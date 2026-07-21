@@ -305,6 +305,7 @@ def test_unsubscribe_context_graph_preserves_the_official_data_safe_operation(mo
     result = client.unsubscribe_context_graph("cg")
 
     assert result == {"unsubscribed": "cg", "subscribed": False}
+    assert cap["method"] == "POST"
     assert cap["url"] == "http://node/api/context-graph/unsubscribe"
     assert json.loads(cap["body"]) == {"contextGraphId": "cg"}
 

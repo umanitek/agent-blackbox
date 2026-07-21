@@ -21,7 +21,17 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional
 
-from . import attach, audit, constants, llm, quads, ruleset, settings, sync_state
+from . import (
+    attach,
+    audit,
+    constants,
+    llm,
+    quads,
+    ruleset,
+    settings,
+    sync_coordinator,
+    sync_state,
+)
 from .config import BlackboxConfig, load_blackbox_config
 from .dkg_client import DkgClient, DkgError
 from .dkg_progress import capture_durable_progress_cursor, read_durable_progress
@@ -29,8 +39,11 @@ from .dkg_progress import capture_durable_progress_cursor, read_durable_progress
 logger = logging.getLogger(__name__)
 
 _DKG_STEADY_SYNC_SETTINGS = {
-    "DKG_SYNC_ON_CONNECT_ENABLED": "1",
-    "DKG_SYNC_RECONCILER_ENABLED": "1",
+    "DKG_SYNC_ON_CONNECT_ENABLED": "0",
+    "DKG_SYNC_RECONCILER_ENABLED": "0",
+    # A persistent subscription's chain/VM reconciliation may invoke durable
+    # recovery. Keep that capability available in steady state; exclusivity is
+    # enforced by the coordinator and DKG's single-flight queue instead.
     "DKG_DURABLE_SYNC_ENABLED": "1",
     "DKG_SYNC_GLOBAL_MAX_INFLIGHT": "1",
     "DKG_SYNC_GLOBAL_QUEUE_LIMIT": "0",
@@ -462,8 +475,8 @@ def _cmd_sync(args: argparse.Namespace) -> int:
     """Run a ruleset sync, translating an interactive cancellation cleanly."""
     try:
         cfg = load_blackbox_config()
-        if _uses_managed_dkg(cfg, args):
-            return _cmd_sync_with_managed_dkg(cfg, args)
+        if _uses_managed_sync_window(cfg, args):
+            return _cmd_sync_in_managed_window(cfg, args)
         if getattr(args, "wait", False):
             with _managed_sync_lock() as acquired:
                 if not acquired:
@@ -479,16 +492,20 @@ def _cmd_sync(args: argparse.Namespace) -> int:
             except (TypeError, ValueError):
                 owns_transfer = False
             if current_transfer.get("status") == "running" and owns_transfer:
+                sync_mode = str(current_transfer.get("sync_mode") or "none")
                 sync_state.write(
                     "cancelled",
                     context_graph_id=current_transfer.get("context_graph_id"),
                     graph_peer_id=current_transfer.get("graph_peer_id"),
+                    coordinator_state=current_transfer.get("coordinator_state"),
+                    sync_mode=sync_mode,
                     phase=str(current_transfer.get("phase") or "cancelled"),
                     public_entries=int(current_transfer.get("public_entries") or 0),
                     expected_public_entries=int(
                         current_transfer.get("expected_public_entries") or 0
                     ),
                     community_entries=int(current_transfer.get("community_entries") or 0),
+                    requires_dkg_restart=sync_mode == "fallback",
                     error="sync cancelled by user",
                 )
         except Exception as exc:  # cancellation must never print a traceback
@@ -497,11 +514,10 @@ def _cmd_sync(args: argparse.Namespace) -> int:
         return 130
 
 
-def _uses_managed_dkg(cfg: BlackboxConfig, args: argparse.Namespace) -> bool:
-    """Return whether this is a blocking sync for Blackbox's managed DKG."""
+def _uses_managed_sync_window(cfg: BlackboxConfig, _args: argparse.Namespace) -> bool:
+    """Return whether this sync targets Blackbox's locally managed DKG."""
     return bool(
-        getattr(args, "wait", False)
-        and cfg.context_graph_id == constants.DEFAULT_CONTEXT_GRAPH_ID
+        cfg.context_graph_id == constants.DEFAULT_CONTEXT_GRAPH_ID
         and cfg.graph_peer_id
         and Path(cfg.dkg_bin).is_file()
         and Path(cfg.dkg_home).is_dir()
@@ -551,10 +567,11 @@ def _managed_sync_lock():
         handle.close()
 
 
-def _dkg_sync_environment(cfg: BlackboxConfig) -> Dict[str, str]:
+def _dkg_sync_environment(cfg: BlackboxConfig, *, durable: bool) -> Dict[str, str]:
     env = os.environ.copy()
     env.update(_DKG_STEADY_SYNC_SETTINGS)
     env["DKG_HOME"] = str(cfg.dkg_home)
+    env["DKG_DURABLE_SYNC_ENABLED"] = "1" if durable else "0"
     env.setdefault("DKG_CATCHUP_MAX_CONCURRENT_PEERS", "1")
     env.setdefault("DKG_STORE_QUEUE_WAIT_TIMEOUT_MS", "300000")
     env.setdefault("DKG_SYNC_TOTAL_TIMEOUT_MS", "1800000")
@@ -649,31 +666,30 @@ def _node_runtime_matches_dkg(executable: Path, cfg: BlackboxConfig) -> bool:
 
 
 def _set_persisted_dkg_steady_state(cfg: BlackboxConfig) -> bool:
-    """Persist bounded native reconciliation and report whether it changed."""
+    """Persist hybrid subscription settings and report whether they changed."""
     path = Path(cfg.dkg_home) / "config.json"
     data = json.loads(path.read_text(encoding="utf-8"))
-    original = json.dumps(data, sort_keys=True)
-    data.update(
-        {
-            "syncOnConnectEnabled": True,
-            "syncReconcilerEnabled": True,
-            "durableSyncEnabled": True,
-            "syncGlobalMaxInflight": 1,
-            "syncGlobalQueueLimit": 0,
-            "syncSharedMemoryOnConnect": False,
-        }
-    )
-    if original == json.dumps(data, sort_keys=True):
+    desired = {
+        "syncOnConnectEnabled": False,
+        "syncReconcilerEnabled": False,
+        "durableSyncEnabled": True,
+        "syncGlobalMaxInflight": 1,
+        "syncGlobalQueueLimit": 0,
+        "syncSharedMemoryOnConnect": False,
+    }
+    changed = any(data.get(key) != value for key, value in desired.items())
+    if not changed:
         return False
+    data.update(desired)
     tmp = path.with_suffix(f".tmp-{os.getpid()}")
     tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
     os.replace(tmp, path)
     return True
 
 
-def _restart_managed_dkg(cfg: BlackboxConfig) -> None:
-    """Restart the managed node with bounded native reconciliation enabled."""
-    env = _dkg_sync_environment(cfg)
+def _restart_managed_dkg(cfg: BlackboxConfig, *, durable: bool) -> None:
+    """Restart the managed node in a controlled sync or steady-state mode."""
+    env = _dkg_sync_environment(cfg, durable=durable)
     command = str(cfg.dkg_bin)
     try:
         subprocess.run(
@@ -735,40 +751,61 @@ def _last_sync_counts(context_graph_id: str = "") -> tuple[int, int]:
     return public, community
 
 
-def _cmd_sync_with_managed_dkg(cfg: BlackboxConfig, args: argparse.Namespace) -> int:
-    """Run one foreground catch-up while DKG owns ongoing reconciliation."""
+def _cmd_sync_in_managed_window(cfg: BlackboxConfig, args: argparse.Namespace) -> int:
+    """Run one hybrid sync while holding the cross-process ownership slot."""
     with _managed_sync_lock() as acquired:
         if not acquired:
             print("Blackbox sync is already running; no second transfer was queued.")
             return 2 if getattr(args, "require_rules", False) else 0
 
+        previous = sync_state.read_for_graph(cfg.context_graph_id)
+        previous_fallback_uncertain = bool(
+            previous.get("requires_dkg_restart")
+            or (
+                previous.get("sync_mode") == "fallback"
+                and previous.get("status") in {"running", "failed"}
+            )
+        )
         known_public, known_community = _last_sync_counts(cfg.context_graph_id)
         sync_state.write(
             "running",
             context_graph_id=cfg.context_graph_id,
             graph_peer_id=cfg.graph_peer_id,
-            phase="preparing-managed-sync",
+            phase="preparing-hybrid-sync",
+            coordinator_state=sync_coordinator.PREPARING,
+            sync_mode="none",
             public_entries=known_public,
             community_entries=known_community,
         )
-        terminal_state: Dict[str, Any] = {}
-        result = 2
-        failure: Optional[BaseException] = None
         try:
-            # Upgrade installs that previously disabled the native reconciler.
-            # Do not restart an already-correct node: preserving the pinned
-            # curator connection lets DKG resume the same manifest after this
-            # foreground command reaches its own deadline.
-            if _set_persisted_dkg_steady_state(cfg):
-                _restart_managed_dkg(cfg)
+            settings_changed = _set_persisted_dkg_steady_state(cfg)
+            node_unreachable = False
+            if not settings_changed and not previous_fallback_uncertain:
+                try:
+                    DkgClient(url=cfg.dkg_url, dkg_home=cfg.dkg_home).status(timeout=2)
+                except DkgError:
+                    node_unreachable = True
+            if settings_changed or previous_fallback_uncertain or node_unreachable:
+                _restart_managed_dkg(cfg, durable=True)
+                previous_fallback_uncertain = False
             result = _cmd_sync_impl(args)
-            terminal_state = sync_state.read_for_graph(cfg.context_graph_id)
-        except BaseException as exc:
-            failure = exc
-            terminal_state = sync_state.read_for_graph(cfg.context_graph_id)
+        except Exception as exc:
+            current = sync_state.read_for_graph(cfg.context_graph_id)
+            failed_details = _terminal_sync_details(current)
+            failed_details.update(
+                context_graph_id=cfg.context_graph_id,
+                graph_peer_id=cfg.graph_peer_id,
+                coordinator_state=sync_coordinator.FAILED,
+                sync_mode="none",
+                phase=str(current.get("phase") or "failed"),
+                error=str(exc),
+            )
+            if previous_fallback_uncertain:
+                failed_details["requires_dkg_restart"] = True
+            sync_state.write("failed", **failed_details)
+            raise
 
-        if failure is not None:
-            raise failure
+        terminal_state = sync_state.read_for_graph(cfg.context_graph_id)
         status = str(terminal_state.get("status") or "")
         if status == "running" or not status:
             status = "done" if result == 0 else "failed"
@@ -790,9 +827,6 @@ def _cmd_sync_impl(args: argparse.Namespace) -> int:
     )
     admitted = not private_graph
     pending_approval = private_graph
-    # The pinned curator remains the preferred foreground source, but the DKG
-    # subscription is still persisted below. That durable subscription is what
-    # lets DKG continue reconciling after this command exits or the node restarts.
     subscribed = False
     catchup_restarted = False
     baseline_catchup_known = False
@@ -812,14 +846,15 @@ def _cmd_sync_impl(args: argparse.Namespace) -> int:
     deadline = time.monotonic() + max(1, int(getattr(args, "timeout", 180) or 180))
     track_sync = bool(getattr(args, "wait", False))
 
-    if (
-        release_graph
-        and getattr(args, "wait", False)
-        and getattr(args, "require_rules", False)
-        and not authoritative_available
-    ):
-        print("  Required curator-pinned VM recovery is unavailable in this DKG build.")
-        return 2
+    if release_graph:
+        return _sync_release_graph(
+            args,
+            cfg,
+            client,
+            deadline=deadline,
+            track_sync=track_sync,
+            authoritative_available=authoritative_available,
+        )
 
     if track_sync:
         known_public, known_community = _last_sync_counts(cfg.context_graph_id)
@@ -915,58 +950,6 @@ def _cmd_sync_impl(args: argparse.Namespace) -> int:
             last_join_attempt = time.monotonic()
             if status and attempt % 10 == 0:
                 print(status)
-
-        # The release graph has one known complete source peer. A fresh node
-        # asks it first instead of downloading unrelated durable graphs from
-        # every generic peer and only falling back minutes later.
-        # If the direct path fails, the ordinary subscription/catch-up path
-        # below remains available for compatibility and recovery.
-        if (
-            release_graph
-            and getattr(args, "wait", False)
-            and authoritative_available
-            and not authoritative_attempted
-        ):
-            authoritative_attempted = True
-            authoritative_recovered = _catchup_authoritative_vm(
-                client,
-                cfg.context_graph_id,
-                cfg.graph_peer_id,
-                deadline,
-                on_progress=_record_verified_pass,
-            )
-            if not authoritative_recovered and getattr(args, "require_rules", False):
-                print(
-                    "  Foreground curator recovery did not complete; "
-                    "persisting the DKG subscription for native reconciliation."
-                )
-            # Successful DKG passes already refreshed the verified cache via
-            # ``_record_verified_pass``. If the pinned source failed before a
-            # pass settled, do not launch a competing full-store query merely
-            # to decide whether to persist the background subscription.
-            if authoritative_recovered:
-                try:
-                    rs = ruleset.refresh(cfg, client, force_query=True)
-                except ruleset.RulesetRefreshUnavailable:
-                    rs = ruleset.peek(cfg)
-                else:
-                    authoritative_cache_refreshed = True
-            else:
-                rs = ruleset.peek(cfg)
-            counts = rs.counts()
-            public_count = max(public_count, _ruleset_graph_count(rs, "public"))
-            community_count = _ruleset_graph_count(rs, "community")
-            authoritative_target = max(authoritative_target, public_count)
-            if authoritative_recovered:
-                # The pinned pass established a complete foreground snapshot.
-                # Still flow through the subscription call below so that DKG
-                # owns future updates and restart-safe reconciliation.
-                fresh_catchup_seen = True
-                authoritative_complete = (
-                    authoritative_cache_refreshed
-                    and authoritative_target > 0
-                    and public_count >= authoritative_target
-                )
 
         may_probe_private = private_graph and not getattr(args, "wait", False)
         if not subscribed and (admitted or not private_graph or may_probe_private):
@@ -1110,7 +1093,6 @@ def _cmd_sync_impl(args: argparse.Namespace) -> int:
         if (
             managed_graph
             and subscribed
-            and not release_graph
             and not catchup_restarted
             and (
                 catchup_includes_swm
@@ -1166,7 +1148,7 @@ def _cmd_sync_impl(args: argparse.Namespace) -> int:
         # not hold the graph.  Once the release graph is subscribed, pin the
         # authoritative source immediately; the recovery helper already
         # waits through DKG backpressure and verifies completion atomically.
-        authoritative_recovery_ready = base_sync_complete or release_graph
+        authoritative_recovery_ready = base_sync_complete
         if (
             authoritative_recovery_ready
             and managed_graph
@@ -1362,6 +1344,347 @@ def _cmd_sync_impl(args: argparse.Namespace) -> int:
     return 0
 
 
+def _subscribe_release_graph(client: DkgClient, context_graph_id: str) -> Dict[str, Any]:
+    """Subscribe VM-only while tolerating older client wrappers."""
+    try:
+        return client.subscribe_context_graph(
+            context_graph_id,
+            include_shared_memory=False,
+        )
+    except TypeError:
+        return client.subscribe_context_graph(context_graph_id)
+
+
+def _restore_release_subscription(client: DkgClient, context_graph_id: str) -> str:
+    """Restore the primary path after a fully stopped fallback; return an error."""
+    try:
+        _subscribe_release_graph(client, context_graph_id)
+    except (DkgError, AttributeError) as exc:
+        return str(exc)
+    return ""
+
+
+def _sync_release_graph(
+    args: argparse.Namespace,
+    cfg: BlackboxConfig,
+    client: DkgClient,
+    *,
+    deadline: float,
+    track_sync: bool,
+    authoritative_available: bool,
+) -> int:
+    """Synchronize the release graph through the exclusive hybrid coordinator."""
+    known_public, known_community = _last_sync_counts(cfg.context_graph_id)
+    coordinator = sync_coordinator.HybridSyncCoordinator(
+        sync_state.write,
+        cfg.context_graph_id,
+        cfg.graph_peer_id,
+    )
+    if track_sync:
+        coordinator.publish_initial(
+            public_entries=known_public,
+            community_entries=known_community,
+        )
+    coordinator.start_regular(
+        public_entries=known_public,
+        community_entries=known_community,
+    )
+
+    try:
+        subscription = _subscribe_release_graph(client, cfg.context_graph_id)
+    except DkgError as exc:
+        error = (
+            "regular DKG subscription failed before its job state could be "
+            f"verified: {exc}"
+        )
+        coordinator.fail(error, phase="regular-subscription-failed")
+        print(f"warning: {error}")
+        print("  Curator fallback was not started because regular-job state is unknown.")
+        return 2 if getattr(args, "require_rules", False) else 0
+
+    print(f"Subscribed to {cfg.context_graph_id}; regular DKG catch-up is primary.")
+    regular_status = coordinator.observe_regular(subscription)
+    regular_job_id = _catchup_job_id(subscription)
+    last_catchup = subscription
+    wait = bool(getattr(args, "wait", False))
+
+    while wait and regular_status not in sync_coordinator.REGULAR_TERMINAL_STATUSES:
+        now = time.monotonic()
+        if now >= deadline:
+            state = regular_status or "unknown"
+            error = (
+                f"regular DKG catch-up remained {state}; curator fallback was "
+                "suppressed to prevent concurrent recovery"
+            )
+            coordinator.fail(error, phase="regular-catchup-blocked")
+            print(f"  {error}.")
+            return 2 if getattr(args, "require_rules", False) else 0
+        try:
+            last_catchup, _exact_job_status = _catchup_status(
+                client,
+                cfg.context_graph_id,
+                regular_job_id,
+            )
+            regular_status = coordinator.observe_regular(last_catchup)
+        except (DkgError, AttributeError) as exc:
+            logger.debug("blackbox: regular catch-up status unavailable: %s", exc)
+            regular_status = ""
+        if regular_status not in sync_coordinator.REGULAR_TERMINAL_STATUSES:
+            state = regular_status or "unknown"
+            print(f"Waiting for regular DKG catch-up ({state})...")
+            time.sleep(min(3.0, max(0.2, deadline - now)))
+
+    if regular_status in sync_coordinator.REGULAR_ACTIVE_STATUSES:
+        rs = ruleset.peek(cfg)
+    else:
+        try:
+            rs = ruleset.refresh(cfg, client, force_query=True)
+        except ruleset.RulesetRefreshUnavailable:
+            rs = ruleset.peek(cfg)
+    counts = rs.counts()
+    public_count = _ruleset_graph_count(rs, "public")
+    community_count = _ruleset_graph_count(rs, "community")
+
+    regular_succeeded = (
+        regular_status in sync_coordinator.REGULAR_SUCCESS_STATUSES
+        and public_count > 0
+    )
+    if regular_succeeded:
+        coordinator.start_reconciling(
+            public_entries=public_count,
+            expected_public_entries=public_count,
+            community_entries=community_count,
+        )
+        coordinator.complete(
+            public_entries=public_count,
+            expected_public_entries=public_count,
+            community_entries=community_count,
+        )
+        _print_release_sync_summary(cfg, counts, public_count)
+        return 0
+
+    if not wait:
+        error = (
+            "regular DKG catch-up is not terminal"
+            if regular_status not in sync_coordinator.REGULAR_TERMINAL_STATUSES
+            else "regular DKG catch-up did not make public threats queryable"
+        )
+        coordinator.fail(error, phase="regular-catchup-incomplete")
+        _print_release_sync_summary(cfg, counts, public_count)
+        if getattr(args, "require_rules", False):
+            print("  Required ruleset sync is incomplete.")
+            return 2
+        return 0
+
+    if regular_status not in sync_coordinator.REGULAR_TERMINAL_STATUSES:
+        error = "regular DKG catch-up state is unknown; curator fallback was suppressed"
+        coordinator.fail(error, phase="regular-catchup-blocked")
+        print(f"  {error}.")
+        return 2 if getattr(args, "require_rules", False) else 0
+
+    if regular_status in sync_coordinator.REGULAR_SUCCESS_STATUSES:
+        reason = "regular DKG catch-up completed without queryable public threats"
+        coordinator.mark_regular_empty(
+            reason,
+            public_entries=public_count,
+            community_entries=community_count,
+        )
+    else:
+        detail = ""
+        if isinstance(last_catchup, dict):
+            result = last_catchup.get("result")
+            detail = str(
+                last_catchup.get("error")
+                or (result.get("error") if isinstance(result, dict) else "")
+                or ""
+            )
+        reason = f"regular DKG catch-up ended as {regular_status}"
+        if detail:
+            reason += f": {detail}"
+
+    if not authoritative_available:
+        error = f"{reason}; curator fallback is unavailable in this DKG build"
+        coordinator.fail(error, phase="fallback-unavailable")
+        print(f"  {error}.")
+        return 2 if getattr(args, "require_rules", False) else 0
+
+    # First gate: a concurrent daemon action may have started a new regular job
+    # after the terminal result above. Fallback remains forbidden in that case.
+    try:
+        gate = client.catchup_status(cfg.context_graph_id)
+        gate_status = sync_coordinator.catchup_status(gate)
+    except (DkgError, AttributeError) as exc:
+        error = f"could not verify the regular catch-up drain gate: {exc}"
+        coordinator.fail(error, phase="fallback-drain-unknown")
+        print(f"  {error}; curator fallback was not started.")
+        return 2 if getattr(args, "require_rules", False) else 0
+    if gate_status not in sync_coordinator.REGULAR_TERMINAL_STATUSES:
+        state = gate_status or "unknown"
+        error = f"regular DKG catch-up drain gate is {state}"
+        coordinator.fail(error, phase="fallback-drain-blocked")
+        print(f"  {error}; curator fallback was not started.")
+        return 2 if getattr(args, "require_rules", False) else 0
+
+    coordinator.queue_fallback(
+        reason,
+        public_entries=public_count,
+        community_entries=community_count,
+    )
+    pause = getattr(client, "unsubscribe_context_graph", None)
+    if not callable(pause):
+        error = "DKG cannot pause the regular subscription for exclusive fallback"
+        coordinator.fail(error, phase="fallback-pause-unavailable")
+        print(f"  {error}; curator fallback was not started.")
+        return 2 if getattr(args, "require_rules", False) else 0
+    try:
+        pause(cfg.context_graph_id)
+    except DkgError as exc:
+        error = f"could not pause the regular DKG subscription: {exc}"
+        coordinator.fail(error, phase="fallback-pause-failed")
+        print(f"  {error}; curator fallback was not started.")
+        return 2 if getattr(args, "require_rules", False) else 0
+
+    # Second gate: unsubscribe removes gossip handlers and the subscribed-CG
+    # reconciliation scope. If a regular job won the race just before that
+    # pause, wait for that already-started job to drain before fallback.
+    while True:
+        try:
+            drained = client.catchup_status(cfg.context_graph_id)
+            drained_status = sync_coordinator.catchup_status(drained)
+        except (DkgError, AttributeError) as exc:
+            restore_error = _restore_release_subscription(client, cfg.context_graph_id)
+            error = f"could not verify the paused regular catch-up drain: {exc}"
+            if restore_error:
+                error += f"; subscription restore failed: {restore_error}"
+            coordinator.fail(error, phase="fallback-drain-unknown")
+            print(f"  {error}; curator fallback was not started.")
+            return 2 if getattr(args, "require_rules", False) else 0
+        if drained_status in sync_coordinator.REGULAR_TERMINAL_STATUSES:
+            break
+        now = time.monotonic()
+        if drained_status not in sync_coordinator.REGULAR_ACTIVE_STATUSES or now >= deadline:
+            restore_error = _restore_release_subscription(client, cfg.context_graph_id)
+            state = drained_status or "unknown"
+            error = f"paused regular DKG catch-up did not drain from {state}"
+            if restore_error:
+                error += f"; subscription restore failed: {restore_error}"
+            coordinator.fail(error, phase="fallback-drain-blocked")
+            print(f"  {error}; curator fallback was not started.")
+            return 2 if getattr(args, "require_rules", False) else 0
+        print(f"Waiting for paused regular DKG catch-up to drain ({drained_status})...")
+        time.sleep(min(3.0, max(0.2, deadline - now)))
+
+    coordinator.start_fallback(
+        public_entries=public_count,
+        community_entries=community_count,
+    )
+    authoritative_target = public_count
+
+    def _record_verified_pass(_inserted_triples: int) -> None:
+        nonlocal authoritative_target
+        count_threats = getattr(client, "threat_count", None)
+        if callable(count_threats):
+            authoritative_target = max(
+                authoritative_target,
+                int(count_threats(cfg.context_graph_id) or 0),
+            )
+        sync_state.write(
+            "running",
+            context_graph_id=cfg.context_graph_id,
+            graph_peer_id=cfg.graph_peer_id,
+            phase="recovering-verifiable-memory",
+            public_entries=authoritative_target,
+            community_entries=community_count,
+        )
+        if authoritative_target > 0:
+            print(f"  {authoritative_target:,} verified threats ready")
+
+    recovered = _catchup_authoritative_vm(
+        client,
+        cfg.context_graph_id,
+        cfg.graph_peer_id,
+        deadline,
+        on_progress=_record_verified_pass,
+    )
+    if not recovered:
+        current = sync_state.read()
+        error = str(current.get("error") or "curator fallback recovery did not complete")
+        requires_restart = bool(current.get("requires_dkg_restart"))
+        if not requires_restart:
+            restore_error = _restore_release_subscription(client, cfg.context_graph_id)
+            if restore_error:
+                error += f"; subscription restore failed: {restore_error}"
+        coordinator.fail(
+            error,
+            phase=str(current.get("phase") or "fallback-failed"),
+            public_entries=public_count,
+            community_entries=community_count,
+            requires_dkg_restart=requires_restart,
+        )
+        print("  Required curator fallback recovery did not complete.")
+        return 2 if getattr(args, "require_rules", False) else 0
+
+    coordinator.start_reconciling(
+        public_entries=authoritative_target,
+        expected_public_entries=authoritative_target,
+        community_entries=community_count,
+    )
+    try:
+        rs = ruleset.refresh(cfg, client, force_query=True)
+    except ruleset.RulesetRefreshUnavailable:
+        rs = ruleset.peek(cfg)
+    counts = rs.counts()
+    public_count = _ruleset_graph_count(rs, "public")
+    community_count = _ruleset_graph_count(rs, "community")
+    authoritative_target = max(authoritative_target, public_count)
+    restore_error = _restore_release_subscription(client, cfg.context_graph_id)
+    if restore_error:
+        error = f"curator recovery completed but regular subscription restore failed: {restore_error}"
+        coordinator.fail(
+            error,
+            phase="regular-subscription-restore-failed",
+            public_entries=public_count,
+            expected_public_entries=authoritative_target,
+            community_entries=community_count,
+        )
+        print(f"  {error}.")
+        return 2 if getattr(args, "require_rules", False) else 0
+    if public_count <= 0:
+        error = "authoritative VM returned no public threat entries"
+        coordinator.fail(
+            error,
+            phase="empty-verifiable-memory",
+            public_entries=0,
+            expected_public_entries=authoritative_target,
+            community_entries=community_count,
+        )
+        print("  authoritative VM returned zero public threat entries.")
+        print("  No rules are available to protect this node.")
+        return 2 if getattr(args, "require_rules", False) else 0
+
+    coordinator.complete(
+        public_entries=public_count,
+        expected_public_entries=authoritative_target or public_count,
+        community_entries=community_count,
+    )
+    _print_release_sync_summary(cfg, counts, public_count)
+    return 0
+
+
+def _print_release_sync_summary(
+    cfg: BlackboxConfig,
+    counts: Dict[str, Any],
+    public_count: int,
+) -> None:
+    print(f"Ruleset synced from {cfg.context_graph_id}:")
+    print(
+        f"  {counts['injection']} injection, {counts['escalation']} escalation, "
+        f"{counts['dependency']} dependency"
+    )
+    print(f"  {public_count:,} public VM (curated)")
+    print("  Community graph (SWM): coming soon")
+
+
 def _ruleset_graph_count(rs: Any, source: str) -> int:
     for name in ("graph_count", "source_count"):
         counter = getattr(rs, name, None)
@@ -1448,7 +1771,7 @@ def _catchup_authoritative_vm(
                 int(max(1.0, remaining - 10) * 1_000),
             ),
         )
-        request_still_active = False
+        request_may_be_running = False
         try:
             # The DKG endpoint is synchronous and its final verification/store
             # phase can outlive a socket inactivity timeout. Run it behind a
@@ -1494,13 +1817,13 @@ def _catchup_authoritative_vm(
                     max(0.0, request_deadline - time.monotonic()),
                 )
                 if wait_for <= 0:
-                    request_still_active = worker.is_alive()
+                    request_may_be_running = worker.is_alive()
                     raise DkgError(
                         "verifiable VM sync watchdog reached its "
                         f"{request_timeout_seconds}s settlement deadline"
                         + (
                             " while the DKG request remains active"
-                            if request_still_active
+                            if request_may_be_running
                             else ""
                         )
                     )
@@ -1526,7 +1849,32 @@ def _catchup_authoritative_vm(
             result = outcome_value
         except DkgError as exc:
             error = str(exc)
-            retryable = not request_still_active and any(
+            lowered_error = error.lower()
+            request_may_be_running = request_may_be_running or (
+                "queue wait timeout" not in lowered_error
+                and any(
+                    marker in lowered_error
+                    for marker in ("transport error", "timed out", "timeout")
+                )
+            )
+            if request_may_be_running:
+                sync_state.write(
+                    "failed",
+                    context_graph_id=context_graph_id,
+                    graph_peer_id=graph_peer_id,
+                    phase="fallback-request-uncertain",
+                    requires_dkg_restart=True,
+                    error=(
+                        f"{error}; DKG must be restarted before another sync "
+                        "path may start"
+                    ),
+                )
+                logger.debug(
+                    "blackbox: curator fallback request may still be active: %s",
+                    exc,
+                )
+                return False
+            retryable = any(
                 marker in error.lower()
                 for marker in (
                     "backpressure",
@@ -1535,8 +1883,6 @@ def _catchup_authoritative_vm(
                     "durable_catchup_all_peers_failed",
                     "store scheduler",
                     "queue wait timeout",
-                    "timed out",
-                    "exceeded its",
                 )
             )
             if (
@@ -1614,6 +1960,7 @@ def _catchup_authoritative_vm(
             return False
         backpressure_retries = 0
         inserted = int(result.get("totalDurableInsertedTriples") or 0)
+        explicit_durable_complete = result.get("durableComplete")
         durable_progress = read_durable_progress(
             str(getattr(client, "dkg_home", "") or ""),
             context_graph_id,
@@ -1621,9 +1968,9 @@ def _catchup_authoritative_vm(
         )
         # Newer DKG releases report the request's completion contract directly.
         # Retain daemon-log parsing as a compatibility fallback for 10.0.9.
-        if result.get("durableComplete") is True:
+        if explicit_durable_complete is True:
             durable_progress["snapshot_complete"] = True
-        elif result.get("durableComplete") is False:
+        elif explicit_durable_complete is False:
             durable_progress["snapshot_complete"] = False
         sync_state.write(
             "running",
@@ -1640,7 +1987,12 @@ def _catchup_authoritative_vm(
         durable_progress = read_durable_progress(
             str(getattr(client, "dkg_home", "") or ""),
             context_graph_id,
+            after=progress_cursor,
         )
+        if explicit_durable_complete is True:
+            durable_progress["snapshot_complete"] = True
+        elif explicit_durable_complete is False:
+            durable_progress["snapshot_complete"] = False
         if inserted <= 0:
             expected = int(durable_progress.get("expected_triples") or 0)
             safe_current = int(durable_progress.get("safe_current_triples") or 0)

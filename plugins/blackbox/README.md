@@ -83,6 +83,22 @@ Blackbox currently uses one shared graph:
 Raw prompts, commands, file contents, secrets, and your local audit trail are
 not published. Findings and reports stay local.
 
+### Graph synchronization
+
+Blackbox keeps a normal DKG context-graph subscription as the primary path.
+That subscription receives live graph updates and lets the DKG node reconcile
+verified content against blockchain state. If its catch-up job reaches a
+terminal failure, or completes without making any public threats queryable,
+Blackbox may recover from the configured publisher peer as a fallback.
+
+The two paths are controlled by one persisted state machine and one
+cross-process ownership lock. Publisher fallback cannot start while the normal
+DKG job is queued, running, or of unknown status. Before fallback, Blackbox
+temporarily pauses the live subscription, verifies that any race-winning job
+has drained, and restores the subscription after fallback stops. A timed-out
+publisher request also requires a managed DKG restart before another sync path
+can start.
+
 ## Configuration
 
 Settings are under `plugins.entries.blackbox` in `config.yaml`. The easiest way
@@ -98,7 +114,7 @@ to change them is through the dashboard settings page.
 | `detection.<category>.min_severity` | `info` | Minimum visible severity for a category |
 | `protected_paths` | `[]` | Local file globs that always block and are never shared |
 | `context_graph_id` | `0x37b1Fdfd…/agent-blackbox-vm` | Public verified threat graph |
-| `graph_peer_id` | bundled publisher peer | Authoritative threat-data sync source |
+| `graph_peer_id` | bundled publisher peer | Curator-pinned recovery source when regular DKG catch-up cannot complete |
 
 Categories are `injection`, `escalation`, `dependency`, `fileaccess`, and
 `skill`.
@@ -142,9 +158,10 @@ blackbox status
 blackbox sync --wait
 ```
 
-A first sync can continue in the background for several minutes. If it does not
-finish, rerun the command below and include the displayed peer ID and DKG log
-when reporting the problem:
+A first regular DKG sync can continue in the background for several minutes.
+Blackbox will not start curator recovery while that job is still active. If it
+does not finish, rerun the command below and include the displayed coordinator
+state, peer ID, and DKG log when reporting the problem:
 
 ```bash
 blackbox sync --wait --timeout 180
