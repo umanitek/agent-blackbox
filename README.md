@@ -48,6 +48,9 @@ Windows PowerShell:
 iwr -useb blackbox-w.umanitek.ai | iex
 ```
 
+The auditable PowerShell installer source is
+[`scripts/blackbox-install.ps1`](scripts/blackbox-install.ps1).
+
 <details>
 <summary><b>Manual install</b> - prefer not to pipe a script into bash?</summary>
 <br>

@@ -1759,10 +1759,6 @@ def _catchup_authoritative_vm(
             inserted_durable_triples=inserted,
             **durable_progress,
         )
-        durable_progress = read_durable_progress(
-            str(getattr(client, "dkg_home", "") or ""),
-            context_graph_id,
-        )
         if inserted <= 0:
             expected = int(durable_progress.get("expected_triples") or 0)
             safe_current = int(durable_progress.get("safe_current_triples") or 0)
