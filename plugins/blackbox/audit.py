@@ -323,21 +323,33 @@ def record(
     event: str,
     findings: Optional[List[Dict[str, Any]]] = None,
     detail: Optional[Dict[str, Any]] = None,
+    framework: str = "hermes",
+    workspace: Optional[str] = None,
 ) -> None:
-    """Append an audit record; on findings also append to findings.jsonl.
+    """Append an audit record; on findings also append to the findings log.
 
     *findings* are Finding dicts (evidence already redacted). *detail* is extra
     context (tool name, ids, args) and is redacted again here before writing.
+    Hermes retains the original ``audit.jsonl`` / ``findings.jsonl`` names;
+    external hosts use ``audit.<framework>.jsonl`` and
+    ``findings.<framework>.jsonl`` so the shared dashboard can distinguish
+    Claude Code and Codex activity without changing the existing readers.
     """
     try:
+        framework_name = _framework_name(framework)
+        suffix = "" if framework_name == "hermes" else f".{framework_name}"
         now = time.time()
         base = {
             "ts": now,
             "iso": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
             "event": event,
+            "framework": framework_name,
             # Profile-level identity is local-only and lets the dashboard keep
             # separate Hermes homes from inheriting each other's activity.
-            "workspace": str(constants.hermes_home()),
+            "workspace": str(
+                workspace
+                or (constants.hermes_home() if framework_name == "hermes" else "")
+            ),
         }
         if detail:
             # Redact the detail normally, but rebuild ``detail.context`` via
@@ -352,12 +364,120 @@ def record(
                 base["detail"].pop("context", None)
         if findings:
             base["findingCount"] = len(findings)
-            base["findings"] = [_finding_summary(f) for f in findings]
-        _append_jsonl(_home() / "audit.jsonl", base)
+            base["findings"] = [
+                _finding_summary({**f, "framework": f.get("framework") or framework_name})
+                for f in findings
+            ]
+        _append_jsonl(_home() / f"audit{suffix}.jsonl", base)
         for finding in findings or []:
-            _append_jsonl(_home() / "findings.jsonl", {**base, "finding": _finding_summary(finding)})
+            summary = _finding_summary(
+                {**finding, "framework": finding.get("framework") or framework_name}
+            )
+            _append_jsonl(
+                _home() / f"findings{suffix}.jsonl",
+                {**base, "finding": summary},
+            )
     except Exception as exc:  # pragma: no cover - fail open
         logger.debug("blackbox: audit record failed: %s", exc)
+
+
+def _framework_name(value: Any) -> str:
+    """Return a filename-safe, dashboard-stable framework identifier."""
+    name = re.sub(r"[^a-z0-9_-]+", "-", str(value or "hermes").strip().lower())
+    return name.strip("-")[:64] or "hermes"
+
+
+_AGENT_SESSIONS_DIR = "agent-sessions"
+_AGENT_SESSION_ID_CHARS = 512
+_AGENT_SESSION_TITLE_CHARS = 120
+_AGENT_SESSION_WORKSPACE_CHARS = 1000
+
+
+def record_agent_session(
+    *,
+    framework: str,
+    session_id: str,
+    workspace: str = "",
+    session_slug: str = "",
+    session_title: str = "",
+    title_source: str = "",
+) -> None:
+    """Remember one Claude/Codex session for local dashboard identity.
+
+    Each session owns an atomically replaced file because command hooks run in
+    separate processes. Only an explicit host title is retained. Prompt text is
+    conversation content and must never become a dashboard session name.
+    """
+    try:
+        host = _framework_name(framework)
+        raw_session_id = str(session_id or "").strip()[:_AGENT_SESSION_ID_CHARS]
+        if host not in {"claude-code", "codex"} or not raw_session_id:
+            return
+
+        state_dir = _home() / _AGENT_SESSIONS_DIR
+        state_dir.mkdir(parents=True, exist_ok=True)
+        session_key = quads.stable_hash(f"{host}\0{raw_session_id}", 24)
+        path = state_dir / f"{host}-{session_key}.json"
+        existing: Dict[str, Any] = {}
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                existing = loaded
+        except Exception:
+            pass
+
+        compact_title = " ".join(str(session_title or "").split())
+        compact_title = sanitize_text(compact_title, _AGENT_SESSION_TITLE_CHARS)
+        source = str(title_source or "").strip().lower()
+        old_source = str(existing.get("title_source") or "").strip().lower()
+        old_title = (
+            str(existing.get("session_title") or "")
+            if old_source == "host"
+            else ""
+        )
+        if source != "host" or not compact_title:
+            compact_title = old_title
+            source = "host" if old_title else ""
+
+        clean_slug = re.sub(r"[^a-z0-9_-]+", "-", str(session_slug or "").strip().lower())
+        clean_slug = clean_slug.strip("-")[:64]
+        now = time.time()
+        record = {
+            "framework": host,
+            "session_id": raw_session_id,
+            "session_key": session_key,
+            "session_slug": clean_slug or str(existing.get("session_slug") or ""),
+            "session_title": compact_title,
+            "title_source": source,
+            "workspace": str(workspace or existing.get("workspace") or "")[
+                :_AGENT_SESSION_WORKSPACE_CHARS
+            ],
+            "first_seen": existing.get("first_seen") or now,
+            "last_seen": now,
+        }
+        temp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+        temp.write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
+        os.replace(temp, path)
+    except Exception as exc:  # pragma: no cover - fail open
+        logger.debug("blackbox: external agent session record failed: %s", exc)
+
+
+def read_agent_sessions(limit: int = 512) -> List[Dict[str, Any]]:
+    """Return recently observed Claude/Codex sessions, newest first."""
+    rows: List[Dict[str, Any]] = []
+    directory = _home() / _AGENT_SESSIONS_DIR
+    try:
+        for path in directory.glob("*.json"):
+            try:
+                row = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(row, dict) and row.get("session_id"):
+                    rows.append(row)
+            except Exception:
+                continue
+    except Exception:
+        return []
+    rows.sort(key=lambda row: row.get("last_seen") or 0, reverse=True)
+    return rows[: max(0, int(limit))]
 
 
 def _finding_summary(finding: Dict[str, Any]) -> Dict[str, Any]:

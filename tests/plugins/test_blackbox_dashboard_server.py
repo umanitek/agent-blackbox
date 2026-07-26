@@ -1,5 +1,7 @@
 from pathlib import Path
+import json
 import re
+import sqlite3
 from types import SimpleNamespace
 
 from _blackbox_loader import load_blackbox
@@ -42,6 +44,60 @@ def test_connected_agent_summary_does_not_mention_inactive_profiles():
     assert "additional protected profile" not in html
 
 
+def test_activity_agent_icons_receive_their_framework_color():
+    html = (Path(server.__file__).with_name("static") / "index.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert '.au-agent svg { color: var(--fw, var(--text)); }' in html
+    assert "style=\"--fw:' + fwColor(fw)" in html
+    assert '"claude-code": "#D97757"' in html
+    assert 'codex: "#556CFC"' in html
+
+
+def test_claude_and_codex_use_bundled_brand_assets():
+    dashboard_dir = Path(server.__file__).parent
+    html = (dashboard_dir / "static" / "index.html").read_text(encoding="utf-8")
+    server_source = Path(server.__file__).read_text(encoding="utf-8")
+
+    assert '"claude-code": "./assets/claude-logo.png"' in html
+    assert 'codex: "./assets/codex-logo.png"' in html
+    assert "Claude Code — compact sparkle mark" not in html
+    assert "Codex — a code glyph inside a hexagon" not in html
+    for name in ("claude-logo.png", "codex-logo.png"):
+        assert (dashboard_dir / "assets" / name).read_bytes().startswith(
+            b"\x89PNG\r\n\x1a\n"
+        )
+        assert f'"{name}"' in server_source
+
+
+def test_claude_and_codex_avatar_tiles_have_no_background():
+    html = (Path(server.__file__).with_name("static") / "index.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert ".agent-avatar-claude-code," in html
+    assert ".agent-avatar-codex { background: transparent; }" in html
+    assert 'class="agent-avatar agent-avatar-' in html
+    assert "+ fwKey(a.framework) +" in html
+    assert "+ fwKey(t.kind) +" in html
+
+
+def test_graph_wheel_zoom_requires_hover_delay_or_click():
+    html = (Path(server.__file__).with_name("static") / "index.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert "var GRAPH_ZOOM_HOVER_DELAY_MS = 2250;" in html
+    assert 'el.addEventListener("pointerenter", startGraphWheelZoomHover);' in html
+    assert 'el.addEventListener("pointerleave", stopGraphWheelZoomHover);' in html
+    assert 'el.addEventListener("pointerdown", activateGraphWheelZoom, true);' in html
+    assert 'event.button !== 0' in html
+    assert (
+        ".enableZoomInteraction(function () { return graphWheelZoomArmed; })" in html
+    )
+
+
 def test_connected_agent_cards_render_before_protected_profiles():
     html = (Path(server.__file__).with_name("static") / "index.html").read_text(
         encoding="utf-8"
@@ -52,6 +108,39 @@ def test_connected_agent_cards_render_before_protected_profiles():
     assert html.index("Connected agents lead the strip") < html.index(
         "var cards = list.map"
     )
+
+
+def test_installed_codex_is_visible_while_hook_trust_is_pending():
+    rows = [
+        {"kind": "claude-code", "target": "/home/u/.claude", "protected": True},
+        {
+            "kind": "codex",
+            "target": "/home/u/.codex",
+            "installed": True,
+            "protected": False,
+            "trust_required": True,
+        },
+        {"kind": "claude-code", "target": "/home/u/broken", "protected": False},
+        {
+            "kind": "codex",
+            "target": "/home/u/missing",
+            "installed": False,
+            "protected": False,
+            "trust_required": True,
+        },
+    ]
+
+    assert server._visible_local_agent_rows(rows) == rows[:2]
+
+
+def test_codex_card_distinguishes_trust_pending_from_protected():
+    html = (Path(server.__file__).with_name("static") / "index.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert "var trustPending = !!a.trust_required && !a.protected;" in html
+    assert "Trust required · /hooks" in html
+    assert ".agent-state.pending { color: var(--high); }" in html
 
 
 def test_blackbox_host_hermes_has_a_distinct_agent_name():
@@ -201,6 +290,309 @@ def test_profile_activity_tracks_explicit_workspace_independently():
         "is_active": True,
         "findings": 1,
     }
+
+
+def test_profile_activity_maps_recent_codex_project_cwd_to_its_only_profile(monkeypatch):
+    monkeypatch.setattr(server.time, "time", lambda: 1_000.0)
+    attached = [
+        {"kind": "codex", "target": "/home/u/.codex", "protected": True},
+    ]
+
+    states = server._profile_activity_state(
+        attached,
+        [{"framework": "codex", "workspace": "/repo/project", "ts": 990.0}],
+        [{"framework": "codex", "workspace": "/repo/project", "ts": 990.0}],
+    )
+
+    assert states[("codex", server._workspace_key("/home/u/.codex"))] == {
+        "is_active": True,
+        "findings": 1,
+    }
+
+
+def test_profile_activity_does_not_guess_between_external_profiles(monkeypatch):
+    monkeypatch.setattr(server.time, "time", lambda: 1_000.0)
+    attached = [
+        {"kind": "codex", "target": "/home/u/.codex", "protected": True},
+        {"kind": "codex", "target": "/home/u/other-codex", "protected": True},
+    ]
+
+    states = server._profile_activity_state(
+        attached,
+        [{"framework": "codex", "workspace": "/repo/project", "ts": 990.0}],
+        [{"framework": "codex", "workspace": "/repo/project", "ts": 990.0}],
+        running_frameworks={"codex"},
+    )
+
+    assert all(state == {"is_active": False, "findings": 0} for state in states.values())
+
+
+def test_profile_activity_marks_single_protected_running_codex_connected():
+    attached = [
+        {"kind": "codex", "target": "/home/u/.codex", "protected": True},
+        {"kind": "claude-code", "target": "/home/u/.claude", "protected": False},
+    ]
+
+    states = server._profile_activity_state(
+        attached,
+        [],
+        [],
+        running_frameworks={"codex", "claude-code"},
+    )
+
+    assert states[("codex", server._workspace_key("/home/u/.codex"))]["is_active"] is True
+    assert not any(key[0] == "claude-code" for key in states)
+
+
+def test_running_external_agents_require_primary_executables(monkeypatch):
+    class FakeProcess:
+        def __init__(self, *, exe, cmdline):
+            self.info = {"name": Path(exe).name, "exe": exe, "cmdline": cmdline}
+
+    processes = [
+        FakeProcess(
+            exe="/Applications/ChatGPT.app/Contents/Resources/codex",
+            cmdline=["/Applications/ChatGPT.app/Contents/Resources/codex", "app-server"],
+        ),
+        FakeProcess(
+            exe="/Applications/Claude.app/Contents/MacOS/Claude",
+            cmdline=["/Applications/Claude.app/Contents/MacOS/Claude"],
+        ),
+        FakeProcess(
+            exe="/Applications/ChatGPT.app/Helpers/browser_crashpad_handler",
+            cmdline=["browser_crashpad_handler", "--database=Codex/Crashpad"],
+        ),
+    ]
+    monkeypatch.setattr(server.psutil, "process_iter", lambda _attrs: processes)
+
+    assert server._running_external_agent_frameworks() == {"claude-code", "codex"}
+
+
+def test_external_session_agents_are_distinct_recent_and_private():
+    sessions = [
+        {
+            "framework": "claude-code",
+            "session_id": "claude-sensitive-session-id-1",
+            "session_slug": "checkout-fix",
+            "session_title": "Repair checkout flow",
+            "workspace": "/work/shop",
+            "last_seen": 20,
+        },
+        {
+            "framework": "claude-code",
+            "session_id": "claude-sensitive-session-id-2",
+            "session_title": "Newer checkout session",
+            "workspace": "/work/shop-v2",
+            "last_seen": 30,
+        },
+        {
+            "framework": "codex",
+            "session_id": "codex-sensitive-session-id-1",
+            "workspace": "/work/blackbox",
+            "last_seen": 10,
+        },
+    ]
+
+    cards = server._external_session_agents(
+        sessions,
+        [],
+        [
+            {
+                "framework": "claude-code",
+                "session_id": "claude-sensitive-session-id-1",
+            }
+        ],
+        {"claude-code", "codex"},
+        "0xlocal",
+        now=40,
+    )
+
+    assert len(cards) == 3
+    assert len({card["agent_slug"] for card in cards}) == 3
+    assert all(card["protected_session"] and card["is_active"] for card in cards)
+    assert next(card for card in cards if card["session_title"] == "Repair checkout flow")[
+        "findings"
+    ] == 1
+    assert next(card for card in cards if card["framework"] == "codex")[
+        "session_context"
+    ] == "blackbox"
+    assert "sensitive-session-id" not in repr(cards)
+
+
+def test_external_session_agents_ignore_prompt_titles_and_honor_live_host_inventory():
+    cards = server._external_session_agents(
+        [
+            {
+                "framework": "claude-code",
+                "session_id": "open-session",
+                "session_title": "Raw submitted prompt",
+                "title_source": "prompt",
+                "workspace": "/work/velocity",
+                "last_seen": 90,
+            },
+            {
+                "framework": "claude-code",
+                "session_id": "closed-session",
+                "session_title": "Another raw prompt",
+                "title_source": "prompt",
+                "workspace": "/work/velocity",
+                "last_seen": 95,
+            },
+        ],
+        [],
+        [],
+        {"claude-code"},
+        now=100,
+        host_session_rows=[
+            {
+                "framework": "claude-code",
+                "session_id": "open-session",
+                "session_title": "velocity-98",
+                "title_source": "host",
+                "workspace": "/work/velocity",
+                "last_seen": 100,
+                "host_live": True,
+            }
+        ],
+        authoritative_session_frameworks={"claude-code"},
+    )
+
+    assert len(cards) == 1
+    assert cards[0]["session_title"] == "velocity-98"
+    assert "Raw submitted prompt" not in repr(cards)
+
+
+def test_external_host_sessions_use_claude_live_names_and_codex_thread_titles(
+    tmp_path,
+    monkeypatch,
+):
+    claude_home = tmp_path / "claude"
+    sessions_dir = claude_home / "sessions"
+    sessions_dir.mkdir(parents=True)
+    (sessions_dir / "123.json").write_text(
+        json.dumps(
+            {
+                "sessionId": "claude-live-id",
+                "name": "velocity-98",
+                "nameSource": "derived",
+                "cwd": "/work/velocity",
+                "pid": 123,
+                "kind": "interactive",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(claude_home))
+    monkeypatch.setattr(server, "psutil", SimpleNamespace(pid_exists=lambda pid: pid == 123))
+
+    codex_home = tmp_path / "codex"
+    codex_home.mkdir()
+    database = codex_home / "state_5.sqlite"
+    connection = sqlite3.connect(database)
+    connection.execute(
+        "CREATE TABLE threads (id TEXT PRIMARY KEY, title TEXT NOT NULL, name TEXT, cwd TEXT)"
+    )
+    connection.execute(
+        "INSERT INTO threads VALUES (?, ?, ?, ?)",
+        ("codex-live-id", "Codex window title", "Renamed Codex task", "/work/blackbox"),
+    )
+    connection.commit()
+    connection.close()
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+
+    rows, authoritative = server._external_host_session_rows(
+        [],
+        [
+            {
+                "framework": "codex",
+                "ts": 99,
+                "detail": {"session_id": "codex-live-id"},
+            }
+        ],
+        now=100,
+    )
+
+    claude = next(row for row in rows if row["framework"] == "claude-code")
+    codex = next(row for row in rows if row["framework"] == "codex")
+    assert claude["session_title"] == "velocity-98"
+    assert claude["host_live"] is True
+    assert codex["session_title"] == "Renamed Codex task"
+    assert authoritative == {"claude-code"}
+
+
+def test_external_session_agents_fall_back_to_recent_audit_rows():
+    cards = server._external_session_agents(
+        [],
+        [
+            {
+                "framework": "codex",
+                "workspace": "/work/agent-blackbox",
+                "ts": 50,
+                "detail": {"session_id": "codex-session-1"},
+            }
+        ],
+        [],
+        {"codex"},
+        now=60,
+    )
+
+    assert cards[0]["session_context"] == "agent-blackbox"
+    assert cards[0]["agent_slug"].startswith("codex-")
+
+
+def test_external_session_metadata_requires_protected_framework():
+    cards = server._external_session_agents(
+        [{"framework": "claude-code", "session_id": "claude-1", "last_seen": 1}],
+        [],
+        [],
+        {"codex"},
+        now=2,
+    )
+
+    assert cards == []
+
+
+def test_external_session_agents_hide_stale_sessions():
+    cards = server._external_session_agents(
+        [{"framework": "codex", "session_id": "old", "last_seen": 1}],
+        [],
+        [],
+        {"codex"},
+        now=1_000,
+    )
+
+    assert cards == []
+
+
+def test_external_agent_cards_show_session_identity_and_context():
+    html = (Path(server.__file__).with_name("static") / "index.html").read_text(
+        encoding="utf-8"
+    )
+    source = Path(server.__file__).read_text(encoding="utf-8")
+
+    assert "if (a.agent_slug)" in html
+    assert 'class="agent-session-title"' in html
+    assert "a.session_context" in html
+    assert "var agentSessionsByKey = {};" in html
+    assert 'data-agent-sessions="' in html
+    assert 'card.addEventListener("click", openSessions);' in html
+    assert 'card.addEventListener("keydown"' in html
+    assert 'id="agent-sessions-modal"' in html
+    assert 'id="agent-sessions-list"' in html
+    assert 'class="agent-session-name" title="' in html
+    assert "session.session_title || session.session_context" in html
+    assert html.index('class="agent-session-name" title="') < html.index(
+        'class="agent-session-slug">'
+    )
+    assert "function openAgentSessionsModal(key, trigger)" in html
+    assert "function closeAgentSessionsModal()" in html
+    assert "if (event.target === overlay) closeAgentSessionsModal();" in html
+    assert ".agents-strip {\n    display: flex;\n    flex-wrap: wrap;\n    align-items: flex-start;" in html
+    assert "max-height: min(56vh, 480px);" in html
+    assert "overflow-y: auto;" in html
+    assert "overscroll-behavior: contain;" in html
+    assert '"sessions": sessions' in source
+    assert '"session_count": len(sessions)' in source
 
 
 def test_sync_state_rejects_abandoned_running_process(tmp_path, monkeypatch):

@@ -15,10 +15,14 @@ FastAPI/uvicorn come from the hermes ``[web]`` extra, imported lazily. Loopback 
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import os
+import re
 import shutil
 import socket
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -26,6 +30,11 @@ import time
 from collections import deque
 from pathlib import Path
 from typing import Any, Dict, List, Set, Tuple
+
+try:
+    import psutil
+except Exception:  # pragma: no cover - optional fail-open runtime probe
+    psutil = None  # type: ignore[assignment]
 
 from .. import sync_state
 from ..dkg_progress import read_durable_progress
@@ -47,6 +56,7 @@ _BLACKBOX_PROFILE = "agent-blackbox"
 _BLACKBOX_RUNTIME_HOST = "127.0.0.1"
 _BLACKBOX_RUNTIME_PORT = 9121
 _BLACKBOX_RESTART_DELAY_SEC = 2.0
+_EXTERNAL_AGENT_ACTIVITY_WINDOW_SEC = 5 * 60.0
 _join_lock = threading.Lock()
 _network_sync_lock = threading.Lock()
 _connection_states: Dict[str, Dict[str, Any]] = {}
@@ -742,10 +752,354 @@ def _workspace_key(value: Any) -> str:
         return os.path.normcase(text)
 
 
+def _running_external_agent_frameworks() -> Set[str]:
+    """Return running Claude/Codex hosts without matching helper processes.
+
+    Both desktop apps spawn many helpers whose paths mention the product.  A
+    primary Claude/Codex executable (or Claude Code's well-known Node entry
+    point) is stronger liveness evidence and avoids those false positives.
+    """
+    if psutil is None:
+        return set()
+    running: Set[str] = set()
+    try:
+        processes = psutil.process_iter(["name", "exe", "cmdline"])
+        for process in processes:
+            try:
+                info = process.info or {}
+                cmdline = [str(item) for item in (info.get("cmdline") or []) if item]
+                executables = [info.get("exe"), cmdline[0] if cmdline else None]
+                basenames = {
+                    Path(str(value)).name.lower().removesuffix(".exe")
+                    for value in executables
+                    if value
+                }
+                if "codex" in basenames:
+                    running.add("codex")
+                if "claude" in basenames:
+                    running.add("claude-code")
+                command = "\0".join(cmdline).lower().replace("\\", "/")
+                if "@anthropic-ai/claude-code/" in command:
+                    running.add("claude-code")
+            except Exception:
+                continue
+    except Exception:
+        return set()
+    return running
+
+
+def _recent_external_activity(row: Dict[str, Any], now: float) -> bool:
+    """Treat a just-received Claude/Codex hook event as liveness evidence."""
+    try:
+        age = now - float(row.get("ts"))
+    except (TypeError, ValueError):
+        return False
+    return -30.0 <= age <= _EXTERNAL_AGENT_ACTIVITY_WINDOW_SEC
+
+
+_EXTERNAL_SESSION_FRAMEWORKS = {
+    "claude-code": "claude",
+    "codex": "codex",
+}
+
+
+def _external_session_slug(framework: str, session_id: str, host_slug: str = "") -> str:
+    """Build a stable, non-secret display slug for one external session."""
+    prefix = _EXTERNAL_SESSION_FRAMEWORKS.get(framework, "agent")
+    digest = hashlib.sha256(f"{framework}\0{session_id}".encode("utf-8")).hexdigest()
+    stem = re.sub(r"[^a-z0-9_-]+", "-", str(host_slug or "").strip().lower())
+    stem = stem.strip("-")[:36]
+    return f"{prefix}-{stem}-{digest[:6]}" if stem else f"{prefix}-{digest[:8]}"
+
+
+def _claude_active_session_rows(*, now: float | None = None) -> "tuple[List[Dict[str, Any]], bool]":
+    """Read Claude's live interactive-session descriptors.
+
+    Claude creates one JSON file per running desktop/CLI session under
+    ``$CLAUDE_CONFIG_DIR/sessions``.  Unlike transcript JSONL files, these
+    descriptors represent the open session itself and include its host name,
+    session id, workspace, and process id.
+    """
+    configured = os.environ.get("CLAUDE_CONFIG_DIR")
+    home = Path(configured).expanduser() if configured else Path.home() / ".claude"
+    directory = home / "sessions"
+    if not directory.is_dir():
+        return [], False
+
+    observed_at = time.time() if now is None else float(now)
+    rows: List[Dict[str, Any]] = []
+    try:
+        paths = list(directory.glob("*.json"))
+    except Exception:
+        return [], True
+    for path in paths:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict):
+                continue
+            session_id = str(payload.get("sessionId") or "").strip()
+            if not session_id:
+                continue
+            kind = str(payload.get("kind") or "interactive").strip().lower()
+            if kind and kind != "interactive":
+                continue
+            pid = int(payload.get("pid") or 0)
+            if pid > 0 and psutil is not None:
+                try:
+                    if not psutil.pid_exists(pid):
+                        continue
+                except Exception:
+                    continue
+            rows.append({
+                "framework": "claude-code",
+                "session_id": session_id,
+                "session_title": " ".join(str(payload.get("name") or "").split())[:120],
+                "title_source": "host",
+                "workspace": str(payload.get("cwd") or ""),
+                "last_seen": observed_at,
+                "host_live": True,
+            })
+        except Exception:
+            continue
+    return rows, True
+
+
+def _codex_thread_title_rows(session_ids: Set[str]) -> List[Dict[str, Any]]:
+    """Resolve observed Codex hook sessions to the titles shown by Codex.
+
+    The desktop app and CLI share ``state_*.sqlite``.  Its ``threads`` table is
+    keyed by the hook's session id and stores the current task title (plus an
+    optional explicit name).  Reading only the observed ids avoids treating
+    the whole task history as live dashboard sessions.
+    """
+    clean_ids = {str(value or "").removeprefix("local:").strip() for value in session_ids}
+    clean_ids.discard("")
+    if not clean_ids:
+        return []
+
+    configured = os.environ.get("CODEX_HOME")
+    home = Path(configured).expanduser() if configured else Path.home() / ".codex"
+    candidates: List[Path] = []
+    try:
+        candidates.extend(home.glob("state_*.sqlite"))
+        candidates.extend((home / "sqlite").glob("state_*.sqlite"))
+    except Exception:
+        return []
+    candidates = sorted(
+        {path for path in candidates if path.is_file()},
+        key=lambda path: (path.stat().st_mtime, path.name),
+        reverse=True,
+    )
+
+    placeholders = ",".join("?" for _ in clean_ids)
+    for database in candidates:
+        connection = None
+        try:
+            connection = sqlite3.connect(
+                f"file:{database}?mode=ro",
+                uri=True,
+                timeout=0.2,
+            )
+            columns = {
+                str(row[1])
+                for row in connection.execute("PRAGMA table_info(threads)")
+            }
+            if not {"id", "title"}.issubset(columns):
+                continue
+            name_column = "name" if "name" in columns else "NULL"
+            cwd_column = "cwd" if "cwd" in columns else "NULL"
+            query = (
+                f"SELECT id, title, {name_column}, {cwd_column} FROM threads "
+                f"WHERE id IN ({placeholders})"
+            )
+            rows: List[Dict[str, Any]] = []
+            for session_id, title, name, workspace in connection.execute(
+                query,
+                tuple(clean_ids),
+            ):
+                host_title = " ".join(str(name or title or "").split())[:120]
+                rows.append({
+                    "framework": "codex",
+                    "session_id": str(session_id),
+                    "session_title": host_title,
+                    "title_source": "host",
+                    "workspace": str(workspace or ""),
+                    "last_seen": 0.0,
+                })
+            if rows:
+                return rows
+        except Exception:
+            continue
+        finally:
+            if connection is not None:
+                connection.close()
+    return []
+
+
+def _external_host_session_rows(
+    session_rows: List[Dict[str, Any]],
+    audit_rows: List[Dict[str, Any]],
+    *,
+    now: float | None = None,
+) -> "tuple[List[Dict[str, Any]], Set[str]]":
+    """Return host-native session names and authoritative live inventories."""
+    claude_rows, claude_inventory_available = _claude_active_session_rows(now=now)
+    codex_ids: Set[str] = set()
+    for row in [*session_rows, *audit_rows]:
+        detail = row.get("detail") if isinstance(row.get("detail"), dict) else {}
+        framework = str(row.get("framework") or "").strip().lower()
+        session_id = str(row.get("session_id") or detail.get("session_id") or "").strip()
+        if framework == "codex" and session_id:
+            codex_ids.add(session_id)
+    authoritative = {"claude-code"} if claude_inventory_available else set()
+    return [*claude_rows, *_codex_thread_title_rows(codex_ids)], authoritative
+
+
+def _external_session_agents(
+    session_rows: List[Dict[str, Any]],
+    audit_rows: List[Dict[str, Any]],
+    finding_rows: List[Dict[str, Any]],
+    protected_frameworks: Set[str],
+    local_address: str = "",
+    *,
+    now: float | None = None,
+    host_session_rows: List[Dict[str, Any]] | None = None,
+    authoritative_session_frameworks: Set[str] | None = None,
+) -> List[Dict[str, Any]]:
+    """Return privacy-safe cards for recently observed Claude/Codex sessions.
+
+    The dedicated registry supplies host titles/slugs. Existing audit rows are
+    also folded in so the UI has a stable session identity immediately, before
+    an updated hook writes its first registry record. Only recent hook activity
+    creates a session card, and raw session IDs never leave this helper.
+    """
+    sessions: Dict[Tuple[str, str], Dict[str, Any]] = {}
+
+    def _merge(row: Dict[str, Any], *, registry: bool) -> None:
+        detail = row.get("detail") if isinstance(row.get("detail"), dict) else {}
+        finding = row.get("finding") if isinstance(row.get("finding"), dict) else {}
+        framework = str(
+            row.get("framework") or finding.get("framework") or ""
+        ).strip().lower()
+        session_id = str(
+            row.get("session_id")
+            or finding.get("session_id")
+            or detail.get("session_id")
+            or ""
+        ).strip()
+        if (
+            framework not in _EXTERNAL_SESSION_FRAMEWORKS
+            or framework not in protected_frameworks
+            or not session_id
+        ):
+            return
+        key = (framework, session_id)
+        current = sessions.setdefault(
+            key,
+            {
+                "framework": framework,
+                "session_id": session_id,
+                "last_seen": 0.0,
+                "workspace": "",
+                "session_slug": "",
+                "session_title": "",
+                "title_source": "",
+                "host_live": False,
+            },
+        )
+        try:
+            observed = float(row.get("last_seen") or row.get("ts") or 0.0)
+        except (TypeError, ValueError):
+            observed = 0.0
+        if observed >= float(current.get("last_seen") or 0.0):
+            current["last_seen"] = observed
+            current["workspace"] = str(
+                row.get("workspace") or finding.get("workspace") or current["workspace"]
+            )
+        if registry:
+            if row.get("session_slug"):
+                current["session_slug"] = str(row["session_slug"])
+            title_source = str(row.get("title_source") or "").strip().lower()
+            # Old registries may contain the first submitted prompt. It is not
+            # a host window/task title and must not be returned by the API.
+            if row.get("session_title") and title_source != "prompt":
+                current["session_title"] = str(row["session_title"])
+                current["title_source"] = title_source
+            if row.get("host_live"):
+                current["host_live"] = True
+
+    for row in session_rows:
+        _merge(row, registry=True)
+    for row in audit_rows:
+        _merge(row, registry=False)
+    for row in host_session_rows or []:
+        _merge(row, registry=True)
+
+    finding_counts: Dict[Tuple[str, str], int] = {}
+    for row in finding_rows:
+        detail = row.get("detail") if isinstance(row.get("detail"), dict) else {}
+        finding = row.get("finding") if isinstance(row.get("finding"), dict) else {}
+        framework = str(
+            row.get("framework") or finding.get("framework") or ""
+        ).strip().lower()
+        session_id = str(
+            row.get("session_id")
+            or finding.get("session_id")
+            or detail.get("session_id")
+            or ""
+        ).strip()
+        if framework in _EXTERNAL_SESSION_FRAMEWORKS and session_id:
+            key = (framework, session_id)
+            finding_counts[key] = finding_counts.get(key, 0) + 1
+
+    current_time = time.time() if now is None else float(now)
+    authoritative = authoritative_session_frameworks or set()
+    cards: List[Dict[str, Any]] = []
+    for row in sessions.values():
+        framework = str(row["framework"])
+        if framework in authoritative and not row.get("host_live"):
+            continue
+        last_seen = float(row.get("last_seen") or 0.0)
+        if not _recent_external_activity({"ts": last_seen}, current_time):
+            continue
+        workspace = str(row.get("workspace") or "")
+        workspace_label = Path(workspace).name if workspace else ""
+        session_id = str(row["session_id"])
+        session_key = hashlib.sha256(
+            f"{framework}\0{session_id}".encode("utf-8")
+        ).hexdigest()[:24]
+        title = " ".join(str(row.get("session_title") or "").split())[:120]
+        cards.append({
+            "framework": framework,
+            "address": local_address or framework,
+            "reports": 0,
+            "findings": finding_counts.get((framework, session_id), 0),
+            "is_local": True,
+            "is_active": True,
+            "protected": True,
+            "protected_session": True,
+            "session_key": session_key,
+            "agent_slug": _external_session_slug(
+                framework,
+                session_id,
+                str(row.get("session_slug") or ""),
+            ),
+            "session_title": title,
+            "session_context": " ".join(str(title or workspace_label).split())[:120],
+            "session_last_seen": last_seen,
+            "workspace": workspace,
+            "workspace_label": workspace_label,
+        })
+    cards.sort(key=lambda card: float(card.get("session_last_seen") or 0.0), reverse=True)
+    return cards
+
+
 def _profile_activity_state(
     attach_rows: List[Dict[str, Any]],
     audit_rows: List[Dict[str, Any]],
     finding_rows: List[Dict[str, Any]],
+    *,
+    running_frameworks: Set[str] | None = None,
 ) -> Dict[Tuple[str, str], Dict[str, Any]]:
     """Aggregate local activity and findings by framework *and* workspace.
 
@@ -755,6 +1109,7 @@ def _profile_activity_state(
     """
     states: Dict[Tuple[str, str], Dict[str, Any]] = {}
     canonical: Dict[str, Tuple[str, str]] = {}
+    framework_keys: Dict[str, List[Tuple[str, str]]] = {}
     for row in attach_rows:
         if not row.get("target") or not row.get("protected", row.get("already")):
             continue
@@ -765,9 +1120,11 @@ def _profile_activity_state(
         key = (framework, workspace)
         states.setdefault(key, {"is_active": False, "findings": 0})
         canonical.setdefault(framework, key)
+        framework_keys.setdefault(framework, []).append(key)
 
     legacy_active: Set[str] = set()
     legacy_findings: Dict[str, int] = {}
+    now = time.time()
 
     def _identity(row: Dict[str, Any]) -> Tuple[str, str]:
         detail = row.get("detail") if isinstance(row.get("detail"), dict) else {}
@@ -785,6 +1142,16 @@ def _profile_activity_state(
         key = (framework, workspace)
         if workspace and key in states:
             states[key]["is_active"] = True
+        elif (
+            workspace
+            and framework in {"claude-code", "codex"}
+            and len(framework_keys.get(framework, [])) == 1
+            and _recent_external_activity(row, now)
+        ):
+            # Claude/Codex report the project cwd, not their config home.  It
+            # is safe to map that event only when exactly one protected profile
+            # exists for the framework; otherwise do not guess.
+            states[framework_keys[framework][0]]["is_active"] = True
         elif not workspace and framework in canonical:
             legacy_active.add(framework)
 
@@ -794,6 +1161,15 @@ def _profile_activity_state(
         if workspace and key in states:
             states[key]["is_active"] = True
             states[key]["findings"] += 1
+        elif (
+            workspace
+            and framework in {"claude-code", "codex"}
+            and len(framework_keys.get(framework, [])) == 1
+        ):
+            external_key = framework_keys[framework][0]
+            states[external_key]["findings"] += 1
+            if _recent_external_activity(row, now):
+                states[external_key]["is_active"] = True
         elif not workspace and framework in canonical:
             legacy_active.add(framework)
             legacy_findings[framework] = legacy_findings.get(framework, 0) + 1
@@ -802,7 +1178,41 @@ def _profile_activity_state(
         if framework in legacy_active:
             states[key]["is_active"] = True
         states[key]["findings"] += legacy_findings.get(framework, 0)
+
+    # Runtime liveness only promotes an already-protected Claude/Codex profile.
+    # With multiple homes we cannot identify which process owns which home, so
+    # leave them unchanged rather than claiming protection for the wrong one.
+    for framework in (running_frameworks or set()) & {"claude-code", "codex"}:
+        keys = framework_keys.get(framework, [])
+        if len(keys) == 1:
+            states[keys[0]]["is_active"] = True
     return states
+
+
+def _visible_local_agent_rows(
+    attach_rows: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Return local profiles that belong in the connected-agent strip.
+
+    Most frameworks appear only after their hooks are confirmed protected.
+    Codex is the exception because installing its plugin cannot bypass the
+    host's explicit hook-trust boundary. Keeping that correctly discovered,
+    installed profile visible lets the dashboard state the required action
+    instead of making Codex look absent.
+    """
+    visible: List[Dict[str, Any]] = []
+    for row in attach_rows:
+        if not row.get("target"):
+            continue
+        protected = bool(row.get("protected", row.get("already")))
+        trust_pending = (
+            str(row.get("kind") or "").lower() == "codex"
+            and bool(row.get("installed"))
+            and bool(row.get("trust_required"))
+        )
+        if protected or trust_pending:
+            visible.append(row)
+    return visible
 
 
 def create_app(*, manage_blackbox: bool = False):
@@ -942,7 +1352,7 @@ def create_app(*, manage_blackbox: bool = False):
                 _blackbox_stop.wait(_BLACKBOX_RESTART_DELAY_SEC)
 
     def _rescan_once(*, force: bool = False) -> List[Dict[str, Any]]:
-        """Discover local Hermes/OpenClaw workspaces and hook Blackbox into them.
+        """Discover local agent installs and hook Blackbox into them.
 
         ``force`` re-attaches every discovered workspace — an idempotent
         self-heal used by the manual refresh, so a freshly installed or upgraded
@@ -957,6 +1367,10 @@ def create_app(*, manage_blackbox: bool = False):
                 current.add(("hermes", str(h)))
             for w in attach.discover_openclaw_workspaces():
                 current.add(("openclaw", str(w)))
+            for h in attach.discover_claude_homes():
+                current.add(("claude-code", str(h)))
+            for h in attach.discover_codex_homes():
+                current.add(("codex", str(h)))
             known: Set[Tuple[str, str]] = _rescan_state["known"]
             removed = known - current
             touched: List[Dict[str, Any]] = []
@@ -969,8 +1383,12 @@ def create_app(*, manage_blackbox: bool = False):
                 try:
                     if kind == "hermes":
                         row = attach.attach_hermes(Path(target))
-                    else:
+                    elif kind == "openclaw":
                         row = attach.attach_openclaw(Path(target))
+                    elif kind == "claude-code":
+                        row = attach.attach_claude(Path(target))
+                    else:
+                        row = attach.attach_codex(Path(target))
                     touched.append(row)
                     if row.get("error"):
                         logger.warning("blackbox rescan: attach %s %s failed: %s", kind, target, row["error"])
@@ -985,7 +1403,7 @@ def create_app(*, manage_blackbox: bool = False):
 
     def _rescan_loop() -> None:
         """Every ``_RESCAN_INTERVAL_SEC`` seconds, attach any newly appeared
-        Hermes/OpenClaw workspace and log ones that vanished."""
+        supported local-agent install and log ones that vanished."""
         while not _rescan_state["stop"]:
             try:
                 _rescan_once()
@@ -1185,14 +1603,20 @@ def create_app(*, manage_blackbox: bool = False):
 
     @app.get("/assets/{name}")
     def asset(name: str) -> Any:
-        # Serve only the two known-safe brand SVGs (no path traversal).
-        allowed = {"blackbox-logo.svg", "umanitek-icon.svg"}
+        # Serve only the known-safe bundled brand assets (no path traversal).
+        allowed = {
+            "blackbox-logo.svg",
+            "umanitek-icon.svg",
+            "claude-logo.png",
+            "codex-logo.png",
+        }
         if name not in allowed:
             return JSONResponse({"error": "not found"}, status_code=404)
         path = _ASSETS_DIR / name
         if not path.exists():
             return JSONResponse({"error": "not found"}, status_code=404)
-        return FileResponse(str(path), media_type="image/svg+xml")
+        media_type = "image/png" if path.suffix == ".png" else "image/svg+xml"
+        return FileResponse(str(path), media_type=media_type)
 
     @app.get("/fonts/{name}")
     def font(name: str) -> Any:
@@ -1532,12 +1956,21 @@ def create_app(*, manage_blackbox: bool = False):
                 return None
         local_addr = _swr("agent-identity", _load_identity, "") or ""
 
-        attach_state: Dict[str, List[Dict[str, Any]]] = {"hermes": [], "openclaw": []}
+        attach_state: Dict[str, List[Dict[str, Any]]] = {
+            "hermes": [],
+            "openclaw": [],
+            "claude-code": [],
+            "codex": [],
+        }
         try:
             attach_state = attach.attach_all(dry_run=True)
         except Exception as exc:  # pragma: no cover - fail open
             logger.debug("blackbox dashboard: attach-state enumeration failed: %s", exc)
-        attach_rows = attach_state.get("hermes", []) + attach_state.get("openclaw", [])
+        attach_rows = [
+            row
+            for kind in ("hermes", "openclaw", "claude-code", "codex")
+            for row in attach_state.get(kind, [])
+        ]
         known_local_fw = {
             str(row.get("kind") or "").lower()
             for row in attach_rows
@@ -1568,7 +2001,42 @@ def create_app(*, manage_blackbox: bool = False):
                 counts_by_fw[fw] = counts_by_fw.get(fw, 0) + 1
         except Exception:  # pragma: no cover - fail open
             finding_rows = []
-        profile_state = _profile_activity_state(attach_rows, audit_rows, finding_rows)
+        running_external_frameworks = _running_external_agent_frameworks()
+        profile_state = _profile_activity_state(
+            attach_rows,
+            audit_rows,
+            finding_rows,
+            running_frameworks=running_external_frameworks,
+        )
+        try:
+            session_rows = audit.read_agent_sessions()
+            host_session_rows, authoritative_session_frameworks = (
+                _external_host_session_rows(session_rows, audit_rows)
+            )
+            external_session_cards = _external_session_agents(
+                session_rows,
+                audit_rows,
+                finding_rows,
+                protected_local_fw,
+                local_addr,
+                host_session_rows=host_session_rows,
+                authoritative_session_frameworks=authoritative_session_frameworks,
+            )
+        except Exception:  # pragma: no cover - fail open
+            external_session_cards = []
+        external_sessions_by_framework: Dict[str, List[Dict[str, Any]]] = {}
+        for card in external_session_cards:
+            framework = str(card.get("framework") or "")
+            external_sessions_by_framework.setdefault(framework, []).append(
+                {
+                    "agent_slug": card.get("agent_slug"),
+                    "session_title": card.get("session_title"),
+                    "session_context": card.get("session_context"),
+                    "workspace_label": card.get("workspace_label"),
+                    "findings": card.get("findings", 0),
+                    "last_seen": card.get("session_last_seen"),
+                }
+            )
         blackbox_runtime = _blackbox_snapshot()
         blackbox_workspace = _workspace_key(_blackbox_profile_dir())
         blackbox_host_workspace = _workspace_key(constants.hermes_home())
@@ -1640,32 +2108,41 @@ def create_app(*, manage_blackbox: bool = False):
             else:
                 found[key] = {"framework": fw, "address": addr, "reports": n}
 
-        # Attached local workspaces — one card per protected workspace, so two
-        # OpenClaw profiles on one node wallet render as two agents. Local-wallet
-        # entries are absorbed here so the same framework doesn't render twice.
+        # Attached local workspaces — one card per protected workspace, plus a
+        # discovered Codex plugin awaiting the host's explicit hook trust. Local
+        # wallet entries are absorbed here so a framework doesn't render twice.
         try:
-            attached = [
-                (str(row.get("kind") or "").lower(), str(row.get("target") or ""))
-                for row in attach_rows
-                if row.get("protected", row.get("already")) and row.get("target")
-            ]
-            fw_with_ws = {fw for fw, _ in attached}
+            attached = _visible_local_agent_rows(attach_rows)
+            fw_with_ws = {
+                str(row.get("kind") or "").lower()
+                for row in attached
+            }
             local_addr_lc = local_addr.lower()
             for k in list(found.keys()):
                 fw_k, addr_k = k
                 if fw_k in fw_with_ws and addr_k == local_addr_lc:
                     found.pop(k, None)
-            for fw, ws in attached:
+            for row in attached:
+                fw = str(row.get("kind") or "").lower()
+                ws = str(row.get("target") or "")
                 ws_name = Path(ws).name or ws
+                protected = bool(row.get("protected", row.get("already")))
+                trust_required = bool(row.get("trust_required")) and not protected
                 state = profile_state.get(
                     (fw, _workspace_key(ws)), {"is_active": False, "findings": 0}
                 )
+                sessions = external_sessions_by_framework.get(fw, []) if protected else []
+                profile_active = bool(state["is_active"] or sessions)
                 key = (fw, ws.lower())
                 if key in found:
                     found[key]["workspace"] = ws
                     found[key]["workspace_label"] = ws_name
-                    found[key]["is_active"] = bool(state["is_active"])
+                    found[key]["is_active"] = profile_active
                     found[key]["findings"] = int(state["findings"])
+                    found[key]["protected"] = protected
+                    found[key]["trust_required"] = trust_required
+                    found[key]["sessions"] = sessions
+                    found[key]["session_count"] = len(sessions)
                     found[key]["blackbox_host"] = (
                         fw == "hermes" and _workspace_key(ws) == blackbox_host_workspace
                     )
@@ -1678,7 +2155,11 @@ def create_app(*, manage_blackbox: bool = False):
                     "is_local": True,
                     # Protection/attachment is persistent configuration; only
                     # activity from this exact workspace marks it active.
-                    "is_active": bool(state["is_active"]),
+                    "is_active": profile_active,
+                    "protected": protected,
+                    "trust_required": trust_required,
+                    "sessions": sessions,
+                    "session_count": len(sessions),
                     "workspace": ws,
                     "workspace_label": ws_name,
                     # The Hermes home that loaded Agent Blackbox gets a distinct
@@ -1694,7 +2175,10 @@ def create_app(*, manage_blackbox: bool = False):
         protected_profile_count = sum(
             1
             for row in agents_out
-            if row.get("is_local") and row.get("workspace") and not row.get("is_active")
+            if row.get("is_local")
+            and row.get("workspace")
+            and row.get("protected")
+            and not row.get("is_active")
         )
         return {
             "agents": agents_out,
@@ -1711,6 +2195,8 @@ def create_app(*, manage_blackbox: bool = False):
         supported = {
             "hermes": "Hermes was not detected on this machine.",
             "openclaw": "OpenClaw was not detected on this machine. Start OpenClaw once so its openclaw.json workspace can be discovered.",
+            "claude-code": "Claude Code was not detected on this machine. Start Claude Code once, then rescan.",
+            "codex": "Codex was not detected on this machine. Start Codex once, then rescan.",
         }
 
         def _add_rows(kind: str, rows: Any) -> None:
@@ -1732,6 +2218,14 @@ def create_app(*, manage_blackbox: bool = False):
         try:
             _add_rows("hermes", attach.attach_all(openclaw=False, dry_run=True).get("hermes", []))
             _add_rows("openclaw", attach.attach_all(hermes=False, dry_run=True).get("openclaw", []))
+            _add_rows(
+                "claude-code",
+                [attach.attach_claude(home, dry_run=True) for home in attach.discover_claude_homes()],
+            )
+            _add_rows(
+                "codex",
+                [attach.attach_codex(home, dry_run=True) for home in attach.discover_codex_homes()],
+            )
         except Exception as exc:  # pragma: no cover - fail open
             logger.debug("blackbox dashboard: attach target discovery failed: %s", exc)
         for kind, reason in supported.items():
@@ -1760,6 +2254,10 @@ def create_app(*, manage_blackbox: bool = False):
                 rows.append(attach.attach_hermes(Path(target)))
             elif kind == "openclaw":
                 rows.append(attach.attach_openclaw(Path(target)))
+            elif kind == "claude-code":
+                rows.append(attach.attach_claude(Path(target)))
+            elif kind == "codex":
+                rows.append(attach.attach_codex(Path(target)))
         ok = all(row.get("ok") for row in rows) if rows else False
         return JSONResponse({"ok": ok, "targets": rows}, status_code=200 if ok else 400)
 
@@ -1779,6 +2277,10 @@ def create_app(*, manage_blackbox: bool = False):
                 rows.append(attach.attach_hermes(Path(target)) if enabled else attach.detach_hermes(Path(target)))
             elif kind == "openclaw":
                 rows.append(attach.attach_openclaw(Path(target)) if enabled else attach.detach_openclaw(Path(target)))
+            elif kind == "claude-code":
+                rows.append(attach.attach_claude(Path(target)) if enabled else attach.detach_claude(Path(target)))
+            elif kind == "codex":
+                rows.append(attach.attach_codex(Path(target)) if enabled else attach.detach_codex(Path(target)))
         ok = all(row.get("ok") for row in rows) if rows else False
         return JSONResponse({"ok": ok, "targets": rows}, status_code=200 if ok else 400)
 
@@ -1786,7 +2288,7 @@ def create_app(*, manage_blackbox: bool = False):
     def rescan_agents() -> Any:
         """Force an immediate re-hook + agent-detection sweep (the manual refresh).
 
-        Re-attaches Blackbox to every local Hermes/OpenClaw workspace
+        Re-attaches Blackbox to every supported local agent install
         (idempotent), so a just-installed or upgraded agent is protected and
         shown without waiting for the background rescan loop. The frontend
         re-polls ``/api/agents`` afterwards to render any new cards. Fail-open:
