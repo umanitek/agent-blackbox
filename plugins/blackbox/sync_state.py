@@ -46,7 +46,17 @@ def write(status: str, **details: Any) -> Dict[str, Any]:
         **details,
     }
     if status == "running" and previous.get("status") == "running":
-        for key in ("public_entries", "expected_public_entries", "community_entries"):
+        for key in (
+            "public_entries",
+            "expected_public_entries",
+            "community_entries",
+            "coordinator_state",
+            "sync_mode",
+            "regular_status",
+            "regular_job_id",
+            "fallback_reason",
+            "requires_dkg_restart",
+        ):
             if key not in details and key in previous:
                 state[key] = previous[key]
     if status == "running" and previous.get("status") != "running":

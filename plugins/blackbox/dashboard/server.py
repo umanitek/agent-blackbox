@@ -236,10 +236,10 @@ def _network_sync_once(
 ) -> Dict[str, Any]:
     """Fetch and verify the latest VM snapshot, once per dashboard process.
 
-    The CLI owns the complete curator-pinned recovery protocol and publishes
-    progress through ``sync_state``. Running it in a subprocess keeps a long
-    network transfer isolated from the dashboard server while its status
-    remains visible to every dashboard poll.
+    The CLI owns the regular-first hybrid coordinator and publishes progress
+    through ``sync_state``. Running it in a subprocess keeps a long network
+    transfer isolated from the dashboard server while its status remains
+    visible to every dashboard poll.
     """
     if not _network_sync_lock.acquire(blocking=False):
         cfg = load_config()
@@ -402,6 +402,8 @@ def _sync_activity(
     connection_state = str(connection.get("state") or "").lower()
     transfer_status = str(transfer.get("status") or "").lower()
     phase = str(transfer.get("phase") or "").lower()
+    coordinator_state = str(transfer.get("coordinator_state") or "").lower()
+    sync_mode = str(transfer.get("sync_mode") or "none").lower()
     current = int(transfer.get("public_entries") or public or 0)
     expected = int(transfer.get("expected_public_entries") or 0)
     current_triples = int(transfer.get("current_triples") or 0)
@@ -417,10 +419,17 @@ def _sync_activity(
         "expected": None,
         "percent": None,
         "indeterminate": True,
+        "coordinator_state": coordinator_state or None,
+        "sync_mode": sync_mode,
     }
 
     if transfer_status == "running":
         labels = {
+            "preparing-hybrid-sync": "Preparing graph synchronization",
+            "regular-subscribing": "Subscribing to threat graph",
+            "network-catchup": "Regular DKG catch-up",
+            "regular-terminal": "Checking regular DKG result",
+            "fallback-pending": "Switching to curator recovery",
             "recovering-verifiable-memory": "Receiving publisher VM",
             "waiting-for-verifiable-memory": "Verifying publisher VM",
             "refreshing-verifiable-memory": "Refreshing verified threats",
@@ -482,6 +491,15 @@ def _sync_activity(
                 expected=expected,
                 percent=round((bounded / expected) * 100, 1),
                 indeterminate=False,
+            )
+        elif phase == "fallback-pending":
+            progress["detail"] = (
+                "The regular DKG job is terminal; curator recovery is waiting "
+                "behind the exclusive drain gate."
+            )
+        elif phase in {"regular-subscribing", "network-catchup", "regular-terminal"}:
+            progress["detail"] = (
+                "The local DKG subscription is fetching and verifying the threat graph."
             )
         else:
             progress["detail"] = "The DKG node is receiving and verifying an atomic snapshot."
@@ -1399,14 +1417,12 @@ def create_app(*, manage_blackbox: bool = False):
             except (TypeError, ValueError):
                 pass
         if authoritative_running:
-            # The curator-pinned durable transfer is intentionally separate
-            # from DKG's generic catch-up job. Keep the loader honest while a
-            # partial but usable VM snapshot is being expanded in the
-            # background.
+            # The coordinator may be in regular catch-up, the drain gate, or
+            # curator fallback. Keep the loader honest until that single owner
+            # publishes a terminal result.
             catchup_state = "running"
         elif authoritative_done and node_catchup_state.lower() not in {"queued", "running"}:
-            # The curator transfer records both tiers, including a legitimate
-            # zero-entry SWM.  Prefer that completed result over a stale generic
+            # Prefer the coordinator's completed result over a stale daemon
             # catch-up probe/connection hint.
             catchup_state = "done"
         public_state = (

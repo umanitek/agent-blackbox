@@ -256,7 +256,6 @@ class DkgClient:
             cg_id,
             include_shared_memory=include_shared_memory,
         )
-
     def catchup_status(
         self,
         cg_id: str,

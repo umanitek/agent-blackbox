@@ -748,6 +748,8 @@ def test_sync_activity_prefers_completed_authoritative_transfer_over_stale_conne
         "expected": 25_000,
         "percent": 100.0,
         "indeterminate": False,
+        "coordinator_state": None,
+        "sync_mode": "none",
     }
 
 
