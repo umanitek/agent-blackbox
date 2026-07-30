@@ -1,7 +1,7 @@
 {
   "name": "@umanitek/blackbox-openclaw",
   "version": "0.1.0",
-  "description": "Agent Blackbox plugin for OpenClaw — mirrors hermes blackbox detection and reports sightings to the local DKG threat graph.",
+  "description": "Agent Blackbox plugin for OpenClaw — local detection from the curated Verifiable Memory threat graph.",
   "type": "module",
   "license": "MIT",
   "files": [

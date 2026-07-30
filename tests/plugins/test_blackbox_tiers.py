@@ -28,6 +28,7 @@ def _ruleset(**kw):
     rs.dependency = kw.get("dependency", {})
     rs.fileaccess = kw.get("fileaccess", [])
     rs.skill = kw.get("skill", [])
+    rs.ioc = kw.get("ioc", {})
     rs.synced_at = kw.get("synced_at", 9e18)  # far future → no background refresh
     return rs
 
@@ -112,21 +113,57 @@ def test_defender_entities_are_expanded_into_individual_rules():
     assert rs.counts()["skill"] == 32
     assert rs.source_count("public") == 1000
     assert rs.graph_count("public") == 1000
+    assert rs.graph_entries("public") is rs.graph_entries("public")
     assert len({rule["identifier"] for _category, rule in rs.iter_rules()}) == 1000
-    sparql = ruleset_mod._threats_sparql(1000, 0)
+    sparql = ruleset_mod._threats_sparql(1000)
     assert "defender:DependencySignal" in sparql
-    split_sparql = "\n".join(ruleset_mod._defender_threats_sparql(1000, 0))
+    split_sparql = "\n".join(ruleset_mod._defender_threats_sparql(1000))
     assert "defender:InjectionSignal" in split_sparql
     assert "defender:SkillSignal" in split_sparql
+    assert "blackbox:SourceObservation" in split_sparql
     assert "UNION" not in sparql
+    assert "OFFSET" not in split_sparql
+    assert "SELECT ?threat WHERE" in split_sparql
 
 
-def test_graph_schemas_are_queried_separately_and_merged():
+def test_active_source_observations_become_verified_ioc_rules():
+    active = {
+        "threat": "urn:blackbox:observation:active",
+        "rdfType": "urn:blackbox:SourceObservation",
+        "canonicalType": "domain",
+        "observationCategory": "phishing",
+        "lifecycleStatus": "active",
+        "normalizedValue": "Bad.Example.",
+        "provenanceJson": '{"severity":"high","originalValue":"Bad.Example."}',
+        "sourceId": "phishing_database",
+    }
+    inactive = {
+        **active,
+        "threat": "urn:blackbox:observation:inactive",
+        "lifecycleStatus": "retired",
+        "normalizedValue": "retired.example",
+    }
+
+    rs = ruleset_mod.build_from_rows([active, inactive], source="public")
+
+    assert list(rs.ioc) == ["ioc:domain:bad.example"]
+    rule = rs.ioc["ioc:domain:bad.example"]
+    assert rule["source"] == "public"
+    assert rule["severity"] == "high"
+    assert rule["kind"] == "phishing"
+    assert rule["value"] == "bad.example"
+    assert rule["sourceId"] == "phishing_database"
+    assert rs.graph_count("public") == 1
+
+
+def test_root_only_graph_schemas_are_queried_separately_and_merged():
     queries = []
 
     class _Client:
         def query(self, sparql, cg_id, **kwargs):
             queries.append(sparql)
+            if "dkg:assertionGraph" in sparql:
+                return []
             if "defender:DependencySignal" in sparql:
                 return [{
                     "threat": {"value": "urn:defender:signal:1"},
@@ -142,8 +179,128 @@ def test_graph_schemas_are_queried_separately_and_merged():
     rows = ruleset_mod._fetch_tier(_Client(), "cg", "verifiable-memory")
 
     assert len(rows) == 2
-    assert len(queries) == 5
-    assert all("UNION" not in query for query in queries)
+    assert len(queries) == 8
+    assert all("UNION" not in query for query in queries[1:])
+    assert all("GRAPH <did:dkg:context-graph:cg>" in query for query in queries[1:])
+
+
+def test_tentative_vm_partitions_fail_closed_without_broad_view():
+    calls = []
+
+    class _Client:
+        def query(self, sparql, cg_id, **kwargs):
+            calls.append((sparql, kwargs))
+            if "dkg:assertionGraph" not in sparql:
+                raise AssertionError("tentative partitions must not be queried")
+            return [{
+                "assertionGraph": {
+                    "value": (
+                        "did:dkg:context-graph:cg/"
+                        "_verifiable_memory/partition/0000"
+                    )
+                },
+                "status": {"value": "tentative"},
+            }]
+
+    assert ruleset_mod._fetch_tier(_Client(), "cg", "verifiable-memory") is None
+    assert len(calls) == 1
+    assert calls[0][1]["view"] is None
+
+
+def test_mixed_vm_store_merges_root_and_confirmed_partitions_without_duplicates():
+    data_graph = "did:dkg:context-graph:cg"
+    root_only = "urn:defender:signal:root"
+    partition_only = "urn:defender:signal:partition"
+    duplicate = "urn:defender:signal:duplicate"
+    calls = []
+
+    class _Client:
+        def query(self, sparql, cg_id, **kwargs):
+            calls.append((sparql, kwargs))
+            if "dkg:assertionGraph" in sparql:
+                return [{
+                    "assertionGraph": {
+                        "value": f"{data_graph}/_verifiable_memory/partition/0000"
+                    },
+                    "status": {"value": "confirmed"},
+                }]
+            if "VALUES ?sourceGraph" in sparql:
+                return [
+                    {"threat": {"value": partition_only}},
+                    {"threat": {"value": duplicate}},
+                ]
+            if "defender:DependencySignal" in sparql:
+                return [
+                    {"threat": {"value": root_only}},
+                    {"threat": {"value": duplicate}},
+                ]
+            return []
+
+    rows = ruleset_mod._fetch_tier(_Client(), "cg", "verifiable-memory")
+
+    assert [ruleset_mod.extract_binding(row.get("threat")) for row in rows] == [
+        partition_only,
+        duplicate,
+        root_only,
+    ]
+    assert all(kwargs["view"] is None for _query, kwargs in calls)
+    root_queries = [
+        query
+        for query, _kwargs in calls
+        if "dkg:assertionGraph" not in query and "VALUES ?sourceGraph" not in query
+    ]
+    assert root_queries
+    assert all(f"GRAPH <{data_graph}>" in query for query in root_queries)
+
+
+def test_vm_correction_suppresses_exact_subject_from_detection_and_graph():
+    subject = "urn:defender:signal:bad-easy-day"
+    threat = {
+        "threat": subject,
+        "rdfType": "urn:defender:DependencySignal",
+        "packageEcosystem": "npm",
+        "packageName": "easy-day-js",
+        "packageVersion": "1.11.21",
+        "severity": "critical",
+        "name": "incorrect malicious version",
+    }
+    correction = {
+        "threat": "urn:defender:correction:easy-day-1-11-21",
+        "rdfType": "urn:defender:CorrectionSignal",
+        "targetSubject": subject,
+        "correctionAction": "suppress",
+    }
+
+    rs = ruleset_mod.build_from_rows([threat, correction], source="public")
+
+    assert rs.dependency == {}
+    assert rs.graph_entries("public") == []
+
+
+def test_only_public_monotonic_suppress_corrections_take_effect():
+    subject = "urn:defender:signal:known-threat"
+    threat = {
+        "threat": subject,
+        "rdfType": "urn:defender:DependencySignal",
+        "packageEcosystem": "npm",
+        "packageName": "known-threat",
+        "packageVersion": "1.0.0",
+    }
+    correction = {
+        "threat": "urn:defender:correction:not-authoritative",
+        "rdfType": "urn:defender:CorrectionSignal",
+        "targetSubject": subject,
+        "correctionAction": "suppress",
+    }
+    restore = {**correction, "correctionAction": "restore"}
+
+    community = ruleset_mod.build_from_rows(
+        [(threat, "public"), (correction, "community")]
+    )
+    unsupported = ruleset_mod.build_from_rows([threat, restore], source="public")
+
+    assert "npm:known-threat@1.0.0" in community.dependency
+    assert "npm:known-threat@1.0.0" in unsupported.dependency
 
 
 def test_graph_keeps_threat_with_invalid_detection_pattern():
@@ -162,6 +319,91 @@ def test_graph_keeps_threat_with_invalid_detection_pattern():
     assert rs.graph_entries("public")[0]["category"] == "injection"
     restored = ruleset_mod._deserialize(ruleset_mod._serialize(rs))
     assert restored.graph_count("public") == 1
+
+
+def test_published_regex_escapes_are_normalized_without_broadening():
+    row = {
+        "threat": "urn:defender:signal:endoftext",
+        "rdfType": "urn:defender:InjectionSignal",
+        "identifier": "injection:endoftext",
+        # The DKG literal contains one extra JSON/RDF escape layer.
+        "pattern": r"<\\|endoftext\\|>",
+        "severity": "high",
+        "name": "GPT end-of-text delimiter injection",
+    }
+
+    rs = ruleset_mod.build_from_rows([row], source="public")
+    restored = ruleset_mod._deserialize(ruleset_mod._serialize(rs))
+
+    assert detection.detect_injection("2 > 1", rs) == []
+    assert detection.detect_injection("2 > 1", restored) == []
+    assert detection.detect_injection("<|endoftext|>", rs)
+    assert detection.detect_injection("<|endoftext|>", restored)
+
+
+def test_legacy_skill_title_recovers_concrete_name_only():
+    rows = [
+        {
+            "identifier": "skill:legacy-named",
+            "rdfType": "urn:defender:SkillSignal",
+            "name": "'totally-safe-helper' (any version)",
+            "severity": "critical",
+        },
+        {
+            "identifier": "skill:legacy-generic",
+            "rdfType": "urn:defender:SkillSignal",
+            "name": "Unrestricted shell-execution MCP",
+            "severity": "critical",
+        },
+    ]
+
+    rs = ruleset_mod.build_from_rows(rows, source="public")
+
+    assert rs.skill[0]["skillName"] == "totally-safe-helper"
+    assert rs.skill[1]["skillName"] == ""
+    assert ruleset_mod._skill_name_from_title("Environment-variable exfil MCP") == ""
+
+
+def test_versionless_historical_skill_flags_medium_with_cautious_wording():
+    rs = _ruleset(skill=[{
+        "identifier": "skill:legacy-named", "skillName": "totally-safe-helper",
+        "skillVersion": "", "dangerShape": "", "severity": "critical",
+        "name": "old incident", "source": "public",
+    }])
+
+    findings = detection.detect_skill(
+        "skill_manage", {"name": "totally-safe-helper", "version": "9.9.9"}, rs
+    )
+
+    assert len(findings) == 1
+    finding = findings[0]
+    assert finding.severity == "medium"
+    assert finding.kind == "historical"
+    assert "was exploited in the past" in finding.evidence
+    assert "may be fixed in newer releases" in finding.evidence
+
+
+def test_versionless_historical_skill_never_blocks(monkeypatch):
+    rs = _ruleset(skill=[{
+        "identifier": "skill:legacy-named", "skillName": "totally-safe-helper",
+        "skillVersion": "", "dangerShape": "", "severity": "critical",
+        "name": "old incident", "source": "public",
+    }])
+    monkeypatch.setattr(ruleset_mod, "get", lambda cfg=None: rs)
+    monkeypatch.setattr(hooks, "_report_and_audit", lambda *a, **k: None)
+    monkeypatch.setattr(hooks, "_spawn_osv_discovery", lambda *a, **k: None)
+    monkeypatch.setattr(
+        config_mod,
+        "load_blackbox_config",
+        lambda: config_mod.BlackboxConfig(mode="block", block_severity="medium"),
+    )
+
+    out = hooks.on_pre_tool_call(
+        tool_name="skill_manage",
+        args={"name": "totally-safe-helper", "version": "9.9.9"},
+    )
+
+    assert out is None
 
 
 # --- detection: community flags, public confirms ------------------------------

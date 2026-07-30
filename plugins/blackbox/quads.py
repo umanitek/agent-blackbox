@@ -320,6 +320,9 @@ def normalize_arg_shape(tool_name: str, args: Any) -> Optional[str]:
 # instruction-noun, or an exfil verb near a secret) so common real-world
 # phrasings match without firing on ordinary prose.
 _INJECTION_HEURISTICS = (
+    # OpenClaw's external-content sanitizer emits this marker after removing a
+    # model-control delimiter; treat the marker itself as a high-signal event.
+    ("high", "LLM01", re.compile(r"\[REMOVED_SPECIAL_TOKEN\]")),
     # "ignore all previous instructions" and its many close variants:
     # ignore/disregard/forget/skip/override + (all|any|the)? +
     # previous/prior/above/earlier + instructions/messages/prompts/rules/context/...
@@ -416,6 +419,8 @@ _SENSITIVE_PATH_RULES = (
 
 # Tools whose args reference a file/path. Value = tuple of candidate arg keys.
 _FILE_ACCESS_TOOLS = {
+    "read": "read",
+    "write": "write",
     "read_file": "read",
     "write_file": "write",
     "edit_file": "write",

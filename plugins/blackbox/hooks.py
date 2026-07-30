@@ -73,7 +73,7 @@ def _flag_worthy(cfg: BlackboxConfig, findings: List[detection.Finding]) -> List
 
 
 def _report_and_audit(cfg: BlackboxConfig, event: str, findings: List[detection.Finding], detail: Dict[str, Any]) -> None:
-    """Audit always; on findings write private audit KA + outbound SWM sighting."""
+    """Audit findings locally; never publish them to community SWM."""
     finding_dicts = [f.to_dict() for f in findings]
     audit.record(event=event, findings=finding_dicts or None, detail=detail)
     if not findings:
@@ -97,9 +97,8 @@ def _report_and_audit(cfg: BlackboxConfig, event: str, findings: List[detection.
         if client is not None:
             audit.mark_reported(identifier)
             audit.write_private_audit_ka(client, cfg.context_graph_id, event, finding)
-        # Outbound SWM sighting (never carries observed prompt/command text).
-        if cfg.report and client is not None and audit.allow_report(cfg.daily_report_limit):
-            _share_sighting(client, cfg, finding)
+        # Outbound sharing is closed until the community graph ships. Findings
+        # and their private audit evidence remain local.
 
 
 def _share_sighting(client: DkgClient, cfg: BlackboxConfig, finding: Dict[str, Any]) -> None:
@@ -336,7 +335,7 @@ def on_pre_tool_call(
             blocking = [
                 f for f in findings
                 if (f.confirmed or f.source in ("custom", "secret"))
-                and getattr(f, "kind", None) != constants.KIND_VULNERABILITY
+                and getattr(f, "kind", None) not in (constants.KIND_VULNERABILITY, "historical")
                 # IOC findings alert but never auto-block in this rollout: network
                 # and crypto-address blocklists are higher-churn/higher-FP than
                 # pinned package versions, so validate them in audit mode first.
@@ -427,33 +426,62 @@ def on_post_tool_call(
         logger.debug("blackbox: post_tool_call failed: %s", exc)
 
 
-def _collect_message_text(messages: Any) -> str:
+def _untrusted_request_text(user_message: Any, request_messages: Any) -> str:
+    """Return only the current turn's untrusted text for injection scanning.
+
+    The API request also contains Hermes' system/developer instructions and
+    earlier assistant turns. Those are trusted runtime context, not attacker
+    input; scanning them caused harmless prompts to inherit matches from the
+    system prompt. Scan the current user turn plus tool results produced during
+    that turn, while keeping the full conversation separately for local audit
+    context.
+    """
+    current = str(user_message or "").strip()
+    messages = request_messages if isinstance(request_messages, list) else []
+
+    # Limit the scan to the most recent user turn and anything returned by tools
+    # after it. This also prevents an old injection from firing again on every
+    # later request in the same conversation.
+    start = 0
+    for idx in range(len(messages) - 1, -1, -1):
+        msg = messages[idx]
+        if isinstance(msg, dict) and str(msg.get("role") or "").lower() == "user":
+            start = idx
+            break
+
     parts: List[str] = []
-    if isinstance(messages, list):
-        for msg in messages[-20:]:
-            if isinstance(msg, dict):
-                content = msg.get("content")
-                if isinstance(content, str):
-                    parts.append(content)
-                elif isinstance(content, list):
-                    for item in content:
-                        if isinstance(item, dict) and isinstance(item.get("text"), str):
-                            parts.append(item["text"])
-                        elif isinstance(item, str):
-                            parts.append(item)
+    seen: set[str] = set()
+
+    def add(text: str) -> None:
+        value = text.strip()
+        if value and value not in seen:
+            seen.add(value)
+            parts.append(value)
+
+    add(current)
+    for msg in messages[start:]:
+        if not isinstance(msg, dict):
+            continue
+        role = str(msg.get("role") or "").lower()
+        # User content and tool output are the untrusted boundaries. System,
+        # developer, and assistant content must never create a user finding.
+        if role not in ("user", "tool"):
+            continue
+        add(_message_text(msg.get("content")))
     return "\n".join(parts)
 
 
 def on_pre_api_request(**kwargs: Any) -> None:
-    """Scan the user message + request messages for prompt-injection patterns.
+    """Scan current user/tool input for prompt-injection patterns.
 
     Observer-only: blocking happens at the tool call, not here.
     """
     try:
         cfg = _config()
         rs = ruleset.get(cfg)
-        text = str(kwargs.get("user_message") or "")
-        text += "\n" + _collect_message_text(kwargs.get("request_messages"))
+        text = _untrusted_request_text(
+            kwargs.get("user_message"), kwargs.get("request_messages")
+        )
         findings = detection.detect_injection(text, rs)
         if cfg.discover:
             findings = findings + detection.discover_injection(text, rs)

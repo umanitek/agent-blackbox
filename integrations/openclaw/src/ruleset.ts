@@ -1,17 +1,12 @@
 /**
  * Graph-synced rule cache.
  *
- * The ruleset is the ONLY source of detection truth, merged from two tiers
- * with strict precedence (mirrors Python `ruleset.py`):
+ * The ruleset is the ONLY source of detection truth (mirrors Python
+ * `ruleset.py`):
  *
  *   - `verifiable-memory` (the curated public threat graph) → rules tagged
  *     `source: "public"`. The source of truth: matches are CONFIRMED and, in
  *     block mode, blockable.
- *   - `shared-working-memory` (the community pool) → rules tagged
- *     `source: "community"`. Checked only when the public graph doesn't
- *     already cover the identifier: matches flag but NEVER block — anyone can
- *     write to the community pool, so it must not be able to stop tool calls.
- *
  * Each tier pulls both legacy Guardian threats and Defender signal entities, normalized into a
  * `Ruleset` and cached to a JSON file (source tags included) under the
  * OpenClaw state dir with a TTL. On an empty graph the ruleset is empty and
@@ -28,6 +23,7 @@ import {
   DependencyRule,
   EscalationRule,
   FileAccessRule,
+  IocRule,
   InjectionRule,
   RuleSource,
   Ruleset,
@@ -49,15 +45,23 @@ import {
   BLACKBOX_SKILL_NAME_PRED,
   BLACKBOX_SKILL_VERSION_PRED,
   BLACKBOX_TOOL_NAME_PRED,
+  DEFENDER_CORRECTION_ACTION_PRED,
+  DEFENDER_CORRECTION_SUPPRESS,
+  DEFENDER_CORRECTION_TARGET_PRED,
+  DEFENDER_CORRECTION_TYPE_IRI,
   SCHEMA_DESCRIPTION,
   SCHEMA_NAME,
   RDF_TYPE,
+  iocIdentifier,
   normalizeSeverity,
 } from "./quads.js";
 
 const SCHEMA_ADVISORY = "http://schema.org/identifier";
 const DEFENDER = "urn:defender:";
 const DEFENDER_P = "urn:defender:p:";
+const SOURCE_OBSERVATION = "urn:blackbox:SourceObservation";
+const SOURCE_OBSERVATION_P = "urn:blackbox:p:";
+const IOC_TYPES = new Set(["domain", "url", "ip", "hash", "wallet", "contract"]);
 
 /**
  * SPARQL that pulls legacy threats and the current Defender signal ontology.
@@ -66,24 +70,40 @@ function rulesetQuery(): string {
   return `
 SELECT ?s ?p ?o WHERE {
   {
-    ?s <${BLACKBOX_IDENTIFIER_PRED}> ?identifier .
+    {
+      ?s <${BLACKBOX_IDENTIFIER_PRED}> ?identifier .
+    }
+    UNION
+    {
+      ?s a ?signalType .
+      VALUES ?signalType {
+        <${DEFENDER}DependencySignal> <${DEFENDER}InjectionSignal>
+        <${DEFENDER}SkillSignal> <${DEFENDER}IocSignal>
+        <${DEFENDER_CORRECTION_TYPE_IRI}>
+      }
+    }
+    ?s ?p ?o .
   }
   UNION
   {
-    ?s a ?signalType .
-    VALUES ?signalType {
-      <${DEFENDER}DependencySignal> <${DEFENDER}InjectionSignal>
-      <${DEFENDER}SkillSignal> <${DEFENDER}IocSignal>
+    ?s a <${SOURCE_OBSERVATION}> .
+    ?s ?p ?o .
+    VALUES ?p {
+      <${RDF_TYPE}>
+      <${SOURCE_OBSERVATION_P}canonicalType>
+      <${SOURCE_OBSERVATION_P}category>
+      <${SOURCE_OBSERVATION_P}lifecycleStatus>
+      <${SOURCE_OBSERVATION_P}normalizedValue>
+      <${SOURCE_OBSERVATION_P}provenanceJson>
+      <${SOURCE_OBSERVATION_P}sourceId>
     }
   }
-  ?s ?p ?o .
 }`.trim();
 }
 
-/** Tier sync order: public curated graph first (source of truth), then community. */
+/** Agent Blackbox is VM-only until community support ships. */
 const TIERS: ReadonlyArray<readonly [DkgView, RuleSource]> = [
   ["verifiable-memory", "public"],
-  ["shared-working-memory", "community"],
 ];
 
 export function resolveStateDir(explicit?: string): string {
@@ -124,6 +144,7 @@ interface ThreatAccum {
   identifier?: string;
   severity?: string;
   name?: string;
+  description?: string;
   pattern?: string;
   owaspCategory?: string;
   toolName?: string;
@@ -140,6 +161,18 @@ interface ThreatAccum {
   skillName?: string;
   skillVersion?: string;
   dangerShape?: string;
+  // IOC
+  iocValue?: string;
+  // append-only correction
+  targetSubject?: string;
+  correctionAction?: string;
+  // compact VM source observation
+  canonicalType?: string;
+  observationCategory?: string;
+  lifecycleStatus?: string;
+  normalizedValue?: string;
+  provenanceJson?: string;
+  sourceId?: string;
 }
 
 /** Accumulate the s/p/o rows of one tier's response into per-subject threats. */
@@ -157,8 +190,8 @@ function collectThreats(resp: unknown): ThreatAccum[] {
       case BLACKBOX_IDENTIFIER_PRED: acc.identifier = o; break;
       case BLACKBOX_SEVERITY_PRED:
       case `${DEFENDER_P}severity`: acc.severity = o; break;
-      case SCHEMA_NAME: acc.name ??= o; break;
-      case SCHEMA_DESCRIPTION: acc.name ??= o; break;
+      case SCHEMA_NAME: acc.name = o; break;
+      case SCHEMA_DESCRIPTION: acc.description = o; break;
       case BLACKBOX_PATTERN_PRED:
       case `${DEFENDER_P}pattern`: acc.pattern = o; break;
       case BLACKBOX_OWASP_CATEGORY_PRED: acc.owaspCategory = o; break;
@@ -176,9 +209,18 @@ function collectThreats(resp: unknown): ThreatAccum[] {
       case `${DEFENDER_P}advisoryId`: acc.advisoryId = o; break;
       case BLACKBOX_CATEGORY_PRED:
       case `${DEFENDER_P}iocType`: acc.category = o; break;
+      case `${DEFENDER_P}value`: acc.iocValue = o; break;
       case BLACKBOX_SKILL_NAME_PRED: acc.skillName = o; break;
       case BLACKBOX_SKILL_VERSION_PRED: acc.skillVersion = o; break;
       case BLACKBOX_DANGER_SHAPE_PRED: acc.dangerShape = o; break;
+      case DEFENDER_CORRECTION_TARGET_PRED: acc.targetSubject = o; break;
+      case DEFENDER_CORRECTION_ACTION_PRED: acc.correctionAction = o; break;
+      case `${SOURCE_OBSERVATION_P}canonicalType`: acc.canonicalType = o; break;
+      case `${SOURCE_OBSERVATION_P}category`: acc.observationCategory = o; break;
+      case `${SOURCE_OBSERVATION_P}lifecycleStatus`: acc.lifecycleStatus = o; break;
+      case `${SOURCE_OBSERVATION_P}normalizedValue`: acc.normalizedValue = o; break;
+      case `${SOURCE_OBSERVATION_P}provenanceJson`: acc.provenanceJson = o; break;
+      case `${SOURCE_OBSERVATION_P}sourceId`: acc.sourceId = o; break;
       default: break;
     }
     bySubject.set(s, acc);
@@ -191,7 +233,32 @@ type MappedRule =
   | { category: "escalation"; key: string; rule: EscalationRule }
   | { category: "dependency"; key: string; rule: DependencyRule }
   | { category: "fileaccess"; key: string; rule: FileAccessRule }
-  | { category: "skill"; key: string; rule: SkillRule };
+  | { category: "skill"; key: string; rule: SkillRule }
+  | { category: "ioc"; key: string; rule: IocRule };
+
+const QUOTED_SKILL_NAME_RE = /^["'`]([^"'`]+)["'`]/;
+const SKILL_PACKAGE_NAME_RE = /^@?[a-z0-9][a-z0-9._-]*(?:\/[a-z0-9][a-z0-9._-]*)?$/i;
+const TITLED_SKILL_NAME_RE = /^(@?[a-z0-9][a-z0-9._-]*(?:\/[a-z0-9][a-z0-9._-]*)?)\s+(?:\(|bcc\b)/i;
+
+/** Recover only explicit package-shaped names from legacy display titles. */
+export function skillNameFromTitle(title: string): string {
+  const value = (title || "").trim();
+  return QUOTED_SKILL_NAME_RE.exec(value)?.[1]?.trim()
+    ?? TITLED_SKILL_NAME_RE.exec(value)?.[1]?.trim()
+    ?? "";
+}
+
+function sourceObservationProvenance(acc: ThreatAccum): Record<string, unknown> {
+  if (!acc.provenanceJson) return {};
+  try {
+    const value = JSON.parse(acc.provenanceJson) as unknown;
+    return value && typeof value === "object" && !Array.isArray(value)
+      ? value as Record<string, unknown>
+      : {};
+  } catch {
+    return {};
+  }
+}
 
 /** Map one accumulated threat to `(category, key, rule)` or null. Port of Python `_row_to_rule`. */
 function accumToRule(acc: ThreatAccum, source: RuleSource): MappedRule | null {
@@ -206,10 +273,22 @@ function accumToRule(acc: ThreatAccum, source: RuleSource): MappedRule | null {
     identifier = `injection:${suffix}`;
   } else if (!identifier && acc.rdfType === `${DEFENDER}SkillSignal` && suffix) {
     identifier = `skill:${suffix}`;
+  } else if (!identifier && acc.rdfType === `${DEFENDER}IocSignal` && acc.category && acc.iocValue) {
+    identifier = `ioc:${acc.category.trim().toLowerCase()}:${acc.iocValue}`;
+  } else if (!identifier && acc.rdfType === SOURCE_OBSERVATION) {
+    const iocType = (acc.canonicalType || "").trim().toLowerCase();
+    if (
+      acc.lifecycleStatus?.trim().toLowerCase() === "active" &&
+      IOC_TYPES.has(iocType) &&
+      acc.normalizedValue
+    ) {
+      identifier = iocIdentifier(iocType, acc.normalizedValue);
+    }
   }
   if (!identifier) return null;
-  const severity = normalizeSeverity(acc.severity, "high");
-  const name = acc.name || identifier;
+  const provenance = sourceObservationProvenance(acc);
+  const severity = normalizeSeverity(acc.severity ?? provenance.severity, "high");
+  const name = acc.name || acc.description || acc.normalizedValue || identifier;
   if (identifier.startsWith("injection:")) {
     if (!acc.pattern) return null;
     return {
@@ -289,11 +368,38 @@ function accumToRule(acc: ThreatAccum, source: RuleSource): MappedRule | null {
       key: identifier,
       rule: {
         identifier,
-        skillName: acc.skillName ?? name,
+        skillName: acc.skillName && SKILL_PACKAGE_NAME_RE.test(acc.skillName)
+          ? acc.skillName
+          : skillNameFromTitle(name),
         skillVersion: acc.skillVersion ?? "",
         dangerShape: acc.dangerShape ?? "",
         severity,
         name,
+        source,
+      },
+    };
+  }
+  if (identifier.startsWith("ioc:")) {
+    const isObservation = acc.rdfType === SOURCE_OBSERVATION;
+    const parts = identifier.split(":", 3);
+    const iocType = (
+      (isObservation ? acc.canonicalType : acc.category) || parts[1] || ""
+    ).trim().toLowerCase();
+    const value = isObservation
+      ? identifier.slice(`ioc:${parts[1] ?? ""}:`.length)
+      : acc.iocValue || identifier.slice(`ioc:${parts[1] ?? ""}:`.length);
+    if (!iocType || !value) return null;
+    return {
+      category: "ioc",
+      key: identifier,
+      rule: {
+        identifier,
+        severity,
+        name,
+        iocType,
+        value,
+        kind: (isObservation ? acc.observationCategory : acc.kind) || undefined,
+        sourceId: isObservation ? acc.sourceId : undefined,
         source,
       },
     };
@@ -311,15 +417,30 @@ function accumToRule(acc: ThreatAccum, source: RuleSource): MappedRule | null {
 function buildRuleset(tiers: ReadonlyArray<readonly [ThreatAccum[], RuleSource]>): Ruleset {
   const ruleset = emptyRuleset();
   ruleset.fetchedAt = Date.now();
+  const suppressedSubjects = new Set<string>();
+  for (const [accums, source] of tiers) {
+    if (source !== "public") continue;
+    for (const acc of accums) {
+      if (
+        acc.rdfType === DEFENDER_CORRECTION_TYPE_IRI &&
+        acc.correctionAction?.trim().toLowerCase() === DEFENDER_CORRECTION_SUPPRESS &&
+        acc.targetSubject
+      ) {
+        suppressedSubjects.add(acc.targetSubject);
+      }
+    }
+  }
   const seen: Record<MappedRule["category"], Set<string>> = {
     injection: new Set(),
     escalation: new Set(),
     dependency: new Set(),
     fileaccess: new Set(),
     skill: new Set(),
+    ioc: new Set(),
   };
   for (const [accums, source] of tiers) {
     for (const acc of accums) {
+      if (acc.subject && suppressedSubjects.has(acc.subject)) continue;
       const mapped = accumToRule(acc, source);
       if (!mapped || seen[mapped.category].has(mapped.key)) continue;
       seen[mapped.category].add(mapped.key);
@@ -329,6 +450,7 @@ function buildRuleset(tiers: ReadonlyArray<readonly [ThreatAccum[], RuleSource]>
         case "dependency": ruleset.dependency[mapped.key] = mapped.rule; break;
         case "fileaccess": ruleset.fileaccess.push(mapped.rule); break;
         case "skill": ruleset.skill.push(mapped.rule); break;
+        case "ioc": ruleset.ioc[mapped.key] = mapped.rule; break;
       }
     }
   }
@@ -339,6 +461,8 @@ export interface RulesetCacheOptions {
   client: DkgClient;
   contextGraphId: string;
   stateDir?: string;
+  /** Optional read-only fallback cache (for an attached Hermes Blackbox home). */
+  seedStateDir?: string;
   /** TTL seconds; below this a get() serves the cache without a refresh. */
   ttlSeconds?: number;
 }
@@ -360,23 +484,48 @@ export class RulesetCache {
     this.contextGraphId = opts.contextGraphId;
     this.ttlMs = (opts.ttlSeconds ?? 300) * 1000;
     this.cachePath = join(resolveStateDir(opts.stateDir), "ruleset.json");
-    this.ruleset = this.loadFromDisk() ?? emptyRuleset();
+    const seedPath = opts.seedStateDir ? join(opts.seedStateDir, "ruleset.json") : "";
+    this.ruleset = this.loadFromDisk(this.cachePath) ?? (seedPath ? this.loadFromDisk(seedPath) : null) ?? emptyRuleset();
   }
 
-  private loadFromDisk(): Ruleset | null {
+  private loadFromDisk(path: string): Ruleset | null {
     try {
-      const parsed = JSON.parse(readFileSync(this.cachePath, "utf8")) as Partial<Ruleset>;
+      const parsed = JSON.parse(readFileSync(path, "utf8")) as Partial<Ruleset> & {
+        synced_at?: number;
+        injection?: Array<InjectionRule & { pattern_src?: string }>;
+      };
       if (parsed && Array.isArray(parsed.injection)) {
+        const publicOnly = <T extends { source?: RuleSource }>(rows: T[] | undefined): T[] =>
+          (rows ?? []).filter((row) => row.source !== "community");
+        const dependencies = Object.fromEntries(
+          Object.entries(parsed.dependency ?? {}).filter(
+            ([, rule]) => rule?.source !== "community",
+          ),
+        );
         // Backfill arrays absent from caches written before fileaccess/skill
-        // support so the detectors never see `undefined`.
+        // support and drop SWM rows written by pre-VM-only releases.
         return {
           ...emptyRuleset(),
           ...parsed,
-          injection: parsed.injection ?? [],
-          escalation: parsed.escalation ?? [],
-          dependency: parsed.dependency ?? {},
-          fileaccess: parsed.fileaccess ?? [],
-          skill: parsed.skill ?? [],
+          // Hermes persists the regex source as `pattern_src` because its
+          // in-memory `pattern` is a compiled Python regex. Treat that cache as
+          // a read-only seed and normalize it to the TypeScript shape.
+          injection: publicOnly(parsed.injection)
+            .map((rule) => ({ ...rule, pattern: rule.pattern || rule.pattern_src || "" }))
+            .filter((rule) => rule.pattern),
+          escalation: publicOnly(parsed.escalation),
+          dependency: dependencies,
+          fileaccess: publicOnly(parsed.fileaccess),
+          skill: publicOnly(parsed.skill).map((rule) => ({
+            ...rule,
+            skillName: rule.skillVersion
+              ? rule.skillName
+              : skillNameFromTitle(rule.name || rule.skillName) || rule.skillName,
+          })),
+          ioc: Object.fromEntries(
+            Object.entries(parsed.ioc ?? {}).filter(([, rule]) => rule?.source !== "community"),
+          ),
+          fetchedAt: parsed.fetchedAt ?? (parsed.synced_at ? parsed.synced_at * 1000 : 0),
         } as Ruleset;
       }
     } catch {
@@ -400,11 +549,8 @@ export class RulesetCache {
 
   /**
    * Force a synchronous sync from the node. Fail-open (returns current on
-   * error). Two queries per sync: verifiable-memory first (rows tagged
-   * `source: "public"`), then shared-working-memory (`source: "community"`);
-   * public wins identifier collisions. If NOTHING comes back (both tiers
-   * empty/unreachable) the last-good ruleset keeps serving. Mirrors Python
-   * `ruleset.refresh`.
+   * error). One query per sync reads verifiable-memory. If nothing comes back,
+   * the last-good public ruleset keeps serving. Mirrors Python `ruleset.refresh`.
    */
   async sync(): Promise<Ruleset> {
     if (this.refreshing) return this.ruleset;
@@ -452,6 +598,7 @@ export class RulesetCache {
     dependency: number;
     fileaccess: number;
     skill: number;
+    ioc: number;
   } {
     return {
       injection: this.ruleset.injection.length,
@@ -459,6 +606,7 @@ export class RulesetCache {
       dependency: Object.keys(this.ruleset.dependency).length,
       fileaccess: this.ruleset.fileaccess.length,
       skill: this.ruleset.skill.length,
+      ioc: Object.keys(this.ruleset.ioc).length,
     };
   }
 }

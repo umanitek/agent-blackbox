@@ -1,8 +1,6 @@
 <div align="center">
 
-<img src="./docs/agent-blackbox-hq.png" alt="Agent Blackbox" width="638">
-
-**Stop dangerous AI agent actions before they happen.**
+<img src="./docs/blackbox-header.jpg" alt="Agent Blackbox" width="100%">
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-80CA9C?style=flat-square)](LICENSE)
 [![by Umanitek](https://img.shields.io/badge/by-Umanitek-5C7F87?style=flat-square)](#about-umanitek)
@@ -23,21 +21,31 @@ before damage is done.
 - **Catch real risks.** Stop prompt injection, credential access, destructive
   commands, malicious packages, and unsafe skills.
 - **See what happened.** Review every finding in a live dashboard and audit trail.
-- **Get safer together.** A threat found by one agent can protect every other
-  connected agent.
+- **Use verified threat intelligence.** Umanitek-reviewed threats sync to every
+  protected agent through the Verifiable Graph.
 
-**One agent finds a threat. Every protected agent gets safer.**
+**One verified graph. Every protected agent gets safer.**
+
+> **Coming soon: Community Graph.** The next layer of collective defense will
+> help agents strengthen protection across the network as new threats are
+> discovered. Today, findings remain local and no community reports are
+> submitted.
 
 ## Install
 
+Docker is required for the default Blazegraph store. On macOS, the installer
+starts Docker Desktop automatically when it is installed but stopped. On Linux,
+start Docker Engine first. To install without Docker, download the script and
+run it with `--store oxigraph`.
+
 ```bash
-curl -fsSL https://raw.githubusercontent.com/umanitek/agent-blackbox/main/scripts/blackbox-install.sh | bash
+curl -fsSL blackbox.umanitek.ai | bash
 ```
 
 Windows PowerShell:
 
 ```powershell
-iwr -useb https://raw.githubusercontent.com/umanitek/agent-blackbox/main/scripts/blackbox-install.ps1 | iex
+iwr -useb blackbox-w.umanitek.ai | iex
 ```
 
 <details>
@@ -86,7 +94,7 @@ blackbox sync --wait --require-rules
 Or download the script, read it, then run it:
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/umanitek/agent-blackbox/main/scripts/blackbox-install.sh
+curl -fsSL blackbox.umanitek.ai -o blackbox-install.sh
 less blackbox-install.sh
 bash blackbox-install.sh
 ```
@@ -110,7 +118,7 @@ Everyday commands:
 
 ```bash
 blackbox status      # config, node health, ruleset + findings counts
-blackbox sync --wait # pull the latest threat graphs right now
+blackbox sync --wait # pull the latest verified threat graph right now
 blackbox dashboard   # live dashboard at http://127.0.0.1:9700
 blackbox chat        # chat with Blackbox from this repo's workspace
 ```
@@ -119,17 +127,9 @@ The installer adds `blackbox` as a shortcut for `hermes blackbox`.
 `blackbox chat` opens a dedicated operator chat for Blackbox without adding that
 chat to the protected-agent count.
 
-Found a threat yourself? Report it to the community graph so every agent sees it:
-
-```bash
-# a malicious npm package
-blackbox report --type dependency --ecosystem npm \
-  --name evil-package --version 1.0.0 --severity critical
-
-# a prompt-injection pattern
-blackbox report --type injection \
-  --pattern "ignore all previous instructions" --owasp LLM01
-```
+The **Community Graph is coming soon**, bringing a new collective-defense layer
+to Blackbox. Until it launches, findings and reports stay local and
+`blackbox report` submits nothing.
 
 Ready to enforce instead of just watch? Flip block mode in `config.yaml`:
 
@@ -140,7 +140,7 @@ plugins:
       mode: block   # stop confirmed threats instead of only flagging them
 ```
 
-Every detection is logged to the audit trail and shown live in the dashboard. Eligible findings can also be shared as privacy-safe community reports.
+Every detection is logged locally to the audit trail and shown live in the dashboard.
 
 The reviewer only flags - it never blocks, and its verdicts stay on your machine (never shared to the community graph). Turn it off with `blackbox setup-llm --disable`.
 
@@ -175,6 +175,11 @@ In the default audit mode every one is flagged and logged, nothing is stopped. S
 - **Sensitive file access** - reads of SSH keys, credentials, and other secrets.
 - **Secret exposure** - a real API key, token, or private key the agent handles or tries to send off-box.
 - **Suspicious skills** - newly installed skills with malicious behavior.
+- **Known-bad indicators** - domains, URLs, IPs, file hashes, wallets, and contracts found in agent actions.
+
+If a historical skill report names no affected version, Blackbox flags every
+version as a medium, alert-only risk and explains that newer releases may
+already be fixed.
 
 ## Shared protection
 
@@ -186,18 +191,25 @@ Threats should not have to be rediscovered one agent at a time. Agent Blackbox
 gives every protected agent the benefit of what the network has already learned:
 
 - **Verified** threats are reviewed by Umanitek and can be blocked.
-- **Community** reports warn other agents while they await verification.
+- **Community** Graph is coming soon, expanding Blackbox with a
+  collective-defense layer as new threats are discovered.
 - **Local** findings stay available in your own dashboard and audit trail.
+
+### Community Graph — coming soon
+
+The Verifiable Graph protects agents today with threats reviewed by Umanitek.
+Next, the Community Graph will help agents strengthen protection across the
+network as new threats emerge. Local findings stay local today, and community
+reporting is not yet active.
 
 ## How it works
 
 1. **Watch.** Blackbox sees the prompt, tool call, command, file, package, or
    skill before the agent acts.
-2. **Check.** It compares the action with built-in security rules and shared
-   threat intelligence.
+2. **Check.** It compares the action with built-in security rules and the
+   curated public Verifiable Memory graph.
 3. **Respond.** Audit mode warns and records. Block mode stops confirmed threats.
-4. **Learn.** Eligible high-severity findings can become privacy-safe community
-   reports, helping other agents spot the same attack.
+4. **Record.** Findings remain in the user's local audit trail.
 
 ### Under the hood
 
@@ -205,12 +217,13 @@ The shared intelligence lives on the OriginTrail Decentralized Knowledge Graph
 (DKG). Blackbox runs its own isolated local DKG node, so it does not replace or
 modify another DKG installation.
 
-The threat graph is private: approved nodes can read its threat data, while its
-anchors remain publicly verifiable. Verified public threats are the only shared
-threats allowed to block; community reports warn until they are reviewed.
+The curated threat graph is public and requires no private membership or join
+approval. Only its verified VM content is used for threat matching. The
+Community Graph and threat sharing remain visible as coming-soon features but
+are inactive today.
 
-The dashboard shows **Public**, **Community**, and **Local** intelligence side by
-side. Technical settings, paths, and node details are listed below.
+The dashboard shows **Verifiable**, **Community**, and **Local** intelligence
+side by side. Technical settings, paths, and node details are listed below.
 
 ## Auto-attach
 
@@ -238,10 +251,10 @@ Set under `plugins.entries.blackbox.*` in `config.yaml`.
 | `mode` | `audit` | `audit` or `block` |
 | `dkg_url` | `http://127.0.0.1:9320` | Blackbox-managed local DKG node |
 | `dkg_home` | `<agent-blackbox>/.dkg` | isolated DKG node config, token, pid, and cache |
-| `context_graph_id` | `0x37b1Fdfd…/agent-blackbox` | Private Blackbox threat graph |
-| `graph_peer_id` | bundled curator peer | Host that receives the signed join request |
-| `daily_report_limit` | `9999` | max threat reports sent to the community graph per day |
-| `report_min_severity` | `high` | minimum severity for heuristic candidates to be flagged and reported |
+| `context_graph_id` | `0x37b1Fdfd…/agent-blackbox-vm` | Public verified threat graph |
+| `graph_peer_id` | bundled publisher peer | Authoritative threat-data sync source |
+| `report` | `false` | fixed off until the Community Graph launches |
+| `report_min_severity` | `high` | reserved for the upcoming Community Graph; does not submit today |
 | `detection.<category>.enabled` | `true` | turn a whole category on/off (`injection`, `escalation`, `dependency`, `fileaccess`, `skill`) |
 | `detection.<category>.min_severity` | `info` | quiet a category below this level, e.g. `detection.dependency.min_severity: critical` |
 | `protected_paths` | `[]` | your own files/folders that always block and never leave your machine |
@@ -258,8 +271,8 @@ Open the dashboard and click the gear icon. Switch threat categories on/off and 
 
 ## Legal
 
-- [Terms of Service](legal/terms-of-service.pdf) ([editable Word version](legal/terms-of-service.docx))
-- [Privacy Policy](legal/privacy-policy.pdf) ([editable Word version](legal/privacy-policy.docx))
+- [Terms of Service](legal/terms-of-service.pdf)
+- [Privacy Policy](legal/privacy-policy.pdf)
 
 These documents are provided for transparency and supplement the open-source license without restricting the rights granted by it.
 

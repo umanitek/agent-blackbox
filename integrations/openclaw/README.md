@@ -1,42 +1,34 @@
 # Agent Blackbox — OpenClaw plugin
 
-Mirrors the hermes Blackbox plugin's detection inside an OpenClaw agent and
-reports sightings to the **same** local DKG node / threat graph. Same threat
-identifiers, same arg shapes, same severities — a hermes node and an OpenClaw
-node computing the same threat converge on the same subject URI.
+Mirrors the Hermes Blackbox plugin's local detection inside an OpenClaw agent.
+It reads the same curated Verifiable Memory graph; findings stay local.
 
 When OpenClaw is attached by `blackbox attach`, it points at the
 Blackbox-managed DKG node (`http://127.0.0.1:9320`) and home
 (`~/.hermes/blackbox/dkg`). That keeps it separate from any user-owned DKG node
 on the DKG CLI defaults (`~/.dkg` / `9200`).
 
-The default context graph is private. The shared local node must complete the
-signed join, curator approval, subscription, and catch-up flow before VM/SWM
-rules are available; `blackbox sync --wait` reports that state.
+The default context graph is public. The shared local node subscribes and
+catches up without curator approval; `blackbox sync --wait` reports that state.
 
 - **Detection rules come only from the threat graph.** The plugin syncs a
-  ruleset from your local DKG node in two trust tiers (see below). On an empty
+  ruleset from your local DKG node's Verifiable Memory. On an empty
   graph it detects nothing until synced — by design.
 - **Audit-only by default.** Blocking is opt-in (`mode: block`).
 - **Fail-open.** Any error in a hook is swallowed; the agent loop is never
   broken. Threat pushes are deterministic HTTP calls, never LLM/MCP-driven.
-- **Reports never carry observed content.** Sightings reference a threat
-  identifier + severity (plus privacy-safe signature fields for candidates);
-  the observed prompt/command stays in the private audit split.
+- **Findings stay local.** Community sharing is coming soon.
 
-## Three-tier trust model
+## Trust model
 
-Every sync runs two queries against the node — the verified public graph first,
-then the community pool — and every finding carries a `source`:
+Every sync reads the verified public graph. Built-in heuristics remain local:
 
 | Tier | Memory view | `source` | Behavior |
 |------|-------------|----------|----------|
 | **Public** | `verifiable-memory` (Umanitek-verified public threat graph) | `public` | The source of truth: a match is `confirmed`, and blockable in block mode. |
-| **Community** | `shared-working-memory` (the pool anyone can write to) | `community` | Checked when the public graph doesn't cover the identifier: a match FLAGS (`confirmed: false`) and is re-reported to strengthen consensus, but **never** blocks. |
-| **Heuristic** | built-in discovery candidates | `heuristic` | Nominations only; flagged/reported only at/above `reportMinSeverity`. Never block. |
+| **Heuristic** | built-in discovery candidates | `heuristic` | Local nominations only. Never block. |
 
-Public wins any identifier collision — a community row can never shadow,
-escalate, or downgrade a verified public rule.
+Community Shared Working Memory support is coming soon.
 
 ## What it detects
 
@@ -82,7 +74,7 @@ Point OpenClaw at the plugin directory and set its config in
         "hooks": { "allowConversationAccess": true },
         "config": {
           "mode": "audit",
-          "contextGraphId": "0x37b1Fdfd134e2b17583bCBdD3034F91504cD9C70/agent-blackbox",
+          "contextGraphId": "0x37b1Fdfd134e2b17583bCBdD3034F91504cD9C70/agent-blackbox-vm",
           "dkgUrl": "http://127.0.0.1:9320",
           "dkgHome": "~/.hermes/blackbox/dkg",
           "syncInterval": 300,
@@ -119,12 +111,12 @@ override (env wins).
 | Key | Default | Env | Meaning |
 |-----|---------|-----|---------|
 | `mode` | `audit` | `BLACKBOX_MODE` | `audit` \| `block` |
-| `contextGraphId` | `0x37b1Fdfd…/agent-blackbox` | `BLACKBOX_CONTEXT_GRAPH_ID` | Private Blackbox threat graph id |
+| `contextGraphId` | `0x37b1Fdfd…/agent-blackbox-vm` | `BLACKBOX_CONTEXT_GRAPH_ID` | Public verified threat graph id |
 | `dkgUrl` | `http://127.0.0.1:9320` | `BLACKBOX_DKG_DAEMON_URL` / `BLACKBOX_DKG_URL` | Blackbox-managed local node |
 | `dkgHome` | `~/.hermes/blackbox/dkg` | `BLACKBOX_DKG_HOME` | isolated DKG config, API token, pid, and cache |
 | `syncInterval` | `300` | `BLACKBOX_SYNC_INTERVAL` | seconds between ruleset refresh |
-| `report` | `true` | `BLACKBOX_REPORT` | share sightings to SWM |
-| `dailyReportLimit` | `9999` | `BLACKBOX_DAILY_REPORT_LIMIT` | anti-bot cap on reports/day |
+| `report` | `false` | — | coming soon; findings stay local |
+| `dailyReportLimit` | `0` | — | coming soon; outbound reporting is disabled |
 | `reportMinSeverity` | `high` | `BLACKBOX_REPORT_MIN_SEVERITY` | min severity for a built-in **heuristic** candidate to flag/report (graph-backed findings always flag) |
 | `blockSeverity` | `critical` | `BLACKBOX_BLOCK_SEVERITY` | min severity blocked in block mode (public-graph findings only) |
 | `discover` | `true` | `BLACKBOX_DISCOVER` | run the built-in discovery nomination layer |
@@ -137,11 +129,14 @@ accepted as aliases of the camelCase keys.
 
 ### Per-category tuning
 
-Each of the five detection categories — `injection`, `escalation`,
-`dependency`, `fileaccess`, `skill` — can be individually disabled or given a
-minimum-severity floor under `detection.<category>`. **Defaults: every category
-is enabled at `minSeverity: info`** (flag everything the threat graph knows), so
-you only need to add a category when you want to quiet it down.
+Each of the six detection categories — `injection`, `escalation`,
+`dependency`, `fileaccess`, `skill`, `ioc` — can be individually disabled or
+given a minimum-severity floor under `detection.<category>`. **Defaults: every
+category is enabled at `minSeverity: info`** (flag everything the threat graph
+knows), so you only need to add a category when you want to quiet it down.
+
+IOC matches and historical skill reports without an affected version always
+alert; they never auto-block.
 
 - `enabled: false` drops **every** finding in that category.
 - `minSeverity: <info|low|medium|high|critical>` drops anything below the floor

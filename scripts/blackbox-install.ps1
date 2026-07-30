@@ -11,7 +11,7 @@
 # the end).
 #
 # Usage:
-#   iwr -useb https://raw.githubusercontent.com/umanitek/agent-blackbox/main/scripts/blackbox-install.ps1 | iex
+#   iwr -useb blackbox-w.umanitek.ai | iex
 #   # or, from a clone:
 #   .\scripts\blackbox-install.ps1 [-SkipDkg]
 #
@@ -38,14 +38,18 @@ $RepoUrl     = if ($env:BLACKBOX_REPO_URL)    { $env:BLACKBOX_REPO_URL }    else
 $RepoBranch  = if ($env:BLACKBOX_REPO_BRANCH) { $env:BLACKBOX_REPO_BRANCH } else { "main" }
 $HermesHome  = if ($env:HERMES_HOME)          { $env:HERMES_HOME }          else { "$env:USERPROFILE\.hermes" }
 # Keep the managed npm DKG package and state in the Agent Blackbox checkout. When
-# invoked from a clone, use that clone; when piped through iex, use the checkout
-# Resolve-Repo creates at BLACKBOX_INSTALL_DIR.
+# invoked from a clone, use that clone; when piped through iex, default to an
+# agent-blackbox child of the invocation directory. BLACKBOX_INSTALL_DIR remains
+# the explicit override.
 if ($env:BLACKBOX_INSTALL_DIR) {
     $DefaultRepoDir = $env:BLACKBOX_INSTALL_DIR
-} elseif (Test-Path "$env:USERPROFILE\agent-blackbox\.git") {
-    $DefaultRepoDir = "$env:USERPROFILE\agent-blackbox"
+} elseif (
+    (Test-Path "$(Get-Location)\pyproject.toml") -and
+    (Test-Path "$(Get-Location)\plugins\blackbox")
+) {
+    $DefaultRepoDir = [string](Get-Location)
 } else {
-    $DefaultRepoDir = "$env:USERPROFILE\agent-blackbox"
+    $DefaultRepoDir = Join-Path ([string](Get-Location)) "agent-blackbox"
 }
 if ($PSCommandPath) {
     $candidateRepoDir = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
@@ -60,6 +64,7 @@ $DkgPort     = if ($env:BLACKBOX_DKG_PORT)    { [int]$env:BLACKBOX_DKG_PORT } el
 $DkgStorePort = if ($env:BLACKBOX_DKG_STORE_PORT) { [int]$env:BLACKBOX_DKG_STORE_PORT } else { 9999 }
 $DkgStoreUrl = if ($env:BLACKBOX_DKG_STORE_URL) { $env:BLACKBOX_DKG_STORE_URL } else { "" }
 $DkgStoreManagedByDkg = $false
+$script:DkgStoreNamespace = "agent-blackbox"
 $script:DkgSelectedStoreBackend = ""
 $script:DockerRequired = $false
 $DkgAcceptStoreReset = $false
@@ -71,15 +76,22 @@ $DkgDaemonUrl = "http://127.0.0.1:$DkgPort"
 $DkgStoreQueueLimit = if ($env:BLACKBOX_DKG_STORE_QUEUE_LIMIT) { [int]$env:BLACKBOX_DKG_STORE_QUEUE_LIMIT } else { 512 }
 $DkgListContextGraphsProjection = if ($env:BLACKBOX_DKG_LIST_CONTEXT_GRAPHS_PROJECTION) { $env:BLACKBOX_DKG_LIST_CONTEXT_GRAPHS_PROJECTION } else { "1" }
 $DkgSyncGlobalMaxInflight = "1"
+$DkgSyncGlobalQueueLimit = "0"
+$script:DkgDurableSyncEnabled = if ($env:BLACKBOX_DKG_DURABLE_SYNC_ENABLED) { $env:BLACKBOX_DKG_DURABLE_SYNC_ENABLED } else { "1" }
+$DkgCatchupMaxConcurrentPeers = "1"
+$DkgStoreQueueWaitTimeoutMs = "300000"
 $script:DkgNodeOptions = ""
 $NodeMajor   = if ($env:BLACKBOX_NODE_MAJOR)  { [int]$env:BLACKBOX_NODE_MAJOR } else { 22 }
-$ContextGraphId = if ($env:BLACKBOX_CONTEXT_GRAPH_ID) { $env:BLACKBOX_CONTEXT_GRAPH_ID } else { "0x37b1Fdfd134e2b17583bCBdD3034F91504cD9C70/agent-blackbox" }
+$ContextGraphId = if ($env:BLACKBOX_CONTEXT_GRAPH_ID) { $env:BLACKBOX_CONTEXT_GRAPH_ID } else { "0x37b1Fdfd134e2b17583bCBdD3034F91504cD9C70/agent-blackbox-vm" }
 $GraphPeerId = if ($env:BLACKBOX_GRAPH_PEER_ID) { $env:BLACKBOX_GRAPH_PEER_ID } else { "12D3KooWBJskzr2unXQG9mR3LRZFUJoxWr1PN6hTbyWyKndHXjZM" }
 $CatchupTimeout = if ($env:BLACKBOX_DKG_CATCHUP_TIMEOUT) { [int]$env:BLACKBOX_DKG_CATCHUP_TIMEOUT } else { 3600 }
 $script:InstallIncomplete = $false
 $script:DkgAlreadyRunning = $false
+$script:DkgFreshState = $false
+$script:DkgForeignEndpoint = $false
 $script:DkgRestartRequired = $false
 $script:DkgRuntimeMarker = Join-Path $DkgHome ".blackbox-runtime.sha256"
+$script:DkgNodePathMarker = Join-Path $DkgHome ".blackbox-node-path"
 $script:DkgStoreResetMarker = Join-Path $DkgHome ".blackbox-store-reset-pending"
 $script:DkgRuntimeFingerprint = ""
 
@@ -113,8 +125,8 @@ Options:
   -StoreBackend     Store backend (default: auto; Blazegraph preferred, Oxigraph fallback asks first)
   -Help             Show this help and exit
 
-The DKG node bootstraps on mainnet. The default context graph is private. Its
-curator auto-approves valid signed requests; joining and reading need no funds.
+The DKG node bootstraps on mainnet. The default context graph is public, and
+subscribing and reading need no funds.
 
 Environment overrides:
 	  BLACKBOX_REPO_URL, BLACKBOX_REPO_BRANCH, HERMES_HOME, BLACKBOX_NODE_MAJOR,
@@ -249,7 +261,13 @@ function Invoke-BlackboxDkg {
         "DKG_ACCEPT_STORE_RESET",
         "DKG_STORE_QUEUE_LIMIT",
         "DKG_LIST_CONTEXT_GRAPHS_PROJECTION",
+        "DKG_SYNC_ON_CONNECT_ENABLED",
+        "DKG_SYNC_RECONCILER_ENABLED",
+        "DKG_DURABLE_SYNC_ENABLED",
         "DKG_SYNC_GLOBAL_MAX_INFLIGHT",
+        "DKG_SYNC_GLOBAL_QUEUE_LIMIT",
+        "DKG_CATCHUP_MAX_CONCURRENT_PEERS",
+        "DKG_STORE_QUEUE_WAIT_TIMEOUT_MS",
         "DKG_SYNC_TOTAL_TIMEOUT_MS",
         "DKG_SWM_RECOVERY_TIMEOUT_MS",
         "NODE_OPTIONS",
@@ -270,7 +288,13 @@ function Invoke-BlackboxDkg {
         ) { "1" } else { "0" }
         $env:DKG_STORE_QUEUE_LIMIT = "$DkgStoreQueueLimit"
         $env:DKG_LIST_CONTEXT_GRAPHS_PROJECTION = "$DkgListContextGraphsProjection"
+        $env:DKG_SYNC_ON_CONNECT_ENABLED = "1"
+        $env:DKG_SYNC_RECONCILER_ENABLED = "1"
+        $env:DKG_DURABLE_SYNC_ENABLED = $script:DkgDurableSyncEnabled
         $env:DKG_SYNC_GLOBAL_MAX_INFLIGHT = "$DkgSyncGlobalMaxInflight"
+        $env:DKG_SYNC_GLOBAL_QUEUE_LIMIT = "$DkgSyncGlobalQueueLimit"
+        $env:DKG_CATCHUP_MAX_CONCURRENT_PEERS = "$DkgCatchupMaxConcurrentPeers"
+        $env:DKG_STORE_QUEUE_WAIT_TIMEOUT_MS = "$DkgStoreQueueWaitTimeoutMs"
         $env:DKG_SYNC_TOTAL_TIMEOUT_MS = "1800000"
         $env:DKG_SWM_RECOVERY_TIMEOUT_MS = "3600000"
         $env:NODE_OPTIONS = $script:DkgNodeOptions
@@ -303,7 +327,7 @@ function Prepare-BlackboxDkgRuntimeFingerprint {
         Write-Warn2 "Could not resolve the Node.js runtime for DKG fingerprinting."
         return $false
     }
-    $fingerprintOutput = @(& $script:VenvPython $fingerprinter compute $DkgCliDir $DkgHome $nodeCommand.Source $DkgBin $DkgStoreQueueLimit $DkgListContextGraphsProjection $DkgSyncGlobalMaxInflight $script:DkgNodeOptions 2>&1)
+    $fingerprintOutput = @(& $script:VenvPython $fingerprinter compute $DkgCliDir $DkgHome $nodeCommand.Source $DkgBin $DkgStoreQueueLimit $DkgListContextGraphsProjection $DkgSyncGlobalMaxInflight $script:DkgNodeOptions $DkgCatchupMaxConcurrentPeers $DkgStoreQueueWaitTimeoutMs 2>&1)
     if ($LASTEXITCODE -ne 0) {
         $script:InstallIncomplete = $true
         if ($fingerprintOutput) {
@@ -336,6 +360,10 @@ function Save-BlackboxDkgRuntimeFingerprint {
         $script:InstallIncomplete = $true
         Write-Warn2 "DKG restarted, but its applied runtime fingerprint could not be recorded."
         return $false
+    }
+    $nodeCommand = Get-Command node -ErrorAction SilentlyContinue
+    if ($nodeCommand -and $nodeCommand.Source) {
+        Set-Content -LiteralPath $script:DkgNodePathMarker -Value $nodeCommand.Source
     }
     return $true
 }
@@ -447,6 +475,7 @@ function Test-BlackboxDkgPort {
             return $true
         }
         Write-Warn2 "Port $DkgPort already has a DKG endpoint, but $DkgHome has no Blackbox node state."
+        $script:DkgForeignEndpoint = $true
         if ($DkgPortExplicit) {
             $script:InstallIncomplete = $true
             Write-Step "Set BLACKBOX_DKG_PORT to a free port or stop the process on $DkgDaemonUrl."
@@ -576,6 +605,7 @@ function Initialize-BlackboxStore {
             $existingManaged = $existing.store.options.managedByDkg -eq $true
         } catch { }
     }
+    $script:DkgStoreNamespace = $namespace
 
     if ($StoreBackend -eq "oxigraph") {
         Use-BlackboxOxigraph
@@ -604,6 +634,38 @@ function Initialize-BlackboxStore {
         $script:DkgStoreUrl = $existingUrl
         $script:DkgStoreManagedByDkg = $true
         if (Test-BlackboxBlazegraph) { return $true }
+        if ($script:DkgAlreadyRunning) {
+            Write-Step "Pausing DKG so its overloaded store can pass recovery checks ..."
+            Invoke-BlackboxDkg stop
+            if ($LASTEXITCODE -eq 0) {
+                $script:DkgAlreadyRunning = $false
+                if (Test-BlackboxBlazegraph) { return $true }
+                $managedContainer = "dkg-blazegraph-$namespace"
+                $storeRestarted = $false
+                Write-Step "Restarting the unresponsive managed Blazegraph container ..."
+                & docker restart $managedContainer | Out-Null
+                if ($LASTEXITCODE -eq 0) {
+                    $storeRestarted = $true
+                } else {
+                    # A wedged JVM can leave the container stopped even though
+                    # Docker reports a failed graceful restart. Start the same
+                    # container so its graph volume remains intact.
+                    $running = (& docker inspect -f '{{.State.Running}}' $managedContainer 2>$null)
+                    if ($LASTEXITCODE -eq 0 -and "$running".Trim() -eq "false") {
+                        & docker start $managedContainer | Out-Null
+                        if ($LASTEXITCODE -eq 0) { $storeRestarted = $true }
+                    }
+                    if (-not $storeRestarted) {
+                        Write-Warn2 "Could not restart managed container $managedContainer."
+                    }
+                }
+                if ($storeRestarted -and (Test-BlackboxBlazegraph)) {
+                    return $true
+                }
+            } else {
+                Write-Warn2 "Could not pause the Blackbox DKG daemon before store recovery."
+            }
+        }
         Write-Warn2 "The managed Blazegraph endpoint is down; attempting Docker recovery."
     }
     if (-not (Test-DockerForBlazegraph)) {
@@ -651,6 +713,29 @@ function Initialize-BlackboxStore {
     }
 }
 
+function Reset-FreshManagedBlazegraph {
+    if (-not $script:DkgFreshState) { return $true }
+    if ($script:DkgSelectedStoreBackend -ne "blazegraph") { return $true }
+    if (-not $script:DkgStoreManagedByDkg) { return $true }
+    if ($DkgStoreUrlExplicit) { return $true }
+    if ($script:DkgForeignEndpoint) {
+        Write-Err2 "Refusing to reset the Blackbox namespace while an unrelated DKG endpoint is running."
+        Write-Step "Stop that DKG node or set BLACKBOX_DKG_STORE_URL to an operator-managed store."
+        return $false
+    }
+    $helper = Join-Path $RepoDir "scripts\blackbox-blazegraph.mjs"
+    Write-Step "Clearing the installer-managed Blazegraph namespace for the fresh DKG identity ..."
+    try {
+        & node $helper reset $DkgCliDir $DkgStoreUrl $script:DkgStoreNamespace *> $null
+        if ($LASTEXITCODE -ne 0) { throw "Blazegraph reset exit $LASTEXITCODE" }
+    } catch {
+        Write-Err2 "Could not clear the stale installer-managed Blackbox namespace."
+        return $false
+    }
+    Write-Ok "Fresh Blackbox store is empty and ready for the new DKG identity"
+    return $true
+}
+
 function Ensure-BlackboxDkgConfig {
     $writer = @'
 import json
@@ -665,6 +750,7 @@ api_port = int(sys.argv[2])
 store_backend = sys.argv[3]
 store_url = sys.argv[4]
 store_managed = sys.argv[5].lower() == "true"
+context_graph_id = sys.argv[6]
 home.mkdir(parents=True, exist_ok=True)
 cfg_path = home / "config.json"
 original = None
@@ -694,13 +780,22 @@ existing_relays = data.get("relayPeers") if isinstance(data.get("relayPeers"), l
 merged_relays = list(dict.fromkeys([*existing_relays, *MAINNET_BASE_RELAYS]))
 data["relayPeers"] = merged_relays
 data["relayReservationCount"] = int(data.get("relayReservationCount") or 4)
-# Use the DKG native default reconnect reconciler.
-data.pop("syncOnConnectEnabled", None)
-# DKG owns sync scheduling, catch-up, backpressure, and approval delivery.
+# DKG owns restart-safe continuation of the persisted Blackbox subscription.
+# The one-inflight/zero-queue limits below prevent sync fan-out from starving
+# Blazegraph while still allowing the reconciler to resume bounded manifests.
+data["syncOnConnectEnabled"] = True
+data["syncReconcilerEnabled"] = True
+data["durableSyncEnabled"] = True
 data.pop("syncAgentsMeta", None)
-data.pop("syncGlobalMaxInflight", None)
-data.pop("syncGlobalQueueLimit", None)
+data["syncGlobalMaxInflight"] = 1
+data["syncGlobalQueueLimit"] = 0
 data.pop("restrictAutoSubscribeContextGraphs", None)
+data["syncSharedMemoryOnConnect"] = False
+priorities = data.get("syncContextGraphPriorities")
+if not isinstance(priorities, dict):
+    priorities = {}
+priorities.update({context_graph_id: 100, "agents": -100, "ontology": -100})
+data["syncContextGraphPriorities"] = priorities
 data.setdefault("autoUpdate", {"enabled": False})
 data["chain"] = {
     "type": "evm",
@@ -750,7 +845,7 @@ print("switched" if switched else ("changed" if changed else "unchanged"))
     $writerFile = Join-Path $env:TEMP "blackbox_dkg_config.py"
     Set-Content -Path $writerFile -Value $writer -Encoding UTF8
     try {
-        $configState = & $VenvPython $writerFile $DkgHome $DkgPort $script:DkgSelectedStoreBackend $DkgStoreUrl $DkgStoreManagedByDkg
+        $configState = & $VenvPython $writerFile $DkgHome $DkgPort $script:DkgSelectedStoreBackend $DkgStoreUrl $DkgStoreManagedByDkg $ContextGraphId
         if ($LASTEXITCODE -ne 0) { throw "dkg config exit $LASTEXITCODE" }
         $configResult = $configState | Select-Object -Last 1
         if ($configResult -eq "switched") {
@@ -767,6 +862,28 @@ print("switched" if switched else ("changed" if changed else "unchanged"))
 }
 
 # ── Locate (or fetch) the repo ──────────────────────────────────────────────
+function Test-BlackboxRepoCheckout {
+    param([string]$Path)
+    if (-not (Test-Path "$Path\.git")) { return $false }
+    if (-not (Test-Path "$Path\pyproject.toml")) { return $false }
+    if (-not (Test-Path "$Path\plugins\blackbox")) { return $false }
+    try {
+        & git -C $Path rev-parse --verify HEAD *> $null
+        return $LASTEXITCODE -eq 0
+    } catch {
+        return $false
+    }
+}
+
+function Move-BrokenBlackboxRepoAside {
+    param([string]$Path)
+    $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
+    $backup = "$Path.broken-$stamp-$PID"
+    Write-Warn2 "Existing install at $Path is incomplete or not an Agent Blackbox checkout."
+    Move-Item -LiteralPath $Path -Destination $backup
+    Write-Step "Preserved it at $backup"
+}
+
 function Resolve-Repo {
     $scriptDir = Split-Path -Parent $PSCommandPath
     if ($scriptDir) {
@@ -782,14 +899,24 @@ function Resolve-Repo {
         exit 1
     }
     $script:RepoDir = $DefaultRepoDir
-    if (Test-Path "$RepoDir\.git") {
+    if ((Test-Path $RepoDir) -and -not (Test-BlackboxRepoCheckout $RepoDir)) {
+        Move-BrokenBlackboxRepoAside $RepoDir
+    }
+    if (Test-BlackboxRepoCheckout $RepoDir) {
         Write-Step "Updating existing clone at $RepoDir"
-        git -C $RepoDir fetch --depth 1 origin $RepoBranch 2>$null
-        git -C $RepoDir checkout $RepoBranch 2>$null
-        git -C $RepoDir pull --ff-only 2>$null
+        & git -C $RepoDir fetch --depth 1 origin $RepoBranch
+        if ($LASTEXITCODE -ne 0) { throw "Could not fetch $RepoBranch from $RepoUrl" }
+        & git -C $RepoDir checkout $RepoBranch
+        if ($LASTEXITCODE -ne 0) { throw "Could not check out $RepoBranch in $RepoDir" }
+        & git -C $RepoDir pull --ff-only origin $RepoBranch
+        if ($LASTEXITCODE -ne 0) { throw "Could not fast-forward $RepoDir to origin/$RepoBranch" }
     } else {
         Write-Step "Cloning $RepoUrl -> $RepoDir"
-        git clone --depth 1 --branch $RepoBranch $RepoUrl $RepoDir
+        & git clone --depth 1 --branch $RepoBranch $RepoUrl $RepoDir
+        if ($LASTEXITCODE -ne 0) { throw "Could not clone $RepoUrl into $RepoDir" }
+    }
+    if (-not (Test-BlackboxRepoCheckout $RepoDir)) {
+        throw "$RepoDir is not a complete Agent Blackbox Python project"
     }
     Write-Ok "Repo ready at $RepoDir"
 }
@@ -910,74 +1037,14 @@ function Install-BlackboxDkgPackage {
         Write-Warn2 "Could not determine the installed DKG package version."
         return $false
     }
-    if (-not (Set-BlackboxDkgLargeGraphRecovery -InstalledVersion $installedVersion)) {
-        Write-Warn2 "Installed DKG runtime could not be prepared for the complete Blackbox graph."
+    & $script:VenvPython -m plugins.blackbox.dkg_version $installedVersion
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warn2 "DKG $installedVersion is too old for direct verified Blackbox recovery; version 10.0.9+ is required."
         return $false
     }
+    Write-Step "Using published upstream DKG $installedVersion unchanged."
     Write-Ok "Published DKG npm package ready ($installedVersion)"
     return $true
-}
-
-function Set-BlackboxDkgLargeGraphRecovery {
-    param([string]$InstalledVersion)
-    if ($InstalledVersion -ne "10.0.6") {
-        Write-Step "Using upstream DKG $InstalledVersion sync behavior (no local runtime shim)."
-        return $true
-    }
-    # DKG 10.0.6 discards normal and private recovery after 120 seconds.
-    # Patch both requester budgets and the private API ceiling.
-    $lifecyclePath = Join-Path $DkgCliDir "node_modules\@origintrail-official\dkg-agent\dist\dkg-agent-lifecycle.js"
-    $constantsPath = Join-Path $DkgCliDir "node_modules\@origintrail-official\dkg-agent\dist\dkg-agent-constants.js"
-    $routePath = Join-Path $DkgCliDir "node_modules\@origintrail-official\dkg\dist\daemon\routes\memory.js"
-    $patches = @(
-        @{
-            Path = $lifecyclePath
-            Old = "createContextGraphSyncDeadline: (remaining) => this.createContextGraphSyncDeadline(remaining),"
-            New = "createContextGraphSyncDeadline: (_remaining) => Date.now() + Math.max(SYNC_TOTAL_TIMEOUT_MS, Number.parseInt(process.env.DKG_SWM_RECOVERY_TIMEOUT_MS ?? '3600000', 10) || 3_600_000),"
-            Transitional = @(
-                "createContextGraphSyncDeadline: (_remaining) => Date.now() + Math.max(SYNC_TOTAL_TIMEOUT_MS, Number.parseInt(process.env.DKG_SWM_RECOVERY_TIMEOUT_MS ?? '1800000', 10) || 1_800_000),",
-                "createContextGraphSyncDeadline: (_remaining) => Date.now() + Math.max(SYNC_TOTAL_TIMEOUT_MS, Number.parseInt(process.env.DKG_SWM_RECOVERY_TIMEOUT_MS ?? '900000', 10) || 900_000),"
-            )
-        },
-        @{
-            Path = $constantsPath
-            Old = "export const SYNC_TOTAL_TIMEOUT_MS = 120_000;"
-            New = "export const SYNC_TOTAL_TIMEOUT_MS = Math.max(120_000, Number.parseInt(process.env.DKG_SYNC_TOTAL_TIMEOUT_MS ?? '1800000', 10) || 1_800_000);"
-            Transitional = @("export const SYNC_TOTAL_TIMEOUT_MS = 1_800_000;")
-        },
-        @{
-            Path = $routePath
-            Old = "const MAX_BUDGET_MS = 300_000;"
-            New = "const MAX_BUDGET_MS = 3_600_000;"
-            Transitional = @("const MAX_BUDGET_MS = 1_800_000;", "const MAX_BUDGET_MS = 900_000;")
-        }
-    )
-    try {
-        foreach ($patch in $patches) {
-            if (-not (Test-Path $patch.Path)) { throw "missing DKG recovery file $($patch.Path)" }
-            $text = [System.IO.File]::ReadAllText($patch.Path)
-            foreach ($transitional in $patch.Transitional) {
-                if ($text.Contains($transitional)) {
-                    $text = $text.Replace($transitional, $patch.New)
-                }
-            }
-            if ($text.Contains($patch.Old)) {
-                $text = $text.Replace($patch.Old, $patch.New)
-            }
-            if ($text.Contains($patch.New)) {
-                [System.IO.File]::WriteAllText($patch.Path, $text)
-            }
-            $expectedCount = if ($patch.Path -eq $lifecyclePath) { 2 } else { 1 }
-            $actualCount = ([regex]::Matches($text, [regex]::Escape($patch.New))).Count
-            if ($actualCount -lt $expectedCount) {
-                throw "unsupported DKG recovery source in $($patch.Path)"
-            }
-        }
-        return $true
-    } catch {
-        Write-Warn2 "Could not patch DKG private recovery timeout: $_"
-        return $false
-    }
 }
 
 function Install-Dkg {
@@ -1013,6 +1080,7 @@ function Install-Dkg {
         return
     }
 
+    $script:DkgFreshState = -not (Test-BlackboxDkgState)
     New-Item -ItemType Directory -Force -Path $DkgHome | Out-Null
     if (-not (Test-BlackboxDkgPort)) {
         Show-DkgManualHint
@@ -1024,6 +1092,10 @@ function Install-Dkg {
             exit 1
         }
         Write-Err2 "Blazegraph setup did not complete and Oxigraph was not confirmed. Installation stopped."
+        exit 1
+    }
+    if (-not (Reset-FreshManagedBlazegraph)) {
+        Write-Err2 "Installation stopped before creating a DKG identity against stale graph state."
         exit 1
     }
     if ($script:DkgAlreadyRunning) {
@@ -1041,7 +1113,6 @@ function Install-Dkg {
             Invoke-BlackboxDkg stop
             if ($LASTEXITCODE -ne 0) { throw "dkg stop exit $LASTEXITCODE" }
             Invoke-BlackboxDkg start
-            if ($LASTEXITCODE -ne 0) { throw "dkg start exit $LASTEXITCODE" }
             if (-not (Wait-BlackboxDkgRuntime)) { throw "DKG runtime verification failed" }
             Remove-Item $script:DkgStoreResetMarker -Force -ErrorAction SilentlyContinue
             Write-Ok "Blackbox DKG node restarted with the current sync settings"
@@ -1067,10 +1138,9 @@ function Install-Dkg {
     Write-Step "  DKG home: $DkgHome"
     Write-Step "  DKG CLI:  $DkgBin"
     Write-Step "  Store:    $(Get-BlackboxStoreDescription)"
-    Write-Step "  (non-interactive; joining and reading need no wallet funding)"
+    Write-Step "  (non-interactive; subscribing and reading need no wallet funding)"
     try {
         Invoke-BlackboxDkg start
-        if ($LASTEXITCODE -ne 0) { throw "dkg exit $LASTEXITCODE" }
         if (-not (Wait-BlackboxDkgRuntime)) { throw "DKG runtime verification failed" }
         Remove-Item $script:DkgStoreResetMarker -Force -ErrorAction SilentlyContinue
         Write-Ok "DKG node bootstrapped on $Network"
@@ -1090,7 +1160,7 @@ function Install-Dkg {
 function Sync-Ruleset {
     if (-not $script:DkgReady) { return }
     Write-Heading "Syncing the threat ruleset"
-    Write-Step "Pulling verified threats from the graph (blackbox sync --wait) ..."
+    Write-Step "Requesting one controlled verified graph catch-up ..."
     $out = & $script:HermesBin blackbox sync --wait --timeout $CatchupTimeout --require-rules 2>&1
     $code = $LASTEXITCODE
     if ($out) { $out | ForEach-Object { Write-Host $_ } }
@@ -1098,10 +1168,11 @@ function Sync-Ruleset {
         Write-Ok "Ruleset synced - Blackbox is watching with the latest threats"
     } else {
         $script:InstallIncomplete = $true
-        Write-Err2 "Initial threat-graph sync did not load any rules."
-        Write-Step "Blackbox is installed, but setup is incomplete until DKG returns a non-empty ruleset."
-        Write-Step "Retry after fixing DKG/catch-up with: blackbox sync --wait --require-rules"
+        Write-Err2 "Initial verified threat-graph sync did not complete."
+        Write-Step "A partial verified ruleset may already be active, but setup is incomplete until the curator snapshot settles."
+        Write-Step "Retry the full sync with: blackbox sync --wait --require-rules"
     }
+    Write-Ok "DKG native reconciliation enabled; one in-flight slot; zero queue"
 }
 
 function Show-DkgManualHint {
@@ -1158,7 +1229,7 @@ plugins = data.setdefault("plugins", {})
 entries = plugins.setdefault("entries", {})
 blackbox = entries.setdefault("blackbox", {})
 legacy_dkg_urls = {"http://127.0.0.1:9200", "http://localhost:9200"}
-legacy_graphs = {"umanitek/blackbox-threats-staging", "umanitek/guardian-threats-staging", "umanitek/guardian-threats"}
+legacy_graphs = {"0x37b1Fdfd134e2b17583bCBdD3034F91504cD9C70/agent-blackbox", "umanitek/blackbox-threats-staging", "umanitek/guardian-threats-staging", "umanitek/guardian-threats"}
 legacy_peers = {"12D3KooWAuEHYTWbD3R3yPTcECCYZnrjHNpJmrUw5b4D5T3m5Kr3", "12D3KooWBY9jmNATMPv1DZcKbFas5RtjpkhT69pPwvkUBY2MMnDX", "12D3KooWQHQd1SNecrRxwceqPJkXS" + "K" + "EYn8vrV4QyJ2AfqeYwXz1E", "12D3KooWBJskzr2unXQG9mR3LRZFUJoxWr1PN6hTbyWyKndHXjZM"}
 default_dkg_home = os.path.abspath(os.path.expanduser("~/.dkg"))
 legacy_blackbox_dkg_home = os.path.abspath(os.path.expanduser("~/.hermes/blackbox/dkg"))
@@ -1212,9 +1283,12 @@ defaults = {
     "mode": "audit",
     "context_graph_id": context_graph_id,
     "graph_peer_id": graph_peer_id,
-    "sync_interval": 60,
-    "report": True,
-    "daily_report_limit": 9999,
+    "sync_interval": 3600,
+    # Community sharing has not shipped.  Keep fresh installs private, and
+    # make the obsolete outbound-report allowance inert for compatibility
+    # with older readers that still expect the key to exist.
+    "report": False,
+    "daily_report_limit": 0,
     "report_min_severity": "high",
     "block_severity": "critical",
     "dashboard_port": 9700,
@@ -1223,6 +1297,12 @@ defaults = {
 }
 for k, v in defaults.items():
     if k not in blackbox:
+        blackbox[k] = v
+        added.append(k)
+# Migrate stale pre-release sharing settings too. The feature is closed at
+# runtime, so leaving an old opt-in in config is misleading even if inert.
+for k, v in {"report": False, "daily_report_limit": 0}.items():
+    if blackbox.get(k) != v:
         blackbox[k] = v
         added.append(k)
 with open(cfg_path, "w") as f:

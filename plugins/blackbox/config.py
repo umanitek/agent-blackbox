@@ -102,9 +102,9 @@ class BlackboxConfig:
     dkg_url: str = constants.DEFAULT_DKG_URL
     dkg_home: str = field(default_factory=lambda: str(constants.blackbox_dkg_home()))
     dkg_bin: str = field(default_factory=lambda: str(constants.blackbox_dkg_bin()))
-    sync_interval: int = 60
-    report: bool = True
-    daily_report_limit: int = 9999
+    sync_interval: int = 3600
+    report: bool = False
+    daily_report_limit: int = 0
     report_min_severity: str = "high"
     block_severity: str = "critical"
     dashboard_port: int = 9700
@@ -310,19 +310,22 @@ def load_blackbox_config() -> BlackboxConfig:
         dkg_url=dkg_url,
         dkg_home=dkg_home,
         dkg_bin=dkg_bin,
-        sync_interval=_as_int(
-            _env_or(entry, env="BLACKBOX_SYNC_INTERVAL", key="sync_interval", default=60), 60
-        ),
-        report=_as_bool(_env_or(entry, env="BLACKBOX_REPORT", key="report", default=True), True),
-        daily_report_limit=_as_int(
-            _env_or(
-                entry,
-                env="BLACKBOX_DAILY_REPORT_LIMIT",
-                key="daily_report_limit",
-                default=9999,
+        sync_interval=max(
+            3600,
+            _as_int(
+                _env_or(
+                    entry,
+                    env="BLACKBOX_SYNC_INTERVAL",
+                    key="sync_interval",
+                    default=3600,
+                ),
+                3600,
             ),
-            9999,
         ),
+        # Threat sharing ships with the future community graph. This is not a
+        # user-toggleable path in the VM-only release.
+        report=False,
+        daily_report_limit=0,
         report_min_severity=report_min_severity,
         block_severity=block_severity,
         dashboard_port=_as_int(

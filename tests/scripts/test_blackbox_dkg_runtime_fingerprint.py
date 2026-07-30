@@ -94,6 +94,28 @@ def test_fingerprint_is_stable_and_tracks_runtime_inputs(tmp_path):
     )
     assert heap_changed != concurrent_sync
 
+    peer_cap_changed = FINGERPRINTER.compute_fingerprint(
+        *runtime,
+        "1024",
+        "1",
+        "1",
+        "--max-old-space-size=6144",
+        "2",
+        "300000",
+    )
+    assert peer_cap_changed != heap_changed
+
+    store_wait_changed = FINGERPRINTER.compute_fingerprint(
+        *runtime,
+        "1024",
+        "1",
+        "1",
+        "--max-old-space-size=6144",
+        "2",
+        "600000",
+    )
+    assert store_wait_changed != peer_cap_changed
+
 
 def test_fingerprint_forces_restart_when_store_backend_changes(tmp_path):
     runtime = _make_runtime(tmp_path)

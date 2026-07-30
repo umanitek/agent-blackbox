@@ -11,9 +11,6 @@ import tempfile
 from pathlib import Path
 
 
-NETWORK_AGENT_PROFILE_GRAPH = "did:dkg:context-graph:agents"
-
-
 def _atomic_write_text(path: Path, text: str) -> None:
     """Replace ``path`` without changing its permissions."""
     original_mode = stat.S_IMODE(path.stat().st_mode)
@@ -78,72 +75,16 @@ def ensure_graph_auto_approval(config_path: Path, graph_id: str) -> bool:
     return True
 
 
-def ensure_network_profiles_used_for_auto_approval(dkg_agent_dist: Path) -> bool:
-    """Repair the DKG 10.0.6 auto-approval profile lookup.
-
-    Network agent profiles are authenticated and stored in the public
-    ``agents`` context graph.  The released auto-approval handler calls
-    ``loadEncryptionKeyTriplesByAgent()``, but that loader only searches the
-    curator's private local-agent graph.  A valid new user's key is therefore
-    invisible at the exact point where admission needs it.
-
-    Extend the loader's two proof-checked queries (active keys and
-    revocations) to search both graphs.  Exact guards keep this fail-closed on
-    DKG versions whose implementation no longer matches the affected release.
-    """
-    registry_path = dkg_agent_dist / "dkg-agent-registry.js"
-    lifecycle_path = dkg_agent_dist / "dkg-agent-lifecycle.js"
-    registry = registry_path.read_text(encoding="utf-8")
-    lifecycle = lifecycle_path.read_text(encoding="utf-8")
-
-    if (
-        "autoApproveJoinRequests?.includes(contextGraphId)" not in lifecycle
-        or "await this.loadEncryptionKeyTriplesByAgent()" not in lifecycle
-    ):
-        raise ValueError(
-            "DKG join auto-approval implementation is not the supported 10.0.6 shape"
-        )
-
-    function_start = registry.find("    async loadEncryptionKeyTriplesByAgent() {")
-    function_end = registry.find("    async persistAgentToStore(", function_start)
-    if function_start < 0 or function_end < 0:
-        raise ValueError("DKG encryption-key loader was not found")
-
-    loader = registry[function_start:function_end]
-    original = "          GRAPH <${graph}> {"
-    repaired = (
-        f"          VALUES ?sourceGraph {{ <${{graph}}> <{NETWORK_AGENT_PROFILE_GRAPH}> }}\n"
-        "          GRAPH ?sourceGraph {"
-    )
-    repaired_count = loader.count(repaired)
-    if repaired_count == 2:
-        return False
-    if repaired_count != 0 or loader.count(original) != 2:
-        raise ValueError("DKG encryption-key loader does not match the supported query shape")
-
-    loader = loader.replace(original, repaired)
-    updated = registry[:function_start] + loader + registry[function_end:]
-    _atomic_write_text(registry_path, updated)
-    return True
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Ensure a curator keeps graph-scoped DKG join auto-approval enabled."
     )
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--graph", required=True)
-    parser.add_argument(
-        "--dkg-agent-dist",
-        type=Path,
-        help="Optional @origintrail-official/dkg-agent/dist directory to repair",
-    )
     args = parser.parse_args()
     if not args.graph.strip():
         parser.error("--graph must not be empty")
     changed = ensure_graph_auto_approval(args.config, args.graph)
-    if args.dkg_agent_dist:
-        changed = ensure_network_profiles_used_for_auto_approval(args.dkg_agent_dist) or changed
     print("updated" if changed else "already configured")
     return 0
 

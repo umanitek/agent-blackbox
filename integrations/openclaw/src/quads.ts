@@ -67,6 +67,13 @@ export const BLACKBOX_CATEGORY_PRED = `${BLACKBOX_ONTOLOGY}category`;
 export const BLACKBOX_SKILL_NAME_PRED = `${BLACKBOX_ONTOLOGY}skillName`;
 export const BLACKBOX_SKILL_VERSION_PRED = `${BLACKBOX_ONTOLOGY}skillVersion`;
 export const BLACKBOX_DANGER_SHAPE_PRED = `${BLACKBOX_ONTOLOGY}dangerShape`;
+// Append-only VM correction vocabulary. Corrections suppress an exact RDF
+// subject without mutating the original published knowledge asset.
+export const DEFENDER_CORRECTION_TYPE_IRI = "urn:defender:CorrectionSignal";
+export const DEFENDER_CORRECTION_TARGET_PRED = "urn:defender:p:targetSubject";
+export const DEFENDER_CORRECTION_ACTION_PRED = "urn:defender:p:action";
+export const DEFENDER_CORRECTION_SUPPRESS = "suppress";
+export const IOC_TYPES = ["domain", "url", "ip", "hash", "wallet", "contract"] as const;
 
 const RDF_TYPE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 const SCHEMA_NAME = "http://schema.org/name";
@@ -171,6 +178,36 @@ export function skillVersionIdentifierFor(name: string, version: string): string
 /** `skill:{name}:{dangerShape}` — a heuristic dangerous-code/permission id. */
 export function skillShapeIdentifierFor(name: string, dangerShape: string): string {
   return `skill:${name.trim().toLowerCase()}:${dangerShape.trim()}`;
+}
+
+/** Canonicalize an IOC value exactly like Python `normalize_ioc_value`. */
+export function normalizeIocValue(iocType: string, value: string): string {
+  const type = (iocType || "").trim().toLowerCase();
+  let raw = String(value || "").trim();
+  if (!raw) return "";
+  if (type === "domain") return raw.replace(/\.+$/, "").toLowerCase();
+  if (type === "url") {
+    const parts = raw.split("://", 2);
+    if (parts.length === 2) {
+      const slash = parts[1].indexOf("/");
+      const host = (slash >= 0 ? parts[1].slice(0, slash) : parts[1]).toLowerCase();
+      const rest = slash >= 0 ? parts[1].slice(slash) : "";
+      raw = `${parts[0].toLowerCase()}://${host}${rest}`;
+    }
+    return raw.replace(/\/+$/, "");
+  }
+  if (type === "ip") return raw.split(":", 1)[0];
+  if (type === "hash") return raw.toLowerCase();
+  if (type === "wallet" || type === "contract") {
+    return /^0x[a-fA-F0-9]{40}$/.test(raw) ? raw.toLowerCase() : raw;
+  }
+  return raw;
+}
+
+/** `ioc:{type}:{normalized-value}` — shared by Hermes and OpenClaw. */
+export function iocIdentifier(iocType: string, value: string): string {
+  const type = (iocType || "").trim().toLowerCase();
+  return `ioc:${type}:${normalizeIocValue(type, value)}`;
 }
 
 /**
@@ -286,7 +323,7 @@ export function datetimeLiteral(ts?: number): string {
 
 export interface ReportInput {
   identifier: string;
-  category: "injection" | "escalation" | "dependency" | "fileaccess" | "skill";
+  category: "injection" | "escalation" | "dependency" | "fileaccess" | "skill" | "ioc";
   severity: BlackboxSeverity;
   /** Reporter agent address (node default agent). Lowercased for the URI. */
   reporter: string;
@@ -308,6 +345,7 @@ export interface ReportInput {
     skillName?: string;
     skillVersion?: string;
     dangerShape?: string;
+    iocType?: string;
   };
 }
 

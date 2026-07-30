@@ -60,7 +60,8 @@ class Finding:
     evidence: str = ""
     confirmed: bool = True
     source: str = "public"  # public | community | heuristic | custom
-    kind: Optional[str] = None  # malware | vulnerability (dependencies) — vulns never block
+    # malware | vulnerability | historical; vulnerability/historical never block
+    kind: Optional[str] = None
     fields: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -367,17 +368,26 @@ def detect_skill(tool_name: str, args: Any, ruleset: Any) -> List[Finding]:
                 continue
             seen.add(ident)
             src = _rule_source(rule)
+            historical = not rule_ver
             out.append(
                 Finding(
                     identifier=ident,
                     category="skill",
-                    severity=rule.get("severity", "high"),
-                    title=rule.get("name") or f"Known-bad skill {name}",
+                    severity="medium" if historical else rule.get("severity", "high"),
+                    title=(
+                        f"Historical threat report for {name} (version unspecified)"
+                        if historical else rule.get("name") or f"Known-bad skill {name}"
+                    ),
                     tool_name=skill.get("tool", "") or (tool_name or "").lower(),
                     matched=name,
-                    evidence=f"known-bad skill {name}",
+                    evidence=(
+                        f"Skill {name} was exploited in the past; the graph does not specify "
+                        "an affected version, so the issue may be fixed in newer releases."
+                        if historical else f"known-bad skill {name}"
+                    ),
                     confirmed=src == "public",
                     source=src,
+                    kind="historical" if historical else rule.get("kind"),
                     fields={"skill_name": name, "skill_version": version},
                 )
             )

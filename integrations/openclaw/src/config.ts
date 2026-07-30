@@ -13,7 +13,7 @@ import { BlackboxSeverity, SEVERITY_RANK } from "./quads.js";
 import type { ThreatCategory } from "./detection.js";
 
 /**
- * The five detection categories a user can tune individually. Mirrors Python
+ * The six detection categories a user can tune individually. Mirrors Python
  * `config.DETECTION_CATEGORIES`.
  */
 export const DETECTION_CATEGORIES = [
@@ -22,6 +22,7 @@ export const DETECTION_CATEGORIES = [
   "dependency",
   "fileaccess",
   "skill",
+  "ioc",
 ] as const;
 
 /**
@@ -113,12 +114,12 @@ const DEFAULT_DKG_URL = `http://127.0.0.1:${DEFAULT_DKG_PORT}`;
 
 const DEFAULTS: BlackboxConfig = {
   mode: "audit",
-  contextGraphId: "0x37b1Fdfd134e2b17583bCBdD3034F91504cD9C70/agent-blackbox",
+  contextGraphId: "0x37b1Fdfd134e2b17583bCBdD3034F91504cD9C70/agent-blackbox-vm",
   dkgUrl: DEFAULT_DKG_URL,
   dkgHome: "",
   syncInterval: 300,
-  report: true,
-  dailyReportLimit: 9999,
+  report: false,
+  dailyReportLimit: 0,
   reportMinSeverity: "high",
   blockSeverity: "critical",
   discover: true,
@@ -275,12 +276,8 @@ export function resolveConfig(pluginConfig: Record<string, unknown> = {}): Black
       num(pluginConfig.syncInterval) ??
       num(pluginConfig.sync_interval) ??
       DEFAULTS.syncInterval,
-    report: bool(env.BLACKBOX_REPORT) ?? bool(pluginConfig.report) ?? DEFAULTS.report,
-    dailyReportLimit:
-      num(env.BLACKBOX_DAILY_REPORT_LIMIT) ??
-      num(pluginConfig.dailyReportLimit) ??
-      num(pluginConfig.daily_report_limit) ??
-      DEFAULTS.dailyReportLimit,
+    report: false,
+    dailyReportLimit: 0,
     reportMinSeverity:
       severity(env.BLACKBOX_REPORT_MIN_SEVERITY) ??
       severity(pluginConfig.reportMinSeverity) ??

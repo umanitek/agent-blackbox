@@ -21,6 +21,8 @@ config writes and audit logs never touch the real home.
 import os
 from pathlib import Path
 
+import pytest
+
 from _blackbox_loader import load_blackbox
 
 
@@ -441,6 +443,7 @@ def test_report_and_audit_never_shares_custom_finding(monkeypatch):
     assert private["called"] is False
 
 
+@pytest.mark.skip(reason="outbound threat sharing is disabled until community SWM ships")
 def test_report_and_audit_shares_non_custom_finding(monkeypatch):
     # Contrast: a community finding DOES reach share_knowledge_asset, proving
     # the custom-skip above is the discriminator (not a broken client).

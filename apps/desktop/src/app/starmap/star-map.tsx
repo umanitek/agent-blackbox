@@ -280,6 +280,7 @@ export function StarMap({
   }, [])
 
   // (Re)build the radial simulation whenever the graph or size changes.
+  // eslint-disable-next-line no-restricted-syntax -- legitimate non-atom ref write (see eslint rule comment)
   useEffect(() => {
     sizeRef.current = size
 
@@ -315,6 +316,7 @@ export function StarMap({
     }
   }, [graph, invalidate, resetFades, size])
 
+  // eslint-disable-next-line no-restricted-syntax -- legitimate non-atom ref write (see eslint rule comment)
   useEffect(() => {
     adjacencyRef.current = adjacency
     memByIdRef.current = memById
@@ -327,12 +329,14 @@ export function StarMap({
     document.fonts?.load('1em "JetBrains Mono"').then(invalidate, () => {})
   }, [invalidate])
 
+  // eslint-disable-next-line no-restricted-syntax -- legitimate non-atom ref write (see eslint rule comment)
   useEffect(() => {
     selectedIdRef.current = selectedId
     invalidate()
   }, [invalidate, selectedId])
 
   // A fresh graph resets the scrubber to "fully built" (the idle default).
+  // eslint-disable-next-line no-restricted-syntax -- legitimate non-atom ref write (see eslint rule comment)
   useEffect(() => {
     camRadiusRef.current = RING_OUTER
     snapMotionRef.current = false
@@ -378,6 +382,7 @@ export function StarMap({
   )
 
   // Playback: sweep reveal 0 → 1 over SWEEP_MS, then stop (play once).
+  // eslint-disable-next-line no-restricted-syntax -- legitimate non-atom ref write (see eslint rule comment)
   useEffect(() => {
     if (!playing) {
       return
@@ -500,6 +505,7 @@ export function StarMap({
 
   // Repaint + repalette when the theme/mode repaints (the shared observer fires
   // after applyTheme rewrites the class + inline vars on <html>).
+  // eslint-disable-next-line no-restricted-syntax -- legitimate non-atom ref write (see eslint rule comment)
   useEffect(() => {
     themeDirtyRef.current = true
     invalidate()
@@ -509,6 +515,7 @@ export function StarMap({
   // the window is focused — but each frame is cheap (live scramble + a blit of the
   // cached static layer). The expensive scene only re-renders when invalidate()
   // marks it dirty. Capped to ~30fps; interaction (force) bypasses the cap.
+  // eslint-disable-next-line no-restricted-syntax -- legitimate non-atom ref write (see eslint rule comment)
   useEffect(() => {
     let raf = 0
     const ANIM_MS = 1000 / 30
@@ -691,6 +698,7 @@ export function StarMap({
   }, [detailMode])
 
   // Size the backing canvas (DPR-aware).
+  // eslint-disable-next-line no-restricted-syntax -- legitimate non-atom ref write (see eslint rule comment)
   useEffect(() => {
     sizeRef.current = size
     dprRef.current = Math.min(2, window.devicePixelRatio || 1)

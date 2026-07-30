@@ -8,7 +8,7 @@
 # sensible config defaults — so onboarding is one command and dead simple.
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/umanitek/agent-blackbox/main/scripts/blackbox-install.sh | bash
+#   curl -fsSL blackbox.umanitek.ai | bash
 #   # or, from a clone:
 #   ./scripts/blackbox-install.sh [--help]
 #
@@ -25,13 +25,14 @@ REPO_BRANCH="${BLACKBOX_REPO_BRANCH:-main}"
 HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
 # Keep the managed npm DKG package and node state inside the Agent Blackbox
 # checkout. For a local script this is the current repository; for curl | bash
-# it is the checkout the installer creates at BLACKBOX_INSTALL_DIR.
+# the default is ./agent-blackbox beneath the directory where the user invoked
+# the installer. BLACKBOX_INSTALL_DIR remains the explicit override.
 if [ -n "${BLACKBOX_INSTALL_DIR:-}" ]; then
     BLACKBOX_INSTALL_ROOT="$BLACKBOX_INSTALL_DIR"
-elif [ -e "$HOME/agent-blackbox/.git" ]; then
-    BLACKBOX_INSTALL_ROOT="$HOME/agent-blackbox"
+elif [ -f "$PWD/pyproject.toml" ] && [ -d "$PWD/plugins/blackbox" ]; then
+    BLACKBOX_INSTALL_ROOT="$PWD"
 else
-    BLACKBOX_INSTALL_ROOT="$HOME/agent-blackbox"
+    BLACKBOX_INSTALL_ROOT="$PWD/agent-blackbox"
 fi
 BLACKBOX_INSTALL_SCRIPT="${BASH_SOURCE[0]:-}"
 if [ -n "$BLACKBOX_INSTALL_SCRIPT" ] && [ -f "$BLACKBOX_INSTALL_SCRIPT" ]; then
@@ -52,6 +53,7 @@ BLACKBOX_DKG_PORT="${BLACKBOX_DKG_PORT:-9320}"
 BLACKBOX_DKG_STORE_PORT="${BLACKBOX_DKG_STORE_PORT:-9999}"
 BLACKBOX_DKG_STORE_URL="${BLACKBOX_DKG_STORE_URL:-}"
 BLACKBOX_DKG_STORE_MANAGED_BY_DKG=false
+BLACKBOX_DKG_STORE_NAMESPACE="agent-blackbox"
 BLACKBOX_DKG_STORE_BACKEND="auto"
 BLACKBOX_DKG_SELECTED_STORE_BACKEND=""
 BLACKBOX_DOCKER_REQUIRED=false
@@ -64,9 +66,13 @@ BLACKBOX_DKG_DAEMON_URL="http://127.0.0.1:$BLACKBOX_DKG_PORT"
 BLACKBOX_DKG_STORE_QUEUE_LIMIT="${BLACKBOX_DKG_STORE_QUEUE_LIMIT:-512}"
 BLACKBOX_DKG_LIST_CONTEXT_GRAPHS_PROJECTION="${BLACKBOX_DKG_LIST_CONTEXT_GRAPHS_PROJECTION:-1}"
 BLACKBOX_DKG_SYNC_GLOBAL_MAX_INFLIGHT="1"
+BLACKBOX_DKG_SYNC_GLOBAL_QUEUE_LIMIT="0"
+BLACKBOX_DKG_DURABLE_SYNC_ENABLED="${BLACKBOX_DKG_DURABLE_SYNC_ENABLED:-1}"
+BLACKBOX_DKG_CATCHUP_MAX_CONCURRENT_PEERS="1"
+BLACKBOX_DKG_STORE_QUEUE_WAIT_TIMEOUT_MS="300000"
 BLACKBOX_DKG_NODE_OPTIONS=""
 NODE_MAJOR="${BLACKBOX_NODE_MAJOR:-22}"
-BLACKBOX_CONTEXT_GRAPH_ID="${BLACKBOX_CONTEXT_GRAPH_ID:-0x37b1Fdfd134e2b17583bCBdD3034F91504cD9C70/agent-blackbox}"
+BLACKBOX_CONTEXT_GRAPH_ID="${BLACKBOX_CONTEXT_GRAPH_ID:-0x37b1Fdfd134e2b17583bCBdD3034F91504cD9C70/agent-blackbox-vm}"
 BLACKBOX_GRAPH_PEER_ID="${BLACKBOX_GRAPH_PEER_ID:-12D3KooWBJskzr2unXQG9mR3LRZFUJoxWr1PN6hTbyWyKndHXjZM}"
 BLACKBOX_DKG_CATCHUP_TIMEOUT="${BLACKBOX_DKG_CATCHUP_TIMEOUT:-3600}"
 BLACKBOX_LLM_PROVIDER="${BLACKBOX_LLM_PROVIDER:-}"
@@ -75,15 +81,19 @@ BLACKBOX_LLM_KEY_SOURCE="${BLACKBOX_LLM_KEY_SOURCE:-}"
 BLACKBOX_LLM_API_KEY="${BLACKBOX_LLM_API_KEY:-}"
 BLACKBOX_HERMES_SETUP="${BLACKBOX_HERMES_SETUP:-reuse}" # reuse | always | never
 BLACKBOX_AUTO_DASHBOARD="${BLACKBOX_AUTO_DASHBOARD:-1}"
-BLACKBOX_SYNC_MODE="${BLACKBOX_SYNC_MODE:-background}" # background | wait
+BLACKBOX_SYNC_MODE="${BLACKBOX_SYNC_MODE:-wait}" # retained for compatibility; sync is controlled
 BLACKBOX_INSTALL_INCOMPLETE=false
 BLACKBOX_THREAT_GRAPH_INCOMPLETE=false
+BLACKBOX_PARTIAL_RULESET_READY=false
 BLACKBOX_SYNC_PENDING=false
 BLACKBOX_SYNC_LOG=""
 BLACKBOX_DETACHED_PID=""
 BLACKBOX_DKG_ALREADY_RUNNING=false
+BLACKBOX_DKG_FRESH_STATE=false
+BLACKBOX_DKG_FOREIGN_ENDPOINT=false
 BLACKBOX_DKG_RESTART_REQUIRED=false
 BLACKBOX_DKG_RUNTIME_MARKER="$BLACKBOX_DKG_HOME/.blackbox-runtime.sha256"
+BLACKBOX_DKG_NODE_PATH_MARKER="$BLACKBOX_DKG_HOME/.blackbox-node-path"
 BLACKBOX_DKG_STORE_RESET_MARKER="$BLACKBOX_DKG_HOME/.blackbox-store-reset-pending"
 BLACKBOX_DKG_RUNTIME_FINGERPRINT=""
 HERMES_API_KEY_VARS='OPENAI_API_KEY|ANTHROPIC_API_KEY|OPENROUTER_API_KEY|NOUS_API_KEY|ZAI_API_KEY|KIMI_API_KEY|KIMI_CN_API_KEY|MINIMAX_API_KEY|MINIMAX_CN_API_KEY|GOOGLE_API_KEY|GEMINI_API_KEY|MISTRAL_API_KEY|GROQ_API_KEY|TOGETHER_API_KEY|XAI_API_KEY'
@@ -108,16 +118,35 @@ heading() { echo ""; echo "${MINT}${BOLD}$1${NC}"; }
 run_detached() {
     local log_file="$1"
     shift
-    if command -v setsid >/dev/null 2>&1; then
+    local python_bin="${VENV_DIR:-}/bin/python"
+    if [ -x "$python_bin" ]; then
+        # macOS has no setsid(1). Python's start_new_session creates a real
+        # session boundary, so an installer exiting non-zero cannot propagate a
+        # terminal hangup to the dashboard it already reported as running.
+        BLACKBOX_DETACHED_PID="$("$python_bin" -c '
+import subprocess, sys
+log = open(sys.argv[1], "ab", buffering=0)
+proc = subprocess.Popen(
+    sys.argv[2:],
+    stdin=subprocess.DEVNULL,
+    stdout=log,
+    stderr=subprocess.STDOUT,
+    start_new_session=True,
+    close_fds=True,
+)
+print(proc.pid)
+' "$log_file" "$@")"
+    elif command -v setsid >/dev/null 2>&1; then
         nohup setsid "$@" </dev/null >"$log_file" 2>&1 &
+        BLACKBOX_DETACHED_PID=$!
     else
         # macOS has no `setsid`.  Detach stdin as well as stdout/stderr and
         # remove the job from Bash's table; otherwise the installer shell can
         # propagate a hangup when it exits, killing a dashboard/sync child it
         # just reported as running.
         nohup "$@" </dev/null >"$log_file" 2>&1 &
+        BLACKBOX_DETACHED_PID=$!
     fi
-    BLACKBOX_DETACHED_PID=$!
     disown "$BLACKBOX_DETACHED_PID" 2>/dev/null || true
 }
 
@@ -162,7 +191,13 @@ blackbox_dkg() {
     DKG_ACCEPT_STORE_RESET="$accept_store_reset" \
     DKG_STORE_QUEUE_LIMIT="$BLACKBOX_DKG_STORE_QUEUE_LIMIT" \
     DKG_LIST_CONTEXT_GRAPHS_PROJECTION="$BLACKBOX_DKG_LIST_CONTEXT_GRAPHS_PROJECTION" \
+    DKG_SYNC_ON_CONNECT_ENABLED="1" \
+    DKG_SYNC_RECONCILER_ENABLED="1" \
+    DKG_DURABLE_SYNC_ENABLED="$BLACKBOX_DKG_DURABLE_SYNC_ENABLED" \
     DKG_SYNC_GLOBAL_MAX_INFLIGHT="$BLACKBOX_DKG_SYNC_GLOBAL_MAX_INFLIGHT" \
+    DKG_SYNC_GLOBAL_QUEUE_LIMIT="$BLACKBOX_DKG_SYNC_GLOBAL_QUEUE_LIMIT" \
+    DKG_CATCHUP_MAX_CONCURRENT_PEERS="$BLACKBOX_DKG_CATCHUP_MAX_CONCURRENT_PEERS" \
+    DKG_STORE_QUEUE_WAIT_TIMEOUT_MS="$BLACKBOX_DKG_STORE_QUEUE_WAIT_TIMEOUT_MS" \
     DKG_SYNC_TOTAL_TIMEOUT_MS="1800000" \
     DKG_SWM_RECOVERY_TIMEOUT_MS="3600000" \
     NODE_OPTIONS="$BLACKBOX_DKG_NODE_OPTIONS" \
@@ -187,7 +222,9 @@ prepare_blackbox_dkg_runtime_fingerprint() {
     if ! BLACKBOX_DKG_RUNTIME_FINGERPRINT="$("$VENV_DIR/bin/python" "$fingerprinter" compute \
         "$BLACKBOX_DKG_CLI_DIR" "$BLACKBOX_DKG_HOME" "$node_bin" "$BLACKBOX_DKG_BIN" \
         "$BLACKBOX_DKG_STORE_QUEUE_LIMIT" "$BLACKBOX_DKG_LIST_CONTEXT_GRAPHS_PROJECTION" \
-        "$BLACKBOX_DKG_SYNC_GLOBAL_MAX_INFLIGHT" "$BLACKBOX_DKG_NODE_OPTIONS")"; then
+        "$BLACKBOX_DKG_SYNC_GLOBAL_MAX_INFLIGHT" "$BLACKBOX_DKG_NODE_OPTIONS" \
+        "$BLACKBOX_DKG_CATCHUP_MAX_CONCURRENT_PEERS" \
+        "$BLACKBOX_DKG_STORE_QUEUE_WAIT_TIMEOUT_MS")"; then
         BLACKBOX_INSTALL_INCOMPLETE=true
         BLACKBOX_THREAT_GRAPH_INCOMPLETE=true
         warn "Could not fingerprint the configured DKG runtime; setup is incomplete."
@@ -211,6 +248,7 @@ record_blackbox_dkg_runtime_fingerprint() {
         warn "DKG restarted, but its applied runtime fingerprint could not be recorded."
         return 1
     fi
+    printf '%s\n' "$(command -v node)" >"$BLACKBOX_DKG_NODE_PATH_MARKER"
     return 0
 }
 
@@ -317,6 +355,7 @@ check_blackbox_dkg_port() {
             return 0
         fi
         warn "Port $port already has a DKG endpoint, but $BLACKBOX_DKG_HOME has no Blackbox node state."
+        BLACKBOX_DKG_FOREIGN_ENDPOINT=true
         if [ "$BLACKBOX_DKG_PORT_EXPLICIT" = true ]; then
             BLACKBOX_INSTALL_INCOMPLETE=true
             BLACKBOX_THREAT_GRAPH_INCOMPLETE=true
@@ -375,6 +414,28 @@ docker_setup_hint() {
 }
 
 require_docker_for_blazegraph() {
+    if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+        ok "Docker engine is ready for Blazegraph"
+        return 0
+    fi
+    if [ "$OS" = "macos" ] && command -v docker >/dev/null 2>&1 &&
+        [ -d "/Applications/Docker.app" -o -d "$HOME/Applications/Docker.app" ]; then
+        step "Docker Desktop is installed but stopped; starting it now ..."
+        open -gja Docker >/dev/null 2>&1 || true
+        local waited=0
+        while [ "$waited" -lt 120 ]; do
+            if docker info >/dev/null 2>&1; then
+                ok "Docker Desktop is ready for Blazegraph"
+                return 0
+            fi
+            sleep 5
+            waited=$((waited + 5))
+            if [ $((waited % 15)) -eq 0 ]; then
+                step "Waiting for Docker Desktop (${waited}s) ..."
+            fi
+        done
+        warn "Docker Desktop did not become ready within 120 seconds."
+    fi
     if ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
         BLACKBOX_DOCKER_REQUIRED=true
         docker_setup_hint
@@ -397,13 +458,18 @@ confirm_oxigraph_fallback() {
     warn "$reason"
     step "Recommended default: stop here, install/start or repair Docker, then re-run Blackbox with Blazegraph."
     step "Alternative: type y to continue now with the DKG-managed Oxigraph store."
-    if [ ! -r /dev/tty ]; then
+    # /dev/tty can exist and pass -r/-w while the piped `curl | bash`
+    # process has no controlling terminal. Probe by opening it once and keep
+    # that descriptor for both prompt and response so no shell-level
+    # "Device not configured" errors leak into the install.
+    if ! { exec 9<>/dev/tty; } 2>/dev/null; then
         warn "No interactive terminal is available, so Oxigraph was not selected."
         step "To choose it explicitly, re-run the installer with: --store oxigraph"
         return 1
     fi
-    printf "Continue with Oxigraph instead? [y/N] " > /dev/tty
-    IFS= read -r answer < /dev/tty || answer=""
+    printf "Continue with Oxigraph instead? [y/N] " >&9
+    IFS= read -r answer <&9 || answer=""
+    exec 9>&-
     case "$answer" in
         y|Y|yes|YES|Yes) return 0 ;;
         *)
@@ -445,6 +511,7 @@ print("true" if options.get("managedByDkg") is True else "false")
 PYEOF
     )"
     namespace="$(printf '%s\n' "$existing_state" | sed -n '1p')"
+    BLACKBOX_DKG_STORE_NAMESPACE="$namespace"
     existing_backend="$(printf '%s\n' "$existing_state" | sed -n '2p')"
     existing_url="$(printf '%s\n' "$existing_state" | sed -n '3p')"
     existing_managed="$(printf '%s\n' "$existing_state" | sed -n '4p')"
@@ -482,6 +549,37 @@ PYEOF
         BLACKBOX_DKG_STORE_MANAGED_BY_DKG=true
         if check_blackbox_blazegraph; then
             return 0
+        fi
+        if [ "$BLACKBOX_DKG_ALREADY_RUNNING" = true ]; then
+            step "Pausing DKG so its overloaded store can pass recovery checks ..."
+            if blackbox_dkg stop; then
+                BLACKBOX_DKG_ALREADY_RUNNING=false
+                if check_blackbox_blazegraph; then
+                    return 0
+                fi
+                local managed_container="dkg-blazegraph-$namespace"
+                local store_restarted=false
+                step "Restarting the unresponsive managed Blazegraph container ..."
+                if docker restart "$managed_container" >/dev/null 2>&1; then
+                    store_restarted=true
+                else
+                    # A wedged JVM can make Docker's graceful restart return
+                    # non-zero after it has nevertheless stopped the container.
+                    # Starting that same container preserves its named volume
+                    # and is safer than falling through to reprovisioning.
+                    if [ "$(docker inspect -f '{{.State.Running}}' "$managed_container" 2>/dev/null)" = false ] &&
+                        docker start "$managed_container" >/dev/null 2>&1; then
+                        store_restarted=true
+                    else
+                        warn "Could not restart managed container $managed_container."
+                    fi
+                fi
+                if [ "$store_restarted" = true ] && check_blackbox_blazegraph; then
+                    return 0
+                fi
+            else
+                warn "Could not pause the Blackbox DKG daemon before store recovery."
+            fi
         fi
         warn "The managed Blazegraph endpoint is down; attempting Docker recovery."
     fi
@@ -546,9 +644,29 @@ check_blackbox_blazegraph() {
     ok "Blazegraph SPARQL endpoint is healthy at $BLACKBOX_DKG_STORE_URL"
 }
 
+reset_fresh_managed_blazegraph() {
+    [ "$BLACKBOX_DKG_FRESH_STATE" = true ] || return 0
+    [ "$BLACKBOX_DKG_SELECTED_STORE_BACKEND" = blazegraph ] || return 0
+    [ "$BLACKBOX_DKG_STORE_MANAGED_BY_DKG" = true ] || return 0
+    [ "$BLACKBOX_DKG_STORE_URL_EXPLICIT" = false ] || return 0
+    if [ "$BLACKBOX_DKG_FOREIGN_ENDPOINT" = true ]; then
+        err "Refusing to reset the Blackbox namespace while an unrelated DKG endpoint is running."
+        step "Stop that DKG node or set BLACKBOX_DKG_STORE_URL to an operator-managed store."
+        return 1
+    fi
+    local helper="$REPO_DIR/scripts/blackbox-blazegraph.mjs"
+    step "Clearing the installer-managed Blazegraph namespace for the fresh DKG identity ..."
+    if ! node "$helper" reset "$BLACKBOX_DKG_CLI_DIR" \
+        "$BLACKBOX_DKG_STORE_URL" "$BLACKBOX_DKG_STORE_NAMESPACE" >/dev/null; then
+        err "Could not clear the stale installer-managed Blackbox namespace."
+        return 1
+    fi
+    ok "Fresh Blackbox store is empty and ready for the new DKG identity"
+}
+
 ensure_blackbox_dkg_config() {
     local config_state
-    config_state="$("$VENV_DIR/bin/python" - "$BLACKBOX_DKG_HOME" "$BLACKBOX_DKG_PORT" "$BLACKBOX_DKG_SELECTED_STORE_BACKEND" "$BLACKBOX_DKG_STORE_URL" "$BLACKBOX_DKG_STORE_MANAGED_BY_DKG" <<'PYEOF'
+    config_state="$("$VENV_DIR/bin/python" - "$BLACKBOX_DKG_HOME" "$BLACKBOX_DKG_PORT" "$BLACKBOX_DKG_SELECTED_STORE_BACKEND" "$BLACKBOX_DKG_STORE_URL" "$BLACKBOX_DKG_STORE_MANAGED_BY_DKG" "$BLACKBOX_CONTEXT_GRAPH_ID" <<'PYEOF'
 import json
 import os
 import secrets
@@ -561,6 +679,7 @@ api_port = int(sys.argv[2])
 store_backend = sys.argv[3]
 store_url = sys.argv[4]
 store_managed = sys.argv[5].lower() == "true"
+context_graph_id = sys.argv[6]
 home.mkdir(parents=True, exist_ok=True)
 cfg_path = home / "config.json"
 original = None
@@ -593,14 +712,22 @@ existing_relays = data.get("relayPeers") if isinstance(data.get("relayPeers"), l
 merged_relays = list(dict.fromkeys([*existing_relays, *MAINNET_BASE_RELAYS]))
 data["relayPeers"] = merged_relays
 data["relayReservationCount"] = int(data.get("relayReservationCount") or 4)
-# Use the DKG native default reconnect reconciler.
-data.pop("syncOnConnectEnabled", None)
-# Retire old Blackbox backpressure overrides. DKG owns sync scheduling,
-# admission catch-up, backpressure, and approval redelivery.
+# DKG owns restart-safe continuation of the persisted Blackbox subscription.
+# The one-inflight/zero-queue limits below prevent sync fan-out from starving
+# Blazegraph while still allowing the reconciler to resume bounded manifests.
+data["syncOnConnectEnabled"] = True
+data["syncReconcilerEnabled"] = True
+data["durableSyncEnabled"] = True
 data.pop("syncAgentsMeta", None)
-data.pop("syncGlobalMaxInflight", None)
-data.pop("syncGlobalQueueLimit", None)
+data["syncGlobalMaxInflight"] = 1
+data["syncGlobalQueueLimit"] = 0
 data.pop("restrictAutoSubscribeContextGraphs", None)
+data["syncSharedMemoryOnConnect"] = False
+priorities = data.get("syncContextGraphPriorities")
+if not isinstance(priorities, dict):
+    priorities = {}
+priorities.update({context_graph_id: 100, "agents": -100, "ontology": -100})
+data["syncContextGraphPriorities"] = priorities
 data.setdefault("autoUpdate", {"enabled": False})
 data["chain"] = {
     "type": "evm",
@@ -729,6 +856,22 @@ fi
 
 # ── Locate (or fetch) the repo ──────────────────────────────────────────────
 # When run from a clone, use it in-place. When piped from curl, clone REPO_URL.
+blackbox_repo_is_valid() {
+    local repo="$1"
+    [ -d "$repo/.git" ] &&
+        git -C "$repo" rev-parse --verify HEAD >/dev/null 2>&1 &&
+        [ -f "$repo/pyproject.toml" ] &&
+        [ -d "$repo/plugins/blackbox" ]
+}
+
+move_broken_blackbox_repo_aside() {
+    local repo="$1"
+    local backup="${repo}.broken-$(date +%Y%m%d-%H%M%S)-$$"
+    warn "Existing install at $repo is incomplete or not an Agent Blackbox checkout."
+    mv -- "$repo" "$backup"
+    step "Preserved it at $backup"
+}
+
 resolve_repo() {
     local script_src="${BASH_SOURCE[0]:-}"
     if [ -n "$script_src" ] && [ -f "$script_src" ]; then
@@ -746,14 +889,30 @@ resolve_repo() {
         exit 1
     fi
     REPO_DIR="$BLACKBOX_INSTALL_ROOT"
-    if [ -d "$REPO_DIR/.git" ]; then
+    if [ -e "$REPO_DIR" ] && ! blackbox_repo_is_valid "$REPO_DIR"; then
+        move_broken_blackbox_repo_aside "$REPO_DIR"
+    fi
+    if blackbox_repo_is_valid "$REPO_DIR"; then
         step "Updating existing clone at $REPO_DIR"
-        git -C "$REPO_DIR" fetch --depth 1 origin "$REPO_BRANCH" >/dev/null 2>&1 || true
-        git -C "$REPO_DIR" checkout "$REPO_BRANCH" >/dev/null 2>&1 || true
-        git -C "$REPO_DIR" pull --ff-only >/dev/null 2>&1 || true
+        if ! git -C "$REPO_DIR" fetch --depth 1 origin "$REPO_BRANCH"; then
+            err "Could not fetch $REPO_BRANCH from $REPO_URL."
+            return 1
+        fi
+        if ! git -C "$REPO_DIR" checkout "$REPO_BRANCH"; then
+            err "Could not check out $REPO_BRANCH in $REPO_DIR. Resolve local changes and re-run."
+            return 1
+        fi
+        if ! git -C "$REPO_DIR" pull --ff-only origin "$REPO_BRANCH"; then
+            err "Could not fast-forward $REPO_DIR to origin/$REPO_BRANCH."
+            return 1
+        fi
     else
         step "Cloning $REPO_URL → $REPO_DIR"
         git clone --depth 1 --branch "$REPO_BRANCH" "$REPO_URL" "$REPO_DIR"
+    fi
+    if ! blackbox_repo_is_valid "$REPO_DIR"; then
+        err "$REPO_DIR is not a complete Agent Blackbox Python project."
+        return 1
     fi
     ok "Repo ready at $REPO_DIR"
 }
@@ -1168,73 +1327,12 @@ install_blackbox_dkg_package() {
         warn "Could not determine the installed DKG package version."
         return 1
     fi
-    if ! patch_blackbox_dkg_large_graph_recovery "$installed_version"; then
-        warn "Installed DKG runtime could not be prepared for the complete Blackbox graph."
+    if ! "$VENV_DIR/bin/python" -m plugins.blackbox.dkg_version "$installed_version"; then
+        warn "DKG $installed_version is too old for direct verified Blackbox recovery; version 10.0.9+ is required."
         return 1
     fi
+    step "Using published upstream DKG $installed_version unchanged."
     ok "Published DKG npm package ready (${installed_version:-installed})"
-}
-
-patch_blackbox_dkg_large_graph_recovery() {
-    local installed_version="${1:-}"
-    if [ "$installed_version" != "10.0.6" ]; then
-        step "Using upstream DKG $installed_version sync behavior (no local runtime shim)."
-        return 0
-    fi
-    # DKG 10.0.6 bounds normal sync and private curator SWM recovery to 120s.
-    # The Blackbox graph is larger and recovery is atomic, so timed-out work is
-    # discarded. Patch both requester budgets and the private API ceiling.
-    # Exact-string guards keep this compatibility patch scoped to the known
-    # DKG version and fail closed instead of rewriting unknown upstream code.
-    "$VENV_DIR/bin/python" - \
-        "$BLACKBOX_DKG_CLI_DIR/node_modules/@origintrail-official/dkg-agent/dist/dkg-agent-lifecycle.js" \
-        "$BLACKBOX_DKG_CLI_DIR/node_modules/@origintrail-official/dkg-agent/dist/dkg-agent-constants.js" \
-        "$BLACKBOX_DKG_CLI_DIR/node_modules/@origintrail-official/dkg/dist/daemon/routes/memory.js" <<'PYEOF'
-import sys
-from pathlib import Path
-
-lifecycle_path, constants_path, route_path = map(Path, sys.argv[1:4])
-replacements = (
-    (
-        lifecycle_path,
-        "createContextGraphSyncDeadline: (remaining) => this.createContextGraphSyncDeadline(remaining),",
-        "createContextGraphSyncDeadline: (_remaining) => Date.now() + Math.max(SYNC_TOTAL_TIMEOUT_MS, Number.parseInt(process.env.DKG_SWM_RECOVERY_TIMEOUT_MS ?? '3600000', 10) || 3_600_000),",
-        (
-            "createContextGraphSyncDeadline: (_remaining) => Date.now() + Math.max(SYNC_TOTAL_TIMEOUT_MS, Number.parseInt(process.env.DKG_SWM_RECOVERY_TIMEOUT_MS ?? '1800000', 10) || 1_800_000),",
-            "createContextGraphSyncDeadline: (_remaining) => Date.now() + Math.max(SYNC_TOTAL_TIMEOUT_MS, Number.parseInt(process.env.DKG_SWM_RECOVERY_TIMEOUT_MS ?? '900000', 10) || 900_000),",
-        ),
-        2,
-    ),
-    (
-        constants_path,
-        "export const SYNC_TOTAL_TIMEOUT_MS = 120_000;",
-        "export const SYNC_TOTAL_TIMEOUT_MS = Math.max(120_000, Number.parseInt(process.env.DKG_SYNC_TOTAL_TIMEOUT_MS ?? '1800000', 10) || 1_800_000);",
-        ("export const SYNC_TOTAL_TIMEOUT_MS = 1_800_000;",),
-        1,
-    ),
-    (
-        route_path,
-        "const MAX_BUDGET_MS = 300_000;",
-        "const MAX_BUDGET_MS = 3_600_000;",
-        ("const MAX_BUDGET_MS = 1_800_000;", "const MAX_BUDGET_MS = 900_000;"),
-        1,
-    ),
-)
-for path, old, new, transitionals, expected_new_count in replacements:
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError as exc:
-        raise SystemExit(f"missing DKG recovery file {path}: {exc}")
-    for transitional in transitionals:
-        if transitional in text:
-            text = text.replace(transitional, new)
-    if old in text:
-        text = text.replace(old, new)
-    if text.count(new) >= expected_new_count:
-        path.write_text(text, encoding="utf-8")
-    if text.count(new) < expected_new_count:
-        raise SystemExit(f"unsupported DKG recovery source in {path}")
-PYEOF
 }
 
 install_dkg() {
@@ -1274,6 +1372,11 @@ install_dkg() {
         return 0
     fi
 
+    if blackbox_has_dkg_state; then
+        BLACKBOX_DKG_FRESH_STATE=false
+    else
+        BLACKBOX_DKG_FRESH_STATE=true
+    fi
     mkdir -p "$BLACKBOX_DKG_HOME"
     if ! check_blackbox_dkg_port; then
         dkg_manual_hint
@@ -1289,6 +1392,10 @@ install_dkg() {
         err "Blazegraph setup did not complete and Oxigraph was not confirmed. Installation stopped."
         exit 1
     fi
+    if ! reset_fresh_managed_blazegraph; then
+        err "Installation stopped before creating a DKG identity against stale graph state."
+        exit 1
+    fi
     if [ "$BLACKBOX_DKG_ALREADY_RUNNING" = true ]; then
         ensure_blackbox_dkg_config
         if ! prepare_blackbox_dkg_runtime_fingerprint; then
@@ -1300,7 +1407,10 @@ install_dkg() {
             return 0
         fi
         step "Restarting the Blackbox-owned DKG node to activate sync and relay updates ..."
-        if blackbox_dkg stop && blackbox_dkg start && wait_for_blackbox_dkg_runtime; then
+        if blackbox_dkg stop; then
+            blackbox_dkg start || true
+        fi
+        if wait_for_blackbox_dkg_runtime; then
             rm -f "$BLACKBOX_DKG_STORE_RESET_MARKER"
             ok "Blackbox DKG node restarted with the current sync settings"
             if ! record_blackbox_dkg_runtime_fingerprint; then
@@ -1326,8 +1436,12 @@ install_dkg() {
     step "  DKG home: $BLACKBOX_DKG_HOME"
     step "  DKG CLI:  $BLACKBOX_DKG_BIN"
     step "  Store:    $(blackbox_store_description)"
-    step "  (non-interactive; joining and reading need no wallet funding)"
-    if blackbox_dkg start && wait_for_blackbox_dkg_runtime; then
+    step "  (non-interactive; subscribing and reading need no wallet funding)"
+    # DKG's launcher can give up its 15-second startup wait just before a
+    # healthy daemon finishes loading a large Blazegraph namespace. The
+    # commit-aware readiness check below is the authoritative result.
+    blackbox_dkg start || true
+    if wait_for_blackbox_dkg_runtime; then
         rm -f "$BLACKBOX_DKG_STORE_RESET_MARKER"
         ok "DKG node bootstrapped on $DKG_NETWORK"
         if ! record_blackbox_dkg_runtime_fingerprint; then
@@ -1350,36 +1464,39 @@ sync_ruleset() {
     heading "Syncing the threat ruleset"
     mkdir -p "$HERMES_HOME/logs"
     BLACKBOX_SYNC_LOG="$HERMES_HOME/logs/blackbox-sync-install.log"
-    if [ "$BLACKBOX_SYNC_MODE" = "background" ]; then
-        step "Starting DKG catch-up in the background; the dashboard stays usable while it syncs."
-        run_detached "$BLACKBOX_SYNC_LOG" "$HERMES_BIN" blackbox sync --wait --timeout "$BLACKBOX_DKG_CATCHUP_TIMEOUT" --require-rules
-        local sync_pid="$BLACKBOX_DETACHED_PID"
-        if ! detached_process_survived_startup "$sync_pid"; then
-            BLACKBOX_INSTALL_INCOMPLETE=true
-            BLACKBOX_THREAT_GRAPH_INCOMPLETE=true
-            err "Threat graph sync exited during startup."
-            step "Log: $BLACKBOX_SYNC_LOG"
-            return 0
-        fi
-        BLACKBOX_SYNC_PENDING=true
-        ok "Threat graph sync running in background (PID $sync_pid)"
-        step "Log: $BLACKBOX_SYNC_LOG"
-        return 0
+    step "Requesting one controlled verified graph catch-up ..."
+    step "Sync progress will stream below (also saved to $BLACKBOX_SYNC_LOG)."
+    # Start the dashboard before the long initial transfer so discovery,
+    # download, verification, and reconciliation are observable immediately.
+    : >"$BLACKBOX_SYNC_LOG"
+    if [ "$BLACKBOX_AUTO_DASHBOARD" != "0" ] &&
+        [ "$BLACKBOX_AUTO_DASHBOARD" != "false" ] &&
+        [ "$BLACKBOX_AUTO_DASHBOARD" != "never" ] &&
+        [ "$BLACKBOX_AUTO_DASHBOARD" != "no" ]; then
+        start_dashboard
     fi
 
-    step "Requesting access, subscribing, and refreshing through the DKG API ..."
-    local sync_out
-    if sync_out="$("$HERMES_BIN" blackbox sync --wait --timeout "$BLACKBOX_DKG_CATCHUP_TIMEOUT" --require-rules 2>&1)"; then
-        printf '%s\n' "$sync_out"
+    local sync_code=0
+    if PYTHONUNBUFFERED=1 "$HERMES_BIN" blackbox sync --wait --timeout "$BLACKBOX_DKG_CATCHUP_TIMEOUT" --require-rules 2>&1 |
+        tee -a "$BLACKBOX_SYNC_LOG"; then
+        sync_code=0
+    else
+        sync_code=$?
+    fi
+    if [ "$sync_code" -eq 0 ]; then
         ok "Ruleset synced — Blackbox is watching with the latest threats"
     else
+        if grep -Eq '  [1-9][0-9,]* verified threats ready' "$BLACKBOX_SYNC_LOG"; then
+            BLACKBOX_PARTIAL_RULESET_READY=true
+        fi
         BLACKBOX_INSTALL_INCOMPLETE=true
         BLACKBOX_THREAT_GRAPH_INCOMPLETE=true
-        printf '%s\n' "$sync_out"
-        err "Initial threat-graph sync did not load any rules."
-        step "Blackbox is installed, but setup is incomplete until DKG returns a non-empty ruleset."
-        step "Retry after fixing DKG/catch-up with: blackbox sync --wait --require-rules"
+        err "Initial verified threat-graph sync did not complete."
+        step "A partial verified ruleset may already be active, but setup is incomplete until the curator snapshot settles."
+        step "Retry the full sync with: blackbox sync --wait --require-rules"
     fi
+    ok "DKG native reconciliation enabled; one in-flight slot; zero queue"
+    return 0
 }
 
 dkg_manual_hint() {
@@ -1431,7 +1548,7 @@ blackbox = entries.setdefault("blackbox", {})
 # Idempotent for custom user edits, but migrate deprecated defaults that point
 # at the user's shared DKG install or a retired community graph.
 legacy_dkg_urls = {"http://127.0.0.1:9200", "http://localhost:9200"}
-legacy_graphs = {"umanitek/blackbox-threats-staging", "umanitek/guardian-threats-staging", "umanitek/guardian-threats"}
+legacy_graphs = {"0x37b1Fdfd134e2b17583bCBdD3034F91504cD9C70/agent-blackbox", "umanitek/blackbox-threats-staging", "umanitek/guardian-threats-staging", "umanitek/guardian-threats"}
 legacy_peers = {"12D3KooWAuEHYTWbD3R3yPTcECCYZnrjHNpJmrUw5b4D5T3m5Kr3", "12D3KooWBY9jmNATMPv1DZcKbFas5RtjpkhT69pPwvkUBY2MMnDX", "12D3KooWQHQd1SNecrRxwceqPJkXS" + "K" + "EYn8vrV4QyJ2AfqeYwXz1E", "12D3KooWBJskzr2unXQG9mR3LRZFUJoxWr1PN6hTbyWyKndHXjZM"}
 default_dkg_home = os.path.abspath(os.path.expanduser("~/.dkg"))
 legacy_blackbox_dkg_home = os.path.abspath(os.path.expanduser("~/.hermes/blackbox/dkg"))
@@ -1485,9 +1602,12 @@ defaults = {
     "mode": "audit",
     "context_graph_id": context_graph_id,
     "graph_peer_id": graph_peer_id,
-    "sync_interval": 60,
-    "report": True,
-    "daily_report_limit": 9999,
+    "sync_interval": 3600,
+    # Community sharing has not shipped.  Keep fresh installs private, and
+    # make the obsolete outbound-report allowance inert for compatibility
+    # with older readers that still expect the key to exist.
+    "report": False,
+    "daily_report_limit": 0,
     "report_min_severity": "high",
     "block_severity": "critical",
     "dashboard_port": 9700,
@@ -1496,6 +1616,12 @@ defaults = {
 }
 for k, v in defaults.items():
     if k not in blackbox:
+        blackbox[k] = v
+        added.append(k)
+# Migrate stale pre-release sharing settings too. The feature is closed at
+# runtime, so leaving an old opt-in in config is misleading even if inert.
+for k, v in {"report": False, "daily_report_limit": 0}.items():
+    if blackbox.get(k) != v:
         blackbox[k] = v
         added.append(k)
 with open(cfg_path, "w") as f:
@@ -1679,10 +1805,9 @@ ${path_note}
   DKG CLI:    $BLACKBOX_DKG_BIN
   Store:      $store_note
 
-  The signed join request and DKG sync are running in the background. The
-  default curator auto-approves valid requests; Blackbox retries until local
-  membership is confirmed. Do not treat this install as fully protected until
-  this command succeeds:
+  The public threat-graph subscription and DKG sync are running in the
+  background. Do not treat this install as fully protected until this command
+  succeeds:
 
       blackbox sync --wait --require-rules
 
@@ -1700,13 +1825,23 @@ EOF
 ${path_note}
 EOF
         if [ "$BLACKBOX_THREAT_GRAPH_INCOMPLETE" = true ]; then
-            cat <<EOF
+            if [ "$BLACKBOX_PARTIAL_RULESET_READY" = true ]; then
+                cat <<EOF
+  A partial verified ruleset is active, but the authoritative snapshot did not
+  finish. Keep the dashboard open to inspect the active protection, then retry:
+
+      blackbox sync --wait --require-rules
+
+EOF
+            else
+                cat <<EOF
   The local DKG node did not provide a non-empty ruleset yet. Do not treat this
   install as protected until this command succeeds:
 
       blackbox sync --wait --require-rules
 
 EOF
+            fi
         fi
         cat <<EOF
   Dashboard:  http://127.0.0.1:${BLACKBOX_DASHBOARD_PORT:-9700}
@@ -1752,8 +1887,8 @@ main() {
     configure_blackbox_mode
     attach_all_agents
     setup_llm
-    start_dashboard
     sync_ruleset
+    start_dashboard
     next_steps
     if [ "$BLACKBOX_INSTALL_INCOMPLETE" = true ]; then
         exit 1

@@ -165,20 +165,49 @@ def test_catchup_status_encodes_context_graph_id(monkeypatch):
     )
 
 
-def test_authoritative_catchup_pins_curator_for_atomic_swm_recovery(monkeypatch):
-    cap = _capture(monkeypatch, '{"completed":true,"replacedRoots":23}')
+def test_catchup_status_can_pin_exact_job_id(monkeypatch):
+    cap = _capture(monkeypatch, '{"jobId":"fresh","status":"done"}')
+    client = dkg_client.DkgClient(url="http://node", token="tok")
+
+    result = client.catchup_status("owner/graph", job_id="fresh job/1")
+
+    assert result == {"jobId": "fresh", "status": "done"}
+    assert cap["method"] == "GET"
+    assert cap["url"] == (
+        "http://node/api/sync/catchup-status?jobId=fresh%20job%2F1"
+    )
+
+
+def test_connect_peer_uses_dkg_peer_resolution(monkeypatch):
+    cap = _capture(monkeypatch)
+    client = dkg_client.DkgClient(url="http://node", token="tok")
+
+    client.connect_peer("publisher-peer")
+
+    assert cap["method"] == "POST"
+    assert cap["url"] == "http://node/api/connect"
+    assert json.loads(cap["body"]) == {"peerId": "publisher-peer"}
+    assert cap["timeout"] == 15.0
+
+
+def test_authoritative_catchup_pins_publisher_for_durable_vm_recovery(monkeypatch):
+    cap = _capture(monkeypatch, '{"ok":true,"totalDurableInsertedTriples":23}')
     client = dkg_client.DkgClient(url="http://node", token="tok")
 
     result = client.catchup_from_peer("owner/private", "curator-peer", budget_ms=9_999_999)
 
-    assert result == {"completed": True, "replacedRoots": 23}
+    assert result == {"ok": True, "totalDurableInsertedTriples": 23}
     assert cap["method"] == "POST"
-    assert cap["url"] == "http://node/api/context-graph/recover-shared-memory"
+    assert cap["url"] == "http://node/api/shared-memory/catchup"
     assert json.loads(cap["body"]) == {
         "contextGraphId": "owner/private",
-        "remotePeerId": "curator-peer",
+        "peerId": "curator-peer",
+        "includeSharedMemory": False,
+        "includeDurable": True,
+        "hostCatchupFallback": False,
+        "perPeerDurableBudgetMs": 300_000,
     }
-    assert cap["timeout"] == 3610
+    assert cap["timeout"] == dkg_client.constants.GRAPH_SYNC_SETTLEMENT_TIMEOUT_S
 
 
 def test_context_graph_has_agent_uses_local_participants_metadata(monkeypatch):
@@ -265,16 +294,61 @@ def test_restart_context_graph_catchup_uses_official_unsubscribe_then_subscribe(
     ]
     assert [json.loads(call["body"]) for call in cap["calls"]] == [
         {"contextGraphId": "cg"},
-        {"contextGraphId": "cg", "includeSharedMemory": True},
+        {"contextGraphId": "cg", "includeSharedMemory": False},
     ]
+
+
+def test_unsubscribe_context_graph_preserves_the_official_data_safe_operation(monkeypatch):
+    cap = _capture(monkeypatch, body='{"unsubscribed":"cg","subscribed":false}')
+    client = dkg_client.DkgClient(url="http://node", token="tok")
+
+    result = client.unsubscribe_context_graph("cg")
+
+    assert result == {"unsubscribed": "cg", "subscribed": False}
+    assert cap["url"] == "http://node/api/context-graph/unsubscribe"
+    assert json.loads(cap["body"]) == {"contextGraphId": "cg"}
 
 
 def test_query_normalizes_bindings(monkeypatch):
     body = json.dumps({"bindings": [{"identifier": '"dep:npm:x@1"'}]})
-    _capture(monkeypatch, body=body)
+    cap = _capture(monkeypatch, body=body)
     client = dkg_client.DkgClient(url="http://node", token="t")
     rows = client.query("SELECT * WHERE {?s ?p ?o}", "cg")
     assert rows == [{"identifier": '"dep:npm:x@1"'}]
+    assert json.loads(cap["body"])["view"] == "verifiable-memory"
+
+
+def test_scoped_graph_query_can_omit_the_memory_view(monkeypatch):
+    cap = _capture(monkeypatch, '{"bindings": []}')
+    client = dkg_client.DkgClient(url="http://node", token="t")
+
+    client.query(
+        "SELECT * WHERE { GRAPH ?g { ?s ?p ?o } }",
+        "cg",
+        view=None,
+    )
+
+    assert json.loads(cap["body"]) == {
+        "sparql": "SELECT * WHERE { GRAPH ?g { ?s ?p ?o } }",
+        "contextGraphId": "cg",
+    }
+
+
+def test_threat_count_uses_one_verifiable_memory_query(monkeypatch):
+    cap = _capture(
+        monkeypatch,
+        '{"bindings":[{"n":"\\\"123\\\"^^<http://www.w3.org/2001/XMLSchema#integer>"}]}',
+    )
+    client = dkg_client.DkgClient(url="http://node", token="tok")
+
+    assert client.threat_count("owner/agent-blackbox-vm") == 123
+    body = json.loads(cap["body"])
+    assert body["contextGraphId"] == "owner/agent-blackbox-vm"
+    assert body["view"] == dkg_client.constants.VIEW_VERIFIABLE_MEMORY
+    assert "COUNT(DISTINCT ?threat)" in body["sparql"]
+    assert "VALUES ?type" in body["sparql"]
+    assert "<urn:blackbox:SourceObservation>" in body["sparql"]
+    assert "UNION" not in body["sparql"]
 
 
 def test_working_memory_query_sends_agent_address(monkeypatch):
@@ -312,8 +386,9 @@ def test_write_path_raises_dkg_error_on_http_error(monkeypatch):
 
     monkeypatch.setattr(dkg_client.urllib.request, "urlopen", raise_http)
     client = dkg_client.DkgClient(url="http://node", token="t")
-    with pytest.raises(dkg_client.DkgError):
+    with pytest.raises(dkg_client.DkgError) as exc_info:
         client.share_knowledge_asset("cg", "n", [])
+    assert exc_info.value.status_code == 403
 
 
 def test_share_is_idempotent_on_already_finalized(monkeypatch):

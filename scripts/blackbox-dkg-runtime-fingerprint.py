@@ -179,6 +179,8 @@ def compute_fingerprint(
     list_context_graphs_projection: str = "1",
     sync_global_max_inflight: str = "1",
     node_options: str = "--max-old-space-size=8192",
+    catchup_max_concurrent_peers: str = "1",
+    store_queue_wait_timeout_ms: str = "300000",
 ) -> str:
     cli_dir = cli_dir.expanduser().resolve()
     dkg_home = dkg_home.expanduser().resolve()
@@ -215,6 +217,16 @@ def compute_fingerprint(
         str(sync_global_max_inflight).encode("utf-8"),
     )
     _add_bytes(digest, "node-options", str(node_options).encode("utf-8"))
+    _add_bytes(
+        digest,
+        "catchup-max-concurrent-peers",
+        str(catchup_max_concurrent_peers).encode("utf-8"),
+    )
+    _add_bytes(
+        digest,
+        "store-queue-wait-timeout-ms",
+        str(store_queue_wait_timeout_ms).encode("utf-8"),
+    )
     for path in _runtime_files(cli_dir, dkg_home, dkg_bin):
         _add_bytes(digest, f"file:{path.resolve()}", path.read_bytes())
     return digest.hexdigest()
@@ -308,7 +320,7 @@ def wait_for_runtime(
 def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     try:
-        if len(args) in (5, 7, 9) and args[0] == "compute":
+        if len(args) in (5, 7, 9, 11) and args[0] == "compute":
             paths = [Path(value) for value in args[1:5]]
             print(compute_fingerprint(*paths, *args[5:]))
             return 0
@@ -337,7 +349,8 @@ def main(argv: list[str] | None = None) -> int:
     print(
         f"usage: {Path(sys.argv[0]).name} compute <dkg-cli-dir> <dkg-home> "
         "<node-bin> <dkg-bin> [<store-queue-limit> <list-context-graphs-projection> "
-        "[<sync-global-max-inflight> <node-options>]]\n"
+        "[<sync-global-max-inflight> <node-options> "
+        "[<catchup-max-concurrent-peers> <store-queue-wait-timeout-ms>]]]\n"
         f"       {Path(sys.argv[0]).name} heap [<default-mb>]\n"
         f"       {Path(sys.argv[0]).name} node-options <heap-mb> [<existing-options>]\n"
         f"       {Path(sys.argv[0]).name} commit <dkg-cli-dir>\n"

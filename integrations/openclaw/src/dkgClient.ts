@@ -169,12 +169,11 @@ export class DkgClient {
     });
   }
 
-  /** SPARQL query against a memory view (ruleset sync reads verifiable-memory
-   * then shared-working-memory — the two trust tiers). */
+  /** SPARQL query against a memory view. Blackbox defaults to durable VM. */
   async query(
     sparql: string,
     contextGraphId: string,
-    view: DkgView = "shared-working-memory",
+    view: DkgView = "verifiable-memory",
   ): Promise<{ results?: unknown } & Record<string, unknown>> {
     return this.request("/api/query", { sparql, contextGraphId, view }, "POST", QUERY_TIMEOUT_MS);
   }

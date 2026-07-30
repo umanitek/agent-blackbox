@@ -9,7 +9,9 @@ import shlex
 import shutil
 import subprocess
 import sys
+import threading
 import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
@@ -19,7 +21,22 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 INSTALL_SH = REPO_ROOT / "scripts" / "blackbox-install.sh"
 INSTALL_PS1 = REPO_ROOT / "scripts" / "blackbox-install.ps1"
 BLAZEGRAPH_HELPER = REPO_ROOT / "scripts" / "blackbox-blazegraph.mjs"
+CURATOR_CONFIG = REPO_ROOT / "scripts" / "blackbox-curator-config.py"
+CURATOR_SERVICE = REPO_ROOT / "scripts" / "blackbox-dkg-curator.service.conf"
 BLAZEGRAPH_URL = "http://127.0.0.1:9999/bigdata/namespace/test/sparql"
+
+
+def test_installers_allow_a_full_hour_for_initial_graph_catchup() -> None:
+    unix = INSTALL_SH.read_text(encoding="utf-8")
+    windows = INSTALL_PS1.read_text(encoding="utf-8")
+
+    assert 'BLACKBOX_DKG_CATCHUP_TIMEOUT="${BLACKBOX_DKG_CATCHUP_TIMEOUT:-3600}"' in unix
+    assert (
+        '$CatchupTimeout = if ($env:BLACKBOX_DKG_CATCHUP_TIMEOUT) '
+        '{ [int]$env:BLACKBOX_DKG_CATCHUP_TIMEOUT } else { 3600 }'
+    ) in windows
+    assert '"sync_interval": 3600' in unix
+    assert '"sync_interval": 3600' in windows
 
 
 def _extract_function_body(name: str) -> str:
@@ -190,7 +207,11 @@ def test_windows_installer_creates_global_blackbox_launcher() -> None:
     assert text.index("Install-BlackboxCommand") < text.rindex("Install-Dkg")
 
 
-def _select_unix_install_root(home: Path, explicit: Path | None = None) -> Path:
+def _select_unix_install_root(
+    home: Path,
+    explicit: Path | None = None,
+    invocation_dir: Path | None = None,
+) -> Path:
     """Evaluate only the install-root preamble with an isolated fake home."""
     text = INSTALL_SH.read_text(encoding="utf-8")
     preamble = text.split('DKG_NETWORK="${BLACKBOX_DKG_NETWORK', 1)[0]
@@ -203,6 +224,7 @@ def _select_unix_install_root(home: Path, explicit: Path | None = None) -> Path:
         capture_output=True,
         text=True,
         env=env,
+        cwd=invocation_dir or home,
     )
     return Path(result.stdout)
 
@@ -232,6 +254,8 @@ def test_next_steps_only_blocks_on_threat_graph_sync() -> None:
     assert "BLACKBOX_THREAT_GRAPH_INCOMPLETE" in body
     assert "BLACKBOX_LLM_INCOMPLETE" not in body
     assert "The LLM reviewer is not configured yet." not in body
+    assert "A partial verified ruleset is active" in body
+    assert "BLACKBOX_PARTIAL_RULESET_READY" in body
 
 
 def test_unix_installer_is_directly_executable_and_detaches_background_processes(
@@ -242,6 +266,9 @@ def test_unix_installer_is_directly_executable_and_detaches_background_processes
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     (fake_bin / "nohup").symlink_to(shutil.which("nohup") or "/usr/bin/nohup")
+    venv_bin = tmp_path / "venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    (venv_bin / "python").symlink_to(Path(sys.executable))
     pid_file = tmp_path / "child.pid"
     log_file = tmp_path / "child.log"
     body = _extract_function_body("run_detached")
@@ -255,9 +282,12 @@ run_detached() {{
 {body}
 }}
 PATH={shlex.quote(str(fake_bin))}
+VENV_DIR={shlex.quote(str(tmp_path / "venv"))}
 run_detached {shlex.quote(str(log_file))} {shlex.quote(sys.executable)} -c {shlex.quote(child_code)}
+exit 1
 """
-    subprocess.run(["bash", "-c", command], check=True, timeout=5)
+    installer = subprocess.run(["bash", "-c", command], check=False, timeout=5)
+    assert installer.returncode == 1
 
     deadline = time.monotonic() + 3
     while not pid_file.exists() and time.monotonic() < deadline:
@@ -272,18 +302,85 @@ run_detached {shlex.quote(str(log_file))} {shlex.quote(sys.executable)} -c {shle
         subprocess.run(["/bin/kill", "-TERM", str(child_pid)], check=False)
 
 
-def test_unix_installer_verifies_background_sync_survives_startup() -> None:
+def test_unix_installer_uses_a_real_session_boundary_for_dashboard() -> None:
+    body = _extract_function_body("run_detached")
+
+    assert "start_new_session=True" in body
+    assert "stdin=subprocess.DEVNULL" in body
+    assert "close_fds=True" in body
+
+
+def test_unix_installer_starts_dashboard_before_one_controlled_sync() -> None:
     run_body = _extract_function_body("run_detached")
     health_body = _extract_function_body("detached_process_survived_startup")
     sync_body = _extract_function_body("sync_ruleset")
 
     assert 'BLACKBOX_DETACHED_PID=$!' in run_body
     assert 'kill -0 "$pid"' in health_body
-    assert 'detached_process_survived_startup "$sync_pid"' in sync_body
+    assert "run_detached" not in sync_body
+    assert "restart_blackbox_dkg_for_sync_mode" not in sync_body
     assert 'BLACKBOX_INSTALL_INCOMPLETE=true' in sync_body
     assert 'BLACKBOX_THREAT_GRAPH_INCOMPLETE=true' in sync_body
-    assert 'Threat graph sync exited during startup.' in sync_body
-    assert 'Threat graph sync running in background (PID $sync_pid)' in sync_body
+    assert "one controlled verified graph catch-up" in sync_body
+    assert "start_dashboard" in sync_body
+    assert ': >"$BLACKBOX_SYNC_LOG"' in sync_body
+    assert 'tee -a "$BLACKBOX_SYNC_LOG"' in sync_body
+    assert sync_body.index("start_dashboard") < sync_body.index("blackbox sync --wait")
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="bash is unavailable")
+def test_unix_installer_opens_dashboard_before_fresh_sync_starts(
+    tmp_path: Path,
+) -> None:
+    sync_body = _extract_function_body("sync_ruleset")
+    hermes_home = tmp_path / "hermes"
+    log_dir = hermes_home / "logs"
+    log_dir.mkdir(parents=True)
+    sync_log = log_dir / "blackbox-sync-install.log"
+    # A previous successful install log is cleared before the new sync.
+    sync_log.write_text("999 verified threats ready\n", encoding="utf-8")
+    events = tmp_path / "events"
+    fake_hermes = tmp_path / "fake-hermes"
+    fake_hermes.write_text(
+        "#!/bin/bash\n"
+        f"echo sync-started >> {shlex.quote(str(events))}\n"
+        "echo 'starting fresh sync'\n"
+        "sleep 0.2\n"
+        "echo '  10 verified threats ready'\n"
+        "sleep 1.4\n"
+        f"echo sync-finished >> {shlex.quote(str(events))}\n",
+        encoding="utf-8",
+    )
+    fake_hermes.chmod(0o755)
+    command = f"""
+set -euo pipefail
+heading() {{ :; }}
+step() {{ :; }}
+ok() {{ :; }}
+err() {{ :; }}
+restart_blackbox_dkg_for_sync_mode() {{ return 0; }}
+start_dashboard() {{ echo dashboard >> {shlex.quote(str(events))}; }}
+sync_ruleset() {{
+{sync_body}
+}}
+DKG_READY=true
+HERMES_HOME={shlex.quote(str(hermes_home))}
+HERMES_BIN={shlex.quote(str(fake_hermes))}
+BLACKBOX_DKG_CATCHUP_TIMEOUT=30
+BLACKBOX_DKG_STEADY_DURABLE_SYNC_ENABLED=0
+BLACKBOX_AUTO_DASHBOARD=1
+BLACKBOX_INSTALL_INCOMPLETE=false
+BLACKBOX_THREAT_GRAPH_INCOMPLETE=false
+BLACKBOX_SYNC_LOG=''
+sync_ruleset
+"""
+
+    subprocess.run(["bash", "-c", command], check=True, timeout=10)
+    assert events.read_text(encoding="utf-8").splitlines() == [
+        "dashboard",
+        "sync-started",
+        "sync-finished",
+    ]
 
 
 def test_installers_enable_blackbox_noninteractively() -> None:
@@ -292,6 +389,61 @@ def test_installers_enable_blackbox_noninteractively() -> None:
 
     assert "plugins enable blackbox --no-allow-tool-override" in unix
     assert "plugins enable blackbox --no-allow-tool-override" in windows
+
+
+def test_unix_installer_fresh_config_keeps_community_sharing_off(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+
+    configured = _run_unix_blackbox_config_writer(
+        config_path,
+        dkg_url="http://127.0.0.1:9320",
+        dkg_home=tmp_path / ".dkg",
+        dkg_bin=tmp_path / "dkg" / "node_modules" / ".bin" / "dkg",
+    )
+    blackbox = configured["plugins"]["entries"]["blackbox"]
+
+    assert blackbox["report"] is False
+    assert blackbox["daily_report_limit"] == 0
+
+
+def test_windows_installer_fresh_config_keeps_community_sharing_off() -> None:
+    writer = _extract_powershell_function_body("Enable-AndConfigure")
+
+    assert '"report": False' in writer
+    assert '"daily_report_limit": 0' in writer
+    assert '"report": True' not in writer
+    assert '"daily_report_limit": 9999' not in writer
+
+
+def test_unix_installer_migrates_stale_community_sharing_opt_in(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "plugins:\n  entries:\n    blackbox:\n      report: true\n"
+        "      daily_report_limit: 9999\n",
+        encoding="utf-8",
+    )
+
+    configured = _run_unix_blackbox_config_writer(
+        config_path,
+        dkg_url="http://127.0.0.1:9320",
+        dkg_home=tmp_path / ".dkg",
+        dkg_bin=tmp_path / "dkg" / "node_modules" / ".bin" / "dkg",
+    )
+    blackbox = configured["plugins"]["entries"]["blackbox"]
+
+    assert blackbox["report"] is False
+    assert blackbox["daily_report_limit"] == 0
+
+
+def test_windows_installer_migrates_stale_community_sharing_opt_in() -> None:
+    writer = INSTALL_PS1.read_text(encoding="utf-8")
+
+    assert 'for k, v in {"report": False, "daily_report_limit": 0}.items()' in writer
+    assert "if blackbox.get(k) != v:" in writer
 
 
 def test_hermes_setup_defaults_to_reuse_without_prompting() -> None:
@@ -319,7 +471,7 @@ def test_unix_installer_uses_isolated_blackbox_dkg_node() -> None:
     assert 'BLACKBOX_DKG_PORT="${BLACKBOX_DKG_PORT:-9320}"' in text
     assert 'BLACKBOX_DKG_STORE_PORT="${BLACKBOX_DKG_STORE_PORT:-9999}"' in text
     assert 'BLACKBOX_DKG_STORE_URL="${BLACKBOX_DKG_STORE_URL:-}"' in text
-    assert 'BLACKBOX_INSTALL_ROOT="$HOME/agent-blackbox"' in text
+    assert 'BLACKBOX_INSTALL_ROOT="$PWD/agent-blackbox"' in text
     assert 'BLACKBOX_DKG_HOME="$BLACKBOX_INSTALL_ROOT/.dkg"' in text
     assert 'BLACKBOX_DKG_CLI_DIR="$BLACKBOX_INSTALL_ROOT/dkg"' in text
     assert 'BLACKBOX_DKG_BIN="$BLACKBOX_DKG_CLI_DIR/node_modules/.bin/dkg"' in text
@@ -496,9 +648,10 @@ def test_unix_installer_uses_agent_blackbox_checkout(
 
     assert _select_unix_install_root(home) == home / "agent-blackbox"
 
-    repo_checkout = home / "agent-blackbox"
-    (repo_checkout / ".git").mkdir(parents=True)
-    assert _select_unix_install_root(home) == repo_checkout
+    repo_checkout = tmp_path / "existing-checkout"
+    (repo_checkout / "plugins" / "blackbox").mkdir(parents=True)
+    (repo_checkout / "pyproject.toml").write_text("[project]\nname='blackbox'\n")
+    assert _select_unix_install_root(home, invocation_dir=repo_checkout) == repo_checkout
 
     explicit = tmp_path / "custom-blackbox"
     assert _select_unix_install_root(home, explicit) == explicit
@@ -507,8 +660,8 @@ def test_unix_installer_uses_agent_blackbox_checkout(
 def test_windows_installer_uses_agent_blackbox_checkout() -> None:
     text = INSTALL_PS1.read_text(encoding="utf-8")
 
-    assert 'Test-Path "$env:USERPROFILE\\agent-blackbox\\.git"' in text
-    assert '$DefaultRepoDir = "$env:USERPROFILE\\agent-blackbox"' in text
+    assert 'Join-Path ([string](Get-Location)) "agent-blackbox"' in text
+    assert '$env:USERPROFILE\\agent-blackbox' not in text
 
 
 # The four mainnet-base core relays written to config.relayPeers.
@@ -627,9 +780,11 @@ def test_dkg_config_writer_leaves_subscriptions_to_the_dkg_api(tmp_path: Path) -
     ]
     assert "autoApproveJoinRequests" not in migrated
     assert "syncAgentsMeta" not in migrated
-    assert "syncOnConnectEnabled" not in migrated
-    assert "syncGlobalMaxInflight" not in migrated
-    assert "syncGlobalQueueLimit" not in migrated
+    assert migrated["syncOnConnectEnabled"] is True
+    assert migrated["syncReconcilerEnabled"] is True
+    assert migrated["durableSyncEnabled"] is True
+    assert migrated["syncGlobalMaxInflight"] == 1
+    assert migrated["syncGlobalQueueLimit"] == 0
     assert "restrictAutoSubscribeContextGraphs" not in migrated
     assert migrated["store"] == {
         "backend": "blazegraph",
@@ -725,6 +880,7 @@ def test_dkg_config_writer_supports_oxigraph_fallback_without_losing_blazegraph_
             "oxigraph-server",
             "",
             "false",
+            "umanitek/blackbox-vm",
         ],
         check=True,
         capture_output=True,
@@ -927,6 +1083,134 @@ provision_blackbox_store && printf 'unexpected-continue\n'
     assert "unexpected-continue" not in completed.stdout
 
 
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is unavailable")
+def test_blazegraph_helper_resets_only_the_exact_local_namespace() -> None:
+    requests = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            length = int(self.headers.get("content-length", "0"))
+            body = self.rfile.read(length).decode("utf-8")
+            requests.append((self.path, self.headers.get("content-type"), body))
+            if body == "DROP ALL":
+                self.send_response(204)
+                self.end_headers()
+                return
+            payload = json.dumps(
+                {
+                    "results": {
+                        "bindings": [{"count": {"type": "literal", "value": "0"}}]
+                    }
+                }
+            ).encode("utf-8")
+            self.send_response(200)
+            self.send_header("content-type", "application/sparql-results+json")
+            self.send_header("content-length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, *_args):
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        endpoint = (
+            f"http://127.0.0.1:{server.server_port}/bigdata/namespace/"
+            "agent-blackbox/sparql"
+        )
+        completed = subprocess.run(
+            [
+                "node",
+                str(BLAZEGRAPH_HELPER),
+                "reset",
+                str(REPO_ROOT / "dkg"),
+                endpoint,
+                "agent-blackbox",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert json.loads(completed.stdout)["triples"] == 0
+    assert requests[0][0] == "/bigdata/namespace/agent-blackbox/sparql"
+    assert requests[0][1] == "application/sparql-update"
+    assert requests[0][2] == "DROP ALL"
+    assert requests[1][1] == "application/sparql-query"
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="bash is unavailable")
+@pytest.mark.parametrize(
+    ("fresh", "managed", "explicit", "foreign", "expected_rc", "expected_calls"),
+    [
+        ("true", "true", "false", "false", 0, 1),
+        ("false", "true", "false", "false", 0, 0),
+        ("true", "false", "true", "false", 0, 0),
+        ("true", "true", "false", "true", 1, 0),
+    ],
+)
+def test_unix_fresh_store_reset_obeys_ownership_boundary(
+    tmp_path: Path,
+    fresh: str,
+    managed: str,
+    explicit: str,
+    foreign: str,
+    expected_rc: int,
+    expected_calls: int,
+) -> None:
+    calls = tmp_path / "calls"
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    node = fake_bin / "node"
+    node.write_text(
+        f"#!/bin/sh\nprintf '%s\\n' \"$*\" >> {shlex.quote(str(calls))}\n",
+        encoding="utf-8",
+    )
+    node.chmod(0o755)
+    command = f"""
+reset_fresh_managed_blazegraph() {{
+{_extract_function_body("reset_fresh_managed_blazegraph")}
+}}
+step() {{ :; }}
+ok() {{ :; }}
+err() {{ :; }}
+BLACKBOX_DKG_FRESH_STATE={fresh}
+BLACKBOX_DKG_SELECTED_STORE_BACKEND=blazegraph
+BLACKBOX_DKG_STORE_MANAGED_BY_DKG={managed}
+BLACKBOX_DKG_STORE_URL_EXPLICIT={explicit}
+BLACKBOX_DKG_FOREIGN_ENDPOINT={foreign}
+BLACKBOX_DKG_STORE_URL=http://127.0.0.1:9999/bigdata/namespace/agent-blackbox/sparql
+BLACKBOX_DKG_STORE_NAMESPACE=agent-blackbox
+BLACKBOX_DKG_CLI_DIR=/tmp/dkg
+REPO_DIR=/tmp/repo
+PATH={shlex.quote(str(fake_bin) + os.pathsep + os.environ.get("PATH", ""))}
+reset_fresh_managed_blazegraph
+"""
+    completed = subprocess.run(["bash", "-c", command], check=False)
+
+    assert completed.returncode == expected_rc
+    actual_calls = calls.read_text(encoding="utf-8").splitlines() if calls.exists() else []
+    assert len(actual_calls) == expected_calls
+    if actual_calls:
+        assert "reset /tmp/dkg" in actual_calls[0]
+        assert actual_calls[0].endswith("agent-blackbox")
+
+
+def test_windows_fresh_store_reset_has_the_same_ownership_guards() -> None:
+    windows = INSTALL_PS1.read_text(encoding="utf-8")
+    assert "$script:DkgFreshState = -not (Test-BlackboxDkgState)" in windows
+    assert 'if (-not $script:DkgStoreManagedByDkg) { return $true }' in windows
+    assert "if ($DkgStoreUrlExplicit) { return $true }" in windows
+    assert "if ($script:DkgForeignEndpoint)" in windows
+    assert "node $helper reset $DkgCliDir $DkgStoreUrl $script:DkgStoreNamespace" in windows
+
+
 def test_installers_offer_both_store_backends_and_actionable_docker_setup() -> None:
     unix = INSTALL_SH.read_text(encoding="utf-8")
     windows = INSTALL_PS1.read_text(encoding="utf-8")
@@ -945,6 +1229,81 @@ def test_installers_offer_both_store_backends_and_actionable_docker_setup() -> N
     assert "Confirm-OxigraphFallback" in windows
     assert "Installation stopped before changing the DKG store" in unix
     assert "Installation stopped before changing the DKG store" in windows
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="bash is unavailable")
+def test_piped_installer_oxigraph_prompt_handles_missing_controlling_tty() -> None:
+    command = f"""
+confirm_oxigraph_fallback() {{
+{_extract_function_body("confirm_oxigraph_fallback")}
+}}
+warn() {{ printf 'warn:%s\\n' "$1"; }}
+step() {{ printf 'step:%s\\n' "$1"; }}
+confirm_oxigraph_fallback "Docker unavailable"
+"""
+    completed = subprocess.run(
+        ["bash", "-c", command],
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 1
+    assert "No interactive terminal is available" in completed.stdout
+    assert "Device not configured" not in completed.stderr
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="bash is unavailable")
+def test_macos_installer_starts_installed_docker_desktop(tmp_path: Path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    docker_state = tmp_path / "docker-attempts"
+    docker = fake_bin / "docker"
+    docker.write_text(
+        "#!/bin/sh\n"
+        f"state={shlex.quote(str(docker_state))}\n"
+        "n=0; [ ! -f \"$state\" ] || n=$(cat \"$state\")\n"
+        "n=$((n + 1)); printf '%s' \"$n\" >\"$state\"\n"
+        "[ \"$n\" -ge 2 ]\n",
+        encoding="utf-8",
+    )
+    docker.chmod(0o755)
+    opened = tmp_path / "opened"
+    open_cmd = fake_bin / "open"
+    open_cmd.write_text(
+        f"#!/bin/sh\nprintf started >{shlex.quote(str(opened))}\n",
+        encoding="utf-8",
+    )
+    open_cmd.chmod(0o755)
+    app = tmp_path / "home" / "Applications" / "Docker.app"
+    app.mkdir(parents=True)
+
+    command = f"""
+require_docker_for_blazegraph() {{
+{_extract_function_body("require_docker_for_blazegraph")}
+}}
+ok() {{ printf 'ok:%s\\n' "$1"; }}
+step() {{ printf 'step:%s\\n' "$1"; }}
+warn() {{ printf 'warn:%s\\n' "$1"; }}
+docker_setup_hint() {{ return 1; }}
+sleep() {{ :; }}
+OS=macos
+HOME={shlex.quote(str(tmp_path / "home"))}
+PATH={shlex.quote(str(fake_bin) + os.pathsep + os.environ.get("PATH", ""))}
+BLACKBOX_DOCKER_REQUIRED=false
+require_docker_for_blazegraph
+"""
+    completed = subprocess.run(
+        ["bash", "-c", command],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert opened.read_text(encoding="utf-8") == "started"
+    assert "starting it now" in completed.stdout
+    assert "Docker Desktop is ready" in completed.stdout
 
 
 def test_blazegraph_helper_uses_built_dkg_provisioner(tmp_path: Path) -> None:
@@ -975,6 +1334,54 @@ def test_blazegraph_helper_uses_built_dkg_provisioner(tmp_path: Path) -> None:
         "port": 10001,
         "managedByDkg": True,
     }
+
+
+def test_blazegraph_helper_sizes_heap_and_preserves_undersized_store(tmp_path: Path) -> None:
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is not installed")
+    cli = tmp_path / "node_modules" / "@origintrail-official" / "dkg"
+    module = cli / "dist" / "daemon" / "blazegraph-docker.js"
+    module.parent.mkdir(parents=True)
+    (cli / "package.json").write_text('{"type":"module"}', encoding="utf-8")
+    module.write_text(
+        "export async function provisionBlazegraphDocker(options) {\n"
+        "  const inspected = await options.docker.run(['inspect', 'dkg-blazegraph-test']);\n"
+        "  if (inspected.exitCode === 0) throw new Error('undersized container was reused');\n"
+        "  const started = await options.docker.run(['run', '-d', 'blazegraph']);\n"
+        "  return {url: started.stdout.trim(), port: options.port, managedByDkg: true};\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    docker_log = tmp_path / "docker.log"
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    docker = fake_bin / "docker"
+    docker.write_text(
+        "#!/bin/sh\n"
+        f"printf '%s\\n' \"$*\" >> {shlex.quote(str(docker_log))}\n"
+        "case \"$1\" in\n"
+        "  inspect) printf '%s\\n' '[{\"Config\":{\"Env\":[\"JAVA_OPTS=-Xmx1g\"]}}]' ;;\n"
+        "  run) printf '%s\\n' \"$*\" ;;\n"
+        "esac\n",
+        encoding="utf-8",
+    )
+    docker.chmod(0o755)
+
+    completed = subprocess.run(
+        [node, str(BLAZEGRAPH_HELPER), str(tmp_path), "blackbox-test", "10001"],
+        check=True,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PATH": str(fake_bin) + os.pathsep + os.environ.get("PATH", "")},
+    )
+
+    calls = docker_log.read_text(encoding="utf-8").splitlines()
+    assert calls[0] == "inspect dkg-blazegraph-test"
+    assert calls[1] == "stop dkg-blazegraph-test"
+    assert calls[2].startswith("rename dkg-blazegraph-test dkg-blazegraph-test-pre-4g-")
+    assert calls[3] == "run --cpus 4 -e JAVA_OPTS=-Xms512m -Xmx4g -d blazegraph"
+    assert json.loads(completed.stdout)["url"] == calls[3]
 
 
 def test_blazegraph_helper_uses_dkg_store_health_check(tmp_path: Path) -> None:
@@ -1048,10 +1455,12 @@ def test_dkg_config_writer_recovers_invalid_utf8(tmp_path: Path) -> None:
 def test_installers_use_native_dkg_membership_without_sync_overrides() -> None:
     unix = INSTALL_SH.read_text(encoding="utf-8")
     windows = INSTALL_PS1.read_text(encoding="utf-8")
+    unix_main = _extract_function_body("main")
 
     for text in (unix, windows):
         assert "blackbox-clean-dkg-subscriptions.py" not in text
-        assert "DKG_CATCHUP_MAX_CONCURRENT_PEERS" not in text
+        assert "DKG_CATCHUP_MAX_CONCURRENT_PEERS" in text
+        assert "DKG_STORE_QUEUE_WAIT_TIMEOUT_MS" in text
         assert "DKG_SYNC_PAGE_TIMEOUT_MS" not in text
         assert "DKG_SYNC_TOTAL_TIMEOUT_MS" in text
         assert "DKG_SYNC_MIN_GRAPH_BUDGET_MS" not in text
@@ -1060,23 +1469,43 @@ def test_installers_use_native_dkg_membership_without_sync_overrides() -> None:
         assert "blackbox-dkg-runtime-fingerprint.py" in text
         assert "DKG daemon is ready on npm build" in text
         assert "autoApproveJoinRequests" not in text
-        assert 'data.pop("syncOnConnectEnabled", None)' in text
-        assert 'data.pop("syncGlobalMaxInflight", None)' in text
-        assert 'data.pop("syncGlobalQueueLimit", None)' in text
+        assert 'data["syncOnConnectEnabled"] = True' in text
+        assert 'data["syncReconcilerEnabled"] = True' in text
+        assert 'data["durableSyncEnabled"] = True' in text
+        assert 'data["syncGlobalMaxInflight"] = 1' in text
+        assert 'data["syncGlobalQueueLimit"] = 0' in text
         assert 'data.pop("restrictAutoSubscribeContextGraphs", None)' in text
+        assert 'data["syncSharedMemoryOnConnect"] = False' in text
+        assert 'data["syncContextGraphPriorities"] = priorities' in text
         assert '"backend": "blazegraph"' in text
         assert '"options": {"url": store_url, "managedByDkg": store_managed, "timeout": 900000}' in text
         assert "DKG_ACCEPT_STORE_RESET" in text
         assert "DKG_STORE_QUEUE_LIMIT" in text
         assert "DKG_LIST_CONTEXT_GRAPHS_PROJECTION" in text
         assert "DKG_SYNC_GLOBAL_MAX_INFLIGHT" in text
+        assert "DKG_SYNC_GLOBAL_QUEUE_LIMIT" in text
+        assert "DKG_SYNC_ON_CONNECT_ENABLED" in text
+        assert "DKG_SYNC_RECONCILER_ENABLED" in text
+        assert "DKG_DURABLE_SYNC_ENABLED" in text
         assert "NODE_OPTIONS" in text
         assert "blackbox-npm-install.log" in text
         assert "Blazegraph SPARQL endpoint is healthy" in text
         assert "Blazegraph is unavailable or returned an error" in text
 
     assert 'BLACKBOX_DKG_SYNC_GLOBAL_MAX_INFLIGHT="1"' in unix
+    assert 'BLACKBOX_DKG_SYNC_GLOBAL_QUEUE_LIMIT="0"' in unix
+    assert 'BLACKBOX_DKG_DURABLE_SYNC_ENABLED="${BLACKBOX_DKG_DURABLE_SYNC_ENABLED:-1}"' in unix
+    assert 'BLACKBOX_DKG_CATCHUP_MAX_CONCURRENT_PEERS="1"' in unix
+    assert "PYTHONUNBUFFERED=1" in unix
+    assert 'BLACKBOX_DKG_STORE_QUEUE_WAIT_TIMEOUT_MS="300000"' in unix
     assert '$DkgSyncGlobalMaxInflight = "1"' in windows
+    assert '$DkgSyncGlobalQueueLimit = "0"' in windows
+    assert 'else { "1" }' in windows
+    assert "restart_blackbox_dkg_for_sync_mode" not in unix
+    assert "Restart-BlackboxDkgForSyncMode" not in windows
+    assert unix_main.index("sync_ruleset\n") < unix_main.index("start_dashboard\n")
+    assert '$DkgCatchupMaxConcurrentPeers = "1"' in windows
+    assert '$DkgStoreQueueWaitTimeoutMs = "300000"' in windows
     assert "one large sync at a time" in unix
     assert "one large sync at a time" in windows
 
@@ -1132,96 +1561,24 @@ blackbox_dkg start
     )
 
 
-@pytest.mark.skipif(shutil.which("bash") is None, reason="bash is unavailable")
-def test_unix_large_graph_patch_updates_both_private_recovery_call_sites(
-    tmp_path: Path,
-) -> None:
-    cli_dir = tmp_path / "dkg-cli"
-    lifecycle = (
-        cli_dir
-        / "node_modules"
-        / "@origintrail-official"
-        / "dkg-agent"
-        / "dist"
-        / "dkg-agent-lifecycle.js"
-    )
-    constants = (
-        cli_dir
-        / "node_modules"
-        / "@origintrail-official"
-        / "dkg-agent"
-        / "dist"
-        / "dkg-agent-constants.js"
-    )
-    route = (
-        cli_dir
-        / "node_modules"
-        / "@origintrail-official"
-        / "dkg"
-        / "dist"
-        / "daemon"
-        / "routes"
-        / "memory.js"
-    )
-    lifecycle.parent.mkdir(parents=True)
-    route.parent.mkdir(parents=True)
-    old_deadline = (
-        "createContextGraphSyncDeadline: (remaining) => "
-        "this.createContextGraphSyncDeadline(remaining),"
-    )
-    lifecycle.write_text(f"first {old_deadline}\nsecond {old_deadline}\n", encoding="utf-8")
-    constants.write_text(
-        "export const SYNC_TOTAL_TIMEOUT_MS = 120_000;\n",
-        encoding="utf-8",
-    )
-    route.write_text("const MAX_BUDGET_MS = 300_000;\n", encoding="utf-8")
-    venv = tmp_path / "venv"
-    (venv / "bin").mkdir(parents=True)
-    (venv / "bin" / "python").symlink_to(Path(sys.executable))
-    body = _extract_function_body("patch_blackbox_dkg_large_graph_recovery")
-    command = f"""
-patch_blackbox_dkg_large_graph_recovery() {{
-{body}
-}}
-VENV_DIR={shlex.quote(str(venv))}
-BLACKBOX_DKG_CLI_DIR={shlex.quote(str(cli_dir))}
-patch_blackbox_dkg_large_graph_recovery 10.0.6
-"""
+def test_installers_never_patch_the_published_dkg_runtime() -> None:
+    unix = INSTALL_SH.read_text(encoding="utf-8")
+    windows = INSTALL_PS1.read_text(encoding="utf-8")
 
-    subprocess.run(["bash", "-c", command], check=True)
+    for text in (unix, windows):
+        assert "dkg-agent-lifecycle.js" not in text
+        assert "dkg-agent-constants.js" not in text
+        assert "dist/daemon/routes/memory.js" not in text
+        assert "dist\\daemon\\routes\\memory.js" not in text
+        assert "Using published upstream DKG" in text
+        assert "unchanged" in text
 
-    patched = lifecycle.read_text(encoding="utf-8")
-    assert old_deadline not in patched
-    assert patched.count("DKG_SWM_RECOVERY_TIMEOUT_MS") == 2
-    assert "DKG_SYNC_TOTAL_TIMEOUT_MS" in constants.read_text(encoding="utf-8")
-    assert "SYNC_TOTAL_TIMEOUT_MS = 120_000;" not in constants.read_text(encoding="utf-8")
-    assert "const MAX_BUDGET_MS = 3_600_000;" in route.read_text(encoding="utf-8")
-
-
-def test_unix_large_graph_patch_defers_to_newer_upstream_dkg(tmp_path: Path) -> None:
-    cli_dir = tmp_path / "dkg-cli"
-    lifecycle = (
-        cli_dir
-        / "node_modules"
-        / "@origintrail-official"
-        / "dkg-agent"
-        / "dist"
-        / "dkg-agent-lifecycle.js"
-    )
-    lifecycle.parent.mkdir(parents=True)
-    lifecycle.write_text("upstream sync implementation\n", encoding="utf-8")
-    body = _extract_function_body("patch_blackbox_dkg_large_graph_recovery")
-    command = f"""
-patch_blackbox_dkg_large_graph_recovery() {{
-{body}
-}}
-step() {{ :; }}
-BLACKBOX_DKG_CLI_DIR={shlex.quote(str(cli_dir))}
-patch_blackbox_dkg_large_graph_recovery 10.0.7
-"""
-
-    subprocess.run(["bash", "-c", command], check=True)
-    assert lifecycle.read_text(encoding="utf-8") == "upstream sync implementation\n"
+    curator = CURATOR_CONFIG.read_text(encoding="utf-8")
+    service = CURATOR_SERVICE.read_text(encoding="utf-8")
+    assert "--dkg-agent-dist" not in curator
+    assert "--dkg-agent-dist" not in service
+    assert "dkg-agent-lifecycle.js" not in curator
+    assert "dkg-agent-registry.js" not in curator
 
 
 def test_installers_restart_running_owned_dkg_only_for_runtime_changes() -> None:
@@ -1230,7 +1587,10 @@ def test_installers_restart_running_owned_dkg_only_for_runtime_changes() -> None
 
     assert "BLACKBOX_DKG_RESTART_REQUIRED" in INSTALL_SH.read_text(encoding="utf-8")
     assert 'if [ "$BLACKBOX_DKG_RESTART_REQUIRED" != true ]; then' in unix
-    assert "blackbox_dkg stop && blackbox_dkg start && wait_for_blackbox_dkg_runtime" in unix
+    assert "blackbox_dkg start || true" in unix
+    assert "if wait_for_blackbox_dkg_runtime; then" in unix
+    assert 'docker start "$managed_container"' in INSTALL_SH.read_text(encoding="utf-8")
+    assert "docker start $managedContainer" in windows
     assert "install_blackbox_dkg_package" in unix
     assert "prepare_blackbox_dkg_runtime_fingerprint" in unix
     assert "record_blackbox_dkg_runtime_fingerprint" in unix

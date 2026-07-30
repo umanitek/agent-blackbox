@@ -12,7 +12,7 @@ confirmed threats before they execute.
 Run the installer:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/umanitek/agent-blackbox/main/scripts/blackbox-install.sh | bash
+curl -fsSL blackbox.umanitek.ai | bash
 ```
 
 The installer sets up an isolated node from the latest official
@@ -20,11 +20,10 @@ The installer sets up an isolated node from the latest official
 agents. Docker must be installed and running for its Blazegraph store. The
 installer does not replace or modify an existing DKG node.
 
-The default context graph is private. The installer sends the local node's
-signed join request to the default curator, which auto-approves valid requests.
-Blackbox retries approval delivery and waits for local membership confirmation
-before starting DKG catch-up. Local WM and the dashboard remain available while
-the private graph is joining.
+The default context graph is public, so every Agent Blackbox install can sync
+verified threat data immediately. Publishing remains curated so only trusted
+data becomes blocking Verifiable Memory. Local working memory and the dashboard
+remain available during the initial sync.
 
 ## Compatibility
 
@@ -72,18 +71,17 @@ plugins:
 
 ## How threat data works
 
-Blackbox uses two shared graphs:
+Blackbox currently uses one shared graph:
 
 - The **public graph** contains Umanitek-verified threats. These can be blocked
-  in block mode. “Public” is the VM trust tier; the default context graph still
-  restricts its underlying data to approved nodes. The UI expands collection
-  contents and lists each threat entity, not one row per collection.
-- The **community graph** contains reports awaiting review. These warn but
-  never block.
+  in block mode. Anyone can read and sync it, while publishing remains curated.
+  The UI expands collection contents and lists each threat entity, not one row
+  per collection.
+- The **community graph** (SWM) is shown as **Coming soon**. It is not queried,
+  joined, matched, or written in the current release.
 
 Raw prompts, commands, file contents, secrets, and your local audit trail are
-not published to either graph. Reports use deterministic identifiers instead
-of the observed private content.
+not published. Findings and reports stay local.
 
 ## Configuration
 
@@ -94,13 +92,13 @@ to change them is through the dashboard settings page.
 |---|---:|---|
 | `mode` | `audit` | Warn only (`audit`) or stop confirmed threats (`block`) |
 | `block_severity` | `critical` | Minimum severity blocked in block mode |
-| `report` | `true` | Share eligible threat reports with the community graph |
-| `report_min_severity` | `high` | Minimum severity shared as a report |
+| `report` | `false` | Fixed off while community threat sharing is coming soon |
+| `report_min_severity` | `high` | Reserved for future community sharing |
 | `detection.<category>.enabled` | `true` | Enable or disable a detection category |
 | `detection.<category>.min_severity` | `info` | Minimum visible severity for a category |
 | `protected_paths` | `[]` | Local file globs that always block and are never shared |
-| `context_graph_id` | `0x37b1Fdfd…/agent-blackbox` | Private Blackbox context graph |
-| `graph_peer_id` | bundled curator peer | Receives the signed join request |
+| `context_graph_id` | `0x37b1Fdfd…/agent-blackbox-vm` | Public verified threat graph |
+| `graph_peer_id` | bundled publisher peer | Authoritative threat-data sync source |
 
 Categories are `injection`, `escalation`, `dependency`, `fileaccess`, and
 `skill`.
@@ -144,11 +142,9 @@ blackbox status
 blackbox sync --wait
 ```
 
-A first sync can continue in the background for several minutes. The default
-curator auto-approves the signed request, and Blackbox keeps retrying until the
-local DKG confirms membership. If `joining private graph` remains for more than
-three minutes, rerun the command below and include the displayed agent address,
-peer ID, and DKG log when reporting the problem:
+A first sync can continue in the background for several minutes. If it does not
+finish, rerun the command below and include the displayed peer ID and DKG log
+when reporting the problem:
 
 ```bash
 blackbox sync --wait --timeout 180

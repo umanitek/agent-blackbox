@@ -36,6 +36,10 @@ Quad = Dict[str, str]
 class DkgError(RuntimeError):
     """Raised for any non-2xx daemon response or transport failure."""
 
+    def __init__(self, message: str, *, status_code: Optional[int] = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
 
 def _validate_quads_literal_sizes(quads: List[Quad]) -> None:
     """Mirror DKG's writable-literal preflight before sending write payloads."""
@@ -156,7 +160,10 @@ class DkgClient:
                 raw = resp.read()
         except urllib.error.HTTPError as exc:
             detail = exc.read(1024).decode("utf-8", errors="replace")
-            raise DkgError(f"{method} {path} -> {exc.code}: {detail}") from exc
+            raise DkgError(
+                f"{method} {path} -> {exc.code}: {detail}",
+                status_code=exc.code,
+            ) from exc
         except (urllib.error.URLError, OSError, TimeoutError) as exc:
             raise DkgError(f"{method} {path} transport error: {exc}") from exc
         if not raw:
@@ -201,12 +208,24 @@ class DkgClient:
 
     # -- context graph -----------------------------------------------------
 
-    def subscribe_context_graph(self, cg_id: str, *, include_shared_memory: bool = True) -> Dict[str, Any]:
-        """Subscribe the node to a context graph + catch up its data.
+    def connect_peer(self, peer_id: str) -> Dict[str, Any]:
+        """Ask DKG to resolve and connect to one graph source peer."""
+        return self._request(
+            "POST", "/api/connect", {"peerId": peer_id}, timeout=15.0
+        )
+
+    def connect_multiaddr(self, multiaddr: str) -> Dict[str, Any]:
+        """Connect through one explicit address when cold DHT lookup is pending."""
+        return self._request(
+            "POST", "/api/connect", {"multiaddr": multiaddr}, timeout=15.0
+        )
+
+    def subscribe_context_graph(self, cg_id: str, *, include_shared_memory: bool = False) -> Dict[str, Any]:
+        """Subscribe the node to a context graph and catch up its durable VM.
 
         What a *consumer* node needs: a fresh install that only set
         ``context_graph_id`` never subscribes the daemon, so its store stays empty.
-        ``include_shared_memory`` (default True) pulls the SWM/community pool.
+        Agent Blackbox is VM-only, so SWM catch-up is disabled by default.
         Idempotent — the daemon no-ops when already subscribed.
         """
         return self._request(
@@ -216,60 +235,95 @@ class DkgClient:
             timeout=_STORE_TIMEOUT,
         )
 
-    def restart_context_graph_catchup(
-        self,
-        cg_id: str,
-        *,
-        include_shared_memory: bool = True,
-    ) -> Dict[str, Any]:
-        """Force a fresh official catch-up without deleting local graph data."""
-        self._request(
+    def unsubscribe_context_graph(self, cg_id: str) -> Dict[str, Any]:
+        """Drop live gossip/sync scope without deleting local VM/SWM data."""
+        return self._request(
             "POST",
             "/api/context-graph/unsubscribe",
             {"contextGraphId": cg_id},
             timeout=_STORE_TIMEOUT,
         )
+
+    def restart_context_graph_catchup(
+        self,
+        cg_id: str,
+        *,
+        include_shared_memory: bool = False,
+    ) -> Dict[str, Any]:
+        """Force a fresh official catch-up without deleting local graph data."""
+        self.unsubscribe_context_graph(cg_id)
         return self.subscribe_context_graph(
             cg_id,
             include_shared_memory=include_shared_memory,
         )
 
-    def catchup_status(self, cg_id: str) -> Dict[str, Any]:
-        """Return the latest asynchronous catch-up job for ``cg_id``.
+    def catchup_status(
+        self,
+        cg_id: str,
+        *,
+        job_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Return an asynchronous catch-up job for ``cg_id``.
 
         The daemon applies a recovered graph snapshot atomically, so consumers
         cannot count partial rows while it is running.  This status lets UI
         callers distinguish that active transfer from a genuinely empty graph.
+        Once subscribe returns a job id, pass it here so a concurrent newer job
+        cannot replace the status being awaited.
         """
-        encoded = urllib.parse.quote(cg_id, safe="")
+        if job_id:
+            query = f"jobId={urllib.parse.quote(job_id, safe='')}"
+        else:
+            query = f"contextGraphId={urllib.parse.quote(cg_id, safe='')}"
         return self._request(
             "GET",
-            f"/api/sync/catchup-status?contextGraphId={encoded}",
+            f"/api/sync/catchup-status?{query}",
         )
+
+    def context_graphs(self) -> List[Dict[str, Any]]:
+        """Return the daemon's native context-graph registry projection."""
+        result = self._request(
+            "GET",
+            "/api/context-graph/list",
+            timeout=_STORE_TIMEOUT,
+        )
+        rows = result.get("contextGraphs") if isinstance(result, dict) else None
+        return [row for row in (rows or []) if isinstance(row, dict)]
 
     def catchup_from_peer(
         self,
         cg_id: str,
         peer_id: str,
         *,
-        budget_ms: int = 3_600_000,
+        budget_ms: int = 300_000,
     ) -> Dict[str, Any]:
-        """Atomically recover the private graph's SWM from its curator.
+        """Recover the graph's durable VM from one configured source peer.
 
-        VM reconciliation depends on a complete SWM snapshot.  The generic
-        multi-peer catch-up can return a useful partial transfer, while this
-        endpoint pins the configured curator and reports an explicit verified
-        ``completed`` result before replacing the local snapshot.
+        DKG's route retains its historical ``shared-memory`` name, but the
+        explicit flags below skip SWM entirely. Pinning the source avoids
+        a generic peer returning a partial or stale graph.  A successful
+        already-current recovery legitimately inserts zero triples.
         """
-        bounded_budget = max(1_000, min(3_600_000, int(budget_ms)))
+        bounded_budget = max(1_000, min(300_000, int(budget_ms)))
         return self._request(
             "POST",
-            "/api/context-graph/recover-shared-memory",
+            "/api/shared-memory/catchup",
             {
                 "contextGraphId": cg_id,
-                "remotePeerId": peer_id,
+                "peerId": peer_id,
+                "includeSharedMemory": False,
+                "includeDurable": True,
+                "hostCatchupFallback": False,
+                "perPeerDurableBudgetMs": bounded_budget,
             },
-            timeout=(bounded_budget / 1_000) + 10,
+            # The budget bounds network fetching, not exact-graph verification
+            # and atomic store materialization. Large fresh-node batches can
+            # spend many minutes settling after the fetch deadline, and the
+            # route deliberately waits for that work before responding.
+            timeout=max(
+                (bounded_budget / 1_000) + 45,
+                constants.GRAPH_SYNC_SETTLEMENT_TIMEOUT_S,
+            ),
         )
 
     def context_graph_participants(self, cg_id: str) -> Dict[str, Any]:
@@ -484,9 +538,10 @@ class DkgClient:
         self,
         sparql: str,
         cg_id: str,
-        view: str = constants.VIEW_SHARED_WORKING_MEMORY,
+        view: Optional[str] = constants.VIEW_VERIFIABLE_MEMORY,
         on_error: Any = None,
         agent_address: Optional[str] = None,
+        timeout: Optional[float] = None,
     ) -> List[Dict[str, Any]]:
         """Run a SPARQL SELECT and return normalized bindings.
 
@@ -496,7 +551,9 @@ class DkgClient:
         read paths fail open. A caller that must tell a genuine *empty* result
         (``[]``) apart from a *failure* passes a unique sentinel.
         """
-        payload = {"sparql": sparql, "contextGraphId": cg_id, "view": view}
+        payload = {"sparql": sparql, "contextGraphId": cg_id}
+        if view:
+            payload["view"] = view
         if agent_address:
             payload["agentAddress"] = agent_address
         try:
@@ -504,12 +561,43 @@ class DkgClient:
                 "POST",
                 "/api/query",
                 payload,
-                timeout=_QUERY_TIMEOUT,
+                timeout=timeout or _QUERY_TIMEOUT,
             )
         except DkgError as exc:
             logger.debug("blackbox: query failed: %s", exc)
             return [] if on_error is None else on_error
         return normalize_bindings(result)
+
+    def threat_count(self, cg_id: str) -> int:
+        """Return the locally verified Blackbox threat count with one query.
+
+        The public VM contains both the original Defender signal entities and
+        newer compact ``SourceObservation`` feed records. Counting only the
+        former made successful clients look stuck at the historical watermark.
+        """
+        sparql = """PREFIX defender: <urn:defender:>
+SELECT (COUNT(DISTINCT ?threat) AS ?n) WHERE {
+  ?threat a ?type .
+  VALUES ?type {
+    defender:DependencySignal
+    defender:InjectionSignal
+    defender:SkillSignal
+    defender:IocSignal
+    <urn:blackbox:SourceObservation>
+  }
+}"""
+        rows = self.query(
+            sparql,
+            cg_id,
+            view=constants.VIEW_VERIFIABLE_MEMORY,
+            on_error=[],
+        )
+        if not rows:
+            return 0
+        try:
+            return int(extract_binding(rows[0].get("n")) or 0)
+        except (TypeError, ValueError):
+            return 0
 
     def register_agent(self, name: str, framework: str = "hermes") -> Dict[str, Any]:
         """Register a new agent on the node → ``{agentAddress, authToken, ...}``."""

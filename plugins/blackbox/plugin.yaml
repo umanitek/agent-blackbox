@@ -6,7 +6,7 @@ version: "1.0.0"
 # registers no tool backend — only the lifecycle hooks below — so the load path
 # is otherwise identical to a standalone plugin.
 kind: backend
-description: "Agent Blackbox — graph-driven agent security. Syncs a threat ruleset from the local OriginTrail DKG node (verified public threats + local graph) and matches every tool call and model request against it: prompt-injection patterns, privilege-escalation tool shapes, and vulnerable dependency installs. Audit mode by default (records findings, shares anonymized sightings to SWM); block mode refuses tool calls at/above a configured severity. Fail-open everywhere."
+description: "Agent Blackbox — graph-driven agent security. Syncs a threat ruleset from the curated public Verifiable Memory graph and matches every tool call and model request against it: prompt-injection patterns, privilege-escalation tool shapes, and vulnerable dependency installs. Audit mode records findings locally; block mode refuses tool calls at/above a configured severity. Community SWM and threat sharing are coming soon. Fail-open everywhere."
 author: Umanitek
 hooks:
   - pre_tool_call

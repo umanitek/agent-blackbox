@@ -1,7 +1,7 @@
 {
   "id": "blackbox",
   "name": "Agent Blackbox",
-  "description": "Detects prompt-injection, escalation, dependency, file-access, and skill threats from tool calls and prompts, and reports sightings to the local DKG threat graph. Audit-only by default; blocking is opt-in.",
+  "description": "Detects prompt-injection, escalation, dependency, file-access, and skill threats from the curated Verifiable Memory graph. Findings stay local; sharing is coming soon.",
   "activation": {
     "onStartup": true
   },
@@ -24,12 +24,12 @@
         "type": "string",
         "enum": ["audit", "block"],
         "default": "audit",
-        "description": "audit = observe + report only; block = also block tool calls and runs at or above blockSeverity."
+        "description": "audit = observe locally; block = also block tool calls and runs at or above blockSeverity."
       },
       "contextGraphId": {
         "type": "string",
-        "default": "0x37b1Fdfd134e2b17583bCBdD3034F91504cD9C70/agent-blackbox",
-        "description": "Private threat context-graph id on the local DKG node."
+        "default": "0x37b1Fdfd134e2b17583bCBdD3034F91504cD9C70/agent-blackbox-vm",
+        "description": "Public Agent Blackbox Verifiable Memory graph id."
       },
       "dkgUrl": {
         "type": "string",
@@ -48,13 +48,13 @@
       },
       "report": {
         "type": "boolean",
-        "default": true,
-        "description": "Share sightings to shared working memory (SWM) when a threat matches."
+        "default": false,
+        "description": "Coming soon. Findings currently stay local."
       },
       "dailyReportLimit": {
         "type": "number",
-        "default": 9999,
-        "description": "Anti-bot cap on outbound sighting reports per day."
+        "default": 0,
+        "description": "Coming soon. Outbound sighting reports are currently disabled."
       },
       "reportMinSeverity": {
         "type": "string",
@@ -81,13 +81,14 @@
       "detection": {
         "type": "object",
         "additionalProperties": false,
-        "description": "Per-category detection policy. Each of the five categories can be individually disabled or given a minimum severity floor. Omitted categories default to enabled at severity 'info' (flag everything the threat graph knows). Custom protected-path rules bypass this policy.",
+        "description": "Per-category detection policy. Each of the six categories can be individually disabled or given a minimum severity floor. Omitted categories default to enabled at severity 'info' (flag everything the threat graph knows). Custom protected-path rules bypass this policy.",
         "properties": {
           "injection": { "$ref": "#/$defs/categoryPolicy" },
           "escalation": { "$ref": "#/$defs/categoryPolicy" },
           "dependency": { "$ref": "#/$defs/categoryPolicy" },
           "fileaccess": { "$ref": "#/$defs/categoryPolicy" },
-          "skill": { "$ref": "#/$defs/categoryPolicy" }
+          "skill": { "$ref": "#/$defs/categoryPolicy" },
+          "ioc": { "$ref": "#/$defs/categoryPolicy" }
         }
       },
       "protectedPaths": {

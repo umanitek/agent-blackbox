@@ -87,7 +87,7 @@ def _validate(payload: Dict[str, Any]) -> Tuple[Dict[str, Any], List[str]]:
             else:
                 errors.append(f"invalid {key}: {payload[key]!r}")
 
-    for key in ("report", "discover", "osv_lookup"):
+    for key in ("discover", "osv_lookup"):
         if key in payload:
             if isinstance(payload[key], bool):
                 updates[key] = payload[key]

@@ -68,6 +68,26 @@ SKILL_NAME_PRED = f"{BLACKBOX_ONTOLOGY}skillName"
 SKILL_VERSION_PRED = f"{BLACKBOX_ONTOLOGY}skillVersion"
 DANGER_SHAPE_PRED = f"{BLACKBOX_ONTOLOGY}dangerShape"
 
+# Append-only public corrections. Published threat assets remain immutable;
+# a VM-verified CorrectionSignal can monotonically suppress one exact RDF
+# subject without deleting or rewriting the original knowledge asset.
+DEFENDER_CORRECTION_TYPE_IRI = "urn:defender:CorrectionSignal"
+DEFENDER_CORRECTION_TARGET_PRED = "urn:defender:p:targetSubject"
+DEFENDER_CORRECTION_ACTION_PRED = "urn:defender:p:action"
+DEFENDER_CORRECTION_SUPPRESS = "suppress"
+
+# VM-native source observations. Newer publisher batches use this compact
+# ontology for feed IOCs instead of Defender ``IocSignal`` entities. These
+# records are still VM-confirmed; Agent Blackbox must recognize them or a
+# healthy node appears permanently stuck at the older Defender-only count.
+SOURCE_OBSERVATION_TYPE_IRI = "urn:blackbox:SourceObservation"
+SOURCE_OBSERVATION_CANONICAL_TYPE_PRED = "urn:blackbox:p:canonicalType"
+SOURCE_OBSERVATION_CATEGORY_PRED = "urn:blackbox:p:category"
+SOURCE_OBSERVATION_LIFECYCLE_STATUS_PRED = "urn:blackbox:p:lifecycleStatus"
+SOURCE_OBSERVATION_NORMALIZED_VALUE_PRED = "urn:blackbox:p:normalizedValue"
+SOURCE_OBSERVATION_PROVENANCE_JSON_PRED = "urn:blackbox:p:provenanceJson"
+SOURCE_OBSERVATION_SOURCE_ID_PRED = "urn:blackbox:p:sourceId"
+
 # schema.org predicates -----------------------------------------------------
 SCHEMA_NAME_PRED = "http://schema.org/name"
 SCHEMA_DESCRIPTION_PRED = "http://schema.org/description"
@@ -80,17 +100,16 @@ SCHEMA_CONTRIBUTOR_PRED = "http://schema.org/contributor"
 # Defaults
 # ---------------------------------------------------------------------------
 
-#: Default private context graph (config key ``context_graph_id``).
-DEFAULT_CONTEXT_GRAPH_ID = "0x37b1Fdfd134e2b17583bCBdD3034F91504cD9C70/agent-blackbox"
+#: Default public Verifiable Memory graph (config key ``context_graph_id``).
+DEFAULT_CONTEXT_GRAPH_ID = "0x37b1Fdfd134e2b17583bCBdD3034F91504cD9C70/agent-blackbox-vm"
 
 #: Legacy graph ids from earlier defaults. A node still pointed at one of these
 #: is transparently switched to ``DEFAULT_CONTEXT_GRAPH_ID`` at config-load
 #: time, so an existing install moves to the current graph with zero manual
-#: steps. Includes the public ``guardian-threats-staging`` default we ran
-#: before pivoting back to the private relay-backed community graph. A
-#: genuinely custom ``context_graph_id`` (anything not in this set) is always
-#: left untouched.
+#: steps. A genuinely custom ``context_graph_id`` (anything not in this set)
+#: is always left untouched.
 LEGACY_CONTEXT_GRAPH_IDS = frozenset({
+    "0x37b1Fdfd134e2b17583bCBdD3034F91504cD9C70/agent-blackbox",
     "umanitek/blackbox-threats-staging",
     "umanitek/guardian-threats-staging",
     "umanitek/guardian-threats",
@@ -100,8 +119,39 @@ LEGACY_CONTEXT_GRAPH_IDS = frozenset({
 DEFAULT_DKG_PORT = 9320
 DEFAULT_DKG_URL = f"http://127.0.0.1:{DEFAULT_DKG_PORT}"
 
-#: Bootstrap peer for joining the default private threat graph.
+#: Source peer used for verified catch-up of the default threat graph.
 DEFAULT_GRAPH_PEER_ID = "12D3KooWBJskzr2unXQG9mR3LRZFUJoxWr1PN6hTbyWyKndHXjZM"
+
+# The minimum complete release generation bundled with this Agent Blackbox
+# build. DKG reconciliation remains subscribed for later append-only updates;
+# these floors only let the foreground command recognize that the known
+# release is already present instead of starting a redundant source transfer.
+DEFAULT_GRAPH_RELEASE_THREAT_FLOOR = 550_000
+DEFAULT_GRAPH_RELEASE_RULE_FLOOR = 500_000
+
+#: Keep the first durable recovery request short so a fresh install gets a
+#: useful verified ruleset quickly. DKG checkpoints complete exact graphs and
+#: resumes the next request from the safe boundary, so this does not weaken
+#: verification.
+INITIAL_GRAPH_SYNC_PASS_BUDGET_MS = 30_000
+
+#: Keep follow-up batches small enough for exact-graph verification and atomic
+#: materialization to finish before DKG's ten-minute responder session expires.
+#: A larger fetch can settle successfully but still lose its numeric checkpoint
+#: before the next pass, forcing the snapshot back to offset zero.
+DEFAULT_GRAPH_SYNC_PASS_BUDGET_MS = 60_000
+
+#: Durable network fetching is bounded by the pass budget above, but DKG must
+#: still verify complete graphs and atomically materialize them afterward. A
+#: large fresh-node pass can spend many minutes in that correctness-critical
+#: settlement phase, so the HTTP caller and its watchdog must wait longer than
+#: the fetch budget.
+GRAPH_SYNC_SETTLEMENT_TIMEOUT_S = 3_600.0
+
+#: Let the HTTP client report its own timeout before the outer CLI watchdog
+#: fires. This prevents a retry from overlapping a request that is still
+#: blocked inside urllib at the settlement boundary.
+GRAPH_SYNC_WATCHDOG_HEADROOM_S = 15.0
 
 #: Previous bootstrap peers transparently replaced during config loading.
 LEGACY_GRAPH_PEER_IDS = frozenset({
@@ -119,6 +169,11 @@ SEVERITY_RANK = {name: idx for idx, name in enumerate(SEVERITY_ORDER)}
 VIEW_WORKING_MEMORY = "working-memory"
 VIEW_SHARED_WORKING_MEMORY = "shared-working-memory"
 VIEW_VERIFIABLE_MEMORY = "verifiable-memory"
+
+# Community graph ingestion and outbound threat sharing are intentionally not
+# part of the current release. Keep this compile-time closed until the complete
+# SWM trust and consent model ships; user configuration must not reopen it.
+COMMUNITY_GRAPH_ENABLED = False
 
 
 def normalize_severity(value: object, fallback: str = "info") -> str:
