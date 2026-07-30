@@ -35,10 +35,13 @@ _SELECT_COLUMNS = """?threat ?rdfType ?identifier ?severity ?name ?description
        ?pattern ?toolName ?argShape ?packageName ?packageVersion
        ?packageEcosystem ?advisoryId ?curated ?category ?skillName
        ?skillVersion ?dangerShape ?kind ?iocValue ?targetSubject
-       ?correctionAction"""
+       ?correctionAction ?canonicalType ?observationCategory
+       ?lifecycleStatus ?normalizedValue ?provenanceJson ?sourceId"""
 
 _DEFENDER_PREFIXES = """PREFIX defender: <urn:defender:>
 PREFIX dp: <urn:defender:p:>
+PREFIX blackbox: <urn:blackbox:>
+PREFIX bp: <urn:blackbox:p:>
 PREFIX schema: <http://schema.org/>
 """
 
@@ -82,11 +85,40 @@ def _defender_page_sparql(
     if graph_uri:
         body = f"  GRAPH <{graph_uri}> {{\n{body}\n  }}"
     return f"""{_DEFENDER_PREFIXES}
-SELECT DISTINCT ?threat ?rdfType ?identifier ?severity ?name ?description
-       ?pattern ?toolName ?argShape ?packageName ?packageVersion
-       ?packageEcosystem ?advisoryId ?curated ?category ?skillName
-       ?skillVersion ?dangerShape ?kind ?iocValue ?targetSubject
-       ?correctionAction
+SELECT DISTINCT {_SELECT_COLUMNS}
+WHERE {{
+{body}
+}}
+ORDER BY STR(?threat)
+"""
+
+
+def _source_observations_sparql(
+    limit: int,
+    after: str = "",
+    graph_uri: str = "",
+) -> str:
+    """Fetch compact IOC observations without pulling citation triples."""
+    cursor_filter = _threat_cursor_filter(after)
+    body = f"""    {{
+        SELECT ?threat WHERE {{
+            ?threat a blackbox:SourceObservation .
+            {cursor_filter}
+        }}
+        ORDER BY STR(?threat)
+        LIMIT {int(limit)}
+    }}
+    BIND(blackbox:SourceObservation AS ?rdfType)
+    OPTIONAL {{ ?threat bp:canonicalType ?canonicalType . }}
+    OPTIONAL {{ ?threat bp:category ?observationCategory . }}
+    OPTIONAL {{ ?threat bp:lifecycleStatus ?lifecycleStatus . }}
+    OPTIONAL {{ ?threat bp:normalizedValue ?normalizedValue . }}
+    OPTIONAL {{ ?threat bp:provenanceJson ?provenanceJson . }}
+    OPTIONAL {{ ?threat bp:sourceId ?sourceId . }}"""
+    if graph_uri:
+        body = f"  GRAPH <{graph_uri}> {{\n{body}\n  }}"
+    return f"""{_DEFENDER_PREFIXES}
+SELECT DISTINCT {_SELECT_COLUMNS}
 WHERE {{
 {body}
 }}
@@ -159,6 +191,7 @@ def _defender_threats_sparql(
             after,
             graph_uri,
         ),
+        _source_observations_sparql(limit, after, graph_uri),
     )
 
 
@@ -247,6 +280,7 @@ WHERE {{
       VALUES ?rdfType {{
         defender:DependencySignal defender:InjectionSignal
         defender:SkillSignal defender:IocSignal defender:CorrectionSignal
+        blackbox:SourceObservation
       }}
     }} UNION {{
       ?threat g:identifier ?identifier .
@@ -279,6 +313,12 @@ WHERE {{
     OPTIONAL {{ ?threat dp:value ?iocValue . }}
     OPTIONAL {{ ?threat dp:targetSubject ?targetSubject . }}
     OPTIONAL {{ ?threat dp:action ?correctionAction . }}
+    OPTIONAL {{ ?threat bp:canonicalType ?canonicalType . }}
+    OPTIONAL {{ ?threat bp:category ?observationCategory . }}
+    OPTIONAL {{ ?threat bp:lifecycleStatus ?lifecycleStatus . }}
+    OPTIONAL {{ ?threat bp:normalizedValue ?normalizedValue . }}
+    OPTIONAL {{ ?threat bp:provenanceJson ?provenanceJson . }}
+    OPTIONAL {{ ?threat bp:sourceId ?sourceId . }}
   }}
 }}
 ORDER BY ?sourceGraph ?threat
@@ -452,6 +492,24 @@ class Ruleset:
 # ---------------------------------------------------------------------------
 
 
+def _source_observation_provenance(row: Dict[str, Any]) -> Dict[str, Any]:
+    raw = extract_binding(row.get("provenanceJson"))
+    if not raw:
+        return {}
+    try:
+        value = json.loads(raw)
+    except (TypeError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _row_severity(row: Dict[str, Any]) -> str:
+    severity = extract_binding(row.get("severity"))
+    if not severity and extract_binding(row.get("rdfType")) == constants.SOURCE_OBSERVATION_TYPE_IRI:
+        severity = _source_observation_provenance(row).get("severity")
+    return constants.normalize_severity(severity, "high")
+
+
 def _row_identity(row: Dict[str, Any]) -> tuple:
     subject = extract_binding(row.get("threat"))
     rdf_type = extract_binding(row.get("rdfType"))
@@ -472,6 +530,12 @@ def _row_identity(row: Dict[str, Any]) -> tuple:
         ioc_value = extract_binding(row.get("iocValue"))
         if ioc_type and ioc_value:
             identifier = f"ioc:{ioc_type}:{ioc_value}"
+    elif not identifier and rdf_type == constants.SOURCE_OBSERVATION_TYPE_IRI:
+        lifecycle = extract_binding(row.get("lifecycleStatus")).strip().lower()
+        ioc_type = extract_binding(row.get("canonicalType")).strip().lower()
+        ioc_value = extract_binding(row.get("normalizedValue"))
+        if lifecycle == "active" and ioc_type in quads.IOC_TYPES and ioc_value:
+            identifier = quads.ioc_identifier(ioc_type, ioc_value)
     return subject, rdf_type, identifier
 
 
@@ -491,8 +555,12 @@ def _row_to_graph_entry(row: Dict[str, Any], source: str) -> Optional[Dict[str, 
     return {
         "identifier": identifier,
         "category": category,
-        "severity": constants.normalize_severity(extract_binding(row.get("severity")), "high"),
-        "name": extract_binding(row.get("name")) or identifier,
+        "severity": _row_severity(row),
+        "name": (
+            extract_binding(row.get("name"))
+            or extract_binding(row.get("normalizedValue"))
+            or identifier
+        ),
         "subject": subject,
         "source": source,
     }
@@ -507,8 +575,12 @@ def _row_to_rule(row: Dict[str, Any], source: str = "public") -> Optional[tuple]
     subject, rdf_type, identifier = _row_identity(row)
     if not identifier:
         return None
-    severity = constants.normalize_severity(extract_binding(row.get("severity")), "high")
-    name = extract_binding(row.get("name")) or identifier
+    severity = _row_severity(row)
+    name = (
+        extract_binding(row.get("name"))
+        or extract_binding(row.get("normalizedValue"))
+        or identifier
+    )
     common = {
         "identifier": identifier,
         "subject": subject,
@@ -590,16 +662,29 @@ def _row_to_rule(row: Dict[str, Any], source: str = "public") -> Optional[tuple]
         return ("skill", identifier, rule)
     if identifier.startswith("ioc:"):
         # ioc:{type}:{value} — type also carried in ?category; value is the rest.
-        ioc_type = (extract_binding(row.get("category")) or "").strip().lower()
+        is_observation = rdf_type == constants.SOURCE_OBSERVATION_TYPE_IRI
+        ioc_type = extract_binding(
+            row.get("canonicalType") if is_observation else row.get("category")
+        ).strip().lower()
         parts = identifier.split(":", 2)
         if not ioc_type and len(parts) == 3:
             ioc_type = parts[1].strip().lower()
-        return ("ioc", identifier, {
+        rule = {
             **common,
             "iocType": ioc_type,
-            "value": extract_binding(row.get("iocValue")) or (parts[2] if len(parts) == 3 else ""),
-            "kind": extract_binding(row.get("kind")) or None,
-        })
+            "value": (
+                (parts[2] if is_observation and len(parts) == 3 else "")
+                or extract_binding(row.get("iocValue"))
+                or (parts[2] if len(parts) == 3 else "")
+            ),
+            "kind": extract_binding(
+                row.get("observationCategory") if is_observation else row.get("kind")
+            ) or None,
+        }
+        source_id = extract_binding(row.get("sourceId")) if is_observation else ""
+        if source_id:
+            rule["sourceId"] = source_id
+        return ("ioc", identifier, rule)
     return None
 
 

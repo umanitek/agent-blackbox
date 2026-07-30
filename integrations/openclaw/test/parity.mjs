@@ -185,6 +185,44 @@ report("dependencyParses", ok, mismatches.join("\n"));
   );
 }
 
+// --- VM source observation ingestion --------------------------------------
+{
+  const active = "urn:blackbox:observation:active";
+  const retired = "urn:blackbox:observation:retired";
+  const rdfType = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+  const observationRows = (subject, status, value) => [
+    [subject, rdfType, "urn:blackbox:SourceObservation"],
+    [subject, "urn:blackbox:p:canonicalType", "domain"],
+    [subject, "urn:blackbox:p:category", "phishing"],
+    [subject, "urn:blackbox:p:lifecycleStatus", status],
+    [subject, "urn:blackbox:p:normalizedValue", value],
+    [subject, "urn:blackbox:p:provenanceJson", JSON.stringify({ severity: "high" })],
+    [subject, "urn:blackbox:p:sourceId", "phishing_database"],
+  ];
+  const bindings = [
+    ...observationRows(active, "active", "Bad.Example."),
+    ...observationRows(retired, "retired", "retired.example"),
+  ].map(([s, p, o]) => ({ s: { value: s }, p: { value: p }, o: { value: o } }));
+  const stateDir = mkdtempSync(join(tmpdir(), "blackbox-observation-parity-"));
+  try {
+    const client = { query: async () => ({ result: { bindings } }) };
+    const cache = new RulesetCache({ client, contextGraphId: "test", stateDir });
+    const rs = await cache.sync();
+    const rule = rs.ioc["ioc:domain:bad.example"];
+    report(
+      "active VM source observation parity",
+      Object.keys(rs.ioc).length === 1 &&
+        rule?.severity === "high" &&
+        rule?.kind === "phishing" &&
+        rule?.value === "bad.example" &&
+        rule?.sourceId === "phishing_database",
+      `iocs=${JSON.stringify(rs.ioc)}`,
+    );
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+}
+
 // --- append-only VM correction precedence ---------------------------------
 {
   const subject = "urn:defender:signal:bad-easy-day";

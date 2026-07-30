@@ -52,12 +52,16 @@ import {
   SCHEMA_DESCRIPTION,
   SCHEMA_NAME,
   RDF_TYPE,
+  iocIdentifier,
   normalizeSeverity,
 } from "./quads.js";
 
 const SCHEMA_ADVISORY = "http://schema.org/identifier";
 const DEFENDER = "urn:defender:";
 const DEFENDER_P = "urn:defender:p:";
+const SOURCE_OBSERVATION = "urn:blackbox:SourceObservation";
+const SOURCE_OBSERVATION_P = "urn:blackbox:p:";
+const IOC_TYPES = new Set(["domain", "url", "ip", "hash", "wallet", "contract"]);
 
 /**
  * SPARQL that pulls legacy threats and the current Defender signal ontology.
@@ -66,18 +70,34 @@ function rulesetQuery(): string {
   return `
 SELECT ?s ?p ?o WHERE {
   {
-    ?s <${BLACKBOX_IDENTIFIER_PRED}> ?identifier .
+    {
+      ?s <${BLACKBOX_IDENTIFIER_PRED}> ?identifier .
+    }
+    UNION
+    {
+      ?s a ?signalType .
+      VALUES ?signalType {
+        <${DEFENDER}DependencySignal> <${DEFENDER}InjectionSignal>
+        <${DEFENDER}SkillSignal> <${DEFENDER}IocSignal>
+        <${DEFENDER_CORRECTION_TYPE_IRI}>
+      }
+    }
+    ?s ?p ?o .
   }
   UNION
   {
-    ?s a ?signalType .
-    VALUES ?signalType {
-      <${DEFENDER}DependencySignal> <${DEFENDER}InjectionSignal>
-      <${DEFENDER}SkillSignal> <${DEFENDER}IocSignal>
-      <${DEFENDER_CORRECTION_TYPE_IRI}>
+    ?s a <${SOURCE_OBSERVATION}> .
+    ?s ?p ?o .
+    VALUES ?p {
+      <${RDF_TYPE}>
+      <${SOURCE_OBSERVATION_P}canonicalType>
+      <${SOURCE_OBSERVATION_P}category>
+      <${SOURCE_OBSERVATION_P}lifecycleStatus>
+      <${SOURCE_OBSERVATION_P}normalizedValue>
+      <${SOURCE_OBSERVATION_P}provenanceJson>
+      <${SOURCE_OBSERVATION_P}sourceId>
     }
   }
-  ?s ?p ?o .
 }`.trim();
 }
 
@@ -146,6 +166,13 @@ interface ThreatAccum {
   // append-only correction
   targetSubject?: string;
   correctionAction?: string;
+  // compact VM source observation
+  canonicalType?: string;
+  observationCategory?: string;
+  lifecycleStatus?: string;
+  normalizedValue?: string;
+  provenanceJson?: string;
+  sourceId?: string;
 }
 
 /** Accumulate the s/p/o rows of one tier's response into per-subject threats. */
@@ -188,6 +215,12 @@ function collectThreats(resp: unknown): ThreatAccum[] {
       case BLACKBOX_DANGER_SHAPE_PRED: acc.dangerShape = o; break;
       case DEFENDER_CORRECTION_TARGET_PRED: acc.targetSubject = o; break;
       case DEFENDER_CORRECTION_ACTION_PRED: acc.correctionAction = o; break;
+      case `${SOURCE_OBSERVATION_P}canonicalType`: acc.canonicalType = o; break;
+      case `${SOURCE_OBSERVATION_P}category`: acc.observationCategory = o; break;
+      case `${SOURCE_OBSERVATION_P}lifecycleStatus`: acc.lifecycleStatus = o; break;
+      case `${SOURCE_OBSERVATION_P}normalizedValue`: acc.normalizedValue = o; break;
+      case `${SOURCE_OBSERVATION_P}provenanceJson`: acc.provenanceJson = o; break;
+      case `${SOURCE_OBSERVATION_P}sourceId`: acc.sourceId = o; break;
       default: break;
     }
     bySubject.set(s, acc);
@@ -215,6 +248,18 @@ export function skillNameFromTitle(title: string): string {
     ?? "";
 }
 
+function sourceObservationProvenance(acc: ThreatAccum): Record<string, unknown> {
+  if (!acc.provenanceJson) return {};
+  try {
+    const value = JSON.parse(acc.provenanceJson) as unknown;
+    return value && typeof value === "object" && !Array.isArray(value)
+      ? value as Record<string, unknown>
+      : {};
+  } catch {
+    return {};
+  }
+}
+
 /** Map one accumulated threat to `(category, key, rule)` or null. Port of Python `_row_to_rule`. */
 function accumToRule(acc: ThreatAccum, source: RuleSource): MappedRule | null {
   let identifier = acc.identifier;
@@ -230,10 +275,20 @@ function accumToRule(acc: ThreatAccum, source: RuleSource): MappedRule | null {
     identifier = `skill:${suffix}`;
   } else if (!identifier && acc.rdfType === `${DEFENDER}IocSignal` && acc.category && acc.iocValue) {
     identifier = `ioc:${acc.category.trim().toLowerCase()}:${acc.iocValue}`;
+  } else if (!identifier && acc.rdfType === SOURCE_OBSERVATION) {
+    const iocType = (acc.canonicalType || "").trim().toLowerCase();
+    if (
+      acc.lifecycleStatus?.trim().toLowerCase() === "active" &&
+      IOC_TYPES.has(iocType) &&
+      acc.normalizedValue
+    ) {
+      identifier = iocIdentifier(iocType, acc.normalizedValue);
+    }
   }
   if (!identifier) return null;
-  const severity = normalizeSeverity(acc.severity, "high");
-  const name = acc.name || acc.description || identifier;
+  const provenance = sourceObservationProvenance(acc);
+  const severity = normalizeSeverity(acc.severity ?? provenance.severity, "high");
+  const name = acc.name || acc.description || acc.normalizedValue || identifier;
   if (identifier.startsWith("injection:")) {
     if (!acc.pattern) return null;
     return {
@@ -325,9 +380,14 @@ function accumToRule(acc: ThreatAccum, source: RuleSource): MappedRule | null {
     };
   }
   if (identifier.startsWith("ioc:")) {
+    const isObservation = acc.rdfType === SOURCE_OBSERVATION;
     const parts = identifier.split(":", 3);
-    const iocType = (acc.category || parts[1] || "").trim().toLowerCase();
-    const value = acc.iocValue || identifier.slice(`ioc:${parts[1] ?? ""}:`.length);
+    const iocType = (
+      (isObservation ? acc.canonicalType : acc.category) || parts[1] || ""
+    ).trim().toLowerCase();
+    const value = isObservation
+      ? identifier.slice(`ioc:${parts[1] ?? ""}:`.length)
+      : acc.iocValue || identifier.slice(`ioc:${parts[1] ?? ""}:`.length);
     if (!iocType || !value) return null;
     return {
       category: "ioc",
@@ -338,7 +398,8 @@ function accumToRule(acc: ThreatAccum, source: RuleSource): MappedRule | null {
         name,
         iocType,
         value,
-        kind: acc.kind || undefined,
+        kind: (isObservation ? acc.observationCategory : acc.kind) || undefined,
+        sourceId: isObservation ? acc.sourceId : undefined,
         source,
       },
     };

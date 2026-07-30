@@ -41,6 +41,91 @@ def test_release_defaults_target_agent_blackbox_graph():
     )
 
 
+def test_complete_local_release_uses_confirmed_rules_without_publisher_transfer(monkeypatch):
+    class LocalRules:
+        def graph_count(self, source):
+            return constants.DEFAULT_GRAPH_RELEASE_RULE_FLOOR if source == "public" else 0
+
+    local_rules = LocalRules()
+    refreshes = []
+
+    class Client:
+        def threat_count(self, _cg_id):
+            return constants.DEFAULT_GRAPH_RELEASE_THREAT_FLOOR
+
+    def refresh(*_args, **kwargs):
+        refreshes.append(kwargs)
+        return local_rules
+
+    monkeypatch.setattr(cli_mod.ruleset, "refresh", refresh)
+    cfg = config_mod.BlackboxConfig(
+        context_graph_id=constants.DEFAULT_CONTEXT_GRAPH_ID,
+    )
+
+    assert cli_mod._complete_local_release_ruleset(cfg, Client()) is local_rules
+    assert refreshes == [{"force_query": True}]
+
+
+def test_release_floor_completion_uses_deduplicated_rule_target(monkeypatch):
+    class LocalRules:
+        def counts(self):
+            return {
+                "injection": 0,
+                "escalation": 0,
+                "dependency": constants.DEFAULT_GRAPH_RELEASE_RULE_FLOOR,
+                "fileaccess": 0,
+                "skill": 0,
+            }
+
+        def graph_count(self, source):
+            return constants.DEFAULT_GRAPH_RELEASE_RULE_FLOOR if source == "public" else 0
+
+    class Client:
+        complete = False
+
+        def __init__(self, **_kwargs):
+            pass
+
+        def agent_identity(self):
+            return {}
+
+        def threat_count(self, _cg_id):
+            return constants.DEFAULT_GRAPH_RELEASE_THREAT_FLOOR if self.complete else 0
+
+        def catchup_from_peer(self, _cg_id, peer_id, *, budget_ms):
+            self.complete = True
+            return {
+                "ok": True,
+                "includeDurable": True,
+                "includeSharedMemory": False,
+                "peersAttempted": 1,
+                "totalDurableInsertedTriples": 0,
+                "results": [{"peerId": peer_id}],
+            }
+
+        def subscribe_context_graph(self, _cg_id):
+            return {"catchup": {"jobId": "fresh", "status": "done"}}
+
+        def catchup_status(self, _cg_id, *, job_id=None):
+            return {"jobId": job_id or "old", "status": "done"}
+
+    cfg = config_mod.BlackboxConfig(
+        context_graph_id=constants.DEFAULT_CONTEXT_GRAPH_ID,
+        graph_peer_id=constants.DEFAULT_GRAPH_PEER_ID,
+    )
+    monkeypatch.setattr(cli_mod, "DkgClient", Client)
+    monkeypatch.setattr(cli_mod, "load_blackbox_config", lambda: cfg)
+    monkeypatch.setattr(cli_mod.ruleset, "refresh", lambda *_args, **_kwargs: LocalRules())
+    monkeypatch.setattr(cli_mod.sync_state, "write", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(cli_mod.sync_state, "read", lambda: {})
+
+    result = cli_mod._cmd_sync_impl(
+        argparse.Namespace(wait=True, timeout=30, require_rules=True)
+    )
+
+    assert result == 0
+
+
 def test_register_wires_hooks_and_cli():
     calls = []
     cli = []
@@ -181,6 +266,59 @@ def test_managed_dkg_sync_environment_keeps_native_reconciliation_enabled(
     )
     for name, value in cli_mod._DKG_STEADY_SYNC_SETTINGS.items():
         assert env[name] == value
+
+
+def test_managed_dkg_restart_waits_for_draining_worker_before_start(tmp_path, monkeypatch):
+    pid = 4242
+    (tmp_path / "daemon.pid").write_text(str(pid), encoding="utf-8")
+    cfg = config_mod.BlackboxConfig(
+        dkg_home=str(tmp_path),
+        dkg_bin=str(tmp_path / "dkg"),
+        dkg_url="http://127.0.0.1:9320",
+    )
+    runs = []
+    process_checks = {"count": 0}
+    sleeps = []
+
+    class Process:
+        def cmdline(self):
+            return ["node", "dkg", "daemon-worker"]
+
+        def is_running(self):
+            return True
+
+    def process(_pid):
+        process_checks["count"] += 1
+        if process_checks["count"] == 1:
+            return Process()
+        raise cli_mod.psutil.NoSuchProcess(pid)
+
+    class Client:
+        def __init__(self, **_kwargs):
+            pass
+
+        def reachable(self, **_kwargs):
+            return False
+
+        def status(self, **_kwargs):
+            return {"status": "ok"}
+
+    def run(command, **_kwargs):
+        runs.append(command[-1])
+        return argparse.Namespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(cli_mod, "_dkg_sync_environment", lambda _cfg: {})
+    monkeypatch.setattr(cli_mod.subprocess, "run", run)
+    monkeypatch.setattr(cli_mod.psutil, "Process", process)
+    monkeypatch.setattr(cli_mod, "DkgClient", Client)
+    monkeypatch.setattr(cli_mod.time, "sleep", sleeps.append)
+
+    cli_mod._restart_managed_dkg(cfg)
+
+    assert runs == ["stop", "start"]
+    assert sleeps == [0.5]
+    assert process_checks["count"] >= 3
+    assert not (tmp_path / "daemon.pid").exists()
 
 
 def test_managed_dkg_sync_environment_finds_runtime_without_pid_file(tmp_path, monkeypatch):
@@ -1596,6 +1734,42 @@ def test_authoritative_recovery_stops_after_safe_manifest_completion(
     )
     assert client.calls == 1
     assert "1,000 triples verified and stored" in capsys.readouterr().out
+
+
+def test_authoritative_recovery_accepts_complete_release_floor_without_manifest(
+    monkeypatch, tmp_path, capsys
+):
+    class FakeClient:
+        dkg_home = str(tmp_path)
+
+        def __init__(self):
+            self.calls = 0
+
+        def catchup_from_peer(self, _cg_id, peer_id, *, budget_ms):
+            self.calls += 1
+            return {
+                "ok": True,
+                "includeDurable": True,
+                "includeSharedMemory": False,
+                "peersAttempted": 1,
+                "totalDurableInsertedTriples": 0,
+                "results": [{"peerId": peer_id}],
+            }
+
+        def threat_count(self, _cg_id):
+            return constants.DEFAULT_GRAPH_RELEASE_THREAT_FLOOR
+
+    client = FakeClient()
+    monkeypatch.setattr(cli_mod.sync_state, "write", lambda *_args, **_kwargs: {})
+
+    assert cli_mod._catchup_authoritative_vm(
+        client,
+        constants.DEFAULT_CONTEXT_GRAPH_ID,
+        constants.DEFAULT_GRAPH_PEER_ID,
+        cli_mod.time.monotonic() + 60,
+    )
+    assert client.calls == 1
+    assert "release floor is complete" in capsys.readouterr().out
 
 
 def test_authoritative_recovery_accepts_committed_incomplete_dkg_progress(

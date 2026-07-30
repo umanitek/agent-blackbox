@@ -675,6 +675,15 @@ def _restart_managed_dkg(cfg: BlackboxConfig) -> None:
     """Restart the managed node with bounded native reconciliation enabled."""
     env = _dkg_sync_environment(cfg)
     command = str(cfg.dkg_bin)
+    old_pid: Optional[int] = None
+    try:
+        old_pid = int(
+            (Path(cfg.dkg_home) / "daemon.pid")
+            .read_text(encoding="utf-8")
+            .strip()
+        )
+    except (OSError, TypeError, ValueError):
+        pass
     try:
         subprocess.run(
             [command, "stop"],
@@ -684,6 +693,48 @@ def _restart_managed_dkg(cfg: BlackboxConfig) -> None:
             timeout=60,
             check=False,
         )
+        # ``dkg stop`` can return after its ten-second API wait while the
+        # worker is still draining sync jobs. Starting immediately then sees
+        # the old PID and refuses with "Daemon already running". Wait for the
+        # exact managed worker and API listener to disappear first.
+        stopped = DkgClient(url=cfg.dkg_url, dkg_home=cfg.dkg_home)
+        stop_deadline = time.monotonic() + 45
+        while time.monotonic() < stop_deadline:
+            pid_running = False
+            if old_pid is not None:
+                try:
+                    process = psutil.Process(old_pid)
+                    command_line = [str(item) for item in process.cmdline()]
+                    pid_running = process.is_running() and any(
+                        item in {"daemon-worker", "daemon-supervisor"}
+                        for item in command_line
+                    )
+                except (OSError, psutil.Error):
+                    pid_running = False
+            if not pid_running and not stopped.reachable(timeout=0.5):
+                break
+            time.sleep(0.5)
+        else:
+            raise RuntimeError("managed DKG node did not finish stopping")
+
+        # A forced worker exit can leave its PID file behind. Remove it only
+        # after proving that exact managed process is no longer alive.
+        if old_pid is not None:
+            try:
+                process = psutil.Process(old_pid)
+                command_line = [str(item) for item in process.cmdline()]
+                still_managed = process.is_running() and any(
+                    item in {"daemon-worker", "daemon-supervisor"}
+                    for item in command_line
+                )
+            except (OSError, psutil.Error):
+                still_managed = False
+            if not still_managed:
+                try:
+                    (Path(cfg.dkg_home) / "daemon.pid").unlink()
+                except FileNotFoundError:
+                    pass
+
         started = subprocess.run(
             [command, "start"],
             env=env,
@@ -694,6 +745,13 @@ def _restart_managed_dkg(cfg: BlackboxConfig) -> None:
         )
     except (OSError, subprocess.SubprocessError) as exc:
         raise RuntimeError(f"could not restart the managed DKG node: {exc}") from exc
+
+    if started.returncode != 0:
+        detail = (started.stderr or started.stdout or "").strip()
+        raise RuntimeError(
+            "could not start the managed DKG node"
+            + (f": {detail[-500:]}" if detail else "")
+        )
 
     client = DkgClient(url=cfg.dkg_url, dkg_home=cfg.dkg_home)
     deadline = time.monotonic() + 90
@@ -733,6 +791,35 @@ def _last_sync_counts(context_graph_id: str = "") -> tuple[int, int]:
     except (TypeError, ValueError):
         community = 0
     return public, community
+
+
+def _complete_local_release_ruleset(
+    cfg: BlackboxConfig,
+    client: DkgClient,
+) -> Optional[ruleset.Ruleset]:
+    """Return a fully verified local release snapshot, if already present.
+
+    The DKG source-pinned endpoint can lack an idempotent EOF marker after its
+    checkpoint is cleaned up. Check the release's raw VM floor first, then
+    rebuild from explicitly confirmed assertion graphs. Both conditions must
+    hold, so tentative or legacy Defender-only data cannot bypass recovery.
+    """
+    try:
+        verified_threats = client.threat_count(cfg.context_graph_id)
+    except (DkgError, AttributeError, TypeError, ValueError):
+        return None
+    if verified_threats < constants.DEFAULT_GRAPH_RELEASE_THREAT_FLOOR:
+        return None
+    try:
+        local_rules = ruleset.refresh(cfg, client, force_query=True)
+    except ruleset.RulesetRefreshUnavailable:
+        return None
+    if (
+        _ruleset_graph_count(local_rules, "public")
+        < constants.DEFAULT_GRAPH_RELEASE_RULE_FLOOR
+    ):
+        return None
+    return local_rules
 
 
 def _cmd_sync_with_managed_dkg(cfg: BlackboxConfig, args: argparse.Namespace) -> int:
@@ -862,6 +949,23 @@ def _cmd_sync_impl(args: argparse.Namespace) -> int:
     last_subscribe_error = ""
     last_catchup: Dict[str, Any] = {}
 
+    if release_graph and getattr(args, "wait", False):
+        local_release = _complete_local_release_ruleset(cfg, client)
+        if local_release is not None:
+            rs = local_release
+            counts = rs.counts()
+            public_count = _ruleset_graph_count(rs, "public")
+            initial_rules_ready = public_count > 0
+            authoritative_attempted = True
+            authoritative_recovered = True
+            authoritative_cache_refreshed = True
+            authoritative_complete = initial_rules_ready
+            authoritative_target = public_count
+            print(
+                "Local confirmed VM already contains the complete "
+                f"release ({public_count:,} enforceable threats)."
+            )
+
     def _record_verified_pass(_inserted_triples: int) -> None:
         """Publish only locally committed threat counts between DKG passes."""
         nonlocal rs, public_count, authoritative_target, initial_rules_ready
@@ -954,9 +1058,18 @@ def _cmd_sync_impl(args: argparse.Namespace) -> int:
             else:
                 rs = ruleset.peek(cfg)
             counts = rs.counts()
-            public_count = max(public_count, _ruleset_graph_count(rs, "public"))
+            cached_public = _ruleset_graph_count(rs, "public")
+            public_count = (
+                cached_public
+                if authoritative_cache_refreshed
+                else max(public_count, cached_public)
+            )
             community_count = _ruleset_graph_count(rs, "community")
-            authoritative_target = max(authoritative_target, public_count)
+            authoritative_target = (
+                public_count
+                if authoritative_cache_refreshed
+                else max(authoritative_target, public_count)
+            )
             if authoritative_recovered:
                 # The pinned pass established a complete foreground snapshot.
                 # Still flow through the subscription call below so that DKG
@@ -1192,9 +1305,18 @@ def _cmd_sync_impl(args: argparse.Namespace) -> int:
             else:
                 rs = ruleset.refresh(cfg, client)
             counts = rs.counts()
-            public_count = max(public_count, _ruleset_graph_count(rs, "public"))
+            cached_public = _ruleset_graph_count(rs, "public")
+            public_count = (
+                cached_public
+                if authoritative_cache_refreshed
+                else max(public_count, cached_public)
+            )
             community_count = _ruleset_graph_count(rs, "community")
-            authoritative_target = max(authoritative_target, public_count)
+            authoritative_target = (
+                public_count
+                if authoritative_cache_refreshed
+                else max(authoritative_target, public_count)
+            )
         if authoritative_recovered and public_count > authoritative_target:
             authoritative_target = public_count
         if authoritative_recovered:
@@ -1693,6 +1815,16 @@ def _catchup_authoritative_vm(
                     local_threats = int(count_threats(context_graph_id) or 0)
                 except (DkgError, TypeError, ValueError):
                     local_threats = None
+            if (
+                context_graph_id == constants.DEFAULT_CONTEXT_GRAPH_ID
+                and local_threats is not None
+                and local_threats >= constants.DEFAULT_GRAPH_RELEASE_THREAT_FLOOR
+            ):
+                print(
+                    "  verifiable VM release floor is complete "
+                    f"({local_threats:,} threats verified and stored)"
+                )
+                return True
             if durable_progress.get("snapshot_complete") is True:
                 expected = int(durable_progress.get("expected_triples") or 0)
                 if expected > 0:
@@ -1769,6 +1901,19 @@ def _catchup_authoritative_vm(
         if on_progress is not None:
             on_progress(inserted)
         public_progress_seen = True
+        if context_graph_id == constants.DEFAULT_CONTEXT_GRAPH_ID:
+            count_threats = getattr(client, "threat_count", None)
+            if callable(count_threats):
+                try:
+                    local_threats = int(count_threats(context_graph_id) or 0)
+                except (DkgError, TypeError, ValueError):
+                    local_threats = 0
+                if local_threats >= constants.DEFAULT_GRAPH_RELEASE_THREAT_FLOOR:
+                    print(
+                        "  verifiable VM release floor is complete "
+                        f"({local_threats:,} threats verified and stored)"
+                    )
+                    return True
         # DKG's bounded rootless recovery deletes its transient page checkpoint
         # after the safe offset reaches the manifest total. Reissuing the full
         # snapshot request then starts a new scan at offset zero; it is not a

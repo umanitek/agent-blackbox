@@ -76,6 +76,18 @@ DEFENDER_CORRECTION_TARGET_PRED = "urn:defender:p:targetSubject"
 DEFENDER_CORRECTION_ACTION_PRED = "urn:defender:p:action"
 DEFENDER_CORRECTION_SUPPRESS = "suppress"
 
+# VM-native source observations. Newer publisher batches use this compact
+# ontology for feed IOCs instead of Defender ``IocSignal`` entities. These
+# records are still VM-confirmed; Agent Blackbox must recognize them or a
+# healthy node appears permanently stuck at the older Defender-only count.
+SOURCE_OBSERVATION_TYPE_IRI = "urn:blackbox:SourceObservation"
+SOURCE_OBSERVATION_CANONICAL_TYPE_PRED = "urn:blackbox:p:canonicalType"
+SOURCE_OBSERVATION_CATEGORY_PRED = "urn:blackbox:p:category"
+SOURCE_OBSERVATION_LIFECYCLE_STATUS_PRED = "urn:blackbox:p:lifecycleStatus"
+SOURCE_OBSERVATION_NORMALIZED_VALUE_PRED = "urn:blackbox:p:normalizedValue"
+SOURCE_OBSERVATION_PROVENANCE_JSON_PRED = "urn:blackbox:p:provenanceJson"
+SOURCE_OBSERVATION_SOURCE_ID_PRED = "urn:blackbox:p:sourceId"
+
 # schema.org predicates -----------------------------------------------------
 SCHEMA_NAME_PRED = "http://schema.org/name"
 SCHEMA_DESCRIPTION_PRED = "http://schema.org/description"
@@ -109,6 +121,13 @@ DEFAULT_DKG_URL = f"http://127.0.0.1:{DEFAULT_DKG_PORT}"
 
 #: Source peer used for verified catch-up of the default threat graph.
 DEFAULT_GRAPH_PEER_ID = "12D3KooWBJskzr2unXQG9mR3LRZFUJoxWr1PN6hTbyWyKndHXjZM"
+
+# The minimum complete release generation bundled with this Agent Blackbox
+# build. DKG reconciliation remains subscribed for later append-only updates;
+# these floors only let the foreground command recognize that the known
+# release is already present instead of starting a redundant source transfer.
+DEFAULT_GRAPH_RELEASE_THREAT_FLOOR = 550_000
+DEFAULT_GRAPH_RELEASE_RULE_FLOOR = 500_000
 
 #: Keep the first durable recovery request short so a fresh install gets a
 #: useful verified ruleset quickly. DKG checkpoints complete exact graphs and

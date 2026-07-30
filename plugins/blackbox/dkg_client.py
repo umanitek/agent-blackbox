@@ -569,7 +569,12 @@ class DkgClient:
         return normalize_bindings(result)
 
     def threat_count(self, cg_id: str) -> int:
-        """Return the locally verified Blackbox threat count with one query."""
+        """Return the locally verified Blackbox threat count with one query.
+
+        The public VM contains both the original Defender signal entities and
+        newer compact ``SourceObservation`` feed records. Counting only the
+        former made successful clients look stuck at the historical watermark.
+        """
         sparql = """PREFIX defender: <urn:defender:>
 SELECT (COUNT(DISTINCT ?threat) AS ?n) WHERE {
   ?threat a ?type .
@@ -578,6 +583,7 @@ SELECT (COUNT(DISTINCT ?threat) AS ?n) WHERE {
     defender:InjectionSignal
     defender:SkillSignal
     defender:IocSignal
+    <urn:blackbox:SourceObservation>
   }
 }"""
         rows = self.query(

@@ -120,9 +120,40 @@ def test_defender_entities_are_expanded_into_individual_rules():
     split_sparql = "\n".join(ruleset_mod._defender_threats_sparql(1000))
     assert "defender:InjectionSignal" in split_sparql
     assert "defender:SkillSignal" in split_sparql
+    assert "blackbox:SourceObservation" in split_sparql
     assert "UNION" not in sparql
     assert "OFFSET" not in split_sparql
     assert "SELECT ?threat WHERE" in split_sparql
+
+
+def test_active_source_observations_become_verified_ioc_rules():
+    active = {
+        "threat": "urn:blackbox:observation:active",
+        "rdfType": "urn:blackbox:SourceObservation",
+        "canonicalType": "domain",
+        "observationCategory": "phishing",
+        "lifecycleStatus": "active",
+        "normalizedValue": "Bad.Example.",
+        "provenanceJson": '{"severity":"high","originalValue":"Bad.Example."}',
+        "sourceId": "phishing_database",
+    }
+    inactive = {
+        **active,
+        "threat": "urn:blackbox:observation:inactive",
+        "lifecycleStatus": "retired",
+        "normalizedValue": "retired.example",
+    }
+
+    rs = ruleset_mod.build_from_rows([active, inactive], source="public")
+
+    assert list(rs.ioc) == ["ioc:domain:bad.example"]
+    rule = rs.ioc["ioc:domain:bad.example"]
+    assert rule["source"] == "public"
+    assert rule["severity"] == "high"
+    assert rule["kind"] == "phishing"
+    assert rule["value"] == "bad.example"
+    assert rule["sourceId"] == "phishing_database"
+    assert rs.graph_count("public") == 1
 
 
 def test_root_only_graph_schemas_are_queried_separately_and_merged():
@@ -148,7 +179,7 @@ def test_root_only_graph_schemas_are_queried_separately_and_merged():
     rows = ruleset_mod._fetch_tier(_Client(), "cg", "verifiable-memory")
 
     assert len(rows) == 2
-    assert len(queries) == 7
+    assert len(queries) == 8
     assert all("UNION" not in query for query in queries[1:])
     assert all("GRAPH <did:dkg:context-graph:cg>" in query for query in queries[1:])
 
