@@ -347,6 +347,7 @@ def test_threat_count_uses_one_verifiable_memory_query(monkeypatch):
     assert body["view"] == dkg_client.constants.VIEW_VERIFIABLE_MEMORY
     assert "COUNT(DISTINCT ?threat)" in body["sparql"]
     assert "VALUES ?type" in body["sparql"]
+    assert "<urn:blackbox:SourceObservation>" in body["sparql"]
     assert "UNION" not in body["sparql"]
 
 

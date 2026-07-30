@@ -119,6 +119,7 @@ export interface IocRule {
   iocType: string;
   value: string;
   kind?: string;
+  sourceId?: string;
   source?: RuleSource;
 }
 export interface Ruleset {
