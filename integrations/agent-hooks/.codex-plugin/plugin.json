@@ -1,0 +1,33 @@
+{
+  "name": "blackbox",
+  "version": "1.2.0",
+  "description": "Agent Blackbox lifecycle hooks for Codex.",
+  "author": {
+    "name": "Umanitek",
+    "url": "https://github.com/umanitek"
+  },
+  "homepage": "https://github.com/umanitek/agent-blackbox",
+  "repository": "https://github.com/umanitek/agent-blackbox",
+  "license": "MIT",
+  "keywords": [
+    "security",
+    "prompt-injection",
+    "agent-hooks",
+    "codex"
+  ],
+  "interface": {
+    "displayName": "Agent Blackbox",
+    "shortDescription": "Threat-graph protection for Codex",
+    "longDescription": "Scans user prompts and local tool calls against the Agent Blackbox threat graph, records redacted local findings, and can deny confirmed threats in block mode.",
+    "developerName": "Umanitek",
+    "category": "Engineering",
+    "capabilities": [
+      "Read",
+      "Interactive"
+    ],
+    "websiteURL": "https://github.com/umanitek/agent-blackbox",
+    "defaultPrompt": [
+      "Show me the latest Agent Blackbox findings"
+    ]
+  }
+}

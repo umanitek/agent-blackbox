@@ -1,0 +1,17 @@
+{
+  "name": "blackbox",
+  "version": "1.2.0",
+  "description": "Agent Blackbox lifecycle hooks for Claude Code.",
+  "author": {
+    "name": "Umanitek"
+  },
+  "homepage": "https://github.com/umanitek/agent-blackbox",
+  "repository": "https://github.com/umanitek/agent-blackbox",
+  "license": "MIT",
+  "keywords": [
+    "security",
+    "prompt-injection",
+    "agent-hooks",
+    "claude-code"
+  ]
+}

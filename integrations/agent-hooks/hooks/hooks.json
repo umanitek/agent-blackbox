@@ -1,0 +1,66 @@
+{
+  "description": "Agent Blackbox prompt and tool-call security hooks.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/blackbox_hook.py\"",
+            "timeout": 30,
+            "statusMessage": "Starting Agent Blackbox"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/blackbox_hook.py\"",
+            "timeout": 30,
+            "statusMessage": "Scanning prompt with Agent Blackbox"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/blackbox_hook.py\"",
+            "timeout": 30,
+            "statusMessage": "Checking tool call with Agent Blackbox"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/blackbox_hook.py\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/blackbox_hook.py\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}
