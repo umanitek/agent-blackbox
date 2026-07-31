@@ -151,7 +151,7 @@ def test_load_config_defaults_to_isolated_blackbox_dkg(monkeypatch, tmp_path):
     cfg = config_mod.load_blackbox_config()
     assert cfg.dkg_url == constants.DEFAULT_DKG_URL
     assert cfg.dkg_home == str(hermes_home / "blackbox" / "dkg")
-    assert cfg.dkg_bin == str(hermes_home / "blackbox" / "dkg-cli" / "node_modules" / ".bin" / "dkg")
+    assert cfg.dkg_bin == str(hermes_home / "blackbox" / "dkg-cli" / "bin" / "dkg")
 
 
 def test_load_config_accepts_blackbox_dkg_overrides(monkeypatch, tmp_path):

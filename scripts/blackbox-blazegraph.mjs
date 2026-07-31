@@ -85,6 +85,16 @@ if (healthCheck) {
   const modulePaths = [
     path.join(
       dkgRoot,
+      'lib',
+      'node_modules',
+      '@origintrail-official',
+      'dkg',
+      'dist',
+      'daemon',
+      'store-health-check.js',
+    ),
+    path.join(
+      dkgRoot,
       'node_modules',
       '@origintrail-official',
       'dkg',
@@ -130,6 +140,16 @@ if (!Number.isInteger(port) || port < 1 || port > 65535) {
 
 const dkgRoot = path.resolve(dkgCheckout);
 const modulePaths = [
+  path.join(
+    dkgRoot,
+    'lib',
+    'node_modules',
+    '@origintrail-official',
+    'dkg',
+    'dist',
+    'daemon',
+    'blazegraph-docker.js',
+  ),
   path.join(
     dkgRoot,
     'node_modules',

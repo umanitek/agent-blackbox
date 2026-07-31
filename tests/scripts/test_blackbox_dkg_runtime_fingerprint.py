@@ -227,6 +227,33 @@ def test_installed_commit_reads_published_npm_build_metadata(tmp_path, capsys):
     assert capsys.readouterr().out.strip() == expected
 
 
+def test_private_global_install_is_fingerprinted_and_reports_commit(tmp_path):
+    cli_dir = tmp_path / "dkg"
+    dkg_home = tmp_path / "home"
+    package = cli_dir / "lib" / "node_modules" / "@origintrail-official" / "dkg"
+    agent = package / "node_modules" / "@origintrail-official" / "dkg-agent"
+    (package / "dist").mkdir(parents=True)
+    (agent / "dist").mkdir(parents=True)
+    (cli_dir / "bin").mkdir(parents=True)
+    dkg_home.mkdir()
+    (package / "package.json").write_text('{"version":"10.0.11"}')
+    (package / "dist" / "cli.js").write_text("export {};\n")
+    expected = "539429d419a01148a974e7db705d6e777eb9eb8f"
+    (package / "build-info.json").write_text(json.dumps({"commit": expected}))
+    (agent / "package.json").write_text('{"version":"10.0.11"}')
+    (agent / "dist" / "agent.js").write_text("export {};\n")
+    (dkg_home / "config.json").write_text("{}\n")
+    dkg_bin = cli_dir / "bin" / "dkg"
+    dkg_bin.write_text("#!/bin/sh\n")
+
+    fingerprint = FINGERPRINTER.compute_fingerprint(
+        cli_dir, dkg_home, Path(sys.executable), dkg_bin
+    )
+
+    assert len(fingerprint) == 64
+    assert FINGERPRINTER.installed_commit(cli_dir) == expected
+
+
 def test_invalid_record_value_fails_closed(tmp_path, capsys):
     marker = tmp_path / "marker"
 

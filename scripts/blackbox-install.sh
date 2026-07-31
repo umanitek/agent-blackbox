@@ -60,7 +60,7 @@ BLACKBOX_DOCKER_REQUIRED=false
 BLACKBOX_DKG_ACCEPT_STORE_RESET=false
 BLACKBOX_DKG_HOME="$BLACKBOX_INSTALL_ROOT/.dkg"
 BLACKBOX_DKG_CLI_DIR="$BLACKBOX_INSTALL_ROOT/dkg"
-BLACKBOX_DKG_BIN="$BLACKBOX_DKG_CLI_DIR/node_modules/.bin/dkg"
+BLACKBOX_DKG_BIN="$BLACKBOX_DKG_CLI_DIR/bin/dkg"
 BLACKBOX_DKG_PACKAGE="${BLACKBOX_DKG_PACKAGE:-@origintrail-official/dkg@latest}"
 BLACKBOX_DKG_DAEMON_URL="http://127.0.0.1:$BLACKBOX_DKG_PORT"
 BLACKBOX_DKG_STORE_QUEUE_LIMIT="${BLACKBOX_DKG_STORE_QUEUE_LIMIT:-512}"
@@ -187,6 +187,7 @@ blackbox_dkg() {
     # Process-level guards intentionally wrap the DKG entrypoint, not a store
     # adapter, so Blazegraph and managed Oxigraph receive identical protection.
     PATH="$node_bin_dir:$PATH" \
+    npm_config_prefix="$BLACKBOX_DKG_CLI_DIR" \
     DKG_HOME="$BLACKBOX_DKG_HOME" \
     DKG_ACCEPT_STORE_RESET="$accept_store_reset" \
     DKG_STORE_QUEUE_LIMIT="$BLACKBOX_DKG_STORE_QUEUE_LIMIT" \
@@ -728,7 +729,24 @@ if not isinstance(priorities, dict):
     priorities = {}
 priorities.update({context_graph_id: 100, "agents": -100, "ontology": -100})
 data["syncContextGraphPriorities"] = priorities
-data.setdefault("autoUpdate", {"enabled": False})
+# DKG's edge-node updater uses `npm install -g`.  The launcher pins npm's
+# prefix to Blackbox's private DKG directory, so updates never touch the
+# user's system-wide npm installation.  Migrate the exact legacy value that
+# older Blackbox installers wrote, while preserving an explicitly customised
+# opt-out.
+legacy_auto_update = {"enabled": False}
+auto_update = data.get("autoUpdate")
+if auto_update is None or auto_update == legacy_auto_update:
+    data["autoUpdate"] = {
+        "enabled": True,
+        "source": "npm",
+        "channel": "mainnet",
+        "allowPrerelease": False,
+    }
+elif isinstance(auto_update, dict):
+    auto_update.setdefault("source", "npm")
+    auto_update.setdefault("channel", "mainnet")
+    auto_update.setdefault("allowPrerelease", False)
 data["chain"] = {
     "type": "evm",
     "rpcUrl": "https://mainnet.base.org",
@@ -1276,7 +1294,7 @@ run_hermes_setup() {
 # ── DKG node CLI + bootstrap ────────────────────────────────────────────────
 install_blackbox_dkg_package() {
     local backup_dir=""
-    local package_json="$BLACKBOX_DKG_CLI_DIR/node_modules/@origintrail-official/dkg/package.json"
+    local package_json="$BLACKBOX_DKG_CLI_DIR/lib/node_modules/@origintrail-official/dkg/package.json"
     local installed_version=""
     local npm_log="$HERMES_HOME/logs/blackbox-npm-install.log"
 
@@ -1296,7 +1314,7 @@ install_blackbox_dkg_package() {
 
     mkdir -p "$BLACKBOX_DKG_CLI_DIR"
     mkdir -p "$(dirname "$npm_log")"
-    if ! npm install --prefix "$BLACKBOX_DKG_CLI_DIR" --prefer-online \
+    if ! npm install -g --prefix "$BLACKBOX_DKG_CLI_DIR" --prefer-online \
         "$BLACKBOX_DKG_PACKAGE" >"$npm_log" 2>&1; then
         if [ -n "$backup_dir" ]; then
             rm -rf "$BLACKBOX_DKG_CLI_DIR"
@@ -1503,7 +1521,7 @@ dkg_manual_hint() {
     step "To set up the DKG node later:"
     echo "      node -v  # must be v$NODE_MAJOR or newer (run: nvm use $NODE_MAJOR)"
     echo "      mkdir -p \"$BLACKBOX_DKG_CLI_DIR\""
-    echo "      npm install --prefix \"$BLACKBOX_DKG_CLI_DIR\" \"$BLACKBOX_DKG_PACKAGE\""
+    echo "      npm install -g --prefix \"$BLACKBOX_DKG_CLI_DIR\" \"$BLACKBOX_DKG_PACKAGE\""
     echo "      export BLACKBOX_DKG_HOME=\"$BLACKBOX_DKG_HOME\""
     echo "      export BLACKBOX_DKG_BIN=\"$BLACKBOX_DKG_BIN\""
     echo "      export BLACKBOX_DKG_PORT=\"$BLACKBOX_DKG_PORT\""
@@ -1563,16 +1581,20 @@ uses_unpaired_shared_dkg_home = uses_shared_dkg_home and (not current_dkg_url or
 uses_legacy_blackbox_dkg_home = current_dkg_home_abs == legacy_blackbox_dkg_home
 current_dkg_bin = str(blackbox.get("dkg_bin") or blackbox.get("dkgBin") or "").strip()
 current_dkg_bin_abs = os.path.abspath(os.path.expanduser(current_dkg_bin)) if current_dkg_bin else ""
-expected_managed_bin = (
-    os.path.join(os.path.dirname(current_dkg_home_abs), "dkg", "node_modules", ".bin", "dkg")
-    if current_dkg_home_abs else ""
+expected_managed_bins = (
+    (
+        os.path.join(os.path.dirname(current_dkg_home_abs), "dkg", "bin", "dkg"),
+        os.path.join(os.path.dirname(current_dkg_home_abs), "dkg", "node_modules", ".bin", "dkg"),
+    )
+    if current_dkg_home_abs
+    else ()
 )
 uses_target_managed_home = current_dkg_home_abs == target_dkg_home_abs
 uses_other_managed_checkout = bool(
     current_dkg_home_abs
     and os.path.basename(current_dkg_home_abs) == ".dkg"
     and current_dkg_home_abs != target_dkg_home_abs
-    and current_dkg_bin_abs == expected_managed_bin
+    and current_dkg_bin_abs in expected_managed_bins
 )
 stale_configured_dkg_home = bool(current_dkg_home_abs) and not os.path.isdir(current_dkg_home_abs)
 stale_configured_dkg_bin = bool(current_dkg_bin_abs) and not os.path.isfile(current_dkg_bin_abs)
