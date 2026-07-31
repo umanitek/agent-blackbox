@@ -15,6 +15,7 @@ attach = load_blackbox("attach")
 constants = load_blackbox("constants")
 hooks = load_blackbox("hooks")
 config_mod = load_blackbox("config")
+cli = load_blackbox("cli")
 
 
 def test_openclaw_package_declares_enforced_minimum_host_version():
@@ -774,6 +775,74 @@ def test_attach_codex_changed_plugin_requires_fresh_trust(fake_env, monkeypatch)
     assert report["changed"] is True
     assert report["protected"] is False
     assert report["trust_required"] is True
+
+
+def test_cli_attach_defaults_to_every_supported_agent(monkeypatch, capsys):
+    seen = {}
+
+    def attach_all(**kwargs):
+        seen.update(kwargs)
+        return {
+            "hermes": [],
+            "openclaw": [],
+            "claude-code": [],
+            "codex": [
+                {
+                    "target": "/tmp/.codex",
+                    "kind": "codex",
+                    "ok": True,
+                    "installed": True,
+                    "trust_required": True,
+                }
+            ],
+            "count": 0,
+        }
+
+    monkeypatch.setattr(cli.attach, "attach_all", attach_all)
+    args = cli.argparse.Namespace(
+        dry_run=False,
+        hermes_only=False,
+        openclaw_only=False,
+        claude_only=False,
+        codex_only=False,
+    )
+
+    assert cli._cmd_attach(args) == 0
+    assert seen == {
+        "hermes": True,
+        "openclaw": True,
+        "claude": True,
+        "codex": True,
+        "dry_run": False,
+    }
+    output = capsys.readouterr().out
+    assert "/hooks trust pending" in output
+    assert "Codex security review required" in output
+
+
+def test_cli_attach_only_flag_selects_one_external_agent(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(
+        cli.attach,
+        "attach_all",
+        lambda **kwargs: (seen.update(kwargs), {"codex": [], "count": 0})[1],
+    )
+    args = cli.argparse.Namespace(
+        dry_run=True,
+        hermes_only=False,
+        openclaw_only=False,
+        claude_only=False,
+        codex_only=True,
+    )
+
+    assert cli._cmd_attach(args) == 0
+    assert seen == {
+        "hermes": False,
+        "openclaw": False,
+        "claude": False,
+        "codex": True,
+        "dry_run": True,
+    }
 
 
 def test_codex_trust_status_requires_every_blackbox_hook(fake_env):

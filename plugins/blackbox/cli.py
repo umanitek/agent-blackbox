@@ -150,11 +150,13 @@ def setup_cli(parser: argparse.ArgumentParser) -> None:
     sync.set_defaults(func=_cmd_sync)
 
     attach_p = sub.add_parser(
-        "attach", help="Auto-protect every local Hermes home + OpenClaw workspace"
+        "attach", help="Auto-protect local Hermes, OpenClaw, Claude Code, and Codex agents"
     )
     attach_p.add_argument("--dry-run", action="store_true", help="Show what would change; write nothing")
     attach_p.add_argument("--hermes-only", action="store_true", help="Only attach to Hermes homes")
     attach_p.add_argument("--openclaw-only", action="store_true", help="Only attach to OpenClaw workspaces")
+    attach_p.add_argument("--claude-only", action="store_true", help="Only attach to Claude Code")
+    attach_p.add_argument("--codex-only", action="store_true", help="Only attach to Codex")
     attach_p.set_defaults(func=_cmd_attach)
 
     detach_p = sub.add_parser("detach", help="Disable Blackbox in every local agent")
@@ -162,6 +164,8 @@ def setup_cli(parser: argparse.ArgumentParser) -> None:
     detach_p.add_argument("--remove-files", action="store_true", help="Also delete copied plugin files")
     detach_p.add_argument("--hermes-only", action="store_true", help="Only detach from Hermes homes")
     detach_p.add_argument("--openclaw-only", action="store_true", help="Only detach from OpenClaw workspaces")
+    detach_p.add_argument("--claude-only", action="store_true", help="Only detach from Claude Code")
+    detach_p.add_argument("--codex-only", action="store_true", help="Only detach from Codex")
     detach_p.set_defaults(func=_cmd_detach)
 
     report = sub.add_parser("report", help="Community threat sharing (coming soon; submits nothing)")
@@ -429,7 +433,7 @@ def _cmd_status(args: argparse.Namespace) -> int:
 
 
 def _print_attached_targets() -> None:
-    """List which local Hermes homes / OpenClaw workspaces have Blackbox attached."""
+    """List which local agent installations have Blackbox attached."""
     attached_hermes = []
     for home in attach.discover_hermes_homes():
         try:
@@ -456,6 +460,25 @@ def _print_attached_targets() -> None:
     print(f"  attached (openclaw): {len(attached_openclaw)}")
     for path in attached_openclaw:
         print(f"      - {path}")
+    try:
+        external = attach.attach_all(
+            hermes=False,
+            openclaw=False,
+            claude=True,
+            codex=True,
+            dry_run=True,
+        )
+    except Exception:
+        external = {}
+    for kind in ("claude-code", "codex"):
+        rows = external.get(kind, []) if isinstance(external, dict) else []
+        protected = [row for row in rows if row.get("protected")]
+        pending = [row for row in rows if row.get("installed") and row.get("trust_required")]
+        print(f"  attached ({kind}): {len(protected)}")
+        for row in protected:
+            print(f"      - {row.get('target')}")
+        for row in pending:
+            print(f"      - {row.get('target')} (plugin installed; /hooks trust pending)")
 
 
 def _cmd_sync(args: argparse.Namespace) -> int:
@@ -2121,27 +2144,56 @@ def _request_join(client: DkgClient, cg_id: str, graph_peer_id: str) -> tuple[Op
 
 
 def _cmd_attach(args: argparse.Namespace) -> int:
-    do_hermes = not args.openclaw_only
-    do_openclaw = not args.hermes_only
-    report = attach.attach_all(hermes=do_hermes, openclaw=do_openclaw, dry_run=args.dry_run)
+    selected = _selected_agent_kinds(args)
+    report = attach.attach_all(
+        hermes="hermes" in selected,
+        openclaw="openclaw" in selected,
+        claude="claude-code" in selected,
+        codex="codex" in selected,
+        dry_run=args.dry_run,
+    )
     prefix = "Would protect" if args.dry_run else "Protected"
     for row in report.get("hermes", []):
         _print_hermes_attach_row(row, prefix)
     for row in report.get("openclaw", []):
         _print_openclaw_attach_row(row, prefix)
+    for row in report.get("claude-code", []):
+        _print_external_attach_row(row, prefix)
+    for row in report.get("codex", []):
+        _print_external_attach_row(row, prefix)
     count = report.get("count", 0)
     if args.dry_run:
+        count = sum(
+            1
+            for kind in ("hermes", "openclaw", "claude-code", "codex")
+            for row in report.get(kind, [])
+            if row.get("ok")
+        )
         print(f"\nDry run: Blackbox would watch {count} agent(s). Nothing was written.")
     else:
         print(f"\nBlackbox is watching {count} agent(s). Restart any running agent to activate.")
+        pending = [
+            row
+            for row in report.get("codex", [])
+            if row.get("installed") and row.get("trust_required")
+        ]
+        if pending:
+            print(
+                "Codex security review required: open Codex, run /hooks, and trust "
+                "the Agent Blackbox hooks once. Codex skips them until you do."
+            )
     return 0
 
 
 def _cmd_detach(args: argparse.Namespace) -> int:
-    do_hermes = not args.openclaw_only
-    do_openclaw = not args.hermes_only
+    selected = _selected_agent_kinds(args)
     report = attach.detach_all(
-        hermes=do_hermes, openclaw=do_openclaw, remove_files=args.remove_files, dry_run=args.dry_run
+        hermes="hermes" in selected,
+        openclaw="openclaw" in selected,
+        claude="claude-code" in selected,
+        codex="codex" in selected,
+        remove_files=args.remove_files,
+        dry_run=args.dry_run,
     )
     prefix = "Would detach" if args.dry_run else "Detached"
     for row in report.get("hermes", []):
@@ -2159,8 +2211,28 @@ def _cmd_detach(args: argparse.Namespace) -> int:
             print(f"  - {row['target']} (openclaw): already detached")
         else:
             print(f"  {prefix} {row['target']} (openclaw)")
+    for kind in ("claude-code", "codex"):
+        for row in report.get(kind, []):
+            if row.get("error"):
+                print(f"  ! {row['target']} ({kind}): {row['error']}")
+            elif row.get("already") and not row.get("removed"):
+                print(f"  - {row['target']} ({kind}): already detached")
+            else:
+                extra = ", generated files removed" if row.get("removed") else ""
+                print(f"  {prefix} {row['target']} ({kind}){extra}")
     print("\nBlackbox detached. Restart any running agent to apply.")
     return 0
+
+
+def _selected_agent_kinds(args: argparse.Namespace) -> set[str]:
+    flags = {
+        "hermes": bool(getattr(args, "hermes_only", False)),
+        "openclaw": bool(getattr(args, "openclaw_only", False)),
+        "claude-code": bool(getattr(args, "claude_only", False)),
+        "codex": bool(getattr(args, "codex_only", False)),
+    }
+    selected = {kind for kind, enabled in flags.items() if enabled}
+    return selected or set(flags)
 
 
 def _print_hermes_attach_row(row: Dict[str, Any], prefix: str) -> None:
@@ -2190,6 +2262,27 @@ def _print_openclaw_attach_row(row: Dict[str, Any], prefix: str) -> None:
         return
     note = f"  note: {row['note']}" if row.get("note") else ""
     print(f"  {prefix} {row['target']} (openclaw){note}")
+
+
+def _print_external_attach_row(row: Dict[str, Any], prefix: str) -> None:
+    kind = str(row.get("kind") or "agent")
+    if row.get("error"):
+        print(f"  ! {row.get('target')} ({kind}): {row['error']}")
+        return
+    if row.get("already") and not row.get("trust_required"):
+        print(f"  - {row.get('target')} ({kind}): already protected")
+        return
+    if kind == "codex" and row.get("installed") and row.get("trust_required"):
+        print(f"  Installed Agent Blackbox for {row.get('target')} (codex; /hooks trust pending)")
+        return
+    if kind == "codex" and row.get("dry_run") and row.get("trust_required"):
+        print(
+            f"  Would install Agent Blackbox for {row.get('target')} "
+            "(codex; /hooks trust required afterward)"
+        )
+        return
+    state = "already installed" if row.get("already") else "hooks configured"
+    print(f"  {prefix} {row.get('target')} ({kind}; {state})")
 
 
 def _cmd_report(args: argparse.Namespace) -> int:
