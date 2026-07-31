@@ -75,15 +75,28 @@ chmod 755 ~/.local/bin/blackbox
 
 # 4. Official npm DKG node (required for first-run protection)
 mkdir -p dkg
-npm install --prefix dkg --prefer-online @origintrail-official/dkg@latest
+npm install -g --prefix dkg --prefer-online @origintrail-official/dkg@latest
 export BLACKBOX_DKG_HOME="$PWD/.dkg"
-export BLACKBOX_DKG_BIN="$PWD/dkg/node_modules/.bin/dkg"
+export BLACKBOX_DKG_BIN="$PWD/dkg/bin/dkg"
+export npm_config_prefix="$PWD/dkg"  # keeps DKG auto-updates inside this checkout
 export BLACKBOX_DKG_PORT=9320
 export BLACKBOX_DKG_DAEMON_URL="http://127.0.0.1:$BLACKBOX_DKG_PORT"
 DKG_HOME="$BLACKBOX_DKG_HOME" "$BLACKBOX_DKG_BIN" hermes setup --network mainnet-base \
   --port "$BLACKBOX_DKG_PORT" \
   --daemon-url "$BLACKBOX_DKG_DAEMON_URL" \
   --no-fund   # joining and reading do not require funds
+venv/bin/python - <<'PY'
+import json, os, pathlib
+path = pathlib.Path(os.environ["BLACKBOX_DKG_HOME"]) / "config.json"
+config = json.loads(path.read_text())
+config["autoUpdate"] = {
+    "enabled": True,
+    "source": "npm",
+    "channel": "mainnet",
+    "allowPrerelease": False,
+}
+path.write_text(json.dumps(config, indent=2) + "\n")
+PY
 
 # 5. Enable Agent Blackbox and protect every local agent
 hermes plugins enable blackbox
@@ -216,6 +229,11 @@ reporting is not yet active.
 The shared intelligence lives on the OriginTrail Decentralized Knowledge Graph
 (DKG). Blackbox runs its own isolated local DKG node, so it does not replace or
 modify another DKG installation.
+
+The managed edge node follows DKG's stable `mainnet` npm channel automatically.
+Updates are installed and self-checked by DKG inside Blackbox's private npm
+prefix; failed updates use DKG's recorded rollback target and never modify a
+system-wide DKG installation.
 
 The curated threat graph is public and requires no private membership or join
 approval. Only its verified VM content is used for threat matching. The
