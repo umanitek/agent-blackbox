@@ -9,6 +9,38 @@ from plugins.blackbox import attach
 from plugins.blackbox.dashboard import server
 
 
+@pytest.mark.parametrize(
+    ("reachable", "node_status", "expected_state"),
+    [
+        (False, {}, "offline"),
+        (True, {"autoUpdate": False, "version": "10.0.11"}, "disabled"),
+        (True, {"autoUpdate": True, "version": "10.0.11"}, "checking"),
+        (
+            True,
+            {"autoUpdate": True, "version": "10.0.11", "updateAvailable": False},
+            "current",
+        ),
+        (
+            True,
+            {
+                "autoUpdate": True,
+                "version": "10.0.10",
+                "latestVersion": "10.0.11",
+                "updateAvailable": True,
+            },
+            "available",
+        ),
+    ],
+)
+def test_dkg_update_view_reports_operator_facing_state(
+    reachable, node_status, expected_state
+):
+    view = server._dkg_update_view(node_status, reachable=reachable)
+
+    assert view["state"] == expected_state
+    assert view["current_version"] == node_status.get("version")
+
+
 def test_dashboard_public_graph_uses_vm_verified_ruleset_rows(monkeypatch):
     from plugins.blackbox import audit, config, dkg_client, ruleset
 
@@ -470,6 +502,23 @@ def test_dashboard_refetches_empty_graph_when_first_verified_threats_arrive():
         render_status.index("lastStatus = data;")
     )
     assert 'resetEmptyGraphOnFirstVerifiedThreats("public", previousPublicTotal);' in render_status
+
+
+def test_dashboard_surfaces_dkg_update_status_in_header_and_settings():
+    html = (
+        Path(__file__).resolve().parents[1]
+        / "plugins"
+        / "blackbox"
+        / "dashboard"
+        / "static"
+        / "index.html"
+    ).read_text(encoding="utf-8")
+
+    assert 'id="pill-dkg"' in html
+    assert 'id="set-dkg-update-state"' in html
+    assert 'id="set-dkg-update-help"' in html
+    assert "function renderDkgUpdateStatus(update, reachable)" in html
+    assert 'status.className = "set-dkg-status " + state;' in html
 
 
 @pytest.mark.skip(reason="dashboard never joins private graphs")
