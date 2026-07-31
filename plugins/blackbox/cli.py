@@ -1790,10 +1790,10 @@ def _catchup_authoritative_vm(
             inserted_durable_triples=inserted,
             **durable_progress,
         )
-        durable_progress = read_durable_progress(
-            str(getattr(client, "dkg_home", "") or ""),
-            context_graph_id,
-        )
+        # Keep this pass scoped to the cursor captured immediately before the
+        # request.  Re-reading the whole daemon log here can either erase the
+        # request's explicit ``durableComplete`` result or accept a completion
+        # marker emitted by an earlier invocation.
         if inserted <= 0:
             expected = int(durable_progress.get("expected_triples") or 0)
             safe_current = int(durable_progress.get("safe_current_triples") or 0)
