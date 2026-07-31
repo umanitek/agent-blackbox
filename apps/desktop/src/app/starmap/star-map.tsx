@@ -799,17 +799,21 @@ export function StarMap({
     setSelectedId(null)
   }
 
-  useEffect(() => {
-    fullFitRef.current = detailMode === 'all'
-    viewportRef.current = fitViewport(
-      sizeRef.current.w,
-      sizeRef.current.h,
-      ringsRef.current[ringsRef.current.length - 1]?.r ?? RING_OUTER,
-      fullFitRef.current
-    )
-    resetFades()
-    invalidate()
-  }, [detailMode, invalidate, resetFades])
+  const changeDetailMode = useCallback(
+    (mode: GraphDetailMode) => {
+      fullFitRef.current = mode === 'all'
+      setDetailMode(mode)
+      viewportRef.current = fitViewport(
+        sizeRef.current.w,
+        sizeRef.current.h,
+        ringsRef.current[ringsRef.current.length - 1]?.r ?? RING_OUTER,
+        fullFitRef.current
+      )
+      resetFades()
+      invalidate()
+    },
+    [invalidate, resetFades]
+  )
 
   const onMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (e.button !== 0) {
@@ -995,7 +999,7 @@ export function StarMap({
           <div aria-label={t.starmap.detailControl}>
             <SegmentedControl
               className="bg-background/70 shadow-[0_0_0_1px_color-mix(in_srgb,var(--border)_55%,transparent)] backdrop-blur"
-              onChange={setDetailMode}
+              onChange={changeDetailMode}
               options={detailOptions}
               value={detailMode}
             />
