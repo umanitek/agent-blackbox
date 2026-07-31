@@ -239,8 +239,12 @@ blackbox detach   # turn it back off
 `attach` finds every Hermes home, OpenClaw workspace, Claude Code installation,
 and Codex installation on your machine and enables Agent Blackbox in each one.
 Claude Code hooks require no manual step. Codex preserves its own trust boundary:
-after the plugin is installed, run `/hooks` once in Codex and trust the Agent
-Blackbox hooks.
+after the plugin is installed, open **Codex → Settings → Hooks**, select
+**blackbox**, and click **Trust** for all five hooks (`PreToolUse`,
+`PostToolUse`, `SessionStart`, `UserPromptSubmit`, and `Stop`). You can also run
+`/hooks` from a Codex task to open the same review flow. Start a new Codex task
+after approving them; Codex will not run new or changed hooks before this
+review.
 
 ### Optional: AI reviewer
 

@@ -238,7 +238,7 @@
     min-width: 0;
   }
   .brand-wordmark {
-    display: inline-flex;
+    display: flex;
     align-items: center;
     min-width: 120px;
     color: var(--text);
@@ -930,7 +930,29 @@
     color: var(--muted);
   }
   .agent-state.connected { color: var(--signal); }
-  .agent-state.pending { color: var(--high); }
+  .agent-state.pending {
+    appearance: none;
+    display: block;
+    width: fit-content;
+    padding: 0;
+    border: 0;
+    color: var(--high);
+    background: transparent;
+    font-family: var(--mono-font);
+    font-size: 9px;
+    font-weight: 600;
+    line-height: 1.5;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    cursor: pointer;
+  }
+  .agent-state.pending span { margin-left: 4px; }
+  .agent-state.pending:hover,
+  .agent-state.pending:focus-visible { color: var(--text); }
+  .agent-state.pending:focus-visible {
+    outline: 1px solid var(--high);
+    outline-offset: 4px;
+  }
   .attach-box { width: 100%; display: flex; justify-content: center; padding: 10px 0 2px; }
   .attach-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; padding: 9px 11px; border: 1px solid var(--border); border-radius: 8px; background: var(--wash-2); }
   .attach-row.disabled {
@@ -1937,6 +1959,81 @@
     --settings-amber: #9B5B00;
   }
   .modal.attach-modal { max-width: 520px; }
+  .modal.codex-trust-modal { max-width: 560px; }
+  .codex-trust-body { padding: 20px 22px 4px; }
+  .codex-trust-intro {
+    margin: 0 0 18px;
+    color: var(--muted);
+    font-size: 13px;
+    line-height: 1.55;
+  }
+  .codex-trust-steps {
+    display: grid;
+    gap: 0;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    counter-reset: codex-trust-step;
+  }
+  .codex-trust-step {
+    position: relative;
+    min-height: 54px;
+    padding: 3px 0 18px 42px;
+    color: var(--text);
+    font-size: 13px;
+    line-height: 1.45;
+    counter-increment: codex-trust-step;
+  }
+  .codex-trust-step::before {
+    content: counter(codex-trust-step);
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 27px;
+    height: 27px;
+    display: grid;
+    place-items: center;
+    border: 1px solid color-mix(in srgb, var(--high) 55%, var(--border));
+    border-radius: 50%;
+    color: var(--high);
+    background: color-mix(in srgb, var(--high) 9%, transparent);
+    font-family: var(--mono-font);
+    font-size: 10px;
+    font-weight: 700;
+  }
+  .codex-trust-step:not(:last-child)::after {
+    content: "";
+    position: absolute;
+    top: 29px;
+    bottom: 2px;
+    left: 13px;
+    width: 1px;
+    background: var(--border);
+  }
+  .codex-trust-step strong { font-weight: 650; }
+  .codex-hook-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 9px;
+  }
+  .codex-hook-name {
+    padding: 5px 7px;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    color: var(--muted-strong);
+    background: var(--wash-2);
+    font-family: var(--mono-font);
+    font-size: 9px;
+  }
+  .codex-trust-status {
+    min-height: 18px;
+    color: var(--muted);
+    font-size: 11px;
+    line-height: 1.4;
+  }
+  .codex-trust-status.pending { color: var(--high); }
+  .codex-trust-status.ready { color: var(--signal); }
   .set-head {
     display: flex; align-items: center; gap: 13px;
     padding: 22px 52px 16px 22px;
@@ -3761,9 +3858,11 @@
         ? '<div class="agent-session-summary">' + num(sessions.length) + ' active session' + (sessions.length === 1 ? '' : 's') + '</div>'
         : '';
       var stateHtml = a.is_local && a.workspace
-        ? '<div class="agent-state ' + (trustPending ? 'pending' : (isActive ? 'connected' : 'protected')) + '">' +
-            (trustPending ? 'Trust required · /hooks' : (isActive ? 'Connected' : 'Protected profile')) +
-          '</div>'
+        ? (trustPending
+            ? '<button type="button" class="agent-state pending" data-codex-trust>Finish setup <span aria-hidden="true">&rarr;</span></button>'
+            : '<div class="agent-state ' + (isActive ? 'connected' : 'protected') + '">' +
+                (isActive ? 'Connected' : 'Protected profile') +
+              '</div>')
         : '';
       var tip = [a.session_title, isBlackboxHermes ? "Hermes agent hosting Agent Blackbox" : a.workspace, a.address]
         .filter(Boolean).join("\n");
@@ -3944,6 +4043,61 @@
     if (!overlay) return;
     overlay.classList.remove("open");
     overlay.setAttribute("aria-hidden", "true");
+  }
+
+  function openCodexTrustModal() {
+    var overlay = $("codex-trust-modal");
+    if (!overlay) return;
+    var status = $("codex-trust-status");
+    if (status) {
+      status.className = "codex-trust-status";
+      status.textContent = "";
+    }
+    overlay.classList.add("open");
+    overlay.setAttribute("aria-hidden", "false");
+    var close = $("codex-trust-close");
+    if (close) close.focus();
+  }
+  function closeCodexTrustModal() {
+    var overlay = $("codex-trust-modal");
+    if (!overlay) return;
+    overlay.classList.remove("open");
+    overlay.setAttribute("aria-hidden", "true");
+  }
+  function checkCodexTrust() {
+    var button = $("codex-trust-check");
+    var status = $("codex-trust-status");
+    if (button) button.disabled = true;
+    if (status) {
+      status.className = "codex-trust-status";
+      status.textContent = "Checking Codex hooks...";
+    }
+    postJSON("/api/agents/rescan", {})
+      .then(function () { return getJSON("/api/agents"); })
+      .then(function (data) {
+        var codex = (data.agents || []).filter(function (agent) {
+          return String(agent.framework || "") === "codex";
+        });
+        var pending = codex.some(function (agent) {
+          return !!agent.trust_required && !agent.protected;
+        });
+        if (status) {
+          status.className = "codex-trust-status " + (pending ? "pending" : "ready");
+          status.textContent = pending
+            ? "Still waiting for approval. Trust all five hooks in Codex, then check again."
+            : "Hooks trusted. Start a new Codex task to activate protection.";
+        }
+        return poll();
+      })
+      .catch(function () {
+        if (status) {
+          status.className = "codex-trust-status pending";
+          status.textContent = "Could not check Codex. Keep this window open and try again.";
+        }
+      })
+      .then(function () {
+        if (button) button.disabled = false;
+      });
   }
 
   // Manual agent refresh: force an immediate server-side re-hook sweep (the
@@ -7290,11 +7444,19 @@
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", wireSettings);
   else wireSettings();
   document.addEventListener("click", function (e) {
+    var codexTrustTrigger = e.target && e.target.closest
+      ? e.target.closest("[data-codex-trust]")
+      : null;
+    if (codexTrustTrigger) openCodexTrustModal();
     if (e.target && e.target.id === "attach-open") openAttachModal();
     if (e.target && e.target.id === "attach-close") closeAttachModal();
     if (e.target && e.target.id === "attach-cancel") closeAttachModal();
     if (e.target && e.target.id === "attach-apply") attachSelected();
     if (e.target && e.target.id === "attach-modal") closeAttachModal();
+    if (e.target && e.target.id === "codex-trust-close") closeCodexTrustModal();
+    if (e.target && e.target.id === "codex-trust-cancel") closeCodexTrustModal();
+    if (e.target && e.target.id === "codex-trust-check") checkCodexTrust();
+    if (e.target && e.target.id === "codex-trust-modal") closeCodexTrustModal();
     if (e.target && e.target.id === "activity-close") closeActivityModal();
     if (e.target && e.target.id === "activity-modal") closeActivityModal();
   });
@@ -7302,6 +7464,10 @@
     if (e.key === "Escape") {
       var overlay = document.getElementById("activity-modal");
       if (overlay && overlay.classList.contains("open")) closeActivityModal();
+      var codexTrustOverlay = document.getElementById("codex-trust-modal");
+      if (codexTrustOverlay && codexTrustOverlay.classList.contains("open")) {
+        closeCodexTrustModal();
+      }
     }
   });
 
@@ -7603,6 +7769,45 @@
       </div>
     </div>
     <div class="agent-sessions-modal-list" id="agent-sessions-list"></div>
+  </div>
+</div>
+
+<!-- Codex hook trust setup -->
+<div class="modal-overlay" id="codex-trust-modal" aria-hidden="true">
+  <div class="modal settings-modal codex-trust-modal" role="dialog" aria-modal="true" aria-labelledby="codex-trust-title">
+    <button class="modal-close" id="codex-trust-close" aria-label="Close Codex setup">&#10005;</button>
+    <div class="set-head">
+      <div class="agent-avatar agent-avatar-codex" style="--fw:#F1EFE9" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a4.5 4.5 0 0 1 4.33 3.25A4.5 4.5 0 0 1 19.5 14a4.5 4.5 0 0 1-7.5 4.75A4.5 4.5 0 0 1 4.5 14a4.5 4.5 0 0 1 3.17-7.75A4.5 4.5 0 0 1 12 3Z"/><path d="m8.5 8.5 7 7M15.5 8.5l-7 7"/></svg>
+      </div>
+      <div class="set-htext">
+        <div class="set-title" id="codex-trust-title">Finish Codex setup</div>
+        <div class="set-sub">Approve Blackbox hooks in Codex before they can run.</div>
+      </div>
+    </div>
+    <div class="codex-trust-body">
+      <p class="codex-trust-intro">Codex blocks every new or changed hook until you review it. Blackbox cannot protect new tasks until all five hooks are trusted.</p>
+      <ol class="codex-trust-steps">
+        <li class="codex-trust-step">Open <strong>Codex Settings</strong>.</li>
+        <li class="codex-trust-step">Select <strong>Hooks</strong> under Coding, then open <strong>blackbox</strong>.</li>
+        <li class="codex-trust-step">
+          Click <strong>Trust</strong> and enable each hook:
+          <div class="codex-hook-list" aria-label="Blackbox hooks to trust">
+            <span class="codex-hook-name">PreToolUse</span>
+            <span class="codex-hook-name">PostToolUse</span>
+            <span class="codex-hook-name">SessionStart</span>
+            <span class="codex-hook-name">UserPromptSubmit</span>
+            <span class="codex-hook-name">Stop</span>
+          </div>
+        </li>
+        <li class="codex-trust-step">Start a <strong>new Codex task</strong> so the approved hooks load.</li>
+      </ol>
+    </div>
+    <div class="set-foot">
+      <span class="codex-trust-status" id="codex-trust-status" aria-live="polite"></span>
+      <button type="button" class="set-cancel" id="codex-trust-cancel">Close</button>
+      <button type="button" class="set-save" id="codex-trust-check">Check again</button>
+    </div>
   </div>
 </div>
 

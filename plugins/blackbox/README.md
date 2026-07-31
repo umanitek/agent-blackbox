@@ -34,9 +34,11 @@ remain available during the initial sync.
   stable plugin hooks Blackbox requires.
 - Claude Code is configured through user-level lifecycle hooks and requires no
   manual plugin installation.
-- Codex receives the plugin automatically. Open a new Codex task, run `/hooks`,
-  and trust the Agent Blackbox hooks once; Codex will not execute them before
-  that security review.
+- Codex receives the plugin automatically. In Codex, open **Settings → Hooks**,
+  select **blackbox**, and click **Trust** for `PreToolUse`, `PostToolUse`,
+  `SessionStart`, `UserPromptSubmit`, and `Stop`. The `/hooks` command opens the
+  same review flow. Start a new task afterward; Codex will not execute new or
+  changed hooks before that security review.
 
 Standard Hermes profiles, OpenClaw profiles, Claude Code, and Codex are attached
 automatically. Restart a running OpenClaw Gateway or Claude Code session after

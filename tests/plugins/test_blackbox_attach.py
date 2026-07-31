@@ -848,16 +848,123 @@ def test_cli_attach_only_flag_selects_one_external_agent(monkeypatch):
 def test_codex_trust_status_requires_every_blackbox_hook(fake_env):
     home = fake_env["home"] / ".codex"
     home.mkdir()
+    marketplace = fake_env["home"] / "blackbox-marketplace"
+    manifest = marketplace / "plugins" / "blackbox" / "hooks" / "hooks.json"
+    manifest.parent.mkdir(parents=True)
+    command = "/opt/blackbox/python /opt/blackbox/external_hook.py --framework codex"
+    manifest.write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    event: [
+                        {
+                            **({"matcher": "*"} if event in {"SessionStart", "PreToolUse", "PostToolUse"} else {}),
+                            "hooks": [
+                                {
+                                    "type": "command",
+                                    "command": command,
+                                    "commandWindows": command,
+                                    "timeout": 30,
+                                }
+                            ],
+                        }
+                    ]
+                    for event in (
+                        "SessionStart",
+                        "UserPromptSubmit",
+                        "PreToolUse",
+                        "PostToolUse",
+                        "Stop",
+                    )
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
     config = home / "config.toml"
-    lines = ["[hooks.state]"]
+    base = [
+        "[marketplaces.agent-blackbox]",
+        f'source = "{marketplace}"',
+        "",
+        "[hooks.state]",
+    ]
+    config.write_text("\n".join(base) + "\n", encoding="utf-8")
+    current = attach._codex_current_hook_hashes(home)
+    assert set(current) == {
+        "session_start",
+        "user_prompt_submit",
+        "pre_tool_use",
+        "post_tool_use",
+        "stop",
+    }
+
+    lines = list(base)
     for event in ("session_start", "user_prompt_submit", "pre_tool_use", "post_tool_use", "stop"):
         key = f"/tmp/plugins/cache/agent-blackbox/blackbox/local/hooks/hooks.json:{event}:0:0"
-        lines.extend([f'[hooks.state."{key}"]', 'trusted_hash = "sha256:abc"'])
+        lines.extend([f'[hooks.state."{key}"]', f'trusted_hash = "{current[event]}"'])
     config.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     assert attach._codex_hooks_trusted(home) is True
 
     config.write_text("\n".join(lines[:-2]) + "\n", encoding="utf-8")
+    assert attach._codex_hooks_trusted(home) is False
+
+    config.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["hooks"]["PreToolUse"][0]["hooks"][0]["command"] += " --changed"
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+    assert attach._codex_hooks_trusted(home) is False
+
+
+def test_codex_trust_status_rejects_disabled_hook(fake_env):
+    home = fake_env["home"] / ".codex"
+    home.mkdir()
+    marketplace = fake_env["home"] / "blackbox-marketplace"
+    manifest = marketplace / "plugins" / "blackbox" / "hooks" / "hooks.json"
+    manifest.parent.mkdir(parents=True)
+    events = ("SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop")
+    manifest.write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    event: [
+                        {
+                            "hooks": [
+                                {
+                                    "type": "command",
+                                    "command": "blackbox-hook",
+                                    "timeout": 30,
+                                }
+                            ]
+                        }
+                    ]
+                    for event in events
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    config = home / "config.toml"
+    base = [
+        "[marketplaces.agent-blackbox]",
+        f'source = "{marketplace}"',
+        "",
+        "[hooks.state]",
+    ]
+    config.write_text("\n".join(base) + "\n", encoding="utf-8")
+    current = attach._codex_current_hook_hashes(home)
+    lines = list(base)
+    for event, digest in current.items():
+        key = f"blackbox@agent-blackbox:hooks/hooks.json:{event}:0:0"
+        lines.extend(
+            [
+                f'[hooks.state."{key}"]',
+                f'trusted_hash = "{digest}"',
+                *(["enabled = false"] if event == "stop" else []),
+            ]
+        )
+    config.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
     assert attach._codex_hooks_trusted(home) is False
 
 

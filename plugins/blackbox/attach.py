@@ -67,6 +67,16 @@ _EXTERNAL_HOOK_EVENTS = (
     "PostToolUse",
     "Stop",
 )
+_CODEX_HOOK_EVENT_KEYS = {
+    "SessionStart": "session_start",
+    "UserPromptSubmit": "user_prompt_submit",
+    "PreToolUse": "pre_tool_use",
+    "PostToolUse": "post_tool_use",
+    "Stop": "stop",
+}
+_CODEX_MATCHER_EVENTS = {"SessionStart", "PreToolUse", "PostToolUse"}
+_CODEX_DEFAULT_HOOK_TIMEOUT_SEC = 600
+_CODEX_DEFAULT_ADDITIONAL_CONTEXT_LIMIT = 2_500
 
 
 # ---------------------------------------------------------------------------
@@ -1527,22 +1537,118 @@ def _codex_plugin_enabled(home: Path) -> bool:
     return isinstance(entry, dict) and entry.get("enabled", True) is not False
 
 
+def _codex_current_hook_hashes(home: Path) -> Dict[str, str]:
+    """Return Codex trust hashes for the currently installed Blackbox hooks.
+
+    Codex persists approval over a normalized hook identity, not merely the
+    event/key. Reproduce that public identity format so an approval for an old
+    Blackbox command cannot make a changed plugin appear protected.
+    """
+    config = _codex_config(home)
+    marketplaces = config.get("marketplaces")
+    marketplace = (
+        marketplaces.get(_CODEX_MARKETPLACE_NAME)
+        if isinstance(marketplaces, dict)
+        else None
+    )
+    source = marketplace.get("source") if isinstance(marketplace, dict) else None
+    if not isinstance(source, str) or not source.strip():
+        return {}
+    manifest_path = (
+        Path(source).expanduser()
+        / "plugins"
+        / "blackbox"
+        / "hooks"
+        / "hooks.json"
+    )
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    hooks = payload.get("hooks") if isinstance(payload, dict) else None
+    if not isinstance(hooks, dict):
+        return {}
+
+    current: Dict[str, str] = {}
+    for event_name, event_key in _CODEX_HOOK_EVENT_KEYS.items():
+        groups = hooks.get(event_name)
+        if not isinstance(groups, list) or not groups or not isinstance(groups[0], dict):
+            return {}
+        group = groups[0]
+        handlers = group.get("hooks")
+        if (
+            not isinstance(handlers, list)
+            or not handlers
+            or not isinstance(handlers[0], dict)
+        ):
+            return {}
+        handler = handlers[0]
+        if handler.get("type") != "command":
+            return {}
+        command = handler.get("command")
+        if os.name == "nt":
+            command = handler.get("commandWindows") or command
+        if not isinstance(command, str) or not command:
+            return {}
+        try:
+            timeout = max(
+                1,
+                int(handler.get("timeout", _CODEX_DEFAULT_HOOK_TIMEOUT_SEC)),
+            )
+        except (TypeError, ValueError):
+            return {}
+
+        normalized_handler: Dict[str, Any] = {
+            "type": "command",
+            "command": command,
+            "timeout": timeout,
+            "async": bool(handler.get("async", False)),
+        }
+        status_message = handler.get("statusMessage")
+        if status_message is not None:
+            normalized_handler["statusMessage"] = status_message
+        additional_context_limit = handler.get("additionalContextLimit")
+        if (
+            additional_context_limit is not None
+            and additional_context_limit != _CODEX_DEFAULT_ADDITIONAL_CONTEXT_LIMIT
+        ):
+            normalized_handler["additionalContextLimit"] = additional_context_limit
+
+        identity: Dict[str, Any] = {
+            "event_name": event_key,
+            "hooks": [normalized_handler],
+        }
+        matcher = group.get("matcher")
+        if event_name in _CODEX_MATCHER_EVENTS and matcher is not None:
+            identity["matcher"] = matcher
+        canonical = json.dumps(
+            identity,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+        current[event_key] = f"sha256:{hashlib.sha256(canonical).hexdigest()}"
+    return current
+
+
 def _codex_hooks_trusted(home: Path) -> bool:
     hooks = _codex_config(home).get("hooks")
     state = hooks.get("state") if isinstance(hooks, dict) else None
     if not isinstance(state, dict):
         return False
-    required = {"session_start", "user_prompt_submit", "pre_tool_use", "post_tool_use", "stop"}
-    trusted = set()
+    current = _codex_current_hook_hashes(home)
+    if set(current) != set(_CODEX_HOOK_EVENT_KEYS.values()):
+        return False
+    trusted: Dict[str, str] = {}
     for key, value in state.items():
         key_text = str(key).replace("\\", "/").lower()
         if "blackbox" not in key_text or "hooks.json:" not in key_text:
             continue
-        if not isinstance(value, dict) or not str(value.get("trusted_hash") or "").startswith("sha256:"):
+        if not isinstance(value, dict) or value.get("enabled") is False:
             continue
         event_part = key_text.split("hooks.json:", 1)[1].split(":", 1)[0]
-        trusted.add(event_part)
-    return required.issubset(trusted)
+        trusted[event_part] = str(value.get("trusted_hash") or "")
+    return all(trusted.get(event) == digest for event, digest in current.items())
 
 
 def attach_codex(home: Path, *, dry_run: bool = False, binary: Optional[str] = None) -> Dict[str, Any]:

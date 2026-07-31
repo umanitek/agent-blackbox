@@ -139,8 +139,21 @@ def test_codex_card_distinguishes_trust_pending_from_protected():
     )
 
     assert "var trustPending = !!a.trust_required && !a.protected;" in html
-    assert "Trust required · /hooks" in html
-    assert ".agent-state.pending { color: var(--high); }" in html
+    assert "data-codex-trust>Finish setup" in html
+    assert 'id="codex-trust-modal"' in html
+    assert "Open <strong>Codex Settings</strong>" in html
+    assert "Select <strong>Hooks</strong> under Coding" in html
+    assert "Click <strong>Trust</strong> and enable each hook" in html
+    for event in (
+        "PreToolUse",
+        "PostToolUse",
+        "SessionStart",
+        "UserPromptSubmit",
+        "Stop",
+    ):
+        assert f'<span class="codex-hook-name">{event}</span>' in html
+    assert "Start a <strong>new Codex task</strong>" in html
+    assert 'id="codex-trust-check">Check again</button>' in html
 
 
 def test_blackbox_host_hermes_has_a_distinct_agent_name():
