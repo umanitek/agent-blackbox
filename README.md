@@ -17,7 +17,8 @@ tools. One malicious instruction can turn that access into a real incident.
 Agent Blackbox checks what an agent is about to do and flags or blocks threats
 before damage is done.
 
-- **Protect every local agent.** One install covers Hermes and OpenClaw.
+- **Protect every local agent.** One install covers Hermes, OpenClaw, Claude
+  Code, and Codex.
 - **Catch real risks.** Stop prompt injection, credential access, destructive
   commands, malicious packages, and unsafe skills.
 - **See what happened.** Review every finding in a live dashboard and audit trail.
@@ -113,7 +114,7 @@ blackbox dashboard         # open the live threat dashboard
 blackbox attach            # protect every local agent
 ```
 
-Works with **Hermes** and **OpenClaw**.
+Works with **Hermes**, **OpenClaw**, **Claude Code**, and **Codex**.
 
 ## Usage
 
@@ -235,7 +236,11 @@ blackbox attach   # protect every local agent at once
 blackbox detach   # turn it back off
 ```
 
-`attach` finds every Hermes home and OpenClaw workspace on your machine and enables Agent Blackbox in each one - no per-agent setup.
+`attach` finds every Hermes home, OpenClaw workspace, Claude Code installation,
+and Codex installation on your machine and enables Agent Blackbox in each one.
+Claude Code hooks require no manual step. Codex preserves its own trust boundary:
+after the plugin is installed, run `/hooks` once in Codex and trust the Agent
+Blackbox hooks.
 
 ### Optional: AI reviewer
 

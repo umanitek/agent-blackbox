@@ -501,7 +501,14 @@ def _finding_summary(finding: Dict[str, Any]) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def record_file_access(tool: str, path: str, mode: str) -> None:
+def record_file_access(
+    tool: str,
+    path: str,
+    mode: str,
+    *,
+    framework: str = "hermes",
+    workspace: Optional[str] = None,
+) -> None:
     """Append a file-access visibility record so a user can see what files
     their agent touched.
 
@@ -511,19 +518,32 @@ def record_file_access(tool: str, path: str, mode: str) -> None:
     """
     try:
         now = time.time()
+        framework_name = _framework_name(framework)
         _append_jsonl(_home() / "file_access.jsonl", {
             "ts": now,
             "iso": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
+            "framework": framework_name,
             "tool": str(tool or "")[:120],
             "path": str(path or "")[:1000],
             "mode": str(mode or "")[:16],
-            "workspace": str(constants.hermes_home()),
+            "workspace": str(
+                workspace
+                or (constants.hermes_home() if framework_name == "hermes" else "")
+            ),
         })
     except Exception as exc:  # pragma: no cover - fail open
         logger.debug("blackbox: file access record failed: %s", exc)
 
 
-def record_dependency(ecosystem: str, name: str, version: str, tool: str = "") -> None:
+def record_dependency(
+    ecosystem: str,
+    name: str,
+    version: str,
+    tool: str = "",
+    *,
+    framework: str = "hermes",
+    workspace: Optional[str] = None,
+) -> None:
     """Append a dependency-install record.
 
     Lib-inventory trail: EVERY install is recorded (not only threats), so an
@@ -532,14 +552,19 @@ def record_dependency(ecosystem: str, name: str, version: str, tool: str = "") -
     """
     try:
         now = time.time()
+        framework_name = _framework_name(framework)
         _append_jsonl(_home() / "dependencies.jsonl", {
             "ts": now,
             "iso": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
+            "framework": framework_name,
             "ecosystem": str(ecosystem or "")[:40],
             "name": str(name or "")[:200],
             "version": str(version or "")[:80],
             "tool": str(tool or "")[:120],
-            "workspace": str(constants.hermes_home()),
+            "workspace": str(
+                workspace
+                or (constants.hermes_home() if framework_name == "hermes" else "")
+            ),
         })
     except Exception as exc:  # pragma: no cover - fail open
         logger.debug("blackbox: dependency record failed: %s", exc)

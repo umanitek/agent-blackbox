@@ -714,6 +714,68 @@ def test_attach_codex_installs_plugin_without_bypassing_hook_trust(fake_env, mon
     assert completed.stderr == ""
 
 
+def test_attach_codex_recovers_its_deleted_marketplace(fake_env, monkeypatch):
+    home = fake_env["home"] / ".codex"
+    home.mkdir()
+    calls = []
+    list_attempts = 0
+
+    def run(_binary, _home, *args):
+        nonlocal list_attempts
+        calls.append(args)
+        if args == ("plugin", "marketplace", "list", "--json"):
+            list_attempts += 1
+            if list_attempts == 1:
+                raise RuntimeError(
+                    "failed to load marketplace(s): agent-blackbox at /tmp/deleted"
+                )
+            return {"marketplaces": []}
+        if args == ("plugin", "list", "--available", "--json"):
+            return {"installed": [], "available": []}
+        return {}
+
+    monkeypatch.setattr(attach, "_run_codex_json", run)
+
+    report = attach.attach_codex(home, binary="/fake/codex")
+
+    assert report["ok"] is True
+    assert list_attempts == 2
+    assert (
+        "plugin",
+        "marketplace",
+        "remove",
+        "agent-blackbox",
+        "--json",
+    ) in calls
+    assert any(args[:3] == ("plugin", "marketplace", "add") for args in calls)
+
+
+def test_attach_codex_changed_plugin_requires_fresh_trust(fake_env, monkeypatch):
+    home = fake_env["home"] / ".codex"
+    home.mkdir()
+    lines = ["[hooks.state]"]
+    for event in ("session_start", "user_prompt_submit", "pre_tool_use", "post_tool_use", "stop"):
+        key = f"blackbox@agent-blackbox:hooks/hooks.json:{event}:0:0"
+        lines.extend([f'[hooks.state."{key}"]', 'trusted_hash = "sha256:stale"'])
+    (home / "config.toml").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    def run(_binary, _home, *args):
+        if args == ("plugin", "marketplace", "list", "--json"):
+            return {"marketplaces": []}
+        if args == ("plugin", "list", "--available", "--json"):
+            return {"installed": [], "available": []}
+        return {}
+
+    monkeypatch.setattr(attach, "_run_codex_json", run)
+
+    report = attach.attach_codex(home, binary="/fake/codex")
+
+    assert report["ok"] is True
+    assert report["changed"] is True
+    assert report["protected"] is False
+    assert report["trust_required"] is True
+
+
 def test_codex_trust_status_requires_every_blackbox_hook(fake_env):
     home = fake_env["home"] / ".codex"
     home.mkdir()
@@ -746,11 +808,28 @@ def test_auto_attach_due_runs_immediately_when_target_set_changes(tmp_path, monk
     targets = [tmp_path / ".hermes"]
     monkeypatch.setattr(attach, "discover_hermes_homes", lambda: list(targets))
     monkeypatch.setattr(attach, "discover_openclaw_workspaces", lambda: [])
+    monkeypatch.setattr(attach, "discover_claude_homes", lambda: [])
+    monkeypatch.setattr(attach, "discover_codex_homes", lambda: [])
 
     assert hooks._auto_attach_due() is True
     assert hooks._auto_attach_due() is False
 
     targets.append(tmp_path / ".hermes" / "profiles" / "new")
+    assert hooks._auto_attach_due() is True
+
+
+def test_auto_attach_due_detects_new_external_agent(tmp_path, monkeypatch):
+    monkeypatch.setenv("BLACKBOX_HOME", str(tmp_path / "ghome"))
+    codex_homes = []
+    monkeypatch.setattr(attach, "discover_hermes_homes", lambda: [])
+    monkeypatch.setattr(attach, "discover_openclaw_workspaces", lambda: [])
+    monkeypatch.setattr(attach, "discover_claude_homes", lambda: [])
+    monkeypatch.setattr(attach, "discover_codex_homes", lambda: list(codex_homes))
+
+    assert hooks._auto_attach_due() is True
+    assert hooks._auto_attach_due() is False
+
+    codex_homes.append(tmp_path / ".codex")
     assert hooks._auto_attach_due() is True
 
 

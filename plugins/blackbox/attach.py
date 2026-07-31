@@ -1580,7 +1580,31 @@ def attach_codex(home: Path, *, dry_run: bool = False, binary: Optional[str] = N
             )
             return report
 
-        marketplaces = _run_codex_json(binary, home, "plugin", "marketplace", "list", "--json")
+        try:
+            marketplaces = _run_codex_json(
+                binary, home, "plugin", "marketplace", "list", "--json"
+            )
+        except RuntimeError as exc:
+            # Codex validates configured marketplaces before returning the list.
+            # A previous Blackbox install may point at a deleted temp/checkout
+            # directory, which makes the list command fail before we can compare
+            # and replace our own entry. Remove only our marketplace, then retry;
+            # unrelated invalid marketplaces remain the user's responsibility.
+            if _CODEX_MARKETPLACE_NAME not in str(exc):
+                raise
+            _run_codex_json(
+                binary,
+                home,
+                "plugin",
+                "marketplace",
+                "remove",
+                _CODEX_MARKETPLACE_NAME,
+                "--json",
+            )
+            report["changed"] = True
+            marketplaces = _run_codex_json(
+                binary, home, "plugin", "marketplace", "list", "--json"
+            )
         existing = next(
             (
                 item
@@ -1646,7 +1670,10 @@ def attach_codex(home: Path, *, dry_run: bool = False, binary: Optional[str] = N
                 "--json",
             )
             report["changed"] = True
-        trusted = _codex_hooks_trusted(home)
+        # Trust is over exact hook content. Existing state keys can describe the
+        # previous plugin version, so any marketplace/plugin change must require
+        # Codex to confirm the new hashes before we claim protection.
+        trusted = not report["changed"] and _codex_hooks_trusted(home)
         report.update(
             ok=True,
             installed=True,

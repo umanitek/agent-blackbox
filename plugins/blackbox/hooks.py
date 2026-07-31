@@ -72,10 +72,24 @@ def _flag_worthy(cfg: BlackboxConfig, findings: List[detection.Finding]) -> List
     return out
 
 
-def _report_and_audit(cfg: BlackboxConfig, event: str, findings: List[detection.Finding], detail: Dict[str, Any]) -> None:
+def _report_and_audit(
+    cfg: BlackboxConfig,
+    event: str,
+    findings: List[detection.Finding],
+    detail: Dict[str, Any],
+    *,
+    framework: str = "hermes",
+    workspace: Optional[str] = None,
+) -> None:
     """Audit findings locally; never publish them to community SWM."""
     finding_dicts = [f.to_dict() for f in findings]
-    audit.record(event=event, findings=finding_dicts or None, detail=detail)
+    audit.record(
+        event=event,
+        findings=finding_dicts or None,
+        detail=detail,
+        framework=framework,
+        workspace=workspace,
+    )
     if not findings:
         return
     client: Optional[DkgClient] = None
@@ -296,6 +310,8 @@ def on_pre_tool_call(
     task_id: str = "",
     session_id: str = "",
     tool_call_id: str = "",
+    framework: str = "hermes",
+    workspace: str = "",
     **_: Any,
 ) -> Optional[Dict[str, str]]:
     """Detect threats; audit + report; block in block mode for ≥ block_severity.
@@ -306,7 +322,7 @@ def on_pre_tool_call(
         cfg = _config()
         rs = ruleset.get(cfg)
         # Visibility: log every file-access tool call (best-effort).
-        _record_activity(tool_name, args)
+        _record_activity(tool_name, args, framework=framework, workspace=workspace)
         raw = detection.detect_all(tool_name, args, rs, discover=cfg.discover)
         raw += detection.detect_custom_fileaccess(tool_name, args, cfg.protected_paths)
         findings = _flag_worthy(cfg, raw)
@@ -323,11 +339,25 @@ def on_pre_tool_call(
             ctx = _tool_context(session_id, args)
             if ctx:
                 detail["context"] = ctx
-        _report_and_audit(cfg, "pre_tool_call", findings, detail)
+        _report_and_audit(
+            cfg,
+            "pre_tool_call",
+            findings,
+            detail,
+            framework=framework,
+            workspace=workspace or None,
+        )
         # OSV auto-discovery runs off the blocking path so a network lookup
         # never delays or breaks the tool call.
         if cfg.discover and cfg.osv_lookup:
-            _spawn_osv_discovery(cfg, rs, tool_name, args)
+            _spawn_osv_discovery(
+                cfg,
+                rs,
+                tool_name,
+                args,
+                framework=framework,
+                workspace=workspace,
+            )
         if cfg.block_enabled:
             # Confirmed findings and custom rules block; community/heuristic ones
             # only alert. ``vulnerability`` kind never blocks (a legit-but-
@@ -350,7 +380,13 @@ def on_pre_tool_call(
         return None
 
 
-def _record_activity(tool_name: str, args: Any) -> None:
+def _record_activity(
+    tool_name: str,
+    args: Any,
+    *,
+    framework: str = "hermes",
+    workspace: str = "",
+) -> None:
     """Log what the agent touched to the visibility trail (fail-open).
 
     Covers both the dedicated file tools and the shell channel (parsing reads,
@@ -360,7 +396,13 @@ def _record_activity(tool_name: str, args: Any) -> None:
     try:
         access = quads.file_access_arg(tool_name, args)
         if access:
-            audit.record_file_access(access["tool"], access["path"], access["mode"])
+            audit.record_file_access(
+                access["tool"],
+                access["path"],
+                access["mode"],
+                framework=framework,
+                workspace=workspace or None,
+            )
             return
         if (tool_name or "").strip().lower() not in quads._SHELL_TOOLS:
             return
@@ -368,16 +410,43 @@ def _record_activity(tool_name: str, args: Any) -> None:
         if not command:
             return
         for path in quads.parse_shell_reads(command):
-            audit.record_file_access("shell", path, "read")
+            audit.record_file_access(
+                "shell",
+                path,
+                "read",
+                framework=framework,
+                workspace=workspace or None,
+            )
         for url in quads.parse_downloads(command):
-            audit.record_file_access("shell", url, "download")
+            audit.record_file_access(
+                "shell",
+                url,
+                "download",
+                framework=framework,
+                workspace=workspace or None,
+            )
         for dep in quads.parse_dependency_installs(command):
-            audit.record_dependency(dep["ecosystem"], dep["name"], dep.get("version", ""), "shell")
+            audit.record_dependency(
+                dep["ecosystem"],
+                dep["name"],
+                dep.get("version", ""),
+                "shell",
+                framework=framework,
+                workspace=workspace or None,
+            )
     except Exception as exc:  # pragma: no cover - fail open
         logger.debug("blackbox: activity visibility log failed: %s", exc)
 
 
-def _spawn_osv_discovery(cfg: BlackboxConfig, rs: Any, tool_name: str, args: Any) -> None:
+def _spawn_osv_discovery(
+    cfg: BlackboxConfig,
+    rs: Any,
+    tool_name: str,
+    args: Any,
+    *,
+    framework: str = "hermes",
+    workspace: str = "",
+) -> None:
     """Run OSV dependency auto-discovery on a daemon thread (never blocks)."""
     import threading
 
@@ -389,7 +458,14 @@ def _spawn_osv_discovery(cfg: BlackboxConfig, rs: Any, tool_name: str, args: Any
                 cfg, detection.discover_dependency_candidates(tool_name, args, rs, osv.lookup)
             )
             if findings:
-                _report_and_audit(cfg, "osv_discovery", findings, {"tool_name": tool_name})
+                _report_and_audit(
+                    cfg,
+                    "osv_discovery",
+                    findings,
+                    {"tool_name": tool_name},
+                    framework=framework,
+                    workspace=workspace or None,
+                )
         except Exception as exc:  # pragma: no cover - fail open
             logger.debug("blackbox: OSV discovery failed: %s", exc)
 
@@ -407,6 +483,8 @@ def on_post_tool_call(
     session_id: str = "",
     tool_call_id: str = "",
     duration_ms: int = 0,
+    framework: str = "hermes",
+    workspace: str = "",
     **_: Any,
 ) -> None:
     """Audit the redacted tool result. Never blocks."""
@@ -421,6 +499,8 @@ def on_post_tool_call(
                 "duration_ms": duration_ms,
                 "result": audit.redact(result),
             },
+            framework=framework,
+            workspace=workspace or None,
         )
     except Exception as exc:  # pragma: no cover - fail open
         logger.debug("blackbox: post_tool_call failed: %s", exc)
@@ -500,15 +580,37 @@ def on_pre_api_request(**kwargs: Any) -> None:
         findings = _dedupe_api_findings(findings, detail)
         if findings and turns:
             detail["context"] = {"turns": turns}
-        _report_and_audit(cfg, "pre_api_request", findings, detail)
+        framework = str(kwargs.get("framework") or "hermes")
+        workspace = str(kwargs.get("workspace") or "")
+        _report_and_audit(
+            cfg,
+            "pre_api_request",
+            findings,
+            detail,
+            framework=framework,
+            workspace=workspace or None,
+        )
         # Optional LLM second opinion, off-thread so it never delays the request.
         if cfg.llm_ready:
-            _spawn_llm_review(cfg, text, detail)
+            _spawn_llm_review(
+                cfg,
+                text,
+                detail,
+                framework=framework,
+                workspace=workspace,
+            )
     except Exception as exc:  # pragma: no cover - fail open
         logger.debug("blackbox: pre_api_request failed: %s", exc)
 
 
-def _spawn_llm_review(cfg: BlackboxConfig, text: str, detail: Dict[str, Any]) -> None:
+def _spawn_llm_review(
+    cfg: BlackboxConfig,
+    text: str,
+    detail: Dict[str, Any],
+    *,
+    framework: str = "hermes",
+    workspace: str = "",
+) -> None:
     """Ask the configured LLM for an injection second opinion on a daemon thread.
 
     A positive verdict becomes a local ``source="llm"`` finding: audited and
@@ -543,7 +645,14 @@ def _spawn_llm_review(cfg: BlackboxConfig, text: str, detail: Dict[str, Any]) ->
                     turns = _recent_convo(str(detail.get("session_id") or ""))
                     if turns:
                         review_detail["context"] = {"turns": turns}
-                _report_and_audit(cfg, "pre_api_request", worthy, review_detail)
+                _report_and_audit(
+                    cfg,
+                    "pre_api_request",
+                    worthy,
+                    review_detail,
+                    framework=framework,
+                    workspace=workspace or None,
+                )
         except Exception as exc:  # pragma: no cover - fail open
             logger.debug("blackbox: LLM review failed: %s", exc)
 
@@ -576,6 +685,8 @@ def _auto_attach_due() -> bool:
             targets = sorted(
                 [f"hermes:{item}" for item in attach.discover_hermes_homes()]
                 + [f"openclaw:{item}" for item in attach.discover_openclaw_workspaces()]
+                + [f"claude-code:{item}" for item in attach.discover_claude_homes()]
+                + [f"codex:{item}" for item in attach.discover_codex_homes()]
             )
         except Exception:
             targets = []
@@ -614,7 +725,7 @@ def _spawn_auto_attach(cfg: BlackboxConfig) -> None:
             report = attach.attach_all()
             changed = [
                 row.get("target")
-                for group in ("hermes", "openclaw")
+                for group in ("hermes", "openclaw", "claude-code", "codex")
                 for row in report.get(group, [])
                 if row.get("changed")
             ]
@@ -631,7 +742,12 @@ def _spawn_auto_attach(cfg: BlackboxConfig) -> None:
 
 def on_session_start(session_id: str = "", **kwargs: Any) -> None:
     try:
-        audit.record(event="session_start", detail={"session_id": session_id})
+        audit.record(
+            event="session_start",
+            detail={"session_id": session_id},
+            framework=str(kwargs.get("framework") or "hermes"),
+            workspace=str(kwargs.get("workspace") or "") or None,
+        )
         _spawn_auto_attach(_config())
     except Exception as exc:  # pragma: no cover - fail open
         logger.debug("blackbox: on_session_start failed: %s", exc)
@@ -643,6 +759,8 @@ def on_session_end(session_id: str = "", completed: bool = True, interrupted: bo
         audit.record(
             event="session_end",
             detail={"session_id": session_id, "completed": completed, "interrupted": interrupted},
+            framework=str(kwargs.get("framework") or "hermes"),
+            workspace=str(kwargs.get("workspace") or "") or None,
         )
     except Exception as exc:  # pragma: no cover - fail open
         logger.debug("blackbox: on_session_end failed: %s", exc)
