@@ -4,8 +4,8 @@ Real-time threat protection for AI agents.
 
 Agent Blackbox checks prompts, tool calls, shell commands, file access, package
 installs, and skills against a shared threat graph on the OriginTrail DKG. It
-works with Hermes and OpenClaw, runs in audit mode by default, and can block
-confirmed threats before they execute.
+works with Hermes, OpenClaw, Claude Code, and Codex, runs in audit mode by
+default, and can block confirmed threats before they execute.
 
 ## Install
 
@@ -16,9 +16,10 @@ curl -fsSL blackbox.umanitek.ai | bash
 ```
 
 The installer sets up an isolated node from the latest official
-`@origintrail-official/dkg` npm package and protects detected Hermes and OpenClaw
-agents. Docker must be installed and running for its Blazegraph store. The
-installer does not replace or modify an existing DKG node.
+`@origintrail-official/dkg` npm package and protects detected Hermes, OpenClaw,
+Claude Code, and Codex agents. Docker must be installed and running for its
+Blazegraph store. The installer does not replace or modify an existing DKG
+node.
 
 The default context graph is public, so every Agent Blackbox install can sync
 verified threat data immediately. Publishing remains curated so only trusted
@@ -31,10 +32,16 @@ remain available during the initial sync.
   compatible Hermes build.
 - OpenClaw 2026.6.11 or later is supported. Older releases do not provide the
   stable plugin hooks Blackbox requires.
+- Claude Code is configured through user-level lifecycle hooks and requires no
+  manual plugin installation.
+- Codex receives the plugin automatically. Open a new Codex task, run `/hooks`,
+  and trust the Agent Blackbox hooks once; Codex will not execute them before
+  that security review.
 
-Standard Hermes profiles and OpenClaw profiles are attached automatically. A
-running OpenClaw Gateway must be restarted once after its plugin config changes.
-For a remote or containerized agent, install Blackbox on the Gateway host.
+Standard Hermes profiles, OpenClaw profiles, Claude Code, and Codex are attached
+automatically. Restart a running OpenClaw Gateway or Claude Code session after
+its config changes. For a remote or containerized agent, install Blackbox on
+the host where the agent and its lifecycle hooks run.
 
 ## Use
 

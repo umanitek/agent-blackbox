@@ -944,6 +944,66 @@ function Install-PythonEnv {
     $script:HermesBin = "$VenvDir\Scripts\hermes.exe"
 }
 
+# Refresh the user plugin before invoking any Blackbox subcommand. A user
+# plugin overrides the bundled checkout plugin, so an upgrade must replace an
+# older copy first or this installer run would execute the previous attach
+# implementation.
+function Refresh-BlackboxPluginCopy {
+    Write-Heading "Installing Blackbox plugin copy"
+    Write-Step "Refreshing $HermesHome\plugins\blackbox from this checkout..."
+    $copyScript = @'
+import shutil
+import sys
+from pathlib import Path
+
+repo = Path(sys.argv[1]).resolve()
+home = Path(sys.argv[2]).expanduser()
+src = repo / "plugins" / "blackbox"
+dest = home / "plugins" / "blackbox"
+openclaw_src = repo / "integrations" / "openclaw"
+openclaw_dest = dest / "_openclaw"
+agent_hooks_src = repo / "integrations" / "agent-hooks"
+agent_hooks_dest = dest / "_agent_hooks"
+
+if not src.is_dir():
+    raise SystemExit(f"missing Blackbox plugin source: {src}")
+
+def ignore_runtime(_directory, names):
+    skip = {"__pycache__", "tests", ".pytest_cache", "node_modules"}
+    return [name for name in names if name in skip or name.endswith((".pyc", ".pyo"))]
+
+def ignore_openclaw(_directory, names):
+    skip = {"node_modules", "dist", ".turbo", "test", "tests", "__pycache__"}
+    return [
+        name
+        for name in names
+        if name in skip or name.endswith((".pyc", ".log", ".tsbuildinfo"))
+    ]
+
+dest.parent.mkdir(parents=True, exist_ok=True)
+if dest.exists():
+    shutil.rmtree(dest)
+shutil.copytree(src, dest, ignore=ignore_runtime)
+if openclaw_src.is_dir():
+    if openclaw_dest.exists():
+        shutil.rmtree(openclaw_dest)
+    shutil.copytree(openclaw_src, openclaw_dest, ignore=ignore_openclaw)
+if agent_hooks_src.is_dir():
+    if agent_hooks_dest.exists():
+        shutil.rmtree(agent_hooks_dest)
+    shutil.copytree(agent_hooks_src, agent_hooks_dest, ignore=ignore_runtime)
+(dest / ".blackbox-source-root").write_text(str(repo), encoding="utf-8")
+'@
+    try {
+        & $VenvPython -c $copyScript $RepoDir $HermesHome
+        if ($LASTEXITCODE -ne 0) { throw "python exit $LASTEXITCODE" }
+        Write-Ok "Blackbox plugin copy refreshed"
+    } catch {
+        $script:InstallIncomplete = $true
+        Write-Warn2 "Could not refresh the Blackbox plugin copy. Commands may use stale plugin files."
+    }
+}
+
 # ── Global blackbox command (per-user shim) ─────────────────────────────────
 function Install-BlackboxCommand {
     $shimDir = Join-Path $HOME ".local\bin"
@@ -1418,11 +1478,11 @@ function Configure-BlackboxMode {
 }
 
 # ── Auto-protect every local agent (best-effort, non-fatal) ─────────────────
-# Discovers every local Hermes home + OpenClaw workspace and enables Blackbox
-# in each, so protection is on everywhere without per-instance setup.
+# Discovers local Hermes, OpenClaw, Claude Code, and Codex installations and
+# enables Blackbox in each. Codex still requires its one-time /hooks review.
 function Protect-AllAgents {
     Write-Heading "Protecting all local agents"
-    Write-Step "Discovering local Hermes homes + OpenClaw workspaces (blackbox attach) ..."
+    Write-Step "Discovering Hermes, OpenClaw, Claude Code, and Codex (blackbox attach) ..."
     try {
         & $HermesBin blackbox attach
         if ($LASTEXITCODE -ne 0) { throw "hermes exit $LASTEXITCODE" }
@@ -1460,10 +1520,14 @@ function Show-NextSteps {
   Store:            $storeDescription
   Docs & community: $docsUrl
 "@ | Write-Host
+        $codexHome = Join-Path $env:USERPROFILE ".codex"
+        if ((Test-Path $codexHome) -or (Get-Command codex -ErrorAction SilentlyContinue)) {
+            Write-Host "  Codex: open a new task, run /hooks, and trust Agent Blackbox once."
+        }
         Write-Host ""
         return
     }
-    Write-Heading "Blackbox is ready - it's already protecting Hermes ($mode mode)."
+    Write-Heading "Blackbox is ready - local agent protection is configured ($mode mode)."
     @"
 
   Watch it live      - findings, assistant, and threat-graph status:
@@ -1484,6 +1548,10 @@ function Show-NextSteps {
 
   Docs & community:  $docsUrl
 "@ | Write-Host
+    $codexHome = Join-Path $env:USERPROFILE ".codex"
+    if ((Test-Path $codexHome) -or (Get-Command codex -ErrorAction SilentlyContinue)) {
+        Write-Host "  Codex: open a new task, run /hooks, and trust Agent Blackbox once."
+    }
     Write-Host ""
 }
 
@@ -1498,6 +1566,7 @@ function Main {
 
     Resolve-Repo
     Install-PythonEnv
+    Refresh-BlackboxPluginCopy
     Install-BlackboxCommand
     Install-Dkg
     Enable-AndConfigure
