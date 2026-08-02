@@ -560,6 +560,25 @@ def _sync_activity(
             )
         return progress
 
+    # DKG can retain a failed source-pinned attempt while a fallback peer is
+    # actively continuing the same durable snapshot. The live catch-up state
+    # is newer and actionable; do not cover its progress with the old error.
+    if catchup_status in {"queued", "running"} or connection_state == "syncing":
+        queued = catchup_status == "queued"
+        progress.update(
+            status="running",
+            phase="queued" if queued else "network-catchup",
+            label="Graph catch-up queued" if queued else "Fetching graph snapshot",
+            detail=(
+                "Waiting for a sync-capable DKG peer."
+                if queued
+                else "Receiving verified graph data from available DKG peers."
+            ),
+            started_at=catchup.get("startedAt") or connection.get("updated_at"),
+            updated_at=connection.get("updated_at") or catchup.get("startedAt"),
+        )
+        return progress
+
     if (
         transfer_status == "failed"
         or catchup_status in {"failed", "cancelled", "denied"}
@@ -581,22 +600,6 @@ def _sync_activity(
             phase="node-unreachable",
             label="DKG node is offline",
             detail="Graph sync will resume when this Blackbox node is reachable.",
-        )
-        return progress
-
-    if catchup_status in {"queued", "running"} or connection_state == "syncing":
-        queued = catchup_status == "queued"
-        progress.update(
-            status="running",
-            phase="queued" if queued else "network-catchup",
-            label="Graph catch-up queued" if queued else "Fetching graph snapshot",
-            detail=(
-                "Waiting for a sync-capable DKG peer."
-                if queued
-                else "Receiving verified graph data from available DKG peers."
-            ),
-            started_at=catchup.get("startedAt") or connection.get("updated_at"),
-            updated_at=connection.get("updated_at") or catchup.get("startedAt"),
         )
         return progress
 

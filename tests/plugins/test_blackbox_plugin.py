@@ -173,7 +173,7 @@ def test_blackbox_sync_parser_accepts_wait_timeout():
     assert args.require_rules is True
 
 
-def test_managed_sync_migrates_to_native_reconciliation_without_final_restart(
+def test_managed_sync_restores_native_reconciliation_after_bootstrap(
     monkeypatch, tmp_path
 ):
     dkg_home = tmp_path / "dkg-home"
@@ -185,9 +185,10 @@ def test_managed_sync_migrates_to_native_reconciliation_without_final_restart(
             {
                 "syncOnConnectEnabled": False,
                 "syncReconcilerEnabled": False,
-                "durableSyncEnabled": False,
-                "syncGlobalMaxInflight": 9,
-                "syncGlobalQueueLimit": 9,
+                "durableSyncEnabled": True,
+                "syncGlobalMaxInflight": 1,
+                "syncGlobalQueueLimit": 1,
+                "syncSharedMemoryOnConnect": False,
             }
         ),
         encoding="utf-8",
@@ -225,10 +226,14 @@ def test_managed_sync_migrates_to_native_reconciliation_without_final_restart(
 
     monkeypatch.setenv("BLACKBOX_HOME", str(tmp_path / "blackbox-home"))
     monkeypatch.setattr(cli_mod, "load_blackbox_config", lambda: cfg)
+    monkeypatch.setattr(cli_mod, "_managed_dkg_sync_mode_matches", lambda *_args: True)
     monkeypatch.setattr(cli_mod, "_restart_managed_dkg", lambda _cfg: restarts.append(True))
     monkeypatch.setattr(cli_mod, "_cmd_sync_impl", sync_impl)
     monkeypatch.setattr(cli_mod.sync_state, "write", write_state)
     monkeypatch.setattr(cli_mod.sync_state, "read", lambda: dict(current))
+    monkeypatch.setattr(
+        cli_mod.sync_state, "read_for_graph", lambda _graph: dict(current)
+    )
 
     args = argparse.Namespace(wait=True, timeout=30, require_rules=True)
     assert cli_mod._cmd_sync(args) == 0
@@ -246,6 +251,67 @@ def test_managed_sync_migrates_to_native_reconciliation_without_final_restart(
     assert persisted["syncSharedMemoryOnConnect"] is False
     assert persisted["syncGlobalMaxInflight"] == 1
     assert persisted["syncGlobalQueueLimit"] == 0
+
+
+def test_managed_sync_restarts_into_bootstrap_before_upgrade_sync(monkeypatch, tmp_path):
+    dkg_home = tmp_path / "dkg-home"
+    dkg_home.mkdir()
+    dkg_bin = tmp_path / "dkg"
+    dkg_bin.write_text("", encoding="utf-8")
+    (dkg_home / "config.json").write_text(
+        json.dumps(
+            {
+                "syncOnConnectEnabled": True,
+                "syncReconcilerEnabled": True,
+                "durableSyncEnabled": True,
+                "syncGlobalMaxInflight": 1,
+                "syncGlobalQueueLimit": 0,
+                "syncSharedMemoryOnConnect": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    cfg = config_mod.BlackboxConfig(
+        context_graph_id=constants.DEFAULT_CONTEXT_GRAPH_ID,
+        graph_peer_id=constants.DEFAULT_GRAPH_PEER_ID,
+        dkg_home=str(dkg_home),
+        dkg_bin=str(dkg_bin),
+    )
+    current = {"status": "done", "context_graph_id": cfg.context_graph_id}
+    restart_modes = []
+
+    def restart(_cfg):
+        data = json.loads((dkg_home / "config.json").read_text(encoding="utf-8"))
+        restart_modes.append(
+            (
+                data["syncOnConnectEnabled"],
+                data["syncReconcilerEnabled"],
+                data["syncGlobalQueueLimit"],
+            )
+        )
+
+    def sync_impl(_args):
+        current.update(status="done", phase="complete")
+        return 0
+
+    monkeypatch.setenv("BLACKBOX_HOME", str(tmp_path / "blackbox-home"))
+    monkeypatch.setattr(cli_mod, "load_blackbox_config", lambda: cfg)
+    monkeypatch.setattr(cli_mod, "_restart_managed_dkg", restart)
+    monkeypatch.setattr(cli_mod, "_cmd_sync_impl", sync_impl)
+    monkeypatch.setattr(
+        cli_mod.sync_state,
+        "write",
+        lambda status, **details: current.update(status=status, **details)
+        or dict(current),
+    )
+    monkeypatch.setattr(cli_mod.sync_state, "read", lambda: dict(current))
+    monkeypatch.setattr(
+        cli_mod.sync_state, "read_for_graph", lambda _graph: dict(current)
+    )
+
+    args = argparse.Namespace(wait=True, timeout=30, require_rules=True)
+    assert cli_mod._cmd_sync(args) == 0
+    assert restart_modes == [(False, False, 1), (True, True, 0)]
 
 
 def test_managed_dkg_sync_environment_keeps_native_reconciliation_enabled(
@@ -266,6 +332,54 @@ def test_managed_dkg_sync_environment_keeps_native_reconciliation_enabled(
     )
     for name, value in cli_mod._DKG_STEADY_SYNC_SETTINGS.items():
         assert env[name] == value
+
+
+def test_managed_dkg_sync_environment_honors_persisted_bootstrap_mode(
+    tmp_path, monkeypatch
+):
+    (tmp_path / "config.json").write_text(
+        json.dumps(
+            {
+                "syncOnConnectEnabled": False,
+                "syncReconcilerEnabled": False,
+                "durableSyncEnabled": True,
+                "syncGlobalMaxInflight": 1,
+                "syncGlobalQueueLimit": 1,
+            }
+        ),
+        encoding="utf-8",
+    )
+    cfg = config_mod.BlackboxConfig(dkg_home=str(tmp_path))
+    monkeypatch.setattr(cli_mod, "_node_runtime_matches_dkg", lambda *_args: True)
+
+    env = cli_mod._dkg_sync_environment(cfg)
+
+    assert env["DKG_SYNC_ON_CONNECT_ENABLED"] == "0"
+    assert env["DKG_SYNC_RECONCILER_ENABLED"] == "0"
+    assert env["DKG_DURABLE_SYNC_ENABLED"] == "1"
+    assert env["DKG_SYNC_GLOBAL_MAX_INFLIGHT"] == "1"
+    assert env["DKG_SYNC_GLOBAL_QUEUE_LIMIT"] == "1"
+
+
+def test_managed_dkg_sync_mode_detects_interrupted_transition(tmp_path, monkeypatch):
+    (tmp_path / "daemon.pid").write_text("4242", encoding="utf-8")
+    cfg = config_mod.BlackboxConfig(dkg_home=str(tmp_path))
+
+    class Process:
+        def __init__(self, pid):
+            assert pid == 4242
+
+        def environ(self):
+            return dict(cli_mod._DKG_STEADY_SYNC_SETTINGS)
+
+    monkeypatch.setattr(cli_mod.psutil, "Process", Process)
+
+    assert not cli_mod._managed_dkg_sync_mode_matches(
+        cfg, cli_mod._DKG_BOOTSTRAP_SYNC_SETTINGS
+    )
+    assert cli_mod._managed_dkg_sync_mode_matches(
+        cfg, cli_mod._DKG_STEADY_SYNC_SETTINGS
+    )
 
 
 def test_managed_dkg_restart_waits_for_draining_worker_before_start(tmp_path, monkeypatch):
