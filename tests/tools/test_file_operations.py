@@ -552,3 +552,51 @@ class _DeletedTestGitBaselineCheck:
     helper is restored or replaced.
     """
     pass
+
+
+# =========================================================================
+# Atomic write: umask-default permissions for new files
+# =========================================================================
+
+class TestAtomicWriteNewFilePermissions:
+    """_atomic_write should apply umask-default perms to new files (not 0600)."""
+
+    def test_new_file_gets_umask_default_permissions(self, tmp_path):
+        """Newly created file should get umask-computed perms, not mktemp's 0600.
+
+        Uses a real subprocess so the shell script actually runs.
+        """
+        env = MagicMock()
+        env.cwd = str(tmp_path)
+
+        def execute(command, **kwargs):
+            completed = subprocess.run(
+                command,
+                shell=True,
+                text=True,
+                capture_output=True,
+                input=kwargs.get("stdin_data"),
+            )
+            return {
+                "output": completed.stdout + completed.stderr,
+                "returncode": completed.returncode,
+            }
+
+        env.execute = execute
+        ops = ShellFileOperations(env)
+        dest = tmp_path / "new_file.txt"
+        assert not dest.exists()
+
+        result = ops.write_file(str(dest), "test content\n")
+        assert result.error is None, f"write failed: {result.error}"
+        assert dest.exists()
+
+        # Compute expected mode: 0666 & ~umask
+        current_umask = os.umask(0)
+        os.umask(current_umask)  # restore
+        expected_mode = 0o666 & ~current_umask
+        actual_mode = dest.stat().st_mode & 0o777
+        assert actual_mode == expected_mode, (
+            f"Expected mode {expected_mode:04o} (umask {current_umask:04o}), "
+            f"got {actual_mode:04o}"
+        )

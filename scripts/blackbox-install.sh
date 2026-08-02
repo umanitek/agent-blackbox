@@ -1143,6 +1143,8 @@ src = repo / "plugins" / "blackbox"
 dest = home / "plugins" / "blackbox"
 openclaw_src = repo / "integrations" / "openclaw"
 openclaw_dest = dest / "_openclaw"
+agent_hooks_src = repo / "integrations" / "agent-hooks"
+agent_hooks_dest = dest / "_agent_hooks"
 
 if not src.is_dir():
     raise SystemExit(f"missing Blackbox plugin source: {src}")
@@ -1163,6 +1165,10 @@ if openclaw_src.is_dir():
     if openclaw_dest.exists():
         shutil.rmtree(openclaw_dest)
     shutil.copytree(openclaw_src, openclaw_dest, ignore=ignore_openclaw)
+if agent_hooks_src.is_dir():
+    if agent_hooks_dest.exists():
+        shutil.rmtree(agent_hooks_dest)
+    shutil.copytree(agent_hooks_src, agent_hooks_dest, ignore=ignore_runtime)
 (dest / ".blackbox-source-root").write_text(str(repo), encoding="utf-8")
 PYEOF
     then
@@ -1701,11 +1707,11 @@ configure_blackbox_mode() {
 }
 
 # ── Auto-protect every local agent (best-effort, non-fatal) ─────────────────
-# Discovers every local Hermes home + OpenClaw workspace and enables Blackbox
-# in each, so protection is on everywhere without per-instance setup.
+# Discovers local Hermes, OpenClaw, Claude Code, and Codex installations and
+# enables Blackbox in each. Codex still requires its one-time /hooks review.
 attach_all_agents() {
     heading "Protecting all local agents"
-    step "Discovering local Hermes homes + OpenClaw workspaces (blackbox attach) ..."
+    step "Discovering Hermes, OpenClaw, Claude Code, and Codex (blackbox attach) ..."
     if "$HERMES_BIN" blackbox attach; then
         ok "Blackbox attached to all discovered local agents"
     else
@@ -1790,6 +1796,10 @@ next_steps() {
     local path_note=""
     local mode="${BLACKBOX_SELECTED_MODE:-$(read_blackbox_mode 2>/dev/null || echo audit)}"
     local store_note="$(blackbox_store_description)"
+    local codex_note=""
+    if [ -d "$HOME/.codex" ] || command -v codex >/dev/null 2>&1; then
+        codex_note=$'\n  Codex:       open a new task, run /hooks, and trust Agent Blackbox once.'
+    fi
     case ":$PATH:" in
         *":$HOME/.local/bin:"*) : ;;
         *) path_note=$'\n  First reload your shell so `blackbox` is on PATH:  exec $SHELL -l' ;;
@@ -1813,6 +1823,7 @@ ${path_note}
   Background log:
       ${BLACKBOX_SYNC_LOG:-$HERMES_HOME/logs/blackbox-sync-install.log}
 
+${codex_note}
   Docs:        $docs_url
 EOF
         echo ""
@@ -1848,6 +1859,7 @@ EOF
   DKG home:   $BLACKBOX_DKG_HOME
   DKG CLI:    $BLACKBOX_DKG_BIN
   Store:      $store_note
+${codex_note}
   Docs:        $docs_url
 EOF
         echo ""
@@ -1862,6 +1874,7 @@ ${path_note}
   DKG CLI:    $BLACKBOX_DKG_BIN
   Store:      $store_note
   Sync now:    blackbox sync --wait
+${codex_note}
   Docs:        $docs_url
 EOF
     echo ""

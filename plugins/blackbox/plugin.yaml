@@ -1,5 +1,5 @@
 name: blackbox
-version: "1.0.0"
+version: "1.2.0"
 # `backend` is the only bundled kind Hermes auto-loads without a per-home
 # `plugins.enabled` entry (hermes_cli/plugins.py load gate). Blackbox must watch
 # every session with zero setup, so it opts into eager auto-load this way. It

@@ -1,7 +1,7 @@
 """Auto-protect every local agent — ``blackbox attach`` / ``blackbox detach``.
 
-Discovers every local Hermes home and OpenClaw workspace and enables Blackbox
-in each, so the user never has to enable it per-instance.
+Discovers local Hermes, OpenClaw, Claude Code, and Codex installations and
+enables Blackbox in each, so the user never has to enable it per-instance.
 
 The trick for Hermes is that *a user plugin with the same name as a bundled
 plugin replaces it* (``hermes_cli/plugins.py``): copying this plugin into a
@@ -15,13 +15,23 @@ rest — the caller collects a per-target report). Only stdlib + PyYAML are used
 
 from __future__ import annotations
 
-import logging
+import hashlib
 import json
+import logging
 import os
 import re
+import shlex
 import shutil
+import subprocess
+import sys
+import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+try:
+    import tomllib
+except ImportError:  # pragma: no cover - Python 3.11+ is required by Hermes
+    tomllib = None  # type: ignore[assignment]
 
 from . import constants
 
@@ -46,8 +56,27 @@ _COPY_EXCLUDE_SUFFIXES = (".pyc", ".pyo")
 # OpenClaw always has something to load, even when Blackbox was copied into a
 # user home with no sibling ``integrations/`` (see ``_openclaw_plugin_source``).
 _BUNDLED_OPENCLAW_DIRNAME = "_openclaw"
+_BUNDLED_AGENT_HOOKS_DIRNAME = "_agent_hooks"
 _OPENCLAW_MIN_VERSION = (2026, 6, 11)
 _OPENCLAW_MIN_VERSION_TEXT = ".".join(str(part) for part in _OPENCLAW_MIN_VERSION)
+_CODEX_MARKETPLACE_NAME = "agent-blackbox"
+_EXTERNAL_HOOK_EVENTS = (
+    "SessionStart",
+    "UserPromptSubmit",
+    "PreToolUse",
+    "PostToolUse",
+    "Stop",
+)
+_CODEX_HOOK_EVENT_KEYS = {
+    "SessionStart": "session_start",
+    "UserPromptSubmit": "user_prompt_submit",
+    "PreToolUse": "pre_tool_use",
+    "PostToolUse": "post_tool_use",
+    "Stop": "stop",
+}
+_CODEX_MATCHER_EVENTS = {"SessionStart", "PreToolUse", "PostToolUse"}
+_CODEX_DEFAULT_HOOK_TIMEOUT_SEC = 600
+_CODEX_DEFAULT_ADDITIONAL_CONTEXT_LIMIT = 2_500
 
 
 # ---------------------------------------------------------------------------
@@ -228,6 +257,48 @@ def discover_openclaw_workspaces() -> List[Path]:
             continue
         seen_configs.add(key)
         out.append(candidate)
+    return out
+
+
+def _claude_binary() -> Optional[str]:
+    return shutil.which("claude")
+
+
+def discover_claude_homes() -> List[Path]:
+    """Return the local Claude Code user-config home when Claude is detected."""
+    configured = os.environ.get("CLAUDE_CONFIG_DIR")
+    candidates = (
+        [Path(configured).expanduser()]
+        if configured and configured.strip()
+        else [Path.home() / ".claude"]
+    )
+    binary_available = _claude_binary() is not None
+    out: List[Path] = []
+    for candidate in candidates:
+        try:
+            if (candidate.is_dir() or binary_available) and candidate not in out:
+                out.append(candidate)
+        except OSError:
+            continue
+    return out
+
+
+def discover_codex_homes() -> List[Path]:
+    """Return the local Codex home when a config or Codex runtime is present."""
+    configured = os.environ.get("CODEX_HOME")
+    candidates = (
+        [Path(configured).expanduser()]
+        if configured and configured.strip()
+        else [Path.home() / ".codex"]
+    )
+    binary_available = _codex_binary() is not None
+    out: List[Path] = []
+    for candidate in candidates:
+        try:
+            if (candidate.is_dir() or binary_available) and candidate not in out:
+                out.append(candidate)
+        except OSError:
+            continue
     return out
 
 
@@ -493,6 +564,13 @@ def _needs_copy(dest: Path) -> bool:
                 candidates.append(checkout / "integrations" / "openclaw")
             if any(_is_openclaw_plugin_dir(candidate) for candidate in candidates):
                 return True
+        if not _is_agent_hooks_plugin_dir(dest / _BUNDLED_AGENT_HOOKS_DIRNAME):
+            checkout = _source_checkout_root(src_dir)
+            candidates = [src_dir / _BUNDLED_AGENT_HOOKS_DIRNAME]
+            if checkout is not None:
+                candidates.append(checkout / "integrations" / "agent-hooks")
+            if any(_is_agent_hooks_plugin_dir(candidate) for candidate in candidates):
+                return True
         stamp = dest / _INSTALL_STAMP_MARKER
         installed_at = stamp.stat().st_mtime if stamp.exists() else init.stat().st_mtime
         newest_src = max(
@@ -518,6 +596,7 @@ def _copy_plugin_tree(src: Path, dest: Path) -> None:
         shutil.rmtree(dest)
     shutil.copytree(src, dest, ignore=_copy_ignore)
     _bundle_openclaw_plugin(src, dest)
+    _bundle_agent_hooks_plugin(src, dest)
     (dest / _INSTALL_STAMP_MARKER).write_text(constants.__version__, encoding="utf-8")
     source_root = _source_checkout_root(src)
     if source_root is not None:
@@ -570,6 +649,43 @@ def _openclaw_ignore(_dir: str, names: List[str]) -> List[str]:
     """Exclude deps/build/test dirs from the bundled OpenClaw plugin."""
     skip = {"node_modules", "dist", ".turbo", "test", "tests", "__pycache__"}
     return [n for n in names if n in skip or n.endswith((".pyc", ".log", ".tsbuildinfo"))]
+
+
+def _repo_agent_hooks_dir() -> Path:
+    return _repo_root() / "integrations" / "agent-hooks"
+
+
+def _is_agent_hooks_plugin_dir(path: Path) -> bool:
+    try:
+        return (
+            (path / ".codex-plugin" / "plugin.json").is_file()
+            and (path / "hooks" / "hooks.json").is_file()
+        )
+    except OSError:
+        return False
+
+
+def _bundle_agent_hooks_plugin(src: Path, dest: Path) -> None:
+    """Bundle the Claude/Codex hook package into installed Blackbox copies."""
+    dest_bundle = dest / _BUNDLED_AGENT_HOOKS_DIRNAME
+    if _is_agent_hooks_plugin_dir(dest_bundle):
+        return
+    checkout = _source_checkout_root(src)
+    checkout_integration = checkout / "integrations" / "agent-hooks" if checkout else None
+    for candidate in (
+        src / _BUNDLED_AGENT_HOOKS_DIRNAME,
+        checkout_integration,
+        _repo_agent_hooks_dir(),
+    ):
+        if candidate is None or not _is_agent_hooks_plugin_dir(candidate):
+            continue
+        try:
+            if dest_bundle.exists():
+                shutil.rmtree(dest_bundle)
+            shutil.copytree(candidate, dest_bundle, ignore=_copy_ignore)
+        except Exception as exc:  # pragma: no cover - best effort
+            logger.debug("blackbox.attach: bundling agent hooks failed: %s", exc)
+        return
 
 
 # ---------------------------------------------------------------------------
@@ -962,6 +1078,769 @@ def detach_openclaw(workspace: Path, *, dry_run: bool = False) -> Dict[str, Any]
 
 
 # ---------------------------------------------------------------------------
+# Claude Code + Codex lifecycle-hook adapters
+# ---------------------------------------------------------------------------
+
+
+def _agent_hooks_plugin_source() -> Optional[Path]:
+    for candidate in (
+        _plugin_source_dir() / _BUNDLED_AGENT_HOOKS_DIRNAME,
+        _repo_agent_hooks_dir(),
+    ):
+        if _is_agent_hooks_plugin_dir(candidate):
+            return candidate
+    return None
+
+
+def _external_hook_source() -> Optional[Path]:
+    candidate = _plugin_source_dir() / "external_hook.py"
+    return candidate if candidate.is_file() else None
+
+
+def _external_hook_runtime_fingerprint(source: Path) -> str:
+    """Fingerprint the files copied into an immutable external-hook runtime."""
+    digest = hashlib.sha256()
+    for path in sorted(p for p in source.rglob("*") if p.is_file()):
+        relative = path.relative_to(source)
+        if any(part in _COPY_EXCLUDE_DIRS for part in relative.parts):
+            continue
+        if path.name.endswith(_COPY_EXCLUDE_SUFFIXES):
+            continue
+        digest.update(str(relative).encode("utf-8"))
+        digest.update(path.read_bytes())
+    return digest.hexdigest()[:16]
+
+
+def _prepare_external_hook_runtime(*, dry_run: bool = False) -> Path:
+    """Return a stable, immutable runtime outside the active checkout.
+
+    Claude Code and Codex retain hook commands across launches. Pointing those
+    commands into the source checkout made a branch switch remove the target
+    script and caused a visible hook error on every prompt. Content-addressed
+    copies under ``BLACKBOX_HOME`` remain valid across branch switches and let
+    an update publish a new runtime before either host's config is changed.
+    """
+    source = _plugin_source_dir()
+    if _external_hook_source() is None:
+        raise FileNotFoundError("Blackbox external-hook runtime is missing")
+    fingerprint = _external_hook_runtime_fingerprint(source)
+    runtimes = constants.blackbox_home() / "agent-hooks" / "runtimes"
+    version_root = runtimes / fingerprint
+    runtime_dir = version_root / "blackbox"
+    runtime = runtime_dir / "external_hook.py"
+    if dry_run or runtime.is_file():
+        return runtime
+
+    runtimes.mkdir(parents=True, exist_ok=True)
+    temporary = Path(tempfile.mkdtemp(prefix=f".{fingerprint}.", dir=str(runtimes)))
+    try:
+        _copy_plugin_tree(source, temporary / "blackbox")
+        # A managed hook runtime must remain self-contained. Installed Hermes
+        # copies keep this marker so they can refresh from a checkout, but that
+        # behavior would reintroduce branch dependence here.
+        (temporary / "blackbox" / _SOURCE_ROOT_MARKER).unlink(missing_ok=True)
+        if not (temporary / "blackbox" / "external_hook.py").is_file():
+            raise FileNotFoundError("Prepared Blackbox external-hook runtime is incomplete")
+        try:
+            os.replace(temporary, version_root)
+        except OSError:
+            # Another concurrent attach may have published the same immutable
+            # runtime first. Its validated destination is equivalent.
+            if not runtime.is_file():
+                raise
+    finally:
+        if temporary.exists():
+            shutil.rmtree(temporary, ignore_errors=True)
+    if not runtime.is_file():
+        raise FileNotFoundError("Prepared Blackbox external-hook runtime is missing")
+    return runtime
+
+
+def _hook_commands(framework: str, runtime: Path) -> Dict[str, Any]:
+    argv = [sys.executable, str(runtime), "--framework", framework]
+    if framework == "claude-code":
+        # Claude's documented exec form avoids shell parsing entirely, so
+        # absolute paths containing spaces and shell metacharacters are safe.
+        return {"command": sys.executable, "args": argv[1:]}
+    windows = subprocess.list2cmdline(argv)
+    return {
+        "command": windows if os.name == "nt" else shlex.join(argv),
+        "commandWindows": windows,
+    }
+
+
+def _hook_config(framework: str, runtime: Path) -> Dict[str, Any]:
+    commands = _hook_commands(framework, runtime)
+
+    def handler(status: str = "") -> Dict[str, Any]:
+        item: Dict[str, Any] = {
+            "type": "command",
+            **commands,
+            "timeout": 30,
+        }
+        if framework != "codex":
+            item.pop("commandWindows", None)
+        if status:
+            item["statusMessage"] = status
+        return item
+
+    return {
+        "description": "Agent Blackbox prompt and tool-call security hooks.",
+        "hooks": {
+            "SessionStart": [
+                {
+                    "matcher": "*",
+                    "hooks": [handler("Starting Agent Blackbox")],
+                }
+            ],
+            "UserPromptSubmit": [
+                {"hooks": [handler("Scanning prompt with Agent Blackbox")]}
+            ],
+            "PreToolUse": [
+                {
+                    "matcher": "*",
+                    "hooks": [handler("Checking tool call with Agent Blackbox")],
+                }
+            ],
+            "PostToolUse": [{"matcher": "*", "hooks": [handler()]}],
+            "Stop": [{"hooks": [handler()]}],
+        },
+    }
+
+
+def _is_blackbox_command_hook(item: Any) -> bool:
+    if not isinstance(item, dict):
+        return False
+    parts = [item.get("command"), item.get("commandWindows")]
+    args = item.get("args")
+    if isinstance(args, list):
+        parts.extend(args)
+    command = " ".join(str(part or "") for part in parts).lower()
+    return (
+        "external_hook.py" in command
+        and "--framework" in command
+        and ("claude-code" in command or "codex" in command)
+    ) or "blackbox_hook.py" in command
+
+
+def _merge_claude_hooks(data: Dict[str, Any], desired: Dict[str, Any]) -> bool:
+    """Replace only Blackbox-owned Claude hook handlers, preserving all others."""
+    before = json.dumps(data, sort_keys=True)
+    hooks = data.get("hooks")
+    if not isinstance(hooks, dict):
+        hooks = {}
+        data["hooks"] = hooks
+    desired_hooks = desired.get("hooks") or {}
+    for event in _EXTERNAL_HOOK_EVENTS:
+        kept_groups: List[Dict[str, Any]] = []
+        groups = hooks.get(event)
+        if isinstance(groups, list):
+            for group in groups:
+                if not isinstance(group, dict):
+                    continue
+                handlers = group.get("hooks")
+                if not isinstance(handlers, list):
+                    kept_groups.append(group)
+                    continue
+                remaining = [item for item in handlers if not _is_blackbox_command_hook(item)]
+                if remaining:
+                    kept_groups.append({**group, "hooks": remaining})
+        kept_groups.extend(desired_hooks.get(event) or [])
+        hooks[event] = kept_groups
+    return json.dumps(data, sort_keys=True) != before
+
+
+def _remove_claude_hooks(data: Dict[str, Any]) -> bool:
+    before = json.dumps(data, sort_keys=True)
+    hooks = data.get("hooks")
+    if not isinstance(hooks, dict):
+        return False
+    for event in list(_EXTERNAL_HOOK_EVENTS):
+        groups = hooks.get(event)
+        if not isinstance(groups, list):
+            continue
+        kept: List[Dict[str, Any]] = []
+        for group in groups:
+            if not isinstance(group, dict):
+                continue
+            handlers = group.get("hooks")
+            if not isinstance(handlers, list):
+                kept.append(group)
+                continue
+            remaining = [item for item in handlers if not _is_blackbox_command_hook(item)]
+            if remaining:
+                kept.append({**group, "hooks": remaining})
+        if kept:
+            hooks[event] = kept
+        else:
+            hooks.pop(event, None)
+    if not hooks:
+        data.pop("hooks", None)
+    return json.dumps(data, sort_keys=True) != before
+
+
+def _claude_has_blackbox_hooks(data: Dict[str, Any]) -> bool:
+    hooks = data.get("hooks")
+    if not isinstance(hooks, dict):
+        return False
+    seen = set()
+    for event in _EXTERNAL_HOOK_EVENTS:
+        for group in hooks.get(event) or []:
+            if not isinstance(group, dict):
+                continue
+            if any(
+                _is_blackbox_command_hook(item) and _blackbox_command_hook_ready(item)
+                for item in group.get("hooks") or []
+            ):
+                seen.add(event)
+    return seen == set(_EXTERNAL_HOOK_EVENTS)
+
+
+def _blackbox_command_hook_ready(item: Any) -> bool:
+    """Return whether a Blackbox handler's executable and runtime still exist."""
+    if not _is_blackbox_command_hook(item):
+        return False
+    command = str(item.get("command") or "")
+    args = item.get("args")
+    if isinstance(args, list):
+        runtime = next(
+            (
+                Path(str(arg)).expanduser()
+                for arg in args
+                if str(arg).endswith("external_hook.py")
+            ),
+            None,
+        )
+        executable_ready = not os.path.isabs(command) or Path(command).is_file()
+        return bool(
+            executable_ready
+            and runtime is not None
+            and _managed_external_hook_runtime_ready(runtime)
+        )
+
+    shell_command = command or str(item.get("commandWindows") or "")
+    try:
+        tokens = shlex.split(shell_command, posix=os.name != "nt")
+    except ValueError:
+        return False
+    runtime = next(
+        (
+            Path(token.strip("\"'")).expanduser()
+            for token in tokens
+            if token.strip("\"'").endswith("external_hook.py")
+        ),
+        None,
+    )
+    return bool(runtime is not None and _managed_external_hook_runtime_ready(runtime))
+
+
+def _managed_external_hook_runtime_ready(runtime: Path) -> bool:
+    """Require Claude hooks to use the branch-independent managed runtime."""
+    try:
+        root = (constants.blackbox_home() / "agent-hooks" / "runtimes").resolve()
+        return runtime.is_file() and root in runtime.resolve().parents
+    except OSError:
+        return False
+
+
+def attach_claude(home: Path, *, dry_run: bool = False) -> Dict[str, Any]:
+    """Install zero-configuration user hooks into Claude Code settings."""
+    home = home.expanduser()
+    settings = home / "settings.json"
+    report: Dict[str, Any] = {
+        "target": str(home),
+        "config_path": str(settings),
+        "kind": "claude-code",
+        "ok": False,
+        "available": home.is_dir() or _claude_binary() is not None,
+        "protected": False,
+        "changed": False,
+        "already": False,
+        "dry_run": dry_run,
+    }
+    try:
+        runtime = _prepare_external_hook_runtime(dry_run=dry_run)
+        desired = _hook_config("claude-code", runtime)
+        if settings.exists():
+            data = json.loads(settings.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                raise ValueError("Claude settings root must be an object")
+        else:
+            data = {}
+        protected_before = _claude_has_blackbox_hooks(data)
+        changed = _merge_claude_hooks(data, desired)
+        report["changed"] = changed
+        report["already"] = protected_before and not changed
+        report["protected"] = protected_before if dry_run else True
+        if changed and not dry_run:
+            if settings.exists():
+                shutil.copy2(settings, settings.with_name("settings.json.blackbox.bak"))
+                report["backed_up"] = True
+            _atomic_write(settings, json.dumps(data, indent=2) + "\n")
+        report["ok"] = True
+    except Exception as exc:
+        logger.debug("blackbox.attach: attach_claude(%s) failed: %s", home, exc)
+        report["error"] = str(exc)
+    return report
+
+
+def detach_claude(home: Path, *, dry_run: bool = False) -> Dict[str, Any]:
+    home = home.expanduser()
+    settings = home / "settings.json"
+    report: Dict[str, Any] = {
+        "target": str(home),
+        "kind": "claude-code",
+        "ok": False,
+        "changed": False,
+        "already": False,
+        "dry_run": dry_run,
+    }
+    try:
+        if not settings.exists():
+            report.update(ok=True, already=True)
+            return report
+        data = json.loads(settings.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError("Claude settings root must be an object")
+        changed = _remove_claude_hooks(data)
+        report["changed"] = changed
+        report["already"] = not changed
+        if changed and not dry_run:
+            _atomic_write(settings, json.dumps(data, indent=2) + "\n")
+        report["ok"] = True
+    except Exception as exc:
+        logger.debug("blackbox.attach: detach_claude(%s) failed: %s", home, exc)
+        report["error"] = str(exc)
+    return report
+
+
+def _codex_binary() -> Optional[str]:
+    found = shutil.which("codex")
+    if found:
+        return found
+    if sys.platform == "darwin":
+        bundled = Path("/Applications/ChatGPT.app/Contents/Resources/codex")
+        if bundled.is_file() and os.access(bundled, os.X_OK):
+            return str(bundled)
+    return None
+
+
+def _codex_env(home: Path) -> Dict[str, str]:
+    env = dict(os.environ)
+    default = Path.home() / ".codex"
+    try:
+        if home.resolve() != default.resolve():
+            env["CODEX_HOME"] = str(home)
+    except OSError:
+        env["CODEX_HOME"] = str(home)
+    return env
+
+
+def _run_codex_json(binary: str, home: Path, *args: str) -> Dict[str, Any]:
+    completed = subprocess.run(
+        [binary, *args],
+        capture_output=True,
+        text=True,
+        timeout=45,
+        check=False,
+        env=_codex_env(home),
+    )
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout or "Codex command failed").strip()
+        raise RuntimeError(detail[-2000:])
+    text = completed.stdout.strip()
+    if not text:
+        return {}
+    data = json.loads(text)
+    return data if isinstance(data, dict) else {"result": data}
+
+
+def _plugin_fingerprint(source: Path, command: str) -> str:
+    digest = hashlib.sha256(command.encode("utf-8"))
+    for path in sorted(p for p in source.rglob("*") if p.is_file()):
+        digest.update(str(path.relative_to(source)).encode("utf-8"))
+        digest.update(path.read_bytes())
+    return digest.hexdigest()[:12]
+
+
+def _prepare_codex_marketplace(home: Path, *, dry_run: bool = False) -> Dict[str, Any]:
+    source = _agent_hooks_plugin_source()
+    if source is None:
+        raise FileNotFoundError("Blackbox Claude/Codex hook bundle is missing")
+    runtime = _prepare_external_hook_runtime(dry_run=dry_run)
+    config = _hook_config("codex", runtime)
+    root = constants.blackbox_home() / "agent-hooks" / "codex-marketplace"
+    plugin = root / "plugins" / "blackbox"
+    command = str(config["hooks"]["PreToolUse"][0]["hooks"][0]["command"])
+    version = f"{constants.__version__}+codex.{_plugin_fingerprint(source, command)}"
+    current_version = ""
+    try:
+        current_version = str(
+            json.loads((plugin / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8"))
+            .get("version")
+            or ""
+        )
+    except Exception:
+        pass
+    expected_hooks = json.dumps(config, indent=2) + "\n"
+    try:
+        installed_hooks = (plugin / "hooks" / "hooks.json").read_text(encoding="utf-8")
+    except OSError:
+        installed_hooks = ""
+    changed = current_version != version or installed_hooks != expected_hooks
+    marketplace = {
+        "name": _CODEX_MARKETPLACE_NAME,
+        "interface": {"displayName": "Agent Blackbox"},
+        "plugins": [
+            {
+                "name": "blackbox",
+                "source": {"source": "local", "path": "./plugins/blackbox"},
+                "policy": {"installation": "AVAILABLE", "authentication": "ON_INSTALL"},
+                "category": "Engineering",
+            }
+        ],
+    }
+    if not dry_run:
+        if changed:
+            if plugin.exists():
+                shutil.rmtree(plugin)
+            shutil.copytree(source, plugin, ignore=_copy_ignore)
+            manifest_path = plugin / ".codex-plugin" / "plugin.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["version"] = version
+            _atomic_write(manifest_path, json.dumps(manifest, indent=2) + "\n")
+            _atomic_write(plugin / "hooks" / "hooks.json", expected_hooks)
+        marketplace_path = root / ".agents" / "plugins" / "marketplace.json"
+        expected_marketplace = json.dumps(marketplace, indent=2) + "\n"
+        if not marketplace_path.exists() or marketplace_path.read_text(encoding="utf-8") != expected_marketplace:
+            _atomic_write(marketplace_path, expected_marketplace)
+            changed = True
+    return {"root": root, "plugin": plugin, "version": version, "changed": changed}
+
+
+def _codex_config(home: Path) -> Dict[str, Any]:
+    path = home / "config.toml"
+    if tomllib is None or not path.is_file():
+        return {}
+    try:
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _codex_plugin_enabled(home: Path) -> bool:
+    plugins = _codex_config(home).get("plugins")
+    if not isinstance(plugins, dict):
+        return False
+    entry = plugins.get(f"blackbox@{_CODEX_MARKETPLACE_NAME}")
+    return isinstance(entry, dict) and entry.get("enabled", True) is not False
+
+
+def _codex_current_hook_hashes(home: Path) -> Dict[str, str]:
+    """Return Codex trust hashes for the currently installed Blackbox hooks.
+
+    Codex persists approval over a normalized hook identity, not merely the
+    event/key. Reproduce that public identity format so an approval for an old
+    Blackbox command cannot make a changed plugin appear protected.
+    """
+    config = _codex_config(home)
+    marketplaces = config.get("marketplaces")
+    marketplace = (
+        marketplaces.get(_CODEX_MARKETPLACE_NAME)
+        if isinstance(marketplaces, dict)
+        else None
+    )
+    source = marketplace.get("source") if isinstance(marketplace, dict) else None
+    if not isinstance(source, str) or not source.strip():
+        return {}
+    manifest_path = (
+        Path(source).expanduser()
+        / "plugins"
+        / "blackbox"
+        / "hooks"
+        / "hooks.json"
+    )
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    hooks = payload.get("hooks") if isinstance(payload, dict) else None
+    if not isinstance(hooks, dict):
+        return {}
+
+    current: Dict[str, str] = {}
+    for event_name, event_key in _CODEX_HOOK_EVENT_KEYS.items():
+        groups = hooks.get(event_name)
+        if not isinstance(groups, list) or not groups or not isinstance(groups[0], dict):
+            return {}
+        group = groups[0]
+        handlers = group.get("hooks")
+        if (
+            not isinstance(handlers, list)
+            or not handlers
+            or not isinstance(handlers[0], dict)
+        ):
+            return {}
+        handler = handlers[0]
+        if handler.get("type") != "command":
+            return {}
+        command = handler.get("command")
+        if os.name == "nt":
+            command = handler.get("commandWindows") or command
+        if not isinstance(command, str) or not command:
+            return {}
+        try:
+            timeout = max(
+                1,
+                int(handler.get("timeout", _CODEX_DEFAULT_HOOK_TIMEOUT_SEC)),
+            )
+        except (TypeError, ValueError):
+            return {}
+
+        normalized_handler: Dict[str, Any] = {
+            "type": "command",
+            "command": command,
+            "timeout": timeout,
+            "async": bool(handler.get("async", False)),
+        }
+        status_message = handler.get("statusMessage")
+        if status_message is not None:
+            normalized_handler["statusMessage"] = status_message
+        additional_context_limit = handler.get("additionalContextLimit")
+        if (
+            additional_context_limit is not None
+            and additional_context_limit != _CODEX_DEFAULT_ADDITIONAL_CONTEXT_LIMIT
+        ):
+            normalized_handler["additionalContextLimit"] = additional_context_limit
+
+        identity: Dict[str, Any] = {
+            "event_name": event_key,
+            "hooks": [normalized_handler],
+        }
+        matcher = group.get("matcher")
+        if event_name in _CODEX_MATCHER_EVENTS and matcher is not None:
+            identity["matcher"] = matcher
+        canonical = json.dumps(
+            identity,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+        current[event_key] = f"sha256:{hashlib.sha256(canonical).hexdigest()}"
+    return current
+
+
+def _codex_hooks_trusted(home: Path) -> bool:
+    hooks = _codex_config(home).get("hooks")
+    state = hooks.get("state") if isinstance(hooks, dict) else None
+    if not isinstance(state, dict):
+        return False
+    current = _codex_current_hook_hashes(home)
+    if set(current) != set(_CODEX_HOOK_EVENT_KEYS.values()):
+        return False
+    trusted: Dict[str, str] = {}
+    for key, value in state.items():
+        key_text = str(key).replace("\\", "/").lower()
+        if "blackbox" not in key_text or "hooks.json:" not in key_text:
+            continue
+        if not isinstance(value, dict) or value.get("enabled") is False:
+            continue
+        event_part = key_text.split("hooks.json:", 1)[1].split(":", 1)[0]
+        trusted[event_part] = str(value.get("trusted_hash") or "")
+    return all(trusted.get(event) == digest for event, digest in current.items())
+
+
+def attach_codex(home: Path, *, dry_run: bool = False, binary: Optional[str] = None) -> Dict[str, Any]:
+    """Install the local Codex plugin without bypassing Codex hook trust."""
+    home = home.expanduser()
+    binary = binary or _codex_binary()
+    report: Dict[str, Any] = {
+        "target": str(home),
+        "kind": "codex",
+        "ok": False,
+        "available": bool(binary),
+        "installed": False,
+        "protected": False,
+        "trust_required": True,
+        "changed": False,
+        "already": False,
+        "dry_run": dry_run,
+    }
+    try:
+        if not binary:
+            raise FileNotFoundError("Codex CLI was not found; update or launch Codex, then run `blackbox attach`")
+        prepared = _prepare_codex_marketplace(home, dry_run=dry_run)
+        report["plugin_version"] = prepared["version"]
+        report["marketplace"] = str(prepared["root"])
+        report["changed"] = bool(prepared["changed"])
+        if dry_run:
+            enabled = _codex_plugin_enabled(home)
+            trusted = enabled and _codex_hooks_trusted(home)
+            report.update(
+                ok=True,
+                installed=enabled,
+                protected=trusted,
+                trust_required=not trusted,
+                already=enabled and not prepared["changed"],
+            )
+            return report
+
+        try:
+            marketplaces = _run_codex_json(
+                binary, home, "plugin", "marketplace", "list", "--json"
+            )
+        except RuntimeError as exc:
+            # Codex validates configured marketplaces before returning the list.
+            # A previous Blackbox install may point at a deleted temp/checkout
+            # directory, which makes the list command fail before we can compare
+            # and replace our own entry. Remove only our marketplace, then retry;
+            # unrelated invalid marketplaces remain the user's responsibility.
+            if _CODEX_MARKETPLACE_NAME not in str(exc):
+                raise
+            _run_codex_json(
+                binary,
+                home,
+                "plugin",
+                "marketplace",
+                "remove",
+                _CODEX_MARKETPLACE_NAME,
+                "--json",
+            )
+            report["changed"] = True
+            marketplaces = _run_codex_json(
+                binary, home, "plugin", "marketplace", "list", "--json"
+            )
+        existing = next(
+            (
+                item
+                for item in marketplaces.get("marketplaces", [])
+                if isinstance(item, dict) and item.get("name") == _CODEX_MARKETPLACE_NAME
+            ),
+            None,
+        )
+        desired_root = str(Path(prepared["root"]).resolve())
+        existing_root = str((existing or {}).get("root") or "")
+        if existing is not None and existing_root:
+            try:
+                same_root = Path(existing_root).resolve() == Path(desired_root).resolve()
+            except OSError:
+                same_root = existing_root == desired_root
+            if not same_root:
+                _run_codex_json(
+                    binary,
+                    home,
+                    "plugin",
+                    "marketplace",
+                    "remove",
+                    _CODEX_MARKETPLACE_NAME,
+                    "--json",
+                )
+                existing = None
+        if existing is None:
+            _run_codex_json(
+                binary,
+                home,
+                "plugin",
+                "marketplace",
+                "add",
+                desired_root,
+                "--json",
+            )
+            report["changed"] = True
+
+        plugins = _run_codex_json(binary, home, "plugin", "list", "--available", "--json")
+        entries = list(plugins.get("installed") or []) + list(plugins.get("available") or [])
+        current = next(
+            (
+                item
+                for item in entries
+                if isinstance(item, dict)
+                and item.get("pluginId") == f"blackbox@{_CODEX_MARKETPLACE_NAME}"
+            ),
+            None,
+        )
+        current_ready = bool(
+            current
+            and current.get("installed")
+            and current.get("enabled")
+            and current.get("version") == prepared["version"]
+        )
+        if not current_ready:
+            _run_codex_json(
+                binary,
+                home,
+                "plugin",
+                "add",
+                f"blackbox@{_CODEX_MARKETPLACE_NAME}",
+                "--json",
+            )
+            report["changed"] = True
+        # Trust is over exact hook content. Existing state keys can describe the
+        # previous plugin version, so any marketplace/plugin change must require
+        # Codex to confirm the new hashes before we claim protection.
+        trusted = not report["changed"] and _codex_hooks_trusted(home)
+        report.update(
+            ok=True,
+            installed=True,
+            protected=trusted,
+            trust_required=not trusted,
+            already=current_ready and not prepared["changed"],
+        )
+        if not trusted:
+            report["note"] = "Plugin installed. In Codex, run /hooks once and trust the Agent Blackbox hooks."
+    except Exception as exc:
+        logger.debug("blackbox.attach: attach_codex(%s) failed: %s", home, exc)
+        report["error"] = str(exc)
+    return report
+
+
+def detach_codex(
+    home: Path,
+    *,
+    remove_files: bool = False,
+    dry_run: bool = False,
+    binary: Optional[str] = None,
+) -> Dict[str, Any]:
+    home = home.expanduser()
+    binary = binary or _codex_binary()
+    report: Dict[str, Any] = {
+        "target": str(home),
+        "kind": "codex",
+        "ok": False,
+        "changed": False,
+        "already": False,
+        "dry_run": dry_run,
+    }
+    try:
+        enabled = _codex_plugin_enabled(home)
+        report["already"] = not enabled
+        if enabled and not dry_run:
+            if not binary:
+                raise FileNotFoundError("Codex CLI was not found")
+            _run_codex_json(
+                binary,
+                home,
+                "plugin",
+                "remove",
+                f"blackbox@{_CODEX_MARKETPLACE_NAME}",
+                "--json",
+            )
+            report["changed"] = True
+        if remove_files:
+            root = constants.blackbox_home() / "agent-hooks" / "codex-marketplace"
+            if root.exists():
+                if not dry_run:
+                    shutil.rmtree(root)
+                report["removed"] = True
+        report["ok"] = True
+    except Exception as exc:
+        logger.debug("blackbox.attach: detach_codex(%s) failed: %s", home, exc)
+        report["error"] = str(exc)
+    return report
+
+
+# ---------------------------------------------------------------------------
 # Config snapshot (for the OpenClaw entry) — decoupled from the running config
 # ---------------------------------------------------------------------------
 
@@ -999,40 +1878,77 @@ def load_blackbox_config_snapshot() -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def attach_all(*, hermes: bool = True, openclaw: bool = True, dry_run: bool = False) -> Dict[str, Any]:
+def attach_all(
+    *,
+    hermes: bool = True,
+    openclaw: bool = True,
+    claude: bool = True,
+    codex: bool = True,
+    dry_run: bool = False,
+) -> Dict[str, Any]:
     """Attach Blackbox to every discovered target. Returns a combined report."""
-    report: Dict[str, Any] = {"hermes": [], "openclaw": [], "dry_run": dry_run}
+    report: Dict[str, Any] = {
+        "hermes": [],
+        "openclaw": [],
+        "claude-code": [],
+        "codex": [],
+        "dry_run": dry_run,
+    }
     if hermes:
         for home in discover_hermes_homes():
             report["hermes"].append(attach_hermes(home, dry_run=dry_run))
     if openclaw:
         for ws in discover_openclaw_workspaces():
             report["openclaw"].append(attach_openclaw(ws, dry_run=dry_run))
+    if claude:
+        for home in discover_claude_homes():
+            report["claude-code"].append(attach_claude(home, dry_run=dry_run))
+    if codex:
+        for home in discover_codex_homes():
+            report["codex"].append(attach_codex(home, dry_run=dry_run))
     report["count"] = _protected_count(report)
     return report
 
 
 def detach_all(
-    *, hermes: bool = True, openclaw: bool = True, remove_files: bool = False, dry_run: bool = False
+    *,
+    hermes: bool = True,
+    openclaw: bool = True,
+    claude: bool = True,
+    codex: bool = True,
+    remove_files: bool = False,
+    dry_run: bool = False,
 ) -> Dict[str, Any]:
     """Detach Blackbox from every discovered target. Returns a combined report."""
-    report: Dict[str, Any] = {"hermes": [], "openclaw": [], "dry_run": dry_run}
+    report: Dict[str, Any] = {
+        "hermes": [],
+        "openclaw": [],
+        "claude-code": [],
+        "codex": [],
+        "dry_run": dry_run,
+    }
     if hermes:
         for home in discover_hermes_homes():
             report["hermes"].append(detach_hermes(home, remove_files=remove_files, dry_run=dry_run))
     if openclaw:
         for ws in discover_openclaw_workspaces():
             report["openclaw"].append(detach_openclaw(ws, dry_run=dry_run))
+    if claude:
+        for home in discover_claude_homes():
+            report["claude-code"].append(detach_claude(home, dry_run=dry_run))
+    if codex:
+        for home in discover_codex_homes():
+            report["codex"].append(
+                detach_codex(home, remove_files=remove_files, dry_run=dry_run)
+            )
     return report
 
 
 def _protected_count(report: Dict[str, Any]) -> int:
     """Number of targets Blackbox is (now) protecting in an attach report."""
     total = 0
-    for row in report.get("hermes", []):
-        if row.get("ok"):
-            total += 1
-    for row in report.get("openclaw", []):
-        if row.get("ok"):
-            total += 1
+    for kind in ("hermes", "openclaw", "claude-code", "codex"):
+        for row in report.get(kind, []):
+            if row.get("protected", row.get("ok")):
+                total += 1
     return total

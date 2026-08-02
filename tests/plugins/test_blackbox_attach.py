@@ -1,6 +1,8 @@
 """Tests for ``blackbox attach`` / ``blackbox detach`` discovery + merge logic."""
 
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -13,6 +15,7 @@ attach = load_blackbox("attach")
 constants = load_blackbox("constants")
 hooks = load_blackbox("hooks")
 config_mod = load_blackbox("config")
+cli = load_blackbox("cli")
 
 
 def test_openclaw_package_declares_enforced_minimum_host_version():
@@ -37,6 +40,8 @@ def fake_env(tmp_path, monkeypatch):
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setattr("pathlib.Path.home", lambda: home)
+    monkeypatch.setattr(attach, "_claude_binary", lambda: None)
+    monkeypatch.setattr(attach, "_codex_binary", lambda: None)
 
     # Default hermes home with an existing config.yaml.
     hermes_default = home / ".hermes"
@@ -83,6 +88,14 @@ def test_discover_hermes_homes_finds_default_and_profile(fake_env):
     homes = attach.discover_hermes_homes()
     assert fake_env["hermes_default"] in homes
     assert fake_env["profile"] in homes
+
+
+def test_discover_external_agents_before_first_launch(fake_env, monkeypatch):
+    monkeypatch.setattr(attach, "_claude_binary", lambda: "/usr/local/bin/claude")
+    monkeypatch.setattr(attach, "_codex_binary", lambda: "/usr/local/bin/codex")
+
+    assert attach.discover_claude_homes() == [fake_env["home"] / ".claude"]
+    assert attach.discover_codex_homes() == [fake_env["home"] / ".codex"]
 
 
 def test_discover_hermes_homes_skips_managed_blackbox_chat_profile(fake_env):
@@ -407,6 +420,17 @@ def test_copy_plugin_tree_bundles_openclaw(tmp_path):
     assert not (bundle / "node_modules").exists()  # deps excluded from the bundle
 
 
+def test_copy_plugin_tree_bundles_claude_and_codex_hooks(tmp_path):
+    dest = tmp_path / "plugins" / "blackbox"
+
+    attach._copy_plugin_tree(attach._plugin_source_dir(), dest)
+
+    bundle = dest / "_agent_hooks"
+    assert (bundle / ".codex-plugin" / "plugin.json").is_file()
+    assert (bundle / ".claude-plugin" / "plugin.json").is_file()
+    assert (bundle / "hooks" / "hooks.json").is_file()
+
+
 def test_copy_plugin_tree_bundles_from_explicit_checkout_source(tmp_path, monkeypatch):
     """Fresh installed-plugin execution must not depend on its own marker yet."""
     repo = tmp_path / "checkout"
@@ -473,6 +497,478 @@ def test_attach_all_reports_targets(fake_env):
 
 
 # ---------------------------------------------------------------------------
+# Claude Code + Codex zero-configuration adapters
+# ---------------------------------------------------------------------------
+
+
+def test_attach_claude_merges_user_hooks_and_is_idempotent(fake_env):
+    home = fake_env["home"] / ".claude"
+    home.mkdir()
+    settings = home / "settings.json"
+    settings.write_text(
+        json.dumps(
+            {
+                "theme": "dark",
+                "hooks": {
+                    "PreToolUse": [
+                        {
+                            "matcher": "Bash",
+                            "hooks": [{"type": "command", "command": "echo keep-me"}],
+                        }
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    first = attach.attach_claude(home)
+    after_first = settings.read_text(encoding="utf-8")
+    second = attach.attach_claude(home)
+    data = json.loads(settings.read_text(encoding="utf-8"))
+
+    assert first["ok"] and first["protected"] and first["changed"]
+    assert second["ok"] and second["already"] and not second["changed"]
+    assert settings.read_text(encoding="utf-8") == after_first
+    assert data["theme"] == "dark"
+    assert any(
+        handler.get("command") == "echo keep-me"
+        for group in data["hooks"]["PreToolUse"]
+        for handler in group.get("hooks", [])
+    )
+    for event in ("SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop"):
+        assert any(
+            "external_hook.py" in " ".join(str(arg) for arg in handler.get("args") or [])
+            and "claude-code" in " ".join(str(arg) for arg in handler.get("args") or [])
+            and handler.get("command") == sys.executable
+            for group in data["hooks"][event]
+            for handler in group.get("hooks", [])
+        )
+
+
+def test_claude_exec_hook_uses_immutable_runtime_and_survives_space_in_path(
+    fake_env, monkeypatch
+):
+    blackbox_home = fake_env["home"] / "blackbox home with spaces"
+    monkeypatch.setenv("BLACKBOX_HOME", str(blackbox_home))
+    home = fake_env["home"] / ".claude"
+    home.mkdir()
+
+    report = attach.attach_claude(home)
+    data = json.loads((home / "settings.json").read_text(encoding="utf-8"))
+    handler = data["hooks"]["PreToolUse"][0]["hooks"][0]
+    runtime = Path(handler["args"][0])
+
+    assert report["ok"] and report["protected"]
+    assert handler["command"] == sys.executable
+    assert handler["args"] == [str(runtime), "--framework", "claude-code"]
+    assert runtime.is_file()
+    assert blackbox_home in runtime.parents
+    assert attach._plugin_source_dir() not in runtime.parents
+    assert not (runtime.parent / ".blackbox-source-root").exists()
+
+    completed = subprocess.run(
+        [handler["command"], *handler["args"]],
+        input="{malformed hook input",
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0
+    assert completed.stdout == ""
+    assert completed.stderr == ""
+
+
+def test_claude_dry_run_does_not_claim_missing_runtime_is_protected(fake_env):
+    home = fake_env["home"] / ".claude"
+    home.mkdir()
+    broken = {
+        "type": "command",
+        "command": sys.executable,
+        "args": ["/missing/blackbox/external_hook.py", "--framework", "claude-code"],
+    }
+    (home / "settings.json").write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    event: [{"hooks": [broken]}]
+                    for event in ("SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop")
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = attach.attach_claude(home, dry_run=True)
+
+    assert report["ok"] is True
+    assert report["protected"] is False
+    assert report["changed"] is True
+
+
+def test_claude_dry_run_does_not_claim_checkout_runtime_is_durable(fake_env):
+    home = fake_env["home"] / ".claude"
+    home.mkdir()
+    checkout_runtime = attach._plugin_source_dir() / "external_hook.py"
+    handler = {
+        "type": "command",
+        "command": sys.executable,
+        "args": [str(checkout_runtime), "--framework", "claude-code"],
+    }
+    events = ("SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop")
+    (home / "settings.json").write_text(
+        json.dumps({"hooks": {event: [{"hooks": [handler]}] for event in events}}),
+        encoding="utf-8",
+    )
+
+    report = attach.attach_claude(home, dry_run=True)
+
+    assert checkout_runtime.is_file()
+    assert report["ok"] is True
+    assert report["protected"] is False
+    assert report["changed"] is True
+
+
+def test_detach_claude_removes_only_blackbox_hooks(fake_env):
+    home = fake_env["home"] / ".claude"
+    home.mkdir()
+    attach.attach_claude(home)
+    settings = home / "settings.json"
+    data = json.loads(settings.read_text(encoding="utf-8"))
+    data["hooks"]["PreToolUse"].append(
+        {"matcher": "Bash", "hooks": [{"type": "command", "command": "echo keep"}]}
+    )
+    settings.write_text(json.dumps(data), encoding="utf-8")
+
+    report = attach.detach_claude(home)
+    detached = json.loads(settings.read_text(encoding="utf-8"))
+
+    assert report["ok"] and report["changed"]
+    assert not attach._claude_has_blackbox_hooks(detached)
+    assert detached["hooks"]["PreToolUse"][0]["hooks"][0]["command"] == "echo keep"
+
+
+def test_attach_codex_installs_plugin_without_bypassing_hook_trust(fake_env, monkeypatch):
+    home = fake_env["home"] / ".codex"
+    home.mkdir()
+    monkeypatch.setenv("BLACKBOX_HOME", str(fake_env["home"] / "blackbox home with spaces"))
+    calls = []
+
+    def run(_binary, _home, *args):
+        calls.append(args)
+        if args == ("plugin", "marketplace", "list", "--json"):
+            return {"marketplaces": []}
+        if args == ("plugin", "list", "--available", "--json"):
+            return {
+                "installed": [],
+                "available": [
+                    {
+                        "pluginId": "blackbox@agent-blackbox",
+                        "installed": False,
+                        "enabled": False,
+                    }
+                ],
+            }
+        return {}
+
+    monkeypatch.setattr(attach, "_run_codex_json", run)
+    report = attach.attach_codex(home, binary="/fake/codex")
+
+    assert report["ok"] and report["installed"]
+    assert report["protected"] is False
+    assert report["trust_required"] is True
+    assert any(args[:4] == ("plugin", "marketplace", "add", report["marketplace"]) for args in calls)
+    assert ("plugin", "add", "blackbox@agent-blackbox", "--json") in calls
+    assert not any("dangerously-bypass-hook-trust" in args for args in calls)
+    marketplace = Path(report["marketplace"])
+    manifest = json.loads(
+        (marketplace / "plugins" / "blackbox" / ".codex-plugin" / "plugin.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    hooks_json = json.loads(
+        (marketplace / "plugins" / "blackbox" / "hooks" / "hooks.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert manifest["version"].startswith(f"{constants.__version__}+codex.")
+    assert set(hooks_json["hooks"]) == {
+        "SessionStart",
+        "UserPromptSubmit",
+        "PreToolUse",
+        "PostToolUse",
+        "Stop",
+    }
+    command = hooks_json["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+    assert "external_hook.py" in command and "--framework codex" in command
+    assert str(attach._plugin_source_dir()) not in command
+    completed = subprocess.run(
+        command,
+        input="{malformed hook input",
+        capture_output=True,
+        text=True,
+        shell=True,
+        check=False,
+    )
+    assert completed.returncode == 0
+    assert completed.stdout == ""
+    assert completed.stderr == ""
+
+
+def test_attach_codex_recovers_its_deleted_marketplace(fake_env, monkeypatch):
+    home = fake_env["home"] / ".codex"
+    home.mkdir()
+    calls = []
+    list_attempts = 0
+
+    def run(_binary, _home, *args):
+        nonlocal list_attempts
+        calls.append(args)
+        if args == ("plugin", "marketplace", "list", "--json"):
+            list_attempts += 1
+            if list_attempts == 1:
+                raise RuntimeError(
+                    "failed to load marketplace(s): agent-blackbox at /tmp/deleted"
+                )
+            return {"marketplaces": []}
+        if args == ("plugin", "list", "--available", "--json"):
+            return {"installed": [], "available": []}
+        return {}
+
+    monkeypatch.setattr(attach, "_run_codex_json", run)
+
+    report = attach.attach_codex(home, binary="/fake/codex")
+
+    assert report["ok"] is True
+    assert list_attempts == 2
+    assert (
+        "plugin",
+        "marketplace",
+        "remove",
+        "agent-blackbox",
+        "--json",
+    ) in calls
+    assert any(args[:3] == ("plugin", "marketplace", "add") for args in calls)
+
+
+def test_attach_codex_changed_plugin_requires_fresh_trust(fake_env, monkeypatch):
+    home = fake_env["home"] / ".codex"
+    home.mkdir()
+    lines = ["[hooks.state]"]
+    for event in ("session_start", "user_prompt_submit", "pre_tool_use", "post_tool_use", "stop"):
+        key = f"blackbox@agent-blackbox:hooks/hooks.json:{event}:0:0"
+        lines.extend([f'[hooks.state."{key}"]', 'trusted_hash = "sha256:stale"'])
+    (home / "config.toml").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    def run(_binary, _home, *args):
+        if args == ("plugin", "marketplace", "list", "--json"):
+            return {"marketplaces": []}
+        if args == ("plugin", "list", "--available", "--json"):
+            return {"installed": [], "available": []}
+        return {}
+
+    monkeypatch.setattr(attach, "_run_codex_json", run)
+
+    report = attach.attach_codex(home, binary="/fake/codex")
+
+    assert report["ok"] is True
+    assert report["changed"] is True
+    assert report["protected"] is False
+    assert report["trust_required"] is True
+
+
+def test_cli_attach_defaults_to_every_supported_agent(monkeypatch, capsys):
+    seen = {}
+
+    def attach_all(**kwargs):
+        seen.update(kwargs)
+        return {
+            "hermes": [],
+            "openclaw": [],
+            "claude-code": [],
+            "codex": [
+                {
+                    "target": "/tmp/.codex",
+                    "kind": "codex",
+                    "ok": True,
+                    "installed": True,
+                    "trust_required": True,
+                }
+            ],
+            "count": 0,
+        }
+
+    monkeypatch.setattr(cli.attach, "attach_all", attach_all)
+    args = cli.argparse.Namespace(
+        dry_run=False,
+        hermes_only=False,
+        openclaw_only=False,
+        claude_only=False,
+        codex_only=False,
+    )
+
+    assert cli._cmd_attach(args) == 0
+    assert seen == {
+        "hermes": True,
+        "openclaw": True,
+        "claude": True,
+        "codex": True,
+        "dry_run": False,
+    }
+    output = capsys.readouterr().out
+    assert "/hooks trust pending" in output
+    assert "Codex security review required" in output
+
+
+def test_cli_attach_only_flag_selects_one_external_agent(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(
+        cli.attach,
+        "attach_all",
+        lambda **kwargs: (seen.update(kwargs), {"codex": [], "count": 0})[1],
+    )
+    args = cli.argparse.Namespace(
+        dry_run=True,
+        hermes_only=False,
+        openclaw_only=False,
+        claude_only=False,
+        codex_only=True,
+    )
+
+    assert cli._cmd_attach(args) == 0
+    assert seen == {
+        "hermes": False,
+        "openclaw": False,
+        "claude": False,
+        "codex": True,
+        "dry_run": True,
+    }
+
+
+def test_codex_trust_status_requires_every_blackbox_hook(fake_env):
+    home = fake_env["home"] / ".codex"
+    home.mkdir()
+    marketplace = fake_env["home"] / "blackbox-marketplace"
+    manifest = marketplace / "plugins" / "blackbox" / "hooks" / "hooks.json"
+    manifest.parent.mkdir(parents=True)
+    command = "/opt/blackbox/python /opt/blackbox/external_hook.py --framework codex"
+    manifest.write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    event: [
+                        {
+                            **({"matcher": "*"} if event in {"SessionStart", "PreToolUse", "PostToolUse"} else {}),
+                            "hooks": [
+                                {
+                                    "type": "command",
+                                    "command": command,
+                                    "commandWindows": command,
+                                    "timeout": 30,
+                                }
+                            ],
+                        }
+                    ]
+                    for event in (
+                        "SessionStart",
+                        "UserPromptSubmit",
+                        "PreToolUse",
+                        "PostToolUse",
+                        "Stop",
+                    )
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    config = home / "config.toml"
+    base = [
+        "[marketplaces.agent-blackbox]",
+        f'source = "{marketplace}"',
+        "",
+        "[hooks.state]",
+    ]
+    config.write_text("\n".join(base) + "\n", encoding="utf-8")
+    current = attach._codex_current_hook_hashes(home)
+    assert set(current) == {
+        "session_start",
+        "user_prompt_submit",
+        "pre_tool_use",
+        "post_tool_use",
+        "stop",
+    }
+
+    lines = list(base)
+    for event in ("session_start", "user_prompt_submit", "pre_tool_use", "post_tool_use", "stop"):
+        key = f"/tmp/plugins/cache/agent-blackbox/blackbox/local/hooks/hooks.json:{event}:0:0"
+        lines.extend([f'[hooks.state."{key}"]', f'trusted_hash = "{current[event]}"'])
+    config.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    assert attach._codex_hooks_trusted(home) is True
+
+    config.write_text("\n".join(lines[:-2]) + "\n", encoding="utf-8")
+    assert attach._codex_hooks_trusted(home) is False
+
+    config.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["hooks"]["PreToolUse"][0]["hooks"][0]["command"] += " --changed"
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+    assert attach._codex_hooks_trusted(home) is False
+
+
+def test_codex_trust_status_rejects_disabled_hook(fake_env):
+    home = fake_env["home"] / ".codex"
+    home.mkdir()
+    marketplace = fake_env["home"] / "blackbox-marketplace"
+    manifest = marketplace / "plugins" / "blackbox" / "hooks" / "hooks.json"
+    manifest.parent.mkdir(parents=True)
+    events = ("SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop")
+    manifest.write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    event: [
+                        {
+                            "hooks": [
+                                {
+                                    "type": "command",
+                                    "command": "blackbox-hook",
+                                    "timeout": 30,
+                                }
+                            ]
+                        }
+                    ]
+                    for event in events
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    config = home / "config.toml"
+    base = [
+        "[marketplaces.agent-blackbox]",
+        f'source = "{marketplace}"',
+        "",
+        "[hooks.state]",
+    ]
+    config.write_text("\n".join(base) + "\n", encoding="utf-8")
+    current = attach._codex_current_hook_hashes(home)
+    lines = list(base)
+    for event, digest in current.items():
+        key = f"blackbox@agent-blackbox:hooks/hooks.json:{event}:0:0"
+        lines.extend(
+            [
+                f'[hooks.state."{key}"]',
+                f'trusted_hash = "{digest}"',
+                *(["enabled = false"] if event == "stop" else []),
+            ]
+        )
+    config.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    assert attach._codex_hooks_trusted(home) is False
+
+
+# ---------------------------------------------------------------------------
 # Session-start auto-attach (hooks) — keeps later-installed agents protected
 # ---------------------------------------------------------------------------
 
@@ -488,11 +984,28 @@ def test_auto_attach_due_runs_immediately_when_target_set_changes(tmp_path, monk
     targets = [tmp_path / ".hermes"]
     monkeypatch.setattr(attach, "discover_hermes_homes", lambda: list(targets))
     monkeypatch.setattr(attach, "discover_openclaw_workspaces", lambda: [])
+    monkeypatch.setattr(attach, "discover_claude_homes", lambda: [])
+    monkeypatch.setattr(attach, "discover_codex_homes", lambda: [])
 
     assert hooks._auto_attach_due() is True
     assert hooks._auto_attach_due() is False
 
     targets.append(tmp_path / ".hermes" / "profiles" / "new")
+    assert hooks._auto_attach_due() is True
+
+
+def test_auto_attach_due_detects_new_external_agent(tmp_path, monkeypatch):
+    monkeypatch.setenv("BLACKBOX_HOME", str(tmp_path / "ghome"))
+    codex_homes = []
+    monkeypatch.setattr(attach, "discover_hermes_homes", lambda: [])
+    monkeypatch.setattr(attach, "discover_openclaw_workspaces", lambda: [])
+    monkeypatch.setattr(attach, "discover_claude_homes", lambda: [])
+    monkeypatch.setattr(attach, "discover_codex_homes", lambda: list(codex_homes))
+
+    assert hooks._auto_attach_due() is True
+    assert hooks._auto_attach_due() is False
+
+    codex_homes.append(tmp_path / ".codex")
     assert hooks._auto_attach_due() is True
 
 
