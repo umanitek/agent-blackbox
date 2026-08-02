@@ -389,6 +389,17 @@ def _is_hidden_swm_catchup_error(value: Any) -> bool:
     )
 
 
+def _is_retryable_durable_catchup_error(value: Any) -> bool:
+    """Recognize DKG's explicit transient durable-catchup response."""
+    text = str(value or "").lower()
+    compact = "".join(text.split())
+    return (
+        "/api/shared-memory/catchup" in text
+        and "durable_catchup_all_peers_failed" in text
+        and '"retryable":true' in compact
+    )
+
+
 def _sync_activity(
     *,
     public: int,
@@ -542,6 +553,44 @@ def _sync_activity(
         )
         return progress
 
+    # A retryable all-peers failure means the selected publisher did not have
+    # capacity for this pass; it is not a corrupt graph or a terminal client
+    # error. Keep the full response in sync-state/logs for diagnosis, but show
+    # users the automatic durable-resume behavior instead of raw HTTP JSON.
+    if node_reachable and _is_retryable_durable_catchup_error(error):
+        detail = (
+            "The sync-capable publisher is temporarily busy or unavailable. "
+            "Blackbox will retry automatically and resume from its durable checkpoint."
+        )
+        progress.update(
+            status="waiting",
+            phase="waiting-for-publisher-capacity",
+            label="Waiting for publisher sync capacity",
+            detail=detail,
+            started_at=transfer.get("started_at") or catchup.get("startedAt"),
+            updated_at=transfer.get("updated_at") or catchup.get("finishedAt"),
+        )
+        if expected_triples > 0:
+            bounded_triples = max(0, min(current_triples, expected_triples))
+            progress.update(
+                detail=(
+                    f"{bounded_triples:,} of {expected_triples:,} graph triples "
+                    "are checkpointed. The publisher is temporarily busy; "
+                    "Blackbox will retry and resume automatically."
+                ),
+                current=bounded_triples,
+                expected=expected_triples,
+                percent=round((bounded_triples / expected_triples) * 100, 1),
+                indeterminate=False,
+            )
+        elif public > 0:
+            progress["detail"] = (
+                f"{public:,} verified public threats remain available. The "
+                "publisher is temporarily busy; Blackbox will retry and resume "
+                "automatically."
+            )
+        return progress
+
     # DKG currently reports an SWM catch-up transport failure even while the
     # independently verified VM remains usable. Do not cover that ready graph
     # with a false failure banner; keep unrelated VM and node errors visible.
@@ -563,7 +612,9 @@ def _sync_activity(
     # DKG can retain a failed source-pinned attempt while a fallback peer is
     # actively continuing the same durable snapshot. The live catch-up state
     # is newer and actionable; do not cover its progress with the old error.
-    if catchup_status in {"queued", "running"} or connection_state == "syncing":
+    if catchup_status in {"queued", "running"} or (
+        not catchup_status and connection_state == "syncing"
+    ):
         queued = catchup_status == "queued"
         progress.update(
             status="running",

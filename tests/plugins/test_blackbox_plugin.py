@@ -173,7 +173,7 @@ def test_blackbox_sync_parser_accepts_wait_timeout():
     assert args.require_rules is True
 
 
-def test_managed_sync_restores_native_reconciliation_after_bootstrap(
+def test_managed_sync_repairs_native_reconciliation_before_sync(
     monkeypatch, tmp_path
 ):
     dkg_home = tmp_path / "dkg-home"
@@ -253,7 +253,7 @@ def test_managed_sync_restores_native_reconciliation_after_bootstrap(
     assert persisted["syncGlobalQueueLimit"] == 0
 
 
-def test_managed_sync_restarts_into_bootstrap_before_upgrade_sync(monkeypatch, tmp_path):
+def test_managed_sync_keeps_existing_steady_node_running(monkeypatch, tmp_path):
     dkg_home = tmp_path / "dkg-home"
     dkg_home.mkdir()
     dkg_bin = tmp_path / "dkg"
@@ -296,6 +296,11 @@ def test_managed_sync_restarts_into_bootstrap_before_upgrade_sync(monkeypatch, t
 
     monkeypatch.setenv("BLACKBOX_HOME", str(tmp_path / "blackbox-home"))
     monkeypatch.setattr(cli_mod, "load_blackbox_config", lambda: cfg)
+    monkeypatch.setattr(
+        cli_mod,
+        "_managed_dkg_sync_mode_matches",
+        lambda _cfg, expected: expected == cli_mod._DKG_STEADY_SYNC_SETTINGS,
+    )
     monkeypatch.setattr(cli_mod, "_restart_managed_dkg", restart)
     monkeypatch.setattr(cli_mod, "_cmd_sync_impl", sync_impl)
     monkeypatch.setattr(
@@ -311,7 +316,85 @@ def test_managed_sync_restarts_into_bootstrap_before_upgrade_sync(monkeypatch, t
 
     args = argparse.Namespace(wait=True, timeout=30, require_rules=True)
     assert cli_mod._cmd_sync(args) == 0
-    assert restart_modes == [(False, False, 1), (True, True, 0)]
+    assert restart_modes == []
+
+
+def test_managed_sync_repairs_interrupted_upgrade_and_preserves_checkpoint(
+    monkeypatch, tmp_path
+):
+    dkg_home = tmp_path / "dkg-home"
+    checkpoint = dkg_home / "rfc64-sync" / "inventory-v1.sqlite3"
+    checkpoint.parent.mkdir(parents=True)
+    checkpoint.write_bytes(b"existing-partial-sync")
+    dkg_bin = tmp_path / "dkg"
+    dkg_bin.write_text("", encoding="utf-8")
+    (dkg_home / "config.json").write_text(
+        json.dumps(
+            {
+                "syncOnConnectEnabled": False,
+                "syncReconcilerEnabled": False,
+                "durableSyncEnabled": True,
+                "syncGlobalMaxInflight": 1,
+                "syncGlobalQueueLimit": 1,
+                "syncSharedMemoryOnConnect": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    cfg = config_mod.BlackboxConfig(
+        context_graph_id=constants.DEFAULT_CONTEXT_GRAPH_ID,
+        graph_peer_id=constants.DEFAULT_GRAPH_PEER_ID,
+        dkg_home=str(dkg_home),
+        dkg_bin=str(dkg_bin),
+    )
+    current = {
+        "status": "failed",
+        "context_graph_id": cfg.context_graph_id,
+        "safe_current_triples": 51_642,
+        "expected_triples": 6_117_721,
+    }
+    restart_modes = []
+
+    def restart(_cfg):
+        data = json.loads((dkg_home / "config.json").read_text(encoding="utf-8"))
+        restart_modes.append(
+            (
+                data["syncOnConnectEnabled"],
+                data["syncReconcilerEnabled"],
+                data["syncGlobalQueueLimit"],
+            )
+        )
+
+    def sync_impl(_args):
+        assert checkpoint.read_bytes() == b"existing-partial-sync"
+        current.update(
+            status="failed",
+            phase="recovering-verifiable-memory",
+            error="publisher remains temporarily busy",
+        )
+        return 2
+
+    def write_state(status, **details):
+        current.update(status=status, **details)
+        return dict(current)
+
+    monkeypatch.setenv("BLACKBOX_HOME", str(tmp_path / "blackbox-home"))
+    monkeypatch.setattr(cli_mod, "load_blackbox_config", lambda: cfg)
+    monkeypatch.setattr(cli_mod, "_managed_dkg_sync_mode_matches", lambda *_args: False)
+    monkeypatch.setattr(cli_mod, "_restart_managed_dkg", restart)
+    monkeypatch.setattr(cli_mod, "_cmd_sync_impl", sync_impl)
+    monkeypatch.setattr(cli_mod.sync_state, "write", write_state)
+    monkeypatch.setattr(cli_mod.sync_state, "read", lambda: dict(current))
+    monkeypatch.setattr(
+        cli_mod.sync_state, "read_for_graph", lambda _graph: dict(current)
+    )
+
+    args = argparse.Namespace(wait=True, timeout=30, require_rules=True)
+    assert cli_mod._cmd_sync(args) == 2
+    assert restart_modes == [(True, True, 0)]
+    assert checkpoint.read_bytes() == b"existing-partial-sync"
+    assert current["safe_current_triples"] == 51_642
+    assert current["expected_triples"] == 6_117_721
 
 
 def test_managed_dkg_sync_environment_keeps_native_reconciliation_enabled(
@@ -374,9 +457,13 @@ def test_managed_dkg_sync_mode_detects_interrupted_transition(tmp_path, monkeypa
 
     monkeypatch.setattr(cli_mod.psutil, "Process", Process)
 
-    assert not cli_mod._managed_dkg_sync_mode_matches(
-        cfg, cli_mod._DKG_BOOTSTRAP_SYNC_SETTINGS
-    )
+    stale_bootstrap = {
+        **cli_mod._DKG_STEADY_SYNC_SETTINGS,
+        "DKG_SYNC_ON_CONNECT_ENABLED": "0",
+        "DKG_SYNC_RECONCILER_ENABLED": "0",
+        "DKG_SYNC_GLOBAL_QUEUE_LIMIT": "1",
+    }
+    assert not cli_mod._managed_dkg_sync_mode_matches(cfg, stale_bootstrap)
     assert cli_mod._managed_dkg_sync_mode_matches(
         cfg, cli_mod._DKG_STEADY_SYNC_SETTINGS
     )
@@ -1743,6 +1830,54 @@ def test_authoritative_recovery_waits_for_dkg_backpressure(
     )
     assert not any(status == "failed" for status, _details in states)
     assert "pausing briefly before a safe resume" in capsys.readouterr().out
+
+
+def test_authoritative_recovery_keeps_retrying_explicit_publisher_pressure(
+    monkeypatch, tmp_path
+):
+    attempts = []
+    delays = []
+
+    class FakeClient:
+        dkg_home = str(tmp_path)
+
+        def catchup_from_peer(self, cg_id, peer_id, *, budget_ms):
+            attempts.append((cg_id, peer_id, budget_ms))
+            if len(attempts) <= 4:
+                raise cli_mod.DkgError(
+                    "POST /api/shared-memory/catchup -> 503: "
+                    '{"errorCode":"DURABLE_CATCHUP_ALL_PEERS_FAILED",'
+                    '"retryable":true,"error":"Durable catchup failed for '
+                    'every selected peer"}'
+                )
+            (tmp_path / "daemon.log").write_text(
+                f'Rootless durable progress for "{cg_id}": '
+                "1 complete graph(s), safe offset 0->100 of 100 (raw 100)\n",
+                encoding="utf-8",
+            )
+            return {
+                "ok": True,
+                "includeDurable": True,
+                "includeSharedMemory": False,
+                "peersAttempted": 1,
+                "totalDurableInsertedTriples": 100,
+                "results": [{"peerId": peer_id}],
+            }
+
+        def threat_count(self, _cg_id, *, peer_id=None):
+            return 1
+
+    monkeypatch.setattr(cli_mod.time, "sleep", delays.append)
+    monkeypatch.setattr(cli_mod.sync_state, "write", lambda *_args, **_kwargs: {})
+
+    assert cli_mod._catchup_authoritative_vm(
+        FakeClient(),
+        constants.DEFAULT_CONTEXT_GRAPH_ID,
+        constants.DEFAULT_GRAPH_PEER_ID,
+        cli_mod.time.monotonic() + 600,
+    )
+    assert len(attempts) == 5
+    assert delays == [2.0, 4.0, 8.0, 16.0]
 
 
 def test_authoritative_recovery_syncs_target_directly_with_bounded_budgets(

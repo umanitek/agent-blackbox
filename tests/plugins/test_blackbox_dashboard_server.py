@@ -691,6 +691,37 @@ def test_sync_activity_hides_known_swm_failure_when_verified_vm_is_ready():
     assert activity["percent"] == 100.0
 
 
+def test_sync_activity_treats_retryable_durable_503_as_resumable_wait():
+    raw_error = (
+        "POST /api/shared-memory/catchup -> 503: "
+        '{"ok":false,"errorCode":"DURABLE_CATCHUP_ALL_PEERS_FAILED",'
+        '"retryable":true,"error":"Durable catchup failed for every selected peer"}'
+    )
+    activity = server._sync_activity(
+        public=52_000,
+        community=0,
+        node_reachable=True,
+        catchup={"status": "failed", "error": raw_error},
+        connection={"state": "subscribed"},
+        transfer={
+            "status": "failed",
+            "phase": "recovering-verifiable-memory",
+            "current_triples": 51_642,
+            "expected_triples": 6_117_721,
+        },
+    )
+
+    assert activity["status"] == "waiting"
+    assert activity["phase"] == "waiting-for-publisher-capacity"
+    assert activity["label"] == "Waiting for publisher sync capacity"
+    assert activity["current"] == 51_642
+    assert activity["expected"] == 6_117_721
+    assert activity["indeterminate"] is False
+    assert "retry and resume automatically" in activity["detail"]
+    assert "POST" not in activity["detail"]
+    assert "503" not in activity["detail"]
+
+
 def test_sync_activity_keeps_unrelated_catchup_failures_visible():
     activity = server._sync_activity(
         public=52_000,

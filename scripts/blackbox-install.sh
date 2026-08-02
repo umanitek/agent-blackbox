@@ -712,14 +712,15 @@ existing_relays = data.get("relayPeers") if isinstance(data.get("relayPeers"), l
 merged_relays = list(dict.fromkeys([*existing_relays, *MAINNET_BASE_RELAYS]))
 data["relayPeers"] = merged_relays
 data["relayReservationCount"] = int(data.get("relayReservationCount") or 4)
-# Reserve the one sync slot for the explicit initial Blackbox VM catch-up. The
-# managed sync command restores native on-connect reconciliation afterward.
-data["syncOnConnectEnabled"] = False
-data["syncReconcilerEnabled"] = False
+# Keep native durable reconciliation resumable from the first node start. The
+# foreground pinned catch-up runs before a fresh install subscribes, while an
+# upgrade must not interrupt an existing checkpointed transfer.
+data["syncOnConnectEnabled"] = True
+data["syncReconcilerEnabled"] = True
 data["durableSyncEnabled"] = True
 data.pop("syncAgentsMeta", None)
 data["syncGlobalMaxInflight"] = 1
-data["syncGlobalQueueLimit"] = 1
+data["syncGlobalQueueLimit"] = 0
 data.pop("restrictAutoSubscribeContextGraphs", None)
 data["syncSharedMemoryOnConnect"] = False
 priorities = data.get("syncContextGraphPriorities")
