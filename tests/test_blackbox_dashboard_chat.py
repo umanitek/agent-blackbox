@@ -162,6 +162,29 @@ def test_running_sync_state_keeps_latest_committed_count(monkeypatch, tmp_path):
     assert state["public_entries"] == 460_000
 
 
+def test_active_catchup_supersedes_older_authoritative_failure():
+    activity = server._sync_activity(
+        public=0,
+        community=0,
+        node_reachable=True,
+        catchup={"status": "running", "startedAt": 200.0},
+        connection={"state": "syncing", "updated_at": 200.0},
+        transfer={
+            "status": "failed",
+            "updated_at": 100.0,
+            "error": (
+                'POST /api/shared-memory/catchup -> 503: {"retryable":true,'
+                '"errorCode":"DURABLE_CATCHUP_ALL_PEERS_FAILED"}'
+            ),
+        },
+    )
+
+    assert activity["status"] == "running"
+    assert activity["phase"] == "network-catchup"
+    assert activity["label"] == "Fetching graph snapshot"
+    assert "503" not in activity["detail"]
+
+
 def test_dashboard_automatic_sync_runs_canonical_verified_cli(monkeypatch):
     cfg = SimpleNamespace(context_graph_id="0x37b1/agent-blackbox")
 

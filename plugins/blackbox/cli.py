@@ -36,6 +36,22 @@ _DKG_STEADY_SYNC_SETTINGS = {
     "DKG_SYNC_GLOBAL_QUEUE_LIMIT": "0",
 }
 
+_DKG_BOOTSTRAP_SYNC_SETTINGS = {
+    "DKG_SYNC_ON_CONNECT_ENABLED": "0",
+    "DKG_SYNC_RECONCILER_ENABLED": "0",
+    "DKG_DURABLE_SYNC_ENABLED": "1",
+    "DKG_SYNC_GLOBAL_MAX_INFLIGHT": "1",
+    "DKG_SYNC_GLOBAL_QUEUE_LIMIT": "1",
+}
+
+_DKG_CONFIG_SYNC_SETTINGS = {
+    "DKG_SYNC_ON_CONNECT_ENABLED": "syncOnConnectEnabled",
+    "DKG_SYNC_RECONCILER_ENABLED": "syncReconcilerEnabled",
+    "DKG_DURABLE_SYNC_ENABLED": "durableSyncEnabled",
+    "DKG_SYNC_GLOBAL_MAX_INFLIGHT": "syncGlobalMaxInflight",
+    "DKG_SYNC_GLOBAL_QUEUE_LIMIT": "syncGlobalQueueLimit",
+}
+
 _BLACKBOX_CHAT_PROFILE = "agent-blackbox"
 _BLACKBOX_SOUL_MARKER = "<!-- managed-by: hermes-blackbox-chat -->"
 _LEGACY_MANAGED_SOUL_PREFIX = "<!-- managed-by: hermes-"
@@ -553,7 +569,21 @@ def _managed_sync_lock():
 
 def _dkg_sync_environment(cfg: BlackboxConfig) -> Dict[str, str]:
     env = os.environ.copy()
-    env.update(_DKG_STEADY_SYNC_SETTINGS)
+    sync_settings = dict(_DKG_STEADY_SYNC_SETTINGS)
+    try:
+        persisted = json.loads(
+            (Path(cfg.dkg_home) / "config.json").read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError, TypeError):
+        persisted = {}
+    if isinstance(persisted, dict):
+        for env_name, config_name in _DKG_CONFIG_SYNC_SETTINGS.items():
+            value = persisted.get(config_name)
+            if isinstance(value, bool):
+                sync_settings[env_name] = "1" if value else "0"
+            elif isinstance(value, int):
+                sync_settings[env_name] = str(value)
+    env.update(sync_settings)
     env["DKG_HOME"] = str(cfg.dkg_home)
     env.setdefault("DKG_CATCHUP_MAX_CONCURRENT_PEERS", "1")
     env.setdefault("DKG_STORE_QUEUE_WAIT_TIMEOUT_MS", "300000")
@@ -566,6 +596,23 @@ def _dkg_sync_environment(cfg: BlackboxConfig) -> Dict[str, str]:
     if node_executable is not None:
         env["PATH"] = str(node_executable.parent) + os.pathsep + env.get("PATH", "")
     return env
+
+
+def _managed_dkg_sync_mode_matches(
+    cfg: BlackboxConfig,
+    expected: Dict[str, str],
+) -> bool:
+    """Return whether the live worker actually uses the persisted sync mode."""
+    try:
+        pid = int(
+            (Path(cfg.dkg_home) / "daemon.pid")
+            .read_text(encoding="utf-8")
+            .strip()
+        )
+        process_env = psutil.Process(pid).environ()
+    except (OSError, TypeError, ValueError, psutil.Error):
+        return False
+    return all(process_env.get(name) == value for name, value in expected.items())
 
 
 def _managed_dkg_node_executable(cfg: BlackboxConfig) -> Optional[Path]:
@@ -648,18 +695,24 @@ def _node_runtime_matches_dkg(executable: Path, cfg: BlackboxConfig) -> bool:
     return result.returncode == 0
 
 
-def _set_persisted_dkg_steady_state(cfg: BlackboxConfig) -> bool:
-    """Persist bounded native reconciliation and report whether it changed."""
+def _set_persisted_dkg_sync_state(
+    cfg: BlackboxConfig,
+    *,
+    on_connect: bool,
+    reconciler: bool,
+    queue_limit: int,
+) -> bool:
+    """Persist a managed DKG sync mode and report whether it changed."""
     path = Path(cfg.dkg_home) / "config.json"
     data = json.loads(path.read_text(encoding="utf-8"))
     original = json.dumps(data, sort_keys=True)
     data.update(
         {
-            "syncOnConnectEnabled": True,
-            "syncReconcilerEnabled": True,
+            "syncOnConnectEnabled": on_connect,
+            "syncReconcilerEnabled": reconciler,
             "durableSyncEnabled": True,
             "syncGlobalMaxInflight": 1,
-            "syncGlobalQueueLimit": 0,
+            "syncGlobalQueueLimit": queue_limit,
             "syncSharedMemoryOnConnect": False,
         }
     )
@@ -669,6 +722,26 @@ def _set_persisted_dkg_steady_state(cfg: BlackboxConfig) -> bool:
     tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
     os.replace(tmp, path)
     return True
+
+
+def _set_persisted_dkg_bootstrap_state(cfg: BlackboxConfig) -> bool:
+    """Reserve DKG capacity for one explicit authoritative bootstrap."""
+    return _set_persisted_dkg_sync_state(
+        cfg,
+        on_connect=False,
+        reconciler=False,
+        queue_limit=1,
+    )
+
+
+def _set_persisted_dkg_steady_state(cfg: BlackboxConfig) -> bool:
+    """Restore bounded native reconciliation after foreground bootstrap."""
+    return _set_persisted_dkg_sync_state(
+        cfg,
+        on_connect=True,
+        reconciler=True,
+        queue_limit=0,
+    )
 
 
 def _restart_managed_dkg(cfg: BlackboxConfig) -> None:
@@ -823,7 +896,7 @@ def _complete_local_release_ruleset(
 
 
 def _cmd_sync_with_managed_dkg(cfg: BlackboxConfig, args: argparse.Namespace) -> int:
-    """Run one foreground catch-up while DKG owns ongoing reconciliation."""
+    """Run one isolated foreground catch-up, then restore reconciliation."""
     with _managed_sync_lock() as acquired:
         if not acquired:
             print("Blackbox sync is already running; no second transfer was queued.")
@@ -842,17 +915,30 @@ def _cmd_sync_with_managed_dkg(cfg: BlackboxConfig, args: argparse.Namespace) ->
         result = 2
         failure: Optional[BaseException] = None
         try:
-            # Upgrade installs that previously disabled the native reconciler.
-            # Do not restart an already-correct node: preserving the pinned
-            # curator connection lets DKG resume the same manifest after this
-            # foreground command reaches its own deadline.
-            if _set_persisted_dkg_steady_state(cfg):
+            # On-connect and reconciler jobs compete with the authoritative
+            # request for DKG's single global sync slot. Isolate bootstrap so
+            # the requested curator graph gets that slot deterministically.
+            bootstrap_changed = _set_persisted_dkg_bootstrap_state(cfg)
+            if bootstrap_changed or not _managed_dkg_sync_mode_matches(
+                cfg, _DKG_BOOTSTRAP_SYNC_SETTINGS
+            ):
                 _restart_managed_dkg(cfg)
             result = _cmd_sync_impl(args)
             terminal_state = sync_state.read_for_graph(cfg.context_graph_id)
         except BaseException as exc:
             failure = exc
             terminal_state = sync_state.read_for_graph(cfg.context_graph_id)
+        finally:
+            try:
+                if _set_persisted_dkg_steady_state(cfg):
+                    _restart_managed_dkg(cfg)
+            except BaseException as exc:
+                if failure is None:
+                    failure = exc
+                else:
+                    logger.exception(
+                        "Could not restore managed DKG reconciliation after sync"
+                    )
 
         if failure is not None:
             raise failure

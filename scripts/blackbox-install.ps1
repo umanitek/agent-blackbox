@@ -76,7 +76,7 @@ $DkgDaemonUrl = "http://127.0.0.1:$DkgPort"
 $DkgStoreQueueLimit = if ($env:BLACKBOX_DKG_STORE_QUEUE_LIMIT) { [int]$env:BLACKBOX_DKG_STORE_QUEUE_LIMIT } else { 512 }
 $DkgListContextGraphsProjection = if ($env:BLACKBOX_DKG_LIST_CONTEXT_GRAPHS_PROJECTION) { $env:BLACKBOX_DKG_LIST_CONTEXT_GRAPHS_PROJECTION } else { "1" }
 $DkgSyncGlobalMaxInflight = "1"
-$DkgSyncGlobalQueueLimit = "0"
+$DkgSyncGlobalQueueLimit = "1"
 $script:DkgDurableSyncEnabled = if ($env:BLACKBOX_DKG_DURABLE_SYNC_ENABLED) { $env:BLACKBOX_DKG_DURABLE_SYNC_ENABLED } else { "1" }
 $DkgCatchupMaxConcurrentPeers = "1"
 $DkgStoreQueueWaitTimeoutMs = "300000"
@@ -288,8 +288,8 @@ function Invoke-BlackboxDkg {
         ) { "1" } else { "0" }
         $env:DKG_STORE_QUEUE_LIMIT = "$DkgStoreQueueLimit"
         $env:DKG_LIST_CONTEXT_GRAPHS_PROJECTION = "$DkgListContextGraphsProjection"
-        $env:DKG_SYNC_ON_CONNECT_ENABLED = "1"
-        $env:DKG_SYNC_RECONCILER_ENABLED = "1"
+        $env:DKG_SYNC_ON_CONNECT_ENABLED = "0"
+        $env:DKG_SYNC_RECONCILER_ENABLED = "0"
         $env:DKG_DURABLE_SYNC_ENABLED = $script:DkgDurableSyncEnabled
         $env:DKG_SYNC_GLOBAL_MAX_INFLIGHT = "$DkgSyncGlobalMaxInflight"
         $env:DKG_SYNC_GLOBAL_QUEUE_LIMIT = "$DkgSyncGlobalQueueLimit"
@@ -780,15 +780,14 @@ existing_relays = data.get("relayPeers") if isinstance(data.get("relayPeers"), l
 merged_relays = list(dict.fromkeys([*existing_relays, *MAINNET_BASE_RELAYS]))
 data["relayPeers"] = merged_relays
 data["relayReservationCount"] = int(data.get("relayReservationCount") or 4)
-# DKG owns restart-safe continuation of the persisted Blackbox subscription.
-# The one-inflight/zero-queue limits below prevent sync fan-out from starving
-# Blazegraph while still allowing the reconciler to resume bounded manifests.
-data["syncOnConnectEnabled"] = True
-data["syncReconcilerEnabled"] = True
+# Reserve the one sync slot for Blackbox's explicit initial VM catch-up. The
+# managed sync command restores native on-connect reconciliation afterward.
+data["syncOnConnectEnabled"] = False
+data["syncReconcilerEnabled"] = False
 data["durableSyncEnabled"] = True
 data.pop("syncAgentsMeta", None)
 data["syncGlobalMaxInflight"] = 1
-data["syncGlobalQueueLimit"] = 0
+data["syncGlobalQueueLimit"] = 1
 data.pop("restrictAutoSubscribeContextGraphs", None)
 data["syncSharedMemoryOnConnect"] = False
 priorities = data.get("syncContextGraphPriorities")

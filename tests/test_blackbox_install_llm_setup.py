@@ -780,11 +780,11 @@ def test_dkg_config_writer_leaves_subscriptions_to_the_dkg_api(tmp_path: Path) -
     ]
     assert "autoApproveJoinRequests" not in migrated
     assert "syncAgentsMeta" not in migrated
-    assert migrated["syncOnConnectEnabled"] is True
-    assert migrated["syncReconcilerEnabled"] is True
+    assert migrated["syncOnConnectEnabled"] is False
+    assert migrated["syncReconcilerEnabled"] is False
     assert migrated["durableSyncEnabled"] is True
     assert migrated["syncGlobalMaxInflight"] == 1
-    assert migrated["syncGlobalQueueLimit"] == 0
+    assert migrated["syncGlobalQueueLimit"] == 1
     assert "restrictAutoSubscribeContextGraphs" not in migrated
     assert migrated["store"] == {
         "backend": "blazegraph",
@@ -1469,11 +1469,11 @@ def test_installers_use_native_dkg_membership_without_sync_overrides() -> None:
         assert "blackbox-dkg-runtime-fingerprint.py" in text
         assert "DKG daemon is ready on npm build" in text
         assert "autoApproveJoinRequests" not in text
-        assert 'data["syncOnConnectEnabled"] = True' in text
-        assert 'data["syncReconcilerEnabled"] = True' in text
+        assert 'data["syncOnConnectEnabled"] = False' in text
+        assert 'data["syncReconcilerEnabled"] = False' in text
         assert 'data["durableSyncEnabled"] = True' in text
         assert 'data["syncGlobalMaxInflight"] = 1' in text
-        assert 'data["syncGlobalQueueLimit"] = 0' in text
+        assert 'data["syncGlobalQueueLimit"] = 1' in text
         assert 'data.pop("restrictAutoSubscribeContextGraphs", None)' in text
         assert 'data["syncSharedMemoryOnConnect"] = False' in text
         assert 'data["syncContextGraphPriorities"] = priorities' in text
@@ -1493,13 +1493,13 @@ def test_installers_use_native_dkg_membership_without_sync_overrides() -> None:
         assert "Blazegraph is unavailable or returned an error" in text
 
     assert 'BLACKBOX_DKG_SYNC_GLOBAL_MAX_INFLIGHT="1"' in unix
-    assert 'BLACKBOX_DKG_SYNC_GLOBAL_QUEUE_LIMIT="0"' in unix
+    assert 'BLACKBOX_DKG_SYNC_GLOBAL_QUEUE_LIMIT="1"' in unix
     assert 'BLACKBOX_DKG_DURABLE_SYNC_ENABLED="${BLACKBOX_DKG_DURABLE_SYNC_ENABLED:-1}"' in unix
     assert 'BLACKBOX_DKG_CATCHUP_MAX_CONCURRENT_PEERS="1"' in unix
     assert "PYTHONUNBUFFERED=1" in unix
     assert 'BLACKBOX_DKG_STORE_QUEUE_WAIT_TIMEOUT_MS="300000"' in unix
     assert '$DkgSyncGlobalMaxInflight = "1"' in windows
-    assert '$DkgSyncGlobalQueueLimit = "0"' in windows
+    assert '$DkgSyncGlobalQueueLimit = "1"' in windows
     assert 'else { "1" }' in windows
     assert "restart_blackbox_dkg_for_sync_mode" not in unix
     assert "Restart-BlackboxDkgForSyncMode" not in windows
