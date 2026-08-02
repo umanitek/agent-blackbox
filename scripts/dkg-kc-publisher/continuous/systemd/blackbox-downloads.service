@@ -1,0 +1,25 @@
+[Unit]
+Description=Tailnet-only Agent Blackbox approval JSON downloads
+After=network-online.target tailscaled.service
+Wants=network-online.target tailscaled.service
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/agent-blackbox-continuous
+ExecStart=/home/ubuntu/agent-blackbox-continuous/.venv/bin/python -m continuous.cli --config /etc/blackbox-continuous/config.yaml downloads-serve
+Restart=on-failure
+RestartSec=10s
+StateDirectory=blackbox-continuous
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/blackbox-continuous
+LockPersonality=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

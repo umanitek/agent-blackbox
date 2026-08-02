@@ -1,0 +1,23 @@
+[Unit]
+Description=Publish the exact Slack-approved Agent Blackbox bundle
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/agent-blackbox-continuous
+ExecStart=/home/ubuntu/agent-blackbox-continuous/.venv/bin/python -m continuous.cli --config /etc/blackbox-continuous/config.yaml publish-triggered
+LoadCredential=dkg_auth_token:/home/ubuntu/.dkg/auth.token
+LoadCredential=slack_webhook_url:/root/.secrets/blackbox/slack-webhook-url
+StateDirectory=blackbox-continuous
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/blackbox-continuous
+LockPersonality=true
+RestrictSUIDSGID=true
+

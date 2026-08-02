@@ -1,0 +1,206 @@
+version: 1
+
+paths:
+  state_dir: /var/lib/blackbox-continuous
+  publisher_dir: /home/ubuntu/agent-blackbox-continuous
+
+downloads:
+  host: 127.0.0.1
+  port: 8791
+
+limits:
+  asset_records: 1000
+  approval_bundle_records: 10000
+  minimum_bundle_records: 10000
+  daily_publish_records: 100000
+  max_new_records_per_source_run: 50000
+  max_pending_records: 500000
+  max_source_bytes: 2000000000
+  max_source_files: 10000
+  max_line_bytes: 16384
+  approval_ttl_hours: 24
+  approval_preflight_ttl_minutes: 30
+
+scheduler:
+  max_bundles_per_run: 1
+
+# Disabled through the complete shadow/Slack rehearsal. Enabling this only lets
+# the outer worker call the existing guarded publish.mjs entrypoint; it never
+# modifies the DKG package or daemon.
+publisher:
+  enabled: false
+  # Explicit operator override. When true, the publisher timer posts the exact
+  # bundle JSON to Slack for information, records an automatic approval, and
+  # publishes one oldest bundle at a time. The safe default remains false.
+  auto_approve: false
+  context_graph_id: ""
+  context_graph_onchain_id: ""
+  dkg_version: ""
+  ledger_dkg_version: ""
+  network: mainnet-base
+  dkg_endpoint: http://127.0.0.1
+  dkg_port: 8900
+  dkg_auth_token_credential: dkg_auth_token
+  epochs: 12
+  publish_mode: sync
+  # VM-only: skip the optional post-VM pull and SWM re-share. The DKG's
+  # required initial WM -> SWM -> VM lifecycle is unchanged.
+  swm_restore_mode: skip
+  pipeline_width: 1
+  # Pin this to 0 for a public graph or 1 for a private/curated graph.
+  access_policy: 1
+  publisher_node_identity_id: 0
+  require_swm_verification: false
+  # Both values remain false/blank until the exact deployed publish.mjs is
+  # reviewed during the read-only publisher-node inventory.
+  verified_incremental_support: false
+  approved_publish_script_sha256: ""
+  timeout_seconds: 86400
+
+# Disabled for the local/offline phase because it needs read-only DKG access.
+# Paid mode cannot be enabled until this is enabled and has completed recently.
+graph_dedupe:
+  enabled: false
+  required_for_publishing: true
+  max_age_hours: 6
+  # Candidate-bound lookups target the confirmed /context/<on-chain-id>
+  # partition. They avoid expensive full scans across hundreds of KA graphs.
+  query_batch_size: 1000
+  query_timeout_seconds: 60
+  # Retry only transient transport/overload failures. Validation and other
+  # non-retryable query errors still stop the run immediately.
+  query_attempts: 3
+  query_retry_delay_seconds: 5
+
+slack:
+  enabled: false
+  workspace_id: ""
+  channel_id: ""
+  download_base_url: ""
+  # When true, any authenticated member clicking inside the exact configured
+  # channel may decide a bundle. Workspace/channel/hash/nonce checks still run.
+  allow_any_channel_member: false
+  approver_user_ids: []
+  progress_interval_seconds: 60
+  approval_mode: socket
+  allow_manual_cli_approval: false
+  bot_token_credential: slack_bot_token
+  app_token_credential: slack_app_token
+  # Optional outbound transport when the bot token lacks chat:write. Button
+  # actions still arrive through authenticated Socket Mode.
+  webhook_url_credential: slack_webhook_url
+
+# Disabled until the exposed conversation key has been revoked and a new,
+# restricted service credential is installed out of band. This worker only
+# proposes sources; it cannot enable adapters, approve, or publish.
+ai_discovery:
+  enabled: false
+  model: gpt-5.6-luna
+  api_key_credential: openai_api_key
+  max_calls_per_run: 1
+  max_calls_per_day: 2
+  max_output_tokens: 1200
+  max_total_tokens_per_day: 20000
+  max_estimated_cost_usd_per_day: 2.0
+  timeout_seconds: 180
+  estimated_pricing:
+    # Set these to current project pricing before enabling. Zero values make
+    # accounting visible but intentionally fail the production rollout review.
+    input_usd_per_million: 0
+    output_usd_per_million: 0
+    web_search_call_usd: 0
+  allowed_domains:
+    - github.com
+    - gitlab.com
+    - cisa.gov
+    - mitre.org
+    - owasp.org
+    - huggingface.co
+  coverage_gaps:
+    - agentic goal hijacking
+    - MCP and agent-skill supply-chain compromise
+    - memory and context poisoning
+    - agent identity and privilege abuse
+    - insecure inter-agent communication
+    - rogue-agent behavior
+
+sources:
+  - id: phishing_database
+    enabled: true
+    adapter: git_lines
+    repository: https://github.com/Phishing-Database/Phishing.Database.git
+    allowed_hosts: [github.com]
+    ref: master
+    paths:
+      - phishing-links-ACTIVE.txt
+      - phishing-domains-ACTIVE.txt
+    category: phishing
+    confidence: 75
+    severity: high
+    auto_candidate: true
+    publish_removals: true
+    max_records_per_run: 50000
+    license:
+      id: MIT
+      url: https://github.com/Phishing-Database/Phishing.Database/blob/master/LICENSE
+      attribution: Phishing.Database contributors
+      redistribution_approved: true
+
+  - id: maltrail_static
+    enabled: true
+    adapter: git_lines
+    repository: https://github.com/stamparm/maltrail.git
+    allowed_hosts: [github.com]
+    ref: master
+    paths:
+      - trails/static/**/*.txt
+    line_parser: maltrail
+    exclude_paths:
+      - trails/online/**
+    category: malware_ioc
+    confidence: 80
+    severity: high
+    category_by_path:
+      trails/static/malware/**: malware_ioc
+      trails/static/malicious/**: malicious_ioc
+      trails/static/suspicious/**: suspicious_ioc
+    confidence_by_path:
+      trails/static/suspicious/**: 60
+    severity_by_path:
+      trails/static/suspicious/**: medium
+    auto_candidate: true
+    publish_removals: true
+    max_records_per_run: 50000
+    license:
+      id: MIT
+      url: https://github.com/stamparm/maltrail/blob/master/LICENSE
+      attribution: Maltrail contributors
+      redistribution_approved: true
+
+  # Kept disabled and quarantined until quality/corroboration policy is
+  # measured and a reviewed hosts-file parser is added. These files use
+  # "0.0.0.0 domain" rows, which the inert one-indicator-per-line parser
+  # deliberately rejects rather than guessing.
+  - id: blocklist_project
+    enabled: false
+    adapter: git_lines
+    repository: https://github.com/blocklistproject/Lists.git
+    allowed_hosts: [github.com]
+    ref: master
+    paths:
+      - malware.txt
+      - abuse.txt
+      - phishing.txt
+      - fraud.txt
+      - ransomware.txt
+      - scam.txt
+    category: candidate_domain
+    confidence: 35
+    severity: unknown
+    auto_candidate: false
+    publish_removals: true
+    license:
+      id: Unlicense
+      url: https://github.com/blocklistproject/Lists/blob/master/LICENSE
+      attribution: The Block List Project
+      redistribution_approved: true

@@ -1,0 +1,12 @@
+[Unit]
+Description=Run Agent Blackbox threat acquisition every three hours
+
+[Timer]
+OnCalendar=*-*-* 00/3:00:00 UTC
+Persistent=true
+RandomizedDelaySec=10m
+AccuracySec=1m
+Unit=blackbox-acquire.service
+
+[Install]
+WantedBy=timers.target

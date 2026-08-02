@@ -1,0 +1,27 @@
+[Unit]
+Description=Agent Blackbox Slack approval listener (Socket Mode)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/agent-blackbox-continuous
+ExecStart=/home/ubuntu/agent-blackbox-continuous/.venv/bin/python -m continuous.cli --config /etc/blackbox-continuous/config.yaml slack-listen
+LoadCredential=slack_bot_token:/root/.secrets/blackbox/slack-bot-token
+LoadCredential=slack_app_token:/root/.secrets/blackbox/slack-app-token
+Restart=on-failure
+RestartSec=10s
+StateDirectory=blackbox-continuous
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/blackbox-continuous
+LockPersonality=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

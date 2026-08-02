@@ -1,0 +1,3 @@
+PyYAML==6.0.3
+slack-bolt==1.30.0
+slack-sdk==3.43.0

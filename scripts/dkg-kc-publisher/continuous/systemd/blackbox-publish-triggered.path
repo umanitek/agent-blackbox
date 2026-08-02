@@ -1,0 +1,9 @@
+[Unit]
+Description=Start Agent Blackbox publishing immediately after live Slack approval
+
+[Path]
+PathExists=/var/lib/blackbox-continuous/publish.trigger
+Unit=blackbox-publish-triggered.service
+
+[Install]
+WantedBy=multi-user.target

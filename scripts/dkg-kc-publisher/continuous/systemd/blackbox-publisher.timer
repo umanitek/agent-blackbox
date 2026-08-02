@@ -1,0 +1,11 @@
+[Unit]
+Description=Check for approved Agent Blackbox bundles
+
+[Timer]
+OnBootSec=5m
+OnUnitInactiveSec=10m
+Persistent=true
+Unit=blackbox-publisher.service
+
+[Install]
+WantedBy=timers.target

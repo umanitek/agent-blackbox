@@ -1,0 +1,27 @@
+[Unit]
+Description=Agent Blackbox threat acquisition and approval staging
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/agent-blackbox-continuous
+ExecStart=/home/ubuntu/agent-blackbox-continuous/.venv/bin/python -m continuous.cli --config /etc/blackbox-continuous/config.yaml acquire
+LoadCredential=dkg_auth_token:/home/ubuntu/.dkg/auth.token
+LoadCredential=slack_bot_token:/root/.secrets/blackbox/slack-bot-token
+LoadCredential=slack_webhook_url:/root/.secrets/blackbox/slack-webhook-url
+LoadCredential=openai_api_key:/root/.secrets/blackbox/openai-api-key
+StateDirectory=blackbox-continuous
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/blackbox-continuous
+LockPersonality=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target
