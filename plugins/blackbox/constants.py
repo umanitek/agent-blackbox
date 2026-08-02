@@ -129,17 +129,25 @@ DEFAULT_GRAPH_PEER_ID = "12D3KooWBJskzr2unXQG9mR3LRZFUJoxWr1PN6hTbyWyKndHXjZM"
 DEFAULT_GRAPH_RELEASE_THREAT_FLOOR = 550_000
 DEFAULT_GRAPH_RELEASE_RULE_FLOOR = 500_000
 
-#: Keep the first durable recovery request short so a fresh install gets a
-#: useful verified ruleset quickly. DKG checkpoints complete exact graphs and
-#: resumes the next request from the safe boundary, so this does not weaken
-#: verification.
-INITIAL_GRAPH_SYNC_PASS_BUDGET_MS = 30_000
+#: DKG divides this caller boundary across three router attempts and its remote
+#: responder may spend ten seconds waiting for capacity before it starts serving
+#: a page.  A 30-second caller budget therefore gave each attempt less than the
+#: responder's own queue window and deterministically aborted congested fresh
+#: installs at offset zero.  Use the route's bounded maximum so each page retains
+#: DKG's full transport timeout.  Durable checkpoints still split a large VM into
+#: safe, resumable passes; this only gives each pass enough time to make progress.
+INITIAL_GRAPH_SYNC_PASS_BUDGET_MS = 300_000
 
-#: Keep follow-up batches small enough for exact-graph verification and atomic
-#: materialization to finish before DKG's ten-minute responder session expires.
-#: A larger fetch can settle successfully but still lose its numeric checkpoint
-#: before the next pass, forcing the snapshot back to offset zero.
-DEFAULT_GRAPH_SYNC_PASS_BUDGET_MS = 60_000
+#: Follow-up passes use the same complete transport window.  This remains below
+#: DKG's ten-minute responder-session lifetime and preserves its checkpointed
+#: exact-graph boundaries across retries and process restarts.
+DEFAULT_GRAPH_SYNC_PASS_BUDGET_MS = 300_000
+
+#: Publisher pressure is explicitly retryable. Keep trying until the command's
+#: overall deadline, with a bounded delay so many fresh clients cannot create a
+#: tight retry loop against the same responder.
+GRAPH_SYNC_RETRY_BACKOFF_INITIAL_S = 2.0
+GRAPH_SYNC_RETRY_BACKOFF_MAX_S = 30.0
 
 #: Durable network fetching is bounded by the pass budget above, but DKG must
 #: still verify complete graphs and atomically materialize them afterward. A

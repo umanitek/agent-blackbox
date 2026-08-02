@@ -36,14 +36,6 @@ _DKG_STEADY_SYNC_SETTINGS = {
     "DKG_SYNC_GLOBAL_QUEUE_LIMIT": "0",
 }
 
-_DKG_BOOTSTRAP_SYNC_SETTINGS = {
-    "DKG_SYNC_ON_CONNECT_ENABLED": "0",
-    "DKG_SYNC_RECONCILER_ENABLED": "0",
-    "DKG_DURABLE_SYNC_ENABLED": "1",
-    "DKG_SYNC_GLOBAL_MAX_INFLIGHT": "1",
-    "DKG_SYNC_GLOBAL_QUEUE_LIMIT": "1",
-}
-
 _DKG_CONFIG_SYNC_SETTINGS = {
     "DKG_SYNC_ON_CONNECT_ENABLED": "syncOnConnectEnabled",
     "DKG_SYNC_RECONCILER_ENABLED": "syncReconcilerEnabled",
@@ -695,24 +687,24 @@ def _node_runtime_matches_dkg(executable: Path, cfg: BlackboxConfig) -> bool:
     return result.returncode == 0
 
 
-def _set_persisted_dkg_sync_state(
-    cfg: BlackboxConfig,
-    *,
-    on_connect: bool,
-    reconciler: bool,
-    queue_limit: int,
-) -> bool:
-    """Persist a managed DKG sync mode and report whether it changed."""
+def _set_persisted_dkg_steady_state(cfg: BlackboxConfig) -> bool:
+    """Persist resumable native reconciliation and report whether it changed.
+
+    Older Blackbox releases temporarily disabled native reconciliation around a
+    foreground sync.  If that process was interrupted, an existing installation
+    could remain in bootstrap mode forever.  Every new sync repairs that state
+    before doing network work, without touching DKG's durable checkpoints.
+    """
     path = Path(cfg.dkg_home) / "config.json"
     data = json.loads(path.read_text(encoding="utf-8"))
     original = json.dumps(data, sort_keys=True)
     data.update(
         {
-            "syncOnConnectEnabled": on_connect,
-            "syncReconcilerEnabled": reconciler,
+            "syncOnConnectEnabled": True,
+            "syncReconcilerEnabled": True,
             "durableSyncEnabled": True,
             "syncGlobalMaxInflight": 1,
-            "syncGlobalQueueLimit": queue_limit,
+            "syncGlobalQueueLimit": 0,
             "syncSharedMemoryOnConnect": False,
         }
     )
@@ -722,26 +714,6 @@ def _set_persisted_dkg_sync_state(
     tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
     os.replace(tmp, path)
     return True
-
-
-def _set_persisted_dkg_bootstrap_state(cfg: BlackboxConfig) -> bool:
-    """Reserve DKG capacity for one explicit authoritative bootstrap."""
-    return _set_persisted_dkg_sync_state(
-        cfg,
-        on_connect=False,
-        reconciler=False,
-        queue_limit=1,
-    )
-
-
-def _set_persisted_dkg_steady_state(cfg: BlackboxConfig) -> bool:
-    """Restore bounded native reconciliation after foreground bootstrap."""
-    return _set_persisted_dkg_sync_state(
-        cfg,
-        on_connect=True,
-        reconciler=True,
-        queue_limit=0,
-    )
 
 
 def _restart_managed_dkg(cfg: BlackboxConfig) -> None:
@@ -896,7 +868,14 @@ def _complete_local_release_ruleset(
 
 
 def _cmd_sync_with_managed_dkg(cfg: BlackboxConfig, args: argparse.Namespace) -> int:
-    """Run one isolated foreground catch-up, then restore reconciliation."""
+    """Run foreground recovery while leaving native reconciliation resumable.
+
+    A running steady-state node may already be advancing a durable checkpoint.
+    Do not restart it merely to reserve the single sync slot: the pinned request
+    can wait behind that work, while the existing transfer keeps making progress.
+    A restart is required only to repair an unreachable node or an installation
+    left in the obsolete bootstrap-only mode by an interrupted older command.
+    """
     with _managed_sync_lock() as acquired:
         if not acquired:
             print("Blackbox sync is already running; no second transfer was queued.")
@@ -912,36 +891,13 @@ def _cmd_sync_with_managed_dkg(cfg: BlackboxConfig, args: argparse.Namespace) ->
             community_entries=known_community,
         )
         terminal_state: Dict[str, Any] = {}
-        result = 2
-        failure: Optional[BaseException] = None
-        try:
-            # On-connect and reconciler jobs compete with the authoritative
-            # request for DKG's single global sync slot. Isolate bootstrap so
-            # the requested curator graph gets that slot deterministically.
-            bootstrap_changed = _set_persisted_dkg_bootstrap_state(cfg)
-            if bootstrap_changed or not _managed_dkg_sync_mode_matches(
-                cfg, _DKG_BOOTSTRAP_SYNC_SETTINGS
-            ):
-                _restart_managed_dkg(cfg)
-            result = _cmd_sync_impl(args)
-            terminal_state = sync_state.read_for_graph(cfg.context_graph_id)
-        except BaseException as exc:
-            failure = exc
-            terminal_state = sync_state.read_for_graph(cfg.context_graph_id)
-        finally:
-            try:
-                if _set_persisted_dkg_steady_state(cfg):
-                    _restart_managed_dkg(cfg)
-            except BaseException as exc:
-                if failure is None:
-                    failure = exc
-                else:
-                    logger.exception(
-                        "Could not restore managed DKG reconciliation after sync"
-                    )
-
-        if failure is not None:
-            raise failure
+        steady_changed = _set_persisted_dkg_steady_state(cfg)
+        if steady_changed or not _managed_dkg_sync_mode_matches(
+            cfg, _DKG_STEADY_SYNC_SETTINGS
+        ):
+            _restart_managed_dkg(cfg)
+        result = _cmd_sync_impl(args)
+        terminal_state = sync_state.read_for_graph(cfg.context_graph_id)
         status = str(terminal_state.get("status") or "")
         if status == "running" or not status:
             status = "done" if result == 0 else "failed"
@@ -1734,24 +1690,25 @@ def _catchup_authoritative_vm(
             result = outcome_value
         except DkgError as exc:
             error = str(exc)
-            retryable = not request_still_active and any(
-                marker in error.lower()
-                for marker in (
-                    "backpressure",
-                    '"retryable":true',
-                    '"retryable": true',
-                    "durable_catchup_all_peers_failed",
-                    "store scheduler",
-                    "queue wait timeout",
-                    "timed out",
-                    "exceeded its",
+            normalized_error = error.lower()
+            compact_error = "".join(normalized_error.split())
+            retryable = not request_still_active and (
+                '"retryable":true' in compact_error
+                or any(
+                    marker in normalized_error
+                    for marker in (
+                        "backpressure",
+                        "store scheduler",
+                        "queue wait timeout",
+                        "queue wait exceeded",
+                        "request aborted",
+                        "timed out",
+                        "exceeded its",
+                        "totaltimeoutms",
+                    )
                 )
             )
-            if (
-                retryable
-                and backpressure_retries < 3
-                and deadline - time.monotonic() > 4
-            ):
+            if retryable and deadline - time.monotonic() > 4:
                 backpressure_retries += 1
                 sync_state.write(
                     "running",
@@ -1762,7 +1719,14 @@ def _catchup_authoritative_vm(
                 if not backpressure_notice_printed:
                     print("DKG graph sync is pausing briefly before a safe resume...")
                     backpressure_notice_printed = True
-                time.sleep(min(2.0, max(0.2, deadline - time.monotonic())))
+                retry_delay = min(
+                    constants.GRAPH_SYNC_RETRY_BACKOFF_MAX_S,
+                    constants.GRAPH_SYNC_RETRY_BACKOFF_INITIAL_S
+                    * (2 ** min(backpressure_retries - 1, 4)),
+                )
+                time.sleep(
+                    min(retry_delay, max(0.2, deadline - time.monotonic()))
+                )
                 continue
             sync_state.write(
                 "failed",
