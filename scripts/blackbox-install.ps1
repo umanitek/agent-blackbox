@@ -70,7 +70,7 @@ $script:DockerRequired = $false
 $DkgAcceptStoreReset = $false
 $DkgHome     = Join-Path $DefaultRepoDir ".dkg"
 $DkgCliDir   = Join-Path $DefaultRepoDir "dkg"
-$DkgBin      = Join-Path $DkgCliDir "node_modules\.bin\dkg.cmd"
+$DkgBin      = Join-Path $DkgCliDir "dkg.cmd"
 $DkgPackage  = if ($env:BLACKBOX_DKG_PACKAGE) { $env:BLACKBOX_DKG_PACKAGE } else { "@origintrail-official/dkg@latest" }
 $DkgDaemonUrl = "http://127.0.0.1:$DkgPort"
 $DkgStoreQueueLimit = if ($env:BLACKBOX_DKG_STORE_QUEUE_LIMIT) { [int]$env:BLACKBOX_DKG_STORE_QUEUE_LIMIT } else { 512 }
@@ -270,6 +270,7 @@ function Invoke-BlackboxDkg {
         "DKG_STORE_QUEUE_WAIT_TIMEOUT_MS",
         "DKG_SYNC_TOTAL_TIMEOUT_MS",
         "DKG_SWM_RECOVERY_TIMEOUT_MS",
+        "npm_config_prefix",
         "NODE_OPTIONS",
         "Path"
     )
@@ -283,6 +284,7 @@ function Invoke-BlackboxDkg {
             $env:Path = "$(Split-Path -Parent $nodeCommand.Source);$env:Path"
         }
         $env:DKG_HOME = $DkgHome
+        $env:npm_config_prefix = $DkgCliDir
         $env:DKG_ACCEPT_STORE_RESET = if (
             $script:DkgAcceptStoreReset -or (Test-Path $script:DkgStoreResetMarker)
         ) { "1" } else { "0" }
@@ -796,7 +798,19 @@ if not isinstance(priorities, dict):
     priorities = {}
 priorities.update({context_graph_id: 100, "agents": -100, "ontology": -100})
 data["syncContextGraphPriorities"] = priorities
-data.setdefault("autoUpdate", {"enabled": False})
+legacy_auto_update = {"enabled": False}
+auto_update = data.get("autoUpdate")
+if auto_update is None or auto_update == legacy_auto_update:
+    data["autoUpdate"] = {
+        "enabled": True,
+        "source": "npm",
+        "channel": "mainnet",
+        "allowPrerelease": False,
+    }
+elif isinstance(auto_update, dict):
+    auto_update.setdefault("source", "npm")
+    auto_update.setdefault("channel", "mainnet")
+    auto_update.setdefault("allowPrerelease", False)
 data["chain"] = {
     "type": "evm",
     "rpcUrl": "https://mainnet.base.org",
@@ -1012,7 +1026,7 @@ function Install-BlackboxDkgPackage {
     New-Item -ItemType Directory -Force -Path $DkgCliDir | Out-Null
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $npmLog) | Out-Null
     try {
-        & npm install --prefix $DkgCliDir --prefer-online $DkgPackage 2>&1 | Tee-Object -FilePath $npmLog | Out-Null
+        & npm install -g --prefix $DkgCliDir --prefer-online $DkgPackage 2>&1 | Tee-Object -FilePath $npmLog | Out-Null
         if ($LASTEXITCODE -ne 0) { throw "npm install exit $LASTEXITCODE" }
     } catch {
         if ($backupDir) {
@@ -1179,7 +1193,7 @@ function Show-DkgManualHint {
     Write-Step "To set up the DKG node later:"
     Write-Host "      node -v  # must be v$NodeMajor or newer"
     Write-Host "      New-Item -ItemType Directory -Force -Path `"$DkgCliDir`""
-    Write-Host "      npm install --prefix `"$DkgCliDir`" `"$DkgPackage`""
+    Write-Host "      npm install -g --prefix `"$DkgCliDir`" `"$DkgPackage`""
     Write-Host "      `$env:BLACKBOX_DKG_HOME = `"$DkgHome`""
     Write-Host "      `$env:BLACKBOX_DKG_BIN = `"$DkgBin`""
     Write-Host "      `$env:BLACKBOX_DKG_PORT = `"$DkgPort`""
@@ -1244,16 +1258,20 @@ uses_unpaired_shared_dkg_home = uses_shared_dkg_home and (not current_dkg_url or
 uses_legacy_blackbox_dkg_home = current_dkg_home_abs == legacy_blackbox_dkg_home
 current_dkg_bin = str(blackbox.get("dkg_bin") or blackbox.get("dkgBin") or "").strip()
 current_dkg_bin_abs = os.path.abspath(os.path.expanduser(current_dkg_bin)) if current_dkg_bin else ""
-expected_managed_bin = (
-    os.path.join(os.path.dirname(current_dkg_home_abs), "dkg", "node_modules", ".bin", "dkg.cmd")
-    if current_dkg_home_abs else ""
+expected_managed_bins = (
+    (
+        os.path.join(os.path.dirname(current_dkg_home_abs), "dkg", "dkg.cmd"),
+        os.path.join(os.path.dirname(current_dkg_home_abs), "dkg", "node_modules", ".bin", "dkg.cmd"),
+    )
+    if current_dkg_home_abs
+    else ()
 )
 uses_target_managed_home = current_dkg_home_abs == target_dkg_home_abs
 uses_other_managed_checkout = bool(
     current_dkg_home_abs
     and os.path.basename(current_dkg_home_abs) == ".dkg"
     and current_dkg_home_abs != target_dkg_home_abs
-    and current_dkg_bin_abs == expected_managed_bin
+    and current_dkg_bin_abs in expected_managed_bins
 )
 stale_configured_dkg_home = bool(current_dkg_home_abs) and not os.path.isdir(current_dkg_home_abs)
 stale_configured_dkg_bin = bool(current_dkg_bin_abs) and not os.path.isfile(current_dkg_bin_abs)

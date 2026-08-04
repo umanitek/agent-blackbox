@@ -302,6 +302,10 @@
   .status-pill.offline { color: var(--signal); border-color: rgba(255,79,0,0.55); background: var(--signal-soft); }
   .status-pill.mode-audit { color: var(--muted-strong); border-color: var(--border); background: var(--panel); }
   .status-pill.mode-block { color: var(--signal); border-color: rgba(255,79,0,0.55); background: var(--signal-soft); }
+  .status-pill.dkg-current { color: var(--mint); border-color: color-mix(in srgb, var(--mint) 42%, var(--border)); }
+  .status-pill.dkg-checking { color: var(--muted-strong); }
+  .status-pill.dkg-available,
+  .status-pill.dkg-disabled { color: var(--signal); border-color: rgba(255,79,0,0.55); background: var(--signal-soft); }
 
   /* gear button — same pill visual language as the status pills */
   .gear-btn {
@@ -1906,6 +1910,33 @@
     text-transform: uppercase;
     white-space: nowrap;
   }
+  .set-dkg-status {
+    display: inline-flex;
+    align-items: center;
+    padding: 4px 8px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    color: var(--muted-strong);
+    background: var(--elevated);
+    font-family: var(--mono-font);
+    font-size: 8px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+  .set-dkg-status.current {
+    color: var(--mint);
+    border-color: color-mix(in srgb, var(--mint) 30%, transparent);
+    background: color-mix(in srgb, var(--mint) 7%, transparent);
+  }
+  .set-dkg-status.available,
+  .set-dkg-status.disabled,
+  .set-dkg-status.offline {
+    color: var(--signal);
+    border-color: rgba(255,79,0,0.55);
+    background: var(--signal-soft);
+  }
 
   /* segmented control (audit | block) — same look as .sort-seg */
   .set-seg { display: inline-flex; padding: 3px; background: var(--elevated); border: 1px solid var(--border); border-radius: 3px; }
@@ -2701,6 +2732,7 @@
       </div>
       <div class="status-pills" aria-live="polite">
         <span class="status-pill offline" id="pill-node" hidden title="The local DKG node is not responding">node offline</span>
+        <span class="status-pill dkg-checking" id="pill-dkg" hidden>DKG checking</span>
         <span class="status-pill mode-audit" id="pill-mode" hidden>audit mode</span>
         <button type="button" class="header-menu-toggle" id="header-menu-toggle" aria-label="Open dashboard menu" aria-expanded="false" aria-controls="header-action-menu">
           <span class="burger-lines" aria-hidden="true"><span class="burger-line"></span><span class="burger-line"></span><span class="burger-line"></span></span>
@@ -6372,6 +6404,7 @@
                 : data.threats;
     var interval = data.sync_interval != null ? data.sync_interval : data.syncInterval;
     var lastSync = data.last_sync != null ? data.last_sync : data.lastSync;
+    var dkgUpdate = data.dkg_update || {};
 
     // Render every available VM/SWM count immediately, including 0. Polling
     // replaces these numbers as catch-up adds entries; loaders are reserved for
@@ -6381,6 +6414,7 @@
     // header status pills: node reachability + enforcement mode
     var nodePill = $("pill-node");
     if (nodePill) nodePill.hidden = data.node_reachable !== false;
+    renderDkgUpdateStatus(dkgUpdate, data.node_reachable !== false);
     var modePill = $("pill-mode");
     if (modePill) {
       var mode = String(data.mode || "").toLowerCase();
@@ -6403,6 +6437,49 @@
       $("stat-sync").textContent = "never";
       $("stat-sync-meta").textContent = "run blackbox sync";
     }
+  }
+
+  function renderDkgUpdateStatus(update, reachable) {
+    update = update || {};
+    var state = String(update.state || (reachable ? "unknown" : "offline"));
+    var current = update.current_version ? "v" + update.current_version : "version unknown";
+    var latest = update.latest_version ? "v" + update.latest_version : "the latest release";
+    var label = "DKG status unknown";
+    var detail = "Update status is not available from this DKG version.";
+    var compact = current;
+    if (state === "current") {
+      detail = "Automatic stable updates are enabled. This node is up to date.";
+      compact = current + " · Current";
+    } else if (state === "available") {
+      detail = "DKG found " + latest + " and will install it automatically.";
+      compact = current + " → " + latest;
+    } else if (state === "checking") {
+      detail = "Automatic stable updates are enabled. DKG is checking the release channel.";
+      compact = current + " · Checking";
+    } else if (state === "disabled") {
+      detail = "Automatic DKG updates are disabled in the node configuration.";
+      compact = current + " · Disabled";
+    } else if (state === "offline") {
+      detail = "The local DKG node is offline, so its update status is unavailable.";
+      compact = "Offline";
+    }
+    if (state !== "unknown") label = "DKG " + compact;
+    var pill = $("pill-dkg");
+    if (pill) {
+      // The existing node-offline pill already covers this state in the header;
+      // Settings keeps the more specific update explanation visible.
+      pill.hidden = state === "offline";
+      pill.className = "status-pill dkg-" + state;
+      pill.textContent = label;
+      pill.title = detail;
+    }
+    var status = $("set-dkg-update-state");
+    if (status) {
+      status.className = "set-dkg-status " + state;
+      status.textContent = compact;
+    }
+    var help = $("set-dkg-update-help");
+    if (help) help.textContent = detail;
   }
 
   // ---------- Poll loop ----------
@@ -7397,6 +7474,19 @@
     </div>
 
     <div class="set-body">
+      <div class="set-group">
+        <div class="set-glabel">DKG node</div>
+        <div class="set-row">
+          <div class="set-rl">
+            <div class="set-rt">Automatic updates</div>
+            <div class="set-rh" id="set-dkg-update-help">Waiting for the local DKG node.</div>
+          </div>
+          <div class="set-rc">
+            <span class="set-dkg-status checking" id="set-dkg-update-state">Checking</span>
+          </div>
+        </div>
+      </div>
+
       <!-- Appearance applies immediately. -->
       <div class="set-group">
         <div class="set-glabel">Appearance</div>

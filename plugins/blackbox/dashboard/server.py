@@ -59,6 +59,45 @@ def _dkg_durable_progress(dkg_home: str, context_graph_id: str) -> Dict[str, Any
     return read_durable_progress(dkg_home, context_graph_id)
 
 
+def _dkg_update_view(
+    node_status: Dict[str, Any] | None, *, reachable: bool
+) -> Dict[str, Any]:
+    """Normalize DKG's update fields into a stable dashboard contract."""
+    status = node_status if isinstance(node_status, dict) else {}
+
+    def _text(key: str) -> str | None:
+        value = status.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        return None
+
+    enabled_raw = status.get("autoUpdate")
+    enabled = enabled_raw if isinstance(enabled_raw, bool) else None
+    available_raw = status.get("updateAvailable")
+    update_available = available_raw if isinstance(available_raw, bool) else None
+    if not reachable:
+        state = "offline"
+    elif enabled is False:
+        state = "disabled"
+    elif update_available is True:
+        state = "available"
+    elif update_available is False:
+        state = "current"
+    elif enabled is True:
+        state = "checking"
+    else:
+        state = "unknown"
+    return {
+        "state": state,
+        "enabled": enabled,
+        "current_version": _text("version"),
+        "latest_version": _text("latestVersion"),
+        "update_available": update_available,
+        "channel_target_missing": bool(status.get("updateChannelTargetMissing")),
+        "install_mode": _text("installMode"),
+    }
+
+
 def _blackbox_runtime_argv(port: int = _BLACKBOX_RUNTIME_PORT) -> List[str]:
     """Command for the dashboard-owned, profile-isolated Agent Blackbox backend."""
     return [
@@ -1412,19 +1451,24 @@ def create_app(*, manage_blackbox: bool = False):
                 return None
             client = DkgClient(url=cfg.dkg_url, dkg_home=cfg.dkg_home)
             try:
+                node_status = client.status(timeout=_REACH_TIMEOUT)
+            except Exception:
+                node_status = {}
+            try:
                 catchup = client.catchup_status(cfg.context_graph_id)
             except Exception:
                 # No job is normal on an already-settled node.
                 catchup = {}
             return {
                 "node_reachable": True,
+                "node_status": node_status,
                 "catchup": catchup,
             }
 
         g = _swr(
             "graph-sync-status",
             _node_sync,
-            {"node_reachable": False, "catchup": {}},
+            {"node_reachable": False, "node_status": {}, "catchup": {}},
             ttl=4.0,
         )
         sightings = 0
@@ -1523,6 +1567,9 @@ def create_app(*, manage_blackbox: bool = False):
             "dkg_home": cfg.dkg_home,
             "dkg_bin": cfg.dkg_bin,
             "node_reachable": g["node_reachable"],
+            "dkg_update": _dkg_update_view(
+                g.get("node_status"), reachable=bool(g["node_reachable"])
+            ),
             "sync_interval": cfg.sync_interval,
             "last_sync": rs.synced_at or None,
             "ruleset": counts,

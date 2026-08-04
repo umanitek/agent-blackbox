@@ -269,5 +269,6 @@ def blackbox_dkg_bin() -> Path:
     env = os.environ.get("BLACKBOX_DKG_BIN")
     if env and env.strip():
         return Path(env).expanduser()
-    bin_name = "dkg.cmd" if os.name == "nt" else "dkg"
-    return blackbox_dkg_cli_dir() / "node_modules" / ".bin" / bin_name
+    if os.name == "nt":
+        return blackbox_dkg_cli_dir() / "dkg.cmd"
+    return blackbox_dkg_cli_dir() / "bin" / "dkg"

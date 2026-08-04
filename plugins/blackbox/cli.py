@@ -577,6 +577,10 @@ def _dkg_sync_environment(cfg: BlackboxConfig) -> Dict[str, str]:
                 sync_settings[env_name] = str(value)
     env.update(sync_settings)
     env["DKG_HOME"] = str(cfg.dkg_home)
+    # The managed CLI is a private npm-global install. DKG's official Edge
+    # updater executes `npm install -g`; pinning the prefix here keeps every
+    # daemon/restart path on the same isolated installation.
+    env["npm_config_prefix"] = str(_managed_dkg_npm_prefix(cfg))
     env.setdefault("DKG_CATCHUP_MAX_CONCURRENT_PEERS", "1")
     env.setdefault("DKG_STORE_QUEUE_WAIT_TIMEOUT_MS", "300000")
     env.setdefault("DKG_SYNC_TOTAL_TIMEOUT_MS", "1800000")
@@ -664,11 +668,38 @@ def _managed_dkg_node_executable(cfg: BlackboxConfig) -> Optional[Path]:
     return None
 
 
+def _managed_dkg_npm_prefix(cfg: BlackboxConfig) -> Path:
+    """Return the private npm-global prefix containing the configured CLI."""
+    dkg_bin = Path(cfg.dkg_bin).expanduser().resolve()
+    if os.name != "nt" and dkg_bin.parent.name == "bin":
+        return dkg_bin.parent.parent
+    if dkg_bin.parent.name == ".bin" and dkg_bin.parent.parent.name == "node_modules":
+        return dkg_bin.parent.parent.parent
+    return dkg_bin.parent
+
+
 def _node_runtime_matches_dkg(executable: Path, cfg: BlackboxConfig) -> bool:
     """Load the installed native SQLite binding before trusting a Node path."""
-    dkg_bin = Path(cfg.dkg_bin).expanduser()
-    native_package = dkg_bin.parent.parent / "better-sqlite3"
-    if not native_package.is_dir():
+    prefix = _managed_dkg_npm_prefix(cfg)
+    candidates = (
+        prefix / "lib" / "node_modules" / "better-sqlite3",
+        prefix
+        / "lib"
+        / "node_modules"
+        / "@origintrail-official"
+        / "dkg"
+        / "node_modules"
+        / "better-sqlite3",
+        prefix / "node_modules" / "better-sqlite3",
+        prefix
+        / "node_modules"
+        / "@origintrail-official"
+        / "dkg"
+        / "node_modules"
+        / "better-sqlite3",
+    )
+    native_package = next((path for path in candidates if path.is_dir()), None)
+    if native_package is None:
         return False
     probe = (
         "const DB=require(process.argv[1]);"
@@ -1809,10 +1840,10 @@ def _catchup_authoritative_vm(
             inserted_durable_triples=inserted,
             **durable_progress,
         )
-        durable_progress = read_durable_progress(
-            str(getattr(client, "dkg_home", "") or ""),
-            context_graph_id,
-        )
+        # Keep this pass scoped to the cursor captured immediately before the
+        # request.  Re-reading the whole daemon log here can either erase the
+        # request's explicit ``durableComplete`` result or accept a completion
+        # marker emitted by an earlier invocation.
         if inserted <= 0:
             expected = int(durable_progress.get("expected_triples") or 0)
             safe_current = int(durable_progress.get("safe_current_triples") or 0)

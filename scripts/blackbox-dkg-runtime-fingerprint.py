@@ -140,10 +140,17 @@ def _add_bytes(digest: "hashlib._Hash", label: str, data: bytes) -> None:
 
 def _runtime_files(cli_dir: Path, dkg_home: Path, dkg_bin: Path) -> list[Path]:
     monorepo_cli = cli_dir / "packages" / "cli"
-    cli_package = (
-        monorepo_cli
-        if (monorepo_cli / "package.json").is_file()
-        else cli_dir / "node_modules" / "@origintrail-official" / "dkg"
+    private_global_cli = (
+        cli_dir / "lib" / "node_modules" / "@origintrail-official" / "dkg"
+    )
+    local_cli = cli_dir / "node_modules" / "@origintrail-official" / "dkg"
+    cli_package = next(
+        (
+            candidate
+            for candidate in (monorepo_cli, private_global_cli, local_cli)
+            if (candidate / "package.json").is_file()
+        ),
+        private_global_cli,
     )
     config = dkg_home / "config.json"
     required = [config, cli_package / "package.json", dkg_bin]
@@ -155,6 +162,7 @@ def _runtime_files(cli_dir: Path, dkg_home: Path, dkg_bin: Path) -> list[Path]:
     monorepo_agent_dist = cli_dir / "packages" / "agent" / "dist"
     if monorepo_agent_dist.is_dir():
         agent_dists.append(monorepo_agent_dist)
+    agent_dists.extend(sorted(cli_dir.glob("lib/node_modules/**/dkg-agent/dist")))
     agent_dists.extend(sorted(cli_dir.glob("node_modules/**/dkg-agent/dist")))
     if not agent_dists:
         raise FingerprintError(f"dkg-agent dist not found under {cli_dir}")
@@ -236,6 +244,7 @@ def installed_commit(cli_dir: Path) -> str:
     """Return the build commit advertised by the installed DKG package."""
     cli_dir = cli_dir.expanduser().resolve()
     package_roots = (
+        cli_dir / "lib" / "node_modules" / "@origintrail-official" / "dkg",
         cli_dir / "node_modules" / "@origintrail-official" / "dkg",
         cli_dir / "packages" / "cli",
     )

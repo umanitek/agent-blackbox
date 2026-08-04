@@ -474,13 +474,13 @@ def test_unix_installer_uses_isolated_blackbox_dkg_node() -> None:
     assert 'BLACKBOX_INSTALL_ROOT="$PWD/agent-blackbox"' in text
     assert 'BLACKBOX_DKG_HOME="$BLACKBOX_INSTALL_ROOT/.dkg"' in text
     assert 'BLACKBOX_DKG_CLI_DIR="$BLACKBOX_INSTALL_ROOT/dkg"' in text
-    assert 'BLACKBOX_DKG_BIN="$BLACKBOX_DKG_CLI_DIR/node_modules/.bin/dkg"' in text
+    assert 'BLACKBOX_DKG_BIN="$BLACKBOX_DKG_CLI_DIR/bin/dkg"' in text
     assert (
         'BLACKBOX_DKG_PACKAGE="${BLACKBOX_DKG_PACKAGE:-'
         '@origintrail-official/dkg@latest}"'
     ) in text
     assert 'BLACKBOX_DKG_DAEMON_URL="http://127.0.0.1:$BLACKBOX_DKG_PORT"' in text
-    assert 'npm install --prefix "$BLACKBOX_DKG_CLI_DIR"' in text
+    assert 'npm install -g --prefix "$BLACKBOX_DKG_CLI_DIR"' in text
     assert '--prefer-online' in text
     assert "BLACKBOX_DKG_REPO_URL" not in text
     assert "corepack pnpm" not in text
@@ -497,8 +497,7 @@ def test_unix_installer_uses_isolated_blackbox_dkg_node() -> None:
     assert "migrate_legacy_blackbox_dkg_home" in text
     assert 'blackbox["dkg_home"] = dkg_home' in text
     assert 'blackbox["dkg_bin"] = dkg_bin' in text
-    assert "npm i -g" not in text
-    assert "npm install -g" not in text
+    assert 'npm_config_prefix="$BLACKBOX_DKG_CLI_DIR"' in text
     assert '"dkg_url": "http://127.0.0.1:9200"' not in text
 
 
@@ -712,10 +711,10 @@ def test_windows_installer_uses_isolated_blackbox_dkg_node() -> None:
     assert "$DkgStoreUrl" in text
     assert '$DkgHome     = Join-Path $DefaultRepoDir ".dkg"' in text
     assert '$DkgCliDir   = Join-Path $DefaultRepoDir "dkg"' in text
-    assert r'$DkgBin      = Join-Path $DkgCliDir "node_modules\.bin\dkg.cmd"' in text
+    assert r'$DkgBin      = Join-Path $DkgCliDir "dkg.cmd"' in text
     assert "@origintrail-official/dkg@latest" in text
     assert '$DkgDaemonUrl = "http://127.0.0.1:$DkgPort"' in text
-    assert "npm install --prefix $DkgCliDir --prefer-online $DkgPackage" in text
+    assert "npm install -g --prefix $DkgCliDir --prefer-online $DkgPackage" in text
     assert "BLACKBOX_DKG_REPO_URL" not in text
     assert "corepack pnpm" not in text
     assert "Ensure-BlackboxDkgConfig" in text
@@ -734,8 +733,7 @@ def test_windows_installer_uses_isolated_blackbox_dkg_node() -> None:
     assert "Move-LegacyBlackboxDkgHome" in text
     assert 'blackbox["dkg_home"] = dkg_home' in text
     assert 'blackbox["dkg_bin"] = dkg_bin' in text
-    assert "npm i -g" not in text
-    assert "npm install -g" not in text
+    assert '$env:npm_config_prefix = $DkgCliDir' in text
     assert '"dkg_url": "http://127.0.0.1:9200"' not in text
 
 
@@ -790,6 +788,67 @@ def test_dkg_config_writer_leaves_subscriptions_to_the_dkg_api(tmp_path: Path) -
         "backend": "blazegraph",
         "options": {"url": BLAZEGRAPH_URL, "managedByDkg": True, "timeout": 900000},
     }
+
+
+@pytest.mark.parametrize("initial", [None, {"enabled": False}])
+def test_dkg_config_writer_enables_managed_npm_updates(tmp_path: Path, initial) -> None:
+    home = tmp_path / "dkg"
+    home.mkdir()
+    config = home / "config.json"
+    if initial is not None:
+        config.write_text(json.dumps({"autoUpdate": initial}), encoding="utf-8")
+
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            _extract_unix_config_writer(),
+            str(home),
+            "9320",
+            "blazegraph",
+            BLAZEGRAPH_URL,
+            "true",
+            "umanitek/blackbox-threats-staging",
+        ],
+        check=True,
+    )
+
+    assert json.loads(config.read_text())["autoUpdate"] == {
+        "enabled": True,
+        "source": "npm",
+        "channel": "mainnet",
+        "allowPrerelease": False,
+    }
+
+
+def test_dkg_config_writer_preserves_custom_auto_update_opt_out(tmp_path: Path) -> None:
+    home = tmp_path / "dkg"
+    home.mkdir()
+    config = home / "config.json"
+    config.write_text(
+        json.dumps({"autoUpdate": {"enabled": False, "checkIntervalMinutes": 60}}),
+        encoding="utf-8",
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            _extract_unix_config_writer(),
+            str(home),
+            "9320",
+            "blazegraph",
+            BLAZEGRAPH_URL,
+            "true",
+            "umanitek/blackbox-threats-staging",
+        ],
+        check=True,
+    )
+
+    auto_update = json.loads(config.read_text())["autoUpdate"]
+    assert auto_update["enabled"] is False
+    assert auto_update["checkIntervalMinutes"] == 60
+    assert auto_update["source"] == "npm"
 
 def test_dkg_config_writer_reports_only_real_runtime_changes(tmp_path: Path) -> None:
     home = tmp_path / "dkg"
@@ -1384,11 +1443,17 @@ def test_blazegraph_helper_sizes_heap_and_preserves_undersized_store(tmp_path: P
     assert json.loads(completed.stdout)["url"] == calls[3]
 
 
-def test_blazegraph_helper_uses_dkg_store_health_check(tmp_path: Path) -> None:
+@pytest.mark.parametrize("private_global", [False, True])
+def test_blazegraph_helper_uses_dkg_store_health_check(
+    tmp_path: Path, private_global: bool
+) -> None:
     node = shutil.which("node")
     if not node:
         pytest.skip("Node.js is not installed")
-    cli = tmp_path / "node_modules" / "@origintrail-official" / "dkg"
+    cli = tmp_path
+    if private_global:
+        cli = cli / "lib"
+    cli = cli / "node_modules" / "@origintrail-official" / "dkg"
     module = cli / "dist" / "daemon" / "store-health-check.js"
     module.parent.mkdir(parents=True)
     (cli / "package.json").write_text('{"type":"module"}', encoding="utf-8")

@@ -543,6 +543,37 @@ def test_managed_dkg_sync_environment_finds_runtime_without_pid_file(tmp_path, m
     env = cli_mod._dkg_sync_environment(cfg)
 
     assert env["PATH"].split(cli_mod.os.pathsep)[0] == str(node.parent)
+    assert env["npm_config_prefix"] == str(dkg_cli.parent)
+
+
+def test_managed_dkg_sync_environment_pins_private_global_prefix(tmp_path, monkeypatch):
+    prefix = tmp_path / "private-dkg"
+    dkg_bin = prefix / "bin" / "dkg"
+    dkg_bin.parent.mkdir(parents=True)
+    dkg_bin.write_text("#!/bin/sh\n", encoding="utf-8")
+    cfg = config_mod.BlackboxConfig(
+        dkg_home=str(tmp_path / "home"), dkg_bin=str(dkg_bin)
+    )
+    monkeypatch.setattr(cli_mod, "_managed_dkg_node_executable", lambda _cfg: None)
+
+    env = cli_mod._dkg_sync_environment(cfg)
+
+    assert env["npm_config_prefix"] == str(prefix)
+
+
+def test_managed_dkg_sync_environment_recognises_legacy_local_layout(
+    tmp_path, monkeypatch
+):
+    prefix = tmp_path / "private-dkg"
+    dkg_bin = prefix / "node_modules" / ".bin" / "dkg"
+    dkg_bin.parent.mkdir(parents=True)
+    dkg_bin.write_text("#!/bin/sh\n", encoding="utf-8")
+    cfg = config_mod.BlackboxConfig(
+        dkg_home=str(tmp_path / "home"), dkg_bin=str(dkg_bin)
+    )
+    monkeypatch.setattr(cli_mod, "_managed_dkg_node_executable", lambda _cfg: None)
+
+    assert cli_mod._dkg_sync_environment(cfg)["npm_config_prefix"] == str(prefix)
 
 
 def test_blackbox_sync_require_rules_fails_empty_ruleset(monkeypatch, capsys):
