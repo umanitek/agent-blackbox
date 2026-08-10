@@ -71,19 +71,56 @@ def read_durable_progress(
         return {}
 
     matches = []
+    selected_expected = 0
+    selected_safe = 0
+    selected_raw = 0
     for match in _DURABLE_PROGRESS_RE.finditer(text):
         if match.group("graph") != context_graph_id:
             continue
+        previous = int(match.group("previous"))
+        current = int(match.group("current"))
+        expected = int(match.group("expected"))
+        raw = int(match.group("raw"))
+        if not matches:
+            matches = [match]
+            selected_expected = expected
+            selected_safe = current
+            selected_raw = raw
+            continue
+
+        if expected != selected_expected:
+            # Exact VM recovery emits its own much smaller rootless manifest
+            # while the parent snapshot is still incomplete. If that entire
+            # child window fits behind the parent prefix already received, it
+            # cannot be a replacement snapshot and must not reset dashboard
+            # progress to a misleading 100%.
+            parent_received = max(selected_safe, selected_raw)
+            nested_repair = (
+                selected_safe < selected_expected
+                and expected <= parent_received
+            )
+            if nested_repair:
+                continue
+            matches = [match]
+            selected_expected = expected
+            selected_safe = current
+            selected_raw = raw
+            continue
+
         # A previous implementation reset only on 0->0. Real bounded passes
         # begin 0->positive, so retaining earlier matches made a restarted
         # transfer look permanently 100% complete.
-        if int(match.group("previous")) == 0:
+        if previous == 0 and selected_safe >= selected_expected:
             matches = []
+            selected_safe = 0
+            selected_raw = 0
         matches.append(match)
+        selected_safe = max(selected_safe, current)
+        selected_raw = max(selected_raw, raw)
     if not matches:
         return {}
 
-    expected = int(matches[-1].group("expected"))
+    expected = selected_expected
     if expected <= 0:
         return {}
     same_manifest = [

@@ -13,6 +13,16 @@ import psutil
 from . import constants
 
 _STALE_RUNNING_SECONDS = 3_600
+_ACTIVE_STATUSES = {"running", "waiting"}
+_PROGRESS_KEYS = (
+    "public_entries",
+    "expected_public_entries",
+    "community_entries",
+    "current_triples",
+    "safe_current_triples",
+    "expected_triples",
+    "inserted_durable_triples",
+)
 
 
 def _pid_is_alive(pid: Any) -> bool:
@@ -45,11 +55,11 @@ def write(status: str, **details: Any) -> Dict[str, Any]:
         "pid": os.getpid(),
         **details,
     }
-    if status == "running" and previous.get("status") == "running":
-        for key in ("public_entries", "expected_public_entries", "community_entries"):
+    if status in _ACTIVE_STATUSES and previous.get("status") in _ACTIVE_STATUSES:
+        for key in _PROGRESS_KEYS:
             if key not in details and key in previous:
                 state[key] = previous[key]
-    if status == "running" and previous.get("status") != "running":
+    if status in _ACTIVE_STATUSES and previous.get("status") not in _ACTIVE_STATUSES:
         state["started_at"] = now
     tmp = path.with_suffix(f".tmp-{os.getpid()}")
     tmp.write_text(json.dumps(state, sort_keys=True), encoding="utf-8")

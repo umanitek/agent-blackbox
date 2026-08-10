@@ -162,6 +162,33 @@ def test_running_sync_state_keeps_latest_committed_count(monkeypatch, tmp_path):
     assert state["public_entries"] == 460_000
 
 
+def test_waiting_sync_state_preserves_durable_progress(monkeypatch, tmp_path):
+    from plugins.blackbox import sync_state
+
+    state_path = tmp_path / "authoritative-sync.json"
+    monkeypatch.setattr(sync_state, "_path", lambda: state_path)
+
+    sync_state.write(
+        "running",
+        phase="recovering-verifiable-memory",
+        public_entries=362_000,
+        current_triples=3_584,
+        expected_triples=8_000,
+    )
+    sync_state.write(
+        "waiting",
+        phase="waiting-for-dkg-capacity",
+        error="Sync backpressure rejected",
+        retryable=True,
+    )
+
+    state = sync_state.read()
+    assert state["status"] == "waiting"
+    assert state["public_entries"] == 362_000
+    assert state["current_triples"] == 3_584
+    assert state["expected_triples"] == 8_000
+
+
 def test_active_catchup_supersedes_older_authoritative_failure():
     activity = server._sync_activity(
         public=0,
@@ -183,6 +210,97 @@ def test_active_catchup_supersedes_older_authoritative_failure():
     assert activity["phase"] == "network-catchup"
     assert activity["label"] == "Fetching graph snapshot"
     assert "503" not in activity["detail"]
+
+
+def test_active_dkg_catchup_renders_durable_progress_over_old_failure():
+    authoritative = {
+        "status": "failed",
+        "updated_at": 100.0,
+        "error": "older source-pinned transport failure",
+    }
+    transfer = server._activity_transfer_state(
+        authoritative,
+        {"status": "running", "startedAt": 200.0},
+        {
+            "current_triples": 136_479,
+            "safe_current_triples": 129_775,
+            "expected_triples": 6_117_721,
+            "progress_percent": 2.2,
+            "snapshot_complete": False,
+        },
+    )
+
+    activity = server._sync_activity(
+        public=367_000,
+        community=0,
+        node_reachable=True,
+        catchup={"status": "running", "startedAt": 200.0},
+        connection={},
+        transfer=transfer,
+    )
+
+    assert authoritative["status"] == "failed"
+    assert transfer["status"] == "running"
+    assert "error" not in transfer
+    assert activity["status"] == "running"
+    assert activity["label"] == "Receiving publisher VM"
+    assert activity["current"] == 136_479
+    assert activity["expected"] == 6_117_721
+    assert activity["percent"] == 2.2
+    assert activity["indeterminate"] is False
+
+
+def test_active_dkg_catchup_does_not_regress_same_manifest_checkpoint():
+    transfer = server._activity_transfer_state(
+        {
+            "status": "running",
+            "current_triples": 179_951,
+            "safe_current_triples": 169_332,
+            "expected_triples": 6_357_721,
+        },
+        {"status": "running", "startedAt": 200.0},
+        {
+            "current_triples": 57_088,
+            "safe_current_triples": 51_642,
+            "expected_triples": 6_357_721,
+            "progress_percent": 0.9,
+            "snapshot_complete": False,
+        },
+    )
+
+    assert transfer["current_triples"] == 179_951
+    assert transfer["safe_current_triples"] == 169_332
+    assert transfer["expected_triples"] == 6_357_721
+    assert transfer["progress_percent"] == 2.8
+    assert transfer["snapshot_complete"] is False
+
+
+def test_local_backpressure_deadline_remains_waiting_in_dashboard():
+    activity = server._sync_activity(
+        public=362_000,
+        community=0,
+        node_reachable=True,
+        catchup={"status": "failed", "error": "older generic failure"},
+        connection={"state": "syncing", "updated_at": 200.0},
+        transfer={
+            "status": "waiting",
+            "phase": "waiting-for-dkg-capacity",
+            "started_at": 100.0,
+            "updated_at": 200.0,
+            "public_entries": 362_000,
+            "current_triples": 3_584,
+            "expected_triples": 8_000,
+            "retryable": True,
+            "error": "Sync backpressure rejected (global inflight=1/1)",
+        },
+    )
+
+    assert activity["status"] == "waiting"
+    assert activity["phase"] == "waiting-for-dkg-capacity"
+    assert activity["label"] == "Waiting for local DKG sync capacity"
+    assert activity["current"] == 3_584
+    assert activity["expected"] == 8_000
+    assert "failed" not in activity["detail"].lower()
 
 
 def test_dashboard_automatic_sync_runs_canonical_verified_cli(monkeypatch):
