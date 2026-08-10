@@ -59,6 +59,57 @@ def _dkg_durable_progress(dkg_home: str, context_graph_id: str) -> Dict[str, Any
     return read_durable_progress(dkg_home, context_graph_id)
 
 
+def _activity_transfer_state(
+    authoritative_sync: Dict[str, Any],
+    catchup: Dict[str, Any],
+    durable_progress: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Build the transfer view used by the dashboard activity panel.
+
+    A managed DKG restart can terminate the source-pinned HTTP request while
+    its durable replacement job immediately resumes from the checkpoint. Keep
+    the persisted authoritative result intact for diagnostics, but render the
+    live daemon job and its current durable offset instead of the old failure.
+    """
+    transfer = {**authoritative_sync, **durable_progress}
+    try:
+        previous_expected = int(authoritative_sync.get("expected_triples") or 0)
+        current_expected = int(durable_progress.get("expected_triples") or 0)
+    except (TypeError, ValueError):
+        previous_expected = 0
+        current_expected = 0
+    if previous_expected > 0 and previous_expected == current_expected:
+        for key in ("current_triples", "safe_current_triples"):
+            try:
+                transfer[key] = max(
+                    int(authoritative_sync.get(key) or 0),
+                    int(durable_progress.get(key) or 0),
+                )
+            except (TypeError, ValueError):
+                pass
+        safe_current = int(transfer.get("safe_current_triples") or 0)
+        current = max(safe_current, int(transfer.get("current_triples") or 0))
+        transfer["current_triples"] = min(current, current_expected)
+        transfer["progress_percent"] = round(
+            (transfer["current_triples"] / current_expected) * 100, 1
+        )
+        transfer["snapshot_complete"] = safe_current >= current_expected
+    if str(transfer.get("status") or "").lower() == "running":
+        return transfer
+    if str(catchup.get("status") or "").lower() != "running":
+        return transfer
+
+    transfer.update(
+        status="running",
+        phase="recovering-verifiable-memory",
+        started_at=catchup.get("startedAt"),
+        updated_at=durable_progress.get("updated_at"),
+    )
+    transfer.pop("error", None)
+    transfer.pop("retryable", None)
+    return transfer
+
+
 def _blackbox_runtime_argv(port: int = _BLACKBOX_RUNTIME_PORT) -> List[str]:
     """Command for the dashboard-owned, profile-isolated Agent Blackbox backend."""
     return [
@@ -533,6 +584,47 @@ def _sync_activity(
         or ""
     )
 
+    # The foreground command can reach its own wait deadline while the local
+    # DKG scheduler still has the request queued behind reconciliation.  That
+    # is durable, retryable admission pressure, not a terminal graph failure.
+    # Preserve the last verified cache and show the waiting state even if the
+    # daemon's generic job record still says ``failed``.
+    if (
+        node_reachable
+        and transfer_status == "waiting"
+        and phase == "waiting-for-dkg-capacity"
+    ):
+        progress.update(
+            status="waiting",
+            phase=phase,
+            label="Waiting for local DKG sync capacity",
+            detail=(
+                "Another verified graph transfer is using the local DKG sync "
+                "slot. Blackbox will retry from its durable checkpoint."
+            ),
+            started_at=transfer.get("started_at"),
+            updated_at=transfer.get("updated_at"),
+        )
+        if expected_triples > 0:
+            bounded_triples = max(0, min(current_triples, expected_triples))
+            progress.update(
+                detail=(
+                    f"{bounded_triples:,} of {expected_triples:,} graph triples "
+                    "are checkpointed. Blackbox is waiting for the local DKG "
+                    "sync slot and will resume automatically."
+                ),
+                current=bounded_triples,
+                expected=expected_triples,
+                percent=round((bounded_triples / expected_triples) * 100, 1),
+                indeterminate=False,
+            )
+        elif public > 0:
+            progress["detail"] = (
+                f"{public:,} verified public threats remain available while "
+                "Blackbox waits for the local DKG sync slot."
+            )
+        return progress
+
     # The source-pinned transfer is the authoritative result for this graph.
     # A generic catch-up job may still retain an older failure after that
     # transfer completed successfully; do not turn verified local data into a
@@ -557,7 +649,11 @@ def _sync_activity(
     # capacity for this pass; it is not a corrupt graph or a terminal client
     # error. Keep the full response in sync-state/logs for diagnosis, but show
     # users the automatic durable-resume behavior instead of raw HTTP JSON.
-    if node_reachable and _is_retryable_durable_catchup_error(error):
+    if (
+        node_reachable
+        and catchup_status not in {"queued", "running"}
+        and _is_retryable_durable_catchup_error(error)
+    ):
         detail = (
             "The sync-capable publisher is temporarily busy or unavailable. "
             "Blackbox will retry automatically and resume from its durable checkpoint."
@@ -1440,11 +1536,18 @@ def create_app(*, manage_blackbox: bool = False):
         authoritative_sync = sync_state.read_for_graph(cfg.context_graph_id)
         authoritative_running = authoritative_sync.get("status") == "running"
         authoritative_done = authoritative_sync.get("status") == "done"
+        durable_progress: Dict[str, Any] = {}
+        if authoritative_running or node_catchup_state.lower() == "running":
+            durable_progress = _dkg_durable_progress(
+                cfg.dkg_home, cfg.context_graph_id
+            )
+        activity_transfer = _activity_transfer_state(
+            authoritative_sync,
+            catchup,
+            durable_progress,
+        )
         if authoritative_running:
-            authoritative_sync = {
-                **authoritative_sync,
-                **_dkg_durable_progress(cfg.dkg_home, cfg.context_graph_id),
-            }
+            authoritative_sync = dict(activity_transfer)
         # This count is measured from locally committed rows and can advance
         # ahead of the materialized ruleset cache during a large snapshot.
         if authoritative_running:
@@ -1489,13 +1592,13 @@ def create_app(*, manage_blackbox: bool = False):
             node_reachable=bool(g["node_reachable"]),
             catchup=catchup,
             connection=connection,
-            transfer=authoritative_sync,
+            transfer=activity_transfer,
         )
         blackbox_health = _blackbox_sync_health(
             public=public,
             sync_interval=cfg.sync_interval,
             activity=activity,
-            transfer=authoritative_sync,
+            transfer=activity_transfer,
             node_reachable=bool(g["node_reachable"]),
         )
         if activity["status"] in {"running", "waiting"}:

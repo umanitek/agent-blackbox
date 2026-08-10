@@ -435,6 +435,27 @@ def test_dkg_durable_progress_marks_safe_manifest_complete(tmp_path):
     ] is True
 
 
+def test_dkg_durable_progress_ignores_nested_exact_repair_manifest(tmp_path):
+    graph = "0x37b1/agent-blackbox-vm"
+    (tmp_path / "daemon.log").write_text(
+        "\n".join(
+            [
+                f'Rootless durable progress for "{graph}": 5 complete graph(s), safe offset 129775->169332 of 6357721 (raw 179951)',
+                f'Rootless durable progress for "{graph}": 1 complete graph(s), safe offset 0->11000 of 11000 (raw 11000)',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert server._dkg_durable_progress(str(tmp_path), graph) == {
+        "current_triples": 179_951,
+        "safe_current_triples": 169_332,
+        "expected_triples": 6_357_721,
+        "progress_percent": 2.8,
+        "snapshot_complete": False,
+    }
+
+
 def test_sync_activity_reports_durable_download_percentage():
     activity = server._sync_activity(
         public=66_000,
