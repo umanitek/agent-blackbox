@@ -8,6 +8,14 @@ import { pathToFileURL } from 'node:url';
 const BLACKBOX_BLAZEGRAPH_JAVA_OPTS = '-Xms512m -Xmx4g';
 const BLACKBOX_BLAZEGRAPH_CPUS = '4';
 const MINIMUM_BLAZEGRAPH_HEAP_BYTES = 4 * 1024 * 1024 * 1024;
+const EFFECTIVE_HEAP_MARKER = 'blackbox-effective-blazegraph-heap';
+const LEGACY_HEAP_PATCH = [
+  'set -eu',
+  'setenv=/opt/tomcat/bin/setenv.sh',
+  'test -f "$setenv"',
+  'cp "$setenv" "$setenv.blackbox-pre-4g"',
+  `printf '\\n# ${EFFECTIVE_HEAP_MARKER}\\nexport JAVA_OPTS="${BLACKBOX_BLAZEGRAPH_JAVA_OPTS}"\\n' >> "$setenv"`,
+];
 
 function fail(message) {
   process.stderr.write(`Blazegraph setup failed: ${message}\n`);
@@ -172,33 +180,38 @@ function heapBytes(javaOpts) {
   return Number(match[1]) * units[match[2].toLowerCase()];
 }
 
-function javaOptsFromInspect(stdout) {
+function containerFromInspect(stdout) {
   try {
     const containers = JSON.parse(stdout);
-    const env = containers?.[0]?.Config?.Env;
-    if (!Array.isArray(env)) return '';
-    const entry = env.find((value) => String(value).startsWith('JAVA_OPTS='));
-    return entry ? String(entry).slice('JAVA_OPTS='.length) : '';
+    return containers?.[0] && typeof containers[0] === 'object' ? containers[0] : undefined;
   } catch {
-    return '';
+    return undefined;
   }
 }
 
-function backupContainerName(name) {
-  return `${name}-pre-4g-${Date.now()}`;
+function envFromInspect(container, key) {
+  const env = container?.Config?.Env;
+  if (!Array.isArray(env)) return '';
+  const prefix = `${key}=`;
+  const entry = env.find((value) => String(value).startsWith(prefix));
+  return entry ? String(entry).slice(prefix.length) : '';
+}
+
+function isPinnedIslandoraBlazegraph(container) {
+  return String(container?.Config?.Image || '').startsWith('islandora/blazegraph:');
 }
 
 function blackboxDockerRunner(log) {
   return {
     async run(args, opts) {
-      if (args[0] === 'run' && !args.some((arg) => String(arg).startsWith('JAVA_OPTS='))) {
+      if (args[0] === 'run' && !args.some((arg) => String(arg).startsWith('TOMCAT_JAVA_OPTS='))) {
         return runDocker(
           [
             'run',
             '--cpus',
             BLACKBOX_BLAZEGRAPH_CPUS,
             '-e',
-            `JAVA_OPTS=${BLACKBOX_BLAZEGRAPH_JAVA_OPTS}`,
+            `TOMCAT_JAVA_OPTS=${BLACKBOX_BLAZEGRAPH_JAVA_OPTS}`,
             ...args.slice(1),
           ],
           opts,
@@ -208,7 +221,8 @@ function blackboxDockerRunner(log) {
       const result = await runDocker([...args], opts);
       if (args[0] !== 'inspect' || result.exitCode !== 0) return result;
 
-      const javaOpts = javaOptsFromInspect(result.stdout);
+      const container = containerFromInspect(result.stdout);
+      const javaOpts = envFromInspect(container, 'TOMCAT_JAVA_OPTS');
       if (heapBytes(javaOpts) >= MINIMUM_BLAZEGRAPH_HEAP_BYTES) {
         const name = String(args[1] || 'dkg-blazegraph');
         const limited = await runDocker(
@@ -222,18 +236,57 @@ function blackboxDockerRunner(log) {
       }
 
       const name = String(args[1] || 'dkg-blazegraph');
-      const backup = backupContainerName(name);
-      log(`  Existing container "${name}" uses ${javaOpts || 'the image-default heap'}; replacing it with a 4 GB instance.`);
-      const stopped = await runDocker(['stop', name], { timeoutMs: 30_000 });
-      if (stopped.exitCode !== 0) {
-        throw new Error(`Could not stop undersized Blazegraph container "${name}": ${stopped.stderr.trim()}`);
+      if (!isPinnedIslandoraBlazegraph(container)) {
+        throw new Error(
+          `Existing Blazegraph container "${name}" does not expose a 4 GB effective Tomcat heap `
+          + `and uses unsupported image "${container?.Config?.Image || 'unknown'}". `
+          + 'Refusing to replace it because its local graph data may not be mounted durably.',
+        );
       }
-      const renamed = await runDocker(['rename', name, backup], { timeoutMs: 10_000 });
-      if (renamed.exitCode !== 0) {
-        throw new Error(`Could not preserve undersized Blazegraph container "${name}": ${renamed.stderr.trim()}`);
+
+      if (container?.State?.Running !== true) {
+        // The DKG provisioner will start stopped containers and inspect them again.
+        // Repair only after that start so docker exec can update the image startup hook.
+        return result;
       }
-      log(`  Preserved the old local store as stopped container "${backup}".`);
-      return { stdout: '', stderr: 'container migrated to a recoverable backup', exitCode: 1 };
+
+      const marker = await runDocker([
+        'exec', '--user', '0', name, 'sh', '-c',
+        `grep -Fq '${EFFECTIVE_HEAP_MARKER}' /opt/tomcat/bin/setenv.sh`,
+      ], { timeoutMs: 10_000 });
+      if (marker.exitCode !== 0) {
+        log(
+          `  Existing container "${name}" uses ${javaOpts || 'the image-default Tomcat heap'}; `
+          + 'repairing it in place with a 4 GB heap while preserving /data.',
+        );
+        const patched = await runDocker(
+          ['exec', '--user', '0', name, 'sh', '-c', LEGACY_HEAP_PATCH.join('; ')],
+          { timeoutMs: 10_000 },
+        );
+        if (patched.exitCode !== 0) {
+          throw new Error(
+            `Could not repair the effective Blazegraph heap in container "${name}": `
+            + `${patched.stderr.trim() || 'startup hook update failed'}. `
+            + 'The existing container and graph data were left in place.',
+          );
+        }
+        const restarted = await runDocker(['restart', name], { timeoutMs: 120_000 });
+        if (restarted.exitCode !== 0) {
+          throw new Error(
+            `Could not restart Blazegraph container "${name}" after applying the 4 GB heap: `
+            + `${restarted.stderr.trim() || 'docker restart failed'}`,
+          );
+        }
+      }
+
+      const limited = await runDocker(
+        ['update', '--cpus', BLACKBOX_BLAZEGRAPH_CPUS, name],
+        { timeoutMs: 10_000 },
+      );
+      if (limited.exitCode !== 0) {
+        throw new Error(`Could not apply the Blackbox CPU limit to "${name}": ${limited.stderr.trim()}`);
+      }
+      return result;
     },
   };
 }

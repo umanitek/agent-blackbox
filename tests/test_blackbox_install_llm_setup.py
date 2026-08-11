@@ -1336,7 +1336,7 @@ def test_blazegraph_helper_uses_built_dkg_provisioner(tmp_path: Path) -> None:
     }
 
 
-def test_blazegraph_helper_sizes_heap_and_preserves_undersized_store(tmp_path: Path) -> None:
+def test_blazegraph_helper_repairs_legacy_heap_in_place_and_preserves_store(tmp_path: Path) -> None:
     node = shutil.which("node")
     if not node:
         pytest.skip("Node.js is not installed")
@@ -1347,9 +1347,8 @@ def test_blazegraph_helper_sizes_heap_and_preserves_undersized_store(tmp_path: P
     module.write_text(
         "export async function provisionBlazegraphDocker(options) {\n"
         "  const inspected = await options.docker.run(['inspect', 'dkg-blazegraph-test']);\n"
-        "  if (inspected.exitCode === 0) throw new Error('undersized container was reused');\n"
-        "  const started = await options.docker.run(['run', '-d', 'blazegraph']);\n"
-        "  return {url: started.stdout.trim(), port: options.port, managedByDkg: true};\n"
+        "  if (inspected.exitCode !== 0) throw new Error('legacy container was replaced');\n"
+        "  return {url: 'reused', port: options.port, managedByDkg: true};\n"
         "}\n",
         encoding="utf-8",
     )
@@ -1361,8 +1360,8 @@ def test_blazegraph_helper_sizes_heap_and_preserves_undersized_store(tmp_path: P
         "#!/bin/sh\n"
         f"printf '%s\\n' \"$*\" >> {shlex.quote(str(docker_log))}\n"
         "case \"$1\" in\n"
-        "  inspect) printf '%s\\n' '[{\"Config\":{\"Env\":[\"JAVA_OPTS=-Xmx1g\"]}}]' ;;\n"
-        "  run) printf '%s\\n' \"$*\" ;;\n"
+        "  inspect) printf '%s\\n' '[{\"Config\":{\"Image\":\"islandora/blazegraph:6.4.3\",\"Env\":[\"JAVA_OPTS=-Xms512m -Xmx4g\",\"TOMCAT_JAVA_OPTS=\"]},\"State\":{\"Running\":true}}]' ;;\n"
+        "  exec) case \"$*\" in *grep*) exit 1 ;; esac ;;\n"
         "esac\n",
         encoding="utf-8",
     )
@@ -1378,10 +1377,98 @@ def test_blazegraph_helper_sizes_heap_and_preserves_undersized_store(tmp_path: P
 
     calls = docker_log.read_text(encoding="utf-8").splitlines()
     assert calls[0] == "inspect dkg-blazegraph-test"
-    assert calls[1] == "stop dkg-blazegraph-test"
-    assert calls[2].startswith("rename dkg-blazegraph-test dkg-blazegraph-test-pre-4g-")
-    assert calls[3] == "run --cpus 4 -e JAVA_OPTS=-Xms512m -Xmx4g -d blazegraph"
-    assert json.loads(completed.stdout)["url"] == calls[3]
+    assert calls[1].startswith(
+        "exec --user 0 dkg-blazegraph-test sh -c grep -Fq "
+    )
+    assert "blackbox-effective-blazegraph-heap" in calls[1]
+    assert calls[2].startswith("exec --user 0 dkg-blazegraph-test sh -c set -eu;")
+    assert 'export JAVA_OPTS="-Xms512m -Xmx4g"' in calls[2]
+    assert calls[3] == "restart dkg-blazegraph-test"
+    assert calls[4] == "update --cpus 4 dkg-blazegraph-test"
+    assert all(not call.startswith(("stop ", "rename ", "rm ")) for call in calls)
+    assert json.loads(completed.stdout)["url"] == "reused"
+
+
+def test_blazegraph_helper_sets_effective_tomcat_heap_on_new_container(tmp_path: Path) -> None:
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is not installed")
+    cli = tmp_path / "node_modules" / "@origintrail-official" / "dkg"
+    module = cli / "dist" / "daemon" / "blazegraph-docker.js"
+    module.parent.mkdir(parents=True)
+    (cli / "package.json").write_text('{"type":"module"}', encoding="utf-8")
+    module.write_text(
+        "export async function provisionBlazegraphDocker(options) {\n"
+        "  const started = await options.docker.run(['run', '-d', 'blazegraph']);\n"
+        "  return {url: started.stdout.trim(), port: options.port, managedByDkg: true};\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    docker_log = tmp_path / "docker.log"
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    docker = fake_bin / "docker"
+    docker.write_text(
+        "#!/bin/sh\n"
+        f"printf '%s\\n' \"$*\" >> {shlex.quote(str(docker_log))}\n"
+        "printf '%s\\n' \"$*\"\n",
+        encoding="utf-8",
+    )
+    docker.chmod(0o755)
+
+    completed = subprocess.run(
+        [node, str(BLAZEGRAPH_HELPER), str(tmp_path), "blackbox-test", "10001"],
+        check=True,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PATH": str(fake_bin) + os.pathsep + os.environ.get("PATH", "")},
+    )
+
+    calls = docker_log.read_text(encoding="utf-8").splitlines()
+    assert calls == [
+        "run --cpus 4 -e TOMCAT_JAVA_OPTS=-Xms512m -Xmx4g -d blazegraph"
+    ]
+    assert json.loads(completed.stdout)["url"] == calls[0]
+
+
+def test_blazegraph_helper_refuses_to_replace_unknown_legacy_store(tmp_path: Path) -> None:
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is not installed")
+    cli = tmp_path / "node_modules" / "@origintrail-official" / "dkg"
+    module = cli / "dist" / "daemon" / "blazegraph-docker.js"
+    module.parent.mkdir(parents=True)
+    (cli / "package.json").write_text('{"type":"module"}', encoding="utf-8")
+    module.write_text(
+        "export async function provisionBlazegraphDocker(options) {\n"
+        "  await options.docker.run(['inspect', 'dkg-blazegraph-test']);\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    docker_log = tmp_path / "docker.log"
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    docker = fake_bin / "docker"
+    docker.write_text(
+        "#!/bin/sh\n"
+        f"printf '%s\\n' \"$*\" >> {shlex.quote(str(docker_log))}\n"
+        "printf '%s\\n' '[{\"Config\":{\"Image\":\"unknown/blazegraph:latest\",\"Env\":[]},\"State\":{\"Running\":true}}]'\n",
+        encoding="utf-8",
+    )
+    docker.chmod(0o755)
+
+    completed = subprocess.run(
+        [node, str(BLAZEGRAPH_HELPER), str(tmp_path), "blackbox-test", "10001"],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PATH": str(fake_bin) + os.pathsep + os.environ.get("PATH", "")},
+    )
+
+    assert completed.returncode != 0
+    assert "Refusing to replace it" in completed.stderr
+    assert docker_log.read_text(encoding="utf-8").splitlines() == [
+        "inspect dkg-blazegraph-test"
+    ]
 
 
 def test_blazegraph_helper_uses_dkg_store_health_check(tmp_path: Path) -> None:
