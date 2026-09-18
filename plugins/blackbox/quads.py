@@ -1175,3 +1175,28 @@ def build_report_quads(
         if ioc_type:
             out.append(_q(subj, constants.IOC_TYPE_PRED, literal(ioc_type)))
     return out
+
+
+def build_false_positive_quads(
+    *,
+    identifier: str,
+    reporter_address: str,
+    framework: str = "hermes",
+    ts: Optional[datetime] = None,
+) -> List[Quad]:
+    """A dispute signal: "this community threat is wrong" (KI-011, Q8's writer).
+
+    Same per-(reporter, threat) subject discipline as reports — one dispute
+    voice per reporter per threat, first write wins — under a ``:fp`` suffix
+    so a reporter can hold both a report and a dispute without collision.
+    Carries only the identifier, reporter, framework and timestamp: a veto
+    needs no evidence payload (curators re-check the original reports).
+    """
+    subj = report_uri(identifier, reporter_address) + ":fp"
+    return [
+        _q(subj, constants.RDF_TYPE, iri(constants.FALSE_POSITIVE_TYPE_IRI)),
+        _q(subj, constants.IDENTIFIER_PRED, literal(identifier)),
+        _q(subj, constants.REPORTER_PRED, literal((reporter_address or "").lower())),
+        _q(subj, constants.FRAMEWORK_PRED, literal(framework)),
+        _q(subj, constants.SCHEMA_DATE_MODIFIED_PRED, datetime_literal(ts)),
+    ]

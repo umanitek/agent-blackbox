@@ -101,13 +101,22 @@ def test_openclaw_runtime_is_vm_only_and_reporting_cannot_be_reenabled():
     assert 'row.source !== "community"' in ruleset_src
 
 
-def test_report_command_submits_nothing(monkeypatch, capsys):
+def test_report_command_submits_nothing_when_community_dormant(monkeypatch, capsys):
+    """Contract update (community-graph build B6): the command is REAL now,
+    but with no community graph configured (the shipped default) it must
+    refuse loudly, submit nothing, and never even create a DKG client."""
     monkeypatch.setattr(cli, "DkgClient", lambda *a, **k: (_ for _ in ()).throw(
-        AssertionError("report must not create a DKG client")
+        AssertionError("report must not create a DKG client while dormant")
     ))
+    monkeypatch.delenv("BLACKBOX_COMMUNITY_GRAPH_ID", raising=False)
+    monkeypatch.delenv("BLACKBOX_REPORT", raising=False)
 
-    assert cli._cmd_report(Namespace()) == 2
-    assert "coming soon" in capsys.readouterr().out.lower()
+    args = Namespace(status=False, type="ioc", ioc_type="domain", value="evil.example",
+                     false_positive=None, severity="high")
+    assert cli._cmd_report(args) == 2
+    out = capsys.readouterr().out
+    assert "Nothing was submitted" in out
+    assert "dormant" in out
 
 
 def test_detection_audit_never_shares(monkeypatch):
