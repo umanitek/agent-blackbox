@@ -1869,6 +1869,103 @@ EOF
 }
 
 # ── Main ────────────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# Boot persistence (B10 / KI-022): the DKG node must survive a reboot, or
+# "install once -> always protected and contributing" is only true until the
+# machine restarts (fail-open would hide the dead node). Registers a system
+# service on Linux (systemd) and a LaunchAgent on macOS. Idempotent: re-runs
+# overwrite the unit in place. Disable anytime:
+#   Linux:  systemctl disable --now blackbox-dkg
+#   macOS:  launchctl unload ~/Library/LaunchAgents/ai.umanitek.blackbox-dkg.plist
+# ---------------------------------------------------------------------------
+register_boot_service() {
+    heading "Registering the DKG node to start on boot"
+    local node_bin_dir
+    node_bin_dir="$(dirname "$(command -v node)")"
+    secure_dkg_token_perms
+    case "$(uname -s)" in
+        Linux)
+            if ! command -v systemctl >/dev/null 2>&1; then
+                warn "systemd not found — the DKG node will NOT auto-start after a reboot."
+                warn "Start it manually after reboots: DKG_HOME=\"$BLACKBOX_DKG_HOME\" \"$BLACKBOX_DKG_BIN\" start"
+                return 0
+            fi
+            local unit=/etc/systemd/system/blackbox-dkg.service
+            if [ ! -w /etc/systemd/system ] && [ "$(id -u)" != 0 ]; then
+                unit="$HOME/.config/systemd/user/blackbox-dkg.service"
+                mkdir -p "$(dirname "$unit")"
+            fi
+            cat > "$unit" <<UNIT
+[Unit]
+Description=Agent Blackbox DKG node (threat-graph sync + community sharing)
+After=network-online.target
+
+[Service]
+Type=simple
+Environment=PATH=$node_bin_dir:/usr/local/bin:/usr/bin:/bin
+Environment=DKG_HOME=$BLACKBOX_DKG_HOME
+Environment=DKG_SYNC_ON_CONNECT_ENABLED=0
+Environment=DKG_SYNC_RECONCILER_ENABLED=0
+ExecStart=$BLACKBOX_DKG_BIN start --foreground
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target default.target
+UNIT
+            if [ "$unit" = /etc/systemd/system/blackbox-dkg.service ]; then
+                systemctl daemon-reload && systemctl enable blackbox-dkg >/dev/null 2>&1 \
+                    && ok "systemd service registered (blackbox-dkg) — the node survives reboots" \
+                    || warn "could not enable blackbox-dkg service; enable manually: systemctl enable blackbox-dkg"
+            else
+                systemctl --user daemon-reload && systemctl --user enable blackbox-dkg >/dev/null 2>&1 \
+                    && ok "systemd user service registered — the node survives reboots (of your session)" \
+                    || warn "could not enable the user service; enable manually: systemctl --user enable blackbox-dkg"
+            fi
+            ;;
+        Darwin)
+            local plist="$HOME/Library/LaunchAgents/ai.umanitek.blackbox-dkg.plist"
+            mkdir -p "$HOME/Library/LaunchAgents"
+            cat > "$plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>ai.umanitek.blackbox-dkg</string>
+  <key>ProgramArguments</key><array>
+    <string>$BLACKBOX_DKG_BIN</string><string>start</string><string>--foreground</string>
+  </array>
+  <key>EnvironmentVariables</key><dict>
+    <key>PATH</key><string>$node_bin_dir:/usr/local/bin:/usr/bin:/bin</string>
+    <key>DKG_HOME</key><string>$BLACKBOX_DKG_HOME</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+</dict></plist>
+PLIST
+            launchctl unload "$plist" >/dev/null 2>&1 || true
+            launchctl load "$plist" >/dev/null 2>&1 \
+                && ok "LaunchAgent registered — the node survives reboots" \
+                || warn "could not load the LaunchAgent; load manually: launchctl load $plist"
+            ;;
+        *)
+            warn "Unknown OS — boot persistence not configured; start the node manually after reboots."
+            ;;
+    esac
+}
+
+# KI-032: any local process that can read the DKG auth token can bypass every
+# Blackbox gate at the node. The token must be owner-only.
+secure_dkg_token_perms() {
+    local token
+    for token in "$BLACKBOX_DKG_HOME/auth.token" "$BLACKBOX_DKG_HOME"/auth*.token; do
+        if [ -f "$token" ]; then
+            chmod 600 "$token" 2>/dev/null \
+                && step "  auth token permissions: 600 ($token)" \
+                || warn "could not tighten $token permissions — check ownership"
+        fi
+    done
+}
+
 main() {
     banner
     heading "Checking your system"
@@ -1889,6 +1986,7 @@ main() {
     setup_llm
     sync_ruleset
     start_dashboard
+    register_boot_service
     next_steps
     if [ "$BLACKBOX_INSTALL_INCOMPLETE" = true ]; then
         exit 1
