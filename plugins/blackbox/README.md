@@ -77,11 +77,17 @@ Blackbox currently uses one shared graph:
   in block mode. Anyone can read and sync it, while publishing remains curated.
   The UI expands collection contents and lists each threat entity, not one row
   per collection.
-- The **community graph** (SWM) is shown as **Coming soon**. It is not queried,
-  joined, matched, or written in the current release.
+- The **community graph** is the open collective-defense layer: any protected
+  agent contributes privacy-safe threat reports and learns from other agents'
+  reports (aggregated with honest distinct-reporter counts). Community rules
+  FLAG only — they can never block. Active when a community graph address is
+  configured; sharing additionally requires `report: true`.
 
 Raw prompts, commands, file contents, secrets, and your local audit trail are
-not published. Findings and reports stay local.
+never published — reports carry only deterministic threat names and the
+signature fields a reviewer needs, and secret/LLM/custom findings are
+hard-excluded from sharing in code. Reports are pseudonymous under your
+node's persistent address.
 
 ## Configuration
 
@@ -92,12 +98,14 @@ to change them is through the dashboard settings page.
 |---|---:|---|
 | `mode` | `audit` | Warn only (`audit`) or stop confirmed threats (`block`) |
 | `block_severity` | `critical` | Minimum severity blocked in block mode |
-| `report` | `false` | Fixed off while community threat sharing is coming soon |
-| `report_min_severity` | `high` | Reserved for future community sharing |
+| `report` | `false` | Share privacy-safe threat reports with the community graph |
+| `report_min_severity` | `high` | Minimum severity for heuristic candidates to flag/share |
 | `detection.<category>.enabled` | `true` | Enable or disable a detection category |
 | `detection.<category>.min_severity` | `info` | Minimum visible severity for a category |
 | `protected_paths` | `[]` | Local file globs that always block and are never shared |
 | `context_graph_id` | `0x37b1Fdfd…/agent-blackbox-vm` | Public verified threat graph |
+| `community_graph_id` | *(empty until launch)* | Community graph address; empty keeps sharing dormant |
+| `daily_report_limit` | `50` | Daily cap on outbound community reports |
 | `graph_peer_id` | bundled publisher peer | Authoritative threat-data sync source |
 
 Categories are `injection`, `escalation`, `dependency`, `fileaccess`, and

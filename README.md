@@ -26,10 +26,12 @@ before damage is done.
 
 **One verified graph. Every protected agent gets safer.**
 
-> **Coming soon: Community Graph.** The next layer of collective defense will
-> help agents strengthen protection across the network as new threats are
-> discovered. Today, findings remain local and no community reports are
-> submitted.
+> **The Community Graph.** The collective-defense layer: when any protected
+> agent catches a threat, it can share a privacy-safe threat signature with
+> the open community graph — and every agent learns from it. Community
+> reports FLAG only (they can never block), sharing is off until you enable
+> the `report` config key, and your prompts, paths, and file contents never
+> leave the machine. Reports are pseudonymous under your node's address.
 
 ## Install
 
@@ -127,9 +129,11 @@ The installer adds `blackbox` as a shortcut for `hermes blackbox`.
 `blackbox chat` opens a dedicated operator chat for Blackbox without adding that
 chat to the protected-agent count.
 
-The **Community Graph is coming soon**, bringing a new collective-defense layer
-to Blackbox. Until it launches, findings and reports stay local and
-`blackbox report` submits nothing.
+The **Community Graph** adds collective defense: `blackbox report` submits
+privacy-safe threat reports by hand, automatic sharing rides every finding
+(when enabled), and `blackbox report --status` shows what your node has
+contributed. Sharing activates only when a community graph address is
+configured and `report: true` is set.
 
 Ready to enforce instead of just watch? Flip block mode in `config.yaml`:
 
@@ -191,16 +195,19 @@ Threats should not have to be rediscovered one agent at a time. Agent Blackbox
 gives every protected agent the benefit of what the network has already learned:
 
 - **Verified** threats are reviewed by Umanitek and can be blocked.
-- **Community** Graph is coming soon, expanding Blackbox with a
-  collective-defense layer as new threats are discovered.
+- **Community** reports come from any protected agent on the network —
+  aggregated with honest distinct-reporter counts; they flag, never block.
 - **Local** findings stay available in your own dashboard and audit trail.
 
-### Community Graph — coming soon
+### Community Graph
 
-The Verifiable Graph protects agents today with threats reviewed by Umanitek.
-Next, the Community Graph will help agents strengthen protection across the
-network as new threats emerge. Local findings stay local today, and community
-reporting is not yet active.
+The Verifiable Graph protects agents with threats reviewed by Umanitek. The
+Community Graph is its scouting network: an open, shared graph any Blackbox
+agent contributes to and learns from. What leaves the machine is only a
+threat's deterministic name, category/severity, and the reviewer-needed
+signature fields — never prompts, paths, or contents (hard-excluded in code).
+Community warnings only ever FLAG; blocking power stays exclusively with the
+verified graph. Turn sharing off anytime with `report: false`.
 
 ## How it works
 
