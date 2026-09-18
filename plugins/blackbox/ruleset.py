@@ -328,14 +328,21 @@ OFFSET {int(offset)}
 
 
 def community_report_count(client: DkgClient, cfg: BlackboxConfig) -> int:
-    """Count outbound sightings in the official SWM view."""
+    """Count threat reports in the COMMUNITY graph's shared memory (B5).
+
+    Repointed from the verified graph's SWM view to the dedicated community
+    graph — the two-graph split. Returns 0 when no community graph is
+    configured or on any error (fail-open read).
+    """
+    if not cfg.community_graph_id:
+        return 0
     sparql = (
         "SELECT (COUNT(DISTINCT ?r) AS ?n) WHERE { "
         "?r a <http://umanitek.ai/ontology/guardian/ThreatReport> }"
     )
     rows = client.query(
         sparql,
-        cfg.context_graph_id,
+        cfg.community_graph_id,
         view=constants.VIEW_SHARED_WORKING_MEMORY,
         on_error=None,
     )
@@ -345,6 +352,309 @@ def community_report_count(client: DkgClient, cfg: BlackboxConfig) -> int:
         return int(extract_binding(rows[0].get("n")) or 0)
     except (ValueError, TypeError):
         return 0
+
+
+# ---------------------------------------------------------------------------
+# Community tier (B5): fetch → aggregate → adapt, with the untrusted-data
+# boundary enforced in exactly one place.
+# ---------------------------------------------------------------------------
+
+#: Bounded ingest (KI-010): a spammer can invent unlimited identifiers; we
+#: keep the corroborated head (reporter count, then recency), never the tail.
+_COMMUNITY_MAX_RULES = 5000
+
+#: Per-page row cap for the community report pager (same discipline as the
+#: verified tiers, smaller pages — reports are tiny).
+_COMMUNITY_PAGE_SIZE = 5000
+
+#: Fleet-wide emergency stop (KI-036): curators publish this subject with
+#: g:enabled "true" INTO THE VERIFIED GRAPH to pause community ingest
+#: everywhere. Read-only for us — no new write path, one-way trust preserved.
+COMMUNITY_PAUSE_SUBJECT = "urn:guardian:community:pause"
+
+
+def sparql_string_literal(value: object) -> str:
+    """Escape *value* as a double-quoted SPARQL string literal (KI-029).
+
+    THE one escaping implementation for runtime strings entering SPARQL
+    (cursors, identifiers, addresses). Community-graph strings are untrusted
+    input that our own read pipeline re-interpolates into queries; everything
+    goes through here, nothing is hand-escaped at call sites.
+    """
+    text = str(value or "")
+    text = text.replace("\\", "\\\\").replace('"', '\\"')
+    text = text.replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
+    return f'"{text}"'
+
+
+@dataclass(frozen=True)
+class CommunityRule:
+    """One aggregated community threat — the typed seam of the read path.
+
+    Holds the corroborated view of every report for one identifier:
+    ``reporter_count`` is COUNT(DISTINCT reporter) — honest by the naming
+    scheme; ``severity`` is the max across reporters (community can only
+    flag, so loud-side is safe); ``first_seen``/``last_seen`` are THIS
+    node's ingest observations, never reporter-supplied timestamps
+    (KI-012 — display metadata can't be gamed by post-dating).
+
+    Pattern: Adapter — :meth:`as_rule` converts to the plain rule-dict shape
+    the existing merge/detection machinery expects, and is the SINGLE point
+    where community-authored strings are clamped and typed display-only.
+    No community string is ever compiled or interpreted (KI-004): community
+    rules match by identifier equality alone.
+    """
+
+    identifier: str
+    category: str
+    severity: str
+    reporter_count: int
+    first_seen: float
+    last_seen: float
+    fields: "tuple[tuple[str, str], ...]" = ()
+
+    _CLAMP = 256
+
+    def as_rule(self) -> Dict[str, Any]:
+        """The merge-compatible rule dict; every value clamped display-only."""
+        clamp = lambda v: str(v or "")[: self._CLAMP]  # noqa: E731 - tiny local helper
+        rule = {
+            "identifier": clamp(self.identifier),
+            "name": clamp(self.identifier),
+            "severity": constants.normalize_severity(self.severity),
+            "source": "community",
+            "reporterCount": int(self.reporter_count),
+            "firstSeen": float(self.first_seen),
+            "lastSeen": float(self.last_seen),
+        }
+        for key, value in self.fields:
+            rule[clamp(key)] = clamp(value)
+        return rule
+
+
+def _community_reports_sparql(after: str) -> str:
+    """Catalog query Q1: cursor-paged ThreatReport fetch with OPTIONAL harvest."""
+    cursor = ""
+    if after:
+        cursor = f"FILTER(STR(?r) > {sparql_string_literal(after)})"
+    return f"""
+PREFIX g: <http://umanitek.ai/ontology/guardian/>
+SELECT ?r ?identifier ?reporter ?severity ?kind ?iocType ?toolName ?argShape
+       ?packageName ?packageVersion ?packageEcosystem ?category ?skillName
+       ?dangerShape ?pattern WHERE {{
+  ?r a g:ThreatReport ;
+     g:identifier ?identifier ;
+     g:reporter ?reporter ;
+     g:severity ?severity .
+  OPTIONAL {{ ?r g:kind ?kind }}
+  OPTIONAL {{ ?r g:iocType ?iocType }}
+  OPTIONAL {{ ?r g:toolName ?toolName }}
+  OPTIONAL {{ ?r g:argShape ?argShape }}
+  OPTIONAL {{ ?r g:packageName ?packageName }}
+  OPTIONAL {{ ?r g:packageVersion ?packageVersion }}
+  OPTIONAL {{ ?r g:packageEcosystem ?packageEcosystem }}
+  OPTIONAL {{ ?r g:category ?category }}
+  OPTIONAL {{ ?r g:skillName ?skillName }}
+  OPTIONAL {{ ?r g:dangerShape ?dangerShape }}
+  OPTIONAL {{ ?r g:pattern ?pattern }}
+  {cursor}
+}} ORDER BY STR(?r) LIMIT {_COMMUNITY_PAGE_SIZE}
+"""
+
+
+def _community_pause_active(client: DkgClient, cfg: BlackboxConfig) -> bool:
+    """KI-036: True when curators have raised the fleet-wide pause flag.
+
+    Read from the VERIFIED graph (only Umanitek writes there). Fail-open to
+    NOT paused — a network error must not silently disable the community
+    tier; the flag exists for deliberate emergencies only.
+    """
+    try:
+        sparql = (
+            f"SELECT ?v WHERE {{ <{COMMUNITY_PAUSE_SUBJECT}> "
+            f"<{constants.BLACKBOX_ONTOLOGY}enabled> ?v }} LIMIT 1"
+        )
+        rows = client.query(sparql, cfg.context_graph_id, on_error=None)
+        if rows is None or not rows:
+            return False
+        return extract_binding(rows[0].get("v")).strip().lower() == "true"
+    except Exception:  # pragma: no cover - fail open
+        return False
+
+
+def _fetch_community_report_rows(client: DkgClient, cfg: BlackboxConfig) -> Optional[List[Dict[str, Any]]]:
+    """Page every ThreatReport from the community graph's shared memory.
+
+    Same cursor discipline as the verified pager (monotonic subject cursor,
+    bounded pages, hard row ceiling). Returns None on failure so the caller
+    keeps last-good (fail-open), [] on a genuinely empty graph.
+    """
+    rows: List[Dict[str, Any]] = []
+    after = ""
+    sentinel = object()
+    while len(rows) < _MAX_ROWS:
+        page = client.query(
+            _community_reports_sparql(after),
+            cfg.community_graph_id,
+            view=constants.VIEW_SHARED_WORKING_MEMORY,
+            on_error=sentinel,
+        )
+        if page is sentinel:
+            return None if not rows else rows
+        if not page:
+            break
+        rows.extend(page)
+        cursors = [extract_binding(r.get("r")) for r in page if extract_binding(r.get("r"))]
+        next_cursor = max(cursors) if cursors else ""
+        if not next_cursor or next_cursor <= after:
+            break  # non-monotonic cursor: stop rather than loop forever
+        after = next_cursor
+        if len(page) < _COMMUNITY_PAGE_SIZE:
+            break
+    return rows
+
+
+_COMMUNITY_EVIDENCE_VARS = (
+    "kind", "iocType", "toolName", "argShape", "packageName",
+    "packageVersion", "packageEcosystem", "category", "skillName",
+    "dangerShape", "pattern",
+)
+
+
+def _aggregate_community_reports(
+    raw_rows: List[Dict[str, Any]], prior_first_seen: Dict[str, float]
+) -> List[CommunityRule]:
+    """Fold report rows into per-identifier CommunityRules.
+
+    Aggregation keys on the exact identifier LITERAL (KI-027 — slugged
+    threat URNs can collide; the literal cannot). Reporter counting is
+    per-distinct reporter string; severity is the max seen; first_seen
+    carries over from this node's previous cache so it reflects OUR first
+    observation, not an attacker-supplied date (KI-012).
+    """
+    now = time.time()
+    grouped: Dict[str, Dict[str, Any]] = {}
+    for row in raw_rows:
+        identifier = extract_binding(row.get("identifier")).strip()
+        reporter = extract_binding(row.get("reporter")).strip().lower()
+        if not identifier or not reporter:
+            continue
+        slot = grouped.setdefault(
+            identifier,
+            {"reporters": set(), "severity": "info", "fields": {}},
+        )
+        slot["reporters"].add(reporter)
+        severity = constants.normalize_severity(extract_binding(row.get("severity")))
+        if constants.SEVERITY_RANK.get(severity, 0) > constants.SEVERITY_RANK.get(slot["severity"], 0):
+            slot["severity"] = severity
+        for var in _COMMUNITY_EVIDENCE_VARS:
+            value = extract_binding(row.get(var))
+            if value and var not in slot["fields"]:
+                slot["fields"][var] = value
+    rules = [
+        CommunityRule(
+            identifier=identifier,
+            category=identifier.split(":", 1)[0],
+            severity=slot["severity"],
+            reporter_count=len(slot["reporters"]),
+            first_seen=float(prior_first_seen.get(identifier, now)),
+            last_seen=now,
+            fields=tuple(sorted(slot["fields"].items())),
+        )
+        for identifier, slot in grouped.items()
+    ]
+    # Bounded ingest (KI-010): corroboration first, then recency.
+    rules.sort(key=lambda r: (-r.reporter_count, -r.first_seen))
+    if len(rules) > _COMMUNITY_MAX_RULES:
+        logger.warning(
+            "blackbox: community ingest capped at %d rules (%d dropped — corroborated head kept)",
+            _COMMUNITY_MAX_RULES,
+            len(rules) - _COMMUNITY_MAX_RULES,
+        )
+        rules = rules[:_COMMUNITY_MAX_RULES]
+    return rules
+
+
+def _apply_community_tier(rs: "Ruleset", client: DkgClient, cfg: BlackboxConfig) -> None:
+    """Enrich a freshly built ruleset with the community tier. Fail-open.
+
+    Populates ``rs.community`` (the corroboration/display store, keyed by
+    identifier literal) and materializes MATCHABLE community rules into the
+    ``dependency``/``ioc`` O(1) lookup dicts only — identifier-equality
+    matching, never pattern execution (KI-004). Public rules always win a
+    key collision (merge precedence). Injection/escalation/fileaccess/skill
+    community reports stay display-and-corroboration only in v1: their
+    local detections derive the same deterministic identifiers, so
+    corroboration works without ever interpreting community content.
+    """
+    if not cfg.community_graph_id:
+        return
+    try:
+        if _community_pause_active(client, cfg):
+            logger.warning("blackbox: community ingest PAUSED by curator flag")
+            rs.community_paused = True
+            return
+        # KI-034: updated existing installs must join without a manual sync.
+        try:
+            client.subscribe_context_graph(cfg.community_graph_id, include_shared_memory=True)
+        except Exception:
+            pass
+        prior = _latest_cached_ruleset(cfg.context_graph_id)
+        prior_first_seen = {}
+        if prior is not None:
+            prior_first_seen = {
+                ident: float(rule.get("firstSeen", 0) or 0)
+                for ident, rule in prior.community.items()
+                if rule.get("firstSeen")
+            }
+        raw = _fetch_community_report_rows(client, cfg)
+        if raw is None:
+            # Fetch failed: keep last-good community rows (fail-open).
+            if prior is not None and prior.community:
+                rs.community = dict(prior.community)
+                _materialize_community_rules(rs)
+            return
+        rules = _aggregate_community_reports(raw, prior_first_seen)
+        rs.community = {rule.identifier: rule.as_rule() for rule in rules}
+        _materialize_community_rules(rs)
+    except Exception as exc:  # pragma: no cover - fail open at the tier boundary
+        logger.debug("blackbox: community tier skipped: %s", exc)
+
+
+def _materialize_community_rules(rs: "Ruleset") -> None:
+    """Copy matchable community rules into the dependency/ioc lookup dicts.
+
+    Only identifier-keyed O(1) structures — nothing community-sourced ever
+    reaches a pattern compile or scan list. Public rules keep precedence.
+    """
+    for identifier, rule in rs.community.items():
+        if identifier.startswith("dep:"):
+            eco = str(rule.get("packageEcosystem") or "").lower()
+            pkg = str(rule.get("packageName") or "").lower()
+            ver = str(rule.get("packageVersion") or "")
+            if not (eco and pkg and ver):
+                try:
+                    _, rest = identifier.split(":", 1)
+                    eco, tail = rest.split(":", 1)
+                    pkg, ver = tail.rsplit("@", 1)
+                    eco, pkg = eco.lower(), pkg.lower()
+                except ValueError:
+                    continue
+            key = quads.dependency_key(eco, pkg, ver)
+            if key not in rs.dependency:  # public beats community
+                rs.dependency[key] = {
+                    **rule,
+                    "ecosystem": eco,
+                    "packageName": pkg,
+                    "packageVersion": ver,
+                    "advisoryId": "",
+                    "kind": rule.get("kind") or None,
+                }
+        elif identifier.startswith("ioc:"):
+            if identifier not in rs.ioc:  # public beats community
+                parts = identifier.split(":", 2)
+                fallback_type = parts[1] if len(parts) >= 3 else ""
+                rs.ioc[identifier] = {**rule, "iocType": str(rule.get("iocType") or fallback_type)}
 
 
 # ---------------------------------------------------------------------------
@@ -422,6 +732,15 @@ class Ruleset:
     # IOC rules keyed by full identifier (``ioc:{type}:{value}``) for O(1) lookup.
     ioc: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     graph_threats: List[Dict[str, Any]] = field(default_factory=list)
+    #: Community tier (B5): aggregated reports keyed by identifier LITERAL —
+    #: the corroboration/display store ({identifier: rule-dict with
+    #: reporterCount/firstSeen/lastSeen/...}). Matchable subsets are also
+    #: materialized into ``dependency``/``ioc``; community rules can only
+    #: ever flag (confirmed stays False downstream).
+    community: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    #: True when the curator fleet-wide pause flag suppressed community
+    #: ingest this refresh (KI-036) — surfaced in status/dashboard.
+    community_paused: bool = False
     synced_at: float = 0.0
     context_graph_id: str = ""
     _graph_entries_cache: Dict[str, List[Dict[str, Any]]] = field(
@@ -438,6 +757,7 @@ class Ruleset:
             "fileaccess": len(self.fileaccess),
             "skill": len(self.skill),
             "ioc": len(self.ioc),
+            "community": len(self.community),
         }
 
     def iter_rules(self):
@@ -831,6 +1151,8 @@ def _serialize(rs: Ruleset) -> Dict[str, Any]:
         "skill": rs.skill,
         "ioc": rs.ioc,
         "graph_threats": rs.graph_threats,
+        "community": rs.community,
+        "community_paused": rs.community_paused,
     }
 
 
@@ -849,12 +1171,32 @@ def _deserialize(data: Dict[str, Any]) -> Ruleset:
             continue
         if rule.get("source", "public") == "public":
             rs.injection.append({**rule, "pattern_src": src, "pattern": compiled})
+    # KI-001: community rules SURVIVE the cache round-trip. The scan lists
+    # (injection/escalation/fileaccess/skill) stay public-only — community
+    # content never enters a scanned/compiled structure (KI-004); the
+    # identifier-keyed lookup dicts (dependency/ioc) keep both tiers, and the
+    # community store reloads verbatim so corroboration outlives restarts.
     rs.escalation = [r for r in data.get("escalation", []) if r.get("source", "public") == "public"]
-    rs.dependency = {k: r for k, r in data.get("dependency", {}).items() if r.get("source", "public") == "public"}
+    rs.dependency = {
+        k: r
+        for k, r in data.get("dependency", {}).items()
+        if r.get("source", "public") in ("public", "community")
+    }
     rs.fileaccess = [r for r in data.get("fileaccess", []) if r.get("source", "public") == "public"]
     rs.skill = [r for r in data.get("skill", []) if r.get("source", "public") == "public"]
-    rs.ioc = {k: r for k, r in data.get("ioc", {}).items() if r.get("source", "public") == "public"}
+    rs.ioc = {
+        k: r
+        for k, r in data.get("ioc", {}).items()
+        if r.get("source", "public") in ("public", "community")
+    }
     rs.graph_threats = [r for r in data.get("graph_threats", []) if r.get("source", "public") == "public"]
+    community = data.get("community")
+    rs.community = {
+        str(k): dict(v)
+        for k, v in (community or {}).items()
+        if isinstance(v, dict)
+    } if isinstance(community, dict) else {}
+    rs.community_paused = bool(data.get("community_paused", False))
     return rs
 
 
@@ -1332,6 +1674,12 @@ def _refresh_unlocked(
         rows.extend((row, tier) for row in view_rows)
     rs = build_from_rows(rows)
     rs.context_graph_id = context_graph_id
+    # Community tier (B5): enrich after the verified build so public rules
+    # already occupy their keys (public-beats-community precedence is then
+    # structural). Entirely fail-open — a community problem never degrades
+    # the verified ruleset.
+    if client is not None and config.community_graph_id:
+        _apply_community_tier(rs, client, config)
     if empty_success:
         # A fresh node's subscribe/catch-up is async. Do not cache "0 rules" as
         # fresh for the full sync interval; retry soon so the dashboard updates
