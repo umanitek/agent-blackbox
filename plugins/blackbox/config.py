@@ -104,8 +104,12 @@ class BlackboxConfig:
     dkg_bin: str = field(default_factory=lambda: str(constants.blackbox_dkg_bin()))
     sync_interval: int = 3600
     report: bool = False
-    daily_report_limit: int = 0
+    daily_report_limit: int = constants.DEFAULT_DAILY_REPORT_LIMIT
     report_min_severity: str = "high"
+    #: Community context graph address (env BLACKBOX_COMMUNITY_GRAPH_ID →
+    #: config entry ``community_graph_id`` → shipped default). Empty means the
+    #: community feature is dormant regardless of ``report``.
+    community_graph_id: str = constants.DEFAULT_COMMUNITY_GRAPH_ID
     block_severity: str = "critical"
     dashboard_port: int = 9700
     discover: bool = True
@@ -133,6 +137,24 @@ class BlackboxConfig:
     def block_enabled(self) -> bool:
         """True when the plugin is allowed to block tool calls."""
         return self.mode.lower() == "block"
+
+    @property
+    def community_enabled(self) -> bool:
+        """True when outbound community sharing may run — THE single gate.
+
+        Every community write path checks this one expression (no scattered
+        gate logic): the build must ship the capability
+        (:data:`constants.COMMUNITY_GRAPH_ENABLED`), the operator must have
+        sharing on (``report``), and a community graph address must exist.
+        An empty address keeps the feature dormant by construction, which is
+        what lets the shipped default stay safe before the production graph
+        is minted (KI-035).
+        """
+        return bool(
+            constants.COMMUNITY_GRAPH_ENABLED
+            and self.report
+            and self.community_graph_id.strip()
+        )
 
     @property
     def llm_ready(self) -> bool:
@@ -322,10 +344,31 @@ def load_blackbox_config() -> BlackboxConfig:
                 3600,
             ),
         ),
-        # Threat sharing ships with the future community graph. This is not a
-        # user-toggleable path in the VM-only release.
-        report=False,
-        daily_report_limit=0,
+        # Community sharing switches (documented in README as `report` /
+        # `report_min_severity`). `report` defaults OFF pending the launch
+        # default-on/off decision; the daily cap defaults to a real bound so
+        # the safeguard exists the moment sharing turns on (KI-002).
+        report=_as_bool(_env_or(entry, env="BLACKBOX_REPORT", key="report", default=False), False),
+        daily_report_limit=max(
+            0,
+            _as_int(
+                _env_or(
+                    entry,
+                    env="BLACKBOX_DAILY_REPORT_LIMIT",
+                    key="daily_report_limit",
+                    default=constants.DEFAULT_DAILY_REPORT_LIMIT,
+                ),
+                constants.DEFAULT_DAILY_REPORT_LIMIT,
+            ),
+        ),
+        community_graph_id=str(
+            _env_or(
+                entry,
+                env="BLACKBOX_COMMUNITY_GRAPH_ID",
+                key="community_graph_id",
+                default=constants.DEFAULT_COMMUNITY_GRAPH_ID,
+            )
+        ).strip(),
         report_min_severity=report_min_severity,
         block_severity=block_severity,
         dashboard_port=_as_int(

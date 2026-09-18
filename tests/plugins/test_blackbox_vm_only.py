@@ -62,11 +62,19 @@ def test_cached_community_rules_are_discarded():
     assert [r["identifier"] for r in restored.graph_threats] == ["public"]
 
 
-def test_config_cannot_enable_threat_sharing(monkeypatch):
+def test_sharing_stays_dormant_without_a_community_graph_address(monkeypatch):
+    """Contract update (community-graph build B2): the `report` key is LIVE,
+    but community sharing remains dormant by construction until a community
+    graph address exists — the shipped default is empty until Umanitek mints
+    the production graph (KI-035). This replaces the old VM-only contract
+    where BLACKBOX_REPORT was inert."""
     monkeypatch.setenv("BLACKBOX_REPORT", "true")
+    monkeypatch.delenv("BLACKBOX_COMMUNITY_GRAPH_ID", raising=False)
     cfg = config.load_blackbox_config()
-    assert cfg.report is False
-    assert cfg.daily_report_limit == 0
+    assert cfg.report is True  # the switch is real now
+    assert cfg.community_graph_id == ""  # shipped default: no address
+    assert cfg.community_enabled is False  # → every community path dormant
+    assert cfg.daily_report_limit > 0  # the cap exists the moment sharing can
 
 
 def test_dashboard_settings_fallback_keeps_community_sharing_off():
