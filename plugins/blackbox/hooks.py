@@ -72,8 +72,61 @@ def _flag_worthy(cfg: BlackboxConfig, findings: List[detection.Finding]) -> List
     return out
 
 
+#: This runtime IS the Hermes host; the OpenClaw runtime has its own TS
+#: pipeline and stamps its own framework when its share path ships (KI-014).
+_FRAMEWORK = "hermes"
+
+#: Sources that must never leave the machine in any form. Secret findings
+#: could carry the shape of a leak; custom rules and LLM opinions are the
+#: operator's private judgment. Enforced BEFORE any graph write.
+_NEVER_SHARED_SOURCES = ("custom", "llm", "secret")
+
+
+class CommunitySharePolicy:
+    """Decides whether ONE finding may be shared to the community graph.
+
+    Pattern: Policy object (Strategy) — the entire outbound gate chain lives
+    in this single, dependency-injected, testable class instead of scattered
+    conditionals. ``decide()`` is pure (no I/O); the one stateful gate (the
+    daily cap) is consumed separately by the caller at spawn time so a denied
+    decision never burns cap budget.
+
+    Usage::
+
+        policy = CommunitySharePolicy(cfg)
+        ok, why = policy.decide(finding_dict, reporter_address)
+        if ok and audit.allow_report(cfg.daily_report_limit):
+            _spawn_community_share(client, cfg, finding_dict, reporter_address)
+
+    Gate order (first refusal wins, ``why`` names it for the debug log):
+    ``community off`` → ``excluded source`` → ``no identifier`` →
+    ``no identity`` (KI-003: a fallback identity would merge distinct nodes
+    into one ghost reporter — refuse instead).
+    """
+
+    def __init__(self, cfg: BlackboxConfig) -> None:
+        self._cfg = cfg
+
+    def decide(self, finding: Dict[str, Any], reporter: Optional[str]) -> "tuple[bool, str]":
+        if not self._cfg.community_enabled:
+            return False, "community sharing disabled"
+        if finding.get("source") in _NEVER_SHARED_SOURCES:
+            return False, f"source {finding.get('source')} never leaves the machine"
+        if not str(finding.get("identifier") or "").strip():
+            return False, "no identifier"
+        if not reporter:
+            return False, "no resolved reporter identity"
+        return True, "ok"
+
+
 def _report_and_audit(cfg: BlackboxConfig, event: str, findings: List[detection.Finding], detail: Dict[str, Any]) -> None:
-    """Audit findings locally; never publish them to community SWM."""
+    """Audit findings locally, then fan out (Observer-style) per finding:
+    private WM audit KA always; community share when the policy allows.
+
+    The community share itself runs on a background daemon thread (KI-033) —
+    a slow or down node must never stall the agent's tool call. Only the
+    policy decision (microseconds, no I/O) happens inline.
+    """
     finding_dicts = [f.to_dict() for f in findings]
     audit.record(event=event, findings=finding_dicts or None, detail=detail)
     if not findings:
@@ -83,13 +136,18 @@ def _report_and_audit(cfg: BlackboxConfig, event: str, findings: List[detection.
         client = DkgClient(url=cfg.dkg_url, dkg_home=cfg.dkg_home)
     except Exception:
         client = None
+    policy = CommunitySharePolicy(cfg)
+    reporter = _reporter_address(client) if client is not None else None
     for finding in finding_dicts:
         # Custom rules, LLM opinions, and secret findings stay local — no private
         # KA, no sighting. Secret values must never risk reaching the shared graph.
-        if finding.get("source") in ("custom", "llm", "secret"):
+        if finding.get("source") in _NEVER_SHARED_SOURCES:
             continue
         identifier = str(finding.get("identifier") or "")
         # Per-threat cooldown: a re-fire within the window adds no signal.
+        # Stamped BEFORE the share attempt, so a failed share waits out the
+        # window too (KI-020, accepted v1 tradeoff — the ledger records the
+        # failure so it is never invisible).
         if audit.recently_reported(identifier):
             continue
         # Private WM audit KA (observed evidence stays local). Stamp the cooldown
@@ -97,29 +155,79 @@ def _report_and_audit(cfg: BlackboxConfig, event: str, findings: List[detection.
         if client is not None:
             audit.mark_reported(identifier)
             audit.write_private_audit_ka(client, cfg.context_graph_id, event, finding)
-        # Outbound sharing is closed until the community graph ships. Findings
-        # and their private audit evidence remain local.
+        allowed, why = policy.decide(finding, reporter)
+        if not allowed:
+            logger.debug("blackbox: community share skipped (%s): %s", why, identifier)
+            continue
+        if client is None or not audit.allow_report(cfg.daily_report_limit):
+            continue
+        _spawn_community_share(client, cfg, finding, reporter)
 
 
-def _share_sighting(client: DkgClient, cfg: BlackboxConfig, finding: Dict[str, Any]) -> None:
+def _spawn_community_share(
+    client: DkgClient, cfg: BlackboxConfig, finding: Dict[str, Any], reporter: str
+) -> threading.Thread:
+    """Run the share network lifecycle off the hook hot path (KI-033).
+
+    Daemon thread, same pattern as the OSV and LLM workers in this file: the
+    hook returns immediately; the share can take the node's full store/poll
+    timeouts without ever freezing the protected agent.
+    """
+    worker = threading.Thread(
+        target=_share_sighting,
+        args=(client, cfg, finding, reporter),
+        name="blackbox-community-share",
+        daemon=True,
+    )
+    worker.start()
+    return worker
+
+
+def _share_sighting(
+    client: DkgClient, cfg: BlackboxConfig, finding: Dict[str, Any], reporter: str
+) -> None:
+    """Share one privacy-safe sighting into the COMMUNITY graph and ledger it.
+
+    Targets ``cfg.community_graph_id`` — never the verified graph: the
+    two-graph separation is the product's core trust boundary. Every attempt
+    (success or failure) lands in the local reports ledger (KI-015) so the
+    node keeps a durable record of its contributions. Fail-open.
+    """
+    identifier = str(finding.get("identifier") or "")
+    subject = quads.report_uri(identifier, reporter)
+    name = f"report-{quads.stable_hash(identifier + reporter, 16)}"
     try:
-        reporter = _reporter_address(client)
         # Reports contain signatures, never raw prompts, paths, or source files.
         fields = finding.get("fields") if isinstance(finding.get("fields"), dict) else {}
         q = quads.build_report_quads(
-            identifier=str(finding.get("identifier") or ""),
+            identifier=identifier,
             category=str(finding.get("category") or ""),
             severity=str(finding.get("severity") or "info"),
             reporter_address=reporter,
-            framework="hermes",
+            framework=_FRAMEWORK,
             **{k: v for k, v in fields.items() if v is not None},
         )
-        name = f"report-{quads.stable_hash(str(finding.get('identifier')) + reporter, 16)}"
-        client.share_knowledge_asset(cfg.context_graph_id, name, q)
+        client.share_knowledge_asset(cfg.community_graph_id, name, q)
     except DkgError as exc:
         logger.debug("blackbox: sighting share failed: %s", exc)
+        _ledger_share(finding, subject, name, ok=False, error=str(exc))
     except Exception as exc:  # pragma: no cover - fail open
         logger.debug("blackbox: sighting share error: %s", exc)
+        _ledger_share(finding, subject, name, ok=False, error=str(exc))
+    else:
+        _ledger_share(finding, subject, name, ok=True)
+
+
+def _ledger_share(finding: Dict[str, Any], subject: str, name: str, *, ok: bool, error: str = "") -> None:
+    audit.record_share_outcome(
+        identifier=str(finding.get("identifier") or ""),
+        category=str(finding.get("category") or ""),
+        severity=str(finding.get("severity") or ""),
+        subject=subject,
+        asset_name=name,
+        ok=ok,
+        error=error,
+    )
 
 
 _reporter_cache: Dict[str, str] = {}
@@ -127,15 +235,23 @@ _seen_api_findings: Dict[tuple, float] = {}
 _API_FINDING_DEDUPE_TTL_SECS = 10 * 60
 
 
-def _reporter_address(client: DkgClient) -> str:
-    """Resolve this node's agent address (cached). Falls back to ``node``.
+def _reporter_address(client: DkgClient) -> Optional[str]:
+    """Resolve this node's agent address (cached), or ``None`` when unknown.
+
+    Pattern: Sentinel Object — ``None`` IS the "no identity" signal (KI-003).
+    The old ``"node"`` string fallback would have merged every identity-less
+    node worldwide onto one report subject (first-writer-wins), silently
+    dropping reports and corrupting distinct-reporter counting. Identity-keyed
+    writes fail closed instead; only real addresses are cached.
 
     ``agent_identity`` is definitive; ``status`` is a fallback for older daemons.
     """
     if "addr" in _reporter_cache:
         return _reporter_cache["addr"]
-    addr = "node"
-    for resolver in (client.agent_identity, client.status):
+    for resolver_name in ("agent_identity", "status"):
+        resolver = getattr(client, resolver_name, None)
+        if resolver is None:
+            continue
         try:
             info = resolver()
         except Exception:
@@ -144,13 +260,10 @@ def _reporter_address(client: DkgClient) -> str:
             continue
         for key in ("agentAddress", "defaultAgentAddress", "address"):
             val = info.get(key)
-            if isinstance(val, str) and val:
-                addr = val
-                break
-        if addr != "node":
-            break
-    _reporter_cache["addr"] = addr
-    return addr
+            if isinstance(val, str) and val.strip():
+                _reporter_cache["addr"] = val.strip()
+                return _reporter_cache["addr"]
+    return None
 
 
 def _dedupe_api_findings(findings: List[detection.Finding], detail: Dict[str, Any]) -> List[detection.Finding]:

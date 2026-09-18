@@ -64,6 +64,7 @@ KIND_VULNERABILITY = "vulnerability"
 # file-access predicates (g:toolName reused; category is new) ----------------
 CATEGORY_PRED = f"{BLACKBOX_ONTOLOGY}category"
 # suspicious-skill predicates -----------------------------------------------
+IOC_TYPE_PRED = f"{BLACKBOX_ONTOLOGY}iocType"
 SKILL_NAME_PRED = f"{BLACKBOX_ONTOLOGY}skillName"
 SKILL_VERSION_PRED = f"{BLACKBOX_ONTOLOGY}skillVersion"
 DANGER_SHAPE_PRED = f"{BLACKBOX_ONTOLOGY}dangerShape"

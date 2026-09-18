@@ -810,6 +810,79 @@ def _rate_state_path() -> Path:
     return _home() / "report_rate.json"
 
 
+# ---------------------------------------------------------------------------
+# Community reports ledger ($BLACKBOX_HOME/reports_log.jsonl)
+# ---------------------------------------------------------------------------
+
+#: Durable record of every outbound community-report attempt (KI-015). The
+#: cooldown state above prunes after 6h, so WITHOUT this file a node forgets
+#: what it ever contributed; the ledger is what makes ``blackbox report
+#: --status`` work offline and enables promotion-feedback later. Append-only
+#: JSONL, size-capped by the shared trim like every other log here.
+_REPORTS_LOG = "reports_log.jsonl"
+
+
+def record_share_outcome(
+    *,
+    identifier: str,
+    category: str,
+    severity: str,
+    subject: str,
+    asset_name: str,
+    ok: bool,
+    error: str = "",
+) -> None:
+    """Append one outbound-share attempt (success or failure) to the ledger.
+
+    Called by the community share worker AFTER the share resolves, never on
+    the hook hot path. ``error`` is sanitized like every audit text so a
+    failure message can never smuggle a secret into the log. Fail-open.
+    """
+    try:
+        _append_jsonl(
+            _home() / _REPORTS_LOG,
+            {
+                "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "identifier": str(identifier or "")[:512],
+                "category": str(category or "")[:64],
+                "severity": str(severity or "")[:16],
+                "subject": str(subject or "")[:512],
+                "asset_name": str(asset_name or "")[:128],
+                "ok": bool(ok),
+                "error": sanitize_text(error, 400) if error else "",
+            },
+        )
+    except Exception as exc:  # pragma: no cover - fail open
+        logger.debug("blackbox: share-ledger write failed (%s)", exc)
+
+
+def read_share_ledger(limit: int = 100) -> List[Dict[str, Any]]:
+    """Newest-first rows from the reports ledger; empty list when absent.
+
+    The offline half of ``blackbox report --status`` (the graph-backed half
+    is the Q9 reporter-profile query, merged by the caller when reachable).
+    """
+    path = _home() / _REPORTS_LOG
+    if not path.exists():
+        return []
+    rows: List[Dict[str, Any]] = []
+    try:
+        with path.open("r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    item = json.loads(line)
+                except Exception:
+                    continue
+                if isinstance(item, dict):
+                    rows.append(item)
+    except Exception:  # pragma: no cover - fail open
+        return []
+    return list(reversed(rows[-max(1, limit):]))
+
+
 # Re-reporting the same identifier within this window adds no signal (the
 # sighting KA name is stable per identifier+reporter, so a re-share only
 # refreshes dateModified) — skip it to keep reports low-noise.
@@ -873,6 +946,14 @@ def allow_report(daily_limit: int) -> bool:
     Only the date-keyed daily counter; the per-threat cooldown is enforced by
     :func:`recently_reported` / :func:`mark_reported`. Fail-open: on any state
     error, allow the report.
+
+    Concurrency (KI-038, decided): the counter is guarded by an in-process
+    lock only. Several agent PROCESSES sharing one BLACKBOX_HOME can race the
+    read-modify-write and land slightly over the cap. Accepted deliberately:
+    the cap is an anti-flood brake (order-of-magnitude bound), not an exact
+    quota — the per-threat cooldown and one-subject-per-(reporter,threat)
+    naming bound the graph impact regardless, and a cross-process file lock
+    here would put lock-contention I/O on the finding path for no real gain.
     """
     today = time.strftime("%Y-%m-%d", time.gmtime())
     path = _rate_state_path()

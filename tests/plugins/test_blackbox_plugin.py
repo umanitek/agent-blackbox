@@ -3235,24 +3235,24 @@ def test_pre_tool_call_records_file_access_visibility(monkeypatch):
     assert rows and rows[0]["tool"] == "read_file" and rows[0]["mode"] == "read"
 
 
-def test_share_sighting_forwards_candidate_fields(monkeypatch):
+def test_share_sighting_forwards_candidate_fields(monkeypatch, tmp_path):
     # A candidate finding's privacy-safe fields must reach build_report_quads so
     # it can be reviewed — and nothing more (no raw content) is carried.
     shared = {}
+    monkeypatch.setenv("BLACKBOX_HOME", str(tmp_path / "bbhome"))
 
     class FakeClient:
         def share_knowledge_asset(self, cg, name, q):
             shared["quads"] = q
             return {}
 
-    monkeypatch.setattr(hooks, "_reporter_address", lambda client: "0xabc")
     cfg = config_mod.BlackboxConfig()
     finding = {
         "identifier": "fileaccess:read_file:ssh-private-key",
         "category": "fileaccess", "severity": "critical", "confirmed": False,
         "fields": {"tool_name": "read_file", "file_category": "ssh-private-key"},
     }
-    hooks._share_sighting(FakeClient(), cfg, finding)
+    hooks._share_sighting(FakeClient(), cfg, finding, "0xabc")
     objs = " ".join(x["object"] for x in shared["quads"])
     assert "ssh-private-key" in objs  # the category signature travels
     assert "read_file" in objs

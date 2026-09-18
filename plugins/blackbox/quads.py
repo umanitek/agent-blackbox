@@ -150,6 +150,23 @@ IOC_TYPES = ("domain", "url", "ip", "hash", "wallet", "contract")
 _EVM_ADDR_RE = re.compile(r"0x[a-fA-F0-9]{40}")
 
 
+def _idna_host(host: str) -> str:
+    """Punycode-normalize an internationalized hostname (KI-026).
+
+    The unicode and punycode spellings of one domain are the SAME network
+    name; without this, ``münchen.example`` and ``xn--mnchen-3ya.example``
+    would derive different identifiers and split corroboration counting.
+    ASCII hosts pass through untouched; malformed labels fail open verbatim
+    (a broken name that cannot match is safer than a dropped finding).
+    """
+    if all(ord(ch) < 128 for ch in host):
+        return host
+    try:
+        return host.encode("idna").decode("ascii")
+    except Exception:
+        return host
+
+
 def normalize_ioc_value(ioc_type: str, value: str) -> str:
     """Canonicalize an IOC value so a graph id and a live match are identical.
 
@@ -157,18 +174,20 @@ def normalize_ioc_value(ioc_type: str, value: str) -> str:
     spaces are case-insensitive); base58 crypto addresses (BTC/Solana) are
     case-*sensitive* and kept verbatim. URLs drop a trailing slash and lower
     only scheme+host so the path stays exact; IPs drop any ``:port``.
+    Internationalized domain/URL hosts are punycode-normalized so unicode and
+    punycode spellings of one domain converge on one identifier.
     """
     t = (ioc_type or "").strip().lower()
     raw = str(value or "").strip()
     if not raw:
         return ""
     if t == "domain":
-        return raw.rstrip(".").lower()
+        return _idna_host(raw.rstrip(".").lower())
     if t == "url":
         parts = raw.split("://", 1)
         if len(parts) == 2:
             host_path = parts[1].split("/", 1)
-            host = host_path[0].lower()
+            host = _idna_host(host_path[0].lower())
             rest = ("/" + host_path[1]) if len(host_path) == 2 else ""
             raw = f"{parts[0].lower()}://{host}{rest}"
         return raw.rstrip("/")
@@ -1095,6 +1114,7 @@ def build_report_quads(
     skill_version: Optional[str] = None,
     danger_shape: Optional[str] = None,
     kind: Optional[str] = None,
+    ioc_type: Optional[str] = None,
 ) -> List[Quad]:
     """Build a sighting/report for SWM.
 
@@ -1147,4 +1167,11 @@ def build_report_quads(
             out.append(_q(subj, constants.SKILL_VERSION_PRED, literal(skill_version)))
         if danger_shape:
             out.append(_q(subj, constants.DANGER_SHAPE_PRED, literal(danger_shape)))
+    elif category == "ioc":
+        # KI-024: without this branch an IOC report carried only the common
+        # core and curators' evidence queries bound nothing for it. The value
+        # itself already lives IN the identifier (ioc:{type}:{value}); the type
+        # travels as its own field so reviewers can filter without parsing.
+        if ioc_type:
+            out.append(_q(subj, constants.IOC_TYPE_PRED, literal(ioc_type)))
     return out
