@@ -67,8 +67,10 @@ you MUST fetch the real data from the sources below and answer from that.
 ## Graph scope
 - **Public** (on-chain, verifiable memory): the Umanitek-curated threat graph.
   Confirmed threats that BLOCK in block mode. Field name in APIs: `curated`.
-- **Community** (shared working memory / SWM): coming soon. It is not queried,
-  matched, joined, or written in this release. Findings stay local.
+- **Community** (shared working memory / SWM): the open community threat graph.
+  Any Blackbox agent contributes privacy-safe threat reports and learns from
+  other agents' reports. Community rules FLAG only — they can never block.
+  Active only when a community graph is configured and sharing is on.
 - **Local** (this node's working memory + synced ruleset): what THIS node has
   pulled down and what it detects with offline. Field name: `ruleset`.
 
@@ -77,7 +79,7 @@ Prefer the running dashboard API on http://127.0.0.1:9700 (all read-only, JSON):
 
 - `GET /api/graph-status` — counts + config. Returns `mode`, `context_graph_id`,
   `dkg_url`, `node_reachable`, `last_sync`, `ruleset` (per-category local counts),
-  `curated` (Public tier count), `community` (always 0 / coming soon),
+  `curated` (Public tier count), `community` (community-tier rule count),
   `sightings`, `findings_logged`.
 - `GET /api/graph?tier=public|local` — the actual threat ENTRIES for a
   tier. Returns `{{tier, threats:[{{identifier, category, severity, name}}]}}`.
@@ -90,7 +92,7 @@ Prefer the running dashboard API on http://127.0.0.1:9700 (all read-only, JSON):
   lifecycle, API requests, tool calls with the real command, installs, flags).
 - `GET /api/agents` — connected/protected local agents. Count the `agents` array
   EXACTLY; never estimate from generic Hermes status or sessions.
-- `GET /api/reports` — returns the community-feature coming-soon state.
+- `GET /api/reports` — this node's outbound community reports (the ledger).
 
 If the dashboard is NOT running (curl to :9700 fails), fall back to:
 - `hermes blackbox status` — mode, node reachability, ruleset + findings counts.
@@ -412,6 +414,44 @@ def _blackbox_chat_argv(chat_args: Optional[List[str]], profile: str = _BLACKBOX
     return argv
 
 
+def _term_safe(value: object, limit: int = 200) -> str:
+    """Render an untrusted string safely for a terminal (KI-009 / LES-001).
+
+    Community/graph-derived text is attacker-authored input at the display
+    surface: strip every non-printable character (ANSI escapes, control
+    codes) and clamp the length. Use this on ANY value printed to the
+    terminal that did not originate on this machine.
+    """
+    text = str(value or "")
+    cleaned = "".join(ch for ch in text if ch.isprintable())
+    return cleaned[:limit]
+
+
+def _ensure_community_subscription(client: DkgClient, cfg) -> "tuple[bool, str]":
+    """Idempotently subscribe (and enroll) this node into the community graph.
+
+    Fail-open: community connectivity must never break sync. Subscription
+    includes shared memory (B1-proven: community reports LIVE in SWM, and the
+    default subscribe excludes it — KI-007). When a curator peer is known,
+    a join request is forwarded once (KI-040: SWM participation is
+    enrollment-mediated even on open graphs; the daemon no-ops when already
+    a member). Returns (ok, detail-for-logs).
+    """
+    if not cfg.community_graph_id:
+        return False, "no community graph configured"
+    try:
+        client.subscribe_context_graph(cfg.community_graph_id, include_shared_memory=True)
+    except Exception as exc:
+        logger.debug("blackbox: community subscribe failed: %s", exc)
+        return False, f"subscribe failed: {exc}"
+    if cfg.community_graph_peer_id:
+        try:
+            client.request_join(cfg.community_graph_id, cfg.community_graph_peer_id)
+        except Exception as exc:  # join is best-effort; open enrollment auto-approves
+            logger.debug("blackbox: community join request failed: %s", exc)
+    return True, "subscribed"
+
+
 def _cmd_status(args: argparse.Namespace) -> int:
     cfg = load_blackbox_config()
     client = DkgClient(url=cfg.dkg_url, dkg_home=cfg.dkg_home)
@@ -425,15 +465,47 @@ def _cmd_status(args: argparse.Namespace) -> int:
     print(f"  DKG node:          {cfg.dkg_url}  [{'reachable' if reachable else 'unreachable'}]")
     print(f"  DKG home:          {cfg.dkg_home}")
     print(f"  DKG CLI:           {cfg.dkg_bin}")
-    print("  threat sharing:    off (Community graph coming soon)")
+    _print_community_status(cfg)
     print(f"  sync interval:     {cfg.sync_interval}s")
     print(f"  ruleset:           {counts['injection']} injection, "
           f"{counts['escalation']} escalation, {counts['dependency']} dependency, "
           f"{counts['fileaccess']} fileaccess, {counts['skill']} skill")
+    if not any(counts.values()):
+        # KI-023: an empty ruleset is a LOUD state, never a quiet day.
+        print("  !! UNPROTECTED:    threat ruleset is EMPTY — detection has no rules.")
+        print("                     Run 'hermes blackbox sync --wait' to load the threat graph.")
     print(f"  findings logged:   {audit.count_findings()}")
     print(f"  dashboard:         http://127.0.0.1:{cfg.dashboard_port}")
     _print_attached_targets()
     return 0
+
+
+def _print_community_status(cfg) -> None:
+    """The truthful community lines for `blackbox status` (B4).
+
+    Reads only local state (config + the reports ledger) so status stays
+    instant and offline-safe; ledger identifiers are community-era data and
+    render through :func:`_term_safe`.
+    """
+    if not cfg.community_graph_id:
+        print("  community graph:   not configured (community sharing dormant)")
+        return
+    print(f"  community graph:   {_term_safe(cfg.community_graph_id)}")
+    if cfg.community_enabled:
+        sharing = f"on (min severity {cfg.report_min_severity}, cap {cfg.daily_report_limit}/day)"
+    elif not cfg.report:
+        sharing = "off (config key `report` is false)"
+    else:
+        sharing = "off"
+    print(f"  threat sharing:    {sharing}")
+    ledger = audit.read_share_ledger(limit=1000)
+    contributed = sum(1 for row in ledger if row.get("ok"))
+    line = f"  reports shared:    {contributed}"
+    if ledger:
+        last = ledger[0]
+        outcome = "ok" if last.get("ok") else "FAILED"
+        line += f" (last: {_term_safe(last.get('identifier'), 80)} · {outcome} · {_term_safe(last.get('ts'), 24)})"
+    print(line)
 
 
 def _print_attached_targets() -> None:
@@ -1124,6 +1196,10 @@ def _cmd_sync_impl(args: argparse.Namespace) -> int:
                 )
 
         may_probe_private = private_graph and not getattr(args, "wait", False)
+        # Community graph rides the same sync: idempotent, fail-open, never
+        # blocks or fails the verified-graph transfer (B4).
+        if cfg.community_graph_id:
+            _ensure_community_subscription(client, cfg)
         if not subscribed and (admitted or not private_graph or may_probe_private):
             try:
                 subscription = client.subscribe_context_graph(cfg.context_graph_id)
@@ -1489,7 +1565,11 @@ def _cmd_sync_impl(args: argparse.Namespace) -> int:
     print(f"  {counts['injection']} injection, {counts['escalation']} escalation, "
           f"{counts['dependency']} dependency")
     print(f"  {public_count:,} public VM (curated)")
-    print("  Community graph (SWM): coming soon")
+    if cfg.community_graph_id:
+        print(f"  Community graph: {_term_safe(cfg.community_graph_id)} "
+              f"[sharing {'on' if cfg.community_enabled else 'off'}]")
+    else:
+        print("  Community graph: not configured (community sharing dormant)")
     if not sync_complete:
         if private_graph and (pending_approval or not subscribed):
             print("  This graph is not supported; Agent Blackbox only uses its public VM graph.")

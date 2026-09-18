@@ -110,6 +110,10 @@ class BlackboxConfig:
     #: config entry ``community_graph_id`` → shipped default). Empty means the
     #: community feature is dormant regardless of ``report``.
     community_graph_id: str = constants.DEFAULT_COMMUNITY_GRAPH_ID
+    #: Curator peer id for community-graph enrollment (KI-040: SWM
+    #: participation is enrollment-mediated; the join request needs the
+    #: curator's libp2p peer id). Optional — open enrollment auto-approves.
+    community_graph_peer_id: str = ""
     block_severity: str = "critical"
     dashboard_port: int = 9700
     discover: bool = True
@@ -367,6 +371,14 @@ def load_blackbox_config() -> BlackboxConfig:
                 env="BLACKBOX_COMMUNITY_GRAPH_ID",
                 key="community_graph_id",
                 default=constants.DEFAULT_COMMUNITY_GRAPH_ID,
+            )
+        ).strip(),
+        community_graph_peer_id=str(
+            _env_or(
+                entry,
+                env="BLACKBOX_COMMUNITY_GRAPH_PEER_ID",
+                key="community_graph_peer_id",
+                default="",
             )
         ).strip(),
         report_min_severity=report_min_severity,
