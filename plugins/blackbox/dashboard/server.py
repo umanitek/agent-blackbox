@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import os
+import secrets
 import shutil
 import socket
 import subprocess
@@ -147,6 +148,42 @@ def _graph_source_count(rs: Any, source: str) -> int:
     if callable(counter):
         return int(counter(source) or 0)
     return int(rs.source_count(source) or 0)
+
+
+def _safe_text(value: Any, limit: int = 256) -> str:
+    """Sanitize a community/graph-derived string for any client payload.
+
+    THE one sanitization implementation for the dashboard (the escaping twin
+    of audit's redaction discipline, per LES-001/002): HTML-escaped so a
+    hostile report can never smuggle markup to a renderer, control
+    characters stripped so it can't drive a terminal, length clamped so it
+    can't blow up a layout or a log. Every community-authored value served
+    by any endpoint passes through here.
+    """
+    import html as _html
+
+    text = str(value or "")
+    cleaned = "".join(ch for ch in text if ch.isprintable())
+    return _html.escape(cleaned[:limit], quote=True)
+
+
+def _sanitized_ledger(limit: int = 50) -> List[Dict[str, Any]]:
+    """This node's outbound reports ledger, sanitized for serving."""
+    from .. import audit as _audit
+
+    rows = []
+    try:
+        for row in _audit.read_share_ledger(limit=limit):
+            rows.append({
+                "ts": _safe_text(row.get("ts"), 32),
+                "identifier": _safe_text(row.get("identifier")),
+                "category": _safe_text(row.get("category"), 32),
+                "severity": _safe_text(row.get("severity"), 16),
+                "ok": bool(row.get("ok")),
+            })
+    except Exception:  # pragma: no cover - fail open
+        return []
+    return rows
 
 
 def _graph_entries(rs: Any, source: str) -> List[Dict[str, Any]]:
@@ -870,6 +907,52 @@ def create_app(*, manage_blackbox: bool = False):
 
     app = FastAPI(title="Agent Blackbox", docs_url=None, redoc_url=None)
 
+    # ------------------------------------------------------------------
+    # Browser-boundary hardening (KI-028 / LES-006). Loopback binding keeps
+    # the network out, but the operator's BROWSER is on loopback too: a
+    # malicious webpage can fire cross-origin POSTs at localhost, and DNS
+    # rebinding makes an attacker page look same-origin. Two structural
+    # gates, enforced in ONE middleware:
+    #   1. Host + Origin allowlist — only genuine local origins pass.
+    #   2. A per-process session token required on every state-changing
+    #      request. The UI receives it via /api/session (same-origin only,
+    #      unreachable through DNS rebinding thanks to gate 1).
+    # ------------------------------------------------------------------
+    _session_token = secrets.token_urlsafe(32)
+    _ALLOWED_HOST_NAMES = {"127.0.0.1", "localhost", "[::1]"}
+
+    def _local_host(value: str) -> bool:
+        host = (value or "").split(":", 1)[0].strip().lower()
+        return host in _ALLOWED_HOST_NAMES
+
+    @app.middleware("http")
+    async def _browser_boundary(request, call_next):
+        host = request.headers.get("host", "")
+        if not _local_host(host):
+            return JSONResponse({"error": "forbidden host"}, status_code=403)
+        origin = request.headers.get("origin", "")
+        if origin:
+            # An Origin is present on cross-site and fetch() requests; only
+            # our own loopback origins may pass. Same-origin UI requests
+            # always carry a loopback origin or none at all.
+            from urllib.parse import urlsplit
+
+            if not _local_host(urlsplit(origin).netloc):
+                return JSONResponse({"error": "forbidden origin"}, status_code=403)
+        if request.method not in ("GET", "HEAD", "OPTIONS"):
+            token = request.headers.get("x-blackbox-token", "")
+            if not secrets.compare_digest(token, _session_token):
+                return JSONResponse(
+                    {"error": "missing or invalid session token"}, status_code=403
+                )
+        return await call_next(request)
+
+    @app.get("/api/session")
+    def session():
+        """Hand the UI its mutation token. Reachable only by genuine local
+        origins (the middleware rejects rebound/foreign hosts first)."""
+        return {"token": _session_token}
+
     _rescan_state: Dict[str, Any] = {
         "stop": False,
         "known": set(),
@@ -1402,7 +1485,7 @@ def create_app(*, manage_blackbox: bool = False):
         # rows are complete threats, and ruleset.refresh also promotes any
         # still-unmigrated legacy proof rows.
         public = _graph_source_count(rs, "public")
-        community = 0
+        community = len(getattr(rs, "community", {}) or {})
 
         # Catch-up state must stay independent from the potentially expensive
         # SWM sightings COUNT. Otherwise a busy store can hide the live
@@ -1477,7 +1560,14 @@ def create_app(*, manage_blackbox: bool = False):
                 ),
             )
         )
-        community_state = "coming-soon"
+        if not getattr(cfg, "community_graph_id", ""):
+            community_state = "not-configured"
+        elif getattr(rs, "community_paused", False):
+            community_state = "paused"
+        elif community:
+            community_state = "ready"
+        else:
+            community_state = "empty"
         with _join_lock:
             connection = dict(_connection_states.get(cfg.context_graph_id) or {})
         if connection.get("state") in {"pending-approval", "pending-encryption-profile", "joining"}:
@@ -1512,7 +1602,8 @@ def create_app(*, manage_blackbox: bool = False):
                 "pending-approval": "curator approval pending",
                 "pending-encryption-profile": "waiting for workspace encryption profile",
                 "joining": "joining private graph",
-                "coming-soon": "coming soon",
+                "not-configured": "not configured",
+                "paused": "paused by curators",
                 "sync-envelope-error": "peer sync handshake malformed",
             }.get(state, state)
             return f"{tier} {suffix}"
@@ -1540,7 +1631,12 @@ def create_app(*, manage_blackbox: bool = False):
                 "community": {
                     "count": int(community or 0),
                     "state": community_state,
-                    "label": "Community graph coming soon",
+                    "label": {
+                        "not-configured": "Community graph not configured",
+                        "paused": "Community ingest paused by curators",
+                        "ready": f"Community graph live · {int(community or 0)} corroborated threats",
+                        "empty": "Community graph connected · no reports yet",
+                    }.get(community_state, community_state),
                 },
                 "catchup": {
                     "status": catchup_state or "idle",
@@ -1610,13 +1706,16 @@ def create_app(*, manage_blackbox: bool = False):
             local_fw = audit.local_active_frameworks()
         except Exception:  # pragma: no cover - fail open
             local_fw = []
+        # KI-031: bounded reads — the logs are size-capped on disk (~an order
+        # of 20k lines max after trim), so 50k covers the whole file without
+        # ever inviting a hostile/huge log to occupy request memory.
         try:
-            audit_rows = audit.read_audit(limit=1_000_000)
+            audit_rows = audit.read_audit(limit=50_000)
         except Exception:  # pragma: no cover - fail open
             audit_rows = []
         counts_by_fw: "Dict[str, int]" = {}
         try:
-            finding_rows = audit.read_findings(limit=1_000_000)
+            finding_rows = audit.read_findings(limit=50_000)
             for row in finding_rows:
                 fw = (row.get("framework") or "hermes").lower()
                 counts_by_fw[fw] = counts_by_fw.get(fw, 0) + 1
@@ -1661,9 +1760,12 @@ def create_app(*, manage_blackbox: bool = False):
                     "OPTIONAL { ?r g:framework ?framework } "
                     "} GROUP BY ?reporter ?framework"
                 )
+                # B7 (KI-006): reporters live in the COMMUNITY graph now.
+                if not getattr(cfg, "community_graph_id", ""):
+                    return []
                 rows = client.query(
                     sparql,
-                    cfg.context_graph_id,
+                    cfg.community_graph_id,
                     view=constants.VIEW_SHARED_WORKING_MEMORY,
                     on_error=None,
                 )
@@ -1685,8 +1787,10 @@ def create_app(*, manage_blackbox: bool = False):
                 reporters.append({"framework": fw, "address": str(addr), "count": n})
             return reporters
 
-        # Remote SWM reporters are not part of the VM-only release.
-        for rep in []:
+        # Distinct community reporters, stale-while-revalidate (KI-006: the
+        # hardcoded empty loop dies — remote agents are real now).
+        remote_reporters = _swr("agents:reporters", _load_reporters) or []
+        for rep in remote_reporters:
             fw, addr, n = rep["framework"], rep["address"], rep["count"]
             key = (fw, addr.lower())
             if key in found:
@@ -1903,13 +2007,6 @@ def create_app(*, manage_blackbox: bool = False):
     ) -> Any:
         """Threats from one graph tier: ``public`` | ``community`` | ``local``."""
         tier, view = _tier_view(tier)
-        if tier == "community":
-            return {
-                "tier": "community", "threats": [], "total": 0,
-                "offset": offset, "limit": limit, "partial": False,
-                "category_totals": {}, "ecosystem_totals": {},
-                "coming_soon": True,
-            }
         cfg = load_blackbox_config()
 
         def _category(identifier: str) -> str:
@@ -1928,15 +2025,30 @@ def create_app(*, manage_blackbox: bool = False):
         # and retains a compatibility join for any legacy CurationProof assets.
         if tier in {"public", "community"}:
             rs = ruleset.peek(cfg)
-            all_threats = [
-                {
-                    "identifier": item.get("identifier"),
-                    "category": item.get("category") or "other",
-                    "severity": str(item.get("severity") or "info").lower(),
-                    "name": item.get("name") or "",
-                }
-                for item in _graph_entries(rs, tier)
-            ]
+            if tier == "community":
+                # Community strings are attacker-authored: sanitized at the
+                # serving boundary, reporterCount + recency carried for the UI.
+                all_threats = [
+                    {
+                        "identifier": _safe_text(item.get("identifier")),
+                        "category": item.get("category") or "other",
+                        "severity": str(item.get("severity") or "info").lower(),
+                        "name": _safe_text(item.get("name") or ""),
+                        "reporterCount": int(item.get("reporterCount") or 0),
+                        "lastSeen": item.get("lastSeen"),
+                    }
+                    for item in _graph_entries(rs, tier)
+                ]
+            else:
+                all_threats = [
+                    {
+                        "identifier": item.get("identifier"),
+                        "category": item.get("category") or "other",
+                        "severity": str(item.get("severity") or "info").lower(),
+                        "name": item.get("name") or "",
+                    }
+                    for item in _graph_entries(rs, tier)
+                ]
             needle = str(q or "").strip().casefold()
             wanted_category = str(category or "").strip().casefold()
             wanted_ecosystem = str(ecosystem or "").strip().casefold()
@@ -2016,12 +2128,68 @@ def create_app(*, manage_blackbox: bool = False):
 
         return _swr("graph:" + tier, _load, {"tier": tier, "threats": []})
 
+    @app.get("/api/community-stats")
+    def community_stats() -> Any:
+        """The launch instruments: contributing agents, corroboration, health."""
+        cfg = load_blackbox_config()
+        rs = ruleset.peek(cfg)
+        community = getattr(rs, "community", {}) or {}
+        now = time.time()
+        corroborated = sum(1 for r in community.values() if int(r.get("reporterCount") or 0) >= 2)
+        # Reports-today from OUR ingest observations (KI-012), not
+        # reporter-supplied timestamps.
+        fresh_today = sum(
+            1 for r in community.values()
+            if float(r.get("lastSeen") or 0) >= now - 86400
+            and float(r.get("firstSeen") or 0) >= now - 86400
+        )
+        ledger = _sanitized_ledger(1)
+        stats = {
+            "configured": bool(getattr(cfg, "community_graph_id", "")),
+            "sharing_enabled": bool(getattr(cfg, "community_enabled", False)),
+            "paused": bool(getattr(rs, "community_paused", False)),
+            "community_threats": len(community),
+            "corroborated_2plus": corroborated,
+            "new_today": fresh_today,
+            "last_refresh": rs.synced_at or None,
+            "last_share": ledger[0] if ledger else None,
+            "contributing_agents": None,  # graph-wide COUNT(DISTINCT) below (SWR)
+        }
+
+        def _agents_count() -> Any:
+            if not getattr(cfg, "community_graph_id", "") or not _node_reachable(cfg):
+                return None
+            try:
+                client = DkgClient(url=cfg.dkg_url, dkg_home=cfg.dkg_home)
+                rows = client.query(
+                    "PREFIX g: <http://umanitek.ai/ontology/guardian/> "
+                    "SELECT (COUNT(DISTINCT ?rep) AS ?n) WHERE { "
+                    "?r a g:ThreatReport ; g:reporter ?rep }",
+                    cfg.community_graph_id,
+                    view=constants.VIEW_SHARED_WORKING_MEMORY,
+                    on_error=None,
+                )
+                if rows:
+                    return int(extract_binding(rows[0].get("n")) or 0)
+            except Exception as exc:  # pragma: no cover - fail open
+                logger.debug("blackbox dashboard: contributing-agents query failed: %s", exc)
+            return None
+
+        stats["contributing_agents"] = _swr("community:agents", _agents_count, None)
+        return stats
+
     @app.get("/api/reports")
     def reports(limit: int = Query(50, ge=1, le=200)) -> Any:
-        return {"reports": [], "coming_soon": True, "sharing_enabled": False}
-
-        # Community reports are deliberately not queried in the VM-only release.
+        # B7 (KI-006): the dead code lives — community corroboration board,
+        # served from the COMMUNITY graph, plus this node's own outbound
+        # ledger so 'what did I contribute' is one call.
         cfg = load_blackbox_config()
+        if not getattr(cfg, "community_graph_id", ""):
+            return {
+                "reports": [],
+                "sharing_enabled": bool(getattr(cfg, "community_enabled", False)),
+                "outbound": _sanitized_ledger(limit),
+            }
 
         # Node-backed sightings list, served stale-while-revalidate.
         def _load() -> Any:
@@ -2040,21 +2208,26 @@ def create_app(*, manage_blackbox: bool = False):
                 )
                 rows = client.query(
                     sparql,
-                    cfg.context_graph_id,
+                    cfg.community_graph_id,
                     view=constants.VIEW_SHARED_WORKING_MEMORY,
                     on_error=[],
                 ) or []
                 for row in rows:
                     out.append({
-                        "identifier": extract_binding(row.get("identifier")),
+                        "identifier": _safe_text(extract_binding(row.get("identifier"))),
                         "reporters": int(extract_binding(row.get("reporters")) or "0"),
-                        "severity": extract_binding(row.get("sev")) or "info",
+                        "severity": _safe_text(extract_binding(row.get("sev")) or "info", 16),
                     })
             except Exception as exc:  # pragma: no cover - fail open
                 logger.debug("blackbox dashboard: reports query failed: %s", exc)
             return {"reports": out}
 
-        return _swr(f"reports:{limit}", _load, {"reports": []})
+        payload = _swr(f"reports:{limit}", _load, {"reports": []})
+        if isinstance(payload, dict):
+            payload = dict(payload)
+            payload["sharing_enabled"] = bool(getattr(cfg, "community_enabled", False))
+            payload["outbound"] = _sanitized_ledger(limit)
+        return payload
 
     # Predicate IRI -> friendly detail key, for the single-threat lookup.
     _DETAIL_FIELDS = {
@@ -2094,12 +2267,24 @@ def create_app(*, manage_blackbox: bool = False):
 
         ``tier`` ∈ public | community | local. Fail-open."""
         tier, view = _tier_view(tier, default="public")
-        if tier == "community":
-            return {
-                "identifier": identifier, "tier": "community", "found": False,
-                "coming_soon": True,
-            }
         cfg = load_blackbox_config()
+        if tier == "community":
+            # Serve straight from the aggregated community store (sanitized).
+            rs = ruleset.peek(cfg)
+            rule = (getattr(rs, "community", {}) or {}).get(identifier)
+            if not rule:
+                return {"identifier": _safe_text(identifier), "tier": "community", "found": False}
+            detail = {
+                _safe_text(k, 64): (_safe_text(v) if isinstance(v, str) else v)
+                for k, v in rule.items()
+            }
+            detail.update({
+                "identifier": _safe_text(identifier),
+                "tier": "community",
+                "found": True,
+                "reporters": int(rule.get("reporterCount") or 0),
+            })
+            return detail
         prefix = identifier.split(":", 1)[0].lower() if ":" in identifier else ""
         category = prefix if prefix in ("dep", "injection", "escalation", "fileaccess", "skill", "ioc") else "other"
         if category == "dep":

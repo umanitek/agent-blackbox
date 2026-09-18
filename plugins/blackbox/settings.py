@@ -15,6 +15,7 @@ and falls back to a plain YAML read-modify-write for standalone installs.
 from __future__ import annotations
 
 import logging
+import threading
 from typing import Any, Dict, List, Tuple
 
 from . import constants
@@ -87,7 +88,9 @@ def _validate(payload: Dict[str, Any]) -> Tuple[Dict[str, Any], List[str]]:
             else:
                 errors.append(f"invalid {key}: {payload[key]!r}")
 
-    for key in ("discover", "osv_lookup"):
+    for key in ("discover", "osv_lookup", "report"):
+        # `report` (KI-005): the community-sharing switch is a real settings
+        # key now — validate-then-persist like every other boolean.
         if key in payload:
             if isinstance(payload[key], bool):
                 updates[key] = payload[key]
@@ -175,8 +178,24 @@ def write_settings(payload: Dict[str, Any]) -> Dict[str, Any]:
     return {"ok": persisted, "errors": errors, "settings": read_settings()}
 
 
+#: KI-030: settings persistence is read-modify-write; concurrent dashboard
+#: saves raced and could silently drop each other's changes. One process-wide
+#: lock serializes writers (the dashboard is the only writer, single process).
+_persist_lock = threading.Lock()
+
+
 def _persist(updates: Dict[str, Any]) -> bool:
-    """Merge *updates* into the blackbox config entry. Prefer hermes' writer."""
+    """Merge *updates* into the blackbox config entry. Prefer hermes' writer.
+
+    Serialized under ``_persist_lock`` so concurrent saves can never lose
+    updates (KI-030); both writers below end in atomic tmp+rename inside
+    their respective helpers.
+    """
+    with _persist_lock:
+        return _persist_locked(updates)
+
+
+def _persist_locked(updates: Dict[str, Any]) -> bool:
     try:
         from hermes_cli import config as hconfig
 

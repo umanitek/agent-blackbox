@@ -63,7 +63,7 @@ def test_dashboard_public_graph_uses_vm_verified_ruleset_rows(monkeypatch):
         ),
     )
 
-    client = TestClient(server.create_app())
+    client = TestClient(server.create_app(), base_url="http://127.0.0.1")
 
     status = client.get("/api/graph-status").json()
     assert status["curated"] == 2
@@ -132,7 +132,7 @@ def test_dashboard_keeps_partial_vm_count_loading_during_curator_transfer(monkey
     )
     monkeypatch.setattr(dkg_client.DkgClient, "query", lambda *args, **kwargs: [])
 
-    status = TestClient(server.create_app()).get("/api/graph-status").json()
+    status = TestClient(server.create_app(), base_url="http://127.0.0.1").get("/api/graph-status").json()
 
     assert status["curated"] == 460
     assert status["sync_progress"]["public"] == {
@@ -259,7 +259,7 @@ def test_dashboard_lists_more_than_five_thousand_vm_threats_with_exact_totals(mo
     monkeypatch.setattr(config, "load_blackbox_config", lambda: cfg)
     monkeypatch.setattr(ruleset, "peek", lambda _cfg=None: LargeThreatGraph())
 
-    result = TestClient(server.create_app()).get("/api/graph?tier=public&limit=6001").json()
+    result = TestClient(server.create_app(), base_url="http://127.0.0.1").get("/api/graph?tier=public&limit=6001").json()
 
     assert result["total"] == 6001
     assert result["category_totals"] == {"dependency": 6001}
@@ -300,7 +300,7 @@ def test_dashboard_graph_search_filters_the_full_verified_cache(monkeypatch):
     monkeypatch.setattr(config, "load_blackbox_config", lambda: cfg)
     monkeypatch.setattr(ruleset, "peek", lambda _cfg=None: SearchableThreats())
 
-    client = TestClient(server.create_app())
+    client = TestClient(server.create_app(), base_url="http://127.0.0.1")
     result = client.get(
         "/api/graph?tier=public&limit=100&q=needle"
     ).json()
@@ -446,7 +446,7 @@ def test_dashboard_does_not_position_private_storage_as_normal_product_behavior(
         assert unwanted not in html
 
     assert "Record findings without blocking agent actions." in html
-    assert "Network threat distribution is in development." in html
+    assert "Share privacy-safe threat signatures with the community graph. Your prompts and files never leave this machine." in html
 
 
 def test_dashboard_more_node_is_a_display_only_marker():
@@ -868,7 +868,7 @@ def test_dashboard_graph_has_fullscreen_control():
 
 
 def test_dashboard_serves_only_allowlisted_brand_fonts():
-    client = TestClient(server.create_app())
+    client = TestClient(server.create_app(), base_url="http://127.0.0.1")
 
     font = client.get("/fonts/archivo-latin.woff2")
     assert font.status_code == 200
@@ -903,8 +903,9 @@ def test_blackbox_dashboard_chat_starts_session(monkeypatch):
     monkeypatch.setattr(server.subprocess, "run", fake_run)
     monkeypatch.setattr(attach, "_repo_root", lambda: Path("/tmp/repo"))
 
-    client = TestClient(server.create_app())
-    res = client.post("/api/blackbox-chat", json={"message": "hi"})
+    client = TestClient(server.create_app(), base_url="http://127.0.0.1")
+    token = client.get("/api/session").json()["token"]
+    res = client.post("/api/blackbox-chat", json={"message": "hi"}, headers={"X-Blackbox-Token": token})
 
     assert res.status_code == 200
     assert res.json() == {"ok": True, "answer": "hello", "session_id": "sid-1"}
@@ -922,8 +923,9 @@ def test_blackbox_dashboard_chat_resumes_session(monkeypatch):
     monkeypatch.setattr(server.subprocess, "run", fake_run)
     monkeypatch.setattr(attach, "_repo_root", lambda: Path("/tmp/repo"))
 
-    client = TestClient(server.create_app())
-    res = client.post("/api/blackbox-chat", json={"message": "which of these?", "session_id": "sid-1"})
+    client = TestClient(server.create_app(), base_url="http://127.0.0.1")
+    token = client.get("/api/session").json()["token"]
+    res = client.post("/api/blackbox-chat", json={"message": "which of these?", "session_id": "sid-1"}, headers={"X-Blackbox-Token": token})
 
     assert res.status_code == 200
     assert res.json() == {"ok": True, "answer": "follow-up", "session_id": "sid-1"}
@@ -960,7 +962,7 @@ def test_attach_targets_include_unavailable_supported_agents(monkeypatch):
 
     monkeypatch.setattr(attach, "attach_all", fake_attach_all)
 
-    client = TestClient(server.create_app())
+    client = TestClient(server.create_app(), base_url="http://127.0.0.1")
     res = client.get("/api/attach-targets")
 
     assert res.status_code == 200
@@ -991,7 +993,7 @@ def test_attach_targets_do_not_duplicate_errored_supported_agents(monkeypatch):
 
     monkeypatch.setattr(attach, "attach_all", fake_attach_all)
 
-    client = TestClient(server.create_app())
+    client = TestClient(server.create_app(), base_url="http://127.0.0.1")
     res = client.get("/api/attach-targets")
 
     assert res.status_code == 200
@@ -1029,7 +1031,7 @@ def test_agent_cards_distinguish_attached_from_active(monkeypatch):
         },
     )
 
-    agents = TestClient(server.create_app()).get("/api/agents").json()["agents"]
+    agents = TestClient(server.create_app(), base_url="http://127.0.0.1").get("/api/agents").json()["agents"]
     by_framework = {row["framework"]: row for row in agents}
 
     assert by_framework["hermes"]["is_active"] is True

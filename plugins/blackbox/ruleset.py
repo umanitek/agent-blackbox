@@ -800,6 +800,26 @@ class Ruleset:
                 "subject": rule.get("subject") or "",
                 "source": source,
             })
+        if source == "community":
+            # The community STORE holds every aggregated report (including
+            # display-only categories that never materialize into lookup
+            # dicts) with reporter counts + recency for the UI (KI-037).
+            for identifier, rule in self.community.items():
+                if identifier in seen:
+                    continue
+                seen.add(identifier)
+                entries.append({
+                    "identifier": identifier,
+                    "category": rule.get("category")
+                    or (identifier.split(":", 1)[0] if ":" in identifier else "other"),
+                    "severity": str(rule.get("severity") or "info").lower(),
+                    "name": rule.get("name") or identifier,
+                    "subject": "",
+                    "source": "community",
+                    "reporterCount": int(rule.get("reporterCount") or 0),
+                    "firstSeen": rule.get("firstSeen"),
+                    "lastSeen": rule.get("lastSeen"),
+                })
         self._graph_entries_cache[source] = entries
         return entries
 

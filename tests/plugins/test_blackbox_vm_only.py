@@ -77,13 +77,16 @@ def test_sharing_stays_dormant_without_a_community_graph_address(monkeypatch):
     assert cfg.daily_report_limit > 0  # the cap exists the moment sharing can
 
 
-def test_dashboard_settings_fallback_keeps_community_sharing_off():
+def test_dashboard_settings_sharing_defaults_off_and_requires_explicit_true():
+    """Contract update (community-graph build B7): the sharing toggle is real.
+    The fallback default remains OFF, and only an explicit server `true` can
+    turn the UI state on — a missing/stale/None value must never opt in."""
     html = DASHBOARD_HTML.read_text(encoding="utf-8")
 
-    assert 'report: false, report_min_severity: "high"' in html
-    assert "out.report = false;" in html
+    assert 'report: false, report_min_severity: "high"' in html  # default OFF
+    assert "out.report = data.report === true;" in html  # explicit opt-in only
     assert 'report: true, report_min_severity: "high"' not in html
-    assert "out.report = data.report !== false;" not in html
+    assert "out.report = data.report !== false;" not in html  # permissive form banned
 
 
 def test_openclaw_runtime_is_vm_only_and_reporting_cannot_be_reenabled():
@@ -387,21 +390,26 @@ def test_dashboard_reuses_fresh_large_ruleset_without_querying_blazegraph(monkey
     }
 
 
-def test_dashboard_community_surfaces_are_static_coming_soon(monkeypatch):
+def test_dashboard_community_surfaces_live_but_dormant_without_graph(monkeypatch):
+    """Contract update (community-graph build B7): the community surfaces are
+    LIVE endpoints now. With no community graph configured (the shipped
+    default) they serve honest empty states — never 'coming soon'."""
+    monkeypatch.delenv("BLACKBOX_COMMUNITY_GRAPH_ID", raising=False)
+    monkeypatch.delenv("BLACKBOX_REPORT", raising=False)
     app = server.create_app()
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
         graph = client.get("/api/graph?tier=community&limit=17&offset=3").json()
         reports = client.get("/api/reports").json()
         threat = client.get("/api/threat?tier=community&identifier=x").json()
+        stats = client.get("/api/community-stats").json()
 
     assert graph["tier"] == "community"
     assert graph["threats"] == []
-    assert graph["total"] == 0
-    assert graph["offset"] == 3
-    assert graph["limit"] == 17
-    assert graph["partial"] is False
-    assert graph["category_totals"] == {}
-    assert graph["ecosystem_totals"] == {}
-    assert graph["coming_soon"] is True
-    assert reports == {"reports": [], "coming_soon": True, "sharing_enabled": False}
-    assert threat["coming_soon"] is True
+    assert "coming_soon" not in graph
+    assert reports["reports"] == []
+    assert reports["sharing_enabled"] is False
+    assert "coming_soon" not in reports
+    assert threat["found"] is False
+    assert "coming_soon" not in threat
+    assert stats["configured"] is False
+    assert stats["community_threats"] == 0

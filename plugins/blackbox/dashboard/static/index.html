@@ -2770,8 +2770,8 @@
             <button class="tab active" id="tab-public" role="tab" aria-selected="true" data-tier="public" title="Verified by Umanitek.">
               Verifiable<span class="tab-count" id="count-public"><span class="bb-loader"></span></span>
             </button>
-            <button class="tab" id="tab-community" role="tab" aria-selected="false" data-tier="community" title="Preview the upcoming community threat graph.">
-              Community<span class="tab-soon">Coming soon</span>
+            <button class="tab" id="tab-community" role="tab" aria-selected="false" data-tier="community" title="Community-reported threats — flag only, never block.">
+              Community<span class="tab-count" id="count-community"><span class="bb-loader"></span></span>
             </button>
             <button class="tab" id="tab-local" role="tab" aria-selected="false" data-tier="local" title="Your local threat audit trail.">
               Local<span class="tab-count" id="count-local"><span class="bb-loader"></span></span>
@@ -2813,9 +2813,9 @@
             </div>
             <div class="community-launch" id="community-launch" hidden>
               <div class="community-launch-copy">
-                <div class="community-launch-eyebrow">Community graph · Coming soon</div>
+                <div class="community-launch-eyebrow">Community graph · No reports yet</div>
                 <h3><span>One agent sees it.</span><span class="community-launch-title-accent">Every agent gets safer.</span></h3>
-                <p class="community-launch-lede">A shared layer of verified threat signals will help agents protect each other across the network.</p>
+                <p class="community-launch-lede">The community graph is connected. When any protected agent reports a threat, it appears here for every agent — flagged, never blocking.</p>
               </div>
               <div class="community-launch-art" aria-hidden="true">
                 <svg class="community-network" viewBox="0 0 420 360">
@@ -2878,16 +2878,16 @@
           <svg class="s-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
           Community graph
         </div>
-        <div class="value"><span class="stat-soon">Coming soon</span></div>
-        <div class="meta">shared working memory is not active yet</div>
+        <div class="value" id="stat-community-count">&mdash;</div>
+        <div class="meta" id="stat-community-meta">community-reported threats</div>
       </div>
       <div class="stat roadmap">
         <div class="label">
           <svg class="s-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg>
           Threat sharing
         </div>
-        <div class="value"><span class="stat-soon">Coming soon</span></div>
-        <div class="meta">network distribution is in development</div>
+        <div class="value" id="stat-sharing-state">&mdash;</div>
+        <div class="meta" id="stat-sharing-meta">outbound threat sharing</div>
       </div>
       </div>
     </section>
@@ -3877,13 +3877,13 @@
   // Subtitle under the tab strip — what each trust tier means.
   var TIER_NOTE = {
     public: "Threats verified by Umanitek.",
-    community: "Community protection is coming soon.",
+    community: "Community-reported threats — flagged for you, never blocking.",
     local: "Events recorded on this machine."
   };
   // Per-tier empty-state message for the graph stage.
   var TIER_EMPTY = {
     public: "No verified threats are available yet.",
-    community: "Community protection is coming soon.",
+    community: "No community reports yet — the network is quiet.",
     local: "No agent activity on this machine yet."
   };
 
@@ -5422,18 +5422,20 @@
         else lel.textContent = localCache.threatCount || 0;
         return;
       }
-      if (t !== "community") {
-        // ``setCount`` keeps the latest committed number and adds the loader
-        // while a newer verified snapshot is arriving.
-        setCount("count-" + t, graphTotalForTier(t), "tab:" + t, false);
-      }
+      // ``setCount`` keeps the latest committed number and adds the loader
+      // while a newer verified snapshot is arriving (community included — live).
+      setCount("count-" + t, graphTotalForTier(t), "tab:" + t, false);
     });
 
+    // The community tier is LIVE: it renders through the same force-graph
+    // stage as every tier. The launch card is only its zero-reports state.
+    var communityRows = activeTier === "community" ? graphViewList("community") : [];
+    var communityEmpty = activeTier === "community" && communityRows.length === 0;
     var communityLaunch = $("community-launch");
-    if (communityLaunch) communityLaunch.hidden = activeTier !== "community";
+    if (communityLaunch) communityLaunch.hidden = !communityEmpty;
     var graphPanel = $("graph-panel");
-    if (graphPanel) graphPanel.classList.toggle("community-preview", activeTier === "community");
-    if (activeTier === "community") {
+    if (graphPanel) graphPanel.classList.toggle("community-preview", communityEmpty);
+    if (communityEmpty) {
       var graphEmpty = $("graph-empty"); if (graphEmpty) graphEmpty.style.display = "none";
       var graphControls = $("graph-controls"); if (graphControls) graphControls.style.display = "none";
       var graphFullscreen = $("graph-fullscreen"); if (graphFullscreen) graphFullscreen.hidden = true;
@@ -6427,7 +6429,8 @@
           var query = graphSearchQuery.public;
           if (!query || graphSearchCache.public || graphSearchInFlight.public) return changed;
           return searchGraphTier("public", query).then(function () { return true; });
-        })
+        }),
+        loadGraphTier("community")
       ]).then(function (graphRes) {
         if (graphRes.some(function (r) { return r.status === "fulfilled" && r.value; })) anyGraph = true;
         if (anyGraph) renderGraphTab();
@@ -6715,9 +6718,7 @@
     out.mode = (String(data.mode).toLowerCase() === "block") ? "block" : "audit";
     out.block_severity = sevOk(data.block_severity || "critical");
     out.report_min_severity = sevOk(data.report_min_severity || "high");
-    // Community sharing is coming soon; missing or stale server values must
-    // never make the dashboard's hidden compatibility field opt in.
-    out.report = false;
+    out.report = data.report === true;
     out.discover = data.discover !== false;
     out.osv_lookup = data.osv_lookup !== false;
     var cats = (data.categories && typeof data.categories === "object") ? data.categories : {};
@@ -6841,6 +6842,7 @@
     if (!setState) return;
     $("set-discover").checked = !!setState.discover;
     $("set-osv").checked = !!setState.osv_lookup;
+    if ($("set-report")) $("set-report").checked = !!setState.report;
   }
 
   function renderAllSettings() {
@@ -6878,17 +6880,35 @@
       report_min_severity: sevOk(setState.report_min_severity),
       discover: !!setState.discover,
       osv_lookup: !!setState.osv_lookup,
+      report: !!setState.report,
       categories: cats,
       protected_paths: setState.protected_paths.slice(0, 100)
     };
   }
 
+  // Every mutation carries the per-process session token (browser-boundary
+  // hardening: cross-origin/rebound pages can never reach a state change).
+  var __bbToken = null;
+  function getSessionToken() {
+    if (__bbToken) return Promise.resolve(__bbToken);
+    return getJSON("/api/session").then(function (j) {
+      __bbToken = j && j.token ? j.token : "";
+      return __bbToken;
+    });
+  }
+
   function postJSON(url, body) {
-    return fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "Accept": "application/json" },
-      cache: "no-store",
-      body: JSON.stringify(body)
+    return getSessionToken().then(function (tok) {
+      return fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Accept": "application/json",
+          "X-Blackbox-Token": tok
+        },
+        cache: "no-store",
+        body: JSON.stringify(body)
+      });
     }).then(function (r) {
       return r.json().catch(function () { return {}; }).then(function (j) {
         return { ok: r.ok, status: r.status, body: j };
@@ -7039,6 +7059,9 @@
     });
     $("set-osv").addEventListener("change", function () {
       if (!setState) return; setState.osv_lookup = this.checked; markDirty();
+    });
+    if ($("set-report")) $("set-report").addEventListener("change", function () {
+      if (!setState) return; setState.report = this.checked; markDirty();
     });
 
     // protected-paths add (button + Enter)
@@ -7310,7 +7333,7 @@
     <div class="chat-prompts" aria-label="Example prompts">
       <button type="button" class="chat-prompt" data-prompt="Summarize the current dashboard state. Which protected agents, findings, graph tiers, or sync issues need attention right now?">What needs attention?</button>
       <button type="button" class="chat-prompt" data-prompt="List the protected local agents exactly as the dashboard sees them. Include framework, path, status, and any recent reports.">Show protected agents</button>
-      <button type="button" class="chat-prompt" data-prompt="Explain the verifiable threat graph and local activity counts on this dashboard. If the verifiable graph is empty, tell me whether it looks unsynced or unreachable and what to check next. Mention that community sharing is coming soon and is not active today.">Explain graph counts</button>
+      <button type="button" class="chat-prompt" data-prompt="Explain the verifiable threat graph and local activity counts on this dashboard. If the verifiable graph is empty, tell me whether it looks unsynced or unreachable and what to check next. Include the community tier count and whether sharing is on.">Explain graph counts</button>
     </div>
     <form class="chat-form" id="chat-form">
       <textarea class="chat-input" id="chat-input" rows="2" maxlength="4000" placeholder="Ask about agents, findings, or graph sync…"></textarea>
@@ -7477,10 +7500,10 @@
         <div class="set-row">
           <div class="set-rl">
             <div class="set-rt">Community sharing</div>
-            <div class="set-rh">Network threat distribution is in development.</div>
+            <div class="set-rh">Share privacy-safe threat signatures with the community graph. Your prompts and files never leave this machine.</div>
           </div>
           <div class="set-rc">
-            <span class="set-soon">Coming soon</span>
+            <label class="set-toggle"><input type="checkbox" id="set-report" /><span class="set-track"></span></label>
           </div>
         </div>
         <div class="set-row">
