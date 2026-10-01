@@ -196,7 +196,7 @@ const SIDEBAR_SCRIPT: ScriptedTurn[] = [
 // test creates that sentinel file, so the test — not the clock — decides when
 // the dot clears. `sleep 5` remains the fallback for callers that don't pass
 // a handle.
-function sidebarCrossBgCommand(releasePath?: string): string {
+export function sidebarCrossBgCommand(releasePath?: string): string {
   if (!releasePath) {
     return 'echo "long bg output" && sleep 5 && echo "finished"'
   }

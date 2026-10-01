@@ -30,15 +30,115 @@ _TIMEOUT = 3.0
 # background refresh and the dashboard hit it, never the cached hot hook path.
 _QUERY_TIMEOUT = 30.0
 _STORE_TIMEOUT = 150.0
+_ERROR_BODY_LIMIT = 64 * 1024
 Quad = Dict[str, str]
 
 
 class DkgError(RuntimeError):
     """Raised for any non-2xx daemon response or transport failure."""
 
-    def __init__(self, message: str, *, status_code: Optional[int] = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: Optional[int] = None,
+        response: Optional[Dict[str, Any]] = None,
+    ) -> None:
         super().__init__(message)
         self.status_code = status_code
+        self.response = response
+
+
+def classify_catchup_error(value: Any) -> str:
+    """Distinguish terminal recovery refusals, capacity, and other retries.
+
+    A top-level retry hint can wrap a non-retryable per-graph failure. Preserve
+    that failure's authority rather than treating every HTTP 503 as pressure.
+    Strings remain supported because persisted sync state contains error text.
+    """
+    text = str(value or "")
+    payload = value if isinstance(value, dict) else getattr(value, "response", None)
+    if not isinstance(payload, dict):
+        try:
+            payload, _ = json.JSONDecoder().raw_decode(text[text.index("{"):])
+        except (ValueError, json.JSONDecodeError):
+            payload = None
+
+    nodes: List[Dict[str, Any]] = []
+    pending = [payload]
+    while pending:
+        node = pending.pop()
+        if isinstance(node, dict):
+            nodes.append(node)
+            pending.extend(node.values())
+        elif isinstance(node, list):
+            pending.extend(node)
+
+    codes = {
+        str(node.get(key) or "").upper()
+        for node in nodes
+        for key in ("errorCode", "code", "reason")
+    }
+    normalized = text.lower()
+    compact = "".join(normalized.split())
+    # Diagnostic keys such as deferredBackpressure occur even when their
+    # counters are zero. Only error values/codes establish capacity pressure.
+    capacity_text = "\n".join(
+        str(node[key])
+        for node in nodes
+        for key in ("error", "message", "durableError", "swmError", "reason", "errorCode", "code")
+        if isinstance(node.get(key), str)
+    ).lower() if nodes else normalized
+    terminal_codes = {
+        "RFC64_CATALOG_VERIFICATION_FAILED",
+        "RFC64_CATALOG_SUBSCRIPTION_REQUIRED",
+        "RFC64_CATALOG_PROVIDER_INCOMPATIBLE",
+        "DURABLE_CATCHUP_LEGACY_DISABLED",
+        "DURABLE_CATCHUP_UNSUPPORTED_MODE",
+        "VM_CHAIN_CONTEXT_GRAPH_MISMATCH",
+        "VM_CHAIN_VERIFICATION_FAILED",
+        "VM_MERKLE_ROOT_MISMATCH",
+        "AUTHORIZATION_DENIED",
+        "FORBIDDEN",
+    }
+    if (
+        any(node.get("retryable") is False for node in nodes)
+        or '"retryable":false' in compact
+        or codes & terminal_codes
+        or any(code.lower() in normalized for code in terminal_codes)
+        or getattr(value, "status_code", None) in {400, 401, 403, 404, 405, 410, 422}
+        or (
+            "legacy durable sync" in normalized
+            and ("disabled" in normalized or "catalog-authoritative" in normalized)
+        )
+    ):
+        return "terminal"
+
+    # Native catalog failures have typed retry semantics but are not evidence
+    # of publisher capacity exhaustion, even when their wording says timeout.
+    if any(code.startswith("RFC64_CATALOG_") for code in codes):
+        return "retryable" if any(node.get("retryable") is True for node in nodes) else "unknown"
+
+    if any(
+        marker in capacity_text
+        for marker in (
+            "backpressure", "capacity_exhausted", "capacity-exhausted",
+            "store scheduler", "queue wait timeout", "queue wait exceeded",
+        )
+    ):
+        return "capacity"
+    if (
+        any(node.get("retryable") is True for node in nodes)
+        or '"retryable":true' in compact
+        or any(
+            marker in normalized
+            for marker in (
+                "request aborted", "timed out", "exceeded its", "totaltimeoutms",
+            )
+        )
+    ):
+        return "retryable"
+    return "unknown"
 
 
 def _validate_quads_literal_sizes(quads: List[Quad]) -> None:
@@ -159,10 +259,23 @@ class DkgClient:
             with urllib.request.urlopen(req, timeout=timeout or _TIMEOUT) as resp:
                 raw = resp.read()
         except urllib.error.HTTPError as exc:
-            detail = exc.read(1024).decode("utf-8", errors="replace")
+            raw_error = exc.read(_ERROR_BODY_LIMIT + 1)
+            truncated = len(raw_error) > _ERROR_BODY_LIMIT
+            detail = raw_error[:_ERROR_BODY_LIMIT].decode("utf-8", errors="replace")
+            response = None
+            if not truncated:
+                try:
+                    decoded = json.loads(detail)
+                    if isinstance(decoded, dict):
+                        response = decoded
+                except (ValueError, TypeError):
+                    pass
+            else:
+                detail += " [response truncated]"
             raise DkgError(
                 f"{method} {path} -> {exc.code}: {detail}",
                 status_code=exc.code,
+                response=response,
             ) from exc
         except (urllib.error.URLError, OSError, TimeoutError) as exc:
             raise DkgError(f"{method} {path} transport error: {exc}") from exc
@@ -220,7 +333,10 @@ class DkgClient:
             "POST", "/api/connect", {"multiaddr": multiaddr}, timeout=15.0
         )
 
-    def subscribe_context_graph(self, cg_id: str, *, include_shared_memory: bool = False) -> Dict[str, Any]:
+    def subscribe_context_graph(
+        self, cg_id: str, *, include_shared_memory: bool = False,
+        timeout: Optional[float] = None,
+    ) -> Dict[str, Any]:
         """Subscribe the node to a context graph and catch up its durable VM.
 
         What a *consumer* node needs: a fresh install that only set
@@ -232,7 +348,7 @@ class DkgClient:
             "POST",
             "/api/context-graph/subscribe",
             {"contextGraphId": cg_id, "includeSharedMemory": include_shared_memory},
-            timeout=_STORE_TIMEOUT,
+            timeout=_STORE_TIMEOUT if timeout is None else timeout,
         )
 
     def unsubscribe_context_graph(self, cg_id: str) -> Dict[str, Any]:

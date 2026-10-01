@@ -41,32 +41,7 @@ def test_release_defaults_target_agent_blackbox_graph():
     )
 
 
-def test_complete_local_release_uses_confirmed_rules_without_publisher_transfer(monkeypatch):
-    class LocalRules:
-        def graph_count(self, source):
-            return constants.DEFAULT_GRAPH_RELEASE_RULE_FLOOR if source == "public" else 0
-
-    local_rules = LocalRules()
-    refreshes = []
-
-    class Client:
-        def threat_count(self, _cg_id):
-            return constants.DEFAULT_GRAPH_RELEASE_THREAT_FLOOR
-
-    def refresh(*_args, **kwargs):
-        refreshes.append(kwargs)
-        return local_rules
-
-    monkeypatch.setattr(cli_mod.ruleset, "refresh", refresh)
-    cfg = config_mod.BlackboxConfig(
-        context_graph_id=constants.DEFAULT_CONTEXT_GRAPH_ID,
-    )
-
-    assert cli_mod._complete_local_release_ruleset(cfg, Client()) is local_rules
-    assert refreshes == [{"force_query": True}]
-
-
-def test_release_floor_completion_uses_deduplicated_rule_target(monkeypatch):
+def test_completed_exact_recovery_uses_deduplicated_rule_target(monkeypatch):
     class LocalRules:
         def counts(self):
             return {
@@ -96,8 +71,10 @@ def test_release_floor_completion_uses_deduplicated_rule_target(monkeypatch):
             self.complete = True
             return {
                 "ok": True,
+                "contextGraphIds": [_cg_id],
                 "includeDurable": True,
                 "includeSharedMemory": False,
+                "durableComplete": True,
                 "peersAttempted": 1,
                 "totalDurableInsertedTriples": 0,
                 "results": [{"peerId": peer_id}],
@@ -111,7 +88,7 @@ def test_release_floor_completion_uses_deduplicated_rule_target(monkeypatch):
 
     cfg = config_mod.BlackboxConfig(
         context_graph_id=constants.DEFAULT_CONTEXT_GRAPH_ID,
-        graph_peer_id=constants.DEFAULT_GRAPH_PEER_ID,
+        graph_peer_id="explicit-publisher",
     )
     monkeypatch.setattr(cli_mod, "DkgClient", Client)
     monkeypatch.setattr(cli_mod, "load_blackbox_config", lambda: cfg)
@@ -246,7 +223,8 @@ def test_managed_sync_repairs_native_reconciliation_before_sync(
     assert states[0]["public_entries"] == 17_000
     persisted = json.loads((dkg_home / "config.json").read_text(encoding="utf-8"))
     assert persisted["syncOnConnectEnabled"] is True
-    assert persisted["syncReconcilerEnabled"] is True
+    assert persisted["syncReconcilerEnabled"] is False
+    assert persisted["vmReconcilerEnabled"] is True
     assert persisted["durableSyncEnabled"] is True
     assert persisted["syncSharedMemoryOnConnect"] is False
     assert persisted["syncGlobalMaxInflight"] == 1
@@ -262,7 +240,8 @@ def test_managed_sync_keeps_existing_steady_node_running(monkeypatch, tmp_path):
         json.dumps(
             {
                 "syncOnConnectEnabled": True,
-                "syncReconcilerEnabled": True,
+                "syncReconcilerEnabled": False,
+                "vmReconcilerEnabled": True,
                 "durableSyncEnabled": True,
                 "syncGlobalMaxInflight": 1,
                 "syncGlobalQueueLimit": 0,
@@ -299,7 +278,10 @@ def test_managed_sync_keeps_existing_steady_node_running(monkeypatch, tmp_path):
     monkeypatch.setattr(
         cli_mod,
         "_managed_dkg_sync_mode_matches",
-        lambda _cfg, expected: expected == cli_mod._DKG_STEADY_SYNC_SETTINGS,
+        lambda _cfg, expected: expected == {
+            **cli_mod._DKG_NATIVE_SYNC_SETTINGS,
+            "DKG_EXPERIMENTAL_EXACT_BATCH_STREAM": "1",
+        },
     )
     monkeypatch.setattr(cli_mod, "_restart_managed_dkg", restart)
     monkeypatch.setattr(cli_mod, "_cmd_sync_impl", sync_impl)
@@ -391,7 +373,7 @@ def test_managed_sync_repairs_interrupted_upgrade_and_preserves_checkpoint(
 
     args = argparse.Namespace(wait=True, timeout=30, require_rules=True)
     assert cli_mod._cmd_sync(args) == 2
-    assert restart_modes == [(True, True, 0)]
+    assert restart_modes == [(True, False, 0)]
     assert checkpoint.read_bytes() == b"existing-partial-sync"
     assert current["safe_current_triples"] == 51_642
     assert current["expected_triples"] == 6_117_721
@@ -406,14 +388,15 @@ def test_managed_dkg_sync_environment_keeps_native_reconciliation_enabled(
     env = cli_mod._dkg_sync_environment(cfg)
 
     assert env["DKG_SYNC_ON_CONNECT_ENABLED"] == "1"
-    assert env["DKG_SYNC_RECONCILER_ENABLED"] == "1"
+    assert env["DKG_SYNC_RECONCILER_ENABLED"] == "0"
+    assert env["DKG_VM_RECONCILER_ENABLED"] == "1"
     assert env["DKG_DURABLE_SYNC_ENABLED"] == "1"
     assert env["DKG_CATCHUP_MAX_CONCURRENT_PEERS"] == "1"
     assert env["DKG_SYNC_TOTAL_TIMEOUT_MS"] == "1800000"
     assert env["PATH"].split(cli_mod.os.pathsep)[0] == str(
         cli_mod.Path(cli_mod.sys.executable).resolve().parent
     )
-    for name, value in cli_mod._DKG_STEADY_SYNC_SETTINGS.items():
+    for name, value in cli_mod._DKG_NATIVE_SYNC_SETTINGS.items():
         assert env[name] == value
 
 
@@ -442,6 +425,25 @@ def test_managed_dkg_sync_environment_honors_persisted_bootstrap_mode(
     assert env["DKG_DURABLE_SYNC_ENABLED"] == "1"
     assert env["DKG_SYNC_GLOBAL_MAX_INFLIGHT"] == "1"
     assert env["DKG_SYNC_GLOBAL_QUEUE_LIMIT"] == "1"
+
+
+def test_managed_dkg_custom_publisher_keeps_legacy_sync_policy(tmp_path, monkeypatch):
+    (tmp_path / "config.json").write_text(
+        json.dumps({"vmReconcilerEnabled": False}), encoding="utf-8"
+    )
+    cfg = config_mod.BlackboxConfig(
+        dkg_home=str(tmp_path), graph_peer_id="12D3KooWcustomPublisher"
+    )
+    monkeypatch.setattr(cli_mod, "_node_runtime_matches_dkg", lambda *_args: True)
+
+    assert cli_mod._set_persisted_dkg_steady_state(cfg) is True
+    persisted = json.loads((tmp_path / "config.json").read_text(encoding="utf-8"))
+    assert persisted["syncOnConnectEnabled"] is True
+    assert persisted["syncReconcilerEnabled"] is True
+    assert persisted["vmReconcilerEnabled"] is False
+    env = cli_mod._dkg_sync_environment(cfg)
+    assert env["DKG_SYNC_RECONCILER_ENABLED"] == "1"
+    assert env["DKG_VM_RECONCILER_ENABLED"] == "0"
 
 
 def test_managed_dkg_sync_mode_detects_interrupted_transition(tmp_path, monkeypatch):
@@ -1088,7 +1090,7 @@ def test_blackbox_sync_waits_for_public_vm_when_community_arrives_first(monkeypa
         lambda: config_mod.BlackboxConfig(
             context_graph_id=constants.DEFAULT_CONTEXT_GRAPH_ID,
             dkg_url=constants.DEFAULT_DKG_URL,
-            graph_peer_id=constants.DEFAULT_GRAPH_PEER_ID,
+            graph_peer_id="explicit-publisher",
         ),
     )
     monkeypatch.setattr(cli_mod.ruleset, "refresh", fake_refresh)
@@ -1098,8 +1100,8 @@ def test_blackbox_sync_waits_for_public_vm_when_community_arrives_first(monkeypa
     assert len(refreshes) == 2
     assert events == [
         ("status", constants.DEFAULT_CONTEXT_GRAPH_ID),
-        ("curator", constants.DEFAULT_CONTEXT_GRAPH_ID),
         ("subscribe", constants.DEFAULT_CONTEXT_GRAPH_ID),
+        ("curator", constants.DEFAULT_CONTEXT_GRAPH_ID),
         ("status", constants.DEFAULT_CONTEXT_GRAPH_ID),
     ]
     out = capsys.readouterr().out
@@ -1185,7 +1187,7 @@ def test_blackbox_sync_recovers_curator_snapshot_then_waits_for_vm(
         lambda: config_mod.BlackboxConfig(
             context_graph_id=constants.DEFAULT_CONTEXT_GRAPH_ID,
             dkg_url=constants.DEFAULT_DKG_URL,
-            graph_peer_id=constants.DEFAULT_GRAPH_PEER_ID,
+            graph_peer_id="explicit-publisher",
         ),
     )
     last_public = {"value": 6_875}
@@ -1286,7 +1288,7 @@ def test_blackbox_sync_uses_authoritative_publisher_for_empty_local_store(
         lambda: config_mod.BlackboxConfig(
             context_graph_id=constants.DEFAULT_CONTEXT_GRAPH_ID,
             dkg_url=constants.DEFAULT_DKG_URL,
-            graph_peer_id=constants.DEFAULT_GRAPH_PEER_ID,
+            graph_peer_id="explicit-publisher",
         ),
     )
 
@@ -1371,7 +1373,7 @@ def test_required_release_sync_fails_when_subscription_cannot_be_persisted(
             context_graph_id=constants.DEFAULT_CONTEXT_GRAPH_ID,
             dkg_url=constants.DEFAULT_DKG_URL,
             dkg_home=str(tmp_path),
-            graph_peer_id=constants.DEFAULT_GRAPH_PEER_ID,
+            graph_peer_id="explicit-publisher",
         ),
     )
     monkeypatch.setattr(
@@ -1448,7 +1450,7 @@ def test_blackbox_sync_fails_instead_of_waiting_on_empty_zero_insert_snapshot(
         lambda: config_mod.BlackboxConfig(
             context_graph_id=constants.DEFAULT_CONTEXT_GRAPH_ID,
             dkg_url=constants.DEFAULT_DKG_URL,
-            graph_peer_id=constants.DEFAULT_GRAPH_PEER_ID,
+            graph_peer_id="explicit-publisher",
         ),
     )
     monkeypatch.setattr(cli_mod.ruleset, "peek", lambda _cfg: EmptyRuleset())
@@ -1529,7 +1531,7 @@ def test_required_release_sync_persists_subscription_after_direct_connect_failur
         lambda: config_mod.BlackboxConfig(
             context_graph_id=constants.DEFAULT_CONTEXT_GRAPH_ID,
             dkg_url=constants.DEFAULT_DKG_URL,
-            graph_peer_id=constants.DEFAULT_GRAPH_PEER_ID,
+            graph_peer_id="explicit-publisher",
         ),
     )
     monkeypatch.setattr(cli_mod.ruleset, "peek", lambda _cfg: EmptyRuleset())
@@ -1543,7 +1545,10 @@ def test_required_release_sync_persists_subscription_after_direct_connect_failur
     assert cli_mod._cmd_sync(args) == 2
     assert len([event for event in events if event[0] == "connect"]) == 1
     assert ("subscribe", constants.DEFAULT_CONTEXT_GRAPH_ID) in events
-    assert "persisting the DKG subscription" in capsys.readouterr().out
+    assert events.index(("subscribe", constants.DEFAULT_CONTEXT_GRAPH_ID)) < events.index(
+        ("connect", "explicit-publisher")
+    )
+    assert "retaining the DKG subscription" in capsys.readouterr().out
 
 
 def test_authoritative_recovery_retries_fresh_node_peer_discovery(
@@ -1705,7 +1710,7 @@ def test_blackbox_sync_does_not_accept_deferred_catchup_as_complete(
         lambda: config_mod.BlackboxConfig(
             context_graph_id=constants.DEFAULT_CONTEXT_GRAPH_ID,
             dkg_url=constants.DEFAULT_DKG_URL,
-            graph_peer_id=constants.DEFAULT_GRAPH_PEER_ID,
+            graph_peer_id="explicit-publisher",
         ),
     )
     monkeypatch.setattr(
@@ -1763,6 +1768,7 @@ def test_blackbox_sync_does_not_fall_back_to_generic_running_catchup(monkeypatch
         lambda: config_mod.BlackboxConfig(
             context_graph_id=constants.DEFAULT_CONTEXT_GRAPH_ID,
             dkg_url=constants.DEFAULT_DKG_URL,
+            graph_peer_id="explicit-publisher",
         ),
     )
     monkeypatch.setattr(cli_mod.ruleset, "peek", lambda _cfg: cached)
@@ -1873,11 +1879,121 @@ def test_authoritative_recovery_keeps_retrying_explicit_publisher_pressure(
     assert cli_mod._catchup_authoritative_vm(
         FakeClient(),
         constants.DEFAULT_CONTEXT_GRAPH_ID,
-        constants.DEFAULT_GRAPH_PEER_ID,
+        "explicit-publisher",
         cli_mod.time.monotonic() + 600,
     )
     assert len(attempts) == 5
     assert delays == [2.0, 4.0, 8.0, 16.0]
+
+
+@pytest.mark.parametrize("failure", [
+    {"retryable": False, "error": "request timed out"},
+    {"retryable": True, "errorCode": "DURABLE_CATCHUP_ALL_PEERS_FAILED",
+     "perContextGraph": [{"durableFailure": {
+         "code": "RFC64_CATALOG_VERIFICATION_FAILED", "retryable": False,
+         "message": "catalog closure authentication failed",
+     }}]},
+    {"retryable": True, "errorCode": "RFC64_CATALOG_SUBSCRIPTION_REQUIRED"},
+])
+def test_authoritative_recovery_stops_on_typed_terminal_failure(monkeypatch, failure):
+    calls = []
+    states = []
+    error = cli_mod.DkgError(
+        "POST /api/shared-memory/catchup -> 503: " + json.dumps(failure),
+        response=failure,
+    )
+
+    class FakeClient:
+        def catchup_from_peer(self, cg_id, peer_id, *, budget_ms):
+            calls.append((cg_id, peer_id))
+            raise error
+
+    monkeypatch.setattr(cli_mod.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        cli_mod.sync_state, "write",
+        lambda status, **details: states.append((status, details)) or details,
+    )
+    assert not cli_mod._catchup_authoritative_vm(
+        FakeClient(), "owner/graph", "publisher", cli_mod.time.monotonic() + 60,
+    )
+    assert calls == [("owner/graph", "publisher")]
+    assert states[-1][0] == "failed"
+    assert states[-1][1]["error"] == str(error)
+    assert not any("waiting-for" in details.get("phase", "") for _, details in states)
+
+
+
+
+
+
+@pytest.mark.parametrize("graph,peer", [
+    ("owner/private", constants.DEFAULT_GRAPH_PEER_ID),
+    (constants.DEFAULT_CONTEXT_GRAPH_ID, "custom-publisher"),
+])
+def test_custom_pins_do_not_fall_back_after_connection_failure(monkeypatch, graph, peer):
+    calls = []
+    states = []
+
+    class FakeClient:
+        def connect_peer(self, peer_id):
+            calls.append(("connect", peer_id))
+            raise cli_mod.DkgError("publisher route unavailable")
+
+        def catchup_from_peer(self, *_args, **_kwargs):
+            raise AssertionError("connection failure must preserve pinned refusal")
+
+        def catchup_from_network(self, *_args, **_kwargs):
+            raise AssertionError("custom pins cannot use public fallback")
+
+    monkeypatch.setattr(
+        cli_mod.sync_state, "write",
+        lambda status, **details: states.append((status, details)) or details,
+    )
+    assert not cli_mod._catchup_authoritative_vm(
+        FakeClient(), graph, peer, cli_mod.time.monotonic() + 60,
+    )
+    assert calls == [("connect", peer)]
+    assert states[-1][0] == "failed"
+    assert "source is unreachable" in states[-1][1]["error"]
+
+
+@pytest.mark.parametrize("graph,peer", [
+    ("owner/private", constants.DEFAULT_GRAPH_PEER_ID),
+    (constants.DEFAULT_CONTEXT_GRAPH_ID, "custom-publisher"),
+])
+def test_public_recovery_preserves_custom_graph_and_peer_pins(monkeypatch, graph, peer):
+    calls = []
+
+    class FakeClient:
+        def catchup_from_peer(self, cg_id, peer_id, *, budget_ms):
+            calls.append((cg_id, peer_id))
+            if len(calls) == 1:
+                raise cli_mod.DkgError("publisher miss", response={
+                    "errorCode": "VM_CHAIN_PROVIDER_INCOMPLETE", "retryable": True,
+                })
+            return {
+                "ok": True, "includeDurable": True, "includeSharedMemory": False,
+                "durableComplete": True, "peersAttempted": 1,
+                "results": [{"peerId": peer_id}],
+            }
+
+        def catchup_from_network(self, *_args, **_kwargs):
+            raise AssertionError("explicit pins must remain pinned")
+
+    monkeypatch.setattr(cli_mod.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(cli_mod.sync_state, "write", lambda *_args, **_kwargs: {})
+    assert cli_mod._catchup_authoritative_vm(
+        FakeClient(), graph, peer, cli_mod.time.monotonic() + 60,
+    )
+    assert calls == [(graph, peer), (graph, peer)]
+
+
+
+
+
+
+
+
 
 
 def test_authoritative_recovery_syncs_target_directly_with_bounded_budgets(
@@ -1932,7 +2048,7 @@ def test_authoritative_recovery_syncs_target_directly_with_bounded_budgets(
     assert cli_mod._catchup_authoritative_vm(
         FakeClient(),
         constants.DEFAULT_CONTEXT_GRAPH_ID,
-        constants.DEFAULT_GRAPH_PEER_ID,
+        "explicit-publisher",
         cli_mod.time.monotonic() + 600,
     )
     assert budgets == [
@@ -1985,7 +2101,7 @@ def test_authoritative_recovery_stops_after_safe_manifest_completion(
     assert "1,000 triples verified and stored" in capsys.readouterr().out
 
 
-def test_authoritative_recovery_accepts_complete_release_floor_without_manifest(
+def test_authoritative_recovery_rejects_release_floor_without_manifest(
     monkeypatch, tmp_path, capsys
 ):
     class FakeClient:
@@ -2010,15 +2126,16 @@ def test_authoritative_recovery_accepts_complete_release_floor_without_manifest(
 
     client = FakeClient()
     monkeypatch.setattr(cli_mod.sync_state, "write", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(cli_mod.time, "sleep", lambda _seconds: None)
 
-    assert cli_mod._catchup_authoritative_vm(
+    assert not cli_mod._catchup_authoritative_vm(
         client,
         constants.DEFAULT_CONTEXT_GRAPH_ID,
-        constants.DEFAULT_GRAPH_PEER_ID,
+        "explicit-publisher",
         cli_mod.time.monotonic() + 60,
     )
-    assert client.calls == 1
-    assert "release floor is complete" in capsys.readouterr().out
+    assert client.calls == cli_mod._MAX_EMPTY_PUBLIC_PASSES
+    assert "no complete manifest boundary" in capsys.readouterr().out
 
 
 def test_authoritative_recovery_accepts_committed_incomplete_dkg_progress(
@@ -2121,6 +2238,89 @@ def test_authoritative_recovery_ignores_completion_from_earlier_invocation(
     output = capsys.readouterr().out
     assert "after 3 pinned passes" in output
     assert "snapshot complete" not in output
+
+
+def test_authoritative_recovery_incomplete_response_beats_old_manifest_and_release_floor(
+    monkeypatch, tmp_path
+):
+    graph = constants.DEFAULT_CONTEXT_GRAPH_ID
+    (tmp_path / "daemon.log").write_text(
+        f'Rootless durable progress for "{graph}": '
+        "1 complete graph(s), safe offset 0->100 of 100 (raw 100)\n",
+        encoding="utf-8",
+    )
+
+    class FakeClient:
+        dkg_home = str(tmp_path)
+
+        def __init__(self):
+            self.calls = 0
+
+        def catchup_from_peer(self, _cg_id, peer_id, *, budget_ms):
+            self.calls += 1
+            return {
+                "ok": False, "retryable": True,
+                "errorCode": "DURABLE_CATCHUP_INCOMPLETE",
+                "includeDurable": True, "includeSharedMemory": False,
+                "peersAttempted": 1, "totalDurableInsertedTriples": 0,
+                "durableComplete": False,
+                "results": [{"peerId": peer_id, "durableComplete": False}],
+            }
+
+        def threat_count(self, _cg_id):
+            return constants.DEFAULT_GRAPH_RELEASE_THREAT_FLOOR
+
+    client = FakeClient()
+    monkeypatch.setattr(cli_mod.time, "sleep", lambda _seconds: None)
+    states = []
+    monkeypatch.setattr(
+        cli_mod.sync_state, "write",
+        lambda status, **details: states.append((status, details)) or details,
+    )
+    assert not cli_mod._catchup_authoritative_vm(
+        client, graph, "publisher", cli_mod.time.monotonic() + 60,
+    )
+    assert client.calls == cli_mod._MAX_EMPTY_PUBLIC_PASSES
+    assert states[-1][0] == "failed"
+    assert not any(status == "done" for status, _ in states)
+
+
+def test_authoritative_recovery_complete_response_beats_new_partial_manifest_log(
+    monkeypatch, tmp_path
+):
+    graph = "owner/chain-vm"
+
+    class FakeClient:
+        dkg_home = str(tmp_path)
+
+        def __init__(self):
+            self.calls = 0
+
+        def catchup_from_peer(self, cg_id, peer_id, *, budget_ms):
+            self.calls += 1
+            # Another daemon activity can emit compatibility diagnostics after
+            # this invocation's cursor. The settled API response is definitive.
+            (tmp_path / "daemon.log").write_text(
+                f'Rootless durable progress for "{cg_id}": '
+                "1 complete graph(s), safe offset 0->25 of 100 (raw 25)\n",
+                encoding="utf-8",
+            )
+            return {
+                "ok": True, "includeDurable": True, "includeSharedMemory": False,
+                "peersAttempted": 1, "totalDurableInsertedTriples": 0,
+                "durableComplete": True,
+                "results": [{"peerId": peer_id, "durableComplete": True}],
+            }
+
+        def threat_count(self, _cg_id):
+            return 0
+
+    client = FakeClient()
+    monkeypatch.setattr(cli_mod.sync_state, "write", lambda *_args, **_kwargs: {})
+    assert cli_mod._catchup_authoritative_vm(
+        client, graph, "publisher", cli_mod.time.monotonic() + 60,
+    )
+    assert client.calls == 1
 
 
 def test_authoritative_recovery_retries_empty_fresh_public_pass(
@@ -2372,7 +2572,7 @@ def test_authoritative_recovery_fails_closed_on_direct_graph_verification_error(
     assert not cli_mod._catchup_authoritative_vm(
         FakeClient(),
         constants.DEFAULT_CONTEXT_GRAPH_ID,
-        constants.DEFAULT_GRAPH_PEER_ID,
+        "explicit-publisher",
         cli_mod.time.monotonic() + 3,
     )
     assert graph_calls == [constants.DEFAULT_CONTEXT_GRAPH_ID]
@@ -2446,14 +2646,19 @@ def test_authoritative_recovery_has_wall_clock_guard_and_heartbeats(
 
 def test_authoritative_recovery_does_not_overlap_active_watchdog_worker(monkeypatch):
     release = threading.Event()
+    started = threading.Event()
 
     class FakeClient:
         def __init__(self):
             self.calls = 0
 
         def catchup_from_peer(self, _cg_id, _peer_id, *, budget_ms):
+            return self._recover()
+
+        def _recover(self):
             self.calls += 1
-            release.wait(1.0)
+            started.set()
+            release.wait(5.0)
             return {}
 
     class EmptyQueue:
@@ -2461,6 +2666,7 @@ def test_authoritative_recovery_does_not_overlap_active_watchdog_worker(monkeypa
             return None
 
         def get(self, *, timeout):
+            assert started.wait(2.0), "recovery worker did not start"
             raise cli_mod.queue.Empty
 
     clock = {"value": 0.0}
@@ -2477,7 +2683,10 @@ def test_authoritative_recovery_does_not_overlap_active_watchdog_worker(monkeypa
 
     try:
         assert not cli_mod._catchup_authoritative_vm(
-            client, "owner/public", "curator", 45.0
+            client,
+            "owner/public",
+            "curator",
+            45.0,
         )
         assert client.calls == 1
     finally:
@@ -2512,7 +2721,7 @@ def test_blackbox_sync_ctrl_c_records_cancellation_and_returns_130(monkeypatch, 
         lambda: config_mod.BlackboxConfig(
             context_graph_id=constants.DEFAULT_CONTEXT_GRAPH_ID,
             dkg_url=constants.DEFAULT_DKG_URL,
-            graph_peer_id=constants.DEFAULT_GRAPH_PEER_ID,
+            graph_peer_id="explicit-publisher",
         ),
     )
     monkeypatch.setattr(
@@ -2623,7 +2832,7 @@ def test_blackbox_sync_does_not_accept_stale_public_rows_after_fresh_catchup_fai
         lambda: config_mod.BlackboxConfig(
             context_graph_id=constants.DEFAULT_CONTEXT_GRAPH_ID,
             dkg_url=constants.DEFAULT_DKG_URL,
-            graph_peer_id=constants.DEFAULT_GRAPH_PEER_ID,
+            graph_peer_id="explicit-publisher",
         ),
     )
     monkeypatch.setattr(
@@ -2696,7 +2905,7 @@ def test_blackbox_sync_uses_curator_when_generic_catchup_peer_fails(monkeypatch,
         lambda: config_mod.BlackboxConfig(
             context_graph_id=constants.DEFAULT_CONTEXT_GRAPH_ID,
             dkg_url=constants.DEFAULT_DKG_URL,
-            graph_peer_id=constants.DEFAULT_GRAPH_PEER_ID,
+            graph_peer_id="explicit-publisher",
         ),
     )
     last_public = {"value": 2}

@@ -25,9 +25,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
-from . import constants, quads
+from . import constants, quads, sync_state
 from .config import BlackboxConfig, load_blackbox_config
-from .dkg_client import DkgClient, extract_binding
+from .dkg_client import DkgClient, DkgError, extract_binding
 
 logger = logging.getLogger(__name__)
 
@@ -1386,7 +1386,17 @@ def _restore_tiers(rs: Ruleset, prior: Ruleset, tiers: List[str]) -> None:
 def _background_refresh(config: BlackboxConfig) -> None:
     global _refreshing
     try:
-        refresh(config, wait_for_lock=False)
+        if sync_state.read_for_graph(config.context_graph_id).get("status") == "running":
+            return
+        client = DkgClient(url=config.dkg_url, dkg_home=config.dkg_home)
+        try:
+            catchup = client.catchup_status(config.context_graph_id)
+        except (DkgError, AttributeError):
+            catchup = {}
+        state = str(catchup.get("jobStatus") or catchup.get("status") or "").lower()
+        if state in {"queued", "running"}:
+            return
+        refresh(config, client, wait_for_lock=False)
     except Exception as exc:  # pragma: no cover - fail open
         logger.debug("blackbox: background refresh failed: %s", exc)
     finally:

@@ -18,6 +18,7 @@
 import { expect, test } from '@playwright/test'
 
 import {
+  approveBackgroundCommandIfNeeded,
   type MockBackendFixture,
   setupMockBackend,
   waitForAppReady,
@@ -26,6 +27,7 @@ import {
   type BackgroundReleaseHandle,
   createBackgroundReleaseHandle,
   restartMockServer,
+  sidebarCrossBgCommand,
   SIDEBAR_CROSS_TEXTS,
 } from './mock-server'
 
@@ -42,8 +44,8 @@ function sessionRow(page: import('@playwright/test').Page, text: string) {
 /** Common setup: start a turn with a held bg process + subagent, wait for
  *  the turn to complete, then switch to a new session so the first session is
  *  no longer $selectedStoredSessionId (required before opening a tile). */
-async function startTurnAndSwitchAway(page: import('@playwright/test').Page) {
-  // Send E2E_SIDEBAR_CROSS — starts a turn with sleep 5 + subagent.
+async function startTurnAndSwitchAway(page: import('@playwright/test').Page, releasePath: string) {
+  // Send E2E_SIDEBAR_CROSS — starts a held background process + subagent.
   const composer = page.locator('[contenteditable="true"]').first()
   await composer.waitFor({ state: 'visible', timeout: 10_000 })
   await composer.click()
@@ -56,6 +58,8 @@ async function startTurnAndSwitchAway(page: import('@playwright/test').Page) {
     undefined,
     { timeout: 15_000 },
   )
+
+  await approveBackgroundCommandIfNeeded(page, sidebarCrossBgCommand(releasePath))
 
   // Wait for the background dot — confirms the turn is running.
   await expect
@@ -125,7 +129,7 @@ test.describe('sidebar states — tab (hidden) unread is correct', () => {
   test('session opened as a tab (not visible) correctly gets unread dot', async () => {
     const page = fixture.page
 
-    await startTurnAndSwitchAway(page)
+    await startTurnAndSwitchAway(page, bgRelease.path)
 
     // Evidence: session A is in the background (bg dot in sidebar).
     await page.screenshot({ path: 'test-results/tile-bug-tab-switched-away.png' })
@@ -186,7 +190,7 @@ test.describe.skip('sidebar states — split (visible) unread bug (RED)', () => 
   test('session visible in a split tile does NOT get unread dot when it finishes', async () => {
     const page = fixture.page
 
-    await startTurnAndSwitchAway(page)
+    await startTurnAndSwitchAway(page, bgRelease.path)
 
     // Evidence: session A is in the background (bg dot in sidebar).
     await page.screenshot({ path: 'test-results/tile-bug-split-switched-away.png' })

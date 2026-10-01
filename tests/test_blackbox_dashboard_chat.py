@@ -69,8 +69,8 @@ def test_dashboard_public_graph_uses_vm_verified_ruleset_rows(monkeypatch):
     assert status["curated"] == 2
     assert status["sync_progress"]["public"] == {
         "count": 2,
-        "state": "ready",
-        "label": "VM synced",
+        "state": "incomplete",
+        "label": "VM incomplete",
     }
 
     public = client.get("/api/graph?tier=public&limit=1&offset=1").json()

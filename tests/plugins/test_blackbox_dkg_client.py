@@ -12,6 +12,18 @@ from _blackbox_loader import load_blackbox
 dkg_client = load_blackbox("dkg_client")
 
 
+def test_structured_terminal_failure_beats_backpressure_wording():
+    assert dkg_client.classify_catchup_error({
+        "errorCode": "RFC64_CATALOG_PROVIDER_INCOMPATIBLE",
+        "error": "The publisher cannot supply this protocol after a timeout",
+        "retryable": False,
+    }) == "terminal"
+    assert dkg_client.classify_catchup_error({
+        "error": "Store scheduler backpressure",
+        "retryable": False,
+    }) == "terminal"
+
+
 class _FakeResponse:
     def __init__(self, body):
         self._body = body.encode() if isinstance(body, str) else body
@@ -210,6 +222,8 @@ def test_authoritative_catchup_pins_publisher_for_durable_vm_recovery(monkeypatc
     assert cap["timeout"] == dkg_client.constants.GRAPH_SYNC_SETTLEMENT_TIMEOUT_S
 
 
+
+
 def test_context_graph_has_agent_uses_local_participants_metadata(monkeypatch):
     cap = _capture(
         monkeypatch,
@@ -389,6 +403,75 @@ def test_write_path_raises_dkg_error_on_http_error(monkeypatch):
     with pytest.raises(dkg_client.DkgError) as exc_info:
         client.share_knowledge_asset("cg", "n", [])
     assert exc_info.value.status_code == 403
+
+
+def test_catchup_keeps_structured_failure_beyond_old_error_body_limit(monkeypatch):
+    payload = {
+        "errorCode": "DURABLE_CATCHUP_ALL_PEERS_FAILED",
+        "retryable": True,
+        "diagnostics": "x" * 2_000,
+        "perContextGraph": [{"durableFailure": {
+            "code": "RFC64_CATALOG_VERIFICATION_FAILED",
+            "message": "Authenticated catalog head did not match the applied closure",
+            "retryable": False,
+        }}],
+    }
+
+    def raise_http(req, timeout=None):
+        raise urllib.error.HTTPError(
+            req.full_url, 503, "unavailable", {},
+            io.BytesIO(json.dumps(payload).encode()),
+        )
+
+    monkeypatch.setattr(dkg_client.urllib.request, "urlopen", raise_http)
+    client = dkg_client.DkgClient(url="http://node", token="t")
+    with pytest.raises(dkg_client.DkgError) as exc_info:
+        client.catchup_from_peer("owner/graph", "publisher")
+    error = exc_info.value
+    assert error.response == payload
+    assert "RFC64_CATALOG_VERIFICATION_FAILED" in str(error)
+    assert dkg_client.classify_catchup_error(error) == "terminal"
+
+
+def test_http_error_body_is_bounded_when_daemon_returns_oversized_response(monkeypatch):
+    def raise_http(req, timeout=None):
+        raise urllib.error.HTTPError(
+            req.full_url, 503, "unavailable", {},
+            io.BytesIO(b"x" * (dkg_client._ERROR_BODY_LIMIT + 100)),
+        )
+
+    monkeypatch.setattr(dkg_client.urllib.request, "urlopen", raise_http)
+    client = dkg_client.DkgClient(url="http://node", token="t")
+    with pytest.raises(dkg_client.DkgError) as exc_info:
+        client.catchup_from_peer("owner/graph", "publisher")
+    assert exc_info.value.response is None
+    assert str(exc_info.value).endswith(" [response truncated]")
+    assert len(str(exc_info.value)) < dkg_client._ERROR_BODY_LIMIT + 100
+
+
+@pytest.mark.parametrize("payload, expected", [
+    ({"retryable": False, "error": "Store scheduler queue wait timeout"}, "terminal"),
+    ({"retryable": True, "errorCode": "SYNC_BACKPRESSURE"}, "capacity"),
+    ({"retryable": True, "errorCode": "DURABLE_CATCHUP_ALL_PEERS_FAILED"}, "retryable"),
+    ({"retryable": True, "errorCode": "RFC64_CATALOG_PROVIDER_UNAVAILABLE",
+      "error": "provider timed out"}, "retryable"),
+    ({"retryable": True, "errorCode": "RFC64_CATALOG_SUBSCRIPTION_REQUIRED"}, "terminal"),
+    ({"retryable": True, "errorCode": "VM_CHAIN_RECOVERY_INCOMPLETE",
+      "error": "Chain VM inventory recovery did not complete",
+      "results": [{"durableDiagnostics": {
+          "deferredBackpressure": 0, "backoffWorthyFailures": 0,
+      }}]}, "retryable"),
+    ({"retryable": True, "errorCode": "VM_CHAIN_RECOVERY_INCOMPLETE",
+      "error": "Store scheduler backpressure rejected recovery",
+      "results": [{"durableDiagnostics": {"deferredBackpressure": 1}}]}, "capacity"),
+])
+def test_catchup_failure_classification_preserves_structured_retry_authority(payload, expected):
+    error = dkg_client.DkgError(
+        "POST /api/shared-memory/catchup -> 503: " + json.dumps(payload),
+        status_code=503, response=payload,
+    )
+    assert dkg_client.classify_catchup_error(error) == expected
+    assert dkg_client.classify_catchup_error(str(error)) == expected
 
 
 def test_share_is_idempotent_on_already_finalized(monkeypatch):

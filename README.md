@@ -42,7 +42,7 @@ run it with `--store oxigraph`.
 curl -fsSL blackbox.umanitek.ai | bash
 ```
 
-Windows PowerShell:
+Windows PowerShell ([installer source](scripts/blackbox-install.ps1)):
 
 ```powershell
 iwr -useb blackbox-w.umanitek.ai | iex

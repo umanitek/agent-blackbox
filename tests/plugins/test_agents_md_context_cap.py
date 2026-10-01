@@ -25,7 +25,7 @@ def test_repo_agents_md_loads_whole_at_pinned_cap(monkeypatch):
     # Use the pinned cap, not the machine's live ~/.hermes config, so this guards
     # the repo invariant on any machine / in CI.
     monkeypatch.setattr(
-        "hermes_cli.config.load_config",
+        "hermes_cli.config.load_config_readonly",
         lambda: {"context_file_max_chars": PIN},
     )
 

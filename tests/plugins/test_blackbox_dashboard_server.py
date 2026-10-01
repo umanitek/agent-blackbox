@@ -671,7 +671,7 @@ def test_sync_activity_does_not_hide_failure_behind_stale_syncing_state():
     assert activity["detail"] == "protocol negotiation failed"
 
 
-def test_sync_activity_hides_known_swm_failure_when_verified_vm_is_ready():
+def test_sync_activity_keeps_verified_partial_vm_available_after_swm_failure():
     activity = server._sync_activity(
         public=52_000,
         community=0,
@@ -684,18 +684,137 @@ def test_sync_activity_hides_known_swm_failure_when_verified_vm_is_ready():
         transfer={},
     )
 
-    assert activity["status"] == "ready"
-    assert activity["phase"] == "verifiable-memory-ready"
-    assert activity["label"] == "Verified threat graph is ready"
-    assert activity["detail"] == "52,000 verified public threats are queryable."
-    assert activity["percent"] == 100.0
+    assert activity["status"] == "waiting"
+    assert activity["phase"] == "partial-verifiable-memory"
+    assert activity["label"] == "Verified rules are available"
+    assert activity["detail"] == "52,000 verified public threats are queryable; full graph sync is incomplete."
+    assert activity["percent"] is None
 
 
-def test_sync_activity_treats_retryable_durable_503_as_resumable_wait():
+def test_sync_activity_keeps_native_provider_timeout_waiting_with_partial_graph():
+    raw_error = (
+        "POST /api/shared-memory/catchup -> 503: "
+        '{"ok":false,"errorCode":"RFC64_CATALOG_PROVIDER_UNAVAILABLE",'
+        '"retryable":true,"error":"Catalog provider request timed out"}'
+    )
+    activity = server._sync_activity(
+        public=52_000,
+        community=0,
+        node_reachable=True,
+        catchup={"status": "failed", "error": raw_error},
+        connection={"state": "subscribed"},
+        transfer={
+            "status": "failed",
+            "phase": "recovering-verifiable-memory",
+            "current_triples": 250,
+            "expected_triples": 1_000,
+        },
+    )
+
+    assert activity["status"] == "waiting"
+    assert activity["phase"] == "waiting-for-sync-source"
+    assert activity["label"] == "Waiting for graph sync source"
+    assert activity["current"] == 250
+    assert activity["expected"] == 1_000
+    assert activity["percent"] == 25.0
+    assert "source is temporarily unavailable" in activity["detail"]
+    assert "publisher is temporarily busy" not in activity["detail"]
+
+
+def test_sync_activity_never_marks_incomplete_durable_timeout_ready():
+    for indicator in (
+        '"includeDurable":true',
+        '"includeSharedMemory":false',
+        '"durableComplete":false',
+    ):
+        raw_error = (
+            "POST /api/shared-memory/catchup -> 503: "
+            '{"ok":false,"retryable":true,"error":"Recovery timed out",'
+            + indicator + "}"
+        )
+        activity = server._sync_activity(
+            public=52_000,
+            community=0,
+            node_reachable=True,
+            catchup={"status": "failed", "error": raw_error},
+            connection={"state": "subscribed"},
+            transfer={
+                "status": "failed",
+                "phase": "recovering-verifiable-memory",
+                "current_triples": 250,
+                "expected_triples": 1_000,
+            },
+        )
+
+        assert activity["status"] == "waiting"
+        assert activity["phase"] == "waiting-for-sync-source"
+        assert activity["percent"] == 25.0
+        assert "checkpointed" in activity["detail"]
+
+
+def test_sync_activity_treats_retryable_durable_503_as_source_wait():
     raw_error = (
         "POST /api/shared-memory/catchup -> 503: "
         '{"ok":false,"errorCode":"DURABLE_CATCHUP_ALL_PEERS_FAILED",'
         '"retryable":true,"error":"Durable catchup failed for every selected peer"}'
+    )
+    activity = server._sync_activity(
+        public=52_000,
+        community=0,
+        node_reachable=True,
+        catchup={"status": "failed", "error": raw_error},
+        connection={"state": "subscribed"},
+        transfer={
+            "status": "failed",
+            "phase": "recovering-verifiable-memory",
+            "current_triples": 51_642,
+            "expected_triples": 6_117_721,
+        },
+    )
+
+    assert activity["status"] == "waiting"
+    assert activity["phase"] == "waiting-for-sync-source"
+    assert activity["label"] == "Waiting for graph sync source"
+    assert activity["current"] == 51_642
+    assert activity["expected"] == 6_117_721
+    assert activity["indeterminate"] is False
+    assert "retry and resume automatically" in activity["detail"]
+    assert "source is temporarily unavailable" in activity["detail"]
+    assert "busy" not in activity["detail"]
+    assert "POST" not in activity["detail"]
+    assert "503" not in activity["detail"]
+
+
+def test_sync_activity_surfaces_structural_failure_inside_retryable_wrapper():
+    raw_error = (
+        "POST /api/shared-memory/catchup -> 503: "
+        '{"ok":false,"errorCode":"DURABLE_CATCHUP_ALL_PEERS_FAILED",'
+        '"retryable":true,"error":"Durable catchup failed for every selected peer",'
+        '"peerErrors":[{"errorCode":"RFC64_CATALOG_SUBSCRIPTION_REQUIRED",'
+        '"retryable":false,"error":"Catalog subscription is required for recovery"}]}'
+    )
+    activity = server._sync_activity(
+        public=0,
+        community=0,
+        node_reachable=True,
+        catchup={"status": "failed", "error": raw_error},
+        connection={"state": "subscribed"},
+        transfer={},
+    )
+
+    assert activity["status"] == "failed"
+    assert activity["label"] == "Graph sync needs attention"
+    assert "Catalog subscription is required" in activity["detail"]
+    assert "temporarily busy" not in activity["detail"]
+    assert activity["percent"] is None
+    assert server._graph_sync_state(0, True, "failed") == "incomplete"
+
+
+def test_sync_activity_displays_proven_capacity_with_preserved_checkpoint():
+    raw_error = (
+        "POST /api/shared-memory/catchup -> 503: "
+        '{"ok":false,"errorCode":"SYNC_BACKPRESSURE","retryable":true,'
+        '"error":"Global sync queue is full"}'
     )
     activity = server._sync_activity(
         public=52_000,
@@ -717,9 +836,74 @@ def test_sync_activity_treats_retryable_durable_503_as_resumable_wait():
     assert activity["current"] == 51_642
     assert activity["expected"] == 6_117_721
     assert activity["indeterminate"] is False
+    assert "publisher is temporarily busy" in activity["detail"]
     assert "retry and resume automatically" in activity["detail"]
-    assert "POST" not in activity["detail"]
-    assert "503" not in activity["detail"]
+
+
+def test_sync_activity_displays_running_wait_phases_with_actual_progress():
+    for phase, expected_phase, expected_label, reason in (
+        (
+            "waiting-for-dkg-capacity",
+            "waiting-for-publisher-capacity",
+            "Waiting for publisher sync capacity",
+            "publisher is temporarily busy",
+        ),
+        (
+            "waiting-for-sync-source",
+            "waiting-for-sync-source",
+            "Waiting for graph sync source",
+            "source is temporarily unavailable",
+        ),
+    ):
+        activity = server._sync_activity(
+            public=5,
+            community=0,
+            node_reachable=True,
+            catchup={"status": "running"},
+            connection={"state": "subscribed"},
+            transfer={
+                "status": "running",
+                "phase": phase,
+                "current_triples": 250,
+                "expected_triples": 1_000,
+                "started_at": 100.0,
+                "updated_at": 200.0,
+            },
+        )
+
+        assert activity["status"] == "waiting"
+        assert activity["phase"] == expected_phase
+        assert activity["label"] == expected_label
+        assert activity["current"] == 250
+        assert activity["expected"] == 1_000
+        assert activity["percent"] == 25.0
+        assert activity["started_at"] == 100.0
+        assert activity["updated_at"] == 200.0
+        assert reason in activity["detail"]
+        assert "retry and resume automatically" in activity["detail"]
+
+
+def test_sync_activity_preserves_active_transfer_over_stale_terminal_catchup():
+    activity = server._sync_activity(
+        public=5,
+        community=0,
+        node_reachable=True,
+        catchup={
+            "status": "failed",
+            "error": '{"errorCode":"RFC64_CATALOG_SUBSCRIPTION_REQUIRED","retryable":false}',
+        },
+        connection={"state": "subscribed"},
+        transfer={
+            "status": "running",
+            "phase": "recovering-verifiable-memory",
+            "current_triples": 250,
+            "expected_triples": 1_000,
+        },
+    )
+
+    assert activity["status"] == "running"
+    assert activity["label"] == "Receiving publisher VM"
+    assert activity["percent"] == 25.0
 
 
 def test_sync_activity_keeps_unrelated_catchup_failures_visible():

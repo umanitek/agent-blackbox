@@ -12,6 +12,7 @@
 import { expect, test, type Page } from '@playwright/test'
 
 import {
+  approveBackgroundCommandIfNeeded,
   type MockBackendFixture,
   setupMockBackend,
   waitForAppReady,
@@ -19,6 +20,7 @@ import {
 import {
   createBackgroundReleaseHandle,
   restartMockServer,
+  sidebarCrossBgCommand,
   SIDEBAR_CROSS_TEXTS,
   SIDEBAR_TEXTS,
 } from './mock-server'
@@ -210,6 +212,8 @@ test.describe('sidebar states — cross-session dot transition', () => {
     await composer.click()
     await composer.type('E2E_SIDEBAR_CROSS', { delay: 20 })
     await page.keyboard.press('Enter')
+
+    await approveBackgroundCommandIfNeeded(page, sidebarCrossBgCommand(bgRelease.path))
 
     // Wait for the background dot to appear.
     await expect

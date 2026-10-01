@@ -25,7 +25,7 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 
-import { _electron, type ElectronApplication, type Page } from '@playwright/test'
+import { _electron, expect, type ElectronApplication, type Page } from '@playwright/test'
 
 import { startMockServer, type MockServerOptions } from './mock-server'
 import { installErrorBannerGuard } from './test'
@@ -588,6 +588,30 @@ export async function setupPackagedApp(): Promise<PackagedAppFixture> {
 }
 
 // ─── Wait helpers ──────────────────────────────────────────────────────
+
+/** Approve only the expected background command, once, if the guard asks. */
+export async function approveBackgroundCommandIfNeeded(
+  page: Page,
+  expectedCommand: string,
+): Promise<void> {
+  const backgroundDot = page.getByLabel('Background task running', { exact: true })
+  const approval = page.locator('[data-slot="tool-approval-inline"]')
+  const run = approval.getByRole('button', { name: /^Run(?:\s|$)/ })
+
+  await expect
+    .poll(
+      async () => (await backgroundDot.count()) > 0 || await run.isVisible(),
+      { timeout: 30_000, message: 'background command should start or request approval' },
+    )
+    .toBe(true)
+
+  if (await backgroundDot.count()) return
+
+  // Inspect the actual pending command before clicking the one-time Run action.
+  await approval.getByRole('button', { name: 'Command', exact: true }).click()
+  await expect(approval.locator('pre')).toHaveText(expectedCommand)
+  await run.click()
+}
 
 /**
  * Wait for the desktop app to finish booting and show the main chat UI.

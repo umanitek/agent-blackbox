@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Set, Tuple
 
 from .. import sync_state
+from ..dkg_client import classify_catchup_error
 from ..dkg_progress import read_durable_progress
 
 logger = logging.getLogger(__name__)
@@ -36,6 +37,7 @@ _RESCAN_INTERVAL_SEC = 5.0
 _RECONCILE_INTERVAL_SEC = 60.0
 _RULESET_EMPTY_RETRY_SEC = 10.0
 _RULESET_MIN_RETRY_SEC = 5.0
+_RULESET_CATCHUP_POLL_SEC = 4.0
 # A complete VM refresh pages through every curated rule. On a large graph it
 # can take several minutes and saturate Blazegraph, so never repeat it on the
 # dashboard's short status-poll interval. Manual sync remains available.
@@ -255,15 +257,17 @@ def _network_sync_once(
         output = "\n".join(
             part.strip() for part in (completed.stdout, completed.stderr) if part.strip()
         )
+        cfg = load_config()
         if completed.returncode != 0:
             logger.warning(
                 "blackbox automatic graph sync exited %d: %s",
                 completed.returncode,
                 output[-2000:] or "no output",
             )
+        elif sync_state.read_for_graph(cfg.context_graph_id).get("status") == "partial":
+            logger.info("blackbox verified rules are available; full graph sync is incomplete")
         else:
             logger.info("blackbox automatic graph sync completed")
-        cfg = load_config()
         counts = _ruleset_sync_counts(ruleset_mod.peek(cfg))
         return {
             "ok": completed.returncode == 0,
@@ -284,7 +288,13 @@ def _network_sync_once(
         _network_sync_lock.release()
 
 
-def _sync_ruleset_once(load_config: Any, dkg_client_cls: Any, ruleset_mod: Any) -> Dict[str, int]:
+def _sync_ruleset_once(
+    load_config: Any,
+    dkg_client_cls: Any,
+    ruleset_mod: Any,
+    *,
+    refresh_after_catchup: bool = False,
+) -> Dict[str, int]:
     """Ensure one public-graph subscription and refresh curated VM rules."""
     cfg = load_config()
     transfer = sync_state.read_for_graph(cfg.context_graph_id)
@@ -302,15 +312,21 @@ def _sync_ruleset_once(load_config: Any, dkg_client_cls: Any, ruleset_mod: Any) 
                 )
                 cached_counts["total"] += verified - cached_counts["public"]
                 cached_counts["public"] = verified
-                return cached_counts
+                return {
+                    **cached_counts,
+                    **({"refresh_deferred": True} if refresh_after_catchup else {}),
+                }
         public = int(transfer.get("public_entries") or 0)
-        return {"total": public, "public": public, "community": 0}
+        return {
+            "total": public, "public": public, "community": 0,
+            **({"refresh_deferred": True} if refresh_after_catchup else {}),
+        }
     client = dkg_client_cls(url=cfg.dkg_url, dkg_home=cfg.dkg_home)
     try:
         catchup = client.catchup_status(cfg.context_graph_id)
     except Exception:
         catchup = {}
-    catchup_state = str(catchup.get("status") or "").lower()
+    catchup_state = str(catchup.get("jobStatus") or catchup.get("status") or "").lower()
     catchup_job_id = str(
         catchup.get("jobId") or catchup.get("job_id") or catchup.get("id") or ""
     )
@@ -327,7 +343,10 @@ def _sync_ruleset_once(load_config: Any, dkg_client_cls: Any, ruleset_mod: Any) 
         # last-good cache until DKG reports a terminal state.
         peek = getattr(ruleset_mod, "peek", None)
         rs = peek(cfg) if callable(peek) else ruleset_mod.refresh(cfg, client)
-        return _ruleset_sync_counts(rs)
+        return {
+            **_ruleset_sync_counts(rs),
+            **({"refresh_deferred": True} if refresh_after_catchup else {}),
+        }
     peek = getattr(ruleset_mod, "peek", None)
     if callable(peek):
         cached = peek(cfg)
@@ -335,7 +354,11 @@ def _sync_ruleset_once(load_config: Any, dkg_client_cls: Any, ruleset_mod: Any) 
         synced_at = float(getattr(cached, "synced_at", 0.0) or 0.0)
         configured_interval = float(getattr(cfg, "sync_interval", 0.0) or 0.0)
         refresh_interval = max(_RULESET_HEAVY_REFRESH_MIN_SEC, configured_interval)
-        if counts["public"] and time.time() - synced_at < refresh_interval:
+        if (
+            not refresh_after_catchup
+            and counts["public"]
+            and time.time() - synced_at < refresh_interval
+        ):
             with _join_lock:
                 _connection_states[cfg.context_graph_id] = {
                     "state": "subscribed",
@@ -351,6 +374,67 @@ def _sync_ruleset_once(load_config: Any, dkg_client_cls: Any, ruleset_mod: Any) 
                 "updated_at": time.time(),
             }
     return counts
+
+
+class _RulesetSyncWake:
+    """Wake the existing rule worker once for each scoped completed job.
+
+    A job's completion only says that local verified rows may have changed.
+    It never establishes that the entire public graph has been recovered.
+    """
+
+    def __init__(self) -> None:
+        self.event = threading.Event()
+        self._lock = threading.Lock()
+        self._last_key: Any = None
+        self._pending = False
+
+    def observe(self, context_graph_id: str, catchup: Any) -> bool:
+        if not isinstance(catchup, dict):
+            return False
+        if catchup.get("contextGraphId") != context_graph_id:
+            return False
+        state = str(catchup.get("jobStatus") or catchup.get("status") or "").lower()
+        job_id = catchup.get("jobId")
+        finished_at = catchup.get("finishedAt")
+        if (
+            state != "done"
+            or not isinstance(job_id, str)
+            or not job_id
+            or len(job_id) > 256
+            or type(finished_at) not in (int, float, str)
+            or not str(finished_at)
+            or len(str(finished_at)) > 128
+        ):
+            return False
+        key = (context_graph_id, job_id, str(finished_at))
+        with self._lock:
+            if key == self._last_key:
+                return False
+            self._last_key = key
+            self._pending = True
+            self.event.set()
+        return True
+
+    def consume(self) -> bool:
+        with self._lock:
+            pending = self._pending
+            self._pending = False
+            self.event.clear()
+            return pending
+
+
+def _poll_ruleset_sync_wake(load_config: Any, dkg_client_cls: Any, wake: Any) -> None:
+    """Read only the cheap catch-up ledger, independently of dashboard polls."""
+    cfg = load_config()
+    if sync_state.read_for_graph(cfg.context_graph_id).get("status") == "running":
+        return
+    client = dkg_client_cls(url=cfg.dkg_url, dkg_home=cfg.dkg_home)
+    try:
+        catchup = client.catchup_status(cfg.context_graph_id)
+    except Exception:
+        return
+    wake.observe(cfg.context_graph_id, catchup)
 
 
 def _graph_sync_state(
@@ -372,10 +456,11 @@ def _graph_sync_state(
         "denied",
         "unreachable",
         "deferred",
+        "partial",
     }:
         return "incomplete"
     if int(count or 0) > 0:
-        return "ready"
+        return "incomplete"
     if not node_reachable:
         return "unreachable"
     return "empty"
@@ -384,19 +469,21 @@ def _graph_sync_state(
 def _is_hidden_swm_catchup_error(value: Any) -> bool:
     """Temporarily suppress the known DKG SWM catch-up UI failure."""
     text = str(value or "").lower()
+    compact = "".join(text.split()).replace('"', "").replace("'", "")
+    # The historical shared-memory route also carries durable/catalog
+    # recovery. Its timeouts cannot establish a verified graph is complete.
+    if any(
+        marker in compact
+        for marker in (
+            "includedurable:true",
+            "includesharedmemory:false",
+            "durablecomplete:false",
+            "rfc64_catalog_",
+        )
+    ):
+        return False
     return "/api/shared-memory/catchup" in text and (
         "transport error" in text or "timed out" in text or "timeout" in text
-    )
-
-
-def _is_retryable_durable_catchup_error(value: Any) -> bool:
-    """Recognize DKG's explicit transient durable-catchup response."""
-    text = str(value or "").lower()
-    compact = "".join(text.split())
-    return (
-        "/api/shared-memory/catchup" in text
-        and "durable_catchup_all_peers_failed" in text
-        and '"retryable":true' in compact
     )
 
 
@@ -409,7 +496,7 @@ def _sync_activity(
     connection: Dict[str, Any],
     transfer: Dict[str, Any],
 ) -> Dict[str, Any]:
-    catchup_status = str(catchup.get("status") or "").lower()
+    catchup_status = str(catchup.get("jobStatus") or catchup.get("status") or "").lower()
     connection_state = str(connection.get("state") or "").lower()
     transfer_status = str(transfer.get("status") or "").lower()
     phase = str(transfer.get("phase") or "").lower()
@@ -417,6 +504,16 @@ def _sync_activity(
     expected = int(transfer.get("expected_public_entries") or 0)
     current_triples = int(transfer.get("current_triples") or 0)
     expected_triples = int(transfer.get("expected_triples") or 0)
+    catchup_result = catchup.get("result") if isinstance(catchup.get("result"), dict) else {}
+    error_value = (
+        transfer.get("error")
+        or connection.get("error")
+        or catchup.get("error")
+        or catchup_result.get("error")
+        or ""
+    )
+    error = str(error_value)
+    error_class = classify_catchup_error(error_value)
     progress: Dict[str, Any] = {
         "status": "idle",
         "phase": "idle",
@@ -429,6 +526,64 @@ def _sync_activity(
         "percent": None,
         "indeterminate": True,
     }
+
+    def wait_for_source(*, capacity: bool) -> Dict[str, Any]:
+        reason = (
+            "The publisher is temporarily busy"
+            if capacity
+            else "The graph sync source is temporarily unavailable"
+        )
+        detail = (
+            f"{reason}. Blackbox will retry automatically and resume "
+            "from its durable checkpoint."
+        )
+        progress.update(
+            status="waiting",
+            phase="waiting-for-publisher-capacity" if capacity else "waiting-for-sync-source",
+            label="Waiting for publisher sync capacity" if capacity else "Waiting for graph sync source",
+            detail=detail,
+            started_at=transfer.get("started_at") or catchup.get("startedAt"),
+            updated_at=transfer.get("updated_at") or catchup.get("finishedAt"),
+        )
+        if expected_triples > 0:
+            bounded_triples = max(0, min(current_triples, expected_triples))
+            progress.update(
+                detail=(
+                    f"{bounded_triples:,} of {expected_triples:,} graph triples "
+                    f"are checkpointed. {reason}; Blackbox will retry and "
+                    "resume automatically."
+                ),
+                current=bounded_triples,
+                expected=expected_triples,
+                percent=round((bounded_triples / expected_triples) * 100, 1),
+                indeterminate=False,
+            )
+        elif public > 0:
+            progress["detail"] = (
+                f"{public:,} verified public threats remain available. "
+                f"{reason}; Blackbox will retry and resume automatically."
+            )
+        return progress
+
+    if transfer_status == "running" and phase in {
+        "waiting-for-dkg-capacity",
+        "waiting-for-sync-source",
+    }:
+        transfer_error_class = classify_catchup_error(transfer.get("error"))
+        if transfer_error_class == "terminal":
+            progress.update(
+                status="failed",
+                phase=phase,
+                label="Graph sync needs attention",
+                detail=str(transfer.get("error")),
+                started_at=transfer.get("started_at"),
+                updated_at=transfer.get("updated_at"),
+            )
+            return progress
+        return wait_for_source(
+            capacity=transfer_error_class == "capacity"
+            or (transfer_error_class == "unknown" and phase == "waiting-for-dkg-capacity")
+        )
 
     if transfer_status == "running":
         labels = {
@@ -524,15 +679,6 @@ def _sync_activity(
         )
         return progress
 
-    catchup_result = catchup.get("result") if isinstance(catchup.get("result"), dict) else {}
-    error = str(
-        transfer.get("error")
-        or connection.get("error")
-        or catchup.get("error")
-        or catchup_result.get("error")
-        or ""
-    )
-
     # The source-pinned transfer is the authoritative result for this graph.
     # A generic catch-up job may still retain an older failure after that
     # transfer completed successfully; do not turn verified local data into a
@@ -553,59 +699,21 @@ def _sync_activity(
         )
         return progress
 
-    # A retryable all-peers failure means the selected publisher did not have
-    # capacity for this pass; it is not a corrupt graph or a terminal client
-    # error. Keep the full response in sync-state/logs for diagnosis, but show
-    # users the automatic durable-resume behavior instead of raw HTTP JSON.
-    if node_reachable and _is_retryable_durable_catchup_error(error):
-        detail = (
-            "The sync-capable publisher is temporarily busy or unavailable. "
-            "Blackbox will retry automatically and resume from its durable checkpoint."
-        )
-        progress.update(
-            status="waiting",
-            phase="waiting-for-publisher-capacity",
-            label="Waiting for publisher sync capacity",
-            detail=detail,
-            started_at=transfer.get("started_at") or catchup.get("startedAt"),
-            updated_at=transfer.get("updated_at") or catchup.get("finishedAt"),
-        )
-        if expected_triples > 0:
-            bounded_triples = max(0, min(current_triples, expected_triples))
-            progress.update(
-                detail=(
-                    f"{bounded_triples:,} of {expected_triples:,} graph triples "
-                    "are checkpointed. The publisher is temporarily busy; "
-                    "Blackbox will retry and resume automatically."
-                ),
-                current=bounded_triples,
-                expected=expected_triples,
-                percent=round((bounded_triples / expected_triples) * 100, 1),
-                indeterminate=False,
-            )
-        elif public > 0:
-            progress["detail"] = (
-                f"{public:,} verified public threats remain available. The "
-                "publisher is temporarily busy; Blackbox will retry and resume "
-                "automatically."
-            )
-        return progress
-
     # DKG currently reports an SWM catch-up transport failure even while the
     # independently verified VM remains usable. Do not cover that ready graph
     # with a false failure banner; keep unrelated VM and node errors visible.
-    if _is_hidden_swm_catchup_error(error):
+    if error_class != "terminal" and _is_hidden_swm_catchup_error(error):
         if public > 0:
             progress.update(
-                status="ready",
-                phase="verifiable-memory-ready",
-                label="Verified threat graph is ready",
-                detail=f"{public:,} verified public threats are queryable.",
+                status="waiting",
+                phase="partial-verifiable-memory",
+                label="Verified rules are available",
+                detail=f"{public:,} verified public threats are queryable; full graph sync is incomplete.",
                 updated_at=transfer.get("updated_at") or connection.get("updated_at"),
                 current=public,
-                expected=public,
-                percent=100.0,
-                indeterminate=False,
+                expected=None,
+                percent=None,
+                indeterminate=True,
             )
         return progress
 
@@ -630,8 +738,15 @@ def _sync_activity(
         )
         return progress
 
+    # All selected peers failing does not establish a capacity problem. Only
+    # explicit backpressure uses the busy-publisher label; other transient
+    # failures wait for a sync source, while structural failures stay visible.
+    if node_reachable and error_class in {"capacity", "retryable"}:
+        return wait_for_source(capacity=error_class == "capacity")
+
     if (
-        transfer_status == "failed"
+        error_class == "terminal"
+        or transfer_status == "failed"
         or catchup_status in {"failed", "cancelled", "denied"}
         or connection_state in {"connection-error", "sync-envelope-error"}
     ):
@@ -656,12 +771,12 @@ def _sync_activity(
 
     if public > 0 or community > 0:
         progress.update(
-            status="ready",
-            phase="complete",
-            label="Threat graphs are ready",
-            detail=f"{public:,} public and {community:,} community threats are queryable.",
+            status="waiting",
+            phase="partial-verifiable-memory",
+            label="Verified rules are available",
+            detail=f"{public:,} public and {community:,} community threats are queryable; full graph sync is incomplete.",
             updated_at=transfer.get("updated_at") or connection.get("updated_at"),
-            indeterminate=False,
+            indeterminate=True,
         )
     else:
         progress.update(
@@ -676,6 +791,7 @@ def _sync_activity(
 def _blackbox_sync_health(
     *,
     public: int,
+    actionable_public: Any = None,
     sync_interval: Any,
     activity: Dict[str, Any],
     transfer: Dict[str, Any],
@@ -690,6 +806,7 @@ def _blackbox_sync_health(
     use the authoritative cross-process result and its age.
     """
     current_time = float(time.time() if now is None else now)
+    protective_rules = int(public if actionable_public is None else actionable_public)
     interval = max(1.0, float(sync_interval or 1.0))
     overdue_after = max(_BLACKBOX_MIN_OVERDUE_SEC, interval * 2.0)
     activity_status = str(activity.get("status") or "idle").lower()
@@ -704,7 +821,8 @@ def _blackbox_sync_health(
         "out_of_sync": False,
         "state": "ready",
         "reason": "fresh",
-        "protection_available": int(public or 0) > 0,
+        "protection_available": protective_rules > 0,
+        "actionable_public_entries": protective_rules,
         "coverage_percent": percent,
         "ready_percent": _BLACKBOX_READY_PERCENT,
         "overdue_after_seconds": int(overdue_after),
@@ -717,7 +835,7 @@ def _blackbox_sync_health(
     if not node_reachable:
         return {
             **base,
-            "out_of_sync": int(public or 0) <= 0,
+            "out_of_sync": protective_rules <= 0,
             "state": "node-offline",
             "reason": "local-node-offline",
         }
@@ -735,12 +853,12 @@ def _blackbox_sync_health(
             below_threshold = percent is not None and percent < _BLACKBOX_READY_PERCENT
             return {
                 **base,
-                "out_of_sync": bool(below_threshold or int(public or 0) <= 0),
+                "out_of_sync": bool(below_threshold or protective_rules <= 0),
                 "state": "sync-stalled",
                 "reason": "sync-stalled",
             }
         below_threshold = percent is not None and percent < _BLACKBOX_READY_PERCENT
-        no_protection_yet = int(public or 0) <= 0
+        no_protection_yet = protective_rules <= 0
         return {
             **base,
             "out_of_sync": bool(below_threshold or no_protection_yet),
@@ -748,7 +866,7 @@ def _blackbox_sync_health(
             "reason": "sync-progress",
         }
 
-    if int(public or 0) <= 0:
+    if protective_rules <= 0:
         return {
             **base,
             "out_of_sync": True,
@@ -876,6 +994,7 @@ def create_app(*, manage_blackbox: bool = False):
         "last_reconcile": 0.0,
         "lock": threading.Lock(),
     }
+    _ruleset_wake = _RulesetSyncWake()
     _blackbox_stop = threading.Event()
     _blackbox_state: Dict[str, Any] = {
         "process": None,
@@ -1051,40 +1170,59 @@ def create_app(*, manage_blackbox: bool = False):
                 time.sleep(0.1)
 
     def _ruleset_sync_loop() -> None:
-        """Keep verified VM threat rows network-synced while the dashboard runs.
+        """Load settled verified rows promptly and retain periodic network sync.
 
-        ``sync_interval`` is a period, not a post-sync sleep: the sync's own
-        duration is deducted from the wait so a refresh *starts* every
-        ``sync_interval`` seconds even when the sync itself is slow."""
+        Completion wakes refresh the local confirmed VM cache. They do not
+        start another transfer or certify global completion. Periodic canonical
+        command maintains the subscription and reports its recovery status.
+        """
         last_total: Any = None
-        # The installer performs an authoritative catch-up before it starts the
-        # dashboard. Waiting one configured period avoids immediately repeating
-        # that expensive transfer and keeps short-lived test/app probes inert.
+        pending_completion_hint = False
         initial_interval = max(
             _RULESET_MIN_RETRY_SEC,
             float(load_blackbox_config().sync_interval or _RULESET_EMPTY_RETRY_SEC),
         )
-        for _ in range(int(initial_interval * 10)):
-            if _rescan_state["stop"]:
-                return
-            time.sleep(0.1)
+        next_network_sync = time.monotonic() + initial_interval
+        next_local_refresh = time.monotonic() + _RULESET_MIN_RETRY_SEC
         while not _rescan_state["stop"]:
-            wait = _RULESET_EMPTY_RETRY_SEC
+            new_completion_hint = _ruleset_wake.consume()
+            pending_completion_hint = pending_completion_hint or new_completion_hint
+            now = time.monotonic()
+            if not new_completion_hint and now < min(next_local_refresh, next_network_sync):
+                _ruleset_wake.event.wait(
+                    min(_RULESET_CATCHUP_POLL_SEC, min(next_local_refresh, next_network_sync) - now)
+                )
+                continue
             started = time.monotonic()
             try:
                 cfg = load_blackbox_config()
-                result = _network_sync_once(lambda: cfg, ruleset)
+                # A partial verified snapshot can be usable even if the
+                # full graph's foreground recovery failed. Never make the
+                # local cache depend on that larger transfer succeeding.
+                result = _sync_ruleset_once(
+                    lambda: cfg,
+                    DkgClient,
+                    ruleset,
+                    refresh_after_catchup=pending_completion_hint,
+                )
+                # A new foreground sync can start between seeing completion
+                # and this guarded read. Keep the hint across that busy period
+                # instead of letting a fresh positive cache hide the update.
+                pending_completion_hint = (
+                    pending_completion_hint and result.get("refresh_deferred") is True
+                )
+                if time.monotonic() >= next_network_sync:
+                    result = _network_sync_once(lambda: cfg, ruleset)
+                    next_network_sync = max(
+                        time.monotonic() + _RULESET_MIN_RETRY_SEC,
+                        started + max(_RULESET_MIN_RETRY_SEC, float(cfg.sync_interval or _RULESET_EMPTY_RETRY_SEC)),
+                    )
                 counts = result
                 total = int(counts.get("total") or 0)
                 public = int(counts.get("public") or 0)
                 community = int(counts.get("community") or 0)
-                elapsed = time.monotonic() - started
-                wait = max(
-                    _RULESET_MIN_RETRY_SEC,
-                    float(cfg.sync_interval or _RULESET_EMPTY_RETRY_SEC) - elapsed,
-                )
-                if public == 0:
-                    wait = min(_RULESET_EMPTY_RETRY_SEC, wait)
+                wait = _RECONCILE_INTERVAL_SEC if public else _RULESET_EMPTY_RETRY_SEC
+                next_local_refresh = time.monotonic() + wait
                 if total != last_total:
                     logger.info(
                         "blackbox automatic graph sync: %d rule(s), %d public, %d community; next sync in %.0fs",
@@ -1104,8 +1242,15 @@ def create_app(*, manage_blackbox: bool = False):
                     )
             except Exception as exc:  # pragma: no cover - fail open
                 logger.debug("blackbox automatic graph sync: iteration failed: %s", exc)
-                wait = _RULESET_EMPTY_RETRY_SEC
-            for _ in range(int(wait * 10)):
+                next_local_refresh = time.monotonic() + _RULESET_EMPTY_RETRY_SEC
+
+    def _ruleset_catchup_watch_loop() -> None:
+        while not _rescan_state["stop"]:
+            try:
+                _poll_ruleset_sync_wake(load_blackbox_config, DkgClient, _ruleset_wake)
+            except Exception as exc:  # pragma: no cover - fail open
+                logger.debug("blackbox catch-up watcher: %s", exc)
+            for _ in range(int(_RULESET_CATCHUP_POLL_SEC * 10)):
                 if _rescan_state["stop"]:
                     return
                 time.sleep(0.1)
@@ -1119,6 +1264,7 @@ def create_app(*, manage_blackbox: bool = False):
         t.start()
         logger.info("blackbox rescan: background thread started (interval %.1fs)", _RESCAN_INTERVAL_SEC)
         threading.Thread(target=_ruleset_sync_loop, name="blackbox-ruleset-sync", daemon=True).start()
+        threading.Thread(target=_ruleset_catchup_watch_loop, name="blackbox-catchup-watch", daemon=True).start()
         logger.info("blackbox automatic graph sync: background thread started")
         if manage_blackbox:
             blackbox_thread = threading.Thread(
@@ -1133,6 +1279,7 @@ def create_app(*, manage_blackbox: bool = False):
     @app.on_event("shutdown")
     def _stop_rescanner() -> None:
         _rescan_state["stop"] = True
+        _ruleset_wake.event.set()
         _blackbox_stop.set()
         with _blackbox_state["lock"]:
             blackbox_process = _blackbox_state.get("process")
@@ -1430,7 +1577,7 @@ def create_app(*, manage_blackbox: bool = False):
         sightings = 0
         total_rules = sum(int(v or 0) for v in counts.values())
         catchup = g.get("catchup") if isinstance(g.get("catchup"), dict) else {}
-        node_catchup_state = str(catchup.get("status") or "")
+        node_catchup_state = str(catchup.get("jobStatus") or catchup.get("status") or "")
         catchup_result = catchup.get("result") if isinstance(catchup.get("result"), dict) else {}
         catchup_error = catchup.get("error") or catchup_result.get("error") or ""
         public_catchup_state = (
@@ -1493,6 +1640,7 @@ def create_app(*, manage_blackbox: bool = False):
         )
         blackbox_health = _blackbox_sync_health(
             public=public,
+            actionable_public=rs.source_count("public"),
             sync_interval=cfg.sync_interval,
             activity=activity,
             transfer=authoritative_sync,
