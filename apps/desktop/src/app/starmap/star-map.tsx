@@ -21,7 +21,17 @@ import { buildSimulation } from './simulation'
 import { formatDate } from './text'
 import { buildTimeAxis, dateAtReveal, type TimeAxis } from './time-axis'
 import { Timeline } from './timeline'
-import type { FadeBuckets, GraphDetailMode, MemoryCard, Palette, Ring, RingLabelRect, SimLink, SimNode, Viewport } from './types'
+import type {
+  FadeBuckets,
+  GraphDetailMode,
+  MemoryCard,
+  Palette,
+  Ring,
+  RingLabelRect,
+  SimLink,
+  SimNode,
+  Viewport
+} from './types'
 
 // How long a full play-through sweep takes (ms), reveal 0 → 1. Longer = the
 // build-up breathes; the eased middle no longer rushes past in a blink.

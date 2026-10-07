@@ -1107,7 +1107,8 @@ export const en: Translations = {
     importedBadge: 'imported map',
     resetToMine: 'Back to my map',
     detailControl: 'Graph detail',
-    detailHint: 'Overview keeps the map quiet. Explore expands selected neighborhoods. All fits the full graph and labels every visible node that can fit.',
+    detailHint:
+      'Overview keeps the map quiet. Explore expands selected neighborhoods. All fits the full graph and labels every visible node that can fit.',
     detailOverview: 'Overview',
     detailExplore: 'Explore',
     detailAll: 'All',
