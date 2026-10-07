@@ -42,7 +42,15 @@ _DKG_NATIVE_SYNC_SETTINGS = {
     "DKG_VM_RECONCILER_ENABLED": "1",
 }
 
-_DKG_EXACT_BATCH_STREAM_ENV = "DKG_EXPERIMENTAL_EXACT_BATCH_STREAM"
+_DKG_EXACT_BATCH_STREAM_ENV = "DKG_EXACT_BATCH_STREAM_ENABLED"
+_DKG_VM_RECOVERY_PREFETCH_ENV = "DKG_VM_RECOVERY_PREFETCH_ENABLED"
+# Runtime-only switches for the default public native path. DKG treats an
+# absent switch as disabled and ignores one it does not know, so these are safe
+# to pass to an older runtime; an operator's explicit value always wins.
+_DKG_RUNTIME_SWITCH_ENVS = (
+    _DKG_EXACT_BATCH_STREAM_ENV,
+    _DKG_VM_RECOVERY_PREFETCH_ENV,
+)
 
 _DKG_CONFIG_SYNC_SETTINGS = {
     "DKG_SYNC_ON_CONNECT_ENABLED": "syncOnConnectEnabled",
@@ -579,14 +587,13 @@ def _dkg_steady_sync_settings(cfg: BlackboxConfig) -> Dict[str, str]:
 
 
 def _dkg_runtime_sync_settings(cfg: BlackboxConfig) -> Dict[str, str]:
-    """Enable exact-batch streaming only for the default public native path."""
+    """Enable the public-graph recovery runtime only for the default native path."""
     from . import native_sync
 
     settings = _dkg_steady_sync_settings(cfg)
     if native_sync.handles_default_public(cfg):
-        settings[_DKG_EXACT_BATCH_STREAM_ENV] = os.environ.get(
-            _DKG_EXACT_BATCH_STREAM_ENV, "1"
-        )
+        for name in _DKG_RUNTIME_SWITCH_ENVS:
+            settings[name] = os.environ.get(name, "1")
     return settings
 
 
@@ -638,10 +645,10 @@ def _managed_dkg_sync_mode_matches(
         process_env = psutil.Process(pid).environ()
     except (OSError, TypeError, ValueError, psutil.Error):
         return False
-    # DKG treats an absent experimental flag as disabled, so an explicit 0
-    # need not restart a worker that already has streaming disabled.
+    # DKG treats an absent switch as disabled, so an explicit 0 need not
+    # restart a worker that already has that switch off.
     return all(
-        process_env.get(name, "0" if name == _DKG_EXACT_BATCH_STREAM_ENV else None)
+        process_env.get(name, "0" if name in _DKG_RUNTIME_SWITCH_ENVS else None)
         == value
         for name, value in expected.items()
     )

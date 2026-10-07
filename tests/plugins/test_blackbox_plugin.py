@@ -280,7 +280,8 @@ def test_managed_sync_keeps_existing_steady_node_running(monkeypatch, tmp_path):
         "_managed_dkg_sync_mode_matches",
         lambda _cfg, expected: expected == {
             **cli_mod._DKG_NATIVE_SYNC_SETTINGS,
-            "DKG_EXPERIMENTAL_EXACT_BATCH_STREAM": "1",
+            "DKG_EXACT_BATCH_STREAM_ENABLED": "1",
+            "DKG_VM_RECOVERY_PREFETCH_ENABLED": "1",
         },
     )
     monkeypatch.setattr(cli_mod, "_restart_managed_dkg", restart)

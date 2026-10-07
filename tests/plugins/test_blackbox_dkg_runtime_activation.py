@@ -13,7 +13,9 @@ from _blackbox_loader import load_blackbox
 cli = load_blackbox("cli")
 config = load_blackbox("config")
 constants = load_blackbox("constants")
-STREAM_ENV = "DKG_EXPERIMENTAL_EXACT_BATCH_STREAM"
+STREAM_ENV = "DKG_EXACT_BATCH_STREAM_ENABLED"
+PREPARE_ENV = "DKG_VM_RECOVERY_PREFETCH_ENABLED"
+RUNTIME_ENVS = (STREAM_ENV, PREPARE_ENV)
 
 
 @pytest.fixture
@@ -34,7 +36,8 @@ def installation(tmp_path, monkeypatch):
     for name in ("identity.key", "rules-cache.json", "inventory.sqlite3"):
         (home / name).write_bytes(b"existing installation state")
     monkeypatch.setenv("BLACKBOX_HOME", str(tmp_path / "blackbox"))
-    monkeypatch.delenv(STREAM_ENV, raising=False)
+    for name in RUNTIME_ENVS:
+        monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(cli, "_managed_dkg_node_executable", lambda _cfg: None)
     # Safety-profile capture is independently exercised at the real restart
     # boundary in test_blackbox_dkg_runtime_safety.py; this fixture isolates
@@ -45,23 +48,28 @@ def installation(tmp_path, monkeypatch):
     return config.BlackboxConfig(dkg_home=str(home), dkg_bin=str(binary))
 
 
-def test_default_native_start_enables_streaming_without_persisting_it(installation):
+def test_default_native_start_enables_runtime_without_persisting_it(installation):
     cfg = installation
     path = Path(cfg.dkg_home) / "config.json"
     before = path.read_bytes()
 
-    assert cli._dkg_sync_environment(cfg)[STREAM_ENV] == "1"
+    env = cli._dkg_sync_environment(cfg)
+    assert [env[name] for name in RUNTIME_ENVS] == ["1", "1"]
     assert cli._set_persisted_dkg_steady_state(cfg) is False
     assert path.read_bytes() == before
 
 
+@pytest.mark.parametrize("name", RUNTIME_ENVS)
 @pytest.mark.parametrize("value", ["0", "1", ""])
 def test_native_start_and_live_policy_preserve_explicit_flag(
-    installation, monkeypatch, value
+    installation, monkeypatch, name, value
 ):
-    monkeypatch.setenv(STREAM_ENV, value)
-    assert cli._dkg_sync_environment(installation)[STREAM_ENV] == value
-    assert cli._dkg_runtime_sync_settings(installation)[STREAM_ENV] == value
+    monkeypatch.setenv(name, value)
+    other = next(item for item in RUNTIME_ENVS if item != name)
+    assert cli._dkg_sync_environment(installation)[name] == value
+    assert cli._dkg_runtime_sync_settings(installation)[name] == value
+    # One explicit choice never changes the independent switch.
+    assert cli._dkg_runtime_sync_settings(installation)[other] == "1"
 
 
 @pytest.mark.parametrize("selection", [
@@ -69,22 +77,24 @@ def test_native_start_and_live_policy_preserve_explicit_flag(
     {"graph_peer_id": "operator-publisher"},
     {"context_graph_id": next(iter(constants.LEGACY_CONTEXT_GRAPH_IDS))},
 ])
+@pytest.mark.parametrize("name", RUNTIME_ENVS)
 @pytest.mark.parametrize("explicit", [None, "0", "1"])
 def test_custom_and_legacy_paths_keep_existing_environment(
-    installation, monkeypatch, selection, explicit
+    installation, monkeypatch, selection, name, explicit
 ):
     cfg = replace(installation, **selection)
     if explicit is not None:
-        monkeypatch.setenv(STREAM_ENV, explicit)
+        monkeypatch.setenv(name, explicit)
     env = cli._dkg_sync_environment(cfg)
 
-    assert STREAM_ENV not in cli._dkg_runtime_sync_settings(cfg)
+    assert name not in cli._dkg_runtime_sync_settings(cfg)
     if explicit is None:
-        assert STREAM_ENV not in env
+        assert name not in env
     else:
-        assert env[STREAM_ENV] == explicit
+        assert env[name] == explicit
 
 
+@pytest.mark.parametrize("name", RUNTIME_ENVS)
 @pytest.mark.parametrize(("explicit", "live", "expected_restarts"), [
     (None, None, 1),
     (None, "0", 1),
@@ -94,7 +104,7 @@ def test_custom_and_legacy_paths_keep_existing_environment(
     ("0", "1", 1),
 ])
 def test_managed_sync_adopts_runtime_once_then_reuses_worker(
-    installation, monkeypatch, explicit, live, expected_restarts
+    installation, monkeypatch, name, explicit, live, expected_restarts
 ):
     cfg = installation
     home = Path(cfg.dkg_home)
@@ -103,10 +113,12 @@ def test_managed_sync_adopts_runtime_once_then_reuses_worker(
     }
     (home / "daemon.pid").write_text("4242\n", encoding="utf-8")
     if explicit is not None:
-        monkeypatch.setenv(STREAM_ENV, explicit)
+        monkeypatch.setenv(name, explicit)
+    # The worker already runs every other runtime switch; only `name` varies.
     live_env = dict(cli._DKG_NATIVE_SYNC_SETTINGS)
+    live_env.update({other: "1" for other in RUNTIME_ENVS if other != name})
     if live is not None:
-        live_env[STREAM_ENV] = live
+        live_env[name] = live
     restarts = []
     observations = []
 
@@ -144,9 +156,44 @@ def test_managed_sync_adopts_runtime_once_then_reuses_worker(
     assert len(restarts) == expected_restarts
     assert observations == [True, True]
     if restarts:
-        assert restarts[0][STREAM_ENV] == (explicit or "1")
+        assert restarts[0][name] == (explicit or "1")
     assert all(path.read_bytes() == data for path, data in preserved.items())
     state = cli.sync_state.read_for_graph(cfg.context_graph_id)
     assert state["status"] == "partial"
     assert state["graph_complete"] is False
     assert state["complete"] is False
+
+
+def test_worker_started_before_either_switch_restarts_exactly_once(
+    installation, monkeypatch
+):
+    """A node started by an older Blackbox adopts both runtime flags in one restart."""
+    cfg = installation
+    home = Path(cfg.dkg_home)
+    (home / "daemon.pid").write_text("4242\n", encoding="utf-8")
+    live_env = dict(cli._DKG_NATIVE_SYNC_SETTINGS)
+    restarts = []
+
+    class Process:
+        def __init__(self, pid):
+            assert pid == 4242
+
+        def environ(self):
+            return dict(live_env)
+
+    def restart(_cfg):
+        env = cli._dkg_sync_environment(_cfg)
+        restarts.append(env)
+        live_env.clear()
+        live_env.update(env)
+
+    monkeypatch.setattr(cli.psutil, "Process", Process)
+    monkeypatch.setattr(cli, "load_blackbox_config", lambda: cfg)
+    monkeypatch.setattr(cli, "_restart_managed_dkg", restart)
+    monkeypatch.setattr(cli, "_cmd_sync_impl", lambda _args: 0)
+    args = argparse.Namespace(wait=True, timeout=30, require_rules=True)
+
+    for _ in range(3):
+        assert cli._cmd_sync(args) == 0
+    assert len(restarts) == 1
+    assert [restarts[0][name] for name in RUNTIME_ENVS] == ["1", "1"]
