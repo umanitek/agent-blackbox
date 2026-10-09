@@ -18,7 +18,7 @@ from . import attach, audit, community, ruleset
 from .kernel import health
 from .kernel import yaml_files
 from .kernel.config import load_blackbox_config
-from .kernel.dkg_client import DkgClient
+from .kernel.dkg_client import DkgClient, DkgError
 from .attach import cmd_attach, cmd_detach
 from .chat import add_blackbox_chat_args, cmd_chat
 from .community import add_report_parser, print_community_status
@@ -122,9 +122,16 @@ def _cmd_status(args: argparse.Namespace) -> int:
     cfg = load_blackbox_config()
     client = DkgClient(url=cfg.dkg_url, dkg_home=cfg.dkg_home)
     reachable = client.reachable()
-    rs = ruleset.get(cfg)
-    counts = rs.counts()
+    try:
+        rs = ruleset.get(cfg)
+        counts = rs.counts()
+    except DkgError as exc:
+        print(f"Graph protection unavailable: {exc}")
+        return 2
     print("Agent Blackbox")
+    if cfg.detection_backend == "dkg":
+        print("  protection source: live local graph queries (no ruleset export)")
+        print("  counts below:      confirmed graph entities; not a full-coverage proof")
     print(f"  mode:              {cfg.mode}")
     print(f"  block severity:    {cfg.block_severity}")
     print(f"  context graph:     {cfg.context_graph_id}")
@@ -143,7 +150,8 @@ def _cmd_status(args: argparse.Namespace) -> int:
     print(f"  ruleset:           {counts['injection']} injection, "
           f"{counts['escalation']} escalation, {counts['dependency']} dependency, "
           f"{counts['fileaccess']} fileaccess, {counts['skill']} skill, {counts['ioc']} ioc")
-    _print_verified_progress(cfg)
+    if cfg.detection_backend != "dkg":
+        _print_verified_progress(cfg)
     if not any(counts.values()):
         # KI-023: an empty ruleset is a LOUD state, never a quiet day.
         print("  !! UNPROTECTED:    threat ruleset is EMPTY — detection has no rules.")

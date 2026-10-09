@@ -144,7 +144,7 @@ def on_pre_tool_call(
     """
     try:
         cfg = _config()
-        rs = ruleset.get(cfg)
+        rs, graph_evidence = _detection_rules(cfg, tool_name, args)
         # Visibility: log every file-access tool call (best-effort).
         _record_activity(tool_name, args)
         raw = detection.detect_all(tool_name, args, rs, discover=cfg.discover)
@@ -153,6 +153,7 @@ def on_pre_tool_call(
         findings = reporting._flag_worthy(cfg, raw)
         detail = {"tool_name": tool_name, "session_id": session_id, "task_id": task_id,
                   "tool_call_id": tool_call_id, "args": audit.redact(args)}
+        detail["graph_read"] = graph_evidence
         # Build the heavier conversation context only on a finding, so routine
         # tool calls stay lean in the audit log.
         if findings:
@@ -309,12 +310,15 @@ def on_pre_api_request(**kwargs: Any) -> None:
     """
     try:
         cfg = _config()
-        rs = ruleset.get(cfg)
+        # The query selects the bounded curated pattern tier; prompt text
+        # stays in this process and is matched by the existing safe scanner.
+        rs, graph_evidence = _detection_rules(cfg, "", {})
         sources = _untrusted_request_sources(kwargs.get("user_message"), kwargs.get("request_messages"))
         text = "\n".join(part for _, part in sources)   # the LLM reviewer's input
         findings = _injection_by_source(sources, rs, cfg.discover)
         findings = reporting._flag_worthy(cfg, findings)
         detail = {
+            "graph_read": graph_evidence,
             "session_id": kwargs.get("session_id"),
             "task_id": kwargs.get("task_id"),
             "turn_id": kwargs.get("turn_id"),
@@ -334,6 +338,32 @@ def on_pre_api_request(**kwargs: Any) -> None:
             background._spawn_llm_review(cfg, text, detail)
     except Exception as exc:  # pragma: no cover - fail open
         logger.debug("blackbox: pre_api_request failed: %s", exc)
+
+
+def _detection_rules(cfg, tool_name, args):
+    if cfg.detection_backend == "legacy-cache":
+        return ruleset.get(cfg), {"backend": "legacy-cache"}
+    from ..graph_read import read_for_action
+    from .. import killlist
+    if cfg.detection_backend != "dkg":
+        from ..graph_read import DetectionRead
+        read = DetectionRead(ruleset.Ruleset(), code="INVALID_DETECTION_BACKEND")
+    else:
+        read = read_for_action(cfg, tool_name, args)
+    if read.state != "available":
+        # Preserve the existing fail-open host policy, but never record a
+        # failed graph check as a successful clean scan. Local checks still run.
+        try:
+            audit.record(event="protection_degraded", detail=read.evidence())
+        except Exception:
+            pass
+        logger.warning("blackbox: graph protection degraded (%s); local checks remain active", read.code)
+        try:
+            previous = killlist.LastGoodStore().current()
+            read.rules.kill_list = previous.as_cache() if previous is not None else {}
+        except Exception:
+            pass  # local secret/path policies must run even with a corrupt trust store
+    return read.rules, read.evidence()
 
 
 def on_session_start(session_id: str = "", **kwargs: Any) -> None:

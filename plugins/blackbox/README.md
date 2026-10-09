@@ -195,3 +195,9 @@ when reporting the problem:
 ```bash
 blackbox sync --wait --timeout 180
 ```
+
+## Direct local graph queries (opt-in)
+
+See [Direct graph reads](docs/DIRECT_GRAPH_READS.md) for the paired DKG capability,
+configuration, compatibility limits and validation gates. The default remains
+`legacy-cache` until that migration is explicitly selected.

@@ -38,6 +38,16 @@ def cmd_sync(args: argparse.Namespace) -> int:
     """Run a ruleset sync, translating an interactive cancellation cleanly."""
     try:
         cfg = load_blackbox_config()
+        if cfg.detection_backend == "dkg":
+            from ..graph_read import validate_config
+            try:
+                validate_config(cfg)
+                if not native.handles(cfg):
+                    print("Direct graph sync currently requires the default native recovery route.")
+                    return 2
+            except DkgError as exc:
+                print(f"Direct graph configuration unavailable: {exc}")
+                return 2
         if managed_node._uses_managed_dkg(cfg, args):
             return _cmd_sync_with_managed_dkg(cfg, args)
         if getattr(args, "wait", False):

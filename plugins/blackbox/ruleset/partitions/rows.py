@@ -62,7 +62,7 @@ COLUMN_PREDICATES: Dict[str, Tuple[str, ...]] = {
 }
 
 
-def rows_from_triples(source_graph: str, triples: Iterable[Triple]) -> List[Row]:
+def rows_from_triples(source_graph: str, triples: Iterable[Triple], *, max_rows: Optional[int] = None) -> List[Row]:
     """Rebuild the joined query's rows for one partition from its triples.
 
     Branch 1 — a threat typed as one of :data:`THREAT_TYPES` — yields rows with
@@ -79,15 +79,17 @@ def rows_from_triples(source_graph: str, triples: Iterable[Triple]) -> List[Row]
     rows: List[Row] = []
     seen = set()
     for threat in sorted(facts):
-        for row in _threat_rows(source_graph, threat, facts[threat]):
+        for row in _threat_rows(source_graph, threat, facts[threat], max_rows=max_rows):
             key = tuple(sorted(row.items()))
             if key not in seen:
                 seen.add(key)
                 rows.append(row)
+                if max_rows is not None and len(rows) > max_rows:
+                    raise ValueError("selected rules exceed the decision bound")
     return rows
 
 
-def _threat_rows(source_graph: str, threat: str, facts: Dict[str, List[str]]) -> List[Row]:
+def _threat_rows(source_graph: str, threat: str, facts: Dict[str, List[str]], *, max_rows: Optional[int] = None) -> List[Row]:
     types = sorted(facts.get(_RDF_TYPE, []))
     bases: List[Dict[str, Optional[str]]] = [
         {"rdfType": rdf_type, "identifier": None} for rdf_type in types if rdf_type in THREAT_TYPES
@@ -103,6 +105,8 @@ def _threat_rows(source_graph: str, threat: str, facts: Dict[str, List[str]]) ->
             row: Dict[str, Optional[str]] = {"sourceGraph": source_graph, "threat": threat, **base}
             row.update({column: value for (column, _values), value in zip(columns, combination)})
             rows.append({key: value for key, value in row.items() if value is not None})
+            if max_rows is not None and len(rows) > max_rows:
+                raise ValueError("multi-valued rule exceeds the decision bound")
     return rows
 
 

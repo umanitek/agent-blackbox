@@ -862,7 +862,7 @@ def create_app(*, manage_blackbox: bool = False):
     from ..sync import state as sync_state
     from ..kernel import constants
     from ..kernel.config import load_blackbox_config
-    from ..kernel.dkg_client import DkgClient, extract_binding
+    from ..kernel.dkg_client import DkgClient, DkgError, extract_binding
 
     app = FastAPI(title="Agent Blackbox", docs_url=None, redoc_url=None)
 
@@ -1447,8 +1447,11 @@ def create_app(*, manage_blackbox: bool = False):
     @app.get("/api/graph-status")
     def graph_status() -> Any:
         cfg = load_blackbox_config()
-        rs = ruleset.peek(cfg)
-        counts = rs.counts()
+        try:
+            rs = ruleset.peek(cfg)
+            counts = rs.counts()
+        except DkgError as exc:
+            return JSONResponse(status_code=503, content={"state": "unavailable", "code": getattr(exc, "code", "QUERY_UNAVAILABLE")})
         # Community + sightings come from the synced ruleset cache, NOT the
         # shared-working-memory view, which does O(slice) trust work and times
         # out (HTTP 500) on a large pool. Public uses the cache too: current VM
@@ -1551,7 +1554,9 @@ def create_app(*, manage_blackbox: bool = False):
             "dkg_bin": cfg.dkg_bin,
             "node_reachable": g["node_reachable"],
             "sync_interval": cfg.sync_interval,
-            "last_sync": rs.synced_at or None,
+            "last_sync": None if cfg.detection_backend == "dkg" else rs.synced_at or None,
+            "detection_backend": cfg.detection_backend,
+            "count_kind": "confirmed-entities" if cfg.detection_backend == "dkg" else "compiled-rules",
             # moves on a pulse (not a VM sync): the page reloads the Community tab on it (FIX-0038)
             "community_version": getattr(rs, "community_fingerprint", "") or None,
             "ruleset": counts,
@@ -1902,6 +1907,13 @@ def create_app(*, manage_blackbox: bool = False):
 
         # The ruleset merges complete public VM threats with community SWM rows
         # and retains a compatibility join for any legacy CurationProof assets.
+        if cfg.detection_backend == "dkg" and tier == "public":
+            from ..graph_read.view import page
+            from ..graph_read.client import GraphReadUnavailable
+            try:
+                return page(cfg, limit=limit, offset=offset, q=q, category=category, ecosystem=ecosystem)
+            except GraphReadUnavailable as exc:
+                return JSONResponse(status_code=503, content={"state": "unavailable", "code": exc.code})
         if tier in {"public", "community"}:
             rs = ruleset.peek(cfg)
             # One shaping function: category from the identifier, community
@@ -1996,6 +2008,15 @@ def create_app(*, manage_blackbox: bool = False):
         ``tier`` ∈ public | community | local. Fail-open."""
         tier, view = _tier_view(tier, default="public")
         cfg = load_blackbox_config()
+        if cfg.detection_backend == "dkg" and tier == "public":
+            from ..graph_read.view import lookup
+            try:
+                rule = lookup(cfg, identifier)
+                return {"identifier": identifier, "tier": tier, "found": rule is not None,
+                        "coverage": "local-confirmed-subset",
+                        **{k: v for k, v in (rule or {}).items() if k != "pattern"}}
+            except DkgError as exc:
+                return JSONResponse(status_code=503, content={"state": "unavailable", "code": getattr(exc, "code", "QUERY_UNAVAILABLE")})
         if tier == "community":
             # Serve straight from the aggregated community store (sanitized).
             rs = ruleset.peek(cfg)

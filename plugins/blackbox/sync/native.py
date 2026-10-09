@@ -94,6 +94,7 @@ class _Observation:
             graph_peer_id=cfg.graph_peer_id,
             phase=phase,
             public_entries=self.verified_rules,
+            count_kind="sampled-usable-rules" if cfg.detection_backend == "dkg" else "compiled-rules",
             community_entries=0,
             detection_ready=self.verified_rules > 0,
             graph_complete=False,
@@ -132,6 +133,11 @@ def _subscribe(client: DkgClient, cfg: BlackboxConfig, seen: _Observation) -> No
 def _compile_what_the_node_holds(client: DkgClient, cfg: BlackboxConfig, seen: _Observation) -> None:
     """Compile the verified rules the node already holds into the ruleset."""
     try:
+        if cfg.detection_backend == "dkg":
+            from ..graph_read.view import ready_sample
+            seen.verified_rules = ready_sample(cfg)
+            seen.error = ""
+            return
         compiled = ruleset.refresh(cfg, client, wait_for_lock=False)
     except ruleset.RulesetRefreshLockUnavailable:
         seen.error = "another process is compiling the rules; waiting for it"
@@ -171,7 +177,7 @@ def run(client: DkgClient, cfg: BlackboxConfig, args: argparse.Namespace) -> int
             if seen.verified_rules > 0:
                 seen.record("partial", "verified-rules-available", cfg)
                 print(
-                    f"Loaded {seen.verified_rules:,} verified detection rules. The node keeps "
+                    f"{'Validated a sample of' if cfg.detection_backend == 'dkg' else 'Loaded'} {seen.verified_rules:,} verified detection rules. The node keeps "
                     "fetching the rest of the graph in the background; `blackbox status` shows "
                     "the count as it grows."
                 )

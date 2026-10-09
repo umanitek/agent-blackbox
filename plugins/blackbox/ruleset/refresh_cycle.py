@@ -105,6 +105,11 @@ def refresh(
     generation started before that barrier.
     """
     config = config or load_blackbox_config()
+    if config.detection_backend == "dkg":
+        from ..graph_read.view import GraphView
+        result = GraphView(config)
+        result.counts()  # live capability/readiness check; no rule extraction
+        return result
     context_graph_id = config.context_graph_id
     initial_stamp = _cache_file_stamp()
     with locks._ruleset_refresh_lock(blocking=wait_for_lock) as acquired:
@@ -134,6 +139,8 @@ def _refresh_unlocked(
 ) -> compiler.Ruleset:
     """Refresh while the caller holds :func:`_ruleset_refresh_lock`."""
     config = config or load_blackbox_config()
+    if config.detection_backend == "dkg":
+        return refresh(config)  # internal/background callers also cannot export
     context_graph_id = config.context_graph_id
     client = client or DkgClient(url=config.dkg_url, dkg_home=config.dkg_home)
     tiers = ((constants.VIEW_VERIFIABLE_MEMORY, "public"),)
@@ -348,6 +355,9 @@ def get(config: Optional[BlackboxConfig] = None) -> compiler.Ruleset:
     """
     global _refreshing
     config = config or load_blackbox_config()
+    if config.detection_backend == "dkg":
+        from ..graph_read.view import GraphView
+        return GraphView(config)
     cached = _latest_cached_ruleset(config.context_graph_id)
     if cached is None:
         disk = disk_cache._read_cache()
@@ -388,6 +398,9 @@ def peek(config: Optional[BlackboxConfig] = None) -> compiler.Ruleset:
     transfer cannot accidentally fan out additional Blazegraph queries.
     """
     config = config or load_blackbox_config()
+    if config.detection_backend == "dkg":
+        from ..graph_read.view import GraphView
+        return GraphView(config)
     cached = _latest_cached_ruleset(config.context_graph_id)
     if cached is None:
         disk = disk_cache._read_cache()

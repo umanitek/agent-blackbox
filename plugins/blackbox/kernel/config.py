@@ -106,6 +106,9 @@ class BlackboxConfig:
     """Resolved Blackbox settings for the current process."""
 
     mode: str = "audit"
+    #: Opt in to "dkg" after upgrading the local query capability.
+    #: Existing and older-daemon installs retain their explicitly named legacy mode.
+    detection_backend: str = "legacy-cache"
     context_graph_id: str = constants.DEFAULT_CONTEXT_GRAPH_ID
     graph_peer_id: str = constants.DEFAULT_GRAPH_PEER_ID
     dkg_url: str = constants.DEFAULT_DKG_URL
@@ -348,6 +351,7 @@ def load_blackbox_config() -> BlackboxConfig:
         graph_peer_id = constants.DEFAULT_GRAPH_PEER_ID
     return BlackboxConfig(
         mode=mode,
+        detection_backend=str(entry.get("detection_backend", "legacy-cache")).strip().lower(),
         context_graph_id=context_graph_id,
         graph_peer_id=graph_peer_id,
         dkg_url=dkg_url,
