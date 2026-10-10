@@ -27,6 +27,7 @@ from .dashboard import cmd_dashboard
 from .detection import cmd_setup_llm
 from .overrides import add_rules_parser
 from .sync import cmd_sync
+from .semantic import add_semantic_parser
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +55,7 @@ def setup_cli(parser: argparse.ArgumentParser) -> None:
     chat.set_defaults(func=cmd_chat)
 
     sub.add_parser("status", help="Show config, node reachability, ruleset + findings counts").set_defaults(func=_cmd_status)
+    add_semantic_parser(sub)
     add_rules_parser(sub)   # R7b: local overrides (unblock / reblock / list)
     sync = sub.add_parser("sync", help="Force a ruleset refresh from the DKG node")
     sync.add_argument(
@@ -95,9 +97,7 @@ def setup_cli(parser: argparse.ArgumentParser) -> None:
     dash.add_argument("--port", type=int, help="Override dashboard port")
     dash.set_defaults(func=cmd_dashboard)
 
-    setup_llm = sub.add_parser(
-        "setup-llm", help="Configure the optional LLM prompt-injection reviewer (provider/model/key)"
-    )
+    setup_llm = sub.add_parser("setup-llm", help="Configure the optional LLM reviewer (provider/model/key)")
     setup_llm.add_argument("--provider", choices=["openai", "anthropic"], help="Skip the prompt: set provider")
     setup_llm.add_argument("--model", help="Skip the prompt: set model id (default: provider's recommended)")
     setup_llm.add_argument(

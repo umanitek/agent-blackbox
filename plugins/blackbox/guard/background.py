@@ -159,3 +159,17 @@ def _spawn_auto_attach(cfg: BlackboxConfig) -> None:
         threading.Thread(target=_run, name="blackbox-auto-attach", daemon=True).start()
     except Exception:  # pragma: no cover - fail open
         pass
+
+
+def review_request(cfg, sources, text, detail):
+    from . import semantic_review
+    semantic_review.schedule(cfg, sources, detail)
+    if cfg.llm_ready and not getattr(getattr(cfg, "semantic", None), "enabled", False):
+        _spawn_llm_review(cfg, text, detail)
+
+
+def review_tool(cfg, tool, args, detail):
+    import json
+    from . import semantic_review
+    if getattr(getattr(cfg, "semantic", None), "enabled", False):
+        semantic_review.schedule(cfg, [("tool-call:" + tool, json.dumps(audit.redact(args), default=str))], detail)
