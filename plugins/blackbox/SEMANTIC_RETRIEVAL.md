@@ -6,7 +6,8 @@ even when the deterministic detectors find no regex match. It does not replace
 exact IOC, package, secret, or local file protection.
 
 This is opt-in. Similarity never blocks an action. The model must cite an exact
-quote from the input and an exact quote from a retrieved entity; positive
+quote from the input and an exact quote from a retrieved entity (allowing only
+whitespace normalization and retaining the original source substring); positive
 advisories additionally require a valid entity ID and confidence of at least
 0.9. Those checks establish traceability, not proof that the model is correct.
 Advisories use the existing `source="llm"`, `confirmed=false`, never-share path.
@@ -68,7 +69,9 @@ scan completed, never full network coverage.
   then builds evidence. Description-only entities do not require a regex.
 - The reviewer sees the input origin, input text, and candidate evidence. Vector
   scores stay outside its prompt: retrieval similarity is not threat confidence.
-  Exact quoted evidence and entity IDs are checked in code before an advisory.
+  The reviewer must classify the whole input as active behavior, analysis/safety,
+  or ordinary content. Only active behavior can yield an advisory. Quoted evidence
+  and entity IDs are checked in code before an advisory.
 - Review runs in a profile-bound background thread, with at most one batch per
   profile and two total. Busy, oversized, timed-out, malformed, absent-index, and
   authority-unavailable paths are recorded distinctly; they are not clean
