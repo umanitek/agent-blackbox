@@ -1069,3 +1069,25 @@ def test_agent_cards_distinguish_attached_from_active(monkeypatch):
     assert by_framework["hermes"]["blackbox_host"] is True
     assert by_framework["openclaw"]["is_active"] is False
     assert by_framework["openclaw"]["blackbox_host"] is False
+
+
+@pytest.mark.parametrize("started,failed,expected", [
+    (200, 100, True), (100, 200, False), (100, 100, False),
+    (None, 100, False), (200, None, False), (float("nan"), 100, False),
+    ("2026-10-10T10:00:01Z", 1791626400, True),
+    (1791626401000, 1791626400, True),
+])
+def test_catchup_only_supersedes_a_provably_older_failure(started, failed, expected):
+    from plugins.blackbox.dashboard.sync_timing import catchup_supersedes_failure
+
+    assert catchup_supersedes_failure({"status": "running", "startedAt": started},
+                                     {"status": "failed", "updated_at": failed}) is expected
+
+
+def test_new_retryable_failure_is_not_hidden_by_old_running_job():
+    activity = server._sync_activity(public=0, community=0, node_reachable=True,
+        catchup={"status": "running", "startedAt": 100.0}, connection={"state": "syncing"},
+        transfer={"status": "failed", "updated_at": 200.0,
+                  "error": 'POST /api/shared-memory/catchup {"retryable":true,"errorCode":"DURABLE_CATCHUP_ALL_PEERS_FAILED"}'})
+    assert activity["status"] == "waiting"
+    assert activity["phase"] == "waiting-for-publisher-capacity"
