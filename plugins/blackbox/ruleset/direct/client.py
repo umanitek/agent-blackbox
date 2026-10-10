@@ -54,7 +54,7 @@ class LocalGraphClient(DkgClient):
 
     def _request(self, method, path, body=None, timeout=None):
         if not ((method == "GET" and path in {"/api/status", "/api/info", "/api/context-graphs", "/api/query/bounded"})
-                or (method == "POST" and path == "/api/query/bounded")):
+                or (method == "POST" and path in {"/api/query/bounded", "/api/entities/search"})):
             raise GraphReadUnavailable("LOCAL_READ_ONLY_REQUIRED")
         remaining = self.deadline - time.monotonic()
         if remaining <= 0:
@@ -64,7 +64,7 @@ class LocalGraphClient(DkgClient):
         if self.token:
             headers["Authorization"] = f"Bearer {self.token}"
             headers.update(signed_request_headers(self.token, method, path, data))
-        from .transport import request
+        from ...kernel.local_http import request
         try:
             status, raw = request(self.url, method, path, data, headers,
                                   deadline=min(self.deadline, time.monotonic() + (timeout or remaining)),

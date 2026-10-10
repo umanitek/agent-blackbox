@@ -145,7 +145,6 @@ def on_pre_tool_call(
     try:
         cfg = _config()
         rs, graph_evidence = _detection_rules(cfg, tool_name, args)
-        # Visibility: log every file-access tool call (best-effort).
         _record_activity(tool_name, args)
         raw = detection.detect_all(tool_name, args, rs, discover=cfg.discover)
         raw += detection.detect_custom_fileaccess(tool_name, args, cfg.protected_paths)
@@ -165,6 +164,7 @@ def on_pre_tool_call(
             # R10's "a revoked threat blocked N actions here" counts these.
             detail["decision"] = _decision(cfg, findings, blocking)
         reporting._report_and_audit(cfg, "pre_tool_call", findings, detail)
+        background.review_tool(cfg, tool_name, args, detail)
         # OSV auto-discovery runs off the blocking path so a network lookup
         # never delays or breaks the tool call.
         if cfg.discover and cfg.osv_lookup:
@@ -333,8 +333,7 @@ def on_pre_api_request(**kwargs: Any) -> None:
             detail["context"] = {"turns": turns}
         reporting._report_and_audit(cfg, "pre_api_request", findings, detail)
         # Optional LLM second opinion, off-thread so it never delays the request.
-        if cfg.llm_ready:
-            background._spawn_llm_review(cfg, text, detail)
+        background.review_request(cfg, sources, text, detail)
     except Exception as exc:  # pragma: no cover - fail open
         logger.debug("blackbox: pre_api_request failed: %s", exc)
 

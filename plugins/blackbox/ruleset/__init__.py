@@ -40,7 +40,11 @@ from .direct import DetectionRead, read_for_action, validate_config
 from .direct.client import GraphReadUnavailable
 from .direct.view import ready_sample, page as graph_page, lookup as graph_lookup
 
+from .direct.semantic import semantic_candidates, INDEX_SPEC as semantic_index_spec
+from .direct.client import local_url as local_graph_url
+
 __all__ = [
+    "semantic_candidates", "semantic_index_spec", "local_graph_url",
     "DetectionRead", "read_for_action", "validate_config", "GraphReadUnavailable",
     "ready_sample", "graph_page", "graph_lookup",
     "DownloadTotals",
