@@ -11,6 +11,13 @@ import urllib.parse
 from ...kernel.dkg_client import DkgClient, DkgError, signed_request_headers
 
 MAX_RESPONSE_BYTES = 1024 * 1024 + 4096
+# Preserve the public failure contract; never echo arbitrary server messages.
+READ_ERROR_CODES = frozenset({
+    "QUERY_RESULT_TOO_LARGE", "QUERY_DEADLINE_EXCEEDED", "QUERY_ACCESS_DENIED",
+    "ENTITY_SEARCH_DISABLED", "ENTITY_INDEX_NOT_FOUND", "ENTITY_SEARCH_BUSY",
+    "ENTITY_EMBEDDING_MODEL_CHANGED", "ENTITY_EMBEDDING_UNAVAILABLE",
+    "ENTITY_EMBEDDING_INVALID", "ENTITY_SEARCH_UNAVAILABLE", "ENTITY_INVALID_REQUEST",
+})
 
 
 class GraphReadUnavailable(DkgError):
@@ -77,7 +84,7 @@ class LocalGraphClient(DkgClient):
                 code = "DKG_UPGRADE_REQUIRED" if status == 404 else "QUERY_UNAVAILABLE"
                 try:
                     error = json.loads(raw)
-                    if isinstance(error, dict) and error.get("code") in {"QUERY_RESULT_TOO_LARGE", "QUERY_DEADLINE_EXCEEDED", "QUERY_ACCESS_DENIED"}:
+                    if isinstance(error, dict) and error.get("code") in READ_ERROR_CODES:
                         code = error["code"]
                 except ValueError:
                     pass

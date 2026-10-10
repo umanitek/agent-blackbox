@@ -156,3 +156,30 @@ def test_hook_schedules_semantic_even_without_deterministic_findings(monkeypatch
         {'role':'tool','content':TEXT}])
     assert any(TEXT in text for _,text in captured)
     assert not any('trusted rules' in text for _,text in captured)
+
+
+@pytest.mark.parametrize("status,code", [(404, "ENTITY_INDEX_NOT_FOUND"),
+    (503, "ENTITY_SEARCH_DISABLED"), (429, "ENTITY_SEARCH_BUSY"),
+    (503, "ENTITY_EMBEDDING_MODEL_CHANGED"), (403, "QUERY_ACCESS_DENIED")])
+def test_semantic_http_failures_retain_actionable_codes(tmp_path, status, code):
+    import json
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from threading import Thread
+    client_module = load_blackbox('ruleset.direct.client')
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args): pass
+        def do_POST(self):
+            self.rfile.read(int(self.headers['Content-Length']))
+            raw = json.dumps({'code': code}).encode()
+            self.send_response(status)
+            self.send_header('Content-Length', str(len(raw)))
+            self.end_headers(); self.wfile.write(raw)
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    thread = Thread(target=server.serve_forever, daemon=True); thread.start()
+    cfg, _ = fixture()
+    cfg = replace(cfg, dkg_url=f'http://127.0.0.1:{server.server_port}', dkg_home=str(tmp_path))
+    try:
+        result = semantic.assess(cfg, TEXT, 'in-tool-output')
+        assert result.state == 'unavailable' and result.code == code
+    finally:
+        server.shutdown(); server.server_close(); thread.join(1)
