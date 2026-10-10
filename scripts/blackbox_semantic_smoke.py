@@ -71,9 +71,9 @@ def seed():
 def run(args):
     dkg = Path(args.dkg_root).resolve()
     report = {'started_at': datetime.now(timezone.utc).isoformat(), 'scope': 'isolated route integration; no chain, peer sync, or interactive agent', 'cases': [],
-              'dkg_commit': subprocess.check_output(['git','rev-parse','HEAD'],cwd=dkg,text=True).strip(),
-              'consumer_commit': subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip(),
-              'source_changes_uncommitted': {key: bool(subprocess.check_output(['git','status','--porcelain','--untracked-files=normal'],cwd=path,text=True).strip()) for key,path in [('dkg',dkg),('consumer',ROOT)]}}
+              'dkg_commit': subprocess.check_output(['git','rev-parse','HEAD'],cwd=dkg,text=True,encoding='utf-8',errors='replace').strip(),
+              'consumer_commit': subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True,encoding='utf-8',errors='replace').strip(),
+              'source_changes_uncommitted': {key: bool(subprocess.check_output(['git','status','--porcelain','--untracked-files=normal'],cwd=path,text=True,encoding='utf-8',errors='replace').strip()) for key,path in [('dkg',dkg),('consumer',ROOT)]}}
     with urllib.request.urlopen('http://127.0.0.1:11434/api/tags',timeout=5) as r:
         tags=json.load(r)['models']
     names={m['name']:m['digest'] for m in tags}
