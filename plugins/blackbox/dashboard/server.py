@@ -400,6 +400,8 @@ def _sync_activity(
     connection: Dict[str, Any],
     transfer: Dict[str, Any],
 ) -> Dict[str, Any]:
+    if node_reachable and sync_timing.catchup_supersedes_failure(catchup, transfer):
+        transfer = {}  # Preserve the historical record; omit only its superseded UI error.
     catchup_status = str(catchup.get("status") or "").lower()
     connection_state = str(connection.get("state") or "").lower()
     transfer_status = str(transfer.get("status") or "").lower()
@@ -525,10 +527,8 @@ def _sync_activity(
     )
 
     # The source-pinned transfer is the authoritative result for this graph.
-    # A generic catch-up job may still retain an older failure after that
-    # transfer completed successfully; do not turn verified local data into a
-    # false dashboard error. A genuinely new queued/running job remains
-    # visible below.
+    # Ignore an older generic-job failure after successful verified transfer.
+    # A new queued/running job remains visible below.
     if transfer_status == "done" and catchup_status not in {"queued", "running"}:
         progress.update(
             status="ready",
