@@ -89,16 +89,16 @@ def run(args):
         fixture=directory/'input.json';portfile=directory/'port';logfile=directory/'fixture.log'
         fixture.write_text(json.dumps({'contextGraphId':CG,'quads':seed(),'embedding':{
             'provider':'ollama','model':'nomic-embed-text','digest':names['nomic-embed-text:latest'],'dimensions':768,
-            'queryPrefix':'search_query: ','documentPrefix':'search_document: '}}))
-        with logfile.open('w') as log:
+            'queryPrefix':'search_query: ','documentPrefix':'search_document: '}}), encoding='utf-8')
+        with logfile.open('w', encoding='utf-8') as log:
             process=subprocess.Popen([shutil.which('node'),str(dkg/'node_modules/tsx/dist/cli.mjs'),
                 str(dkg/'packages/cli/test/support/entity-http-fixture.mts'),str(fixture),str(data),str(portfile)],cwd=dkg,stdout=log,stderr=log)
             try:
                 until=time.monotonic()+30
                 while not portfile.exists() and process.poll() is None and time.monotonic()<until:
                     time.sleep(.1)
-                if not portfile.exists():raise RuntimeError('fixture did not start: '+logfile.read_text()[-3000:])
-                url='http://127.0.0.1:'+portfile.read_text().strip()
+                if not portfile.exists():raise RuntimeError('fixture did not start: '+logfile.read_text(encoding='utf-8')[-3000:])
+                url='http://127.0.0.1:'+portfile.read_text(encoding='utf-8').strip()
                 start=time.perf_counter()
                 while True:
                     indexed=post(url,'/api/entities/index',{'contextGraphId':CG,**reader.INDEX_SPEC})
@@ -127,7 +127,7 @@ def run(args):
                         case.update(state='unavailable',code=getattr(exc,'code',type(exc).__name__),
                                     recall_at_5=False,classification_match=False)
                     report['cases'].append(case)
-                    Path(args.report).write_text(json.dumps(report,indent=2)+'\n')
+                    Path(args.report).write_text(json.dumps(report,indent=2)+'\n', encoding='utf-8')
                     print(json.dumps({k:v for k,v in case.items() if k not in {'ranking','verdict','raw_local_verdict'}}),flush=True)
                 report['rules_export_absent']=not list(home.rglob('ruleset*.json'))
             finally:
@@ -138,7 +138,7 @@ def run(args):
                 report['fixture_stopped']=process.poll() is not None
     report['finished_at']=datetime.now(timezone.utc).isoformat()
     report['passed']=bool(report['cases']) and all(c['recall_at_5'] and c['classification_match'] for c in report['cases']) and report['rules_export_absent']
-    Path(args.report).write_text(json.dumps(report,indent=2)+'\n')
+    Path(args.report).write_text(json.dumps(report,indent=2)+'\n', encoding='utf-8')
     return 0 if report['passed'] else 1
 
 
