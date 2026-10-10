@@ -3,7 +3,7 @@
   "files": {
     "dashboard/server.py": 2152,
     "kernel/dkg_client.py": 641,
-    "sync/command.py": 1405
+    "sync/command.py": 1404
   },
   "functions": {
     "attach/hermes_homes.py::attach_hermes": 58,
@@ -42,7 +42,7 @@
     "ruleset/locks.py::_ruleset_refresh_lock": 75,
     "ruleset/refresh_cycle.py::_refresh_unlocked": 62,
     "ruleset/row_adapters.py::_row_to_rule": 120,
-    "sync/command.py::_catchup_authoritative_vm": 468,
+    "sync/command.py::_catchup_authoritative_vm": 467,
     "sync/command.py::_cmd_sync_impl": 624,
     "sync/managed_node.py::_managed_dkg_node_executable": 40,
     "sync/managed_node.py::_restart_managed_dkg": 82,
