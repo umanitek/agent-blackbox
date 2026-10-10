@@ -37,7 +37,9 @@ def apply_curator_tier(rs: compiler.Ruleset, client: DkgClient, config: Blackbox
         view = community.read_curator_view(client, config)
     except Exception as exc:  # pragma: no cover - fail open (an outer boundary)
         logger.warning("blackbox: curator revocations not applied this refresh: %s", exc)
+        rs.curator_read_unavailable = True
         return 0
+    rs.curator_read_unavailable = bool(view.unavailable or view.lookup_incomplete or view.manifest_conflict)
     _apply_kill_list(rs, client, config, view)
     rs.curator_manifest_state = ({"stale": "STALE since ", "pending": "PENDING until "}.get(view.manifest_state, "")
                                  + view.manifest_state_day) if view.manifest_state else ""

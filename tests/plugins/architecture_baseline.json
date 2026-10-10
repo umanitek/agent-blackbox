@@ -1,10 +1,9 @@
 {
   "_comment": "Baselined when the structure guard landed (2026-10-01). Numbers may only shrink: lower them in the commit that shrinks the code; delete an entry once it is under the alarm. Never raise one.",
   "files": {
-    "dashboard/server.py": 2155,
-    "kernel/config.py": 428,
+    "dashboard/server.py": 2152,
     "kernel/dkg_client.py": 641,
-    "sync/command.py": 1405
+    "sync/command.py": 1404
   },
   "functions": {
     "attach/hermes_homes.py::attach_hermes": 58,
@@ -22,12 +21,12 @@
     "dashboard/server.py::_profile_activity_state": 61,
     "dashboard/server.py::_sync_activity": 271,
     "dashboard/server.py::_sync_ruleset_once": 66,
-    "dashboard/server.py::create_app": 1289,
+    "dashboard/server.py::create_app": 1286,
     "dashboard/server.py::create_app._blackbox_runtime_loop": 87,
     "dashboard/server.py::create_app._ruleset_sync_loop": 51,
     "dashboard/server.py::create_app.agents": 166,
     "dashboard/server.py::create_app.graph": 97,
-    "dashboard/server.py::create_app.graph_status": 138,
+    "dashboard/server.py::create_app.graph_status": 135,
     "dashboard/server.py::create_app.threat": 120,
     "detection/detectors.py::detect_dependency": 53,
     "detection/detectors.py::detect_escalation": 58,
@@ -41,9 +40,9 @@
     "ruleset/compiler.py::build_from_rows": 75,
     "ruleset/fetching.py::fetch_tier": 78,
     "ruleset/locks.py::_ruleset_refresh_lock": 75,
-    "ruleset/refresh_cycle.py::_refresh_unlocked": 69,
+    "ruleset/refresh_cycle.py::_refresh_unlocked": 62,
     "ruleset/row_adapters.py::_row_to_rule": 120,
-    "sync/command.py::_catchup_authoritative_vm": 468,
+    "sync/command.py::_catchup_authoritative_vm": 467,
     "sync/command.py::_cmd_sync_impl": 624,
     "sync/managed_node.py::_managed_dkg_node_executable": 40,
     "sync/managed_node.py::_restart_managed_dkg": 82,

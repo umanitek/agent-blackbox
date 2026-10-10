@@ -256,15 +256,24 @@ def _canonical_ip(raw: str) -> str:
         candidate = candidate[1:].split("]", 1)[0]
     candidate = candidate.split("%", 1)[0]
     try:
-        return ipaddress.IPv6Address(candidate).compressed
+        return _compressed_ipv6(ipaddress.IPv6Address(candidate))
     except ValueError:
         return raw
 
 
+def _compressed_ipv6(address: ipaddress.IPv6Address) -> str:
+    # Python versions differ on mapped-address display. Keep the shared hex
+    # identifier stable instead of accepting a dotted-decimal spelling.
+    mapped = address.ipv4_mapped
+    if mapped is not None:
+        return f"::ffff:{int(mapped) >> 16:x}:{int(mapped) & 0xffff:x}"
+    return address.compressed
+
+
 def _is_canonical_ipv6(value: str) -> bool:
-    """True only for the exact compressed lower-case spelling ipaddress emits."""
+    """True only for the shared compressed lower-case spelling."""
     try:
-        return ipaddress.IPv6Address(value).compressed == value
+        return _compressed_ipv6(ipaddress.IPv6Address(value)) == value
     except ValueError:
         return False
 

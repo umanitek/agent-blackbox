@@ -30,7 +30,7 @@ from typing import Any, Dict, List, Set, Tuple
 
 from ..sync import state as sync_state
 from ..sync import read_durable_progress
-from . import community_routes, lifecycle, sync_meter, sync_timing
+from . import community_routes, lifecycle, sync_meter, sync_timing, direct_reads
 from .network_sync import network_sync_argv as _network_sync_argv
 from .node_probe import node_sync_probe
 from .sync_labels import _community_progress, _sync_label, not_subscribed_activity
@@ -400,6 +400,8 @@ def _sync_activity(
     connection: Dict[str, Any],
     transfer: Dict[str, Any],
 ) -> Dict[str, Any]:
+    if node_reachable and sync_timing.catchup_supersedes_failure(catchup, transfer):
+        transfer = {}  # Preserve the historical record; omit only its superseded UI error.
     catchup_status = str(catchup.get("status") or "").lower()
     connection_state = str(connection.get("state") or "").lower()
     transfer_status = str(transfer.get("status") or "").lower()
@@ -525,10 +527,8 @@ def _sync_activity(
     )
 
     # The source-pinned transfer is the authoritative result for this graph.
-    # A generic catch-up job may still retain an older failure after that
-    # transfer completed successfully; do not turn verified local data into a
-    # false dashboard error. A genuinely new queued/running job remains
-    # visible below.
+    # Ignore an older generic-job failure after successful verified transfer.
+    # A new queued/running job remains visible below.
     if transfer_status == "done" and catchup_status not in {"queued", "running"}:
         progress.update(
             status="ready",
@@ -862,7 +862,7 @@ def create_app(*, manage_blackbox: bool = False):
     from ..sync import state as sync_state
     from ..kernel import constants
     from ..kernel.config import load_blackbox_config
-    from ..kernel.dkg_client import DkgClient, extract_binding
+    from ..kernel.dkg_client import DkgClient, DkgError, extract_binding
 
     app = FastAPI(title="Agent Blackbox", docs_url=None, redoc_url=None)
 
@@ -1447,13 +1447,10 @@ def create_app(*, manage_blackbox: bool = False):
     @app.get("/api/graph-status")
     def graph_status() -> Any:
         cfg = load_blackbox_config()
-        rs = ruleset.peek(cfg)
-        counts = rs.counts()
-        # Community + sightings come from the synced ruleset cache, NOT the
-        # shared-working-memory view, which does O(slice) trust work and times
-        # out (HTTP 500) on a large pool. Public uses the cache too: current VM
-        # rows are complete threats, and ruleset.refresh also promotes any
-        # still-unmigrated legacy proof rows.
+        result = direct_reads.status(cfg)
+        if isinstance(result, JSONResponse):
+            return result
+        rs, counts = result
         public = _graph_source_count(rs, "public")
         community = len(getattr(rs, "community", {}) or {})
 
@@ -1551,7 +1548,7 @@ def create_app(*, manage_blackbox: bool = False):
             "dkg_bin": cfg.dkg_bin,
             "node_reachable": g["node_reachable"],
             "sync_interval": cfg.sync_interval,
-            "last_sync": rs.synced_at or None,
+            **direct_reads.metadata(cfg, rs),
             # moves on a pulse (not a VM sync): the page reloads the Community tab on it (FIX-0038)
             "community_version": getattr(rs, "community_fingerprint", "") or None,
             "ruleset": counts,
@@ -1900,8 +1897,8 @@ def create_app(*, manage_blackbox: bool = False):
         tier, view = _tier_view(tier)
         cfg = load_blackbox_config()
 
-        # The ruleset merges complete public VM threats with community SWM rows
-        # and retains a compatibility join for any legacy CurationProof assets.
+        if getattr(cfg, 'detection_backend', 'legacy-cache') == "dkg" and tier == "public":
+            return direct_reads.page(cfg, limit=limit, offset=offset, q=q, category=category, ecosystem=ecosystem)
         if tier in {"public", "community"}:
             rs = ruleset.peek(cfg)
             # One shaping function: category from the identifier, community
@@ -1991,11 +1988,11 @@ def create_app(*, manage_blackbox: bool = False):
 
     @app.get("/api/threat")
     def threat(identifier: str = Query(..., min_length=1), tier: str = Query("public")) -> Any:
-        """Full detail for ONE threat via a targeted point-lookup.
-
-        ``tier`` ∈ public | community | local. Fail-open."""
+        """Targeted threat detail in the requested tier; unavailable reads are explicit."""
         tier, view = _tier_view(tier, default="public")
         cfg = load_blackbox_config()
+        if getattr(cfg, 'detection_backend', 'legacy-cache') == "dkg" and tier == "public":
+            return direct_reads.lookup(cfg, identifier, tier)
         if tier == "community":
             # Serve straight from the aggregated community store (sanitized).
             rs = ruleset.peek(cfg)

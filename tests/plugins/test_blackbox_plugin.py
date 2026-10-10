@@ -1133,7 +1133,7 @@ def test_blackbox_sync_waits_for_public_vm_when_community_arrives_first(monkeypa
     ]
     out = capsys.readouterr().out
     assert "2 public VM (curated)" in out
-    assert "Community graph (SWM): coming soon" in out
+    assert "Community graph: not configured (community sharing dormant)" in out
 
 
 def test_blackbox_sync_recovers_curator_snapshot_then_waits_for_vm(

@@ -3247,6 +3247,7 @@
   };
   var graphFocus = { public: null, community: null };
   var graphFocusLoadInFlight = { public: false, community: false };
+  var graphFocusPages = { public: {}, community: {} };
   var graphRenderMeta = { public: null, community: null, local: null };
   // A temporary render-only ceiling. Cached graph rows and corpus totals stay
   // intact; only the number of force-graph leaves mounted at once changes.
@@ -3492,7 +3493,9 @@
       note.textContent = TIER_NOTE.community;
       return;
     }
-    note.textContent = TIER_NOTE[activeTier] || "";
+    note.textContent = activeTier === "public" && lastStatus && lastStatus.detection_backend === "dkg"
+      ? "Live entries from the local verified graph. Counts are graph entities; coverage may still be partial."
+      : TIER_NOTE[activeTier] || "";
   }
 
   function graphTotalForTier(tier) {
@@ -3529,7 +3532,8 @@
       graphCache[tier].total = page.total;
       graphCache[tier].category_totals = page.category_totals || graphCache[tier].category_totals || {};
       graphCache[tier].ecosystem_totals = page.ecosystem_totals || graphCache[tier].ecosystem_totals || {};
-      graphCache[tier].partial = current.length < (Number(page.total) || current.length);
+      graphCache[tier].partial = page.backend === "dkg" ? page.partial : current.length < (Number(page.total) || current.length);
+      graphCache[tier].next_offset = page.next_offset;
     }
     graphRevision[tier] += 1;
   }
@@ -3578,6 +3582,7 @@
     graphLoadInFlight[tier] = false;
     graphSearchInFlight[tier] = false;
     graphFocusLoadInFlight[tier] = false;
+    graphFocusPages[tier] = {};
     graphCache[tier] = null;
     graphSearchCache[tier] = null;
     graphRevision[tier] += 1;
@@ -3603,6 +3608,7 @@
   function graphHasMore(tier) {
     var data = graphCache[tier];
     if (!data) return true;
+    if (data.backend === "dkg") return !!data.partial;
     var loaded = graphLoaded(tier);
     var total = graphTotalForTier(tier);
     if (total != null && total !== loaded) return true;
@@ -3616,7 +3622,8 @@
     graphLoadInFlight[tier] = requestToken;
     var target = graphTotalForTier(tier);
     var loaded = graphLoaded(tier);
-    var offset = target != null && target >= loaded ? loaded : 0;
+    var offset = graphCache[tier] && graphCache[tier].backend === "dkg"
+      ? graphCache[tier].next_offset || 0 : target != null && target >= loaded ? loaded : 0;
     return getJSON(graphPageUrl(tier, offset)).then(function (page) {
       if (graphLoadInFlight[tier] !== requestToken || graphGeneration[tier] !== requestGeneration) return false;
       mergeGraphPage(tier, page);
@@ -3632,12 +3639,18 @@
   function loadGraphFocusPage(tier, focus) {
     if (!focus || graphFocusLoadInFlight[tier]) return Promise.resolve(false);
     var current = graphCache[tier] ? asList(graphCache[tier]) : [];
-    var offset = current.filter(function (t) { return graphMatchesFocus(t, focus); }).length;
+    var direct = lastStatus && lastStatus.detection_backend === "dkg";
+    var focusKey = graphFocusKey(focus);
+    var cursor = graphFocusPages[tier][focusKey];
+    if (direct && cursor && !cursor.partial) return Promise.resolve(false);
+    var offset = direct ? (cursor ? cursor.next_offset : 0)
+      : current.filter(function (t) { return graphMatchesFocus(t, focus); }).length;
     var requestToken = {};
     var requestGeneration = graphGeneration[tier];
     graphFocusLoadInFlight[tier] = requestToken;
     return getJSON(graphFocusPageUrl(tier, focus, offset)).then(function (page) {
       if (graphFocusLoadInFlight[tier] !== requestToken || graphGeneration[tier] !== requestGeneration) return false;
+      if (page.backend === "dkg") graphFocusPages[tier][focusKey] = page;
       var existing = graphCache[tier] || { tier: tier, threats: [], total: graphTotalForTier(tier) || 0 };
       var seen = {};
       var added = 0;

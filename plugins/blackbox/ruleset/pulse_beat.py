@@ -37,6 +37,8 @@ def pulse(config: Optional[BlackboxConfig] = None) -> bool:
     """Start the beat if it is due; never blocks; returns whether a probe started."""
     global _pulsing, _pulsing_since
     config = config or load_blackbox_config()
+    if getattr(config, 'detection_backend', 'legacy-cache') == "dkg":
+        return False  # direct reads never create or update the exported ruleset
     interval = float(getattr(config, "community_poll_interval", 0) or 0)
     if interval <= 0 or not config.community_graph_id or not community.PULSE.due(interval):
         return False

@@ -218,3 +218,15 @@ def test_a_malformed_ipv6_is_refused_by_the_grammar_not_repaired():
     for bad in ("2001:db8::zz", "2001:db8:::1", "[2001:db8::1"):
         canonical = threat_ids.normalize_ioc_value("ip", bad)
         assert not threat_ids.ioc_value_is_well_formed("ip", canonical), bad
+
+
+def test_mapped_ipv6_preserves_shared_hex_identifiers_and_grammar():
+    from plugins.blackbox.kernel import threat_ids
+
+    for dotted, canonical in [("::ffff:192.0.2.128", "::ffff:c000:280"),
+                              ("::ffff:0.0.0.1", "::ffff:0:1"),
+                              ("::ffff:255.255.255.255", "::ffff:ffff:ffff")]:
+        assert threat_ids.normalize_ioc_value("ip", dotted) == canonical
+        assert threat_ids.normalize_ioc_value("ip", canonical) == canonical
+        assert threat_ids.ioc_value_is_well_formed("ip", canonical)
+        assert not threat_ids.ioc_value_is_well_formed("ip", dotted)
