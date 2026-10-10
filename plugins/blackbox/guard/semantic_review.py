@@ -9,6 +9,10 @@ _lock = threading.Lock()
 _active = set()
 
 
+def warmup(cfg):
+    schedule(cfg, [], {"prepare_models": True})
+
+
 def schedule(cfg, sources, detail):
     settings = getattr(cfg, "semantic", None)
     if not settings or not settings.enabled:
@@ -30,6 +34,9 @@ def schedule(cfg, sources, detail):
 
 def _run(key, cfg, sources, detail):
     try:
+        if detail.get("prepare_models"):
+            audit.record(event="semantic_warmup", detail=semantic.prepare(cfg))
+            return
         if len(sources) > 4:
             audit.record(event="semantic_review", detail={"state": "unavailable", "code": "SEMANTIC_SOURCE_LIMIT"})
             return

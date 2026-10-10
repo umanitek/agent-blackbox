@@ -12,6 +12,7 @@ def add_semantic_parser(sub):
     index = actions.add_parser("index", help="Build or resume the local behavioral entity index")
     index.add_argument("--restart", action="store_true", help="Rescan current local graph data")
     index.set_defaults(func=cmd_index)
+    actions.add_parser("warmup", help="Prepare local embedding and review models").set_defaults(func=cmd_warmup)
 
 
 def cmd_index(args):
@@ -32,3 +33,10 @@ def cmd_index(args):
     except Exception:
         print("Semantic index unavailable. Check the local node's embedding configuration and operator permission.")
         return 2
+
+
+def cmd_warmup(args):
+    from .readiness import prepare
+    result = prepare(load_blackbox_config())
+    print(json.dumps(result))
+    return 0 if result["state"] == "ready" else 2

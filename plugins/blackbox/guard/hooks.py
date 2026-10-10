@@ -367,7 +367,10 @@ def _detection_rules(cfg, tool_name, args):
 def on_session_start(session_id: str = "", **kwargs: Any) -> None:
     try:
         audit.record(event="session_start", detail={"session_id": session_id})
-        background._spawn_auto_attach(_config())
+        cfg = _config()
+        background._spawn_auto_attach(cfg)
+        from . import semantic_review
+        semantic_review.warmup(cfg)
     except Exception as exc:  # pragma: no cover - fail open
         logger.debug("blackbox: on_session_start failed: %s", exc)
 

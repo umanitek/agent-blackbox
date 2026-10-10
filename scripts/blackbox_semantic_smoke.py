@@ -107,6 +107,9 @@ def run(args):
                 cfg=Config(detection_backend='dkg', context_graph_id=CG, dkg_url=url,dkg_home=str(directory/'dkg'),
                     auto_attach=False,discover=False,osv_lookup=False,
                     semantic=SemanticConfig(enabled=True,index_id=indexed['indexId'],model=args.model,budget_s=30))
+                report['preparation'] = semantic.prepare(cfg)
+                if report['preparation']['state'] != 'ready':
+                    raise RuntimeError('Local models are not ready; see preparation outcome')
                 for name,origin,text,expected,threat in CASES:
                     case={'name':name,'expected_threat':threat}
                     try:
@@ -116,7 +119,7 @@ def run(args):
                             raw=load_blackbox('semantic.reviewer')._local_model(settings,payload,deadline)
                             case['raw_local_verdict']=raw
                             return raw
-                        result=semantic.assess(cfg,text,origin,retrieve=lambda *_:(candidates,status),classify=traced)
+                        result=semantic.assess(cfg,text,origin,retrieve=lambda *_:(candidates,status),classify=traced,ready=semantic.check)
                         case.update(state=result.state,code=result.code,retrieval_seconds=retrieval,
                             review_seconds=time.perf_counter()-start,
                             ranking=[{'entity':v['entity_uri'],'score':v['score']} for v in candidates],

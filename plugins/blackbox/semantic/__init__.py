@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from ..kernel import redaction
 from ..ruleset import semantic_candidates
 from .reviewer import review
+from .readiness import check, model_lane, prepare
 
 
 @dataclass
@@ -16,7 +17,7 @@ class SemanticResult:
     retrieval: dict = field(default_factory=dict)
 
 
-def assess(cfg, text, origin, *, retrieve=None, classify=None):
+def assess(cfg, text, origin, *, retrieve=None, classify=None, ready=None):
     settings = getattr(cfg, "semantic", None)
     if not settings or not settings.enabled:
         return SemanticResult("disabled")
@@ -32,6 +33,10 @@ def assess(cfg, text, origin, *, retrieve=None, classify=None):
     if len(text) > 6000:
         return SemanticResult("unavailable", "SEMANTIC_INPUT_LIMIT")
     try:
+        # Explicit injected transports are a unit-test seam; production always
+        # checks live residency. Instrumented evaluations can pass ready=check.
+        if ready is not None or (retrieve is None and classify is None):
+            (ready or check)(cfg, deadline)
         evidence, status = (retrieve or semantic_candidates)(cfg, text)
         if time.monotonic() >= deadline:
             raise TimeoutError()
@@ -39,7 +44,8 @@ def assess(cfg, text, origin, *, retrieve=None, classify=None):
         evidence = [{**item, "text": redaction.redact_secret_values(item["text"])} for item in evidence]
         if not evidence:
             return SemanticResult("no-candidates", evidence=evidence, retrieval=status)
-        verdict = review(cfg, text, origin, evidence, deadline=deadline, call=classify)
+        with model_lane():
+            verdict = review(cfg, text, origin, evidence, deadline=deadline, call=classify)
         if time.monotonic() >= deadline:
             raise TimeoutError()
         return SemanticResult("advisory" if verdict else "no-finding", verdict=verdict, evidence=evidence, retrieval=status)
@@ -54,4 +60,4 @@ def assess(cfg, text, origin, *, retrieve=None, classify=None):
 
 from .command import add_semantic_parser
 
-__all__ = ["add_semantic_parser", "assess", "SemanticResult"]
+__all__ = ["add_semantic_parser", "assess", "SemanticResult", "prepare", "check"]

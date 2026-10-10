@@ -82,8 +82,20 @@ budget; the DKG search request itself has a two-second deadline. The reviewer
 uses an explicit 8,192-token context and a conservative 7,000-byte request ceiling.
 This prevents an inference-server default from reserving a huge context for a
 small classification request, or silently truncating the evidence. Large inputs
-are reported unavailable. Cold model loading can also exceed the budget; keep
-models warm when evaluating latency and record cold and warm behavior separately.
+are reported unavailable. Session startup prepares enabled models in a profile-bound
+background worker. You can also run `blackbox semantic warmup` explicitly after
+setting the index and reviewer model. Preparation has a separate 60-second cap,
+uses a neutral probe with the same inference options, and never downloads models.
+It reports its duration separately from review latency.
+
+Before a real assessment, the plugin checks current DKG embedding residency and
+the reviewer's installed digest, loaded digest, and 8,192-token context. An evicted
+or mismatched model yields `SEMANTIC_MODEL_NOT_READY`; preparation contention yields
+`SEMANTIC_REVIEW_BUSY`. These are unavailable outcomes, not clean negatives.
+Readiness is checked live, with no profile-independent cached ready flag, and is
+only a point-in-time observation. Eviction after that check can still cause a
+normal bounded request failure. Preparation/review share a non-queuing admission
+lane to avoid overlapping model loads in this process.
 
 `no-candidates` means this local index found no usable current evidence.
 `no-finding` means the reviewer found no supported behavior in the retrieved

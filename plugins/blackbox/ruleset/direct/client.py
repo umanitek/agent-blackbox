@@ -61,7 +61,7 @@ class LocalGraphClient(DkgClient):
 
     def _request(self, method, path, body=None, timeout=None):
         if not ((method == "GET" and path in {"/api/status", "/api/info", "/api/context-graphs", "/api/query/bounded"})
-                or (method == "POST" and path in {"/api/query/bounded", "/api/entities/search"})):
+                or (method == "POST" and path in {"/api/query/bounded", "/api/entities/search", "/api/entities/readiness"})):
             raise GraphReadUnavailable("LOCAL_READ_ONLY_REQUIRED")
         remaining = self.deadline - time.monotonic()
         if remaining <= 0:
