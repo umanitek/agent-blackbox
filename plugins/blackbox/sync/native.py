@@ -28,7 +28,7 @@ from __future__ import annotations
 import argparse
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable
 
 from .. import ruleset
@@ -81,6 +81,7 @@ class _Observation:
     gave_up: bool = False   # the node refused the subscription for good
     error: str = ""
     verified_rules: int = 0
+    readiness_cursor: dict = field(default_factory=lambda: {"offset": 0})
 
     def record(self, status: str, phase: str, cfg: BlackboxConfig) -> None:
         """Publish progress for the dashboard and ``blackbox status``.
@@ -94,7 +95,7 @@ class _Observation:
             graph_peer_id=cfg.graph_peer_id,
             phase=phase,
             public_entries=self.verified_rules,
-            count_kind="sampled-usable-rules" if cfg.detection_backend == "dkg" else "compiled-rules",
+            count_kind="sampled-usable-rules" if getattr(cfg, 'detection_backend', 'legacy-cache') == "dkg" else "compiled-rules",
             community_entries=0,
             detection_ready=self.verified_rules > 0,
             graph_complete=False,
@@ -133,9 +134,9 @@ def _subscribe(client: DkgClient, cfg: BlackboxConfig, seen: _Observation) -> No
 def _compile_what_the_node_holds(client: DkgClient, cfg: BlackboxConfig, seen: _Observation) -> None:
     """Compile the verified rules the node already holds into the ruleset."""
     try:
-        if cfg.detection_backend == "dkg":
-            from ..graph_read.view import ready_sample
-            seen.verified_rules = ready_sample(cfg)
+        if getattr(cfg, 'detection_backend', 'legacy-cache') == "dkg":
+            from ..ruleset import ready_sample
+            seen.verified_rules = ready_sample(cfg, cursor=seen.readiness_cursor)
             seen.error = ""
             return
         compiled = ruleset.refresh(cfg, client, wait_for_lock=False)
@@ -177,7 +178,7 @@ def run(client: DkgClient, cfg: BlackboxConfig, args: argparse.Namespace) -> int
             if seen.verified_rules > 0:
                 seen.record("partial", "verified-rules-available", cfg)
                 print(
-                    f"{'Validated a sample of' if cfg.detection_backend == 'dkg' else 'Loaded'} {seen.verified_rules:,} verified detection rules. The node keeps "
+                    f"{'Validated a sample of' if getattr(cfg, 'detection_backend', 'legacy-cache') == 'dkg' else 'Loaded'} {seen.verified_rules:,} verified detection rules. The node keeps "
                     "fetching the rest of the graph in the background; `blackbox status` shows "
                     "the count as it grows."
                 )

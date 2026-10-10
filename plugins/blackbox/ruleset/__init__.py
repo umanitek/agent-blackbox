@@ -36,7 +36,13 @@ from .partitions import progress as verified_progress
 from .pulse_beat import pulse
 from .refresh_cycle import get, peek, refresh
 
+from .direct import DetectionRead, read_for_action, validate_config
+from .direct.client import GraphReadUnavailable
+from .direct.view import ready_sample, page as graph_page, lookup as graph_lookup
+
 __all__ = [
+    "DetectionRead", "read_for_action", "validate_config", "GraphReadUnavailable",
+    "ready_sample", "graph_page", "graph_lookup",
     "DownloadTotals",
     "Ruleset",
     "RulesetRefreshIncomplete",

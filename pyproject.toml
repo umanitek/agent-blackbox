@@ -496,6 +496,7 @@ exclude-newer = "14 days"
 # environment resolves under the same cutoff ("Failed to resolve
 # requirements from build-system.requires ... maturin>=1.9,<2").
 [tool.uv.exclude-newer-package]
+rdflib = false
 agent-client-protocol = false
 ai-edge-litert = false
 aiohttp = false

@@ -30,7 +30,7 @@ from typing import Any, Dict, List, Set, Tuple
 
 from ..sync import state as sync_state
 from ..sync import read_durable_progress
-from . import community_routes, lifecycle, sync_meter, sync_timing
+from . import community_routes, lifecycle, sync_meter, sync_timing, direct_reads
 from .network_sync import network_sync_argv as _network_sync_argv
 from .node_probe import node_sync_probe
 from .sync_labels import _community_progress, _sync_label, not_subscribed_activity
@@ -1447,16 +1447,10 @@ def create_app(*, manage_blackbox: bool = False):
     @app.get("/api/graph-status")
     def graph_status() -> Any:
         cfg = load_blackbox_config()
-        try:
-            rs = ruleset.peek(cfg)
-            counts = rs.counts()
-        except DkgError as exc:
-            return JSONResponse(status_code=503, content={"state": "unavailable", "code": getattr(exc, "code", "QUERY_UNAVAILABLE")})
-        # Community + sightings come from the synced ruleset cache, NOT the
-        # shared-working-memory view, which does O(slice) trust work and times
-        # out (HTTP 500) on a large pool. Public uses the cache too: current VM
-        # rows are complete threats, and ruleset.refresh also promotes any
-        # still-unmigrated legacy proof rows.
+        result = direct_reads.status(cfg)
+        if isinstance(result, JSONResponse):
+            return result
+        rs, counts = result
         public = _graph_source_count(rs, "public")
         community = len(getattr(rs, "community", {}) or {})
 
@@ -1554,9 +1548,7 @@ def create_app(*, manage_blackbox: bool = False):
             "dkg_bin": cfg.dkg_bin,
             "node_reachable": g["node_reachable"],
             "sync_interval": cfg.sync_interval,
-            "last_sync": None if cfg.detection_backend == "dkg" else rs.synced_at or None,
-            "detection_backend": cfg.detection_backend,
-            "count_kind": "confirmed-entities" if cfg.detection_backend == "dkg" else "compiled-rules",
+            **direct_reads.metadata(cfg, rs),
             # moves on a pulse (not a VM sync): the page reloads the Community tab on it (FIX-0038)
             "community_version": getattr(rs, "community_fingerprint", "") or None,
             "ruleset": counts,
@@ -1905,15 +1897,8 @@ def create_app(*, manage_blackbox: bool = False):
         tier, view = _tier_view(tier)
         cfg = load_blackbox_config()
 
-        # The ruleset merges complete public VM threats with community SWM rows
-        # and retains a compatibility join for any legacy CurationProof assets.
-        if cfg.detection_backend == "dkg" and tier == "public":
-            from ..graph_read.view import page
-            from ..graph_read.client import GraphReadUnavailable
-            try:
-                return page(cfg, limit=limit, offset=offset, q=q, category=category, ecosystem=ecosystem)
-            except GraphReadUnavailable as exc:
-                return JSONResponse(status_code=503, content={"state": "unavailable", "code": exc.code})
+        if getattr(cfg, 'detection_backend', 'legacy-cache') == "dkg" and tier == "public":
+            return direct_reads.page(cfg, limit=limit, offset=offset, q=q, category=category, ecosystem=ecosystem)
         if tier in {"public", "community"}:
             rs = ruleset.peek(cfg)
             # One shaping function: category from the identifier, community
@@ -2003,20 +1988,11 @@ def create_app(*, manage_blackbox: bool = False):
 
     @app.get("/api/threat")
     def threat(identifier: str = Query(..., min_length=1), tier: str = Query("public")) -> Any:
-        """Full detail for ONE threat via a targeted point-lookup.
-
-        ``tier`` ∈ public | community | local. Fail-open."""
+        """Targeted threat detail in the requested tier; unavailable reads are explicit."""
         tier, view = _tier_view(tier, default="public")
         cfg = load_blackbox_config()
-        if cfg.detection_backend == "dkg" and tier == "public":
-            from ..graph_read.view import lookup
-            try:
-                rule = lookup(cfg, identifier)
-                return {"identifier": identifier, "tier": tier, "found": rule is not None,
-                        "coverage": "local-confirmed-subset",
-                        **{k: v for k, v in (rule or {}).items() if k != "pattern"}}
-            except DkgError as exc:
-                return JSONResponse(status_code=503, content={"state": "unavailable", "code": getattr(exc, "code", "QUERY_UNAVAILABLE")})
+        if getattr(cfg, 'detection_backend', 'legacy-cache') == "dkg" and tier == "public":
+            return direct_reads.lookup(cfg, identifier, tier)
         if tier == "community":
             # Serve straight from the aggregated community store (sanitized).
             rs = ruleset.peek(cfg)

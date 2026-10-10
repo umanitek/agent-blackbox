@@ -43,7 +43,12 @@ from .detectors import (
 )
 from .shell_shapes import ESCALATION_SHAPES, SHELL_TOOLS, command_from_args
 
+from .content_scanners import iter_ioc_candidates
+from .injection_detection import injection_scan_text
+from .action_parsing import command_text
+
 __all__ = [
+    "iter_ioc_candidates", "injection_scan_text", "command_text",
     "DEPENDENCY_ECOSYSTEMS",
     "advisory_kind",
     "ESCALATION_SHAPES",

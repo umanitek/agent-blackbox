@@ -152,8 +152,7 @@ def on_pre_tool_call(
         raw += _kill_list_findings(rs, tool_name, args)   # R14: curator-signed DISABLE / WARN, last-good list
         findings = reporting._flag_worthy(cfg, raw)
         detail = {"tool_name": tool_name, "session_id": session_id, "task_id": task_id,
-                  "tool_call_id": tool_call_id, "args": audit.redact(args)}
-        detail["graph_read"] = graph_evidence
+                  "tool_call_id": tool_call_id, "args": audit.redact(args), "graph_read": graph_evidence}
         # Build the heavier conversation context only on a finding, so routine
         # tool calls stay lean in the audit log.
         if findings:
@@ -341,12 +340,12 @@ def on_pre_api_request(**kwargs: Any) -> None:
 
 
 def _detection_rules(cfg, tool_name, args):
-    if cfg.detection_backend == "legacy-cache":
+    if getattr(cfg, 'detection_backend', 'legacy-cache') == "legacy-cache":
         return ruleset.get(cfg), {"backend": "legacy-cache"}
-    from ..graph_read import read_for_action
+    from ..ruleset import read_for_action
     from .. import killlist
-    if cfg.detection_backend != "dkg":
-        from ..graph_read import DetectionRead
+    if getattr(cfg, 'detection_backend', 'legacy-cache') != "dkg":
+        from ..ruleset import DetectionRead
         read = DetectionRead(ruleset.Ruleset(), code="INVALID_DETECTION_BACKEND")
     else:
         read = read_for_action(cfg, tool_name, args)

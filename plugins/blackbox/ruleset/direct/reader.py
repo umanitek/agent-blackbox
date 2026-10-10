@@ -4,10 +4,10 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass
 
-from ..ruleset.compiler import Ruleset, build_from_rows
-from ..ruleset.partitions.rows import rows_from_triples
-from ..ruleset import curator_tier
-from ..kernel.dkg_client import extract_binding, DkgError
+from ..compiler import Ruleset, build_from_rows
+from ..partitions.rows import rows_from_triples
+from .. import curator_tier
+from ...kernel.dkg_client import extract_binding, DkgError
 from .client import GraphReadUnavailable, LocalGraphClient, local_url
 from .queries import candidate_query, candidates
 
@@ -82,3 +82,5 @@ def compile_reply(cfg, reply):
         rule["graph_provenance"] = [{"assertion_graph": graph, "asset": ka}
                                     for graph, ka in sorted(provenance.get(rule.get("subject"), ()))]
     return rules
+
+__all__ = ["compile_reply", "validate_config"]

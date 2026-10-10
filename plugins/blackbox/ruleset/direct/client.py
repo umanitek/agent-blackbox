@@ -5,11 +5,10 @@ import ipaddress
 import json
 import re
 import time
-import urllib.error
+import http.client
 import urllib.parse
-import urllib.request
 
-from ..kernel.dkg_client import DkgClient, DkgError, signed_request_headers
+from ...kernel.dkg_client import DkgClient, DkgError, signed_request_headers
 
 MAX_RESPONSE_BYTES = 1024 * 1024 + 4096
 
@@ -20,11 +19,6 @@ class GraphReadUnavailable(DkgError):
     def __init__(self, code: str):
         super().__init__(code)
         self.code = code
-
-
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        raise GraphReadUnavailable("LOCAL_DKG_REDIRECT_REFUSED")
 
 
 def local_url(value: str) -> str:
@@ -50,7 +44,6 @@ class LocalGraphClient(DkgClient):
         self.deadline = time.monotonic() + budget_s
         self.failure_code = ""
         self.rows_left = 8192
-        self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect())
 
     def request(self, method, path, body=None, timeout=None):
         try:
@@ -71,31 +64,33 @@ class LocalGraphClient(DkgClient):
         if self.token:
             headers["Authorization"] = f"Bearer {self.token}"
             headers.update(signed_request_headers(self.token, method, path, data))
-        request = urllib.request.Request(f"{self.url}{path}", data=data, headers=headers, method=method)
+        from .transport import request
         try:
-            with self.opener.open(request, timeout=min(remaining, timeout or remaining)) as response:
-                raw = response.read(MAX_RESPONSE_BYTES + 1)
-            if time.monotonic() > self.deadline:
-                raise GraphReadUnavailable("QUERY_DEADLINE_EXCEEDED")
+            status, raw = request(self.url, method, path, data, headers,
+                                  deadline=min(self.deadline, time.monotonic() + (timeout or remaining)),
+                                  max_bytes=MAX_RESPONSE_BYTES)
+            if 300 <= status < 400:
+                raise GraphReadUnavailable("LOCAL_DKG_REDIRECT_REFUSED")
             if len(raw) > MAX_RESPONSE_BYTES:
                 raise GraphReadUnavailable("QUERY_RESULT_TOO_LARGE")
+            if status >= 400:
+                code = "DKG_UPGRADE_REQUIRED" if status == 404 else "QUERY_UNAVAILABLE"
+                try:
+                    error = json.loads(raw)
+                    if isinstance(error, dict) and error.get("code") in {"QUERY_RESULT_TOO_LARGE", "QUERY_DEADLINE_EXCEEDED", "QUERY_ACCESS_DENIED"}:
+                        code = error["code"]
+                except ValueError:
+                    pass
+                raise GraphReadUnavailable(code)
             result = json.loads(raw)
             if not isinstance(result, dict):
                 raise ValueError
             return result
-        except urllib.error.HTTPError as exc:
-            # Never echo response bodies, request text, URLs or credentials.
-            code = "DKG_UPGRADE_REQUIRED" if exc.code == 404 else "QUERY_UNAVAILABLE"
-            try:
-                error = json.loads(exc.read(4096))
-                if error.get("code") in {"QUERY_RESULT_TOO_LARGE", "QUERY_DEADLINE_EXCEEDED", "QUERY_ACCESS_DENIED"}:
-                    code = error["code"]
-            except (ValueError, OSError):
-                pass
-            raise GraphReadUnavailable(code) from None
-        except (urllib.error.URLError, TimeoutError, OSError):
+        except TimeoutError:
+            raise GraphReadUnavailable("QUERY_DEADLINE_EXCEEDED") from None
+        except (OSError, http.client.HTTPException):
             raise GraphReadUnavailable("QUERY_UNAVAILABLE") from None
-        except (ValueError, UnicodeError):
+        except ValueError:
             raise GraphReadUnavailable("QUERY_MALFORMED_RESPONSE") from None
 
     def bounded(self, sparql: str, cg_id: str, *, max_rows: int = 8192, view=None):

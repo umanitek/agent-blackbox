@@ -6,11 +6,10 @@ No command text, file contents or credential values are sent to the node.
 """
 from __future__ import annotations
 
-from ..detection import action_parsing, content_scanners
-from ..detection.injection_detection import injection_scan_text
-from ..kernel import threat_ids
-from ..kernel.sparql_text import sparql_string_literal as literal
-from ..ruleset.graph_queries import _context_graph_data_uri, _owner_pin
+from ...detection import command_text, parse_dependency_installs, iter_ioc_candidates, injection_scan_text
+from ...kernel import threat_ids
+from ...kernel.sparql_text import sparql_string_literal as literal
+from ..graph_queries import _context_graph_data_uri, _owner_pin
 from .client import GraphReadUnavailable
 
 MAX_CANDIDATES = 64
@@ -20,9 +19,9 @@ BP = "urn:blackbox:p:"
 
 
 def candidates(tool: str, args) -> tuple[list[str], list[str]]:
-    identifiers = set(content_scanners.iter_ioc_candidates(injection_scan_text(args)))
+    identifiers = set(iter_ioc_candidates(injection_scan_text(args)))
     packages = set()
-    for dep in action_parsing.parse_dependency_installs(action_parsing.command_text(args)):
+    for dep in parse_dependency_installs(command_text(args)):
         eco, name, version = dep["ecosystem"], dep["name"], dep.get("version")
         packages.add(threat_ids.canonical_package_name(eco, name))
         identifiers.add(threat_ids.dependency_identifier(eco, name, version or "*"))
@@ -60,6 +59,11 @@ def candidate_query(cg_id: str, identifiers: list[str], packages: list[str]) -> 
             branches.append(f"{{ VALUES ?value {{ {values} }} VALUES ?valuePredicate {{ <{DP}value> <{BP}normalizedValue> }} ?threat ?valuePredicate ?value }}")
     if packages:
         values = ", ".join(literal(value) for value in packages)
+        # Identifier-only legacy Python rules have the same package-name semantics.
+        branches.append(f'''{{ ?threat <{G}identifier> ?legacyId .
+          FILTER(STRSTARTS(STR(?legacyId), "dep:pypi:"))
+          BIND(STRBEFORE(SUBSTR(STR(?legacyId), 10), "@") AS ?legacyPackage)
+          FILTER(REPLACE(LCASE(?legacyPackage), "[-_.]+", "-") IN ({values})) }}''')
         # Python distribution names treat [-_.] runs as the same character.
         branches.append(f'''{{ VALUES ?packagePredicate {{ <{DP}package> <{G}packageName> }}
           ?threat ?packagePredicate ?package .

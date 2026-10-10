@@ -129,7 +129,7 @@ def _cmd_status(args: argparse.Namespace) -> int:
         print(f"Graph protection unavailable: {exc}")
         return 2
     print("Agent Blackbox")
-    if cfg.detection_backend == "dkg":
+    if getattr(cfg, 'detection_backend', 'legacy-cache') == "dkg":
         print("  protection source: live local graph queries (no ruleset export)")
         print("  counts below:      confirmed graph entities; not a full-coverage proof")
     print(f"  mode:              {cfg.mode}")
@@ -150,7 +150,7 @@ def _cmd_status(args: argparse.Namespace) -> int:
     print(f"  ruleset:           {counts['injection']} injection, "
           f"{counts['escalation']} escalation, {counts['dependency']} dependency, "
           f"{counts['fileaccess']} fileaccess, {counts['skill']} skill, {counts['ioc']} ioc")
-    if cfg.detection_backend != "dkg":
+    if getattr(cfg, 'detection_backend', 'legacy-cache') != "dkg":
         _print_verified_progress(cfg)
     if not any(counts.values()):
         # KI-023: an empty ruleset is a LOUD state, never a quiet day.

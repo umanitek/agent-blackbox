@@ -9,13 +9,13 @@ from rdflib import Dataset, URIRef, Literal, RDF
 
 from _blackbox_loader import load_blackbox
 
-graph_read = load_blackbox("graph_read")
-queries = load_blackbox("graph_read.queries")
+graph_read = load_blackbox("ruleset.direct")
+queries = load_blackbox("ruleset.direct.queries")
 compiler = load_blackbox("ruleset.compiler")
 rows_module = load_blackbox("ruleset.partitions.rows")
 detection = load_blackbox("detection")
 config = load_blackbox("kernel.config")
-client_module = load_blackbox("graph_read.client")
+client_module = load_blackbox("ruleset.direct.client")
 
 CG = "0x1111111111111111111111111111111111111111/test"
 BASE = f"did:dkg:context-graph:{CG}"
@@ -154,7 +154,7 @@ def test_live_hook_without_json_keeps_local_protection_on_unavailable_node(tmp_p
         assert hooks.on_pre_tool_call("terminal", {"command": "echo hostile phrase"})["action"] == "block"
         assert hooks.on_pre_tool_call("terminal", {"command": "echo benign"}) is None
         assert not list(tmp_path.rglob("ruleset.json"))
-        view = load_blackbox("graph_read.view")
+        view = load_blackbox("ruleset.direct.view")
         assert view.ready_sample(cfg) == 1
         assert view.page(cfg)["threats"][0]["category"] == "injection"
         with pytest.raises(client_module.GraphReadUnavailable, match="QUERY_RESULT_TOO_LARGE"):
@@ -177,7 +177,7 @@ def test_live_views_readiness_corrections_and_limits(tmp_path):
     cfg = config.BlackboxConfig(detection_backend="dkg", context_graph_id=CG)
     for index in range(3):
         node.add(f"urn:defender:ioc:{index}", "urn:defender:IocSignal", {DP + "iocType": "domain", DP + "value": f"{index}.evil.example"})
-    view = load_blackbox("graph_read.view")
+    view = load_blackbox("ruleset.direct.view")
     assert view.GraphView(cfg, node).counts()["ioc"] == 3
     assert view.ready_sample(cfg, client=node) == 3
     first = view.page(cfg, limit=1, client=node)

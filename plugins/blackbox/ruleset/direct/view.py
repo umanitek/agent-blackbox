@@ -3,10 +3,10 @@ from __future__ import annotations
 
 import time
 
-from ..kernel.sparql_text import sparql_string_literal as literal
-from ..kernel.dkg_client import extract_binding
-from ..ruleset.compiler import Ruleset
-from . import compile_reply, validate_config
+from ...kernel.sparql_text import sparql_string_literal as literal
+from ...kernel.dkg_client import extract_binding
+from ..compiler import Ruleset
+from .reader import compile_reply, validate_config
 from .client import LocalGraphClient, GraphReadUnavailable
 from .queries import confirmed_scope, candidate_query, triples_query, G, DP, BP
 
@@ -115,24 +115,30 @@ def lookup(cfg, identifier, *, client=None):
     return next((r for _, r in rules.iter_rules() if r.get("identifier") == identifier), None)
 
 
-def ready_sample(cfg, *, client=None):
-    """Actual compiled usable rules in a bounded sample; never a full-graph count."""
+def ready_sample(cfg, *, client=None, cursor=None):
+    """Bounded usable-rule sampling; the observer owns progress between polls."""
     validate_config(cfg)
     client = client or LocalGraphClient(cfg)
-    selected = client.page(f'SELECT DISTINCT ?sourceGraph ?threat WHERE {{ {_entities(cfg.context_graph_id)} }} ORDER BY ?sourceGraph ?threat',
-                           cfg.context_graph_id, limit=64)
-    rules = compile_reply(cfg, _selected_triples(cfg, client, selected["result"]["bindings"]))
-    from ..ruleset import curator_tier
-    curator_tier.apply_curator_tier(rules, client, cfg)
-    if getattr(rules, "curator_read_unavailable", False):
-        raise GraphReadUnavailable("QUERY_AUTHORITY_UNAVAILABLE")
-    if getattr(client, "failure_code", ""):
-        raise GraphReadUnavailable(client.failure_code)
-    return rules.source_count("public")
+    cursor = cursor if cursor is not None else {"offset": 0}
+    from .. import curator_tier
+    for _ in range(4):
+        selected = client.page(f'SELECT DISTINCT ?sourceGraph ?threat WHERE {{ {_entities(cfg.context_graph_id)} }} ORDER BY ?sourceGraph ?threat',
+                               cfg.context_graph_id, limit=64, offset=cursor.get("offset", 0))
+        rules = compile_reply(cfg, _selected_triples(cfg, client, selected["result"]["bindings"]))
+        curator_tier.apply_curator_tier(rules, client, cfg)
+        if getattr(rules, "curator_read_unavailable", False):
+            raise GraphReadUnavailable("QUERY_AUTHORITY_UNAVAILABLE")
+        if getattr(client, "failure_code", ""):
+            raise GraphReadUnavailable(client.failure_code)
+        cursor["offset"] = selected["nextOffset"] if selected["hasMore"] else 0
+        count = rules.source_count("public")
+        if count or not selected["hasMore"]:
+            return count
+    return 0
 
 
 def _selected_triples(cfg, client, selected):
-    from ..ruleset.graph_queries import _FORBIDDEN_IRI_CHARS
+    from ..graph_queries import _FORBIDDEN_IRI_CHARS
 
     def iri(value):
         text = extract_binding(value)
