@@ -14,6 +14,7 @@ MAX_RESPONSE_BYTES = 1024 * 1024 + 4096
 # Preserve the public failure contract; never echo arbitrary server messages.
 READ_ERROR_CODES = frozenset({
     "QUERY_RESULT_TOO_LARGE", "QUERY_DEADLINE_EXCEEDED", "QUERY_ACCESS_DENIED",
+    "CORE_CACHE_QUERY_TRUST_REQUIRED",
     "ENTITY_SEARCH_DISABLED", "ENTITY_INDEX_NOT_FOUND", "ENTITY_SEARCH_BUSY",
     "ENTITY_EMBEDDING_MODEL_CHANGED", "ENTITY_EMBEDDING_UNAVAILABLE",
     "ENTITY_EMBEDDING_INVALID", "ENTITY_SEARCH_UNAVAILABLE", "ENTITY_INVALID_REQUEST",
@@ -50,6 +51,7 @@ class LocalGraphClient(DkgClient):
         super().__init__(url=local_url(cfg.dkg_url), dkg_home=cfg.dkg_home)
         self.deadline = time.monotonic() + budget_s
         self.failure_code = ""
+        self.chain_evidence_mode = cfg.snapshot_sync.mode if getattr(cfg, "snapshot_sync", None) else None
         self.rows_left = 8192
 
     def request(self, method, path, body=None, timeout=None):
@@ -66,6 +68,8 @@ class LocalGraphClient(DkgClient):
         remaining = self.deadline - time.monotonic()
         if remaining <= 0:
             raise GraphReadUnavailable("QUERY_DEADLINE_EXCEEDED")
+        if body is not None and self.chain_evidence_mode is not None:
+            body = {**body, "chainEvidenceMode": self.chain_evidence_mode}
         data = json.dumps(body).encode() if body is not None else None
         headers = {"Accept": "application/json", "Content-Type": "application/json"}
         if self.token:
@@ -92,6 +96,9 @@ class LocalGraphClient(DkgClient):
             result = json.loads(raw)
             if not isinstance(result, dict):
                 raise ValueError
+            if (method == "POST" and self.chain_evidence_mode is not None
+                    and result.get("chainEvidenceMode") != self.chain_evidence_mode):
+                raise GraphReadUnavailable("CHAIN_EVIDENCE_MODE_UNACKNOWLEDGED")
             return result
         except TimeoutError:
             raise GraphReadUnavailable("QUERY_DEADLINE_EXCEEDED") from None

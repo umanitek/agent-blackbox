@@ -23,15 +23,17 @@ class DetectionRead:
     code: str = "QUERY_UNAVAILABLE"
     query_id: str = ""
     observed_at: str = ""
+    chain_evidence_mode: str = "rpc-only"
 
     def evidence(self):
         return {"backend": "dkg", "state": self.state, "code": self.code,
                 "coverage": "local-confirmed-subset", "graph_complete": None, "query_id": self.query_id,
-                "observed_at": self.observed_at}
+                "observed_at": self.observed_at, "chain_evidence_mode": self.chain_evidence_mode}
 
 
 def read_for_action(cfg, tool: str, args, *, client=None) -> DetectionRead:
-    result = DetectionRead(Ruleset(context_graph_id=cfg.context_graph_id))
+    result = DetectionRead(Ruleset(context_graph_id=cfg.context_graph_id),
+                           chain_evidence_mode=cfg.snapshot_sync.mode if getattr(cfg, "snapshot_sync", None) else "rpc-only")
     try:
         validate_config(cfg)
         client = client or LocalGraphClient(cfg)

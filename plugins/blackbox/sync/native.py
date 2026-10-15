@@ -64,6 +64,9 @@ def route(cfg: BlackboxConfig, older_route: SyncRoute) -> SyncRoute:
     """The sync to run for *cfg*: :func:`sync` for the default graph (KI-282),
     otherwise *older_route* (the durable catch-up, unchanged). Every caller of
     ``blackbox sync`` goes through this one decision."""
+    if cfg.snapshot_sync is not None:
+        from .core_snapshot import sync as snapshot_sync
+        return snapshot_sync
     return sync if handles(cfg) else older_route
 
 

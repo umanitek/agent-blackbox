@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import logging
 import os
+from .snapshot_config import SnapshotSyncConfig, snapshot_config
+
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Mapping, Tuple
@@ -53,6 +55,7 @@ class BlackboxConfig:
     #: Opt in to "dkg" after upgrading the local query capability.
     #: Existing and older-daemon installs retain their explicitly named legacy mode.
     detection_backend: str = "legacy-cache"
+    snapshot_sync: SnapshotSyncConfig | None = None
     semantic: SemanticConfig = field(default_factory=SemanticConfig)
     context_graph_id: str = constants.DEFAULT_CONTEXT_GRAPH_ID
     graph_peer_id: str = constants.DEFAULT_GRAPH_PEER_ID
@@ -293,7 +296,7 @@ def load_blackbox_config() -> BlackboxConfig:
         )
         graph_peer_id = constants.DEFAULT_GRAPH_PEER_ID
     return BlackboxConfig(
-        mode=mode, semantic=semantic_config(entry),
+        mode=mode, semantic=semantic_config(entry), snapshot_sync=snapshot_config(entry),
         detection_backend=str(entry.get("detection_backend", "legacy-cache")).strip().lower(),
         context_graph_id=context_graph_id,
         graph_peer_id=graph_peer_id,

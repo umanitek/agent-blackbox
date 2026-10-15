@@ -9,7 +9,7 @@ def valid(cfg):
         return True
     try:
         ruleset.validate_config(cfg)
-        if native.handles(cfg):
+        if native.handles(cfg) or cfg.snapshot_sync is not None:
             return True
         print("Direct graph sync currently requires the default native recovery route.")
     except DkgError as exc:
