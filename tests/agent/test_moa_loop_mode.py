@@ -605,6 +605,11 @@ def test_references_parallel_interrupt_aborts_wait(monkeypatch):
 
     monkeypatch.setattr(moa_loop, "call_llm", fake_call_llm)
 
+    def interrupt_after_completion(_done, _total, _label):
+        # The worker must finish response/accounting before the interrupt.
+        # Setting this inside call_llm races with completion of its Future.
+        fake_agent._interrupt_requested = True
+
     refs = [
         {"provider": "fast", "model": "m1"},
         {"provider": "wedged", "model": "m2"},
@@ -613,9 +618,7 @@ def test_references_parallel_interrupt_aborts_wait(monkeypatch):
         start = time.monotonic()
         out = moa_loop._run_references_parallel(
             refs, [{"role": "user", "content": "hi"}], agent=fake_agent,
-            # The interrupt arrives right after the fast reference is recorded,
-            # while the wedged one is still in flight.
-            progress_callback=lambda done, total, label: setattr(fake_agent, "_interrupt_requested", True),
+            progress_callback=interrupt_after_completion,
         )
         elapsed = time.monotonic() - start
 

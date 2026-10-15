@@ -42,6 +42,12 @@ reattaches to the job and reports that it is still running. Interrupting the
 observer does not cancel the node's job. Starting a different graph/mode while
 one job runs is refused.
 
+Newer daemons may add their selected `transport` (`exact` or `bulk`) to the job
+request. The client accepts that known addition when starting or reattaching to
+a matching job, then pins the complete returned request and job ID. Any later
+change, an unknown field, or a different graph, registration ID, trust mode or
+trusted peer list is refused. Daemons that omit transport remain compatible.
+
 The managed snapshot profile disables competing connection-time and periodic
 VM recovery. This is intended for a dedicated managed node. With an externally
 managed shared node, the operator must arrange that isolation explicitly.
@@ -50,10 +56,11 @@ bounded local DKG queries that explicitly acknowledge the selected trust mode.
 No threat-rule JSON export is generated. `authoritative-sync.json` remains a
 small operational status file, not a rule database.
 
-Current scope keeps ten-asset batches and sequential supplier fallback.
-Parallel core downloads, larger chunks, persistent job resumption and bulk
-atomic ingestion are separate work. This change does not claim a five-minute
-full-graph result.
+The daemon selects the transport under its own configuration: the exact path
+uses ten-asset batches, while the experimental bulk path requires the companion
+DKG implementation and its explicit opt-in. This client compatibility change
+does not enable bulk mode, parallel core downloads or persistent job resumption,
+and does not claim a five-minute full-graph result.
 
 ## Local validation
 

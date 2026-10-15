@@ -6,14 +6,39 @@ import time
 from ...kernel.sparql_text import sparql_string_literal as literal
 from ...kernel.dkg_client import extract_binding
 from ..compiler import Ruleset
-from .reader import compile_reply, validate_config
+from .reader import compile_reply, validate_config, read_candidates
 from .client import LocalGraphClient, GraphReadUnavailable
-from .queries import confirmed_scope, candidate_query, triples_query, G, DP, BP
+from .queries import confirmed_scope, selected_query, iri, G, DP, BP
 
 
-def _entities(cg_id):
-    return f'''{confirmed_scope(cg_id)} GRAPH ?sourceGraph {{
-      {{ ?threat a ?type . VALUES (?type ?category) {{
+def _entities(cg_id, source_graph=None, category=""):
+    # A sample binds one confirmed partition before scanning its entities. A
+    # global DISTINCT/ORDER BY forces the store to sort the entire rule graph.
+    graph = iri(source_graph) if source_graph is not None else "?sourceGraph"
+    binding = f"VALUES ?sourceGraph {{ {graph} }}" if source_graph is not None else ""
+    return f'{binding} {confirmed_scope(cg_id)} GRAPH {graph} {{ {_entity_patterns(category)} }}'
+
+
+def _entity_patterns(category="", *, bind_category=True):
+    if category:
+        # Bind the requested category before reading entities, rather than
+        # scanning every signal type and filtering the joined result afterward.
+        types = {"dependency": "DependencySignal", "injection": "InjectionSignal",
+                 "skill": "SkillSignal", "ioc": "IocSignal"}
+        if category not in {*types, "fileaccess", "escalation"}:
+            return "FILTER(false)"
+        branches = []
+        if category in types:
+            branches.append(f'{{ ?threat a <urn:defender:{types[category]}> }}')
+        if category == "ioc":
+            branches.append(f'''{{ ?threat a <urn:blackbox:SourceObservation> ;
+                <{BP}lifecycleStatus> "active" }}''')
+        prefix = "dep" if category == "dependency" else category
+        branches.append(f'''{{ ?threat <{G}identifier> ?identifier .
+            FILTER(STRSTARTS(?identifier, {literal(prefix + ':')})) }}''')
+        binding = f' BIND({literal(category)} AS ?category)' if bind_category else ''
+        return '{ ' + ' UNION '.join(branches) + ' }' + binding
+    return f'''{{ ?threat a ?type . VALUES (?type ?category) {{
         (<urn:defender:DependencySignal> "dependency")
         (<urn:defender:InjectionSignal> "injection")
         (<urn:defender:SkillSignal> "skill")
@@ -23,8 +48,7 @@ def _entities(cg_id):
       UNION {{ ?threat <{G}identifier> ?identifier .
         BIND(STRBEFORE(?identifier, ":") AS ?prefix)
         BIND(IF(?prefix = "dep", "dependency", ?prefix) AS ?category)
-        FILTER(?category IN ("dependency", "injection", "skill", "ioc", "fileaccess", "escalation")) }}
-    }}'''
+        FILTER(?category IN ("dependency", "injection", "skill", "ioc", "fileaccess", "escalation")) }}'''
 
 
 def _body(cfg, q="", category="", ecosystem=""):
@@ -35,11 +59,14 @@ def _body(cfg, q="", category="", ecosystem=""):
         filters.append(f"FILTER(LCASE(STR(?ecosystem)) = {literal(ecosystem.lower())})")
     if q:
         filters.append(f"FILTER(CONTAINS(LCASE(CONCAT(STR(?threat), COALESCE(STR(?name), ''), COALESCE(STR(?identifier), ''), COALESCE(STR(?value), ''))), {literal(q.lower())}))")
-    return f'''{_entities(cfg.context_graph_id)} GRAPH ?sourceGraph {{
-      OPTIONAL {{ ?threat <http://schema.org/name> ?name }}
-      OPTIONAL {{ ?threat <{DP}ecosystem>|<{G}packageEcosystem> ?ecosystem }}
-      OPTIONAL {{ ?threat <{DP}value>|<{BP}normalizedValue>|<{DP}package> ?value }}
-    }} {' '.join(filters)}'''
+    properties = []
+    if q:
+        properties.extend(["OPTIONAL { ?threat <http://schema.org/name> ?name }",
+                           f"OPTIONAL {{ ?threat <{DP}value>|<{BP}normalizedValue>|<{DP}package> ?value }}"])
+    if ecosystem:
+        properties.append(f"OPTIONAL {{ ?threat <{DP}ecosystem>|<{G}packageEcosystem> ?ecosystem }}")
+    joins = 'GRAPH ?sourceGraph { ' + ' '.join(properties) + ' }' if properties else ''
+    return f'{_entities(cfg.context_graph_id, category=category)} {joins} {" ".join(filters)}'
 
 
 class GraphView(Ruleset):
@@ -111,47 +138,74 @@ def lookup(cfg, identifier, *, client=None):
     packages = []
     if identifier.startswith("dep:"):
         packages = [identifier.split(":", 2)[-1].rsplit("@", 1)[0]]
-    rules = compile_reply(cfg, client.bounded(candidate_query(cfg.context_graph_id, [identifier], packages), cfg.context_graph_id))
+    rules = compile_reply(cfg, read_candidates(cfg, client, [identifier], packages))
     return next((r for _, r in rules.iter_rules() if r.get("identifier") == identifier), None)
 
 
 def ready_sample(cfg, *, client=None, cursor=None):
-    """Bounded usable-rule sampling; the observer owns progress between polls."""
+    return sample_rules(cfg, client=client, cursor=cursor).source_count("public")
+
+
+def _sample_partitions(cfg, client, cursor, category):
+    after = f'FILTER(STR(?sourceGraph) > {literal(cursor["after"])})' if cursor.get("after") else ''
+    # Sort only partition identities, not all matching entity identities.
+    # Keep GRAPH variables at top level for the DKG scope guard.
+    scope_body = confirmed_scope(cfg.context_graph_id)
+    if category:
+        # Existential selection returns at most one match per partition.
+        # Enumerating all matching threats here consumes the shared read
+        # deadline before their selected properties can be fetched.
+        # Existence only needs matching entities. Binding an unused literal
+        # here sends Blazegraph through MockTermResolverOp inside EXISTS.
+        scope_body += f' GRAPH ?sourceGraph {{ FILTER EXISTS {{ {_entity_patterns(category, bind_category=False)} }} }}'
+    return client.page(f'SELECT DISTINCT ?sourceGraph WHERE {{ {scope_body} {after} }} ORDER BY ?sourceGraph',
+                       cfg.context_graph_id, limit=1)
+
+
+def sample_rules(cfg, *, client=None, cursor=None, category=""):
+    """Compile a bounded partition sample, with the same corrections/authority.
+
+    The cursor contains identities/offsets only, never cached rules. Every read
+    rechecks confirmed metadata. Four pages bound work per observation; callers
+    may continue until ``exhausted`` rather than treating a partial scan as empty.
+    """
     validate_config(cfg)
     client = client or LocalGraphClient(cfg)
-    cursor = cursor if cursor is not None else {"offset": 0}
+    cursor = cursor if cursor is not None else {}
+    scope = (cfg.context_graph_id, category)
+    if cursor.get("scope") != scope or cursor.get("exhausted"):
+        cursor.clear()
+        cursor.update(scope=scope, offset=0, exhausted=False)
     from .. import curator_tier
     for _ in range(4):
-        selected = client.page(f'SELECT DISTINCT ?sourceGraph ?threat WHERE {{ {_entities(cfg.context_graph_id)} }} ORDER BY ?sourceGraph ?threat',
-                               cfg.context_graph_id, limit=64, offset=cursor.get("offset", 0))
+        if not cursor.get("graph"):
+            partitions = _sample_partitions(cfg, client, cursor, category)
+            rows = partitions["result"]["bindings"]
+            if not rows:
+                cursor["exhausted"] = True
+                return Ruleset(context_graph_id=cfg.context_graph_id)
+            cursor["graph"] = extract_binding(rows[0].get("sourceGraph"))
+            cursor["last_graph"] = not partitions["hasMore"]
+        selected = client.page(f'SELECT DISTINCT ?sourceGraph ?threat WHERE {{ {_entities(cfg.context_graph_id, cursor["graph"], category)} }} ORDER BY ?threat',
+                               cfg.context_graph_id, limit=64, offset=cursor["offset"])
         rules = compile_reply(cfg, _selected_triples(cfg, client, selected["result"]["bindings"]))
         curator_tier.apply_curator_tier(rules, client, cfg)
         if getattr(rules, "curator_read_unavailable", False):
             raise GraphReadUnavailable("QUERY_AUTHORITY_UNAVAILABLE")
         if getattr(client, "failure_code", ""):
             raise GraphReadUnavailable(client.failure_code)
-        cursor["offset"] = selected["nextOffset"] if selected["hasMore"] else 0
+        if selected["hasMore"]:
+            cursor["offset"] = selected["nextOffset"]
+        else:
+            cursor.update(after=cursor.pop("graph"), offset=0, exhausted=cursor["last_graph"])
         count = rules.source_count("public")
-        if count or not selected["hasMore"]:
-            return count
-    return 0
+        if count or cursor["exhausted"]:
+            return rules
+    return Ruleset(context_graph_id=cfg.context_graph_id)
 
 
 def _selected_triples(cfg, client, selected):
-    from ..graph_queries import _FORBIDDEN_IRI_CHARS
-
-    def iri(value):
-        text = extract_binding(value)
-        if not text or any(c.isspace() or c in _FORBIDDEN_IRI_CHARS for c in text) or ":" not in text:
-            raise GraphReadUnavailable("QUERY_MALFORMED_RESPONSE")
-        return "<" + text + ">"
 
     if not selected:
         return {"result": {"bindings": []}}
-    pairs = " ".join("(" + iri(row.get("sourceGraph")) + " " + iri(row.get("threat")) + ")" for row in selected)
-    # Explicit VALUES keep GRAPH variables out of nested SELECTs: the DKG
-    # scope guard deliberately refuses those rather than risk a CG escape.
-    selection = ('GRAPH ?sourceGraph { { VALUES (?selectedGraph ?threat) { ' + pairs + ' } } '
-                 'UNION { ?threat a <urn:defender:CorrectionSignal> } } '
-                 'FILTER(!BOUND(?selectedGraph) || ?sourceGraph = ?selectedGraph)')
-    return client.bounded(triples_query(cfg.context_graph_id, selection), cfg.context_graph_id)
+    return client.bounded(selected_query(cfg.context_graph_id, selected), cfg.context_graph_id)
