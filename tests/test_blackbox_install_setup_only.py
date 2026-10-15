@@ -497,7 +497,7 @@ blackbox_docker_available() {{
 }}
 OS={os_name}
 HOME={shlex.quote(str(tmp_path))}
-PATH={shlex.quote(str(fake_bin))}:/usr/bin:/bin
+PATH={shlex.quote(str(fake_bin))}
 blackbox_docker_available
 """
     return subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=False).returncode
