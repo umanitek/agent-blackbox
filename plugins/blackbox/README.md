@@ -169,8 +169,8 @@ plugins:
 |---|---|---|---|
 | Malicious or vulnerable package | `dep:<ecosystem>:<name>@<version>` | `dep:npm:event-stream@3.3.6` | verified malware blocks; a vulnerability never blocks |
 | Prompt injection | `injection:<pattern hash>` | `injection:2146bcb99d8ef90a53e99b08` | verified rules block |
-| Dangerous command | `escalation:<tool>:<argument shape>` | `escalation:terminal:remote-script-pipe` | verified rules block |
-| Sensitive file access | `fileaccess:<tool>:<category>` | `fileaccess:read_file:ssh-private-key` | verified rules block |
+| Dangerous command | `escalation:{tool}:<argument shape>` | `escalation:terminal:remote-script-pipe` | verified rules block |
+| Sensitive file access | `fileaccess:{tool}:<category>` | `fileaccess:read_file:ssh-private-key` | verified rules block |
 | Suspicious skill | `skill:<name>@<version>`, or `skill:artifact:<sha256>:<shape>` for a local one | `skill:sneaky-skill@1.0.0` | verified rules block |
 | Known-bad indicator | `ioc:<type>:<value>` — domain, url, ip, hash, wallet, contract | `ioc:domain:evil.example` | flags only in this version |
 | Secret exposure | `secret:<type>` — the type only, never the value | `secret:aws-access-key` | blocks at `block_severity`; a secret sent off the machine is rated critical |
@@ -543,6 +543,12 @@ you report the problem:
 ```bash
 blackbox sync --wait --timeout 180
 ```
+
+## Direct local graph queries (opt-in)
+
+See [Direct graph reads](docs/DIRECT_GRAPH_READS.md) for the paired DKG capability,
+configuration, compatibility limits and validation gates. The default remains
+`legacy-cache` until that migration is explicitly selected.
 
 ## About
 

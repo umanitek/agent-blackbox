@@ -51,7 +51,7 @@ def _hermes_bin() -> str:
 def _revision() -> str:
     """The commit this plugin was installed from (the catalog's pin), else its version."""
     try:
-        sidecar = json.loads((PLUGIN_DIR / ".hermes-catalog.json").read_text(encoding="utf-8"))
+        sidecar = json.loads((PLUGIN_DIR / ".hermes-catalog.json").read_text(encoding="utf-8-sig"))
         if sidecar.get("sha"):
             return str(sidecar["sha"])
     except (OSError, ValueError):

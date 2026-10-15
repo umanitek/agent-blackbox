@@ -46,11 +46,14 @@ function attach(html: string): HTMLElement {
   return host
 }
 
-afterEach(() => {
+afterEach(async () => {
   $contextMenu.set(null)
   $connection.set(null)
   closeRightRail()
   cleanup()
+  // Radix restores focus on the next timer turn. Keep this jsdom realm alive
+  // until its unmount callback runs instead of dispatching into a torn-down DOM.
+  await new Promise(resolve => setTimeout(resolve, 0))
   vi.restoreAllMocks()
   document.body.innerHTML = ''
   delete desktopWindow.hermesDesktop

@@ -152,7 +152,7 @@ def bodies_in_working_tree(plugin_dir: Path) -> dict[str, str]:
     found: dict[str, str] = {}
     for path in _working_files(plugin_dir):
         module = _module_name(path.relative_to(plugin_dir))
-        found.update(_bodies(path.read_text(encoding="utf-8"), module, str(path)))
+        found.update(_bodies(path.read_text(encoding="utf-8-sig"), module, str(path)))
     return found
 
 
@@ -252,7 +252,7 @@ def check_imports(plugin_dir: Path, repo: Path, report: Report) -> None:
             report.broken_imports.append(f"{module_name}: {type(exc).__name__}: {exc}")
             continue
         own_package = dotted if relative.name == "__init__.py" else dotted.rpartition(".")[0]
-        for node in _lazy_relative_imports(ast.parse(path.read_text(encoding="utf-8"), filename=str(path))):
+        for node in _lazy_relative_imports(ast.parse(path.read_text(encoding="utf-8-sig"), filename=str(path))):
             failure = _resolve(node, own_package)
             if failure is not None:
                 names = ", ".join(alias.name for alias in node.names)

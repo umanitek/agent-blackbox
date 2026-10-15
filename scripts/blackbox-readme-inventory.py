@@ -56,7 +56,7 @@ MODULE_ORDER = list(MODULE_SUMMARY)
 def _description(path: Path) -> str:
     """First line of the file's module docstring, without a trailing period; "" if none."""
     try:
-        doc = ast.get_docstring(ast.parse(path.read_text(encoding="utf-8")))
+        doc = ast.get_docstring(ast.parse(path.read_text(encoding="utf-8-sig")))
     except (SyntaxError, UnicodeDecodeError):
         return ""
     first = (doc or "").strip().splitlines()[0] if doc and doc.strip() else ""
@@ -117,7 +117,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--check", action="store_true", help="exit 1 when README.md is out of date")
     args = parser.parse_args()
-    text = README.read_text(encoding="utf-8")
+    text = README.read_text(encoding="utf-8-sig")
     if START not in text or END not in text:
         print(f"README.md has no {START} … {END} block", file=sys.stderr)
         return 2

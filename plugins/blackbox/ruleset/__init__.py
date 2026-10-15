@@ -42,8 +42,14 @@ from .partitions import progress as verified_progress
 from .pulse_beat import pulse, request_refresh_now
 from .refresh_cycle import get, peek, refresh
 
+from .direct import DetectionRead, read_for_action, validate_config
+from .direct.client import GraphReadUnavailable
+from .direct.view import ready_sample, page as graph_page, lookup as graph_lookup
+
 __all__ = [
+    "DetectionRead",
     "DownloadTotals",
+    "GraphReadUnavailable",
     "GrowthWatch",
     "Ruleset",
     "RulesetRefreshIncomplete",
@@ -53,11 +59,16 @@ __all__ = [
     "fetch_local_records",
     "fetch_tier",
     "get",
+    "graph_lookup",
+    "graph_page",
     "live",
     "peek",
     "pulse",
+    "read_for_action",
+    "ready_sample",
     "refresh",
     "request_refresh_now",
+    "validate_config",
     "verified_download_totals",
     "verified_identifiers",
     "verified_progress",
