@@ -11,4 +11,3 @@ def own_key_findings(raw: list[detection.Finding], tool_name: str, args: Any) ->
     rank = constants.SEVERITY_RANK
     have = max((rank.get(f.severity, -1) for f in raw if f.identifier == "secret:wallet-private-key"), default=-1)
     return [f for f in found if rank.get(f.severity, -1) > have]
-

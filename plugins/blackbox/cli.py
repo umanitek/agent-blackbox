@@ -28,6 +28,7 @@ from .detection import cmd_setup_llm
 from .overrides import add_rules_parser
 from .setup import add_setup_parser
 from .sync import cmd_sync
+from .semantic import add_semantic_parser
 
 logger = logging.getLogger(__name__)
 
@@ -55,26 +56,10 @@ def setup_cli(parser: argparse.ArgumentParser) -> None:
     chat.set_defaults(func=cmd_chat)
 
     sub.add_parser("status", help="Show config, node reachability, ruleset + findings counts").set_defaults(func=_cmd_status)
+    add_semantic_parser(sub)
     add_rules_parser(sub)   # R7b: local overrides (unblock / reblock / list)
     add_setup_parser(sub)   # the full install after a Hermes plugin-catalog install
-    sync = sub.add_parser("sync", help="Force a ruleset refresh from the DKG node")
-    sync.add_argument(
-        "--wait",
-        action="store_true",
-        help="Wait for DKG catch-up before refreshing the Blackbox cache",
-    )
-    sync.add_argument(
-        "--timeout",
-        type=int,
-        default=3600,
-        help="Seconds to wait for complete curator catch-up with --wait (default: 3600)",
-    )
-    sync.add_argument(
-        "--require-rules",
-        action="store_true",
-        help="Return non-zero if the refreshed ruleset is empty (used by installers)",
-    )
-    sync.set_defaults(func=cmd_sync)
+    _add_sync_parser(sub)
 
     attach_p = sub.add_parser(
         "attach", help="Auto-protect every local Hermes home + OpenClaw workspace"
@@ -97,9 +82,7 @@ def setup_cli(parser: argparse.ArgumentParser) -> None:
     dash.add_argument("--port", type=int, help="Override dashboard port")
     dash.set_defaults(func=cmd_dashboard)
 
-    setup_llm = sub.add_parser(
-        "setup-llm", help="Configure the optional LLM prompt-injection reviewer (provider/model/key)"
-    )
+    setup_llm = sub.add_parser("setup-llm", help="Configure the optional LLM reviewer (provider/model/key)")
     setup_llm.add_argument("--provider", choices=["openai", "anthropic"], help="Skip the prompt: set provider")
     setup_llm.add_argument("--model", help="Skip the prompt: set model id (default: provider's recommended)")
     setup_llm.add_argument(
@@ -115,6 +98,27 @@ def setup_cli(parser: argparse.ArgumentParser) -> None:
     )
     setup_llm.add_argument("--disable", action="store_true", help="Turn the LLM reviewer off and exit")
     setup_llm.set_defaults(func=cmd_setup_llm)
+
+
+def _add_sync_parser(sub) -> None:
+    sync = sub.add_parser("sync", help="Force a ruleset refresh from the DKG node")
+    sync.add_argument(
+        "--wait",
+        action="store_true",
+        help="Wait for DKG catch-up before refreshing the Blackbox cache",
+    )
+    sync.add_argument(
+        "--timeout",
+        type=int,
+        default=3600,
+        help="Seconds to wait for complete curator catch-up with --wait (default: 3600)",
+    )
+    sync.add_argument(
+        "--require-rules",
+        action="store_true",
+        help="Return non-zero if the refreshed ruleset is empty (used by installers)",
+    )
+    sync.set_defaults(func=cmd_sync)
 
 
 def _cmd_status(args: argparse.Namespace) -> int:

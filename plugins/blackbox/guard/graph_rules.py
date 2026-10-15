@@ -29,4 +29,3 @@ def detection_rules(cfg, tool_name, args):
         except Exception:
             logger.exception("blackbox: could not load last known trusted rules")
     return read.rules, read.evidence()
-
