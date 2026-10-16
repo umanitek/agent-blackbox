@@ -99,6 +99,8 @@ def _dkg_sync_environment(cfg: BlackboxConfig) -> dict[str, str]:
     env["DKG_HOME"] = str(cfg.dkg_home)
     env.setdefault("DKG_CATCHUP_MAX_CONCURRENT_PEERS", "1")
     env.setdefault("DKG_STORE_QUEUE_WAIT_TIMEOUT_MS", "300000")
+    # No effect: the node reads neither of the next two (DKG 10.0.25 has its sync
+    # round and durable-sync limits built in).
     env.setdefault("DKG_SYNC_TOTAL_TIMEOUT_MS", "1800000")
     env.setdefault("DKG_SWM_RECOVERY_TIMEOUT_MS", "3600000")
     _apply_process_limits(cfg, env)

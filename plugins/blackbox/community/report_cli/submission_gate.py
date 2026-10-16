@@ -28,8 +28,8 @@ def is_reduction(args: Any) -> bool:
 
 def refusal_for(cfg: Any, reduction: bool) -> Optional[int]:
     """The exit code to return when the command must stop here (its reason printed), else None."""
-    if not cfg.community_graph_id:
-        print("Community sharing is dormant: no community graph is configured.")
+    if not cfg.context_graph_id:
+        print("Community sharing is dormant: no graph is configured.")
         print("Nothing was submitted.")
         return 2
     if reduction:

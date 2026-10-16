@@ -24,7 +24,7 @@ from ..detection import osv
 from ..kernel import display_safety, node_routes, signing
 from ..kernel.signing.authority import Authority
 from ..kernel.signing.statement_order import CuratorStatement
-from . import console, dossier, handoff, intake, keys, node_ui_views, publishing, queue, transport, verbs, watch
+from . import console, dossier, handoff, intake, keys, node_ui_views, promotion, publishing, queue, transport, verbs, watch
 from .ladder import outcomes
 from .upkeep import heartbeat, published
 from .context import CurateContext, build_context, verified_identifiers
@@ -147,10 +147,9 @@ def _list(args: argparse.Namespace) -> int:
 def _view(args: argparse.Namespace) -> int:
     ctx = _ctx(args)
     saved = node_ui_views.find_view(args.slug)
-    community_view = saved in node_ui_views.COMMUNITY_VIEWS
-    graph = ctx.community_graph if community_view else ctx.verified_graph
-    rows = ctx.client.query(saved.sparql, graph, view=("shared-working-memory" if community_view else "verifiable-memory"),
-                            on_error=None) or []
+    community_view = saved in node_ui_views.COMMUNITY_VIEWS   # the community lives in the graph's shared memory
+    rows = ctx.client.query(saved.sparql, ctx.verified_graph,
+                            view=("shared-working-memory" if community_view else "verifiable-memory"), on_error=None) or []
     print(f"{saved.name} — {len(rows)} row(s)")
     for row in rows[:200]:
         print("  " + "  ".join(f"{k}={_term(v, 60)}" for k, v in row.items()))
@@ -159,9 +158,8 @@ def _view(args: argparse.Namespace) -> int:
 
 def _views(args: argparse.Namespace) -> int:
     ctx = _ctx(args)
-    for graph, views in ((ctx.community_graph, node_ui_views.COMMUNITY_VIEWS), (ctx.verified_graph, node_ui_views.VERIFIED_VIEWS)):
-        if not graph:
-            continue
+    graph, views = ctx.verified_graph, (*node_ui_views.COMMUNITY_VIEWS, *node_ui_views.VERIFIED_VIEWS)
+    if graph:   # one graph: the community's views and the verified tier's in one catalog
         node_routes.write_query_catalog(ctx.client, graph, node_ui_views.catalog_quads(views, graph))
         print(f"installed {len(views)} saved view(s) for {graph}")
     return 0
@@ -203,10 +201,16 @@ def _propose(args: argparse.Namespace) -> int:
 
 
 def _propose_promotion(ctx: CurateContext, store: ProposalStore, args: argparse.Namespace):
+    """The report to promote comes from the community read (``--report`` picks one; default: the earliest)."""
     read = community.read_verified_reports(ctx.client, ctx.cfg)
-    subjects = [r.subject for r in read.reports if r.identifier == args.promote] if read.available else []
-    return verbs.propose_promotion(ctx, store, identifier=args.promote, severity=args.severity, evidence=args.evidence,
-                                   reason=args.reason, report_subjects=subjects, name=args.name)
+    if not read.available:
+        raise verbs.VerbError("the community reports could not be read; nothing was signed (try again)")
+    try:
+        report = promotion.choose_report(read.reports, args.promote, subject=args.report)
+    except promotion.PromotionError as exc:
+        raise verbs.VerbError(str(exc)) from exc
+    return verbs.propose_promotion(ctx, store, report=report, severity=args.severity, evidence=args.evidence,
+                                   reason=args.reason, name=args.name)
 
 
 def _inbox(args: argparse.Namespace) -> int:

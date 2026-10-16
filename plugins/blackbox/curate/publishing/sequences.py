@@ -18,7 +18,8 @@ import logging
 from typing import List
 
 from ... import community
-from ...kernel import signing
+from ...kernel import constants, signing, sparql_text
+from ...kernel.signing import promotion_statement as statement
 from ...kernel.signing.authority import Authority
 from ..context import CurateContext
 from ..proposal import ProposalStore
@@ -32,6 +33,7 @@ def next_sequence(ctx: CurateContext, store: ProposalStore, identifier: str) -> 
     graphs and in this node's trust store) and this machine's own proposals."""
     seen = [0]
     seen.extend(_published_sequences(ctx, identifier))
+    seen.extend(_published_promotions(ctx, identifier))
     for proposal in store.for_identifier(identifier):
         envelope = proposal.parsed()
         if envelope is not None:
@@ -57,4 +59,24 @@ def _published_sequences(ctx: CurateContext, identifier: str) -> list[int]:
         envelope = signing.from_text(row.get("signedStatement", ""))
         if envelope is not None and manifest.curator_signers(envelope, statement_type=envelope.statement_type, graph=graph):
             numbers.append(envelope.sequence)
+    return numbers
+
+
+def _published_promotions(ctx: CurateContext, identifier: str) -> list[int]:
+    """Sequence numbers of the verified authority's published promotion
+    statements about *identifier* — they carry no ``g:identifier``
+    (``kernel.signing.promotion_statement``), so the lookup above does not see them.
+    Best effort, like it."""
+    manifest = ctx.manifest
+    if manifest is None or ctx.authority is not Authority.VERIFIED:
+        return []
+    rows = sparql_text.page_rows(ctx.client, ctx.verified_graph, constants.VIEW_VERIFIABLE_MEMORY,
+                                 lambda after: statement.statements_sparql(after, identifier)) or []
+    numbers = []
+    for row in rows:
+        envelope = signing.from_text(sparql_text.extract_binding(row.get("signedStatement")))
+        found = statement.parse(envelope)
+        if found is not None and found.identifier == identifier and manifest.curator_signers(
+                envelope, statement_type=statement.PROMOTION_STATEMENT, graph=ctx.verified_graph):
+            numbers.append(found.sequence)
     return numbers

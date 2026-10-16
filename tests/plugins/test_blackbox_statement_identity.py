@@ -6,7 +6,11 @@ a signature, the signatures in another order, or one of three signatures left
 out. Anyone can publish such rewritten copies of a genuine curator statement,
 with no key at all. Wherever a reader counts, stores or de-duplicates curator
 statements it must therefore key on the signed content — otherwise the copies
-use up its daily cap on raising statements and crowd its trust store.
+crowd its trust store (and, were the community authority awake, its daily cap
+on raising statements).
+
+The statements here are the verified authority's: its advisory statements live
+in the shared memory anyone can write (one graph since 2026-10-16).
 """
 
 from __future__ import annotations
@@ -15,12 +19,11 @@ import json
 
 import pytest
 from _community_rows import GRAPH
-from test_blackbox_authority import CFG, CITED, TODAY, Side
+from test_blackbox_authority import CFG, CITED, Side, TODAY, VM_GRAPH
 from test_blackbox_trust_store import Store
 
 from plugins.blackbox.community import read_curator_view
 from plugins.blackbox.community.statements import curator_view as cv
-from plugins.blackbox.community.trust import raising_budget
 from plugins.blackbox.community.trust.trust_store import TrustStore, statement_key
 from plugins.blackbox.kernel import signing
 from plugins.blackbox.kernel.signing.statement_order import CuratorStatement as Kind
@@ -36,10 +39,15 @@ def home(monkeypatch, tmp_path):
 
 
 @pytest.fixture
-def community(monkeypatch):
-    side = Side(GRAPH)
-    monkeypatch.setenv("BLACKBOX_COMMUNITY_ROOT_KEYS", side.root_hex)
+def curators(monkeypatch):
+    """The verified authority: its root trusted, its manifest in Verified Memory."""
+    side = Side(VM_GRAPH)
+    monkeypatch.setenv("BLACKBOX_CURATOR_ROOT_KEYS", side.root_hex)
     return side
+
+
+def _node(curators, *shared):
+    return Store(shared=shared, verified=[curators.manifest_row()])
 
 
 def _upper(text: str, nth: int = 0) -> str:
@@ -86,13 +94,13 @@ def _copies(row: dict, count: int) -> list:
 # ------------------------------------------------------------------ the identity
 
 
-def test_every_rewritten_copy_verifies_and_is_the_same_statement(community):
-    row = community.row(Kind.CONFIRMATION, THREAT, CITED, signers=3)
+def test_every_rewritten_copy_verifies_and_is_the_same_statement(curators):
+    row = curators.row(Kind.CONFIRMATION, THREAT, CITED, signers=3)
     genuine = signing.from_text(row["signedStatement"])
     for what, text in rewritten(row["signedStatement"]).items():
         envelope = signing.from_text(text)
         assert text != row["signedStatement"], what
-        assert len(community.manifest.curator_signers(envelope, statement_type=Kind.CONFIRMATION.value, graph=GRAPH)) >= 2, what
+        assert len(curators.manifest.curator_signers(envelope, statement_type=Kind.CONFIRMATION.value, graph=GRAPH)) >= 2, what
         assert signing.content_id(envelope) == signing.content_id(genuine), what          # one statement
         assert statement_key({**row, "signedStatement": text}) == statement_key(row), what
         # Only a copy with fewer signatures is still in canonical form (it is what two curators would
@@ -101,74 +109,58 @@ def test_every_rewritten_copy_verifies_and_is_the_same_statement(community):
     assert signing.is_canonical(row["signedStatement"])
 
 
-def test_what_was_signed_decides_the_identity_never_who_else_signed_or_how_it_is_written(community):
-    one = community.row(Kind.CONFIRMATION, THREAT, CITED, sequence=1)
-    assert statement_key(one) != statement_key(community.row(Kind.CONFIRMATION, THREAT, CITED, sequence=2))
-    assert statement_key(one) != statement_key(community.row(Kind.CONFIRMATION, "ioc:ip:203.0.113.8", CITED, sequence=1))
-    assert statement_key(one) != statement_key(community.row(Kind.REJECTION, THREAT, {"reason": "benign"}, sequence=1))
-    assert statement_key(one) == statement_key(community.row(Kind.CONFIRMATION, THREAT, CITED, sequence=1, signers=3))
+def test_what_was_signed_decides_the_identity_never_who_else_signed_or_how_it_is_written(curators):
+    one = curators.row(Kind.CONFIRMATION, THREAT, CITED, sequence=1)
+    assert statement_key(one) != statement_key(curators.row(Kind.CONFIRMATION, THREAT, CITED, sequence=2))
+    assert statement_key(one) != statement_key(curators.row(Kind.CONFIRMATION, "ioc:ip:203.0.113.8", CITED, sequence=1))
+    assert statement_key(one) != statement_key(curators.row(Kind.REJECTION, THREAT, {"reason": "benign"}, sequence=1))
+    assert statement_key(one) == statement_key(curators.row(Kind.CONFIRMATION, THREAT, CITED, sequence=1, signers=3))
     junk = {"r": "urn:x", "identifier": THREAT, "signedStatement": "not a statement"}
     assert statement_key(junk) != statement_key({**junk, "signedStatement": "another text"})    # unparseable: keyed by its text
 
 
-# ------------------------------------------------------------------ the daily cap
-
-
-def test_rewritten_copies_of_one_confirmation_use_one_place_in_the_daily_cap(community):
-    """An outsider replays ONE genuine confirmation as 150 different texts. Before the fix
-    each copy was charged to the reader's day, and the curators' real statements were held."""
-    assert read_curator_view(Store(community=[community.manifest_row()]), CFG).community.manifest is not None   # the baseline
-    replayed = community.row(Kind.CONFIRMATION, THREAT, CITED)
-    threats = [f"ioc:ip:10.1.0.{i}" for i in range(raising_budget.CONFIRMATIONS_PER_DAY - 1)]
-    genuine = [community.row(Kind.CONFIRMATION, threat, CITED) for threat in threats]
-    node = Store(community=[community.manifest_row(), *_copies(replayed, 150), replayed, *genuine])
-    view = read_curator_view(node, CFG, interest=[THREAT, *threats])
-    assert view.community.held_raising == 0
-    assert all(view.verdict(threat) is Kind.CONFIRMATION for threat in [THREAT, *threats])
-
-
-def test_the_trust_store_keeps_one_row_per_signed_statement(community):
-    replayed = community.row(Kind.CONFIRMATION, THREAT, CITED)
+def test_the_trust_store_keeps_one_row_per_signed_statement(curators):
+    replayed = curators.row(Kind.CONFIRMATION, THREAT, CITED)
     copies = _copies(replayed, 60)
     assert len({row["signedStatement"] for row in copies}) == 60
-    read_curator_view(Store(community=[community.manifest_row(), *copies, replayed]), CFG, interest=[THREAT])
+    read_curator_view(_node(curators, *copies, replayed), CFG, interest=[THREAT])
     stored = TrustStore().load(GRAPH).statements
     assert len(stored) == 1 and stored[0]["signedStatement"] == replayed["signedStatement"]      # as the curators wrote it
 
 
-def test_every_formatting_only_copy_reads_back_as_the_original_text(community):
-    row = community.row(Kind.CONFIRMATION, THREAT, CITED, signers=3)
+def test_every_formatting_only_copy_reads_back_as_the_original_text(curators):
+    row = curators.row(Kind.CONFIRMATION, THREAT, CITED, signers=3)
     for what, text in rewritten(row["signedStatement"]).items():
         canonical = signing.canonical_text(signing.from_text(text))
         assert signing.is_canonical(canonical), what
         assert (canonical == row["signedStatement"]) == (what != "one of three signatures left out"), what
 
 
-def test_a_signature_an_outsider_added_to_a_genuine_statement_is_not_what_the_reader_keeps(community):
+def test_a_signature_an_outsider_added_to_a_genuine_statement_is_not_what_the_reader_keeps(curators):
     """Anyone can sign the same bytes with a key of their own and publish the result: it
     verifies (the two curator signatures are still there). The reader keeps the copy with
     the fewest signatures, whatever order the copies are read in."""
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-    genuine = community.row(Kind.CONFIRMATION, THREAT, CITED)
+    genuine = curators.row(Kind.CONFIRMATION, THREAT, CITED)
     padded = []
     for _ in range(6):
         outsider = Ed25519PrivateKey.generate()                    # gitleaks:allow — a throwaway test key
         padded.append({**genuine, "signedStatement": signing.cosign(signing.from_text(genuine["signedStatement"]), outsider).to_text()})
     for rows in ([*padded, genuine], [genuine, *padded]):
         TrustStore().forget()
-        view = read_curator_view(Store(community=[community.manifest_row(), *rows]), CFG, interest=[THREAT])
-        assert view.verdict(THREAT) is Kind.CONFIRMATION and view.community.held_raising == 0
+        view = read_curator_view(_node(curators, *rows), CFG, interest=[THREAT])
+        assert view.verdict(THREAT) is Kind.CONFIRMATION
         assert [row["signedStatement"] for row in TrustStore().load(GRAPH).statements] == [genuine["signedStatement"]]
 
 
-def test_a_copy_with_a_broken_signature_cannot_stand_in_for_the_genuine_statement(community):
-    genuine = community.row(Kind.CONFIRMATION, THREAT, CITED)
+def test_a_copy_with_a_broken_signature_cannot_stand_in_for_the_genuine_statement(curators):
+    genuine = curators.row(Kind.CONFIRMATION, THREAT, CITED)
     document = json.loads(genuine["signedStatement"])
     document["sigs"][0]["sig"] = "0" * 128                                    # same content, one signature destroyed
     broken = {**genuine, "signedStatement": json.dumps(document, sort_keys=True, separators=(",", ":"))}
     assert statement_key(broken) == statement_key(genuine) and broken["signedStatement"] < genuine["signedStatement"]
     for rows in ([broken, genuine], [genuine, broken]):
         TrustStore().forget()
-        view = read_curator_view(Store(community=[community.manifest_row(), *rows]), CFG, interest=[THREAT])
+        view = read_curator_view(_node(curators, *rows), CFG, interest=[THREAT])
         assert view.verdict(THREAT) is Kind.CONFIRMATION
         assert [row["signedStatement"] for row in TrustStore().load(GRAPH).statements] == [genuine["signedStatement"]]

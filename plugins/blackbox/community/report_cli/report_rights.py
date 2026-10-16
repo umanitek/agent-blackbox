@@ -118,7 +118,7 @@ def set_sharing(on: bool) -> int:
     if on:
         print("Sharing is on: when your agent meets a threat the verified graph already lists, a privacy-safe")
         print("statement (the threat's identifier and type, blocked or flagged; never prompts, commands, paths")
-        print("or files) is shared with the community graph. Turn it off with `blackbox report --disable-sharing`.")
+        print("or files) is shared with the community. Turn it off with `blackbox report --disable-sharing`.")
     else:
         print("Sharing is off: nothing new leaves this node.")
     return 0
@@ -146,7 +146,7 @@ def withdraw_consent() -> int:
         from ...kernel import settings
         if not settings.write_settings({"report": False}).get("ok"):
             print("Note: the sharing switch in config.yaml could not be turned off; your opt-out still stops sharing.")
-        print("Community sharing turned off: nothing further leaves this machine for the community graph.")
+        print("Community sharing turned off: nothing further leaves this machine for the community.")
         return 0
     print("Could not save the opt-out, so sharing is still ON. Check that the Blackbox home is writable and try again.")
     return 1

@@ -228,7 +228,7 @@ def test_a_band_moves_when_the_listing_is_published_and_not_before(tmp_path, mon
     with team.a:
         proposal = verbs.propose_graduation(team.ctx(team.a, interest=[f"author:{alice.author}"]), ProposalStore(),
                                             key=alice.author, address=ADDRESS, today=TODAY.isoformat())
-        assert proposal.parsed().payload["expires"] == (TODAY + timedelta(days=90)).isoformat()   # a community listing: 90 days
+        assert proposal.parsed().payload["expires"] == (TODAY + timedelta(days=reputation.LISTING_DAYS)).isoformat()   # a verified listing
         assert reputation.ReputationLedger().standing(alice.author).band is reputation.ReputationBand.PROBATION
         verbs.send(team.ctx(team.a), proposal, team.b.name)
     assert team.standing(team.b, alice).band is reputation.ReputationBand.PROBATION      # proposed, not published

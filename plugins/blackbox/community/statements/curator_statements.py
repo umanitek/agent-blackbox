@@ -112,7 +112,9 @@ EVIDENCE_REFERENCE = re.compile(
 def _confirmation(extras: Mapping[str, str]) -> Optional[dict[str, str]]:
     """No extras, or exactly one signed evidence reference. The COMMUNITY
     authority's confirmations count only with one (``curator_view``); the
-    verified authority's stay as shipped, so every reader version accepts them."""
+    verified authority's carry one when its curators give it (the curator
+    service always does) and count either way. Only readers of the one graph
+    read them, and every one of those accepts the reference."""
     if not extras:
         return {}
     ok = set(extras) == {"evidence"} and bool(EVIDENCE_REFERENCE.fullmatch(extras["evidence"]))

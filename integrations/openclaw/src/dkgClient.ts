@@ -24,6 +24,13 @@ export class DkgError extends Error {
   }
 }
 
+/**
+ * The named sub-graph every community statement is written to and read from (Python
+ * `constants.COMMUNITY_SUB_GRAPH`). Never the graph's root: the DKG keeps one author catalog per
+ * writer of a root and allows 64 per graph, and every node is a writer.
+ */
+export const COMMUNITY_SUB_GRAPH = "reports";
+
 const DEFAULT_DKG_PORT = 9320;
 const DEFAULT_URL = `http://127.0.0.1:${DEFAULT_DKG_PORT}`;
 const DEFAULT_TIMEOUT_MS = 3000;
@@ -158,28 +165,42 @@ export class DkgClient {
     return this.request("/api/connect", { peerId }, "POST", 15_000);
   }
 
-  /** Subscribe the node to a context graph (idempotent on the daemon). */
-  async subscribeContextGraph(contextGraphId: string, includeSharedMemory = false): Promise<unknown> {
-    return this.request("/api/context-graph/subscribe", { contextGraphId, includeSharedMemory });
+  /**
+   * Subscribe the node to a context graph (idempotent on the daemon). `forceCatchup` starts a new
+   * catch-up even on a ready subscription: it fetches a graph definition that never arrived (DKG #3264).
+   */
+  async subscribeContextGraph(contextGraphId: string, includeSharedMemory = true, forceCatchup = false): Promise<unknown> {
+    const body = { contextGraphId, includeSharedMemory, ...(forceCatchup ? { forceCatchup: true } : {}) };
+    return this.request("/api/context-graph/subscribe", body);
+  }
+
+  /** Register a named sub-graph of a context graph on this node (a node writes into one only once it is). */
+  async createSubGraph(contextGraphId: string, subGraphName: string): Promise<unknown> {
+    return this.request("/api/sub-graph/create", { contextGraphId, subGraphName });
   }
 
   /**
    * The explicit v10 share lifecycle Python `share_knowledge_asset` uses: write/seal the
-   * asset in WM (`alsoShareSwm:false`), then queue `/swm/share-async` and poll the job.
+   * asset in WM (`alsoShareSwm:false`), then queue `/swm/share-async` and poll the job — both
+   * in the community sub-graph ({@link COMMUNITY_SUB_GRAPH}), never the graph's root.
    * An asset the node already holds sealed is shared as-is; a `{ idempotent: true }`
    * result means "already on the network", which callers report as not-new (KI-104).
    */
   async shareReport(contextGraphId: string, name: string, quads: Quad[],
                     opts: { timeoutMs?: number; pollMs?: number } = {}): Promise<Record<string, unknown>> {
     try {
-      await this.request("/api/knowledge-assets", { contextGraphId, name, quads, alsoShareSwm: false });
+      await this.request("/api/knowledge-assets", {
+        contextGraphId, name, quads, alsoShareSwm: false, subGraphName: COMMUNITY_SUB_GRAPH,
+      });
     } catch (err) {
       if (!(err instanceof DkgError) || !isAlreadyFinalized(err)) throw err;
     }
     const enc = encodeURIComponent(name);
     let queued: Record<string, unknown>;
     try {
-      queued = await this.request<Record<string, unknown>>(`/api/knowledge-assets/${enc}/swm/share-async`, { contextGraphId, entities: "all" });
+      queued = await this.request<Record<string, unknown>>(`/api/knowledge-assets/${enc}/swm/share-async`, {
+        contextGraphId, entities: "all", subGraphName: COMMUNITY_SUB_GRAPH,
+      });
     } catch (err) {
       if (err instanceof DkgError && isAlreadyFinalized(err)) return { name, idempotent: true };
       const existing = err instanceof DkgError ? jobIdFromError(err) : undefined;

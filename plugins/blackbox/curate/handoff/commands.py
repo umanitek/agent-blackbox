@@ -60,7 +60,7 @@ def export(ctx: CurateContext, out: str) -> int:
     tmp.write_text(text, encoding="utf-8")
     os.replace(tmp, path)
     print(f"exported {len(pool.entries)} confirmed threat(s) to {path} "
-          f"(network {_term(ctx.environment, 60)}, graph {_term(ctx.cfg.community_graph_id, 100)})")
+          f"(network {_term(ctx.environment, 60)}, graph {_term(ctx.verified_graph, 100)})")
     print("check it anywhere with: blackbox curate verify-bundle <file> --root <community root key> --network <network id>")
     return 0
 
@@ -80,7 +80,7 @@ def check(path: str, *, root: str, network: str, graph: str, today: Optional[str
     """Verify the bundle file at *path*. *root* — the community root key (hex;
     default: the one pinned for *graph*); *network* — the network id (default:
     this node's); *graph* — the community graph (default: this node's)."""
-    graph = graph or load_blackbox_config().community_graph_id
+    graph = graph or load_blackbox_config().context_graph_id
     roots = {root.lower()} if root else trust_anchors.community_roots(graph)
     network = _network(network)
     if not network:
@@ -113,7 +113,7 @@ def confirmation_for(ctx: CurateContext, identifier: str, bundle: str = "") -> O
     *identifier*: from a verified bundle file when one is given, else from the
     statements this node verified. None when there is none."""
     if bundle:
-        report = check(bundle, root="", network=ctx.environment, graph=ctx.cfg.community_graph_id)
+        report = check(bundle, root="", network=ctx.environment, graph=ctx.verified_graph)
         if report.error:
             raise VerbError(f"the bundle was refused: {report.error}")
         for entry in report.passed:

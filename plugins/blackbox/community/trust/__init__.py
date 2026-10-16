@@ -9,7 +9,7 @@
   one, or the successor a root-signed graph migration names once its time-lock
   passed (:mod:`.migrations` — the same time-lock, freeze and sticky rules).
 * :mod:`.bounded_read` — trust statements are looked up by identifier in the
-  open community graph, never scanned; an incomplete lookup proves nothing.
+  open shared memory, never scanned; an incomplete lookup proves nothing.
 * :mod:`.trust_store` — this node's own verified copy of the trust statements:
   the state of record, re-verified on every load.
 * :mod:`.raising_budget` — the reader's daily cap on what the community

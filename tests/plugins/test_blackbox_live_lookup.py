@@ -274,13 +274,16 @@ def test_a_refresh_writes_a_ready_scope_into_the_cache_on_both_paths(monkeypatch
     from plugins.blackbox.ruleset.partitions import rows_from_triples
     public_rows = [rows_from_triples(PART_A, _dep("urn:defender:signal:a1", "evil-pkg", "1.0.0"))]
     monkeypatch.setattr(refresh_cycle.fetching, "fetch_tier", lambda client, cg, view, **kw: public_rows[0])
-    monkeypatch.setattr(refresh_cycle.curator_tier, "apply_curator_tier", lambda rs, client, cfg: 0)
+    monkeypatch.setattr(refresh_cycle.curator_tier, "apply_curator_tier", lambda rs, client, cfg, prior=None: 0)
 
     class Client:
         def status(self, timeout=None):
             return {"storeUrl": "http://127.0.0.1:7878/query"}
 
-    cfg = BlackboxConfig(context_graph_id=CG, community_graph_id="")
+        def query(self, sparql, cg_id, view=None, on_error=None, **kwargs):
+            return on_error   # the community's shared memory is read too (one graph); it fails open
+
+    cfg = BlackboxConfig(context_graph_id=CG)
     rs = refresh_cycle.refresh(cfg, Client(), force_query=True)
     assert rs.verified_scope is not None and rs.verified_scope.assertion_graphs == {PART_A}
     assert disk_cache._read_cache().verified_scope == rs.verified_scope

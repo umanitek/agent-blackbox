@@ -16,7 +16,7 @@ curator role. Public entry: :func:`add_curate_parser` (wired by cli.py) and
 * :mod:`.dossier` — evidence dossier (Builder) + the ≤3-item checklist.
 * :mod:`.proposal` — proposals and their lifecycle (State) + store.
 * :mod:`.consent` — content-bound typed consent + the local ledger.
-* :mod:`.promotion` — the verified-rule write for a promoted dependency.
+* :mod:`.promotion` — one community report promoted: which report, what the promotion names, the re-checks.
 * :mod:`.transport` — proposals by private point-to-point message.
 * :mod:`.intake` — watch the delta view, notify a webhook.
 * :mod:`.node_ui_views` — saved queries for the DKG node's own UI.

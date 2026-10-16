@@ -313,8 +313,20 @@ def test_restart_context_graph_catchup_uses_official_unsubscribe_then_subscribe(
     ]
     assert [json.loads(call["body"]) for call in cap["calls"]] == [
         {"contextGraphId": "cg"},
-        {"contextGraphId": "cg", "includeSharedMemory": False},
+        {"contextGraphId": "cg", "includeSharedMemory": True},   # the community lives in its shared memory
     ]
+
+
+def test_a_forced_subscribe_asks_the_node_for_a_new_catchup(monkeypatch):
+    """A subscribed node that never got the graph's definition gets it only from a new
+    catch-up: an already-ready subscription is otherwise a no-op (DKG #3264)."""
+    cap = _capture(monkeypatch, body='{"catchup":{"status":"queued"}}')
+    client = dkg_client.DkgClient(url="http://node", token="tok")
+
+    client.subscribe_context_graph("cg", force_catchup=True)
+
+    assert cap["url"] == "http://node/api/context-graph/subscribe"
+    assert json.loads(cap["body"]) == {"contextGraphId": "cg", "includeSharedMemory": True, "forceCatchup": True}
 
 
 def test_unsubscribe_context_graph_preserves_the_official_data_safe_operation(monkeypatch):

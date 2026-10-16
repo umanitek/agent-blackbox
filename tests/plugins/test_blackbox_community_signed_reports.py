@@ -118,14 +118,14 @@ def test_automatic_share_refuses_when_it_cannot_sign(monkeypatch, tmp_path):
 
     monkeypatch.setattr(sharing, "_ledger_share", lambda finding, subject, name, ok, error="": ledger.append((ok, error)))
     finding = {"identifier": "ioc:domain:x.example", "category": "ioc", "severity": "high", "fields": {}}
-    sharing._share_sighting(_NoNetwork({}), BlackboxConfig(report=True, community_graph_id=GRAPH), finding, REPORTER)
+    sharing._share_sighting(_NoNetwork({}), BlackboxConfig(report=True, context_graph_id=GRAPH), finding, REPORTER)
     assert shared == []
     assert ledger and ledger[0][0] is False and "cannot sign" in ledger[0][1]
 
 
 def test_cli_report_refuses_when_it_cannot_sign(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("BLACKBOX_HOME", str(tmp_path))
-    monkeypatch.setattr(report_command, "load_blackbox_config", lambda: BlackboxConfig(report=True, community_graph_id=GRAPH))
+    monkeypatch.setattr(report_command, "load_blackbox_config", lambda: BlackboxConfig(report=True, context_graph_id=GRAPH))
     monkeypatch.setattr(report_command, "DkgClient", lambda **kw: _Status({}))
     monkeypatch.setattr(report_command.identity, "reporter_address", lambda client: REPORTER)
     args = argparse.Namespace(false_positive=None, status=False)

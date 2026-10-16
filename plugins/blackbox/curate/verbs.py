@@ -29,8 +29,8 @@ from ..kernel.signing.statement_order import CuratorStatement
 from . import dossier, keys, promotion, transport
 from .context import CurateContext, KillListDraft, ManifestDraft, PromotionDraft, StatementDraft
 from .proposal import Proposal, ProposalState, ProposalStore
-from .publishing import MANIFEST_KIND, VerbError, next_sequence, publish
-from .publishing.publish import _validated_promotion
+from .publishing import MANIFEST_KIND, VerbError, next_sequence, publish, strategies
+from .publishing.publish import checked_promotion
 from ..community import reputation
 
 logger = logging.getLogger(__name__)
@@ -39,20 +39,25 @@ logger = logging.getLogger(__name__)
 # -- propose -----------------------------------------------------------------
 
 
-def propose_promotion(ctx: CurateContext, store: ProposalStore, *, identifier: str, severity: str, evidence: str,
-                      reason: str, report_subjects: Iterable[str], name: str = "") -> Proposal:
-    """A promotion proposal (dependency, kind=malware): checklist, first signature, stored."""
+def propose_promotion(ctx: CurateContext, store: ProposalStore, *, report: community.VerifiedReport, severity: str,
+                      evidence: str, reason: str, name: str = "") -> Proposal:
+    """A promotion proposal: ONE community report into the verified tier
+    (:mod:`.promotion`), signed the way new promotions take
+    (``publishing.strategies``) — checklist, first signature, stored. *name* —
+    the rule's display name ("" for the default)."""
     _require_manifest(ctx)
     _require_verified_authority(ctx, "promote into the verified graph")
-    items = dossier.checklist(identifier, kind="malware", evidence=evidence, reason=reason)
+    items = dossier.checklist(report.identifier, kind="malware", evidence=evidence, reason=reason)
     if not dossier.passes(items):
         raise VerbError("checklist failed: " + "; ".join(f"{i.item}. {i.note}" for i in items if not i.ok))
     advisory = evidence[len("advisory:"):] if evidence.startswith("advisory:") else ""
-    payload = promotion.payload_for(identifier, severity=severity, advisory=advisory, report_subjects=report_subjects,
-                                    provenance=promotion.ProvenanceMap(), name=name)
+    try:
+        payload = strategies.active().payload(report, severity=severity, advisory=advisory, display_name=name)
+    except promotion.PromotionError as exc:
+        raise VerbError(str(exc)) from exc
     key = keys.curator_key_store().load_or_create()
-    envelope = ctx.sign(PromotionDraft(payload, sequence=next_sequence(ctx, store, identifier)), key)
-    return _stored(store, CuratorStatement.PROMOTION.value, identifier, envelope, ctx.verified_graph,
+    envelope = ctx.sign(PromotionDraft(payload, sequence=next_sequence(ctx, store, report.identifier)), key)
+    return _stored(store, CuratorStatement.PROMOTION.value, report.identifier, envelope, ctx.verified_graph,
                    {signing.public_key_hex(key): evidence})
 
 
@@ -81,13 +86,18 @@ _EVIDENCE_HELP = "advisory:<id> | registry-action:<url> | reproduced:<sha256>"
 
 def _with_confirmation_evidence(ctx: CurateContext, kind: CuratorStatement, fields: Mapping[str, str],
                                 evidence: str) -> Mapping[str, str]:
-    """A COMMUNITY confirmation signs the evidence its curators checked (plan
-    §08); without evidence the honest statement is a deferral, never a confirmation."""
-    if kind is not CuratorStatement.CONFIRMATION or ctx.authority is not Authority.COMMUNITY:
-        return fields
+    """A confirmation signs the evidence its curators checked (plan §08). The
+    COMMUNITY authority's must: without evidence the honest statement is a
+    deferral. The verified authority's signs it whenever one is given — the
+    curator service always gives one, and its co-signer checks it (one graph:
+    the verified curators confirm the community's threats) — and stays valid
+    without, as people have always signed it."""
     cited = evidence.strip()
+    if kind is not CuratorStatement.CONFIRMATION or (ctx.authority is not Authority.COMMUNITY and not cited):
+        return fields
     if not community.EVIDENCE_REFERENCE.fullmatch(cited):
-        raise VerbError(f"a community confirmation needs --evidence {_EVIDENCE_HELP}; without evidence, propose a deferral")
+        raise VerbError(f"a confirmation's evidence is {_EVIDENCE_HELP}" if ctx.authority is not Authority.COMMUNITY else
+                        f"a community confirmation needs --evidence {_EVIDENCE_HELP}; without evidence, propose a deferral")
     return {**fields, "evidence": cited}
 
 
@@ -245,7 +255,7 @@ def approve(ctx: CurateContext, store: ProposalStore, proposal_id: str, *, evide
     if proposal.kind == CuratorStatement.PROMOTION.value:
         if not evidence:
             raise VerbError("a promotion needs your own item-1 evidence (--evidence advisory:<id> …); each key checks the truth itself")
-        _validated_promotion(envelope)   # KI-195: never cosign a payload you did not check yourself
+        checked_promotion(ctx, envelope)   # KI-195: never cosign a report you did not check yourself
     if envelope.payload.get("evidence") and not community.EVIDENCE_REFERENCE.fullmatch(evidence.strip()):
         raise VerbError(f"this confirmation cites evidence; co-sign it only after your own check of it "
                         f"(--evidence {_EVIDENCE_HELP}) — each key checks the truth itself")

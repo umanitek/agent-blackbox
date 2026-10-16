@@ -1,7 +1,9 @@
-"""Reading the community graph: fetch, verify, and the three-state read.
+"""Reading the community: fetch, verify, and the three-state read.
 
-Fetches ``g:ThreatReport`` rows from the community graph's shared memory,
-verifies them (:mod:`.verification`), honours retractions, and returns ONE
+Fetches ``g:ThreatReport`` rows from the verified graph's shared memory —
+sub-graph ``constants.COMMUNITY_SUB_GRAPH``, where every node shares its
+reports since there is one graph (2026-10-16) — verifies them
+(:mod:`.verification`), honours retractions, and returns ONE
 tagged :class:`CommunityRead` (the curator's own statements are read by
 :mod:`.trust`). Also the curator pause flag
 (``COMMUNITY_PAUSE_SUBJECT``) and the report count. Aggregation into rules is
@@ -31,13 +33,11 @@ from .verification import ReportVerifier, VerifiedReport, verify_report_rows
 logger = logging.getLogger(__name__)
 
 def community_report_count(client: DkgClient, cfg: BlackboxConfig) -> int:
-    """Count threat reports in the COMMUNITY graph's shared memory (B5).
-
-    Repointed from the verified graph's SWM view to the dedicated community
-    graph — the two-graph split. Returns 0 when no community graph is
+    """Count threat reports in the verified graph's shared memory, sub-graph
+    ``constants.COMMUNITY_SUB_GRAPH`` (B5). Returns 0 when no graph is
     configured or on any error (fail-open read).
     """
-    if not cfg.community_graph_id:
+    if not cfg.context_graph_id:
         return 0
     sparql = (
         "SELECT (COUNT(DISTINCT ?r) AS ?n) WHERE { "
@@ -45,7 +45,7 @@ def community_report_count(client: DkgClient, cfg: BlackboxConfig) -> int:
     )
     rows = client.query(
         sparql,
-        cfg.community_graph_id,
+        cfg.context_graph_id,
         view=constants.VIEW_SHARED_WORKING_MEMORY,
         on_error=None,
     )
@@ -66,9 +66,9 @@ def community_report_count(client: DkgClient, cfg: BlackboxConfig) -> int:
 #: verified tiers, smaller pages — reports are tiny).
 _COMMUNITY_PAGE_SIZE = 5000
 
-#: Most report rows read from the community graph in one refresh (KI-100) —
-#: far below the generic paged-read ceiling; reports are tiny and a real
-#: community graph is orders of magnitude smaller.
+#: Most report rows read from the community's shared memory in one refresh
+#: (KI-100) — far below the generic paged-read ceiling; reports are tiny and
+#: the community's share of the graph is orders of magnitude smaller.
 _COMMUNITY_MAX_ROWS = 100_000
 
 #: Fleet-wide emergency stop (KI-036): curators publish this subject with
@@ -137,15 +137,16 @@ def community_pause_active(client: DkgClient, cfg: BlackboxConfig) -> bool:
 
 
 def fetch_community_report_rows(client: DkgClient, cfg: BlackboxConfig) -> Optional[list[dict[str, Any]]]:
-    """Page every ThreatReport from the community graph's shared memory
+    """Page every ThreatReport from the community's shared memory
     (see :func:`page_community_rows`)."""
     return page_community_rows(client, cfg, _community_reports_sparql)
 
 
 def page_community_rows(client: DkgClient, cfg: BlackboxConfig,
                         sparql_after: Callable[[str], str]) -> Optional[list[dict[str, Any]]]:
-    """Page a community-graph query (shared memory); see :func:`page_rows`."""
-    return page_rows(client, cfg.community_graph_id, constants.VIEW_SHARED_WORKING_MEMORY, sparql_after,
+    """Page a query over the community's shared memory — the verified graph's,
+    sub-graph ``constants.COMMUNITY_SUB_GRAPH``; see :func:`page_rows`."""
+    return page_rows(client, cfg.context_graph_id, constants.VIEW_SHARED_WORKING_MEMORY, sparql_after,
                      page_size=_COMMUNITY_PAGE_SIZE, max_rows=_COMMUNITY_MAX_ROWS)
 
 
@@ -216,25 +217,26 @@ def _empty_is_authorised(client: DkgClient, graph: str) -> bool:
 
 def read_verified_reports(client: DkgClient, cfg: BlackboxConfig, *, held: Iterable[str] = ()) -> CommunityRead:
     """THE community read (R0c/R0d, tri-state R0): every report in the
-    community graph whose signature verifies for this node's network and graph.
+    community's shared memory whose signature verifies for this node's network
+    and the verified graph.
 
     The one place community reports are fetched and verified — the ruleset,
     the dashboard's community statistics and `blackbox report --status` all
     start here. UNAVAILABLE when any page failed or came back malformed, when
     the node's network id is unknown (nothing can be verified), or when the
     graph reads empty but the node cannot confirm it is subscribed and
-    synced. No community graph configured = AUTHORISED_EMPTY. Reports their
+    synced. No graph configured = AUTHORISED_EMPTY. Reports their
     own signer retracted are left out (:mod:`.retractions`).
 
     *held* — threats the caller still holds from an earlier read. The curators
     are asked about them too, so a threat whose reports are gone is still seen
     if it was rejected or revoked meanwhile (KI-275).
     """
-    if not cfg.community_graph_id:
+    if not cfg.context_graph_id:
         return CommunityRead(ReadState.AUTHORISED_EMPTY)
     rows = fetch_community_report_rows(client, cfg)
     if rows is None:
-        return _unavailable("a page of the community graph failed or was malformed")
+        return _unavailable("a page of the community's reports failed or was malformed")
     try:
         environment = network_environment(client.status())
     except Exception as exc:  # node unreachable: "cannot verify now"
@@ -242,10 +244,10 @@ def read_verified_reports(client: DkgClient, cfg: BlackboxConfig, *, held: Itera
     if not environment:
         return _unavailable("the node reports no network id, so nothing can be verified")
     if not rows:
-        if _empty_is_authorised(client, cfg.community_graph_id):
+        if _empty_is_authorised(client, cfg.context_graph_id):
             return CommunityRead(ReadState.AUTHORISED_EMPTY, curator=_held_verdicts(client, cfg, environment, held))
         return _unavailable("empty read without proof of a synced subscription")
-    verifier = ReportVerifier(environment, cfg.community_graph_id)
+    verifier = ReportVerifier(environment, cfg.context_graph_id)
     reports, _dropped = verify_report_rows(rows, verifier)
     read = _honour_statements(client, cfg, environment, reports, held)
     return replace(read, env_mismatch=verifier.drops["env_mismatch"], future_dated=verifier.drops["future_dated"])
@@ -289,7 +291,7 @@ def _honour_statements(client: DkgClient, cfg: BlackboxConfig, environment: str,
     withdrawn report is never counted again because its retraction could not
     be read.
     """
-    graph = cfg.community_graph_id
+    graph = cfg.context_graph_id
     retraction_rows = page_community_rows(client, cfg, retractions.retractions_sparql)
     dispute_rows = page_community_rows(client, cfg, disputes.disputes_sparql)
     if retraction_rows is None or dispute_rows is None:

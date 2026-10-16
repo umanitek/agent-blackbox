@@ -75,7 +75,7 @@ def credit_verdicts(ctx: CurateContext, *, osv_lookup: Optional[novelty_facts.Os
     rows = community.fetch_community_report_rows(ctx.client, ctx.cfg)
     if rows is None:
         return CreditReport(available=False)
-    reports, _ = community.verify_report_rows(rows, community.ReportVerifier(ctx.environment, ctx.community_graph))
+    reports, _ = community.verify_report_rows(rows, community.ReportVerifier(ctx.environment, ctx.verified_graph))
     by_threat: dict[str, list[Any]] = {}
     first_day: dict[str, str] = {}
     for report in reports:
@@ -138,7 +138,7 @@ def overlap_rings(ctx: CurateContext) -> list[frozenset]:
     rows = community.fetch_community_report_rows(ctx.client, ctx.cfg)
     if rows is None:
         return []
-    reports, _ = community.verify_report_rows(rows, community.ReportVerifier(ctx.environment, ctx.community_graph))
+    reports, _ = community.verify_report_rows(rows, community.ReportVerifier(ctx.environment, ctx.verified_graph))
     by_key: dict[str, set] = {}
     for report in reports:
         by_key.setdefault(report.author, set()).add(report.identifier)

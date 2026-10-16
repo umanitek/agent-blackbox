@@ -61,7 +61,7 @@ def _read():
 @pytest.fixture
 def configured(monkeypatch):
     monkeypatch.setattr("plugins.blackbox.kernel.config.load_blackbox_config",
-                        lambda: BlackboxConfig(community_graph_id=GRAPH))
+                        lambda: BlackboxConfig(context_graph_id=GRAPH))
 
 
 def test_statements_carry_who_when_why(configured):
@@ -94,7 +94,7 @@ def test_community_strings_are_sanitized(configured):
 
 def test_unconfigured_and_unreadable_states(monkeypatch, configured):
     assert community_routes.community_statements_payload(lambda cfg: None) == {"configured": True, "available": False}
-    monkeypatch.setattr("plugins.blackbox.kernel.config.load_blackbox_config", lambda: BlackboxConfig(community_graph_id=""))
+    monkeypatch.setattr("plugins.blackbox.kernel.config.load_blackbox_config", lambda: BlackboxConfig(context_graph_id=""))
     assert community_routes.community_statements_payload(lambda cfg: _read()) == {"configured": False}
 
 

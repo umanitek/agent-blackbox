@@ -22,7 +22,6 @@ import os
 import re
 import shutil
 import sqlite3
-import time
 from datetime import datetime, timezone, UTC
 from pathlib import Path
 from typing import Any
@@ -147,7 +146,10 @@ def _claim_receipt(path: Path) -> Path | None:
 
 
 def _stale(receipt: dict) -> bool:
-    return time.time() - receipt["finished_at"] > MAX_RECEIPT_AGE_SECONDS
+    """Older than a week on the store's clock, the clock that also decides the consent day."""
+    from .shared_metrics import _utc_now
+
+    return _utc_now().timestamp() - receipt["finished_at"] > MAX_RECEIPT_AGE_SECONDS
 
 
 def report_pending_installs(home: Path) -> None:

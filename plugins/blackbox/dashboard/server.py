@@ -1115,7 +1115,7 @@ def create_app(*, manage_blackbox: bool = False):
         CommunityRead (reports counted by signer; disputes, curator view, budget — R2), or
         None before the first lands; stale-while-revalidate, so it never blocks a request."""
         def _load() -> Any:
-            if not getattr(cfg, "community_graph_id", "") or not _node_reachable(cfg):
+            if not getattr(cfg, "context_graph_id", "") or not _node_reachable(cfg):
                 return None   # keep the cached value; retry next poll
             try:
                 read = community.read_verified_reports(DkgClient(url=cfg.dkg_url, dkg_home=cfg.dkg_home), cfg)
@@ -1711,7 +1711,7 @@ def create_app(*, manage_blackbox: bool = False):
         """Map a UI tier name to a DKG SPARQL view.
 
         ``public`` → verifiable-memory (the curated source of truth),
-        ``community`` → shared-working-memory (the community graph; flag-only),
+        ``community`` → shared-working-memory (the community's reports; flag-only),
         ``local`` → working-memory (this node's own private graph).
         """
         tier = (tier or default).lower()

@@ -250,7 +250,7 @@ def test_a_trader_event_never_leaves_the_machine(shielded, monkeypatch):
                         lambda cfg, event, findings, detail: captured.extend(findings))
     hooks.on_pre_tool_call(tool_name="terminal", args={"command": ARCHIVE_CHROME}, session_id=SESSION)
     [finding] = captured
-    cfg = config_mod.BlackboxConfig(report=True, community_graph_id="did:dkg:context-graph:test")
+    cfg = config_mod.BlackboxConfig(report=True, context_graph_id="did:dkg:context-graph:test")
 
     allowed, why = community_sharing.CommunitySharePolicy(cfg).decide(finding.to_dict(), "0x" + "ab" * 20)
 

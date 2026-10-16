@@ -103,7 +103,7 @@ def test_the_native_profile_is_written_to_the_nodes_own_config(dkg_home):
     assert data["vmReconcilerEnabled"] is True
     assert data["vmRecoveryPrefetchEnabled"] is True
     assert data["syncOnConnectEnabled"] is True
-    assert data["syncGlobalMaxInflight"] == 1 and data["syncGlobalQueueLimit"] == 0
+    assert data["syncGlobalMaxInflight"] == 1 and data["syncGlobalQueueLimit"] == 4
     assert data["name"] == "agent-blackbox"                       # unrelated keys survive
 
 

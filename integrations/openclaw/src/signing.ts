@@ -11,7 +11,7 @@
  * epoch / sequence at their defaults. A signer is named by its raw public key (hex).
  *
  * Usage:
- *   const signer = new ReportSigner(privateKey, networkId, communityGraphId);
+ *   const signer = new ReportSigner(privateKey, networkId, contextGraphId);   // the graph the community lives in
  *   quads.push(q(subject, BLACKBOX_SIGNED_STATEMENT_PRED, literal(signer.sign(REPORT_STATEMENT, payload))));
  */
 import { createPublicKey, sign as cryptoSign, type KeyObject } from "node:crypto";

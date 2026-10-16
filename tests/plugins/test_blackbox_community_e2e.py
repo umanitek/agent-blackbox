@@ -4,7 +4,7 @@ Marked ``integration`` (excluded by default). Point it at real nodes with:
 
     BLACKBOX_E2E_NODE_A_URL=http://<a>:9320  BLACKBOX_E2E_NODE_A_HOME=...
     BLACKBOX_E2E_NODE_B_URL=http://<b>:9320  BLACKBOX_E2E_NODE_B_HOME=...
-    BLACKBOX_COMMUNITY_GRAPH_ID=<cg id>
+    BLACKBOX_CONTEXT_GRAPH_ID=<cg id>   # the verified graph: its shared memory is the community's
     uv run pytest -m integration tests/plugins/test_blackbox_community_e2e.py -s
 
 Skips cleanly when the endpoints are not configured (CI-safe). The run
@@ -31,7 +31,7 @@ from plugins.blackbox.kernel.reporter_key import ReporterKeyStore
 
 pytestmark = pytest.mark.integration
 
-CG = os.environ.get("BLACKBOX_COMMUNITY_GRAPH_ID", "")
+CG = os.environ.get("BLACKBOX_CONTEXT_GRAPH_ID", "")
 A_URL = os.environ.get("BLACKBOX_E2E_NODE_A_URL", "")
 A_HOME = os.environ.get("BLACKBOX_E2E_NODE_A_HOME", "")
 B_URL = os.environ.get("BLACKBOX_E2E_NODE_B_URL", "")
@@ -39,7 +39,7 @@ B_HOME = os.environ.get("BLACKBOX_E2E_NODE_B_HOME", "")
 
 needs_nodes = pytest.mark.skipif(
     not (CG and A_URL and B_URL),
-    reason="community e2e endpoints not configured (set BLACKBOX_E2E_NODE_*_URL + BLACKBOX_COMMUNITY_GRAPH_ID)",
+    reason="community e2e endpoints not configured (set BLACKBOX_E2E_NODE_*_URL + BLACKBOX_CONTEXT_GRAPH_ID)",
 )
 
 def _client(url: str, home: str) -> DkgClient:
@@ -66,7 +66,7 @@ def _visible_identifiers(client: DkgClient) -> set[tuple[str, str]]:
     """(identifier, signer) for every report that VERIFIES on *client* —
     the one reader every product surface uses (R0c/R0d), never the
     self-described reporter field (KI-110)."""
-    read = community.read_verified_reports(client, BlackboxConfig(community_graph_id=CG))
+    read = community.read_verified_reports(client, BlackboxConfig(context_graph_id=CG))
     return {(report.identifier, report.author) for report in read.reports}
 
 

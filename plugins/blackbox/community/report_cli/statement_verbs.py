@@ -23,12 +23,12 @@ from .. import report_builder, report_schema, report_signer, sharing
 def send_and_record(client: DkgClient, cfg, *, identifier: str, category: str, severity: str,
                      subject: str, name: str, quads: list[dict[str, str]],
                      keep_alive: bool = False) -> tuple[sharing.ShareOutcome, str]:
-    """Send one built statement to the community graph and record the attempt
+    """Send one built statement to the community and record the attempt
     in the local share ledger, success or failure (KI-015). Returns
     (outcome, detail) for the caller to report. *keep_alive* (reports only —
     disputes and retractions are final) remembers an ACCEPTED statement so this
     node re-publishes it each epoch (R5)."""
-    outcome, detail = sharing.send_report(client, cfg.community_graph_id, name, quads)
+    outcome, detail = sharing.send_report(client, cfg.context_graph_id, name, quads)
     audit.record_share_outcome(
         identifier=identifier, category=category, severity=severity,
         subject=subject, asset_name=name, ok=outcome is sharing.ShareOutcome.ACCEPTED,
@@ -61,7 +61,7 @@ def submit_false_positive(client: DkgClient, cfg, identifier: str, reason: Optio
         print("The attempt is recorded in your local reports ledger.")
         return 1
     if outcome is sharing.ShareOutcome.REJECTED_SAME_VERSION:
-        print(f"Dispute already on the community graph for: {display_safety.term_safe(identifier)} (not re-sent)")
+        print(f"Dispute already shared with the community for: {display_safety.term_safe(identifier)} (not re-sent)")
         return 0
     print(f"False-positive signal shared for: {display_safety.term_safe(identifier)}")
     return 0

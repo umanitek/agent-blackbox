@@ -31,17 +31,17 @@ def print_community_status(cfg) -> None:
     instant and offline-safe; ledger identifiers are community-era data and
     render through :func:`_term_safe`.
     """
-    if not cfg.community_graph_id:
-        print("  community graph:   not configured (community sharing dormant)")
+    if not cfg.context_graph_id:
+        print("  community:         no graph configured (community sharing dormant)")
         return
-    print(f"  community graph:   {display_safety.term_safe(cfg.community_graph_id)}")
+    print(f"  community:         shared memory of {display_safety.term_safe(cfg.context_graph_id)}")
     # One answer for "is sharing on?" (consent.sharing_on): the switch AND an opt-in record.
     if consent.sharing_on(cfg):
         state = f"on (min severity {cfg.report_min_severity}, cap {cfg.daily_report_limit}/day)"
     elif not cfg.report:
         state = "off — opt-in; `blackbox report --enable-sharing` turns it on"
     else:
-        state = f"off — {consent.why_not() or 'the community graph is not configured'}"
+        state = f"off — {consent.why_not() or 'no graph is configured'}"
     print(f"  threat sharing:    {state}")
     ledger = audit.read_share_ledger(limit=1000)
     contributed = sum(1 for row in ledger if row.get("ok"))
@@ -141,7 +141,7 @@ _REPORT_FIELDS = {
 
 def _queue_refused_share(cfg, finding, *, subject: str, name: str, quads, detail: str) -> int:
     """R16: a refused write is queued for automatic retry, and the operator is told so."""
-    share_retry.queue_failed_share(graph=cfg.community_graph_id, name=name, identifier=finding["identifier"],
+    share_retry.queue_failed_share(graph=cfg.context_graph_id, name=name, identifier=finding["identifier"],
                                    category=finding["category"], severity=finding["severity"], subject=subject,
                                    quads=quads, error=detail)
     print(f"Share refused for now: {display_safety.term_safe(detail, 160)}")
@@ -249,7 +249,7 @@ def add_report_parser(sub: argparse._SubParsersAction, *, compiled_community: Op
     the composition root (the ruleset depends on this package, not the other
     way round): ``--status`` prints each community threat's local stage from
     it (R3)."""
-    report = sub.add_parser("report", help="Report a threat to the community graph / view your contributions")
+    report = sub.add_parser("report", help="Report a threat to the community / view your contributions")
     for flags, options in _REPORT_FLAGS:
         report.add_argument(*flags, **options)
     report.set_defaults(func=cmd_report, compiled_community=compiled_community)
@@ -271,7 +271,7 @@ def cmd_report(args: argparse.Namespace) -> int:
     if refusal is not None:
         return refusal
     client = DkgClient(url=cfg.dkg_url, dkg_home=cfg.dkg_home)
-    resolved = _reporting_identity(client, cfg.community_graph_id)
+    resolved = _reporting_identity(client, cfg.context_graph_id)
     if resolved is None:
         return 1
     reporter, signer = resolved
@@ -306,9 +306,9 @@ def cmd_report(args: argparse.Namespace) -> int:
         return _queue_refused_share(cfg, finding, subject=subject, name=name, quads=q, detail=detail)
     audit.mark_reported(identifier)
     if outcome is sharing.ShareOutcome.REJECTED_SAME_VERSION:
-        print(f"Already on the community graph — not re-sent ({display_safety.term_safe(detail, 120)}).")
+        print(f"Already shared with the community — not re-sent ({display_safety.term_safe(detail, 120)}).")
         return 0
-    print("Report shared to the community graph.")
+    print("Report shared with the community.")
     print(f"  identifier: {display_safety.term_safe(identifier)}")
     print(f"  subject:    {display_safety.term_safe(subject)}")
     return 0
@@ -371,19 +371,19 @@ def _report_status(cfg, compiled_community: Optional[CompiledCommunity] = None) 
         print(f"Community contributions from this node (newest first, {len(rows)} shown):")
         for row in rows:
             print("  " + report_tracking.outcome_line(row, compiled))
-    if cfg.community_graph_id:
+    if cfg.context_graph_id:
         try:
             client = DkgClient(url=cfg.dkg_url, dkg_home=cfg.dkg_home)
             store = reporter_key.ReporterKeyStore()
             own_author = store.public_key_hex() if store.path.exists() else ""
             read = graph_reader.read_verified_reports(client, cfg)
             if not read.available:
-                print(f"Community graph unavailable right now: {display_safety.term_safe(read.reason, 160)}")
+                print(f"Community reports unavailable right now: {display_safety.term_safe(read.reason, 160)}")
             elif own_author:
                 # R0d: count what THIS node's key signed and the graph verified —
                 # never rows that merely claim our address.
                 count = graph_stats.reports_signed_by(read.reports, own_author)
-                print(f"On the community graph: {count} verified report(s) signed by this node.")
+                print(f"In the community's shared memory: {count} verified report(s) signed by this node.")
             if compiled_community is not None:
                 _print_stages(compiled_community(cfg))
         except Exception as exc:
