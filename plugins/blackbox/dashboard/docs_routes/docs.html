@@ -169,7 +169,7 @@
   <p>Blackbox's knowledge of known threats — malicious packages, wallet drainers, scam sites, dangerous commands — comes from a <b>verified threat graph</b> that Umanitek curates and publishes on the OriginTrail Decentralized Knowledge Graph (DKG). Your install runs its own small DKG node, which keeps a copy of that graph on your machine. Checks then ask your own node, never a server, so they are fast and private.</p>
   <div class="cards two">
     <article class="card"><h3>Verified graph</h3><p>Curated by Umanitek. Only its curator can write to it. Its threats may block. <code>blackbox status</code> shows how many of its assets are on your machine.</p></article>
-    <article class="card"><h3>Community graph</h3><p>A separate graph where Blackbox users can share sightings — only if they choose to. Community findings only flag, never block.</p></article>
+    <article class="card"><h3>Community reports</h3><p>Sightings Blackbox users share in the same graph's shared memory — only if they choose to. There is no separate community graph. Community findings only flag, never block.</p></article>
   </div>
 </section>
 
@@ -196,7 +196,7 @@
   <h2>Privacy and sharing</h2>
   <div class="cards two">
     <article class="card"><h3>Stays on your machine</h3><p>Your commands, prompts, files and findings. Blackbox's logs are redacted: seed phrases, keys and other secrets are removed before anything is written.</p></article>
-    <article class="card"><h3>Leaves only if you say so</h3><p>Sharing a threat with the community graph is off until you turn it on. A shared report says which threat was seen and how severe it was — never your command or prompt text. Shield findings (wallets, secrets) are never shared. Turn it on with <code>blackbox report --enable-sharing</code> or the dashboard's switch (that records your agreement to the reporter terms; no installer or update turns it on), and off again any time with <code>blackbox report --disable-sharing</code>.</p></article>
+    <article class="card"><h3>Leaves only if you say so</h3><p>Sharing a threat with the community is off until you turn it on. A shared report says which threat was seen and how severe it was — never your command or prompt text. Shield findings (wallets, secrets) are never shared. Turn it on with <code>blackbox report --enable-sharing</code> or the dashboard's switch (that records your agreement to the reporter terms; no installer or update turns it on), and off again any time with <code>blackbox report --disable-sharing</code>.</p></article>
   </div>
 </section>
 
@@ -218,7 +218,7 @@
     <tr><th scope="row"><code>sync</code></th><td>Refresh the threat rules from your DKG node now. <code>--wait</code> waits for the first full download.</td></tr>
     <tr><th scope="row"><code>dashboard</code></th><td>Start this dashboard at http://127.0.0.1:9700.</td></tr>
     <tr><th scope="row"><code>attach</code> / <code>detach</code></th><td>Protect the Hermes homes or OpenClaw workspaces you name (<code>blackbox attach ~/.hermes/profiles/work</code>), or every one found with <code>--all</code>; <code>detach</code> switches Blackbox off, and it stays off.</td></tr>
-    <tr><th scope="row"><code>report</code></th><td>Share a threat with the community graph, see what you shared, or turn sharing on or off.</td></tr>
+    <tr><th scope="row"><code>report</code></th><td>Share a threat with the community, see what you shared, or turn sharing on or off.</td></tr>
     <tr><th scope="row"><code>rules</code></th><td>Local overrides: let one verified rule only flag on this machine, undo that, or list your overrides.</td></tr>
     <tr><th scope="row"><code>setup</code></th><td>Finish an install that came from the Hermes plugin catalog: DKG node, threat graphs, agents, dashboard.</td></tr>
     <tr><th scope="row"><code>setup-llm</code></th><td>Set up the optional second-opinion model that reviews possible prompt injections (advisory only).</td></tr>

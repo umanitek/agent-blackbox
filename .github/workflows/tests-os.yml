@@ -182,8 +182,15 @@ jobs:
             -v --tb=short
         env:
           # These files spawn nested PowerShell trees. CPU-count parallelism
-          # starves cold child startup before the fixture's idle deadline.
-          HERMES_TEST_WORKERS: ${{ matrix.marker == 'windows' && (runner.arch == 'ARM64' && '16' || '16') || '' }}
+          # starves cold child startup before the fixture's idle deadline: at
+          # 16 files at a time the 4-vCPU windows-latest runner timed out 6 and
+          # then 10 different PowerShell tests (14 and 16 Oct); at 2 they pass.
+          HERMES_TEST_WORKERS: ${{ matrix.marker == 'windows' && '2' || '' }}
+          # Per-file limit, sized for this 4-vCPU runner as tests.yml sizes its Linux
+          # 4-core lane: the 300 s default is for the 96-core runner. Here
+          # test_desktop_update_windows_commit_outcome.py takes 217-285 s; on a slower
+          # runner it was killed at 301 s and the desktop-update files after it stalled.
+          HERMES_TEST_FILE_TIMEOUT: ${{ matrix.marker == 'windows' && '1200' || '' }}
           HERMES_TEST_SLICE: ${{ matrix.slice || '' }}
           # Belt-and-suspenders with tests/conftest.py's env blanking: no
           # test may reach a real provider API.

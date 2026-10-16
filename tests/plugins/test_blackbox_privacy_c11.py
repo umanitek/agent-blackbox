@@ -65,7 +65,7 @@ def test_accepting_again_shows_what_changed_since_the_earlier_version(consented_
     assert report_rights.record_consent() == 0
     out = capsys.readouterr().out
     told, changed, full = (out.index("The terms changed since you accepted version 1.0"),
-                           out.index("## What changed in version 1.4"), out.index("Version: 1.4"))
+                           out.index("## What changed in version 1.5"), out.index("Version: 1.5"))
     assert told < changed < full and "OPT-IN again" in out
     report_rights.record_consent()
     assert "The terms changed" not in capsys.readouterr().out                           # an up-to-date acceptance is not re-explained
@@ -121,7 +121,7 @@ def test_status_and_the_dashboard_pass_the_consent_state_to_health():
 
 def test_the_terms_name_both_curator_groups_and_what_a_listing_publishes():
     terms = consent_module.terms_text()
-    assert consent_module.terms_version(terms) == "1.4" and consent_module.changes_section(terms).startswith("## What changed in version 1.4")
+    assert consent_module.terms_version(terms) == "1.5" and consent_module.changes_section(terms).startswith("## What changed in version 1.5")
     for phrase in ("COMMUNITY curators", "never block", "at most 90 days", "index", "wallet address", "is not changed",
                    "signed statements", "always a person's decision"):
         assert phrase in terms, phrase
@@ -131,8 +131,8 @@ def test_the_terms_name_both_curator_groups_and_what_a_listing_publishes():
 def test_the_controller_map_and_the_dpia_carry_the_community_authority_and_the_open_name():
     controllers = (DOCS / "CONTROLLER_MAP.md").read_text(encoding="utf-8")
     dpia = (DOCS / "DPIA.md").read_text(encoding="utf-8")
-    assert "Version: 1.1" in controllers and "Community curators' operator" in controllers and "decision 15" in controllers
-    assert "Version: 1.6" in dpia and "OPT-IN" in dpia and "COUNSEL REVIEW REQUIRED" in dpia and "community_trust.json" in dpia and "Export bundle" in dpia and "art. 22" in dpia
+    assert "Version: 1.2" in controllers and "Community curators' operator" in controllers and "decision 15" in controllers
+    assert "Version: 1.7" in dpia and "OPT-IN" in dpia and "COUNSEL REVIEW REQUIRED" in dpia and "community_trust.json" in dpia and "Export bundle" in dpia and "art. 22" in dpia
     checklist = dpia.split("## 8. Compliant-by-default checklist", 1)[1]
     rows = re.findall(r"^\| (?!Item|---)(.+?) \| (\w[\w ,]*?) \|", checklist, re.MULTILINE)
     assert len(rows) == 10 and {state for _, state in rows} <= {"done", "partly", "not applicable", "done, one name open", "departed"}
