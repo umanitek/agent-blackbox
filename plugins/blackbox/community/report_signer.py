@@ -8,14 +8,15 @@ Every report and dispute this node shares carries a signed envelope
   ``blackbox.retract``;
 * the environment — the DKG network id the node runs on, so a statement
   signed on a test network can never be replayed on mainnet;
-* the community graph it is shared to.
+* the graph it is shared to — the verified graph, whose shared memory the
+  community lives in (one graph, 2026-10-16).
 
 A node that cannot sign does not share (fail closed): an unsigned report would
 be indistinguishable from a forged one to every reader (LES-014).
 
 Usage::
 
-    signer = report_signer.resolve_report_signer(client, cfg.community_graph_id)
+    signer = report_signer.resolve_report_signer(client, cfg.context_graph_id)
     if signer is None:
         ...refuse to share...
     quads = build_report_quads(..., signer=signer)
@@ -50,7 +51,7 @@ class ReportSigner:
     """Everything needed to sign this node's community statements.
 
     ``private_key`` — the reporter key; ``environment`` — the DKG network id;
-    ``graph`` — the community graph id. Build with :func:`resolve_report_signer`.
+    ``graph`` — the graph the statements are shared to (the verified graph). Build with :func:`resolve_report_signer`.
     """
 
     private_key: Ed25519PrivateKey  # gitleaks:allow — a type annotation, not a secret

@@ -111,11 +111,6 @@ NVM_INSTALL_SHA256="2d8359a64a3cb07c02389ad88ceecd43f2fa469c06104f92f98df5b6f315
 BLACKBOX_DEFAULT_CONTEXT_GRAPH_ID="0x37b1Fdfd134e2b17583bCBdD3034F91504cD9C70/agent-blackbox-vm"
 BLACKBOX_CONTEXT_GRAPH_ID="${BLACKBOX_CONTEXT_GRAPH_ID:-$BLACKBOX_DEFAULT_CONTEXT_GRAPH_ID}"
 BLACKBOX_GRAPH_PEER_ID="${BLACKBOX_GRAPH_PEER_ID:-12D3KooWBJskzr2unXQG9mR3LRZFUJoxWr1PN6hTbyWyKndHXjZM}"
-# Community graph + the peer id of the node that OWNS it (its read authority).
-# Set as a PAIR: an unregistered public graph cannot be found by a fresh node
-# until it is connected to the owner (KI-216). Empty = community layer dormant.
-BLACKBOX_COMMUNITY_GRAPH_ID="${BLACKBOX_COMMUNITY_GRAPH_ID:-}"
-BLACKBOX_COMMUNITY_GRAPH_PEER_ID="${BLACKBOX_COMMUNITY_GRAPH_PEER_ID:-}"
 BLACKBOX_DKG_CATCHUP_TIMEOUT="${BLACKBOX_DKG_CATCHUP_TIMEOUT:-3600}"
 BLACKBOX_LLM_PROVIDER="${BLACKBOX_LLM_PROVIDER:-}"
 BLACKBOX_LLM_MODEL="${BLACKBOX_LLM_MODEL:-}"
@@ -241,6 +236,8 @@ blackbox_dkg() {
     fi
     # Process-level guards intentionally wrap the DKG entrypoint, not a store
     # adapter, so Blazegraph and managed Oxigraph receive identical protection.
+    # DKG_SYNC_TOTAL_TIMEOUT_MS and DKG_SWM_RECOVERY_TIMEOUT_MS have no effect: the
+    # node reads neither (DKG 10.0.25 has its sync limits built in).
     PATH="$node_bin_dir:$PATH" \
     DKG_HOME="$BLACKBOX_DKG_HOME" \
     DKG_ACCEPT_STORE_RESET="$accept_store_reset" \
@@ -966,9 +963,13 @@ if native_profile:
     data["vmRecoveryPrefetchEnabled"] = True
 data.pop("syncAgentsMeta", None)
 data["syncGlobalMaxInflight"] = 1
-data["syncGlobalQueueLimit"] = 0
+# Waiting sync work queues for the one slot instead of being refused (as in
+# sync/node_profile.py): several always-on graphs ask for it.
+data["syncGlobalQueueLimit"] = 4
 data.pop("restrictAutoSubscribeContextGraphs", None)
-data["syncSharedMemoryOnConnect"] = False
+# One graph (2026-10-16): community reports live in the shared memory of the
+# verified graph; ones written while this node was offline come back on connect.
+data["syncSharedMemoryOnConnect"] = True
 priorities = data.get("syncContextGraphPriorities")
 if not isinstance(priorities, dict):
     priorities = {}
@@ -1059,7 +1060,6 @@ Environment overrides:
   BLACKBOX_DKG_DAEMON_URL, BLACKBOX_DKG_CATCHUP_TIMEOUT,
   BLACKBOX_DKG_STORE_QUEUE_LIMIT, BLACKBOX_DKG_LIST_CONTEXT_GRAPHS_PROJECTION,
   BLACKBOX_CONTEXT_GRAPH_ID, BLACKBOX_GRAPH_PEER_ID,
-  BLACKBOX_COMMUNITY_GRAPH_ID, BLACKBOX_COMMUNITY_GRAPH_PEER_ID (set as a pair),
   BLACKBOX_LLM_PROVIDER,
   BLACKBOX_LLM_MODEL, BLACKBOX_LLM_KEY_SOURCE=hermes|new, BLACKBOX_LLM_API_KEY,
   BLACKBOX_HERMES_SETUP=reuse|always|never, BLACKBOX_AUTO_DASHBOARD=0|1,
@@ -2022,11 +2022,10 @@ enable_and_configure() {
     fi
 
     step "Writing plugins.entries.blackbox defaults to $HERMES_HOME/config.yaml ..."
-    if "$VENV_DIR/bin/python" - "$HERMES_HOME/config.yaml" "$DKG_NETWORK" "$BLACKBOX_CONTEXT_GRAPH_ID" "$BLACKBOX_GRAPH_PEER_ID" "$BLACKBOX_DKG_DAEMON_URL" "$BLACKBOX_DKG_HOME" "$BLACKBOX_DKG_BIN" "$BLACKBOX_COMMUNITY_GRAPH_ID" "$BLACKBOX_COMMUNITY_GRAPH_PEER_ID" "${BLACKBOX_PLUGIN_DIR:-$REPO_DIR}" <<'PYEOF'
+    if "$VENV_DIR/bin/python" - "$HERMES_HOME/config.yaml" "$DKG_NETWORK" "$BLACKBOX_CONTEXT_GRAPH_ID" "$BLACKBOX_GRAPH_PEER_ID" "$BLACKBOX_DKG_DAEMON_URL" "$BLACKBOX_DKG_HOME" "$BLACKBOX_DKG_BIN" "${BLACKBOX_PLUGIN_DIR:-$REPO_DIR}" <<'PYEOF'
 import sys, os
 cfg_path, network, context_graph_id, graph_peer_id, dkg_url, dkg_home, dkg_bin = sys.argv[1:8]
-# Optional (older callers pass seven arguments): the community graph + its owner peer id, and the checkout.
-community_graph_id, community_graph_peer_id, repo_dir = (sys.argv[8:11] + ["", "", ""])[:3]
+repo_dir = (sys.argv[8:9] + [""])[0]   # optional (older callers pass seven arguments): the checkout
 try:
     try:
         import hermes_yaml as yaml  # Hermes 0.21.7+: YAML through ruamel (PyYAML left the host)
@@ -2046,7 +2045,7 @@ plugins = data.setdefault("plugins", {})
 entries = plugins.setdefault("entries", {})
 blackbox = entries.setdefault("blackbox", {})
 # Idempotent for custom user edits, but migrate deprecated defaults that point
-# at the user's shared DKG install or a retired community graph.
+# at the user's shared DKG install or a retired graph.
 legacy_dkg_urls = {"http://127.0.0.1:9200", "http://localhost:9200"}
 legacy_graphs = {"0x37b1Fdfd134e2b17583bCBdD3034F91504cD9C70/agent-blackbox", "umanitek/blackbox-threats-staging", "umanitek/guardian-threats-staging", "umanitek/guardian-threats"}
 legacy_peers = {"12D3KooWAuEHYTWbD3R3yPTcECCYZnrjHNpJmrUw5b4D5T3m5Kr3", "12D3KooWBY9jmNATMPv1DZcKbFas5RtjpkhT69pPwvkUBY2MMnDX", "12D3KooWQHQd1SNecrRxwceqPJkXS" + "K" + "EYn8vrV4QyJ2AfqeYwXz1E", "12D3KooWBJskzr2unXQG9mR3LRZFUJoxWr1PN6hTbyWyKndHXjZM"}
@@ -2098,14 +2097,11 @@ if current_graph in legacy_graphs:
 if not blackbox.get("graph_peer_id") or str(blackbox.get("graph_peer_id")) in legacy_peers:
     blackbox["graph_peer_id"] = graph_peer_id
     added.append("graph_peer_id")
-# The community graph and its owner's peer id travel as a pair (KI-216): the
-# installer env names them explicitly, so an explicit value always wins.
-if community_graph_id:
-    for key, value in (("community_graph_id", community_graph_id),
-                       ("community_graph_peer_id", community_graph_peer_id)):
-        if str(blackbox.get(key) or "") != value:
-            blackbox[key] = value
-            added.append(key)
+# One graph (2026-10-16): community reports live in the verified graph's shared
+# memory, so the separate community graph and its owner's peer id are dropped.
+for key in ("community_graph_id", "community_graph_peer_id"):
+    if blackbox.pop(key, None) is not None:
+        added.append(f"{key} (removed)")
 defaults = {
     "mode": "audit",
     "context_graph_id": context_graph_id,
@@ -2379,7 +2375,8 @@ print_sharing_notice() {
   your agent meets a threat already listed in the verified threat graph, this
   node shares a privacy-safe statement (the threat's identifier and type, the
   tool that met it, blocked or flagged, and what the threat targets; never
-  prompts, commands, file paths or files) with the Blackbox community graph.
+  prompts, commands, file paths or files) with the Blackbox community, in that
+  graph's shared memory, where Umanitek's curators review it.
   Turn it on (this records your agreement to the reporter terms):
 
       blackbox report --enable-sharing         (or the dashboard's sharing toggle)

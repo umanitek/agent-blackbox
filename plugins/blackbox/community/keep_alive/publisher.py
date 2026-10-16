@@ -59,7 +59,7 @@ def remember_accepted_share(cfg: Any, *, name: str, identifier: str, subject: st
         return
     when = time.time() if now is None else now
     try:
-        (store or LiveReportStore()).remember(graph=str(cfg.community_graph_id), name=name, identifier=identifier,
+        (store or LiveReportStore()).remember(graph=str(cfg.context_graph_id), name=name, identifier=identifier,
                                               subject=subject, severity=severity, quads=quads,
                                               epoch=current_epoch(when, days))
     except Exception as exc:  # pragma: no cover - never fail a share over its memory

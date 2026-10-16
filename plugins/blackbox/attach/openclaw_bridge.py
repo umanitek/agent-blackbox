@@ -171,16 +171,18 @@ def _desired_entry(cfg: dict[str, Any]) -> dict[str, Any]:
             "dkgUrl": cfg["dkg_url"],
             "dkgHome": cfg["dkg_home"],
             "contextGraphId": cfg["context_graph_id"],
+            # The graph's owner, dialled before the first share: an edge that reaches the
+            # graph only through relays gets the graph's definition from it (DKG #3264).
+            "graphPeerId": cfg.get("graph_peer_id", ""),
             "mode": cfg["mode"],
             # Point OpenClaw's local findings log at THIS Hermes blackbox home so
             # the one dashboard surfaces OpenClaw detections too. OpenClaw writes
             # findings.openclaw.jsonl here; the dashboard merges all findings*.jsonl.
             "blackboxHome": cfg.get("blackbox_home") or str(constants.blackbox_home()),
-            # KI-182 port: the bridge shares to the SAME community graph under the same
-            # gates — the graph + owner-peer pair, the switch and the cap travel with it
-            # (consent is read from blackboxHome, so one consent record covers both runtimes).
-            "communityGraphId": cfg.get("community_graph_id", ""),
-            "communityGraphPeerId": cfg.get("community_graph_peer_id", ""),
+            # KI-182 port: the bridge shares with the SAME community — the shared memory of
+            # contextGraphId (one graph since 2026-10-16) — under the same gates: the switch
+            # and the cap travel with it (consent is read from blackboxHome, so one consent
+            # record covers both runtimes).
             "report": bool(cfg.get("report", False)),   # opt-in (2026-10-16); the consent record still gates sends
             "dailyReportLimit": int(cfg.get("daily_report_limit") or constants.DEFAULT_DAILY_REPORT_LIMIT),
             "reportMinSeverity": cfg.get("report_min_severity", "high"),
@@ -317,10 +319,9 @@ def load_blackbox_config_snapshot() -> dict[str, Any]:
             "dkg_url": cfg.dkg_url,
             "dkg_home": cfg.dkg_home,
             "context_graph_id": cfg.context_graph_id,
+            "graph_peer_id": cfg.graph_peer_id,
             "mode": cfg.mode,
             "blackbox_home": str(constants.blackbox_home()),
-            "community_graph_id": cfg.community_graph_id,
-            "community_graph_peer_id": cfg.community_graph_peer_id,
             "report": cfg.report,
             "daily_report_limit": cfg.daily_report_limit,
             "report_min_severity": cfg.report_min_severity,
@@ -330,10 +331,9 @@ def load_blackbox_config_snapshot() -> dict[str, Any]:
             "dkg_url": constants.DEFAULT_DKG_URL,
             "dkg_home": str(constants.blackbox_dkg_home()),
             "context_graph_id": constants.DEFAULT_CONTEXT_GRAPH_ID,
+            "graph_peer_id": constants.DEFAULT_GRAPH_PEER_ID,
             "mode": "audit",
             "blackbox_home": str(constants.blackbox_home()),
-            "community_graph_id": constants.DEFAULT_COMMUNITY_GRAPH_ID,
-            "community_graph_peer_id": constants.DEFAULT_COMMUNITY_GRAPH_PEER_ID,
             "report": False,   # the config could not be read: send nothing rather than guess
             "daily_report_limit": constants.DEFAULT_DAILY_REPORT_LIMIT,
             "report_min_severity": "high",

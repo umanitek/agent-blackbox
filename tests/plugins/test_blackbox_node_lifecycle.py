@@ -23,7 +23,7 @@ _STEADY_CONFIG = {
     "syncReconcilerEnabled": True,
     "durableSyncEnabled": True,
     "syncGlobalMaxInflight": 1,
-    "syncGlobalQueueLimit": 0,
+    "syncGlobalQueueLimit": 4,
 }
 
 

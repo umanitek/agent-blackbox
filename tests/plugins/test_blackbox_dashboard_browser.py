@@ -83,7 +83,7 @@ def fixture_app(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("HERMES_HOME", str(tmp_path / "home" / ".hermes"))
     monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
-    monkeypatch.setenv("BLACKBOX_COMMUNITY_GRAPH_ID", GRAPH)
+    monkeypatch.setenv("BLACKBOX_CONTEXT_GRAPH_ID", GRAPH)   # the community lives in this graph (one graph since 2026-10-16)
     root = Ed25519PrivateKey.generate()
     curators = [Ed25519PrivateKey.generate() for _ in range(3)]
     monkeypatch.setenv("BLACKBOX_CURATOR_ROOT_KEYS", signing.public_key_hex(root))
@@ -92,7 +92,7 @@ def fixture_app(monkeypatch, tmp_path):
                               curator_keys=tuple(sorted(signing.public_key_hex(k) for k in curators)),
                               curator_operators=("operator-a", "operator-b", "operator-c"), threshold=2,
                               promotion_author="0x" + "1" * 40, legacy_assets_hash=km.legacy_assets_hash([]))
-    cfg = BlackboxConfig(report=True, community_graph_id=GRAPH, context_graph_id=adv.VM_GRAPH, sync_interval=900)
+    cfg = BlackboxConfig(report=True, context_graph_id=adv.VM_GRAPH, sync_interval=900)
     alice, bob, carol, newcomer = (adv._reporter(n) for n in ("alice", "bob", "carol", "newcomer"))
     malware, ioc, hostile = "dep:npm:evil-pkg@1.0.0", "ioc:ip:203.0.113.7", "ioc:domain:evil.example"
     verified = adv._verified_graph(keys, manifest, counted=[alice, bob], statements=[

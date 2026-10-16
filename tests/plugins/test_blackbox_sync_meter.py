@@ -328,7 +328,7 @@ def test_the_dashboard_status_says_syncing_until_the_graph_has_arrived(monkeypat
     from plugins.blackbox.kernel import config, dkg_client
 
     cfg = SimpleNamespace(mode="audit", context_graph_id=VM_GRAPH, graph_peer_id="peer", report=False,
-                          community_graph_id="", dkg_url="http://127.0.0.1:9320", dkg_home=str(tmp_path),
+                          dkg_url="http://127.0.0.1:9320", dkg_home=str(tmp_path),
                           dkg_bin=str(tmp_path / "dkg"), sync_interval=3600)
 
     class Rules:

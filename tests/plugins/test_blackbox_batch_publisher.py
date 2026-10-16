@@ -705,7 +705,7 @@ from plugins.blackbox.curate.context import CurateContext
 from plugins.blackbox.curate.publishing import commands as correction_verbs
 from plugins.blackbox.curate.publishing import never_flag
 from plugins.blackbox.curate.publishing.errors import VerbError
-from test_blackbox_curate import CFG, COMMUNITY, VM_GRAPH, FakeNode, _machine
+from test_blackbox_curate import CFG, COMMUNITY, NEEDS_CURATOR_ONE_GRAPH, VM_GRAPH, FakeNode, _machine
 
 LEGACY_8888 = "urn:defender:signal:94f04f19bc0000000000000000000000"
 publish_module = importlib.import_module("plugins.blackbox.curate.publishing.publish")   # not the re-exported function
@@ -936,6 +936,7 @@ def _published_envelope(node):
     return json.loads(next(q["object"] for q in quads if q["predicate"] == constants.SIGNED_STATEMENT_PRED))
 
 
+@NEEDS_CURATOR_ONE_GRAPH
 @pytest.mark.parametrize("second", ["b", "glass"])
 def test_a_correction_is_published_at_once_and_followed_by_its_advisory_twin(monkeypatch, tmp_path, capsys, curators, second):
     """Amos's code on A; B's or the break-glass key's signature second (a reduction, K2)."""
@@ -949,6 +950,7 @@ def test_a_correction_is_published_at_once_and_followed_by_its_advisory_twin(mon
     assert graph == COMMUNITY and json.loads(twin[1]["object"]) == _published_envelope(node)
 
 
+@NEEDS_CURATOR_ONE_GRAPH
 def test_a_revocation_is_followed_by_its_advisory_twin(monkeypatch, tmp_path, curators):
     node = FakeNode()
     _machine(monkeypatch, tmp_path, "A", curators.a)
@@ -1011,6 +1013,7 @@ def test_the_verb_signs_every_subject_the_verified_graph_holds(monkeypatch, tmp_
     assert {q["object"] for q in quads if q["predicate"] == constants.DEFENDER_CORRECTION_TARGET_PRED} == {own_uri, LEGACY_8888}
 
 
+@NEEDS_CURATOR_ONE_GRAPH
 def test_a_twin_the_community_graph_refuses_never_undoes_the_publication(monkeypatch, tmp_path, capsys, curators):
     """Review guard (P5): the twin is best effort — the correction stays published and the
     outcome says the twin was not posted; readers withdraw on their next full refresh."""

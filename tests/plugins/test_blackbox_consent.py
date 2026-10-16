@@ -28,7 +28,7 @@ from plugins.blackbox.community.report_cli import report_rights
 from plugins.blackbox.kernel import reporter_key, settings
 from plugins.blackbox.kernel.config import BlackboxConfig
 
-CFG = BlackboxConfig(report=True, community_graph_id=GRAPH)
+CFG = BlackboxConfig(report=True, context_graph_id=GRAPH)
 FINDING = {"identifier": "dep:npm:evil-pkg@1.0.0", "category": "dependency", "severity": "high", "source": "public",
            "fields": {"ecosystem": "npm", "package_name": "evil-pkg", "package_version": "1.0.0", "kind": "malware",
                       "reason": "install-hook"}}
@@ -205,7 +205,7 @@ def test_a_retraction_or_dispute_passes_without_consent_and_with_sharing_off(rea
 
     sent = []
     monkeypatch.setattr(report_command, "load_blackbox_config", lambda: SimpleNamespace(
-        community_graph_id="0xowner/community-test", community_enabled=False, report=False,
+        context_graph_id="0xowner/agent-blackbox-vm-test", community_enabled=False, report=False,
         dkg_url="http://127.0.0.1:9200", dkg_home="/tmp/x", daily_report_limit=20))
     monkeypatch.setattr(report_command, "DkgClient", lambda **kw: object())
     monkeypatch.setattr(report_command, "_reporting_identity", lambda client, graph: ("0x" + "a" * 40, object()))

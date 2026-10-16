@@ -1,7 +1,12 @@
-"""Community membership: subscribe and join at most once, never to self (Refine R0, KI-064/114).
+"""Community membership: the verified graph's subscription WITH shared memory and its
+definition, at most once per process, on the node's word (Refine R0, KI-064/114; one
+graph since 2026-10-16).
 
-Before: the ruleset subscribed on every refresh and `blackbox sync` sent a
-join request on every run, even toward this node's own peer id.
+Before R0 the ruleset subscribed on every refresh. Since the community moved into the
+verified graph's shared memory there is no community graph and no join step (the graph
+is public), but the owner link stays: an edge that reaches the graph only through relays
+gets the graph's definition only from its owner, after a forced catch-up (KI-295, DKG
+#3264), and reports reach it over that link (KI-297).
 """
 
 from __future__ import annotations
@@ -9,54 +14,63 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from plugins.blackbox.community.membership import CommunityMembership
+from plugins.blackbox.kernel.dkg_client import DkgError
 
-GRAPH = "0xabc/agent-blackbox-community-test"
-CURATOR = "12D3KooWcurator"
+GRAPH = "0xabc/agent-blackbox-vm-test"
+OWNER = "12D3KooWowner"
 
 
 class _Node:
-    def __init__(self, subscribed=False, own_peer="12D3KooWself", join_fails=False,
-                 access_policy="private", connect_fails=False, subscribe_fails=False):
+    def __init__(self, subscribed=False, subscribe_fails=False, running_vm_only=False,
+                 defined=True, definition_from_owner=True, peer_id="12D3KooWedge"):
         self.subscribed = subscribed
-        self.own_peer = own_peer
-        self.join_fails = join_fails
-        self.access_policy = access_policy
-        self.connect_fails = connect_fails
         self.subscribe_fails = subscribe_fails
-        self.subscribe_calls = 0
-        self.join_calls = 0
-        self.calls = []   # ordered verbs: "connect", "subscribe", "join"
+        #: a VM-only catch-up job is running: the node hands it back instead of a new one
+        self.running_vm_only = running_vm_only
+        #: the node holds the graph's definition (its listing names an access policy)
+        self.defined = defined
+        #: a forced catch-up after dialling the owner brings the definition (DKG #3264)
+        self.definition_from_owner = definition_from_owner
+        self.peer_id = peer_id
+        self.listings = 0
+        self.calls = []   # ordered verbs: ("subscribe", graph, shared_memory, forced), ("connect", peer), ("join", ...)
+
+    def status(self):
+        return {"peerId": self.peer_id}
 
     def context_graphs(self):
-        return [{"id": GRAPH, "subscribed": self.subscribed, "synced": self.subscribed,
-                 "accessPolicy": self.access_policy}]
+        self.listings += 1
+        row = {"id": GRAPH, "subscribed": self.subscribed, "synced": self.subscribed}
+        return [{**row, "accessPolicy": "public"} if self.defined else row]
+
+    def subscribe_context_graph(self, graph, include_shared_memory=True, force_catchup=False):
+        self.calls.append(("subscribe", graph, include_shared_memory, force_catchup))
+        if self.subscribe_fails:
+            raise DkgError("Context Graph read authority is temporarily unavailable")
+        self.subscribed = True
+        if force_catchup and self.definition_from_owner and ("connect", OWNER) in self.calls:
+            self.defined = True
+        return {"subscribed": graph,
+                "catchup": {"status": "running" if self.running_vm_only else "queued",
+                            "includeWorkspace": not self.running_vm_only, "jobId": "job-1"}}
 
     def connect_peer(self, peer):
         self.calls.append(("connect", peer))
-        if self.connect_fails:
-            raise RuntimeError("peer discovery pending")
-        return {"connected": peer}
-
-    def subscribe_context_graph(self, graph, include_shared_memory=False):
-        self.subscribe_calls += 1
-        self.calls.append(("subscribe", graph))
-        if self.subscribe_fails:
-            raise RuntimeError("Context Graph read authority is temporarily unavailable")
-        return {"subscribed": graph}
-
-    def status(self):
-        return {"peerId": self.own_peer}
 
     def request_join(self, graph, peer):
-        self.join_calls += 1
         self.calls.append(("join", peer))
-        if self.join_fails:
-            raise RuntimeError("curator unreachable")
-        return {"ok": True}
+
+    @property
+    def subscribes(self):
+        return [call for call in self.calls if call[0] == "subscribe"]
+
+    @property
+    def dials(self):
+        return [call for call in self.calls if call[0] == "connect"]
 
 
-def _cfg(peer=CURATOR):
-    return SimpleNamespace(community_graph_id=GRAPH, community_graph_peer_id=peer)
+def _cfg(graph=GRAPH, owner=OWNER):
+    return SimpleNamespace(context_graph_id=graph, graph_peer_id=owner)
 
 
 class _Clock:
@@ -67,76 +81,123 @@ class _Clock:
         return self.now
 
 
-def test_fifty_sync_passes_send_one_join():
-    node, membership = _Node(), CommunityMembership()
-    for _ in range(50):
+def test_dials_the_owner_then_subscribes_the_verified_graph_with_shared_memory():
+    node = _Node()
+    ok, _ = CommunityMembership().ensure(node, _cfg())
+    assert ok and node.calls == [("connect", OWNER), ("subscribe", GRAPH, True, False)]   # no join (D-040)
+
+
+def test_a_subscribed_node_without_the_definition_dials_the_owner_and_forces_a_catchup():
+    """The listing says subscribed and synced, but names no access policy: every write
+    would be refused CONTEXT_GRAPH_NOT_FOUND. Synced is not the signal; the definition is."""
+    node = _Node(subscribed=True, defined=False)
+    membership = CommunityMembership()
+    assert membership.ensure(node, _cfg()) == (True, "subscribed")
+    assert node.calls == [("connect", OWNER), ("subscribe", GRAPH, True, True)]
+    membership.ensure(node, _cfg())
+    assert len(node.subscribes) == 1, "confirmed once the definition is in"
+
+
+def test_a_definition_still_missing_is_fetched_again_after_the_short_window_not_every_beat():
+    clock = _Clock()
+    node = _Node(subscribed=True, defined=False, definition_from_owner=False)
+    membership = CommunityMembership(clock=clock)
+    ok, detail = membership.ensure(node, _cfg())
+    assert ok and "definition" in detail   # reads keep working meanwhile
+    for _ in range(3):   # the pulse beats every ~20 s
+        clock.now += 15
         membership.ensure(node, _cfg())
-    assert node.join_calls == 1
+    assert len(node.subscribes) == 1, "still inside the short window"
+    clock.now += CommunityMembership.FAILED_SUBSCRIBE_RETRY_SECONDS
+    membership.ensure(node, _cfg())
+    assert node.subscribes == [("subscribe", GRAPH, True, True)] * 2
+    assert node.calls[-2:] == [("connect", OWNER), ("subscribe", GRAPH, True, True)]   # dial, then force
 
 
-def test_no_subscribe_when_the_node_says_it_is_subscribed():
+def test_the_owner_link_is_redialled_every_two_minutes_once_confirmed():
+    """KI-297: a node that lost the owner link stayed subscribed while receiving nothing."""
+    clock = _Clock()
+    node = _Node()
+    membership = CommunityMembership(clock=clock)
+    membership.ensure(node, _cfg())
+    clock.now += CommunityMembership.OWNER_LINK_SECONDS - 1
+    membership.ensure(node, _cfg())
+    assert len(node.dials) == 1
+    clock.now += 2
+    membership.ensure(node, _cfg())
+    assert len(node.dials) == 2 and len(node.subscribes) == 1
+
+
+def test_the_owners_own_node_never_dials_itself():
+    node = _Node(peer_id=OWNER)
+    membership = CommunityMembership()
+    assert membership.ensure(node, _cfg()) == (True, "subscribed")
+    assert node.calls == [("subscribe", GRAPH, True, False)]
+
+
+def test_without_an_owner_peer_nothing_is_dialled_or_waited_for():
+    node = _Node(defined=False)
+    membership = CommunityMembership()
+    assert membership.ensure(node, _cfg(owner="")) == (True, "subscribed")
+    assert node.calls == [("subscribe", GRAPH, True, False)]
+
+
+def test_a_node_subscribed_without_shared_memory_is_asked_once_to_add_it():
+    """A node an older release subscribed VM-only lists the graph as subscribed; the
+    listing alone must not stop the one subscribe that adds the shared memory."""
     node = _Node(subscribed=True)
-    ok, _ = CommunityMembership().ensure(node, _cfg())
-    assert ok and node.subscribe_calls == 0
+    membership = CommunityMembership()
+    for _ in range(20):
+        membership.ensure(node, _cfg())
+    assert node.subscribes == [("subscribe", GRAPH, True, False)]
 
 
-def test_subscribe_is_not_repeated_inside_the_retry_window():
-    node, clock = _Node(subscribed=False), _Clock()
+def test_a_running_vm_only_catchup_is_asked_again_a_minute_later():
+    """The node hands back a VM-only job that is still running: shared memory is not
+    in yet, so the subscribe is repeated after the short window until it is."""
+    clock = _Clock()
+    node = _Node(subscribed=True, running_vm_only=True)
     membership = CommunityMembership(clock=clock)
-    for _ in range(10):
-        membership.ensure(node, _cfg(peer=""))
-    assert node.subscribe_calls == 1
-    clock.now += CommunityMembership.RETRY_SECONDS + 1
-    membership.ensure(node, _cfg(peer=""))
-    assert node.subscribe_calls == 2
+    ok, detail = membership.ensure(node, _cfg())
+    assert ok and "shared memory" in detail
+    clock.now += CommunityMembership.FAILED_SUBSCRIBE_RETRY_SECONDS - 1
+    membership.ensure(node, _cfg())
+    assert len(node.subscribes) == 1, "still inside the short window"
+    clock.now += 2
+    node.running_vm_only = False   # the VM job ended: the node starts one with shared memory
+    membership.ensure(node, _cfg())
+    clock.now += CommunityMembership.FAILED_SUBSCRIBE_RETRY_SECONDS + 1
+    membership.ensure(node, _cfg())
+    assert len(node.subscribes) == 2, "confirmed once the answer covers shared memory"
 
 
-def test_never_asks_itself_to_join():
-    node = _Node(own_peer=CURATOR)
-    CommunityMembership().ensure(node, _cfg())
-    assert node.join_calls == 0
-
-
-def test_a_failed_join_is_retried_only_after_the_window():
-    node, clock = _Node(join_fails=True), _Clock()
+def test_once_confirmed_only_the_listing_is_read_and_only_after_the_window():
+    """The pulse calls ensure() every ~20 s: once the subscription and the definition
+    are confirmed the node's listing is re-read once per RETRY_SECONDS, and nothing is
+    re-subscribed."""
+    clock = _Clock()
+    node = _Node()
     membership = CommunityMembership(clock=clock)
     membership.ensure(node, _cfg())
-    membership.ensure(node, _cfg())
-    assert node.join_calls == 1
+    confirmed_at = node.listings
+    for _ in range(4):
+        membership.ensure(node, _cfg())
+    assert node.listings == confirmed_at and len(node.subscribes) == 1
     clock.now += CommunityMembership.RETRY_SECONDS + 1
-    node.join_fails = False
     membership.ensure(node, _cfg())
     membership.ensure(node, _cfg())
-    assert node.join_calls == 2
+    assert node.listings == confirmed_at + 1 and len(node.subscribes) == 1
 
 
-def test_no_graph_configured_does_nothing():
+def test_a_node_that_lost_the_subscription_is_subscribed_again():
+    clock = _Clock()
     node = _Node()
-    ok, _detail = CommunityMembership().ensure(node, SimpleNamespace(community_graph_id="", community_graph_peer_id=""))
-    assert not ok and node.subscribe_calls == 0 and node.join_calls == 0
-
-
-# ---------------------------------------------------------------------------
-# KI-216 / FIX-0039: a fresh node must reach the graph OWNER before it can subscribe
-# ---------------------------------------------------------------------------
-
-
-def test_connects_to_the_owner_before_the_first_subscribe():
-    node = _Node()
-    CommunityMembership().ensure(node, _cfg())
-    assert node.calls[:2] == [("connect", CURATOR), ("subscribe", GRAPH)]
-
-
-def test_no_connect_without_an_owner_peer_id():
-    node = _Node()
-    CommunityMembership().ensure(node, _cfg(peer=""))
-    assert ("connect", CURATOR) not in node.calls and node.subscribe_calls == 1
-
-
-def test_a_failed_owner_dial_does_not_stop_the_subscribe():
-    node = _Node(connect_fails=True)
-    ok, _ = CommunityMembership().ensure(node, _cfg())
-    assert ok and node.subscribe_calls == 1
+    membership = CommunityMembership(clock=clock)
+    membership.ensure(node, _cfg())
+    node.subscribed = False   # e.g. an operator unsubscribed it
+    clock.now += CommunityMembership.RETRY_SECONDS + 1
+    membership.ensure(node, _cfg())
+    assert len(node.subscribes) == 2
 
 
 def test_a_refused_subscribe_is_retried_after_the_short_window_not_the_long_one():
@@ -146,149 +207,23 @@ def test_a_refused_subscribe_is_retried_after_the_short_window_not_the_long_one(
     assert membership.ensure(node, _cfg())[0] is False
     clock.now += CommunityMembership.FAILED_SUBSCRIBE_RETRY_SECONDS - 1
     membership.ensure(node, _cfg())
-    assert node.subscribe_calls == 1, "still inside the short window"
+    assert len(node.subscribes) == 1, "still inside the short window"
     clock.now += 2
     membership.ensure(node, _cfg())
-    assert node.subscribe_calls == 2, "retried after the short window, long before RETRY_SECONDS"
+    assert len(node.subscribes) == 2, "retried after the short window, long before RETRY_SECONDS"
 
 
-def test_no_join_request_for_a_public_graph():
-    """D-040: public graphs have no membership step — with an owner peer now
-    configured for discovery, the join request must NOT start firing at it."""
-    node = _Node(access_policy="public")
-    CommunityMembership().ensure(node, _cfg())
-    assert node.join_calls == 0 and node.subscribe_calls == 1
+def test_an_answer_that_does_not_name_its_catchup_counts_as_covering_shared_memory():
+    """Older nodes answer a subscribe without the catch-up block: the request asked
+    for shared memory, so the subscription is taken as confirmed."""
+    node = _Node()
+    node.subscribe_context_graph = lambda graph, include_shared_memory=True, force_catchup=False: {"subscribed": graph}
+    membership = CommunityMembership()
+    assert membership.ensure(node, _cfg()) == (True, "subscribed")
+    assert membership.ensure(node, _cfg()) == (True, "subscribed")
 
 
-def test_a_confirmed_subscription_is_not_re_probed_inside_the_window():
-    """The pulse calls ensure() every ~20 s; once the node said "subscribed" the
-    listing is not re-read until RETRY_SECONDS have passed."""
-    clock = _Clock()
-    node = _Node(subscribed=True)
-    probes = {"n": 0}
-    real = node.context_graphs
-    def counting():
-        probes["n"] += 1
-        return real()
-    node.context_graphs = counting
-    membership = CommunityMembership(clock=clock)
-    for _ in range(5):
-        membership.ensure(node, _cfg())
-    assert probes["n"] == 1
-    clock.now += CommunityMembership.RETRY_SECONDS + 1
-    membership.ensure(node, _cfg())
-    assert probes["n"] == 2
-
-
-def test_no_join_when_the_listing_does_not_know_the_graph_yet():
-    """Bench F (2026-10-03): the first ensure() ran before the node listed the
-    graph, the public check saw no row, and a join request went to the owner of
-    a PUBLIC graph. A join is outward and fails closed: only a row that says
-    "private" earns one."""
-    class _Unlisted(_Node):
-        def context_graphs(self):
-            return []   # the node has no row for the graph, even after subscribing
-    node = _Unlisted()
-    CommunityMembership().ensure(node, _cfg())
-    assert node.subscribe_calls == 1 and node.join_calls == 0
-
-
-def test_a_private_graph_still_gets_its_join_after_the_first_subscribe():
-    class _ListsAfterSubscribe(_Node):
-        def subscribe_context_graph(self, graph, include_shared_memory=False):
-            self.subscribed = True   # the node lists it from now on, access private
-            return super().subscribe_context_graph(graph, include_shared_memory)
-    node = _ListsAfterSubscribe()
-    CommunityMembership().ensure(node, _cfg())
-    assert node.join_calls == 1
-
-
-# ------------------------------------------------- the owner link (KI-297) and the definition (KI-295)
-
-
-def _connects(node):
-    return sum(1 for verb, _ in node.calls if verb == "connect")
-
-
-def test_the_owner_is_redialled_while_already_subscribed():
-    """KI-297: reports reach a node only over a live link to the graph owner; the
-    owner used to be dialled only before a subscribe, so a node that lost the link
-    stayed "subscribed" and received nothing for 1.5 h (bench swm21-b, 2026-10-07)."""
-    clock = _Clock()
-    node = _Node(subscribed=True, access_policy="public")
-    membership = CommunityMembership(clock=clock)
-    membership.ensure(node, _cfg())
-    assert _connects(node) == 1
-    clock.now += CommunityMembership.OWNER_LINK_SECONDS - 1
-    membership.ensure(node, _cfg())
-    assert _connects(node) == 1, "not inside the link window"
-    clock.now += 2
-    membership.ensure(node, _cfg())
-    assert _connects(node) == 2, "redialled although the node stays subscribed"
-
-
-def test_the_owner_link_is_not_dialled_by_the_owner_itself():
-    node = _Node(subscribed=True, access_policy="public", own_peer=CURATOR)
-    CommunityMembership().ensure(node, _cfg())
-    assert _connects(node) == 0
-
-
-def test_a_failed_owner_redial_is_fail_open():
-    node = _Node(subscribed=True, access_policy="public", connect_fails=True)
-    ok, _ = CommunityMembership().ensure(node, _cfg())
-    assert ok
-
-
-def test_a_subscription_without_the_graph_definition_fetches_it_again():
-    """KI-295: a node subscribed while not connected to the owner never received the
-    graph's public definition; it could read but every post failed
-    CONTEXT_GRAPH_NOT_FOUND. Its listing shows no access policy; connecting to the
-    owner and subscribing again installs the definition (bench swm21-c)."""
-    node = _Node(subscribed=True, access_policy="")
-    ok, _ = CommunityMembership().ensure(node, _cfg())
-    assert ok, "reads keep working meanwhile"
-    assert node.calls[:2] == [("connect", CURATOR), ("subscribe", GRAPH)]
-
-
-def test_the_definition_is_fetched_again_at_most_once_a_minute_until_it_arrives():
-    clock = _Clock()
-    node = _Node(subscribed=True, access_policy="")
-    membership = CommunityMembership(clock=clock)
-    membership.ensure(node, _cfg())
-    clock.now += CommunityMembership.FAILED_SUBSCRIBE_RETRY_SECONDS - 1
-    membership.ensure(node, _cfg())
-    assert node.subscribe_calls == 1
-    clock.now += 2
-    membership.ensure(node, _cfg())
-    assert node.subscribe_calls == 2
-    node.access_policy = "public"                  # the definition arrived
-    clock.now += CommunityMembership.FAILED_SUBSCRIBE_RETRY_SECONDS + 1
-    membership.ensure(node, _cfg())
-    clock.now += CommunityMembership.FAILED_SUBSCRIBE_RETRY_SECONDS + 1
-    membership.ensure(node, _cfg())
-    assert node.subscribe_calls == 2, "no more re-subscribes once the definition is in"
-
-
-def test_no_definition_refetch_without_a_known_owner():
-    """A graph whose owner is not configured has nobody to fetch the definition from."""
-    node = _Node(subscribed=True, access_policy="")
-    CommunityMembership().ensure(node, _cfg(peer=""))
-    assert node.subscribe_calls == 0
-
-
-def test_a_fresh_subscribe_without_the_definition_looks_again_in_a_minute():
-    """The first subscribe succeeded but the definition did not come with it: the
-    node must not wait the long window before fetching it again."""
-    clock = _Clock()
-    node = _Node(subscribed=False, access_policy="")
-    real_subscribe = node.subscribe_context_graph
-    def subscribe_without_definition(graph, include_shared_memory=False):
-        node.subscribed = True                     # subscribed, but no definition yet
-        return real_subscribe(graph, include_shared_memory)
-    node.subscribe_context_graph = subscribe_without_definition
-    membership = CommunityMembership(clock=clock)
-    membership.ensure(node, _cfg())
-    assert node.subscribe_calls == 1
-    clock.now += CommunityMembership.FAILED_SUBSCRIBE_RETRY_SECONDS + 1
-    membership.ensure(node, _cfg())
-    assert node.subscribe_calls == 2, "fetched again after a minute, not ten"
+def test_no_graph_configured_does_nothing():
+    node = _Node()
+    ok, _detail = CommunityMembership().ensure(node, _cfg(graph=""))
+    assert not ok and node.calls == []

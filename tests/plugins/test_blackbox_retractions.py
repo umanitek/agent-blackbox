@@ -25,7 +25,7 @@ from plugins.blackbox.kernel import constants, signing
 from plugins.blackbox.kernel import identity as kernel_identity
 from plugins.blackbox.kernel.config import BlackboxConfig
 
-CFG = BlackboxConfig(report=True, community_graph_id=GRAPH, daily_report_limit=50)
+CFG = BlackboxConfig(report=True, context_graph_id=GRAPH, daily_report_limit=50)
 THREAT = "ioc:domain:evil.example"
 
 

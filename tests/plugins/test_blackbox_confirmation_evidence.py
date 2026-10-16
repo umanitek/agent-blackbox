@@ -2,23 +2,25 @@
 
 The confirmed pool is the hand-off to the verified graph's owner; without a
 signed reference to what the curators checked it would be a list of opinions.
-So: the reference has a closed format; a COMMUNITY confirmation counts only
-with one; the curator verbs refuse to sign or co-sign one without a check; and
-the verified authority's confirmations stay exactly as shipped.
+So: the reference has a closed format; the curator verbs refuse to sign a
+community confirmation without one; and the verified authority's confirmations
+stay exactly as shipped.
+
+One graph (2026-10-16): there are no community curators for now, so the
+community authority is dormant and no community confirmation counts on a
+reader, evidenced or not (``test_blackbox_authority``).
 """
 
 from __future__ import annotations
 
 import pytest
 from _community_rows import GRAPH
-from test_blackbox_authority import CFG, CITED, THREAT, VM_GRAPH, Graphs, Side
-from test_blackbox_curate_community import EVIDENCE, Curators
-from test_blackbox_curate_community import THREAT as IP_THREAT
+from test_blackbox_authority import CFG, THREAT, VM_GRAPH, Graphs, Side
 
 from plugins.blackbox.community import EVIDENCE_REFERENCE, read_curator_view
 from plugins.blackbox.community.statements import curator_statements as cs
 from plugins.blackbox.community.statements import curator_view as cv
-from plugins.blackbox.curate import dossier, transport, verbs
+from plugins.blackbox.curate import dossier, verbs
 from plugins.blackbox.curate.proposal import ProposalStore
 from plugins.blackbox.kernel import signing
 from plugins.blackbox.kernel.signing.authority import Authority
@@ -70,31 +72,7 @@ def test_the_curators_checklist_and_the_signed_field_share_one_format():
     assert not spaced[0].ok
 
 
-# ------------------------------------------------------------------ what a reader counts
-
-
-def test_a_community_confirmation_without_evidence_does_not_count(monkeypatch):
-    side = Side(GRAPH)
-    monkeypatch.setenv("BLACKBOX_COMMUNITY_ROOT_KEYS", side.root_hex)
-    bare = read_curator_view(Graphs(community=[side.manifest_row(), side.row(Kind.CONFIRMATION, THREAT, {})]), CFG)
-    assert bare.verdict(THREAT) is None and THREAT not in bare.community.verdicts
-
-
-def test_a_community_confirmation_with_evidence_counts_and_readers_see_what_was_checked(monkeypatch, tmp_path):
-    side = Side(GRAPH)
-    monkeypatch.setenv("BLACKBOX_COMMUNITY_ROOT_KEYS", side.root_hex)
-    view = read_curator_view(Graphs(community=[side.manifest_row(), side.row(Kind.CONFIRMATION, THREAT, CITED)]), CFG)
-    assert view.verdict(THREAT) is Kind.CONFIRMATION
-    assert view.community.verdicts[THREAT].field("evidence") == CITED["evidence"]
-
-
-def test_a_bare_confirmation_never_displaces_an_evidenced_one(monkeypatch):
-    """A later confirmation without evidence is not a statement the community authority can make: the earlier one stands."""
-    side = Side(GRAPH)
-    monkeypatch.setenv("BLACKBOX_COMMUNITY_ROOT_KEYS", side.root_hex)
-    view = read_curator_view(Graphs(community=[side.manifest_row(), side.row(Kind.CONFIRMATION, THREAT, CITED, sequence=1),
-                                               side.row(Kind.CONFIRMATION, THREAT, {}, sequence=2)]), CFG)
-    assert view.community.verdicts[THREAT].field("evidence") == CITED["evidence"]
+# ------------------------------------------------------------------ what a reader counts: the verified authority's
 
 
 def test_the_verified_authoritys_confirmation_is_unchanged_and_needs_no_evidence(monkeypatch):
@@ -109,39 +87,6 @@ def test_the_verified_authoritys_confirmation_is_unchanged_and_needs_no_evidence
 
 
 # ------------------------------------------------------------------ what a curator may sign
-
-
-def test_a_community_curator_cannot_propose_a_confirmation_without_evidence(tmp_path, monkeypatch):
-    team = Curators(tmp_path, monkeypatch)
-    with team.a:
-        ctx, store = team.ctx(team.a, interest=[IP_THREAT]), ProposalStore()
-        for evidence in ("", "it is obviously malware", "advisory:"):
-            with pytest.raises(verbs.VerbError, match="propose a deferral"):
-                verbs.propose_statement(ctx, store, kind=Kind.CONFIRMATION, identifier=IP_THREAT, fields={}, evidence=evidence)
-        proposal = verbs.propose_statement(ctx, store, kind=Kind.CONFIRMATION, identifier=IP_THREAT, fields={}, evidence=EVIDENCE)
-    assert proposal.parsed().payload["evidence"] == EVIDENCE
-    with team.a:                                                              # a deferral needs none
-        verbs.propose_statement(team.ctx(team.a), ProposalStore(), kind=Kind.DEFERRAL, identifier="ioc:ip:203.0.113.8", fields={})
-
-
-def test_the_second_curator_co_signs_only_after_its_own_check(tmp_path, monkeypatch):
-    team = Curators(tmp_path, monkeypatch)
-    with team.a:
-        proposal = verbs.propose_statement(team.ctx(team.a, interest=[IP_THREAT]), ProposalStore(), kind=Kind.CONFIRMATION,
-                                           identifier=IP_THREAT, fields={}, evidence=EVIDENCE)
-        verbs.send(team.ctx(team.a), proposal, team.b.name)
-    with team.b:
-        for received in transport.receive_proposals(team.b.node, transport.InboxCursor()):
-            ProposalStore().save(received)
-        ctx = team.ctx(team.b, interest=[IP_THREAT])
-        with pytest.raises(verbs.VerbError, match="only after your own check"):
-            verbs.approve(ctx, ProposalStore(), proposal.id, evidence="", typed_code=None, yes=True)
-        assert len(ProposalStore().get(proposal.id).parsed().signatures) == 1      # nothing was co-signed
-        _, outcome = verbs.approve(ctx, ProposalStore(), proposal.id, evidence=f"reproduced:{SHA}", typed_code=None, yes=True)
-    assert outcome.startswith("published")
-    with team.reader:
-        view = read_curator_view(team.reader.node, CFG, interest=[IP_THREAT])
-    assert view.community.verdicts[IP_THREAT].field("evidence") == EVIDENCE       # the SIGNED reference is the proposer's
 
 
 def test_the_verified_authoritys_confirmation_verb_signs_no_evidence_field(tmp_path, monkeypatch):

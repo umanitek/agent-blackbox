@@ -263,38 +263,21 @@ VIEW_WORKING_MEMORY = "working-memory"
 VIEW_SHARED_WORKING_MEMORY = "shared-working-memory"
 VIEW_VERIFIABLE_MEMORY = "verifiable-memory"
 
-# Community graph: the open, shared threat graph every Blackbox agent can
-# contribute to and learn from. The runtime gate lives in config
-# (BlackboxConfig.community_enabled = report AND community_graph_id present);
-# this constant only records that the capability ships in this build.
+# The community: what every Blackbox agent shares and learns from. Since
+# 2026-10-16 it lives in the verified graph itself (``context_graph_id``) — its
+# shared memory, sub-graph ``COMMUNITY_SUB_GRAPH`` — and there is no second
+# graph. Edges share there; the curator promotes what it confirms to the
+# graph's Verified Memory. The runtime gate lives in config
+# (BlackboxConfig.community_enabled = report AND a graph); this constant only
+# records that the capability ships in this build.
 COMMUNITY_GRAPH_ENABLED = True
 
-#: Default community context graph id: the PRODUCTION community graph, created
-#: 2026-10-12 on Umanitek's node and owned by its wallet (an open, unregistered
-#: shared-memory graph; creating it cost nothing). Every install joins it unless
-#: the BLACKBOX_COMMUNITY_GRAPH_ID env override or the config entry names
-#: another graph. Reading community flags needs only this address; SENDING
-#: reports still needs the operator's consent (``report``, the single gate
-#: ``BlackboxConfig.community_enabled``). Never a development or test graph here.
-DEFAULT_COMMUNITY_GRAPH_ID = "0x37b1Fdfd134e2b17583bCBdD3034F91504cD9C70/agent-blackbox-community"
-
-#: The named subgraph every community statement is written to and read from
-#: (2026-10-12). DKG 10.0.23 reserves a catalog-mode graph's ROOT for its RFC-64
-#: catalog sync and refuses members' direct shares there ("legacy SWM apply is
-#: not authoritative for root scope"); a named subgraph keeps the member lane,
-#: so a share reaches every subscribed member at once (measured: same second).
+#: The named sub-graph of the verified graph every community statement is
+#: written to and read from. Never the graph's ROOT: the DKG keeps one author
+#: catalog per writer of a root and allows 64 per graph, and every node is a
+#: writer — a named sub-graph has no per-author catalog. (DKG 10.0.23 also
+#: refuses members' direct shares into a catalog-mode root.)
 COMMUNITY_SUB_GRAPH = "reports"
-
-#: Peer id of the node that OWNS the community graph (its read authority). An
-#: unregistered public graph has no on-chain pointer, so a fresh node cannot
-#: find the graph until it is connected to this peer (KI-216: eight subscribes
-#: failed "read authority unavailable" on a new mainnet node; six seconds after
-#: a DHT connect to the owner the same subscribe succeeded and 221 quads
-#: replayed). Ships as a PAIR with ``DEFAULT_COMMUNITY_GRAPH_ID`` — empty with
-#: it, filled in the same launch PR. It is a TRUST ANCHOR: whoever names this
-#: peer decides whose graph the node reads, so it comes only from the shipped
-#: default, the installer, or the operator's own config — never from the network.
-DEFAULT_COMMUNITY_GRAPH_PEER_ID = "12D3KooWBJskzr2unXQG9mR3LRZFUJoxWr1PN6hTbyWyKndHXjZM"   # Umanitek's node
 
 #: Default daily cap on outbound community reports per node. Bounds a runaway
 #: or compromised agent's graph footprint even before the per-threat 6-hour

@@ -280,7 +280,10 @@ def test_a_refresh_writes_a_ready_scope_into_the_cache_on_both_paths(monkeypatch
         def status(self, timeout=None):
             return {"storeUrl": "http://127.0.0.1:7878/query"}
 
-    cfg = BlackboxConfig(context_graph_id=CG, community_graph_id="")
+        def query(self, sparql, cg_id, view=None, on_error=None, **kwargs):
+            return on_error   # the community's shared memory is read too (one graph); it fails open
+
+    cfg = BlackboxConfig(context_graph_id=CG)
     rs = refresh_cycle.refresh(cfg, Client(), force_query=True)
     assert rs.verified_scope is not None and rs.verified_scope.assertion_graphs == {PART_A}
     assert disk_cache._read_cache().verified_scope == rs.verified_scope

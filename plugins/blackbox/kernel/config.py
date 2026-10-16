@@ -120,14 +120,6 @@ class BlackboxConfig:
     report: bool = False   # community sharing is opt-in (2026-10-16); a consent record is also needed
     daily_report_limit: int = constants.DEFAULT_DAILY_REPORT_LIMIT
     report_min_severity: str = "high"
-    #: Community context graph address (env BLACKBOX_COMMUNITY_GRAPH_ID →
-    #: config entry ``community_graph_id`` → shipped default). Empty means the
-    #: community feature is dormant regardless of ``report``.
-    community_graph_id: str = constants.DEFAULT_COMMUNITY_GRAPH_ID
-    #: Curator peer id for a JOIN request — empty by default and meant to stay so:
-    #: the community graph is PUBLIC, trust is enforced at READ time (decision 9
-    #: as amended 2026-10-02). Set only for a deliberately gated sandbox graph.
-    community_graph_peer_id: str = constants.DEFAULT_COMMUNITY_GRAPH_PEER_ID
     #: Seconds between community-pulse probes (R16); 0 disables the pulse.
     community_poll_interval: int = 20
     #: Days per keep-alive epoch (R5): this node re-publishes a copy of each of
@@ -167,21 +159,25 @@ class BlackboxConfig:
         return self.mode.lower() == "block"
 
     @property
+    def community_graph_id(self) -> str:
+        """Where community statements live: the verified graph (one graph since 2026-10-16). Kept for the
+        callers in ``curate/`` and ``ruleset/`` that still use this name; new code reads ``context_graph_id``."""
+        return self.context_graph_id
+
+    @property
     def community_enabled(self) -> bool:
         """True when outbound community sharing may run — THE single gate.
 
         Every community write path checks this one expression (no scattered
         gate logic): the build must ship the capability
         (:data:`constants.COMMUNITY_GRAPH_ENABLED`), the operator must have
-        sharing on (``report``), and a community graph address must exist.
-        An empty address keeps the feature dormant by construction, which is
-        what lets the shipped default stay safe before the production graph
-        is minted (KI-035).
+        sharing on (``report``), and a graph address must exist (empty keeps
+        the feature dormant by construction, KI-035).
         """
         return bool(
             constants.COMMUNITY_GRAPH_ENABLED
             and self.report
-            and self.community_graph_id.strip()
+            and self.context_graph_id.strip()
         )
 
     @property
@@ -253,25 +249,32 @@ def _blackbox_entry() -> dict[str, Any]:
     return entry if isinstance(entry, dict) else {}
 
 
+#: The separate community graph's settings (2026-10-12 to 2026-10-16), config keys and environment
+#: variables: ignored since there is one graph, and said so once per process.
+_RETIRED_COMMUNITY_SETTINGS = frozenset({"community_graph_id", "community_graph_peer_id",
+                                         "BLACKBOX_COMMUNITY_GRAPH_ID", "BLACKBOX_COMMUNITY_GRAPH_PEER_ID"})
+_retired_settings_noted: set[str] = set()
+
+
+def _note_retired_community_settings(entry: Mapping[str, Any]) -> None:
+    for name in _RETIRED_COMMUNITY_SETTINGS - _retired_settings_noted:
+        if str(entry.get(name) or os.environ.get(name) or "").strip():
+            _retired_settings_noted.add(name)
+            logger.info("blackbox: %s is ignored: community reports live in the verified graph now", name)
+
+
 def load_blackbox_config() -> BlackboxConfig:
     """Build a :class:`BlackboxConfig` from config file + environment overrides."""
     entry = _blackbox_entry()
+    _note_retired_community_settings(entry)
     mode = str(_env_or(entry, env="BLACKBOX_MODE", key="mode", default="audit")).lower()
     if mode not in {"audit", "block"}:
         mode = "audit"
-    block_severity = str(
-        _env_or(entry, env="BLACKBOX_BLOCK_SEVERITY", key="block_severity", default="critical")
-    ).lower()
+    block_severity = str(_env_or(entry, env="BLACKBOX_BLOCK_SEVERITY", key="block_severity", default="critical")).lower()
     if block_severity not in constants.SEVERITY_RANK:
         block_severity = "critical"
-    report_min_severity = str(
-        _env_or(
-            entry,
-            env="BLACKBOX_REPORT_MIN_SEVERITY",
-            key="report_min_severity",
-            default="high",
-        )
-    ).lower()
+    report_min_severity = str(_env_or(entry, env="BLACKBOX_REPORT_MIN_SEVERITY", key="report_min_severity",
+                                      default="high")).lower()
     if report_min_severity not in constants.SEVERITY_RANK:
         report_min_severity = "high"
     categories = _normalize_categories(entry.get("detection"))
@@ -364,10 +367,6 @@ def load_blackbox_config() -> BlackboxConfig:
         daily_report_limit=constants.effective_daily_report_limit(_as_int(_env_or(entry, env="BLACKBOX_DAILY_REPORT_LIMIT", key="daily_report_limit", default=constants.DEFAULT_DAILY_REPORT_LIMIT), constants.DEFAULT_DAILY_REPORT_LIMIT)),
         community_shadow=_as_bool(_env_or(entry, env="BLACKBOX_COMMUNITY_SHADOW", key="community_shadow", default=False), False),
         verified_lookup_fallback=_fallback_mode(_env_or(entry, env="BLACKBOX_VERIFIED_LOOKUP_FALLBACK", key="verified_lookup_fallback", default="off")),
-        community_graph_id=str(_env_or(entry, env="BLACKBOX_COMMUNITY_GRAPH_ID", key="community_graph_id",
-                                        default=constants.DEFAULT_COMMUNITY_GRAPH_ID)).strip(),
-        community_graph_peer_id=str(_env_or(entry, env="BLACKBOX_COMMUNITY_GRAPH_PEER_ID", key="community_graph_peer_id",
-                                             default=constants.DEFAULT_COMMUNITY_GRAPH_PEER_ID)).strip(),
         community_poll_interval=_as_int(_env_or(entry, env="BLACKBOX_COMMUNITY_POLL_INTERVAL", key="community_poll_interval", default=20), 20),
         community_keepalive_epoch_days=_as_float(_env_or(entry, env="BLACKBOX_COMMUNITY_KEEPALIVE_EPOCH_DAYS", key="community_keepalive_epoch_days", default=10.0), 10.0),
         report_min_severity=report_min_severity,

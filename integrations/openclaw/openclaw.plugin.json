@@ -31,6 +31,11 @@
         "default": "0x37b1Fdfd134e2b17583bCBdD3034F91504cD9C70/agent-blackbox-vm",
         "description": "Public Agent Blackbox Verifiable Memory graph id."
       },
+      "graphPeerId": {
+        "type": "string",
+        "default": "12D3KooWBJskzr2unXQG9mR3LRZFUJoxWr1PN6hTbyWyKndHXjZM",
+        "description": "Peer id of the graph's owner (the curator), dialled before the first share: a node that reaches the graph only through relays gets the graph's definition from it."
+      },
       "dkgUrl": {
         "type": "string",
         "default": "http://127.0.0.1:9320",

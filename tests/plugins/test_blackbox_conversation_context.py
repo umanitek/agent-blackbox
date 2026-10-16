@@ -251,7 +251,7 @@ def test_injection_in_tool_call_arguments_has_no_context_and_cannot_share():
     finding = detection.detect_all("terminal", {"command": f"echo '{ATTACK}'"}, ruleset_mod.Ruleset())
     injections = [f for f in finding if f.category == "injection"]
     assert injections and all(f.fields.get("context") is None for f in injections)
-    cfg = config_mod.BlackboxConfig(report=True, community_graph_id="did:dkg:context-graph:test")
+    cfg = config_mod.BlackboxConfig(report=True, context_graph_id="did:dkg:context-graph:test")
     allowed, why = sharing.CommunitySharePolicy(cfg).decide(injections[0].to_dict(), "0x" + "1" * 40)
     assert not allowed and "context" in why
 

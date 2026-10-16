@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import pytest
 from _community_rows import GRAPH, NETWORK, Reporter, signed_row
-from test_blackbox_authority import CFG, Network, Side
+from test_blackbox_authority import CFG, VM_GRAPH, Network, Side
 from test_blackbox_curator_view import _entry
 from test_blackbox_stages import _keys, _stage, _view
 
@@ -120,13 +120,15 @@ CODE = "import os\nos.system('make build')"
 
 
 def _tier(reports, listed, monkeypatch, verified_skill=None):
-    side = Side(GRAPH)
-    monkeypatch.setenv("BLACKBOX_COMMUNITY_ROOT_KEYS", side.root_hex)
+    """The community tier over *reports*, with *listed* reporters on the verified curators'
+    counted-author list (one graph since 2026-10-16: the community authority is dormant)."""
+    side = Side(VM_GRAPH)
+    monkeypatch.setenv("BLACKBOX_CURATOR_ROOT_KEYS", side.root_hex)
     listings = [side.row(Kind.COUNTED_AUTHORS, f"author:{r.author}", _entry(r.author)) for r in listed]
     rs = compiler.Ruleset()
     if verified_skill:
         rs.skill.append(verified_skill)
-    community_tier.apply_community_tier(rs, Network(reports=reports, community=[side.manifest_row(), *listings]), CFG, None)
+    community_tier.apply_community_tier(rs, Network(reports=reports, verified=[side.manifest_row(), *listings]), CFG, None)
     return rs
 
 
@@ -183,15 +185,15 @@ def test_a_trusted_report_of_a_local_skill_is_matched_by_its_code_hash_never_its
 
 def test_a_delisted_reporters_skill_rule_is_gone_when_the_tier_is_applied_again(monkeypatch):
     alice = Reporter("0xa")
-    side = Side(GRAPH)
-    monkeypatch.setenv("BLACKBOX_COMMUNITY_ROOT_KEYS", side.root_hex)
+    side = Side(VM_GRAPH)   # the verified curators' counted-author list (one graph: no community authority)
+    monkeypatch.setenv("BLACKBOX_CURATOR_ROOT_KEYS", side.root_hex)
     listing = side.row(Kind.COUNTED_AUTHORS, f"author:{alice.author}", _entry(alice.author))
     rs = compiler.Ruleset()
-    community_tier.apply_community_tier(rs, Network(reports=[_skill_report(alice)], community=[side.manifest_row(), listing]), CFG, None)
+    community_tier.apply_community_tier(rs, Network(reports=[_skill_report(alice)], verified=[side.manifest_row(), listing]), CFG, None)
     assert [rule["identifier"] for rule in rs.skill] == ["skill:evil-skill@1.0.0"]
     delisting = side.row(Kind.COUNTED_AUTHORS, f"author:{alice.author}", _entry(alice.author, listed="no"), sequence=2)
     community_tier.reapply_community_tier(
-        rs, Network(reports=[_skill_report(alice)], community=[side.manifest_row(), listing, delisting]), CFG)
+        rs, Network(reports=[_skill_report(alice)], verified=[side.manifest_row(), listing, delisting]), CFG)
     assert rs.skill == [] and rs.community["skill:evil-skill@1.0.0"]["enforcement"] == "monitor"
     assert detect_skill("skill_install", {"name": "evil-skill", "version": "1.0.0"}, rs) == []
 

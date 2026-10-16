@@ -25,7 +25,7 @@ from plugins.blackbox.kernel import signing
 from plugins.blackbox.kernel.config import BlackboxConfig
 from plugins.blackbox.detection import Finding
 
-CFG = BlackboxConfig(report=True, community_graph_id=GRAPH)
+CFG = BlackboxConfig(report=True, context_graph_id=GRAPH)
 THREAT = "dep:npm:evil@1.0.0"
 MONDAY_W40 = datetime(2026, 9, 28, 12, tzinfo=UTC)
 MONDAY_W41 = datetime(2026, 10, 5, 12, tzinfo=UTC)
@@ -176,7 +176,7 @@ def test_publishing_sends_one_digest_per_completed_week_and_never_twice(monkeypa
 def test_nothing_is_published_while_sharing_is_off(tmp_path):
     tally = digest.SightingTally(tmp_path / "tally.json", clock=_Clock(MONDAY_W41))
     tally.record(THREAT)
-    assert digest.publish_due_digests(_Node(), BlackboxConfig(report=False, community_graph_id=GRAPH), tally) == 0
+    assert digest.publish_due_digests(_Node(), BlackboxConfig(report=False, context_graph_id=GRAPH), tally) == 0
 
 
 # ------------------------------------------------------------------ the reader

@@ -90,7 +90,7 @@ def community_stats_payload(verified_reports: VerifiedReportsRead) -> Any:
     rs = ruleset.peek(cfg)
     community_rules = getattr(rs, "community", {}) or {}
     now = time.time()
-    graph = str(getattr(cfg, "community_graph_id", "") or "")
+    graph = str(getattr(cfg, "context_graph_id", "") or "")   # the community lives in the verified graph's shared memory
     join = community.read_join_state(DkgClient(url=cfg.dkg_url, dkg_home=cfg.dkg_home), graph) if graph else None
     corroborated = sum(1 for r in community_rules.values() if int(r.get("reporterCount") or 0) >= 2)
     # Reports-today from OUR ingest observations (KI-012), not
@@ -102,7 +102,7 @@ def community_stats_payload(verified_reports: VerifiedReportsRead) -> Any:
     )
     ledger = sanitized_ledger(1)
     stats = {
-        "configured": bool(getattr(cfg, "community_graph_id", "")),
+        "configured": bool(graph),
         "sharing_enabled": community.consent.sharing_on(cfg),
         "paused": bool(getattr(rs, "community_paused", False)),
         "community_threats": len(community_rules),
@@ -110,8 +110,8 @@ def community_stats_payload(verified_reports: VerifiedReportsRead) -> Any:
         "new_today": fresh_today,
         "last_refresh": rs.synced_at or None,
         "last_share": ledger[0] if ledger else None,
-        # distinct VERIFIED signers (R0d); None when no community graph is configured
-        "contributing_agents": community.contributing_agent_count(verified_reports(cfg)) if cfg.community_graph_id else None,
+        # distinct VERIFIED signers (R0d); None when no graph is configured
+        "contributing_agents": community.contributing_agent_count(verified_reports(cfg)) if graph else None,
         # which graph this node joined and whether it is connected yet (2026-10-12: a new
         # install saw "some community graph" and a "not authorized" log line with no explanation)
         "graph": safe_text(graph.rsplit("/", 1)[-1], 80) if graph else None,
@@ -129,10 +129,10 @@ def reports_payload(verified_reports: VerifiedReportsRead, limit: int) -> Any:
     from ..kernel.config import load_blackbox_config
 
     # B7 (KI-006): the dead code lives — community corroboration board,
-    # served from the COMMUNITY graph, plus this node's own outbound
+    # served from the community's shared memory, plus this node's own outbound
     # ledger so 'what did I contribute' is one call.
     cfg = load_blackbox_config()
-    if not getattr(cfg, "community_graph_id", ""):
+    if not getattr(cfg, "context_graph_id", ""):
         return {
             "reports": [],
             "sharing_enabled": community.consent.sharing_on(cfg),
@@ -162,7 +162,7 @@ def community_statements_payload(community_read: CommunityReadSource) -> dict[st
     from ..kernel.config import load_blackbox_config
 
     cfg = load_blackbox_config()
-    if not getattr(cfg, "community_graph_id", ""):
+    if not getattr(cfg, "context_graph_id", ""):
         return {"configured": False}
     read = community_read(cfg)
     if read is None:
@@ -216,7 +216,7 @@ def health_payload(community_read: CommunityReadSource, node_reachable: Callable
     cfg = load_blackbox_config()
     ruleset.pulse(cfg)   # R16: the dashboard is a long-lived process — its health poll keeps the pulse going
     rs = ruleset.peek(cfg)
-    read = community_read(cfg) if getattr(cfg, "community_graph_id", "") else None
+    read = community_read(cfg) if getattr(cfg, "context_graph_id", "") else None
     retries = community.share_retry_stats()
     inputs = health.gather(cfg, rs, node_reachable(cfg), read, audit.blocked_counts_by_identifier(), time.time(),
                            pending_shares=retries.pending, shares_given_up=retries.given_up,

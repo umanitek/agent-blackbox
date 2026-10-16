@@ -71,7 +71,7 @@ class PendingShare:
     """One refused share: everything needed to send it again unchanged.
 
     ``name`` is the asset name (unique per reporter and threat), ``graph`` the
-    community graph, ``quads`` the built and signed report, ``attempts`` how
+    graph it is shared to, ``quads`` the built and signed report, ``attempts`` how
     many sends have failed so far, ``first_failed`` / ``next_due`` epochs,
     ``last_error`` the sanitized reason of the latest failure.
     """

@@ -5,6 +5,12 @@ Three curator machines and a reader over one shared in-memory network
 listings and its verdicts are all published in the COMMUNITY graph — the
 verified graph is never written — and "published" means the statement was read
 back from the graph, not that the node said yes.
+
+One graph (2026-10-16): there are no community curators for now (the project
+lead's decision), so the community authority is dormant. What only it does is no
+longer tested here; a team that publishes nothing still runs. The curator
+machinery a PUBLISHING team drives is the verified curators' too, and waits for
+the curator PR (``MOVES_TO_VERIFIED_CURATORS``).
 """
 
 from __future__ import annotations
@@ -14,9 +20,8 @@ import time
 from datetime import date
 
 import pytest
-from _clock import utc_today
 from _community_rows import GRAPH, NETWORK, Reporter
-from _machines import SWM, VM, Machine, Network, Node
+from _machines import SWM, Machine, Network, Node
 
 from plugins.blackbox.community import read_curator_view
 from plugins.blackbox.community.statements import curator_view as cv
@@ -24,15 +29,21 @@ from plugins.blackbox.curate import consent, context, keys, publishing, transpor
 from plugins.blackbox.curate.context import CurateContext
 from plugins.blackbox.curate.proposal import ProposalState, ProposalStore
 from plugins.blackbox.kernel.config import BlackboxConfig
-from plugins.blackbox.kernel.signing import key_manifest, trust_anchors
+from plugins.blackbox.kernel.signing import key_manifest
 from plugins.blackbox.kernel.signing.authority import Authority
 from plugins.blackbox.kernel.signing.statement_order import CuratorStatement as Kind
 
-VM_GRAPH = "0x37b1Fdfd/agent-blackbox-vm"
-CFG = BlackboxConfig(report=True, community_graph_id=GRAPH, context_graph_id=VM_GRAPH)
+VM_GRAPH = GRAPH   # one graph (2026-10-16): the community lives in the verified graph's shared memory
+CFG = BlackboxConfig(report=True, context_graph_id=VM_GRAPH)
 THREAT = "ioc:ip:203.0.113.7"
 ADDRESS = "0x" + "a" * 40
 EVIDENCE = "advisory:MAL-2026-0001"
+#: Publishing, the service beat, keep-alive, the reporter ladder and a curator node's stores are
+#: the verified curators' machinery too. Driven here through community curators, who are dormant,
+#: they need the curator PR's routing of the verified curators' statements to move onto them.
+MOVES_TO_VERIFIED_CURATORS = ("drives curator machinery through community curators, dormant under one graph "
+                              "(2026-10-16): it moves onto the verified curators with the curator PR (#44), "
+                              "which routes their statements to where they live")
 
 
 class Curators:
@@ -40,6 +51,8 @@ class Curators:
     community root held on A and a published 2-of-3 community manifest."""
 
     def __init__(self, tmp_path, monkeypatch, *, publish_manifest=True):
+        if publish_manifest:
+            pytest.skip(MOVES_TO_VERIFIED_CURATORS)
         self.net = Network()
         self.monkeypatch = monkeypatch
         self.a, self.b, self.c, self.reader = (Machine(self.net, tmp_path, monkeypatch, name) for name in "ABCR")
@@ -87,36 +100,25 @@ def _listing(reporter, **over):
     return {"listed": "yes", "class": "established", "org": "", "expires": "2026-12-31", "address": ADDRESS, **over}
 
 
-# ------------------------------------------------------------------ the flow, with no access to the verified graph
+# ------------------------------------------------------------------ dormant, and the flow with no access to the verified graph
 
 
-def test_two_curators_publish_a_manifest_a_listing_and_a_confirmation_and_a_reader_sees_all_three(tmp_path, monkeypatch):
-    team = Curators(tmp_path, monkeypatch)
-    alice = Reporter("0xa")
-    proposal, outcome = team.two_key(Kind.COUNTED_AUTHORS, f"author:{alice.author}", _listing(alice))
-    assert outcome.startswith(f"published to {GRAPH}") and proposal.graph == GRAPH
-    _, outcome = team.two_key(Kind.CONFIRMATION, THREAT, {})
-    assert outcome.startswith(f"published to {GRAPH}")
-    with team.reader:
-        view = read_curator_view(team.reader.node, CFG, interest=[f"author:{alice.author}", THREAT])
-    assert view.community.manifest.curator_keys == tuple(sorted(team.keys.values()))
-    assert alice.author in view.counted and view.verdict(THREAT) is Kind.CONFIRMATION
-    assert (VM_GRAPH, VM) not in team.net.assets and (VM_GRAPH, SWM) not in team.net.assets   # the verified graph was never written
-    names = [name for (_, name) in team.net.assets[(GRAPH, SWM)]]
-    assert any(name.startswith("key-manifest-1-1") for name in names) and len(names) == 3
-
-
-def test_the_community_authority_refuses_what_belongs_to_the_verified_tier(tmp_path, monkeypatch):
-    team = Curators(tmp_path, monkeypatch)
-    with team.a:
-        ctx, store = team.ctx(team.a), ProposalStore()
-        with pytest.raises(verbs.VerbError, match="may not sign a revocation"):
-            verbs.propose_statement(ctx, store, kind=Kind.REVOCATION, identifier=THREAT, fields={"reason": "false-positive"})
-        with pytest.raises(verbs.VerbError, match="may not promote"):
-            verbs.propose_promotion(ctx, store, identifier="dep:npm:evil@1.0.0", severity="critical",
-                                    evidence="advisory:MAL-2026-0001", reason="", report_subjects=[])
-        with pytest.raises(verbs.VerbError, match="may not sign a kill list"):
-            verbs.propose_kill_list(ctx, store, entries=[])
+@pytest.mark.parametrize("kind, identifier, fields, evidence", [
+    (Kind.COUNTED_AUTHORS, "author:" + "ab" * 32, _listing(None), ""),
+    (Kind.CONFIRMATION, THREAT, {}, EVIDENCE),
+    (Kind.REJECTION, THREAT, {"reason": "benign"}, ""),
+    (Kind.DEFERRAL, THREAT, {}, ""),
+    (Kind.PAUSE, "curator", {"until": "2026-12-31"}, ""),
+])
+def test_while_dormant_the_tooling_signs_nothing_as_the_community_authority(tmp_path, monkeypatch, kind, identifier,
+                                                                            fields, evidence):
+    """No community curators for now (one graph, 2026-10-16): with a community root configured and
+    curator keys on hand, no verb acts for the community authority, because no key manifest of its
+    is trusted on this graph."""
+    team = Curators(tmp_path, monkeypatch, publish_manifest=False)
+    with team.a, pytest.raises(verbs.VerbError, match="no trusted key manifest for the community authority"):
+        verbs.propose_statement(team.ctx(team.a, interest=[identifier]), ProposalStore(), kind=kind, identifier=identifier,
+                                fields=fields, evidence=evidence)
 
 
 def test_one_curator_key_is_not_enough_to_list_a_reporter(tmp_path, monkeypatch):
@@ -247,22 +249,7 @@ def test_a_third_machine_continues_the_numbering_whatever_kind_came_before(tmp_p
     assert alice.author not in view.counted and alice.author in view.delisted
 
 
-# ------------------------------------------------------------------ pinned graphs, listing length, acting authority
-
-
-def test_a_pinned_graph_refuses_a_locally_held_root(tmp_path, monkeypatch):
-    """KI-256: a development root must never exist on a graph whose root is pinned."""
-    team = Curators(tmp_path, monkeypatch)
-    monkeypatch.setattr(trust_anchors, "COMMUNITY_ROOT_KEYS", {GRAPH: ("ab" * 32,)})
-    assert not context.is_sandbox(Authority.COMMUNITY, CFG, NETWORK)
-    with team.a:
-        pinned = team.ctx(team.a, sandbox=context.is_sandbox(Authority.COMMUNITY, CFG, NETWORK))
-        with pytest.raises(verbs.VerbError, match="pinned root"):
-            verbs.manifest_proposal(pinned, ProposalStore(), curator_keys=list(team.keys.values()),
-                                    curator_operators=list(team.keys), threshold=2,
-                                    promotion_author="", root_epoch=1, version=2, legacy_uals=[])
-        with pytest.raises(verbs.VerbError, match="pinned root"):
-            verbs.approve(pinned, ProposalStore(), "missing", evidence="", typed_code=None, yes=False, root=True)
+# ------------------------------------------------------------------ manifests, listing defaults, acting authority
 
 
 def test_a_sandbox_manifest_needs_one_operator_per_distinct_key(tmp_path, monkeypatch):
@@ -280,19 +267,6 @@ def test_a_sandbox_manifest_needs_one_operator_per_distinct_key(tmp_path, monkey
                                          root_epoch=1, version=1, legacy_uals=[])
     manifest = key_manifest.parse_manifest(staged.parsed().payload)
     assert dict(zip(manifest.curator_keys, manifest.curator_operators)) == dict(zip(keys_, operators))
-
-
-def test_a_community_listing_counts_for_at_most_90_days_whatever_it_states(tmp_path, monkeypatch):
-    team = Curators(tmp_path, monkeypatch)
-    alice = Reporter("0xa")
-    team.two_key(Kind.COUNTED_AUTHORS, f"author:{alice.author}", _listing(alice, expires=(utc_today().replace(year=utc_today().year + 1)).isoformat()))
-    signed = utc_today()
-    with team.reader:
-        for days, counted in ((0, True), (cv.COMMUNITY_LISTING_MAX_DAYS, True), (cv.COMMUNITY_LISTING_MAX_DAYS + 1, False)):
-            day = date.fromordinal(signed.toordinal() + days).isoformat()
-            monkeypatch.setattr(cv, "_today", lambda day=day: day)
-            view = read_curator_view(team.reader.node, CFG, interest=[f"author:{alice.author}"])
-            assert (alice.author in view.counted) is counted, days
 
 
 def test_a_listing_without_an_expiry_gets_the_authoritys_default(tmp_path, monkeypatch):
@@ -388,7 +362,7 @@ def test_a_revocations_advisory_twin_makes_the_next_pulse_withdraw_the_blocked_r
     graph = _TwinGraph()
     monkeypatch.setattr(pulse_beat, "DkgClient", lambda *a, **k: graph)
 
-    cfg = BlackboxConfig(report=True, community_graph_id=GRAPH, context_graph_id=VM_GRAPH, community_poll_interval=20)
+    cfg = BlackboxConfig(report=True, context_graph_id=VM_GRAPH, community_poll_interval=20)
     rule = {"identifier": blocked, "source": "public", "severity": "critical", "kind": "malware",
             "ecosystem": "npm", "packageName": "evil-pkg", "packageVersion": "1.2.3"}
     rs = compiler.Ruleset(context_graph_id=VM_GRAPH, dependency={"npm:evil-pkg@1.2.3": rule},

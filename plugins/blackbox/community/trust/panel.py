@@ -68,7 +68,7 @@ class Confirmed(TypedDict):
 
 
 class TrustPanel(TypedDict):
-    available: bool             # False: the community graph could not be read (never "nothing is trusted")
+    available: bool             # False: the shared memory could not be read (never "nothing is trusted")
     reason: str
     authorities: list[AuthorityFacts]
     reporters: list[TrustedReporter]

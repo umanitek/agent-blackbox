@@ -1,4 +1,4 @@
-"""Whether this machine may share with the community graph — the ONE gate
+"""Whether this machine may share with the community — the ONE gate
 every send path asks (Refine R13, revised 2026-10-16).
 
 Community sharing is OPT-IN: off until the operator turns it on (2026-10-16,
@@ -112,8 +112,8 @@ def in_force() -> bool:
 
 
 def sharing_on(cfg: Any) -> bool:
-    """Whether this node shares with the community graph right now: the build and the
-    operator's switch and a community graph (``cfg.community_enabled``) AND a consent in force
+    """Whether this node shares with the community right now: the build and the
+    operator's switch and a graph (``cfg.community_enabled``) AND a consent in force
     — the two checks the share gate makes. Every "is sharing on?" display reads this, so an
     opt-out made with ``blackbox report --withdraw-consent`` never shows as on."""
     return bool(getattr(cfg, "community_enabled", False)) and in_force()

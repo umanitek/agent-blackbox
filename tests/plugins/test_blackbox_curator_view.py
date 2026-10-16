@@ -2,9 +2,9 @@
 
 Trust starts at a ROOT this network trusts (pinned in constants; sandbox
 networks only may take one from the environment). From a root-signed key
-manifest, curator statements count only from the right graph (enforcement in
-the verified graph, advisory in the community graph) and only with enough
-curator keys. Rejected or revoked threats stop counting; revoked verified
+manifest, curator statements count only from the right memory of the one graph
+(enforcement in its Verified Memory, advisory in its shared memory — one graph
+since 2026-10-16) and only with enough curator keys. Rejected or revoked threats stop counting; revoked verified
 rules are withdrawn from the ruleset; counted authors are keyed by reporter
 KEY; an unlisted author's dispute weighs nothing.
 """
@@ -29,8 +29,8 @@ from plugins.blackbox.kernel.signing import trust_anchors
 from plugins.blackbox.kernel.signing.statement_order import CuratorStatement as Kind
 from plugins.blackbox.ruleset import compiler, curator_tier
 
-VM_GRAPH = "0x37b1Fdfd/agent-blackbox-vm"
-CFG = BlackboxConfig(report=True, community_graph_id=GRAPH, context_graph_id=VM_GRAPH)
+VM_GRAPH = GRAPH   # one graph (2026-10-16): the community lives in the verified graph's shared memory
+CFG = BlackboxConfig(report=True, context_graph_id=VM_GRAPH)
 THREAT = "ioc:domain:evil.example"
 DAY = date(2026, 10, 2)
 
@@ -79,7 +79,7 @@ def _curator_row(kind, identifier, fields, signers, manifest, *, graph, sequence
 
 
 class _Node:
-    """Serves the verified graph (manifests + curator statements) and the community graph."""
+    """Serves the graph's Verified Memory (manifests + curator statements) and its shared memory."""
 
     def __init__(self, verified=(), community_statements=(), reports=(), disputes=()):
         self.verified = list(verified)
@@ -92,7 +92,7 @@ class _Node:
         return []
 
     def query(self, sparql, cg_id, view=None, on_error=None, **kw):
-        if cg_id == VM_GRAPH:
+        if view != constants.VIEW_SHARED_WORKING_MEMORY:
             if "g:KeyManifest" in sparql:
                 return [r for r in self.verified if "manifest" in r["r"]]
             return [r for r in self.verified if "curator:" in r["r"]] if "g:CuratorStatement" in sparql else []
@@ -136,10 +136,10 @@ def test_statements_count_only_from_their_own_graph(trust, keys, manifest):
     two = keys["curators"][:2]
     node = _Node([_manifest_row(manifest, keys["root"]),
                   _curator_row(Kind.REJECTION, "ioc:domain:a.example", {"reason": "benign"}, two, manifest,
-                               graph=VM_GRAPH)],                                  # advisory, but in the verified graph
+                               graph=VM_GRAPH)],                                  # advisory, but in Verified Memory
                  community_statements=[
                      _curator_row(Kind.REVOCATION, "ioc:domain:b.example", {"reason": "false-positive"}, two,
-                                  manifest, graph=GRAPH)])                        # enforcement, but in community
+                                  manifest, graph=GRAPH)])                        # enforcement, but in shared memory
     view = read_curator_view(node, CFG)
     assert view.manifest is not None and view.verdicts == {}
 
@@ -261,7 +261,7 @@ class _PageFailsNode(_Node):
         self.failing = failing
 
     def query(self, sparql, cg_id, view=None, on_error=None, **kw):
-        if cg_id == VM_GRAPH and self.failing in sparql:
+        if view != constants.VIEW_SHARED_WORKING_MEMORY and self.failing in sparql:
             return on_error
         return super().query(sparql, cg_id, view=view, on_error=on_error, **kw)
 

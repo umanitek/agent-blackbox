@@ -921,7 +921,7 @@ def test_the_suspension_is_a_health_item_on_blackbox_status(svc, monkeypatch, ca
         assert [item.klass for item in items] == [HealthClass.SECURITY] and "curator SUSPENDED" in items[0].message
         monkeypatch.setattr(cli.health, "gather", lambda *args, **kwargs: None)
         monkeypatch.setattr(cli.health, "operator_health", lambda inputs: [])
-        cli._print_health(dataclasses.replace(CFG, community_graph_id=""), None, None, False)
+        cli._print_health(dataclasses.replace(CFG, context_graph_id=""), None, None, False)
         assert "[SECURITY] curator SUSPENDED: its self-test failed 1 of 22" in capsys.readouterr().out
         svc.beat("A")                                                     # a passing run lifts it
         assert curate.status_health_items(time.time()) == []

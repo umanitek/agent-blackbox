@@ -170,7 +170,7 @@ def _print_verified_progress(cfg: Any) -> None:
 def _print_health(cfg: Any, rs: Any, client: DkgClient, reachable: bool) -> None:
     """R10: the shared operator health items (the dashboard banner shows the same)."""
     read = None
-    if reachable and cfg.community_graph_id:
+    if reachable and cfg.context_graph_id:
         try:
             read = community.read_verified_reports(client, cfg)
         except Exception as exc:  # pragma: no cover - status must never crash on the node
@@ -181,7 +181,7 @@ def _print_health(cfg: Any, rs: Any, client: DkgClient, reachable: bool) -> None
                                                  sharing_consent_problem=community.consent.why_not(),
                                                  verified_lookup_problem=ruleset.live.HEALTH.read().problem()))
     items += status_health_items(time.time())   # a curator node's own alarms: self-test suspension, halted quorum
-    if cfg.community_graph_id:   # who curates, who is trusted, what is confirmed (the dashboard's trust panel shows the same)
+    if cfg.context_graph_id:   # who curates, who is trusted, what is confirmed (the dashboard's trust panel shows the same)
         for line in community.trust_status_lines(community.trust_panel(read)):
             print(line)
     for line in health.render_lines(items):
