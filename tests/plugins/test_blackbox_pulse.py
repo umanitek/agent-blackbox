@@ -14,7 +14,7 @@ from plugins.blackbox.kernel.config import BlackboxConfig
 from plugins.blackbox.ruleset import community_tier, compiler, refresh_cycle
 from plugins.blackbox.ruleset import pulse_beat
 
-VM_GRAPH = "0x37b1Fdfd/agent-blackbox-vm"
+VM_GRAPH = GRAPH   # one graph (2026-10-16): the community lives in the verified graph's shared memory
 THREAT = "ioc:domain:fresh.example"
 
 
@@ -77,20 +77,20 @@ class _Graph:
 
 def test_the_fingerprint_is_count_and_newest_subject_and_fails_open():
     graph = _Graph([signed_row(THREAT, Reporter("0xa"))])
-    fp = pulse_module.fingerprint(graph, BlackboxConfig(community_graph_id=GRAPH))
+    fp = pulse_module.fingerprint(graph, BlackboxConfig(context_graph_id=GRAPH))
     assert fp.startswith("ThreatReport=1:urn:guardian:report:")
-    assert pulse_module.fingerprint(graph, BlackboxConfig(community_graph_id="")) is None
+    assert pulse_module.fingerprint(graph, BlackboxConfig(context_graph_id="")) is None
 
     class _Down(_Graph):
         def query(self, *a, **kw):
             return kw.get("on_error")
-    assert pulse_module.fingerprint(_Down(), BlackboxConfig(community_graph_id=GRAPH)) is None
+    assert pulse_module.fingerprint(_Down(), BlackboxConfig(context_graph_id=GRAPH)) is None
 
 
 def test_the_first_probe_is_a_baseline_and_only_a_different_graph_counts_as_changed():
     clock = _Clock()
     pulse = pulse_module.CommunityPulse(clock=clock)
-    cfg = BlackboxConfig(community_graph_id=GRAPH)
+    cfg = BlackboxConfig(context_graph_id=GRAPH)
     graph = _Graph([signed_row(THREAT, Reporter("0xa"))])
     assert pulse.due(20) and not pulse.due(20)               # one slot per interval
     assert pulse.changed(graph, cfg) is False                 # baseline
@@ -106,7 +106,7 @@ def test_a_new_dispute_changes_the_fingerprint_too():
     """Bench finding 2026-10-02: statements arrived only on the full refresh — the grouped probe counts them."""
     from _community_rows import signed_dispute_row
     pulse = pulse_module.CommunityPulse(clock=_Clock())
-    cfg = BlackboxConfig(community_graph_id=GRAPH)
+    cfg = BlackboxConfig(context_graph_id=GRAPH)
     graph = _Graph([signed_row(THREAT, Reporter("0xa"))])
     assert pulse.changed(graph, cfg) is False and pulse.report_count == 1
     graph.disputes.append(signed_dispute_row(THREAT, Reporter("0xb")))
@@ -116,7 +116,7 @@ def test_a_new_dispute_changes_the_fingerprint_too():
 
 def test_a_failed_probe_never_reports_a_change():
     pulse = pulse_module.CommunityPulse(clock=_Clock())
-    cfg = BlackboxConfig(community_graph_id=GRAPH)
+    cfg = BlackboxConfig(context_graph_id=GRAPH)
     graph = _Graph([signed_row(THREAT, Reporter("0xa"))])
     assert pulse.changed(graph, cfg) is False
 
@@ -133,7 +133,7 @@ def test_a_failed_probe_never_reports_a_change():
 
 def test_a_changed_graph_re_applies_the_community_tier_and_writes_it_through(monkeypatch):
     """The whole beat: probe → changed → reapply onto the cached generation → disk + memory."""
-    cfg = BlackboxConfig(report=True, community_graph_id=GRAPH, context_graph_id=VM_GRAPH, community_poll_interval=20)
+    cfg = BlackboxConfig(report=True, context_graph_id=VM_GRAPH, community_poll_interval=20)
     graph = _Graph([signed_row(THREAT, Reporter("0xa"))])
     monkeypatch.setattr(pulse_beat, "DkgClient", lambda *a, **k: graph)
     rs = compiler.Ruleset(context_graph_id=VM_GRAPH)
@@ -154,7 +154,7 @@ def test_a_changed_graph_re_applies_the_community_tier_and_writes_it_through(mon
 def test_a_process_that_starts_with_an_empty_tier_applies_the_reports_already_there(monkeypatch):
     """Bench finding 2026-10-02: B's dashboard baselined on A's report and never applied it — the
     first full refresh was an hour away. The first probe now applies when the cached tier is empty."""
-    cfg = BlackboxConfig(report=True, community_graph_id=GRAPH, context_graph_id=VM_GRAPH, community_poll_interval=20)
+    cfg = BlackboxConfig(report=True, context_graph_id=VM_GRAPH, community_poll_interval=20)
     graph = _Graph([signed_row(THREAT, Reporter("0xa"))])          # the report is ALREADY there
     monkeypatch.setattr(pulse_beat, "DkgClient", lambda *a, **k: graph)
     rs = compiler.Ruleset(context_graph_id=VM_GRAPH)
@@ -189,7 +189,7 @@ def test_a_process_that_starts_with_an_empty_tier_applies_the_reports_already_th
 
 def test_a_new_process_compares_its_first_probe_against_the_applied_fingerprint():
     """KI-208 (pure): the cached tier's fingerprint is the baseline for a process with no probe yet."""
-    cfg = BlackboxConfig(community_graph_id=GRAPH)
+    cfg = BlackboxConfig(context_graph_id=GRAPH)
     graph = _Graph([signed_row(THREAT, Reporter("0xa"))])
     current = pulse_module.fingerprint(graph, cfg)
     stale = pulse_module.CommunityPulse(clock=_Clock())
@@ -203,7 +203,7 @@ def test_a_new_process_compares_its_first_probe_against_the_applied_fingerprint(
 
 def test_a_wedged_beat_does_not_stall_the_pulse_forever(monkeypatch):
     """A node call that never returns must not disable the pulse for the life of the process."""
-    cfg = BlackboxConfig(report=True, community_graph_id=GRAPH, context_graph_id=VM_GRAPH, community_poll_interval=20)
+    cfg = BlackboxConfig(report=True, context_graph_id=VM_GRAPH, community_poll_interval=20)
     monkeypatch.setattr(pulse_beat, "_pulsing", True)
     monkeypatch.setattr(pulse_beat, "_pulsing_since", time.time())
     assert pulse_beat.pulse(cfg) is False                           # a live beat is respected
@@ -218,14 +218,14 @@ def test_a_wedged_beat_does_not_stall_the_pulse_forever(monkeypatch):
 def test_the_pulse_is_off_without_a_graph_or_with_interval_zero(monkeypatch):
     called = []
     monkeypatch.setattr(pulse_beat, "DkgClient", lambda *a, **k: called.append(1))
-    assert pulse_beat.pulse(BlackboxConfig(community_graph_id="", community_poll_interval=20)) is False
-    assert pulse_beat.pulse(BlackboxConfig(community_graph_id=GRAPH, community_poll_interval=0)) is False
+    assert pulse_beat.pulse(BlackboxConfig(context_graph_id="", community_poll_interval=20)) is False
+    assert pulse_beat.pulse(BlackboxConfig(context_graph_id=GRAPH, community_poll_interval=0)) is False
     assert called == []
 
 
 def test_the_pulse_retries_refused_shares_on_its_beat(monkeypatch, tmp_path):
     from plugins.blackbox.community import share_retry
-    cfg = BlackboxConfig(report=True, community_graph_id=GRAPH, context_graph_id=VM_GRAPH, community_poll_interval=20)
+    cfg = BlackboxConfig(report=True, context_graph_id=VM_GRAPH, community_poll_interval=20)
     drained = threading.Event()
     monkeypatch.setattr(pulse_beat, "DkgClient", lambda *a, **k: _Graph())
     monkeypatch.setattr(community, "retry_due_shares", lambda client, cfg, queue=None: drained.set() or 0)
@@ -234,7 +234,7 @@ def test_the_pulse_retries_refused_shares_on_its_beat(monkeypatch, tmp_path):
 
 
 def test_get_runs_the_pulse_instead_of_a_refresh_when_the_cache_is_fresh(monkeypatch):
-    cfg = BlackboxConfig(report=True, community_graph_id=GRAPH, context_graph_id=VM_GRAPH, community_poll_interval=20, sync_interval=3600)
+    cfg = BlackboxConfig(report=True, context_graph_id=VM_GRAPH, community_poll_interval=20, sync_interval=3600)
     rs = compiler.Ruleset(context_graph_id=VM_GRAPH)
     rs.synced_at = time.time()
     refresh_cycle._memory.store(rs)
@@ -247,7 +247,7 @@ def test_get_runs_the_pulse_instead_of_a_refresh_when_the_cache_is_fresh(monkeyp
 def test_a_curator_statement_in_shared_memory_changes_the_fingerprint_too():
     """R3-attest: an attestation must reach readers on the pulse, not an hour later."""
     pulse = pulse_module.CommunityPulse(clock=_Clock())
-    cfg = BlackboxConfig(community_graph_id=GRAPH)
+    cfg = BlackboxConfig(context_graph_id=GRAPH)
     graph = _Graph([signed_row(THREAT, Reporter("0xa"))])
     assert pulse.changed(graph, cfg) is False
     graph.statements.append({"r": "urn:guardian:curator:stage-attestation:abc:1"})
@@ -258,14 +258,15 @@ def test_a_curator_statement_in_shared_memory_changes_the_fingerprint_too():
 def test_the_beat_runs_membership_so_a_fresh_node_subscribes_without_a_full_refresh(monkeypatch):
     """KI-216 / FIX-0039: on blackbox-main-f the heavy refresh never completed (no
     verified graph), so membership had no caller and the node sat unsubscribed
-    for 7+ minutes. The beat always runs, so membership runs on the beat."""
+    for 7+ minutes. The beat always runs, so membership — now the verified graph's
+    subscription with its shared memory — runs on the beat."""
     calls = []
     monkeypatch.setattr(pulse_beat, "DkgClient", lambda *a, **k: object())
     monkeypatch.setattr(pulse_beat.community, "ensure_community_subscription",
-                        lambda client, cfg: calls.append(cfg.community_graph_id) or (True, "subscribed"))
+                        lambda client, cfg: calls.append(cfg.context_graph_id) or (True, "subscribed"))
     monkeypatch.setattr(refresh_cycle, "_retry_shares", lambda client, cfg: None)   # lazy import inside the beat
     monkeypatch.setattr(refresh_cycle, "peek", lambda cfg: compiler.Ruleset())
     monkeypatch.setattr(pulse_beat.community.PULSE, "changed", lambda client, cfg, applied=None: False)
-    cfg = BlackboxConfig(community_graph_id=GRAPH, community_graph_peer_id="12D3KooWowner")
+    cfg = BlackboxConfig(context_graph_id=GRAPH)
     pulse_beat._background_pulse(cfg)
     assert calls == [GRAPH]

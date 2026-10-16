@@ -29,9 +29,9 @@ _SYNC_LABEL_SUFFIX = {
 }
 
 _COMMUNITY_PROGRESS_LABEL = {
-    "not-configured": "Community graph not configured",
+    "not-configured": "Community not configured (no graph)",
     "paused": "Community ingest paused by curators",
-    "empty": "Community graph connected · no reports yet",
+    "empty": "Community connected · no reports yet",
 }
 
 
@@ -43,13 +43,13 @@ def _sync_label(tier: str, state: str) -> str:
 def _community_progress(cfg: Any, rs: Any, community: int) -> dict[str, Any]:
     """The ``sync_progress.community`` entry of /api/graph-status: ``{count, state, label}``.
     Its state is independent of the VM catch-up — the community tier is live on its own."""
-    if not getattr(cfg, "community_graph_id", ""):
+    if not getattr(cfg, "context_graph_id", ""):
         state = "not-configured"
     elif getattr(rs, "community_paused", False):
         state = "paused"
     else:
         state = "ready" if community else "empty"
-    label = _COMMUNITY_PROGRESS_LABEL.get(state, f"Community graph live · {int(community or 0)} corroborated threats")
+    label = _COMMUNITY_PROGRESS_LABEL.get(state, f"Community live · {int(community or 0)} corroborated threats")
     return {"count": int(community or 0), "state": state, "label": label}
 
 

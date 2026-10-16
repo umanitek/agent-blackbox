@@ -1,9 +1,10 @@
 """P2 (trust-and-threat-lab §03.4) — row builders: one Strategy per promotable category.
 
 Every category D3 calls promotable has a builder; every row carries the signed
-``blackbox.promotion`` envelope whose payload names the rule; evidence is capped
-at 2 KB; a built row's envelope parses and a 2-key manifest accepts it; and the
-verified reader compiles each row back into the rule it was signed as.
+``blackbox.promotion`` envelope whose payload names the rule and the community
+report it was made from (its provenance — the one-graph flow); evidence is
+capped at 2 KB; a built row's envelope parses and a 2-key manifest accepts it;
+and the verified reader compiles each row back into the rule it was signed as.
 """
 
 from __future__ import annotations
@@ -17,24 +18,33 @@ from plugins.blackbox.curate import publishing
 from plugins.blackbox.curate.publishing import row_builders as rb
 from plugins.blackbox.kernel import constants, rdf_terms, signing, threat_ids
 from plugins.blackbox.kernel.signing import key_manifest as km
+from plugins.blackbox.kernel.signing import promotion_statement as statement
 from plugins.blackbox.ruleset import row_adapters
 from plugins.blackbox.ruleset.partitions.rows import rows_from_triples
 
 NETWORK = "sandbox-net"
 VERIFIED_GRAPH = "0xabc/agent-blackbox-vm"
-PROVENANCE = ("0123456789abcdef", "fedcba9876543210")
+REPORTER, REPORTER_KEY, DIGEST = "0x" + "e" * 40, "e" * 64, "d" * 64
 INJECTION_PATTERN = r"ignore\s+(all\s+)?previous\s+instructions\\n"
 
-#: One confirmed entry per promotable category (D3: every listable type is promotable).
+
+def _report(identifier):
+    """The community report a promotion of *identifier* was made from (its provenance)."""
+    return statement.ReportRef(identifier, threat_ids.report_uri(identifier, REPORTER), DIGEST, REPORTER_KEY)
+
+
+#: One confirmed entry per promotable category (D3: every listable type is promotable). No report
+#: carries an injection's pattern, so the injection entry is made from none.
+_IOC, _SKILL = threat_ids.ioc_identifier("domain", "Evil.Example."), threat_ids.skill_version_identifier("totally-safe-helper", "2.1.0")
+_FILEACCESS = threat_ids.fileaccess_identifier("read_file", "ssh-private-key")
 ENTRIES = {
-    "dep": rb.ConfirmedEntry("dep:npm:evil-pkg@1.0.0", "critical", "malware", PROVENANCE, "advisory MAL-2026-1",
-                             advisory_id="MAL-2026-1"),
-    "ioc": rb.ConfirmedEntry(threat_ids.ioc_identifier("domain", "Evil.Example."), "high", "malware", PROVENANCE, "lab: C2 beacon"),
-    "skill": rb.ConfirmedEntry(threat_ids.skill_version_identifier("totally-safe-helper", "2.1.0"), "high", "malware", PROVENANCE),
-    "injection": rb.ConfirmedEntry(threat_ids.injection_identifier(INJECTION_PATTERN), "medium", "injection", PROVENANCE,
+    "dep": rb.ConfirmedEntry("dep:npm:evil-pkg@1.0.0", "critical", "malware", _report("dep:npm:evil-pkg@1.0.0"),
+                             "advisory MAL-2026-1", advisory_id="MAL-2026-1"),
+    "ioc": rb.ConfirmedEntry(_IOC, "high", "malware", _report(_IOC), "lab: C2 beacon"),
+    "skill": rb.ConfirmedEntry(_SKILL, "high", "malware", _report(_SKILL)),
+    "injection": rb.ConfirmedEntry(threat_ids.injection_identifier(INJECTION_PATTERN), "medium", "injection",
                                    pattern=INJECTION_PATTERN),
-    "fileaccess": rb.ConfirmedEntry(threat_ids.fileaccess_identifier("read_file", "ssh-private-key"), "high", "exfiltration",
-                                    PROVENANCE),
+    "fileaccess": rb.ConfirmedEntry(_FILEACCESS, "high", "exfiltration", _report(_FILEACCESS)),
 }
 
 
@@ -91,7 +101,12 @@ def test_an_unpromotable_category_is_refused_at_the_entry():
         rb.ConfirmedEntry(threat_ids.escalation_identifier("shell", "remote-script-pipe"), "high", "malware")
 
 
-@pytest.mark.parametrize("field_name,value", [("severity", "urgent"), ("kind", " "), ("provenance", ("urn:guardian:report:0xr:1",))])
+@pytest.mark.parametrize("field_name,value", [
+    ("severity", "urgent"), ("kind", " "), ("kind", "vulnerability"),   # a dependency rule blocks: malware only
+    ("report", _report("dep:npm:other@1")),                           # another identifier's report
+    ("report", statement.ReportRef("dep:npm:x@1", threat_ids.report_uri("dep:npm:x@1", REPORTER), "ab", REPORTER_KEY)),
+    ("report", statement.ReportRef("dep:npm:x@1", "urn:guardian:report:0xr:1", DIGEST, REPORTER_KEY)),
+])
 def test_an_ill_formed_entry_is_refused(field_name, value):
     fields = {"identifier": "dep:npm:x@1", "severity": "high", "kind": "malware", field_name: value}
     with pytest.raises(rb.RowBuildError):
@@ -110,12 +125,17 @@ def test_no_builder_writes_a_row_without_the_signed_statement(keys, category):
 
 
 @pytest.mark.parametrize("category", sorted(ENTRIES))
-def test_the_signed_payload_carries_identifier_kind_severity_version_and_provenance(keys, category):
+def test_the_signed_payload_carries_identifier_kind_severity_version_and_the_report(keys, category):
     entry = ENTRIES[category]
-    payload = signing.from_text(_signed_literal(_built(keys, entry))).payload
-    assert set(payload) >= {"identifier", "kind", "severity", "ecosystem", "packageName", "packageVersion", "provenance"}
+    quads = _built(keys, entry)
+    payload = signing.from_text(_signed_literal(quads)).payload
+    assert set(payload) == rb.PAYLOAD_KEYS and "provenance" not in payload   # no random provenance ids any more
     assert (payload["identifier"], payload["kind"], payload["severity"]) == (entry.identifier, entry.kind, entry.severity)
-    assert payload["provenance"] == ",".join(PROVENANCE)
+    named = entry.report.fields() if entry.report else {"report": "", "reportDigest": "", "reporterKey": ""}
+    assert {key: payload[key] for key in ("report", "reportDigest", "reporterKey")} == {
+        key: named[key] for key in ("report", "reportDigest", "reporterKey")}
+    provenance = next(_plain(q["object"]) for q in quads if q["predicate"] == constants.SOURCE_OBSERVATION_PROVENANCE_JSON_PRED)
+    assert json.loads(provenance) == ([entry.report.report] if entry.report else [])   # the report itself, as the corpus writes it
 
 
 def test_the_payload_names_the_package_and_version_where_the_identifier_has_them():
@@ -197,7 +217,7 @@ def _evidence_of(quads):
 def test_evidence_over_2kb_is_truncated_to_the_typed_cap(keys, category):
     base = ENTRIES[category]
     long_evidence = "é" * 3000   # 6000 UTF-8 bytes; a multi-byte character is never split
-    entry = rb.ConfirmedEntry(base.identifier, base.severity, base.kind, base.provenance, long_evidence, pattern=base.pattern)
+    entry = rb.ConfirmedEntry(base.identifier, base.severity, base.kind, base.report, long_evidence, pattern=base.pattern)
     evidence = _evidence_of(_built(keys, entry))
     assert len(evidence.encode("utf-8")) <= rb.EVIDENCE_MAX_BYTES == 2048
     assert evidence.endswith("[truncated]") and evidence.startswith("é" * 100)
@@ -206,7 +226,7 @@ def test_evidence_over_2kb_is_truncated_to_the_typed_cap(keys, category):
 def test_evidence_within_the_cap_is_written_whole(keys):
     assert _evidence_of(_built(keys, ENTRIES["ioc"])) == "lab: C2 beacon"
     exact = "x" * rb.EVIDENCE_MAX_BYTES
-    entry = rb.ConfirmedEntry(ENTRIES["dep"].identifier, "critical", "malware", PROVENANCE, exact)
+    entry = rb.ConfirmedEntry(ENTRIES["dep"].identifier, "critical", "malware", ENTRIES["dep"].report, exact)
     assert _evidence_of(_built(keys, entry)) == exact
 
 

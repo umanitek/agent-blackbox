@@ -1,13 +1,15 @@
-"""B2 contract: the community graph gets an address and a real switch.
+"""B2 contract: the community gets a real switch — and, since 2026-10-16, no graph of its own.
 
-Covers the config layer of the community-graph build: precedence of the
-``community_graph_id`` resolution (env → config entry → shipped default),
-the ``community_enabled`` single-gate truth table, the live ``report`` /
-``daily_report_limit`` keys (KI-002), the empty-default launch-safety rule
-(KI-035), and the report-threshold severity edges.
+Covers the config layer of the community: one graph (the community lives in the
+verified graph's shared memory; a config or environment that still names the
+retired community graph keeps working, the setting ignored and logged once), the
+``community_enabled`` single-gate truth table, the live ``report`` /
+``daily_report_limit`` keys (KI-002), and the report-threshold severity edges.
 """
 
 from __future__ import annotations
+
+import logging
 
 import pytest
 
@@ -16,6 +18,7 @@ from plugins.blackbox.kernel import constants
 
 
 DEV_GRAPH = "0x51E5dE758A45c8b64048E29918421F0bdD6D5d5C/agent-blackbox-community-dev"
+RETIRED_COMMUNITY_GRAPH = "0x37b1Fdfd134e2b17583bCBdD3034F91504cD9C70/agent-blackbox-community"
 
 
 @pytest.fixture
@@ -23,11 +26,14 @@ def clean_env(monkeypatch):
     """Blank every Blackbox env override so precedence tests start neutral."""
     for var in (
         "BLACKBOX_REPORT",
+        "BLACKBOX_CONTEXT_GRAPH_ID",
         "BLACKBOX_COMMUNITY_GRAPH_ID",
+        "BLACKBOX_COMMUNITY_GRAPH_PEER_ID",
         "BLACKBOX_DAILY_REPORT_LIMIT",
         "BLACKBOX_REPORT_MIN_SEVERITY",
     ):
         monkeypatch.delenv(var, raising=False)
+    monkeypatch.setattr(bb_config, "_retired_settings_noted", set())
     return monkeypatch
 
 
@@ -37,44 +43,33 @@ def _load_with_entry(monkeypatch, entry):
 
 
 # ---------------------------------------------------------------------------
-# community_graph_id precedence: env wins, entry second, default third
+# one graph: the community lives in the verified graph's shared memory
 # ---------------------------------------------------------------------------
 
 
-def test_env_override_wins_over_entry(clean_env):
-    clean_env.setenv("BLACKBOX_COMMUNITY_GRAPH_ID", DEV_GRAPH)
-    cfg = _load_with_entry(clean_env, {"community_graph_id": "0xother/graph"})
-    assert cfg.community_graph_id == DEV_GRAPH
-
-
-def test_entry_wins_over_default(clean_env):
-    cfg = _load_with_entry(clean_env, {"community_graph_id": DEV_GRAPH})
-    assert cfg.community_graph_id == DEV_GRAPH
-
-
-def test_default_is_shipped_constant(clean_env):
+def test_a_fresh_install_reads_the_verified_graph_and_shares_only_after_opting_in(clean_env):
+    """A fresh install reads the verified graph, where the community lives, but does not
+    share: sharing is opt-in (2026-10-16); `report: true` (what --enable-sharing writes) turns it on."""
     cfg = _load_with_entry(clean_env, {})
-    assert cfg.community_graph_id == constants.DEFAULT_COMMUNITY_GRAPH_ID
+    assert cfg.context_graph_id == constants.DEFAULT_CONTEXT_GRAPH_ID
+    assert cfg.report is False and cfg.community_enabled is False                    # sharing is opt-in (2026-10-16)
+    assert _load_with_entry(clean_env, {"report": True}).community_enabled is True   # what --enable-sharing writes
 
 
-def test_the_shipped_default_is_the_production_community_graph(clean_env):
-    """KI-035 launch-safety rule: a release never points the fleet at a dev or
-    test graph. The shipped default is the production graph, owned by the
-    Umanitek wallet, and its owner peer ships with it (KI-216: both or neither)."""
-    graph = constants.DEFAULT_COMMUNITY_GRAPH_ID
-    assert graph == "0x37b1Fdfd134e2b17583bCBdD3034F91504cD9C70/agent-blackbox-community"
-    assert not any(word in graph.lower() for word in ("test", "dev", "sim", "bench", "demo"))
-    assert constants.DEFAULT_COMMUNITY_GRAPH_PEER_ID.startswith("12D3KooW")
-    assert bool(constants.DEFAULT_COMMUNITY_GRAPH_PEER_ID) == bool(constants.DEFAULT_COMMUNITY_GRAPH_ID)
-
-
-def test_a_fresh_install_reads_the_community_graph_and_shares_only_after_opting_in(clean_env):
-    """A fresh install reads the production community graph but does not share:
-    sharing is opt-in (2026-10-16); `report: true` (what --enable-sharing writes) turns it on."""
-    cfg = _load_with_entry(clean_env, {})
-    assert cfg.community_graph_id == constants.DEFAULT_COMMUNITY_GRAPH_ID
-    assert cfg.report is False and cfg.community_enabled is False
-    assert _load_with_entry(clean_env, {"report": True}).community_enabled is True
+def test_a_config_that_still_names_the_retired_community_graph_keeps_working(clean_env, caplog):
+    """An install configured before 2026-10-16 names the separate community graph and its
+    owner peer, in its config or its environment. Both are ignored — the community reads
+    and shares in the verified graph — and each is logged once per process, not per load."""
+    clean_env.setenv("BLACKBOX_COMMUNITY_GRAPH_PEER_ID", "12D3KooWowner")
+    entry = {"community_graph_id": RETIRED_COMMUNITY_GRAPH, "context_graph_id": DEV_GRAPH, "report": True}   # opted in
+    with caplog.at_level(logging.INFO, logger=bb_config.__name__):
+        first = _load_with_entry(clean_env, entry)
+        second = _load_with_entry(clean_env, entry)
+    assert first == second
+    assert first.context_graph_id == DEV_GRAPH
+    assert first.community_enabled is True
+    ignored = sorted(record.getMessage().split()[1] for record in caplog.records if "is ignored" in record.getMessage())
+    assert ignored == ["BLACKBOX_COMMUNITY_GRAPH_PEER_ID", "community_graph_id"]
 
 
 # ---------------------------------------------------------------------------
@@ -93,7 +88,7 @@ def test_a_fresh_install_reads_the_community_graph_and_shares_only_after_opting_
     ],
 )
 def test_community_enabled_truth_table(report, graph_id, expected):
-    cfg = bb_config.BlackboxConfig(report=report, community_graph_id=graph_id)
+    cfg = bb_config.BlackboxConfig(report=report, context_graph_id=graph_id)
     assert cfg.community_enabled is expected
 
 

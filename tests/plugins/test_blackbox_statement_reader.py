@@ -21,7 +21,7 @@ from plugins.blackbox.community.statements.retractions import VerifiedRetraction
 from plugins.blackbox.community.verification import VerifiedReport
 from plugins.blackbox.kernel.config import BlackboxConfig
 
-CFG = BlackboxConfig(report=True, community_graph_id=GRAPH)
+CFG = BlackboxConfig(report=True, context_graph_id=GRAPH)
 THREAT = "ioc:domain:evil.example"
 DAY = 86_400
 

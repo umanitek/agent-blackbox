@@ -162,7 +162,7 @@ def test_gather_fills_the_new_inputs_from_the_read_and_the_ruleset(curators):
 
 
 class BlackboxConfigStub:
-    community_graph_id = GRAPH
+    context_graph_id = GRAPH   # the community lives in the verified graph (one graph since 2026-10-16)
     sync_interval = 3600
 
 

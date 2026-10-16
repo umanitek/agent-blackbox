@@ -5,12 +5,16 @@ pinned roots, its own key manifest and the graph that manifest is bound to —
 then combines them (:mod:`.combine`: the most restrictive current word wins).
 
 * VERIFIED authority: roots pinned per network; manifest and enforcement
-  statements in the verified graph (one writer, read by scan as before); its
-  advisory statements in the community graph.
+  statements in the verified graph's Verified Memory (one writer, read by scan
+  as before); its advisory statements in the same graph's SHARED memory, where
+  the community's reports live (one graph since 2026-10-16).
 * COMMUNITY authority: roots pinned per community graph; manifest and every
-  statement in the community graph; flag-only powers (``kernel.signing.authority``).
+  statement in a community graph of its own; flag-only powers
+  (``kernel.signing.authority``). It must never share the verified
+  authority's graph, and there is one graph now, so it is dormant: no
+  community root is trusted (:func:`_community_roots`).
 
-Everything read from the COMMUNITY graph goes through two defences, because
+Everything read from the shared memory goes through two defences, because
 anyone can write there (:mod:`.bounded_read`, :mod:`.trust_store`):
 
 * statements are looked up by the identifiers the caller is interested in
@@ -98,7 +102,7 @@ def read_curator_view(client: DkgClient, cfg: BlackboxConfig, environment: str =
     if not verified_roots and not community_roots:
         return curator_view.CuratorView()   # no root, no manifest, no curator statement counts
     today = curator_view.today_utc()
-    graph = cfg.community_graph_id
+    graph = cfg.context_graph_id   # the advisory statements: the verified graph's shared memory
     store = trust_store.TrustStore()
     stored = store.load(graph) if graph else trust_store.StoredTrust()
     statements, readable, complete = _community_statements(client, graph, stored, interest)
@@ -125,13 +129,12 @@ def read_curator_view(client: DkgClient, cfg: BlackboxConfig, environment: str =
 
 
 def _community_roots(cfg: BlackboxConfig) -> trust_anchors.RootPins:
-    """The community roots for this node's community graph — none when the
-    community graph is also configured as the verified graph (the two
-    authorities must never share a graph)."""
-    graph = cfg.community_graph_id
-    if not graph or graph == cfg.context_graph_id:
-        return trust_anchors.RootPins()
-    return trust_anchors.RootPins.unbound(trust_anchors.community_roots(graph))
+    """None. The community authority speaks only in a graph of its own — the two
+    authorities must never share a graph — and since 2026-10-16 the only graph
+    is the verified one (*cfg*'s ``context_graph_id``), so the authority is dormant.
+    There are no community curators for now; it is kept, not deleted, so that
+    curators can be added later."""
+    return trust_anchors.RootPins()
 
 
 def _community_statements(client: DkgClient, graph: str, stored: trust_store.StoredTrust,
@@ -189,7 +192,7 @@ def _resolve_community(client: DkgClient, cfg: BlackboxConfig, environment: str,
                        stored: trust_store.StoredTrust, today: str) -> _Resolved:
     """The COMMUNITY authority: its manifest from the community graph (stored
     copies plus a lookup), verified against the roots pinned for THIS graph."""
-    graph = cfg.community_graph_id
+    graph = cfg.context_graph_id
     if not roots:
         return _Resolved(Authority.COMMUNITY)
     found = bounded_read.lookup_manifests(client, graph, trust_store.manifest_orders(stored.manifests))
@@ -216,11 +219,11 @@ def _statements_view(resolved: _Resolved, statements: Sequence[Row], readable: b
     if resolved.manifest is None or resolved.unavailable:
         return curator_view.CuratorView(authority=resolved.authority, manifest=resolved.manifest,
                                         manifest_conflict=resolved.conflict, unavailable=resolved.unavailable)
-    if cfg.community_graph_id and not readable:   # KI-244
+    if cfg.context_graph_id and not readable:   # KI-244
         return curator_view.CuratorView(authority=resolved.authority, manifest=resolved.manifest,
                                         manifest_conflict=resolved.conflict, unavailable=True)
     return curator_view.build_view(resolved.manifest, resolved.enforcement_rows, statements,
-                                   verified_graph=cfg.context_graph_id, community_graph=cfg.community_graph_id,
+                                   verified_graph=cfg.context_graph_id, community_graph=cfg.context_graph_id,
                                    today=today, manifest_conflict=resolved.conflict, root_keys=resolved.roots.keys,
                                    community_readable=readable, authority=resolved.authority)
 
@@ -274,14 +277,14 @@ def _copy_rank(row: Row) -> tuple[int, str]:
 def known_curator_statements(client: DkgClient, cfg: BlackboxConfig, identifiers: Iterable[str], *,
                              verified_graph: bool = False) -> list[tuple[str, dict[str, str]]]:
     """``(graph id, row)`` for every curator statement about *identifiers* this
-    node can find: its stored copies and an exact lookup in the community
-    graph, plus (with *verified_graph*) the verified graph's statements. Rows
+    node can find: its stored copies and an exact lookup in the shared memory,
+    plus (with *verified_graph*) the Verified Memory's statements. Rows
     are UNVERIFIED candidates — the caller checks signatures. Used by the
     curators' tooling to continue sequence numbers where the last statement
     left off, whichever kind it was and whichever machine published it."""
     wanted = {identifier for identifier in identifiers if identifier}
     found: list[tuple[str, dict[str, str]]] = []
-    graph = cfg.community_graph_id
+    graph = cfg.context_graph_id
     if graph:
         stored = trust_store.TrustStore().load(graph).statements
         looked_up = bounded_read.lookup_statements(client, graph, sorted(wanted)).rows

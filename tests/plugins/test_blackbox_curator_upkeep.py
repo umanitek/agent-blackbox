@@ -1,12 +1,14 @@
 """Community Curation C5 — keeping the authority's word alive.
 
 Shared memory forgets after about 30 days. The machine that published a
-statement re-publishes it once per keep-alive epoch, so a reader that joins
-later still finds it; only CURRENT statements are kept alive; and a heartbeat
-lets readers tell a silent curator from an absent one.
+statement there re-publishes it once per keep-alive epoch, so a reader that
+joins later still finds it; only CURRENT statements are kept alive; and a
+heartbeat lets readers tell a silent curator from an absent one. Statements in
+Verified Memory (the verified curators' manifest and listings, one graph since
+2026-10-16) never expire, so nothing keeps them alive.
 
 Curators and a reader run as separate machines over one shared in-memory
-network; "the network forgot" is ``net.forget(GRAPH)``.
+network; "shared memory forgot" is ``net.forget(GRAPH)``.
 """
 
 from __future__ import annotations
@@ -16,9 +18,8 @@ import time
 from datetime import date, timedelta
 
 import pytest
-from _clock import utc_today
 from _community_rows import GRAPH, Reporter
-from _machines import SWM, Machine
+from _machines import SWM, VM, Machine
 from test_blackbox_curate_community import CFG, THREAT, Curators, _listing
 
 from plugins.blackbox.community import read_curator_view
@@ -47,14 +48,13 @@ def _fresh_reader(team, tmp_path, monkeypatch, name="NEW"):
     return Machine(team.net, tmp_path, monkeypatch, name)
 
 
-def _counted(machine, reporter):
-    with machine:
-        return reporter.author in read_curator_view(machine.node, CFG, interest=[f"author:{reporter.author}"]).counted
-
-
 def _keep_alive(team, machine, now):
     with machine:
         return published.publish_due(machine.node, CFG, now=now)
+
+
+#: An advisory statement: it lives in shared memory, so its publisher keeps it alive.
+REJECTION = (Kind.REJECTION, THREAT, {"reason": "benign"})
 
 
 # ------------------------------------------------------------------ what a late joiner finds
@@ -63,35 +63,49 @@ def _keep_alive(team, machine, now):
 def test_a_rejection_is_still_honoured_by_a_fresh_reader_after_the_first_copy_expired(tmp_path, monkeypatch):
     """The item's done-when (KI-251): rejected reports must not count again when the network forgets."""
     team = Curators(tmp_path, monkeypatch)
-    team.two_key(Kind.REJECTION, THREAT, {"reason": "benign"})
+    team.two_key(*REJECTION)
     team.net.forget(GRAPH)                                              # shared memory expired everything
     late = _fresh_reader(team, tmp_path, monkeypatch)
     with late:
         assert not read_curator_view(late.node, CFG, interest=[THREAT]).rejected(THREAT)   # nothing on the network: unknown
-    assert _keep_alive(team, team.a, NOW + EPOCH) >= 1                  # A published the manifest
+    assert _keep_alive(team, team.a, NOW + EPOCH) == 0                  # A's manifest is in Verified Memory: nothing to do
     assert _keep_alive(team, team.b, NOW + EPOCH) == 1                  # B published the rejection
     with late:
         assert read_curator_view(late.node, CFG, interest=[THREAT]).rejected(THREAT)
 
 
-def test_the_manifest_and_a_listing_come_back_and_each_counts_once(tmp_path, monkeypatch):
+def test_a_kept_alive_statement_sits_beside_its_original_and_counts_once(tmp_path, monkeypatch):
     team = Curators(tmp_path, monkeypatch)
-    alice = Reporter("0xa")
-    team.two_key(Kind.COUNTED_AUTHORS, f"author:{alice.author}", _listing(alice))
-    _keep_alive(team, team.a, NOW + EPOCH)
-    _keep_alive(team, team.b, NOW + EPOCH)                              # copies sit BESIDE the originals
+    team.two_key(*REJECTION)
+    _keep_alive(team, team.b, NOW + EPOCH)                              # the copy sits BESIDE the original
     names = sorted(name for (_, name) in team.net.assets[(GRAPH, SWM)])
-    assert sum(name.startswith("key-manifest-1-1") for name in names) == 2
-    assert _counted(team.reader, alice)
+    assert sum(name.startswith("curator-rejection-") for name in names) == 2
     with team.reader:
+        assert read_curator_view(team.reader.node, CFG, interest=[THREAT]).rejected(THREAT)
         from plugins.blackbox.community.trust import trust_store
         assert len(trust_store.TrustStore().load(GRAPH).statements) == 1   # two network copies, one statement
 
 
-def test_one_copy_per_epoch_and_none_when_keep_alive_is_off(tmp_path, monkeypatch):
+def test_the_manifest_and_a_listing_in_verified_memory_outlive_shared_memory_with_no_keep_alive(tmp_path, monkeypatch):
     team = Curators(tmp_path, monkeypatch)
     alice = Reporter("0xa")
-    team.two_key(Kind.COUNTED_AUTHORS, f"author:{alice.author}", _listing(alice))
+    identifier = f"author:{alice.author}"
+    team.two_key(Kind.COUNTED_AUTHORS, identifier, _listing(alice))
+    team.two_key(Kind.COUNTED_AUTHORS, identifier, _listing(alice, listed="no"))
+    for machine in (team.a, team.b):
+        with machine:
+            assert published.store().all() == []                       # nothing of theirs needs keeping alive
+    team.net.forget(GRAPH)
+    late = _fresh_reader(team, tmp_path, monkeypatch)
+    with late:
+        view = read_curator_view(late.node, CFG, interest=[identifier])
+    assert view.manifest is not None and alice.author not in view.counted and alice.author in view.delisted
+    assert sum(name.startswith("key-manifest-1-1") for (_, name) in team.net.assets[(GRAPH, VM)]) == 1
+
+
+def test_one_copy_per_epoch_and_none_when_keep_alive_is_off(tmp_path, monkeypatch):
+    team = Curators(tmp_path, monkeypatch)
+    team.two_key(*REJECTION)
     window = (int(NOW // EPOCH) + 1) * EPOCH                             # the start of the next keep-alive window
     assert _keep_alive(team, team.b, window + DAY) == 1
     assert _keep_alive(team, team.b, window + 2 * DAY) == 0              # same window: nothing to do
@@ -104,24 +118,6 @@ def test_one_copy_per_epoch_and_none_when_keep_alive_is_off(tmp_path, monkeypatc
 # ------------------------------------------------------------------ only current statements
 
 
-def test_a_superseded_listing_lapses_and_its_delisting_is_kept_alive(tmp_path, monkeypatch):
-    team = Curators(tmp_path, monkeypatch)
-    alice = Reporter("0xa")
-    identifier = f"author:{alice.author}"
-    team.two_key(Kind.COUNTED_AUTHORS, identifier, _listing(alice))
-    team.two_key(Kind.COUNTED_AUTHORS, identifier, _listing(alice, listed="no"))
-    with team.b:
-        kept = published.store().all()
-        assert len(kept) == 1 and '\\"listed\\":\\"no\\"' in "".join(q["object"] for q in kept[0].quads)
-    team.net.forget(GRAPH)
-    _keep_alive(team, team.a, NOW + EPOCH)
-    _keep_alive(team, team.b, NOW + EPOCH)
-    late = _fresh_reader(team, tmp_path, monkeypatch)
-    with late:
-        view = read_curator_view(late.node, CFG, interest=[identifier])
-    assert alice.author not in view.counted and alice.author in view.delisted
-
-
 def test_a_rejection_supersedes_the_confirmation_it_follows(tmp_path, monkeypatch):
     team = Curators(tmp_path, monkeypatch)
     team.two_key(Kind.CONFIRMATION, THREAT, {})
@@ -131,32 +127,20 @@ def test_a_rejection_supersedes_the_confirmation_it_follows(tmp_path, monkeypatc
     assert envelopes == [Kind.REJECTION.value]
 
 
-def test_a_listing_past_the_day_readers_stop_counting_it_is_retired(tmp_path, monkeypatch):
+def test_forgetting_an_identifier_stops_keeping_its_statements_alive(tmp_path, monkeypatch):
     team = Curators(tmp_path, monkeypatch)
-    alice = Reporter("0xa")
-    far = (utc_today() + timedelta(days=300)).isoformat()             # the listing states 300 days; readers count 90
-    team.two_key(Kind.COUNTED_AUTHORS, f"author:{alice.author}", _listing(alice, expires=far))
-    assert _keep_alive(team, team.b, NOW + (cv.COMMUNITY_LISTING_MAX_DAYS - 20) * DAY) == 1   # still counted: kept alive
-    assert _keep_alive(team, team.b, NOW + (cv.COMMUNITY_LISTING_MAX_DAYS + 2) * DAY) == 0
+    other = "ioc:ip:198.51.100.9"
+    team.two_key(*REJECTION)
+    team.two_key(Kind.REJECTION, other, {"reason": "benign"})
     with team.b:
-        assert published.store().all() == []
-
-
-def test_a_reporters_erasure_stops_keep_alive_of_its_listing(tmp_path, monkeypatch):
-    team = Curators(tmp_path, monkeypatch)
-    alice, bob = Reporter("0xa"), Reporter("0xb")
-    team.two_key(Kind.COUNTED_AUTHORS, f"author:{alice.author}", _listing(alice))
-    team.two_key(Kind.COUNTED_AUTHORS, f"author:{bob.author}", _listing(bob))
-    with team.b:
-        assert published.forget_identifier(f"author:{alice.author}") == 1
-        assert [entry.identifier for entry in published.store().all()] == [f"author:{bob.author}"]
+        assert published.forget_identifier(THREAT) == 1
+        assert [entry.identifier for entry in published.store().all()] == [other]
 
 
 def test_a_refused_copy_ends_the_beat_and_is_sent_on_the_next(tmp_path, monkeypatch):
     """The fail-open path, run for real."""
     team = Curators(tmp_path, monkeypatch)
-    alice = Reporter("0xa")
-    team.two_key(Kind.COUNTED_AUTHORS, f"author:{alice.author}", _listing(alice))
+    team.two_key(*REJECTION)
     team.b.node.refuse_shares = True
     assert _keep_alive(team, team.b, NOW + EPOCH) == 0
     team.b.node.refuse_shares = False
@@ -171,10 +155,9 @@ def test_a_heartbeat_is_published_by_one_key_and_seen_by_a_reader(tmp_path, monk
     with team.a:
         _, outcome = heartbeat.publish_heartbeat(team.ctx(team.a, interest=["curator"]), ProposalStore(), yes=True)
         assert outcome.startswith("published")
-        assert published.store().all()[0].name.startswith("key-manifest")          # the heartbeat itself is not kept alive
-        assert len(published.store().all()) == 1
+        assert published.store().all() == []          # the heartbeat itself is not kept alive; the manifest is in Verified Memory
     with team.reader:
-        beats = read_curator_view(team.reader.node, CFG).community.heartbeats
+        beats = read_curator_view(team.reader.node, CFG).heartbeats
     assert set(beats) == {team.keys["A"]}
 
 
@@ -191,8 +174,8 @@ def test_the_root_alone_may_lower_only_after_the_curators_have_been_silent_for_a
     with team.a:
         ctx = team.ctx(team.a, interest=["curator"])
         heartbeat.publish_heartbeat(ctx, ProposalStore(), yes=True)
-        beat_day = read_curator_view(team.a.node, CFG).community.heartbeats[team.keys["A"]]
-        root = keys.root_key_store(Authority.COMMUNITY).load_or_create()
+        beat_day = read_curator_view(team.a.node, CFG).heartbeats[team.keys["A"]]
+        root = keys.root_key_store(Authority.VERIFIED).load_or_create()
         alone = cs.sign_statement(Kind.REJECTION, THREAT, sequence=1, fields={"reason": "benign"}, key=root,
                                   manifest=ctx.manifest, graph=GRAPH)
         assert signing.public_key_hex(root) not in ctx.manifest.curator_keys

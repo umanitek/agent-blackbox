@@ -23,7 +23,7 @@ from plugins.blackbox.kernel.config import BlackboxConfig
 
 DEV_GRAPH = "0x51E5dE758A45c8b64048E29918421F0bdD6D5d5C/agent-blackbox-community-dev"
 REPORTER = "0xabc0000000000000000000000000000000000001"
-CFG_ON = BlackboxConfig(report=True, community_graph_id=DEV_GRAPH, daily_report_limit=50)
+CFG_ON = BlackboxConfig(report=True, context_graph_id=DEV_GRAPH, daily_report_limit=50)
 
 
 @pytest.fixture
@@ -171,7 +171,7 @@ def test_cooldown_short_circuits_resubmission(wired, capsys):
 def test_gate_off_is_loud_not_silent(monkeypatch, bb_home, capsys):
     monkeypatch.setattr(
         report_command, "load_blackbox_config",
-        lambda: BlackboxConfig(report=False, community_graph_id=DEV_GRAPH),
+        lambda: BlackboxConfig(report=False, context_graph_id=DEV_GRAPH),
     )
     rc = report_command.cmd_report(_args(type="ioc", ioc_type="domain", value="evil.example", context="fetched-by-tool"))
     out = capsys.readouterr().out

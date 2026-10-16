@@ -6,14 +6,20 @@ attestations and 20 new listings per day of its own clock from that authority;
 the rest are HELD and admitted on the following days, oldest first. Reductions
 (rejections, delistings, pauses) are never held. A node's first read is a
 baseline and admits everything.
+
+One graph (2026-10-16): the community authority is dormant, so on a reader the
+cap holds nothing. Its rules are pinned on the pure function, kept for when
+community curators are added; the reader test pins that the verified
+authority's word is never held.
 """
 
 from __future__ import annotations
 
 import pytest
 from _community_rows import GRAPH, Reporter
-from test_blackbox_authority import CFG, CITED, Side, TODAY
-from test_blackbox_trust_store import Store, _listing
+from test_blackbox_authority import CFG, CITED, Side, TODAY, VM_GRAPH
+from test_blackbox_curator_view import _entry
+from test_blackbox_trust_store import Store
 
 from plugins.blackbox.community import read_curator_view
 from plugins.blackbox.community.statements import curator_view as cv
@@ -31,74 +37,28 @@ def home(monkeypatch, tmp_path):
     monkeypatch.setattr(cv, "_today", lambda: TODAY)
 
 
-@pytest.fixture
-def community(monkeypatch):
-    side = Side(GRAPH)
-    monkeypatch.setenv("BLACKBOX_COMMUNITY_ROOT_KEYS", side.root_hex)
-    return side
-
-
 def _threats(n):
     return [f"ioc:ip:10.1.{i // 250}.{i % 250}" for i in range(n)]
 
 
-def _baselined(community):
-    """A node whose first read (the baseline) has happened: it knows the manifest and nothing else."""
-    assert read_curator_view(Store(community=[community.manifest_row()]), CFG).community.manifest is not None
+def _listing(side, reporter, **kw):
+    fields = _entry(reporter.author, **{k: v for k, v in kw.items() if k in ("listed", "expires")})
+    return side.row(Kind.COUNTED_AUTHORS, f"author:{reporter.author}", fields, sequence=kw.get("sequence", 1))
 
 
 # ------------------------------------------------------------------ through the reader
 
 
-def test_a_burst_of_confirmations_is_admitted_at_the_daily_rate_and_none_is_dropped(monkeypatch, community):
-    _baselined(community)
+def test_the_verified_authoritys_word_is_never_held_however_much_it_says(monkeypatch):
+    """The cap binds the community authority's online keys only, and that authority is
+    dormant (one graph, 2026-10-16): a burst from the verified authority is read at once."""
+    curators = Side(VM_GRAPH)
+    monkeypatch.setenv("BLACKBOX_CURATOR_ROOT_KEYS", curators.root_hex)
+    assert read_curator_view(Store(verified=[curators.manifest_row()]), CFG).manifest is not None   # the baseline
     threats = _threats(raising_budget.CONFIRMATIONS_PER_DAY + 1)
-    rows = [community.row(Kind.CONFIRMATION, threat, CITED, sequence=i + 1) for i, threat in enumerate(threats)]
-    node = Store(community=[community.manifest_row(), *rows])
-    view = read_curator_view(node, CFG, interest=threats)
-    confirmed = [t for t in threats if view.verdict(t) is Kind.CONFIRMATION]
-    assert len(confirmed) == raising_budget.CONFIRMATIONS_PER_DAY and view.community.held_raising == 1
-    assert view.verdict(threats[-1]) is None                           # the newest (highest sequence) waits
-    again = read_curator_view(node, CFG, interest=threats)
-    assert again.community.held_raising == 1                           # the same day admits no more
-    monkeypatch.setattr(cv, "_today", lambda: TOMORROW)
-    tomorrow = read_curator_view(node, CFG, interest=threats)
-    assert tomorrow.verdict(threats[-1]) is Kind.CONFIRMATION and tomorrow.community.held_raising == 0
-
-
-def test_reductions_are_never_held_whatever_their_number(community):
-    _baselined(community)
-    threats = _threats(300)
-    rows = [community.row(Kind.REJECTION, threat, {"reason": "benign"}) for threat in threats]
-    view = read_curator_view(Store(community=[community.manifest_row(), *rows]), CFG, interest=threats)
-    assert all(view.rejected(threat) for threat in threats) and view.community.held_raising == 0
-
-
-def test_listings_are_capped_and_delistings_are_not(community):
-    _baselined(community)
-    reporters = [Reporter(f"0xr{i}") for i in range(raising_budget.LISTINGS_PER_DAY + 5)]
-    gone = [Reporter(f"0xg{i}") for i in range(40)]
-    rows = [_listing(community, r, sequence=1) for r in reporters] + [_listing(community, r, listed="no") for r in gone]
-    view = read_curator_view(Store(community=[community.manifest_row(), *rows]), CFG,
-                             interest=[f"author:{r.author}" for r in (*reporters, *gone)])
-    assert len(view.counted) == raising_budget.LISTINGS_PER_DAY and view.community.held_raising == 5
-    assert view.delisted == {r.author for r in gone}
-
-
-def test_a_nodes_first_read_is_a_baseline_and_admits_everything(community):
-    threats = _threats(raising_budget.CONFIRMATIONS_PER_DAY + 50)
-    rows = [community.row(Kind.CONFIRMATION, threat, CITED) for threat in threats]
-    view = read_curator_view(Store(community=[community.manifest_row(), *rows]), CFG, interest=threats)
-    assert all(view.verdict(threat) is Kind.CONFIRMATION for threat in threats) and view.community.held_raising == 0
-
-
-def test_a_held_confirmation_does_not_hold_back_a_rejection_of_the_same_threat(community):
-    _baselined(community)
-    threats = _threats(raising_budget.CONFIRMATIONS_PER_DAY + 1)
-    rows = [community.row(Kind.CONFIRMATION, threat, CITED, sequence=1) for threat in threats]
-    rows.append(community.row(Kind.REJECTION, threats[-1], {"reason": "benign"}, sequence=2))
-    view = read_curator_view(Store(community=[community.manifest_row(), *rows]), CFG, interest=threats)
-    assert view.rejected(threats[-1])
+    rows = [curators.row(Kind.CONFIRMATION, threat, CITED, sequence=i + 1) for i, threat in enumerate(threats)]
+    view = read_curator_view(Store(shared=rows, verified=[curators.manifest_row()]), CFG, interest=threats)
+    assert all(view.verdict(threat) is Kind.CONFIRMATION for threat in threats) and view.held_raising == 0
 
 
 # ------------------------------------------------------------------ the pure function

@@ -431,7 +431,7 @@ def test_verified_dependency_match_shares_only_with_a_spec_reason(rule_key, advi
             "advisoryId": advisory}
     findings = detection.detect_dependency("terminal", {"command": command}, _ruleset(dependency={rule_key: rule}))
     assert [f.source for f in findings] == ["public"]
-    cfg = config_mod.BlackboxConfig(report=True, community_graph_id="did:dkg:context-graph:test")
+    cfg = config_mod.BlackboxConfig(report=True, context_graph_id="did:dkg:context-graph:test")
     allowed, why = sharing.CommunitySharePolicy(cfg).decide(findings[0].to_dict(), "0x" + "1" * 40)
     assert allowed is shares, why
 

@@ -245,7 +245,7 @@ def _apply_overlays(rs: compiler.Ruleset, client: Optional[DkgClient], config: B
     """
     if client is None:
         return
-    curator_tier.apply_curator_tier(rs, client, config)
+    curator_tier.apply_curator_tier(rs, client, config, rs if reused else _latest_cached_ruleset(config.context_graph_id))
     # DKG-lookup B2: the live verified scope is rebuilt on every path, so a last-good
     # generation kept through an empty read still learns the assets confirmed since.
     rs.verified_scope = live.scope_for_generation(
@@ -253,7 +253,7 @@ def _apply_overlays(rs: compiler.Ruleset, client: Optional[DkgClient], config: B
         suppressed=None if reused else rs.suppressed_subjects, revoked=rs.curator_revoked, listing=listing,
         fallback=config.verified_lookup_fallback, legacy_assets_hash=rs.curator_legacy_assets_hash)
     live.maintain_fallback_index(rs.verified_scope, client, config.context_graph_id)   # B9: no-op unless opted in
-    if not config.community_graph_id:
+    if not config.context_graph_id:
         return
     # KI-208: record what the graph looks like BEFORE this read, so anything that
     # lands during or after it shows up as a change to the next pulse of any process.

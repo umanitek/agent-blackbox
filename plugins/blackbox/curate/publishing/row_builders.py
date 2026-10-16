@@ -1,4 +1,4 @@
-"""Row builders — the quads a quorum-signed promotion is written as (§03.4).
+"""Row builders — the quads a quorum-signed promotion is written as (§03.4; the curator-asset way).
 
 Pattern: Strategy registry. One :class:`RowBuilder` per promotable threat
 category (D3: every listable type is promotable), keyed by the identifier's
@@ -6,9 +6,8 @@ prefix as ``kernel/threat_ids`` names it — ``dep``, ``ioc``, ``skill``,
 ``injection``, ``fileaccess``. Each writes the corpus's EXISTING shape for its
 type, so the verified reader needs no second vocabulary:
 
-* ``dep`` — ``urn:defender:DependencySignal`` (:func:`verified_rule_quads`, the
-  builder moved here from ``curate/promotion.py``), located by the live
-  lookup through ``dp:package`` / ``dp:ecosystem`` / ``dp:version``;
+* ``dep`` — ``urn:defender:DependencySignal``, located by the live lookup
+  through ``dp:package`` / ``dp:ecosystem`` / ``dp:version``;
 * ``ioc`` — ``urn:defender:IocSignal`` with ``dp:iocType`` / ``dp:value``;
 * ``skill`` / ``injection`` / ``fileaccess`` — a legacy ``g:identifier`` rule
   (skill name/version/shape; the pattern; tool name and category), the shape
@@ -20,13 +19,19 @@ type, so the verified reader needs no second vocabulary:
 
 Every row carries ``SIGNED_STATEMENT_PRED``: the ``blackbox.promotion``
 envelope whose flat payload (:func:`promotion_payload`) names the rule —
-identifier, severity, kind, ecosystem, package name/version, provenance. The
-reader builds a BLOCK-tier rule from that payload, never from the row,
-so a builder refuses an envelope whose payload disagrees with the entry it is
-asked to write. Evidence is capped at :data:`EVIDENCE_MAX_BYTES` (F-017) and
-every literal stays under ``kernel/rdf_terms``' cap. A correction (P5) is not a
-category: :func:`correction_payload` / :func:`correction_quads` write its
-``CorrectionSignal`` rows (its community-graph twin: ``publish.advisory_twin``).
+identifier, severity, kind, ecosystem, package name/version — and its
+provenance: the community report it was made from (subject, digest, reporter
+key — ``kernel.signing.promotion_statement``), never a random id. The reader
+builds a BLOCK-tier rule from that payload, never from the row, so a builder
+refuses an envelope whose payload disagrees with the entry it is asked to
+write. Rows written before the report was the provenance (random ids) are read
+the same way: the reader never reads the provenance. No report carries an
+injection's pattern (only its hash), so an injection is never promoted from a
+report; its builder writes only an entry that holds the pattern. Evidence is
+capped at :data:`EVIDENCE_MAX_BYTES` (F-017) and every literal stays under
+``kernel/rdf_terms``' cap. A correction (P5) is not a category:
+:func:`correction_payload` / :func:`correction_quads` write its
+``CorrectionSignal`` rows (its shared-memory twin: ``publish.advisory_twin``).
 
 Usage::
 
@@ -38,12 +43,12 @@ Usage::
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Dict, List, Mapping, Optional, Protocol, Sequence, Tuple
 
 from ...kernel import constants, rdf_terms, signing, threat_ids
+from ...kernel.signing import promotion_statement as statement
 from ...kernel.signing.statement_order import CuratorStatement
 from ..context import CORRECTION_STATEMENT
 
@@ -54,8 +59,8 @@ EVIDENCE_MAX_BYTES = 2048
 _EVIDENCE_TRUNCATION_MARKER = " ...[truncated]"
 #: The payload fields that NAME the rule; the row must agree with the signed ones.
 SIGNED_RULE_FIELDS = ("identifier", "severity", "kind", "ecosystem", "packageName", "packageVersion")
-#: A provenance id as ``promotion.ProvenanceMap.credit`` mints it (random, 16 hex).
-_PROVENANCE_ID = re.compile(r"[0-9a-f]{16}")
+#: The keys of a curator-asset promotion's payload (:func:`promotion_payload`).
+PAYLOAD_KEYS = frozenset({*SIGNED_RULE_FIELDS, "advisoryId", "name", "report", "reportDigest", "reporterKey"})
 _DEFENDER_PREDICATE = "urn:defender:p:"
 _IOC_SIGNAL_TYPE = "urn:defender:IocSignal"
 
@@ -70,8 +75,9 @@ class ConfirmedEntry:
 
     ``identifier`` — the threat id (its prefix picks the builder, see
     :attr:`category`). ``severity`` — one of ``constants.SEVERITY_ORDER``.
-    ``kind`` — e.g. ``malware``. ``provenance`` — random report ids from
-    ``promotion.ProvenanceMap.credit`` (never report subjects). ``evidence`` —
+    ``kind`` — e.g. ``malware`` (the only kind a dependency rule is promoted
+    as: it blocks). ``report`` — the community report the rule was made from,
+    its provenance (a reporter's own report of this identifier). ``evidence`` —
     why it is confirmed; written truncated to :data:`EVIDENCE_MAX_BYTES`.
     ``name`` — display name (default: the identifier). ``advisory_id`` — an
     advisory such as ``MAL-2026-1``. ``pattern`` — injection entries only: the
@@ -81,7 +87,7 @@ class ConfirmedEntry:
     identifier: str
     severity: str
     kind: str
-    provenance: tuple[str, ...] = ()
+    report: Optional[statement.ReportRef] = None
     evidence: str = ""
     name: str = ""
     advisory_id: str = ""
@@ -94,8 +100,11 @@ class ConfirmedEntry:
             raise RowBuildError(f"severity must be one of {constants.SEVERITY_ORDER}")
         if not self.kind.strip():
             raise RowBuildError("a promoted entry needs a kind")
-        if not all(_PROVENANCE_ID.fullmatch(ident) for ident in self.provenance):
-            raise RowBuildError("provenance ids are 16 lowercase hex characters (ProvenanceMap.credit)")
+        if self.category == "dep" and self.kind != constants.KIND_MALWARE:
+            raise RowBuildError("a dependency is promoted as malware only (a vulnerability never blocks)")
+        if self.report is not None and (self.report.identifier != self.identifier
+                                        or statement.reference(self.report.fields()) is None):
+            raise RowBuildError("the report must be a reporter's own report of this identifier (subject, digest, key)")
 
     @property
     def category(self) -> str:
@@ -105,9 +114,10 @@ class ConfirmedEntry:
 
 def promotion_payload(entry: ConfirmedEntry) -> dict[str, str]:
     """The flat str→str payload the curators sign for *entry* — the same keys
-    for every category (``promotion.payload_for`` writes them for a
-    dependency); fields that do not apply to a category are empty."""
+    (:data:`PAYLOAD_KEYS`) for every category; fields that do not apply to a
+    category are empty."""
     ecosystem, package, version = _package_fields(entry.identifier)
+    report = entry.report.fields() if entry.report is not None else {}
     return {
         "identifier": entry.identifier,
         "severity": entry.severity,
@@ -117,7 +127,9 @@ def promotion_payload(entry: ConfirmedEntry) -> dict[str, str]:
         "packageVersion": version,
         "advisoryId": entry.advisory_id.strip(),
         "name": entry.name.strip() or entry.identifier,
-        "provenance": ",".join(entry.provenance),
+        "report": report.get("report", ""),
+        "reportDigest": report.get("reportDigest", ""),
+        "reporterKey": report.get("reporterKey", ""),
     }
 
 
@@ -196,8 +208,9 @@ def _signed_row(subject: str, rdf_type: Optional[str], payload: Mapping[str, str
 
 
 def _provenance_json(payload: Mapping[str, str]) -> str:
-    provenance = payload.get("provenance", "")
-    return json.dumps(provenance.split(",") if provenance else [])
+    """The rule's provenance as the corpus writes it: the report it was made from."""
+    report = payload.get("report", "")
+    return json.dumps([report] if report else [])
 
 
 # ---------------------------------------------------------------- dependency
@@ -215,13 +228,6 @@ def _dependency_literals(payload: Mapping[str, str]) -> tuple[tuple[str, str], .
         (f"{_DEFENDER_PREDICATE}package", payload["packageName"]),
         (f"{_DEFENDER_PREDICATE}version", payload["packageVersion"]),
     )
-
-
-def verified_rule_quads(payload: Mapping[str, str], envelope: signing.SignedEnvelope) -> list[rdf_terms.Quad]:
-    """The verified-graph quads the existing reader compiles into a BLOCKING
-    dependency rule (the manual one-threat path, ``publishing.publish``)."""
-    return _signed_row(threat_ids.threat_uri(payload["identifier"]), constants.DEFENDER_DEPENDENCY_TYPE_IRI,
-                       payload, envelope, _dependency_literals(payload))
 
 
 class DependencyRowBuilder:

@@ -5,6 +5,12 @@ trusted, what is confirmed, is anything wrong"; the dashboard serves it
 (``GET /api/trust``) and `blackbox status` prints it. A reporter sees its
 progress toward the trusted list from the public record. The operator's alarms
 about the community authority each fire on their condition and not otherwise.
+
+One graph (2026-10-16): the community authority is dormant, so on a real read the
+surfaces show the verified authority's facts and say plainly that no community
+curators are trusted, even with a community root configured, and its alarms stay
+quiet. How a community authority's facts are shown is pinned on hand-built views,
+kept for when community curators are added.
 """
 
 from __future__ import annotations
@@ -25,7 +31,6 @@ from plugins.blackbox.community.report_cli import report_tracking
 from plugins.blackbox.community.statements import curator_view as cv
 from plugins.blackbox.community.statements.curator_statements import CuratorRecord
 from plugins.blackbox.dashboard import trust_routes
-from plugins.blackbox.community.trust.trust_store import TrustStore
 from plugins.blackbox.kernel import health, signing
 from plugins.blackbox.kernel.health import community_authority as ca
 from plugins.blackbox.kernel.signing.statement_order import CuratorStatement as Kind
@@ -42,24 +47,31 @@ def home(monkeypatch, tmp_path):
     monkeypatch.setattr(cv, "_today", lambda: TODAY)
 
 
+def _heartbeat(side, key):
+    """A heartbeat signed by the one curator *key* of *side*."""
+    signer = next(curator for curator in side.curators if signing.public_key_hex(curator) == key)
+    envelope = cv.curator_statements.sign_statement(Kind.HEARTBEAT, "curator", sequence=1, fields={"key": key}, key=signer,
+                                                    manifest=side.manifest, graph=GRAPH, day=date.fromisoformat(TODAY))
+    return {"r": cv.curator_statements.statement_subject(Kind.HEARTBEAT, "curator", 1), "identifier": "curator",
+            "signedStatement": envelope.to_text()}
+
+
 def _network(monkeypatch):
-    """Both authorities trusted; the verified one lists a partner, the community one lists alice,
-    confirms IP with evidence and has ONE of its three keys heartbeating."""
-    ours, theirs = Side(GRAPH), Side(VM_GRAPH)
-    monkeypatch.setenv("BLACKBOX_COMMUNITY_ROOT_KEYS", ours.root_hex)
-    monkeypatch.setenv("BLACKBOX_CURATOR_ROOT_KEYS", theirs.root_hex)
+    """The verified authority trusted: it lists a partner in Verified Memory, confirms IP and
+    heartbeats with ONE of its three keys in the shared memory. Beside it, a community
+    authority with its root configured lists alice, confirms IP and heartbeats too; it is
+    dormant (one graph, 2026-10-16), so none of that may surface."""
+    verified, dormant = Side(VM_GRAPH), Side(GRAPH)
+    monkeypatch.setenv("BLACKBOX_CURATOR_ROOT_KEYS", verified.root_hex)
+    monkeypatch.setenv("BLACKBOX_COMMUNITY_ROOT_KEYS", dormant.root_hex)
     alice, acme, newcomer = Reporter("0xa"), Reporter("0xacme"), Reporter("0xnew")
-    beating = sorted(ours.manifest.curator_keys)[0]
-    signer = next(key for key in ours.curators if signing.public_key_hex(key) == beating)
-    heartbeat = cv.curator_statements.sign_statement(Kind.HEARTBEAT, "curator", sequence=1, fields={"key": beating}, key=signer,
-                                                     manifest=ours.manifest, graph=GRAPH, day=date.fromisoformat(TODAY))
-    beat_row = {"r": cv.curator_statements.statement_subject(Kind.HEARTBEAT, "curator", 1), "identifier": "curator",
-                "signedStatement": heartbeat.to_text()}
+    beating = sorted(verified.manifest.curator_keys)[0]
     node = Store(
-        verified=[theirs.manifest_row(), theirs.row(Kind.COUNTED_AUTHORS, f"author:{acme.author}",
-                                                    _entry(acme.author, expires="2027-01-01") | {"class": "partner", "org": "acme"})],
-        community=[ours.manifest_row(), ours.row(Kind.COUNTED_AUTHORS, f"author:{alice.author}", _entry(alice.author, expires="2026-12-01")),
-                   ours.row(Kind.CONFIRMATION, IP, CITED), beat_row],
+        verified=[verified.manifest_row(), verified.row(Kind.COUNTED_AUTHORS, f"author:{acme.author}",
+                                                        _entry(acme.author, expires="2027-01-01") | {"class": "partner", "org": "acme"})],
+        shared=[verified.row(Kind.CONFIRMATION, IP, CITED), _heartbeat(verified, beating),
+                dormant.manifest_row(), dormant.row(Kind.COUNTED_AUTHORS, f"author:{alice.author}", _entry(alice.author)),
+                dormant.row(Kind.CONFIRMATION, IP, CITED), _heartbeat(dormant, sorted(dormant.manifest.curator_keys)[0])],
         reports=[signed_row(IP, alice), signed_row(IP, newcomer), signed_row("ioc:ip:203.0.113.8", newcomer)])
     return node, community.read_verified_reports(node, CFG), (alice, acme, beating)
 
@@ -68,17 +80,16 @@ def _network(monkeypatch):
 
 
 def test_the_panel_says_who_curates_who_is_trusted_and_what_is_confirmed(monkeypatch):
-    _, read, (alice, acme, beating) = _network(monkeypatch)
+    _, read, (_alice, acme, beating) = _network(monkeypatch)
     panel = community.trust_panel(read, TODAY)
     verified, ours = panel["authorities"]
     assert panel["available"] and (verified["authority"], ours["authority"]) == ("verified", "community")
     assert (verified["trusted"], verified["state"], verified["keys"], verified["threshold"]) == (True, "ok", 3, 2)
-    assert all(beat["silent"] and beat["day"] == "" for beat in verified["heartbeats"])          # they never beat here
-    assert (ours["trusted"], ours["state"], ours["keys"], ours["threshold"], ours["version"]) == (True, "ok", 3, 2, 1)
-    assert [(beat["key"], beat["day"], beat["silent"]) for beat in ours["heartbeats"] if not beat["silent"]] == [(beating, TODAY, False)]
+    assert [(beat["key"], beat["day"], beat["silent"]) for beat in verified["heartbeats"] if not beat["silent"]] == [(beating, TODAY, False)]
+    assert (ours["trusted"], ours["state"]) == (False, "none")             # dormant: its root and its manifest count for nothing
     assert {r["key"]: (r["listed_by"], r["author_class"], r["org"]) for r in panel["reporters"]} == {
-        alice.author: ("community", "established", ""), acme.author: ("verified", "partner", "acme")}
-    assert panel["confirmed"] == [{"identifier": IP, "evidence": CITED["evidence"], "day": TODAY, "curators": 2, "reporters": 2}]
+        acme.author: ("verified", "partner", "acme")}                      # alice's community listing is not there
+    assert panel["confirmed"] == []                                        # the community curators' pool: dormant
     assert (panel["held_raising"], panel["lookup_incomplete"]) == (0, False)
 
 
@@ -90,21 +101,6 @@ def test_a_heartbeat_is_silent_after_48_hours():
         read = CommunityRead(ReadState.ROWS, curator=cv.CuratorView(community=view))
         beat = community.trust_panel(read, TODAY)["authorities"][1]["heartbeats"][0]
         assert (beat["key"], beat["silent"]) == (key, silent), age
-
-
-def test_a_confirmation_the_verified_authority_overruled_is_not_shown_as_confirmed(monkeypatch):
-    ours, theirs = Side(GRAPH), Side(VM_GRAPH)
-    monkeypatch.setenv("BLACKBOX_COMMUNITY_ROOT_KEYS", ours.root_hex)
-    monkeypatch.setenv("BLACKBOX_CURATOR_ROOT_KEYS", theirs.root_hex)
-    other, rejected = "ioc:ip:203.0.113.9", "ioc:ip:203.0.113.10"
-    alice = Reporter("0xa")
-    node = Store(verified=[theirs.manifest_row()], reports=[signed_row(IP, alice), signed_row(other, alice), signed_row(rejected, alice)],
-                 community=[ours.manifest_row(), ours.row(Kind.CONFIRMATION, IP, CITED), ours.row(Kind.CONFIRMATION, other, CITED),
-                            ours.row(Kind.REJECTION, rejected, {"reason": "benign"}),          # the community curators' own rejection
-                            theirs.row(Kind.REJECTION, IP, {"reason": "benign"}, graph=GRAPH)])
-    read = community.read_verified_reports(node, CFG)
-    assert read.curator.community.verdicts[IP].kind is Kind.CONFIRMATION                        # they did confirm it
-    assert [entry["identifier"] for entry in community.trust_panel(read, TODAY)["confirmed"]] == [other]
 
 
 def test_an_unreadable_graph_is_unavailable_never_nothing_trusted():
@@ -142,10 +138,10 @@ def test_status_prints_the_same_facts(monkeypatch):
     _, read, _ = _network(monkeypatch)
     lines = community.trust_status_lines(community.trust_panel(read, TODAY))
     assert lines == [
-        "  verified trust:    2 of 3 curator keys sign (manifest v1) · 0 of 3 alive",
-        "  community trust:   2 of 3 curator keys sign (manifest v1) · 1 of 3 alive",
-        "  trusted reporters: 2 (1 listed by the community curators)",
-        "  confirmed pool:    1 threat(s) confirmed by the community curators",
+        "  verified trust:    2 of 3 curator keys sign (manifest v1) · 1 of 3 alive",
+        "  community trust:   no curators trusted on this network",
+        "  trusted reporters: 1 (0 listed by the community curators)",
+        "  confirmed pool:    0 threat(s) confirmed by the community curators",
     ]
 
 
@@ -156,12 +152,12 @@ def test_blackbox_status_prints_the_trust_lines_beside_the_health_items(monkeypa
     rs = type("Rs", (), {"synced_at": 1.0, "counts": lambda self: {"injection": 5}, "community_paused": False, "kill_list": {}})()
     cli._print_health(CFG, rs, object(), True)
     printed = capsys.readouterr().out.splitlines()
-    assert "  community trust:   2 of 3 curator keys sign (manifest v1) · 1 of 3 alive" in printed
-    assert "  confirmed pool:    1 threat(s) confirmed by the community curators" in printed
+    assert "  community trust:   no curators trusted on this network" in printed
+    assert "  confirmed pool:    0 threat(s) confirmed by the community curators" in printed
     assert all(line[:21].strip().endswith(":") for line in printed if line.strip())      # every value starts in one column
     cli._print_health(CFG, rs, object(), False)                                          # the node is down: said, not guessed
     assert "  trust:             unavailable (not read yet)" in capsys.readouterr().out.splitlines()
-    cli._print_health(replace(CFG, community_graph_id=""), rs, object(), True)
+    cli._print_health(replace(CFG, context_graph_id=""), rs, object(), True)
     assert "trust" not in capsys.readouterr().out
 
 
@@ -169,15 +165,16 @@ def test_blackbox_status_prints_the_trust_lines_beside_the_health_items(monkeypa
 
 
 def test_the_endpoint_serves_each_fact(monkeypatch):
-    _, read, (alice, acme, beating) = _network(monkeypatch)
+    _, read, (_alice, acme, beating) = _network(monkeypatch)
     monkeypatch.setattr("plugins.blackbox.kernel.config.load_blackbox_config", lambda: CFG)
     payload = trust_routes.trust_payload(lambda cfg: read)
-    assert payload["configured"] and payload["available"] and (payload["reporters_total"], payload["confirmed_total"]) == (2, 1)
-    ours = payload["authorities"][1]
-    assert (ours["authority"], ours["trusted"], ours["threshold"], ours["keys"]) == ("community", True, 2, 3)
-    assert {"key": beating[:16], "day": TODAY, "silent": False} in ours["heartbeats"]
-    assert {r["key"] for r in payload["reporters"]} == {alice.author[:16], acme.author[:16]}                # shortened keys only
-    assert payload["confirmed"][0]["identifier"] == IP and payload["confirmed"][0]["evidence"] == CITED["evidence"]
+    assert payload["configured"] and payload["available"] and (payload["reporters_total"], payload["confirmed_total"]) == (1, 0)
+    verified, ours = payload["authorities"]
+    assert (verified["authority"], verified["trusted"], verified["threshold"], verified["keys"]) == ("verified", True, 2, 3)
+    assert {"key": beating[:16], "day": TODAY, "silent": False} in verified["heartbeats"]
+    assert (ours["authority"], ours["trusted"]) == ("community", False)
+    assert {r["key"] for r in payload["reporters"]} == {acme.author[:16]}                # shortened keys only
+    assert payload["confirmed"] == []
 
 
 def test_the_endpoint_sanitizes_every_string_that_came_from_someone_else(monkeypatch):
@@ -199,7 +196,7 @@ def test_the_endpoint_sanitizes_every_string_that_came_from_someone_else(monkeyp
 
 
 def test_the_endpoint_says_unconfigured_and_unavailable(monkeypatch):
-    monkeypatch.setattr("plugins.blackbox.kernel.config.load_blackbox_config", lambda: replace(CFG, community_graph_id=""))
+    monkeypatch.setattr("plugins.blackbox.kernel.config.load_blackbox_config", lambda: replace(CFG, context_graph_id=""))
     assert trust_routes.trust_payload(lambda cfg: None) == {"configured": False}
     monkeypatch.setattr("plugins.blackbox.kernel.config.load_blackbox_config", lambda: CFG)
     assert trust_routes.trust_payload(lambda cfg: None) == {"configured": True, "available": False, "reason": "not read yet"}
@@ -215,7 +212,7 @@ def test_the_route_is_served_and_the_page_asks_for_it(monkeypatch):
     app = FastAPI()
     community_routes.register_community_routes(app, community_read=lambda cfg: read)
     response = TestClient(app, base_url="http://127.0.0.1").get("/api/trust")
-    assert response.status_code == 200 and response.json()["confirmed_total"] == 1
+    assert response.status_code == 200 and response.json()["reporters_total"] == 1
     # The dashboard's Community graph section (and its Trust pane) was removed at Amos's direction
     # (2026-10-10); /api/trust stays for `blackbox status` parity and other clients.
     assert 'id="community-panel"' not in PAGE.read_text(encoding="utf-8")
@@ -308,32 +305,24 @@ def test_alarms_do_not_fire_outside_their_condition():
     assert untrusted == []                                                # silence of curators nobody trusts is not an alarm
 
 
-def test_the_alarms_reach_the_operators_health_from_a_real_read(monkeypatch):
+def test_no_community_curator_alarm_reaches_the_operators_health_while_dormant(monkeypatch):
     node, read, _ = _network(monkeypatch)
     rs = type("Rs", (), {"synced_at": 1.0, "counts": lambda self: {"injection": 5}, "community_paused": False, "kill_list": {}})()
-    items = health.operator_health(health.gather(CFG, rs, True, read, {}, 2.0))
-    messages = [item.message for item in items]
-    assert "community curator heartbeat missing for 2 of 3 key(s)" in messages
+    messages = [item.message for item in health.operator_health(health.gather(CFG, rs, True, read, {}, 2.0))]
+    assert not any("community curator" in message or "curators are silent" in message for message in messages)
     assert not any("no trusted curator keys" in message for message in messages)
-    assert all(item.klass is health.HealthClass.INFO for item in items if "community curator" in item.message)
     node.failing_statements = True                                        # the trust lookup now fails: the node keeps what it stored
     again = community.read_verified_reports(node, CFG)
-    assert again.available and again.curator.community.lookup_incomplete and again.curator.verdict(IP) is Kind.CONFIRMATION
-    after = [item.message for item in health.operator_health(health.gather(CFG, rs, True, again, {}, 2.0))]
-    assert any("trust lookup was cut short" in message for message in after)
+    assert again.available and again.curator.verdict(IP) is Kind.CONFIRMATION
 
 
-def test_only_a_community_authority_still_counts_as_trusted_curators(monkeypatch):
+def test_a_community_root_alone_leaves_no_trusted_curators_and_no_curator_alarm(monkeypatch):
+    """With only a community root configured, nothing is trusted while that authority is
+    dormant: the panel says so, and its alarms (silence, heartbeats, manifest) stay quiet."""
     ours = Side(GRAPH)
     monkeypatch.setenv("BLACKBOX_COMMUNITY_ROOT_KEYS", ours.root_hex)
-    read = community.read_verified_reports(Store(community=[ours.manifest_row()], reports=[signed_row(IP, Reporter("0xa"))]), CFG)
+    read = community.read_verified_reports(Store(shared=[ours.manifest_row()], reports=[signed_row(IP, Reporter("0xa"))]), CFG)
+    assert [(a["trusted"], a["state"]) for a in community.trust_panel(read, TODAY)["authorities"]] == [(False, "none"), (False, "none")]
     rs = type("Rs", (), {"synced_at": 1.0, "counts": lambda self: {"injection": 5}, "community_paused": False, "kill_list": {}})()
     messages = [item.message for item in health.operator_health(health.gather(CFG, rs, True, read, {}, 2.0))]
-    assert not any("no trusted curator keys" in message for message in messages)
-    assert "the community curators are silent (no heartbeat seen yet)" in messages
-    TrustStore().forget()                                                  # a node that never saw that manifest
-    monkeypatch.delenv("BLACKBOX_COMMUNITY_ROOT_KEYS")
-    nobody = community.read_verified_reports(Store(reports=[signed_row(IP, Reporter("0xa"))]), CFG)
-    untrusted = [item.message for item in health.operator_health(health.gather(CFG, rs, True, nobody, {}, 2.0))]
-    assert not any("curators are silent" in message for message in untrusted)   # nobody trusted: no curator alarm at all
-    assert not any("no trusted curator keys" in message for message in untrusted)
+    assert not any("community curator" in message or "curators are silent" in message for message in messages)

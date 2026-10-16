@@ -4,7 +4,7 @@ Every attack script from the plan (§05 anti-gaming, §06 anti-pollution and
 asymmetric safety, §07 hardening) runs here as a table-driven test over the
 REAL Phase 1 pipeline — nothing below the node is stubbed:
 
-    signed rows built by the real writer  →  one fake node (both graphs)
+    signed rows built by the real writer  →  one fake node (the one graph: Verified Memory + shared memory)
     →  the one community reader (signatures, statements, budgets)
     →  aggregation  →  stages  →  the compiled community tier
     →  queue admission / health items / the dashboard's display seam
@@ -51,8 +51,8 @@ from plugins.blackbox.kernel.signing import key_manifest as km
 from plugins.blackbox.kernel.signing.statement_order import CuratorStatement as Kind
 from plugins.blackbox.ruleset import community_tier, compiler, curator_tier
 
-VM_GRAPH = "0x37b1Fdfd/agent-blackbox-vm"
-CFG = BlackboxConfig(report=True, community_graph_id=GRAPH, context_graph_id=VM_GRAPH, sync_interval=900)
+VM_GRAPH = GRAPH   # one graph (2026-10-16): the community lives in the verified graph's shared memory
+CFG = BlackboxConfig(report=True, context_graph_id=VM_GRAPH, sync_interval=900)
 DAY = 86_400
 MALWARE = "dep:npm:evil-pkg@1.0.0"
 IOC = "ioc:ip:203.0.113.7"
@@ -110,7 +110,7 @@ CANNOT = (
 )
 
 
-# ------------------------------------------------------------------ the sandbox: one fake node, both graphs
+# ------------------------------------------------------------------ the sandbox: one fake node, both memories of the graph
 
 
 def _kind(sparql: str) -> str:
@@ -122,8 +122,8 @@ def _kind(sparql: str) -> str:
 
 
 class _Node:
-    """Serves the verified graph (key manifests + curator statements) and the
-    community graph (reports, retractions, disputes, digests, advisory
+    """Serves the graph's Verified Memory (key manifests + curator statements)
+    and its shared memory (reports, retractions, disputes, digests, advisory
     curator statements), one page each. *fail* names community row kinds
     whose page fails (the reader must then keep last-good)."""
 
@@ -141,7 +141,7 @@ class _Node:
 
     def query(self, sparql, cg_id, view=None, on_error=None, **kw):
         kind = _kind(sparql)
-        if cg_id == VM_GRAPH:
+        if view != "shared-working-memory":
             if kind == "manifest":
                 return [r for r in self.verified if "manifest" in r["r"]]
             if kind == "curator":

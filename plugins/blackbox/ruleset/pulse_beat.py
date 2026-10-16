@@ -40,7 +40,7 @@ def pulse(config: Optional[BlackboxConfig] = None) -> bool:
     global _pulsing, _pulsing_since
     config = config or load_blackbox_config()
     interval = float(getattr(config, "community_poll_interval", 0) or 0)
-    if interval <= 0 or not config.community_graph_id or not community.PULSE.due(interval):
+    if interval <= 0 or not config.context_graph_id or not community.PULSE.due(interval):
         return False
     with _pulsing_lock:
         if _pulsing and time.time() - _pulsing_since < STUCK_BEAT_SECONDS:

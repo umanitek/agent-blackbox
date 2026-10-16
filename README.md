@@ -522,6 +522,51 @@ The map is `plugins/blackbox/ARCHITECTURE.md`. Three guards in the test suite ke
 matches the disk, imports point one way (modules to kernel, never the reverse), and file and function
 sizes may only shrink.
 
+### The one-graph trial on a DKG devnet
+
+`scripts/blackbox-one-graph-trial.py` runs the one-graph flow end to end on a local OriginTrail DKG
+devnet. It drives Blackbox's own code, one process per Blackbox installation, the way separate
+machines would run it:
+
+| Step | What it shows |
+|---|---|
+| `devnet`, `graph` | a devnet is up; the curator node creates one public graph, registered on chain with a curated publish policy, and its `reports` sub-graph; the curator node gets Blackbox's curator settings (`scripts/blackbox-curator-config.py`) |
+| `edges` | two Edge nodes run Blackbox's node settings, taken from this checkout: the installer's config writer, the native sync profile (`sync/node_profile.py`) and the launch environment Blackbox starts its node with |
+| `keys` | test curator keys for the devnet's network only (below); a manifest with two curator keys of two operators is published and trusted |
+| `subscribe` | the reporters subscribe with `blackbox sync`; each node then lists the graph with its definition, as Blackbox's membership requires (the listing's `synced` flag is recorded as a known DKG gap, not awaited: on a registered graph the DKG can leave it false while the node takes writes, OriginTrail/dkg#3281 and #3296) |
+| `share`, `read` | reporter A opts in to community sharing (`blackbox report --enable-sharing`) and files a report with `blackbox report`; reporter B's community reader returns it |
+| `promote` | curator 1 proposes, curator 2 co-signs and publishes. Verified Memory then holds a promotion statement both curator keys signed that names the report (subject and digest), with the curators' own asset built from the report, or the report itself |
+| `compile` | both reporters' rulesets serve the report as a verified rule, and their guards in block mode refuse to install the package; reporter B's unpromoted report does not become one |
+| `late-join`, `restart` | a reporter added later gets the reports and the rule; after a node restart they are still there |
+
+**Keys.** Blackbox trusts curator roots pinned per network (`kernel/signing/trust_anchors.py`, `CURATOR_ROOT_KEYS`).
+Only a network with no pin takes roots from `BLACKBOX_CURATOR_ROOT_KEYS`; a pinned network ignores the
+variable. The trial creates a test root with `blackbox curate keys --root` and sets that variable for its
+own processes only. It changes no pin and refuses to run on a network that has one. A devnet node
+reports the network id of the network its config falls back to, today the testnet's.
+
+**Running it** needs a built checkout of OriginTrail/dkg (testnet-canary or the 10.0.25 candidate),
+[uv](https://docs.astral.sh/uv/), and a machine that is free to run a devnet. Run it from this checkout:
+
+```bash
+uv run scripts/blackbox-one-graph-trial.py run --dkg-repo ~/dkg --start-devnet --stop-devnet
+```
+
+- `--start-devnet` cleans and starts the devnet (`scripts/devnet.sh clean`, then `start 6`). It refuses to
+  start while `<dkg repo>/.claude/devnet.lock` exists and holds that lock while its devnet runs;
+  `--stop-devnet` stops the devnet and releases the lock at the end (also on a `--resume`d run). Without
+  `--start-devnet` the trial uses the devnet that is already running.
+- The report is written to the run folder (`~/blackbox-one-graph-trial/<stamp>` unless `--run-dir` says
+  otherwise) as `report.md` and `report.json`. Each step is PASS, FAIL (with the evidence: what was
+  asked, what the nodes answered, and the node log lines of that step's time window), ERROR (the trial
+  itself could not run it) or SKIP. A step is ASSISTED when it reached its goal only after the trial
+  applied a documented DKG work-around, a forced catch-up, which Blackbox does not do itself; with
+  `--no-assist` that step fails instead. The exit code is 0 only when every step passed.
+- `--resume <run folder>` continues a run on the same devnet from its first step that did not pass.
+  `--until <step>` stops after that step.
+- Each role's Blackbox home, and the output of every call it made, are kept under `actors/` in the run
+  folder.
+
 ---
 
 ## File structure

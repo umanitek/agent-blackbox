@@ -20,6 +20,9 @@ and ``signing.sign(...)`` / ``signing.verify(...)``:
   (root epoch -> root keys per network; the sandbox override when unpinned).
 * :mod:`.statement_order` — curator statement types and which statement about
   a threat is current (per-threat sequence; terminal statements dominate).
+* :mod:`.promotion_statement` — the promotion statement: the verified authority's
+  two-key pointer (report subject + digest) to ONE community report it
+  promoted to Verified Memory; imported as ``signing.promotion_statement``.
 """
 
 from .envelope import (
@@ -39,7 +42,7 @@ from .envelope import (
     verify,
 )
 
-from . import authority, graph_migration, key_manifest, statement_order, trust_anchors
+from . import authority, graph_migration, key_manifest, promotion_statement, statement_order, trust_anchors
 from .graph_migration import MigrationVerdict
 from .key_manifest import ManifestVerdict
 from .trust_anchors import RootPins
@@ -61,6 +64,7 @@ __all__ = [
     "graph_migration",
     "is_canonical",
     "key_manifest",
+    "promotion_statement",
     "public_key_hex",
     "sign",
     "statement_order",

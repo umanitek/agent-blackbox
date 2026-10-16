@@ -263,7 +263,7 @@ def publish_due_digests(client: DkgClient, cfg: BlackboxConfig, tally: Optional[
     if not due:
         return 0
     reporter = identity.reporter_address(client)
-    signer = report_signer.resolve_report_signer(client, cfg.community_graph_id)
+    signer = report_signer.resolve_report_signer(client, cfg.context_graph_id)
     if not reporter or signer is None:
         logger.debug("blackbox: sighting digest not published (no identity or signer)")
         return 0
@@ -272,7 +272,7 @@ def publish_due_digests(client: DkgClient, cfg: BlackboxConfig, tally: Optional[
         entries = build_digest(tally.counts(week))
         quads = build_digest_quads(reporter_address=reporter, week=week, entries=entries, signer=signer)
         name = f"digest-{threat_ids.stable_hash(reporter + week, 16)}"
-        outcome, detail = sharing.send_report(client, cfg.community_graph_id, name, quads)
+        outcome, detail = sharing.send_report(client, cfg.context_graph_id, name, quads)
         audit.record_share_outcome(identifier=f"digest:{week}", category="digest", severity="info",
                                    subject=digest_subject(reporter, week), asset_name=name,
                                    ok=outcome is sharing.ShareOutcome.ACCEPTED, error=detail, outcome=outcome.value)

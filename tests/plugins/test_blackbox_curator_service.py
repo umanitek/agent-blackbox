@@ -154,7 +154,7 @@ class Service:
 
     def verdict(self, identifier):
         view = self.view(identifier)
-        return view.community.verdicts.get(identifier), view
+        return view.verdicts.get(identifier), view
 
     def inbox(self, name):
         return len(self.team.net.inbox.get(name, []))
@@ -186,7 +186,7 @@ def test_a_malicious_dependency_is_confirmed_on_a_reader_with_no_human_command(s
     assert second.received == 1 and len(second.cosigned) == 1 and second.errors == ()
     record, view = svc.verdict(PKG)
     assert record.kind is Kind.CONFIRMATION and record.field("evidence") == "advisory:MAL-2026-1" and len(record.signers) == 2
-    assert view.verdict(PKG) is Kind.CONFIRMATION and set(view.community.heartbeats) == {svc.team.keys["A"], svc.team.keys["B"]}
+    assert view.verdict(PKG) is Kind.CONFIRMATION and set(view.heartbeats) == {svc.team.keys["A"], svc.team.keys["B"]}
     again = svc.beat("A")                                               # nothing left to do, and nothing repeated
     assert again.proposed == () and again.heartbeat == "not due" and again.credited == 1
     assert len(svc.statements("confirmation")) == 1 and len(svc.statements("heartbeat")) == 2
@@ -571,7 +571,7 @@ def test_a_graduation_both_ledgers_call_for_is_listed_with_no_human_command(svc)
     assert len(svc.beat("B").cosigned) == 1
     view = svc.view(f"author:{bob.author}")
     assert bob.author in view.counted and view.counted[bob.author].author_class == "established"
-    assert view.counted[bob.author].expires == (utc_today() + timedelta(days=90)).isoformat()
+    assert view.counted[bob.author].expires == (utc_today() + timedelta(days=reputation.LISTING_DAYS)).isoformat()
     assert svc.beat("A").proposed == () and svc.beat("B").proposed == ()                # listed: nothing more to propose
 
 
@@ -603,7 +603,8 @@ def test_a_listing_about_to_expire_is_renewed_and_one_far_from_expiry_is_not(tmp
     soon = (utc_today() + timedelta(days=10)).isoformat()
     svc.team.two_key(Kind.COUNTED_AUTHORS, f"author:{carol.author}", _listing(carol, expires=soon))
     assert len(svc.beat("A").proposed) == 1 and len(svc.beat("B").cosigned) == 1
-    assert svc.view(f"author:{carol.author}").counted[carol.author].expires == (utc_today() + timedelta(days=90)).isoformat()
+    assert svc.view(f"author:{carol.author}").counted[carol.author].expires == (
+        utc_today() + timedelta(days=reputation.LISTING_DAYS)).isoformat()
     assert svc.beat("A").proposed == () and svc.beat("B").proposed == ()                # renewed: nothing more to propose
 
 
@@ -921,7 +922,7 @@ def test_the_suspension_is_a_health_item_on_blackbox_status(svc, monkeypatch, ca
         assert [item.klass for item in items] == [HealthClass.SECURITY] and "curator SUSPENDED" in items[0].message
         monkeypatch.setattr(cli.health, "gather", lambda *args, **kwargs: None)
         monkeypatch.setattr(cli.health, "operator_health", lambda inputs: [])
-        cli._print_health(dataclasses.replace(CFG, community_graph_id=""), None, None, False)
+        cli._print_health(dataclasses.replace(CFG, context_graph_id=""), None, None, False)
         assert "[SECURITY] curator SUSPENDED: its self-test failed 1 of 22" in capsys.readouterr().out
         svc.beat("A")                                                     # a passing run lifts it
         assert curate.status_health_items(time.time()) == []
@@ -1395,12 +1396,6 @@ def test_the_weekly_withdrawal_step_revokes_a_confirmation_whose_advisory_was_wi
     assert rechecked == [(PKG, "MAL-2026-1")] and revocations == [(PKG, "withdrawn:osv:MAL-2026-1")]
     assert len(report.proposed) == 1 and report.errors == ()
     assert svc.beat("A", withdrawal=watcher).proposed == () and len(rechecked) == 1     # once a week
-
-
-def test_a_revocation_the_acting_authority_may_not_sign_is_a_step_error(svc, tmp_path):
-    watcher, _ = _confirmed_and_withdrawn(svc, tmp_path)               # the community authority signs no revocation
-    report = svc.beat("A", withdrawal=watcher)
-    assert report.proposed == () and report.errors == (f"withdrawal: could not propose revoking {PKG}",)
 
 
 def test_the_withdrawal_step_waits_while_this_node_may_not_sign(tmp_path, monkeypatch):

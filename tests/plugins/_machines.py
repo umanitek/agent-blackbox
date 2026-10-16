@@ -119,6 +119,10 @@ class Node:
         self.sealed[name] = (cg, [dict(q) for q in quads])
         return {"name": name}
 
+    def share_finalized_knowledge_asset(self, cg: str, name: str, sub_graph: str = "") -> dict[str, Any]:
+        """The full share a Verified Memory publish needs first (KI-351): nothing to store here."""
+        return {"state": "succeeded"}
+
     def request(self, method: str, path: str, body: Optional[dict[str, Any]] = None, timeout: Any = None) -> dict[str, Any]:
         if path.endswith("/vm/publish"):
             name = path.split("/knowledge-assets/", 1)[1].rsplit("/vm/publish", 1)[0]

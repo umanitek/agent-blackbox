@@ -1,9 +1,11 @@
 """Publishing an APPROVED curator proposal: quorum check, consent, the write, the read-back.
 
-A proposal is written to the graph it was SIGNED for (``proposal.graph``): the
-verified graph is published to verifiable memory, the community graph is
-shared into shared memory. Which graph a statement belongs in was decided when
-it was proposed, from the acting authority (``kernel.signing.authority``).
+A proposal is written where its kind lives (``CurateContext.home_of``, from
+the acting authority's table in ``kernel.signing.authority``): an enforcement
+statement is published to the graph's Verified Memory, an advisory one is
+shared into its shared memory, beside the community's reports. One graph since
+2026-10-16, so the home decides, never the graph id the proposal was signed
+for (which must be this node's graph).
 
 "Published" means the statement can be READ BACK from that graph (KI-246): a
 node reply that only says "accepted", "already there" or "partly failed" is
@@ -15,9 +17,16 @@ Every outward write sits behind content-bound consent and is ledgered.
 
 A revocation or a correction (P5) is published at once, never batched, and
 once it reads back the verified authority also posts its ADVISORY TWIN in the
-community graph (:func:`advisory_twin`, D26) so readers' 20 s pulse withdraws
-the rule instead of waiting for a full refresh. A correction publishes only
+graph's shared memory (:func:`advisory_twin`, D26) so readers' 20 s pulse
+withdraws the rule instead of waiting for a full refresh. A correction publishes only
 under an EFFECTIVE manifest (:func:`require_effective_manifest`).
+
+A promotion is published the way its payload says (:mod:`.strategies`,
+:func:`_write_promotion`): by default the curators' own verified-rule asset
+made from the report; a member-asset promotion first publishes the reporter's
+own asset from shared memory, then the statement beside it. Every key and the
+publisher first re-check the report on their own node
+(:func:`checked_promotion`); published means everything reads back.
 
 Usage::
 
@@ -25,32 +34,31 @@ Usage::
     outcome.startswith("published")      # True only after the read-back
 
 The batch publisher (``batch.py``) writes promotions in batches through the
-same node, split into its ledger's steps: :class:`NodeBatchWriter` seals a
-batch asset in working memory, submits it to ``/vm/publish``, asks the node
-for an asset's UAL and reads every signed row back; :func:`has_quorum` is the
-quorum check both paths share.
+same node, split into its ledger's steps (``node_writers.NodeBatchWriter``);
+:func:`has_quorum` is the quorum check both paths share.
 """
 
 from __future__ import annotations
 
 import logging
 from enum import Enum
-from dataclasses import dataclass
-from typing import Dict, List, Mapping, Optional, Tuple
-from urllib.parse import quote, urlencode
+from typing import Optional
 
 from ... import audit, community, killlist
 from ...kernel import constants, node_routes, rdf_terms, signing, sparql_text, threat_ids
-from ...kernel.dkg_client import DkgClient, DkgError
+from ...kernel.dkg_client import DkgError
 from ...kernel.signing import key_manifest
+from ...kernel.signing import promotion_statement as statement
+from ...kernel.signing.authority import COMMUNITY_GRAPH, VERIFIED_GRAPH
 from ...kernel.signing.statement_order import CuratorStatement
 from .. import consent, promotion
 from ..ladder import outcomes
 from ..upkeep import published
 from ..context import CORRECTION_STATEMENT, CurateContext
 from ..proposal import Proposal, ProposalState, ProposalStore
-from . import row_builders
+from . import row_builders, strategies
 from .errors import VerbError
+from .node_writers import NodeReportWriter, definite_refusal
 
 logger = logging.getLogger(__name__)
 
@@ -102,7 +110,7 @@ def publish(ctx: CurateContext, store: ProposalStore, proposal_id: str, *, typed
     audit.record_share_outcome(identifier=proposal.identifier, category=f"curator:{proposal.kind.split('.', 1)[-1]}",
                                severity="info", subject=proposal.id, asset_name=name, ok=True, outcome="accepted")
     store.save(proposal.transition(ProposalState.PUBLISHED, note=f"published to {graph} as {name}"))
-    if graph == ctx.community_graph:   # shared memory forgets: this node keeps its statement alive
+    if ctx.home_of(proposal.kind) == COMMUNITY_GRAPH:   # shared memory forgets: this node keeps its statement alive
         published.remember(ctx.cfg, graph=graph, name=name, quads=_asset(proposal, envelope)[1])
     _credit_reporters(ctx, proposal)
     already = " (the node already held it)" if outcome is PublishOutcome.ALREADY_THERE else ""
@@ -123,14 +131,14 @@ def require_effective_manifest(ctx: CurateContext) -> None:
 
 # ---------------------------------------------------------------- the advisory twin (D26)
 
-#: The statements whose advisory twin the verified authority posts in the community graph.
+#: The statements whose advisory twin the verified authority posts in the graph's shared memory.
 TWINNED_STATEMENTS = frozenset({CuratorStatement.REVOCATION.value, CORRECTION_STATEMENT})
 
 
 def advisory_twin(envelope: signing.SignedEnvelope) -> tuple[str, list[dict[str, str]]]:
     """``(asset name, quads)`` of a revocation's or correction's advisory twin:
     the same signed text under a ``g:CuratorStatement`` subject, which changes
-    the community graph's pulse fingerprint (``community.pulse``), so the pulse
+    the shared memory's pulse fingerprint (``community.pulse``), so the pulse
     re-applies the curator tier within ~20 s (R4).
 
     It says nothing by itself: the envelope is bound to the verified graph and
@@ -147,13 +155,11 @@ def advisory_twin(envelope: signing.SignedEnvelope) -> tuple[str, list[dict[str,
 
 
 def post_advisory_twin(ctx: CurateContext, envelope: signing.SignedEnvelope) -> str:
-    """Share *envelope*'s advisory twin into the community graph, AFTER the
-    verified-graph asset reads back (the pulse reads the verified graph: a twin
-    that synced first would find nothing). Best effort — readers still withdraw
-    the rule on their next full refresh — so it reports, never raises."""
-    graph = ctx.community_graph
-    if not graph or graph == ctx.verified_graph:
-        return "no community graph: no advisory twin (readers act on their next full refresh)"
+    """Share *envelope*'s advisory twin into the graph's shared memory, AFTER
+    the Verified Memory asset reads back (the pulse then re-reads Verified
+    Memory: a twin that synced first would find nothing). Best effort — readers
+    still withdraw the rule on their next full refresh — so it reports, never raises."""
+    graph = ctx.verified_graph
     name, quads = advisory_twin(envelope)
     try:
         _share(ctx, graph, name, quads)
@@ -198,27 +204,86 @@ def has_quorum(ctx: CurateContext, proposal: Proposal, envelope: signing.SignedE
 
 
 def _write(ctx: CurateContext, proposal: Proposal, envelope: signing.SignedEnvelope) -> tuple[str, str, PublishOutcome]:
-    """Build the quads, write them to the graph the proposal was signed for and
-    read them back; (asset name, graph, outcome)."""
+    """Build the quads, write them where the proposal's kind lives (Verified
+    Memory or the graph's shared memory) and read them back; (asset name, graph, outcome)."""
+    graph, home = proposal.graph, ctx.home_of(proposal.kind)
+    if not graph or graph != ctx.verified_graph or home is None:
+        raise VerbError(f"the proposal was signed for {graph or 'no graph'}, where this node does not publish "
+                        f"{proposal.kind} statements")
+    if proposal.kind == CuratorStatement.PROMOTION.value:
+        return _write_promotion(ctx, proposal, envelope)
     name, quads = _asset(proposal, envelope)
-    graph = proposal.graph
-    if graph == ctx.verified_graph:
+    if home == VERIFIED_GRAPH:
         node_routes.publish_to_verified_memory(ctx.client, graph, name, quads)
         already, view = False, constants.VIEW_VERIFIABLE_MEMORY
-    elif graph and graph == ctx.community_graph:
-        already, view = _share(ctx, graph, name, quads), constants.VIEW_SHARED_WORKING_MEMORY
     else:
-        raise VerbError(f"the proposal was signed for {graph or 'no graph'}, which is neither of this node's graphs")
+        already, view = _share(ctx, graph, name, quads), constants.VIEW_SHARED_WORKING_MEMORY
     if not _readable(ctx, graph, view, quads):
         return name, graph, PublishOutcome.UNCONFIRMED
     return name, graph, PublishOutcome.ALREADY_THERE if already else PublishOutcome.PUBLISHED
 
 
+def _write_promotion(ctx: CurateContext, proposal: Proposal,
+                     envelope: signing.SignedEnvelope) -> tuple[str, str, PublishOutcome]:
+    """The promotion, the way its payload says: for a member-asset promotion
+    the reporter's own asset first (from shared memory, unless Verified Memory
+    holds it already), then the curators' own asset. Published means
+    everything reads back."""
+    strategy, _report = checked_promotion(ctx, envelope)
+    ref, graph = strategy.reference(envelope), proposal.graph
+    writer = _publish_report(ctx, ref) if strategy.publishes_report else None
+    try:
+        name, quads = strategy.asset(envelope, strategies.evidence_of(proposal))
+    except ValueError as exc:
+        raise VerbError(f"the promotion is not acceptable: {exc}") from exc
+    already = _readable(ctx, graph, constants.VIEW_VERIFIABLE_MEMORY, quads)
+    if not already:
+        try:
+            node_routes.publish_to_verified_memory(ctx.client, graph, name, quads)
+        except DkgError as exc:
+            if writer is None:
+                raise
+            raise VerbError(f"the report is published, its promotion statement is not ({exc}); "
+                            "run publish again") from exc
+    if not (already or _readable(ctx, graph, constants.VIEW_VERIFIABLE_MEMORY, quads)) or (
+            writer is not None and not writer.readable(ref)):
+        return name, graph, PublishOutcome.UNCONFIRMED
+    return name, graph, PublishOutcome.ALREADY_THERE if already else PublishOutcome.PUBLISHED
+
+
+def _publish_report(ctx: CurateContext, ref: statement.ReportRef) -> NodeReportWriter:
+    """A member-asset promotion's report: its reporter's own asset, published
+    from shared memory unless Verified Memory holds it already."""
+    writer = NodeReportWriter(ctx.client, ctx.verified_graph)
+    asset = writer.locate(ref)
+    if asset is None:
+        raise VerbError("this node holds no copy of the report the promotion points at; nothing was published")
+    if not asset.verified:
+        try:
+            writer.submit(asset)
+        except DkgError as exc:
+            raise VerbError(f"the node refused to publish the report ({exc}); nothing was paid" if definite_refusal(exc)
+                            else f"the report's publish could not tell whether it was paid ({exc}); "
+                                 "it is looked up again before any retry") from exc
+    return writer
+
+
+def checked_promotion(ctx: CurateContext, envelope: Optional[signing.SignedEnvelope]
+                      ) -> tuple[strategies.PromotionStrategy, community.VerifiedReport]:
+    """The way a promotion is published and the report it names, re-read and
+    checked on THIS node (:func:`.promotion.checked_report`, KI-195) —
+    refused as a :class:`VerbError`."""
+    strategy = strategies.strategy_for(envelope)
+    try:
+        if strategy is None:
+            raise promotion.PromotionError(strategies.refusal(envelope))
+        return strategy, promotion.checked_report(ctx, strategy.reference(envelope))
+    except promotion.PromotionError as exc:
+        raise VerbError(f"the promotion is not acceptable: {exc}") from exc
+
+
 def _asset(proposal: Proposal, envelope: signing.SignedEnvelope) -> tuple[str, list[dict[str, str]]]:
-    """(asset name, quads) for a proposal, by its kind."""
-    if proposal.kind == CuratorStatement.PROMOTION.value:
-        _validated_promotion(envelope)
-        return promotion.asset_name(proposal.identifier), row_builders.verified_rule_quads(dict(envelope.payload), envelope)
+    """(asset name, quads) for a proposal, by its kind (a promotion: :func:`_write_promotion`)."""
     if proposal.kind == killlist.KILL_LIST_STATEMENT:
         return f"kill-list-{envelope.sequence}", killlist.kill_list_quads(envelope)
     if proposal.kind == CORRECTION_STATEMENT:
@@ -235,8 +300,8 @@ def _asset(proposal: Proposal, envelope: signing.SignedEnvelope) -> tuple[str, l
 
 
 def _share(ctx: CurateContext, graph: str, name: str, quads: list[dict[str, str]]) -> bool:
-    """Share into the community graph; True when the node already held this
-    asset (an earlier attempt got it there). Any other failure is raised."""
+    """Share into the graph's shared memory; True when the node already held
+    this asset (an earlier attempt got it there). Any other failure is raised."""
     try:
         community.ensure_report_lane(ctx.client, graph)
         result = ctx.client.share_knowledge_asset(graph, name, quads)
@@ -260,121 +325,22 @@ def _readable(ctx: CurateContext, graph: str, view: str, quads: list[dict[str, s
     return bool(sparql_text.query_rows(ctx.client, sparql, graph, view))
 
 
-def _validated_promotion(envelope: signing.SignedEnvelope) -> None:
-    try:
-        promotion.validate_payload(envelope.payload)
-    except promotion.PromotionError as exc:
-        raise VerbError(f"the promotion payload is not acceptable: {exc}") from exc
-
-
 def summary(proposal: Proposal) -> str:
     """What the operator is asked to consent to (graph, kind, subject, signers);
-    a whole-package promotion says so in words, so the second signer cannot
-    miss the scope."""
+    a promotion names the report it makes permanent and the severity it gets,
+    and a whole-package one says so in words, so the second signer cannot miss
+    whose report it promotes or its scope."""
     envelope = proposal.parsed()
     signers = ", ".join(s[:12] + "…" for s in envelope.signers) if envelope else "?"
-    scope = " · WHOLE PACKAGE (every version)" if envelope and promotion.whole_package(envelope.payload) else ""
+    strategy = strategies.strategy_for(envelope)
+    ref = strategy.reference(envelope) if strategy is not None else None
+    scope = ""
+    if strategy is not None and ref is not None:
+        scope = (f" · PROMOTES THE REPORT {ref.report} (permanent; names its reporter) · severity "
+                 f"{envelope.payload.get('severity', '')}" + (" · publishes the reporter's own asset"
+                                                             if strategy.publishes_report else ""))
+        if ref.identifier.endswith("@*"):
+            scope += " · WHOLE PACKAGE (every version)"
     if envelope and proposal.kind == CORRECTION_STATEMENT:
         scope = f" · SUPPRESSES {len(str(envelope.payload.get('targetSubjects', '')).split())} subject(s)"
     return f"{proposal.kind} · {proposal.identifier}{scope} · graph {proposal.graph} · seq {envelope.sequence if envelope else '?'} · keys {signers}"
-
-
-# ---------------------------------------------------------------- the batch path (BatchPublisher's node side)
-
-
-@dataclass(frozen=True)
-class SubmitReply:
-    """What ``/vm/publish`` answered: ``ual`` — set when the asset was minted on
-    chain (the node names it whether or not the graph binding then succeeded:
-    a 207 carries it too); ``tx_hash`` — the publish transaction, kept on the
-    ledger so the spend can be looked up on chain."""
-
-    ual: Optional[str]
-    tx_hash: str = ""
-
-
-def definite_refusal(exc: BaseException) -> bool:
-    """True only when the node DEFINITELY refused (a 4xx): nothing was minted
-    and a retry is safe. A 5xx, a timeout or a dropped connection is "could
-    not tell" (LES-011) — the asset may be on chain already."""
-    status = getattr(exc, "status_code", None)
-    return isinstance(exc, DkgError) and isinstance(status, int) and 400 <= status < 500
-
-
-class NodeBatchWriter:
-    """The node side of a batch, one call per publish-ledger step (pattern:
-    Adapter over the DKG routes ``node_routes.publish_to_verified_memory``
-    uses). The write and the publish are separate calls here, unlike the
-    one-shot path: a failed working-memory write spent nothing and is retried
-    as such, while a failed publish may have been paid for.
-
-    Usage::
-
-        writer = NodeBatchWriter(ctx.client, ctx.verified_graph)
-        writer.seal(name, quads)                   # QUEUED → SEALED
-        reply = writer.submit(name)                # SUBMITTED → MINTED / BOUND
-        writer.readable({subject: envelope_text})  # True / False / None (could not tell)
-    """
-
-    def __init__(self, client: DkgClient, graph: str) -> None:
-        self._client = client
-        self._graph = graph
-
-    def seal(self, name: str, quads: list[dict[str, str]]) -> None:
-        """Write and seal the batch, then share it in full to shared memory — the
-        node publishes only a complete share (KI-351). Both are free, so a
-        failure here is a safe retry: nothing has been paid yet."""
-        try:
-            self._client.write_private_knowledge_asset(self._graph, name, quads)
-        except DkgError as exc:
-            # The node finished an earlier seal whose reply was lost (timeout, crash before the
-            # ledger moved): the name is this batch's own, so the sealed asset IS this batch.
-            # Without this the batch fails every beat and holds every later batch (P4 review).
-            if not _already_sealed(exc):
-                raise
-        self._client.share_finalized_knowledge_asset(self._graph, name)
-
-    def submit(self, name: str) -> SubmitReply:
-        reply = self._client.request("POST", f"/api/knowledge-assets/{quote(name, safe='')}/vm/publish",
-                                     {"contextGraphId": self._graph})
-        return SubmitReply(ual=_text(reply, "ual") or None, tx_hash=_text(reply, "txHash"))
-
-    def asset_ual(self, name: str) -> Optional[str]:
-        """The UAL the node's lifecycle descriptor names for *name*; None when it
-        names none or cannot be asked (could not tell — never "not minted")."""
-        path = f"/api/knowledge-assets/{quote(name, safe='')}?{urlencode({'contextGraphId': self._graph})}"
-        try:
-            return _text(self._client.request("GET", path), "ual") or None
-        except DkgError:
-            return None
-
-    def readable(self, signed: Mapping[str, str]) -> Optional[bool]:
-        """True when every subject in *signed* (subject → envelope text) reads back
-        from verifiable memory carrying exactly that envelope; None when the read
-        cannot be believed."""
-        if not signed:
-            return True
-        values = " ".join(f"<{subject}>" for subject in sorted(signed))
-        sparql = (f"SELECT ?r ?o WHERE {{ VALUES ?r {{ {values} }} ?r <{constants.SIGNED_STATEMENT_PRED}> ?o }} "
-                  f"LIMIT {len(signed) * 4}")
-        rows = sparql_text.query_rows(self._client, sparql, self._graph, constants.VIEW_VERIFIABLE_MEMORY)
-        if rows is None:
-            return None
-        seen = set()
-        for row in rows:
-            envelope = signing.from_text(sparql_text.extract_binding(row.get("o")))
-            if envelope is not None:
-                seen.add((sparql_text.extract_binding(row.get("r")), envelope.to_text()))
-        return all((subject, text) in seen for subject, text in signed.items())
-
-
-def _already_sealed(exc: DkgError) -> bool:
-    """The node's answer to a create for a name it already sealed: DKG 10.0.20+
-    (``community.ALREADY_SEALED_REPLY``) and the older "already finalized" text."""
-    message = str(exc).lower()
-    return community.ALREADY_SEALED_REPLY in message or "already finalized" in message
-
-
-def _text(reply: object, key: str) -> str:
-    value = reply.get(key) if isinstance(reply, dict) else None
-    return value.strip() if isinstance(value, str) else ""

@@ -65,10 +65,10 @@ def test_in_shadow_mode_nothing_community_derived_becomes_matchable(monkeypatch)
     prior = compiler.Ruleset()                                                # seen 10 days ago: the span is met
     prior.community = {THREAT: {"identifier": THREAT, "firstSeen": NOW - 10 * 86_400}}
     live = compiler.Ruleset()
-    community_tier.apply_community_tier(live, FakeClient(), BlackboxConfig(community_graph_id=GRAPH), prior)
+    community_tier.apply_community_tier(live, FakeClient(), BlackboxConfig(context_graph_id=GRAPH), prior)
     assert live.community[THREAT]["enforcement"] == "flag" and THREAT in live.ioc
     shadowed = compiler.Ruleset()
-    community_tier.apply_community_tier(shadowed, FakeClient(), BlackboxConfig(community_graph_id=GRAPH, community_shadow=True), prior)
+    community_tier.apply_community_tier(shadowed, FakeClient(), BlackboxConfig(context_graph_id=GRAPH, community_shadow=True), prior)
     assert shadowed.community[THREAT]["enforcement"] == "monitor" and shadowed.community[THREAT]["shadowEnforcement"] == "flag"
     assert THREAT not in shadowed.ioc                                        # the hook can never match it
     assert shadowed.community[THREAT]["stage"] == "corroborated"             # the stage is still computed and logged
@@ -107,9 +107,9 @@ def test_the_refresh_logs_a_snapshot_only_in_shadow_mode(monkeypatch):
     written = []
     monkeypatch.setattr(community_tier.community.shadow, "write_snapshot", lambda snap: written.append(snap))
     rs = compiler.Ruleset(synced_at=NOW)
-    community_tier.record_shadow_metrics(rs, BlackboxConfig(community_graph_id=GRAPH))
+    community_tier.record_shadow_metrics(rs, BlackboxConfig(context_graph_id=GRAPH))
     assert written == []
-    community_tier.record_shadow_metrics(rs, BlackboxConfig(community_graph_id=GRAPH, community_shadow=True))
+    community_tier.record_shadow_metrics(rs, BlackboxConfig(context_graph_id=GRAPH, community_shadow=True))
     assert len(written) == 1 and written[0].community_total == 0
 
 

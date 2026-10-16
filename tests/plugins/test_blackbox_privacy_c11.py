@@ -32,7 +32,7 @@ from plugins.blackbox.kernel import health
 from plugins.blackbox.kernel.config import BlackboxConfig
 from plugins.blackbox.kernel.signing.statement_order import CuratorStatement as Kind
 
-CFG = BlackboxConfig(report=True, community_graph_id=GRAPH)
+CFG = BlackboxConfig(report=True, context_graph_id=GRAPH)
 DOCS = Path(consent_module.TERMS_PATH).parent
 FINDING = {"identifier": "dep:npm:evil-pkg@1.0.0", "category": "dependency", "severity": "high", "source": "public",
            "fields": {"ecosystem": "npm", "package_name": "evil-pkg", "package_version": "1.0.0", "kind": "malware",
@@ -95,7 +95,7 @@ def test_an_operator_who_opted_out_with_sharing_still_switched_on_sees_an_action
     items = health.operator_health(health.gather(CFG, rs, True, None, {}, 2.0, sharing_consent_problem=why))
     stopped = [item for item in items if item.message.startswith("`report` is true in the settings but sharing is stopped")]
     assert len(stopped) == 1 and stopped[0].klass is health.HealthClass.ACTION and "--enable-sharing" in stopped[0].what_to_do
-    off = BlackboxConfig(report=False, community_graph_id=GRAPH)                      # sharing off: nothing is stopped
+    off = BlackboxConfig(report=False, context_graph_id=GRAPH)                      # sharing off: nothing is stopped
     assert not any("stopped" in item.message for item in health.operator_health(health.gather(off, rs, True, None, {}, 2.0,
                                                                                               sharing_consent_problem=why)))
 
@@ -158,6 +158,7 @@ CLASSIFIED = {
     "curate/self_test.json": "the last self-test result over synthetic fixtures: names nobody",
     "curate/undelivered.json": "proposal ids no other curator received yet and for how many beats: names nobody",
     "curate/curator_key.pem": "this curator's own key",
+    "curate/root_key.pem": "the SANDBOX verified root key (never on a pinned network)",
     "curate/community_root_key.pem": "the SANDBOX community root key (never on a pinned network)",
 }
 

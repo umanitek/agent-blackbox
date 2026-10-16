@@ -32,7 +32,7 @@ from plugins.blackbox.ruleset.community_tier import materialize_community_rules 
 
 
 DEV_GRAPH = "0x51E5dE758A45c8b64048E29918421F0bdD6D5d5C/agent-blackbox-community-dev"
-CFG = BlackboxConfig(report=True, community_graph_id=DEV_GRAPH)
+CFG = BlackboxConfig(report=True, context_graph_id=DEV_GRAPH)
 
 
 def _report(identifier, author, severity="high", reporter=None, **fields):
@@ -256,8 +256,11 @@ class FakeClient:
     def context_graphs(self):
         return self.graphs
 
-    def subscribe_context_graph(self, cg_id, include_shared_memory=False):
+    def subscribe_context_graph(self, cg_id, include_shared_memory=False, force_catchup=False):
         self.subscribed.append((cg_id, include_shared_memory))
+        return {}
+
+    def connect_peer(self, peer_id):   # membership dials the graph's owner first
         return {}
 
     def query(self, sparql, cg_id, view=None, on_error=None, **kw):
@@ -365,7 +368,7 @@ def test_read_states_are_tagged():
     unknown_network.network = ""
     read = read_verified_reports(unknown_network, CFG)
     assert read.state is ReadState.UNAVAILABLE and "network id" in read.reason
-    assert read_verified_reports(FakeClient(), BlackboxConfig(community_graph_id="")).state is ReadState.AUTHORISED_EMPTY
+    assert read_verified_reports(FakeClient(), BlackboxConfig(context_graph_id="")).state is ReadState.AUTHORISED_EMPTY
 
 
 def test_reapply_on_a_reused_ruleset_replaces_stale_community_entries():

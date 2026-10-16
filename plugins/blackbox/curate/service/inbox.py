@@ -8,7 +8,9 @@ and the graph, never from what a message claims:
   a curator key of the trusted manifest signed it.
 * :func:`published_elsewhere` — "whoever signs second publishes", so the node
   that signed FIRST never sees its own proposal change state. It is finished
-  when the graph holds that same signed statement with enough signatures.
+  when the graph holds that same signed statement with enough signatures — a
+  promotion in Verified Memory, where its way wrote it
+  (``publishing.strategies``).
 """
 
 from __future__ import annotations
@@ -16,7 +18,10 @@ from __future__ import annotations
 from typing import Optional
 
 from ... import community
-from ...kernel import signing, threat_ids
+from ...kernel import constants, signing, sparql_text, threat_ids
+from ...kernel.signing import promotion_statement as statement
+from ..publishing import strategies
+from ...kernel.signing.authority import VERIFIED_GRAPH
 from ...kernel.signing.key_manifest import KeyManifest
 from ...kernel.signing.statement_order import CuratorStatement
 from ..context import CurateContext
@@ -38,21 +43,52 @@ def from_a_curator(manifest: Optional[KeyManifest], proposal: Proposal) -> bool:
 
 
 def published_elsewhere(ctx: CurateContext, proposal: Proposal, envelope: signing.SignedEnvelope) -> bool:
-    """True when the community graph holds the statement *proposal* proposes —
-    the same signed content — carrying the signatures its kind needs (another
-    curator co-signed and published it)."""
+    """True when the graph holds the statement *proposal* proposes — the same
+    signed content — carrying the signatures its kind needs (another curator
+    co-signed and published it), where its kind lives: a promotion or an
+    enforcement statement in Verified Memory, an advisory one in shared memory."""
     manifest = ctx.manifest
-    if manifest is None or proposal.graph != ctx.community_graph:
+    if manifest is None or proposal.graph != ctx.verified_graph:
         return False
+    if proposal.kind == statement.PROMOTION_STATEMENT:
+        return _promotion_published(ctx, manifest, envelope)
+    home = ctx.home_of(proposal.kind)
     try:
         kind = CuratorStatement(proposal.kind)
     except ValueError:
         return False
+    if home is None:
+        return False
     wanted = signing.content_id(envelope)
     needed = manifest.threshold if kind.needs_quorum else 1
-    for _graph, row in community.known_curator_statements(ctx.client, ctx.cfg, [proposal.identifier]):
+    for _graph, row in community.known_curator_statements(ctx.client, ctx.cfg, [proposal.identifier],
+                                                          verified_graph=home == VERIFIED_GRAPH):
         held = signing.from_text(row.get("signedStatement", ""))
         if held is not None and signing.content_id(held) == wanted and len(
                 manifest.curator_signers(held, statement_type=kind.value, graph=proposal.graph)) >= needed:
+            return True
+    return False
+
+
+def _promotion_published(ctx: CurateContext, manifest: KeyManifest, envelope: signing.SignedEnvelope) -> bool:
+    """True when Verified Memory holds the promotion *envelope* states — the
+    same content, under the subject its way writes it at — with a quorum of
+    curator keys."""
+    strategy = strategies.strategy_for(envelope)
+    try:
+        _name, quads = strategy.asset(envelope, "") if strategy is not None else ("", [])
+    except ValueError:
+        return False
+    subjects = sorted({quad["subject"] for quad in quads if quad["predicate"] == constants.SIGNED_STATEMENT_PRED})
+    if not subjects:
+        return False
+    values = " ".join(f"<{subject}>" for subject in subjects)
+    sparql = (f"SELECT ?o WHERE {{ VALUES ?r {{ {values} }} ?r <{constants.SIGNED_STATEMENT_PRED}> ?o }} "
+              "LIMIT 64")
+    wanted = signing.content_id(envelope)
+    for row in sparql_text.query_rows(ctx.client, sparql, ctx.verified_graph, constants.VIEW_VERIFIABLE_MEMORY) or []:
+        held = signing.from_text(sparql_text.extract_binding(row.get("o")))
+        if held is not None and signing.content_id(held) == wanted and manifest.has_quorum(
+                held, statement_type=statement.PROMOTION_STATEMENT, graph=ctx.verified_graph):
             return True
     return False

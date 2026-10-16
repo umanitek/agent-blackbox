@@ -303,7 +303,7 @@ def gather(cfg: Any, rs: Any, node_reachable: bool, read: Optional[Any], blocked
         ruleset_age_s=(now - getattr(rs, "synced_at", 0)) if getattr(rs, "synced_at", 0) else None,
         sync_interval_s=float(getattr(cfg, "sync_interval", 0) or 0),
         rule_count=sum(int(v) for k, v in rs.counts().items() if k != "community"),
-        community_configured=bool(getattr(cfg, "community_graph_id", "")),
+        community_configured=bool(getattr(cfg, "context_graph_id", "")),
         community_paused=bool(getattr(rs, "community_paused", False)),
         read_unavailable_reason=("" if read is None or read.available else str(read.reason)),
         curator_trusted=bool(view is not None and view.manifest is not None),

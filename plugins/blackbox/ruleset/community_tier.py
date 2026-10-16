@@ -42,7 +42,7 @@ def apply_community_tier(rs: compiler.Ruleset, client: DkgClient, cfg: BlackboxC
     *prior* is this node's previous ruleset generation (first-seen history and
     the last-good fallback); the refresh cycle passes it in.
     """
-    if not cfg.community_graph_id:
+    if not cfg.context_graph_id:
         return
     previous = dict(prior.community) if prior is not None else {}   # captured first: *prior* may be *rs* itself
     try:

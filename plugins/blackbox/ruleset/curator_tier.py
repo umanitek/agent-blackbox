@@ -1,4 +1,4 @@
-"""The curator overlay on the verified ruleset — revocations (Refine R2).
+"""The curator overlay on the verified ruleset — revocations (Refine R2) and promoted reports.
 
 A curator revocation withdraws a verified rule. It REDUCES enforcement, so it
 always applies, on every refresh path and whether or not a community graph is
@@ -11,6 +11,13 @@ A re-promotion (a higher-sequence promotion after a revocation) takes effect
 at the next full compile of the verified graph. Delaying an un-revoke is the
 safe direction, because it raises enforcement.
 
+Promoted reports (the one-graph flow) join the verified tier here, AFTER the
+revocations are dropped: a community report the verified authority promoted
+is served as a verified rule only when a quorum-signed promotion statement
+points at it and Verified Memory holds exactly that report — its digest,
+signed by its reporter key (:mod:`.live.promoted`). A revoked identifier or a
+suppressed report is never served.
+
 The pulse fast path (trust-and-threat-lab R4, D26): when the community graph
 changes — the verified authority posts a revocation's advisory twin there —
 the 20 s pulse calls :func:`withdraw_revoked`, which only ever ADDS
@@ -19,7 +26,7 @@ un-revoke, the manifest state) waits for the full refresh.
 
 Usage::
 
-    curator_tier.apply_curator_tier(rs, client, config)   # the refresh cycle
+    curator_tier.apply_curator_tier(rs, client, config, prior)   # the refresh cycle
     curator_tier.withdraw_revoked(rs, client, config)     # the pulse beat
 """
 
@@ -28,19 +35,22 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import replace
-from typing import Any
+from typing import Any, Optional
 
 from .. import community, killlist
 from ..kernel import constants, signing
 from ..kernel.config import BlackboxConfig
 from ..kernel.dkg_client import DkgClient
 from . import compiler
+from .live import promoted
 
 logger = logging.getLogger(__name__)
 
 
-def apply_curator_tier(rs: compiler.Ruleset, client: DkgClient, config: BlackboxConfig) -> int:
-    """Drop the verified rules the curator revoked; returns how many."""
+def apply_curator_tier(rs: compiler.Ruleset, client: DkgClient, config: BlackboxConfig,
+                       prior: Optional[compiler.Ruleset] = None) -> int:
+    """Drop the verified rules the curator revoked (returns how many), then
+    serve the promoted reports — *prior*'s when they cannot be read now."""
     try:
         view = community.read_curator_view(client, config)
     except Exception as exc:  # pragma: no cover - fail open (an outer boundary)
@@ -55,6 +65,12 @@ def apply_curator_tier(rs: compiler.Ruleset, client: DkgClient, config: Blackbox
     removed = rs.drop_identifiers(view.revoked)
     if removed:
         logger.info("blackbox: %d verified rule(s) withdrawn by curator revocation", removed)
+    try:
+        served = promoted.apply_promoted_reports(rs, client, config, view, prior)
+    except Exception as exc:  # health: allow BLE001 -- fail open: a promoted-report problem never costs the refresh
+        logger.warning("blackbox: promoted reports not applied this refresh: %s", exc)
+    else:
+        logger.debug("blackbox: %d promoted report(s) served as verified rules", served)
     return removed
 
 

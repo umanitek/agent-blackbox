@@ -77,7 +77,7 @@ def wired(monkeypatch, tmp_path):
     """Dashboard over a fake node serving REAL signed rows: this node (own key)
     plus one remote node posing as three addresses with one key."""
     monkeypatch.setenv("BLACKBOX_HOME", str(tmp_path / "bbhome"))
-    monkeypatch.setenv("BLACKBOX_COMMUNITY_GRAPH_ID", GRAPH)
+    monkeypatch.setenv("BLACKBOX_CONTEXT_GRAPH_ID", GRAPH)   # the community lives in this graph (one graph since 2026-10-16)
     own = Reporter(LOCAL_ADDRESS, reporter_key.ReporterKeyStore().load_or_create())
     poser = Reporter("0x2bf0e3c192ac5aa603813050094d4e394a7ae78d").key
     rows = [signed_row("ioc:domain:evil.example", own), signed_row("ioc:domain:mine.example", own)]

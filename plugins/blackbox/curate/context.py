@@ -9,9 +9,13 @@ this package, never the reverse).
 
 A curator machine acts for exactly one authority (``kernel.signing.authority``):
 the VERIFIED one publishes its manifest and enforcement statements in the
-verified graph; the COMMUNITY one publishes everything in the community graph
-and may only ever cause FLAG. Which one is decided once, in
-:func:`acting_authority`, and every verb routes by it.
+verified graph's Verified Memory and its advisory statements in the same
+graph's shared memory, beside the community's reports (one graph since
+2026-10-16); the COMMUNITY one may only ever cause FLAG, and it is dormant: it
+may never share the verified authority's graph, and there is no other. Which
+one is decided once, in :func:`acting_authority`, and every verb routes by it.
+Both homes are in one graph, so a statement is routed by its HOME
+(:meth:`CurateContext.home_of`), never by comparing graph ids.
 
 It is also the SIGNING CHOKE POINT: :meth:`CurateContext.sign` and
 :meth:`CurateContext.cosign` are the only places code under ``curate/`` makes a
@@ -27,7 +31,8 @@ Usage::
 
     ctx = build_context(compiled_ruleset, authority="community", interest=["author:<key>"])
     ctx.manifest                      # the acting authority's key manifest (None: publish one first)
-    ctx.graph_for(CuratorStatement.COUNTED_AUTHORS)   # where this authority publishes that kind
+    ctx.graph_for(CuratorStatement.COUNTED_AUTHORS)   # the graph that kind is signed for (None: may not sign it)
+    ctx.home_of("blackbox.rejection")                 # "community": the graph's shared memory
     envelope = ctx.sign(PromotionDraft(payload, sequence=3), curator_key)   # first signature, logged
     envelope = ctx.cosign(envelope, my_key)                                  # one more, logged
 """
@@ -44,7 +49,7 @@ from ..kernel import constants, signing
 from ..kernel.config import BlackboxConfig, load_blackbox_config
 from ..kernel.dkg_client import DkgClient
 from ..kernel.signing import key_manifest, trust_anchors
-from ..kernel.signing.authority import VERIFIED_GRAPH, Authority, home_graph
+from ..kernel.signing.authority import VERIFIED_GRAPH, Authority, RootStatement, home_graph
 from ..kernel.signing.key_manifest import KeyManifest
 from ..kernel.signing.statement_order import CuratorStatement
 from . import keys
@@ -59,8 +64,8 @@ CompiledRuleset = Callable[[Any], Any]
 
 @dataclass(frozen=True)
 class PromotionDraft:
-    """A promotion payload (``promotion.payload_for``), bound to the acting
-    authority's manifest graph at *sequence*."""
+    """A promotion payload (``publishing.strategies``: the way new promotions
+    take), bound to the acting authority's manifest graph at *sequence*."""
 
     payload: Mapping[str, str]
     sequence: int
@@ -166,24 +171,34 @@ class CurateContext:
 
     @property
     def verified_graph(self) -> str:
+        """The one context graph: Verified Memory holds the verified tier, shared
+        memory the community's reports and the advisory statements."""
         return self.cfg.context_graph_id
 
     @property
-    def community_graph(self) -> str:
-        return self.cfg.community_graph_id
-
-    @property
     def manifest_graph(self) -> str:
-        """The graph the acting authority's manifest is bound to and published in."""
-        return self.community_graph if self.authority is Authority.COMMUNITY else self.verified_graph
+        """The graph the acting authority's manifest is bound to and published in
+        (the one graph; the community authority is dormant)."""
+        return self.verified_graph
 
     def graph_for(self, kind: CuratorStatement) -> Optional[str]:
-        """The graph id where the acting authority publishes a *kind* statement,
+        """The graph id a *kind* statement of the acting authority is signed for,
         or None when it may not sign that kind at all."""
-        home = home_graph(self.authority, kind)
-        if home is None:
+        return self.verified_graph if self.home_of(kind.value) is not None else None
+
+    def home_of(self, statement_type: str) -> Optional[str]:
+        """Where the acting authority publishes a *statement_type* statement:
+        ``"verified"`` (the graph's Verified Memory), ``"community"`` (its shared
+        memory) or None when it may not sign it. Corrections and kill lists act
+        on the verified tier, so only the verified authority signs them."""
+        if statement_type in (CORRECTION_STATEMENT, killlist.KILL_LIST_STATEMENT):
+            return VERIFIED_GRAPH if self.authority is Authority.VERIFIED else None
+        if statement_type == key_manifest.KEY_MANIFEST_STATEMENT:
+            return home_graph(self.authority, RootStatement.KEY_MANIFEST)
+        try:
+            return home_graph(self.authority, CuratorStatement(statement_type))
+        except ValueError:
             return None
-        return self.verified_graph if home == VERIFIED_GRAPH else self.community_graph
 
     def sign(self, draft: Draft, key: Ed25519PrivateKey) -> signing.SignedEnvelope:
         """The FIRST signature on *draft* by *key*, recorded in the signing log.
@@ -236,19 +251,15 @@ class CurateContext:
 def acting_authority(cfg: BlackboxConfig, environment: str, view: community.CuratorView,
                      requested: Optional[str] = None) -> Authority:
     """Which authority this curator machine acts for. An explicit *requested*
-    value wins. Otherwise: the authority whose trusted manifest lists this
-    machine's curator key; else COMMUNITY when only a community root is
-    trusted here; else VERIFIED (the behaviour before the community authority existed)."""
+    value wins; else COMMUNITY when the community manifest lists this
+    machine's curator key; else VERIFIED. Under one graph the community
+    authority is dormant (no reader builds its view), so a machine trusting
+    only a community root no longer defaults to it: *cfg* and *environment*
+    decided that case and wait with it."""
     if requested:
         return Authority(requested)
     my_key = keys.curator_key_store().public_key_hex()
     if view.community is not None and view.community.manifest is not None and my_key in view.community.manifest.curator_keys:
-        return Authority.COMMUNITY
-    if view.manifest is not None and my_key in view.manifest.curator_keys:
-        return Authority.VERIFIED
-    has_community_root = bool(cfg.community_graph_id and cfg.community_graph_id != cfg.context_graph_id
-                              and trust_anchors.community_roots(cfg.community_graph_id))
-    if has_community_root and not trust_anchors.trusted_roots(environment):
         return Authority.COMMUNITY
     return Authority.VERIFIED
 
@@ -256,7 +267,7 @@ def acting_authority(cfg: BlackboxConfig, environment: str, view: community.Cura
 def is_sandbox(authority: Authority, cfg: BlackboxConfig, environment: str) -> bool:
     """True when *authority* has no pinned root here (a development setup)."""
     if authority is Authority.COMMUNITY:
-        return not trust_anchors.community_root_pinned(cfg.community_graph_id)
+        return not trust_anchors.community_root_pinned(cfg.context_graph_id)
     return not constants.CURATOR_ROOT_KEYS.get(environment)
 
 

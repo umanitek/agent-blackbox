@@ -1,10 +1,11 @@
-"""The community pulse — "did the community graph change?" between full refreshes (R16, KI-202).
+"""The community pulse — "did the community change?" between full refreshes (R16, KI-202).
 
 Before R16 the community tier was re-read only when the WHOLE ruleset
 refreshed: a 15-minute floor on the dashboard, one hour by default. The
 near-real-time arrival the benches showed came from a watcher that existed
 only in the sandbox. Now one cheap probe — a single aggregate query over the
-community graph's shared memory, count plus newest subject — runs at most
+community's shared memory (the verified graph's, sub-graph
+``constants.COMMUNITY_SUB_GRAPH``), count plus newest subject — runs at most
 every ``cfg.community_poll_interval`` seconds (default 20, 0 = off) while the
 agent is active, and only when its answer differs from last time does the
 ruleset re-apply the community tier (see ``ruleset.pulse``). Reading stays
@@ -31,14 +32,14 @@ from ..kernel.dkg_client import DkgClient, extract_binding
 
 logger = logging.getLogger(__name__)
 
-#: One grouped aggregate over the community graph's shared memory: per statement
+#: One grouped aggregate over the community's shared memory: per statement
 #: kind (reports, retractions, disputes, digests, curator statements such as
 #: stage attestations — R3-attest) how many there are and the
 #: newest subject — so a retraction or a dispute changes the fingerprint too,
 #: not only a new report (bench finding 2026-10-02). Key manifests are counted
-#: too (Community Curation: the community authority's manifest lives in this
-#: graph, so a new one must be picked up within a pulse, KI-248). Kinds absent
-#: from the graph simply return no row.
+#: too (Community Curation: a community authority's manifest would live there,
+#: so a new one must be picked up within a pulse, KI-248). Kinds absent simply
+#: return no row.
 _STATEMENT_KINDS = ("ThreatReport", "Retraction", "FalsePositive", "SightingDigest", "CuratorStatement", "KeyManifest")
 _FINGERPRINT_SPARQL = (
     "PREFIX g: <http://umanitek.ai/ontology/guardian/> "
@@ -52,7 +53,7 @@ def fingerprint(client: DkgClient, cfg: Any) -> Optional[str]:
     absent kinds omitted; ``""`` for an empty graph), or None when the probe
     failed or timed out (fail-open: no change is ever inferred from a failed
     probe, and a timed-out probe looks like an empty graph — KI-262)."""
-    graph = str(getattr(cfg, "community_graph_id", "") or "")
+    graph = str(getattr(cfg, "context_graph_id", "") or "")
     if not graph:
         return None
     rows = sparql_text.query_rows(client, _FINGERPRINT_SPARQL, graph, constants.VIEW_SHARED_WORKING_MEMORY)

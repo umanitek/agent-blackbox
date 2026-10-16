@@ -34,7 +34,7 @@ from plugins.blackbox.kernel.dkg_client import DkgError
 from plugins.blackbox.ruleset import Ruleset
 from plugins.blackbox.ruleset import community_tier
 
-CFG = BlackboxConfig(report=True, community_graph_id=GRAPH)          # epoch = 10 days by default
+CFG = BlackboxConfig(report=True, context_graph_id=GRAPH)          # epoch = 10 days by default
 THREAT = "ioc:domain:slow-burn.example"
 DAY = 86_400.0
 NOW = 1_800_000_000.0
@@ -177,10 +177,10 @@ def test_the_beat_is_capped_and_off_at_epoch_zero_or_with_sharing_off(tmp_path):
     node = _Node()
     assert keep_alive.publish_due_copies(node, CFG, store, now=NOW) == keep_alive.MAX_COPIES_PER_BEAT
     assert keep_alive.publish_due_copies(node, CFG, store, now=NOW) == 3
-    off = BlackboxConfig(report=True, community_graph_id=GRAPH, community_keepalive_epoch_days=0)
+    off = BlackboxConfig(report=True, context_graph_id=GRAPH, community_keepalive_epoch_days=0)
     _remember(store, "report-off", epoch=1)
     assert keep_alive.publish_due_copies(_Node(), off, store, now=NOW) == 0
-    assert keep_alive.publish_due_copies(_Node(), BlackboxConfig(report=False, community_graph_id=GRAPH), store, now=NOW) == 0
+    assert keep_alive.publish_due_copies(_Node(), BlackboxConfig(report=False, context_graph_id=GRAPH), store, now=NOW) == 0
     keep_alive.remember_accepted_share(off, name="report-never", identifier=THREAT, subject="s", severity="high",
                                        quads=[], store=store)
     assert "report-never" not in {r.name for r in store.all()}
