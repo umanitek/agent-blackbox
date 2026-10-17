@@ -30,7 +30,7 @@ def trust_payload(community_read: Callable[[Any], Any]) -> dict[str, Any]:
     from ..kernel.config import load_blackbox_config
 
     cfg = load_blackbox_config()
-    if not getattr(cfg, "community_graph_id", ""):
+    if not getattr(cfg, "context_graph_id", ""):
         return {"configured": False}
     panel = community.trust_panel(community_read(cfg))
     if not panel["available"]:

@@ -140,7 +140,7 @@ class TestCommandCodeFetchModelsPickerContract:
     """
 
 
-    def test_resolve_provider_full(self):
+    def test_resolve_provider_full(self, monkeypatch):
         """Both profiles must resolve through the model-switch path.
 
         Regression: ``resolve_provider_full`` only knew models.dev + overlay
@@ -150,6 +150,9 @@ class TestCommandCodeFetchModelsPickerContract:
         """
         from hermes_cli.providers import resolve_provider_full
 
+        # The plugin-only path, whatever the live catalog lists: models.dev now has its own
+        # "commandcode" entry (key CMD_API_KEY), which would answer before the plugin profile.
+        monkeypatch.setattr("agent.models_dev.fetch_models_dev", dict)
         chat = resolve_provider_full("commandcode", {}, [])
         assert chat is not None and chat.id == "commandcode"
         assert chat.transport == "openai_chat"

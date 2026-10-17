@@ -313,7 +313,7 @@ def test_restart_context_graph_catchup_uses_official_unsubscribe_then_subscribe(
     ]
     assert [json.loads(call["body"]) for call in cap["calls"]] == [
         {"contextGraphId": "cg"},
-        {"contextGraphId": "cg", "includeSharedMemory": False},
+        {"contextGraphId": "cg", "includeSharedMemory": True},   # the community lives in its shared memory
     ]
 
 

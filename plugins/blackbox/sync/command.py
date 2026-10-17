@@ -1,9 +1,10 @@
 """``blackbox sync`` — bring this node's copy of the verified graph up to date.
 
 Drives the local node's catch-up of the verified graph (curator peer first,
-generic peers as fallback), joins the community graph, then compiles the
-ruleset. ``_cmd_sync_impl`` and ``_catchup_authoritative_vm`` are the two
-long functions quality item G4 will turn into an explicit state machine.
+generic peers as fallback; the subscription includes the shared memory the
+community's reports live in), then compiles the ruleset. ``_cmd_sync_impl``
+and ``_catchup_authoritative_vm`` are the two long functions quality item G4
+will turn into an explicit state machine.
 """
 
 from __future__ import annotations
@@ -383,7 +384,7 @@ def _cmd_sync_impl(args: argparse.Namespace) -> int:
                 )
 
         may_probe_private = private_graph and not getattr(args, "wait", False)
-        # The community graph (B4) and an active successor graph (T2) ride the same sync, fail-open.
+        # An active successor graph (T2) rides the same sync, fail-open.
         side_subscriptions.ensure_side_subscriptions(client, cfg)
         if not subscribed and (admitted or not private_graph or may_probe_private):
             try:
@@ -750,11 +751,8 @@ def _cmd_sync_impl(args: argparse.Namespace) -> int:
     print(f"  {counts['injection']} injection, {counts['escalation']} escalation, "
           f"{counts['dependency']} dependency")
     print(f"  {public_count:,} public VM (curated)")
-    if cfg.community_graph_id:
-        print(f"  Community graph: {display_safety.term_safe(cfg.community_graph_id)} "
-              f"[sharing {'on' if cfg.community_enabled else 'off'}]")
-    else:
-        print("  Community graph: not configured (community sharing dormant)")
+    print(f"  Community reports: shared memory of {display_safety.term_safe(cfg.context_graph_id)} "
+          f"[sharing {'on' if cfg.community_enabled else 'off'}]")
     if not sync_complete:
         if private_graph and (pending_approval or not subscribed):
             print("  This graph is not supported; Agent Blackbox only uses its public VM graph.")

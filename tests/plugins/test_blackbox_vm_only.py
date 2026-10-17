@@ -41,7 +41,7 @@ def test_refresh_queries_only_verifiable_memory(monkeypatch, tmp_path):
 
     monkeypatch.setattr(constants, "blackbox_home", lambda: tmp_path)
     monkeypatch.setattr(ruleset_refresh, "_memory", ruleset_refresh._new_memory())
-    cfg = config.BlackboxConfig(community_graph_id="")
+    cfg = config.BlackboxConfig()
     ruleset.refresh(cfg, Client())
 
     assert queries
@@ -50,12 +50,17 @@ def test_refresh_queries_only_verifiable_memory(monkeypatch, tmp_path):
     assert "dkg:assertionGraph" in metadata_query
     assert "/_meta>" in metadata_query
     data_graph = f"did:dkg:context-graph:{cfg.context_graph_id}"
+    # The community lives in the same graph's SHARED memory (one graph since 2026-10-16):
+    # its tier reads only community statements there; every other read is verified memory.
+    community = [query for query, view in queries[1:] if view == constants.VIEW_SHARED_WORKING_MEMORY]
+    verified = [(query, view) for query, view in queries[1:] if view != constants.VIEW_SHARED_WORKING_MEMORY]
+    assert community and all("ThreatReport" in query for query in community)
     # The small-tier lanes read the confirmed assets' graphs (GRAPH ?g under the VM
     # prefix, through the verified-memory view); the root rows read the data graph.
-    assert {view for _query, view in queries[1:]} <= {None, "verifiable-memory"}
+    assert {view for _query, view in verified} <= {None, "verifiable-memory"}
     vm_prefix = f'"{data_graph}/_verifiable_memory/"'
     assert all(f"GRAPH <{data_graph}>" in query or ("GRAPH ?g {" in query and vm_prefix in query)
-               for query, _view in queries[1:])
+               for query, _view in verified)
 
 
 def test_cached_community_rules_are_discarded():
@@ -76,18 +81,16 @@ def test_cached_community_rules_are_discarded():
     assert [r["identifier"] for r in restored.graph_threats] == ["public"]
 
 
-@pytest.mark.usefixtures("no_community_graph")
-def test_sharing_stays_dormant_without_a_community_graph_address(monkeypatch):
+@pytest.mark.usefixtures("no_graph")
+def test_sharing_stays_dormant_without_a_graph_address(monkeypatch):
     """Contract update (community-graph build B2): the `report` key is LIVE,
-    but community sharing remains dormant by construction until a community
-    graph address exists — the shipped default is empty until Umanitek mints
-    the production graph (KI-035). This replaces the old VM-only contract
-    where BLACKBOX_REPORT was inert."""
+    but community sharing remains dormant by construction without a graph
+    address (KI-035) — since 2026-10-16 the community lives in the verified
+    graph, so that is an install that names no graph at all."""
     monkeypatch.setenv("BLACKBOX_REPORT", "true")
-    monkeypatch.delenv("BLACKBOX_COMMUNITY_GRAPH_ID", raising=False)
     cfg = config.load_blackbox_config()
     assert cfg.report is True  # the switch is real now
-    assert cfg.community_graph_id == ""  # an install with no community graph
+    assert cfg.context_graph_id == ""  # an install that names no graph
     assert cfg.community_enabled is False  # → every community path dormant
     assert cfg.daily_report_limit > 0  # the cap exists the moment sharing can
 
@@ -107,8 +110,9 @@ def test_dashboard_settings_sharing_defaults_off_and_requires_explicit_true():
 def test_openclaw_runtime_reads_vm_only_and_reporting_is_opt_in():
     """The bridge READS only the verified graph (its enforcement tier never comes
     from shared memory). Reporting is OFF by default like the Python plugin
-    (opt-in, 2026-10-16), 0 is never "no cap", and it still needs a community
-    graph id and an opt-in record before anything leaves."""
+    (opt-in, 2026-10-16), 0 is never "no cap", an opt-in record must stand before
+    anything leaves, and what leaves goes into the community sub-graph of the
+    verified graph's shared memory — never the graph's root (one graph since 2026-10-16)."""
     ruleset_src = (OPENCLAW_DIR / "src" / "ruleset.ts").read_text(encoding="utf-8")
     config_src = (OPENCLAW_DIR / "src" / "config.ts").read_text(encoding="utf-8")
     client_src = (OPENCLAW_DIR / "src" / "dkgClient.ts").read_text(encoding="utf-8")
@@ -120,19 +124,19 @@ def test_openclaw_runtime_reads_vm_only_and_reporting_is_opt_in():
     assert "report: false," in config_src                      # opt-in, like the Python plugin
     assert "dailyReportLimit: 0" not in config_src             # 0 was "no cap" (Refine R1)
     assert "effectiveDailyReportLimit(" in config_src
-    assert 'communityGraphId: "",' in config_src               # dormant until a graph is named
+    assert 'COMMUNITY_SUB_GRAPH = "reports"' in client_src
+    assert client_src.count("subGraphName: COMMUNITY_SUB_GRAPH") == 2   # the write and the share
     assert 'row.source !== "community"' in ruleset_src
 
 
-@pytest.mark.usefixtures("no_community_graph")
+@pytest.mark.usefixtures("no_graph")
 def test_report_command_submits_nothing_when_community_dormant(monkeypatch, capsys):
     """Contract update (community-graph build B6): the command is REAL now,
-    but with no community graph configured (the shipped default) it must
-    refuse loudly, submit nothing, and never even create a DKG client."""
+    but with no graph configured it must refuse loudly, submit nothing, and
+    never even create a DKG client."""
     monkeypatch.setattr(sync_command, "DkgClient", lambda *a, **k: (_ for _ in ()).throw(
         AssertionError("report must not create a DKG client while dormant")
     ))
-    monkeypatch.delenv("BLACKBOX_COMMUNITY_GRAPH_ID", raising=False)
     monkeypatch.delenv("BLACKBOX_REPORT", raising=False)
 
     args = Namespace(status=False, type="ioc", ioc_type="domain", value="evil.example",
@@ -411,12 +415,11 @@ def test_dashboard_reuses_fresh_large_ruleset_without_querying_blazegraph(monkey
     }
 
 
-@pytest.mark.usefixtures("no_community_graph")
+@pytest.mark.usefixtures("no_graph")
 def test_dashboard_community_surfaces_live_but_dormant_without_graph(monkeypatch):
     """Contract update (community-graph build B7): the community surfaces are
-    LIVE endpoints now. With no community graph configured (the shipped
-    default) they serve honest empty states — never 'coming soon'."""
-    monkeypatch.delenv("BLACKBOX_COMMUNITY_GRAPH_ID", raising=False)
+    LIVE endpoints now. With no graph configured they serve honest empty
+    states — never 'coming soon'."""
     monkeypatch.delenv("BLACKBOX_REPORT", raising=False)
     app = server.create_app()
     with TestClient(app, base_url="http://127.0.0.1") as client:

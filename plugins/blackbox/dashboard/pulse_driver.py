@@ -1,12 +1,12 @@
 """The community pulse keeps beating while the dashboard runs, browser or not (KI-283).
 
 The pulse is the cheap beat between full refreshes: it keeps the node's
-community membership alive (the link to the graph's owner, KI-297; a missing
-graph definition, KI-295) and pulls new community statements into the rules
-within ~20 s. It used to run only when an agent acted (``ruleset.get``) or a
-browser polled ``/api/health`` — so an idle node with no dashboard tab open
-never redialled the owner and saw community reports only at the hourly
-refresh (bench v21-b, 2026-10-06). The dashboard is the node's long-lived
+community membership alive (the verified graph's subscription with its shared
+memory) and pulls new community statements into the rules within ~20 s. It
+used to run only when an agent acted (``ruleset.get``) or a browser polled
+``/api/health`` — so an idle node with no dashboard tab open never checked its
+membership and saw community reports only at the hourly refresh (bench v21-b,
+2026-10-06). The dashboard is the node's long-lived
 process, so it drives the beat itself.
 
 Pattern: a small Active Object — one daemon thread owned by :class:`PulseDriver`,

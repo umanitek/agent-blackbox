@@ -41,14 +41,14 @@ export interface BlackboxConfig {
   dkgUrl: string;
   dkgHome: string;
   syncInterval: number; // seconds
-  /** Share privacy-safe reports to the community graph. Opt-in (2026-10-16): off by default, and a consent record (R13) is still required at send time. */
+  /**
+   * Share privacy-safe reports with the community: the shared memory of `contextGraphId`, sub-graph
+   * "reports" (one graph since 2026-10-16). Opt-in (2026-10-16): off by default, and a consent record
+   * (R13) is still required at send time.
+   */
   report: boolean;
   /** Daily cap on outbound reports; never "no cap" — 0 or less means the default (Refine R1). */
   dailyReportLimit: number;
-  /** The community graph reports go to (NEVER the verified graph); empty = community layer off. */
-  communityGraphId: string;
-  /** Peer id of the node that owns the community graph — dialled before the first subscribe (KI-216/FIX-0039). Travels as a pair with the graph id. */
-  communityGraphPeerId: string;
   /**
    * Minimum severity a built-in HEURISTIC candidate must reach to be flagged /
    * reported. Graph-backed findings (public or community) always flag — this
@@ -132,8 +132,6 @@ const DEFAULTS: BlackboxConfig = {
   syncInterval: 300,
   report: false,
   dailyReportLimit: DEFAULT_DAILY_REPORT_LIMIT,
-  communityGraphId: "",
-  communityGraphPeerId: "",
   reportMinSeverity: "high",
   blockSeverity: "critical",
   discover: true,
@@ -290,22 +288,12 @@ export function resolveConfig(pluginConfig: Record<string, unknown> = {}): Black
       num(pluginConfig.syncInterval) ??
       num(pluginConfig.sync_interval) ??
       DEFAULTS.syncInterval,
-    // KI-182 port: the bridge now builds R1-schema, signed reports to the COMMUNITY graph,
-    // so the switch may be wired. Still opt-in, and a consent record gates every send.
+    // KI-182 port: the bridge builds R1-schema, signed reports for the community (the shared
+    // memory of contextGraphId), so the switch is wired. Still opt-in, and a consent record gates every send.
     report: bool(env.BLACKBOX_REPORT) ?? bool(pluginConfig.report) ?? DEFAULTS.report,
     dailyReportLimit: effectiveDailyReportLimit(
       num(env.BLACKBOX_DAILY_REPORT_LIMIT) ?? num(pluginConfig.dailyReportLimit) ?? num(pluginConfig.daily_report_limit),
     ),
-    communityGraphId:
-      str(env.BLACKBOX_COMMUNITY_GRAPH_ID) ??
-      str(pluginConfig.communityGraphId) ??
-      str(pluginConfig.community_graph_id) ??
-      DEFAULTS.communityGraphId,
-    communityGraphPeerId:
-      str(env.BLACKBOX_COMMUNITY_GRAPH_PEER_ID) ??
-      str(pluginConfig.communityGraphPeerId) ??
-      str(pluginConfig.community_graph_peer_id) ??
-      DEFAULTS.communityGraphPeerId,
     reportMinSeverity:
       severity(env.BLACKBOX_REPORT_MIN_SEVERITY) ??
       severity(pluginConfig.reportMinSeverity) ??

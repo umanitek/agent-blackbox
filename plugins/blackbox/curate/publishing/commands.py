@@ -36,7 +36,8 @@ import json
 import logging
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
-from ...kernel import constants, display_safety, sparql_text, threat_ids
+from ...kernel import constants, display_safety, signing, sparql_text, threat_ids
+from ...kernel.signing import promotion_statement as statement
 from ...kernel.signing.authority import Authority
 from .. import consent, keys, transport
 from ..context import CORRECTION_STATEMENT, CorrectionDraft, CurateContext, build_context
@@ -145,12 +146,14 @@ def canonical_address(identifier: str) -> str:
 
 def verified_subjects(ctx: CurateContext, identifiers: Sequence[str]) -> dict[str, tuple[str, ...]]:
     """The subjects the verified graph holds for each ``ioc:`` identifier, matched
-    as the live lookup matches (the exact ``dp:value`` / ``normalizedValue``).
+    as the live lookup matches (the exact ``dp:value`` / ``normalizedValue``),
+    plus every promoted report a promotion statement points at for it (the
+    one-graph flow: the report's own subject is the rule's).
     Every subject is returned — the live lookup keeps one rule per identifier,
     and suppressing only that one would expose the next. Raises
     :class:`VerbError` when the graph cannot be read (could not tell, LES-011)."""
     by_value: dict[str, str] = {identifier.split(":", 2)[2]: identifier for identifier in identifiers}
-    found: dict[str, list[str]] = {}
+    found: dict[str, list[str]] = _promoted_reports(ctx, identifiers)
     values = list(by_value)
     for start in range(0, len(values), LOOKUP_CHUNK):
         chunk = values[start:start + LOOKUP_CHUNK]
@@ -164,6 +167,19 @@ def verified_subjects(ctx: CurateContext, identifiers: Sequence[str]) -> dict[st
             if identifier and subject:
                 found.setdefault(identifier, []).append(subject)
     return {identifier: tuple(sorted(set(subjects))) for identifier, subjects in found.items()}
+
+
+def _promoted_reports(ctx: CurateContext, identifiers: Sequence[str]) -> dict[str, list[str]]:
+    """identifier → the reports the verified graph's promotion statements point at (one paged read)."""
+    rows = sparql_text.page_rows(ctx.client, ctx.verified_graph, constants.VIEW_VERIFIABLE_MEMORY, statement.statements_sparql)
+    if rows is None:
+        raise VerbError("the verified graph could not be read; nothing was signed (try again)")
+    wanted, found = set(identifiers), {}
+    for row in rows:
+        stated = statement.parse(signing.from_text(sparql_text.extract_binding(row.get("signedStatement"))))
+        if stated is not None and stated.identifier in wanted:
+            found.setdefault(stated.identifier, []).append(stated.report)
+    return found
 
 
 def _subjects_sparql(values: Sequence[str]) -> str:

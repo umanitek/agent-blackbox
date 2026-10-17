@@ -1,6 +1,6 @@
 """Looking trust statements up in a graph anyone can write (Community Curation C3).
 
-The community graph is open: any node can publish rows beside a curator's,
+The shared memory is open: any node can publish rows beside a curator's,
 under the same subject and the same asset name (bench 2026-10-03, KI-250), and
 writing is free and fast. A read that SCANS every statement of a type and
 orders it can therefore be made slow or truncated by anyone (an ordered scan

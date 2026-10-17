@@ -1,11 +1,16 @@
 /**
- * Community-graph membership — TypeScript mirror of `community/membership.py` (FIX-0039).
+ * Community membership — TypeScript mirror of `community/membership.py`.
  *
- * A fresh node cannot FIND an unregistered public graph until it is connected to the
- * graph's owner (KI-216), so: dial the owner by peer id (DHT-resolved), subscribe with
- * shared memory, remember a confirmed subscription for RETRY_MS, retry a refused
- * subscribe after FAILED_RETRY_MS. Public graphs have no join step (D-040) and this
- * bridge never sends one. Fail-open: errors are logged, never thrown.
+ * Since 2026-10-16 the community lives in the verified graph's shared memory (sub-graph
+ * "reports"), so membership is that graph's subscription WITH shared memory. The graph is
+ * registered on chain, so no owner peer is dialled first, and the node gets its definition by
+ * itself, also through Cores only (DKG 10.0.25: OriginTrail/dkg#3303, #3311). It is public: no
+ * join step (D-040). Subscribe with shared memory once per process — a node subscribed VM-only
+ * gets its shared memory added — and believe it when the node's answer covers shared memory;
+ * otherwise (a refusal, or a VM-only catch-up still running) retry after FAILED_RETRY_MS. The
+ * bridge registers no sub-graph: it writes into the "reports" sub-graph the graph's owner
+ * registered (DKG 10.0.25 looks that up at a member's first write, OriginTrail/dkg#3306).
+ * Fail-open: errors are logged, never thrown.
  */
 import type { DkgClient } from "./dkgClient.js";
 
@@ -15,12 +20,20 @@ export const FAILED_RETRY_MS = 60_000;
 export interface MembershipState {
   confirmedAt?: number;
   lastAttemptAt?: number;
+  /** The node took the subscription WITH shared memory (this process). */
+  withSharedMemory?: boolean;
+}
+
+/** Whether a subscribe answer covers shared memory: an already-running catch-up keeps its own setting. */
+function includesSharedMemory(reply: unknown): boolean {
+  const catchup = (reply as { catchup?: Record<string, unknown> } | null)?.catchup;
+  if (!catchup || typeof catchup !== "object") return true;
+  return (catchup.includeSharedMemory ?? catchup.includeWorkspace) !== false;
 }
 
 export async function ensureCommunitySubscription(
   client: DkgClient,
   graph: string,
-  ownerPeerId: string,
   state: MembershipState,
   log: (msg: string) => void,
   now = Date.now(),
@@ -30,23 +43,20 @@ export async function ensureCommunitySubscription(
   if (state.lastAttemptAt !== undefined && now - state.lastAttemptAt < FAILED_RETRY_MS) return false;
   state.lastAttemptAt = now;
   try {
-    const listed = (await client.contextGraphs()).find((e) => e.id === graph);
-    if (listed?.subscribed) {
-      state.confirmedAt = now;
-      return true;
-    }
-    if (ownerPeerId) {
-      try {
-        await client.connectPeer(ownerPeerId);
-      } catch (err) {
-        log(`blackbox: could not reach the community graph owner ${ownerPeerId}: ${(err as Error).message}`);
+    if (state.withSharedMemory) {
+      const listed = (await client.contextGraphs()).find((e) => e.id === graph);
+      if (listed?.subscribed) {
+        state.confirmedAt = now;
+        return true;
       }
     }
-    await client.subscribeContextGraph(graph, true);
+    const reply = await client.subscribeContextGraph(graph, true);
+    if (!includesSharedMemory(reply)) return true; // subscribed; shared memory follows the running catch-up
+    state.withSharedMemory = true;
     state.confirmedAt = now;
     return true;
   } catch (err) {
-    log(`blackbox: community subscribe failed (retry in ${FAILED_RETRY_MS / 1000}s): ${(err as Error).message}`);
+    log(`blackbox: subscribe with shared memory failed (retry in ${FAILED_RETRY_MS / 1000}s): ${(err as Error).message}`);
     return false;
   }
 }

@@ -39,7 +39,7 @@ def test_the_environment_selects_setup_only_mode_in_this_hermes_with_the_pinned_
     assert env["VENV_DIR"] == sys.prefix
     assert env["BLACKBOX_HELPER_DIR"] == str(setup.HERE)
     assert env["BLACKBOX_PLUGIN_DIR"] == str(setup.PLUGIN_DIR)
-    assert env["BLACKBOX_DKG_PACKAGE"] == "@origintrail-official/dkg@10.0.23"
+    assert env["BLACKBOX_DKG_PACKAGE"] == "@origintrail-official/dkg@10.0.25"
     assert env["BLACKBOX_DKG_INTEGRITY"].startswith("sha512-")
     assert env["BLACKBOX_INSTALL_DIR"].endswith("node") and env["HERMES_HOME"] == str(tmp_path / "home")
 

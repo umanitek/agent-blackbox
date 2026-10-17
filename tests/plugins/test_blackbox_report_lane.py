@@ -1,9 +1,11 @@
-"""Community statements are written into the community subgraph (2026-10-12).
+"""Community statements are written into the community sub-graph (2026-10-12).
 
-DKG 10.0.23 refuses members' direct shares into a catalog-mode graph's root;
-a named subgraph keeps the member lane, and a node writes into a subgraph only
-once it is registered locally. ``community.ensure_report_lane`` registers it
-once per process per graph before the first write.
+DKG 10.0.23 refuses members' direct shares into a catalog-mode graph's root, so
+every community statement goes into a named sub-graph. The graph's OWNER
+registers it (``community.ensure_report_lane``, once per process per graph,
+before its first write); every other node writes into the owner's sub-graph
+as it is, because DKG 10.0.25 looks the owner's registration up at a member's
+first write (OriginTrail/dkg#3306).
 """
 
 from __future__ import annotations
@@ -11,14 +13,28 @@ from __future__ import annotations
 import pytest
 
 from plugins.blackbox.community.membership import CommunityMembership
-from plugins.blackbox.kernel import constants
+from plugins.blackbox.kernel import constants, identity
 from plugins.blackbox.kernel.dkg_client import DkgError
+
+OWNER = "0x00000000000000000000000000000000000000aa"
+GRAPH = f"{OWNER}/agent-blackbox-vm"
+
+
+@pytest.fixture(autouse=True)
+def _fresh_identity(monkeypatch):
+    monkeypatch.setattr(identity, "_reporter_cache", {})
 
 
 class _Node:
-    def __init__(self, fail_with: str = "") -> None:
+    def __init__(self, address: str = OWNER, fail_with: str = "") -> None:
+        self.address = address
         self.calls = []
         self.fail_with = fail_with
+
+    def agent_identity(self):
+        if not self.address:
+            raise DkgError("node starting")
+        return {"agentAddress": self.address}
 
     def request(self, method, path, body=None, timeout=None):
         self.calls.append((method, path, body))
@@ -27,28 +43,43 @@ class _Node:
         return {"created": body["subGraphName"]}
 
 
-def test_the_lane_is_registered_once_per_graph():
+def test_the_owners_node_registers_the_lane_once_per_graph():
     node, membership = _Node(), CommunityMembership()
-    assert membership.ensure_report_lane(node, "g") and membership.ensure_report_lane(node, "g")
-    assert node.calls == [("POST", "/api/sub-graph/create", {"contextGraphId": "g", "subGraphName": constants.COMMUNITY_SUB_GRAPH})]
-    membership.ensure_report_lane(node, "other")
-    assert len(node.calls) == 2                                                     # a second graph registers its own
+    assert membership.ensure_report_lane(node, GRAPH) and membership.ensure_report_lane(node, GRAPH)
+    assert node.calls == [("POST", "/api/sub-graph/create",
+                           {"contextGraphId": GRAPH, "subGraphName": constants.COMMUNITY_SUB_GRAPH})]
+    membership.ensure_report_lane(node, "0x00000000000000000000000000000000000000AA/other")
+    assert len(node.calls) == 2                                   # a second graph of its own, address in any case
+
+
+def test_a_member_registers_nothing_and_writes_into_the_owners_sub_graph():
+    node, membership = _Node(address="0x00000000000000000000000000000000000000bb"), CommunityMembership()
+    assert membership.ensure_report_lane(node, GRAPH) is True
+    assert membership.ensure_report_lane(node, "agent-blackbox-vm-test") is True   # an id with no owner part
+    assert node.calls == []
 
 
 def test_an_already_registered_lane_counts_as_ready():
-    node, membership = _Node('Sub-graph "reports" already exists'), CommunityMembership()
-    assert membership.ensure_report_lane(node, "g") is True
+    node, membership = _Node(fail_with='Sub-graph "reports" already exists'), CommunityMembership()
+    assert membership.ensure_report_lane(node, GRAPH) is True
     node.fail_with = ""
-    membership.ensure_report_lane(node, "g")
+    membership.ensure_report_lane(node, GRAPH)
     assert len(node.calls) == 1                                                     # remembered as ready
 
 
 def test_a_failed_registration_is_logged_and_tried_again(caplog):
-    node, membership = _Node("context graph not found"), CommunityMembership()
-    assert membership.ensure_report_lane(node, "g") is False
+    node, membership = _Node(fail_with="context graph not found"), CommunityMembership()
+    assert membership.ensure_report_lane(node, GRAPH) is False
     assert "could not register the community subgraph" in caplog.text
     node.fail_with = ""
-    assert membership.ensure_report_lane(node, "g") is True and len(node.calls) == 2
+    assert membership.ensure_report_lane(node, GRAPH) is True and len(node.calls) == 2
+
+
+def test_an_unknown_own_address_registers_nothing_yet_and_asks_again():
+    node, membership = _Node(address=""), CommunityMembership()
+    assert membership.ensure_report_lane(node, GRAPH) is False and node.calls == []
+    node.address = OWNER
+    assert membership.ensure_report_lane(node, GRAPH) is True and len(node.calls) == 1
 
 
 @pytest.mark.parametrize("module_path", ["plugins/blackbox/community/sharing.py",

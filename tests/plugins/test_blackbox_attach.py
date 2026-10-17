@@ -270,10 +270,12 @@ def test_attach_openclaw_writes_blackbox_block(fake_env):
     # blackboxHome points OpenClaw's local findings log at the Hermes blackbox
     # home so the one dashboard surfaces OpenClaw detections too.
     assert entry["config"]["blackboxHome"] == str(constants.blackbox_home())
-    # KI-182 port: the bridge shares to the same community graph under the same gates —
-    # the graph + owner-peer pair, the switch and the cap travel with the attach.
-    for key in ("communityGraphId", "communityGraphPeerId", "report", "dailyReportLimit", "reportMinSeverity"):
+    # KI-182 port: the bridge shares with the same community under the same gates — the
+    # switch and the cap travel with the attach. The community lives in contextGraphId's
+    # shared memory (one graph since 2026-10-16), so no second graph travels with it.
+    for key in ("report", "dailyReportLimit", "reportMinSeverity"):
         assert key in entry["config"], key
+    assert not {"communityGraphId", "communityGraphPeerId"} & set(entry["config"])
     assert entry["config"]["report"] is False and entry["config"]["dailyReportLimit"] >= 1   # opt-in (2026-10-16)
     # Unrelated keys preserved.
     assert data["someKey"] == "keepme"

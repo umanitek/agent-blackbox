@@ -318,15 +318,24 @@ from plugins.blackbox.community.trust import manifest_history
 from plugins.blackbox.curate.publishing import row_builders as rb
 from plugins.blackbox.kernel import constants, signing, threat_ids
 from plugins.blackbox.kernel.signing import key_manifest as km
+from plugins.blackbox.kernel.signing import promotion_statement
 from plugins.blackbox.ruleset import graph_queries
 from plugins.blackbox.ruleset.live import envelope_tier
 from plugins.blackbox.ruleset.live.asset_facts import SignedRule
 
 NETWORK = "sandbox-net"
 CURATOR_A, CURATOR_B, CURATOR_C = (Ed25519PrivateKey.generate() for _ in range(3))
-PROVENANCE = ("0123456789abcdef",)
-EVIL = rb.ConfirmedEntry("dep:npm:evil-pkg@1.0.0", "critical", "malware", PROVENANCE, "advisory MAL-2026-1")
-EVIL_IOC = rb.ConfirmedEntry(threat_ids.ioc_identifier("domain", "evil.example"), "high", "malware", PROVENANCE)
+
+
+def _report(identifier):
+    """The community report a promotion of *identifier* was made from (its provenance, the one-graph flow)."""
+    return promotion_statement.ReportRef(identifier, threat_ids.report_uri(identifier, "0x" + "e" * 40), "d" * 64, "e" * 64)
+
+
+EVIL = rb.ConfirmedEntry("dep:npm:evil-pkg@1.0.0", "critical", "malware", _report("dep:npm:evil-pkg@1.0.0"),
+                         "advisory MAL-2026-1")
+EVIL_IOC = rb.ConfirmedEntry(threat_ids.ioc_identifier("domain", "evil.example"), "high", "malware",
+                             _report(threat_ids.ioc_identifier("domain", "evil.example")))
 PART_C = f"{VM}300"
 UAL_C = "did:dkg:base:8453/0x37b1fdfd134e2b17583bcbdd3034f91504cd9c70/300"
 TODAY = "2026-11-20"
@@ -421,6 +430,19 @@ def test_a_quorum_envelope_tiers_the_asset_block_and_serves_its_rule():
     assert len(store.signed_queries()) == 1
     rules = _served(decided, PART_A, triples)
     assert set(rules) == {"npm:evil-pkg@1.0.0"} and rules["npm:evil-pkg@1.0.0"]["source"] == "public"
+
+
+def test_a_row_signed_before_the_report_was_its_provenance_is_served_the_same():
+    """Legacy verified rules need no re-publish: a row whose envelope carries the payload promotions
+    signed before the one-graph flow (random provenance ids, no report) is decided and served the same."""
+    legacy = {**{key: value for key, value in rb.promotion_payload(EVIL).items()
+                 if key not in ("report", "reportDigest", "reporterKey")}, "provenance": "0123456789abcdef"}
+    triples = [(q["subject"], q["predicate"], q["object"])
+               for q in rb.ROW_BUILDERS["dep"].quads(EVIL, _envelope(EVIL, payload=legacy))]
+    decided, _store = _decide({PART_A: triples}, {PART_A: "2026-09-10"})
+    assert decided[PART_A].tier is AssetTier.BLOCK
+    assert decided[PART_A].signed == {triples[0][0]: SignedRule.from_payload(legacy)}
+    assert set(_served(decided, PART_A, triples)) == {"npm:evil-pkg@1.0.0"}
 
 
 def test_an_unsigned_or_under_signed_post_pin_row_tiers_its_asset_flag():
@@ -672,7 +694,7 @@ UAL_D = "did:dkg:base:8453/0x37b1fdfd134e2b17583bcbdd3034f91504cd9c70/400"
 CUT_DAY = "2026-10-24"
 MIGRATION = GraphMigration(environment=NETWORK, from_graph=CG, to_graph=SUCCESSOR, from_day=CUT_DAY,
                            issued_day="2026-10-20", root_epoch=1, sequence=1)
-EVIL_S = rb.ConfirmedEntry("dep:npm:evil-next@2.0.0", "critical", "malware", PROVENANCE)
+EVIL_S = rb.ConfirmedEntry("dep:npm:evil-next@2.0.0", "critical", "malware", _report("dep:npm:evil-next@2.0.0"))
 
 
 def _promoted_in(entry, graph, signers=(CURATOR_A, CURATOR_C)):

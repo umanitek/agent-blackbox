@@ -13,7 +13,7 @@ from plugins.blackbox.community.report_signer import ReportSigner
 from plugins.blackbox.kernel.config import BlackboxConfig
 from plugins.blackbox.kernel.dkg_client import DkgError
 
-CFG = BlackboxConfig(report=True, community_graph_id=GRAPH)
+CFG = BlackboxConfig(report=True, context_graph_id=GRAPH)
 THREAT = "dep:npm:evil-pkg@1.0.0"
 
 
@@ -150,7 +150,7 @@ def test_nothing_is_retried_while_sharing_is_off(tmp_path):
     queue = share_retry.ShareRetryQueue(tmp_path / "q.json", clock=_Clock())
     queue.add(_pending("report-x", next_due=0))
     node = _Node(accept_after=0)
-    assert share_retry.retry_due_shares(node, BlackboxConfig(report=False, community_graph_id=GRAPH), queue) == 0
+    assert share_retry.retry_due_shares(node, BlackboxConfig(report=False, context_graph_id=GRAPH), queue) == 0
     assert node.calls == 0 and queue.stats().pending == 1
 
 

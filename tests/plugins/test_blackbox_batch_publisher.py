@@ -31,20 +31,23 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from plugins.blackbox.curate.proposal import Proposal, ProposalState, ProposalStore
 from plugins.blackbox.curate.publishing import batch as batch_module
 from plugins.blackbox.curate.publishing import row_builders as rb
-from plugins.blackbox.curate.publishing.batch import BatchPublisher, PrecheckUnavailable, strict_verified_subset
+from plugins.blackbox.curate.publishing.batch import BatchPublisher
 from plugins.blackbox.curate.publishing.ledger import PublishLedger, PublishState
-from plugins.blackbox.curate.publishing.publish import NodeBatchWriter, SubmitReply, definite_refusal
+from plugins.blackbox.curate.publishing.node_writers import NodeBatchWriter, SubmitReply, definite_refusal
 from plugins.blackbox.curate.publishing.precheck import (
     ALREADY_VERIFIED,
     COVERED_BY_WHOLE_PACKAGE,
     DUPLICATE_IN_BATCH,
+    PrecheckUnavailable,
     canonical_identifier,
     precheck,
+    strict_verified_subset,
 )
 from plugins.blackbox.curate.publishing.row_builders import ConfirmedEntry
 from plugins.blackbox.kernel import constants, signing, threat_ids
 from plugins.blackbox.kernel.dkg_client import DkgError
 from plugins.blackbox.kernel.signing import key_manifest as km
+from plugins.blackbox.kernel.signing import promotion_statement as statement
 
 # The package re-exports the precheck FUNCTION under the submodule's name, so the module is
 # taken from the import system, never by attribute.
@@ -59,6 +62,11 @@ VERIFIED_GRAPH = "0xabc/agent-blackbox-vm"
 START = 1_800_000_000.0
 HOUR = 3600.0
 UAL = "did:dkg:base:8453/0xka/42"
+
+
+def _report(identifier):
+    """The community report each promotion here was made from (its provenance, the one-graph flow)."""
+    return statement.ReportRef(identifier, threat_ids.report_uri(identifier, "0x" + "e" * 40), "d" * 64, "e" * 64)
 
 
 @pytest.fixture(scope="module")
@@ -120,10 +128,11 @@ def world(tmp_path, ctx, curator_keys):
     lookup = FakeVerifiedSubset()
     publisher = BatchPublisher(store, ledger, writer=writer, verified_subset=lookup, clock=clock)
     sequence = iter(range(1, 10_000))
+    # the community tier's verified-reporter counts (the fast lane reads them; a promotion names ONE report)
+    ctx = SimpleNamespace(**{**vars(ctx), "compiled": SimpleNamespace(community={})})
 
     def approve(identifier, *, reporters=1, at=None, kind=rb.PROMOTION_STATEMENT):
-        provenance = tuple(f"{n:016x}" for n in range(1, reporters + 1))
-        entry = ConfirmedEntry(identifier, "high", "malware", provenance, "advisory MAL-2026-9")
+        entry = ConfirmedEntry(identifier, "high", "malware", _report(identifier), "advisory MAL-2026-9")
         payload = rb.promotion_payload(entry) if kind == rb.PROMOTION_STATEMENT else {"identifier": identifier, "reason": "fp"}
         first = signing.sign(curator_keys[0], statement_type=kind, environment=NETWORK, graph=VERIFIED_GRAPH,
                              payload=payload, root_epoch=1, sequence=next(sequence))
@@ -132,6 +141,7 @@ def world(tmp_path, ctx, curator_keys):
         proposal = Proposal.new(kind, identifier, envelope, VERIFIED_GRAPH, checks={"k": "osv:MAL-2026-9"}, now=when)
         proposal = proposal.transition(ProposalState.PROPOSED, now=when).transition(ProposalState.APPROVED, now=when)
         store.save(proposal)
+        ctx.compiled.community[identifier] = {"reporterCount": reporters}
         return proposal
 
     return SimpleNamespace(ctx=ctx, clock=clock, store=store, ledger=ledger, writer=writer, lookup=lookup,
@@ -310,7 +320,7 @@ def test_an_entry_the_verified_graph_now_lists_is_dropped_and_its_proposal_close
 
 
 def test_a_promotion_with_one_signature_is_not_batched(world, curator_keys):
-    entry = ConfirmedEntry(_ioc(5), "high", "malware")
+    entry = ConfirmedEntry(_ioc(5), "high", "malware", _report(_ioc(5)))
     single = signing.sign(curator_keys[0], statement_type=rb.PROMOTION_STATEMENT, environment=NETWORK,
                           graph=VERIFIED_GRAPH, payload=rb.promotion_payload(entry), root_epoch=1, sequence=9_999)
     proposal = Proposal.new(rb.PROMOTION_STATEMENT, entry.identifier, single, VERIFIED_GRAPH, checks={}, now=START - 7 * HOUR)
@@ -423,7 +433,7 @@ def test_a_buildable_revocation_or_correction_never_enters_a_batch(world, kind):
     # The revocation tests above pass even without the kind filter, because their payload
     # cannot be row-built. Here the payload is promotion-shaped (buildable), so only the
     # promotion-only collection keeps it out (F-032: reductions go at once, never batched).
-    entry = ConfirmedEntry(_dep(7), "high", "malware", ("0" * 15 + "1",), "advisory MAL-2026-9")
+    entry = ConfirmedEntry(_dep(7), "high", "malware", _report(_dep(7)), "advisory MAL-2026-9")
     envelope = signing.cosign(signing.sign(world.keys[0], statement_type=kind, environment=NETWORK,
                                            graph=VERIFIED_GRAPH, payload=rb.promotion_payload(entry), root_epoch=1,
                                            sequence=7_777), world.keys[1])
@@ -911,7 +921,7 @@ def test_every_subject_the_verified_graph_holds_is_returned_and_could_not_tell_r
     node = SubjectNode({"8.8.8.8": [LEGACY_8888, threat_ids.threat_uri("ioc:ip:8.8.8.8")]})
     found = correction_verbs.verified_subjects(_verified_ctx(node, curators.manifest), ["ioc:ip:8.8.8.8", "ioc:ip:1.1.1.1"])
     assert found == {"ioc:ip:8.8.8.8": tuple(sorted([LEGACY_8888, threat_ids.threat_uri("ioc:ip:8.8.8.8")]))}
-    [(sparql, graph, view)] = node.queries
+    [(sparql, graph, view)] = [query for query in node.queries if "VALUES ?val" in query[0]]
     assert (graph, view) == (VM_GRAPH, constants.VIEW_VERIFIABLE_MEMORY) and "LIMIT" in sparql
     with pytest.raises(VerbError, match="could not be read"):
         correction_verbs.verified_subjects(_verified_ctx(SubjectNode({}, fail=True), curators.manifest), ["ioc:ip:8.8.8.8"])
@@ -921,7 +931,7 @@ def test_subject_queries_are_chunked(curators):
     node = SubjectNode({})
     identifiers = [f"ioc:ip:10.0.{n // 256}.{n % 256}" for n in range(correction_verbs.LOOKUP_CHUNK + 1)]
     assert correction_verbs.verified_subjects(_verified_ctx(node, curators.manifest), identifiers) == {}
-    assert len(node.queries) == 2
+    assert sum("VALUES ?val" in query[0] for query in node.queries) == 2
 
 
 # -- published at once, then the advisory twin -----------------------------------------------

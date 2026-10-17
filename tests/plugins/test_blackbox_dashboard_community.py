@@ -50,7 +50,7 @@ def _community_ruleset() -> Ruleset:
 @pytest.fixture
 def client(monkeypatch, tmp_path):
     monkeypatch.setenv("BLACKBOX_HOME", str(tmp_path / "bbhome"))
-    monkeypatch.setenv("BLACKBOX_COMMUNITY_GRAPH_ID", DEV_GRAPH)
+    monkeypatch.setenv("BLACKBOX_CONTEXT_GRAPH_ID", DEV_GRAPH)   # the community lives in this graph (one graph since 2026-10-16)
     monkeypatch.setattr(rs_mod, "peek", lambda cfg: _community_ruleset())
     app = server.create_app()
     with TestClient(app, base_url="http://127.0.0.1:9700") as c:   # the dashboard's own port (KI-390: the Origin must match it)

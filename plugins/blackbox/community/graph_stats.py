@@ -1,4 +1,4 @@
-"""Graph-wide statistics over the community graph — the dashboard's read model.
+"""Statistics over the community's reports — the dashboard's read model.
 
 Pure functions over VERIFIED reports (:func:`.reader.read_verified_reports`):
 how many distinct agents have reported, what each reporting agent contributed
@@ -31,7 +31,7 @@ from .verification import VerifiedReport
 
 
 class CommunityAgent(TypedDict):
-    """One signer on the community graph and what it reported.
+    """One signer among the community's reports and what it reported.
 
     ``author`` — the verified signer key (the identity); ``address`` — the
     reporter address it most often claims (display only); ``frameworks`` —

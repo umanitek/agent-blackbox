@@ -16,6 +16,9 @@ from typing import Dict
 
 from ..kernel.config import BlackboxConfig
 
+#: One sync transfer at a time, no queue: a refresh of a graph's metadata that meets
+#: a busy slot takes the node's reserved control-plane slot (DKG 10.0.25,
+#: OriginTrail/dkg#3302), so it is not refused behind a transfer.
 _DKG_STEADY_SYNC_SETTINGS = {
     "DKG_SYNC_ON_CONNECT_ENABLED": "1",
     "DKG_SYNC_RECONCILER_ENABLED": "1",
@@ -160,7 +163,10 @@ def _set_persisted_dkg_sync_state(cfg: BlackboxConfig) -> bool:
         if key is None:
             continue   # an environment-only switch: see _DKG_ENV_ONLY_SETTINGS
         data[key] = int(value) if key in _INTEGER_CONFIG_KEYS else value == "1"
-    data["syncSharedMemoryOnConnect"] = False
+    # One graph (2026-10-16): the community's reports live in the verified graph's
+    # shared memory, and reports written while this node was offline come back only
+    # through the shared-memory step of sync-on-connect.
+    data["syncSharedMemoryOnConnect"] = True
     if original == json.dumps(data, sort_keys=True):
         return False
     tmp = path.with_suffix(f".tmp-{os.getpid()}")

@@ -7,7 +7,8 @@ the DKG's own authorship signals are unchecked on some delivery routes
 shows:
 
 1. the envelope is a ``blackbox.report`` signed for THIS node's network and
-   THIS community graph (no replay from a test network or another graph);
+   THIS graph — the verified graph, whose shared memory holds the community's
+   reports (no replay from a test network or another graph);
 2. the row's subject, identifier, reporter and severity equal the signed ones;
 3. the subject is the signed reporter's own (``report_uri(identifier, reporter)``);
 4. every evidence field the row shows equals the signed value.
@@ -19,7 +20,7 @@ dedupe (KI-144).
 
 Usage::
 
-    verifier = ReportVerifier(environment=network_id, graph=cfg.community_graph_id)
+    verifier = ReportVerifier(environment=network_id, graph=cfg.context_graph_id)
     reports, dropped = verify_report_rows(raw_rows, verifier)
     rules = aggregate_community_reports(reports, prior_first_seen)
 """
@@ -94,7 +95,7 @@ class VerifiedReport:
 
 
 class ReportVerifier:
-    """Checks rows for one network (``environment``) and one community graph.
+    """Checks rows for one network (``environment``) and one graph.
 
     Stateless after construction; safe to share across threads.
     """

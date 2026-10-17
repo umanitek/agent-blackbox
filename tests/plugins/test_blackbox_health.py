@@ -82,7 +82,7 @@ def test_gather_reads_the_ruleset_and_the_community_read():
     revoked = CuratorRecord(kind=Kind.REVOCATION, identifier=THREAT, sequence=2, day="2026-10-02",
                             fields=(("reason", "false-positive"),), signers=frozenset({"a" * 64}))
     read = CommunityRead(ReadState.ROWS, held_back=4, curator=cv.CuratorView(manifest=manifest, verdicts={THREAT: revoked}))
-    inputs = health.gather(BlackboxConfig(community_graph_id=GRAPH, sync_interval=300), rs, True, read, {THREAT: 2}, 1_600.0)
+    inputs = health.gather(BlackboxConfig(context_graph_id=GRAPH, sync_interval=300), rs, True, read, {THREAT: 2}, 1_600.0)
     assert (inputs.ruleset_age_s, inputs.rule_count, inputs.community_paused, inputs.curator_trusted) == (600.0, 1, True, True)
     assert inputs.revoked == {THREAT: 2} and inputs.held_back == 4
     assert health.ruleset_age_text(inputs.ruleset_age_s) == "10 min ago"
@@ -96,7 +96,7 @@ def test_an_ignored_manifest_conflict_is_a_security_item_on_both_authorities():
     assert len(items) == 1 and items[0].klass is health.HealthClass.SECURITY
     assert "IGNORED" in items[0].message and "root key may be compromised" in items[0].what_to_do
     read = CommunityRead(ReadState.ROWS, curator=cv.CuratorView(manifest_conflict_ignored=True))
-    inputs = health.gather(BlackboxConfig(community_graph_id=GRAPH, sync_interval=300), compiler.Ruleset(), True,
+    inputs = health.gather(BlackboxConfig(context_graph_id=GRAPH, sync_interval=300), compiler.Ruleset(), True,
                            read, {}, 1_600.0)
     assert inputs.manifest_conflict_ignored and not inputs.manifest_conflict
     community = health.community_authority.gather(cv.CuratorView(manifest_conflict_ignored=True), "2026-10-11")
@@ -143,7 +143,7 @@ def test_api_health_and_my_reports_serve_the_same_facts(monkeypatch, tmp_path):
     rs = compiler.Ruleset()
     rs.community = {THREAT: {"stage": "reported", "enforcement": "monitor", "stageReason": "reported by unlisted authors only"}}
     monkeypatch.setattr("plugins.blackbox.ruleset.peek", lambda cfg=None: rs)
-    monkeypatch.setattr("plugins.blackbox.kernel.config.load_blackbox_config", lambda: BlackboxConfig(community_graph_id=GRAPH))
+    monkeypatch.setattr("plugins.blackbox.kernel.config.load_blackbox_config", lambda: BlackboxConfig(context_graph_id=GRAPH))
     audit.record_share_outcome(identifier=THREAT, category="dependency", severity="high", subject="s", asset_name="n",
                                ok=True, outcome="accepted")
     app = FastAPI()

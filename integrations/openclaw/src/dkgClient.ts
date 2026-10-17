@@ -24,6 +24,13 @@ export class DkgError extends Error {
   }
 }
 
+/**
+ * The named sub-graph every community statement is written to and read from (Python
+ * `constants.COMMUNITY_SUB_GRAPH`). Never the graph's root: the DKG keeps one author catalog per
+ * writer of a root and allows 64 per graph, and every node is a writer.
+ */
+export const COMMUNITY_SUB_GRAPH = "reports";
+
 const DEFAULT_DKG_PORT = 9320;
 const DEFAULT_URL = `http://127.0.0.1:${DEFAULT_DKG_PORT}`;
 const DEFAULT_TIMEOUT_MS = 3000;
@@ -153,33 +160,33 @@ export class DkgClient {
     return String(status?.networkId ?? "");
   }
 
-  /** Dial a peer by id (DHT-resolved) — how a newcomer reaches a graph's owner (FIX-0039). */
-  async connectPeer(peerId: string): Promise<unknown> {
-    return this.request("/api/connect", { peerId }, "POST", 15_000);
-  }
-
   /** Subscribe the node to a context graph (idempotent on the daemon). */
-  async subscribeContextGraph(contextGraphId: string, includeSharedMemory = false): Promise<unknown> {
+  async subscribeContextGraph(contextGraphId: string, includeSharedMemory = true): Promise<unknown> {
     return this.request("/api/context-graph/subscribe", { contextGraphId, includeSharedMemory });
   }
 
   /**
    * The explicit v10 share lifecycle Python `share_knowledge_asset` uses: write/seal the
-   * asset in WM (`alsoShareSwm:false`), then queue `/swm/share-async` and poll the job.
+   * asset in WM (`alsoShareSwm:false`), then queue `/swm/share-async` and poll the job — both
+   * in the community sub-graph ({@link COMMUNITY_SUB_GRAPH}), never the graph's root.
    * An asset the node already holds sealed is shared as-is; a `{ idempotent: true }`
    * result means "already on the network", which callers report as not-new (KI-104).
    */
   async shareReport(contextGraphId: string, name: string, quads: Quad[],
                     opts: { timeoutMs?: number; pollMs?: number } = {}): Promise<Record<string, unknown>> {
     try {
-      await this.request("/api/knowledge-assets", { contextGraphId, name, quads, alsoShareSwm: false });
+      await this.request("/api/knowledge-assets", {
+        contextGraphId, name, quads, alsoShareSwm: false, subGraphName: COMMUNITY_SUB_GRAPH,
+      });
     } catch (err) {
       if (!(err instanceof DkgError) || !isAlreadyFinalized(err)) throw err;
     }
     const enc = encodeURIComponent(name);
     let queued: Record<string, unknown>;
     try {
-      queued = await this.request<Record<string, unknown>>(`/api/knowledge-assets/${enc}/swm/share-async`, { contextGraphId, entities: "all" });
+      queued = await this.request<Record<string, unknown>>(`/api/knowledge-assets/${enc}/swm/share-async`, {
+        contextGraphId, entities: "all", subGraphName: COMMUNITY_SUB_GRAPH,
+      });
     } catch (err) {
       if (err instanceof DkgError && isAlreadyFinalized(err)) return { name, idempotent: true };
       const existing = err instanceof DkgError ? jobIdFromError(err) : undefined;

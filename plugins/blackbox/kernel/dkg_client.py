@@ -257,13 +257,13 @@ class DkgClient:
             "POST", "/api/connect", {"multiaddr": multiaddr}, timeout=15.0
         )
 
-    def subscribe_context_graph(self, cg_id: str, *, include_shared_memory: bool = False) -> dict[str, Any]:
-        """Subscribe the node to a context graph and catch up its durable VM.
+    def subscribe_context_graph(self, cg_id: str, *, include_shared_memory: bool = True) -> dict[str, Any]:
+        """Subscribe the node to a context graph and catch up its VM and shared memory.
 
-        What a *consumer* node needs: a fresh install that only set
-        ``context_graph_id`` never subscribes the daemon, so its store stays empty.
-        Agent Blackbox is VM-only, so SWM catch-up is disabled by default.
-        Idempotent — the daemon no-ops when already subscribed.
+        A fresh install that only set ``context_graph_id`` never subscribes the
+        daemon, so its store stays empty. Shared memory is included because the
+        community's reports live there (one graph, 2026-10-16); a node subscribed
+        without it gets a catch-up job that adds it, an already-ready one a no-op.
         """
         return self.request(
             "POST",
@@ -285,7 +285,7 @@ class DkgClient:
         self,
         cg_id: str,
         *,
-        include_shared_memory: bool = False,
+        include_shared_memory: bool = True,
     ) -> dict[str, Any]:
         """Force a fresh official catch-up without deleting local graph data."""
         self.unsubscribe_context_graph(cg_id)
@@ -336,9 +336,9 @@ class DkgClient:
     ) -> dict[str, Any]:
         """Recover the graph's durable VM from one configured source peer.
 
-        DKG's route retains its historical ``shared-memory`` name, but the
-        explicit flags below skip SWM entirely. Pinning the source avoids
-        a generic peer returning a partial or stale graph.  A successful
+        DKG's route retains its historical ``shared-memory`` name, but the flags
+        below skip SWM: the shared memory comes with the subscription. Pinning the
+        source avoids a generic peer returning a partial or stale graph. A successful
         already-current recovery legitimately inserts zero triples.
         """
         bounded_budget = max(1_000, min(300_000, int(budget_ms)))

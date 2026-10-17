@@ -1,5 +1,9 @@
-"""Community — the shared community threat graph.
+"""Community — what every protected agent shares and learns from.
 
+Since 2026-10-16 the community lives in the verified graph itself: every node
+shares its signed reports into that graph's shared memory (sub-graph
+``kernel.constants.COMMUNITY_SUB_GRAPH``), and the curators promote what they
+confirm into its Verified Memory. There is no second graph.
 Every protected agent can report what it sees; every other agent reads it.
 Community findings only ever FLAG — they never block — and community strings
 are untrusted data that is clamped, typed and displayed, never interpreted.
@@ -16,9 +20,10 @@ Public surface:
   :func:`spawn_community_share` sends an allowed finding. This node's
   reporting identity is resolved by ``kernel.identity.reporter_address``.
 * :func:`add_report_parser` + :func:`cmd_report` (``blackbox report``), :func:`print_community_status`
-  (the status block), :func:`ensure_community_subscription` (join on sync),
+  (the status block), :func:`ensure_community_subscription` (the verified graph's
+  subscription with the shared memory the community lives in),
   :func:`read_join_state` + :class:`JoinState` / ``JOIN_STATE_TEXT`` (is this node
-  connected to the community graph yet — the dashboard's community tile).
+  connected to that graph yet — the dashboard's community tile).
 * :func:`build_report_quads` / :func:`build_false_positive_quads` /
   :func:`build_retraction_quads` — the
   privacy-safe statements a report or dispute shares (write side).

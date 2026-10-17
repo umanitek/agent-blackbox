@@ -176,18 +176,17 @@ def test_confusable_package_names_are_refused_not_canonicalised_into_a_real_one(
 
 
 def test_the_openclaw_bridge_share_path_is_the_r1_signed_community_path():
-    """KI-182 (FIX-0044): the bridge shares only R1-schema, SIGNED reports, to the
-    COMMUNITY graph, behind the same gates as Python. The switch may be wired
-    now; these structural checks keep every piece of the port in place."""
+    """KI-182 (FIX-0044): the bridge shares only R1-schema, SIGNED reports, with the
+    community — the verified graph's shared memory, never its Verified Memory
+    (one graph since 2026-10-16) — behind the same gates as Python. These
+    structural checks keep every piece of the port in place."""
     from pathlib import Path
     src = Path(__file__).resolve().parents[2] / "integrations" / "openclaw" / "src"
     config = (src / "config.ts").read_text(encoding="utf-8")
     index = (src / "index.ts").read_text(encoding="utf-8")
     quads = (src / "quads.ts").read_text(encoding="utf-8")
     assert "effectiveDailyReportLimit(" in config and "dailyReportLimit: 0" not in config   # 0 is never "no cap"
-    assert "communityGraphId" in config and "communityGraphPeerId" in config
-    assert "rt.client.shareReport(rt.cfg.communityGraphId" in index                      # never the verified graph
-    assert "rt.cfg.contextGraphId, name, quads" not in index
+    assert "rt.client.shareReport(rt.cfg.contextGraphId, name, quads)" in index         # the community's shared memory
     assert "sharingConsentInForce(rt.cfg.blackboxHome)" in index                          # R13 gate
     assert "if (!signer) return;" in index                                               # a node that cannot sign does not share
     assert "validateReport(" in quads and "BLACKBOX_SIGNED_STATEMENT_PRED" in quads       # R1 schema + R0b envelope

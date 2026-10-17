@@ -46,9 +46,9 @@ _ROOT_ENV = "BLACKBOX_CURATOR_ROOT_KEYS"
 _COMMUNITY_ROOT_ENV = "BLACKBOX_COMMUNITY_ROOT_KEYS"
 
 #: Community roots pinned per community graph id: ``{graph id: (root, backup root)}``.
-#: Empty until launch — the pin ships as ONE unit with the default community
-#: graph id and its owner peer id (``constants.DEFAULT_COMMUNITY_GRAPH_ID`` /
-#: ``DEFAULT_COMMUNITY_GRAPH_PEER_ID``).
+#: Empty: a community authority speaks only in a community graph of its own, and
+#: since 2026-10-16 there is one graph, the verified one (readers trust no
+#: community root at all — ``community.trust``).
 COMMUNITY_ROOT_KEYS: Mapping[str, tuple[str, ...]] = {}
 
 

@@ -90,7 +90,10 @@ def _add_keys(verbs_: Any) -> None:
 def _add_propose(verbs_: Any) -> None:
     p = verbs_.add_parser("propose", help="First key: sign a proposal and send it to the other curator")
     what = p.add_mutually_exclusive_group(required=True)
-    what.add_argument("--promote", metavar="IDENTIFIER", help="promote a malware dependency (dep:…)")
+    what.add_argument("--promote", metavar="IDENTIFIER",
+                      help="promote a community report of this threat (dep: malware, ioc:, skill:, fileaccess:) — "
+                           "permanent in Verified Memory, naming its reporter: the report itself (DKG 10.0.25), "
+                           "or a rule made from it on an older node")
     what.add_argument("--verdict", nargs=2, metavar=("KIND", "IDENTIFIER"),
                       help="confirmation | rejection | revocation | deferral | in-review | deferral-lapsed")
     what.add_argument("--nominate", metavar="KEY_HEX", help="counted-author entry for a reporter key")
@@ -101,7 +104,10 @@ def _add_propose(verbs_: Any) -> None:
     p.add_argument("--severity", default="critical")
     p.add_argument("--evidence", default="", help="item 1: advisory:<id> | registry-action:<url> | reproduced:<sha256>")
     p.add_argument("--reason", default="", help="verdict reason / scope reason")
-    p.add_argument("--name", default="")
+    p.add_argument("--report", default="", metavar="SUBJECT",
+                   help="promotion: which report of the threat (default: the earliest one)")
+    p.add_argument("--name", default="", help="promotion taken as the curators' own copy (a node older than DKG "
+                                             "10.0.25): the rule's display name (default: from the identifier)")
     p.add_argument("--class", dest="author_class", default="established", choices=["partner", "established"])
     p.add_argument("--address", default="", help="nomination: the reporter's agent address")
     p.add_argument("--org", default="")

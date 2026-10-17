@@ -85,9 +85,9 @@ interface BlackboxRuntime {
   dailyReports: { date: string; count: number };
   /** Per-identifier cooldown stamps (identifier → epoch ms of last sighting). Mirrors Python `audit.allow_report`. */
   recentReports: Map<string, number>;
-  /** This node's report signer (reporter key + network id + community graph), resolved lazily; null = cannot sign. */
+  /** This node's report signer (reporter key + network id + the verified graph), resolved lazily; null = cannot sign. */
   signer?: ReportSigner | null;
-  /** Community-graph subscription bookkeeping (connect owner → subscribe; FIX-0039). */
+  /** Subscription bookkeeping for the graph the community lives in (subscribe with shared memory, report lane). */
   membership: MembershipState;
   /**
    * Per-session conversation transcript (last N turns) so a tool-call finding —
@@ -328,7 +328,7 @@ const NEVER_SHARED_SOURCES = new Set(["custom", "llm", "secret"]);
  */
 function shareDecision(rt: BlackboxRuntime, finding: Finding, reporter: string | undefined,
                        evidence: Record<string, string | undefined>): [boolean, string] {
-  if (!rt.cfg.report || !rt.cfg.communityGraphId) return [false, "community sharing disabled"];
+  if (!rt.cfg.report || !rt.cfg.contextGraphId) return [false, "community sharing disabled"];
   if (!sharingConsentInForce(rt.cfg.blackboxHome)) return [false, "community sharing is not turned on on this machine (`blackbox report --enable-sharing` turns it on)"];
   if (NEVER_SHARED_SOURCES.has(finding.source)) return [false, `source ${finding.source} never leaves the machine`];
   if ((finding.kind ?? finding.fields.kind) === "vulnerability" || (finding.category === "dependency" && (finding.kind ?? finding.fields.kind) !== "malware")) {
@@ -345,7 +345,7 @@ function shareDecision(rt: BlackboxRuntime, finding: Finding, reporter: string |
   return [true, "ok"];
 }
 
-/** This node's signer for the community graph, or null when it cannot sign (then it does not share — R0b). */
+/** This node's signer for the graph the community lives in, or null when it cannot sign (then it does not share — R0b). */
 async function resolveSigner(rt: BlackboxRuntime): Promise<ReportSigner | null> {
   if (rt.signer !== undefined) return rt.signer;
   try {
@@ -354,7 +354,7 @@ async function resolveSigner(rt: BlackboxRuntime): Promise<ReportSigner | null> 
       rt.log("warn", "blackbox: cannot sign reports — the node reports no network id");
       return (rt.signer = null);
     }
-    rt.signer = new ReportSigner(loadOrCreateReporterKey(rt.cfg.blackboxHome), network, rt.cfg.communityGraphId);
+    rt.signer = new ReportSigner(loadOrCreateReporterKey(rt.cfg.blackboxHome), network, rt.cfg.contextGraphId);
   } catch (err) {
     rt.log("warn", `blackbox: cannot sign reports — reporter key unusable: ${(err as Error).message}`);
     rt.signer = null;
@@ -393,8 +393,8 @@ async function reportSighting(rt: BlackboxRuntime, finding: Finding, event: stri
   try {
     const signer = await resolveSigner(rt);
     if (!signer) return; // a node that cannot sign does not share (R0b)
-    await ensureCommunitySubscription(rt.client, rt.cfg.communityGraphId, rt.cfg.communityGraphPeerId, rt.membership,
-                                      (msg) => rt.log("debug", msg));
+    const log = (msg: string) => rt.log("debug", msg);
+    await ensureCommunitySubscription(rt.client, rt.cfg.contextGraphId, rt.membership, log);
     const quads = buildReportQuads({
       identifier: finding.identifier,
       category: finding.category,
@@ -406,7 +406,7 @@ async function reportSighting(rt: BlackboxRuntime, finding: Finding, event: stri
     });
     // KA name matches Python `_share_sighting`: stable per (identifier, reporter).
     const name = `report-${stableHash(finding.identifier + reporter, 16)}`;
-    const result = await rt.client.shareReport(rt.cfg.communityGraphId, name, quads);
+    const result = await rt.client.shareReport(rt.cfg.contextGraphId, name, quads);
     if (result.idempotent) {
       rt.log("debug", `blackbox: report ${name} was already on the network (not re-sent)`);
       return;

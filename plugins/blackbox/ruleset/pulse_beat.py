@@ -40,7 +40,7 @@ def pulse(config: Optional[BlackboxConfig] = None) -> bool:
     global _pulsing, _pulsing_since
     config = config or load_blackbox_config()
     interval = float(getattr(config, "community_poll_interval", 0) or 0)
-    if interval <= 0 or not config.community_graph_id or not community.PULSE.due(interval):
+    if interval <= 0 or not config.context_graph_id or not community.PULSE.due(interval):
         return False
     with _pulsing_lock:
         if _pulsing and time.time() - _pulsing_since < STUCK_BEAT_SECONDS:
@@ -66,8 +66,9 @@ def _background_pulse(config: BlackboxConfig) -> None:
         client = DkgClient(url=config.dkg_url, dkg_home=config.dkg_home)
         # KI-216 / FIX-0039: the beat is the one path that ALWAYS runs on a node
         # (the heavy refresh fails outright on a node without the verified graph),
-        # so membership — dial the owner, subscribe — lives here too. Membership
-        # rate-limits itself; a confirmed subscription costs nothing per beat.
+        # so membership — the verified graph's subscription with its shared memory —
+        # lives here too. Membership rate-limits itself; a confirmed subscription
+        # costs nothing per beat.
         community.ensure_community_subscription(client, config)
         refresh_cycle._retry_shares(client, config)
         cached = refresh_cycle.peek(config)
