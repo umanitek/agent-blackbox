@@ -177,4 +177,3 @@ def detect_model_request_secrets(sources: Iterable[tuple[str, str]]) -> list[Fin
                     matched=hit["type"], evidence=f"{hit['type']} (sent to the model provider, {context})",
                     confirmed=False, source="secret", fields={"context": context})
     return list(found.values())
-

@@ -26,8 +26,10 @@ from ..kernel.config import load_blackbox_config
 from ..kernel.dkg_client import DkgClient
 from .command import cmd_sync as _sync_with_node
 from .progress import read_durable_progress, read_recovery_backlog
+from .snapshot_readiness import defaults as snapshot_defaults, validate_requested_profile as validate_snapshot_profile
 
-__all__ = ["cmd_sync", "progress", "read_durable_progress", "read_recovery_backlog", "state"]
+__all__ = ["cmd_sync", "progress", "read_durable_progress", "read_recovery_backlog",
+           "snapshot_defaults", "state", "validate_snapshot_profile"]
 
 
 def cmd_sync(args: argparse.Namespace) -> int:

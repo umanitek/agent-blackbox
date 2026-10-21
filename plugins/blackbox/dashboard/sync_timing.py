@@ -26,6 +26,8 @@ from __future__ import annotations
 
 import logging
 import time
+import math
+from datetime import datetime
 from typing import Any, Callable
 
 logger = logging.getLogger(__name__)
@@ -59,6 +61,28 @@ def next_sync_delay(cfg: Any, cached: Any, elapsed_s: float, min_retry_s: float)
     if float(getattr(cached, "synced_at", 0.0) or 0.0):
         period_left = min(period_left, cached.refresh_due(interval) - time.time())
     return max(min_retry_s, period_left)
+
+
+def catchup_supersedes_failure(catchup: Any, transfer: Any) -> bool:
+    """A provably newer live job supersedes the previous attempt's error only."""
+    if str(catchup.get("status")).lower() not in {"queued", "running"} or str(transfer.get("status")).lower() != "failed":
+        return False
+
+    def timestamp(value):
+        try:
+            if isinstance(value, str) and "T" in value:
+                parsed = datetime.fromisoformat(value)
+                value = parsed.timestamp() if parsed.tzinfo else 0
+            value = float(value)
+            if value > 100_000_000_000:  # DKG job timestamps may use epoch milliseconds.
+                value /= 1000
+            return value if math.isfinite(value) and value > 0 else 0
+        except (TypeError, ValueError, OverflowError):
+            return 0
+
+    started = timestamp(catchup.get("startedAt"))
+    failed = timestamp(transfer.get("updated_at"))
+    return failed > 0 and started > failed
 
 
 def wait_or_wake(seconds: float, stopped: Callable[[], bool], wake: Callable[[], bool], tick_s: float = 0.1) -> bool:

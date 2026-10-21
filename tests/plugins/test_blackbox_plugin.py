@@ -12,7 +12,6 @@ import pytest
 
 from _blackbox_loader import load_blackbox
 
-
 blackbox = load_blackbox()
 hooks = load_blackbox("guard.hooks")
 community_sharing = load_blackbox("community.sharing")
@@ -1118,6 +1117,8 @@ def test_blackbox_sync_waits_for_public_vm_when_community_arrives_first(monkeypa
             context_graph_id=constants.DEFAULT_CONTEXT_GRAPH_ID,
             dkg_url=constants.DEFAULT_DKG_URL,
             graph_peer_id=constants.DEFAULT_GRAPH_PEER_ID,
+            community_graph_id="",
+            report=False,
         ),
     )
     monkeypatch.setattr(sync_command.ruleset, "refresh", fake_refresh)
@@ -1133,8 +1134,7 @@ def test_blackbox_sync_waits_for_public_vm_when_community_arrives_first(monkeypa
     ]
     out = capsys.readouterr().out
     assert "2 public VM (curated)" in out
-    # The community graph has been live since 7231dbe34e (it used to say "coming soon").
-    assert f"Community graph: {constants.DEFAULT_COMMUNITY_GRAPH_ID}" in out
+    assert "Community graph: not configured (community sharing dormant)" in out
 
 
 def test_blackbox_sync_recovers_curator_snapshot_then_waits_for_vm(

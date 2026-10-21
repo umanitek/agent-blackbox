@@ -17,7 +17,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from ..kernel import threat_ids
-from .safe_payloads import graph_tier_item
+from .safe_payloads import graph_tier_item, safe_identifier, safe_text
 
 
 def _graph_entries(rs: Any, source: str) -> list[dict[str, Any]]:
@@ -194,3 +194,16 @@ def page_response(rs: Any, tier: str, threats: list[dict[str, Any]], *, needle: 
         return public_tier_response(rs, threats, needle=needle, category=category, ecosystem=ecosystem,
                                     offset=offset, limit=limit)
     return tier_response(tier, threats, offset, limit)
+
+
+def community_threat(rs: Any, identifier: str) -> dict[str, Any]:
+    """Shape a sanitized threat detail from the aggregated community store."""
+    rule = (getattr(rs, "community", {}) or {}).get(identifier)
+    if not rule:
+        return {"identifier": safe_identifier(identifier), "tier": "community", "found": False}
+    detail = {safe_text(k, 64): (safe_text(v) if isinstance(v, str) else v) for k, v in rule.items()}
+    detail.update({
+        "identifier": safe_identifier(identifier), "tier": "community", "found": True,
+        "reporters": int(rule.get("reporterCount") or 0), **verified_profile(rs, identifier),
+    })
+    return detail

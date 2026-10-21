@@ -33,14 +33,14 @@ concurrency:
 
 jobs:
   test:
-    name: Run tests
-    # One 96-core runner for the whole suite. There is no slicing. Slicing
-    # existed to spread the suite over 4-core runners. It cost a matrix job, a
-    # duration cache, a per-slice artifact and a merge job to do it.
-    #
-    # 96 cores clear the floor that the slowest single test file sets (about
-    # 82s). A second slice divides work that is already at that floor, and
-    # adds a second setup.
+    name: Run tests (${{ matrix.slice }}/4)
+    # Separate runners add capacity without crowding each four-core host.
+    # Keep every slice running after a failure so the full suite reports.
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        slice: [1, 2, 3, 4]
     # Standard runner: umanitek/agent-blackbox has no large runners (the 96-core
     # pool is NousResearch's), so a large-runner job would queue forever.
     runs-on: ubuntu-latest
@@ -101,32 +101,12 @@ jobs:
         # with bounded parallelism. No xdist, no shared workers, no
         # module-level state leakage between files.
         #
-        # No --files: the runner discovers the suite itself. The discovered
-        # set is identical to the list the removed matrix job used to pass in.
+        # Discover the full suite, then partition by stable file order. Duration
+        # caches affect scheduling within a slice, never its membership.
         run: |
-          scripts/run_tests.sh
+          scripts/run_tests.sh --slice "${{ matrix.slice }}/4"
         env:
-          # This is the maximum number of test FILES that run together.
-          # run_tests_parallel.py starts one pytest subprocess for each file
-          # from a single ThreadPoolExecutor, so this value IS the limit. The
-          # default is cpu_count*2, which is 192 here.
-          #
-          # Measured on this runner (96-core EPYC 7763, 377GB). Whole suite,
-          # two repetitions for each value. See run 32549672063:
-          #
-          #     workers   x cores   mean
-          #        48       0.5x    138s
-          #        96       1.0x    126s   <- fastest
-          #       144       1.5x    132s
-          #       192       2.0x    132s
-          #       240       2.5x    140s
-          #       288       3.0x    142s
-          #
-          # One worker for each core wins. The curve is shallow: 126s to 142s
-          # across a 6x range. The suite has sufficient concurrency at this
-          # size. The remaining time is the slowest files plus the setup.
-          # Workers above the core count only add contention.
-          # On the standard 4-core runner: one worker per core (fastest per the table above).
+          # Four isolated test-file subprocesses per standard runner.
           HERMES_TEST_WORKERS: 4
           # Per-file limit. The 300 s default is sized for the 96-core runner; on 4 cores
           # tests/agent/test_run_agent.py (294 tests) was killed at 14% (PR #23 CI).

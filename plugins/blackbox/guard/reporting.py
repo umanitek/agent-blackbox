@@ -108,3 +108,20 @@ def _report_and_audit(cfg: BlackboxConfig, event: str, findings: list[detection.
         if client is None or not audit.allow_report(cfg.daily_report_limit):
             continue
         community.spawn_community_share(client, cfg, finding, reporter)
+
+
+def blackbox_block_message(findings: list[detection.Finding]) -> str:
+    """Human-readable block message summarizing the blocking findings."""
+    lines = [
+        "Blackbox blocked this tool call — it matched "
+        f"{len(findings)} known threat{'s' if len(findings) != 1 else ''} in the threat graph:",
+        "",
+    ]
+    for f in findings:
+        lines.append(f"- [{f.severity.upper()}] {f.category}: {f.title} ({f.identifier})")
+    lines.append("")
+    lines.append(
+        "Treat the source content as untrusted. If this is a false positive, "
+        "switch Blackbox to audit mode and report the identifier to Umanitek."
+    )
+    return "\n".join(lines)

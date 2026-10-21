@@ -39,15 +39,16 @@ def test_the_environment_selects_setup_only_mode_in_this_hermes_with_the_pinned_
     assert env["VENV_DIR"] == sys.prefix
     assert env["BLACKBOX_HELPER_DIR"] == str(setup.HERE)
     assert env["BLACKBOX_PLUGIN_DIR"] == str(setup.PLUGIN_DIR)
-    assert env["BLACKBOX_DKG_PACKAGE"] == "@origintrail-official/dkg@10.0.23"
+    assert env["BLACKBOX_DKG_PACKAGE"] == setup.DKG_PACKAGE
     assert env["BLACKBOX_DKG_INTEGRITY"].startswith("sha512-")
     assert env["BLACKBOX_INSTALL_DIR"].endswith("node") and env["HERMES_HOME"] == str(tmp_path / "home")
 
 
-def test_the_revision_is_the_catalogs_pinned_commit(tmp_path, monkeypatch):
+@pytest.mark.parametrize("encoding", ["utf-8", "utf-8-sig"])
+def test_the_revision_is_the_catalogs_pinned_commit(tmp_path, monkeypatch, encoding):
     plugin = tmp_path / "blackbox"
     plugin.mkdir()
-    (plugin / ".hermes-catalog.json").write_text('{"sha": "cfe788d212383113929e2f10011816966f6cc0b2"}', encoding="utf-8")
+    (plugin / ".hermes-catalog.json").write_text('{"sha": "cfe788d212383113929e2f10011816966f6cc0b2"}', encoding=encoding)
     monkeypatch.setattr(setup, "PLUGIN_DIR", plugin)
 
     assert setup._revision() == "cfe788d212383113929e2f10011816966f6cc0b2"

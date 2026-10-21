@@ -15,9 +15,10 @@ from typing import Any, Dict, List, Optional, Tuple
 from .. import audit, detection, killlist, overrides, ruleset, shields
 from ..kernel import config as config_mod, constants
 from ..kernel.config import BlackboxConfig
-from . import background
+from . import background, graph_rules
 from . import injection_sites
 from . import reporting
+from .reporting import blackbox_block_message
 from . import session_context
 
 logger = logging.getLogger(__name__)
@@ -27,21 +28,6 @@ def _config() -> BlackboxConfig:
     return config_mod.load_blackbox_config()
 
 
-def blackbox_block_message(findings: list[detection.Finding]) -> str:
-    """Human-readable block message summarizing the blocking findings."""
-    lines = [
-        "Blackbox blocked this tool call — it matched "
-        f"{len(findings)} known threat{'s' if len(findings) != 1 else ''} in the threat graph:",
-        "",
-    ]
-    for f in findings:
-        lines.append(f"- [{f.severity.upper()}] {f.category}: {f.title} ({f.identifier})")
-    lines.append("")
-    lines.append(
-        "Treat the source content as untrusted. If this is a false positive, "
-        "switch Blackbox to audit mode and report the identifier to Umanitek."
-    )
-    return "\n".join(lines)
 _seen_api_findings: dict[tuple, float] = {}
 _API_FINDING_DEDUPE_TTL_SECS = 10 * 60
 
@@ -165,15 +151,14 @@ def on_pre_tool_call(
     """
     try:
         cfg = _config()
-        rs = ruleset.get(cfg)
+        rs, graph_evidence = graph_rules.detection_rules(cfg, tool_name, args)
         _record_activity(tool_name, args)   # visibility: log every file-access tool call (best-effort)
         active = shields.snapshot()   # every shield's mode, read once for this call
         raw = _raw_findings(cfg, rs, tool_name, args, active)
         findings = reporting._flag_worthy(cfg, raw, active)
         detail = {"tool_name": tool_name, "session_id": session_id, "task_id": task_id,
-                  "tool_call_id": tool_call_id, "args": audit.redact(args)}
-        # Build the heavier conversation context only on a finding, so routine
-        # tool calls stay lean in the audit log.
+                  "tool_call_id": tool_call_id, "args": audit.redact(args), "graph_read": graph_evidence}
+        # Build conversation context only when a finding needs it.
         if findings:
             ctx = session_context._tool_context(session_id, args)
             if ctx:
@@ -184,6 +169,7 @@ def on_pre_tool_call(
             # R10's "a revoked threat blocked N actions here" counts these.
             detail.update(_decision_detail(cfg, findings, blocking))
         reporting._report_and_audit(cfg, "pre_tool_call", findings, detail)
+        background.review_tool(cfg, tool_name, args, detail)
         # OSV auto-discovery runs off the blocking path so a network lookup
         # never delays or breaks the tool call.
         if cfg.discover and cfg.osv_lookup:
@@ -351,13 +337,16 @@ def on_pre_api_request(**kwargs: Any) -> None:
     """
     try:
         cfg = _config()
-        rs = ruleset.get(cfg)
+        # The query selects the bounded curated pattern tier; prompt text
+        # stays in this process and is matched by the existing safe scanner.
+        rs, graph_evidence = graph_rules.detection_rules(cfg, "", {})
         sources = _untrusted_request_sources(kwargs.get("user_message"), kwargs.get("request_messages"))
         text = "\n".join(part for _, part in sources)   # the LLM reviewer's input
         findings = _injection_by_source(sources, rs, cfg.discover) + detection.detect_model_request_secrets(sources)   # KI-381
         findings += injection_sites.injection_site_findings(findings, kwargs.get("request_messages"), rs)   # D8
         findings = reporting._flag_worthy(cfg, findings, shields.snapshot())
         detail = {
+            "graph_read": graph_evidence,
             "session_id": kwargs.get("session_id"),
             "task_id": kwargs.get("task_id"),
             "turn_id": kwargs.get("turn_id"),
@@ -373,8 +362,7 @@ def on_pre_api_request(**kwargs: Any) -> None:
             detail["context"] = {"turns": turns}
         reporting._report_and_audit(cfg, "pre_api_request", findings, detail)
         # Optional LLM second opinion, off-thread so it never delays the request.
-        if cfg.llm_ready:
-            background._spawn_llm_review(cfg, text, detail)
+        background.review_request(cfg, sources, text, detail)
     except Exception as exc:  # pragma: no cover - fail open
         logger.debug("blackbox: pre_api_request failed: %s", exc)
 
@@ -382,7 +370,10 @@ def on_pre_api_request(**kwargs: Any) -> None:
 def on_session_start(session_id: str = "", **kwargs: Any) -> None:
     try:
         audit.record(event="session_start", detail={"session_id": session_id})
-        background._spawn_auto_attach(_config())
+        cfg = _config()
+        background._spawn_auto_attach(cfg)
+        from . import semantic_review
+        semantic_review.warmup(cfg)
     except Exception as exc:  # pragma: no cover - fail open
         logger.debug("blackbox: on_session_start failed: %s", exc)
 

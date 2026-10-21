@@ -13,3 +13,10 @@ class RulesetRefreshLockUnavailable(RulesetRefreshUnavailable):
 
 class RulesetRefreshIncomplete(RulesetRefreshUnavailable):
     """A required post-barrier refresh could not read a complete VM snapshot."""
+
+
+def require_complete(required, failed, empty):
+    if required and failed:
+        raise RulesetRefreshIncomplete("post-barrier VM query failed for " + ", ".join(sorted(failed)))
+    if required and empty:
+        raise RulesetRefreshIncomplete("post-barrier VM query returned an empty snapshot")

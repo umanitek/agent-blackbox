@@ -866,6 +866,7 @@ data.setdefault("name", "agent-blackbox")
 data["apiPort"] = api_port
 data.setdefault("listenPort", 0)
 data["nodeRole"] = "edge"
+data.setdefault("DKG_Core_chain_cache", True)
 data["networkConfig"] = "mainnet-base"
 # Relay reachability (see the .sh installer for the full rationale): DKG builds
 # its relay set from `relayPeers`; empty -> network-isolation denies every
@@ -1408,6 +1409,7 @@ function Enable-AndConfigure {
     $configWriter = @'
 import sys, os
 cfg_path, dkg_url, dkg_home, dkg_bin, context_graph_id, graph_peer_id = sys.argv[1:7]
+repo_dir = sys.argv[7] if len(sys.argv) > 7 else ""
 try:
     try:
         import hermes_yaml as yaml  # Hermes 0.21.7+: YAML through ruamel (PyYAML left the host)
@@ -1424,6 +1426,7 @@ if os.path.exists(cfg_path):
 plugins = data.setdefault("plugins", {})
 entries = plugins.setdefault("entries", {})
 blackbox = entries.setdefault("blackbox", {})
+fresh_sync_profile = not any(k in blackbox for k in ("context_graph_id", "detection_backend", "snapshot_sync", "dkg_home"))
 legacy_dkg_urls = {"http://127.0.0.1:9200", "http://localhost:9200"}
 legacy_graphs = {"0x37b1Fdfd134e2b17583bCBdD3034F91504cD9C70/agent-blackbox", "umanitek/blackbox-threats-staging", "umanitek/guardian-threats-staging", "umanitek/guardian-threats"}
 legacy_peers = {"12D3KooWAuEHYTWbD3R3yPTcECCYZnrjHNpJmrUw5b4D5T3m5Kr3", "12D3KooWBY9jmNATMPv1DZcKbFas5RtjpkhT69pPwvkUBY2MMnDX", "12D3KooWQHQd1SNecrRxwceqPJkXS" + "K" + "EYn8vrV4QyJ2AfqeYwXz1E", "12D3KooWBJskzr2unXQG9mR3LRZFUJoxWr1PN6hTbyWyKndHXjZM"}
@@ -1493,6 +1496,18 @@ defaults = {
     # Optional LLM reviewer — off until `blackbox setup-llm` fills it in.
     "llm": {"enabled": False, "provider": "", "model": "", "api_key": ""},
 }
+# Keep community protection and ordinary sync unless the installed plugin can
+# prove this fresh profile and its current DKG/core combination are compatible.
+if fresh_sync_profile:
+    try:
+        import runpy
+        from pathlib import Path
+        checkout = Path(repo_dir)
+        plugin = checkout if (checkout / "plugin.yaml").is_file() else checkout / "plugins" / "blackbox"
+        defaults.update(runpy.run_path(str(plugin / "setup" / "sync_defaults.py"))["defaults"](
+            {**defaults, **blackbox}, os.environ.get("BLACKBOX_DKG_NETWORK", "mainnet-base")))
+    except Exception:
+        print("  Keeping ordinary sync: the compatible Core-cache default is not available.")
 for k, v in defaults.items():
     if k not in blackbox:
         blackbox[k] = v
@@ -1501,7 +1516,6 @@ for k, v in defaults.items():
 # re-run and upgrade; only a pre-release opt-in (no consent record in force) is
 # migrated off. The product's own consent code decides; if it cannot be
 # imported the answer is "no consent" (fail closed = sharing off).
-repo_dir = sys.argv[7] if len(sys.argv) > 7 else ""
 def _consent_in_force(checkout):
     try:
         if checkout and os.path.isfile(os.path.join(checkout, "plugin.yaml")):

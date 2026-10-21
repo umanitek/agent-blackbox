@@ -934,6 +934,7 @@ data.setdefault("name", "agent-blackbox")
 data["apiPort"] = api_port
 data.setdefault("listenPort", 0)
 data["nodeRole"] = "edge"
+data.setdefault("DKG_Core_chain_cache", True)
 data["networkConfig"] = "mainnet-base"
 # Relay reachability: an edge node behind NAT must hold circuit-relay
 # reservations so other members can dial it (and so it can dial them). DKG
@@ -2045,6 +2046,7 @@ if os.path.exists(cfg_path):
 plugins = data.setdefault("plugins", {})
 entries = plugins.setdefault("entries", {})
 blackbox = entries.setdefault("blackbox", {})
+fresh_sync_profile = not any(k in blackbox for k in ("context_graph_id", "detection_backend", "snapshot_sync", "dkg_home"))
 # Idempotent for custom user edits, but migrate deprecated defaults that point
 # at the user's shared DKG install or a retired community graph.
 legacy_dkg_urls = {"http://127.0.0.1:9200", "http://localhost:9200"}
@@ -2124,6 +2126,18 @@ defaults = {
     # Optional LLM reviewer — off until `blackbox setup-llm` fills it in.
     "llm": {"enabled": False, "provider": "", "model": "", "api_key": ""},
 }
+# Keep community protection and ordinary sync unless the installed plugin can
+# prove this fresh profile and its current DKG/core combination are compatible.
+if fresh_sync_profile:
+    try:
+        import runpy
+        from pathlib import Path
+        checkout = Path(repo_dir)
+        plugin = checkout if (checkout / "plugin.yaml").is_file() else checkout / "plugins" / "blackbox"
+        defaults.update(runpy.run_path(str(plugin / "setup" / "sync_defaults.py"))["defaults"](
+            {**defaults, **blackbox}, os.environ.get("BLACKBOX_DKG_NETWORK", "mainnet-base")))
+    except Exception:
+        print("  Keeping ordinary sync: the compatible Core-cache default is not available.")
 for k, v in defaults.items():
     if k not in blackbox:
         blackbox[k] = v

@@ -39,6 +39,10 @@ HERMES_OVERLAYS: dict[str, HermesOverlay] = {
                                 base_url_env_var="HERMES_QWEN_BASE_URL"),
     "lmstudio": HermesOverlay(extra_env_vars=("LM_API_KEY",), base_url_override="http://127.0.0.1:1234/v1",
                               base_url_env_var="LM_BASE_URL"),
+    # Preserve the plugin's installed key/endpoint settings when models.dev lists CMD_API_KEY.
+    "commandcode": HermesOverlay(extra_env_vars=("COMMANDCODE_API_KEY",),
+                                 base_url_override="https://api.commandcode.ai/provider/v1",
+                                 base_url_env_var="COMMANDCODE_BASE_URL"),
     "copilot-acp": HermesOverlay(transport="codex_responses", auth_type="external_process",
                                  base_url_override="acp://copilot", base_url_env_var="COPILOT_ACP_BASE_URL"),
     "github-copilot": HermesOverlay(extra_env_vars=("COPILOT_GITHUB_TOKEN", "GH_TOKEN")),

@@ -25,18 +25,18 @@ from ..kernel.config import BlackboxConfig, load_blackbox_config
 from ..kernel.dkg_client import DkgClient, DkgError
 from .progress import apply_completion_contract, capture_durable_progress_cursor, read_durable_progress
 from ..kernel import display_safety
-from . import managed_node, native, side_subscriptions
+from . import managed_node, native, direct_preflight, side_subscriptions
 from .catchup_job import _catchup_denied, _catchup_job_id, _catchup_status
 
 logger = logging.getLogger(__name__)
-
 _MAX_EMPTY_PUBLIC_PASSES = 3
-
 
 def cmd_sync(args: argparse.Namespace) -> int:
     """Run a ruleset sync, translating an interactive cancellation cleanly."""
     try:
         cfg = load_blackbox_config()
+        if not direct_preflight.valid(cfg):
+            return 2
         if managed_node._uses_managed_dkg(cfg, args):
             return _cmd_sync_with_managed_dkg(cfg, args)
         if getattr(args, "wait", False):

@@ -18,7 +18,7 @@ from . import attach, audit, community, ruleset
 from .kernel import health
 from .kernel import yaml_files
 from .kernel.config import load_blackbox_config
-from .kernel.dkg_client import DkgClient
+from .kernel.dkg_client import DkgClient, DkgError
 from .attach import add_attach_parsers
 from .chat import add_blackbox_chat_args, cmd_chat
 from .community import add_report_parser, print_community_status
@@ -28,6 +28,7 @@ from .detection import cmd_setup_llm
 from .overrides import add_rules_parser
 from .setup import add_setup_parser
 from .sync import cmd_sync
+from .semantic import add_semantic_parser
 
 logger = logging.getLogger(__name__)
 
@@ -55,8 +56,37 @@ def setup_cli(parser: argparse.ArgumentParser) -> None:
     chat.set_defaults(func=cmd_chat)
 
     sub.add_parser("status", help="Show config, node reachability, ruleset + findings counts").set_defaults(func=_cmd_status)
+    add_semantic_parser(sub)
     add_rules_parser(sub)   # R7b: local overrides (unblock / reblock / list)
     add_setup_parser(sub)   # the full install after a Hermes plugin-catalog install
+    _add_sync_parser(sub)
+
+    add_attach_parsers(sub)
+    add_report_parser(sub, compiled_community=lambda cfg: ruleset.peek(cfg).community)
+    add_curate_parser(sub, compiled_ruleset=lambda cfg: ruleset.peek(cfg))
+    dash = sub.add_parser("dashboard", help="Start the local Blackbox dashboard")
+    dash.add_argument("--port", type=int, help="Override dashboard port")
+    dash.set_defaults(func=cmd_dashboard)
+
+    setup_llm = sub.add_parser("setup-llm", help="Configure the optional LLM reviewer (provider/model/key)")
+    setup_llm.add_argument("--provider", choices=["openai", "anthropic"], help="Skip the prompt: set provider")
+    setup_llm.add_argument("--model", help="Skip the prompt: set model id (default: provider's recommended)")
+    setup_llm.add_argument(
+        "--key-source", choices=["hermes", "new"], help="hermes: reuse the key Hermes has for its provider; new: BLACKBOX_LLM_API_KEY or ask"
+    )
+    setup_llm.add_argument("--api-key", help="Use this key (other programs can see it; prefer BLACKBOX_LLM_API_KEY)")
+    setup_llm.add_argument("--auto", action="store_true",
+                           help="Reuse the key Hermes already has for its provider (asks on a terminal; else changes nothing)")
+    setup_llm.add_argument(
+        "--configure",
+        action="store_true",
+        help="Prompt for provider, API key, and model even when reusable config exists",
+    )
+    setup_llm.add_argument("--disable", action="store_true", help="Turn the LLM reviewer off and exit")
+    setup_llm.set_defaults(func=cmd_setup_llm)
+
+
+def _add_sync_parser(sub) -> None:
     sync = sub.add_parser("sync", help="Force a ruleset refresh from the DKG node")
     sync.add_argument(
         "--wait",
@@ -76,40 +106,21 @@ def setup_cli(parser: argparse.ArgumentParser) -> None:
     )
     sync.set_defaults(func=cmd_sync)
 
-    add_attach_parsers(sub)
-    add_report_parser(sub, compiled_community=lambda cfg: ruleset.peek(cfg).community)
-    add_curate_parser(sub, compiled_ruleset=lambda cfg: ruleset.peek(cfg))
-    dash = sub.add_parser("dashboard", help="Start the local Blackbox dashboard")
-    dash.add_argument("--port", type=int, help="Override dashboard port")
-    dash.set_defaults(func=cmd_dashboard)
-
-    setup_llm = sub.add_parser(
-        "setup-llm", help="Configure the optional LLM prompt-injection reviewer (provider/model/key)"
-    )
-    setup_llm.add_argument("--provider", choices=["openai", "anthropic"], help="Skip the prompt: set provider")
-    setup_llm.add_argument("--model", help="Skip the prompt: set model id (default: provider's recommended)")
-    setup_llm.add_argument(
-        "--key-source", choices=["hermes", "new"], help="hermes: reuse the key Hermes has for its provider; new: BLACKBOX_LLM_API_KEY or ask"
-    )
-    setup_llm.add_argument("--api-key", help="Use this key (other programs can see it; prefer BLACKBOX_LLM_API_KEY)")
-    setup_llm.add_argument("--auto", action="store_true",
-                           help="Reuse the key Hermes already has for its provider (asks on a terminal; else changes nothing)")
-    setup_llm.add_argument(
-        "--configure",
-        action="store_true",
-        help="Prompt for provider, API key, and model even when reusable config exists",
-    )
-    setup_llm.add_argument("--disable", action="store_true", help="Turn the LLM reviewer off and exit")
-    setup_llm.set_defaults(func=cmd_setup_llm)
-
 
 def _cmd_status(args: argparse.Namespace) -> int:
     cfg = load_blackbox_config()
     client = DkgClient(url=cfg.dkg_url, dkg_home=cfg.dkg_home)
     reachable = client.reachable()
-    rs = ruleset.get(cfg)
-    counts = rs.counts()
+    try:
+        rs = ruleset.get(cfg)
+        counts = rs.counts()
+    except DkgError as exc:
+        print(f"Graph protection unavailable: {exc}")
+        return 2
     print("Agent Blackbox")
+    if getattr(cfg, 'detection_backend', 'legacy-cache') == "dkg":
+        print("  protection source: live local graph queries (no ruleset export)")
+        print("  counts below:      confirmed graph entities; not a full-coverage proof")
     print(f"  mode:              {cfg.mode}")
     print(f"  block severity:    {cfg.block_severity}")
     print(f"  context graph:     {cfg.context_graph_id}")
@@ -129,7 +140,8 @@ def _cmd_status(args: argparse.Namespace) -> int:
     print(f"  ruleset:           {counts['injection']} injection, "
           f"{counts['escalation']} escalation, {counts['dependency']} dependency, "
           f"{counts['fileaccess']} fileaccess, {counts['skill']} skill, {counts['ioc']} ioc")
-    _print_verified_progress(cfg)
+    if getattr(cfg, 'detection_backend', 'legacy-cache') != "dkg":
+        _print_verified_progress(cfg)
     if not any(counts.values()) and not health.node_installed(cfg, reachable):
         print("  !! SETUP NEEDED:   Blackbox setup has not run — no DKG node, so the verified threat graph is not loaded.")
         print(f"                     To {health.NODE_INSTALL_HINT}.")
