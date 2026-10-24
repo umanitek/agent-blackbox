@@ -112,6 +112,7 @@ override (env wins).
 |-----|---------|-----|---------|
 | `mode` | `audit` | `BLACKBOX_MODE` | `audit` \| `block` |
 | `contextGraphId` | `0x37b1Fdfd…/agent-blackbox-vm` | `BLACKBOX_CONTEXT_GRAPH_ID` | Public verified threat graph id |
+| `graphPeerId` | the bundled curator peer (as `graph_peer_id`) | `BLACKBOX_GRAPH_PEER_ID` | peer id of the graph's owner (the curator), dialled before the first share and kept connected: a node that reaches the graph only through relays gets the graph's definition from it |
 | `dkgUrl` | `http://127.0.0.1:9320` | `BLACKBOX_DKG_DAEMON_URL` / `BLACKBOX_DKG_URL` | Blackbox-managed local node |
 | `dkgHome` | `~/.hermes/blackbox/dkg` | `BLACKBOX_DKG_HOME` | isolated DKG config, API token, pid, and cache |
 | `syncInterval` | `300` | `BLACKBOX_SYNC_INTERVAL` | seconds between ruleset refresh |

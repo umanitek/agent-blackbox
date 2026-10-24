@@ -47,7 +47,7 @@ def test_sharing_is_off_until_the_operator_opts_in_and_an_opt_out_stops_it(real_
     assert real_consent.current() is None and not real_consent.in_force()          # no record: the default, off
     assert "is off" in real_consent.why_not() and "--enable-sharing" in real_consent.why_not()
     entry = real_consent.record()                                                     # the opt-in
-    assert entry is not None and entry.terms_version == "1.4" and real_consent.in_force()
+    assert entry is not None and entry.terms_version == "1.5" and real_consent.in_force()
     monkeypatch.setattr(real_consent, "terms_text", lambda: "Version: 2.0\nnew terms")
     assert real_consent.in_force()                                                    # new terms never pause sharing
     assert real_consent.withdraw() and not real_consent.withdraw()                    # opt out once; already off after
@@ -136,7 +136,7 @@ def test_the_sharing_verbs_record_and_withdraw(real_consent, capsys):
     assert report_rights.withdraw_consent() == 0 and "already off" in capsys.readouterr().out   # the default is off
     assert report_rights.record_consent() == 0 and real_consent.in_force()
     out = capsys.readouterr().out
-    assert "Version: 1.4" in out and "Consent recorded" in out
+    assert "Version: 1.5" in out and "Consent recorded" in out
     assert report_rights.withdraw_consent() == 0 and not real_consent.in_force()
     assert report_rights.withdraw_consent() == 0 and "already off" in capsys.readouterr().out
     assert report_rights.wants_local_verb(argparse.Namespace(consent=True))
@@ -183,7 +183,7 @@ def test_the_documents_ship_with_the_plugin():
     terms = consent_module.terms_text()
     for command in ("--enable-sharing", "--withdraw-consent", "--erase-identity", "--export", "--retract"):
         assert command in terms                                                               # the rights are real commands
-    assert consent_module.terms_version() == "1.4"
+    assert consent_module.terms_version() == "1.5"
     assert "OFF until you turn it on" in terms                                                # opt-in, said up front
 
 
