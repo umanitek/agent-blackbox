@@ -22,7 +22,7 @@
 
 param(
     [switch]$SkipDkg,
-    [ValidateSet("auto", "blazegraph", "oxigraph")]
+    [ValidateSet("auto", "blazegraph", "oxigraph", "native")]
     [string]$StoreBackend = "auto",
     [switch]$Help
 )
@@ -469,6 +469,8 @@ function Save-BlackboxDkgRuntimeFingerprint {
 }
 
 function Wait-BlackboxDkgRuntime {
+    & $script:VenvPython (Get-BlackboxHelper "blackbox-native-bootstrap.py") wait $DkgHome $DkgDaemonUrl
+    if ($LASTEXITCODE -ne 0) { return $false }
     $verifier = Get-BlackboxHelper "blackbox-dkg-runtime-fingerprint.py"
     $expectedCommit = (& $script:VenvPython $verifier commit $DkgCliDir).Trim()
     if ($LASTEXITCODE -ne 0 -or -not $expectedCommit) {
@@ -679,6 +681,7 @@ function Confirm-OxigraphFallback {
 }
 
 function Get-BlackboxStoreDescription {
+    if ($script:DkgSelectedStoreBackend -eq "native") { return "Blazegraph native verified bootstrap (DKG-managed)" }
     if ($script:DkgSelectedStoreBackend -eq "oxigraph-server") {
         return "Oxigraph (DKG-managed local server)"
     }
@@ -690,6 +693,16 @@ function Get-BlackboxStoreDescription {
 }
 
 function Initialize-BlackboxStore {
+    $nativeHelper = Get-BlackboxHelper "blackbox-native-bootstrap.py"
+    & $script:VenvPython $nativeHelper plan $DkgHome $DkgCliDir $DkgBin $ContextGraphId $DefaultContextGraphId $StoreBackend (Join-Path $HermesHome "config.yaml")
+    if ($LASTEXITCODE -eq 0) {
+        $script:DkgSelectedStoreBackend = "native"
+        $script:DkgStoreUrl = ""
+        $script:DkgStoreManagedByDkg = $true
+        $script:DockerRequired = $false
+        return $true
+    }
+    if ($LASTEXITCODE -ne 3) { return $false }
     $helper = Get-BlackboxHelper "blackbox-blazegraph.mjs"
     $namespace = "agent-blackbox"
     $existingBackend = ""
@@ -881,6 +894,8 @@ if cfg_path.exists():
         data = {}
 else:
     data = {}
+if (store_backend == "native" and "store" in data) or (data.get("publicSnapshotBootstrap") and store_backend != "native"):
+    raise SystemExit("Native bootstrap cannot convert an existing store; configuration was preserved")
 data.setdefault("name", "agent-blackbox")
 data["apiPort"] = api_port
 data.setdefault("listenPort", 0)
@@ -944,7 +959,11 @@ if switched and original is not None:
     if not backup_path.exists():
         shutil.copy2(cfg_path, backup_path)
     (home / ".blackbox-store-reset-pending").write_text(store_backend + "\n", encoding="utf-8")
-if store_backend == "blazegraph":
+if store_backend == "native":
+    if data.get("store"):
+        raise SystemExit("Native bootstrap cannot replace an existing store")
+    data["publicSnapshotBootstrap"] = json.loads((home / "public-bootstrap-plan.json").read_text())
+elif store_backend == "blazegraph":
     data["store"] = {
         "backend": "blazegraph",
         "options": {"url": store_url, "managedByDkg": store_managed, "timeout": 900000},
@@ -1161,6 +1180,11 @@ exit /b %ERRORLEVEL%
 
 # ── DKG node CLI + bootstrap ────────────────────────────────────────────────
 function Install-BlackboxDkgPackage {
+    if (Test-Path (Join-Path $DkgHome "config.json")) {
+        & $script:VenvPython (Get-BlackboxHelper "blackbox-native-bootstrap.py") retain $DkgHome $DkgBin
+        if ($LASTEXITCODE -eq 0) { Write-Ok "Preserved the native journal's compatible DKG runtime"; return $true }
+        if ($LASTEXITCODE -ne 3) { return $false }
+    }
     $backupDir = ""
     $packageJson = Join-Path $DkgCliDir "node_modules\@origintrail-official\dkg\package.json"
     $npmLog = Join-Path $HermesHome "logs\blackbox-npm-install.log"

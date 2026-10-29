@@ -346,11 +346,24 @@ def _stop_managed_dkg(cfg: BlackboxConfig, old_pid: Optional[int], env: dict[str
                 pass
 
 
+def wait_for_native_bootstrap(cfg):
+    import importlib.util
+    path = Path(__file__).resolve().parents[1] / "setup" / "blackbox-native-bootstrap.py"
+    spec = importlib.util.spec_from_file_location("blackbox_native_bootstrap", path)
+    helper = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(helper)
+    try:
+        helper.wait_for_bootstrap(cfg.dkg_home, cfg.dkg_url)
+    except (ValueError, OSError) as exc:
+        raise RuntimeError(str(exc)) from exc
+
+
 def _wait_for_managed_dkg_ready(cfg: BlackboxConfig, detail: str) -> None:
     """Block until the node API answers ``status`` (90s), else RuntimeError.
 
     *detail* is the start command's output, appended to the error for context.
     """
+    wait_for_native_bootstrap(cfg)
     client = DkgClient(url=cfg.dkg_url, dkg_home=cfg.dkg_home, config=cfg)
     deadline = time.monotonic() + 90
     while time.monotonic() < deadline:

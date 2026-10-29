@@ -19,7 +19,7 @@ setup = load_blackbox("setup")
 cli_mod = load_blackbox("cli")
 
 REPO = Path(__file__).resolve().parents[2]
-COPIES = ["blackbox-install.sh", "blackbox-install.ps1", "blackbox-blazegraph.mjs", "blackbox-dkg-runtime-fingerprint.py"]
+COPIES = ["blackbox-install.sh", "blackbox-install.ps1", "blackbox-blazegraph.mjs", "blackbox-dkg-runtime-fingerprint.py", "blackbox-native-bootstrap.py"]
 
 
 @pytest.mark.parametrize("name", COPIES)
