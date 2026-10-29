@@ -1,6 +1,33 @@
-# Agent Blackbox — Reporter Terms (community graph)
+# Agent Blackbox — Reporter Terms (community reports)
 
-Version: 1.4 (draft for counsel review, 2026-10-16)
+Version: 1.5 (draft for counsel review, 2026-10-16)
+
+## What changed in version 1.5
+
+- ONE GRAPH. Your statements now go to the SHARED MEMORY of the verified
+  threat graph (`0x37b1Fdfd134e2b17583bCBdD3034F91504cD9C70/agent-blackbox-vm`,
+  registered on chain), in its sub-graph `reports`, not to a separate
+  community graph. Every node that follows the verified graph reads your
+  statements (sections 1 and 4).
+- PROMOTION PUBLISHES YOUR REPORT. Umanitek's curators review reports and
+  promote the threats they choose. A promotion publishes one report, exactly
+  as its reporter signed it, to the graph's VERIFIED MEMORY, and next to it
+  the curators' promotion statement, signed by two curators, that points to
+  it. The report can be yours (section 4).
+- A PROMOTED REPORT IS PERMANENT. Nobody can remove or change it: not you,
+  not Umanitek, not anyone. Only the curators can stop it counting, with a
+  revocation or a correction, and neither removes it; your retraction stops
+  your report counting, not the rule (sections 2 and 5).
+- THE LINK IS PUBLIC. Anyone can see which report a verified rule came from,
+  and so the reporter address and reporter public key in that report. Until
+  now a promotion carried random ids in place of the reports behind it, and
+  only Umanitek's curator could link them to you (section 4).
+- Erasing your identity cannot reach a promoted report: it keeps the key and
+  the address it was signed with (section 5).
+- NO COMMUNITY CURATORS FOR NOW. The community curators of version 1.1 are
+  not in use: there are none, and no reader acts on community-curator
+  statements. Some may be added later. Umanitek's curators are the only ones
+  who rule on reports (section 4).
 
 ## What changed in version 1.4
 
@@ -57,7 +84,8 @@ any time with `blackbox report --disable-sharing`, `blackbox report
 When a protected agent on your machine meets a threat that the VERIFIED
 threat graph already lists, or when you file a report yourself with
 `blackbox report`, this node publishes a privacy-safe STATEMENT to the shared
-community graph of the OriginTrail Decentralized Knowledge Graph (DKG):
+memory of the verified threat graph on the OriginTrail Decentralized Knowledge
+Graph (DKG), in its sub-graph `reports`:
 
 - the threat's deterministic identifier (for example `dep:npm:evil-pkg@1.0.0`
   or `ioc:domain:evil.example`) and its closed, typed metadata (category,
@@ -88,10 +116,14 @@ person's identity.
 
 You dedicate each statement you publish to the public domain under
 **CC0 1.0** (no rights reserved) so every node on the network may read,
-store, verify and act on it. The graph is shared and replicated: a published
-statement cannot be deleted by you, by Umanitek or by anyone; you can
-RETRACT a report (`blackbox report --retract`) and every current reader
-stops counting it, but the record of the statement stays on the network.
+store, verify and act on it, and Umanitek's curators may publish it,
+unchanged, to Verified Memory (section 4). The graph is
+shared and replicated: a published statement cannot be deleted by you, by
+Umanitek or by anyone; you can RETRACT a report (`blackbox report --retract`)
+and every current reader stops counting it, but the record of the statement
+stays on the network. A promoted report stays in Verified Memory permanently, and
+your retraction does not withdraw it: only the curators can stop a rule
+promoted from your report, with a revocation or a correction (section 4).
 
 ## 3. What you promise
 
@@ -110,17 +142,39 @@ stops counting it, but the record of the statement stays on the network.
 
 ## 4. Who sees what, and for how long
 
-- Every node subscribed to the community graph receives your statements and
-  keeps them for ITS OWN retention setting (30 days by default on current
-  nodes; a replica may lengthen or disable expiry). Readers keep a counted
-  threat locally for up to 90 days after its network copies expire.
-- Two groups of curators read the community graph. The COMMUNITY curators
-  (named in the controller map) may list you as a trusted reporter, confirm,
+- Every node that follows the verified threat graph receives your
+  statements in the graph's shared memory and keeps them for ITS OWN
+  retention setting (30 days by default on current nodes; a replica may
+  lengthen or disable expiry). Readers keep a counted threat locally for up
+  to 90 days after its network copies expire.
+- Umanitek's curator (the VERIFIED graph's owner) reads the reports. It may
+  list you as a trusted reporter, confirm, reject or defer a community
+  threat, pause intake for up to 7 days, promote a threat into Verified
+  Memory (below), revoke a verified rule, and publish the kill list.
+- The COMMUNITY curators (named in the controller map) are NOT IN USE: there
+  are none for now, and no reader acts on community-curator statements; some
+  may be added later. Once in use, they may list trusted reporters, confirm,
   reject or defer a community threat, and pause intake for up to 7 days;
-  their statements can only make a threat FLAG, never block. Umanitek's
-  curator (the VERIFIED graph's owner) may do the same and may also promote a
-  threat into the verified graph, revoke a verified rule, and publish the kill
-  list.
+  their statements can only make a threat FLAG,
+  never block.
+- PROMOTION. Umanitek's curators promote a threat by publishing one report
+  they select, by default the earliest shared for it, exactly as its
+  reporter signed it, to the graph's VERIFIED MEMORY. Their promotion
+  statement, signed by two curators, is published next to it and points to
+  it. A promoted report carries everything your statement carries
+  (section 1), your REPORTER ADDRESS, reporter public key, sighting fields
+  and signature included. Reports of malicious packages, indicators, skills
+  and file access can be promoted; an injection report cannot. A promoted
+  report is PERMANENT: nobody can remove or change it. Anyone can read it and
+  see which verified rule it led to. Only the curators can stop it counting
+  on every reader, with a revocation or a correction; it stays readable.
+  Your retraction stops your report counting, not the rule: to have a rule
+  revoked, ask Umanitek (the contact is in the controller map).
+- A curator node on a DKG release older than 10.0.25 cannot publish your
+  report itself. It publishes instead a verified rule built from it, with
+  the threat's identifier and fields, that names your report: its subject,
+  which carries your REPORTER ADDRESS, the digest of what you signed, and
+  your reporter public key. That rule is permanent too.
 - Each group of curators may keep a PRIVATE reputation ledger about reporters
   on its own curator nodes: which of your reports were confirmed or rejected,
   keyed by a per-reporter random salt. Nothing from it is published. The index
@@ -134,24 +188,29 @@ stops counting it, but the record of the statement stays on the network.
   confirmation of a package that a public malicious-package advisory already
   names, listings its own ledger calls for). Rejections and anything that
   accuses a reporter of bad faith are always a person's decision.
-- Confirmed threats can be handed to the verified graph's owner as one file
-  holding the signed statements behind them, your signed reports included, so
-  the receiver can credit the original reporters. The file holds nothing that
-  is not already public in the community graph.
+- Threats the community curators confirmed can be handed to the verified
+  graph's owner as one file holding the signed statements behind them, your
+  signed reports included, so the receiver can credit the original reporters.
+  The file holds nothing that is not already public in the graph's shared
+  memory. This hand-off is not in use while there are no community curators.
 
 ## 5. Your rights and the tools for them
 
 - **Access and export:** `blackbox report --export FILE` writes your key
   backup and your local ledger of every statement this node made.
 - **Correction / withdrawal of a statement:** `blackbox report --retract`,
-  `blackbox report --false-positive`.
+  `blackbox report --false-positive`. A retraction withdraws your report;
+  a verified rule already promoted from it stays until the curators revoke
+  or correct it, which you can ask Umanitek to do (section 4).
 - **Erasure of your identity:** `blackbox report --erase-identity --confirm`
   destroys the reporter key and every local share record, including the
   keep-alive memory, so this node can never re-publish its old statements.
   Your next report is signed by a new key; your node's WALLET address, which
   every statement also carries, is not changed by this command. Each group of
   curators deletes its ledger salt on request (crypto-shredding) and stops
-  keeping your listing alive.
+  keeping your listing alive. Erasure cannot reach a promoted report: it
+  stays in Verified Memory with the reporter key and address it was signed
+  with.
 - **Turn sharing on (opt in):** `blackbox report --enable-sharing` (or the
   dashboard toggle).
 - **Turn sharing off (opt out):** `blackbox report --withdraw-consent` (or
