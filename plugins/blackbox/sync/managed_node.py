@@ -351,6 +351,8 @@ def _wait_for_managed_dkg_ready(cfg: BlackboxConfig, detail: str) -> None:
 
     *detail* is the start command's output, appended to the error for context.
     """
+    from .bootstrap import wait_for_native_bootstrap
+    wait_for_native_bootstrap(cfg)
     client = DkgClient(url=cfg.dkg_url, dkg_home=cfg.dkg_home, config=cfg)
     deadline = time.monotonic() + 90
     while time.monotonic() < deadline:

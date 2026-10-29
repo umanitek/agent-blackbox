@@ -37,7 +37,7 @@ DKG_INTEGRITY = "sha512-QlCW/5UvL2UHaR2QGAemQzvu+ZtBKfefwuitoX2hGr/XZAgkFXsln1NH
 
 HERE = Path(__file__).resolve().parent
 PLUGIN_DIR = HERE.parent
-STORES = ("auto", "blazegraph", "oxigraph")
+STORES = ("auto", "blazegraph", "oxigraph", "native")
 
 __all__ = ["DKG_INTEGRITY", "DKG_PACKAGE", "add_setup_parser", "cmd_setup", "setup_environment"]
 
@@ -110,7 +110,7 @@ def add_setup_parser(sub: argparse._SubParsersAction) -> None:
     """Register ``blackbox setup`` on the `blackbox` command's sub-parsers."""
     parser = sub.add_parser("setup", help="Finish a plugin-catalog install: DKG node, threat graphs, agents, dashboard")
     parser.add_argument("--store", choices=STORES, default=None,
-                        help="the node's store: auto (default), blazegraph (Docker) or oxigraph (no Docker)")
+                        help="the node's store: auto (default), blazegraph (Docker) oxigraph (no Docker), or native (experimental fresh bootstrap)")
     parser.add_argument("--snapshot-graph-id", help="Registered numeric graph ID for core-cache sync (requires trusted cores)")
     parser.add_argument("--trusted-core-peer", action="append", help="Explicit trusted core peer; repeat for up to four cores")
     parser.add_argument("--dkg-core-chain-cache", action="store_true",
