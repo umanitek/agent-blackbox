@@ -108,3 +108,36 @@ def test_blackbox_upgrade_retains_native_cli_and_refuses_incompatible_replacemen
 
 def test_missing_ordinary_config_does_not_add_a_new_readiness_gate(tmp_path):
     bootstrap.wait_for_bootstrap(tmp_path, 'http://localhost', request=lambda *a, **k: pytest.fail('ordinary path'))
+
+
+@pytest.mark.platforms('linux', 'macos', 'windows')
+def test_native_startup_observer_authenticates_without_stopping_owned_daemon(tmp_path):
+    import subprocess
+    import sys
+    server = r'''
+from http.server import BaseHTTPRequestHandler, HTTPServer
+class Handler(BaseHTTPRequestHandler):
+    requests = 0
+    def log_message(self, *args): pass
+    def do_GET(self):
+        if self.headers.get('Authorization') != 'Bearer test-token':
+            self.send_response(401); self.end_headers(); return
+        Handler.requests += 1
+        self.send_response(503 if Handler.requests == 1 else 200)
+        self.end_headers()
+        self.wfile.write(b'{"state":"public-bootstrap-starting","ready":false}')
+server = HTTPServer(('127.0.0.1', 0), Handler)
+print(server.server_port, flush=True)
+server.serve_forever()
+'''
+    child = subprocess.Popen([sys.executable, '-u', '-c', server], stdout=subprocess.PIPE, text=True)
+    try:
+        port = int(child.stdout.readline())
+        (tmp_path / 'config.json').write_text(json.dumps({'publicSnapshotBootstrap': {'version': 1}}), encoding='utf-8')
+        (tmp_path / 'daemon.pid').write_text(str(child.pid), encoding='utf-8')
+        (tmp_path / 'auth.token').write_text('# local token\ntest-token\n', encoding='utf-8')
+        bootstrap.wait_for_bootstrap(tmp_path, f'http://127.0.0.1:{port}', sleep=lambda _: None)
+        assert child.poll() is None
+    finally:
+        child.terminate(); child.wait(timeout=10)
+        child.stdout.close()
