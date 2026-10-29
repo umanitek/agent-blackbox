@@ -4,7 +4,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import psutil
 from pathlib import Path
 import shutil
 import subprocess
@@ -106,6 +105,7 @@ def wait_for_bootstrap(home, url, *, request=urllib.request.urlopen, clock=time.
     config = json.loads(path.read_text(encoding="utf-8-sig"))
     if not config.get("publicSnapshotBootstrap"):
         return
+    import psutil
     from urllib.parse import urlsplit
     parsed = urlsplit(url)
     if parsed.scheme != 'http' or parsed.hostname not in {'127.0.0.1', 'localhost', '::1'} or parsed.username or parsed.password:

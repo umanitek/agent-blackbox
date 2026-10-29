@@ -960,6 +960,10 @@ def test_unix_installer_falls_back_to_oxigraph_after_blazegraph_failure(
     scripts = tmp_path / "repo" / "scripts"
     scripts.mkdir(parents=True)
     (scripts / "blackbox-blazegraph.mjs").write_text("process.exit(1);\n", encoding="utf-8")
+    shutil.copyfile(INSTALL_SH.parent / "blackbox-native-bootstrap.py", scripts / "blackbox-native-bootstrap.py")
+    dkg = tmp_path / "dkg"
+    dkg.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")  # Released CLI has no native capability.
+    dkg.chmod(0o755)
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     docker = fake_bin / "docker"
@@ -967,6 +971,7 @@ def test_unix_installer_falls_back_to_oxigraph_after_blazegraph_failure(
     docker.chmod(0o755)
 
     command = f"""
+blackbox_helper() {{ printf '%s/scripts/%s\\n' "$REPO_DIR" "$1"; }}
 require_docker_for_blazegraph() {{
 {_extract_function_body("require_docker_for_blazegraph")}
 }}
@@ -987,6 +992,7 @@ err() {{ :; }}
 docker_setup_hint() {{ :; }}
 VENV_DIR={shlex.quote(str(tmp_path / "venv"))}
 REPO_DIR={shlex.quote(str(tmp_path / "repo"))}
+BLACKBOX_DKG_BIN={shlex.quote(str(dkg))}
 BLACKBOX_DKG_HOME={shlex.quote(str(tmp_path / "dkg-home"))}
 BLACKBOX_DKG_CLI_DIR={shlex.quote(str(tmp_path / "dkg-cli"))}
 BLACKBOX_DKG_STORE_PORT=9999
@@ -1023,6 +1029,10 @@ def test_unix_installer_does_not_fall_back_to_oxigraph_without_confirmation(
     scripts = tmp_path / "repo" / "scripts"
     scripts.mkdir(parents=True)
     (scripts / "blackbox-blazegraph.mjs").write_text("process.exit(1);\n", encoding="utf-8")
+    shutil.copyfile(INSTALL_SH.parent / "blackbox-native-bootstrap.py", scripts / "blackbox-native-bootstrap.py")
+    dkg = tmp_path / "dkg"
+    dkg.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")  # Released CLI has no native capability.
+    dkg.chmod(0o755)
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     docker = fake_bin / "docker"
@@ -1030,6 +1040,7 @@ def test_unix_installer_does_not_fall_back_to_oxigraph_without_confirmation(
     docker.chmod(0o755)
 
     command = f"""
+blackbox_helper() {{ printf '%s/scripts/%s\\n' "$REPO_DIR" "$1"; }}
 require_docker_for_blazegraph() {{
 {_extract_function_body("require_docker_for_blazegraph")}
 }}
@@ -1050,6 +1061,7 @@ err() {{ :; }}
 docker_setup_hint() {{ :; }}
 VENV_DIR={shlex.quote(str(tmp_path / "venv"))}
 REPO_DIR={shlex.quote(str(tmp_path / "repo"))}
+BLACKBOX_DKG_BIN={shlex.quote(str(dkg))}
 BLACKBOX_DKG_HOME={shlex.quote(str(tmp_path / "dkg-home"))}
 BLACKBOX_DKG_CLI_DIR={shlex.quote(str(tmp_path / "dkg-cli"))}
 BLACKBOX_DKG_STORE_PORT=9999
@@ -1206,7 +1218,7 @@ def test_installers_offer_both_store_backends_and_actionable_docker_setup() -> N
     windows = INSTALL_PS1.read_text(encoding="utf-8")
 
     assert "--store MODE" in unix
-    assert "Store backend: auto, blazegraph, or oxigraph" in unix
+    assert "Store backend: auto, blazegraph, oxigraph, or native" in unix
     assert "auto|blazegraph|oxigraph" in windows
     assert "oxigraph-server" in unix and "oxigraph-server" in windows
     assert "https://get.docker.com" in unix
