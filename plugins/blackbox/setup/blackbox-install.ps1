@@ -697,6 +697,8 @@ function Initialize-BlackboxStore {
     & $script:VenvPython $nativeHelper plan $DkgHome $DkgCliDir $DkgBin $ContextGraphId $DefaultContextGraphId $StoreBackend (Join-Path $HermesHome "config.yaml")
     if ($LASTEXITCODE -eq 0) {
         $script:DkgSelectedStoreBackend = "native"
+        $script:DkgExactBatchStreamEnabled = "1"
+        $script:DkgVmRecoveryPrefetchEnabled = "0"
         $script:DkgStoreUrl = ""
         $script:DkgStoreManagedByDkg = $true
         $script:DockerRequired = $false
@@ -963,6 +965,11 @@ if store_backend == "native":
     if data.get("store"):
         raise SystemExit("Native bootstrap cannot replace an existing store")
     data["publicSnapshotBootstrap"] = json.loads((home / "public-bootstrap-plan.json").read_text())
+    # Start with the same profile blackbox sync uses; avoid reopening a verified journal.
+    data["syncOnConnectEnabled"] = False
+    data["syncReconcilerEnabled"] = False
+    data["vmReconcilerEnabled"] = True
+    data["vmRecoveryPrefetchEnabled"] = False
 elif store_backend == "blazegraph":
     data["store"] = {
         "backend": "blazegraph",
@@ -1851,17 +1858,18 @@ function ConvertTo-PsLiteral {
 }
 
 function New-BlackboxDkgLauncherLines {
-    # The node launcher's lines. Connection-time sync stays ON (it delivers
-    # context-graph authority to subscribers, KI-044); the periodic reconciler is
+    # Ordinary profiles keep connection-time authority sync (KI-044). Native
+    # checkpoints retain the managed snapshot profile. The periodic reconciler is
     # left to config.json, as in the Linux unit; the stream/prefetch switches and
     # the installer's safety limits ride along (KI-282). The graph-list projection
     # stays install-time only: with it on, the running node's listing omits the
     # verified graph and Blackbox reads it as "not subscribed".
     param([string]$NodeDir = "")
+    $syncOnConnect = if ($script:DkgSelectedStoreBackend -eq "native") { "0" } else { "1" }
     $lines = @(
         "# managed-by: agent-blackbox-installer -- starts the Blackbox DKG node at sign-in; rewritten on every install.",
         "`$env:DKG_HOME = $(ConvertTo-PsLiteral $DkgHome)",
-        "`$env:DKG_SYNC_ON_CONNECT_ENABLED = '1'",
+        "`$env:DKG_SYNC_ON_CONNECT_ENABLED = $(ConvertTo-PsLiteral $syncOnConnect)",
         "`$env:DKG_DURABLE_SYNC_ENABLED = $(ConvertTo-PsLiteral $script:DkgDurableSyncEnabled)",
         "`$env:DKG_STORE_QUEUE_LIMIT = $(ConvertTo-PsLiteral "$DkgStoreQueueLimit")",
         "`$env:DKG_EXACT_BATCH_STREAM_ENABLED = $(ConvertTo-PsLiteral "$DkgExactBatchStreamEnabled")",

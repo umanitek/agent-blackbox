@@ -5,8 +5,10 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+from types import SimpleNamespace
 
 import pytest
+from tests.plugins._blackbox_loader import load_blackbox
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -19,12 +21,13 @@ def writer(extension):
 
 
 @pytest.mark.parametrize('extension', ['sh', 'ps1'])
-def test_native_fresh_and_upgrade_preserve_journal_and_explicit_profile(tmp_path, extension):
+@pytest.mark.parametrize('slots', [(10, 20), (2, 4)])
+def test_native_fresh_and_upgrade_preserve_journal_and_explicit_profile(tmp_path, monkeypatch, extension, slots):
     plan = {'version': 1, 'source': {'contextGraphId': 'graph'}, 'runtime': {'jarSha256': 'a' * 64}}
     (tmp_path / 'public-bootstrap-plan.json').write_text(json.dumps(plan), encoding='utf-8')
     def invoke(backend):
         return subprocess.run([sys.executable, '-c', writer(extension), str(tmp_path), '9320', backend,
-                               '', 'true', 'graph', 'graph', '', '10', '20'],
+                               '', 'true', 'graph', 'graph', '', *map(str, slots)],
                               env={**os.environ, 'HERMES_HOME': str(tmp_path)}, capture_output=True, text=True, timeout=30, check=False)
     fresh = invoke('native')
     assert fresh.returncode == 0, fresh.stderr
@@ -32,6 +35,14 @@ def test_native_fresh_and_upgrade_preserve_journal_and_explicit_profile(tmp_path
     saved = json.loads(config.read_text(encoding='utf-8'))
     assert 'store' not in saved
     assert saved['publicSnapshotBootstrap'] == plan
+    profile = load_blackbox('sync.node_profile')
+    monkeypatch.setattr(profile.process_limits, 'sync_slots', lambda: slots)
+    cfg = SimpleNamespace(dkg_home=str(tmp_path), snapshot_sync=object())
+    before_sync = config.read_bytes()
+    assert profile._set_persisted_dkg_sync_state(cfg) is False
+    assert config.read_bytes() == before_sync
+    assert saved['syncSharedMemoryOnConnect'] is True
+    assert saved['vmReconcilerEnabled'] is True
     journal = tmp_path / 'public-checkpoint-edge' / 'checkpoint-store' / 'store.jnl'
     journal.parent.mkdir(parents=True)
     journal.write_bytes(b'original retained journal')
@@ -39,6 +50,7 @@ def test_native_fresh_and_upgrade_preserve_journal_and_explicit_profile(tmp_path
     config.write_text(json.dumps(saved), encoding='utf-8')
     assert invoke('native').returncode == 0
     assert json.loads(config.read_text(encoding='utf-8'))['DKG_Core_chain_cache'] is False
+    assert profile._set_persisted_dkg_sync_state(cfg) is False
     before = config.read_bytes()
     rejected = invoke('blazegraph')
     assert rejected.returncode != 0 and 'cannot convert' in rejected.stderr

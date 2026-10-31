@@ -41,17 +41,27 @@ def test_systemd_unit_shape():
     assert "DKG_HOME=$BLACKBOX_DKG_HOME" in src
 
 
-def test_systemd_unit_keeps_steady_state_sync_enabled():
-    """KI-044 regression: the boot service must run with connection-time meta
-    sync ON — it is what delivers context-graph authority to subscribers.
-    The =0 bootstrap values are for the supervised install transfer only;
-    a unit that disables them makes every community-graph subscribe fail
-    closed with CONTEXT_GRAPH_AUTHORITY_UNAVAILABLE after the first reboot.
-    """
+@pytest.mark.parametrize('backend', ['blazegraph', 'oxigraph-server', 'native'])
+@pytest.mark.parametrize('platform', ['systemd', 'launchd'])
+def test_boot_service_preserves_the_selected_sync_profile(backend, platform):
+    """KI-044 remains ON for ordinary stores; explicit native checkpoints boot
+    with the same profile as their managed sync, avoiding another journal open."""
+    import subprocess
+    import plistlib
     src = _src()
-    unit = src.split("[Unit]", 1)[1].split("UNIT", 1)[0]
-    assert "DKG_SYNC_ON_CONNECT_ENABLED=1" in unit
-    assert "DKG_SYNC_ON_CONNECT_ENABLED=0" not in unit
+    end = 'UNIT' if platform == 'systemd' else 'PLIST'
+    template = src.split('<<' + end + '\n', 1)[1].split('\n' + end, 1)[0]
+    # Expand the actual shipped template, without registering any service.
+    script = 'xml_escape() { printf "%s" "$1"; }; blackbox_dkg_launchd_error_log() { :; };\n'
+    script += 'cat <<' + end + '\n' + template + '\n' + end
+    rendered = subprocess.run(['bash', '-c', script], capture_output=True, text=True, timeout=30,
+                              env={'PATH': '/usr/bin:/bin', 'BLACKBOX_DKG_SELECTED_STORE_BACKEND': backend}, check=False)
+    assert rendered.returncode == 0, rendered.stderr
+    expected = '0' if backend == 'native' else '1'
+    if platform == 'systemd':
+        assert f'Environment=DKG_SYNC_ON_CONNECT_ENABLED={expected}' in rendered.stdout.splitlines()
+    else:
+        assert plistlib.loads(rendered.stdout.encode())['EnvironmentVariables']['DKG_SYNC_ON_CONNECT_ENABLED'] == expected
 
 
 def test_systemd_unit_leaves_the_reconciler_to_config_and_carries_the_stream_switch():

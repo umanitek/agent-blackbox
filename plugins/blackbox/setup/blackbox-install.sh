@@ -780,6 +780,8 @@ provision_blackbox_store() {
         "$BLACKBOX_DKG_STORE_BACKEND" "$HERMES_HOME/config.yaml" || native_rc=$?
     if [ "$native_rc" -eq 0 ]; then
         BLACKBOX_DKG_SELECTED_STORE_BACKEND=native
+        BLACKBOX_DKG_EXACT_BATCH_STREAM_ENABLED=1
+        BLACKBOX_DKG_VM_RECOVERY_PREFETCH_ENABLED=0
         BLACKBOX_DKG_STORE_URL=""
         BLACKBOX_DKG_STORE_MANAGED_BY_DKG=true
         BLACKBOX_DOCKER_REQUIRED=false
@@ -1085,6 +1087,11 @@ if store_backend == "native":
     if data.get("store"):
         raise SystemExit("Native bootstrap cannot replace an existing store")
     data["publicSnapshotBootstrap"] = json.loads((home / "public-bootstrap-plan.json").read_text())
+    # Start with the same profile blackbox sync uses; avoid reopening a verified journal.
+    data["syncOnConnectEnabled"] = False
+    data["syncReconcilerEnabled"] = False
+    data["vmReconcilerEnabled"] = True
+    data["vmRecoveryPrefetchEnabled"] = False
 elif store_backend == "blazegraph":
     data["store"] = {
         "backend": "blazegraph",
@@ -3115,13 +3122,11 @@ After=network-online.target
 Type=simple
 Environment=PATH=$node_bin_dir:$BLACKBOX_SERVICE_SYSTEM_PATH
 Environment=DKG_HOME=$BLACKBOX_DKG_HOME
-# Connection-time sync stays ON: the meta sync on connect is what delivers
-# context-graph authority to subscribers — with it off, community-graph
-# subscribes fail closed (KI-044). The =0 values used during install bootstrap
-# are for that one supervised transfer only and must never leak into the boot
-# service. The periodic sync reconciler is NOT set here: config.json decides it
-# per graph (sync/managed_node.py), and an environment value would override it.
-Environment=DKG_SYNC_ON_CONNECT_ENABLED=1
+# Ordinary profiles keep connection-time authority sync (KI-044). Native
+# checkpoints use the same managed snapshot profile at install and boot. Shared
+# memory and VM reconciliation remain enabled in config.json. The periodic
+# reconciler is left to config.json; an environment value would override it.
+Environment=DKG_SYNC_ON_CONNECT_ENABLED=$([ "${BLACKBOX_DKG_SELECTED_STORE_BACKEND:-}" = native ] && echo 0 || echo 1)
 # DKG 10.0.21+ recovery speed-ups (KI-282). The exact batch stream is read ONLY
 # from the environment: without this line a service-started node recovers the
 # graph about 8x slower. The reconciler choice itself lives in config.json.
@@ -3174,7 +3179,7 @@ UNIT
   <key>EnvironmentVariables</key><dict>
     <key>PATH</key><string>$(xml_escape "$node_bin_dir:$BLACKBOX_SERVICE_SYSTEM_PATH")</string>
     <key>DKG_HOME</key><string>$(xml_escape "$BLACKBOX_DKG_HOME")</string>
-    <key>DKG_SYNC_ON_CONNECT_ENABLED</key><string>1</string>
+    <key>DKG_SYNC_ON_CONNECT_ENABLED</key><string>$([ "${BLACKBOX_DKG_SELECTED_STORE_BACKEND:-}" = native ] && echo 0 || echo 1)</string>
     <key>DKG_EXACT_BATCH_STREAM_ENABLED</key><string>$(xml_escape "$BLACKBOX_DKG_EXACT_BATCH_STREAM_ENABLED")</string>
     <key>DKG_VM_RECOVERY_PREFETCH_ENABLED</key><string>$(xml_escape "$BLACKBOX_DKG_VM_RECOVERY_PREFETCH_ENABLED")</string>
     <key>NODE_OPTIONS</key><string>$(xml_escape "$BLACKBOX_DKG_NODE_OPTIONS")</string>
