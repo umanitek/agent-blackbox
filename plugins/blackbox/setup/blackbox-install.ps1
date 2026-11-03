@@ -1470,10 +1470,13 @@ except Exception:
     print("  (PyYAML unavailable - skipping config update; run 'blackbox status' to configure)")
     sys.exit(0)
 os.makedirs(os.path.dirname(cfg_path), exist_ok=True)
+# The user's config.yaml keeps its comments (Hermes's round-trip editor when it ships one; see the .sh).
+_roundtrip = getattr(yaml, "roundtrip_yaml", None)
+editor = _roundtrip() if callable(_roundtrip) else None
 data = {}
 if os.path.exists(cfg_path):
     with open(cfg_path) as f:
-        data = yaml.safe_load(f) or {}
+        data = (editor.load(f) if editor is not None else yaml.safe_load(f)) or {}
 plugins = data.setdefault("plugins", {})
 entries = plugins.setdefault("entries", {})
 blackbox = entries.setdefault("blackbox", {})
@@ -1603,8 +1606,11 @@ if blackbox.pop("sharing_default", None) is not None:
 if blackbox.get("daily_report_limit") in (0, "0", 20, "20"):
     blackbox["daily_report_limit"] = 100
     added.append("daily_report_limit")
-with open(cfg_path, "w") as f:
-    yaml.safe_dump(data, f, default_flow_style=False, sort_keys=False)
+with open(cfg_path, "w", encoding="utf-8") as f:
+    if editor is not None:
+        editor.dump(data, f)
+    else:
+        yaml.safe_dump(data, f, default_flow_style=False, sort_keys=False)
 print("  configured: " + ", ".join(added) if added else "  already configured - no changes")
 '@
     $configFile = Join-Path $env:TEMP "blackbox_configure.py"
@@ -1632,10 +1638,13 @@ try:
 except Exception:
     print("audit")
     sys.exit(0)
+# The user's config.yaml keeps its comments (Hermes's round-trip editor when it ships one; see the .sh).
+_roundtrip = getattr(yaml, "roundtrip_yaml", None)
+editor = _roundtrip() if callable(_roundtrip) else None
 data = {}
 if os.path.exists(cfg_path):
     with open(cfg_path) as f:
-        data = yaml.safe_load(f) or {}
+        data = (editor.load(f) if editor is not None else yaml.safe_load(f)) or {}
 mode = data.get("plugins", {}).get("entries", {}).get("blackbox", {}).get("mode", "audit")
 mode = str(mode).lower()
 print(mode if mode in ("audit", "block") else "audit")
@@ -1667,15 +1676,21 @@ except Exception:
 if mode not in ("audit", "block"):
     sys.exit(1)
 os.makedirs(os.path.dirname(cfg_path), exist_ok=True)
+# The user's config.yaml keeps its comments (Hermes's round-trip editor when it ships one; see the .sh).
+_roundtrip = getattr(yaml, "roundtrip_yaml", None)
+editor = _roundtrip() if callable(_roundtrip) else None
 data = {}
 if os.path.exists(cfg_path):
     with open(cfg_path) as f:
-        data = yaml.safe_load(f) or {}
+        data = (editor.load(f) if editor is not None else yaml.safe_load(f)) or {}
 blackbox = data.setdefault("plugins", {}).setdefault("entries", {}).setdefault("blackbox", {})
 blackbox["mode"] = mode
 blackbox.setdefault("block_severity", "critical")
-with open(cfg_path, "w") as f:
-    yaml.safe_dump(data, f, default_flow_style=False, sort_keys=False)
+with open(cfg_path, "w", encoding="utf-8") as f:
+    if editor is not None:
+        editor.dump(data, f)
+    else:
+        yaml.safe_dump(data, f, default_flow_style=False, sort_keys=False)
 '@
     $writerFile = Join-Path $env:TEMP "blackbox_mode_write.py"
     Set-Content -Path $writerFile -Value $writer -Encoding UTF8

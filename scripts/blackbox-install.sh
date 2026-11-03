@@ -2133,10 +2133,14 @@ except Exception:
     sys.exit(0)
 
 os.makedirs(os.path.dirname(cfg_path), exist_ok=True)
+# The user's config.yaml keeps its comments: Hermes's round-trip editor (0.21.7+) reads and writes
+# it back with only our keys changed (Hermes Desktop's config is ~2,400 lines, mostly comments).
+_roundtrip = getattr(yaml, "roundtrip_yaml", None)
+editor = _roundtrip() if callable(_roundtrip) else None
 data = {}
 if os.path.exists(cfg_path):
-    with open(cfg_path) as f:
-        data = yaml.safe_load(f) or {}
+    with open(cfg_path, encoding="utf-8-sig") as f:
+        data = (editor.load(f) if editor is not None else yaml.safe_load(f)) or {}
 
 plugins = data.setdefault("plugins", {})
 entries = plugins.setdefault("entries", {})
@@ -2274,8 +2278,11 @@ if blackbox.pop("sharing_default", None) is not None:
 if blackbox.get("daily_report_limit") in (0, "0", 20, "20"):
     blackbox["daily_report_limit"] = 100
     added.append("daily_report_limit")
-with open(cfg_path, "w") as f:
-    yaml.safe_dump(data, f, default_flow_style=False, sort_keys=False)
+with open(cfg_path, "w", encoding="utf-8") as f:
+    if editor is not None:
+        editor.dump(data, f)
+    else:
+        yaml.safe_dump(data, f, default_flow_style=False, sort_keys=False)
 if added:
     print("  configured: " + ", ".join(added))
 else:
@@ -2334,16 +2341,22 @@ except Exception:
 if mode not in ("audit", "block", ""):
     sys.exit(1)
 os.makedirs(os.path.dirname(cfg_path), exist_ok=True)
+# Comments kept, as in enable_and_configure (Hermes's round-trip editor when it ships one).
+_roundtrip = getattr(yaml, "roundtrip_yaml", None)
+editor = _roundtrip() if callable(_roundtrip) else None
 data = {}
 if os.path.exists(cfg_path):
     with open(cfg_path, encoding="utf-8-sig") as f:
-        data = yaml.safe_load(f) or {}
+        data = (editor.load(f) if editor is not None else yaml.safe_load(f)) or {}
 blackbox = data.setdefault("plugins", {}).setdefault("entries", {}).setdefault("blackbox", {})
 saved = str(blackbox.get("mode") or "").lower()
 blackbox["mode"] = mode or (saved if saved in ("audit", "block") else "audit")
 blackbox.setdefault("block_severity", "critical")
 with open(cfg_path, "w", encoding="utf-8") as f:
-    yaml.safe_dump(data, f, default_flow_style=False, sort_keys=False)
+    if editor is not None:
+        editor.dump(data, f)
+    else:
+        yaml.safe_dump(data, f, default_flow_style=False, sort_keys=False)
 print(blackbox["mode"])
 PYEOF
 }
