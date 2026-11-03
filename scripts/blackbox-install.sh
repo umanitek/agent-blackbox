@@ -711,12 +711,14 @@ require_docker_for_blazegraph() {
     ok "Docker engine is ready for Blazegraph"
 }
 
-# Whether Docker can run the Blazegraph store: running now, or Docker Desktop installed on a Mac
-# (require_docker_for_blazegraph starts it).
+# Whether Docker can run the Blazegraph store RIGHT NOW (its engine answers). Setup-only mode
+# (`hermes blackbox setup`) uses this to pick its store: a Docker Desktop that is installed but not
+# running is not started for it, because Oxigraph needs no Docker and opening someone's Docker
+# Desktop is not ours to do (2026-11-03: setup on Hermes Desktop launched it and waited 120 s).
+# The Windows installer's setup-only check already asked only "is it running".
 blackbox_docker_available() {
     command -v docker >/dev/null 2>&1 || return 1
-    docker info >/dev/null 2>&1 && return 0
-    [ "$OS" = "macos" ] && { [ -d "/Applications/Docker.app" ] || [ -d "$HOME/Applications/Docker.app" ]; }
+    docker info >/dev/null 2>&1
 }
 
 use_blackbox_oxigraph() {

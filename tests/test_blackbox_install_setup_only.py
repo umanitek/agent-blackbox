@@ -612,6 +612,16 @@ def test_docker_counts_as_available_only_when_it_can_run_the_store(tmp_path):
     assert _docker_available(tmp_path / "c", docker="up") == 0
 
 
+def test_setup_only_never_counts_a_stopped_docker_desktop_as_available(tmp_path):
+    """`hermes blackbox setup` on Hermes Desktop (2026-11-03) found Docker Desktop installed but not
+    running, launched it and waited 120 s, although setup-only mode uses Oxigraph when Docker is
+    absent. Installed is not running: only an engine that answers now counts."""
+    home = tmp_path / "mac"
+    (home / "Applications" / "Docker.app").mkdir(parents=True)
+    assert _docker_available(home, docker="down", os_name="macos") != 0
+    assert _docker_available(tmp_path / "up", docker="up", os_name="macos") == 0
+
+
 def test_catalog_setup_without_docker_uses_oxigraph_and_curl_keeps_asking():
     """Founder decision 2026-10-14: `hermes blackbox setup` picks Oxigraph by itself when Docker is
     missing; the one-line installer keeps its ask-first fallback (unchanged since the first commit)."""
