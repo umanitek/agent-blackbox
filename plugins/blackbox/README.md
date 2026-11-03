@@ -582,3 +582,23 @@ compatibility and the distinction between core-cache and independent RPC evidenc
 Agent Blackbox is built by [Umanitek](https://umanitek.ai) on the OriginTrail
 Decentralized Knowledge Graph, turning collective threat intelligence into
 real-time protection for every agent. MIT License.
+
+### Experimental native public bootstrap
+
+The matching DKG candidate adds `hermes blackbox setup --store native` for a
+**fresh** default-graph profile. It verifies a public snapshot into a private
+native Blazegraph journal, then runs the normal authority, coverage and initial
+rule checks. Restart reopens the retained journal and catches up; it does not
+repeat the fresh import. Existing stores and community protection settings are
+preserved. Explicit source choices and RPC-cache opt-outs are not migrated.
+
+This needs a compatible installed DKG package, Java 11, a checksum-verified
+Blazegraph runtime and more than 18 GiB free. Released DKG 10.0.26 does not provide
+the new daemon capability. `auto` stays on the existing backend until DKG marks
+the capability eligible after the full mainnet comparison. Blackbox upgrades
+preserve an existing native profile's compatible CLI; upgrading that CLI requires
+a separately verified compatible DKG package.
+
+Startup reports incomplete while preparing data. The snapshot budget remains one
+hour; the ordinary readiness, full coverage and initial rule checks remain
+mandatory. Offline 909-asset timings are not an end-to-end mainnet speed promise.

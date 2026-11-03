@@ -8,6 +8,8 @@ name: Blackbox CI
 # One Linux runner: the Blackbox suite (tests/**/test_blackbox_*.py — the catalog
 # admission test inside it runs ``hermes plugins validate``) and the blocking
 # lints that ``scripts/check`` runs for the lint lane, judged against the base.
+# The native installer contracts also run on each supported OS inside this
+# required workflow: plugin-only routing deliberately skips the host OS suites.
 
 on:
   workflow_call:
@@ -21,6 +23,48 @@ permissions:
   contents: read
 
 jobs:
+  native-bootstrap:
+    name: Native bootstrap (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest, windows-latest]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
+        with:
+          ref: ${{ inputs.commit }}
+
+      - name: Set up locked Python and test dependencies
+        uses: ./.github/actions/setup-pm
+        with:
+          extras: '[]'
+          test-environment: 'true'
+          prune-python-cache: true
+
+      - name: Native fresh install, upgrade and authenticated startup contracts
+        shell: bash
+        run: |
+          scripts/run_tests.sh tests/scripts/install/test_native_bootstrap.py tests/scripts/install/test_native_bootstrap_writers.py -- -v --tb=short
+        env:
+          HERMES_TEST_WORKERS: '1'
+
+      - name: Parse shipped PowerShell installers
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          foreach ($file in @('scripts/blackbox-install.ps1', 'plugins/blackbox/setup/blackbox-install.ps1')) {
+            $tokens = $null
+            $parseErrors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PWD $file), [ref]$tokens, [ref]$parseErrors)
+            if ($parseErrors.Count) { throw ($parseErrors | Out-String) }
+          }
+
+      - name: Check the checkout is clean
+        uses: ./.github/actions/check-clean-worktree
+
   blackbox:
     name: Blackbox suite + lints
     runs-on: ubuntu-24.04

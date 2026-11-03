@@ -22,7 +22,7 @@
 
 param(
     [switch]$SkipDkg,
-    [ValidateSet("auto", "blazegraph", "oxigraph")]
+    [ValidateSet("auto", "blazegraph", "oxigraph", "native")]
     [string]$StoreBackend = "auto",
     [switch]$Help
 )
@@ -469,6 +469,8 @@ function Save-BlackboxDkgRuntimeFingerprint {
 }
 
 function Wait-BlackboxDkgRuntime {
+    & $script:VenvPython (Get-BlackboxHelper "blackbox-native-bootstrap.py") wait $DkgHome $DkgDaemonUrl
+    if ($LASTEXITCODE -ne 0) { return $false }
     $verifier = Get-BlackboxHelper "blackbox-dkg-runtime-fingerprint.py"
     $expectedCommit = (& $script:VenvPython $verifier commit $DkgCliDir).Trim()
     if ($LASTEXITCODE -ne 0 -or -not $expectedCommit) {
@@ -679,6 +681,7 @@ function Confirm-OxigraphFallback {
 }
 
 function Get-BlackboxStoreDescription {
+    if ($script:DkgSelectedStoreBackend -eq "native") { return "Blazegraph native verified bootstrap (DKG-managed)" }
     if ($script:DkgSelectedStoreBackend -eq "oxigraph-server") {
         return "Oxigraph (DKG-managed local server)"
     }
@@ -690,6 +693,18 @@ function Get-BlackboxStoreDescription {
 }
 
 function Initialize-BlackboxStore {
+    $nativeHelper = Get-BlackboxHelper "blackbox-native-bootstrap.py"
+    & $script:VenvPython $nativeHelper plan $DkgHome $DkgCliDir $DkgBin $ContextGraphId $DefaultContextGraphId $StoreBackend (Join-Path $HermesHome "config.yaml")
+    if ($LASTEXITCODE -eq 0) {
+        $script:DkgSelectedStoreBackend = "native"
+        $script:DkgExactBatchStreamEnabled = "1"
+        $script:DkgVmRecoveryPrefetchEnabled = "0"
+        $script:DkgStoreUrl = ""
+        $script:DkgStoreManagedByDkg = $true
+        $script:DockerRequired = $false
+        return $true
+    }
+    if ($LASTEXITCODE -ne 3) { return $false }
     $helper = Get-BlackboxHelper "blackbox-blazegraph.mjs"
     $namespace = "agent-blackbox"
     $existingBackend = ""
@@ -881,6 +896,8 @@ if cfg_path.exists():
         data = {}
 else:
     data = {}
+if (store_backend == "native" and "store" in data) or (data.get("publicSnapshotBootstrap") and store_backend != "native"):
+    raise SystemExit("Native bootstrap cannot convert an existing store; configuration was preserved")
 data.setdefault("name", "agent-blackbox")
 data["apiPort"] = api_port
 data.setdefault("listenPort", 0)
@@ -944,7 +961,16 @@ if switched and original is not None:
     if not backup_path.exists():
         shutil.copy2(cfg_path, backup_path)
     (home / ".blackbox-store-reset-pending").write_text(store_backend + "\n", encoding="utf-8")
-if store_backend == "blazegraph":
+if store_backend == "native":
+    if data.get("store"):
+        raise SystemExit("Native bootstrap cannot replace an existing store")
+    data["publicSnapshotBootstrap"] = json.loads((home / "public-bootstrap-plan.json").read_text())
+    # Start with the same profile blackbox sync uses; avoid reopening a verified journal.
+    data["syncOnConnectEnabled"] = False
+    data["syncReconcilerEnabled"] = False
+    data["vmReconcilerEnabled"] = True
+    data["vmRecoveryPrefetchEnabled"] = False
+elif store_backend == "blazegraph":
     data["store"] = {
         "backend": "blazegraph",
         "options": {"url": store_url, "managedByDkg": store_managed, "timeout": 900000},
@@ -1161,6 +1187,11 @@ exit /b %ERRORLEVEL%
 
 # ── DKG node CLI + bootstrap ────────────────────────────────────────────────
 function Install-BlackboxDkgPackage {
+    if (Test-Path (Join-Path $DkgHome "config.json")) {
+        & $script:VenvPython (Get-BlackboxHelper "blackbox-native-bootstrap.py") retain $DkgHome $DkgBin
+        if ($LASTEXITCODE -eq 0) { Write-Ok "Preserved the native journal's compatible DKG runtime"; return $true }
+        if ($LASTEXITCODE -ne 3) { return $false }
+    }
     $backupDir = ""
     $packageJson = Join-Path $DkgCliDir "node_modules\@origintrail-official\dkg\package.json"
     $npmLog = Join-Path $HermesHome "logs\blackbox-npm-install.log"
@@ -1827,17 +1858,18 @@ function ConvertTo-PsLiteral {
 }
 
 function New-BlackboxDkgLauncherLines {
-    # The node launcher's lines. Connection-time sync stays ON (it delivers
-    # context-graph authority to subscribers, KI-044); the periodic reconciler is
+    # Ordinary profiles keep connection-time authority sync (KI-044). Native
+    # checkpoints retain the managed snapshot profile. The periodic reconciler is
     # left to config.json, as in the Linux unit; the stream/prefetch switches and
     # the installer's safety limits ride along (KI-282). The graph-list projection
     # stays install-time only: with it on, the running node's listing omits the
     # verified graph and Blackbox reads it as "not subscribed".
     param([string]$NodeDir = "")
+    $syncOnConnect = if ($script:DkgSelectedStoreBackend -eq "native") { "0" } else { "1" }
     $lines = @(
         "# managed-by: agent-blackbox-installer -- starts the Blackbox DKG node at sign-in; rewritten on every install.",
         "`$env:DKG_HOME = $(ConvertTo-PsLiteral $DkgHome)",
-        "`$env:DKG_SYNC_ON_CONNECT_ENABLED = '1'",
+        "`$env:DKG_SYNC_ON_CONNECT_ENABLED = $(ConvertTo-PsLiteral $syncOnConnect)",
         "`$env:DKG_DURABLE_SYNC_ENABLED = $(ConvertTo-PsLiteral $script:DkgDurableSyncEnabled)",
         "`$env:DKG_STORE_QUEUE_LIMIT = $(ConvertTo-PsLiteral "$DkgStoreQueueLimit")",
         "`$env:DKG_EXACT_BATCH_STREAM_ENABLED = $(ConvertTo-PsLiteral "$DkgExactBatchStreamEnabled")",

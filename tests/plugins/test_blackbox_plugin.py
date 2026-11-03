@@ -454,7 +454,7 @@ def test_managed_dkg_sync_environment_honors_persisted_bootstrap_mode(
         encoding="utf-8",
     )
     cfg = config_mod.BlackboxConfig(dkg_home=str(tmp_path))
-    monkeypatch.setattr(managed_node, "_node_runtime_matches_dkg", lambda *_args: True)
+    monkeypatch.setattr(managed_node, "_managed_dkg_node_executable", lambda *_args: None)
 
     env = managed_node._dkg_sync_environment(cfg)
 

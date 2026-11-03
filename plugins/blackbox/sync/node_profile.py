@@ -83,17 +83,18 @@ def node_sync_settings(cfg: BlackboxConfig) -> dict[str, str]:
     """
     from . import native   # sibling module; lazy so the two never import-cycle
 
+    inflight, queue = process_limits.sync_slots()
     if cfg.snapshot_sync is not None:
         # The VM reconciler stays ON beside the snapshot download: its pass line
         # (``pending=N`` in daemon.log) is the only place the node states the graph's
         # size mid-sync, and the dashboard's progress bar reads it (Amos, 2026-10-28:
         # keep the percentage). Its cost to the snapshot's speed is measured on a bench.
         return {**_DKG_NATIVE_SYNC_SETTINGS,
+                "DKG_SYNC_GLOBAL_MAX_INFLIGHT": str(inflight), "DKG_SYNC_GLOBAL_QUEUE_LIMIT": str(queue),
                 "DKG_SYNC_ON_CONNECT_ENABLED": "0",
                 "DKG_EXACT_BATCH_STREAM_ENABLED": "1", "DKG_VM_RECOVERY_PREFETCH_ENABLED": "0"}
     settings = dict(_DKG_NATIVE_SYNC_SETTINGS if native.handles(cfg) else _DKG_STEADY_SYNC_SETTINGS)
     # The tables carry the ≥ 8 GB values; a smaller machine runs fewer transfers at once.
-    inflight, queue = process_limits.sync_slots()
     settings["DKG_SYNC_GLOBAL_MAX_INFLIGHT"], settings["DKG_SYNC_GLOBAL_QUEUE_LIMIT"] = str(inflight), str(queue)
     if native.handles(cfg):
         for name, default in _DKG_RECOVERY_SPEEDUPS.items():

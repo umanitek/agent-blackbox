@@ -54,7 +54,8 @@ def test_missing_scheduled_tasks_or_node_only_warns():
 
 
 @pytest.mark.skipif(PWSH is None, reason="PowerShell (pwsh) is not installed")
-def test_the_node_launcher_carries_the_steady_state_settings(tmp_path):
+@pytest.mark.parametrize('backend', ['blazegraph', 'native'])
+def test_the_node_launcher_carries_the_steady_state_settings(tmp_path, backend):
     """Run the real generator: same choices as the Linux unit — connection-time sync
     on (KI-044), stream + prefetch (KI-282), no reconciler override — and paths
     with an apostrophe stay one literal."""
@@ -70,20 +71,23 @@ $DkgStoreQueueLimit = 512
 $DkgListContextGraphsProjection = '1'
 $DkgExactBatchStreamEnabled = '1'
 $DkgVmRecoveryPrefetchEnabled = '1'
+$script:DkgSelectedStoreBackend = $env:T_BACKEND
+if ($env:T_BACKEND -eq 'native') { $DkgVmRecoveryPrefetchEnabled = '0' }
 $script:DkgNodeOptions = '--max-old-space-size=8192'
 New-BlackboxDkgLauncherLines -NodeDir $env:T_NODE_DIR
 """
     env = {**os.environ, "T_FUNCTIONS": str(functions), "T_DKG_HOME": r"C:\Users\O'Brien\agent-blackbox\.dkg",
-           "T_DKG_BIN": r"C:\Users\O'Brien\agent-blackbox\dkg\node_modules\.bin\dkg.cmd", "T_NODE_DIR": r"C:\node"}
+           "T_DKG_BIN": r"C:\Users\O'Brien\agent-blackbox\dkg\node_modules\.bin\dkg.cmd", "T_NODE_DIR": r"C:\node", "T_BACKEND": backend}
     result = subprocess.run([PWSH, "-NoProfile", "-NonInteractive", "-Command", script],
                             capture_output=True, text=True, timeout=120, env=env, check=False)
 
     assert result.returncode == 0, result.stderr
     lines = result.stdout.splitlines()
     assert "$env:DKG_HOME = 'C:\\Users\\O''Brien\\agent-blackbox\\.dkg'" in lines
-    assert "$env:DKG_SYNC_ON_CONNECT_ENABLED = '1'" in lines
+    expected = '0' if backend == 'native' else '1'
+    assert f"$env:DKG_SYNC_ON_CONNECT_ENABLED = '{expected}'" in lines
     assert "$env:DKG_EXACT_BATCH_STREAM_ENABLED = '1'" in lines
-    assert "$env:DKG_VM_RECOVERY_PREFETCH_ENABLED = '1'" in lines
+    assert f"$env:DKG_VM_RECOVERY_PREFETCH_ENABLED = '{expected}'" in lines
     assert "$env:NODE_OPTIONS = '--max-old-space-size=8192'" in lines
     assert not any("DKG_SYNC_RECONCILER_ENABLED" in line for line in lines)
     assert lines[-1] == "& 'C:\\Users\\O''Brien\\agent-blackbox\\dkg\\node_modules\\.bin\\dkg.cmd' start --foreground"
