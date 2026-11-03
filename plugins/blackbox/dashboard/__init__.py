@@ -7,6 +7,6 @@
 
 from __future__ import annotations
 
-from .command import cmd_dashboard
+from .command import cmd_dashboard, stop_running_dashboard
 
-__all__ = ["cmd_dashboard"]
+__all__ = ["cmd_dashboard", "stop_running_dashboard"]

@@ -84,6 +84,7 @@ class UninstallPlan:
     keep_logs: bool
     shim: Optional[Path]               # our `blackbox` launcher, if this machine has it
     system_units: tuple[Path, ...]     # Linux /etc/systemd/system units (need root)
+    dashboard_port: int = 9700         # where a directly started dashboard would be listening
     notes: tuple[str, ...] = field(default_factory=tuple)
 
 
@@ -111,6 +112,13 @@ def build_plan(*, purge: bool, keep_logs: bool, now: Optional[_dt.datetime] = No
     blackbox_home = constants.blackbox_home()
     notes: list[str] = []
     dkg_home: Optional[Path] = None
+    dashboard_port = 9700
+    for home in hermes_homes:
+        entry = (((yaml_files.load_yaml(home / "config.yaml").get("plugins") or {}).get("entries") or {})
+                 .get("blackbox") or {})
+        if isinstance(entry, dict) and str(entry.get("dashboard_port", "")).isdigit():
+            dashboard_port = int(entry["dashboard_port"])
+            break
     for home in hermes_homes or (constants.hermes_home(),):
         configured = _configured_dkg_home(home)
         if configured and (configured / DKG_HOME_MARKER).exists():
@@ -131,7 +139,8 @@ def build_plan(*, purge: bool, keep_logs: bool, now: Optional[_dt.datetime] = No
         system=platform.system(), hermes_homes=hermes_homes, blackbox_home=blackbox_home, dkg_home=dkg_home,
         key_files=tuple(p for p in keys if p.is_file()),
         backup_dir=None if purge else Path.home() / f"blackbox-backup-{stamp}",
-        keep_logs=keep_logs, shim=shim, system_units=system_units, notes=tuple(notes))
+        keep_logs=keep_logs, shim=shim, system_units=system_units, dashboard_port=dashboard_port,
+        notes=tuple(notes))
 
 
 def describe(plan: UninstallPlan) -> list[str]:
@@ -182,6 +191,18 @@ def _stop_services(plan: UninstallPlan, run: Runner, report: list[str]) -> None:
             run(["schtasks", "/End", "/TN", task])
             if run(["schtasks", "/Delete", "/TN", task, "/F"]) == 0:
                 report.append(f"removed scheduled task {task}")
+
+
+def _stop_dashboard_on(port: int) -> list[int]:
+    from ..dashboard import stop_running_dashboard   # dashboard's public entry
+    return stop_running_dashboard(port)
+
+
+def _stop_running_dashboard(plan: UninstallPlan, stop: Callable[[int], list[int]], report: list[str]) -> None:
+    """A dashboard setup started directly (its service takes over at the next login): stopped
+    before the data goes, or it re-creates $BLACKBOX_HOME (seen live 2026-11-03)."""
+    for pid in stop(plan.dashboard_port):
+        report.append(f"stopped Blackbox's dashboard (pid {pid})")
 
 
 def _stop_unsupervised_node(plan: UninstallPlan, report: list[str]) -> None:
@@ -267,10 +288,13 @@ def _delete_data(plan: UninstallPlan, report: list[str]) -> None:
         report.append(f"removed {plan.shim}")
 
 
-def execute(plan: UninstallPlan, *, run: Runner = _run, hermes: str = "hermes") -> list[str]:
-    """Carry out *plan*; returns what was done (and what needs root), in order."""
+def execute(plan: UninstallPlan, *, run: Runner = _run, hermes: str = "hermes",
+            stop_dashboard: Callable[[int], list[int]] = _stop_dashboard_on) -> list[str]:
+    """Carry out *plan*; returns what was done (and what needs root), in order. *run* and
+    *stop_dashboard* are the two ways it reaches running processes (tests pass fakes)."""
     report: list[str] = []
     _stop_services(plan, run, report)
+    _stop_running_dashboard(plan, stop_dashboard, report)
     _stop_unsupervised_node(plan, report)
     _back_up(plan, report)
     hermes_installed = _remove_from_agents(plan, report)

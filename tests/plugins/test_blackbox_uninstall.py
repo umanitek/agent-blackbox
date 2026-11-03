@@ -71,9 +71,14 @@ def _plan(machine: Path, *, system: str = "Darwin", **kw) -> uninstall.Uninstall
     return dataclasses.replace(plan, system=system)
 
 
-def _execute(plan: uninstall.UninstallPlan):
+def _execute(plan: uninstall.UninstallPlan, *, dashboard_pids: tuple[int, ...] = ()):
     calls: list[list[str]] = []
-    report = uninstall.execute(plan, run=lambda cmd: calls.append(list(cmd)) or 0)
+
+    def stop_dashboard(port: int) -> list[int]:
+        calls.append(["stop-dashboard", str(port), str(plan.blackbox_home.exists())])
+        return list(dashboard_pids)
+
+    report = uninstall.execute(plan, run=lambda cmd: calls.append(list(cmd)) or 0, stop_dashboard=stop_dashboard)
     return calls, report
 
 
@@ -171,3 +176,26 @@ def test_without_a_terminal_nothing_is_removed_without_yes(machine, monkeypatch,
     assert uninstall.cmd_uninstall(args) == 1
     assert (machine / ".hermes" / "blackbox").exists()
     assert "without a yes" in capsys.readouterr().out
+
+
+def test_a_dashboard_started_without_its_service_is_stopped_before_the_data_goes(machine):
+    """Live 2026-11-03: setup starts the dashboard directly; uninstall removed the service, the
+    dashboard kept running and re-created ~/.hermes/blackbox right after it was deleted."""
+    config = machine / ".hermes" / "config.yaml"
+    config.write_text(config.read_text(encoding="utf-8").replace("      mode: audit", "      mode: audit\n      dashboard_port: 9711"),
+                      encoding="utf-8")
+    plan = _plan(machine)
+    assert plan.dashboard_port == 9711
+    calls, report = _execute(plan, dashboard_pids=(4242,))
+    assert ["stop-dashboard", "9711", "True"] in calls          # asked while the data still existed
+    assert "stopped Blackbox's dashboard (pid 4242)" in report
+
+
+def test_only_a_blackbox_dashboard_on_the_port_is_stopped(monkeypatch):
+    from plugins.blackbox.dashboard import command
+    stopped: list[set[int]] = []
+    monkeypatch.setattr(command, "_listening_pids", lambda port: {11, 22})
+    monkeypatch.setattr(command, "_is_blackbox_dashboard", lambda pid: pid == 11)
+    monkeypatch.setattr(command, "_stop", lambda pids: stopped.append(set(pids)))
+    assert command.stop_running_dashboard(9700) == [11]
+    assert stopped == [{11}]                                       # 22 is someone else's: left alone
