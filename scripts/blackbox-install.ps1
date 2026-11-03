@@ -1213,15 +1213,24 @@ function Install-BlackboxDkgPackage {
     New-Item -ItemType Directory -Force -Path $DkgCliDir | Out-Null
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $npmLog) | Out-Null
     # npm 12's allow list lives in the project's package.json: merge ours in (a package an
-    # operator set to false stays denied); older npm ignores the field.
+    # operator set to false stays denied); older npm ignores the field. npm 12 keys a package
+    # installed from a local tarball by that tarball's file: spec, not its name, so the pinned
+    # tarball is allowed by its own path (as given, with forward slashes, and resolved); entries an
+    # earlier run left for its own temporary tarball are dropped (see the .sh). "-" = no tarball,
+    # because Windows PowerShell drops an empty argument to a native command.
     $allowScriptsMerge = @'
-const fs = require("fs"); const file = process.argv[1];
+const fs = require("fs"); const file = process.argv[1]; const tarball = process.argv[2] === "-" ? "" : process.argv[2];
 let pkg = {}; try { pkg = JSON.parse(fs.readFileSync(file, "utf8")); } catch (e) {}
 pkg.allowScripts = Object.assign({}, pkg.allowScripts);
-for (const name of process.argv.slice(2)) if (pkg.allowScripts[name] !== false) pkg.allowScripts[name] = true;
+for (const key of Object.keys(pkg.allowScripts)) if (/^file:.*blackbox-dkg-pack[.-]/.test(key)) delete pkg.allowScripts[key];
+const names = process.argv.slice(3);
+if (tarball) names.push("file:" + tarball, "file:" + tarball.split("\\").join("/"));
+try { if (tarball) names.push("file:" + fs.realpathSync(tarball)); } catch (e) {}
+for (const name of names) if (pkg.allowScripts[name] !== false) pkg.allowScripts[name] = true;
 fs.writeFileSync(file, JSON.stringify(pkg, null, 2) + "\n");
 '@
-    & node -e $allowScriptsMerge (Join-Path $DkgCliDir "package.json") @DkgAllowScripts
+    $tarballArg = if ($tarball) { $tarball } else { "-" }
+    & node -e $allowScriptsMerge (Join-Path $DkgCliDir "package.json") $tarballArg @DkgAllowScripts
     $installSpec = if ($tarball) { $tarball } else { $DkgPackage }
     try {
         & npm install --prefix $DkgCliDir --prefer-online $installSpec 2>&1 | Tee-Object -FilePath $npmLog | Out-Null

@@ -1864,14 +1864,22 @@ install_blackbox_dkg_package() {
     mkdir -p "$BLACKBOX_DKG_CLI_DIR"
     mkdir -p "$(dirname "$npm_log")"
     # npm 12's allow list lives in the project's package.json: merge ours in (a package an
-    # operator set to false stays denied); older npm ignores the field.
+    # operator set to false stays denied); older npm ignores the field. npm 12 keys a package
+    # installed from a local tarball by that tarball's file: spec, not by its name, so the pinned
+    # tarball is allowed by its own path, as given and with symlinks resolved (macOS temp folders
+    # sit behind /var -> /private/var). Entries an earlier run left for its own temporary tarball
+    # (blackbox-dkg-pack.*) are dropped so the file does not grow with every update.
     node -e '
-const fs = require("fs"); const file = process.argv[1];
+const fs = require("fs"); const file = process.argv[1]; const tarball = process.argv[2];
 let pkg = {}; try { pkg = JSON.parse(fs.readFileSync(file, "utf8")); } catch (e) {}
 pkg.allowScripts = Object.assign({}, pkg.allowScripts);
-for (const name of process.argv.slice(2)) if (pkg.allowScripts[name] !== false) pkg.allowScripts[name] = true;
+for (const key of Object.keys(pkg.allowScripts)) if (/^file:.*blackbox-dkg-pack[.-]/.test(key)) delete pkg.allowScripts[key];
+const names = process.argv.slice(3);
+if (tarball) names.push("file:" + tarball);
+try { if (tarball) names.push("file:" + fs.realpathSync(tarball)); } catch (e) {}
+for (const name of names) if (pkg.allowScripts[name] !== false) pkg.allowScripts[name] = true;
 fs.writeFileSync(file, JSON.stringify(pkg, null, 2) + "\n");
-' "$BLACKBOX_DKG_CLI_DIR/package.json" "${BLACKBOX_DKG_ALLOW_SCRIPTS[@]}"
+' "$BLACKBOX_DKG_CLI_DIR/package.json" "$tarball" "${BLACKBOX_DKG_ALLOW_SCRIPTS[@]}"
     local install_spec="$BLACKBOX_DKG_PACKAGE"
     [ -n "$tarball" ] && install_spec="$tarball"
     npm install --prefix "$BLACKBOX_DKG_CLI_DIR" --prefer-online "$install_spec" >"$npm_log" 2>&1
