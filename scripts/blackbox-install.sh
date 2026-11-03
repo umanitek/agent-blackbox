@@ -3668,7 +3668,13 @@ install_into_existing_hermes() {
     if [ "$SKIP_DKG" = true ]; then
         warn "--skip-dkg is not used when installing into an existing Hermes; setup installs Blackbox's DKG node."
     fi
-    if "$hermes" plugins list 2>/dev/null | grep -qE '(^|[^[:alnum:]_-])blackbox([^[:alnum:]_-]|$)'; then
+    # The list is captured first: `hermes plugins list | grep -q` under pipefail fails when grep
+    # stops early and Hermes, still printing its table, dies of SIGPIPE (2026-11-03, Hermes
+    # Desktop). The plugin's folder counts too: it is what Hermes's "already exists" refusal checks.
+    local listed=""
+    listed="$("$hermes" plugins list 2>/dev/null || true)"
+    if [ -d "$HERMES_HOME/plugins/blackbox" ] ||
+        grep -qE '(^|[^[:alnum:]_-])blackbox([^[:alnum:]_-]|$)' <<<"$listed"; then
         ok "The Blackbox plugin is already installed in this Hermes"
         step "Updating it to the version the Hermes plugin catalog lists ..."
         "$hermes" plugins update blackbox || warn "The plugin update did not finish; setup continues with the installed version."

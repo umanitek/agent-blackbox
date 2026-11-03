@@ -1959,7 +1959,8 @@ function Install-IntoExistingHermes([string]$Hermes) {
     Write-Step "Blackbox installs into this Hermes as a plugin; no second Hermes is installed and your hermes command is not changed."
     if ($SkipDkg) { Write-Warn2 "-SkipDkg is not used when installing into an existing Hermes; setup installs Blackbox's DKG node." }
     $installed = @(& $Hermes plugins list 2>$null) | Where-Object { $_ -match '(^|[^\w-])blackbox([^\w-]|$)' }
-    if ($installed) {
+    # The plugin's folder counts too: it is what Hermes's "already exists" refusal checks (see the .sh).
+    if ($installed -or (Test-Path (Join-Path $HermesHome "plugins\blackbox"))) {
         Write-Ok "The Blackbox plugin is already installed in this Hermes"
         Write-Step "Updating it to the version the Hermes plugin catalog lists ..."
         & $Hermes plugins update blackbox

@@ -43,7 +43,13 @@ def _fake_hermes(tmp_path: Path, *, install_dir: Path | None, plugins_list: str 
     hermes.write_text(f"""#!/bin/sh
 if [ "$1" = --version ]; then printf '%s\\n' {shlex.quote(version)} {shlex.quote(where)}; exit 0; fi
 echo "$*" >> {shlex.quote(str(calls))}
-if [ "$1 $2" = "plugins list" ]; then printf '%s\\n' {shlex.quote(plugins_list)}; exit 0; fi
+if [ "$1 $2" = "plugins list" ]; then
+  # A real Hermes prints a long table: enough to fill a pipe, so an early-exiting grep -q
+  # makes it die of SIGPIPE (what broke the first live run under pipefail).
+  printf '%s\\n' {shlex.quote(plugins_list)}
+  i=0; while [ $i -lt 4000 ]; do echo "│ other-plugin-$i │ enabled │ 1.0.0 │ a description │ bundled │"; i=$((i+1)); done
+  exit 0
+fi
 if [ "$1 $2" = "plugins install" ]; then exit {0 if install_ok else 1}; fi
 exit 0
 """, encoding="utf-8")
@@ -71,6 +77,7 @@ HOME={shlex.quote(str(tmp_path / "home"))}
 PATH={shlex.quote(str(tmp_path / "home" / ".local" / "bin"))}:/usr/bin:/bin
 BLACKBOX_DKG_STORE_BACKEND=auto
 SKIP_DKG=false
+HERMES_HOME={shlex.quote(str(tmp_path / "home" / ".hermes"))}
 {env}
 {call}
 """
@@ -137,6 +144,17 @@ def test_an_installed_plugin_is_updated_to_the_catalog_pin_and_the_store_choice_
                   env="BLACKBOX_DKG_STORE_BACKEND=oxigraph")
     assert result.returncode == 0, result.stdout + result.stderr
     assert _calls(tmp_path) == ["plugins list", "plugins update blackbox", "blackbox setup --store oxigraph"]
+
+
+@pytest.mark.parametrize("bash", BASHES)
+def test_a_plugin_folder_left_by_an_earlier_run_is_updated_not_reinstalled(tmp_path, bash):
+    """Live run 2026-11-03: an earlier, rolled-back setup left ~/.hermes/plugins/blackbox, and
+    `hermes plugins install` refused with "Plugin 'blackbox' already exists"."""
+    hermes = _fake_hermes(tmp_path, install_dir=_stock_hermes_dir(tmp_path))
+    (tmp_path / "home" / ".hermes" / "plugins" / "blackbox").mkdir(parents=True)
+    result = _run(tmp_path, bash, f"install_into_existing_hermes {shlex.quote(str(hermes))}")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert _calls(tmp_path) == ["plugins list", "plugins update blackbox", "blackbox setup"]
 
 
 @pytest.mark.parametrize("bash", BASHES)
