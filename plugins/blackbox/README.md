@@ -54,6 +54,10 @@ hermes plugins install blackbox
 hermes blackbox setup
 ```
 
+The one-line install below does these two steps for you when it finds a Hermes it did not
+install (Hermes Desktop, or Hermes's own installer): Blackbox goes into that Hermes, and no
+second Hermes is installed. `BLACKBOX_USE_EXISTING_HERMES=0` keeps the standalone install.
+
 `hermes blackbox setup` runs the same installer as the one-line install below,
 inside the Hermes you already have: it installs Blackbox's DKG node (a pinned,
 checksum-verified release), joins both threat graphs, protects the Hermes home it

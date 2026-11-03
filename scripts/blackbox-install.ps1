@@ -1911,11 +1911,69 @@ function Register-BlackboxStartupTasks {
     }
 }
 
+# ── A Hermes that is already installed (Hermes Desktop, Hermes's own installer) ─────────────────
+# Mirrors existing_foreign_hermes / install_into_existing_hermes in the .sh (see there for the
+# story): another Hermes gets Blackbox as a plugin from the Hermes catalog and `hermes blackbox
+# setup`; no second Hermes is installed. Our own Agent Blackbox checkouts keep the standalone path.
+# BLACKBOX_USE_EXISTING_HERMES=0 keeps the standalone install.
+function Test-RunsFromBlackboxCheckout {
+    $scriptDir = Split-Path -Parent $PSCommandPath
+    if (-not $scriptDir) { return $false }
+    $d = Split-Path -Parent $scriptDir
+    return ((Test-Path "$d\pyproject.toml") -and (Test-Path "$d\plugins\blackbox"))
+}
+
+function Find-ExistingForeignHermes {
+    if ($env:BLACKBOX_USE_EXISTING_HERMES -eq "0") { return $null }
+    $cmd = Get-Command hermes -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $cmd) { return $null }
+    $hermes = $cmd.Source
+    $line = @(& $hermes --version 2>$null) | Where-Object { $_ -match '^Install directory:\s*\S' } | Select-Object -First 1
+    # Hermes did not say where it is installed: whose it is cannot be told, so nothing is decided.
+    if (-not $line) { return $null }
+    $dir = ($line -replace '^Install directory:\s*', '').Trim()
+    if (-not (Test-Path $dir -PathType Container)) { return $null }
+    if (Test-Path (Join-Path $dir "plugins\blackbox\plugin.yaml")) { return $null }   # ours
+    return $hermes
+}
+
+function Install-IntoExistingHermes([string]$Hermes) {
+    $version = @(& $Hermes --version 2>$null) | Select-Object -First 1
+    Write-Heading "Using your Hermes"
+    Write-Ok "Found $(if ($version) { $version } else { 'Hermes' }) ($Hermes)"
+    Write-Step "Blackbox installs into this Hermes as a plugin; no second Hermes is installed and your hermes command is not changed."
+    if ($SkipDkg) { Write-Warn2 "-SkipDkg is not used when installing into an existing Hermes; setup installs Blackbox's DKG node." }
+    $installed = @(& $Hermes plugins list 2>$null) | Where-Object { $_ -match '(^|[^\w-])blackbox([^\w-]|$)' }
+    if ($installed) {
+        Write-Ok "The Blackbox plugin is already installed in this Hermes"
+        Write-Step "Updating it to the version the Hermes plugin catalog lists ..."
+        & $Hermes plugins update blackbox
+        if ($LASTEXITCODE -ne 0) { Write-Warn2 "The plugin update did not finish; setup continues with the installed version." }
+    } else {
+        Write-Step "Installing the Blackbox plugin from the Hermes plugin catalog ..."
+        & $Hermes plugins install blackbox --yes-deps --enable
+        if ($LASTEXITCODE -ne 0) {
+            Write-Err2 "Hermes could not install the Blackbox plugin (its reason is above)."
+            Write-Step "Update Hermes (hermes update), then run this installer again."
+            exit 1
+        }
+    }
+    $setupArgs = @("blackbox", "setup")
+    if ($StoreBackend -ne "auto") { $setupArgs += @("--store", $StoreBackend) }
+    Write-Step "Running: hermes $($setupArgs -join ' ')"
+    & $Hermes @setupArgs
+    exit $LASTEXITCODE
+}
+
 # ── Main ────────────────────────────────────────────────────────────────────
 function Main {
     Write-Banner
     Write-Heading "Checking your system"
     Write-Ok "Detected Windows ($env:PROCESSOR_ARCHITECTURE)"
+    if (-not $SetupOnly -and -not (Test-RunsFromBlackboxCheckout)) {
+        $existingHermes = Find-ExistingForeignHermes
+        if ($existingHermes) { Install-IntoExistingHermes $existingHermes }
+    }
     if ($SetupOnly) {
         Test-NodeJs
         Use-RunningHermes

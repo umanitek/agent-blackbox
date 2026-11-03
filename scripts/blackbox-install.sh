@@ -3616,10 +3616,74 @@ CONSOLE_UNIT
     step "  then, as the tailnet admin:  tailscale serve --bg http://127.0.0.1:$port   (never Funnel)"
 }
 
+# ── A Hermes that is already installed (Hermes Desktop, Hermes's own installer) ─────────────────
+# The one-line install clones Agent Blackbox (a Hermes fork) and builds its Hermes into HERMES_HOME.
+# On a machine that already runs another Hermes that would put a second, possibly older Hermes into
+# the same ~/.hermes and fight over the `hermes` launcher (found 2026-11-03 with Hermes Desktop
+# 0.22.6). There, Blackbox is what Hermes's own plugin system is for: install it from the Hermes
+# plugin catalog into that Hermes (the catalog's reviewed pin, Hermes's trust model) and run
+# `hermes blackbox setup` — this same installer in setup-only mode. Our own earlier installs (an
+# Agent Blackbox checkout) are recognised and keep updating as before.
+# BLACKBOX_USE_EXISTING_HERMES=0 keeps the standalone install.
+
+# Prints the Hermes launcher to use when another Hermes is installed here; fails otherwise.
+existing_foreign_hermes() {
+    [ "${BLACKBOX_USE_EXISTING_HERMES:-1}" = 0 ] && return 1
+    local hermes="" dir=""
+    if [ -x "$HOME/.local/bin/hermes" ]; then
+        hermes="$HOME/.local/bin/hermes"
+    else
+        hermes="$(command -v hermes 2>/dev/null || true)"
+    fi
+    [ -n "$hermes" ] || return 1
+    dir="$("$hermes" --version 2>/dev/null | sed -n 's/^Install directory: *//p' | head -n 1)"
+    # Hermes did not say where it is installed: we cannot tell whose it is, so nothing is decided
+    # on a guess and the standalone install runs as before (LES-011).
+    [ -n "$dir" ] && [ -d "$dir" ] || return 1
+    [ -f "$dir/plugins/blackbox/plugin.yaml" ] && return 1   # an Agent Blackbox checkout: ours
+    printf '%s\n' "$hermes"
+}
+
+# Installs Blackbox into the Hermes that is already here and hands over to its setup; never returns.
+install_into_existing_hermes() {
+    local hermes="$1"
+    local version
+    version="$("$hermes" --version 2>/dev/null | head -n 1)"
+    heading "Using your Hermes"
+    ok "Found ${version:-Hermes} ($hermes)"
+    step "Blackbox installs into this Hermes as a plugin; no second Hermes is installed and your hermes command is not changed."
+    if [ "$SKIP_DKG" = true ]; then
+        warn "--skip-dkg is not used when installing into an existing Hermes; setup installs Blackbox's DKG node."
+    fi
+    if "$hermes" plugins list 2>/dev/null | grep -qE '(^|[^[:alnum:]_-])blackbox([^[:alnum:]_-]|$)'; then
+        ok "The Blackbox plugin is already installed in this Hermes"
+        step "Updating it to the version the Hermes plugin catalog lists ..."
+        "$hermes" plugins update blackbox || warn "The plugin update did not finish; setup continues with the installed version."
+    else
+        step "Installing the Blackbox plugin from the Hermes plugin catalog ..."
+        if ! "$hermes" plugins install blackbox --yes-deps --enable; then
+            err "Hermes could not install the Blackbox plugin (its reason is above)."
+            step "Update Hermes (hermes update), then run this installer again."
+            exit 1
+        fi
+    fi
+    local args=()
+    [ "$BLACKBOX_DKG_STORE_BACKEND" = auto ] || args+=(--store "$BLACKBOX_DKG_STORE_BACKEND")
+    # ${args[@]+...}: macOS bash 3.2 treats an empty array as unset under `set -u`.
+    step "Running: hermes blackbox setup ${args[*]+${args[*]}}"
+    exec "$hermes" blackbox setup ${args[@]+"${args[@]}"}
+}
+
 main() {
     banner
     heading "Checking your system"
     detect_os
+    if [ "$BLACKBOX_SETUP_ONLY" != true ] && ! install_uses_local_checkout; then
+        local existing_hermes=""
+        if existing_hermes="$(existing_foreign_hermes)"; then
+            install_into_existing_hermes "$existing_hermes"
+        fi
+    fi
     install_record_begin
     preflight_install
     if [ "$BLACKBOX_SETUP_ONLY" = true ]; then
