@@ -1,0 +1,173 @@
+"""`blackbox uninstall` removes Blackbox from a machine and nothing else (2026-11-03).
+
+Until now there was no way out but `detach`. The machine below is the Hermes Desktop install
+proven live that day: Desktop's Hermes home with a commented config and Hermes's own record of
+the plugin, Blackbox's node (marker, wallet and identity files, pid file) and reporter key, our
+`blackbox` launcher beside Desktop's `hermes`, a Foreman-style node in ~/.dkg that must survive,
+and the two login services. Service commands are recorded, never run.
+"""
+
+from __future__ import annotations
+
+import argparse
+import dataclasses
+import json
+import os
+import stat
+from pathlib import Path
+
+import pytest
+
+from plugins.blackbox.setup import uninstall
+
+CONFIG = """\
+# Hermes Agent CLI Configuration
+model:
+  default: nous/hermes-4   # the model
+plugins:
+  enabled:
+    - blackbox
+    - browser
+  entries:
+    blackbox:
+      mode: audit
+      dkg_home: {dkg_home}
+"""
+
+
+@pytest.fixture()
+def machine(tmp_path, monkeypatch):
+    home = tmp_path / "user"
+    hermes = home / ".hermes"
+    bb = hermes / "blackbox"
+    dkg = bb / "node" / ".dkg"
+    for d in (hermes / "plugins" / "blackbox", dkg, home / ".local" / "bin", home / ".dkg",
+              home / "Library" / "LaunchAgents"):
+        d.mkdir(parents=True, exist_ok=True)
+    (hermes / "config.yaml").write_text(CONFIG.format(dkg_home=dkg), encoding="utf-8")
+    (hermes / "plugins" / ".install-metadata.json").write_text(json.dumps({"blackbox": {"pinned": True}}), encoding="utf-8")
+    (dkg / uninstall.DKG_HOME_MARKER).write_text("{}", encoding="utf-8")
+    for name in uninstall.NODE_KEY_FILES:
+        (dkg / name).write_text(f"secret {name}", encoding="utf-8")
+    (dkg / "daemon.pid").write_text("2147483646", encoding="utf-8")       # no such process
+    (bb / "reporter_key.pem").write_text("reporter", encoding="utf-8")
+    (bb / "sharing_consent.json").write_text("{}", encoding="utf-8")
+    (bb / "audit.jsonl").write_text('{"event": 1}\n', encoding="utf-8")
+    (home / ".local" / "bin" / "blackbox").write_text(f"#!/bin/sh\n# {uninstall.SHIM_MARKER}\n", encoding="utf-8")
+    (home / ".local" / "bin" / "hermes").write_text("#!/bin/sh\nexec desktop-hermes\n", encoding="utf-8")
+    (home / ".dkg" / "config.json").write_text("foreman", encoding="utf-8")
+    for label in uninstall.LAUNCHD_LABELS:
+        (home / "Library" / "LaunchAgents" / f"{label}.plist").write_text("<plist/>", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("HERMES_HOME", str(hermes))
+    monkeypatch.delenv("BLACKBOX_HOME", raising=False)
+    monkeypatch.delenv("BLACKBOX_DKG_HOME", raising=False)
+    return home
+
+
+def _plan(machine: Path, *, system: str = "Darwin", **kw) -> uninstall.UninstallPlan:
+    plan = uninstall.build_plan(homes=[machine / ".hermes"], purge=kw.pop("purge", False),
+                                keep_logs=kw.pop("keep_logs", False))
+    return dataclasses.replace(plan, system=system)
+
+
+def _execute(plan: uninstall.UninstallPlan):
+    calls: list[list[str]] = []
+    report = uninstall.execute(plan, run=lambda cmd: calls.append(list(cmd)) or 0)
+    return calls, report
+
+
+def test_the_plan_says_what_goes_and_what_stays(machine):
+    lines = "\n".join(uninstall.describe(_plan(machine)))
+    assert "remove Blackbox from the Hermes in" in lines and "blackbox-backup-" in lines
+    assert str(machine / ".dkg") not in lines
+    assert "Your Hermes itself, other DKG nodes and Docker are not touched." in lines
+
+
+def test_uninstall_removes_blackbox_and_keeps_the_keys(machine):
+    plan = _plan(machine)
+    calls, _ = _execute(plan)
+
+    hermes = machine / ".hermes"
+    assert not (hermes / "blackbox").exists()                                  # data + node + graph
+    assert not (machine / ".local" / "bin" / "blackbox").exists()
+    assert not list((machine / "Library" / "LaunchAgents").glob("ai.umanitek.*"))
+    assert [c[:2] for c in calls[:2]] == [["launchctl", "bootout"]] * 2
+    assert calls[-1][-3:] == ["plugins", "remove", "blackbox"]                # the running code goes last
+    config = (hermes / "config.yaml").read_text(encoding="utf-8")
+    assert "blackbox" not in config and "# the model" in config and "browser" in config
+    # kept, private, and explained
+    keys = plan.backup_dir / "keys"
+    assert {p.name for p in keys.iterdir()} == {f"node-{n}" for n in uninstall.NODE_KEY_FILES} | {
+        "reporter_key.pem", "sharing_consent.json"}
+    assert stat.S_IMODE(os.stat(keys / "node-wallets.key").st_mode) == 0o600
+    assert stat.S_IMODE(os.stat(plan.backup_dir).st_mode) == 0o700
+    assert "To use the same node identity again" in (plan.backup_dir / "README.txt").read_text(encoding="utf-8")
+    # not ours, not touched
+    assert (machine / ".local" / "bin" / "hermes").exists()
+    assert (machine / ".dkg" / "config.json").read_text(encoding="utf-8") == "foreman"
+
+
+def test_purge_leaves_no_keys_anywhere(machine):
+    plan = _plan(machine, purge=True)
+    _execute(plan)
+    assert plan.backup_dir is None
+    assert not list(machine.glob("blackbox-backup-*"))
+    assert not (machine / ".hermes" / "blackbox").exists()
+
+
+def test_keep_logs_puts_the_audit_record_in_the_backup(machine):
+    plan = _plan(machine, keep_logs=True)
+    _execute(plan)
+    assert (plan.backup_dir / "audit-record" / "audit.jsonl").read_text(encoding="utf-8") == '{"event": 1}\n'
+
+
+def test_a_dkg_home_without_blackboxs_marker_is_never_deleted(machine):
+    other = machine / "elsewhere" / ".dkg"
+    other.mkdir(parents=True)
+    (other / "config.json").write_text("someone else's node", encoding="utf-8")
+    config = machine / ".hermes" / "config.yaml"
+    config.write_text(CONFIG.format(dkg_home=other), encoding="utf-8")
+    plan = _plan(machine)
+    assert plan.dkg_home != other and any("no Blackbox marker" in n for n in plan.notes)
+    _execute(plan)
+    assert (other / "config.json").exists()
+
+
+def test_a_blackbox_command_we_did_not_write_is_left_alone(machine):
+    shim = machine / ".local" / "bin" / "blackbox"
+    shim.write_text("#!/bin/sh\necho mine\n", encoding="utf-8")
+    plan = _plan(machine)
+    assert plan.shim is None
+    _execute(plan)
+    assert shim.exists()
+
+
+def test_linux_user_services_go_and_system_units_are_named_with_their_root_commands(machine, tmp_path):
+    user_units = machine / ".config" / "systemd" / "user"
+    user_units.mkdir(parents=True)
+    for unit in uninstall.SYSTEMD_UNITS:
+        (user_units / unit).write_text("[Unit]", encoding="utf-8")
+    system_unit = tmp_path / "etc" / "blackbox-dkg.service"
+    system_unit.parent.mkdir()
+    system_unit.write_text("[Unit]", encoding="utf-8")
+    plan = dataclasses.replace(_plan(machine, system="Linux"), system_units=(system_unit,))
+    calls, report = _execute(plan)
+    assert not list(user_units.iterdir())
+    assert ["systemctl", "--user", "disable", "--now", "blackbox-dkg.service"] in calls
+    assert any(r.startswith("needs root: sudo systemctl disable --now blackbox-dkg.service") for r in report)
+    assert system_unit.exists()
+
+
+def test_windows_tasks_are_ended_and_deleted(machine):
+    calls, _ = _execute(_plan(machine, system="Windows"))
+    for task in uninstall.WINDOWS_TASKS:
+        assert ["schtasks", "/Delete", "/TN", task, "/F"] in calls
+
+
+def test_without_a_terminal_nothing_is_removed_without_yes(machine, monkeypatch, capsys):
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    args = argparse.Namespace(purge=False, keep_logs=False, dry_run=False, yes=False)
+    assert uninstall.cmd_uninstall(args) == 1
+    assert (machine / ".hermes" / "blackbox").exists()
+    assert "without a yes" in capsys.readouterr().out

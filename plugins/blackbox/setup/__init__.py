@@ -107,7 +107,10 @@ def cmd_setup(args: argparse.Namespace) -> int:
 
 
 def add_setup_parser(sub: argparse._SubParsersAction) -> None:
-    """Register ``blackbox setup`` on the `blackbox` command's sub-parsers."""
+    """Register ``blackbox setup`` (and its reverse, ``blackbox uninstall``) on the `blackbox`
+    command's sub-parsers."""
+    from .uninstall import add_uninstall_parser
+    add_uninstall_parser(sub)
     parser = sub.add_parser("setup", help="Finish a plugin-catalog install: DKG node, threat graphs, agents, dashboard")
     parser.add_argument("--store", choices=STORES, default=None,
                         help="the node's store: auto (default), blazegraph (Docker) or oxigraph (no Docker)")
