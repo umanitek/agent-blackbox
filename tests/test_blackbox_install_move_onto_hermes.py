@@ -180,3 +180,27 @@ def test_the_windows_hand_over_carries_the_node_across_and_retires_the_checkout(
     assert "if ($setupExit -eq 0) {" in hand_over and "Remove-Item $ourCheckout -Recurse -Force" in hand_over
     shipped = INSTALL_SH.parents[1] / "plugins" / "blackbox" / "setup" / "blackbox-install.ps1"
     assert shipped.read_bytes() == INSTALL_SH.with_suffix(".ps1").read_bytes()
+
+
+def test_a_move_that_stopped_half_way_finishes_as_a_move(mac):
+    """Live 2026-11-04: the first move's setup rolled back (the 90 s node wait, KI-457) after the
+    hermes command already ran Desktop's Hermes and the node had moved; a re-run must still retire
+    our checkout, so with our checkout present the foreign-Hermes path goes through the move."""
+    main = _body("main")
+    foreign = main.index('if existing_hermes="$(existing_foreign_hermes)"; then')
+    branch = main[foreign:main.index("elif", foreign)]
+    assert 'if [ -f "$BLACKBOX_INSTALL_ROOT/plugins/blackbox/plugin.yaml" ]; then' in branch
+    assert branch.index('move_onto_existing_hermes "$existing_hermes" "$BLACKBOX_INSTALL_ROOT"') < \
+        branch.index('install_into_existing_hermes "$existing_hermes"')
+    # and the move itself tolerates what is already done: node moved, launcher already switched
+    desktop_bin = mac["desktop"] / ".hermes" / "bin" / "hermes"
+    node = mac["hermes_home"] / "blackbox" / "node" / ".dkg"
+    node.parent.mkdir(parents=True)
+    (mac["ours"] / ".dkg").rename(node)
+    (mac["ours"] / ".dkg").mkdir()
+    (mac["ours"] / ".dkg" / "launchd-errors.log").write_text("old service log", encoding="utf-8")
+    mac["launcher"].write_text(f'#!/bin/sh\nexec "{desktop_bin}" "$@"\n', encoding="utf-8")
+    result = _run(mac, f"move_onto_existing_hermes {shlex.quote(str(desktop_bin))} {shlex.quote(str(mac['ours']))}")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (node / "wallets.key").read_text(encoding="utf-8") == "node key"
+    assert not mac["ours"].exists()

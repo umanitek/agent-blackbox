@@ -3831,6 +3831,11 @@ main() {
         local existing_hermes=""
         local ours_dir=""
         if existing_hermes="$(existing_foreign_hermes)"; then
+            # A move that stopped half-way (the hermes command already runs the other Hermes, our
+            # checkout is still here) finishes as a move, so our checkout is retired after setup.
+            if [ -f "$BLACKBOX_INSTALL_ROOT/plugins/blackbox/plugin.yaml" ]; then
+                move_onto_existing_hermes "$existing_hermes" "$BLACKBOX_INSTALL_ROOT"
+            fi
             install_into_existing_hermes "$existing_hermes"
         elif existing_hermes="$(other_hermes_in_home)" && ours_dir="$(our_installed_hermes_dir)"; then
             move_onto_existing_hermes "$existing_hermes" "$ours_dir"
