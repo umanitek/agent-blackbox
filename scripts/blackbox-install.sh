@@ -1276,6 +1276,7 @@ resolve_repo() {
     else
         step "Cloning $REPO_URL → $REPO_DIR"
         git clone --depth 1 --branch "$REPO_BRANCH" "$REPO_URL" "$REPO_DIR"
+        BLACKBOX_FRESH_CLONE=true
     fi
     if ! blackbox_repo_is_valid "$REPO_DIR"; then
         err "$REPO_DIR is not a complete Agent Blackbox Python project."
@@ -3658,8 +3659,10 @@ existing_foreign_hermes() {
 }
 
 # Installs Blackbox into the Hermes that is already here and hands over to its setup; never returns.
+# Installs Blackbox into the Hermes that is already here and hands over to its setup (never
+# returns); with a second argument "return", runs setup and returns its status instead.
 install_into_existing_hermes() {
-    local hermes="$1"
+    local hermes="$1" then="${2:-exec}"
     local version
     version="$("$hermes" --version 2>/dev/null | head -n 1)"
     heading "Using your Hermes"
@@ -3690,7 +3693,127 @@ install_into_existing_hermes() {
     [ "$BLACKBOX_DKG_STORE_BACKEND" = auto ] || args+=(--store "$BLACKBOX_DKG_STORE_BACKEND")
     # ${args[@]+...}: macOS bash 3.2 treats an empty array as unset under `set -u`.
     step "Running: hermes blackbox setup ${args[*]+${args[*]}}"
+    if [ "$then" = return ]; then
+        "$hermes" blackbox setup ${args[@]+"${args[@]}"}
+        return
+    fi
     exec "$hermes" blackbox setup ${args[@]+"${args[@]}"}
+}
+
+# Hermes names a checkout's environment record $HERMES_HOME/installs/<key>, key = the first 16 hex
+# of sha256(the checkout's resolved path) (pm/environments.py install_key).
+hermes_install_key() {
+    local resolved
+    resolved="$(cd "$1" 2>/dev/null && pwd -P)" || return 1
+    # LC_ALL=C: macOS's shasum is a Perl script that panics on a locale it cannot set.
+    if command -v sha256sum >/dev/null 2>&1; then
+        printf '%s' "$resolved" | sha256sum | cut -c1-16
+    else
+        printf '%s' "$resolved" | LC_ALL=C shasum -a 256 | cut -c1-16
+    fi
+}
+
+# A fresh clone at the path of a checkout that is gone inherits that checkout's environment record
+# (same path, same key), and Hermes refuses to reconcile it ("recorded dependency lock is missing;
+# refusing to drop plugins"), so Hermes cannot start and the install rolls back (KI-467). The
+# record belongs to nothing that exists any more: it is removed so the clone builds its own.
+drop_stale_hermes_install_record() {
+    [ "${BLACKBOX_FRESH_CLONE:-false}" = true ] && [ -n "$REPO_DIR" ] || return 0
+    local key record
+    key="$(hermes_install_key "$REPO_DIR")" || return 0
+    record="$HERMES_HOME/installs/$key"
+    [ -d "$record" ] || return 0
+    step "Removing the environment record an earlier checkout at $REPO_DIR left ($record), so this fresh checkout builds its own."
+    rm -rf "$record"
+}
+
+# Another Hermes in this Hermes home: where Hermes Desktop and Hermes's own installer put theirs.
+# Prints its launcher, or fails (none, opted out, or it is an Agent Blackbox checkout).
+other_hermes_in_home() {
+    [ "${BLACKBOX_USE_EXISTING_HERMES:-1}" = 0 ] && return 1
+    local dir="$HERMES_HOME/hermes-agent"
+    [ -x "$dir/.hermes/bin/hermes" ] || return 1
+    [ -f "$dir/plugins/blackbox/plugin.yaml" ] && return 1
+    printf '%s\n' "$dir/.hermes/bin/hermes"
+}
+
+# The Hermes this installer put here earlier (an Agent Blackbox checkout behind ~/.local/bin/hermes).
+our_installed_hermes_dir() {
+    local launcher="$HOME/.local/bin/hermes" dir=""
+    [ -x "$launcher" ] || return 1
+    dir="$("$launcher" --version 2>/dev/null | sed -n 's/^Install directory: *//p' | head -n 1)"
+    [ -n "$dir" ] && [ -f "$dir/plugins/blackbox/plugin.yaml" ] || return 1
+    printf '%s\n' "$dir"
+}
+
+# Stops Blackbox's dashboard: through its supervisor, then one setup started directly on its port —
+# only a process whose own command line ends in "blackbox dashboard" (the plugin's ownership rule,
+# dashboard/command.py); anything else on the port is left alone.
+stop_blackbox_dashboard() {
+    local pid=""
+    case "$(blackbox_dashboard_supervisor)" in
+        systemd) systemctl stop blackbox-dashboard >/dev/null 2>&1 || true ;;
+        systemd-user) systemctl --user stop blackbox-dashboard >/dev/null 2>&1 || true ;;
+        launchd) launchctl bootout "gui/$(id -u)/$BLACKBOX_DASHBOARD_LAUNCHD_LABEL" >/dev/null 2>&1 || true ;;
+    esac
+    command -v lsof >/dev/null 2>&1 || return 0
+    for pid in $(lsof -tiTCP:"${BLACKBOX_DASHBOARD_PORT:-9700}" -sTCP:LISTEN 2>/dev/null); do
+        case "$(ps -o command= -p "$pid" 2>/dev/null)" in
+            *" blackbox dashboard"|*" blackbox dashboard "*) kill -TERM "$pid" 2>/dev/null || true ;;
+        esac
+    done
+}
+
+# Blackbox was installed first (with its own Hermes) and the user then installed Hermes Desktop:
+# two Hermes programs now share one ~/.hermes, the `hermes` command runs ours and the app runs
+# Desktop's (found 2026-11-03). Blackbox moves onto that Hermes, so there is one Hermes again:
+# the node (its identity, keys and synced graph) moves to where `hermes blackbox setup` keeps it,
+# the hermes command runs that Hermes, Blackbox is installed into it and set up, and only then is
+# the Hermes this installer put here retired (its checkout and its environment record). Never returns.
+move_onto_existing_hermes() {
+    local other="$1" ours="$2"
+    local node_home="$HERMES_HOME/blackbox/node/.dkg" launcher="$HOME/.local/bin/hermes" pid="" waited=0
+    heading "Moving Blackbox onto your Hermes"
+    ok "Found $("$other" --version 2>/dev/null | head -n 1) ($other) beside the Hermes Blackbox installed ($ours)"
+    step "Blackbox moves into that Hermes and the Hermes it installed is retired; your node, its graph and keys move with it."
+    stop_blackbox_dashboard
+    blackbox_dkg_control stop >/dev/null 2>&1 || true
+    [ -f "$ours/.dkg/daemon.pid" ] && pid="$(tr -dc '0-9' <"$ours/.dkg/daemon.pid")"
+    while [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && [ "$waited" -lt 60 ]; do
+        sleep 1
+        waited=$((waited + 1))
+    done
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+        err "Blackbox's DKG node did not stop, so it was not moved; nothing else changed."
+        exit 1
+    fi
+    if [ -d "$ours/.dkg" ] && [ ! -e "$node_home" ]; then
+        mkdir -p "$(dirname "$node_home")"
+        mv "$ours/.dkg" "$node_home"
+        ok "Moved Blackbox's DKG node to $node_home"
+    fi
+    # The copy `blackbox attach` placed is Blackbox's own; Hermes's plugin install wants the folder free.
+    if [ -d "$HERMES_HOME/plugins/blackbox" ] &&
+        ! grep -q '"blackbox"' "$HERMES_HOME/plugins/.install-metadata.json" 2>/dev/null; then
+        rm -rf "$HERMES_HOME/plugins/blackbox"
+    fi
+    # The hermes command runs that Hermes: the same launcher Hermes publishes for itself.
+    if grep -qF "$ours/" "$launcher" 2>/dev/null; then
+        printf '#!/bin/sh\nexec "%s" "$@"\n' "$other" > "$launcher"
+        chmod 755 "$launcher"
+        ok "The hermes command now runs $other"
+    fi
+    if ! install_into_existing_hermes "$other" return; then
+        err "Setting Blackbox up in that Hermes did not finish; the Hermes Blackbox installed is kept at $ours."
+        step "Fix the reason above, then run this installer again: it picks up where this stopped."
+        exit 1
+    fi
+    local key=""
+    key="$(hermes_install_key "$ours" 2>/dev/null || true)"
+    rm -rf "$ours"
+    [ -n "$key" ] && rm -rf "$HERMES_HOME/installs/$key"
+    ok "Retired the Hermes Blackbox installed ($ours); there is one Hermes again, with Blackbox in it."
+    exit 0
 }
 
 main() {
@@ -3699,8 +3822,11 @@ main() {
     detect_os
     if [ "$BLACKBOX_SETUP_ONLY" != true ] && ! install_uses_local_checkout; then
         local existing_hermes=""
+        local ours_dir=""
         if existing_hermes="$(existing_foreign_hermes)"; then
             install_into_existing_hermes "$existing_hermes"
+        elif existing_hermes="$(other_hermes_in_home)" && ours_dir="$(our_installed_hermes_dir)"; then
+            move_onto_existing_hermes "$existing_hermes" "$ours_dir"
         fi
     fi
     install_record_begin
@@ -3714,6 +3840,7 @@ main() {
         ensure_node
 
         resolve_repo
+        drop_stale_hermes_install_record
         release_old_hermes_link
         install_python_env
         link_hermes

@@ -25,7 +25,7 @@ import pytest
 
 INSTALL_SH = Path(__file__).resolve().parents[1] / "scripts" / "blackbox-install.sh"
 
-HERMES_STEPS = ["check_git", "check_python", "resolve_repo", "release_old_hermes_link", "install_python_env", "link_hermes",
+HERMES_STEPS = ["check_git", "check_python", "resolve_repo", "drop_stale_hermes_install_record", "release_old_hermes_link", "install_python_env", "link_hermes",
                 "refresh_blackbox_plugin_copy", "run_hermes_setup"]
 
 
@@ -57,7 +57,8 @@ main
 def test_curl_install_runs_every_step_in_the_same_order_as_before():
     steps = _main_steps(setup_only=False)
 
-    assert steps[:12] == ["banner", "detect_os", "install_record_begin", "preflight_install", "check_git", "check_python", "ensure_node", "resolve_repo",
+    assert steps[:13] == ["banner", "detect_os", "install_record_begin", "preflight_install", "check_git", "check_python", "ensure_node", "resolve_repo",
+                          "drop_stale_hermes_install_record",   # KI-467: a fresh clone drops a gone checkout's record
                           "release_old_hermes_link", "install_python_env", "link_hermes", "refresh_blackbox_plugin_copy"]
     assert steps.index("run_hermes_setup") < steps.index("install_dkg")
 
@@ -188,7 +189,8 @@ def test_no_step_after_hermes_reads_the_checkout_directly():
               and guard not in lines[index - 1]]   # the line under a non-empty check is safe
     allowed = ("REPO_DIR=", "${BLACKBOX_HELPER_DIR:-$REPO_DIR/scripts}", "${BLACKBOX_PLUGIN_DIR:-$REPO_DIR/plugins/blackbox}",
                "${BLACKBOX_PLUGIN_DIR:-$REPO_DIR}", '[ -n "$REPO_DIR" ]')
-    hermes_steps = "".join(_body(step) for step in ("resolve_repo", "blackbox_head_in_branch", "install_python_env",
+    hermes_steps = "".join(_body(step) for step in ("resolve_repo", "drop_stale_hermes_install_record",
+                                                    "blackbox_head_in_branch", "install_python_env",
                                                     "use_hermes_selected_venv", "ensure_web_extra", "minimal_python_env",
                                                     "refresh_blackbox_plugin_copy", "reuse_existing_hermes_api_keys"))
     # blackbox_head_in_branch is part of resolve_repo's update (KI-417): it may read the checkout

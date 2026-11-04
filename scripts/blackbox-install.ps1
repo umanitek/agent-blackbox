@@ -1958,6 +1958,26 @@ function Install-IntoExistingHermes([string]$Hermes) {
     Write-Ok "Found $(if ($version) { $version } else { 'Hermes' }) ($Hermes)"
     Write-Step "Blackbox installs into this Hermes as a plugin; no second Hermes is installed and your hermes command is not changed."
     if ($SkipDkg) { Write-Warn2 "-SkipDkg is not used when installing into an existing Hermes; setup installs Blackbox's DKG node." }
+    # Blackbox was installed first, with its own Hermes, and this Hermes came later (see the .sh,
+    # move_onto_existing_hermes): the node (identity, keys, graph) moves to where `hermes blackbox
+    # setup` keeps it, and the checkout this installer made is retired once setup succeeds.
+    $ourCheckout = $null
+    $nodeHome = Join-Path $HermesHome "blackbox\node\.dkg"
+    if ((Test-Path (Join-Path $DefaultRepoDir "plugins\blackbox\plugin.yaml")) -and (Test-Path (Join-Path $DkgHome "config.json"))) {
+        $ourCheckout = $DefaultRepoDir
+        foreach ($task in @("Agent Blackbox dashboard", $DkgTaskName)) { & schtasks /End /TN $task 2>$null | Out-Null }
+        Start-Sleep -Seconds 3
+        if (-not (Test-Path $nodeHome)) {
+            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $nodeHome) | Out-Null
+            Move-Item -Path $DkgHome -Destination $nodeHome
+            Write-Ok "Moved Blackbox's DKG node to $nodeHome"
+        }
+        $copied = Join-Path $HermesHome "plugins\blackbox"
+        $metadata = Join-Path $HermesHome "plugins\.install-metadata.json"
+        if ((Test-Path $copied) -and -not ((Test-Path $metadata) -and (Select-String -Path $metadata -SimpleMatch '"blackbox"' -Quiet))) {
+            Remove-Item $copied -Recurse -Force
+        }
+    }
     $installed = @(& $Hermes plugins list 2>$null) | Where-Object { $_ -match '(^|[^\w-])blackbox([^\w-]|$)' }
     # The plugin's folder counts too: it is what Hermes's "already exists" refusal checks (see the .sh).
     if ($installed -or (Test-Path (Join-Path $HermesHome "plugins\blackbox"))) {
@@ -1978,7 +1998,16 @@ function Install-IntoExistingHermes([string]$Hermes) {
     if ($StoreBackend -ne "auto") { $setupArgs += @("--store", $StoreBackend) }
     Write-Step "Running: hermes $($setupArgs -join ' ')"
     & $Hermes @setupArgs
-    exit $LASTEXITCODE
+    $setupExit = $LASTEXITCODE
+    if ($ourCheckout) {
+        if ($setupExit -eq 0) {
+            Remove-Item $ourCheckout -Recurse -Force -ErrorAction SilentlyContinue
+            Write-Ok "Retired the Hermes Blackbox installed ($ourCheckout); there is one Hermes again, with Blackbox in it."
+        } else {
+            Write-Err2 "Setting Blackbox up in that Hermes did not finish; the Hermes Blackbox installed is kept at $ourCheckout."
+        }
+    }
+    exit $setupExit
 }
 
 # ── Main ────────────────────────────────────────────────────────────────────
