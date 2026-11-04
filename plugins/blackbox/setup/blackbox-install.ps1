@@ -1969,7 +1969,12 @@ function Install-IntoExistingHermes([string]$Hermes) {
     $nodeHome = Join-Path $HermesHome "blackbox\node\.dkg"
     if ((Test-Path (Join-Path $DefaultRepoDir "plugins\blackbox\plugin.yaml")) -and (Test-Path (Join-Path $DkgHome "config.json"))) {
         $ourCheckout = $DefaultRepoDir
-        foreach ($task in @("Agent Blackbox dashboard", $DkgTaskName)) { & schtasks /End /TN $task 2>$null | Out-Null }
+        # Stopped AND removed: these tasks start the node from the old folder ("No config found");
+        # the setup that follows registers fresh ones (see retire_services_pointing_into in the .sh).
+        foreach ($task in @("Agent Blackbox dashboard", $DkgTaskName)) {
+            & schtasks /End /TN $task 2>$null | Out-Null
+            & schtasks /Delete /TN $task /F 2>$null | Out-Null
+        }
         Start-Sleep -Seconds 3
         if (-not (Test-Path $nodeHome)) {
             New-Item -ItemType Directory -Force -Path (Split-Path -Parent $nodeHome) | Out-Null

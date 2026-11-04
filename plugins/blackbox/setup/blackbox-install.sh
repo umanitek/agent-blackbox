@@ -3777,6 +3777,35 @@ stop_blackbox_dashboard() {
 # the node (its identity, keys and synced graph) moves to where `hermes blackbox setup` keeps it,
 # the hermes command runs that Hermes, Blackbox is installed into it and set up, and only then is
 # the Hermes this installer put here retired (its checkout and its environment record). Never returns.
+# Service files of the Blackbox being retired: they start the node and dashboard from its old
+# folder, so a later start "through the service" would run the old home ("No config found").
+# Only files naming that folder are removed; the setup that follows registers fresh ones.
+retire_services_pointing_into() {
+    local folder="$1" label name unit
+    for label in $BLACKBOX_LAUNCHD_LABELS; do
+        unit="$HOME/Library/LaunchAgents/$label.plist"
+        grep -qF "$folder/" "$unit" 2>/dev/null || continue
+        command -v launchctl >/dev/null 2>&1 && launchctl bootout "gui/$(id -u)/$label" >/dev/null 2>&1
+        rm -f "$unit"
+    done
+    command -v systemctl >/dev/null 2>&1 || return 0
+    for name in $BLACKBOX_SERVICE_NAMES; do
+        unit="$HOME/.config/systemd/user/$name.service"
+        if grep -qF "$folder/" "$unit" 2>/dev/null; then
+            systemctl --user disable --now "$name" >/dev/null 2>&1
+            rm -f "$unit"
+        fi
+        unit="$BLACKBOX_SYSTEMD_DIR/$name.service"
+        if grep -qF "$folder/" "$unit" 2>/dev/null && [ -w "$BLACKBOX_SYSTEMD_DIR" ]; then
+            systemctl disable --now "$name" >/dev/null 2>&1
+            rm -f "$unit"
+        fi
+    done
+    systemctl --user daemon-reload >/dev/null 2>&1
+    [ -w "$BLACKBOX_SYSTEMD_DIR" ] && systemctl daemon-reload >/dev/null 2>&1
+    return 0
+}
+
 move_onto_existing_hermes() {
     local other="$1" ours="$2"
     local node_home="$HERMES_HOME/blackbox/node/.dkg" launcher="$HOME/.local/bin/hermes" pid="" waited=0
@@ -3799,6 +3828,7 @@ move_onto_existing_hermes() {
         mv "$ours/.dkg" "$node_home"
         ok "Moved Blackbox's DKG node to $node_home"
     fi
+    retire_services_pointing_into "$ours"
     # The copy `blackbox attach` placed is Blackbox's own; Hermes's plugin install wants the folder free.
     if [ -d "$HERMES_HOME/plugins/blackbox" ] &&
         ! grep -q '"blackbox"' "$HERMES_HOME/plugins/.install-metadata.json" 2>/dev/null; then

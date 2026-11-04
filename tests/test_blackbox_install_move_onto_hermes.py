@@ -27,7 +27,7 @@ INSTALL_SH = Path(__file__).resolve().parents[1] / "scripts" / "blackbox-install
 TEXT = INSTALL_SH.read_text(encoding="utf-8")
 FUNCTIONS = ("install_into_existing_hermes", "hermes_install_key", "drop_stale_hermes_install_record",
              "other_hermes_in_home", "our_installed_hermes_dir", "stop_blackbox_dashboard",
-             "move_onto_existing_hermes")
+             "retire_services_pointing_into", "move_onto_existing_hermes")
 
 
 def _body(name: str) -> str:
@@ -77,7 +77,7 @@ def mac(tmp_path):
 def _run(mac: dict, call: str, *, extra: str = "") -> subprocess.CompletedProcess:
     fake_bin = mac["tmp"] / "fakebin"
     fake_bin.mkdir(exist_ok=True)
-    for tool in ("lsof", "ps"):
+    for tool in ("lsof", "ps", "launchctl", "systemctl"):
         if not (fake_bin / tool).exists():
             (fake_bin / tool).write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
             (fake_bin / tool).chmod(0o755)
@@ -93,6 +93,9 @@ HERMES_HOME={shlex.quote(str(mac['hermes_home']))}
 PATH={shlex.quote(str(fake_bin))}:/usr/bin:/bin
 BLACKBOX_DKG_STORE_BACKEND=auto
 SKIP_DKG=false
+BLACKBOX_LAUNCHD_LABELS="ai.umanitek.blackbox-dkg ai.umanitek.blackbox-dashboard"
+BLACKBOX_SERVICE_NAMES="blackbox-dkg blackbox-dashboard"
+BLACKBOX_SYSTEMD_DIR={shlex.quote(str(mac['tmp'] / 'etc-systemd'))}
 {extra}
 {call}
 """
@@ -177,6 +180,8 @@ def test_the_windows_hand_over_carries_the_node_across_and_retires_the_checkout(
     hand_over = ps1[ps1.index("function Install-IntoExistingHermes"):ps1.index("function Main {")]
     assert 'Move-Item -Path $DkgHome -Destination $nodeHome' in hand_over
     assert hand_over.index("Move-Item -Path $DkgHome") < hand_over.index("& $Hermes plugins")
+    # the old scheduled tasks start the node from the old folder: removed, not only stopped
+    assert hand_over.index("& schtasks /Delete /TN $task /F") < hand_over.index("& $Hermes plugins")
     assert "if ($setupExit -eq 0) {" in hand_over and "Remove-Item $ourCheckout -Recurse -Force" in hand_over
     shipped = INSTALL_SH.parents[1] / "plugins" / "blackbox" / "setup" / "blackbox-install.ps1"
     assert shipped.read_bytes() == INSTALL_SH.with_suffix(".ps1").read_bytes()
@@ -204,3 +209,22 @@ def test_a_move_that_stopped_half_way_finishes_as_a_move(mac):
     assert result.returncode == 0, result.stdout + result.stderr
     assert (node / "wallets.key").read_text(encoding="utf-8") == "node key"
     assert not mac["ours"].exists()
+
+
+def test_the_retired_blackboxs_services_go_with_it(mac):
+    """Live 2026-11-04: the old node LaunchAgent still started `dkg` with DKG_HOME in our checkout,
+    so the setup's start "through the service" ran an empty home ("No config found") and the move
+    rolled back after 300 s. The move removes service files naming our folder, and only those."""
+    agents = mac["home"] / "Library" / "LaunchAgents"
+    agents.mkdir(parents=True)
+    old_node = agents / "ai.umanitek.blackbox-dkg.plist"
+    old_node.write_text(f"<string>{mac['ours']}/.dkg</string>", encoding="utf-8")
+    elsewhere = agents / "ai.umanitek.blackbox-dashboard.plist"
+    elsewhere.write_text(f"<string>{mac['hermes_home']}/blackbox</string>", encoding="utf-8")
+    desktop_bin = mac["desktop"] / ".hermes" / "bin" / "hermes"
+    result = _run(mac, f"move_onto_existing_hermes {shlex.quote(str(desktop_bin))} {shlex.quote(str(mac['ours']))}")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not old_node.exists()
+    assert elsewhere.exists()
+    move = _body("move_onto_existing_hermes")
+    assert move.index('retire_services_pointing_into "$ours"') < move.index('install_into_existing_hermes "$other" return')
