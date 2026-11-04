@@ -540,6 +540,9 @@ def test_managed_dkg_restart_waits_for_draining_worker_before_start(tmp_path, mo
     monkeypatch.setattr(managed_node, "_dkg_sync_environment", lambda _cfg: {})
     monkeypatch.setattr(managed_node.subprocess, "run", run)
     monkeypatch.setattr(managed_node.psutil, "Process", process)
+    # No service runs this node (the restart runs `dkg` itself); without the stub the lookup reads
+    # the machine's real LaunchAgent, which leads into the real ~/.hermes on a Mac (KI-465).
+    monkeypatch.setattr(managed_node.node_service, "registered", lambda _cfg: None)
     monkeypatch.setattr(sync_command, "DkgClient", Client)
     monkeypatch.setattr(managed_node, "DkgClient", Client)
     monkeypatch.setattr(sync_command.time, "sleep", sleeps.append)
