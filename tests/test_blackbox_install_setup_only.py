@@ -25,7 +25,7 @@ import pytest
 
 INSTALL_SH = Path(__file__).resolve().parents[1] / "scripts" / "blackbox-install.sh"
 
-HERMES_STEPS = ["check_git", "check_python", "resolve_repo", "release_old_hermes_link", "install_python_env", "link_hermes",
+HERMES_STEPS = ["check_git", "check_python", "resolve_repo", "drop_stale_hermes_install_record", "release_old_hermes_link", "install_python_env", "link_hermes",
                 "refresh_blackbox_plugin_copy", "run_hermes_setup"]
 
 
@@ -57,7 +57,8 @@ main
 def test_curl_install_runs_every_step_in_the_same_order_as_before():
     steps = _main_steps(setup_only=False)
 
-    assert steps[:12] == ["banner", "detect_os", "install_record_begin", "preflight_install", "check_git", "check_python", "ensure_node", "resolve_repo",
+    assert steps[:13] == ["banner", "detect_os", "install_record_begin", "preflight_install", "check_git", "check_python", "ensure_node", "resolve_repo",
+                          "drop_stale_hermes_install_record",   # KI-467: a fresh clone drops a gone checkout's record
                           "release_old_hermes_link", "install_python_env", "link_hermes", "refresh_blackbox_plugin_copy"]
     assert steps.index("run_hermes_setup") < steps.index("install_dkg")
 
@@ -188,7 +189,8 @@ def test_no_step_after_hermes_reads_the_checkout_directly():
               and guard not in lines[index - 1]]   # the line under a non-empty check is safe
     allowed = ("REPO_DIR=", "${BLACKBOX_HELPER_DIR:-$REPO_DIR/scripts}", "${BLACKBOX_PLUGIN_DIR:-$REPO_DIR/plugins/blackbox}",
                "${BLACKBOX_PLUGIN_DIR:-$REPO_DIR}", '[ -n "$REPO_DIR" ]')
-    hermes_steps = "".join(_body(step) for step in ("resolve_repo", "blackbox_head_in_branch", "install_python_env",
+    hermes_steps = "".join(_body(step) for step in ("resolve_repo", "drop_stale_hermes_install_record",
+                                                    "blackbox_head_in_branch", "install_python_env",
                                                     "use_hermes_selected_venv", "ensure_web_extra", "minimal_python_env",
                                                     "refresh_blackbox_plugin_copy", "reuse_existing_hermes_api_keys"))
     # blackbox_head_in_branch is part of resolve_repo's update (KI-417): it may read the checkout
@@ -350,8 +352,12 @@ def test_windows_keeps_sharing_on_and_pins_the_dkg_checksum():
     assert "& npm rebuild --prefix $DkgCliDir better-sqlite3" in _ps1_function("Install-BlackboxDkgPackage")
 
 
-def _install_with_npm(tmp_path: Path, *, npm_output: str, existing_package_json: str | None = None):
-    """install_blackbox_dkg_package with a stub npm that prints *npm_output* and succeeds."""
+def _install_with_npm(tmp_path: Path, *, npm_output: str, existing_package_json: str | None = None,
+                      tarball: Path | None = None):
+    """install_blackbox_dkg_package with a stub npm that prints *npm_output* and succeeds.
+
+    With *tarball*, the install takes the pinned path (as every real install does): the checksum
+    step is stubbed to hand over that file, the way fetch_pinned_dkg_tarball does."""
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     cli_dir = tmp_path / "dkg"
@@ -374,7 +380,8 @@ HERMES_HOME={shlex.quote(str(tmp_path / "home"))}
 BLACKBOX_DKG_CLI_DIR={shlex.quote(str(cli_dir))}
 BLACKBOX_DKG_BIN={shlex.quote(str(cli_dir / "missing-dkg"))}
 BLACKBOX_DKG_PACKAGE=@origintrail-official/dkg@10.0.23
-BLACKBOX_DKG_INTEGRITY=unpinned
+BLACKBOX_DKG_INTEGRITY={"sha512-pinned" if tarball else "unpinned"}
+fetch_pinned_dkg_tarball() {{ printf '%s\\n' {shlex.quote(str(tarball or ""))}; }}
 install_blackbox_dkg_package
 """
     result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=False)
@@ -393,6 +400,46 @@ def test_npm_12_is_told_which_install_scripts_the_dkg_node_needs(tmp_path):
     data = _json.loads(package_json.read_text(encoding="utf-8"))
     assert data["allowScripts"] == {"better-sqlite3": False, "@origintrail-official/dkg": True, "@openuidev/lang-core": True}
     assert data["x"] == 1   # everything else in the file is kept
+
+
+def test_npm_12_allows_the_pinned_tarball_by_its_own_path(tmp_path):
+    """npm 12 keys a package installed from a local tarball by its file: spec, not its name, so the
+    name entry alone left the DKG node's install scripts blocked and the node unconfigured:
+    `hermes blackbox setup` on Hermes Desktop (its bundled npm 12.0.2) rolled back on 2026-11-03.
+    The tarball is allowed by its path as given and with symlinks resolved (macOS /var), and an
+    entry an earlier run left for its own temporary tarball is dropped. FIX-0129 regressed by
+    5ffe28dc79 (pinned tarball installs), whose tests ran only the unpinned path."""
+    import json as _json
+    if not shutil.which("node"):
+        pytest.skip("Node.js is not installed")
+    real_dir = tmp_path / "real"
+    (real_dir / "blackbox-dkg-pack.new").mkdir(parents=True)
+    tarball_file = real_dir / "blackbox-dkg-pack.new" / "origintrail-official-dkg-10.0.23.tgz"
+    tarball_file.write_bytes(b"tgz")
+    linked = tmp_path / "linked"
+    linked.symlink_to(real_dir)                   # the macOS /var -> /private/var shape
+    tarball = linked / "blackbox-dkg-pack.new" / tarball_file.name
+    earlier = ('{"allowScripts": {"file:/old/blackbox-dkg-pack.old/origintrail-official-dkg-10.0.22.tgz": true,'
+               ' "file:/mine.tgz": true}}')
+    result, package_json = _install_with_npm(tmp_path, npm_output="added 1 package",
+                                             existing_package_json=earlier, tarball=tarball)
+
+    allowed = _json.loads(package_json.read_text(encoding="utf-8"))["allowScripts"]
+    assert allowed[f"file:{tarball}"] is True
+    assert allowed[f"file:{tarball_file.resolve()}"] is True
+    assert "file:/old/blackbox-dkg-pack.old/origintrail-official-dkg-10.0.22.tgz" not in allowed
+    assert allowed["file:/mine.tgz"] is True       # an entry the operator added is kept
+    assert allowed["@origintrail-official/dkg"] is True
+    assert "npm blocked install scripts" not in result.stdout
+
+
+def test_the_windows_installer_allows_the_pinned_tarball_by_its_own_path_too():
+    """The .ps1 mirrors the .sh (LES-029): the tarball's path goes to the allowScripts merge, with a
+    "-" placeholder because Windows PowerShell drops an empty native argument."""
+    ps1 = INSTALL_SH.with_suffix(".ps1").read_text(encoding="utf-8")
+    assert '$tarballArg = if ($tarball) { $tarball } else { "-" }' in ps1
+    assert "& node -e $allowScriptsMerge (Join-Path $DkgCliDir \"package.json\") $tarballArg @DkgAllowScripts" in ps1
+    assert "/^file:.*blackbox-dkg-pack[.-]/" in ps1
 
 
 def test_a_blocked_install_script_stops_the_install_with_the_package_named(tmp_path):
@@ -565,6 +612,16 @@ def test_docker_counts_as_available_only_when_it_can_run_the_store(tmp_path):
     assert _docker_available(tmp_path / "a", docker=None) != 0
     assert _docker_available(tmp_path / "b", docker="down") != 0
     assert _docker_available(tmp_path / "c", docker="up") == 0
+
+
+def test_setup_only_never_counts_a_stopped_docker_desktop_as_available(tmp_path):
+    """`hermes blackbox setup` on Hermes Desktop (2026-11-03) found Docker Desktop installed but not
+    running, launched it and waited 120 s, although setup-only mode uses Oxigraph when Docker is
+    absent. Installed is not running: only an engine that answers now counts."""
+    home = tmp_path / "mac"
+    (home / "Applications" / "Docker.app").mkdir(parents=True)
+    assert _docker_available(home, docker="down", os_name="macos") != 0
+    assert _docker_available(tmp_path / "up", docker="up", os_name="macos") == 0
 
 
 def test_catalog_setup_without_docker_uses_oxigraph_and_curl_keeps_asking():

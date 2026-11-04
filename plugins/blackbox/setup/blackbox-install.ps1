@@ -70,6 +70,9 @@ $DkgStoreUrlExplicit = [bool]$env:BLACKBOX_DKG_STORE_URL
 $DkgPort     = if ($env:BLACKBOX_DKG_PORT)    { [int]$env:BLACKBOX_DKG_PORT } else { 9320 }
 $DkgStorePort = if ($env:BLACKBOX_DKG_STORE_PORT) { [int]$env:BLACKBOX_DKG_STORE_PORT } else { 9999 }
 $DkgStoreUrl = if ($env:BLACKBOX_DKG_STORE_URL) { $env:BLACKBOX_DKG_STORE_URL } else { "" }
+# How long a restarted DKG node may take to answer again: a node holding the whole verified graph
+# spends ~100 s reopening its store, so a fixed 90 s failed every update of a synced install (KI-457).
+$DkgRuntimeWaitSeconds = if ($env:BLACKBOX_DKG_RUNTIME_WAIT_SECONDS) { [int]$env:BLACKBOX_DKG_RUNTIME_WAIT_SECONDS } else { 300 }
 $DkgStoreManagedByDkg = $false
 $script:DkgStoreNamespace = "agent-blackbox"
 $script:DkgSelectedStoreBackend = ""
@@ -476,10 +479,11 @@ function Wait-BlackboxDkgRuntime {
         Write-Warn2 "Could not resolve the published DKG build commit."
         return $false
     }
-    $null = & $script:VenvPython $verifier wait $DkgDaemonUrl $expectedCommit 90
+    Write-Step "Waiting for the DKG node to answer (up to $($DkgRuntimeWaitSeconds)s; a synced node takes about 2 minutes) ..."
+    $null = & $script:VenvPython $verifier wait $DkgDaemonUrl $expectedCommit $DkgRuntimeWaitSeconds
     if ($LASTEXITCODE -ne 0) {
         $script:InstallIncomplete = $true
-        Write-Warn2 "The DKG daemon did not activate npm build $($expectedCommit.Substring(0, 12))."
+        Write-Warn2 "The DKG daemon did not activate npm build $($expectedCommit.Substring(0, 12)) within $($DkgRuntimeWaitSeconds)s."
         return $false
     }
     Write-Ok "DKG daemon is ready on npm build $($expectedCommit.Substring(0, 12))"
@@ -1213,15 +1217,24 @@ function Install-BlackboxDkgPackage {
     New-Item -ItemType Directory -Force -Path $DkgCliDir | Out-Null
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $npmLog) | Out-Null
     # npm 12's allow list lives in the project's package.json: merge ours in (a package an
-    # operator set to false stays denied); older npm ignores the field.
+    # operator set to false stays denied); older npm ignores the field. npm 12 keys a package
+    # installed from a local tarball by that tarball's file: spec, not its name, so the pinned
+    # tarball is allowed by its own path (as given, with forward slashes, and resolved); entries an
+    # earlier run left for its own temporary tarball are dropped (see the .sh). "-" = no tarball,
+    # because Windows PowerShell drops an empty argument to a native command.
     $allowScriptsMerge = @'
-const fs = require("fs"); const file = process.argv[1];
+const fs = require("fs"); const file = process.argv[1]; const tarball = process.argv[2] === "-" ? "" : process.argv[2];
 let pkg = {}; try { pkg = JSON.parse(fs.readFileSync(file, "utf8")); } catch (e) {}
 pkg.allowScripts = Object.assign({}, pkg.allowScripts);
-for (const name of process.argv.slice(2)) if (pkg.allowScripts[name] !== false) pkg.allowScripts[name] = true;
+for (const key of Object.keys(pkg.allowScripts)) if (/^file:.*blackbox-dkg-pack[.-]/.test(key)) delete pkg.allowScripts[key];
+const names = process.argv.slice(3);
+if (tarball) names.push("file:" + tarball, "file:" + tarball.split("\\").join("/"));
+try { if (tarball) names.push("file:" + fs.realpathSync(tarball)); } catch (e) {}
+for (const name of names) if (pkg.allowScripts[name] !== false) pkg.allowScripts[name] = true;
 fs.writeFileSync(file, JSON.stringify(pkg, null, 2) + "\n");
 '@
-    & node -e $allowScriptsMerge (Join-Path $DkgCliDir "package.json") @DkgAllowScripts
+    $tarballArg = if ($tarball) { $tarball } else { "-" }
+    & node -e $allowScriptsMerge (Join-Path $DkgCliDir "package.json") $tarballArg @DkgAllowScripts
     $installSpec = if ($tarball) { $tarball } else { $DkgPackage }
     try {
         & npm install --prefix $DkgCliDir --prefer-online $installSpec 2>&1 | Tee-Object -FilePath $npmLog | Out-Null
@@ -1461,10 +1474,13 @@ except Exception:
     print("  (PyYAML unavailable - skipping config update; run 'blackbox status' to configure)")
     sys.exit(0)
 os.makedirs(os.path.dirname(cfg_path), exist_ok=True)
+# The user's config.yaml keeps its comments (Hermes's round-trip editor when it ships one; see the .sh).
+_roundtrip = getattr(yaml, "roundtrip_yaml", None)
+editor = _roundtrip() if callable(_roundtrip) else None
 data = {}
 if os.path.exists(cfg_path):
     with open(cfg_path) as f:
-        data = yaml.safe_load(f) or {}
+        data = (editor.load(f) if editor is not None else yaml.safe_load(f)) or {}
 plugins = data.setdefault("plugins", {})
 entries = plugins.setdefault("entries", {})
 blackbox = entries.setdefault("blackbox", {})
@@ -1594,8 +1610,11 @@ if blackbox.pop("sharing_default", None) is not None:
 if blackbox.get("daily_report_limit") in (0, "0", 20, "20"):
     blackbox["daily_report_limit"] = 100
     added.append("daily_report_limit")
-with open(cfg_path, "w") as f:
-    yaml.safe_dump(data, f, default_flow_style=False, sort_keys=False)
+with open(cfg_path, "w", encoding="utf-8") as f:
+    if editor is not None:
+        editor.dump(data, f)
+    else:
+        yaml.safe_dump(data, f, default_flow_style=False, sort_keys=False)
 print("  configured: " + ", ".join(added) if added else "  already configured - no changes")
 '@
     $configFile = Join-Path $env:TEMP "blackbox_configure.py"
@@ -1623,10 +1642,13 @@ try:
 except Exception:
     print("audit")
     sys.exit(0)
+# The user's config.yaml keeps its comments (Hermes's round-trip editor when it ships one; see the .sh).
+_roundtrip = getattr(yaml, "roundtrip_yaml", None)
+editor = _roundtrip() if callable(_roundtrip) else None
 data = {}
 if os.path.exists(cfg_path):
     with open(cfg_path) as f:
-        data = yaml.safe_load(f) or {}
+        data = (editor.load(f) if editor is not None else yaml.safe_load(f)) or {}
 mode = data.get("plugins", {}).get("entries", {}).get("blackbox", {}).get("mode", "audit")
 mode = str(mode).lower()
 print(mode if mode in ("audit", "block") else "audit")
@@ -1658,15 +1680,21 @@ except Exception:
 if mode not in ("audit", "block"):
     sys.exit(1)
 os.makedirs(os.path.dirname(cfg_path), exist_ok=True)
+# The user's config.yaml keeps its comments (Hermes's round-trip editor when it ships one; see the .sh).
+_roundtrip = getattr(yaml, "roundtrip_yaml", None)
+editor = _roundtrip() if callable(_roundtrip) else None
 data = {}
 if os.path.exists(cfg_path):
     with open(cfg_path) as f:
-        data = yaml.safe_load(f) or {}
+        data = (editor.load(f) if editor is not None else yaml.safe_load(f)) or {}
 blackbox = data.setdefault("plugins", {}).setdefault("entries", {}).setdefault("blackbox", {})
 blackbox["mode"] = mode
 blackbox.setdefault("block_severity", "critical")
-with open(cfg_path, "w") as f:
-    yaml.safe_dump(data, f, default_flow_style=False, sort_keys=False)
+with open(cfg_path, "w", encoding="utf-8") as f:
+    if editor is not None:
+        editor.dump(data, f)
+    else:
+        yaml.safe_dump(data, f, default_flow_style=False, sort_keys=False)
 '@
     $writerFile = Join-Path $env:TEMP "blackbox_mode_write.py"
     Set-Content -Path $writerFile -Value $writer -Encoding UTF8
@@ -1902,11 +1930,104 @@ function Register-BlackboxStartupTasks {
     }
 }
 
+# ── A Hermes that is already installed (Hermes Desktop, Hermes's own installer) ─────────────────
+# Mirrors existing_foreign_hermes / install_into_existing_hermes in the .sh (see there for the
+# story): another Hermes gets Blackbox as a plugin from the Hermes catalog and `hermes blackbox
+# setup`; no second Hermes is installed. Our own Agent Blackbox checkouts keep the standalone path.
+# BLACKBOX_USE_EXISTING_HERMES=0 keeps the standalone install.
+function Test-RunsFromBlackboxCheckout {
+    $scriptDir = Split-Path -Parent $PSCommandPath
+    if (-not $scriptDir) { return $false }
+    $d = Split-Path -Parent $scriptDir
+    return ((Test-Path "$d\pyproject.toml") -and (Test-Path "$d\plugins\blackbox"))
+}
+
+function Find-ExistingForeignHermes {
+    if ($env:BLACKBOX_USE_EXISTING_HERMES -eq "0") { return $null }
+    $cmd = Get-Command hermes -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $cmd) { return $null }
+    $hermes = $cmd.Source
+    $line = @(& $hermes --version 2>$null) | Where-Object { $_ -match '^Install directory:\s*\S' } | Select-Object -First 1
+    # Hermes did not say where it is installed: whose it is cannot be told, so nothing is decided.
+    if (-not $line) { return $null }
+    $dir = ($line -replace '^Install directory:\s*', '').Trim()
+    if (-not (Test-Path $dir -PathType Container)) { return $null }
+    if (Test-Path (Join-Path $dir "plugins\blackbox\plugin.yaml")) { return $null }   # ours
+    return $hermes
+}
+
+function Install-IntoExistingHermes([string]$Hermes) {
+    $version = @(& $Hermes --version 2>$null) | Select-Object -First 1
+    Write-Heading "Using your Hermes"
+    Write-Ok "Found $(if ($version) { $version } else { 'Hermes' }) ($Hermes)"
+    Write-Step "Blackbox installs into this Hermes as a plugin; no second Hermes is installed and your hermes command is not changed."
+    if ($SkipDkg) { Write-Warn2 "-SkipDkg is not used when installing into an existing Hermes; setup installs Blackbox's DKG node." }
+    # Blackbox was installed first, with its own Hermes, and this Hermes came later (see the .sh,
+    # move_onto_existing_hermes): the node (identity, keys, graph) moves to where `hermes blackbox
+    # setup` keeps it, and the checkout this installer made is retired once setup succeeds.
+    $ourCheckout = $null
+    $nodeHome = Join-Path $HermesHome "blackbox\node\.dkg"
+    if ((Test-Path (Join-Path $DefaultRepoDir "plugins\blackbox\plugin.yaml")) -and (Test-Path (Join-Path $DkgHome "config.json"))) {
+        $ourCheckout = $DefaultRepoDir
+        # Stopped AND removed: these tasks start the node from the old folder ("No config found");
+        # the setup that follows registers fresh ones (see retire_services_pointing_into in the .sh).
+        foreach ($task in @("Agent Blackbox dashboard", $DkgTaskName)) {
+            & schtasks /End /TN $task 2>$null | Out-Null
+            & schtasks /Delete /TN $task /F 2>$null | Out-Null
+        }
+        Start-Sleep -Seconds 3
+        if (-not (Test-Path $nodeHome)) {
+            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $nodeHome) | Out-Null
+            Move-Item -Path $DkgHome -Destination $nodeHome
+            Write-Ok "Moved Blackbox's DKG node to $nodeHome"
+        }
+        $copied = Join-Path $HermesHome "plugins\blackbox"
+        $metadata = Join-Path $HermesHome "plugins\.install-metadata.json"
+        if ((Test-Path $copied) -and -not ((Test-Path $metadata) -and (Select-String -Path $metadata -SimpleMatch '"blackbox"' -Quiet))) {
+            Remove-Item $copied -Recurse -Force
+        }
+    }
+    $installed = @(& $Hermes plugins list 2>$null) | Where-Object { $_ -match '(^|[^\w-])blackbox([^\w-]|$)' }
+    # The plugin's folder counts too: it is what Hermes's "already exists" refusal checks (see the .sh).
+    if ($installed -or (Test-Path (Join-Path $HermesHome "plugins\blackbox"))) {
+        Write-Ok "The Blackbox plugin is already installed in this Hermes"
+        Write-Step "Updating it to the version the Hermes plugin catalog lists ..."
+        & $Hermes plugins update blackbox
+        if ($LASTEXITCODE -ne 0) { Write-Warn2 "The plugin update did not finish; setup continues with the installed version." }
+    } else {
+        Write-Step "Installing the Blackbox plugin from the Hermes plugin catalog ..."
+        & $Hermes plugins install blackbox --yes-deps --enable
+        if ($LASTEXITCODE -ne 0) {
+            Write-Err2 "Hermes could not install the Blackbox plugin (its reason is above)."
+            Write-Step "Update Hermes (hermes update), then run this installer again."
+            exit 1
+        }
+    }
+    $setupArgs = @("blackbox", "setup")
+    if ($StoreBackend -ne "auto") { $setupArgs += @("--store", $StoreBackend) }
+    Write-Step "Running: hermes $($setupArgs -join ' ')"
+    & $Hermes @setupArgs
+    $setupExit = $LASTEXITCODE
+    if ($ourCheckout) {
+        if ($setupExit -eq 0) {
+            Remove-Item $ourCheckout -Recurse -Force -ErrorAction SilentlyContinue
+            Write-Ok "Retired the Hermes Blackbox installed ($ourCheckout); there is one Hermes again, with Blackbox in it."
+        } else {
+            Write-Err2 "Setting Blackbox up in that Hermes did not finish; the Hermes Blackbox installed is kept at $ourCheckout."
+        }
+    }
+    exit $setupExit
+}
+
 # ── Main ────────────────────────────────────────────────────────────────────
 function Main {
     Write-Banner
     Write-Heading "Checking your system"
     Write-Ok "Detected Windows ($env:PROCESSOR_ARCHITECTURE)"
+    if (-not $SetupOnly -and -not (Test-RunsFromBlackboxCheckout)) {
+        $existingHermes = Find-ExistingForeignHermes
+        if ($existingHermes) { Install-IntoExistingHermes $existingHermes }
+    }
     if ($SetupOnly) {
         Test-NodeJs
         Use-RunningHermes

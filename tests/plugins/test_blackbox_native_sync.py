@@ -135,6 +135,9 @@ def test_another_graph_writes_the_steady_profile(dkg_home):
 def test_a_node_blackbox_launched_must_carry_every_switch(dkg_home, monkeypatch):
     monkeypatch.setattr(managed_node, "_daemon_pid", lambda _cfg: 4242)
     monkeypatch.setattr(managed_node, "_systemd_unit_of", lambda _pid: None)
+    # No service runs this node; without the stub the lookup reads the machine's real
+    # LaunchAgent, which on a Mac with Blackbox installed leads into the real ~/.hermes (KI-465).
+    monkeypatch.setattr(managed_node.node_service, "registered", lambda _cfg: None)
 
     expected = managed_node.expected_node_settings(_cfg(dkg_home))
 

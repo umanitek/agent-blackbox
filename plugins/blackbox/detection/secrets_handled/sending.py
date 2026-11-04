@@ -39,8 +39,8 @@ _EGRESS_RE = re.compile(
     r"|(?:^|[|;&(`\n]|\$\()\s*ssh\s+(?:-\S+\s+)*[\w.@-]+\s+\S",
     re.IGNORECASE | re.MULTILINE,
 )
-#: A program that moves data off the machine, standing where a command starts (line start,
-#: after | ; & ( ` $( or a wrapper like sudo / env / xargs), with or without its path.
+# A program that moves data off the machine, standing where a command starts (line start,
+# after | ; & ( ` $( or a wrapper like sudo / env / xargs), with or without its path.
 _NETWORK_COMMAND_RE = re.compile(
     r"(?:^|[|;&(`\n]|\$\(|\b(?:sudo|env|xargs|nohup|time|exec|command)\s)\s*(?:[\w./-]*/)?"
     r"(?:curl|wget|https?|xh|nc|ncat|netcat|socat|telnet|ssh|scp|sftp|rsync|ftp|tftp|lftp|sendmail|mail|mailx"

@@ -3,10 +3,20 @@
 :func:`load_yaml` never raises (unreadable -> ``{}``); :func:`dump_yaml` writes
 through :func:`atomic_write` (temp file + rename) so a concurrent reader never
 sees a torn file. ``yaml`` is None only if PyYAML is somehow absent.
+
+A ``config.yaml`` is the user's own file: Hermes Desktop writes a 2,400-line one,
+almost all of it comments that document every setting. Where Hermes ships its
+comment-preserving editor (``hermes_yaml.roundtrip_yaml``, Hermes 0.21.7+),
+:func:`load_yaml` reads through it and :func:`dump_yaml` writes what it read back
+the same way, so a load -> change -> dump keeps every comment and quote and
+changes only the keys Blackbox set (2026-11-03: setup dropped all 2,147 comment
+lines of Hermes Desktop's config). Data that did not come from :func:`load_yaml`
+(a new file) and older Hermes (PyYAML) keep the plain safe_dump.
 """
 
 from __future__ import annotations
 
+import io
 import logging
 import os
 from pathlib import Path
@@ -34,11 +44,24 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 
+def _roundtrip_editor() -> Any:
+    """Hermes's comment-preserving YAML editor, or None (older Hermes, PyYAML)."""
+    factory = getattr(yaml, "roundtrip_yaml", None)
+    return factory() if callable(factory) else None
+
+
+def _keeps_comments(data: Any) -> bool:
+    """Whether *data* was read by the round-trip editor (ruamel's CommentedMap carries ``.ca``)."""
+    return hasattr(data, "ca")
+
+
 def load_yaml(path: Path) -> dict[str, Any]:
     if yaml is None or not path.exists():
         return {}
     try:
-        data = yaml.safe_load(path.read_text(encoding="utf-8-sig"))
+        text = path.read_text(encoding="utf-8-sig")
+        editor = _roundtrip_editor()
+        data = editor.load(text) if editor is not None else yaml.safe_load(text)
     except Exception as exc:
         logger.debug("blackbox.attach: could not parse %s (%s)", path, exc)
         return {}
@@ -46,4 +69,10 @@ def load_yaml(path: Path) -> dict[str, Any]:
 
 
 def dump_yaml(path: Path, data: dict[str, Any]) -> None:
+    editor = _roundtrip_editor() if _keeps_comments(data) else None
+    if editor is not None:
+        buffer = io.StringIO()
+        editor.dump(data, buffer)
+        atomic_write(path, buffer.getvalue())
+        return
     atomic_write(path, yaml.safe_dump(data, default_flow_style=False, sort_keys=False))
