@@ -77,9 +77,11 @@ def mac(tmp_path):
 def _run(mac: dict, call: str, *, extra: str = "") -> subprocess.CompletedProcess:
     fake_bin = mac["tmp"] / "fakebin"
     fake_bin.mkdir(exist_ok=True)
-    for tool in ("lsof", "ps", "launchctl", "systemctl"):
+    # launchctl/systemctl fail as they do for a service that is not loaded (bootout exits 3):
+    # the move runs under set -e and must not stop on that (live 2026-11-04)
+    for tool, status in (("lsof", 0), ("ps", 0), ("launchctl", 3), ("systemctl", 1)):
         if not (fake_bin / tool).exists():
-            (fake_bin / tool).write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            (fake_bin / tool).write_text(f"#!/bin/sh\nexit {status}\n", encoding="utf-8")
             (fake_bin / tool).chmod(0o755)
     functions = "\n".join(f"{name}() {{\n{_body(name)}\n}}" for name in FUNCTIONS)
     script = f"""set -euo pipefail

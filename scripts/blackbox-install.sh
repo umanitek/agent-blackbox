@@ -3771,12 +3771,6 @@ stop_blackbox_dashboard() {
     done
 }
 
-# Blackbox was installed first (with its own Hermes) and the user then installed Hermes Desktop:
-# two Hermes programs now share one ~/.hermes, the `hermes` command runs ours and the app runs
-# Desktop's (found 2026-11-03). Blackbox moves onto that Hermes, so there is one Hermes again:
-# the node (its identity, keys and synced graph) moves to where `hermes blackbox setup` keeps it,
-# the hermes command runs that Hermes, Blackbox is installed into it and set up, and only then is
-# the Hermes this installer put here retired (its checkout and its environment record). Never returns.
 # Service files of the Blackbox being retired: they start the node and dashboard from its old
 # folder, so a later start "through the service" would run the old home ("No config found").
 # Only files naming that folder are removed; the setup that follows registers fresh ones.
@@ -3785,27 +3779,34 @@ retire_services_pointing_into() {
     for label in $BLACKBOX_LAUNCHD_LABELS; do
         unit="$HOME/Library/LaunchAgents/$label.plist"
         grep -qF "$folder/" "$unit" 2>/dev/null || continue
-        command -v launchctl >/dev/null 2>&1 && launchctl bootout "gui/$(id -u)/$label" >/dev/null 2>&1
+        # bootout exits 3 when the service is not loaded; under set -e that would end the install
+        launchctl bootout "gui/$(id -u)/$label" >/dev/null 2>&1 || true
         rm -f "$unit"
     done
     command -v systemctl >/dev/null 2>&1 || return 0
     for name in $BLACKBOX_SERVICE_NAMES; do
         unit="$HOME/.config/systemd/user/$name.service"
         if grep -qF "$folder/" "$unit" 2>/dev/null; then
-            systemctl --user disable --now "$name" >/dev/null 2>&1
+            systemctl --user disable --now "$name" >/dev/null 2>&1 || true
             rm -f "$unit"
         fi
         unit="$BLACKBOX_SYSTEMD_DIR/$name.service"
         if grep -qF "$folder/" "$unit" 2>/dev/null && [ -w "$BLACKBOX_SYSTEMD_DIR" ]; then
-            systemctl disable --now "$name" >/dev/null 2>&1
+            systemctl disable --now "$name" >/dev/null 2>&1 || true
             rm -f "$unit"
         fi
     done
-    systemctl --user daemon-reload >/dev/null 2>&1
-    [ -w "$BLACKBOX_SYSTEMD_DIR" ] && systemctl daemon-reload >/dev/null 2>&1
+    systemctl --user daemon-reload >/dev/null 2>&1 || true
+    if [ -w "$BLACKBOX_SYSTEMD_DIR" ]; then systemctl daemon-reload >/dev/null 2>&1 || true; fi
     return 0
 }
 
+# Blackbox was installed first (with its own Hermes) and the user then installed Hermes Desktop:
+# two Hermes programs now share one ~/.hermes, the `hermes` command runs ours and the app runs
+# Desktop's (found 2026-11-03). Blackbox moves onto that Hermes, so there is one Hermes again:
+# the node (its identity, keys and synced graph) moves to where `hermes blackbox setup` keeps it,
+# the hermes command runs that Hermes, Blackbox is installed into it and set up, and only then is
+# the Hermes this installer put here retired (its checkout and its environment record). Never returns.
 move_onto_existing_hermes() {
     local other="$1" ours="$2"
     local node_home="$HERMES_HOME/blackbox/node/.dkg" launcher="$HOME/.local/bin/hermes" pid="" waited=0
