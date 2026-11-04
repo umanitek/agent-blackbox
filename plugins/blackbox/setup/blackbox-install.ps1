@@ -70,6 +70,9 @@ $DkgStoreUrlExplicit = [bool]$env:BLACKBOX_DKG_STORE_URL
 $DkgPort     = if ($env:BLACKBOX_DKG_PORT)    { [int]$env:BLACKBOX_DKG_PORT } else { 9320 }
 $DkgStorePort = if ($env:BLACKBOX_DKG_STORE_PORT) { [int]$env:BLACKBOX_DKG_STORE_PORT } else { 9999 }
 $DkgStoreUrl = if ($env:BLACKBOX_DKG_STORE_URL) { $env:BLACKBOX_DKG_STORE_URL } else { "" }
+# How long a restarted DKG node may take to answer again: a node holding the whole verified graph
+# spends ~100 s reopening its store, so a fixed 90 s failed every update of a synced install (KI-457).
+$DkgRuntimeWaitSeconds = if ($env:BLACKBOX_DKG_RUNTIME_WAIT_SECONDS) { [int]$env:BLACKBOX_DKG_RUNTIME_WAIT_SECONDS } else { 300 }
 $DkgStoreManagedByDkg = $false
 $script:DkgStoreNamespace = "agent-blackbox"
 $script:DkgSelectedStoreBackend = ""
@@ -476,10 +479,11 @@ function Wait-BlackboxDkgRuntime {
         Write-Warn2 "Could not resolve the published DKG build commit."
         return $false
     }
-    $null = & $script:VenvPython $verifier wait $DkgDaemonUrl $expectedCommit 90
+    Write-Step "Waiting for the DKG node to answer (up to $($DkgRuntimeWaitSeconds)s; a synced node takes about 2 minutes) ..."
+    $null = & $script:VenvPython $verifier wait $DkgDaemonUrl $expectedCommit $DkgRuntimeWaitSeconds
     if ($LASTEXITCODE -ne 0) {
         $script:InstallIncomplete = $true
-        Write-Warn2 "The DKG daemon did not activate npm build $($expectedCommit.Substring(0, 12))."
+        Write-Warn2 "The DKG daemon did not activate npm build $($expectedCommit.Substring(0, 12)) within $($DkgRuntimeWaitSeconds)s."
         return $false
     }
     Write-Ok "DKG daemon is ready on npm build $($expectedCommit.Substring(0, 12))"

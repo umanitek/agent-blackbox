@@ -337,7 +337,12 @@ blackbox_dkg_control() {
     esac
 }
 
-BLACKBOX_DKG_HANDOVER_WAIT_SECONDS="${BLACKBOX_DKG_HANDOVER_WAIT_SECONDS:-90}"   # a node start takes 10-60 s
+# How long a restarted DKG node may take to answer again. An empty store starts in seconds, but
+# a node holding the whole verified graph (~10M triples) spends ~100 s reopening its store, so a
+# fixed 90 s rolled back every update of a synced install (KI-457). One setting, read by the
+# installers and by Blackbox itself (sync/managed_node.py); the handover wait follows it.
+BLACKBOX_DKG_RUNTIME_WAIT_SECONDS="${BLACKBOX_DKG_RUNTIME_WAIT_SECONDS:-300}"
+BLACKBOX_DKG_HANDOVER_WAIT_SECONDS="${BLACKBOX_DKG_HANDOVER_WAIT_SECONDS:-$BLACKBOX_DKG_RUNTIME_WAIT_SECONDS}"
 
 # The pid of the process the node's service runs (`dkg start --foreground`, the DKG CLI's own
 # supervisor), or nothing when the service is not running it.
@@ -494,11 +499,13 @@ wait_for_blackbox_dkg_runtime() {
         warn "Could not resolve the published DKG build commit."
         return 1
     fi
+    step "Waiting for the DKG node to answer (up to ${BLACKBOX_DKG_RUNTIME_WAIT_SECONDS}s; a synced node takes about 2 minutes) ..."
     if ! "$VENV_DIR/bin/python" "$verifier" wait \
-        "$BLACKBOX_DKG_DAEMON_URL" "$expected_commit" 90 >/dev/null; then
+        "$BLACKBOX_DKG_DAEMON_URL" "$expected_commit" "$BLACKBOX_DKG_RUNTIME_WAIT_SECONDS" >/dev/null; then
         BLACKBOX_INSTALL_INCOMPLETE=true
         BLACKBOX_THREAT_GRAPH_INCOMPLETE=true
-        warn "The DKG daemon did not activate npm build ${expected_commit:0:12}."
+        warn "The DKG daemon did not activate npm build ${expected_commit:0:12} within ${BLACKBOX_DKG_RUNTIME_WAIT_SECONDS}s."
+        step "A node holding a large graph can need longer: re-run with BLACKBOX_DKG_RUNTIME_WAIT_SECONDS=600"
         return 1
     fi
     ok "DKG daemon is ready on npm build ${expected_commit:0:12}"
