@@ -16,7 +16,9 @@ import os
 from pathlib import Path
 from typing import Mapping, Tuple
 
-__version__ = "1.1.0"
+# The release number. plugin.yaml `version` and CHANGELOG.md match it (test_blackbox_versioning.py);
+# keep it a plain literal on one line: attach/plugin_copy.py reads it from installed copies as text.
+__version__ = "1.2.0"
 
 # ---------------------------------------------------------------------------
 # Ontology
