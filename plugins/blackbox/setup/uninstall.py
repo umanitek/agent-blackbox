@@ -133,7 +133,7 @@ def build_plan(*, purge: bool, keep_logs: bool, now: Optional[_dt.datetime] = No
     stamp = (now or _dt.datetime.now()).strftime("%Y%m%d-%H%M%S")
     shim_dir = Path.home() / ".local" / "bin"
     shim = next((p for p in (shim_dir / "blackbox", shim_dir / "blackbox.cmd")
-                 if p.is_file() and SHIM_MARKER in p.read_text(encoding="utf-8", errors="ignore")), None)
+                 if p.is_file() and SHIM_MARKER in p.read_text(encoding="utf-8-sig", errors="ignore")), None)
     system_units = tuple(p for p in (Path("/etc/systemd/system") / u for u in SYSTEMD_UNITS) if p.exists())
     return UninstallPlan(
         system=platform.system(), hermes_homes=hermes_homes, blackbox_home=blackbox_home, dkg_home=dkg_home,
@@ -165,7 +165,8 @@ def describe(plan: UninstallPlan) -> list[str]:
 
 def _stop_services(plan: UninstallPlan, run: Runner, report: list[str]) -> None:
     if plan.system == "Darwin":
-        uid = os.getuid()
+        # Only reached on macOS; getattr keeps the module importable where os has no getuid (Windows).
+        uid = getattr(os, "getuid", lambda: 0)()
         for label in LAUNCHD_LABELS:
             run(["launchctl", "bootout", f"gui/{uid}/{label}"])
             plist = Path.home() / "Library" / "LaunchAgents" / f"{label}.plist"
@@ -211,7 +212,7 @@ def _stop_unsupervised_node(plan: UninstallPlan, report: list[str]) -> None:
     if not pid_file or not pid_file.is_file():
         return
     try:
-        pid = int(pid_file.read_text(encoding="utf-8").strip())
+        pid = int(pid_file.read_text(encoding="utf-8-sig").strip())
         os.kill(pid, signal.SIGTERM)
         report.append(f"stopped Blackbox's DKG node (pid {pid})")
     except (ValueError, OSError):
@@ -267,7 +268,7 @@ def _remove_from_agents(plan: UninstallPlan, report: list[str]) -> list[Path]:
             del entries["blackbox"]
             yaml_files.dump_yaml(config, data)
         metadata = home / "plugins" / ".install-metadata.json"
-        if metadata.is_file() and '"blackbox"' in metadata.read_text(encoding="utf-8", errors="ignore"):
+        if metadata.is_file() and '"blackbox"' in metadata.read_text(encoding="utf-8-sig", errors="ignore"):
             hermes_installed.append(home)
         elif (home / "plugins" / "blackbox").is_dir():
             shutil.rmtree(home / "plugins" / "blackbox", ignore_errors=True)

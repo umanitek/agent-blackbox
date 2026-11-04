@@ -516,8 +516,7 @@ def test_managed_dkg_restart_waits_for_draining_worker_before_start(tmp_path, mo
             return True
 
     def process(_pid):
-        # Alive for the restart's own lookup (node_process, KI-312) and the first
-        # drain check, then gone.
+        # Alive for the restart's own lookup (node_process, KI-312) and the first drain check, then gone.
         process_checks["count"] += 1
         if process_checks["count"] <= 2:
             return Process()
@@ -540,9 +539,7 @@ def test_managed_dkg_restart_waits_for_draining_worker_before_start(tmp_path, mo
     monkeypatch.setattr(managed_node, "_dkg_sync_environment", lambda _cfg: {})
     monkeypatch.setattr(managed_node.subprocess, "run", run)
     monkeypatch.setattr(managed_node.psutil, "Process", process)
-    # No service runs this node (the restart runs `dkg` itself); without the stub the lookup reads
-    # the machine's real LaunchAgent, which leads into the real ~/.hermes on a Mac (KI-465).
-    monkeypatch.setattr(managed_node.node_service, "registered", lambda _cfg: None)
+    monkeypatch.setattr(managed_node.node_service, "registered", lambda _cfg: None)  # no service; not the real LaunchAgent (KI-465)
     monkeypatch.setattr(sync_command, "DkgClient", Client)
     monkeypatch.setattr(managed_node, "DkgClient", Client)
     monkeypatch.setattr(sync_command.time, "sleep", sleeps.append)
