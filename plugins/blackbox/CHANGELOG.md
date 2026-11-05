@@ -38,6 +38,14 @@ that the two version fields agree.
 
 ## [Unreleased]
 
+### Added
+
+- **Blackbox inside Hermes Desktop.** A shield in Desktop's status bar shows the mode and today's
+  findings; a Blackbox page in the sidebar shows threat rules loaded, the last sync and the newest
+  findings; and an alert appears the moment Blackbox flags or blocks something an agent tried to
+  do. Alerts show the title, severity, tool and whether it was blocked, never the command or file
+  contents. Switch it on under Capabilities → Plugins in Hermes Desktop.
+
 ## [1.2.0] - 2026-11-04
 
 ### Added
