@@ -43,7 +43,7 @@ function StatusChip() {
   const { data } = useStatus()
   const today = (data && data.today) || { findings: 0, blocked: 0 }
   const variant = !data || !data.available ? 'muted' : today.blocked > 0 ? 'destructive' : today.findings > 0 ? 'warn' : 'success'
-  const count = data && data.available ? today.findings : null
+  const count = data && data.available ? today.findings : null // checked actions with a finding
 
   return jsxs('button', {
     type: 'button',
@@ -75,6 +75,7 @@ function FindingRow({ item }) {
       jsx(Badge, { variant: item.outcome === 'blocked' ? 'destructive' : 'warn', children: item.outcome }),
       jsx(Badge, { variant: severityVariant(item.severity), children: item.severity }),
       jsx('span', { className: 'min-w-0 flex-1 truncate text-(--ui-text-secondary)', children: item.title }),
+      item.more > 0 ? jsx(Badge, { variant: 'outline', children: `+${item.more} more` }) : null,
       jsx('span', { className: 'text-[0.7rem] text-(--ui-text-tertiary)', children: item.tool }),
       jsx('span', {
         className: 'w-20 text-right text-[0.7rem] text-(--ui-text-quaternary)',
@@ -139,7 +140,7 @@ function BlackboxPage({ ctx }) {
         children: [
           jsx(Fact, { label: 'Threat rules', value: rules }),
           jsx(Fact, { label: 'Last synced', value: synced }),
-          jsx(Fact, { label: 'Findings today', value: s ? String(s.today.findings) : '–' }),
+          jsx(Fact, { label: 'Caught today', value: s ? String(s.today.findings) : '–' }),
           jsx(Fact, { label: 'Blocked today', value: s ? String(s.today.blocked) : '–' })
         ]
       }),
@@ -167,7 +168,11 @@ function announce(ctx, finding) {
     kind: blocked ? 'error' : 'warning',
     title: blocked ? 'Blackbox blocked an action' : 'Blackbox flagged an action',
     message: what,
-    detail: `${finding.severity} severity${finding.sandbox ? ' · Playground test' : ''}`
+    detail: [
+      `${finding.severity} severity`,
+      finding.more > 0 ? `${finding.more} more rule${finding.more === 1 ? '' : 's'} matched` : '',
+      finding.sandbox ? 'Playground test' : ''
+    ].filter(Boolean).join(' · ')
   })
   ctx.os.notify({
     title: blocked ? 'Blackbox blocked an action' : 'Blackbox flagged an action',

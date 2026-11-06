@@ -7,7 +7,11 @@ This module is the one door both use — a Facade over the config, the ruleset a
 - :func:`status_payload` — protection at a glance for the status bar and the page header;
 - :func:`findings_payload` — the newest findings for the page's list;
 - :func:`announce_findings` — called by the hook right after findings are recorded; pushes one
-  ``plugin.blackbox.finding`` event per finding to every connected Desktop window (Observer).
+  ``plugin.blackbox.finding`` event per checked action to every connected Desktop window (Observer).
+
+One action is one alert and one row: several rules can match the same tool call (the built-in
+``.env`` rule and a protected path, KI-469), and a person reacts to the action, so the page shows
+its most severe finding and says how many more matched (``more``), and today's counts count actions.
 
 The alert carries what a person needs to react — title, severity, category, the tool, blocked or
 flagged — and never the evidence, the command, its arguments or any matched text: those stay in the
@@ -30,6 +34,7 @@ from typing import Any, Mapping, Optional, Sequence, TypedDict
 
 from .. import audit, ruleset
 from ..kernel.config import load_blackbox_config
+from ..kernel.constants import SEVERITY_RANK
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +47,8 @@ _DAY_SECONDS = 86_400
 
 
 class FindingAlert(TypedDict):
-    """One finding as the Desktop alert and list show it: no evidence, command or matched text."""
+    """One checked action as the Desktop alert and list show it: its most severe finding, and how
+    many more findings the same action matched. No evidence, command or matched text."""
 
     time: float
     title: str
@@ -51,13 +57,20 @@ class FindingAlert(TypedDict):
     tool: str
     outcome: str      # "blocked" | "flagged"
     sandbox: bool     # a Playground test, not a real agent action
+    more: int         # other findings the same action matched
 
 
 def _outcome(detail: Mapping[str, Any]) -> str:
     return "blocked" if str(detail.get("decision") or "") == "block" else "flagged"
 
 
-def _alert(finding: Mapping[str, Any], detail: Mapping[str, Any], when: float, sandbox: bool) -> FindingAlert:
+def _most_severe(findings: Sequence[Mapping[str, Any]]) -> Mapping[str, Any]:
+    return max(findings, key=lambda finding: SEVERITY_RANK.get(str(finding.get("severity") or ""), -1))
+
+
+def _alert(findings: Sequence[Mapping[str, Any]], detail: Mapping[str, Any], when: float,
+           sandbox: bool) -> FindingAlert:
+    finding = _most_severe(findings)
     return FindingAlert(
         time=float(finding.get("ts") or when),
         title=str(finding.get("title") or finding.get("identifier") or "Threat")[:160],
@@ -66,6 +79,7 @@ def _alert(finding: Mapping[str, Any], detail: Mapping[str, Any], when: float, s
         tool=str(finding.get("tool_name") or detail.get("tool_name") or "")[:64],
         outcome=_outcome(detail),
         sandbox=sandbox,
+        more=len(findings) - 1,
     )
 
 
@@ -83,14 +97,10 @@ def announce_findings(event: str, findings: Sequence[Mapping[str, Any]], detail:
     broadcast = _broadcast() if findings else None
     if broadcast is None:
         return
-    now = time.time()
-    sandbox = audit.in_sandbox_run()
-    for finding in findings:
-        try:
-            broadcast(PLUGIN_ID, FINDING_EVENT, dict(_alert(finding, detail or {}, now, sandbox)))
-        except Exception as exc:   # health: allow BLE001 -- the hook boundary is fail-open: a Desktop alert must never break the agent's tool call
-            logger.warning("blackbox: Desktop alert not sent: %s", exc)
-            return
+    try:
+        broadcast(PLUGIN_ID, FINDING_EVENT, dict(_alert(findings, detail or {}, time.time(), audit.in_sandbox_run())))
+    except Exception as exc:   # health: allow BLE001 -- the hook boundary is fail-open: a Desktop alert must never break the agent's tool call
+        logger.warning("blackbox: Desktop alert not sent: %s", exc)
 
 
 def _rows(limit: int) -> list[dict[str, Any]]:
@@ -101,21 +111,36 @@ def _rows(limit: int) -> list[dict[str, Any]]:
         return []
 
 
-def _list_item(row: Mapping[str, Any]) -> FindingAlert:
-    finding = row.get("finding") if isinstance(row.get("finding"), Mapping) else {}
+def _action_key(row: Mapping[str, Any]) -> tuple[Any, ...]:
+    """Rows of one checked action share the record's time, event and tool call (one per finding)."""
     detail = row.get("detail") if isinstance(row.get("detail"), Mapping) else {}
-    # Playground tests are recorded in the sandbox folder's own log (audit.sandbox_run), never this one.
-    return _alert(finding, detail, float(row.get("ts") or 0), sandbox=False)
+    return (row.get("ts"), row.get("event"), detail.get("tool_call_id"), detail.get("session_id"))
+
+
+def _actions(rows: Sequence[Mapping[str, Any]]) -> list[FindingAlert]:
+    """One alert per checked action, newest first (the log is already newest first)."""
+    grouped: dict[tuple[Any, ...], list[Mapping[str, Any]]] = {}
+    for row in rows:
+        grouped.setdefault(_action_key(row), []).append(row)
+    actions = []
+    for group in grouped.values():
+        findings = [row["finding"] for row in group if isinstance(row.get("finding"), Mapping)] or [{}]
+        detail = group[0].get("detail") if isinstance(group[0].get("detail"), Mapping) else {}
+        # Playground tests are recorded in the sandbox folder's own log (audit.sandbox_run), never this one.
+        actions.append(_alert(findings, detail, float(group[0].get("ts") or 0), sandbox=False))
+    return actions
 
 
 def findings_payload(limit: int = 20) -> dict[str, Any]:
-    """The newest findings, newest first, as alerts (``{"findings": [...], "total": n}``)."""
-    rows = _rows(max(1, min(int(limit), MAX_FINDINGS)))
+    """The newest checked actions with findings, newest first (``{"findings": [...], "total": n}``,
+    where ``total`` counts every finding in the log)."""
+    limit = max(1, min(int(limit), MAX_FINDINGS))
+    actions = _actions(_rows(MAX_FINDINGS))[:limit]
     try:
         total = audit.count_findings()
     except Exception:   # health: allow BLE001 -- a count is a nicety; the list still shows
-        total = len(rows)
-    return {"findings": [_list_item(row) for row in rows], "total": total}
+        total = len(actions)
+    return {"findings": actions, "total": total}
 
 
 def _rules(cfg: Any) -> tuple[Optional[int], float]:
@@ -129,11 +154,12 @@ def _rules(cfg: Any) -> tuple[Optional[int], float]:
 
 
 def status_payload() -> dict[str, Any]:
-    """Protection at a glance: mode, rules loaded, today's findings, the local dashboard's address."""
+    """Protection at a glance: mode, rules loaded, today's checked actions with findings (and how
+    many were blocked), the newest one, the local dashboard's address."""
     cfg = load_blackbox_config()
     rules, synced_at = _rules(cfg)
     since = time.time() - _DAY_SECONDS
-    today = [item for item in (_list_item(row) for row in _rows(MAX_FINDINGS)) if item["time"] >= since]
+    today = [action for action in _actions(_rows(MAX_FINDINGS)) if action["time"] >= since]
     return {
         "mode": cfg.mode,
         "blockSeverity": cfg.block_severity,
