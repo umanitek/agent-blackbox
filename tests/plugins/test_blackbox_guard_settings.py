@@ -63,6 +63,9 @@ def _tampers(tool, args):
     ("patch", {"path": "{cfg}", "old_string": "mode: block", "new_string": "mode: audit"}),
     ("patch", {"path": "{cfg}", "old_string": "    - blackbox\n", "new_string": ""}),
     ("write_file", {"path": "{home}/blackbox/overrides.json", "content": "{{}}"}),
+    ("terminal", {"command": "curl -s http://127.0.0.1:9700/api/session"}),
+    ("terminal", {"command": "curl -X POST -d '{{\"mode\":\"audit\"}}' http://localhost:9700/api/settings"}),
+    ("execute_code", {"code": "import urllib.request; urllib.request.urlopen('http://127.0.0.1:63519/api/plugins/blackbox/mode')"}),
 ])
 def test_an_agent_changing_blackboxs_settings_is_found(home, tool, args):
     filled = {key: value.format(cfg=home / "config.yaml", home=home) for key, value in args.items()}
@@ -81,6 +84,8 @@ def test_an_agent_changing_blackboxs_settings_is_found(home, tool, args):
     ("patch", {"path": "{cfg}", "old_string": "default: some-model", "new_string": "default: other-model"}),
     ("patch", {"path": "{cfg}", "old_string": "  mode: compact", "new_string": "  mode: full"}),
     ("write_file", {"path": "/tmp/notes.txt", "content": "hello"}),
+    ("terminal", {"command": "curl -s http://127.0.0.1:9700/api/findings"}),
+    ("terminal", {"command": "curl -s http://127.0.0.1:9700/"}),
 ])
 def test_reading_and_unrelated_edits_are_left_alone(home, tool, args):
     filled = {key: value.format(cfg=home / "config.yaml", home=home) for key, value in args.items()}

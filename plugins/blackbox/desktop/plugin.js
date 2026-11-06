@@ -19,12 +19,14 @@ import {
   STATUSBAR_AREAS,
   useQuery
 } from '@hermes/plugin-sdk'
+import { useState } from 'react'
 import { jsx, jsxs } from 'react/jsx-runtime'
 
 const PAGE = '/blackbox'
 const POLL_MS = 10000 // the live event refreshes at once; polling covers a dropped connection
 const STATUS_KEY = ['blackbox', 'status']
 const FINDINGS_KEY = ['blackbox', 'findings']
+const AUDIT_NOTICE_KEY = 'auditNoticeShown' // ctx.storage: the one-time "recording, not blocking" notice
 
 let rest = null // ctx.rest, set in register() and cleared on dispose
 
@@ -36,6 +38,27 @@ function useStatus() {
 }
 
 const modeLabel = mode => (mode === 'block' ? 'Block' : 'Audit')
+
+// The Audit / Block switch. Saved by Blackbox's own checked settings path (POST /mode, which Hermes
+// answers only for this app's own credential), never by an agent.
+async function setMode(mode) {
+  if (!rest) return false
+  try {
+    const result = await rest('/mode', { method: 'POST', body: { mode } })
+    queryClient.invalidateQueries({ queryKey: STATUS_KEY })
+    if (result && result.ok) {
+      host.notify({
+        kind: 'success',
+        message: mode === 'block' ? 'Blocking is on: Blackbox now stops threats' : 'Audit mode: Blackbox records threats but does not stop them'
+      })
+      return true
+    }
+    host.notify({ kind: 'error', message: `Could not change the mode: ${(result && (result.errors || []).join('; ')) || (result && result.error) || 'unknown error'}` })
+  } catch (error) {
+    host.notifyError(error, 'Could not change the mode')
+  }
+  return false
+}
 const severityVariant = severity =>
   severity === 'critical' || severity === 'high' ? 'destructive' : severity === 'medium' ? 'warn' : 'muted'
 
@@ -48,11 +71,15 @@ function StatusChip() {
   return jsxs('button', {
     type: 'button',
     className: 'flex items-center gap-1 px-1.5 text-[0.6875rem] text-(--ui-text-tertiary) hover:text-(--ui-text-secondary)',
-    title: data && data.available ? `Blackbox: ${modeLabel(data.mode)} mode, ${today.findings} finding(s) today` : 'Blackbox',
+    title: data && data.available
+      ? `Blackbox: ${data.mode === 'block' ? 'Block mode, stopping threats' : 'Audit mode, recording but not stopping threats'}; ${today.findings} caught today`
+      : 'Blackbox',
     onClick: () => host.navigate(PAGE),
     children: [
       jsx(Codicon, { name: 'shield' }),
-      jsx('span', { children: data && data.available ? modeLabel(data.mode) : 'Blackbox' }),
+      data && data.available
+        ? jsx(Badge, { size: 'xs', variant: data.mode === 'block' ? 'success' : 'warn', children: modeLabel(data.mode) })
+        : jsx('span', { children: 'Blackbox' }),
       count === null ? null : jsx(Badge, { size: 'xs', variant, children: String(count) })
     ]
   })
@@ -81,6 +108,48 @@ function FindingRow({ item }) {
         className: 'w-20 text-right text-[0.7rem] text-(--ui-text-quaternary)',
         children: item.time ? relativeTime(item.time * 1000) : ''
       })
+    ]
+  })
+}
+
+function ModeSwitch({ mode }) {
+  const [confirming, setConfirming] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const choose = async next => {
+    setBusy(true)
+    await setMode(next)
+    setBusy(false)
+    setConfirming(false)
+  }
+  const option = (value, label) =>
+    jsx(Button, {
+      size: 'sm',
+      variant: mode === value ? 'default' : 'outline',
+      disabled: busy || mode === value,
+      onClick: () => (value === 'audit' ? setConfirming(true) : choose('block')),
+      children: label
+    })
+  return jsxs('div', {
+    className: 'flex flex-col gap-2',
+    children: [
+      jsxs('div', {
+        className: 'flex items-center gap-2',
+        children: [
+          jsx('span', { className: 'text-[0.7rem] uppercase tracking-wide text-(--ui-text-quaternary)', children: 'Mode' }),
+          option('audit', 'Audit: record only'),
+          option('block', 'Block: stop threats')
+        ]
+      }),
+      confirming
+        ? jsxs('div', {
+            className: 'flex flex-wrap items-center gap-2 text-sm text-(--ui-text-secondary)',
+            children: [
+              jsx('span', { children: 'Switch to audit? Blackbox will keep recording threats but will stop blocking them.' }),
+              jsx(Button, { size: 'sm', variant: 'destructive', disabled: busy, onClick: () => choose('audit'), children: 'Switch to audit' }),
+              jsx(Button, { size: 'sm', variant: 'outline', disabled: busy, onClick: () => setConfirming(false), children: 'Keep blocking' })
+            ]
+          })
+        : null
     ]
   })
 }
@@ -121,10 +190,10 @@ function BlackboxPage({ ctx }) {
         children: [
           jsx(Codicon, { name: 'shield', size: '20px' }),
           jsx('h1', { className: 'text-lg font-medium text-(--ui-text-secondary)', children: 'Agent Blackbox' }),
-          s ? jsx(Badge, { variant: s.mode === 'block' ? 'default' : 'muted', children: `${modeLabel(s.mode)} mode` }) : null,
+          s ? jsx(Badge, { variant: s.mode === 'block' ? 'success' : 'warn', children: `${modeLabel(s.mode)} mode` }) : null,
           jsx('div', { className: 'flex-1' }),
           s && s.dashboardUrl
-            ? jsx(Button, { size: 'sm', variant: 'outline', onClick: () => openDashboard(ctx, s.dashboardUrl), children: 'Open full dashboard' })
+            ? jsx(Button, { size: 'sm', variant: 'outline', onClick: () => openDashboard(ctx, s.dashboardUrl), children: 'All settings' })
             : null
         ]
       }),
@@ -133,8 +202,9 @@ function BlackboxPage({ ctx }) {
         children:
           s && s.mode === 'block'
             ? `Blackbox checks every tool call and model request before it runs, and refuses those at or above ${s.blockSeverity} severity.`
-            : 'Blackbox checks every tool call and model request before it runs, and records what it finds. Audit mode never refuses; turn on block mode on the full dashboard.'
+            : 'Blackbox checks every tool call and model request before it runs, and records what it finds. In audit mode it does not stop anything: turn on Block to have it refuse threats.'
       }),
+      s ? jsx(ModeSwitch, { mode: s.mode }) : null,
       jsxs('div', {
         className: 'grid grid-cols-2 gap-4 sm:grid-cols-4',
         children: [
@@ -194,6 +264,23 @@ export default {
       { id: 'nav', area: SIDEBAR_NAV_AREA, data: { path: PAGE, label: 'Blackbox', codicon: 'shield' } },
       { id: 'status', area: STATUSBAR_AREAS.right, order: 110, render: () => jsx(StatusChip, {}) }
     ])
+    // Someone who switches Blackbox on in Desktop should not take audit mode for protection: once,
+    // say plainly that it is recording, not blocking, with a one-click way to turn blocking on.
+    ctx.setTimeout(() => {
+      if (ctx.storage.get(AUDIT_NOTICE_KEY, false)) return
+      fetchStatus().then(status => {
+        if (!status || !status.available || status.mode !== 'audit') return
+        ctx.storage.set(AUDIT_NOTICE_KEY, true)
+        host.notify({
+          kind: 'warning',
+          persistent: true,
+          title: 'Blackbox is recording, not blocking',
+          message: 'It is in Audit mode: it flags threats but lets them run.',
+          action: { label: 'Turn on blocking', onClick: () => setMode('block') },
+          secondaryAction: { label: 'Open Blackbox', onClick: () => host.navigate(PAGE) }
+        })
+      }, () => {})
+    }, 3000)
     ctx.onEvent('plugin.blackbox.finding', event => {
       queryClient.invalidateQueries({ queryKey: STATUS_KEY })
       queryClient.invalidateQueries({ queryKey: FINDINGS_KEY })

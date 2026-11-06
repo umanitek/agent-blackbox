@@ -17,7 +17,8 @@ through these hooks):
   ``tee``, ``cp``/``mv``/``ln``/``install``/``rsync`` onto it, ``rm``/``truncate``, a script that
   opens it for writing), or runs Hermes or Blackbox to switch Blackbox off
   (``hermes plugins disable|remove blackbox``, ``hermes config set …blackbox…``,
-  ``blackbox detach|uninstall|rules unblock``);
+  ``blackbox detach|uninstall|rules unblock``), or calls Blackbox's settings APIs (the dashboard's
+  settings and session-token routes, the Desktop page's switch);
 * code handed to a code tool (``execute_code``) that writes one of those places.
 
 A built-in rule, not an entry in the editable protected-path list (LES-053: a default added to a
@@ -35,7 +36,7 @@ from __future__ import annotations
 import os
 import re
 import shlex
-from typing import Any, List
+from typing import Any
 
 from .. import action_parsing, shell_shapes
 from ..finding import Finding
@@ -57,6 +58,12 @@ _REDIRECT_TARGET = re.compile(r"(?<![0-9&])>>?\s*([^\s;&|<>]+)|\btee\b(?:\s+-[a-
 #: Code that writes or deletes a file.
 _CODE_WRITES = re.compile(r"open\([^)]*['\"][wax][+b]?['\"]|write_text|write_bytes|\.write\(|os\.remove|os\.unlink"
                           r"|\.unlink\(|rmtree|os\.replace|os\.rename|shutil\.(?:copy|move)|yaml\.(?:safe_)?dump")
+#: Blackbox's own settings APIs: the local dashboard's settings, session-token and protection routes,
+#: and the Hermes Desktop page's switch. An agent fetching the dashboard's page token and posting a
+#: mode change is the same self-disable by another road.
+_SETTINGS_API = re.compile(
+    r"(?:127\.0\.0\.1|localhost|\[::1\]|0\.0\.0\.0):\d+/api/(?:settings|session|agents/protection|attach|report)\b"
+    r"|/api/plugins/blackbox/mode\b", re.IGNORECASE)
 #: Commands that switch Blackbox off without naming a file.
 _SWITCH_OFF = re.compile(
     r"\bhermes\b(?:\s+-p\s+\S+)?\s+(?:plugins\s+(?:disable|remove|uninstall|rm)\b[^|;&]*\bblackbox\b"
@@ -188,7 +195,7 @@ def _written_operands(segment: list[str]) -> list[str]:
 
 def _shell_tampers(command: str) -> bool:
     """True when *command* writes a guarded place, or switches Blackbox off by command."""
-    if _SWITCH_OFF.search(command):
+    if _SWITCH_OFF.search(command) or _SETTINGS_API.search(command):
         return True
     folder = ""
     for segment in _segments(_words(command)):
@@ -205,6 +212,8 @@ def _shell_tampers(command: str) -> bool:
 
 def _code_tampers(code: str) -> bool:
     """True when *code* names a guarded place and writes or deletes a file."""
+    if _SETTINGS_API.search(code):
+        return True
     paths = [arg.path for arg in shell_files.code_file_args(code)]
     return any(_guarded(path) for path in paths) and bool(_CODE_WRITES.search(code))
 
@@ -224,7 +233,7 @@ def _finding(tool: str, evidence: str) -> Finding:
     )
 
 
-def detect_guard_tamper(tool_name: str, args: Any) -> List[Finding]:
+def detect_guard_tamper(tool_name: str, args: Any) -> list[Finding]:
     """A finding when an agent's call would change Blackbox's settings or switch it off, else []."""
     tool = (tool_name or "").strip().lower()
     try:
@@ -237,6 +246,6 @@ def detect_guard_tamper(tool_name: str, args: Any) -> List[Finding]:
             command = shell_shapes.command_from_args(tool_name, args)
             if _shell_tampers(command) or any(_code_tampers(arg) for arg in _inline_code(command)):
                 return [_finding(tool, "command that changes Blackbox's settings or switches it off")]
-    except Exception:  # pragma: no cover - fail open: a detector fault never breaks the agent's call
+    except Exception:  # pragma: no cover  # health: allow BLE001 -- fail open: a detector fault never breaks the agent's tool call
         return []
     return []

@@ -6,6 +6,8 @@ This module is the one door both use — a Facade over the config, the ruleset a
 
 - :func:`status_payload` — protection at a glance for the status bar and the page header;
 - :func:`findings_payload` — the newest findings for the page's list;
+- :func:`set_mode` — the page's Audit / Block switch, saved through the dashboard's own checked path
+  (``kernel.settings.write_settings``); reached only through Desktop's authenticated route;
 - :func:`announce_findings` — called by the hook right after findings are recorded; pushes one
   ``plugin.blackbox.finding`` event per checked action to every connected Desktop window (Observer).
 
@@ -30,9 +32,11 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any, Mapping, Optional, Sequence, TypedDict
+from typing import Any, Optional, TypedDict
+from collections.abc import Mapping, Sequence
 
 from .. import audit, ruleset
+from ..kernel import settings
 from ..kernel.config import load_blackbox_config
 from ..kernel.constants import SEVERITY_RANK
 
@@ -173,4 +177,21 @@ def status_payload() -> dict[str, Any]:
     }
 
 
-__all__ = ["FINDING_EVENT", "PLUGIN_ID", "FindingAlert", "announce_findings", "findings_payload", "status_payload"]
+MODES = ("audit", "block")
+
+
+def set_mode(mode: str) -> dict[str, Any]:
+    """Switch Blackbox to *mode* (``audit`` or ``block``) for the person at the Desktop page.
+
+    Returns ``{"ok": bool, "mode": <the mode now in force>, "errors": [...]}``; nothing is written on
+    an unknown mode. The same validate-then-persist path as the dashboard's Settings, so the config
+    keeps its comments and every other setting is untouched.
+    """
+    wanted = str(mode or "").strip().lower()
+    if wanted not in MODES:
+        return {"ok": False, "mode": load_blackbox_config().mode, "errors": [f"mode must be one of {', '.join(MODES)}"]}
+    result = settings.write_settings({"mode": wanted})
+    return {"ok": bool(result.get("ok")), "mode": load_blackbox_config().mode, "errors": list(result.get("errors") or [])}
+
+
+__all__ = ["FINDING_EVENT", "MODES", "PLUGIN_ID", "FindingAlert", "announce_findings", "findings_payload", "set_mode", "status_payload"]

@@ -196,6 +196,28 @@ def test_the_backend_finds_the_loaded_blackbox_and_serves_status(monkeypatch):
     assert api.findings(limit=5) == {"available": True, "findings": [], "total": 0, "limit": 5}
 
 
+def test_the_switch_saves_block_mode_through_the_settings_path():
+    """The Desktop page's Audit / Block switch writes the same config the dashboard's Settings does."""
+    from plugins.blackbox.kernel.config import load_blackbox_config
+    assert desktop.set_mode("block") == {"ok": True, "mode": "block", "errors": []}
+    assert load_blackbox_config().mode == "block"
+    assert desktop.set_mode("audit")["mode"] == "audit"
+    assert load_blackbox_config().mode == "audit"
+
+
+def test_the_switch_refuses_an_unknown_mode_and_writes_nothing(monkeypatch):
+    written = []
+    monkeypatch.setattr(desktop.settings, "write_settings", lambda payload, **kwargs: written.append(payload))
+    result = desktop.set_mode("off")
+    assert result["ok"] is False and written == []
+
+
+def test_the_backend_switch_route_reaches_set_mode(monkeypatch):
+    api = _load_plugin_api()
+    monkeypatch.setattr(desktop, "set_mode", lambda mode: {"ok": True, "mode": mode, "errors": []})
+    assert api.mode({"mode": "block"}) == {"available": True, "ok": True, "mode": "block", "errors": []}
+
+
 def test_the_backend_answers_unavailable_instead_of_an_error(monkeypatch):
     api = _load_plugin_api()
     def broken():
@@ -212,6 +234,13 @@ def test_plugin_js_passes_hermes_desktop_admission_lint():
     if hasattr(lint, "desktop_review_findings"):
         source = (PLUGIN / "desktop" / "plugin.js").read_text(encoding="utf-8")
         assert lint.desktop_review_findings(source) == []
+
+
+def test_plugin_js_asks_before_lowering_protection():
+    """Turning blocking on is one click; switching to audit needs a second, explicit click."""
+    source = (PLUGIN / "desktop" / "plugin.js").read_text(encoding="utf-8")
+    assert "value === 'audit' ? setConfirming(true) : choose('block')" in source
+    assert "choose('audit')" in source and "Switch to audit?" in source
 
 
 def test_plugin_js_imports_only_what_hermes_allows():

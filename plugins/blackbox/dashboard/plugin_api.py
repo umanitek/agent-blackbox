@@ -5,7 +5,10 @@ the plugin is enabled. Hermes imports it on its own, as ``hermes_dashboard_plugi
 Blackbox's package, so relative imports cannot work here. It finds the Blackbox package Hermes
 already loaded in this process (the one whose folder holds this file) and reads everything through
 its ``desktop`` module; if Blackbox is not loaded here, it loads its own copy of the package once.
-The routes only read: protection status and the newest findings, never evidence or commands.
+The routes read protection status and the newest findings (never evidence or commands), and
+``POST /mode`` switches between audit and block. Hermes refuses every request here that does not
+carry Desktop's own credential (401), so an agent's ``curl`` cannot reach the switch; Blackbox's
+tamper rule also flags any agent command aimed at these routes.
 
 Data shapes are documented on ``desktop.status_payload`` and ``desktop.findings_payload``.
 """
@@ -19,7 +22,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any, Optional
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Body, Query
 
 router = APIRouter()
 
@@ -73,5 +76,13 @@ def status() -> Any:
 def findings(limit: int = Query(50, ge=1, le=100)) -> Any:
     try:
         return {"available": True, **_desktop_module().findings_payload(limit=limit)}
+    except Exception as exc:   # health: allow BLE001 -- the Desktop page shows "unavailable", never an HTML 500
+        return _unavailable(exc)
+
+
+@router.post("/mode")
+def mode(body: dict[str, Any] = Body(default={})) -> Any:
+    try:
+        return {"available": True, **_desktop_module().set_mode(str(body.get("mode") or ""))}
     except Exception as exc:   # health: allow BLE001 -- the Desktop page shows "unavailable", never an HTML 500
         return _unavailable(exc)

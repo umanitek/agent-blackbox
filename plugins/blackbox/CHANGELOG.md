@@ -46,6 +46,10 @@ that the two version fields agree.
   do. Alerts show the title, severity, tool and whether it was blocked, never the command or file
   contents. Switch it on under Capabilities → Plugins in Hermes Desktop. One action that matches
   several rules is one alert and one row, naming its most severe finding.
+- **Audit / Block switch in Hermes Desktop.** The Blackbox page switches between Audit (record
+  only) and Block (stop threats); switching to Audit asks you to confirm. The status-bar shield
+  shows the mode in amber (Audit) or green (Block), and Desktop tells you once, with a "Turn on
+  blocking" button, when Blackbox is recording but not blocking.
 
 ### Security
 
