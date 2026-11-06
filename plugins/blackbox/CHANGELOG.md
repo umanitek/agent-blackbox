@@ -44,7 +44,19 @@ that the two version fields agree.
   findings; a Blackbox page in the sidebar shows threat rules loaded, the last sync and the newest
   findings; and an alert appears the moment Blackbox flags or blocks something an agent tried to
   do. Alerts show the title, severity, tool and whether it was blocked, never the command or file
-  contents. Switch it on under Capabilities → Plugins in Hermes Desktop.
+  contents. Switch it on under Capabilities → Plugins in Hermes Desktop. One action that matches
+  several rules is one alert and one row, naming its most severe finding.
+
+### Security
+
+- **An agent can no longer change Blackbox's settings or switch it off.** Edits by an agent's
+  tools to Hermes's `config.yaml` that touch Blackbox (its mode, its entry, the plugin list),
+  writes into Blackbox's own folders, and commands such as `hermes plugins disable blackbox` are
+  flagged, and refused in block mode. You still change settings as before: the dashboard, the
+  `blackbox` commands you type, or your own editor.
+- **Protected files stay protected on more routes:** code run through Hermes's code tool, a
+  wildcard that would match a protected file, and a link pointing at one are now checked the same
+  way as a direct read.
 
 ## [1.2.0] - 2026-11-04
 

@@ -30,6 +30,7 @@ from .content_scanners import SKILL_DANGER_SHAPES
 from .osv import DEPENDENCY_ECOSYSTEMS, advisory_kind
 from .reviewer_setup import cmd_setup_llm
 from .finding import KIND_FLAG_ONLY
+from .paths.guard_settings import detect_guard_tamper
 from .detectors import (
     ANSWERED_BY_FALLBACK,
     Finding,
@@ -71,6 +72,7 @@ __all__ = [
     'command_text',
     'detect_all',
     'detect_custom_fileaccess',
+    'detect_guard_tamper',
     'detect_dependency',
     'detect_escalation',
     'detect_fileaccess',
