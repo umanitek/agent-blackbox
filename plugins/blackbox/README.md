@@ -400,23 +400,28 @@ has `queue`, `show`, `propose`, `approve`, `policy`, `run`, `pool`, `export`,
 
 ## In Hermes Desktop
 
-Blackbox also lives inside the Hermes Desktop app. Switch it on once under
-**Capabilities → Plugins** (Hermes ships every plugin's Desktop part switched off
-until you choose it), then:
+Blackbox also lives inside the Hermes Desktop app, with everything the dashboard
+does. Switch it on once under **Capabilities → Plugins** (Hermes ships every
+plugin's Desktop part switched off until you choose it), then open **Blackbox** in
+the sidebar:
 
-| Where | What you see |
+| Tab | What you see and do |
 |---|---|
-| Status bar | a shield with the mode — **Audit** in amber (recording, not stopping), **Block** in green — and how many actions it caught today |
-| Sidebar → Blackbox | the mode switch, threat rules loaded, last sync, what was caught and blocked today, and the newest findings |
-| Alerts | a toast the moment Blackbox flags or blocks something an agent tried to do, and a system notification when you are in another app |
+| **Overview** | open findings, verified threats synced, last sync, the community graph and threat sharing; your connected agents and **Attach agent**; Trader Shield — wallets found here, what it always watches, recent events |
+| **Threat graph** | the verified, community and local graphs as a live bubble map (drag, zoom, click a threat), the verified graph's sync progress, a search over every verified threat, and **Threats detected** and **Agent activity** as sortable, paged tables |
+| **Settings** | the mode, what Blackbox checks and from which severity, protected paths, Trader Shield, community sharing |
 
-The switch: **Block: stop threats** takes one click; **Audit: record only** asks you
-to confirm, because it lowers protection. While Blackbox is in audit mode, Desktop
-says so once, with a **Turn on blocking** button. **All settings** opens the full
-dashboard.
+The **status bar** shows a shield with the mode — **Audit** in amber (recording,
+not stopping), **Block** in green — and what was caught today. Switching to Audit
+asks you to confirm, because it lowers protection; while Blackbox is in audit mode,
+Desktop says so once, with a **Turn on blocking** button. An **alert** appears the
+moment Blackbox flags or blocks something an agent tried to do (and a system
+notification when you are in another app). Alerts and the page show the finding,
+its severity, the tool and whether it was blocked — never the command, the file or
+what it contained.
 
-Alerts and the page show what happened (the finding, its severity, the tool,
-blocked or flagged) and never the command, the file or what it contained.
+The Desktop section reads Blackbox's dashboard service (it starts at login); if it
+is not running, the page says how to start it.
 
 **An agent cannot change these settings.** Blackbox flags, and in block mode
 refuses, an agent's attempts to edit Hermes's `config.yaml` where it concerns
