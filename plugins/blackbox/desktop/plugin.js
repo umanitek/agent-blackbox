@@ -394,14 +394,16 @@ function Activity() {
 
 // ---------------------------------------------------------------- Threat graph
 
-// The bubble map — the dashboard's Threat graph drawn natively, in the dashboard's own style: the tier
-// at the centre (a dark node with a mint ring), one glowing hub per threat type sized by its total,
-// and one bubble per threat in its type's colour with a severity ring. The palette and sizes are the
-// dashboard's (dashboard/static/index.html: CATS, SEV_COLOR, MINT, graphHubVal); a small force
-// layout on a canvas stands in for its vendored force-graph, which a Desktop plugin cannot load.
-// Settles, then fits itself to the view; wheel zooms, drag pans, hover names a threat, click opens it.
+// The bubble map — the dashboard's Threat graph ported to Desktop: the same layout (the tier at the
+// centre with the Umanitek flag, one hub per threat type, dependencies split into one hub per
+// ecosystem, threats around their hub, a "+N more" bubble where a hub holds more than is drawn), the
+// same palette, sizes, icons and drawing rules (dashboard/static/index.html: CATS, SEV_COLOR, MINT,
+// CAT_ICONS, FLAG_PATHS, graphHubVal, nodeCanvas), and the same feel: a live force layout you can
+// watch settle, drag bubbles, scroll to zoom, drag the background to pan, fullscreen.
+// A Desktop plugin can load neither the dashboard's script nor its vendored force-graph, so this is a
+// second copy of those drawing rules — change them in both places (KNOWN_ISSUES records it).
 const LEAVES_PER_TYPE = 40
-const SIMULATION_TICKS = 260
+const ALPHA_DECAY = 0.0228 // d3's default: the layout cools over about 300 frames
 const GRAPH_CATEGORIES = {
   dependency: { name: 'Dependency', color: '#F59E0B' },
   injection: { name: 'Prompt injection', color: '#FB7185' },
@@ -414,39 +416,124 @@ const GRAPH_CATEGORIES = {
 }
 const SEVERITY_RING = { critical: '#EF4444', high: '#FB7185', medium: '#F59E0B', low: '#3B82F6', info: '#94A3B8' }
 const GRAPH_MINT = '#80CA9C'
+const GRAPH_ICONS = {
+  // dependency — Lucide "package"
+  dependency: [
+    "M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z",
+    "M12 22V12",
+    "m3.3 7 7.703 4.734a2 2 0 0 0 1.994 0L20.7 7",
+    "m7.5 4.27 9 5.15"
+  ],
+  // escalation — Lucide "square-terminal"
+  escalation: [
+    "m7 11 2-2-2-2",
+    "M11 13h4",
+    "M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"
+  ],
+  // injection (prompt injection) — Lucide "message-square"
+  injection: [
+    "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"
+  ],
+  // fileaccess (file access) — Lucide "file-text"
+  fileaccess: [
+    "M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z",
+    "M14 2v4a2 2 0 0 0 2 2h4",
+    "M10 9H8",
+    "M16 13H8",
+    "M16 17H8"
+  ],
+  // skill (suspicious skill) — Lucide "puzzle"
+  skill: [
+    "M15.39 4.39a1 1 0 0 0 1.68-.474 2.5 2.5 0 1 1 3.014 3.015 1 1 0 0 0-.474 1.68l1.683 1.682a2.414 2.414 0 0 1 0 3.414L19.61 19.39a1 1 0 0 1-1.68-.474 2.5 2.5 0 1 0-3.014 3.015 1 1 0 0 1 .474 1.68l-1.683 1.682a2.414 2.414 0 0 1-3.414 0L8.61 19.61a1 1 0 0 0-1.68.474 2.5 2.5 0 1 1-3.014-3.015 1 1 0 0 0 .474-1.68l-1.683-1.682a2.414 2.414 0 0 1 0-3.414L4.39 8.61a1 1 0 0 1 1.68.474 2.5 2.5 0 1 0 3.014-3.015 1 1 0 0 1-.474-1.68l1.683-1.682a2.414 2.414 0 0 1 3.414 0z"
+  ],
+  // secret (secret exposure) — Lucide "key-round"
+  secret: [
+    "M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z",
+    "M16.5 7.5h0.01"
+  ],
+  // other — Lucide "shield-alert"
+  other: [
+    "M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z",
+    "M12 8v4",
+    "M12 16h.01"
+  ]
+};
+const FLAG_PATHS = [
+  'M58.192 87.252H65.642L106.328 0H98.879L58.192 87.252Z',
+  'M16.292 40.202H77.342L96.085 0H35.045L16.292 40.202Z',
+  'M18.753 9.623H28.36L16.267 35.559H18.456L30.549 9.623H47.296L28.544 49.826H0L18.753 9.623Z'
+]
+const iconCache = new Map()
+const iconPaths = type => {
+  const key = GRAPH_ICONS[type] ? type : 'other'
+  if (!iconCache.has(key)) iconCache.set(key, GRAPH_ICONS[key].map(d => new Path2D(d)))
+  return iconCache.get(key)
+}
+let flagCache = null
 const nodeRadius = value => Math.sqrt(Math.max(value || 1, 1)) * 1.9
 const hubValue = count => 13 + Math.min(19, Math.log(count + 1) * 3.2)
 
-function buildBubbleGraph(centerLabel, threats, totals) {
-  const nodes = [{ id: '__center__', kind: 'center', label: centerLabel, color: GRAPH_MINT, r: nodeRadius(26) }]
+function darken(hex, factor) {
+  const value = String(hex || '#94A3B8').replace('#', '')
+  const channel = index => Math.round(parseInt(value.slice(index, index + 2), 16) * factor)
+  return `rgb(${channel(0)},${channel(2)},${channel(4)})`
+}
+
+// threats: [{identifier, category, severity, name}], totals: {category: n}, ecosystemTotals: {npm: n}
+function buildBubbleGraph(centerLabel, threats, totals, ecosystemTotals) {
+  const nodes = [{ id: '__center__', kind: 'center', label: centerLabel, total: 0, color: GRAPH_MINT, val: 26 }]
   const links = []
+  const add = node => {
+    nodes.push(node)
+    return nodes.length - 1
+  }
+  const addLeaves = (hubIndex, type, leaves, total) => {
+    const color = GRAPH_CATEGORIES[type].color
+    for (const leaf of leaves.slice(0, LEAVES_PER_TYPE)) {
+      const index = add({ id: leaf.identifier, kind: 'leaf', type, label: leaf.name || leaf.title || leaf.identifier, severity: leaf.severity, color,
+        ring: SEVERITY_RING[leaf.severity] || SEVERITY_RING.info, threat: leaf, val: 5 })
+      links.push({ from: hubIndex, to: index, length: 26, kind: 'threat' })
+    }
+    const hidden = total - Math.min(leaves.length, LEAVES_PER_TYPE)
+    if (hidden > 0) {
+      const index = add({ id: `${nodes[hubIndex].id}:more`, kind: 'more', type, label: `+${hidden.toLocaleString()} more`, color, val: 4 })
+      links.push({ from: hubIndex, to: index, length: 30, kind: 'threat' })
+    }
+  }
   const byType = new Map()
   for (const threat of threats) {
     const type = GRAPH_CATEGORIES[threat.category] ? threat.category : 'other'
     if (!byType.has(type)) byType.set(type, [])
-    const leaves = byType.get(type)
-    if (leaves.length < LEAVES_PER_TYPE && !leaves.some(leaf => leaf.identifier === threat.identifier)) leaves.push(threat)
+    const list = byType.get(type)
+    if (!list.some(item => item.identifier === threat.identifier)) list.push(threat)
   }
-  for (const [type, leaves] of byType) {
-    const total = typeof totals[type] === 'number' ? totals[type] : leaves.length
+  for (const [type, list] of byType) {
+    const total = typeof totals[type] === 'number' ? totals[type] : list.length
     const category = GRAPH_CATEGORIES[type]
-    nodes.push({ id: `type:${type}`, kind: 'hub', label: category.name, total, color: category.color, r: nodeRadius(hubValue(total)) })
-    const hubIndex = nodes.length - 1
-    links.push({ from: 0, to: hubIndex, length: 70, kind: 'hub' })
-    for (const leaf of leaves) {
-      nodes.push({
-        id: leaf.identifier,
-        kind: 'leaf',
-        label: leaf.name || leaf.title || leaf.identifier,
-        severity: leaf.severity,
-        color: category.color,
-        ring: SEVERITY_RING[leaf.severity] || SEVERITY_RING.info,
-        threat: leaf,
-        r: nodeRadius(5)
-      })
-      links.push({ from: hubIndex, to: nodes.length - 1, length: 22, kind: 'threat' })
+    const hubIndex = add({ id: `type:${type}`, kind: 'hub', type, label: category.name, total, color: category.color, val: hubValue(total) })
+    nodes[0].total += total
+    links.push({ from: 0, to: hubIndex, length: 90, kind: 'hub' })
+    const ecosystems = type === 'dependency' ? Object.keys(ecosystemTotals || {}) : []
+    if (ecosystems.length > 1) {
+      // Dependencies span ecosystems: one hub per ecosystem, as the dashboard draws them.
+      const byEcosystem = new Map()
+      for (const leaf of list) {
+        const ecosystem = String(leaf.identifier || '').split(':')[1] || 'other'
+        if (!byEcosystem.has(ecosystem)) byEcosystem.set(ecosystem, [])
+        byEcosystem.get(ecosystem).push(leaf)
+      }
+      ecosystems.sort((a, b) => (ecosystemTotals[b] || 0) - (ecosystemTotals[a] || 0))
+      for (const ecosystem of ecosystems) {
+        const ecosystemTotal = ecosystemTotals[ecosystem] || 0
+        const ecosystemIndex = add({ id: `eco:${ecosystem}`, kind: 'hub', type, label: ecosystem, total: ecosystemTotal, color: category.color, val: hubValue(ecosystemTotal) * 0.8 })
+        links.push({ from: hubIndex, to: ecosystemIndex, length: 64, kind: 'hub' })
+        addLeaves(ecosystemIndex, type, byEcosystem.get(ecosystem) || [], ecosystemTotal)
+      }
+    } else {
+      addLeaves(hubIndex, type, list, total)
     }
   }
+  for (const node of nodes) node.r = nodeRadius(node.val)
   return { nodes, links }
 }
 
@@ -455,74 +542,135 @@ function themeColor(element, name, fallback) {
   return value || fallback
 }
 
-function settleLayout(nodes, links) {
-  // Seed each hub on its own spoke and its leaves around it, then relax with charge + springs.
-  const hubs = nodes.filter(node => node.kind === 'hub')
-  hubs.forEach((hub, index) => {
-    const angle = (index / Math.max(1, hubs.length)) * Math.PI * 2
-    hub.x = Math.cos(angle) * 70
-    hub.y = Math.sin(angle) * 70
-  })
-  for (const link of links) {
-    if (link.kind !== 'threat') continue
-    const hub = nodes[link.from]
-    const leaf = nodes[link.to]
-    const angle = Math.random() * Math.PI * 2
-    leaf.x = hub.x + Math.cos(angle) * 24
-    leaf.y = hub.y + Math.sin(angle) * 24
-  }
+function seedLayout(nodes, links) {
   nodes[0].x = 0
   nodes[0].y = 0
+  const placed = new Set([0])
+  const queue = [0]
+  while (queue.length) {
+    const parent = queue.shift()
+    const children = links.filter(link => link.from === parent && !placed.has(link.to))
+    children.forEach((link, index) => {
+      const angle = (index / Math.max(1, children.length)) * Math.PI * 2 + parent
+      const child = nodes[link.to]
+      child.x = nodes[parent].x + Math.cos(angle) * link.length
+      child.y = nodes[parent].y + Math.sin(angle) * link.length
+      placed.add(link.to)
+      queue.push(link.to)
+    })
+  }
   for (const node of nodes) {
     node.vx = 0
     node.vy = 0
   }
-  for (let tick = 0; tick < SIMULATION_TICKS; tick++) {
-    const alpha = 1 - tick / SIMULATION_TICKS
-    for (let i = 0; i < nodes.length; i++) {
-      for (let j = i + 1; j < nodes.length; j++) {
-        const a = nodes[i]
-        const b = nodes[j]
-        const dx = b.x - a.x
-        const dy = b.y - a.y
-        const distanceSquared = Math.max(dx * dx + dy * dy, 4)
-        if (distanceSquared > 40000) continue
-        const push = (alpha * (a.kind === 'leaf' && b.kind === 'leaf' ? 12 : 30)) / distanceSquared
-        a.vx -= dx * push
-        a.vy -= dy * push
-        b.vx += dx * push
-        b.vy += dy * push
-      }
-    }
-    for (const link of links) {
-      const a = nodes[link.from]
-      const b = nodes[link.to]
+}
+
+// One step of the force layout at temperature alpha: charge between nearby bubbles, springs along
+// links, velocity decay 0.3 (the dashboard's d3VelocityDecay). A dragged node stays under the pointer.
+function stepLayout(nodes, links, alpha) {
+  for (let i = 0; i < nodes.length; i++) {
+    for (let j = i + 1; j < nodes.length; j++) {
+      const a = nodes[i]
+      const b = nodes[j]
       const dx = b.x - a.x
       const dy = b.y - a.y
-      const distance = Math.max(1, Math.hypot(dx, dy))
-      const pull = ((distance - link.length) / distance) * 0.12 * alpha
-      a.vx += dx * pull * 0.5
-      a.vy += dy * pull * 0.5
-      b.vx -= dx * pull
-      b.vy -= dy * pull
-    }
-    for (const node of nodes) {
-      if (node.kind === 'center') continue
-      node.vx *= 0.7
-      node.vy *= 0.7
-      node.x += node.vx
-      node.y += node.vy
+      const distanceSquared = Math.max(dx * dx + dy * dy, 1)
+      if (distanceSquared > 90000) continue
+      const strength = a.kind === 'leaf' && b.kind === 'leaf' ? 14 : 45
+      const push = (alpha * strength) / distanceSquared
+      a.vx -= dx * push
+      a.vy -= dy * push
+      b.vx += dx * push
+      b.vy += dy * push
     }
   }
+  for (const link of links) {
+    const a = nodes[link.from]
+    const b = nodes[link.to]
+    const dx = b.x - a.x
+    const dy = b.y - a.y
+    const distance = Math.max(1, Math.hypot(dx, dy))
+    const pull = ((distance - link.length) / distance) * alpha * 0.5
+    a.vx += dx * pull * 0.3
+    a.vy += dy * pull * 0.3
+    b.vx -= dx * pull
+    b.vy -= dy * pull
+  }
+  for (const node of nodes) {
+    if (node.fixed) {
+      node.vx = 0
+      node.vy = 0
+      continue
+    }
+    if (node.kind === 'center') {
+      node.vx -= node.x * 0.02 * alpha
+      node.vy -= node.y * 0.02 * alpha
+    }
+    node.vx *= 0.7
+    node.vy *= 0.7
+    node.x += node.vx
+    node.y += node.vy
+  }
 }
+
+function drawIcon(context, type, node, color, k) {
+  const box = node.r * 1.55
+  context.save()
+  context.translate(node.x, node.y)
+  context.scale(box / 24, box / 24)
+  context.translate(-12, -12)
+  context.lineWidth = 1.9
+  context.lineJoin = 'round'
+  context.lineCap = 'round'
+  context.strokeStyle = color
+  for (const path of iconPaths(type)) context.stroke(path)
+  context.restore()
+}
+
+function drawFlag(context, node) {
+  if (!flagCache) flagCache = FLAG_PATHS.map(d => new Path2D(d))
+  const scale = node.r / 62
+  context.save()
+  context.beginPath()
+  context.arc(node.x, node.y, node.r, 0, Math.PI * 2)
+  context.clip()
+  context.translate(node.x, node.y)
+  context.scale(scale, scale)
+  context.translate(-100, -100)
+  context.translate(46, 56)
+  context.fillStyle = '#ffffff'
+  for (const path of flagCache) context.fill(path)
+  context.restore()
+}
+
+const truncate = (text, size) => (text.length > size ? `${text.slice(0, size - 1)}…` : text)
 
 function drawGraph(canvas, nodes, links, view, hover, theme) {
   const context = canvas.getContext('2d')
   const scale = window.devicePixelRatio || 1
+  const width = canvas.width / scale
+  const height = canvas.height / scale
   context.setTransform(1, 0, 0, 1, 0, 0)
   context.clearRect(0, 0, canvas.width, canvas.height)
-  context.setTransform(scale * view.k, 0, 0, scale * view.k, scale * view.x, scale * view.y)
   const k = view.k
+  // the grid, in world space so it pans and zooms with the graph
+  context.setTransform(scale, 0, 0, scale, 0, 0)
+  context.strokeStyle = theme.grid
+  context.lineWidth = 1
+  const step = 40 * k
+  if (step > 8) {
+    context.beginPath()
+    for (let x = ((view.x % step) + step) % step; x < width; x += step) {
+      context.moveTo(x, 0)
+      context.lineTo(x, height)
+    }
+    for (let y = ((view.y % step) + step) % step; y < height; y += step) {
+      context.moveTo(0, y)
+      context.lineTo(width, y)
+    }
+    context.stroke()
+  }
+  context.setTransform(scale * k, 0, 0, scale * k, scale * view.x, scale * view.y)
   for (const link of links) {
     const a = nodes[link.from]
     const b = nodes[link.to]
@@ -534,7 +682,7 @@ function drawGraph(canvas, nodes, links, view, hover, theme) {
     context.stroke()
   }
   for (const node of nodes) {
-    const r = node.r + (hover === node ? 1.5 / k : 0)
+    const r = node.r
     if (node.kind === 'hub') {
       context.save()
       context.globalAlpha = 0.22
@@ -546,11 +694,20 @@ function drawGraph(canvas, nodes, links, view, hover, theme) {
       context.fill()
       context.restore()
     }
-    context.fillStyle = node.kind === 'center' ? theme.centerFill : node.color
+    context.fillStyle = node.kind === 'center' ? '#000000' : node.kind === 'more' ? theme.more : node.color
     context.beginPath()
     context.arc(node.x, node.y, r, 0, Math.PI * 2)
     context.fill()
-    if (node.kind === 'center') {
+    if (node.kind === 'center') drawFlag(context, node)
+    else if (node.kind === 'hub') drawIcon(context, node.type, node, '#0D0D0D', k)
+    else if (node.kind === 'leaf' && k >= 1.4) drawIcon(context, node.type, node, darken(node.color, 0.42), k)
+    if (node.kind === 'leaf') {
+      context.lineWidth = (hover === node ? 2.4 : 1.6) / k
+      context.strokeStyle = node.ring
+      context.beginPath()
+      context.arc(node.x, node.y, r + 2.2 / k, 0, Math.PI * 2)
+      context.stroke()
+    } else if (node.kind === 'center') {
       context.lineWidth = 1.8 / k
       context.strokeStyle = GRAPH_MINT
       context.beginPath()
@@ -558,7 +715,7 @@ function drawGraph(canvas, nodes, links, view, hover, theme) {
       context.stroke()
     } else if (node.kind === 'hub') {
       context.lineWidth = 1.2 / k
-      context.strokeStyle = 'rgba(255,255,255,0.20)'
+      context.strokeStyle = theme.outline
       context.beginPath()
       context.arc(node.x, node.y, r, 0, Math.PI * 2)
       context.stroke()
@@ -572,29 +729,27 @@ function drawGraph(canvas, nodes, links, view, hover, theme) {
       context.stroke()
       context.restore()
     } else {
-      context.lineWidth = 1.6 / k
-      context.strokeStyle = node.ring
+      context.lineWidth = 1 / k
+      context.strokeStyle = theme.outline
       context.beginPath()
-      context.arc(node.x, node.y, r + 2.2 / k, 0, Math.PI * 2)
+      context.arc(node.x, node.y, r, 0, Math.PI * 2)
       context.stroke()
     }
   }
   context.textAlign = 'center'
   context.textBaseline = 'top'
+  const showLeafLabels = k >= 1.6
   for (const node of nodes) {
-    if (node.kind === 'leaf' && hover !== node) continue
-    const big = node.kind !== 'leaf'
-    context.font = `${big ? 600 : 500} ${(big ? 11 : 10) / k}px system-ui, sans-serif`
-    context.shadowColor = 'rgba(0,0,0,0.85)'
-    context.shadowBlur = 4 / k
-    context.fillStyle = theme.label
-    context.fillText(node.label, node.x, node.y + node.r + 5 / k)
-    if (node.kind === 'hub') {
-      context.font = `500 ${9.5 / k}px system-ui, sans-serif`
-      context.fillStyle = theme.muted
-      context.fillText(node.total.toLocaleString(), node.x, node.y + node.r + 18 / k)
+    const isLeaf = node.kind === 'leaf'
+    if (isLeaf && !showLeafLabels && hover !== node) continue
+    context.font = `${isLeaf ? 500 : 600} ${(isLeaf ? 9.5 : 11) / k}px system-ui, sans-serif`
+    context.fillStyle = node.kind === 'more' ? theme.muted : theme.label
+    context.fillText(isLeaf ? truncate(node.label, 28) : node.label, node.x, node.y + node.r + 4 / k)
+    if (node.kind === 'hub' || node.kind === 'center') {
+      context.font = `600 ${9.5 / k}px ui-monospace, monospace`
+      context.fillStyle = node.color
+      context.fillText(`${node.total.toLocaleString()} THREATS`, node.x, node.y + node.r + 17 / k)
     }
-    context.shadowBlur = 0
   }
 }
 
@@ -607,7 +762,7 @@ function fitView(nodes, width, height) {
     minX = Math.min(minX, node.x - node.r)
     minY = Math.min(minY, node.y - node.r)
     maxX = Math.max(maxX, node.x + node.r)
-    maxY = Math.max(maxY, node.y + node.r + 26)
+    maxY = Math.max(maxY, node.y + node.r + 28)
   }
   const pad = 42
   const k = Math.min((width - pad * 2) / Math.max(1, maxX - minX), (height - pad * 2) / Math.max(1, maxY - minY), 4)
@@ -615,39 +770,57 @@ function fitView(nodes, width, height) {
 }
 
 function BubbleMap({ graph, onPick }) {
+  const wrapRef = useRef(null)
   const canvasRef = useRef(null)
   const [hover, setHover] = useState(null)
-  const live = useRef({ nodes: [], links: [], view: { k: 1, x: 0, y: 0 }, hover: null, drag: null, draw: null })
+  const live = useRef({ nodes: [], links: [], view: { k: 1, x: 0, y: 0 }, hover: null, pointer: null, alpha: 1, wake: null, fitted: false })
 
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return undefined
-    const nodes = graph.nodes.map(node => ({ ...node }))
-    settleLayout(nodes, graph.links)
     const state = live.current
+    const nodes = graph.nodes.map(node => ({ ...node }))
+    seedLayout(nodes, graph.links)
     state.nodes = nodes
     state.links = graph.links
+    state.alpha = 1
+    state.fitted = false
     const theme = {
       label: themeColor(canvas, '--ui-text-secondary', '#F1EFE9'),
       muted: themeColor(canvas, '--ui-text-tertiary', '#A8A49D'),
-      centerFill: themeColor(canvas, '--ui-bg-primary', '#000000')
+      outline: 'rgba(255,255,255,0.20)',
+      more: 'rgba(255,255,255,0.05)',
+      grid: 'rgba(128,128,128,0.08)'
     }
     let frame = 0
-    const draw = () => {
-      if (frame) return
-      frame = requestAnimationFrame(() => {
-        frame = 0
-        drawGraph(canvas, state.nodes, state.links, state.view, state.hover, theme)
-      })
+    let ticks = 0
+    const size = () => canvas.getBoundingClientRect()
+    const loop = () => {
+      frame = 0
+      if (state.alpha > 0.004) {
+        stepLayout(state.nodes, state.links, state.alpha)
+        state.alpha *= 1 - ALPHA_DECAY
+        ticks++
+        if (!state.fitted && ticks > 90) {
+          const box = size()
+          state.view = fitView(state.nodes, box.width, box.height)
+          state.fitted = true
+        }
+      }
+      drawGraph(canvas, state.nodes, state.links, state.view, state.hover, theme)
+      if (state.alpha > 0.004 || state.pointer) frame = requestAnimationFrame(loop)
     }
-    state.draw = draw
+    const wake = () => {
+      if (!frame) frame = requestAnimationFrame(loop)
+    }
+    state.wake = wake
     const resize = () => {
-      const box = canvas.getBoundingClientRect()
+      const box = size()
       const scale = window.devicePixelRatio || 1
       canvas.width = Math.max(1, Math.floor(box.width * scale))
       canvas.height = Math.max(1, Math.floor(box.height * scale))
-      state.view = fitView(nodes, box.width, box.height)
-      draw()
+      state.view = fitView(state.nodes, box.width, box.height)
+      wake()
     }
     const observer = new ResizeObserver(resize)
     observer.observe(canvas)
@@ -655,76 +828,98 @@ function BubbleMap({ graph, onPick }) {
     return () => {
       if (frame) cancelAnimationFrame(frame)
       observer.disconnect()
-      state.draw = null
+      state.wake = null
     }
   }, [graph])
 
-  const toWorld = event => {
+  const local = event => {
     const box = canvasRef.current.getBoundingClientRect()
-    const view = live.current.view
-    return { x: (event.clientX - box.left - view.x) / view.k, y: (event.clientY - box.top - view.y) / view.k }
+    return { x: event.clientX - box.left, y: event.clientY - box.top }
   }
-  const nodeAt = event => {
-    const point = toWorld(event)
+  const toWorld = point => {
+    const view = live.current.view
+    return { x: (point.x - view.x) / view.k, y: (point.y - view.y) / view.k }
+  }
+  const nodeAt = point => {
+    const world = toWorld(point)
     const slack = 3 / live.current.view.k
     let best = null
     for (const node of live.current.nodes) {
-      const distance = Math.hypot(node.x - point.x, node.y - point.y)
-      if (distance <= node.r + slack && (!best || node.kind === 'leaf')) best = node
+      if (Math.hypot(node.x - world.x, node.y - world.y) <= node.r + slack && (!best || node.kind === 'leaf')) best = node
     }
     return best
   }
-  const redraw = () => live.current.draw && live.current.draw()
+  const wake = () => live.current.wake && live.current.wake()
+  const toggleFullscreen = () => {
+    const wrap = wrapRef.current
+    if (!wrap) return
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => {})
+    else if (wrap.requestFullscreen) wrap.requestFullscreen().catch(() => {})
+  }
 
   return jsxs('div', {
-    className: 'relative',
+    ref: wrapRef,
+    className: 'relative overflow-hidden rounded border border-(--ui-stroke-secondary) bg-(--ui-bg-primary)',
     children: [
       jsx('canvas', {
         ref: canvasRef,
-        className: 'h-[560px] w-full rounded border border-(--ui-stroke-secondary)',
+        className: 'block h-[560px] w-full',
         onWheel: event => {
-          const box = canvasRef.current.getBoundingClientRect()
+          const point = local(event)
           const view = live.current.view
-          const factor = Math.exp(-event.deltaY * 0.0015)
-          const k = Math.min(12, Math.max(0.2, view.k * factor))
-          const mx = event.clientX - box.left
-          const my = event.clientY - box.top
-          live.current.view = { k, x: mx - ((mx - view.x) * k) / view.k, y: my - ((my - view.y) * k) / view.k }
-          redraw()
+          const k = Math.min(12, Math.max(0.2, view.k * Math.exp(-event.deltaY * 0.0015)))
+          live.current.view = { k, x: point.x - ((point.x - view.x) * k) / view.k, y: point.y - ((point.y - view.y) * k) / view.k }
+          live.current.fitted = true
+          wake()
         },
         onMouseDown: event => {
-          live.current.drag = { x: event.clientX, y: event.clientY, view: live.current.view, moved: false }
-        },
-        onMouseUp: event => {
-          const drag = live.current.drag
-          live.current.drag = null
-          if (drag && drag.moved) return
-          const node = nodeAt(event)
-          if (node && node.kind === 'leaf') onPick(node.threat)
+          const point = local(event)
+          const node = nodeAt(point)
+          live.current.pointer = { start: point, view: live.current.view, node, moved: false }
+          if (node) node.fixed = true
+          wake()
         },
         onMouseMove: event => {
-          const drag = live.current.drag
-          if (drag) {
-            const dx = event.clientX - drag.x
-            const dy = event.clientY - drag.y
-            if (Math.abs(dx) + Math.abs(dy) > 3) drag.moved = true
-            live.current.view = { ...drag.view, x: drag.view.x + dx, y: drag.view.y + dy }
-            redraw()
+          const point = local(event)
+          const pointer = live.current.pointer
+          if (pointer) {
+            if (Math.abs(point.x - pointer.start.x) + Math.abs(point.y - pointer.start.y) > 3) pointer.moved = true
+            if (pointer.node) {
+              // drag a bubble: it follows the pointer and the layout around it wakes up
+              const world = toWorld(point)
+              pointer.node.x = world.x
+              pointer.node.y = world.y
+              live.current.alpha = Math.max(live.current.alpha, 0.3)
+            } else {
+              live.current.view = { ...pointer.view, x: pointer.view.x + point.x - pointer.start.x, y: pointer.view.y + point.y - pointer.start.y }
+              live.current.fitted = true
+            }
+            wake()
             return
           }
-          const node = nodeAt(event)
-          event.currentTarget.style.cursor = node && node.kind === 'leaf' ? 'pointer' : 'grab'
+          const node = nodeAt(point)
+          event.currentTarget.style.cursor = node ? (node.kind === 'leaf' ? 'pointer' : 'grab') : 'default'
           if (live.current.hover !== node) {
             live.current.hover = node
             setHover(node && node.kind === 'leaf' ? node : null)
-            redraw()
+            wake()
           }
         },
+        onMouseUp: () => {
+          const pointer = live.current.pointer
+          live.current.pointer = null
+          if (!pointer) return
+          if (pointer.node) pointer.node.fixed = false
+          if (!pointer.moved && pointer.node && pointer.node.kind === 'leaf') onPick(pointer.node.threat)
+          wake()
+        },
         onMouseLeave: () => {
-          live.current.drag = null
+          const pointer = live.current.pointer
+          if (pointer && pointer.node) pointer.node.fixed = false
+          live.current.pointer = null
           live.current.hover = null
           setHover(null)
-          redraw()
+          wake()
         }
       }),
       hover
@@ -732,11 +927,12 @@ function BubbleMap({ graph, onPick }) {
             className: 'pointer-events-none absolute left-3 top-3 max-w-sm rounded border border-(--ui-stroke-secondary) bg-(--ui-bg-quaternary) px-2.5 py-1.5 text-[0.75rem] text-(--ui-text-secondary)',
             children: [
               jsx('div', { className: 'font-medium', children: hover.label }),
-              jsx('div', { className: 'text-(--ui-text-tertiary)', children: `${hover.severity || 'unknown'} · ${GRAPH_CATEGORIES[hover.threat.category] ? GRAPH_CATEGORIES[hover.threat.category].name : 'Other'}${hover.threat.count > 1 ? ` · seen ${hover.threat.count}×` : ''}` })
+              jsx('div', { className: 'text-(--ui-text-tertiary)', children: `${hover.severity || 'unknown'} · ${GRAPH_CATEGORIES[hover.type] ? GRAPH_CATEGORIES[hover.type].name : 'Other'}${hover.threat.count > 1 ? ` · seen ${hover.threat.count}×` : ''}` })
             ]
           })
         : null,
-      jsx('div', { className: 'pointer-events-none absolute bottom-2 right-3 text-[0.65rem] text-(--ui-text-quaternary)', children: 'Scroll to zoom · drag to move' })
+      jsx('div', { className: 'pointer-events-none absolute bottom-2 left-3 text-[0.65rem] text-(--ui-text-quaternary)', children: 'Scroll to zoom · drag a bubble or the background · click a threat to open it' }),
+      jsx(Button, { size: 'sm', variant: 'outline', className: 'absolute bottom-2 right-2', onClick: toggleFullscreen, children: jsx(Codicon, { name: 'screen-full' }) })
     ]
   })
 }
@@ -803,7 +999,14 @@ function ThreatGraph() {
       const totals = asObject(asObject(first).category_totals)
       const types = Object.keys(totals).filter(type => totals[type] > 0)
       if (types.length === 0) return first
-      const pages = await Promise.all(types.map(type => dash(`api/graph?tier=${tier}&limit=${LEAVES_PER_TYPE}&category=${encodeURIComponent(type)}`)))
+      const ecosystems = Object.keys(asObject(asObject(first).ecosystem_totals))
+      const pages = await Promise.all([
+        ...types.filter(type => type !== 'dependency' || ecosystems.length < 2)
+          .map(type => dash(`api/graph?tier=${tier}&limit=${LEAVES_PER_TYPE}&category=${encodeURIComponent(type)}`)),
+        ...(types.includes('dependency') && ecosystems.length > 1
+          ? ecosystems.map(ecosystem => dash(`api/graph?tier=${tier}&limit=${LEAVES_PER_TYPE}&category=dependency&ecosystem=${encodeURIComponent(ecosystem)}`))
+          : [])
+      ])
       return { ...asObject(first), threats: pages.flatMap(page => asList(asObject(page).threats)) }
     }
   })
@@ -818,7 +1021,8 @@ function ThreatGraph() {
   const graph = useMemo(() => {
     const threats = tier === 'local' ? localThreats(asList(mapData.findings)) : asList(mapData.threats).map(threat => ({ ...threat, tier }))
     const totals = tier === 'local' ? {} : asObject(mapData.category_totals)
-    return threats.length ? buildBubbleGraph(tierLabel, threats, totals) : null
+    const ecosystemTotals = tier === 'local' ? {} : asObject(mapData.ecosystem_totals)
+    return threats.length ? buildBubbleGraph(tierLabel === 'Verified' ? 'Verifiable graph' : `${tierLabel} graph`, threats, totals, ecosystemTotals) : null
   }, [map.dataUpdatedAt, tier])
   if (open) {
     if (open.local) {
