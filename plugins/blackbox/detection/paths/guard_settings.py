@@ -63,7 +63,7 @@ _CODE_WRITES = re.compile(r"open\([^)]*['\"][wax][+b]?['\"]|write_text|write_byt
 #: mode change is the same self-disable by another road.
 _SETTINGS_API = re.compile(
     r"(?:127\.0\.0\.1|localhost|\[::1\]|0\.0\.0\.0):\d+/api/(?:settings|session|agents/protection|attach|report)\b"
-    r"|/api/plugins/blackbox/mode\b", re.IGNORECASE)
+    r"|/api/plugins/blackbox/(?:mode|dash)\b", re.IGNORECASE)
 #: Commands that switch Blackbox off without naming a file.
 _SWITCH_OFF = re.compile(
     r"\bhermes\b(?:\s+-p\s+\S+)?\s+(?:plugins\s+(?:disable|remove|uninstall|rm)\b[^|;&]*\bblackbox\b"

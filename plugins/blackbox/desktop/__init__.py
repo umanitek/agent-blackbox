@@ -6,6 +6,8 @@ This module is the one door both use — a Facade over the config, the ruleset a
 
 - :func:`status_payload` — protection at a glance for the status bar and the page header;
 - :func:`findings_payload` — the newest findings for the page's list;
+- :func:`dashboard_link` — the one :class:`~.dashboard_link.DashboardLink` the Desktop routes forward
+  the dashboard's own API through (every other panel: threat graph, Trader Shield, agents, settings);
 - :func:`set_mode` — the page's Audit / Block switch, saved through the dashboard's own checked path
   (``kernel.settings.write_settings``); reached only through Desktop's authenticated route;
 - :func:`announce_findings` — called by the hook right after findings are recorded; pushes one
@@ -39,6 +41,7 @@ from .. import audit, ruleset
 from ..kernel import settings
 from ..kernel.config import load_blackbox_config
 from ..kernel.constants import SEVERITY_RANK
+from .dashboard_link import DashboardLink, LinkAnswer
 
 logger = logging.getLogger(__name__)
 
@@ -175,6 +178,27 @@ def status_payload() -> dict[str, Any]:
         "last": today[0] if today else None,
         "dashboardUrl": f"http://127.0.0.1:{cfg.dashboard_port}/",
     }
+
+
+class _LinkHolder:
+    """Keeps one DashboardLink per dashboard port (the port is a setting and can change)."""
+
+    def __init__(self) -> None:
+        self._link: Optional[DashboardLink] = None
+        self._port: Optional[int] = None
+
+    def get(self, port: int) -> DashboardLink:
+        if self._link is None or self._port != port:
+            self._link, self._port = DashboardLink(port), port
+        return self._link
+
+
+_links = _LinkHolder()
+
+
+def dashboard_link() -> DashboardLink:
+    """The link to this machine's dashboard, on the configured ``dashboard_port``."""
+    return _links.get(int(load_blackbox_config().dashboard_port))
 
 
 MODES = ("audit", "block")

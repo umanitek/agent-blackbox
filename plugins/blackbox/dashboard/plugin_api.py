@@ -6,7 +6,9 @@ Blackbox's package, so relative imports cannot work here. It finds the Blackbox 
 already loaded in this process (the one whose folder holds this file) and reads everything through
 its ``desktop`` module; if Blackbox is not loaded here, it loads its own copy of the package once.
 The routes read protection status and the newest findings (never evidence or commands), and
-``POST /mode`` switches between audit and block. Hermes refuses every request here that does not
+``POST /mode`` switches between audit and block, and ``/dash/<path>`` forwards an allowlisted set
+of the running dashboard's own API (threat graph, Trader Shield, agents, community, settings) so the
+Desktop page shows every panel without a second copy of its logic (``desktop.dashboard_link``). Hermes refuses every request here that does not
 carry Desktop's own credential (401), so an agent's ``curl`` cannot reach the switch; Blackbox's
 tamper rule also flags any agent command aimed at these routes.
 
@@ -22,7 +24,8 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any, Optional
 
-from fastapi import APIRouter, Body, Query
+from fastapi import APIRouter, Body, Query, Request
+from fastapi.responses import JSONResponse
 
 router = APIRouter()
 
@@ -86,3 +89,25 @@ def mode(body: dict[str, Any] = Body(default={})) -> Any:
         return {"available": True, **_desktop_module().set_mode(str(body.get("mode") or ""))}
     except Exception as exc:   # health: allow BLE001 -- the Desktop page shows "unavailable", never an HTML 500
         return _unavailable(exc)
+
+
+async def _forward(request: Request, path: str) -> Any:
+    try:
+        body = await request.json() if request.method == "POST" else None
+    except ValueError:
+        body = {}
+    try:
+        answer = _desktop_module().dashboard_link().forward(request.method, path, request.url.query, body)
+    except Exception as exc:   # health: allow BLE001 -- the Desktop page shows "unavailable", never an HTML 500
+        return _unavailable(exc)
+    return JSONResponse(answer.body, status_code=answer.status)
+
+
+@router.get("/dash/{path:path}")
+async def dash_read(request: Request, path: str) -> Any:
+    return await _forward(request, path)
+
+
+@router.post("/dash/{path:path}")
+async def dash_write(request: Request, path: str) -> Any:
+    return await _forward(request, path)
