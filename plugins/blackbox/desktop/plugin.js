@@ -394,31 +394,57 @@ function Activity() {
 
 // ---------------------------------------------------------------- Threat graph
 
-// The bubble map, the dashboard's graph view drawn natively: the tier at the centre, one bubble per
-// threat type, one per threat (at most LEAVES_PER_TYPE each). A small force layout on a canvas —
-// Desktop plugins load no libraries, so the dashboard's vendored force-graph cannot come along.
+// The bubble map — the dashboard's Threat graph drawn natively, in the dashboard's own style: the tier
+// at the centre (a dark node with a mint ring), one glowing hub per threat type sized by its total,
+// and one bubble per threat in its type's colour with a severity ring. The palette and sizes are the
+// dashboard's (dashboard/static/index.html: CATS, SEV_COLOR, MINT, graphHubVal); a small force
+// layout on a canvas stands in for its vendored force-graph, which a Desktop plugin cannot load.
+// Settles, then fits itself to the view; wheel zooms, drag pans, hover names a threat, click opens it.
 const LEAVES_PER_TYPE = 40
-const SIMULATION_TICKS = 320
+const SIMULATION_TICKS = 260
+const GRAPH_CATEGORIES = {
+  dependency: { name: 'Dependency', color: '#F59E0B' },
+  injection: { name: 'Prompt injection', color: '#FB7185' },
+  escalation: { name: 'Escalation', color: '#EF4444' },
+  fileaccess: { name: 'File access', color: '#3B82F6' },
+  skill: { name: 'Suspicious skill', color: '#A78BFA' },
+  secret: { name: 'Secret exposure', color: '#F97316' },
+  ioc: { name: 'IOC', color: '#14B8A6' },
+  other: { name: 'Other', color: '#94A3B8' }
+}
+const SEVERITY_RING = { critical: '#EF4444', high: '#FB7185', medium: '#F59E0B', low: '#3B82F6', info: '#94A3B8' }
+const GRAPH_MINT = '#80CA9C'
+const nodeRadius = value => Math.sqrt(Math.max(value || 1, 1)) * 1.9
+const hubValue = count => 13 + Math.min(19, Math.log(count + 1) * 3.2)
 
 function buildBubbleGraph(centerLabel, threats, totals) {
-  const nodes = [{ id: '__center__', kind: 'center', label: centerLabel, r: 22 }]
+  const nodes = [{ id: '__center__', kind: 'center', label: centerLabel, color: GRAPH_MINT, r: nodeRadius(26) }]
   const links = []
   const byType = new Map()
   for (const threat of threats) {
-    const type = threat.category || 'other'
+    const type = GRAPH_CATEGORIES[threat.category] ? threat.category : 'other'
     if (!byType.has(type)) byType.set(type, [])
     const leaves = byType.get(type)
     if (leaves.length < LEAVES_PER_TYPE && !leaves.some(leaf => leaf.identifier === threat.identifier)) leaves.push(threat)
   }
   for (const [type, leaves] of byType) {
-    const typeId = `type:${type}`
     const total = typeof totals[type] === 'number' ? totals[type] : leaves.length
-    nodes.push({ id: typeId, kind: 'type', label: `${type} · ${total.toLocaleString()}`, r: 13 })
-    links.push([0, nodes.length - 1, 120])
-    const typeIndex = nodes.length - 1
+    const category = GRAPH_CATEGORIES[type]
+    nodes.push({ id: `type:${type}`, kind: 'hub', label: category.name, total, color: category.color, r: nodeRadius(hubValue(total)) })
+    const hubIndex = nodes.length - 1
+    links.push({ from: 0, to: hubIndex, length: 70, kind: 'hub' })
     for (const leaf of leaves) {
-      nodes.push({ id: leaf.identifier, kind: 'leaf', label: leaf.name || leaf.title || leaf.identifier, severity: leaf.severity, threat: leaf, r: 5 + Math.min(4, leaf.count || 0) })
-      links.push([typeIndex, nodes.length - 1, 46])
+      nodes.push({
+        id: leaf.identifier,
+        kind: 'leaf',
+        label: leaf.name || leaf.title || leaf.identifier,
+        severity: leaf.severity,
+        color: category.color,
+        ring: SEVERITY_RING[leaf.severity] || SEVERITY_RING.info,
+        threat: leaf,
+        r: nodeRadius(5)
+      })
+      links.push({ from: hubIndex, to: nodes.length - 1, length: 22, kind: 'threat' })
     }
   }
   return { nodes, links }
@@ -429,191 +455,288 @@ function themeColor(element, name, fallback) {
   return value || fallback
 }
 
+function settleLayout(nodes, links) {
+  // Seed each hub on its own spoke and its leaves around it, then relax with charge + springs.
+  const hubs = nodes.filter(node => node.kind === 'hub')
+  hubs.forEach((hub, index) => {
+    const angle = (index / Math.max(1, hubs.length)) * Math.PI * 2
+    hub.x = Math.cos(angle) * 70
+    hub.y = Math.sin(angle) * 70
+  })
+  for (const link of links) {
+    if (link.kind !== 'threat') continue
+    const hub = nodes[link.from]
+    const leaf = nodes[link.to]
+    const angle = Math.random() * Math.PI * 2
+    leaf.x = hub.x + Math.cos(angle) * 24
+    leaf.y = hub.y + Math.sin(angle) * 24
+  }
+  nodes[0].x = 0
+  nodes[0].y = 0
+  for (const node of nodes) {
+    node.vx = 0
+    node.vy = 0
+  }
+  for (let tick = 0; tick < SIMULATION_TICKS; tick++) {
+    const alpha = 1 - tick / SIMULATION_TICKS
+    for (let i = 0; i < nodes.length; i++) {
+      for (let j = i + 1; j < nodes.length; j++) {
+        const a = nodes[i]
+        const b = nodes[j]
+        const dx = b.x - a.x
+        const dy = b.y - a.y
+        const distanceSquared = Math.max(dx * dx + dy * dy, 4)
+        if (distanceSquared > 40000) continue
+        const push = (alpha * (a.kind === 'leaf' && b.kind === 'leaf' ? 12 : 30)) / distanceSquared
+        a.vx -= dx * push
+        a.vy -= dy * push
+        b.vx += dx * push
+        b.vy += dy * push
+      }
+    }
+    for (const link of links) {
+      const a = nodes[link.from]
+      const b = nodes[link.to]
+      const dx = b.x - a.x
+      const dy = b.y - a.y
+      const distance = Math.max(1, Math.hypot(dx, dy))
+      const pull = ((distance - link.length) / distance) * 0.12 * alpha
+      a.vx += dx * pull * 0.5
+      a.vy += dy * pull * 0.5
+      b.vx -= dx * pull
+      b.vy -= dy * pull
+    }
+    for (const node of nodes) {
+      if (node.kind === 'center') continue
+      node.vx *= 0.7
+      node.vy *= 0.7
+      node.x += node.vx
+      node.y += node.vy
+    }
+  }
+}
+
+function drawGraph(canvas, nodes, links, view, hover, theme) {
+  const context = canvas.getContext('2d')
+  const scale = window.devicePixelRatio || 1
+  context.setTransform(1, 0, 0, 1, 0, 0)
+  context.clearRect(0, 0, canvas.width, canvas.height)
+  context.setTransform(scale * view.k, 0, 0, scale * view.k, scale * view.x, scale * view.y)
+  const k = view.k
+  for (const link of links) {
+    const a = nodes[link.from]
+    const b = nodes[link.to]
+    context.strokeStyle = link.kind === 'hub' ? 'rgba(128,202,156,0.35)' : 'rgba(160,160,160,0.22)'
+    context.lineWidth = (link.kind === 'hub' ? 1.4 : 0.8) / k
+    context.beginPath()
+    context.moveTo(a.x, a.y)
+    context.lineTo(b.x, b.y)
+    context.stroke()
+  }
+  for (const node of nodes) {
+    const r = node.r + (hover === node ? 1.5 / k : 0)
+    if (node.kind === 'hub') {
+      context.save()
+      context.globalAlpha = 0.22
+      context.shadowColor = node.color
+      context.shadowBlur = 22 / Math.max(k, 0.7)
+      context.fillStyle = node.color
+      context.beginPath()
+      context.arc(node.x, node.y, r * 1.22, 0, Math.PI * 2)
+      context.fill()
+      context.restore()
+    }
+    context.fillStyle = node.kind === 'center' ? theme.centerFill : node.color
+    context.beginPath()
+    context.arc(node.x, node.y, r, 0, Math.PI * 2)
+    context.fill()
+    if (node.kind === 'center') {
+      context.lineWidth = 1.8 / k
+      context.strokeStyle = GRAPH_MINT
+      context.beginPath()
+      context.arc(node.x, node.y, r + 1.6 / k, 0, Math.PI * 2)
+      context.stroke()
+    } else if (node.kind === 'hub') {
+      context.lineWidth = 1.2 / k
+      context.strokeStyle = 'rgba(255,255,255,0.20)'
+      context.beginPath()
+      context.arc(node.x, node.y, r, 0, Math.PI * 2)
+      context.stroke()
+      context.save()
+      context.globalAlpha = 0.48
+      context.lineWidth = 0.9 / k
+      context.strokeStyle = node.color
+      context.setLineDash([2.2 / k, 3.2 / k])
+      context.beginPath()
+      context.arc(node.x, node.y, r + 4.3 / k, 0, Math.PI * 2)
+      context.stroke()
+      context.restore()
+    } else {
+      context.lineWidth = 1.6 / k
+      context.strokeStyle = node.ring
+      context.beginPath()
+      context.arc(node.x, node.y, r + 2.2 / k, 0, Math.PI * 2)
+      context.stroke()
+    }
+  }
+  context.textAlign = 'center'
+  context.textBaseline = 'top'
+  for (const node of nodes) {
+    if (node.kind === 'leaf' && hover !== node) continue
+    const big = node.kind !== 'leaf'
+    context.font = `${big ? 600 : 500} ${(big ? 11 : 10) / k}px system-ui, sans-serif`
+    context.shadowColor = 'rgba(0,0,0,0.85)'
+    context.shadowBlur = 4 / k
+    context.fillStyle = theme.label
+    context.fillText(node.label, node.x, node.y + node.r + 5 / k)
+    if (node.kind === 'hub') {
+      context.font = `500 ${9.5 / k}px system-ui, sans-serif`
+      context.fillStyle = theme.muted
+      context.fillText(node.total.toLocaleString(), node.x, node.y + node.r + 18 / k)
+    }
+    context.shadowBlur = 0
+  }
+}
+
+function fitView(nodes, width, height) {
+  let minX = Infinity
+  let minY = Infinity
+  let maxX = -Infinity
+  let maxY = -Infinity
+  for (const node of nodes) {
+    minX = Math.min(minX, node.x - node.r)
+    minY = Math.min(minY, node.y - node.r)
+    maxX = Math.max(maxX, node.x + node.r)
+    maxY = Math.max(maxY, node.y + node.r + 26)
+  }
+  const pad = 42
+  const k = Math.min((width - pad * 2) / Math.max(1, maxX - minX), (height - pad * 2) / Math.max(1, maxY - minY), 4)
+  return { k, x: width / 2 - ((minX + maxX) / 2) * k, y: height / 2 - ((minY + maxY) / 2) * k }
+}
+
 function BubbleMap({ graph, onPick }) {
   const canvasRef = useRef(null)
   const [hover, setHover] = useState(null)
-  const state = useRef({ nodes: [], hover: null })
+  const live = useRef({ nodes: [], links: [], view: { k: 1, x: 0, y: 0 }, hover: null, drag: null, draw: null })
 
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return undefined
-    const nodes = graph.nodes.map((node, index) => ({
-      ...node,
-      x: Math.cos(index * 2.4) * (node.kind === 'leaf' ? 160 : 70),
-      y: Math.sin(index * 2.4) * (node.kind === 'leaf' ? 160 : 70),
-      vx: 0,
-      vy: 0
-    }))
-    nodes[0].x = 0
-    nodes[0].y = 0
-    state.current.nodes = nodes
-    let frame = 0
-    let ticks = 0
-    const colors = {}
-    const readColors = () => {
-      colors.center = themeColor(canvas, '--ui-accent', 'CanvasText')
-      colors.type = themeColor(canvas, '--ui-text-secondary', 'CanvasText')
-      colors.critical = themeColor(canvas, '--ui-red', themeColor(canvas, '--color-destructive', 'CanvasText'))
-      colors.high = themeColor(canvas, '--color-destructive', colors.critical)
-      colors.medium = themeColor(canvas, '--ui-accent-secondary', colors.type)
-      colors.low = themeColor(canvas, '--ui-text-tertiary', colors.type)
-      colors.link = themeColor(canvas, '--ui-stroke-secondary', colors.low)
-      colors.text = themeColor(canvas, '--ui-text-secondary', 'CanvasText')
+    const nodes = graph.nodes.map(node => ({ ...node }))
+    settleLayout(nodes, graph.links)
+    const state = live.current
+    state.nodes = nodes
+    state.links = graph.links
+    const theme = {
+      label: themeColor(canvas, '--ui-text-secondary', '#F1EFE9'),
+      muted: themeColor(canvas, '--ui-text-tertiary', '#A8A49D'),
+      centerFill: themeColor(canvas, '--ui-bg-primary', '#000000')
     }
-    readColors()
+    let frame = 0
+    const draw = () => {
+      if (frame) return
+      frame = requestAnimationFrame(() => {
+        frame = 0
+        drawGraph(canvas, state.nodes, state.links, state.view, state.hover, theme)
+      })
+    }
+    state.draw = draw
     const resize = () => {
       const box = canvas.getBoundingClientRect()
       const scale = window.devicePixelRatio || 1
       canvas.width = Math.max(1, Math.floor(box.width * scale))
       canvas.height = Math.max(1, Math.floor(box.height * scale))
-      ticks = Math.min(ticks, SIMULATION_TICKS - 60)   // settle again into the new space
+      state.view = fitView(nodes, box.width, box.height)
+      draw()
     }
     const observer = new ResizeObserver(resize)
     observer.observe(canvas)
     resize()
-
-    const step = () => {
-      for (let i = 0; i < nodes.length; i++) {
-        for (let j = i + 1; j < nodes.length; j++) {
-          const a = nodes[i]
-          const b = nodes[j]
-          let dx = b.x - a.x
-          let dy = b.y - a.y
-          const distance = Math.max(1, Math.hypot(dx, dy))
-          const push = Math.min(4, 900 / (distance * distance))
-          dx /= distance
-          dy /= distance
-          a.vx -= dx * push
-          a.vy -= dy * push
-          b.vx += dx * push
-          b.vy += dy * push
-        }
-      }
-      for (const [from, to, length] of graph.links) {
-        const a = nodes[from]
-        const b = nodes[to]
-        const dx = b.x - a.x
-        const dy = b.y - a.y
-        const distance = Math.max(1, Math.hypot(dx, dy))
-        const pull = (distance - length) * 0.02
-        a.vx += (dx / distance) * pull
-        a.vy += (dy / distance) * pull
-        b.vx -= (dx / distance) * pull
-        b.vy -= (dy / distance) * pull
-      }
-      for (const node of nodes) {
-        if (node.kind === 'center') {
-          node.x = 0
-          node.y = 0
-          continue
-        }
-        node.vx *= 0.82
-        node.vy *= 0.82
-        node.x += node.vx
-        node.y += node.vy
-      }
-    }
-
-    const draw = () => {
-      const context = canvas.getContext('2d')
-      const scale = window.devicePixelRatio || 1
-      const width = canvas.width / scale
-      const height = canvas.height / scale
-      context.setTransform(scale, 0, 0, scale, width / 2, height / 2)
-      context.clearRect(-width / 2, -height / 2, width, height)
-      context.lineWidth = 1
-      context.strokeStyle = colors.link
-      context.globalAlpha = 0.6
-      for (const [from, to] of graph.links) {
-        context.beginPath()
-        context.moveTo(nodes[from].x, nodes[from].y)
-        context.lineTo(nodes[to].x, nodes[to].y)
-        context.stroke()
-      }
-      for (const node of nodes) {
-        const color = node.kind === 'center' ? colors.center : node.kind === 'type' ? colors.type : colors[node.severity] || colors.low
-        context.globalAlpha = node.kind === 'leaf' ? 0.85 : 1
-        context.fillStyle = color
-        context.beginPath()
-        context.arc(node.x, node.y, node.r + (state.current.hover === node ? 2 : 0), 0, Math.PI * 2)
-        context.fill()
-      }
-      context.globalAlpha = 1
-      context.fillStyle = colors.text
-      context.font = '11px system-ui, sans-serif'
-      context.textAlign = 'center'
-      for (const node of nodes) {
-        if (node.kind !== 'leaf' || state.current.hover === node) context.fillText(node.label, node.x, node.y + node.r + 13)
-      }
-    }
-
-    // Animate while the layout settles, then stop: hover and resize ask for one more frame.
-    const loop = () => {
-      frame = 0
-      if (ticks < SIMULATION_TICKS) {
-        step()
-        ticks++
-      }
-      draw()
-      if (ticks < SIMULATION_TICKS) frame = requestAnimationFrame(loop)
-    }
-    const redraw = () => {
-      if (!frame) frame = requestAnimationFrame(loop)
-    }
-    state.current.redraw = redraw
-    observer.disconnect()
-    const watcher = new ResizeObserver(() => {
-      resize()
-      redraw()
-    })
-    watcher.observe(canvas)
-    redraw()
     return () => {
       if (frame) cancelAnimationFrame(frame)
-      watcher.disconnect()
-      state.current.redraw = null
+      observer.disconnect()
+      state.draw = null
     }
   }, [graph])
 
-  const nodeAt = event => {
-    const canvas = canvasRef.current
-    const box = canvas.getBoundingClientRect()
-    const x = event.clientX - box.left - box.width / 2
-    const y = event.clientY - box.top - box.height / 2
-    return state.current.nodes.find(node => Math.hypot(node.x - x, node.y - y) <= node.r + 3) || null
+  const toWorld = event => {
+    const box = canvasRef.current.getBoundingClientRect()
+    const view = live.current.view
+    return { x: (event.clientX - box.left - view.x) / view.k, y: (event.clientY - box.top - view.y) / view.k }
   }
+  const nodeAt = event => {
+    const point = toWorld(event)
+    const slack = 3 / live.current.view.k
+    let best = null
+    for (const node of live.current.nodes) {
+      const distance = Math.hypot(node.x - point.x, node.y - point.y)
+      if (distance <= node.r + slack && (!best || node.kind === 'leaf')) best = node
+    }
+    return best
+  }
+  const redraw = () => live.current.draw && live.current.draw()
 
   return jsxs('div', {
     className: 'relative',
     children: [
       jsx('canvas', {
         ref: canvasRef,
-        className: 'h-[440px] w-full cursor-default rounded border border-(--ui-stroke-secondary)',
-        onMouseMove: event => {
-          const node = nodeAt(event)
-          if (state.current.hover !== node) {
-            state.current.hover = node
-            setHover(node && node.kind === 'leaf' ? node : null)
-            if (state.current.redraw) state.current.redraw()
-          }
-          event.currentTarget.style.cursor = node && node.kind === 'leaf' ? 'pointer' : 'default'
+        className: 'h-[560px] w-full rounded border border-(--ui-stroke-secondary)',
+        onWheel: event => {
+          const box = canvasRef.current.getBoundingClientRect()
+          const view = live.current.view
+          const factor = Math.exp(-event.deltaY * 0.0015)
+          const k = Math.min(12, Math.max(0.2, view.k * factor))
+          const mx = event.clientX - box.left
+          const my = event.clientY - box.top
+          live.current.view = { k, x: mx - ((mx - view.x) * k) / view.k, y: my - ((my - view.y) * k) / view.k }
+          redraw()
         },
-        onMouseLeave: () => {
-          state.current.hover = null
-          setHover(null)
-          if (state.current.redraw) state.current.redraw()
+        onMouseDown: event => {
+          live.current.drag = { x: event.clientX, y: event.clientY, view: live.current.view, moved: false }
         },
-        onClick: event => {
+        onMouseUp: event => {
+          const drag = live.current.drag
+          live.current.drag = null
+          if (drag && drag.moved) return
           const node = nodeAt(event)
           if (node && node.kind === 'leaf') onPick(node.threat)
+        },
+        onMouseMove: event => {
+          const drag = live.current.drag
+          if (drag) {
+            const dx = event.clientX - drag.x
+            const dy = event.clientY - drag.y
+            if (Math.abs(dx) + Math.abs(dy) > 3) drag.moved = true
+            live.current.view = { ...drag.view, x: drag.view.x + dx, y: drag.view.y + dy }
+            redraw()
+            return
+          }
+          const node = nodeAt(event)
+          event.currentTarget.style.cursor = node && node.kind === 'leaf' ? 'pointer' : 'grab'
+          if (live.current.hover !== node) {
+            live.current.hover = node
+            setHover(node && node.kind === 'leaf' ? node : null)
+            redraw()
+          }
+        },
+        onMouseLeave: () => {
+          live.current.drag = null
+          live.current.hover = null
+          setHover(null)
+          redraw()
         }
       }),
       hover
-        ? jsx('div', {
-            className: 'pointer-events-none absolute left-2 top-2 max-w-sm rounded border border-(--ui-stroke-secondary) bg-(--ui-bg-quaternary) px-2 py-1 text-[0.75rem] text-(--ui-text-secondary)',
-            children: `${hover.severity || ''} · ${hover.label}${hover.threat && hover.threat.count > 1 ? ` · seen ${hover.threat.count}×` : ''}`
+        ? jsxs('div', {
+            className: 'pointer-events-none absolute left-3 top-3 max-w-sm rounded border border-(--ui-stroke-secondary) bg-(--ui-bg-quaternary) px-2.5 py-1.5 text-[0.75rem] text-(--ui-text-secondary)',
+            children: [
+              jsx('div', { className: 'font-medium', children: hover.label }),
+              jsx('div', { className: 'text-(--ui-text-tertiary)', children: `${hover.severity || 'unknown'} · ${GRAPH_CATEGORIES[hover.threat.category] ? GRAPH_CATEGORIES[hover.threat.category].name : 'Other'}${hover.threat.count > 1 ? ` · seen ${hover.threat.count}×` : ''}` })
+            ]
           })
-        : null
+        : null,
+      jsx('div', { className: 'pointer-events-none absolute bottom-2 right-3 text-[0.65rem] text-(--ui-text-quaternary)', children: 'Scroll to zoom · drag to move' })
     ]
   })
 }
