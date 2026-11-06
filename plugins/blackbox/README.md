@@ -23,7 +23,7 @@ Contents: [How it works](#how-it-works) · [Install](#install) ·
 [Trader Shield](#trader-shield-crypto-wallets-and-keys) ·
 [Where threat knowledge comes from](#where-threat-knowledge-comes-from) ·
 [The community graph](#the-community-graph) · [Commands](#commands) ·
-[Dashboard](#dashboard) · [Configuration](#configuration) ·
+[In Hermes Desktop](#in-hermes-desktop) · [Dashboard](#dashboard) · [Configuration](#configuration) ·
 [Files it keeps](#files-it-keeps) · [Privacy and your rights](#privacy-and-your-rights) ·
 [Inside the plugin](#inside-the-plugin) · [Troubleshooting](#troubleshooting)
 
@@ -165,7 +165,8 @@ rule for it. The finding lands in the dashboard's live feed within a second. In
 the default `audit` mode it is flagged and logged; nothing is stopped.
 
 **Switch to blocking.** When you want confirmed threats stopped rather than
-just flagged, set the mode in the dashboard's settings, or in `config.yaml`:
+just flagged, use the Audit / Block switch on the Blackbox page in Hermes Desktop,
+the mode in the dashboard's settings, or `config.yaml`:
 
 ```yaml
 plugins:
@@ -397,6 +398,33 @@ Nothing can raise enforcement locally — only lower it.
 has `queue`, `show`, `propose`, `approve`, `policy`, `run`, `pool`, `export`,
 `verify-bundle`, `graduate` and more; `blackbox curate --help` lists them all.
 
+## In Hermes Desktop
+
+Blackbox also lives inside the Hermes Desktop app. Switch it on once under
+**Capabilities → Plugins** (Hermes ships every plugin's Desktop part switched off
+until you choose it), then:
+
+| Where | What you see |
+|---|---|
+| Status bar | a shield with the mode — **Audit** in amber (recording, not stopping), **Block** in green — and how many actions it caught today |
+| Sidebar → Blackbox | the mode switch, threat rules loaded, last sync, what was caught and blocked today, and the newest findings |
+| Alerts | a toast the moment Blackbox flags or blocks something an agent tried to do, and a system notification when you are in another app |
+
+The switch: **Block: stop threats** takes one click; **Audit: record only** asks you
+to confirm, because it lowers protection. While Blackbox is in audit mode, Desktop
+says so once, with a **Turn on blocking** button. **All settings** opens the full
+dashboard.
+
+Alerts and the page show what happened (the finding, its severity, the tool,
+blocked or flagged) and never the command, the file or what it contained.
+
+**An agent cannot change these settings.** Blackbox flags, and in block mode
+refuses, an agent's attempts to edit Hermes's `config.yaml` where it concerns
+Blackbox, to write into Blackbox's own folders, to call its settings APIs, or to
+run commands that switch it off (`hermes plugins disable blackbox`). You change
+settings as before: this switch, the dashboard, the `blackbox` commands you type,
+or your own editor.
+
 ## Dashboard
 
 `blackbox dashboard` serves http://127.0.0.1:9700 on this computer only. Every
@@ -536,6 +564,7 @@ shrink).
 | `setup/` | `blackbox setup`: the full install after a plugin-catalog install |
 | `audit/` | local logs and the share ledger |
 | `dashboard/` | the local web UI and its API |
+| `desktop/` | Blackbox inside Hermes Desktop: the status-bar shield, the Blackbox page, live alerts |
 | `attach/` | finding local agents and protecting the ones you choose |
 | `overrides/` | the local release valve (`blackbox rules`) |
 | `killlist/` | the curators' signed kill list for skills and MCP servers |
