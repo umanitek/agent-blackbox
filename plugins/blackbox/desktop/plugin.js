@@ -22,7 +22,7 @@ import {
   STATUSBAR_AREAS,
   useQuery
 } from '@hermes/plugin-sdk'
-import { useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { jsx, jsxs } from 'react/jsx-runtime'
 
 const PAGE = '/blackbox'
@@ -394,8 +394,243 @@ function Activity() {
 
 // ---------------------------------------------------------------- Threat graph
 
-function ThreatDetail({ identifier, onClose }) {
-  const query = useDash('threat', `api/threat?identifier=${encodeURIComponent(identifier)}`)
+// The bubble map, the dashboard's graph view drawn natively: the tier at the centre, one bubble per
+// threat type, one per threat (at most LEAVES_PER_TYPE each). A small force layout on a canvas —
+// Desktop plugins load no libraries, so the dashboard's vendored force-graph cannot come along.
+const LEAVES_PER_TYPE = 40
+const SIMULATION_TICKS = 320
+
+function buildBubbleGraph(centerLabel, threats, totals) {
+  const nodes = [{ id: '__center__', kind: 'center', label: centerLabel, r: 22 }]
+  const links = []
+  const byType = new Map()
+  for (const threat of threats) {
+    const type = threat.category || 'other'
+    if (!byType.has(type)) byType.set(type, [])
+    const leaves = byType.get(type)
+    if (leaves.length < LEAVES_PER_TYPE && !leaves.some(leaf => leaf.identifier === threat.identifier)) leaves.push(threat)
+  }
+  for (const [type, leaves] of byType) {
+    const typeId = `type:${type}`
+    const total = typeof totals[type] === 'number' ? totals[type] : leaves.length
+    nodes.push({ id: typeId, kind: 'type', label: `${type} · ${total.toLocaleString()}`, r: 13 })
+    links.push([0, nodes.length - 1, 120])
+    const typeIndex = nodes.length - 1
+    for (const leaf of leaves) {
+      nodes.push({ id: leaf.identifier, kind: 'leaf', label: leaf.name || leaf.title || leaf.identifier, severity: leaf.severity, threat: leaf, r: 5 + Math.min(4, leaf.count || 0) })
+      links.push([typeIndex, nodes.length - 1, 46])
+    }
+  }
+  return { nodes, links }
+}
+
+function themeColor(element, name, fallback) {
+  const value = getComputedStyle(element).getPropertyValue(name).trim()
+  return value || fallback
+}
+
+function BubbleMap({ graph, onPick }) {
+  const canvasRef = useRef(null)
+  const [hover, setHover] = useState(null)
+  const state = useRef({ nodes: [], hover: null })
+
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return undefined
+    const nodes = graph.nodes.map((node, index) => ({
+      ...node,
+      x: Math.cos(index * 2.4) * (node.kind === 'leaf' ? 160 : 70),
+      y: Math.sin(index * 2.4) * (node.kind === 'leaf' ? 160 : 70),
+      vx: 0,
+      vy: 0
+    }))
+    nodes[0].x = 0
+    nodes[0].y = 0
+    state.current.nodes = nodes
+    let frame = 0
+    let ticks = 0
+    const colors = {}
+    const readColors = () => {
+      colors.center = themeColor(canvas, '--ui-accent', 'CanvasText')
+      colors.type = themeColor(canvas, '--ui-text-secondary', 'CanvasText')
+      colors.critical = themeColor(canvas, '--ui-red', themeColor(canvas, '--color-destructive', 'CanvasText'))
+      colors.high = themeColor(canvas, '--color-destructive', colors.critical)
+      colors.medium = themeColor(canvas, '--ui-accent-secondary', colors.type)
+      colors.low = themeColor(canvas, '--ui-text-tertiary', colors.type)
+      colors.link = themeColor(canvas, '--ui-stroke-secondary', colors.low)
+      colors.text = themeColor(canvas, '--ui-text-secondary', 'CanvasText')
+    }
+    readColors()
+    const resize = () => {
+      const box = canvas.getBoundingClientRect()
+      const scale = window.devicePixelRatio || 1
+      canvas.width = Math.max(1, Math.floor(box.width * scale))
+      canvas.height = Math.max(1, Math.floor(box.height * scale))
+      ticks = Math.min(ticks, SIMULATION_TICKS - 60)   // settle again into the new space
+    }
+    const observer = new ResizeObserver(resize)
+    observer.observe(canvas)
+    resize()
+
+    const step = () => {
+      for (let i = 0; i < nodes.length; i++) {
+        for (let j = i + 1; j < nodes.length; j++) {
+          const a = nodes[i]
+          const b = nodes[j]
+          let dx = b.x - a.x
+          let dy = b.y - a.y
+          const distance = Math.max(1, Math.hypot(dx, dy))
+          const push = Math.min(4, 900 / (distance * distance))
+          dx /= distance
+          dy /= distance
+          a.vx -= dx * push
+          a.vy -= dy * push
+          b.vx += dx * push
+          b.vy += dy * push
+        }
+      }
+      for (const [from, to, length] of graph.links) {
+        const a = nodes[from]
+        const b = nodes[to]
+        const dx = b.x - a.x
+        const dy = b.y - a.y
+        const distance = Math.max(1, Math.hypot(dx, dy))
+        const pull = (distance - length) * 0.02
+        a.vx += (dx / distance) * pull
+        a.vy += (dy / distance) * pull
+        b.vx -= (dx / distance) * pull
+        b.vy -= (dy / distance) * pull
+      }
+      for (const node of nodes) {
+        if (node.kind === 'center') {
+          node.x = 0
+          node.y = 0
+          continue
+        }
+        node.vx *= 0.82
+        node.vy *= 0.82
+        node.x += node.vx
+        node.y += node.vy
+      }
+    }
+
+    const draw = () => {
+      const context = canvas.getContext('2d')
+      const scale = window.devicePixelRatio || 1
+      const width = canvas.width / scale
+      const height = canvas.height / scale
+      context.setTransform(scale, 0, 0, scale, width / 2, height / 2)
+      context.clearRect(-width / 2, -height / 2, width, height)
+      context.lineWidth = 1
+      context.strokeStyle = colors.link
+      context.globalAlpha = 0.6
+      for (const [from, to] of graph.links) {
+        context.beginPath()
+        context.moveTo(nodes[from].x, nodes[from].y)
+        context.lineTo(nodes[to].x, nodes[to].y)
+        context.stroke()
+      }
+      for (const node of nodes) {
+        const color = node.kind === 'center' ? colors.center : node.kind === 'type' ? colors.type : colors[node.severity] || colors.low
+        context.globalAlpha = node.kind === 'leaf' ? 0.85 : 1
+        context.fillStyle = color
+        context.beginPath()
+        context.arc(node.x, node.y, node.r + (state.current.hover === node ? 2 : 0), 0, Math.PI * 2)
+        context.fill()
+      }
+      context.globalAlpha = 1
+      context.fillStyle = colors.text
+      context.font = '11px system-ui, sans-serif'
+      context.textAlign = 'center'
+      for (const node of nodes) {
+        if (node.kind !== 'leaf' || state.current.hover === node) context.fillText(node.label, node.x, node.y + node.r + 13)
+      }
+    }
+
+    // Animate while the layout settles, then stop: hover and resize ask for one more frame.
+    const loop = () => {
+      frame = 0
+      if (ticks < SIMULATION_TICKS) {
+        step()
+        ticks++
+      }
+      draw()
+      if (ticks < SIMULATION_TICKS) frame = requestAnimationFrame(loop)
+    }
+    const redraw = () => {
+      if (!frame) frame = requestAnimationFrame(loop)
+    }
+    state.current.redraw = redraw
+    observer.disconnect()
+    const watcher = new ResizeObserver(() => {
+      resize()
+      redraw()
+    })
+    watcher.observe(canvas)
+    redraw()
+    return () => {
+      if (frame) cancelAnimationFrame(frame)
+      watcher.disconnect()
+      state.current.redraw = null
+    }
+  }, [graph])
+
+  const nodeAt = event => {
+    const canvas = canvasRef.current
+    const box = canvas.getBoundingClientRect()
+    const x = event.clientX - box.left - box.width / 2
+    const y = event.clientY - box.top - box.height / 2
+    return state.current.nodes.find(node => Math.hypot(node.x - x, node.y - y) <= node.r + 3) || null
+  }
+
+  return jsxs('div', {
+    className: 'relative',
+    children: [
+      jsx('canvas', {
+        ref: canvasRef,
+        className: 'h-[440px] w-full cursor-default rounded border border-(--ui-stroke-secondary)',
+        onMouseMove: event => {
+          const node = nodeAt(event)
+          if (state.current.hover !== node) {
+            state.current.hover = node
+            setHover(node && node.kind === 'leaf' ? node : null)
+            if (state.current.redraw) state.current.redraw()
+          }
+          event.currentTarget.style.cursor = node && node.kind === 'leaf' ? 'pointer' : 'default'
+        },
+        onMouseLeave: () => {
+          state.current.hover = null
+          setHover(null)
+          if (state.current.redraw) state.current.redraw()
+        },
+        onClick: event => {
+          const node = nodeAt(event)
+          if (node && node.kind === 'leaf') onPick(node.threat)
+        }
+      }),
+      hover
+        ? jsx('div', {
+            className: 'pointer-events-none absolute left-2 top-2 max-w-sm rounded border border-(--ui-stroke-secondary) bg-(--ui-bg-quaternary) px-2 py-1 text-[0.75rem] text-(--ui-text-secondary)',
+            children: `${hover.severity || ''} · ${hover.label}${hover.threat && hover.threat.count > 1 ? ` · seen ${hover.threat.count}×` : ''}`
+          })
+        : null
+    ]
+  })
+}
+
+function localThreats(rows) {
+  const byIdentifier = new Map()
+  for (const row of rows) {
+    const key = row.identifier || row.title
+    const seen = byIdentifier.get(key)
+    if (seen) seen.count += 1
+    else byIdentifier.set(key, { identifier: key, category: row.category, severity: row.severity, name: row.title, count: 1, local: true })
+  }
+  return Array.from(byIdentifier.values())
+}
+
+function ThreatDetail({ identifier, tier, onClose }) {
+  const query = useDash('threat', `api/threat?identifier=${encodeURIComponent(identifier)}&tier=${encodeURIComponent(tier || 'public')}`)
   return jsx(Section, {
     title: 'Threat',
     actions: jsx(Button, { size: 'sm', variant: 'outline', onClick: onClose, children: 'Back' }),
@@ -427,19 +662,58 @@ function ThreatDetail({ identifier, onClose }) {
 }
 
 function ThreatGraph() {
+  const [tier, setTier] = useState('public')
   const [category, setCategory] = useState('')
   const [search, setSearch] = useState('')
   const [term, setTerm] = useState('')
   const [open, setOpen] = useState(null)
   const status = useDash('graph-status', 'api/graph-status')
   const sync = useDash('sync', 'api/verified-sync', POLL_MS)
+  // A sample of each threat type, asked for separately: the graph lists one type after another, so a
+  // single page of the verified tier held no indicators at all (717,005 of them, 2026-11-06).
+  const map = useQuery({
+    queryKey: ['blackbox', 'dash', 'graph-map', tier],
+    refetchInterval: SLOW_POLL_MS,
+    queryFn: async () => {
+      if (tier === 'local') return dash('api/findings?limit=500')
+      const first = await dash(`api/graph?tier=${tier}&limit=${LEAVES_PER_TYPE}`)
+      const totals = asObject(asObject(first).category_totals)
+      const types = Object.keys(totals).filter(type => totals[type] > 0)
+      if (types.length === 0) return first
+      const pages = await Promise.all(types.map(type => dash(`api/graph?tier=${tier}&limit=${LEAVES_PER_TYPE}&category=${encodeURIComponent(type)}`)))
+      return { ...asObject(first), threats: pages.flatMap(page => asList(asObject(page).threats)) }
+    }
+  })
   const browse = useDash('graph', `api/graph?tier=public&limit=50&q=${encodeURIComponent(term)}&category=${encodeURIComponent(category)}`)
   const syncNow = async () => {
     const answer = await dash('api/sync', { method: 'POST', body: {} })
     host.notify(answer && answer.ok ? { kind: 'success', message: answer.busy ? 'A sync is already running' : 'Sync started' } : { kind: 'error', message: 'Could not start a sync' })
     refreshDash()
   }
-  if (open) return jsx(ThreatDetail, { identifier: open, onClose: () => setOpen(null) })
+  const mapData = asObject(map.data)
+  const tierLabel = { public: 'Verified', community: 'Community', local: 'Local' }[tier]
+  const graph = useMemo(() => {
+    const threats = tier === 'local' ? localThreats(asList(mapData.findings)) : asList(mapData.threats).map(threat => ({ ...threat, tier }))
+    const totals = tier === 'local' ? {} : asObject(mapData.category_totals)
+    return threats.length ? buildBubbleGraph(tierLabel, threats, totals) : null
+  }, [map.dataUpdatedAt, tier])
+  if (open) {
+    if (open.local) {
+      return jsx(Section, {
+        title: open.name || open.identifier,
+        actions: jsx(Button, { size: 'sm', variant: 'outline', onClick: () => setOpen(null), children: 'Back' }),
+        children: jsxs('div', {
+          className: 'flex flex-col gap-1 text-sm text-(--ui-text-secondary)',
+          children: [
+            jsx(Badge, { variant: severityVariant(open.severity), children: open.severity }),
+            jsx(Dim, { children: open.identifier }),
+            jsx(Dim, { children: `Seen ${open.count} time(s) on this machine — see the Threats tab for each one.` })
+          ]
+        })
+      })
+    }
+    return jsx(ThreatDetail, { identifier: open.identifier, tier: open.tier || 'public', onClose: () => setOpen(null) })
+  }
   return jsxs('div', {
     className: 'flex flex-col gap-4',
     children: [
@@ -467,7 +741,24 @@ function ThreatGraph() {
         })
       }),
       jsx(Section, {
-        title: 'Browse the verified graph',
+        title: 'Threat graph',
+        help: 'Each bubble is a threat, grouped by type and coloured by severity. Hover to see it, click to open it. A sample of at most 40 per type is drawn; search below to find any threat.',
+        actions: jsx('div', {
+          className: 'flex gap-1',
+          children: [['public', 'Verified'], ['community', 'Community'], ['local', 'Local']].map(([id, label]) =>
+            jsx(Button, { size: 'sm', variant: tier === id ? 'default' : 'outline', onClick: () => setTier(id), children: label }, id)
+          )
+        }),
+        children: jsx(DashState, {
+          query: map,
+          children: () =>
+            graph
+              ? jsx(BubbleMap, { graph, onPick: threat => setOpen(threat) })
+              : jsx(Note, { children: `No ${tierLabel.toLowerCase()} threats to draw yet.` })
+        })
+      }),
+      jsx(Section, {
+        title: 'Search the verified graph',
         children: jsxs('div', {
           className: 'flex flex-col gap-2',
           children: [
@@ -499,21 +790,21 @@ function ThreatGraph() {
               query: browse,
               children: data => {
                 const page = asObject(data)
-                const threats = asList(page.threats)
-                const totals = asObject(page.category_totals)
+                const rows = asList(page.threats)
+                const pageTotals = asObject(page.category_totals)
                 return jsxs('div', {
                   className: 'flex flex-col',
                   children: [
-                    jsx(Dim, { children: `${num(page.total)} threats${Object.keys(totals).length ? ' · ' + Object.entries(totals).map(([k, v]) => `${k} ${num(v)}`).join(' · ') : ''}` }),
-                    threats.length === 0
+                    jsx(Dim, { children: `${num(page.total)} threats${Object.keys(pageTotals).length ? ' · ' + Object.entries(pageTotals).map(([k, v]) => `${k} ${num(v)}`).join(' · ') : ''}` }),
+                    rows.length === 0
                       ? jsx(Note, { children: 'No match.' })
-                      : threats.map(threat =>
+                      : rows.map(threat =>
                           jsxs(
                             'button',
                             {
                               type: 'button',
                               className: 'flex items-center gap-2 border-b border-(--ui-stroke-secondary) py-2 text-left text-sm hover:bg-(--chrome-action-hover)',
-                              onClick: () => setOpen(threat.identifier),
+                              onClick: () => setOpen({ ...threat, tier: 'public' }),
                               children: [
                                 jsx(Badge, { variant: severityVariant(threat.severity), children: threat.severity }),
                                 jsx(Badge, { variant: 'outline', children: threat.category }),
