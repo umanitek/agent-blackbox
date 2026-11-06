@@ -278,11 +278,24 @@ function themeColor(element, name, fallback) {
   return value || fallback
 }
 
-function seedLayout(nodes, links) {
-  nodes[0].x = 0
-  nodes[0].y = 0
-  const placed = new Set([0])
-  const queue = [0]
+function seedLayout(nodes, links, previous) {
+  // Bubbles the last graph also had (the centre, the hubs) start where they were, so switching tier
+  // reshapes the map instead of redrawing it from nothing; the rest start next to their hub.
+  const placed = new Set()
+  nodes.forEach((node, index) => {
+    const before = previous && previous.get(node.id)
+    if (before) {
+      node.x = before.x
+      node.y = before.y
+      placed.add(index)
+    }
+  })
+  if (!placed.has(0)) {
+    nodes[0].x = 0
+    nodes[0].y = 0
+    placed.add(0)
+  }
+  const queue = Array.from(placed)
   while (queue.length) {
     const parent = queue.shift()
     const children = links.filter(link => link.from === parent && !placed.has(link.to))
@@ -505,7 +518,7 @@ function fitView(nodes, width, height) {
   return { k, x: width / 2 - ((minX + maxX) / 2) * k, y: height / 2 - ((minY + maxY) / 2) * k }
 }
 
-function BubbleMap({ graph, onPick }) {
+function BubbleMap({ graph, loading, onPick }) {
   const wrapRef = useRef(null)
   const canvasRef = useRef(null)
   const [hover, setHover] = useState(null)
@@ -515,12 +528,15 @@ function BubbleMap({ graph, onPick }) {
     const canvas = canvasRef.current
     if (!canvas) return undefined
     const state = live.current
+    const previous = new Map(state.nodes.map(node => [node.id, node]))
     const nodes = graph.nodes.map(node => ({ ...node }))
-    seedLayout(nodes, graph.links)
+    seedLayout(nodes, graph.links, previous)
+    const carried = previous.size > 0
     state.nodes = nodes
     state.links = graph.links
-    state.alpha = 1
+    state.alpha = carried ? 0.6 : 1
     state.fitted = false
+    state.target = null
     const theme = {
       label: themeColor(canvas, '--ui-text-secondary', '#F1EFE9'),
       muted: themeColor(canvas, '--ui-text-tertiary', '#A8A49D'),
@@ -539,23 +555,37 @@ function BubbleMap({ graph, onPick }) {
         ticks++
         if (!state.fitted && ticks > 90) {
           const box = size()
-          state.view = fitView(state.nodes, box.width, box.height)
+          state.target = fitView(state.nodes, box.width, box.height)   // glide there, never jump
           state.fitted = true
         }
       }
+      if (state.target) {
+        const view = state.view
+        const target = state.target
+        const ease = 0.18
+        state.view = { k: view.k + (target.k - view.k) * ease, x: view.x + (target.x - view.x) * ease, y: view.y + (target.y - view.y) * ease }
+        if (Math.abs(target.k - view.k) < 0.002 && Math.abs(target.x - view.x) < 0.5 && Math.abs(target.y - view.y) < 0.5) {
+          state.view = target
+          state.target = null
+        }
+      }
       drawGraph(canvas, state.nodes, state.links, state.view, state.hover, theme)
-      if (state.alpha > 0.004 || state.pointer) frame = requestAnimationFrame(loop)
+      if (state.alpha > 0.004 || state.pointer || state.target) frame = requestAnimationFrame(loop)
     }
     const wake = () => {
       if (!frame) frame = requestAnimationFrame(loop)
     }
     state.wake = wake
+    let sized = false
     const resize = () => {
       const box = size()
       const scale = window.devicePixelRatio || 1
       canvas.width = Math.max(1, Math.floor(box.width * scale))
       canvas.height = Math.max(1, Math.floor(box.height * scale))
-      state.view = fitView(state.nodes, box.width, box.height)
+      // the first frame of a fresh map fits at once; a resize or a tier switch glides
+      if (!sized && !carried) state.view = fitView(state.nodes, box.width, box.height)
+      else state.target = fitView(state.nodes, box.width, box.height)
+      sized = true
       wake()
     }
     const observer = new ResizeObserver(resize)
@@ -595,11 +625,11 @@ function BubbleMap({ graph, onPick }) {
 
   return jsxs('div', {
     ref: wrapRef,
-    className: 'relative overflow-hidden rounded border border-(--ui-stroke-secondary) bg-(--ui-bg-primary)',
+    style: { position: 'relative', overflow: 'hidden' },
     children: [
       jsx('canvas', {
         ref: canvasRef,
-        className: 'block h-[560px] w-full',
+        style: { display: 'block', width: '100%', height: 560, opacity: loading ? 0.55 : 1, transition: 'opacity .2s' },
         onWheel: event => {
           const point = local(event)
           const view = live.current.view
@@ -660,15 +690,16 @@ function BubbleMap({ graph, onPick }) {
       }),
       hover
         ? jsxs('div', {
-            className: 'pointer-events-none absolute left-3 top-3 max-w-sm rounded border border-(--ui-stroke-secondary) bg-(--ui-bg-quaternary) px-2.5 py-1.5 text-[0.75rem] text-(--ui-text-secondary)',
+            style: { position: 'absolute', left: 12, top: 12, maxWidth: 380, pointerEvents: 'none', padding: '8px 12px', borderRadius: 6,
+              border: '1px solid var(--ui-stroke-secondary)', background: 'var(--background, #0b0b0d)', fontSize: 12.5 },
             children: [
-              jsx('div', { className: 'font-medium', children: hover.label }),
-              jsx('div', { className: 'text-(--ui-text-tertiary)', children: `${hover.severity || 'unknown'} · ${GRAPH_CATEGORIES[hover.type] ? GRAPH_CATEGORIES[hover.type].name : 'Other'}${hover.threat.count > 1 ? ` · seen ${hover.threat.count}×` : ''}` })
+              jsx('div', { style: { fontWeight: 600 }, children: hover.label }),
+              jsx('div', { style: { color: 'var(--ui-text-tertiary)' }, children: `${hover.severity || 'unknown'} · ${GRAPH_CATEGORIES[hover.type] ? GRAPH_CATEGORIES[hover.type].name : 'Other'}${hover.threat.count > 1 ? ` · seen ${hover.threat.count}×` : ''}` })
             ]
           })
         : null,
-      jsx('div', { className: 'pointer-events-none absolute bottom-2 left-3 text-[0.65rem] text-(--ui-text-quaternary)', children: 'Scroll to zoom · drag a bubble or the background · click a threat to open it' }),
-      jsx(Button, { size: 'sm', variant: 'outline', className: 'absolute bottom-2 right-2', onClick: toggleFullscreen, children: jsx(Codicon, { name: 'screen-full' }) })
+      jsx('div', { style: { position: 'absolute', left: 14, bottom: 10, pointerEvents: 'none', fontSize: 11, color: 'var(--ui-text-quaternary)' }, children: 'Scroll to zoom · drag a bubble or the background · click a threat to open it' }),
+      jsx('button', { type: 'button', className: 'bbx-iconbtn', title: 'Fullscreen', style: { position: 'absolute', right: 12, bottom: 12, background: 'var(--background, #0b0b0d)' }, onClick: toggleFullscreen, children: jsx(Codicon, { name: 'screen-full' }) })
     ]
   })
 }
@@ -706,9 +737,9 @@ const PAGE_CSS = `
 .bbx-tab { font-family: var(--bbx-mono); font-size: 11.5px; letter-spacing: 0.08em; text-transform: uppercase; padding: 7px 14px;
   border-radius: 4px; border: 0; background: transparent; color: var(--bbx-muted); cursor: pointer; display: inline-flex; gap: 8px; align-items: center; }
 .bbx-tab:hover { color: var(--bbx-text); background: var(--bbx-hover); }
-.bbx-tab[aria-selected="true"] { background: var(--bbx-text); color: var(--ui-bg-primary, #000); }
+.bbx-tab[aria-selected="true"] { background: var(--bbx-text); color: var(--background, #0b0b0d); }
 .bbx-tab-count { font-size: 10.5px; padding: 1px 6px; border-radius: 3px; background: var(--bbx-hover); }
-.bbx-tab[aria-selected="true"] .bbx-tab-count { background: color-mix(in srgb, var(--ui-bg-primary, #000) 20%, transparent); }
+.bbx-tab[aria-selected="true"] .bbx-tab-count { background: color-mix(in srgb, var(--background, #0b0b0d) 20%, transparent); }
 .bbx-modepill { font-family: var(--bbx-mono); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; padding: 8px 14px;
   border-radius: 4px; border: 1px solid var(--bbx-line); color: var(--bbx-muted); background: transparent; cursor: pointer; }
 .bbx-modepill.block { color: var(--bbx-signal); border-color: color-mix(in srgb, ${SIGNAL} 55%, transparent); background: color-mix(in srgb, ${SIGNAL} 10%, transparent); }
@@ -729,10 +760,10 @@ const PAGE_CSS = `
 .bbx-ok { color: #3FA568; font-family: var(--bbx-mono); font-size: 12.5px; font-weight: 600; }
 .bbx-seg { display: inline-flex; padding: 3px; border: 1px solid var(--bbx-line); border-radius: 6px; gap: 2px; }
 .bbx-seg button { font-family: var(--bbx-mono); font-size: 11.5px; padding: 6px 12px; border-radius: 4px; border: 0; background: transparent; color: var(--bbx-muted); cursor: pointer; }
-.bbx-seg button[aria-pressed="true"] { background: var(--bbx-text); color: var(--ui-bg-primary, #000); }
+.bbx-seg button[aria-pressed="true"] { background: var(--bbx-text); color: var(--background, #0b0b0d); }
 .bbx-btn { font-size: 13px; font-weight: 600; padding: 8px 14px; border-radius: 6px; border: 1px solid var(--bbx-line); background: transparent; color: var(--bbx-text); cursor: pointer; }
 .bbx-btn:hover { background: var(--bbx-hover); }
-.bbx-btn.primary { background: var(--bbx-text); color: var(--ui-bg-primary, #000); border-color: var(--bbx-text); }
+.bbx-btn.primary { background: var(--bbx-text); color: var(--background, #0b0b0d); border-color: var(--bbx-text); }
 .bbx-btn.danger { color: #E5484D; border-color: color-mix(in srgb, #E5484D 45%, transparent); }
 .bbx-btn:disabled { opacity: 0.45; cursor: default; }
 .bbx-table { width: 100%; border-collapse: collapse; }
@@ -758,7 +789,7 @@ const PAGE_CSS = `
   background: color-mix(in srgb, ${SIGNAL} 5%, transparent); }
 .bbx-agent.off { border-color: var(--bbx-line); background: transparent; }
 .bbx-avatar { width: 46px; height: 46px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 18px;
-  background: var(--bbx-text); color: var(--ui-bg-primary, #000); flex: none; }
+  background: var(--bbx-text); color: var(--background, #0b0b0d); flex: none; }
 .bbx-attach { display: flex; gap: 14px; align-items: center; padding: 16px; border-radius: 6px; border: 1px dashed var(--bbx-line); background: transparent;
   color: var(--bbx-text); cursor: pointer; text-align: left; font-size: 15px; }
 .bbx-attach:hover { background: var(--bbx-hover); }
@@ -785,11 +816,11 @@ const PAGE_CSS = `
 .bbx-setrow-text { flex: 1; min-width: 220px; }
 .bbx-setrow-title { font-weight: 600; }
 .bbx-switch { position: relative; width: 38px; height: 22px; border-radius: 11px; border: 0; background: var(--bbx-line); cursor: pointer; flex: none; }
-.bbx-switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: var(--ui-bg-primary, #fff); transition: left .15s; }
+.bbx-switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: var(--background, #0b0b0d); transition: left .15s; }
 .bbx-switch[aria-checked="true"] { background: #3F8F5F; }
 .bbx-switch[aria-checked="true"]::after { left: 19px; }
 .bbx-savebar { position: sticky; bottom: 0; display: flex; gap: 12px; align-items: center; padding: 14px 22px; border-top: 1px solid var(--bbx-line);
-  background: var(--ui-bg-primary, #000); }
+  background: var(--background, #0b0b0d); }
 .bbx-confirm { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; padding: 14px 22px; border-top: 1px solid var(--bbx-line);
   background: color-mix(in srgb, ${SIGNAL} 6%, transparent); }
 .bbx-graphwrap { padding: 0; overflow: hidden; }
@@ -1458,12 +1489,13 @@ function ThreatGraphTab() {
   const map = useQuery({
     queryKey: ['blackbox', 'dash', 'graph-map', tier],
     refetchInterval: SLOW_POLL_MS,
+    placeholderData: previous => previous, // the last graph stays up while the next tier loads
     queryFn: async () => {
-      if (tier === 'local') return dash('api/findings?limit=500')
+      if (tier === 'local') return { ...asObject(await dash('api/findings?limit=500')), loadedTier: tier }
       const first = await dash(`api/graph?tier=${tier}&limit=${LEAVES_PER_TYPE}`)
       const totals = asObject(asObject(first).category_totals)
       const types = Object.keys(totals).filter(type => totals[type] > 0)
-      if (types.length === 0) return first
+      if (types.length === 0) return { ...asObject(first), loadedTier: tier }
       const ecosystems = Object.keys(asObject(asObject(first).ecosystem_totals))
       const pages = await Promise.all([
         ...types.filter(type => type !== 'dependency' || ecosystems.length < 2)
@@ -1472,17 +1504,20 @@ function ThreatGraphTab() {
           ? ecosystems.map(ecosystem => dash(`api/graph?tier=${tier}&limit=${LEAVES_PER_TYPE}&category=dependency&ecosystem=${encodeURIComponent(ecosystem)}`))
           : [])
       ])
-      return { ...asObject(first), threats: pages.flatMap(page => asList(asObject(page).threats)) }
+      return { ...asObject(first), threats: pages.flatMap(page => asList(asObject(page).threats)), loadedTier: tier }
     }
   })
   const mapData = asObject(map.data)
   const tierLabel = { public: 'Verified', community: 'Community', local: 'Local' }[tier]
+  // drawn from the tier the data belongs to: while the next tier loads, the last graph stays as it was
   const graph = useMemo(() => {
-    const threats = tier === 'local' ? localThreats(asList(mapData.findings)) : asList(mapData.threats).map(threat => ({ ...threat, tier }))
-    const totals = tier === 'local' ? {} : asObject(mapData.category_totals)
-    const ecosystemTotals = tier === 'local' ? {} : asObject(mapData.ecosystem_totals)
-    return threats.length ? buildBubbleGraph(tierLabel === 'Verified' ? 'Verifiable graph' : `${tierLabel} graph`, threats, totals, ecosystemTotals) : null
-  }, [map.dataUpdatedAt, tier])
+    const shown = mapData.loadedTier || tier
+    const threats = shown === 'local' ? localThreats(asList(mapData.findings)) : asList(mapData.threats).map(threat => ({ ...threat, tier: shown }))
+    const totals = shown === 'local' ? {} : asObject(mapData.category_totals)
+    const ecosystemTotals = shown === 'local' ? {} : asObject(mapData.ecosystem_totals)
+    const label = { public: 'Verifiable graph', community: 'Community graph', local: 'Local graph' }[shown]
+    return threats.length ? buildBubbleGraph(label, threats, totals, ecosystemTotals) : null
+  }, [map.dataUpdatedAt, mapData.loadedTier])
   const syncNow = async () => {
     const answer = await dash('api/sync', { method: 'POST', body: {} })
     host.notify(answer && answer.ok ? { kind: 'success', message: answer.busy ? 'A sync is already running' : 'Sync started' } : { kind: 'error', message: 'Could not start a sync' })
@@ -1519,15 +1554,15 @@ function ThreatGraphTab() {
               ]
             })
           }),
-          tier === 'public' ? jsx(SyncPanel, {}) : null,
+          jsx(SyncPanel, {}),
           jsxs('div', {
             className: 'bbx-panel bbx-graphwrap',
             children: [
-              tier === 'public' ? jsx(FindThreat, { onOpen: setOpen }) : null,
+              jsx(FindThreat, { onOpen: setOpen }),
               jsx(Loading, {
                 query: map,
                 empty: `No ${tierLabel.toLowerCase()} threats to draw yet.`,
-                children: () => (graph ? jsx(BubbleMap, { graph, onPick: threat => setOpen(threat) }) : null)
+                children: () => (graph ? jsx(BubbleMap, { graph, loading: map.isPlaceholderData, onPick: threat => setOpen(threat) }) : null)
               })
             ]
           })
