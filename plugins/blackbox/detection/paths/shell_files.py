@@ -11,6 +11,7 @@ Two more ways a command reads files without naming them to ``cat``:
 
 * ``find ROOT … -exec cat {} +`` (or ``| xargs cat``): every file under ROOT is
   read, so ROOT counts as a folder handed over whole (:func:`_find_args`).
+* a link: ``ln -s SRC DEST`` reaches SRC through DEST, so SRC counts like a copy's source.
 * a one-line script — ``python3 -c "open('…').read()"``, ``node -e``, ``ruby -e``,
   ``perl -e``, ``php -r``, or a script fed on a heredoc (``python3 - <<EOF``): the
   quoted paths in its code are read (:func:`_script_args`). A path the code builds
@@ -52,6 +53,7 @@ _READ_COMMANDS = frozenset({
 #: folder hands over everything inside it.
 _RECURSIVE_COMMANDS = frozenset({
     "cp", "scp", "rsync", "tar", "zip", "7z", "7za", "rar", "ditto", "mv", "gzip", "rg",
+    "ln", "link",   # a link reaches what it points at: ``ln -s KEY /tmp/y && cat /tmp/y`` (KI-472)
     "copy", "xcopy", "robocopy", "copy-item", "cpi", "compress-archive", "move-item",   # Windows
 })
 #: Commands that read whole folders only with a recursive flag.
@@ -59,7 +61,8 @@ _RECURSIVE_WITH_FLAG = {"grep": ("-r", "-R", "--recursive"), "egrep": ("-r", "-R
 _SEPARATORS = frozenset({";", "&&", "||", "|", "&", ">", ">>", "<", "|&"})
 #: Copy and move commands whose LAST path argument is where things go, not what is read
 #: (unless ``-t``/``--target-directory`` names the destination up front).
-_COPY_COMMANDS = frozenset({"cp", "scp", "rsync", "mv", "ditto", "copy", "xcopy", "robocopy", "copy-item", "cpi", "move-item"})
+_COPY_COMMANDS = frozenset({"cp", "scp", "rsync", "mv", "ditto", "copy", "xcopy", "robocopy", "copy-item", "cpi", "move-item",
+                            "ln", "link"})
 #: Archivers whose FIRST path argument is the archive being written (tar names it after ``f``).
 _ARCHIVE_FIRST = frozenset({"zip", "7z", "7za", "rar"})
 #: Interpreters and the option that hands them code on the command line.
@@ -265,6 +268,15 @@ def _script_args(name: str, words: list[str], index: int) -> tuple[list[ShellFil
         if words[position] in options:
             found.extend(_paths_in_code(name, words[position + 1]))
     return found, end
+
+
+def code_file_args(code: str, language: str = "python") -> list[ShellFileArg]:
+    """The paths a piece of *code* reads, for tools that run code directly rather than through a
+    shell (Hermes's ``execute_code`` runs Python): the same reading as ``python3 -c CODE`` (KI-470).
+
+        code_file_args("print(open('/home/me/.ssh/id_rsa').read())")   # -> [ShellFileArg(path='/home/me/.ssh/id_rsa', ...)]
+    """
+    return _paths_in_code(language, code or "")
 
 
 def _paths_in_code(interpreter: str, code: str) -> list[ShellFileArg]:

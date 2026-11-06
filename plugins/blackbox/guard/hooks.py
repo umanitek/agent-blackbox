@@ -109,6 +109,7 @@ def _raw_findings(cfg: BlackboxConfig, rs: Any, tool_name: str, args: Any,
     """All raw findings for one call, gathered here so new detectors join without growing the hook body."""
     raw = detection.detect_all(tool_name, args, rs, discover=cfg.discover)
     raw += detection.detect_custom_fileaccess(tool_name, args, cfg.protected_paths) + shields.check(tool_name, args, active)
+    raw += detection.detect_guard_tamper(tool_name, args)   # KI-473: an agent never switches its guard off
     raw += _kill_list_findings(rs, tool_name, args)   # R14: curator-signed DISABLE / WARN, last-good list
     return raw
 

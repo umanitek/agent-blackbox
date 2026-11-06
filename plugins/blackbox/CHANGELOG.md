@@ -38,6 +38,40 @@ that the two version fields agree.
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-11-06
+
+### Added
+
+- **The Blackbox dashboard inside Hermes Desktop.** Switch it on once under Capabilities →
+  Plugins, then open Blackbox in the sidebar:
+  - **Overview:** open findings, verified threats synced, last sync, the community graph and
+    threat sharing at a glance; your connected agents, with Attach agent to protect another one;
+    and Trader Shield — the wallets found on this machine, what it always watches, recent events.
+  - **Threat graph:** the verified, community and local graphs as a live bubble map you can drag
+    and zoom (dependencies split by ecosystem, threats coloured by severity, click to open one),
+    the verified graph's sync progress, a search over all verified threats, and Threats detected
+    and Agent activity as sortable, paged tables.
+  - **Settings:** the mode (Audit or Block; switching to Audit asks you to confirm), what
+    Blackbox checks and from which severity, protected paths, Trader Shield (wallets, your
+    addresses) and community sharing (with its consent step).
+- **A shield in Desktop's status bar** shows the mode — Audit in amber, Block in green — and what
+  was caught today; Desktop says once, with a Turn on blocking button, when Blackbox is recording
+  but not blocking.
+- **Live alerts in Desktop** the moment Blackbox flags or blocks something an agent tried to do:
+  the finding, its severity, the tool and whether it was blocked — never the command or file
+  contents. An action that matches several rules is one alert.
+
+### Security
+
+- **An agent can no longer change Blackbox's settings or switch it off.** Edits by an agent's
+  tools to Hermes's `config.yaml` that touch Blackbox (its mode, its entry, the plugin list),
+  writes into Blackbox's own folders, and commands such as `hermes plugins disable blackbox` are
+  flagged, and refused in block mode. You still change settings as before: the dashboard, the
+  `blackbox` commands you type, or your own editor.
+- **Protected files stay protected on more routes:** code run through Hermes's code tool, a
+  wildcard that would match a protected file, and a link pointing at one are now checked the same
+  way as a direct read.
+
 ## [1.2.0] - 2026-11-04
 
 ### Added
@@ -103,6 +137,7 @@ The first version in the Hermes plugin catalog (commit `7d697683`, added by Herm
 in NousResearch/hermes-agent#140529). Its `plugin.yaml` said 1.0.0 while Blackbox's own code and
 dashboard reported 1.1.0; 1.1.0 is therefore skipped, so no two different builds share a number.
 
-[Unreleased]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.2.0...main
+[Unreleased]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.3.0...main
+[1.3.0]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.2.0...blackbox-v1.3.0
 [1.2.0]: https://github.com/umanitek/agent-blackbox/compare/7d697683e0d56608cfe3fee374d6a6866702058a...blackbox-v1.2.0
 [1.0.0]: https://github.com/umanitek/agent-blackbox/tree/7d697683e0d56608cfe3fee374d6a6866702058a/plugins/blackbox
