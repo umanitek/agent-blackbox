@@ -112,23 +112,22 @@ def _rows(limit: int) -> list[dict[str, Any]]:
 
 
 def _action_key(row: Mapping[str, Any]) -> tuple[Any, ...]:
-    """Rows of one checked action share the record's time, event and tool call (one per finding)."""
-    detail = row.get("detail") if isinstance(row.get("detail"), Mapping) else {}
-    return (row.get("ts"), row.get("event"), detail.get("tool_call_id"), detail.get("session_id"))
+    """Findings of one checked action share the record's time, event and session (one row per finding)."""
+    return (row.get("ts"), row.get("event"), row.get("session_id"))
 
 
 def _actions(rows: Sequence[Mapping[str, Any]]) -> list[FindingAlert]:
-    """One alert per checked action, newest first (the log is already newest first)."""
+    """One alert per checked action, newest first (the log is already newest first).
+
+    ``audit.read_findings`` rows are flat: each is one finding (``identifier``, ``title``, ``severity``,
+    ``category``, ``tool_name``) with its record's ``ts``, ``event``, ``session_id`` and the hook's
+    ``decision`` beside it.
+    """
     grouped: dict[tuple[Any, ...], list[Mapping[str, Any]]] = {}
     for row in rows:
         grouped.setdefault(_action_key(row), []).append(row)
-    actions = []
-    for group in grouped.values():
-        findings = [row["finding"] for row in group if isinstance(row.get("finding"), Mapping)] or [{}]
-        detail = group[0].get("detail") if isinstance(group[0].get("detail"), Mapping) else {}
-        # Playground tests are recorded in the sandbox folder's own log (audit.sandbox_run), never this one.
-        actions.append(_alert(findings, detail, float(group[0].get("ts") or 0), sandbox=False))
-    return actions
+    # Playground tests are recorded in the sandbox folder's own log (audit.sandbox_run), never this one.
+    return [_alert(group, group[0], float(group[0].get("ts") or 0), sandbox=False) for group in grouped.values()]
 
 
 def findings_payload(limit: int = 20) -> dict[str, Any]:
