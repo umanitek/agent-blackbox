@@ -1,5 +1,6 @@
 // Agent Blackbox inside Hermes Desktop: a shield in the status bar, a Blackbox section in the
-// sidebar with everything the Blackbox dashboard does, and an alert the moment Blackbox flags or
+// sidebar with everything the Blackbox dashboard does (Overview, Threat graph, Settings, in the
+// dashboard's own design), and an alert the moment Blackbox flags or
 // blocks something an agent tried to do.
 //
 // Data: Blackbox's own Desktop routes (dashboard/plugin_api.py) through ctx.rest — /status,
@@ -31,16 +32,6 @@ const SLOW_POLL_MS = 30000
 const STATUS_KEY = ['blackbox', 'status']
 const FINDINGS_KEY = ['blackbox', 'findings']
 const AUDIT_NOTICE_KEY = 'auditNoticeShown' // ctx.storage: the one-time "recording, not blocking" notice
-const TABS = [
-  ['overview', 'Overview'],
-  ['threats', 'Threats'],
-  ['activity', 'Activity'],
-  ['graph', 'Threat graph'],
-  ['trader', 'Trader Shield'],
-  ['agents', 'Agents'],
-  ['community', 'Community'],
-  ['settings', 'Settings']
-]
 const SEVERITIES = ['info', 'low', 'medium', 'high', 'critical']
 
 let rest = null // ctx.rest, set in register() and cleared on dispose
@@ -107,90 +98,6 @@ async function setMode(mode) {
   return false
 }
 
-// ---------------------------------------------------------------- small building blocks
-
-function Label({ children }) {
-  return jsx('div', { className: 'text-[0.65rem] uppercase tracking-wide text-(--ui-text-quaternary)', children })
-}
-
-function Fact({ label, value }) {
-  return jsxs('div', {
-    className: 'flex flex-col gap-0.5',
-    children: [jsx(Label, { children: label }), jsx('span', { className: 'text-sm text-(--ui-text-secondary)', children: value })]
-  })
-}
-
-function Section({ title, help, actions, children }) {
-  return jsxs('section', {
-    className: 'flex flex-col gap-2 border-t border-(--ui-stroke-secondary) pt-4',
-    children: [
-      jsxs('div', {
-        className: 'flex items-center gap-2',
-        children: [
-          jsx('h2', { className: 'text-sm font-medium text-(--ui-text-secondary)', children: title }),
-          jsx('div', { className: 'flex-1' }),
-          actions || null
-        ]
-      }),
-      help ? jsx('p', { className: 'max-w-3xl text-[0.8rem] text-(--ui-text-tertiary)', children: help }) : null,
-      children
-    ]
-  })
-}
-
-function Note({ children }) {
-  return jsx('div', { className: 'py-3 text-sm text-(--ui-text-tertiary)', children })
-}
-
-function DashState({ query, children }) {
-  const data = query.data
-  if (query.isLoading) return jsx(Note, { children: 'Loading…' })
-  if (data && data.dashboardDown) {
-    return jsx(Note, {
-      children: 'The Blackbox dashboard service is not running, so this panel cannot load. It starts at login; to start it now, run `blackbox dashboard` in a terminal.'
-    })
-  }
-  if (data && data.error && !Array.isArray(data)) return jsx(Note, { children: `Could not load: ${data.error}` })
-  return children(data)
-}
-
-function Row({ children }) {
-  return jsx('div', { className: 'flex flex-wrap items-center gap-2 border-b border-(--ui-stroke-secondary) py-2 text-sm', children })
-}
-
-function Grow({ children, title }) {
-  return jsx('span', { className: 'min-w-0 flex-1 truncate text-(--ui-text-secondary)', title, children })
-}
-
-function Dim({ children }) {
-  return jsx('span', { className: 'text-[0.7rem] text-(--ui-text-tertiary)', children })
-}
-
-function Checkbox({ checked, onChange, label, disabled }) {
-  return jsxs('label', {
-    className: 'flex items-center gap-2 text-sm text-(--ui-text-secondary)',
-    children: [
-      jsx('input', { type: 'checkbox', checked: !!checked, disabled: !!disabled, onChange: event => onChange(event.target.checked) }),
-      jsx('span', { children: label })
-    ]
-  })
-}
-
-function SeverityPick({ value, onChange }) {
-  return jsx('select', {
-    className: 'rounded border border-(--ui-stroke-secondary) bg-transparent px-1 py-0.5 text-sm text-(--ui-text-secondary)',
-    value: SEVERITIES.includes(value) ? value : 'info',
-    onChange: event => onChange(event.target.value),
-    children: SEVERITIES.map(name => jsx('option', { value: name, children: name }, name))
-  })
-}
-
-function openDashboard(ctx, url) {
-  ctx.os.openExternal(url).then(opened => {
-    if (!opened) host.notify({ kind: 'warning', message: `Open ${url} in your browser` })
-  })
-}
-
 // ---------------------------------------------------------------- status bar
 
 function useStatus() {
@@ -220,179 +127,8 @@ function StatusChip() {
   })
 }
 
-// ---------------------------------------------------------------- Overview
 
-function ModeSwitch({ mode }) {
-  const [confirming, setConfirming] = useState(false)
-  const [busy, setBusy] = useState(false)
-  const choose = async next => {
-    setBusy(true)
-    await setMode(next)
-    setBusy(false)
-    setConfirming(false)
-  }
-  const option = (value, label) =>
-    jsx(Button, {
-      size: 'sm',
-      variant: mode === value ? 'default' : 'outline',
-      disabled: busy || mode === value,
-      onClick: () => (value === 'audit' ? setConfirming(true) : choose('block')),
-      children: label
-    })
-  return jsxs('div', {
-    className: 'flex flex-col gap-2',
-    children: [
-      jsxs('div', {
-        className: 'flex flex-wrap items-center gap-2',
-        children: [jsx(Label, { children: 'Mode' }), option('audit', 'Audit: record only'), option('block', 'Block: stop threats')]
-      }),
-      confirming
-        ? jsxs('div', {
-            className: 'flex flex-wrap items-center gap-2 text-sm text-(--ui-text-secondary)',
-            children: [
-              jsx('span', { children: 'Switch to audit? Blackbox will keep recording threats but will stop blocking them.' }),
-              jsx(Button, { size: 'sm', variant: 'destructive', disabled: busy, onClick: () => choose('audit'), children: 'Switch to audit' }),
-              jsx(Button, { size: 'sm', variant: 'outline', disabled: busy, onClick: () => setConfirming(false), children: 'Keep blocking' })
-            ]
-          })
-        : null
-    ]
-  })
-}
-
-function FindingRow({ item }) {
-  return jsxs(Row, {
-    children: [
-      jsx(Badge, { variant: item.outcome === 'blocked' ? 'destructive' : 'warn', children: item.outcome }),
-      jsx(Badge, { variant: severityVariant(item.severity), children: item.severity }),
-      jsx(Grow, { title: item.title, children: item.title }),
-      item.more > 0 ? jsx(Badge, { variant: 'outline', children: `+${item.more} more` }) : null,
-      jsx(Dim, { children: item.tool }),
-      jsx('span', { className: 'w-20 text-right text-[0.7rem] text-(--ui-text-quaternary)', children: item.time ? relativeTime(item.time * 1000) : '' })
-    ]
-  })
-}
-
-function Overview({ status, setTab }) {
-  const findings = useQuery({ queryKey: FINDINGS_KEY, queryFn: () => (rest ? rest('/findings') : { findings: [] }), refetchInterval: POLL_MS })
-  const sync = useDash('sync', 'api/verified-sync')
-  const shields = useDash('shields', 'api/shields')
-  const s = status
-  const items = asList(findings.data && findings.data.findings).slice(0, 6)
-  const trader = asList(shields.data).find(card => card && card.shield_id === 'trader')
-  const syncData = asObject(sync.data)
-  return jsxs('div', {
-    className: 'flex flex-col gap-4',
-    children: [
-      jsx('p', {
-        className: 'max-w-2xl text-sm text-(--ui-text-tertiary)',
-        children:
-          s.mode === 'block'
-            ? `Blackbox checks every tool call and model request before it runs, and refuses those at or above ${s.blockSeverity} severity.`
-            : 'Blackbox checks every tool call and model request before it runs, and records what it finds. In audit mode it does not stop anything: turn on Block to have it refuse threats.'
-      }),
-      jsx(ModeSwitch, { mode: s.mode }),
-      jsxs('div', {
-        className: 'grid grid-cols-2 gap-4 sm:grid-cols-4',
-        children: [
-          jsx(Fact, { label: 'Threat rules', value: s.rules != null ? s.rules.toLocaleString() : 'loading' }),
-          jsx(Fact, { label: 'Verified graph', value: syncData.phase_text || syncData.state || '–' }),
-          jsx(Fact, { label: 'Caught today', value: String(s.today.findings) }),
-          jsx(Fact, { label: 'Blocked today', value: String(s.today.blocked) })
-        ]
-      }),
-      trader
-        ? jsxs(Row, {
-            children: [
-              jsx(Codicon, { name: 'shield' }),
-              jsx(Grow, { children: `${trader.name}: ${asObject(trader.mode).enabled ? 'engaged' : 'off'}` }),
-              jsx(Button, { size: 'sm', variant: 'outline', onClick: () => setTab('trader'), children: asObject(trader.mode).enabled ? 'Open' : 'Set up' })
-            ]
-          })
-        : null,
-      jsx(Section, {
-        title: 'Recent findings',
-        actions: jsx(Button, { size: 'sm', variant: 'outline', onClick: () => setTab('threats'), children: 'All threats' }),
-        children:
-          items.length === 0
-            ? jsx(Note, { children: 'Nothing flagged yet. Blackbox is watching every tool call your agents make.' })
-            : items.map((item, index) => jsx(FindingRow, { item }, `${item.time}-${index}`))
-      })
-    ]
-  })
-}
-
-// ---------------------------------------------------------------- Threats and Activity
-
-function Threats() {
-  const [order, setOrder] = useState('newest')
-  const query = useDash('findings', 'api/findings?limit=200', POLL_MS)
-  return jsx(Section, {
-    title: 'Threats detected',
-    help: 'Everything Blackbox flagged or blocked on this machine, with the evidence it recorded (redacted, kept on this machine only).',
-    actions: jsxs('div', {
-      className: 'flex gap-1',
-      children: [
-        jsx(Button, { size: 'sm', variant: order === 'newest' ? 'default' : 'outline', onClick: () => setOrder('newest'), children: 'Newest' }),
-        jsx(Button, { size: 'sm', variant: order === 'severity' ? 'default' : 'outline', onClick: () => setOrder('severity'), children: 'Most severe' })
-      ]
-    }),
-    children: jsx(DashState, {
-      query,
-      children: data => {
-        const rows = asList(asObject(data).findings).slice()
-        if (order === 'severity') rows.sort((a, b) => SEVERITIES.indexOf(b.severity) - SEVERITIES.indexOf(a.severity) || (b.ts || 0) - (a.ts || 0))
-        if (rows.length === 0) return jsx(Note, { children: 'No threats recorded yet.' })
-        return rows.map((row, index) =>
-          jsxs(
-            Row,
-            {
-              children: [
-                jsx(Badge, { variant: row.decision === 'block' ? 'destructive' : 'warn', children: row.decision === 'block' ? 'blocked' : 'flagged' }),
-                jsx(Badge, { variant: severityVariant(row.severity), children: row.severity || 'unknown' }),
-                jsx(Grow, { title: `${row.identifier || ''}\n${row.evidence || ''}`, children: row.title || row.identifier }),
-                jsx(Dim, { children: row.tool_name || row.event }),
-                jsx('span', { className: 'w-20 text-right text-[0.7rem] text-(--ui-text-quaternary)', children: when(row.ts) })
-              ]
-            },
-            `${row.ts}-${index}`
-          )
-        )
-      }
-    })
-  })
-}
-
-function Activity() {
-  const query = useDash('audit', 'api/audit?limit=200', POLL_MS)
-  return jsx(Section, {
-    title: 'Agent activity',
-    help: 'What the protected agents did: sessions, tool calls, package installs and file access, newest first.',
-    children: jsx(DashState, {
-      query,
-      children: data => {
-        const rows = asList(asObject(data).entries)
-        if (rows.length === 0) return jsx(Note, { children: 'No activity recorded yet.' })
-        return rows.map((row, index) =>
-          jsxs(
-            Row,
-            {
-              children: [
-                jsx(Badge, { variant: row.severity ? severityVariant(row.severity) : 'outline', children: row.event || 'event' }),
-                jsx(Grow, { children: [row.tool || row.tool_name, row.name && `${row.ecosystem ? row.ecosystem + ':' : ''}${row.name}${row.version ? '@' + row.version : ''}`, row.path].filter(Boolean).join(' · ') || row.event }),
-                jsx(Dim, { children: row.framework }),
-                jsx('span', { className: 'w-20 text-right text-[0.7rem] text-(--ui-text-quaternary)', children: when(row.ts) })
-              ]
-            },
-            `${row.ts}-${index}`
-          )
-        )
-      }
-    })
-  })
-}
-
-// ---------------------------------------------------------------- Threat graph
+// ---------------------------------------------------------------- Threat graph map
 
 // The bubble map — the dashboard's Threat graph ported to Desktop: the same layout (the tier at the
 // centre with the Umanitek flag, one hub per threat type, dependencies split into one hub per
@@ -948,31 +684,555 @@ function localThreats(rows) {
   return Array.from(byIdentifier.values())
 }
 
-function ThreatDetail({ identifier, tier, onClose }) {
-  const query = useDash('threat', `api/threat?identifier=${encodeURIComponent(identifier)}&tier=${encodeURIComponent(tier || 'public')}`)
-  return jsx(Section, {
-    title: 'Threat',
-    actions: jsx(Button, { size: 'sm', variant: 'outline', onClick: onClose, children: 'Back' }),
-    children: jsx(DashState, {
-      query,
-      children: data => {
-        const threat = asObject(data)
-        if (!threat.found) return jsx(Note, { children: 'This threat is not in the graph on this node.' })
-        return jsxs('div', {
-          className: 'flex flex-col gap-2 text-sm text-(--ui-text-secondary)',
+// ---------------------------------------------------------------- the look
+//
+// The page carries its own small stylesheet (class prefix bbx-) in the Blackbox dashboard's design —
+// uppercase monospace labels, large figures, outlined severity pills, quiet tables — on Desktop's
+// theme variables, so it reads as Blackbox and still follows the app's light and dark themes. A disk
+// plugin cannot rely on Tailwind classes the app itself never uses, so nothing here depends on them.
+const SIGNAL = '#FF4F00' // the dashboard's signal orange (block mode, accents)
+const PAGE_CSS = `
+.bbx { --bbx-text: var(--ui-text-secondary); --bbx-muted: var(--ui-text-tertiary); --bbx-faint: var(--ui-text-quaternary);
+  --bbx-line: var(--ui-stroke-secondary); --bbx-panel: color-mix(in srgb, var(--ui-text-secondary) 3%, transparent);
+  --bbx-hover: color-mix(in srgb, var(--ui-text-secondary) 6%, transparent); --bbx-signal: ${SIGNAL};
+  --bbx-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--bbx-text); font-size: 14px; line-height: 1.5; height: 100%; overflow: auto; }
+.bbx-wrap { max-width: 1240px; margin: 0 auto; padding: 28px 32px 64px; display: flex; flex-direction: column; gap: 40px; }
+.bbx-top { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.bbx-brand { font-size: 26px; font-weight: 800; letter-spacing: -0.02em; display: flex; align-items: center; gap: 10px; }
+.bbx-brand-dot { width: 16px; height: 16px; border-radius: 50%; background: var(--bbx-signal); display: inline-block; }
+.bbx-spacer { flex: 1; }
+.bbx-tabs { display: inline-flex; padding: 3px; border: 1px solid var(--bbx-line); border-radius: 6px; gap: 2px; }
+.bbx-tab { font-family: var(--bbx-mono); font-size: 11.5px; letter-spacing: 0.08em; text-transform: uppercase; padding: 7px 14px;
+  border-radius: 4px; border: 0; background: transparent; color: var(--bbx-muted); cursor: pointer; display: inline-flex; gap: 8px; align-items: center; }
+.bbx-tab:hover { color: var(--bbx-text); background: var(--bbx-hover); }
+.bbx-tab[aria-selected="true"] { background: var(--bbx-text); color: var(--ui-bg-primary, #000); }
+.bbx-tab-count { font-size: 10.5px; padding: 1px 6px; border-radius: 3px; background: var(--bbx-hover); }
+.bbx-tab[aria-selected="true"] .bbx-tab-count { background: color-mix(in srgb, var(--ui-bg-primary, #000) 20%, transparent); }
+.bbx-modepill { font-family: var(--bbx-mono); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; padding: 8px 14px;
+  border-radius: 4px; border: 1px solid var(--bbx-line); color: var(--bbx-muted); background: transparent; cursor: pointer; }
+.bbx-modepill.block { color: var(--bbx-signal); border-color: color-mix(in srgb, ${SIGNAL} 55%, transparent); background: color-mix(in srgb, ${SIGNAL} 10%, transparent); }
+.bbx-iconbtn { width: 38px; height: 38px; display: inline-flex; align-items: center; justify-content: center; border-radius: 6px;
+  border: 1px solid var(--bbx-line); background: transparent; color: var(--bbx-text); cursor: pointer; }
+.bbx-iconbtn:hover { background: var(--bbx-hover); }
+.bbx-h2 { font-size: 22px; font-weight: 700; letter-spacing: -0.01em; margin: 0; }
+.bbx-sub { color: var(--bbx-muted); margin: 4px 0 0; max-width: 72ch; }
+.bbx-section { display: flex; flex-direction: column; gap: 16px; }
+.bbx-head { display: flex; align-items: flex-end; gap: 16px; flex-wrap: wrap; }
+.bbx-panel { border: 1px solid var(--bbx-line); border-radius: 6px; background: var(--bbx-panel); }
+.bbx-label { font-family: var(--bbx-mono); font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--bbx-muted); }
+.bbx-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 16px; }
+.bbx-stat { padding: 20px 22px; display: flex; flex-direction: column; gap: 10px; min-height: 150px; }
+.bbx-stat.warm { border-left: 3px solid color-mix(in srgb, ${SIGNAL} 60%, transparent); }
+.bbx-stat-value { font-family: var(--bbx-mono); font-size: 34px; font-weight: 500; line-height: 1.1; }
+.bbx-stat-note { font-family: var(--bbx-mono); font-size: 12.5px; color: var(--bbx-muted); }
+.bbx-ok { color: #3FA568; font-family: var(--bbx-mono); font-size: 12.5px; font-weight: 600; }
+.bbx-seg { display: inline-flex; padding: 3px; border: 1px solid var(--bbx-line); border-radius: 6px; gap: 2px; }
+.bbx-seg button { font-family: var(--bbx-mono); font-size: 11.5px; padding: 6px 12px; border-radius: 4px; border: 0; background: transparent; color: var(--bbx-muted); cursor: pointer; }
+.bbx-seg button[aria-pressed="true"] { background: var(--bbx-text); color: var(--ui-bg-primary, #000); }
+.bbx-btn { font-size: 13px; font-weight: 600; padding: 8px 14px; border-radius: 6px; border: 1px solid var(--bbx-line); background: transparent; color: var(--bbx-text); cursor: pointer; }
+.bbx-btn:hover { background: var(--bbx-hover); }
+.bbx-btn.primary { background: var(--bbx-text); color: var(--ui-bg-primary, #000); border-color: var(--bbx-text); }
+.bbx-btn.danger { color: #E5484D; border-color: color-mix(in srgb, #E5484D 45%, transparent); }
+.bbx-btn:disabled { opacity: 0.45; cursor: default; }
+.bbx-table { width: 100%; border-collapse: collapse; }
+.bbx-table th { text-align: left; font-family: var(--bbx-mono); font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--bbx-muted);
+  font-weight: 500; padding: 14px 20px; border-bottom: 1px solid var(--bbx-line); }
+.bbx-table td { padding: 14px 20px; border-bottom: 1px solid var(--bbx-line); vertical-align: top; }
+.bbx-table tr:last-child td { border-bottom: 0; }
+.bbx-table tbody tr:hover td { background: var(--bbx-hover); }
+.bbx-mono { font-family: var(--bbx-mono); }
+.bbx-small { font-size: 12px; color: var(--bbx-muted); }
+.bbx-pill { display: inline-block; font-family: var(--bbx-mono); font-size: 12px; font-weight: 600; padding: 3px 10px; border-radius: 3px; border: 1px solid; white-space: nowrap; }
+.bbx-pill.critical { color: #E5484D; border-color: color-mix(in srgb, #E5484D 50%, transparent); background: color-mix(in srgb, #E5484D 10%, transparent); }
+.bbx-pill.high { color: #F0657A; border-color: color-mix(in srgb, #F0657A 50%, transparent); background: color-mix(in srgb, #F0657A 9%, transparent); }
+.bbx-pill.medium { color: #E5A00D; border-color: color-mix(in srgb, #E5A00D 50%, transparent); background: color-mix(in srgb, #E5A00D 9%, transparent); }
+.bbx-pill.low, .bbx-pill.info, .bbx-pill.neutral { color: var(--bbx-muted); border-color: var(--bbx-line); background: var(--bbx-hover); }
+.bbx-pill.ok { color: #3FA568; border-color: color-mix(in srgb, #3FA568 50%, transparent); background: color-mix(in srgb, #3FA568 9%, transparent); }
+.bbx-pill.blocked { color: ${SIGNAL}; border-color: color-mix(in srgb, ${SIGNAL} 50%, transparent); background: color-mix(in srgb, ${SIGNAL} 9%, transparent); }
+.bbx-type { display: inline-flex; align-items: center; gap: 8px; font-family: var(--bbx-mono); font-size: 13px; white-space: nowrap; }
+.bbx-pager { display: flex; align-items: center; gap: 10px; padding: 12px 20px; border-top: 1px solid var(--bbx-line); }
+.bbx-empty { padding: 28px 20px; color: var(--bbx-muted); }
+.bbx-agents { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px; padding: 22px; }
+.bbx-agent { display: flex; gap: 14px; align-items: center; padding: 16px; border-radius: 6px; border: 1px solid color-mix(in srgb, ${SIGNAL} 45%, transparent);
+  background: color-mix(in srgb, ${SIGNAL} 5%, transparent); }
+.bbx-agent.off { border-color: var(--bbx-line); background: transparent; }
+.bbx-avatar { width: 46px; height: 46px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 18px;
+  background: var(--bbx-text); color: var(--ui-bg-primary, #000); flex: none; }
+.bbx-attach { display: flex; gap: 14px; align-items: center; padding: 16px; border-radius: 6px; border: 1px dashed var(--bbx-line); background: transparent;
+  color: var(--bbx-text); cursor: pointer; text-align: left; font-size: 15px; }
+.bbx-attach:hover { background: var(--bbx-hover); }
+.bbx-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+.bbx-col { padding: 22px 24px; display: flex; flex-direction: column; gap: 16px; border-right: 1px solid var(--bbx-line); }
+.bbx-col:last-child { border-right: 0; }
+.bbx-check { display: flex; gap: 12px; align-items: flex-start; }
+.bbx-mark { width: 22px; height: 22px; border-radius: 50%; border: 1.6px solid; display: inline-flex; align-items: center; justify-content: center; flex: none;
+  font-size: 12px; font-weight: 700; margin-top: 1px; }
+.bbx-mark.ok { color: #3FA568; } .bbx-mark.warn { color: #E5A00D; } .bbx-mark.none { color: var(--bbx-faint); } .bbx-mark.bad { color: #E5484D; }
+.bbx-legend { display: flex; gap: 22px; flex-wrap: wrap; padding: 14px 24px; border-top: 1px solid var(--bbx-line); color: var(--bbx-muted); font-size: 13px; }
+.bbx-legend span { display: inline-flex; gap: 8px; align-items: center; }
+.bbx-sync { display: grid; grid-template-columns: 200px 1fr; gap: 28px; padding: 26px 28px; align-items: center; }
+.bbx-bar { height: 6px; border-radius: 3px; background: var(--bbx-hover); overflow: hidden; }
+.bbx-bar > i { display: block; height: 100%; background: #3F8F5F; border-radius: 3px; }
+.bbx-barrow { display: grid; grid-template-columns: 170px 1fr auto; gap: 16px; align-items: center; }
+.bbx-facts { display: flex; gap: 40px; flex-wrap: wrap; }
+.bbx-fact-value { font-family: var(--bbx-mono); font-size: 20px; }
+.bbx-input { font: inherit; padding: 9px 12px; border-radius: 6px; border: 1px solid var(--bbx-line); background: transparent; color: var(--bbx-text); min-width: 0; }
+.bbx-select { font: inherit; font-size: 13px; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--bbx-line); background: transparent; color: var(--bbx-text); }
+.bbx-textarea { font-family: var(--bbx-mono); font-size: 12.5px; padding: 10px 12px; border-radius: 6px; border: 1px solid var(--bbx-line); background: transparent; color: var(--bbx-text); min-height: 110px; width: 100%; box-sizing: border-box; }
+.bbx-setrow { display: flex; align-items: center; gap: 16px; padding: 14px 22px; border-bottom: 1px solid var(--bbx-line); flex-wrap: wrap; }
+.bbx-setrow:last-child { border-bottom: 0; }
+.bbx-setrow-text { flex: 1; min-width: 220px; }
+.bbx-setrow-title { font-weight: 600; }
+.bbx-switch { position: relative; width: 38px; height: 22px; border-radius: 11px; border: 0; background: var(--bbx-line); cursor: pointer; flex: none; }
+.bbx-switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: var(--ui-bg-primary, #fff); transition: left .15s; }
+.bbx-switch[aria-checked="true"] { background: #3F8F5F; }
+.bbx-switch[aria-checked="true"]::after { left: 19px; }
+.bbx-savebar { position: sticky; bottom: 0; display: flex; gap: 12px; align-items: center; padding: 14px 22px; border-top: 1px solid var(--bbx-line);
+  background: var(--ui-bg-primary, #000); }
+.bbx-confirm { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; padding: 14px 22px; border-top: 1px solid var(--bbx-line);
+  background: color-mix(in srgb, ${SIGNAL} 6%, transparent); }
+.bbx-graphwrap { padding: 0; overflow: hidden; }
+.bbx-searchbar { display: flex; gap: 10px; align-items: center; padding: 14px 20px; border-bottom: 1px solid var(--bbx-line); flex-wrap: wrap; }
+`
+
+const SEVERITY_ORDER = { critical: 4, high: 3, medium: 2, low: 1, info: 0 }
+const EVENT_LABELS = {
+  session_start: 'Session started', session_end: 'Session ended', message_received: 'Message received',
+  pre_api_request: 'API request', pre_tool_call: 'Tool call', post_tool_call: 'Tool result',
+  file_access: 'File access', dependency_install: 'Package install', flagged: 'Threat flagged', blocked: 'Threat blocked'
+}
+const TYPE_LABELS = {
+  dependency: 'Dependency', injection: 'Prompt injection', escalation: 'Escalation', fileaccess: 'File access',
+  skill: 'Suspicious skill', secret: 'Secret exposure', ioc: 'Indicator', other: 'Other'
+}
+const PAGE_SIZE = 10
+const cap = text => (text ? text.charAt(0).toUpperCase() + text.slice(1) : '')
+
+function timeCell(seconds) {
+  if (typeof seconds !== 'number' || !seconds) return jsx('span', { className: 'bbx-small', children: '–' })
+  const date = new Date(seconds * 1000)
+  const today = new Date()
+  const sameDay = date.toDateString() === today.toDateString()
+  return jsxs('div', {
+    children: [
+      jsx('div', { className: 'bbx-mono', children: date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', second: '2-digit' }) }),
+      jsx('div', { className: 'bbx-small bbx-mono', children: sameDay ? 'Today' : date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) })
+    ]
+  })
+}
+
+function Pill({ tone, children }) {
+  return jsx('span', { className: `bbx-pill ${tone || 'neutral'}`, children })
+}
+
+function TypeCell({ type }) {
+  const key = TYPE_LABELS[type] ? type : 'other'
+  return jsxs('span', {
+    className: 'bbx-type',
+    children: [
+      jsx('svg', {
+        width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', stroke: (GRAPH_CATEGORIES[key] || GRAPH_CATEGORIES.other).color,
+        strokeWidth: 1.9, strokeLinecap: 'round', strokeLinejoin: 'round',
+        children: (GRAPH_ICONS[key] || GRAPH_ICONS.other).map((d, index) => jsx('path', { d }, index))
+      }),
+      TYPE_LABELS[key]
+    ]
+  })
+}
+
+function Switch({ checked, onChange, label, disabled }) {
+  return jsx('button', {
+    type: 'button', role: 'switch', 'aria-checked': checked ? 'true' : 'false', 'aria-label': label, disabled: !!disabled,
+    className: 'bbx-switch', onClick: () => onChange(!checked)
+  })
+}
+
+function Segmented({ value, options, onChange }) {
+  return jsx('div', {
+    className: 'bbx-seg',
+    children: options.map(([id, label]) => jsx('button', { type: 'button', 'aria-pressed': value === id ? 'true' : 'false', onClick: () => onChange(id), children: label }, id))
+  })
+}
+
+function Pager({ page, pages, total, onPage }) {
+  if (pages <= 1) return null
+  return jsxs('div', {
+    className: 'bbx-pager',
+    children: [
+      jsx('span', { className: 'bbx-small bbx-mono', children: `${(page * PAGE_SIZE + 1).toLocaleString()}–${Math.min(total, (page + 1) * PAGE_SIZE).toLocaleString()} of ${total.toLocaleString()}` }),
+      jsx('div', { className: 'bbx-spacer' }),
+      jsx('button', { type: 'button', className: 'bbx-btn', disabled: page === 0, onClick: () => onPage(page - 1), children: 'Previous' }),
+      jsx('span', { className: 'bbx-small bbx-mono', children: `${page + 1} / ${pages}` }),
+      jsx('button', { type: 'button', className: 'bbx-btn', disabled: page >= pages - 1, onClick: () => onPage(page + 1), children: 'Next' })
+    ]
+  })
+}
+
+function Loading({ query, children, empty }) {
+  const data = query.data
+  if (query.isLoading) return jsx('div', { className: 'bbx-empty', children: 'Loading…' })
+  if (data && data.dashboardDown)
+    return jsx('div', { className: 'bbx-empty', children: 'The Blackbox dashboard service is not running, so this cannot load. It starts at login; to start it now, run blackbox dashboard in a terminal.' })
+  if (data && data.error && !Array.isArray(data)) return jsx('div', { className: 'bbx-empty', children: `Could not load: ${data.error}` })
+  const content = children(data)
+  return content == null ? jsx('div', { className: 'bbx-empty', children: empty || 'Nothing here yet.' }) : content
+}
+
+function Heading({ title, sub, actions }) {
+  return jsxs('div', {
+    className: 'bbx-head',
+    children: [
+      jsxs('div', { children: [jsx('h2', { className: 'bbx-h2', children: title }), sub ? jsx('p', { className: 'bbx-sub', children: sub }) : null] }),
+      jsx('div', { className: 'bbx-spacer' }),
+      actions || null
+    ]
+  })
+}
+
+function openDashboard(ctx, url) {
+  ctx.os.openExternal(url).then(opened => {
+    if (!opened) host.notify({ kind: 'warning', message: `Open ${url} in your browser` })
+  })
+}
+
+// ---------------------------------------------------------------- Overview
+
+function StatCards({ status }) {
+  const graph = useDash('graph-status', 'api/graph-status')
+  const community = useDash('community-stats', 'api/community-stats')
+  const findings = useDash('findings-all', 'api/findings?limit=500', POLL_MS)
+  const settings = useDash('settings', 'api/settings')
+  const g = asObject(graph.data)
+  const c = asObject(community.data)
+  const rows = asList(asObject(findings.data).findings)
+  const critical = rows.filter(row => row.severity === 'critical').length
+  const sharing = !!asObject(settings.data).report
+  const minutes = g.sync_interval ? Math.round(g.sync_interval / 60) : null
+  const card = (icon, label, value, note, extra, warm) =>
+    jsxs('div', {
+      className: `bbx-panel bbx-stat${warm ? ' warm' : ''}`,
+      children: [
+        jsxs('div', { className: 'bbx-label', style: { display: 'flex', gap: 8, alignItems: 'center' }, children: [jsx(Codicon, { name: icon }), label] }),
+        jsx('div', { className: 'bbx-stat-value', children: value }),
+        note ? jsx('div', { className: 'bbx-stat-note', children: note }) : null,
+        extra || null
+      ]
+    })
+  return jsxs('div', {
+    className: 'bbx-stats',
+    children: [
+      card('warning', 'Open findings', num(asObject(findings.data).total ?? rows.length), `${critical} critical`),
+      card('shield', 'Verified threats synced', num(g.curated), "from Umanitek's curated graph"),
+      card('history', 'Last sync', when(g.last_sync), minutes ? `auto every ${minutes >= 60 ? `${Math.round(minutes / 60)}h` : `${minutes}m`}` : ''),
+      card('organization', 'Community graph', num(c.community_threats), [c.graph && c.graph.split('/').pop(), `${num(c.contributing_agents)} agents`, `${num(c.corroborated_2plus)} with 2+ reporters`].filter(Boolean).join(' · '),
+        c.join_state ? jsx('div', { className: 'bbx-ok', children: c.join_text || c.join_state }) : null, true),
+      card('broadcast', 'Threat sharing', sharing ? 'on' : 'off', sharing ? 'privacy-safe reports to the community' : 'off · opt in from settings', null, true)
+    ]
+  })
+}
+
+function ModeCard({ mode, blockSeverity }) {
+  const [confirming, setConfirming] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const choose = async next => {
+    setBusy(true)
+    await setMode(next)
+    setBusy(false)
+    setConfirming(false)
+  }
+  return jsxs('div', {
+    className: 'bbx-panel',
+    children: [
+      jsxs('div', {
+        className: 'bbx-setrow',
+        children: [
+          jsxs('div', {
+            className: 'bbx-setrow-text',
+            children: [
+              jsx('div', { className: 'bbx-setrow-title', children: mode === 'block' ? 'Block mode: Blackbox stops threats' : 'Audit mode: Blackbox records threats but does not stop them' }),
+              jsx('div', {
+                className: 'bbx-small',
+                children: mode === 'block'
+                  ? `Every tool call and model request is checked before it runs; verified threats at or above ${blockSeverity} severity, your protected paths and secrets sent off the machine are refused.`
+                  : 'Every tool call and model request is checked and recorded. Nothing is stopped until you turn on blocking.'
+              })
+            ]
+          }),
+          jsxs('div', {
+            className: 'bbx-seg',
+            children: [
+              jsx('button', { type: 'button', 'aria-pressed': mode === 'audit' ? 'true' : 'false', disabled: busy || mode === 'audit', onClick: () => (mode === 'audit' ? null : setConfirming(true)), children: 'Audit: record only' }),
+              jsx('button', { type: 'button', 'aria-pressed': mode === 'block' ? 'true' : 'false', disabled: busy || mode === 'block', onClick: () => choose('block'), children: 'Block: stop threats' })
+            ]
+          })
+        ]
+      }),
+      // switching to audit lowers protection, so it takes a second, explicit click
+      confirming
+        ? jsxs('div', {
+            className: 'bbx-confirm',
+            children: [
+              jsx('span', { children: 'Switch to audit? Blackbox will keep recording threats but will stop blocking them.' }),
+              jsx('div', { className: 'bbx-spacer' }),
+              jsx('button', { type: 'button', className: 'bbx-btn danger', disabled: busy, onClick: () => choose('audit'), children: 'Switch to audit' }),
+              jsx('button', { type: 'button', className: 'bbx-btn', disabled: busy, onClick: () => setConfirming(false), children: 'Keep blocking' })
+            ]
+          })
+        : null
+    ]
+  })
+}
+
+function ConnectedAgents() {
+  const agents = useDash('agents', 'api/agents', POLL_MS)
+  const targets = useDash('attach-targets', 'api/attach-targets')
+  const [choosing, setChoosing] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const protect = async (target, enabled) => {
+    setBusy(true)
+    const answer = await dash('api/agents/protection', { method: 'POST', body: { targets: [{ kind: target.kind, target: target.target, enabled }] } })
+    setBusy(false)
+    host.notify(answer && answer.ok
+      ? { kind: 'success', message: `${enabled ? 'Protecting' : 'Stopped protecting'} ${target.target}. Restart that agent to apply.` }
+      : { kind: 'error', message: `Could not change protection: ${(answer && answer.error) || 'unknown error'}` })
+    refreshDash()
+  }
+  const rescan = async () => {
+    await dash('api/agents/rescan', { method: 'POST', body: {} })
+    refreshDash()
+  }
+  const a = asObject(agents.data)
+  const list = asList(a.agents).filter(agent => agent.is_local !== false)
+  return jsxs('section', {
+    className: 'bbx-section',
+    children: [
+      jsx(Heading, {
+        title: 'Connected agents',
+        actions: jsxs('div', {
+          style: { display: 'flex', gap: 12, alignItems: 'center' },
           children: [
-            jsxs('div', {
-              className: 'flex flex-wrap items-center gap-2',
+            jsx('span', { className: 'bbx-small', children: `${num(a.connected_count ?? list.length)} connected agent${a.connected_count === 1 ? '' : 's'}` }),
+            jsx('button', { type: 'button', className: 'bbx-iconbtn', title: 'Rescan this machine for agents', onClick: rescan, children: jsx(Codicon, { name: 'refresh' }) })
+          ]
+        })
+      }),
+      jsxs('div', {
+        className: 'bbx-panel',
+        children: [
+          jsxs('div', {
+            className: 'bbx-agents',
+            children: [
+              ...list.map((agent, index) =>
+                jsxs(
+                  'div',
+                  {
+                    className: `bbx-agent${agent.is_active === false ? ' off' : ''}`,
+                    children: [
+                      jsx('div', { className: 'bbx-avatar', children: (agent.framework || 'A').charAt(0).toUpperCase() }),
+                      jsxs('div', {
+                        style: { minWidth: 0 },
+                        children: [
+                          jsx('div', { style: { fontWeight: 700, fontSize: 15 }, children: agent.blackbox_host ? 'Blackbox Hermes Agent' : `${cap(agent.framework || 'agent')} agent` }),
+                          jsx('div', { className: 'bbx-small bbx-mono', style: { overflow: 'hidden', textOverflow: 'ellipsis' }, children: agent.workspace_label || agent.workspace || '' }),
+                          jsx('div', { className: 'bbx-label', style: { color: agent.is_active === false ? undefined : SIGNAL, marginTop: 4 }, children: agent.is_active === false ? 'Idle' : 'Connected' })
+                        ]
+                      })
+                    ]
+                  },
+                  index
+                )
+              ),
+              jsxs('button', {
+                type: 'button', className: 'bbx-attach', onClick: () => setChoosing(!choosing),
+                children: [jsx('span', { className: 'bbx-iconbtn', style: { pointerEvents: 'none' }, children: jsx(Codicon, { name: 'add' }) }), choosing ? 'Close' : 'Attach agent']
+              })
+            ]
+          }),
+          choosing
+            ? jsx(Loading, {
+                query: targets,
+                children: data =>
+                  jsx('div', {
+                    style: { borderTop: '1px solid var(--bbx-line)' },
+                    children: asList(asObject(data).targets).map((target, index) =>
+                      jsxs(
+                        'div',
+                        {
+                          className: 'bbx-setrow',
+                          children: [
+                            jsxs('div', {
+                              className: 'bbx-setrow-text',
+                              children: [
+                                jsx('div', { className: 'bbx-setrow-title', children: target.kind === 'hermes' ? 'Hermes' : target.kind === 'openclaw' ? 'OpenClaw' : target.kind }),
+                                jsx('div', { className: 'bbx-small bbx-mono', children: target.target || target.disabled_reason || '' })
+                              ]
+                            }),
+                            target.available === false
+                              ? jsx('span', { className: 'bbx-small', children: 'Not found on this machine' })
+                              : jsx(Switch, { checked: !!target.protected, disabled: busy, label: `Protect ${target.target}`, onChange: next => protect(target, next) })
+                          ]
+                        },
+                        index
+                      )
+                    )
+                  })
+              })
+            : null
+        ]
+      })
+    ]
+  })
+}
+
+function TraderShieldPanel({ setTab }) {
+  const cards = useDash('shields', 'api/shields')
+  const events = useDash('trader-events', 'api/shields/trader/events', POLL_MS)
+  const card = asList(cards.data).find(item => item && item.shield_id === 'trader')
+  if (!card) return null
+  const engaged = !!asObject(card.mode).enabled
+  const markTone = state => (state === 'ok' || state === 'on' || state === 'secured' ? 'ok' : state === 'warn' || state === 'watched' ? 'warn' : state === 'bad' || state === 'attention' ? 'bad' : 'none')
+  const markGlyph = tone => ({ ok: '✓', warn: '~', none: '–', bad: '!' })[tone]
+  const eventRows = asList(events.data)
+  return jsxs('section', {
+    className: 'bbx-section',
+    children: [
+      jsx(Heading, {
+        title: jsxs('span', { style: { display: 'inline-flex', gap: 12, alignItems: 'center' }, children: [card.name, card.beta ? jsx(Pill, { tone: 'blocked', children: 'BETA' }) : null] }),
+        sub: card.tagline || 'What Blackbox found on this machine, and how it keeps your agent away from it.',
+        actions: jsxs('div', {
+          style: { display: 'flex', gap: 12, alignItems: 'center' },
+          children: [
+            jsx(Pill, { tone: engaged ? (card.blocking ? 'ok' : 'medium') : 'neutral', children: engaged ? (card.blocking ? '● Blocking' : '● Watching') : 'Off' }),
+            jsx('button', { type: 'button', className: 'bbx-btn', onClick: () => setTab('settings'), children: engaged ? 'Edit settings' : 'Turn on in settings' })
+          ]
+        })
+      }),
+      jsxs('div', {
+        className: 'bbx-panel',
+        children: [
+          jsxs('div', {
+            className: 'bbx-cols',
+            children: [
+              ...asList(card.sections).map((part, index) =>
+                jsxs(
+                  'div',
+                  {
+                    className: 'bbx-col',
+                    children: [
+                      jsx('div', { className: 'bbx-label', title: part.help || '', children: part.title }),
+                      ...asList(part.rows).map((row, rowIndex) => {
+                        const tone = markTone(row.state)
+                        return jsxs(
+                          'div',
+                          {
+                            className: 'bbx-check',
+                            children: [
+                              jsx('span', { className: `bbx-mark ${tone}`, children: markGlyph(tone) }),
+                              jsxs('div', { children: [jsx('div', { style: { fontWeight: 600 }, children: row.text }), row.sub ? jsx('div', { className: 'bbx-small', children: row.sub }) : null] })
+                            ]
+                          },
+                          rowIndex
+                        )
+                      })
+                    ]
+                  },
+                  index
+                )
+              ),
+              jsxs('div', {
+                className: 'bbx-col',
+                children: [
+                  jsx('div', { className: 'bbx-label', children: 'Recent events' }),
+                  eventRows.length
+                    ? eventRows.slice(0, 6).map((row, index) =>
+                        jsxs('div', { className: 'bbx-check', children: [jsx('span', { className: `bbx-mark ${row.decision === 'block' || row.blocked ? 'bad' : 'warn'}`, children: '!' }), jsxs('div', { children: [jsx('div', { style: { fontWeight: 600 }, children: row.title || row.what || 'Wallet event' }), jsx('div', { className: 'bbx-small', children: when(row.ts) })] })] }, index)
+                      )
+                    : jsx('div', { className: 'bbx-small', children: 'Nothing yet — no agent has reached for anything Trader Shield protects.' })
+                ]
+              })
+            ]
+          }),
+          jsxs('div', {
+            className: 'bbx-legend',
+            children: [
+              jsxs('span', { children: [jsx('span', { className: 'bbx-mark ok', children: '✓' }), 'secured — blocked'] }),
+              jsxs('span', { children: [jsx('span', { className: 'bbx-mark warn', children: '~' }), 'watched — flagged only (audit mode)'] }),
+              jsxs('span', { children: [jsx('span', { className: 'bbx-mark none', children: '–' }), 'not protected'] }),
+              jsxs('span', { children: [jsx('span', { className: 'bbx-mark bad', children: '!' }), 'needs attention'] })
+            ]
+          })
+        ]
+      })
+    ]
+  })
+}
+
+function Overview({ status, setTab }) {
+  return jsxs('div', {
+    className: 'bbx-wrap',
+    style: { padding: 0 },
+    children: [
+      jsx(StatCards, { status }),
+      jsx(ModeCard, { mode: status.mode, blockSeverity: status.blockSeverity }),
+      jsx(ConnectedAgents, {}),
+      jsx(TraderShieldPanel, { setTab })
+    ]
+  })
+}
+
+// ---------------------------------------------------------------- Threat graph tab
+
+function SyncPanel() {
+  const sync = useDash('sync', 'api/verified-sync', POLL_MS)
+  return jsx('div', {
+    className: 'bbx-panel',
+    children: jsx(Loading, {
+      query: sync,
+      children: data => {
+        const v = asObject(data)
+        const percent = Math.round(typeof v.percent_compiled === 'number' ? v.percent_compiled : 0)
+        const radius = 70
+        const length = 2 * Math.PI * radius
+        const bar = (label, done, total, pct) =>
+          jsxs('div', {
+            className: 'bbx-barrow',
+            children: [
+              jsx('span', { className: 'bbx-label', children: label }),
+              jsx('div', { className: 'bbx-bar', children: jsx('i', { style: { width: `${Math.max(0, Math.min(100, pct || 0))}%` } }) }),
+              jsx('span', { className: 'bbx-mono', style: { fontSize: 13 }, children: `${num(done)} / ${num(total)} · ${(pct || 0).toFixed(1)}%` })
+            ]
+          })
+        return jsxs('div', {
+          className: 'bbx-sync',
+          children: [
+            jsxs('svg', {
+              viewBox: '0 0 180 180', width: 180, height: 180,
               children: [
-                jsx(Badge, { variant: severityVariant(threat.severity), children: threat.severity }),
-                jsx(Badge, { variant: 'outline', children: threat.category }),
-                jsx('span', { className: 'font-medium', children: threat.name || threat.identifier })
+                jsx('circle', { cx: 90, cy: 90, r: radius, fill: 'none', stroke: 'var(--bbx-hover)', strokeWidth: 12 }),
+                jsx('circle', { cx: 90, cy: 90, r: radius, fill: 'none', stroke: '#3F8F5F', strokeWidth: 12, strokeDasharray: `${(percent / 100) * length} ${length}`, transform: 'rotate(-90 90 90)', strokeLinecap: 'round' }),
+                jsx('text', { x: 90, y: 92, textAnchor: 'middle', fontSize: 34, fontWeight: 800, fill: 'currentColor', children: `${percent}%` }),
+                jsx('text', { x: 90, y: 116, textAnchor: 'middle', fontSize: 10.5, letterSpacing: 2, fill: 'var(--bbx-muted)', fontFamily: 'ui-monospace, monospace', children: 'PROTECTED' })
               ]
             }),
-            threat.description ? jsx('p', { className: 'max-w-3xl text-(--ui-text-tertiary)', children: threat.description }) : null,
-            jsx(Dim, { children: threat.identifier }),
-            asList(threat.sources).length ? jsx(Fact, { label: 'Sources', value: asList(threat.sources).join(' · ') }) : null,
-            asList(threat.references).length ? jsx(Fact, { label: 'References', value: asList(threat.references).join(' · ') }) : null
+            jsxs('div', {
+              style: { display: 'flex', flexDirection: 'column', gap: 14 },
+              children: [
+                jsxs('div', { style: { display: 'flex', gap: 12, alignItems: 'center' }, children: [jsx('span', { style: { fontWeight: 700, fontSize: 17 }, children: 'Verified graph sync' }), jsx(Pill, { tone: v.state === 'synced' || percent >= 100 ? 'ok' : 'medium', children: String(v.state || (percent >= 100 ? 'synced' : 'syncing')).toUpperCase() })] }),
+                v.phase_text ? jsx('div', { className: 'bbx-sub', style: { margin: 0 }, children: v.phase_text }) : null,
+                asObject(v.lookups).text ? jsx('div', { className: 'bbx-ok', style: { fontFamily: 'inherit', fontWeight: 500 }, children: `✓ ${asObject(v.lookups).label || asObject(v.lookups).text}` }) : null,
+                bar('Downloaded', v.downloaded_assets, v.graph_assets, v.percent_downloaded),
+                bar('Compiled to rules', v.compiled_assets, v.graph_assets, v.percent_compiled),
+                jsxs('div', {
+                  className: 'bbx-facts',
+                  children: [
+                    jsxs('div', { children: [jsx('div', { className: 'bbx-label', children: 'Graph size' }), jsx('div', { className: 'bbx-fact-value', children: `${num(v.graph_assets)} assets` })] }),
+                    jsxs('div', { children: [jsx('div', { className: 'bbx-label', children: 'Triples held' }), jsx('div', { className: 'bbx-fact-value', children: num(v.downloaded_triples) })] }),
+                    jsxs('div', { children: [jsx('div', { className: 'bbx-label', children: 'Verified rules' }), jsx('div', { className: 'bbx-fact-value', children: num(v.verified_rules) })] })
+                  ]
+                })
+              ]
+            })
           ]
         })
       }
@@ -980,14 +1240,219 @@ function ThreatDetail({ identifier, tier, onClose }) {
   })
 }
 
-function ThreatGraph() {
-  const [tier, setTier] = useState('public')
-  const [category, setCategory] = useState('')
+function FindThreat({ onOpen }) {
   const [search, setSearch] = useState('')
   const [term, setTerm] = useState('')
+  const [page, setPage] = useState(0)
+  const query = useDash('graph-search', term ? `api/graph?tier=public&limit=${PAGE_SIZE}&offset=${page * PAGE_SIZE}&q=${encodeURIComponent(term)}` : 'api/graph?tier=public&limit=1')
+  return jsxs('div', {
+    children: [
+      jsxs('form', {
+        className: 'bbx-searchbar',
+        onSubmit: event => {
+          event.preventDefault()
+          setPage(0)
+          setTerm(search.trim())
+        },
+        children: [
+          jsx(Codicon, { name: 'search' }),
+          jsx('input', { className: 'bbx-input', style: { flex: 1 }, placeholder: 'Find any threat in the verified graph: a package, domain, wallet or pattern', value: search, onChange: event => setSearch(event.target.value) }),
+          term ? jsx('button', { type: 'button', className: 'bbx-btn', onClick: () => { setSearch(''); setTerm('') }, children: 'Clear' }) : null,
+          jsx('button', { type: 'submit', className: 'bbx-btn primary', children: 'Search' })
+        ]
+      }),
+      term
+        ? jsx(Loading, {
+            query,
+            empty: 'No threat matches that search.',
+            children: data => {
+              const result = asObject(data)
+              const rows = asList(result.threats)
+              if (!rows.length) return null
+              const total = typeof result.total === 'number' ? result.total : rows.length
+              return jsxs('div', {
+                children: [
+                  jsx('table', {
+                    className: 'bbx-table',
+                    children: jsx('tbody', {
+                      children: rows.map(threat =>
+                        jsxs('tr', { style: { cursor: 'pointer' }, onClick: () => onOpen({ ...threat, tier: 'public' }), children: [jsx('td', { style: { width: 120 }, children: jsx(Pill, { tone: threat.severity, children: cap(threat.severity) }) }), jsx('td', { style: { width: 200 }, children: jsx(TypeCell, { type: threat.category }) }), jsx('td', { children: threat.name || threat.identifier })] }, threat.identifier)
+                      )
+                    })
+                  }),
+                  jsx(Pager, { page, pages: Math.ceil(total / PAGE_SIZE), total, onPage: setPage })
+                ]
+              })
+            }
+          })
+        : null
+    ]
+  })
+}
+
+function reasonOf(row) {
+  const lines = [row.evidence || row.title || row.identifier, [row.title, row.tool_name && `via ${row.tool_name}`].filter(Boolean).join(' · ')]
+  return jsxs('div', { children: [jsx('div', { className: 'bbx-mono', style: { fontSize: 13 }, children: lines[0] }), lines[1] ? jsx('div', { className: 'bbx-small bbx-mono', children: lines[1] }) : null] })
+}
+
+function ThreatsDetected() {
+  const [order, setOrder] = useState('newest')
+  const [page, setPage] = useState(0)
+  const query = useDash('findings-all', 'api/findings?limit=500', POLL_MS)
+  return jsxs('section', {
+    className: 'bbx-section',
+    children: [
+      jsx(Heading, {
+        title: jsxs('span', { style: { display: 'inline-flex', gap: 12, alignItems: 'center' }, children: [jsx('span', { style: { color: SIGNAL }, children: jsx(Codicon, { name: 'warning', size: '22px' }) }), 'Threats detected'] }),
+        actions: jsxs('div', { style: { display: 'flex', gap: 10, alignItems: 'center' }, children: [jsx('span', { className: 'bbx-label', children: 'Sort' }), jsx(Segmented, { value: order, options: [['newest', 'Newest'], ['severity', 'Severity']], onChange: value => { setOrder(value); setPage(0) } })] })
+      }),
+      jsx('div', {
+        className: 'bbx-panel',
+        children: jsx(Loading, {
+          query,
+          empty: 'No threats detected yet. Blackbox is watching every tool call your agents make.',
+          children: data => {
+            const rows = asList(asObject(data).findings).slice()
+            if (!rows.length) return null
+            if (order === 'severity') rows.sort((a, b) => (SEVERITY_ORDER[b.severity] || 0) - (SEVERITY_ORDER[a.severity] || 0) || (b.ts || 0) - (a.ts || 0))
+            const pages = Math.ceil(rows.length / PAGE_SIZE)
+            const current = Math.min(page, pages - 1)
+            return jsxs('div', {
+              children: [
+                jsxs('table', {
+                  className: 'bbx-table',
+                  children: [
+                    jsx('thead', { children: jsxs('tr', { children: [jsx('th', { children: 'Time' }), jsx('th', { children: 'Agent' }), jsx('th', { children: 'Severity' }), jsx('th', { children: 'Type' }), jsx('th', { children: 'Reasoning' }), jsx('th', { children: 'Outcome' })] }) }),
+                    jsx('tbody', {
+                      children: rows.slice(current * PAGE_SIZE, (current + 1) * PAGE_SIZE).map((row, index) =>
+                        jsxs('tr', {
+                          children: [
+                            jsx('td', { style: { width: 130 }, children: timeCell(row.ts) }),
+                            jsx('td', { style: { width: 110 }, children: jsx('span', { style: { color: '#3FA568', fontFamily: 'var(--bbx-mono)' }, children: cap(row.framework || 'agent') }) }),
+                            jsx('td', { style: { width: 110 }, children: jsx(Pill, { tone: row.severity, children: cap(row.severity || 'unknown') }) }),
+                            jsx('td', { style: { width: 180 }, children: jsx(TypeCell, { type: row.category }) }),
+                            jsx('td', { children: reasonOf(row) }),
+                            jsx('td', { style: { width: 100 }, children: jsx(Pill, { tone: row.decision === 'block' ? 'blocked' : 'neutral', children: row.decision === 'block' ? 'Blocked' : 'Flagged' }) })
+                          ]
+                        }, `${row.ts}-${index}`)
+                      )
+                    })
+                  ]
+                }),
+                jsx(Pager, { page: current, pages, total: rows.length, onPage: setPage })
+              ]
+            })
+          }
+        })
+      })
+    ]
+  })
+}
+
+function activityDetails(entry) {
+  const detail = asObject(entry.detail)
+  const args = asObject(detail.args)
+  let main = ''
+  if (entry.event === 'file_access') main = `${entry.mode || 'read'} ${entry.path || ''}`
+  else if (entry.event === 'dependency_install') main = `${entry.ecosystem ? entry.ecosystem + ':' : ''}${entry.name || ''}${entry.version ? '@' + entry.version : ''}`
+  else if (entry.event === 'flagged' || entry.event === 'blocked') main = asObject(entry.finding).title || asObject(entry.finding).identifier || 'Threat'
+  else if (entry.event && entry.event.startsWith('session')) main = `session ${String(detail.session_id || '').replace(/^local-/, '').slice(0, 6)}`
+  else main = String(args.command || args.path || args.url || args.query || detail.tool_name || entry.tool || '').slice(0, 180)
+  const via = entry.tool || detail.tool_name
+  return jsxs('div', { children: [jsx('div', { className: 'bbx-mono', style: { fontSize: 13, wordBreak: 'break-word' }, children: main || EVENT_LABELS[entry.event] || entry.event }), via ? jsx('div', { className: 'bbx-small bbx-mono', children: `via ${via}` }) : null] })
+}
+
+function AgentActivity() {
+  const [filter, setFilter] = useState('all')
+  const [page, setPage] = useState(0)
+  const query = useDash('audit-all', 'api/audit?limit=500', POLL_MS)
+  return jsxs('section', {
+    className: 'bbx-section',
+    children: [
+      jsx(Heading, {
+        title: 'Agent activity',
+        sub: 'Recorded sessions, API calls, tool calls and installs.',
+        actions: jsx(Segmented, { value: filter, options: [['all', 'All activity'], ['threats', 'Threats only']], onChange: value => { setFilter(value); setPage(0) } })
+      }),
+      jsx('div', {
+        className: 'bbx-panel',
+        children: jsx(Loading, {
+          query,
+          empty: 'No activity recorded yet.',
+          children: data => {
+            const all = asList(asObject(data).entries)
+            const rows = filter === 'threats' ? all.filter(entry => entry.event === 'flagged' || entry.event === 'blocked' || (entry.severity && entry.severity !== 'info')) : all
+            if (!rows.length) return null
+            const pages = Math.ceil(rows.length / PAGE_SIZE)
+            const current = Math.min(page, pages - 1)
+            return jsxs('div', {
+              children: [
+                jsxs('table', {
+                  className: 'bbx-table',
+                  children: [
+                    jsx('thead', { children: jsxs('tr', { children: [jsx('th', { children: 'Time' }), jsx('th', { children: 'Agent' }), jsx('th', { children: 'Event' }), jsx('th', { children: 'Details' })] }) }),
+                    jsx('tbody', {
+                      children: rows.slice(current * PAGE_SIZE, (current + 1) * PAGE_SIZE).map((entry, index) =>
+                        jsxs('tr', {
+                          children: [
+                            jsx('td', { style: { width: 130 }, children: timeCell(entry.ts) }),
+                            jsx('td', { style: { width: 110 }, children: cap(entry.framework || 'agent') }),
+                            jsx('td', { style: { width: 170 }, children: jsx(Pill, { tone: entry.event === 'blocked' ? 'blocked' : entry.event === 'flagged' ? entry.severity || 'high' : 'neutral', children: EVENT_LABELS[entry.event] || entry.event }) }),
+                            jsx('td', { children: activityDetails(entry) })
+                          ]
+                        }, `${entry.ts}-${index}`)
+                      )
+                    })
+                  ]
+                }),
+                jsx(Pager, { page: current, pages, total: rows.length, onPage: setPage })
+              ]
+            })
+          }
+        })
+      })
+    ]
+  })
+}
+
+function ThreatDetail({ threat, onClose }) {
+  const query = useDash('threat', `api/threat?identifier=${encodeURIComponent(threat.identifier)}&tier=${encodeURIComponent(threat.tier || 'public')}`)
+  return jsxs('section', {
+    className: 'bbx-section',
+    children: [
+      jsx(Heading, { title: threat.name || threat.identifier, actions: jsx('button', { type: 'button', className: 'bbx-btn', onClick: onClose, children: 'Back to the graph' }) }),
+      jsx('div', {
+        className: 'bbx-panel',
+        style: { padding: '22px 24px' },
+        children: threat.local
+          ? jsxs('div', { style: { display: 'flex', flexDirection: 'column', gap: 10 }, children: [jsxs('div', { style: { display: 'flex', gap: 10 }, children: [jsx(Pill, { tone: threat.severity, children: cap(threat.severity) }), jsx(TypeCell, { type: threat.category })] }), jsx('div', { className: 'bbx-small bbx-mono', children: threat.identifier }), jsx('div', { children: `Seen ${threat.count} time(s) on this machine — each one is in Threats detected below.` })] })
+          : jsx(Loading, {
+              query,
+              children: data => {
+                const t = asObject(data)
+                if (!t.found) return jsx('div', { className: 'bbx-empty', children: 'This threat is not in the graph on this node.' })
+                return jsxs('div', {
+                  style: { display: 'flex', flexDirection: 'column', gap: 14 },
+                  children: [
+                    jsxs('div', { style: { display: 'flex', gap: 10, alignItems: 'center' }, children: [jsx(Pill, { tone: t.severity, children: cap(t.severity) }), jsx(TypeCell, { type: t.category })] }),
+                    t.description ? jsx('p', { style: { margin: 0, maxWidth: '72ch' }, children: t.description }) : null,
+                    jsx('div', { className: 'bbx-small bbx-mono', children: t.identifier }),
+                    asList(t.sources).length ? jsxs('div', { children: [jsx('div', { className: 'bbx-label', children: 'Sources' }), jsx('div', { children: asList(t.sources).join(' · ') })] }) : null,
+                    asList(t.references).length ? jsxs('div', { children: [jsx('div', { className: 'bbx-label', children: 'References' }), ...asList(t.references).map((ref, index) => jsx('div', { className: 'bbx-small bbx-mono', children: ref }, index))] }) : null
+                  ]
+                })
+              }
+            })
+      })
+    ]
+  })
+}
+
+function ThreatGraphTab() {
+  const [tier, setTier] = useState('public')
   const [open, setOpen] = useState(null)
   const status = useDash('graph-status', 'api/graph-status')
-  const sync = useDash('sync', 'api/verified-sync', POLL_MS)
+  const community = useDash('community-stats', 'api/community-stats')
   // A sample of each threat type, asked for separately: the graph lists one type after another, so a
   // single page of the verified tier held no indicators at all (717,005 of them, 2026-11-06).
   const map = useQuery({
@@ -1010,12 +1475,6 @@ function ThreatGraph() {
       return { ...asObject(first), threats: pages.flatMap(page => asList(asObject(page).threats)) }
     }
   })
-  const browse = useDash('graph', `api/graph?tier=public&limit=50&q=${encodeURIComponent(term)}&category=${encodeURIComponent(category)}`)
-  const syncNow = async () => {
-    const answer = await dash('api/sync', { method: 'POST', body: {} })
-    host.notify(answer && answer.ok ? { kind: 'success', message: answer.busy ? 'A sync is already running' : 'Sync started' } : { kind: 'error', message: 'Could not start a sync' })
-    refreshDash()
-  }
   const mapData = asObject(map.data)
   const tierLabel = { public: 'Verified', community: 'Community', local: 'Local' }[tier]
   const graph = useMemo(() => {
@@ -1024,495 +1483,82 @@ function ThreatGraph() {
     const ecosystemTotals = tier === 'local' ? {} : asObject(mapData.ecosystem_totals)
     return threats.length ? buildBubbleGraph(tierLabel === 'Verified' ? 'Verifiable graph' : `${tierLabel} graph`, threats, totals, ecosystemTotals) : null
   }, [map.dataUpdatedAt, tier])
-  if (open) {
-    if (open.local) {
-      return jsx(Section, {
-        title: open.name || open.identifier,
-        actions: jsx(Button, { size: 'sm', variant: 'outline', onClick: () => setOpen(null), children: 'Back' }),
-        children: jsxs('div', {
-          className: 'flex flex-col gap-1 text-sm text-(--ui-text-secondary)',
-          children: [
-            jsx(Badge, { variant: severityVariant(open.severity), children: open.severity }),
-            jsx(Dim, { children: open.identifier }),
-            jsx(Dim, { children: `Seen ${open.count} time(s) on this machine — see the Threats tab for each one.` })
-          ]
-        })
-      })
-    }
-    return jsx(ThreatDetail, { identifier: open.identifier, tier: open.tier || 'public', onClose: () => setOpen(null) })
+  const syncNow = async () => {
+    const answer = await dash('api/sync', { method: 'POST', body: {} })
+    host.notify(answer && answer.ok ? { kind: 'success', message: answer.busy ? 'A sync is already running' : 'Sync started' } : { kind: 'error', message: 'Could not start a sync' })
+    refreshDash()
   }
+  const g = asObject(status.data)
+  const counts = { public: g.curated, community: asObject(community.data).community_threats ?? g.community, local: g.findings_logged }
+  const subtitles = {
+    public: 'Threats verified by Umanitek. A verified rule may block.',
+    community: 'Threats reported by other Blackbox nodes. They only ever flag.',
+    local: 'Threats Blackbox found on this machine.'
+  }
+  if (open) return jsx(ThreatDetail, { threat: open, onClose: () => setOpen(null) })
   return jsxs('div', {
-    className: 'flex flex-col gap-4',
+    className: 'bbx-wrap',
+    style: { padding: 0 },
     children: [
-      jsx(Section, {
-        title: 'Where threat knowledge comes from',
-        actions: jsx(Button, { size: 'sm', variant: 'outline', onClick: syncNow, children: 'Sync now' }),
-        children: jsx(DashState, {
-          query: status,
-          children: data => {
-            const g = asObject(data)
-            const progress = asObject(g.sync_progress)
-            const v = asObject(sync.data)
-            return jsxs('div', {
-              className: 'grid grid-cols-1 gap-4 sm:grid-cols-3',
+      jsxs('section', {
+        className: 'bbx-section',
+        children: [
+          jsx(Heading, {
+            title: 'Threat graph',
+            sub: subtitles[tier],
+            actions: jsxs('div', {
+              style: { display: 'flex', gap: 10, alignItems: 'center' },
               children: [
-                jsx(Fact, { label: 'Verified (may block)', value: `${num(g.curated)} rules · ${asObject(progress.public).label || v.phase_text || ''}` }),
-                jsx(Fact, { label: 'Community (flags only)', value: `${num(g.community)} · ${asObject(progress.community).label || ''}` }),
-                jsx(Fact, { label: 'Local (this machine)', value: `${num(g.findings_logged)} findings` }),
-                jsx(Fact, { label: 'DKG node', value: g.node_reachable ? 'running' : 'not answering' }),
-                jsx(Fact, { label: 'Verified sync', value: typeof v.percent_compiled === 'number' ? `${Math.round(v.percent_compiled)}% compiled · ${num(v.verified_rules)} rules` : v.state || '–' }),
-                jsx(Fact, { label: 'Last sync', value: when(g.last_sync) })
-              ]
-            })
-          }
-        })
-      }),
-      jsx(Section, {
-        title: 'Threat graph',
-        help: 'Each bubble is a threat, grouped by type and coloured by severity. Hover to see it, click to open it. A sample of at most 40 per type is drawn; search below to find any threat.',
-        actions: jsx('div', {
-          className: 'flex gap-1',
-          children: [['public', 'Verified'], ['community', 'Community'], ['local', 'Local']].map(([id, label]) =>
-            jsx(Button, { size: 'sm', variant: tier === id ? 'default' : 'outline', onClick: () => setTier(id), children: label }, id)
-          )
-        }),
-        children: jsx(DashState, {
-          query: map,
-          children: () =>
-            graph
-              ? jsx(BubbleMap, { graph, onPick: threat => setOpen(threat) })
-              : jsx(Note, { children: `No ${tierLabel.toLowerCase()} threats to draw yet.` })
-        })
-      }),
-      jsx(Section, {
-        title: 'Search the verified graph',
-        children: jsxs('div', {
-          className: 'flex flex-col gap-2',
-          children: [
-            jsxs('form', {
-              className: 'flex flex-wrap items-center gap-2',
-              onSubmit: event => {
-                event.preventDefault()
-                setTerm(search.trim())
-              },
-              children: [
-                jsx('input', {
-                  className: 'min-w-0 flex-1 rounded border border-(--ui-stroke-secondary) bg-transparent px-2 py-1 text-sm text-(--ui-text-secondary)',
-                  placeholder: 'Search a package, domain, wallet or pattern',
-                  value: search,
-                  onChange: event => setSearch(event.target.value)
-                }),
-                jsx('select', {
-                  className: 'rounded border border-(--ui-stroke-secondary) bg-transparent px-1 py-1 text-sm text-(--ui-text-secondary)',
-                  value: category,
-                  onChange: event => setCategory(event.target.value),
-                  children: [['', 'All kinds'], ['dependency', 'Packages'], ['ioc', 'Indicators'], ['injection', 'Prompt injection'], ['skill', 'Skills']].map(([value, label]) =>
-                    jsx('option', { value, children: label }, value)
+                jsxs('div', {
+                  className: 'bbx-tabs',
+                  children: [['public', 'Verifiable'], ['community', 'Community'], ['local', 'Local']].map(([id, label]) =>
+                    jsxs('button', { type: 'button', className: 'bbx-tab', 'aria-selected': tier === id ? 'true' : 'false', onClick: () => setTier(id), children: [label, jsx('span', { className: 'bbx-tab-count', children: typeof counts[id] === 'number' ? counts[id].toLocaleString() : '–' })] }, id)
                   )
                 }),
-                jsx(Button, { size: 'sm', type: 'submit', children: 'Search' })
+                jsx('button', { type: 'button', className: 'bbx-iconbtn', title: 'Sync the verified graph now', onClick: syncNow, children: jsx(Codicon, { name: 'refresh' }) })
               ]
-            }),
-            jsx(DashState, {
-              query: browse,
-              children: data => {
-                const page = asObject(data)
-                const rows = asList(page.threats)
-                const pageTotals = asObject(page.category_totals)
-                return jsxs('div', {
-                  className: 'flex flex-col',
-                  children: [
-                    jsx(Dim, { children: `${num(page.total)} threats${Object.keys(pageTotals).length ? ' · ' + Object.entries(pageTotals).map(([k, v]) => `${k} ${num(v)}`).join(' · ') : ''}` }),
-                    rows.length === 0
-                      ? jsx(Note, { children: 'No match.' })
-                      : rows.map(threat =>
-                          jsxs(
-                            'button',
-                            {
-                              type: 'button',
-                              className: 'flex items-center gap-2 border-b border-(--ui-stroke-secondary) py-2 text-left text-sm hover:bg-(--chrome-action-hover)',
-                              onClick: () => setOpen({ ...threat, tier: 'public' }),
-                              children: [
-                                jsx(Badge, { variant: severityVariant(threat.severity), children: threat.severity }),
-                                jsx(Badge, { variant: 'outline', children: threat.category }),
-                                jsx(Grow, { children: threat.name || threat.identifier })
-                              ]
-                            },
-                            threat.identifier
-                          )
-                        )
-                  ]
-                })
-              }
             })
-          ]
-        })
-      })
-    ]
-  })
-}
-
-// ---------------------------------------------------------------- Trader Shield (and any other shield)
-
-function ShieldSettings({ shieldId, section }) {
-  const mode = asObject(section.mode)
-  const [draft, setDraft] = useState(null)
-  const value = draft || { enabled: !!mode.enabled, wallets: asList(mode.wallets), addresses: asList(mode.addresses) }
-  const fields = asList(section.fields)
-  const change = (key, next) => setDraft({ ...value, [key]: next })
-  const save = async () => {
-    const ok = await saveSettings({ shields: { [shieldId]: value } }, 'Trader Shield settings saved. Restart your agent so it picks them up.')
-    if (ok) setDraft(null)
-  }
-  return jsxs('div', {
-    className: 'flex flex-col gap-3',
-    children: [
-      ...fields.map(field => {
-        if (field.kind === 'toggle') {
-          return jsxs('div', {
-            className: 'flex flex-col gap-1',
-            children: [
-              jsx(Checkbox, { checked: value[field.key], onChange: next => change(field.key, next), label: field.label }),
-              field.help ? jsx('p', { className: 'max-w-3xl text-[0.75rem] text-(--ui-text-tertiary)', children: field.help }) : null
-            ]
-          }, field.key)
-        }
-        if (field.kind === 'multi-pick') {
-          const chosen = new Set(asList(value[field.key]))
-          return jsxs('div', {
-            className: 'flex flex-col gap-1',
-            children: [
-              jsx(Label, { children: field.label }),
-              jsx('div', {
-                className: 'flex flex-wrap gap-x-4 gap-y-1',
-                children: asList(field.options).map(option =>
-                  jsx(
-                    Checkbox,
-                    {
-                      checked: chosen.has(option.id),
-                      label: option.name + (option.status && option.status !== 'supported' ? ` (${option.status})` : ''),
-                      onChange: next => {
-                        const updated = new Set(chosen)
-                        if (next) updated.add(option.id)
-                        else updated.delete(option.id)
-                        change(field.key, Array.from(updated))
-                      }
-                    },
-                    option.id
-                  )
-                )
-              })
-            ]
-          }, field.key)
-        }
-        if (field.kind === 'lines') {
-          return jsxs('div', {
-            className: 'flex flex-col gap-1',
-            children: [
-              jsx(Label, { children: field.label }),
-              field.help ? jsx('p', { className: 'max-w-3xl text-[0.75rem] text-(--ui-text-tertiary)', children: field.help }) : null,
-              jsx('textarea', {
-                className: 'min-h-16 rounded border border-(--ui-stroke-secondary) bg-transparent p-2 font-mono text-[0.75rem] text-(--ui-text-secondary)',
-                value: asList(value[field.key]).join('\n'),
-                onChange: event => change(field.key, event.target.value.split('\n').map(line => line.trim()).filter(Boolean))
-              })
-            ]
-          }, field.key)
-        }
-        return null
-      }),
-      jsxs('div', {
-        className: 'flex gap-2',
-        children: [
-          jsx(Button, { size: 'sm', disabled: !draft, onClick: save, children: 'Save' }),
-          draft ? jsx(Button, { size: 'sm', variant: 'outline', onClick: () => setDraft(null), children: 'Discard changes' }) : null
-        ]
-      })
-    ]
-  })
-}
-
-function TraderShield({ ctx, dashboardUrl }) {
-  const cards = useDash('shields', 'api/shields')
-  const settings = useDash('settings', 'api/settings')
-  const events = useDash('trader-events', 'api/shields/trader/events', POLL_MS)
-  return jsx(DashState, {
-    query: cards,
-    children: data => {
-      const card = asList(data).find(item => item && item.shield_id === 'trader')
-      if (!card) return jsx(Note, { children: 'Trader Shield is not available in this version.' })
-      const section = asObject(asObject(asObject(settings.data).shields).trader)
-      const eventRows = asList(events.data)
-      return jsxs('div', {
-        className: 'flex flex-col gap-4',
-        children: [
+          }),
+          tier === 'public' ? jsx(SyncPanel, {}) : null,
           jsxs('div', {
-            className: 'flex flex-wrap items-center gap-2',
+            className: 'bbx-panel bbx-graphwrap',
             children: [
-              jsx('h2', { className: 'text-base font-medium text-(--ui-text-secondary)', children: card.name }),
-              card.beta ? jsx(Badge, { variant: 'outline', children: 'Beta' }) : null,
-              jsx(Badge, { variant: asObject(card.mode).enabled ? (card.blocking ? 'success' : 'warn') : 'muted', children: asObject(card.mode).enabled ? (card.blocking ? 'Engaged · blocking' : 'Engaged · audit only') : 'Off' }),
-              jsx('div', { className: 'flex-1' }),
-              card.page ? jsx(Button, { size: 'sm', variant: 'outline', onClick: () => openDashboard(ctx, String(dashboardUrl || 'http://127.0.0.1:9700/').replace(/\/$/, '') + card.page), children: 'Tested attacks' }) : null
+              tier === 'public' ? jsx(FindThreat, { onOpen: setOpen }) : null,
+              jsx(Loading, {
+                query: map,
+                empty: `No ${tierLabel.toLowerCase()} threats to draw yet.`,
+                children: () => (graph ? jsx(BubbleMap, { graph, onPick: threat => setOpen(threat) }) : null)
+              })
             ]
-          }),
-          card.tagline ? jsx('p', { className: 'max-w-3xl text-sm text-(--ui-text-tertiary)', children: card.tagline }) : null,
-          ...asList(card.sections).map((part, index) =>
-            jsx(
-              Section,
-              {
-                title: part.title,
-                help: part.help,
-                children: asList(part.rows).map((row, rowIndex) =>
-                  jsxs(
-                    Row,
-                    {
-                      children: [
-                        jsx(Badge, { variant: row.state === 'ok' || row.state === 'on' ? 'success' : row.state === 'warn' ? 'warn' : 'muted', children: row.icon || '·' }),
-                        jsx(Grow, { children: row.text }),
-                        row.sub ? jsx(Dim, { children: row.sub }) : null
-                      ]
-                    },
-                    rowIndex
-                  )
-                )
-              },
-              index
-            )
-          ),
-          jsx(Section, {
-            title: 'Settings',
-            children: Object.keys(section).length ? jsx(ShieldSettings, { shieldId: 'trader', section }) : jsx(Note, { children: 'Loading…' })
-          }),
-          jsx(Section, {
-            title: 'Recent wallet events',
-            help: 'Kept on this machine only.',
-            children: eventRows.length
-              ? eventRows.slice(0, 50).map((row, index) =>
-                  jsxs(
-                    Row,
-                    {
-                      children: [
-                        jsx(Badge, { variant: row.decision === 'block' || row.blocked ? 'destructive' : 'warn', children: row.decision === 'block' || row.blocked ? 'blocked' : 'flagged' }),
-                        jsx(Grow, { children: row.title || row.what || row.identifier || 'Wallet event' }),
-                        jsx('span', { className: 'w-20 text-right text-[0.7rem] text-(--ui-text-quaternary)', children: when(row.ts) })
-                      ]
-                    },
-                    index
-                  )
-                )
-              : jsx(Note, { children: 'No wallet events yet.' })
           })
         ]
-      })
-    }
-  })
-}
-
-// ---------------------------------------------------------------- Agents
-
-function Agents() {
-  const agents = useDash('agents', 'api/agents', POLL_MS)
-  const targets = useDash('attach-targets', 'api/attach-targets')
-  const [busy, setBusy] = useState(false)
-  const protect = async (target, enabled) => {
-    setBusy(true)
-    const answer = await dash('api/agents/protection', { method: 'POST', body: { targets: [{ kind: target.kind, target: target.target, enabled }] } })
-    setBusy(false)
-    host.notify(answer && answer.ok
-      ? { kind: 'success', message: `${enabled ? 'Protecting' : 'Stopped protecting'} ${target.target}. Restart that agent to apply.` }
-      : { kind: 'error', message: `Could not change protection: ${(answer && answer.error) || 'unknown error'}` })
-    refreshDash()
-  }
-  const rescan = async () => {
-    await dash('api/agents/rescan', { method: 'POST', body: {} })
-    refreshDash()
-  }
-  return jsxs('div', {
-    className: 'flex flex-col gap-4',
-    children: [
-      jsx(Section, {
-        title: 'Protected agents',
-        help: 'Hermes homes and profiles, and OpenClaw workspaces, that Blackbox watches. Changes apply after the agent restarts.',
-        actions: jsx(Button, { size: 'sm', variant: 'outline', onClick: rescan, children: 'Rescan' }),
-        children: jsx(DashState, {
-          query: targets,
-          children: data =>
-            asList(asObject(data).targets).map((target, index) =>
-              jsxs(
-                Row,
-                {
-                  children: [
-                    jsx(Badge, { variant: 'outline', children: target.kind }),
-                    jsx(Grow, { children: target.target || target.disabled_reason || '–' }),
-                    target.available === false
-                      ? jsx(Dim, { children: 'not found on this machine' })
-                      : jsx(Checkbox, { checked: target.protected, disabled: busy, label: target.protected ? 'Protected' : 'Not protected', onChange: next => protect(target, next) })
-                  ]
-                },
-                index
-              )
-            )
-        })
       }),
-      jsx(Section, {
-        title: 'Connected agents',
-        children: jsx(DashState, {
-          query: agents,
-          children: data => {
-            const rows = asList(asObject(data).agents)
-            if (!rows.length) return jsx(Note, { children: 'No agent has been seen yet.' })
-            return rows.map((row, index) =>
-              jsxs(
-                Row,
-                {
-                  children: [
-                    jsx(Badge, { variant: row.is_active ? 'success' : 'muted', children: row.is_active ? 'active' : 'idle' }),
-                    jsx(Grow, { children: `${row.framework || 'agent'} · ${row.workspace_label || row.workspace || ''}` }),
-                    jsx(Dim, { children: `${num(row.findings)} findings · ${num(row.reports)} reports` })
-                  ]
-                },
-                index
-              )
-            )
-          }
-        })
-      })
+      jsx(ThreatsDetected, {}),
+      jsx(AgentActivity, {})
     ]
   })
 }
 
-// ---------------------------------------------------------------- Community
+// ---------------------------------------------------------------- Settings tab
 
-function Community() {
-  const stats = useDash('community-stats', 'api/community-stats')
-  const trust = useDash('trust', 'api/trust')
-  const reports = useDash('reports', 'api/reports')
-  const [confirming, setConfirming] = useState(false)
-  const setSharing = async on => {
-    setConfirming(false)
-    await saveSettings({ report: on }, on ? 'Sharing is on. You agreed to the reporter terms.' : 'Sharing is off.')
-  }
+function SettingRow({ title, help, children }) {
   return jsxs('div', {
-    className: 'flex flex-col gap-4',
-    children: [
-      jsx(Section, {
-        title: 'The community graph',
-        help: 'Other Blackbox nodes report threats here; they only ever flag, never block. Your node reads them either way.',
-        children: jsx(DashState, {
-          query: stats,
-          children: data => {
-            const c = asObject(data)
-            return jsxs('div', {
-              className: 'flex flex-col gap-3',
-              children: [
-                jsxs('div', {
-                  className: 'grid grid-cols-2 gap-4 sm:grid-cols-4',
-                  children: [
-                    jsx(Fact, { label: 'Joined', value: c.join_text || c.join_state || '–' }),
-                    jsx(Fact, { label: 'Community threats', value: num(c.community_threats) }),
-                    jsx(Fact, { label: 'Corroborated', value: num(c.corroborated_2plus) }),
-                    jsx(Fact, { label: 'Contributing agents', value: num(c.contributing_agents) })
-                  ]
-                }),
-                c.admission_text ? jsx(Dim, { children: c.admission_text }) : null,
-                jsxs('div', {
-                  className: 'flex flex-wrap items-center gap-2 text-sm text-(--ui-text-secondary)',
-                  children: [
-                    jsx(Label, { children: 'Sharing' }),
-                    jsx(Badge, { variant: c.sharing_enabled ? 'success' : 'muted', children: c.sharing_enabled ? 'On' : 'Off' }),
-                    c.sharing_enabled
-                      ? jsx(Button, { size: 'sm', variant: 'outline', onClick: () => setSharing(false), children: 'Turn sharing off' })
-                      : jsx(Button, { size: 'sm', variant: 'outline', onClick: () => setConfirming(true), children: 'Turn sharing on' })
-                  ]
-                }),
-                confirming
-                  ? jsxs('div', {
-                      className: 'flex flex-col gap-2 text-sm text-(--ui-text-secondary)',
-                      children: [
-                        jsx('p', {
-                          className: 'max-w-3xl',
-                          children:
-                            'Sharing sends privacy-safe, signed threat reports to the community graph: the threat’s name, category, severity and the day — never prompts, commands, file contents or secrets. Turning it on records your agreement to the reporter terms (blackbox report --consent shows them).'
-                        }),
-                        jsxs('div', {
-                          className: 'flex gap-2',
-                          children: [
-                            jsx(Button, { size: 'sm', onClick: () => setSharing(true), children: 'I agree, turn sharing on' }),
-                            jsx(Button, { size: 'sm', variant: 'outline', onClick: () => setConfirming(false), children: 'Cancel' })
-                          ]
-                        })
-                      ]
-                    })
-                  : null
-              ]
-            })
-          }
-        })
-      }),
-      jsx(Section, {
-        title: 'Who is trusted',
-        children: jsx(DashState, {
-          query: trust,
-          children: data => {
-            const t = asObject(data)
-            const authorities = asList(t.authorities)
-            return jsxs('div', {
-              className: 'flex flex-col',
-              children: [
-                ...authorities.map((authority, index) =>
-                  jsxs(
-                    Row,
-                    {
-                      children: [
-                        jsx(Badge, { variant: authority.trusted ? 'success' : 'muted', children: authority.trusted ? 'trusted' : authority.state || 'not trusted' }),
-                        jsx(Grow, { children: `${authority.authority} authority` }),
-                        jsx(Dim, { children: `${authority.threshold || '?'} of ${authority.keys || '?'} curators sign` })
-                      ]
-                    },
-                    index
-                  )
-                ),
-                jsx(Dim, { children: `${num(t.reporters_total)} trusted reporters · ${num(t.confirmed_total)} confirmed threats` })
-              ]
-            })
-          }
-        })
-      }),
-      jsx(Section, {
-        title: 'Reports',
-        children: jsx(DashState, {
-          query: reports,
-          children: data => {
-            const r = asObject(data)
-            const outbound = asList(r.outbound)
-            const seen = asList(r.reports)
-            return jsxs('div', {
-              className: 'flex flex-col',
-              children: [
-                jsx(Label, { children: `Shared by this node (${outbound.length})` }),
-                ...outbound.slice(0, 50).map((row, index) =>
-                  jsxs(Row, { children: [jsx(Badge, { variant: 'outline', children: row.stage || row.outcome || 'sent' }), jsx(Grow, { children: row.identifier }), jsx(Dim, { children: row.day || '' })] }, `o${index}`)
-                ),
-                jsx('div', { className: 'pt-2' }),
-                jsx(Label, { children: `Reported by the community (${seen.length})` }),
-                ...seen.slice(0, 50).map((row, index) =>
-                  jsxs(Row, { children: [jsx(Badge, { variant: severityVariant(row.severity), children: row.severity }), jsx(Grow, { children: row.identifier }), jsx(Dim, { children: `${row.reporters} reporter(s)` })] }, `s${index}`)
-                )
-              ]
-            })
-          }
-        })
-      })
-    ]
+    className: 'bbx-setrow',
+    children: [jsxs('div', { className: 'bbx-setrow-text', children: [jsx('div', { className: 'bbx-setrow-title', children: title }), help ? jsx('div', { className: 'bbx-small', children: help }) : null] }), children]
   })
 }
 
-// ---------------------------------------------------------------- Settings
+function SeverityPick({ value, onChange }) {
+  return jsx('select', {
+    className: 'bbx-select',
+    value: SEVERITIES.includes(value) ? value : 'info',
+    onChange: event => onChange(event.target.value),
+    children: SEVERITIES.map(name => jsx('option', { value: name, children: cap(name) }, name))
+  })
+}
 
-function SettingsForm({ initial }) {
+function ProtectionSettings({ initial }) {
   const [state, setState] = useState(() => ({
-    mode: initial.mode === 'block' ? 'block' : 'audit',
     block_severity: initial.block_severity,
     report_min_severity: initial.report_min_severity,
     discover: !!initial.discover,
@@ -1532,20 +1578,15 @@ function SettingsForm({ initial }) {
   }
   const labels = asObject(initial.category_labels)
   const save = async () => {
-    if (state.mode === 'audit' && initial.mode === 'block') {
-      // lowering protection from the form goes through the same confirmation as the switch
-      host.notify({ kind: 'warning', message: 'Use the Overview switch to change to audit mode; it asks you to confirm first.' })
-      return
-    }
     const ok = await saveSettings(
       {
-        mode: state.mode,
+        mode: initial.mode === 'block' ? 'block' : 'audit', // the mode changes only through the Overview switch
+        report: !!initial.report, // sharing changes only below, with its consent step
         block_severity: state.block_severity,
         report_min_severity: state.report_min_severity,
         discover: state.discover,
         osv_lookup: state.osv_lookup,
         community_sandbox: state.community_sandbox,
-        report: !!initial.report, // sharing is changed on the Community tab, with its consent step
         categories: state.categories,
         protected_paths: state.protected_paths.slice(0, 100)
       },
@@ -1553,77 +1594,178 @@ function SettingsForm({ initial }) {
     )
     if (ok) setDirty(false)
   }
-  return jsxs('div', {
-    className: 'flex flex-col gap-4',
+  return jsxs('section', {
+    className: 'bbx-section',
     children: [
-      jsx(Section, {
-        title: 'Blocking',
-        children: jsxs('div', {
-          className: 'flex flex-wrap items-center gap-4 text-sm text-(--ui-text-secondary)',
-          children: [
-            jsx(Badge, { variant: state.mode === 'block' ? 'success' : 'warn', children: `${modeLabel(state.mode)} mode` }),
-            state.mode === 'audit' ? jsx(Button, { size: 'sm', variant: 'outline', onClick: () => set('mode', 'block'), children: 'Turn on blocking' }) : null,
-            jsx(Label, { children: 'Lowest severity blocked' }),
-            jsx(SeverityPick, { value: state.block_severity, onChange: value => set('block_severity', value) }),
-            jsx(Label, { children: 'Lowest severity flagged' }),
-            jsx(SeverityPick, { value: state.report_min_severity, onChange: value => set('report_min_severity', value) })
-          ]
-        })
-      }),
-      jsx(Section, {
-        title: 'What Blackbox checks',
-        children: Object.keys(state.categories).map(key =>
-          jsxs(
-            Row,
-            {
-              children: [
-                jsx(Checkbox, { checked: asObject(state.categories[key]).enabled, label: labels[key] || key, onChange: value => setCategory(key, 'enabled', value) }),
-                jsx('div', { className: 'flex-1' }),
-                jsx(Dim, { children: 'from' }),
-                jsx(SeverityPick, { value: asObject(state.categories[key]).min_severity, onChange: value => setCategory(key, 'min_severity', value) })
-              ]
-            },
-            key
-          )
-        )
-      }),
-      jsx(Section, {
-        title: 'Protected paths',
-        help: 'Files and folders an agent may not read or copy. In block mode a match is refused; these rules never leave this machine. One per line.',
-        children: jsx('textarea', {
-          className: 'min-h-28 rounded border border-(--ui-stroke-secondary) bg-transparent p-2 font-mono text-[0.75rem] text-(--ui-text-secondary)',
-          value: state.protected_paths.join('\n'),
-          onChange: event => set('protected_paths', event.target.value.split('\n').map(line => line.trim()).filter(Boolean))
-        })
-      }),
-      jsx(Section, {
-        title: 'More',
-        children: jsxs('div', {
-          className: 'flex flex-col gap-2',
-          children: [
-            jsx(Checkbox, { checked: state.osv_lookup, label: 'Look packages up on OSV.dev (sends the package name and version, never your code)', onChange: value => set('osv_lookup', value) }),
-            jsx(Checkbox, { checked: state.discover, label: 'Built-in checks for threats not yet in the graph (flag only)', onChange: value => set('discover', value) }),
-            jsx(Checkbox, { checked: state.community_sandbox, label: 'Sandbox mode: Playground tests go to a test lane, never the real community graph', onChange: value => set('community_sandbox', value) })
-          ]
-        })
-      }),
+      jsx(Heading, { title: 'Protection', sub: 'What Blackbox checks, and what it refuses in block mode. The mode itself is the switch on Overview.' }),
       jsxs('div', {
-        className: 'flex gap-2',
+        className: 'bbx-panel',
         children: [
-          jsx(Button, { size: 'sm', disabled: !dirty, onClick: save, children: 'Save settings' }),
-          dirty ? jsx(Dim, { children: 'Unsaved changes' }) : null
+          jsx(SettingRow, { title: 'Lowest severity blocked', help: 'In block mode, verified threats at or above this severity are refused.', children: jsx(SeverityPick, { value: state.block_severity, onChange: value => set('block_severity', value) }) }),
+          jsx(SettingRow, { title: 'Lowest severity flagged', help: 'A built-in check must reach this severity to be flagged or shared.', children: jsx(SeverityPick, { value: state.report_min_severity, onChange: value => set('report_min_severity', value) }) }),
+          ...Object.keys(state.categories).map(key =>
+            jsx(
+              SettingRow,
+              {
+                title: labels[key] || key,
+                help: 'Flag from',
+                children: jsxs('div', { style: { display: 'flex', gap: 14, alignItems: 'center' }, children: [jsx(SeverityPick, { value: asObject(state.categories[key]).min_severity, onChange: value => setCategory(key, 'min_severity', value) }), jsx(Switch, { checked: asObject(state.categories[key]).enabled, label: labels[key] || key, onChange: value => setCategory(key, 'enabled', value) })] })
+              },
+              key
+            )
+          ),
+          jsxs('div', {
+            className: 'bbx-setrow',
+            style: { flexDirection: 'column', alignItems: 'stretch' },
+            children: [
+              jsxs('div', { children: [jsx('div', { className: 'bbx-setrow-title', children: 'Protected paths' }), jsx('div', { className: 'bbx-small', children: 'Files and folders an agent may not read or copy, one per line. In block mode a match is refused; these rules never leave this machine.' })] }),
+              jsx('textarea', { className: 'bbx-textarea', value: state.protected_paths.join('\n'), onChange: event => set('protected_paths', event.target.value.split('\n').map(line => line.trim()).filter(Boolean)) })
+            ]
+          }),
+          jsx(SettingRow, { title: 'Look packages up on OSV.dev', help: 'Sends the package name and version, never your code.', children: jsx(Switch, { checked: state.osv_lookup, label: 'OSV lookup', onChange: value => set('osv_lookup', value) }) }),
+          jsx(SettingRow, { title: 'Built-in checks', help: 'Flag threats not in the graph yet (flag only, never block).', children: jsx(Switch, { checked: state.discover, label: 'Built-in checks', onChange: value => set('discover', value) }) }),
+          jsx(SettingRow, { title: 'Sandbox mode', help: 'Playground tests go to a test lane, never the real community graph.', children: jsx(Switch, { checked: state.community_sandbox, label: 'Sandbox mode', onChange: value => set('community_sandbox', value) }) }),
+          jsxs('div', { className: 'bbx-savebar', children: [jsx('button', { type: 'button', className: 'bbx-btn primary', disabled: !dirty, onClick: save, children: 'Save protection settings' }), dirty ? jsx('span', { className: 'bbx-small', children: 'Unsaved changes' }) : null] })
         ]
       })
     ]
   })
 }
 
-function Settings() {
+function TraderShieldSettings({ section }) {
+  const mode = asObject(section.mode)
+  const [draft, setDraft] = useState(null)
+  const value = draft || { enabled: !!mode.enabled, wallets: asList(mode.wallets), addresses: asList(mode.addresses) }
+  const change = (key, next) => setDraft({ ...value, [key]: next })
+  const save = async () => {
+    const ok = await saveSettings({ shields: { trader: value } }, 'Trader Shield saved. Restart your agent so it picks the change up.')
+    if (ok) setDraft(null)
+  }
+  return jsxs('section', {
+    className: 'bbx-section',
+    children: [
+      jsx(Heading, { title: 'Trader Shield', sub: 'Keep your AI agent away from your crypto wallets and keys.' }),
+      jsxs('div', {
+        className: 'bbx-panel',
+        children: [
+          ...asList(section.fields).map(field => {
+            if (field.kind === 'toggle')
+              return jsx(SettingRow, { title: field.label, help: field.help, children: jsx(Switch, { checked: !!value[field.key], label: field.label, onChange: next => change(field.key, next) }) }, field.key)
+            if (field.kind === 'multi-pick') {
+              const chosen = new Set(asList(value[field.key]))
+              return jsxs(
+                'div',
+                {
+                  className: 'bbx-setrow',
+                  style: { flexDirection: 'column', alignItems: 'stretch' },
+                  children: [
+                    jsxs('div', { children: [jsx('div', { className: 'bbx-setrow-title', children: field.label }), field.help ? jsx('div', { className: 'bbx-small', children: field.help }) : null] }),
+                    jsx('div', {
+                      style: { display: 'flex', flexWrap: 'wrap', gap: 8 },
+                      children: asList(field.options).map(option =>
+                        jsx('button', {
+                          type: 'button', className: 'bbx-btn', 'aria-pressed': chosen.has(option.id) ? 'true' : 'false',
+                          style: chosen.has(option.id) ? { borderColor: '#3F8F5F', color: '#3FA568' } : undefined,
+                          onClick: () => {
+                            const next = new Set(chosen)
+                            if (next.has(option.id)) next.delete(option.id)
+                            else next.add(option.id)
+                            change(field.key, Array.from(next))
+                          },
+                          children: `${chosen.has(option.id) ? '✓ ' : ''}${option.name}${option.status && option.status !== 'supported' ? ` (${option.status})` : ''}`
+                        }, option.id)
+                      )
+                    })
+                  ]
+                },
+                field.key
+              )
+            }
+            if (field.kind === 'lines')
+              return jsxs(
+                'div',
+                {
+                  className: 'bbx-setrow',
+                  style: { flexDirection: 'column', alignItems: 'stretch' },
+                  children: [
+                    jsxs('div', { children: [jsx('div', { className: 'bbx-setrow-title', children: field.label }), field.help ? jsx('div', { className: 'bbx-small', children: field.help }) : null] }),
+                    jsx('textarea', { className: 'bbx-textarea', style: { minHeight: 70 }, value: asList(value[field.key]).join('\n'), onChange: event => change(field.key, event.target.value.split('\n').map(line => line.trim()).filter(Boolean)) })
+                  ]
+                },
+                field.key
+              )
+            return null
+          }),
+          jsxs('div', { className: 'bbx-savebar', children: [jsx('button', { type: 'button', className: 'bbx-btn primary', disabled: !draft, onClick: save, children: 'Save Trader Shield' }), draft ? jsx('button', { type: 'button', className: 'bbx-btn', onClick: () => setDraft(null), children: 'Discard' }) : null] })
+        ]
+      })
+    ]
+  })
+}
+
+function CommunitySettings({ sharing }) {
+  const community = useDash('community-stats', 'api/community-stats')
+  const trust = useDash('trust', 'api/trust')
+  const [confirming, setConfirming] = useState(false)
+  const c = asObject(community.data)
+  const t = asObject(trust.data)
+  const setSharing = async on => {
+    setConfirming(false)
+    await saveSettings({ report: on }, on ? 'Sharing is on. You agreed to the reporter terms.' : 'Sharing is off.')
+  }
+  return jsxs('section', {
+    className: 'bbx-section',
+    children: [
+      jsx(Heading, { title: 'Community graph', sub: 'Other Blackbox nodes report threats to one shared graph; their reports only ever flag. Your node reads them either way.' }),
+      jsxs('div', {
+        className: 'bbx-panel',
+        children: [
+          jsx(SettingRow, { title: 'Membership', help: c.admission_text || '', children: jsx('span', { className: 'bbx-ok', children: c.join_text || c.join_state || '–' }) }),
+          jsx(SettingRow, {
+            title: 'Share threat reports',
+            help: 'Privacy-safe, signed reports: the threat’s name, category, severity and the day — never prompts, commands, file contents or secrets.',
+            children: jsx(Switch, { checked: sharing, label: 'Share threat reports', onChange: on => (on ? setConfirming(true) : setSharing(false)) })
+          }),
+          confirming
+            ? jsxs('div', {
+                className: 'bbx-confirm',
+                children: [
+                  jsx('span', { style: { flex: 1, minWidth: 260 }, children: 'Turning sharing on records your agreement to the reporter terms (blackbox report --consent shows them).' }),
+                  jsx('button', { type: 'button', className: 'bbx-btn primary', onClick: () => setSharing(true), children: 'I agree, turn sharing on' }),
+                  jsx('button', { type: 'button', className: 'bbx-btn', onClick: () => setConfirming(false), children: 'Cancel' })
+                ]
+              })
+            : null,
+          ...asList(t.authorities).map((authority, index) =>
+            jsx(SettingRow, { title: `${cap(authority.authority)} authority`, help: `${authority.threshold || '?'} of ${authority.keys || '?'} curators sign its statements`, children: jsx(Pill, { tone: authority.trusted ? 'ok' : 'neutral', children: authority.trusted ? 'Trusted' : cap(authority.state || 'not trusted') }) }, `a${index}`)
+          )
+        ]
+      })
+    ]
+  })
+}
+
+function SettingsTab() {
   const query = useDash('settings', 'api/settings')
-  return jsx(DashState, {
-    query,
-    // keyed by the saved mode so a change made elsewhere (the switch, the dashboard) reloads the form
-    children: data => jsx(SettingsForm, { initial: asObject(data) }, `${asObject(data).mode}-${asObject(data).block_severity}`)
+  return jsx('div', {
+    className: 'bbx-wrap',
+    style: { padding: 0 },
+    children: jsx(Loading, {
+      query,
+      children: data => {
+        const settings = asObject(data)
+        const trader = asObject(asObject(settings.shields).trader)
+        return jsxs('div', {
+          style: { display: 'flex', flexDirection: 'column', gap: 40 },
+          children: [
+            // keyed by what was saved, so a change made elsewhere (the switch, the dashboard) reloads the form
+            jsx(ProtectionSettings, { initial: settings }, JSON.stringify([settings.block_severity, settings.report_min_severity, settings.categories, settings.protected_paths])),
+            Object.keys(trader).length ? jsx(TraderShieldSettings, { section: trader }, JSON.stringify(trader.mode)) : null,
+            jsx(CommunitySettings, { sharing: !!settings.report })
+          ]
+        })
+      }
+    })
   })
 }
 
@@ -1633,55 +1775,44 @@ function BlackboxPage({ ctx }) {
   const [tab, setTab] = useState('overview')
   const status = useStatus()
   const s = status.data
-
   if (s && !s.available) {
     return jsxs('div', {
-      className: 'flex h-full flex-col gap-2 p-6 text-sm text-(--ui-text-secondary)',
+      className: 'bbx',
       children: [
-        jsx('div', { className: 'font-medium', children: 'Blackbox is not running in this Hermes' }),
-        jsx('div', { className: 'text-(--ui-text-tertiary)', children: 'Enable the blackbox plugin (hermes plugins enable blackbox) and run hermes blackbox setup.' })
+        jsx('style', { children: PAGE_CSS }),
+        jsx('div', { className: 'bbx-wrap', children: jsxs('div', { children: [jsx('h2', { className: 'bbx-h2', children: 'Blackbox is not running in this Hermes' }), jsx('p', { className: 'bbx-sub', children: 'Enable the blackbox plugin (hermes plugins enable blackbox) and run hermes blackbox setup.' })] }) })
       ]
     })
   }
-
-  const panels = {
-    overview: () => (s ? jsx(Overview, { status: s, setTab }) : jsx(Note, { children: 'Loading…' })),
-    threats: () => jsx(Threats, {}),
-    activity: () => jsx(Activity, {}),
-    graph: () => jsx(ThreatGraph, {}),
-    trader: () => jsx(TraderShield, { ctx, dashboardUrl: s && s.dashboardUrl }),
-    agents: () => jsx(Agents, {}),
-    community: () => jsx(Community, {}),
-    settings: () => jsx(Settings, {})
-  }
-
   return jsxs('div', {
-    className: 'flex h-full flex-col gap-4 overflow-auto p-6',
+    className: 'bbx',
     children: [
+      jsx('style', { children: PAGE_CSS }),
       jsxs('div', {
-        className: 'flex items-center gap-2',
+        className: 'bbx-wrap',
         children: [
-          jsx(Codicon, { name: 'shield', size: '20px' }),
-          jsx('h1', { className: 'text-lg font-medium text-(--ui-text-secondary)', children: 'Agent Blackbox' }),
-          s ? jsx(Badge, { variant: s.mode === 'block' ? 'success' : 'warn', children: `${modeLabel(s.mode)} mode` }) : null,
-          jsx('div', { className: 'flex-1' }),
-          s && s.dashboardUrl
-            ? jsx(Button, { size: 'sm', variant: 'outline', onClick: () => openDashboard(ctx, s.dashboardUrl), children: 'Open in browser' })
-            : null
+          jsxs('div', {
+            className: 'bbx-top',
+            children: [
+              jsxs('div', { className: 'bbx-brand', children: ['BLACKB', jsx('span', { className: 'bbx-brand-dot' }), 'X'] }),
+              jsxs('div', {
+                className: 'bbx-tabs',
+                style: { marginLeft: 12 },
+                role: 'tablist',
+                children: [['overview', 'Overview'], ['graph', 'Threat graph'], ['settings', 'Settings']].map(([id, label]) =>
+                  jsx('button', { type: 'button', role: 'tab', className: 'bbx-tab', 'aria-selected': tab === id ? 'true' : 'false', onClick: () => setTab(id), children: label }, id)
+                )
+              }),
+              jsx('div', { className: 'bbx-spacer' }),
+              s ? jsx('button', { type: 'button', className: `bbx-modepill${s.mode === 'block' ? ' block' : ''}`, title: 'Change it on Overview', onClick: () => setTab('overview'), children: s.mode === 'block' ? 'Block mode' : 'Audit mode' }) : null,
+              s && s.dashboardUrl ? jsx('button', { type: 'button', className: 'bbx-iconbtn', title: 'Open the dashboard in your browser', onClick: () => openDashboard(ctx, s.dashboardUrl), children: jsx(Codicon, { name: 'link-external' }) }) : null
+            ]
+          }),
+          tab === 'overview' ? (s ? jsx(Overview, { status: s, setTab }) : jsx('div', { className: 'bbx-empty', children: 'Loading…' })) : null,
+          tab === 'graph' ? jsx(ThreatGraphTab, {}) : null,
+          tab === 'settings' ? jsx(SettingsTab, {}) : null
         ]
-      }),
-      jsx('div', {
-        className: 'flex flex-wrap gap-1 border-b border-(--ui-stroke-secondary) pb-2',
-        role: 'tablist',
-        children: TABS.map(([id, label]) =>
-          jsx(
-            Button,
-            { size: 'sm', role: 'tab', 'aria-selected': tab === id, variant: tab === id ? 'secondary' : 'ghost', onClick: () => setTab(id), children: label },
-            id
-          )
-        )
-      }),
-      panels[tab] ? panels[tab]() : null
+      })
     ]
   })
 }

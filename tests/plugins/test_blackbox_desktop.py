@@ -239,7 +239,8 @@ def test_plugin_js_passes_hermes_desktop_admission_lint():
 def test_plugin_js_asks_before_lowering_protection():
     """Turning blocking on is one click; switching to audit needs a second, explicit click."""
     source = (PLUGIN / "desktop" / "plugin.js").read_text(encoding="utf-8")
-    assert "value === 'audit' ? setConfirming(true) : choose('block')" in source
+    assert "onClick: () => (mode === 'audit' ? null : setConfirming(true))" in source   # Audit: a confirmation first
+    assert "onClick: () => choose('block')" in source                                   # Block: one click
     assert "choose('audit')" in source and "Switch to audit?" in source
 
 
