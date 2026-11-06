@@ -752,11 +752,13 @@ const PAGE_CSS = `
 .bbx-head { display: flex; align-items: flex-end; gap: 16px; flex-wrap: wrap; }
 .bbx-panel { border: 1px solid var(--bbx-line); border-radius: 6px; background: var(--bbx-panel); }
 .bbx-label { font-family: var(--bbx-mono); font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--bbx-muted); }
-.bbx-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 16px; }
-.bbx-stat { padding: 20px 22px; display: flex; flex-direction: column; gap: 10px; min-height: 150px; }
+.bbx-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
+@media (min-width: 1000px) { .bbx-stats { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
+.bbx-stat { padding: 16px 18px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .bbx-stat.warm { border-left: 3px solid color-mix(in srgb, ${SIGNAL} 60%, transparent); }
-.bbx-stat-value { font-family: var(--bbx-mono); font-size: 34px; font-weight: 500; line-height: 1.1; }
-.bbx-stat-note { font-family: var(--bbx-mono); font-size: 12.5px; color: var(--bbx-muted); }
+.bbx-stat-value { font-family: var(--bbx-mono); font-size: 24px; font-weight: 500; line-height: 1.15; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bbx-stat-note { font-family: var(--bbx-mono); font-size: 11.5px; color: var(--bbx-muted); line-height: 1.45; }
+.bbx-stat .bbx-label { font-size: 10px; letter-spacing: 0.12em; }
 .bbx-ok { color: #3FA568; font-family: var(--bbx-mono); font-size: 12.5px; font-weight: 600; }
 .bbx-seg { display: inline-flex; padding: 3px; border: 1px solid var(--bbx-line); border-radius: 6px; gap: 2px; }
 .bbx-seg button { font-family: var(--bbx-mono); font-size: 11.5px; padding: 6px 12px; border-radius: 4px; border: 0; background: transparent; color: var(--bbx-muted); cursor: pointer; }
@@ -929,6 +931,15 @@ function openDashboard(ctx, url) {
 
 // ---------------------------------------------------------------- Overview
 
+function ago(seconds) {
+  if (typeof seconds !== 'number' || seconds <= 0) return '–'
+  const elapsed = Math.max(0, Date.now() / 1000 - seconds)
+  if (elapsed < 60) return `${Math.round(elapsed)}s ago`
+  if (elapsed < 3600) return `${Math.round(elapsed / 60)}m ago`
+  if (elapsed < 86400) return `${Math.round(elapsed / 3600)}h ago`
+  return `${Math.round(elapsed / 86400)}d ago`
+}
+
 function StatCards({ status }) {
   const graph = useDash('graph-status', 'api/graph-status')
   const community = useDash('community-stats', 'api/community-stats')
@@ -955,10 +966,10 @@ function StatCards({ status }) {
     children: [
       card('warning', 'Open findings', num(asObject(findings.data).total ?? rows.length), `${critical} critical`),
       card('shield', 'Verified threats synced', num(g.curated), "from Umanitek's curated graph"),
-      card('history', 'Last sync', when(g.last_sync), minutes ? `auto every ${minutes >= 60 ? `${Math.round(minutes / 60)}h` : `${minutes}m`}` : ''),
+      card('history', 'Last sync', ago(g.last_sync), minutes ? `auto every ${minutes >= 60 ? `${Math.round(minutes / 60)}h` : `${minutes}m`}` : ''),
       card('organization', 'Community graph', num(c.community_threats), [c.graph && c.graph.split('/').pop(), `${num(c.contributing_agents)} agents`, `${num(c.corroborated_2plus)} with 2+ reporters`].filter(Boolean).join(' · '),
         c.join_state ? jsx('div', { className: 'bbx-ok', children: c.join_text || c.join_state }) : null, true),
-      card('broadcast', 'Threat sharing', sharing ? 'on' : 'off', sharing ? 'privacy-safe reports to the community' : 'off · opt in from settings', null, true)
+      card('broadcast', 'Threat sharing', sharing ? 'on' : 'off', sharing ? 'privacy-safe reports to the community' : 'opt in from settings', null, true)
     ]
   })
 }
@@ -1205,7 +1216,6 @@ function Overview({ status, setTab }) {
     style: { padding: 0 },
     children: [
       jsx(StatCards, { status }),
-      jsx(ModeCard, { mode: status.mode, blockSeverity: status.blockSeverity }),
       jsx(ConnectedAgents, {}),
       jsx(TraderShieldPanel, { setTab })
     ]
@@ -1615,7 +1625,7 @@ function ProtectionSettings({ initial }) {
   const save = async () => {
     const ok = await saveSettings(
       {
-        mode: initial.mode === 'block' ? 'block' : 'audit', // the mode changes only through the Overview switch
+        mode: initial.mode === 'block' ? 'block' : 'audit', // the mode changes only through the Mode switch above
         report: !!initial.report, // sharing changes only below, with its consent step
         block_severity: state.block_severity,
         report_min_severity: state.report_min_severity,
@@ -1632,7 +1642,7 @@ function ProtectionSettings({ initial }) {
   return jsxs('section', {
     className: 'bbx-section',
     children: [
-      jsx(Heading, { title: 'Protection', sub: 'What Blackbox checks, and what it refuses in block mode. The mode itself is the switch on Overview.' }),
+      jsx(Heading, { title: 'Protection', sub: 'What Blackbox checks, and what it refuses in block mode.' }),
       jsxs('div', {
         className: 'bbx-panel',
         children: [
@@ -1793,6 +1803,7 @@ function SettingsTab() {
         return jsxs('div', {
           style: { display: 'flex', flexDirection: 'column', gap: 40 },
           children: [
+            jsxs('section', { className: 'bbx-section', children: [jsx(Heading, { title: 'Mode', sub: 'Audit records what agents do; Block also stops threats.' }), jsx(ModeCard, { mode: settings.mode === 'block' ? 'block' : 'audit', blockSeverity: settings.block_severity })] }),
             // keyed by what was saved, so a change made elsewhere (the switch, the dashboard) reloads the form
             jsx(ProtectionSettings, { initial: settings }, JSON.stringify([settings.block_severity, settings.report_min_severity, settings.categories, settings.protected_paths])),
             Object.keys(trader).length ? jsx(TraderShieldSettings, { section: trader }, JSON.stringify(trader.mode)) : null,
@@ -1839,7 +1850,7 @@ function BlackboxPage({ ctx }) {
                 )
               }),
               jsx('div', { className: 'bbx-spacer' }),
-              s ? jsx('button', { type: 'button', className: `bbx-modepill${s.mode === 'block' ? ' block' : ''}`, title: 'Change it on Overview', onClick: () => setTab('overview'), children: s.mode === 'block' ? 'Block mode' : 'Audit mode' }) : null,
+              s ? jsx('button', { type: 'button', className: `bbx-modepill${s.mode === 'block' ? ' block' : ''}`, title: 'Change the mode in Settings', onClick: () => setTab('settings'), children: s.mode === 'block' ? 'Block mode' : 'Audit mode' }) : null,
               s && s.dashboardUrl ? jsx('button', { type: 'button', className: 'bbx-iconbtn', title: 'Open the dashboard in your browser', onClick: () => openDashboard(ctx, s.dashboardUrl), children: jsx(Codicon, { name: 'link-external' }) }) : null
             ]
           }),
