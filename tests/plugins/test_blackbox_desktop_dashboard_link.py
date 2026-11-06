@@ -122,3 +122,17 @@ def test_every_panel_route_is_allowed():
     writes = ["api/settings", "api/agents/protection", "api/agents/rescan", "api/sync"]
     assert all(DashboardLink.allowed("GET", path) for path in reads)
     assert all(DashboardLink.allowed("POST", path) for path in writes)
+
+
+def test_every_route_the_desktop_panels_call_is_allowed():
+    """desktop/plugin.js and the allowlist move together: a panel calling a route the link refuses
+    would show "Could not load" in Desktop with no test to say why."""
+    import re
+    from pathlib import Path
+    source = (Path(__file__).resolve().parents[2] / "plugins" / "blackbox" / "desktop" / "plugin.js").read_text(encoding="utf-8")
+    calls = re.findall(r"dash\(\s*'([^'?`]+)[^']*'\s*,\s*\{\s*method:\s*'POST'", source)
+    reads = re.findall(r"useDash\(\s*'[^']+'\s*,\s*[`']([^'?`$]+)", source)
+    assert calls and reads
+    assert [path for path in calls if not DashboardLink.allowed("POST", path)] == []
+    assert [path for path in reads if not DashboardLink.allowed("GET", path)] == []
+
