@@ -346,13 +346,35 @@ def _stop_managed_dkg(cfg: BlackboxConfig, old_pid: Optional[int], env: dict[str
                 pass
 
 
+#: How long a (re)started managed node may take to answer again. An empty store starts in
+#: seconds, but a node holding the whole verified graph (~10M triples) spends ~100 s reopening
+#: its store (bb-install-1022b, 2026-10-28) — a fixed 90 s made every update of a synced node
+#: fail (KI-457). The default leaves room for the graph to grow; the installers read the same
+#: setting, so one value governs every wait for a restarting node.
+NODE_READY_WAIT_SECONDS = 300.0
+NODE_READY_WAIT_ENV = "BLACKBOX_DKG_RUNTIME_WAIT_SECONDS"
+
+
+def node_ready_wait_seconds() -> float:
+    """The wait for a restarting node: ``BLACKBOX_DKG_RUNTIME_WAIT_SECONDS`` when it holds a
+    positive number, else :data:`NODE_READY_WAIT_SECONDS` (a bad value never shortens it)."""
+    raw = os.environ.get(NODE_READY_WAIT_ENV, "").strip()
+    try:
+        value = float(raw) if raw else NODE_READY_WAIT_SECONDS
+    except ValueError:
+        return NODE_READY_WAIT_SECONDS
+    return value if value > 0 else NODE_READY_WAIT_SECONDS
+
+
 def _wait_for_managed_dkg_ready(cfg: BlackboxConfig, detail: str) -> None:
-    """Block until the node API answers ``status`` (90s), else RuntimeError.
+    """Block until the node API answers ``status`` (:func:`node_ready_wait_seconds`), else
+    RuntimeError naming the wait and how to lengthen it.
 
     *detail* is the start command's output, appended to the error for context.
     """
     client = DkgClient(url=cfg.dkg_url, dkg_home=cfg.dkg_home, config=cfg)
-    deadline = time.monotonic() + 90
+    wait_seconds = node_ready_wait_seconds()
+    deadline = time.monotonic() + wait_seconds
     while time.monotonic() < deadline:
         try:
             client.status(timeout=2)
@@ -360,6 +382,7 @@ def _wait_for_managed_dkg_ready(cfg: BlackboxConfig, detail: str) -> None:
         except DkgError:
             time.sleep(1)
     raise RuntimeError(
-        "managed DKG node did not become ready"
+        f"managed DKG node did not become ready within {wait_seconds:g}s "
+        f"(set {NODE_READY_WAIT_ENV} to wait longer)"
         + (f": {detail[-500:]}" if detail else "")
     )

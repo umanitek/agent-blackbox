@@ -1,5 +1,5 @@
 name: blackbox
-version: "1.0.0"
+version: "1.3.0"  # the release number; kernel/constants.py __version__ and CHANGELOG.md match it
 # The Hermes release this plugin is built and tested against (pm-managed installs,
 # hermes_yaml, the register_* routes it uses). SemVer floor, as the catalog requires.
 requires_hermes: ">=0.21.7"
@@ -17,7 +17,7 @@ python_dependencies:
 # registers no tool backend — only the lifecycle hooks below — so the load path
 # is otherwise identical to a standalone plugin.
 kind: backend
-description: "Agent Blackbox — graph-driven agent security. Syncs a threat ruleset from the curated public Verifiable Memory graph and matches every tool call and model request against it: prompt-injection patterns, privilege-escalation tool shapes, and vulnerable dependency installs. Audit mode records findings locally; block mode refuses tool calls at/above a configured severity. It also shares privacy-safe threat reports (never prompt or command text, never secrets) with a community graph in DKG shared working memory and flags (never blocks) what other nodes report; sharing is on by default and turned off with report: false (or BLACKBOX_REPORT=0). Fail-open everywhere."
+description: "Agent Blackbox — graph-driven agent security. Syncs a threat ruleset from the curated public Verifiable Memory graph and matches every tool call and model request against it: prompt-injection patterns, privilege-escalation tool shapes, and vulnerable dependency installs. Audit mode records findings locally; block mode refuses tool calls at/above a configured severity. It can also share privacy-safe threat reports (never prompt or command text, never secrets) with the threat graph's community area and flags (never blocks) what other nodes report; sharing is off by default and turned on with `blackbox report --enable-sharing` or the dashboard toggle, which record your agreement to the reporter terms. Fail-open everywhere."
 author: Umanitek
 # Every hook register() installs, declared so `hermes plugins validate` can check
 # the plugin registers nothing it did not declare (catalog admission rule 6).

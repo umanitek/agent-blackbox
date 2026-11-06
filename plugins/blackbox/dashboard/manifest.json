@@ -1,0 +1,7 @@
+{
+  "name": "blackbox",
+  "label": "Blackbox",
+  "description": "Agent Blackbox: protection status and recent findings for Hermes Desktop.",
+  "api": "plugin_api.py",
+  "tab": {"hidden": true}
+}

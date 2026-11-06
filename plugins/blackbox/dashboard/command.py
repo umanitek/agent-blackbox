@@ -63,6 +63,19 @@ def _replace_existing_dashboard(port: int) -> bool:
     return True
 
 
+def stop_running_dashboard(port: int) -> list[int]:
+    """Stop the Blackbox dashboard serving loopback ``port``, if one does; returns the pids stopped.
+
+    For `blackbox uninstall`: setup starts the dashboard directly (its login service takes over at
+    the next login), so removing the service does not stop it, and a dashboard left running
+    re-creates $BLACKBOX_HOME. Same ownership rule as a restart: only a process whose own command
+    line is ``… blackbox dashboard``; anything else on the port is left alone."""
+    ours = sorted(pid for pid in _listening_pids(port) if _is_blackbox_dashboard(pid))
+    if ours:
+        _stop(set(ours))
+    return ours
+
+
 def _listening_pids(port: int) -> set[int]:
     """Other processes listening on loopback ``port`` (empty when nothing answers or lsof is missing)."""
     import shutil

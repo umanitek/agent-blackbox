@@ -929,6 +929,12 @@
   .wp-sub { color: var(--muted); font-size: 12px; }
   /* The event list scrolls inside its column instead of growing the panel down the page. */
   .wp-evlist { max-height: min(340px, 55vh); overflow-y: auto; overscroll-behavior: contain; padding-right: 4px; display: grid; align-content: start; }
+  /* The events column is as tall as its neighbours (the wallet list), so the list fills it and
+     scrolls inside it — `contain: size` keeps the list's own length out of the row's height.
+     Alone in its row (phone width) it falls back to the fixed height above. */
+  .wp-col:has(> .wp-evlist) { display: flex; flex-direction: column; }
+  .wp-col > .wp-evlist { flex: 1 1 auto; contain: size; min-height: min(340px, 55vh); max-height: none; }
+  @media (max-width: 700px) { .wp-col > .wp-evlist { contain: none; flex: none; max-height: min(340px, 55vh); } }
   .wp-ev { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; font-size: 12.5px; padding: 6px 0; border-bottom: 1px solid var(--border); }
   .wp-ev:last-child { border-bottom: 0; }
   .wp-ev .o { font-weight: 700; font-size: 11px; letter-spacing: .05em; text-transform: uppercase; }

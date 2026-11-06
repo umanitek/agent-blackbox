@@ -2,8 +2,8 @@
 
 :func:`_flag_worthy` keeps the findings worth surfacing under the current
 config; :func:`_report_and_audit` records them locally and fans each one out
-(Observer-style) to the private audit record and — when the community share
-policy allows — the community graph. Called by the hooks and the background
+(Observer-style) to Hermes Desktop's live alert, the private audit record and —
+when the community share policy allows — the community graph. Called by the hooks and the background
 discovery tasks alike.
 """
 
@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any, Dict, List, Optional
-from .. import audit, detection, shields
+from .. import audit, desktop, detection, shields
 from .. import community
 from ..kernel import identity
 from ..kernel.config import BlackboxConfig
@@ -76,6 +76,7 @@ def _report_and_audit(cfg: BlackboxConfig, event: str, findings: list[detection.
     audit.record(event=event, findings=finding_dicts or None, detail=detail)
     if not findings:
         return
+    desktop.announce_findings(event, finding_dicts, detail)   # fail-open; title/severity/outcome only
     if cfg.community_sandbox:
         with audit.sandbox_run():
             _share_findings(cfg, event, finding_dicts)

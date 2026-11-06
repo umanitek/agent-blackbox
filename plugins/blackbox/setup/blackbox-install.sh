@@ -337,7 +337,12 @@ blackbox_dkg_control() {
     esac
 }
 
-BLACKBOX_DKG_HANDOVER_WAIT_SECONDS="${BLACKBOX_DKG_HANDOVER_WAIT_SECONDS:-90}"   # a node start takes 10-60 s
+# How long a restarted DKG node may take to answer again. An empty store starts in seconds, but
+# a node holding the whole verified graph (~10M triples) spends ~100 s reopening its store, so a
+# fixed 90 s rolled back every update of a synced install (KI-457). One setting, read by the
+# installers and by Blackbox itself (sync/managed_node.py); the handover wait follows it.
+BLACKBOX_DKG_RUNTIME_WAIT_SECONDS="${BLACKBOX_DKG_RUNTIME_WAIT_SECONDS:-300}"
+BLACKBOX_DKG_HANDOVER_WAIT_SECONDS="${BLACKBOX_DKG_HANDOVER_WAIT_SECONDS:-$BLACKBOX_DKG_RUNTIME_WAIT_SECONDS}"
 
 # The pid of the process the node's service runs (`dkg start --foreground`, the DKG CLI's own
 # supervisor), or nothing when the service is not running it.
@@ -494,11 +499,13 @@ wait_for_blackbox_dkg_runtime() {
         warn "Could not resolve the published DKG build commit."
         return 1
     fi
+    step "Waiting for the DKG node to answer (up to ${BLACKBOX_DKG_RUNTIME_WAIT_SECONDS}s; a synced node takes about 2 minutes) ..."
     if ! "$VENV_DIR/bin/python" "$verifier" wait \
-        "$BLACKBOX_DKG_DAEMON_URL" "$expected_commit" 90 >/dev/null; then
+        "$BLACKBOX_DKG_DAEMON_URL" "$expected_commit" "$BLACKBOX_DKG_RUNTIME_WAIT_SECONDS" >/dev/null; then
         BLACKBOX_INSTALL_INCOMPLETE=true
         BLACKBOX_THREAT_GRAPH_INCOMPLETE=true
-        warn "The DKG daemon did not activate npm build ${expected_commit:0:12}."
+        warn "The DKG daemon did not activate npm build ${expected_commit:0:12} within ${BLACKBOX_DKG_RUNTIME_WAIT_SECONDS}s."
+        step "A node holding a large graph can need longer: re-run with BLACKBOX_DKG_RUNTIME_WAIT_SECONDS=600"
         return 1
     fi
     ok "DKG daemon is ready on npm build ${expected_commit:0:12}"
@@ -711,12 +718,14 @@ require_docker_for_blazegraph() {
     ok "Docker engine is ready for Blazegraph"
 }
 
-# Whether Docker can run the Blazegraph store: running now, or Docker Desktop installed on a Mac
-# (require_docker_for_blazegraph starts it).
+# Whether Docker can run the Blazegraph store RIGHT NOW (its engine answers). Setup-only mode
+# (`hermes blackbox setup`) uses this to pick its store: a Docker Desktop that is installed but not
+# running is not started for it, because Oxigraph needs no Docker and opening someone's Docker
+# Desktop is not ours to do (2026-11-03: setup on Hermes Desktop launched it and waited 120 s).
+# The Windows installer's setup-only check already asked only "is it running".
 blackbox_docker_available() {
     command -v docker >/dev/null 2>&1 || return 1
-    docker info >/dev/null 2>&1 && return 0
-    [ "$OS" = "macos" ] && { [ -d "/Applications/Docker.app" ] || [ -d "$HOME/Applications/Docker.app" ]; }
+    docker info >/dev/null 2>&1
 }
 
 use_blackbox_oxigraph() {
@@ -1274,6 +1283,7 @@ resolve_repo() {
     else
         step "Cloning $REPO_URL → $REPO_DIR"
         git clone --depth 1 --branch "$REPO_BRANCH" "$REPO_URL" "$REPO_DIR"
+        BLACKBOX_FRESH_CLONE=true
     fi
     if ! blackbox_repo_is_valid "$REPO_DIR"; then
         err "$REPO_DIR is not a complete Agent Blackbox Python project."
@@ -1313,12 +1323,12 @@ check_python() {
         warn "No system Python 3.11–3.13 found — uv will provide a compatible one."
         PY=""
     else
-        err "Python 3.11–3.13 not found (and uv isn't installed)."
-        case "$OS" in
-            macos) step "Easiest fix: brew install uv   (or: brew install python@3.12)" ;;
-            linux) step "Easiest fix: curl -LsSf https://astral.sh/uv/install.sh | sh   (or: apt install python3.12 python3.12-venv)" ;;
-        esac
-        exit 1
+        # Nothing to install by hand: Hermes's own setup (setup-hermes.sh, run below) downloads a
+        # pinned, sha256-verified uv and has it install Python. Stopping here sent a user to
+        # `brew install python@3.12` for a step the installer does itself (2026-10-29). Only the
+        # old-Hermes fallback (minimal_python_env) still needs a Python or uv, and says so there.
+        step "No Python 3.11–3.13 or uv yet — Hermes's setup will download a pinned, checksum-verified uv and Python."
+        PY=""
     fi
 }
 
@@ -1552,7 +1562,12 @@ minimal_python_env() {
             step "Creating virtual environment (uv fetches Python 3.12) ..."
             ( cd "$REPO_DIR" && uv venv --python 3.12 "$VENV_DIR" )
         else
-            err "Need Python 3.11–3.13 or uv to build the environment."; exit 1
+            err "Need Python 3.11–3.13 or uv to build the environment (this Hermes has no setup that fetches them)."
+            case "$OS" in
+                macos) step "Easiest fix: brew install uv   (or: brew install python@3.12)" ;;
+                linux) step "Easiest fix: curl -LsSf https://astral.sh/uv/install.sh | sh   (or: apt install python3.12 python3.12-venv)" ;;
+            esac
+            exit 1
         fi
     else
         step "Reusing existing venv at $VENV_DIR"
@@ -1859,14 +1874,22 @@ install_blackbox_dkg_package() {
     mkdir -p "$BLACKBOX_DKG_CLI_DIR"
     mkdir -p "$(dirname "$npm_log")"
     # npm 12's allow list lives in the project's package.json: merge ours in (a package an
-    # operator set to false stays denied); older npm ignores the field.
+    # operator set to false stays denied); older npm ignores the field. npm 12 keys a package
+    # installed from a local tarball by that tarball's file: spec, not by its name, so the pinned
+    # tarball is allowed by its own path, as given and with symlinks resolved (macOS temp folders
+    # sit behind /var -> /private/var). Entries an earlier run left for its own temporary tarball
+    # (blackbox-dkg-pack.*) are dropped so the file does not grow with every update.
     node -e '
-const fs = require("fs"); const file = process.argv[1];
+const fs = require("fs"); const file = process.argv[1]; const tarball = process.argv[2];
 let pkg = {}; try { pkg = JSON.parse(fs.readFileSync(file, "utf8")); } catch (e) {}
 pkg.allowScripts = Object.assign({}, pkg.allowScripts);
-for (const name of process.argv.slice(2)) if (pkg.allowScripts[name] !== false) pkg.allowScripts[name] = true;
+for (const key of Object.keys(pkg.allowScripts)) if (/^file:.*blackbox-dkg-pack[.-]/.test(key)) delete pkg.allowScripts[key];
+const names = process.argv.slice(3);
+if (tarball) names.push("file:" + tarball);
+try { if (tarball) names.push("file:" + fs.realpathSync(tarball)); } catch (e) {}
+for (const name of names) if (pkg.allowScripts[name] !== false) pkg.allowScripts[name] = true;
 fs.writeFileSync(file, JSON.stringify(pkg, null, 2) + "\n");
-' "$BLACKBOX_DKG_CLI_DIR/package.json" "${BLACKBOX_DKG_ALLOW_SCRIPTS[@]}"
+' "$BLACKBOX_DKG_CLI_DIR/package.json" "$tarball" "${BLACKBOX_DKG_ALLOW_SCRIPTS[@]}"
     local install_spec="$BLACKBOX_DKG_PACKAGE"
     [ -n "$tarball" ] && install_spec="$tarball"
     npm install --prefix "$BLACKBOX_DKG_CLI_DIR" --prefer-online "$install_spec" >"$npm_log" 2>&1
@@ -2118,10 +2141,14 @@ except Exception:
     sys.exit(0)
 
 os.makedirs(os.path.dirname(cfg_path), exist_ok=True)
+# The user's config.yaml keeps its comments: Hermes's round-trip editor (0.21.7+) reads and writes
+# it back with only our keys changed (Hermes Desktop's config is ~2,400 lines, mostly comments).
+_roundtrip = getattr(yaml, "roundtrip_yaml", None)
+editor = _roundtrip() if callable(_roundtrip) else None
 data = {}
 if os.path.exists(cfg_path):
-    with open(cfg_path) as f:
-        data = yaml.safe_load(f) or {}
+    with open(cfg_path, encoding="utf-8-sig") as f:
+        data = (editor.load(f) if editor is not None else yaml.safe_load(f)) or {}
 
 plugins = data.setdefault("plugins", {})
 entries = plugins.setdefault("entries", {})
@@ -2259,8 +2286,11 @@ if blackbox.pop("sharing_default", None) is not None:
 if blackbox.get("daily_report_limit") in (0, "0", 20, "20"):
     blackbox["daily_report_limit"] = 100
     added.append("daily_report_limit")
-with open(cfg_path, "w") as f:
-    yaml.safe_dump(data, f, default_flow_style=False, sort_keys=False)
+with open(cfg_path, "w", encoding="utf-8") as f:
+    if editor is not None:
+        editor.dump(data, f)
+    else:
+        yaml.safe_dump(data, f, default_flow_style=False, sort_keys=False)
 if added:
     print("  configured: " + ", ".join(added))
 else:
@@ -2319,16 +2349,22 @@ except Exception:
 if mode not in ("audit", "block", ""):
     sys.exit(1)
 os.makedirs(os.path.dirname(cfg_path), exist_ok=True)
+# Comments kept, as in enable_and_configure (Hermes's round-trip editor when it ships one).
+_roundtrip = getattr(yaml, "roundtrip_yaml", None)
+editor = _roundtrip() if callable(_roundtrip) else None
 data = {}
 if os.path.exists(cfg_path):
     with open(cfg_path, encoding="utf-8-sig") as f:
-        data = yaml.safe_load(f) or {}
+        data = (editor.load(f) if editor is not None else yaml.safe_load(f)) or {}
 blackbox = data.setdefault("plugins", {}).setdefault("entries", {}).setdefault("blackbox", {})
 saved = str(blackbox.get("mode") or "").lower()
 blackbox["mode"] = mode or (saved if saved in ("audit", "block") else "audit")
 blackbox.setdefault("block_severity", "critical")
 with open(cfg_path, "w", encoding="utf-8") as f:
-    yaml.safe_dump(data, f, default_flow_style=False, sort_keys=False)
+    if editor is not None:
+        editor.dump(data, f)
+    else:
+        yaml.safe_dump(data, f, default_flow_style=False, sort_keys=False)
 print(blackbox["mode"])
 PYEOF
 }
@@ -3601,10 +3637,241 @@ CONSOLE_UNIT
     step "  then, as the tailnet admin:  tailscale serve --bg http://127.0.0.1:$port   (never Funnel)"
 }
 
+# ── A Hermes that is already installed (Hermes Desktop, Hermes's own installer) ─────────────────
+# The one-line install clones Agent Blackbox (a Hermes fork) and builds its Hermes into HERMES_HOME.
+# On a machine that already runs another Hermes that would put a second, possibly older Hermes into
+# the same ~/.hermes and fight over the `hermes` launcher (found 2026-11-03 with Hermes Desktop
+# 0.22.6). There, Blackbox is what Hermes's own plugin system is for: install it from the Hermes
+# plugin catalog into that Hermes (the catalog's reviewed pin, Hermes's trust model) and run
+# `hermes blackbox setup` — this same installer in setup-only mode. Our own earlier installs (an
+# Agent Blackbox checkout) are recognised and keep updating as before.
+# BLACKBOX_USE_EXISTING_HERMES=0 keeps the standalone install.
+
+# Prints the Hermes launcher to use when another Hermes is installed here; fails otherwise.
+existing_foreign_hermes() {
+    [ "${BLACKBOX_USE_EXISTING_HERMES:-1}" = 0 ] && return 1
+    local hermes="" dir=""
+    if [ -x "$HOME/.local/bin/hermes" ]; then
+        hermes="$HOME/.local/bin/hermes"
+    else
+        hermes="$(command -v hermes 2>/dev/null || true)"
+    fi
+    [ -n "$hermes" ] || return 1
+    dir="$("$hermes" --version 2>/dev/null | sed -n 's/^Install directory: *//p' | head -n 1)"
+    # Hermes did not say where it is installed: we cannot tell whose it is, so nothing is decided
+    # on a guess and the standalone install runs as before (LES-011).
+    [ -n "$dir" ] && [ -d "$dir" ] || return 1
+    [ -f "$dir/plugins/blackbox/plugin.yaml" ] && return 1   # an Agent Blackbox checkout: ours
+    printf '%s\n' "$hermes"
+}
+
+# Installs Blackbox into the Hermes that is already here and hands over to its setup; never returns.
+# Installs Blackbox into the Hermes that is already here and hands over to its setup (never
+# returns); with a second argument "return", runs setup and returns its status instead.
+install_into_existing_hermes() {
+    local hermes="$1" then="${2:-exec}"
+    local version
+    version="$("$hermes" --version 2>/dev/null | head -n 1)"
+    heading "Using your Hermes"
+    ok "Found ${version:-Hermes} ($hermes)"
+    step "Blackbox installs into this Hermes as a plugin; no second Hermes is installed and your hermes command is not changed."
+    if [ "$SKIP_DKG" = true ]; then
+        warn "--skip-dkg is not used when installing into an existing Hermes; setup installs Blackbox's DKG node."
+    fi
+    # The list is captured first: `hermes plugins list | grep -q` under pipefail fails when grep
+    # stops early and Hermes, still printing its table, dies of SIGPIPE (2026-11-03, Hermes
+    # Desktop). The plugin's folder counts too: it is what Hermes's "already exists" refusal checks.
+    local listed=""
+    listed="$("$hermes" plugins list 2>/dev/null || true)"
+    if [ -d "$HERMES_HOME/plugins/blackbox" ] ||
+        grep -qE '(^|[^[:alnum:]_-])blackbox([^[:alnum:]_-]|$)' <<<"$listed"; then
+        ok "The Blackbox plugin is already installed in this Hermes"
+        step "Updating it to the version the Hermes plugin catalog lists ..."
+        "$hermes" plugins update blackbox || warn "The plugin update did not finish; setup continues with the installed version."
+    else
+        step "Installing the Blackbox plugin from the Hermes plugin catalog ..."
+        if ! "$hermes" plugins install blackbox --yes-deps --enable; then
+            err "Hermes could not install the Blackbox plugin (its reason is above)."
+            step "Update Hermes (hermes update), then run this installer again."
+            exit 1
+        fi
+    fi
+    local args=()
+    [ "$BLACKBOX_DKG_STORE_BACKEND" = auto ] || args+=(--store "$BLACKBOX_DKG_STORE_BACKEND")
+    # ${args[@]+...}: macOS bash 3.2 treats an empty array as unset under `set -u`.
+    step "Running: hermes blackbox setup ${args[*]+${args[*]}}"
+    if [ "$then" = return ]; then
+        "$hermes" blackbox setup ${args[@]+"${args[@]}"}
+        return
+    fi
+    exec "$hermes" blackbox setup ${args[@]+"${args[@]}"}
+}
+
+# Hermes names a checkout's environment record $HERMES_HOME/installs/<key>, key = the first 16 hex
+# of sha256(the checkout's resolved path) (pm/environments.py install_key).
+hermes_install_key() {
+    local resolved
+    resolved="$(cd "$1" 2>/dev/null && pwd -P)" || return 1
+    # LC_ALL=C: macOS's shasum is a Perl script that panics on a locale it cannot set.
+    if command -v sha256sum >/dev/null 2>&1; then
+        printf '%s' "$resolved" | sha256sum | cut -c1-16
+    else
+        printf '%s' "$resolved" | LC_ALL=C shasum -a 256 | cut -c1-16
+    fi
+}
+
+# A fresh clone at the path of a checkout that is gone inherits that checkout's environment record
+# (same path, same key), and Hermes refuses to reconcile it ("recorded dependency lock is missing;
+# refusing to drop plugins"), so Hermes cannot start and the install rolls back (KI-467). The
+# record belongs to nothing that exists any more: it is removed so the clone builds its own.
+drop_stale_hermes_install_record() {
+    [ "${BLACKBOX_FRESH_CLONE:-false}" = true ] && [ -n "$REPO_DIR" ] || return 0
+    local key record
+    key="$(hermes_install_key "$REPO_DIR")" || return 0
+    record="$HERMES_HOME/installs/$key"
+    [ -d "$record" ] || return 0
+    step "Removing the environment record an earlier checkout at $REPO_DIR left ($record), so this fresh checkout builds its own."
+    rm -rf "$record"
+}
+
+# Another Hermes in this Hermes home: where Hermes Desktop and Hermes's own installer put theirs.
+# Prints its launcher, or fails (none, opted out, or it is an Agent Blackbox checkout).
+other_hermes_in_home() {
+    [ "${BLACKBOX_USE_EXISTING_HERMES:-1}" = 0 ] && return 1
+    local dir="$HERMES_HOME/hermes-agent"
+    [ -x "$dir/.hermes/bin/hermes" ] || return 1
+    [ -f "$dir/plugins/blackbox/plugin.yaml" ] && return 1
+    printf '%s\n' "$dir/.hermes/bin/hermes"
+}
+
+# The Hermes this installer put here earlier (an Agent Blackbox checkout behind ~/.local/bin/hermes).
+our_installed_hermes_dir() {
+    local launcher="$HOME/.local/bin/hermes" dir=""
+    [ -x "$launcher" ] || return 1
+    dir="$("$launcher" --version 2>/dev/null | sed -n 's/^Install directory: *//p' | head -n 1)"
+    [ -n "$dir" ] && [ -f "$dir/plugins/blackbox/plugin.yaml" ] || return 1
+    printf '%s\n' "$dir"
+}
+
+# Stops Blackbox's dashboard: through its supervisor, then one setup started directly on its port —
+# only a process whose own command line ends in "blackbox dashboard" (the plugin's ownership rule,
+# dashboard/command.py); anything else on the port is left alone.
+stop_blackbox_dashboard() {
+    local pid=""
+    case "$(blackbox_dashboard_supervisor)" in
+        systemd) systemctl stop blackbox-dashboard >/dev/null 2>&1 || true ;;
+        systemd-user) systemctl --user stop blackbox-dashboard >/dev/null 2>&1 || true ;;
+        launchd) launchctl bootout "gui/$(id -u)/$BLACKBOX_DASHBOARD_LAUNCHD_LABEL" >/dev/null 2>&1 || true ;;
+    esac
+    command -v lsof >/dev/null 2>&1 || return 0
+    for pid in $(lsof -tiTCP:"${BLACKBOX_DASHBOARD_PORT:-9700}" -sTCP:LISTEN 2>/dev/null); do
+        case "$(ps -o command= -p "$pid" 2>/dev/null)" in
+            *" blackbox dashboard"|*" blackbox dashboard "*) kill -TERM "$pid" 2>/dev/null || true ;;
+        esac
+    done
+}
+
+# Service files of the Blackbox being retired: they start the node and dashboard from its old
+# folder, so a later start "through the service" would run the old home ("No config found").
+# Only files naming that folder are removed; the setup that follows registers fresh ones.
+retire_services_pointing_into() {
+    local folder="$1" label name unit
+    for label in $BLACKBOX_LAUNCHD_LABELS; do
+        unit="$HOME/Library/LaunchAgents/$label.plist"
+        grep -qF "$folder/" "$unit" 2>/dev/null || continue
+        # bootout exits 3 when the service is not loaded; under set -e that would end the install
+        launchctl bootout "gui/$(id -u)/$label" >/dev/null 2>&1 || true
+        rm -f "$unit"
+    done
+    command -v systemctl >/dev/null 2>&1 || return 0
+    for name in $BLACKBOX_SERVICE_NAMES; do
+        unit="$HOME/.config/systemd/user/$name.service"
+        if grep -qF "$folder/" "$unit" 2>/dev/null; then
+            systemctl --user disable --now "$name" >/dev/null 2>&1 || true
+            rm -f "$unit"
+        fi
+        unit="$BLACKBOX_SYSTEMD_DIR/$name.service"
+        if grep -qF "$folder/" "$unit" 2>/dev/null && [ -w "$BLACKBOX_SYSTEMD_DIR" ]; then
+            systemctl disable --now "$name" >/dev/null 2>&1 || true
+            rm -f "$unit"
+        fi
+    done
+    systemctl --user daemon-reload >/dev/null 2>&1 || true
+    if [ -w "$BLACKBOX_SYSTEMD_DIR" ]; then systemctl daemon-reload >/dev/null 2>&1 || true; fi
+    return 0
+}
+
+# Blackbox was installed first (with its own Hermes) and the user then installed Hermes Desktop:
+# two Hermes programs now share one ~/.hermes, the `hermes` command runs ours and the app runs
+# Desktop's (found 2026-11-03). Blackbox moves onto that Hermes, so there is one Hermes again:
+# the node (its identity, keys and synced graph) moves to where `hermes blackbox setup` keeps it,
+# the hermes command runs that Hermes, Blackbox is installed into it and set up, and only then is
+# the Hermes this installer put here retired (its checkout and its environment record). Never returns.
+move_onto_existing_hermes() {
+    local other="$1" ours="$2"
+    local node_home="$HERMES_HOME/blackbox/node/.dkg" launcher="$HOME/.local/bin/hermes" pid="" waited=0
+    heading "Moving Blackbox onto your Hermes"
+    ok "Found $("$other" --version 2>/dev/null | head -n 1) ($other) beside the Hermes Blackbox installed ($ours)"
+    step "Blackbox moves into that Hermes and the Hermes it installed is retired; your node, its graph and keys move with it."
+    stop_blackbox_dashboard
+    blackbox_dkg_control stop >/dev/null 2>&1 || true
+    [ -f "$ours/.dkg/daemon.pid" ] && pid="$(tr -dc '0-9' <"$ours/.dkg/daemon.pid")"
+    while [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && [ "$waited" -lt 60 ]; do
+        sleep 1
+        waited=$((waited + 1))
+    done
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+        err "Blackbox's DKG node did not stop, so it was not moved; nothing else changed."
+        exit 1
+    fi
+    if [ -d "$ours/.dkg" ] && [ ! -e "$node_home" ]; then
+        mkdir -p "$(dirname "$node_home")"
+        mv "$ours/.dkg" "$node_home"
+        ok "Moved Blackbox's DKG node to $node_home"
+    fi
+    retire_services_pointing_into "$ours"
+    # The copy `blackbox attach` placed is Blackbox's own; Hermes's plugin install wants the folder free.
+    if [ -d "$HERMES_HOME/plugins/blackbox" ] &&
+        ! grep -q '"blackbox"' "$HERMES_HOME/plugins/.install-metadata.json" 2>/dev/null; then
+        rm -rf "$HERMES_HOME/plugins/blackbox"
+    fi
+    # The hermes command runs that Hermes: the same launcher Hermes publishes for itself.
+    if grep -qF "$ours/" "$launcher" 2>/dev/null; then
+        printf '#!/bin/sh\nexec "%s" "$@"\n' "$other" > "$launcher"
+        chmod 755 "$launcher"
+        ok "The hermes command now runs $other"
+    fi
+    if ! install_into_existing_hermes "$other" return; then
+        err "Setting Blackbox up in that Hermes did not finish; the Hermes Blackbox installed is kept at $ours."
+        step "Fix the reason above, then run this installer again: it picks up where this stopped."
+        exit 1
+    fi
+    local key=""
+    key="$(hermes_install_key "$ours" 2>/dev/null || true)"
+    rm -rf "$ours"
+    [ -n "$key" ] && rm -rf "$HERMES_HOME/installs/$key"
+    ok "Retired the Hermes Blackbox installed ($ours); there is one Hermes again, with Blackbox in it."
+    exit 0
+}
+
 main() {
     banner
     heading "Checking your system"
     detect_os
+    if [ "$BLACKBOX_SETUP_ONLY" != true ] && ! install_uses_local_checkout; then
+        local existing_hermes=""
+        local ours_dir=""
+        if existing_hermes="$(existing_foreign_hermes)"; then
+            # A move that stopped half-way (the hermes command already runs the other Hermes, our
+            # checkout is still here) finishes as a move, so our checkout is retired after setup.
+            if [ -f "$BLACKBOX_INSTALL_ROOT/plugins/blackbox/plugin.yaml" ]; then
+                move_onto_existing_hermes "$existing_hermes" "$BLACKBOX_INSTALL_ROOT"
+            fi
+            install_into_existing_hermes "$existing_hermes"
+        elif existing_hermes="$(other_hermes_in_home)" && ours_dir="$(our_installed_hermes_dir)"; then
+            move_onto_existing_hermes "$existing_hermes" "$ours_dir"
+        fi
+    fi
     install_record_begin
     preflight_install
     if [ "$BLACKBOX_SETUP_ONLY" = true ]; then
@@ -3616,6 +3883,7 @@ main() {
         ensure_node
 
         resolve_repo
+        drop_stale_hermes_install_record
         release_old_hermes_link
         install_python_env
         link_hermes
