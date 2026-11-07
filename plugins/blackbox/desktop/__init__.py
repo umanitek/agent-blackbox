@@ -8,6 +8,8 @@ This module is the one door both use — a Facade over the config, the ruleset a
 - :func:`findings_payload` — the newest findings for the page's list;
 - :func:`dashboard_link` — the one :class:`~.dashboard_link.DashboardLink` the Desktop routes forward
   the dashboard's own API through (every other panel: threat graph, Trader Shield, agents, settings);
+- :func:`long_calls` — the assistant turn and Playground tests, which outlast Desktop's 30 s request
+  limit: started in the background and read back by id (``long_calls.py``);
 - :func:`readiness_status` / :func:`start_setup` — where the machine is between plugin install and synced, and
   the page's "Set up Blackbox" button (``readiness.py``: one owned ``hermes blackbox setup`` run);
 - :func:`set_mode` — the page's Audit / Block switch, saved through the dashboard's own checked path
@@ -35,6 +37,7 @@ log gives a calm answer, never an exception into the hook or the Desktop app.
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from typing import Any, Optional, TypedDict
 from collections.abc import Mapping, Sequence
@@ -45,6 +48,7 @@ from ..kernel.config import load_blackbox_config
 from ..kernel.constants import SEVERITY_RANK
 from . import readiness as readiness_mod
 from .dashboard_link import DashboardLink, LinkAnswer
+from .long_calls import LongCalls
 
 logger = logging.getLogger(__name__)
 
@@ -184,16 +188,26 @@ def status_payload() -> dict[str, Any]:
 
 
 class _LinkHolder:
-    """Keeps one DashboardLink per dashboard port (the port is a setting and can change)."""
+    """Keeps one DashboardLink, and the LongCalls riding on it, per dashboard port (a setting that can change)."""
 
     def __init__(self) -> None:
         self._link: Optional[DashboardLink] = None
+        self._calls: Optional[LongCalls] = None
         self._port: Optional[int] = None
+        self._lock = threading.Lock()
+
+    def _current(self, port: int) -> tuple[DashboardLink, LongCalls]:
+        with self._lock:
+            if self._link is None or self._calls is None or self._port != port:
+                self._link, self._port = DashboardLink(port), port
+                self._calls = LongCalls(self._link)
+            return self._link, self._calls
 
     def get(self, port: int) -> DashboardLink:
-        if self._link is None or self._port != port:
-            self._link, self._port = DashboardLink(port), port
-        return self._link
+        return self._current(port)[0]
+
+    def calls(self, port: int) -> LongCalls:
+        return self._current(port)[1]
 
 
 _links = _LinkHolder()
@@ -202,6 +216,11 @@ _links = _LinkHolder()
 def dashboard_link() -> DashboardLink:
     """The link to this machine's dashboard, on the configured ``dashboard_port``."""
     return _links.get(int(load_blackbox_config().dashboard_port))
+
+
+def long_calls() -> LongCalls:
+    """The dashboard calls that outlast Desktop's 30 s request limit (``long_calls.py``), on the same link."""
+    return _links.calls(int(load_blackbox_config().dashboard_port))
 
 
 MODES = ("audit", "block")
@@ -252,5 +271,5 @@ def start_setup() -> dict[str, Any]:
     return readiness_mod.start_setup()
 
 
-__all__ = ["FINDING_EVENT", "MODES", "PLUGIN_ID", "FindingAlert", "announce_findings", "findings_payload", "readiness_status",
+__all__ = ["FINDING_EVENT", "MODES", "PLUGIN_ID", "FindingAlert", "announce_findings", "findings_payload", "long_calls", "readiness_status",
            "set_mode", "start_setup", "status_payload"]

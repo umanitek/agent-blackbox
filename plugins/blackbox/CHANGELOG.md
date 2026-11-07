@@ -50,6 +50,13 @@ that the two version fields agree.
   phase, percentage and asset counts, refreshed every few seconds: "First sync in progress" before
   any rule, then "Still syncing" with how many verified rules already protect, or "Sync stopped
   making progress" with what to do. The empty verified map says why it is empty.
+- **The Blackbox assistant in Desktop.** The chat button in the page header opens the dashboard's
+  assistant beside the page: its three example questions, a running conversation kept on this
+  computer (New chat starts over), and progress messages while it works.
+- **Docs and the Playground in Desktop.** The book button opens the dashboard's documentation in
+  your browser. With Sandbox mode on, the Overview holds the Playground: send a listed threat of
+  each kind through the real check, and run every wallet test Trader Shield has for this machine
+  (one at a time or Run all), each with its result.
 
 ### Changed
 
@@ -70,6 +77,12 @@ that the two version fields agree.
 - On a fresh install the first sync of the verified threat graph starts within seconds of setup
   finishing. It could wait an hour: setup's own compile left an empty ruleset that the dashboard
   took for a finished one.
+- The Blackbox assistant answers again, in the dashboard and in Desktop. On Hermes 0.23 every
+  question failed with "No such file or directory: '/usr/local/sbin/-c'": it re-ran Hermes by the
+  name of the running program, which Hermes' new launcher reports as `-c`.
+- The assistant's own Hermes profile no longer appears in Connected agents as an idle agent.
+- One slow request (an assistant answer) no longer freezes the Desktop page: it used to empty
+  every card until the answer came back.
 
 ## [1.3.0] - 2026-11-06
 

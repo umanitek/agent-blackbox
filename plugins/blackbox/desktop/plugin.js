@@ -42,12 +42,47 @@ const fetchStatus = () => (rest ? rest('/status') : Promise.resolve({ available:
 // with `error` (and `dashboardDown` when the dashboard is not running), never a thrown request.
 async function dash(path, opts) {
   if (!rest) return { error: 'Blackbox is not loaded', unavailable: true }
+  return callRest(`/dash/${path}`, opts)
+}
+
+// A dashboard call that outlasts Desktop's 30 s request limit (an assistant turn, a Playground test):
+// started in the background on the backend (desktop/long_calls.py), then read back every 1.5 s.
+const LONG_CALL_POLL_MS = 1500
+const LONG_CALL_LIMIT_MS = 150000
+
+async function dashLong(path, body) {
+  if (!rest) return { error: 'Blackbox is not loaded', unavailable: true }
+  const started = await callRest(`/dash-call/${path}`, { method: 'POST', body })
+  if (!started.call_id) return started
+  const deadline = Date.now() + LONG_CALL_LIMIT_MS
+  while (Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, LONG_CALL_POLL_MS))
+    const answer = await callRest(`/dash-call/${started.call_id}`)
+    if (!answer.running) return answer
+  }
+  return { error: 'Blackbox took too long to answer.' }
+}
+
+async function callRest(path, opts) {
   try {
-    const answer = await rest(`/dash/${path}`, opts)
+    const answer = await rest(path, opts)
     return answer == null ? {} : answer
   } catch (error) {
     const text = String((error && error.message) || error || '')
-    return { error: text, dashboardDown: /dashboard is not running|503/.test(text) }
+    const refusal = serverRefusal(text)
+    return { ...refusal, error: refusal.error || text, dashboardDown: /dashboard is not running|503/.test(text) }
+  }
+}
+
+// Desktop wraps a refused request as "Error invoking remote method …: Error: 409: {json}". The
+// dashboard's own answer is that JSON ({ok:false, error, …}); hand it back so callers show its words.
+function serverRefusal(text) {
+  const match = /\b\d{3}: (\{[\s\S]*\})\s*$/.exec(text)
+  if (!match) return {}
+  try {
+    return asObject(JSON.parse(match[1]))
+  } catch {
+    return {}
   }
 }
 
@@ -965,6 +1000,15 @@ const PAGE_CSS = `
 .bbx-bell-count { position: absolute; top: -6px; right: -6px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: ${SIGNAL}; color: #fff;
   font-size: 10.5px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
 .bbx-firstdet { display: flex; gap: 24px; align-items: center; flex-wrap: wrap; padding: 22px 24px; }
+.bbx-drawer-backdrop { justify-content: flex-end; padding: 0; }
+.bbx-drawer { width: min(460px, 100%); height: 100%; background: var(--background, #0b0b0d); border-left: 1px solid var(--bbx-line); display: flex; flex-direction: column; }
+.bbx-chat-body { flex: 1; overflow: auto; padding: 16px 20px; display: flex; flex-direction: column; gap: 10px; }
+.bbx-chat-turn { padding: 10px 14px; border-radius: 8px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; max-width: 92%; }
+.bbx-chat-turn.user { align-self: flex-end; background: color-mix(in srgb, ${SIGNAL} 10%, transparent); border: 1px solid color-mix(in srgb, ${SIGNAL} 30%, transparent); }
+.bbx-chat-turn.assistant { align-self: flex-start; background: var(--bbx-panel); border: 1px solid var(--bbx-line); }
+.bbx-chat-turn.error { align-self: flex-start; color: #E5484D; border: 1px solid color-mix(in srgb, #E5484D 40%, transparent); }
+.bbx-chat-turn.waiting { color: var(--bbx-muted); display: flex; align-items: center; }
+.bbx-chat-input { display: flex; gap: 10px; align-items: flex-end; padding: 14px 20px 18px; border-top: 1px solid var(--bbx-line); }
 `
 
 const SEVERITY_ORDER = { critical: 4, high: 3, medium: 2, low: 1, info: 0 }
@@ -1763,7 +1807,8 @@ function Overview({ status, setTab, readiness, ctx }) {
       syncInProgress(readiness) ? jsx(FirstSyncBanner, { r: readiness, setTab, ctx }) : null,
       jsx(ConnectedAgents, {}),
       jsx(StatCards, { status }),
-      jsx(ShieldBanner, { setTab })
+      jsx(ShieldBanner, { setTab }),
+      jsx(Playground, {})
     ]
   })
 }
@@ -3448,10 +3493,258 @@ function ThreatBell({ ctx, onOpen }) {
   })
 }
 
+// ---------------------------------------------------------------- assistant, docs, playground
+
+// The dashboard's Blackbox assistant (index.html #chat-panel / submitChat, POST /api/blackbox-chat):
+// one scoped assistant turn at a time through Blackbox's own profile, with its session carried over.
+// The conversation is kept on this computer in Desktop's plugin storage (last 50 turns).
+const CHAT_KEY = 'chatHistory'
+const CHAT_SESSION_KEY = 'chatSession'
+const CHAT_KEEP = 50
+const CHAT_PROMPTS = [
+  ['What needs attention?', 'Summarize the current dashboard state. Which protected agents, findings, graph tiers, or sync issues need attention right now?'],
+  ['Show protected agents', 'List the protected local agents exactly as the dashboard sees them. Include framework, path, status, and any recent reports.'],
+  ['Explain graph counts', 'Explain the verifiable threat graph and local activity counts on this dashboard. If the verifiable graph is empty, tell me whether it looks unsynced or unreachable and what to check next. Include the community tier count and whether sharing is on.']
+]
+const CHAT_WAITING = [
+  'I’m checking the local Blackbox state…',
+  'Looking through connected agents and recent findings…',
+  'Still working. Some checks can take a few seconds…',
+  'Almost there. I’m turning the raw state into a clear answer…'
+]
+
+// A failed turn: the last line says what went wrong; the whole output stays one click away.
+function ChatFailure({ text }) {
+  const lines = String(text || '').split('\n').map(line => line.trim()).filter(Boolean)
+  const last = lines.length ? lines[lines.length - 1] : 'Blackbox chat failed.'
+  return jsxs('div', {
+    children: [
+      jsx('div', { children: `The assistant could not answer: ${last}` }),
+      lines.length > 1 ? jsxs('details', { style: { marginTop: 8 }, children: [jsx('summary', { className: 'bbx-small', style: { cursor: 'pointer' }, children: 'Full output' }), jsx('pre', { className: 'bbx-small bbx-mono', style: { whiteSpace: 'pre-wrap', margin: '6px 0 0' }, children: text })] }) : null
+    ]
+  })
+}
+
+function AssistantDrawer({ ctx, onClose }) {
+  const [turns, setTurns] = useState(() => asList(ctx.storage.get(CHAT_KEY, [])))
+  const [text, setText] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [waiting, setWaiting] = useState(0)
+  const end = useRef(null)
+  useEffect(() => {
+    if (end.current) end.current.scrollIntoView({ block: 'end' })
+  }, [turns.length, busy])
+  useEffect(() => {
+    if (!busy) return undefined
+    const timer = setInterval(() => setWaiting(step => Math.min(step + 1, CHAT_WAITING.length - 1)), 4000)
+    return () => clearInterval(timer)
+  }, [busy])
+  useEffect(() => {
+    const onKey = event => {
+      if (event.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+  const remember = next => {
+    const kept = next.slice(-CHAT_KEEP)
+    ctx.storage.set(CHAT_KEY, kept)
+    setTurns(kept)
+    return kept
+  }
+  const send = async message => {
+    const question = String(message || '').trim()
+    if (!question || busy) return
+    let current = remember([...turns, { role: 'user', text: question, at: Date.now() }])
+    setText('')
+    setBusy(true)
+    setWaiting(0)
+    const answer = await dashLong('api/blackbox-chat', { message: question, session_id: ctx.storage.get(CHAT_SESSION_KEY, '') || '' })
+    const reply = asObject(answer)
+    if (reply.session_id) ctx.storage.set(CHAT_SESSION_KEY, reply.session_id)
+    current = remember([...current, reply.ok ? { role: 'assistant', text: reply.answer || '(no response)', at: Date.now() } : { role: 'error', text: reply.error || 'Blackbox chat failed.', at: Date.now() }])
+    setBusy(false)
+  }
+  return jsx('div', {
+    className: 'bbx-modal-backdrop bbx-drawer-backdrop',
+    onMouseDown: event => {
+      if (event.target === event.currentTarget) onClose()
+    },
+    children: jsxs('aside', {
+      className: 'bbx-drawer',
+      role: 'dialog',
+      'aria-modal': 'true',
+      children: [
+        jsxs('div', {
+          className: 'bbx-modal-head',
+          children: [
+            jsxs('div', { style: { flex: 1 }, children: [jsx('h2', { className: 'bbx-modal-title', children: 'Blackbox assistant' }), jsx('div', { className: 'bbx-small', children: 'Ask about agents, findings, sync, and setup.' })] }),
+            turns.length
+              ? jsx('button', {
+                  type: 'button',
+                  className: 'bbx-btn',
+                  onClick: () => {
+                    ctx.storage.set(CHAT_SESSION_KEY, '')
+                    remember([])
+                  },
+                  children: 'New chat'
+                })
+              : null,
+            jsx('button', { type: 'button', className: 'bbx-iconbtn', title: 'Close (Esc)', onClick: onClose, children: jsx(Codicon, { name: 'close' }) })
+          ]
+        }),
+        jsxs('div', {
+          className: 'bbx-chat-body',
+          children: [
+            turns.length
+              ? null
+              : jsxs('div', {
+                  style: { display: 'flex', flexDirection: 'column', gap: 8 },
+                  children: [
+                    jsx('div', { className: 'bbx-small', children: 'I can inspect this Blackbox and explain what needs attention.' }),
+                    ...CHAT_PROMPTS.map(([label, prompt]) => jsx('button', { type: 'button', className: 'bbx-btn', style: { textAlign: 'left' }, onClick: () => send(prompt), children: label }, label))
+                  ]
+                }),
+            ...turns.map((turn, index) => jsx('div', { className: `bbx-chat-turn ${turn.role}`, children: turn.role === 'error' ? jsx(ChatFailure, { text: turn.text }) : turn.text }, index)),
+            busy ? jsxs('div', { className: 'bbx-chat-turn assistant waiting', children: [jsx('span', { className: 'bbx-spin', style: { marginRight: 8 } }), CHAT_WAITING[waiting]] }) : null,
+            jsx('div', { ref: end })
+          ]
+        }),
+        jsxs('form', {
+          className: 'bbx-chat-input',
+          onSubmit: event => {
+            event.preventDefault()
+            send(text)
+          },
+          children: [
+            jsx('textarea', {
+              className: 'bbx-textarea',
+              style: { minHeight: 56, flex: 1 },
+              placeholder: 'Ask Blackbox…',
+              value: text,
+              disabled: busy,
+              onChange: event => setText(event.target.value),
+              onKeyDown: event => {
+                if (event.key === 'Enter' && !event.shiftKey) {
+                  event.preventDefault()
+                  send(text)
+                }
+              }
+            }),
+            jsx('button', { type: 'submit', className: 'bbx-btn primary', disabled: busy || !text.trim(), children: busy ? 'Asking…' : 'Send' })
+          ]
+        })
+      ]
+    })
+  })
+}
+
+// The Playground (dashboard/playground_routes/playground.js), shown while Sandbox mode is on: a listed
+// threat of each kind sent through the real check into the sandbox lane, and every wallet test the
+// shields have for this machine (local only, never shared, nothing executed), each with its result.
+const PLAYGROUND_KINDS = { package: 'Malware package', domain: 'Malicious domain', ip: 'C2 server address', url: 'Payload link' }
+const TEST_DECISIONS = { blocked: ['BLOCKED', 'blocked'], flagged: ['FLAGGED', 'flagged'], allowed: ['LET THROUGH', 'allowed'] }
+
+function Playground() {
+  const state = useDash('playground', 'api/playground', POLL_MS)
+  const wallets = useDash('playground-wallets', 'api/playground/wallets', SLOW_POLL_MS)
+  const [busy, setBusy] = useState('')
+  const [results, setResults] = useState({})
+  const s = asObject(state.data)
+  if (!s.sandbox) return null
+  const run = async (key, path, body) => {
+    setBusy(key)
+    const answer = asObject(await dashLong(path, body))
+    setResults(previous => ({ ...previous, [key]: answer.ok ? asObject(answer.result) : { error: answer.error || answer.reason || 'The test could not run.' } }))
+    setBusy('')
+    refreshDash()
+  }
+  const decision = result => TEST_DECISIONS[result.decision] || [String(result.decision || '').toUpperCase(), 'flagged']
+  const walletList = asList(asObject(wallets.data).tests).map(asObject)
+  const groups = new Map()
+  for (const test of walletList) {
+    const name = test.group_name || test.shield_name || 'Tests'
+    if (!groups.has(name)) groups.set(name, [])
+    groups.get(name).push(test)
+  }
+  return jsxs('section', {
+    className: 'bbx-section',
+    children: [
+      jsx(Heading, { title: jsxs('span', { style: { display: 'inline-flex', gap: 12, alignItems: 'center' }, children: ['Playground', jsx(Pill, { tone: 'blocked', children: 'SANDBOX' })] }), sub: 'Send a listed threat through the real check into the sandbox lane, and test every wallet Trader Shield guards here. Nothing is executed; wallet tests stay on this machine.' }),
+      jsxs('div', {
+        className: 'bbx-panel',
+        style: { padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: 16 },
+        children: [
+          jsx('div', {
+            style: { display: 'flex', gap: 10, flexWrap: 'wrap' },
+            children: asList(s.kinds).map(kind =>
+              jsx('button', { type: 'button', className: 'bbx-btn', disabled: !!busy, onClick: () => run(`kind:${kind}`, 'api/playground/run', { kind }), children: busy === `kind:${kind}` ? 'Asking Blackbox… (up to 90 s)' : `Send: ${PLAYGROUND_KINDS[kind] || kind}` }, kind)
+            )
+          }),
+          ...Object.keys(results).filter(key => key.startsWith('kind:')).map(key => {
+            const result = results[key]
+            return result.error
+              ? jsx('div', { className: 'bbx-small', style: { color: '#E5484D' }, children: result.error }, key)
+              : jsx('div', { className: 'bbx-small bbx-mono', children: `${PLAYGROUND_KINDS[result.kind] || result.kind}: ${result.decision} · ${result.identifier} · ${result.shared || 'not shared'} · ${Math.round(result.check_ms || 0)} ms` }, key)
+          }),
+          asList(s.tests).length
+            ? jsxs('div', { children: [jsx('div', { className: 'bbx-label', style: { marginBottom: 6 }, children: "This node's tests" }), ...asList(s.tests).map(asObject).slice(0, 8).map((test, index) => jsx('div', { className: 'bbx-small bbx-mono', children: `${when(test.at)} · ${test.kind} · ${test.decision} · ${test.identifier}` }, index))] })
+            : null
+        ]
+      }),
+      walletList.length
+        ? jsxs('div', {
+            className: 'bbx-panel',
+            style: { padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: 14 },
+            children: [
+              jsxs('div', {
+                style: { display: 'flex', alignItems: 'center', gap: 10 },
+                children: [
+                  jsx('div', { className: 'bbx-label', children: 'Wallet tests' }),
+                  jsx('div', { className: 'bbx-spacer' }),
+                  jsx('button', {
+                    type: 'button',
+                    className: 'bbx-btn',
+                    disabled: !!busy,
+                    onClick: async () => {
+                      for (const test of walletList) await run(`wallet:${test.id}`, 'api/playground/wallets/run', { id: test.id })
+                    },
+                    children: 'Run all'
+                  })
+                ]
+              }),
+              ...Array.from(groups.entries()).map(([name, tests]) =>
+                jsxs('div', {
+                  children: [
+                    jsx('div', { style: { fontWeight: 600, margin: '6px 0' }, children: name }),
+                    ...tests.map(test => {
+                      const result = results[`wallet:${test.id}`]
+                      const [label, tone] = result && !result.error ? decision(result) : ['', '']
+                      return jsxs('div', {
+                        className: 'bbx-catrow',
+                        style: { cursor: 'default' },
+                        children: [
+                          jsxs('span', { style: { flex: 1, minWidth: 0 }, children: [jsx('div', { children: test.title }), jsx('div', { className: 'bbx-small bbx-mono', style: { wordBreak: 'break-all' }, children: test.shown }), result && result.note ? jsx('div', { className: 'bbx-small', children: result.note }) : null, result && result.error ? jsx('div', { className: 'bbx-small', style: { color: '#E5484D' }, children: result.error }) : null] }),
+                          label ? jsx('span', { className: `bbx-wev-chip ${tone === 'blocked' ? 'blocked' : 'flagged'}`, children: label }) : null,
+                          jsx('button', { type: 'button', className: 'bbx-btn', disabled: !!busy, onClick: () => run(`wallet:${test.id}`, 'api/playground/wallets/run', { id: test.id }), children: busy === `wallet:${test.id}` ? 'Running…' : 'Run' })
+                        ]
+                      }, test.id)
+                    })
+                  ]
+                }, name)
+              )
+            ]
+          })
+        : null
+    ]
+  })
+}
+
 // ---------------------------------------------------------------- the page
 
 function BlackboxPage({ ctx }) {
   const [tab, setTab] = useState('overview')
+  const [chatOpen, setChatOpen] = useState(false)
   const status = useStatus()
   const ready = useReadiness()
   const s = status.data
@@ -3487,6 +3780,8 @@ function BlackboxPage({ ctx }) {
               }),
               jsx('div', { className: 'bbx-spacer' }),
               setupScreen ? null : jsx(NodePill, {}),
+              setupScreen ? null : jsx('button', { type: 'button', className: 'bbx-iconbtn', title: 'Blackbox assistant', onClick: () => setChatOpen(true), children: jsx(Codicon, { name: 'comment-discussion' }) }),
+              setupScreen || !(s && s.dashboardUrl) ? null : jsx('button', { type: 'button', className: 'bbx-iconbtn', title: 'Docs (opens in your browser)', onClick: () => openDashboard(ctx, new URL('docs', s.dashboardUrl).href), children: jsx(Codicon, { name: 'book' }) }),
               setupScreen ? null : jsx(ThreatBell, { ctx, onOpen: () => { setTab('graph'); setTimeout(() => { const el = document.getElementById('bbx-findings'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }) }, 250) } }),
               s ? jsx('button', { type: 'button', className: `bbx-modepill${s.mode === 'block' ? ' block' : ''}`, title: 'Change the mode in Settings', onClick: () => setTab('settings'), children: s.mode === 'block' ? 'Block mode' : 'Audit mode' }) : null,
               s && s.dashboardUrl && !setupScreen ? jsx('button', { type: 'button', className: 'bbx-iconbtn', title: 'Open the dashboard in your browser', onClick: () => openDashboard(ctx, s.dashboardUrl), children: jsx(Codicon, { name: 'link-external' }) }) : null
@@ -3496,7 +3791,8 @@ function BlackboxPage({ ctx }) {
           !setupScreen && tab === 'overview' ? (s ? jsx(Overview, { status: s, setTab, readiness: r, ctx }) : jsx('div', { className: 'bbx-empty', children: 'Loading…' })) : null,
           !setupScreen && tab === 'graph' ? jsx(ThreatGraphTab, { readiness: r }) : null,
           !setupScreen && tab === 'shields' ? jsx(ShieldsTab, {}) : null,
-          !setupScreen && tab === 'settings' ? jsx(SettingsTab, { ctx }) : null
+          !setupScreen && tab === 'settings' ? jsx(SettingsTab, { ctx }) : null,
+          chatOpen ? jsx(AssistantDrawer, { ctx, onClose: () => setChatOpen(false) }) : null
         ]
       })
     ]
