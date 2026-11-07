@@ -73,15 +73,15 @@ class SetupStep(TypedDict):
 #: Setup's steps, each with the installer section headings (``heading "…"`` in
 #: setup/blackbox-install.sh) that belong to it, in the order setup runs them.
 STEPS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
-    ("check", "Check this Mac", ("Checking your system", "Checking this machine")),
-    ("hermes", "Connect to Hermes", ("Using your Hermes", "Installing Blackbox plugin copy", "Hermes API setup",
+    ("check", "Check disk space and network", ("Checking your system", "Checking this machine")),
+    ("hermes", "Link Blackbox into your Hermes", ("Using your Hermes", "Installing Blackbox plugin copy", "Hermes API setup",
                                      "Moving Blackbox onto your Hermes")),
-    ("node", "Install the threat-graph node", ("Setting up the OriginTrail DKG node",)),
-    ("protect", "Turn on protection", ("Enabling and configuring Blackbox", "Blackbox mode", "Protecting your agents",
+    ("node", "Install the local threat-graph node", ("Setting up the OriginTrail DKG node",)),
+    ("protect", "Switch on protection for your agents", ("Enabling and configuring Blackbox", "Blackbox mode", "Protecting your agents",
                                        "LLM reviewer", "Threat graph")),
-    ("dashboard", "Start the dashboard", ("Starting Blackbox dashboard",)),
-    ("service", "Keep the node running", ("Registering the DKG node to start on boot",)),
-    ("verify", "Final checks", ("Checking the install",)),
+    ("dashboard", "Start the Blackbox dashboard", ("Starting Blackbox dashboard",)),
+    ("service", "Run the node in the background", ("Registering the DKG node to start on boot",)),
+    ("verify", "Check that everything answers", ("Checking the install",)),
 )
 
 
@@ -145,10 +145,13 @@ class SetupRun:
     """The one setup run Desktop starts, and its record (``run.json`` + ``setup.log`` in *folder*).
 
     One lock guards the start and the record. ``spawn`` is injectable for tests; it takes
-    (command, log file) and returns a ``subprocess.Popen``-like object with ``pid`` and ``wait()``.
+    (command, log file, working folder) and returns a ``subprocess.Popen``-like object with ``pid``,
+    ``poll()`` and ``wait()``. Setup runs in *folder*, never in the folder of the process that starts
+    it: Hermes runs in its own checkout, whose ``.npmrc`` (``min-release-age=14``) made npm refuse the
+    pinned DKG release for its first two weeks, and setup rolled back.
     """
 
-    def __init__(self, folder: Callable[[], Path], spawn: Optional[Callable[[list[str], Any], Any]] = None,
+    def __init__(self, folder: Callable[[], Path], spawn: Optional[Callable[[list[str], Any, Path], Any]] = None,
                  clock: Callable[[], float] = time.time) -> None:
         self._folder = folder
         self._spawn = spawn or _spawn_detached
@@ -225,7 +228,7 @@ class SetupRun:
             with open(self.log_path, "w", encoding="utf-8") as log:
                 log.write("Blackbox setup, started from Hermes Desktop\n")
                 log.flush()
-                self._process = self._spawn(command, log)
+                self._process = self._spawn(command, log, self._folder())
             self._write_record({"started": self._clock(), "finished": None, "exitCode": None, "pid": self._process.pid})
             threading.Thread(target=self._wait, args=(self._process,), name="blackbox-desktop-setup", daemon=True).start()
             return {"started": True}
@@ -236,11 +239,11 @@ class SetupRun:
             self._write_record({**self._read_record(), "finished": self._clock(), "exitCode": int(code)})
 
 
-def _spawn_detached(command: list[str], log: Any) -> subprocess.Popen:
-    """Run *command* in its own session (a Hermes restart does not stop it), output to *log*.
+def _spawn_detached(command: list[str], log: Any, cwd: Path) -> subprocess.Popen:
+    """Run *command* in *cwd* and its own session (a Hermes restart does not stop it), output to *log*.
     stdin is closed: the installer asks on the terminal itself and takes its defaults without one."""
     return subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
-                            start_new_session=True)
+                            cwd=str(cwd), start_new_session=True)
 
 
 def setup_command() -> list[str]:

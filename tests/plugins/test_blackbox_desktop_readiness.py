@@ -116,7 +116,7 @@ class _FakeProcess:
 def run(tmp_path):
     started = []
 
-    def spawn(command, log):
+    def spawn(command, log, cwd):
         process = _FakeProcess()
         started.append((command, process))
         return process
@@ -174,6 +174,21 @@ def test_a_real_setup_process_runs_to_its_end_and_is_read_back(tmp_path):
     wait_until(lambda: run.state()["state"] == "done", timeout=20)
     assert "Blackbox is ready (audit mode)." in run.log_lines()
     assert {step["state"] for step in step_states(run.log_lines(), "done", node_installed=True)} == {"done"}
+
+
+def test_setup_runs_in_its_own_folder_not_the_folder_of_hermes(tmp_path, monkeypatch):
+    """Judge-path test, bb-judge-3 (2026-11-07): setup started from Desktop inherited the gateway's
+    folder, Hermes' checkout, whose .npmrc (min-release-age=14) made npm refuse the pinned DKG
+    release ("No matching version found ... with a date before ..."), and setup rolled back."""
+    hermes_checkout = tmp_path / "hermes-agent"
+    hermes_checkout.mkdir()
+    (hermes_checkout / ".npmrc").write_text("min-release-age=14\n", encoding="utf-8")
+    monkeypatch.chdir(hermes_checkout)
+    folder = tmp_path / "desktop_setup"
+    run = SetupRun(folder=lambda: folder)
+    run.start([sys.executable, "-c", "import os; print('cwd=' + os.getcwd()); print('Blackbox is ready (audit mode).')"])
+    wait_until(lambda: run.state()["state"] == "done", timeout=20)
+    assert f"cwd={folder.resolve()}" in run.log_lines()   # getcwd() is the resolved path (macOS: /private/var)
 
 
 def test_the_setup_command_is_this_hermes(monkeypatch):
