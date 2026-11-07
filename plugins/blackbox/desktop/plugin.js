@@ -704,15 +704,21 @@ function BubbleMap({ graph, loading, onPick }) {
   })
 }
 
+// One bubble per threat seen here: grouped by rule AND title (two wallets under one rule stay two
+// bubbles, as on the dashboard), keeping the newest finding so a click opens its full record.
 function localThreats(rows) {
-  const byIdentifier = new Map()
+  const byThreat = new Map()
   for (const row of rows) {
-    const key = row.identifier || row.title
-    const seen = byIdentifier.get(key)
-    if (seen) seen.count += 1
-    else byIdentifier.set(key, { identifier: key, category: row.category, severity: row.severity, name: row.title, count: 1, local: true })
+    const key = `${row.identifier || ''}|${row.title || ''}`
+    const seen = byThreat.get(key)
+    if (seen) {
+      seen.count += 1
+      seen.finding.firstSeen = Math.min(Number(seen.finding.firstSeen || row.ts || 0), Number(row.ts || 0)) || seen.finding.firstSeen
+    } else {
+      byThreat.set(key, { identifier: row.identifier || row.title, category: row.category, severity: row.severity, name: row.title, count: 1, local: true, finding: { ...row, firstSeen: row.ts } })
+    }
   }
-  return Array.from(byIdentifier.values())
+  return Array.from(byThreat.values())
 }
 
 // ---------------------------------------------------------------- the look
@@ -927,6 +933,18 @@ const PAGE_CSS = `
   background: transparent; color: var(--bbx-text); cursor: pointer; font: inherit; }
 .bbx-ev:hover { background: var(--bbx-hover); border-color: var(--bbx-line); }
 @media (max-width: 760px) { .bbx-wev-body { grid-template-columns: 1fr; } .bbx-wev-list { max-height: 30vh; border-right: 0; border-bottom: 1px solid var(--bbx-line); } }
+.bbx-idrow { display: flex; gap: 10px; align-items: center; padding: 8px 10px 8px 14px; border: 1px solid var(--bbx-line); border-radius: 6px; background: var(--bbx-panel); }
+.bbx-idrow code { flex: 1; min-width: 0; font-family: var(--bbx-mono); font-size: 12.5px; word-break: break-all; }
+.bbx-idrow .bbx-btn { padding: 5px 10px; font-size: 12px; flex: none; }
+.bbx-ref { text-align: left; word-break: break-all; color: var(--bbx-text); }
+.bbx-ref span { text-decoration: underline; text-underline-offset: 2px; }
+.bbx-srcbadge { font-family: var(--bbx-mono); font-size: 11px; letter-spacing: 0.06em; padding: 3px 9px; border-radius: 3px; border: 1px dashed var(--bbx-line); color: var(--bbx-muted); white-space: nowrap; }
+.bbx-srcbadge.public { border-style: solid; color: #3FA568; border-color: color-mix(in srgb, #3FA568 50%, transparent); }
+.bbx-srcbadge.secret, .bbx-srcbadge.custom { border-style: solid; color: var(--bbx-text); }
+.bbx-convo { display: flex; flex-direction: column; gap: 6px; border-left: 2px solid var(--bbx-line); padding-left: 12px; }
+.bbx-convo.user { border-color: color-mix(in srgb, ${SIGNAL} 55%, transparent); }
+.bbx-convo-text { margin: 0; font-family: var(--bbx-mono); font-size: 12px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; max-height: 260px; overflow: auto;
+  background: var(--bbx-panel); border: 1px solid var(--bbx-line); border-radius: 6px; padding: 10px 12px; }
 `
 
 const SEVERITY_ORDER = { critical: 4, high: 3, medium: 2, low: 1, info: 0 }
@@ -1718,7 +1736,112 @@ function DetailGrid({ rows }) {
 const TIER_NAMES = { public: 'Verifiable graph (VM)', community: 'Community graph (SWM)', local: 'Local graph (WM)' }
 const fullDate = seconds => (typeof seconds === 'number' && seconds > 0 ? new Date(seconds * 1000).toLocaleString() : '')
 
-// The fields the dashboard's threat pop-up shows for each kind of threat (index.html detailRows).
+// Everything the dashboard's threat and finding pop-ups say about a threat, as its own tables do
+// (dashboard/static/index.html: SRC_META, EVENT_LABEL, FOUND_IN, RULE_FROM, ruleIdMeaning, profileRows,
+// IOC_KIND_LABEL, IOC_TYPE_LABEL, FEED_LABEL, SOURCE_INFO, advisoryUrl, findingAdvisoryRefs,
+// findingExchangeHTML, proofHTML). Change both together.
+const SOURCE_BADGES = {
+  public: { label: 'confirmed', tip: 'Verifiable graph match, verified by Umanitek. Blockable in block mode.' },
+  community: { label: 'flagged here', tip: 'Matched a community-only report: flagged here, not shared.' },
+  heuristic: { label: 'candidate', tip: 'Built-in heuristic discovery awaiting graph verification.' },
+  custom: { label: 'your rule', tip: 'Matched one of your own protected paths.' },
+  llm: { label: 'AI review', tip: 'Flagged by the optional LLM injection reviewer. Informational and never blocks.' },
+  secret: { label: 'secret', tip: 'Secret exposure detected by Blackbox.' }
+}
+const sourceKey = finding => {
+  const source = String(asObject(finding).source || '').toLowerCase()
+  if (SOURCE_BADGES[source]) return source
+  return finding.confirmed === true || finding.confirmed === 'true' ? 'public' : 'heuristic'
+}
+const TRIGGERS = {
+  pre_tool_call: 'Pre-tool check',
+  post_tool_call: 'Post-tool check',
+  pre_api_request: 'Check of what the agent was about to send the model',
+  osv_discovery: 'Package advisory lookup (OSV)'
+}
+const FOUND_IN = {
+  'in-tool-output': 'Something a tool returned to the agent — a file it read or a command\'s output',
+  'in-fetched-page': 'A web page the agent fetched',
+  'in-user-prompt': 'The message typed to the agent',
+  'in-skill': 'A skill the agent was installing'
+}
+const RULE_FROM = {
+  public: "Umanitek's verified threat graph",
+  community: "The community graph (other Blackbox users' signed reports)",
+  heuristic: "Blackbox's built-in checks (not in any graph yet)",
+  custom: 'Your own protected files and folders',
+  llm: 'The optional AI reviewer',
+  secret: "Blackbox's built-in secret and wallet checks, on this machine only"
+}
+const IOC_KINDS = {
+  phishing: 'Phishing', 'credential-harvest': 'Credential harvesting', scam: 'Scam', malicious_ioc: 'Malware infrastructure', malware: 'Malware',
+  'malware-delivery': 'Malware delivery', c2: 'Command & control', 'command-and-control': 'Command & control',
+  'exfil-endpoint': 'Data exfiltration endpoint', 'injection-host': 'Hosted a prompt injection'
+}
+const IOC_TYPES = { domain: 'Domain', ip: 'IP address', url: 'URL', hash: 'File hash', wallet: 'Wallet address', contract: 'Contract address' }
+const FEEDS = { phishing_database: 'Phishing.Database', maltrail_static: 'Maltrail (static trails)' }
+const SOURCE_INFO = [
+  [/socket/i, 'Socket — a supply-chain security company that scans new npm and PyPI releases for malware'],
+  [/openssf|ossf|malicious.?packages|^mal-/i, "OpenSSF Malicious Packages — the open-source community's shared list of confirmed malicious packages"],
+  [/osv/i, "OSV.dev — Google's open database of vulnerabilities and malicious packages across ecosystems"],
+  [/ghsa|github.*advis/i, 'GitHub Advisory Database — security advisories reviewed by GitHub'],
+  [/phishing.?database/i, 'Phishing.Database — a public, continuously tested list of active phishing domains and IPs'],
+  [/maltrail/i, 'Maltrail — an open-source list of known malware, command-and-control and attack infrastructure'],
+  [/urlhaus/i, 'URLhaus (abuse.ch) — URLs used to spread malware'],
+  [/malwarebazaar/i, 'MalwareBazaar (abuse.ch) — samples and file hashes of known malware'],
+  [/threatfox/i, 'ThreatFox (abuse.ch) — indicators of compromise shared by researchers'],
+  [/abuse\.?ch/i, 'abuse.ch — a non-profit that tracks malware, botnets and the infrastructure behind them'],
+  [/phishtank/i, 'PhishTank — a community-verified database of phishing sites'],
+  [/urlscan/i, 'urlscan.io — a service that scans and classifies suspicious websites'],
+  [/scamsniffer/i, 'ScamSniffer — a Web3 security service that tracks crypto drainer sites and wallets'],
+  [/mcptox/i, 'MCPTox — research on poisoned MCP servers and tools aimed at AI agents'],
+  [/umanitek/i, "Umanitek — curated directly into the verified graph by Umanitek's curators"]
+]
+const sourceText = name => {
+  const found = SOURCE_INFO.find(([pattern]) => pattern.test(String(name || '')))
+  return found ? found[1] : String(name || '')
+}
+const iocKind = kind => IOC_KINDS[String(kind || '')] || IOC_KINDS[String(kind || '').toLowerCase()] || ''
+const dateFull = value => {
+  if (value === undefined || value === null || value === '') return ''
+  const ms = typeof value === 'number' ? value * (value < 1e12 ? 1000 : 1) : Date.parse(value)
+  return Number.isNaN(ms) ? String(value) : new Date(ms).toLocaleString()
+}
+
+// What the parts of a rule id mean, so a hash never stands unexplained.
+function ruleIdMeaning(id) {
+  const parts = String(id || '').split(':')
+  switch (parts[0]) {
+    case 'injection': return 'A fingerprint of the exact pattern that matched (the first 24 characters of its SHA-256 hash). Every machine names the same pattern the same way. It is a name, not a date or a version, so it never goes out of date.'
+    case 'fileaccess': return `A file rule: ${parts[2] || 'a sensitive file'}, reached through the ${parts[1] || "agent's"} tool.`
+    case 'secret': return `A secret recognised by its own shape or proof: ${parts.slice(1).join(':') || 'a secret'}. The value itself is never recorded.`
+    case 'dep': return `A package rule: ecosystem ${parts[1] || '?'}, package and version ${parts.slice(2).join(':') || '?'}.`
+    case 'ioc': return `An indicator rule: a known-bad ${parts[1] || 'value'}.`
+    case 'skill': return "A skill rule, named by the skill's fingerprint."
+    default: return ''
+  }
+}
+
+function profileRows(profile) {
+  const p = asObject(profile)
+  const pick = (a, b) => p[a] || p[b] || ''
+  const words = value => String(value || '').replace(/-/g, ' ')
+  const risk = pick('resourceAtRisk', 'resource_at_risk')
+  return [
+    ["What it's after", words(pick('threatGoal', 'threat_goal'))],
+    ['At risk', risk === 'none-identified' ? '' : words(risk)],
+    ['Technique', pick('attackTechnique', 'attack_technique'), true],
+    ['Outcome', pick('outcome', 'outcome')],
+    ['Agent action', words(pick('agentAction', 'agent_action'))],
+    ['Seen via', pick('agentTool', 'agent_tool'), true],
+    ['Found in', words(pick('injectionContext', 'context') || pick('iocContext', 'ioc_context'))],
+    ['Matched by', pick('matchedBy', 'matched_by')],
+    ['Verified rule', pick('verifiedSubject', 'verified_subject'), true],
+    ['Blackbox version', pick('blackboxVersion', 'blackbox_version'), true]
+  ]
+}
+
+// The fields of a graph threat, per kind (index.html detailRows), in plain words.
 function threatRows(t) {
   const rows = []
   const type = t.category
@@ -1726,89 +1849,263 @@ function threatRows(t) {
   else if (type === 'injection') rows.push(['OWASP', t.owasp], ['Pattern', t.pattern, true])
   else if (type === 'escalation') rows.push(['Tool', t.tool, true], ['Arg shape', t.arg_shape, true])
   else if (type === 'fileaccess') rows.push(['Tool', t.tool, true], ['File category', t.file_category])
-  else if (type === 'ioc') rows.push(['Threat type', t.kind || t.reportReason], ['Indicator', t.iocType || t.ioc_type], ['Feed', t.sourceId])
+  else if (type === 'ioc') rows.push(['Threat type', iocKind(t.kind || t.reportReason)], ['Indicator', IOC_TYPES[t.iocType || t.ioc_type] || t.iocType || t.ioc_type], ['Feed', sourceText(FEEDS[t.sourceId] || t.sourceId)])
   else if (type === 'skill') rows.push(['Skill', t.skill, true], ['Version', t.skill_version, true], ['Danger shape', t.danger_shape, true])
-  rows.push(['Source', asList(t.sources).join('; ')], ['Contributor', t.contributor], ['Last updated', t.modified], ['Graph', TIER_NAMES[t.tier] || 'Threat graph'])
-  if (t.tier === 'community') rows.push(['Stage', t.stage ? `${t.stage}${t.stageReason ? ` — ${t.stageReason}` : ''}` : ''])
+  rows.push(['Source', asList(t.sources).map(sourceText).join('; ')], ['Contributor', t.contributor], ['Last updated', dateFull(t.modified)], ['Graph', TIER_NAMES[t.tier] || 'Threat graph'])
+  if (t.tier === 'community') rows.push(['Stage', t.stage ? `${t.stage}${t.stageReason ? ` — ${t.stageReason}` : ''}` : ''], ...profileRows(t))
   return rows
 }
 
-function threatTags(threat, t) {
-  return [
-    jsx(Pill, { tone: t.severity || threat.severity, children: cap(t.severity || threat.severity || 'unknown') }, 'severity'),
-    jsx(TypeCell, { type: t.category || threat.category }, 'type'),
-    t.curated ? jsx(Pill, { tone: 'ok', children: 'Verified' }, 'verified') : null
-  ]
+const ADVISORY_ID = /\b(MAL-\d{4}-\d+|GHSA-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}|CVE-\d{4}-\d+|PYSEC-\d{4}-\d+|GO-\d{4}-\d+|RUSTSEC-\d{4}-\d+|OSV-\d{4}-\d+)\b/gi
+function advisoryUrl(id) {
+  const text = String(id).trim()
+  if (/^GHSA-/i.test(text)) return `https://github.com/advisories/${text}`
+  if (/^CVE-/i.test(text)) return `https://nvd.nist.gov/vuln/detail/${text.toUpperCase()}`
+  if (/^(MAL|OSV|PYSEC|GO|RUSTSEC)-/i.test(text)) return `https://osv.dev/vulnerability/${text}`
+  return ''
+}
+// Advisory pages for the ids a finding carries ("pkg@ver (MAL-2023-1576)"), plus any references it has.
+function findingAdvisoryRefs(finding) {
+  const text = [finding.evidence, finding.matched, finding.advisory_id, finding.advisoryId, finding.title, finding.identifier].filter(Boolean).join('  ')
+  const out = []
+  for (const match of text.matchAll(ADVISORY_ID)) {
+    const url = advisoryUrl(match[1])
+    if (url && !out.includes(url)) out.push(url)
+  }
+  asList(finding.references).forEach(url => {
+    if (url && !out.includes(url)) out.push(url)
+  })
+  return out
 }
 
-// The signed proof behind a community threat (GET /api/threat-proof), as the dashboard shows it.
-function ThreatProof({ identifier }) {
-  const query = useDash('threat-proof', `api/threat-proof?tier=community&identifier=${encodeURIComponent(identifier)}`, SLOW_POLL_MS)
-  const proof = asObject(query.data)
-  const reports = asList(proof.reports)
-  if (query.isLoading || proof.error) return null
+let openExternal = null // ctx.os.openExternal, set in register()
+const openLink = url => {
+  if (!/^https:\/\//i.test(String(url || ''))) return
+  if (openExternal) openExternal(url).then(opened => (opened ? null : host.notify({ kind: 'warning', message: `Open ${url} in your browser` })))
+}
+
+function References({ urls }) {
+  const list = asList(urls).filter(Boolean)
+  if (!list.length) return null
   return jsxs('div', {
-    style: { display: 'flex', flexDirection: 'column', gap: 12 },
+    style: { display: 'flex', flexDirection: 'column', gap: 6 },
     children: [
-      jsx('div', { className: 'bbx-label', children: 'Proof' }),
-      reports.length
-        ? reports.map((report, index) => jsx(DetailGrid, { rows: [['Signature', report.verified ? '✓ valid' : 'not checked'], ['Reported by', report.reporter, true], ['Signed by', report.signer, true], ['Fingerprint', report.fingerprint, true], ['Signed on', report.day]] }, index))
-        : jsx('div', { className: 'bbx-small', children: 'No signed report for this threat has reached this node yet.' })
+      jsx('div', { className: 'bbx-label', children: 'Advisories & references' }),
+      ...list.map((url, index) =>
+        /^https:\/\//i.test(url)
+          ? jsxs('button', { type: 'button', className: 'bbx-linkbtn bbx-ref', onClick: () => openLink(url), children: [jsx(Codicon, { name: 'link-external' }), jsx('span', { children: url })] }, index)
+          : jsx('div', { className: 'bbx-small bbx-mono', style: { wordBreak: 'break-all' }, children: url }, index)
+      )
     ]
   })
 }
 
+function CopyId({ id }) {
+  const [copied, setCopied] = useState(false)
+  if (!id) return null
+  return jsxs('div', {
+    className: 'bbx-idrow',
+    children: [
+      jsx('code', { children: id }),
+      jsx('button', {
+        type: 'button',
+        className: 'bbx-btn',
+        onClick: () => {
+          try {
+            navigator.clipboard.writeText(id).then(() => {
+              setCopied(true)
+              setTimeout(() => setCopied(false), 1500)
+            })
+          } catch (error) {
+            host.notify({ kind: 'warning', message: id })
+          }
+        },
+        children: copied ? 'Copied' : 'Copy'
+      })
+    ]
+  })
+}
+
+// What the finding saw: the prompt (and the model's reply, when captured) for an injection, the
+// evidence for anything else. Redacted and capped by the recorder; shown as plain text.
+function FindingExchange({ finding }) {
+  const context = asObject(finding.context)
+  const turns = asList(context.turns).map(asObject)
+  const last = role => {
+    for (let i = turns.length - 1; i >= 0; i--) if (String(turns[i].role || '').toLowerCase() === role && turns[i].text) return String(turns[i].text)
+    return ''
+  }
+  const block = (label, text, role) => jsxs('div', { className: `bbx-convo ${role || ''}`, children: [label ? jsx('div', { className: 'bbx-label', children: label }) : null, jsx('pre', { className: 'bbx-convo-text', children: text })] })
+  if (finding.category !== 'injection') {
+    const evidence = String(finding.evidence || finding.matched || context.input || '')
+    return evidence ? jsxs('div', { children: [jsx('div', { className: 'bbx-label', style: { marginBottom: 8 }, children: 'Evidence' }), block('', evidence)] }) : null
+  }
+  const user = last('user')
+  const assistant = last('assistant')
+  const input = context.input ? String(context.input) : ''
+  const prompt = user || input || String(finding.evidence || finding.matched || '')
+  const response = user ? assistant || input || (context.result ? String(context.result) : '') : assistant || (context.result ? String(context.result) : '')
+  if (!prompt && !response) return null
+  let heading = prompt && response ? 'Prompt & response' : response ? 'Response' : 'Prompt'
+  if (user && finding.found_in && finding.found_in !== 'in-user-prompt') heading = 'Your request (the injection was in what the agent read, not in this)'
+  return jsxs('div', {
+    style: { display: 'flex', flexDirection: 'column', gap: 8 },
+    children: [
+      jsxs('div', { className: 'bbx-label', children: [heading, context.truncated ? ' · truncated' : ''] }),
+      prompt ? block('Prompt', prompt, 'user') : null,
+      response ? block('Model response', response, 'assistant') : null
+    ]
+  })
+}
+
+const shortKey = key => {
+  const text = String(key || '')
+  return text.length > 30 ? `${text.slice(0, 18)}…${text.slice(-8)}` : text
+}
+const graphShort = graph => String(graph || '').split('/').pop()
+
+// The proof behind a threat (GET /api/threat-proof): who signed each community report, or — for this
+// machine — whether it shared this finding and with which key.
+function Proof({ identifier, tier }) {
+  const query = useDash(`threat-proof-${tier}`, `api/threat-proof?tier=${tier}&identifier=${encodeURIComponent(identifier || '')}`, SLOW_POLL_MS)
+  const proof = asObject(query.data)
+  if (!identifier || query.isLoading || proof.error) return null
+  const block = (title, summary, report) =>
+    jsxs('div', {
+      style: { display: 'flex', flexDirection: 'column', gap: 8 },
+      children: [
+        jsx('div', { className: 'bbx-label', children: title }),
+        jsx('div', { children: summary }),
+        jsx(DetailGrid, { rows: [['Signed by', shortKey(report.signer), true], ['Fingerprint', report.fingerprint, true], ['Network', report.network_name ? `${report.network_name}${report.this_network ? " · this node's network" : ''}` : shortKey(report.network)], ['Graph', graphShort(report.graph), true], ['Signed on', report.day]] })
+      ]
+    })
+  if (tier === 'community') {
+    const reports = asList(proof.reports).map(asObject)
+    if (!reports.length) return jsxs('div', { children: [jsx('div', { className: 'bbx-label', children: 'Proof' }), jsx('div', { className: 'bbx-small', children: 'No signed report for this threat has reached this node yet.' })] })
+    return jsxs('div', {
+      style: { display: 'flex', flexDirection: 'column', gap: 16 },
+      children: [
+        ...reports.map((report, index) => jsx('div', { children: block(reports.length > 1 ? `Proof · report ${index + 1} of ${reports.length}` : 'Proof', `${report.verified ? '✓ Signature valid' : 'Signature not checked'} · reported by ${shortKey(report.reporter)}`, report) }, index)),
+        jsx(DetailGrid, { rows: [['Counts toward confirmation', `${proof.counted || '0'} of ${reports.length} reporter${reports.length === 1 ? '' : 's'}${proof.disputed === 'yes' ? ' · disputed' : ''}`]] })
+      ]
+    })
+  }
+  const shares = asList(proof.shares).map(asObject)
+  const last = shares[0]
+  const shared = last ? `${last.outcome} · ${dateFull(last.ts)}` : ''
+  const report = asObject(proof.report)
+  if (report.fingerprint) return block('Proof', `✓ You shared this · ${shared || 'signed'}`, report)
+  return jsxs('div', {
+    style: { display: 'flex', flexDirection: 'column', gap: 8 },
+    children: [jsx('div', { className: 'bbx-label', children: 'Proof' }), jsx(DetailGrid, { rows: [['Shared', shared || 'not shared — this finding stayed on this machine'], ['Your signing key', shortKey(proof.own_key), true]] })]
+  })
+}
+
+function threatTags(threat, t) {
+  const kind = iocKind(t.kind)
+  return [
+    jsx(Pill, { tone: t.severity || threat.severity, children: cap(t.severity || threat.severity || 'unknown') }, 'severity'),
+    jsx(TypeCell, { type: t.category || threat.category }, 'type'),
+    t.curated ? jsx(Pill, { tone: 'ok', children: 'Verified' }, 'verified') : null,
+    kind ? jsx(Pill, { tone: 'high', children: kind }, 'kind') : null
+  ]
+}
+
+// A threat from the graph (a bubble, a search result): the dashboard's threat pop-up. A threat of
+// the Local graph is a finding on this machine, so it opens the finding pop-up, as the dashboard does.
 function ThreatModal({ threat, onClose }) {
   const tier = threat.tier || 'public'
   const query = useDash('threat', `api/threat?identifier=${encodeURIComponent(threat.identifier)}&tier=${encodeURIComponent(tier)}`, SLOW_POLL_MS)
+  if (threat.local && threat.finding) return jsx(FindingModal, { row: { ...threat.finding, sightings: threat.count }, onClose })
   const t = { tier, ...asObject(query.data) }
   return jsx(Modal, {
     title: t.name || threat.name || threat.identifier,
-    sub: threat.identifier,
     tags: threatTags(threat, t),
     onClose,
-    children: threat.local
-      ? jsx(DetailGrid, { rows: [['Graph', TIER_NAMES.local], ['Seen on this machine', `${threat.count} time(s)`], ['Identifier', threat.identifier, true]] })
-      : jsx(Loading, {
+    children: jsxs('div', {
+      style: { display: 'flex', flexDirection: 'column', gap: 18 },
+      children: [
+        jsx(CopyId, { id: threat.identifier }),
+        jsx(Loading, {
           query,
           children: () => {
-            if (!t.found) return jsx('div', { className: 'bbx-empty', style: { padding: 0 }, children: 'This threat is not in the graph on this node.' })
+            if (!t.found) return jsx('div', { className: 'bbx-small', children: 'This threat is not in the graph on this node.' })
+            const rows = threatRows(t)
             return jsxs('div', {
               style: { display: 'flex', flexDirection: 'column', gap: 18 },
               children: [
                 t.description ? jsx('p', { style: { margin: 0, lineHeight: 1.6 }, children: t.description }) : null,
-                jsx(DetailGrid, { rows: threatRows(t) }),
-                asList(t.references).length
-                  ? jsxs('div', { children: [jsx('div', { className: 'bbx-label', style: { marginBottom: 8 }, children: 'References' }), ...asList(t.references).map((ref, index) => jsx('div', { className: 'bbx-small bbx-mono', style: { wordBreak: 'break-all' }, children: ref }, index))] })
+                jsx(DetailGrid, { rows }),
+                jsx(References, { urls: t.references }),
+                !t.description && !asList(t.references).length && rows.filter(row => row[1]).length <= 1
+                  ? jsx('div', { className: 'bbx-small', children: `No further detail is stored for this threat in the ${tier === 'public' ? 'verifiable' : tier} graph yet.` })
                   : null,
-                tier === 'community' ? jsx(ThreatProof, { identifier: threat.identifier }) : null
+                tier === 'community' ? jsx(Proof, { identifier: threat.identifier, tier: 'community' }) : null
               ]
             })
           }
         })
+      ]
+    })
   })
 }
 
-// One finding from Threats detected: what happened here, and the matching threat in the verified graph.
+// One finding on this machine: everything the dashboard's finding pop-up shows (index.html
+// openFindingModal / findingBaseHTML) — what happened, where, which rule and why, the prompt or evidence,
+// this machine's proof — and the matching entry of the verified graph when the rule came from a graph.
 function FindingModal({ row, onClose }) {
-  const verified = useDash('threat', `api/threat?identifier=${encodeURIComponent(row.identifier || '')}&tier=public`, SLOW_POLL_MS)
-  const t = asObject(verified.data)
+  const finding = asObject(row)
+  const key = sourceKey(finding)
+  const badge = SOURCE_BADGES[key]
+  const fromGraph = finding.identifier && key !== 'heuristic'
+  const verified = useDash('threat', `api/threat?identifier=${encodeURIComponent(fromGraph ? finding.identifier : '')}&tier=public`, SLOW_POLL_MS)
+  const t = fromGraph ? asObject(verified.data) : {}
+  const blocked = finding.decision === 'block' || finding.event === 'blocked'
+  const seen = finding.sightings > 1 ? `${finding.sightings} times${finding.firstSeen ? ` · first ${dateFull(finding.firstSeen)}` : ''} · last ${dateFull(finding.ts)}` : ''
   return jsx(Modal, {
-    title: row.title || row.identifier || 'Threat',
-    sub: row.identifier,
+    title: finding.title || finding.evidence || finding.identifier || 'Finding',
     tags: [
-      jsx(Pill, { tone: row.severity, children: cap(row.severity || 'unknown') }, 'severity'),
-      jsx(TypeCell, { type: row.category }, 'type'),
-      jsx(Pill, { tone: row.decision === 'block' ? 'blocked' : 'neutral', children: row.decision === 'block' ? 'Blocked' : 'Flagged' }, 'outcome')
+      jsx(Pill, { tone: finding.severity, children: cap(finding.severity || 'unknown') }, 'severity'),
+      jsx(TypeCell, { type: finding.category }, 'type'),
+      jsx('span', { className: `bbx-srcbadge ${key}`, title: badge.tip, children: badge.label }, 'source'),
+      jsx(Pill, { tone: blocked ? 'blocked' : 'neutral', children: blocked ? 'Blocked' : 'Flagged' }, 'outcome'),
+      finding.sandbox ? jsx(Pill, { tone: 'neutral', children: 'SANDBOX TEST' }, 'sandbox') : null,
+      iocKind(t.kind) ? jsx(Pill, { tone: 'high', children: iocKind(t.kind) }, 'kind') : null
     ],
     onClose,
     children: jsxs('div', {
       style: { display: 'flex', flexDirection: 'column', gap: 18 },
       children: [
-        jsx(DetailGrid, { rows: [['Time', fullDate(row.ts)], ['Agent', cap(row.framework || 'agent')], ['Tool', row.tool_name, true], ['Reasoning', row.evidence], ['Rule source', row.source], ['Session', row.session_id, true]] }),
+        jsx(CopyId, { id: finding.identifier }),
+        jsx(DetailGrid, {
+          rows: [
+            ['Detected', dateFull(finding.time || finding.ts || finding.timestamp)],
+            ['Agent', cap(finding.framework || 'hermes')],
+            ['Tool', finding.tool_name || finding.tool, true],
+            ['Trigger', TRIGGERS[String(finding.event || '')] || finding.event],
+            ['Seen', seen],
+            ['What matched', finding.category === 'injection' && finding.evidence ? `“${finding.evidence}”` : ''],
+            ['Found in', FOUND_IN[finding.found_in] || ''],
+            ['Rule from', RULE_FROM[key]],
+            ['About this id', ruleIdMeaning(finding.identifier)],
+            ['Session', finding.session_id, true],
+            ...profileRows(finding.profile || finding.sighting)
+          ]
+        }),
+        jsx(References, { urls: findingAdvisoryRefs(finding) }),
+        jsx(FindingExchange, { finding }),
         t.found
-          ? jsxs('div', { style: { display: 'flex', flexDirection: 'column', gap: 12 }, children: [jsx('div', { className: 'bbx-label', children: 'In the verified threat graph' }), t.description ? jsx('p', { style: { margin: 0, lineHeight: 1.6 }, children: t.description }) : null, jsx(DetailGrid, { rows: threatRows({ tier: 'public', ...t }) })] })
-          : null
+          ? jsxs('div', {
+              style: { display: 'flex', flexDirection: 'column', gap: 12 },
+              children: [
+                jsx('div', { className: 'bbx-label', children: 'From the threat graph' }),
+                t.description ? jsx('p', { style: { margin: 0, lineHeight: 1.6 }, children: t.description }) : null,
+                jsx(DetailGrid, { rows: threatRows({ tier: 'public', ...t }) }),
+                jsx(References, { urls: t.references })
+              ]
+            })
+          : null,
+        jsx(Proof, { identifier: finding.identifier, tier: 'local' })
       ]
     })
   })
@@ -2082,7 +2379,11 @@ function AgentActivity() {
           }
         })
       }),
-      shown ? jsx(ActivityModal, { entry: shown, onClose: () => setShown(null) }) : null
+      shown && (shown.event === 'flagged' || shown.event === 'blocked') && asObject(shown.finding).identifier
+        ? jsx(FindingModal, { row: { ...asObject(shown.finding), ts: shown.ts, framework: shown.framework, decision: shown.event === 'blocked' ? 'block' : '', session_id: asObject(shown.detail).session_id }, onClose: () => setShown(null) })
+        : shown
+          ? jsx(ActivityModal, { entry: shown, onClose: () => setShown(null) })
+          : null
     ]
   })
 }
@@ -2751,8 +3052,10 @@ export default {
   name: 'Agent Blackbox',
   register(ctx) {
     rest = ctx.rest
+    openExternal = url => ctx.os.openExternal(url)
     ctx.onDispose(() => {
       rest = null
+      openExternal = null
     })
     ctx.registerMany([
       { id: 'page', area: ROUTES_AREA, data: { path: PAGE }, render: () => jsx(BlackboxPage, { ctx }) },
