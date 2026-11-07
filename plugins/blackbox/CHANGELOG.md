@@ -54,6 +54,11 @@ that the two version fields agree.
 ### Changed
 
 - The Desktop page refreshes every 4 seconds, as the dashboard does (was 10 to 30).
+- The Desktop page opens with your connected agents, then the stats, then Trader Shield as the
+  dashboard's "Engage Trader Shield" card (one line once it is on). A new **Shields** tab turns each
+  shield on or off (turning off asks first) and holds what it protects, its events and its settings.
+- Clicking a threat (on the map, in search or in Threats detected) or an Agent activity row opens a
+  pop-up with the same details as the dashboard's, over the page, instead of leaving it.
 
 ### Fixed
 

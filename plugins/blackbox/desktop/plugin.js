@@ -756,7 +756,7 @@ const PAGE_CSS = `
 @media (min-width: 1000px) { .bbx-stats { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
 .bbx-stat { padding: 16px 18px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .bbx-stat.warm { border-left: 3px solid color-mix(in srgb, ${SIGNAL} 60%, transparent); }
-.bbx-stat-value { font-family: var(--bbx-mono); font-size: 24px; font-weight: 500; line-height: 1.15; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bbx-stat-value { font-family: var(--bbx-mono); font-size: clamp(17px, 1.7vw, 24px); font-weight: 500; line-height: 1.15; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .bbx-stat-note { font-family: var(--bbx-mono); font-size: 11.5px; color: var(--bbx-muted); line-height: 1.45; }
 .bbx-stat .bbx-label { font-size: 10px; letter-spacing: 0.12em; }
 .bbx-ok { color: #3FA568; font-family: var(--bbx-mono); font-size: 12.5px; font-weight: 600; }
@@ -880,6 +880,22 @@ const PAGE_CSS = `
 .bbx-syncbanner { display: flex; gap: 24px; align-items: center; padding: 22px 24px; flex-wrap: wrap;
   border-left: 3px solid var(--bbx-signal); background: color-mix(in srgb, ${SIGNAL} 4%, var(--bbx-panel)); }
 .bbx-syncbanner-ring { position: relative; width: 54px; height: 54px; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 600; flex: none; }
+.bbx-modal-backdrop { position: fixed; inset: 0; z-index: 60; background: color-mix(in srgb, #000 55%, transparent); display: flex;
+  align-items: flex-start; justify-content: center; padding: 6vh 24px; overflow: auto; }
+.bbx-modal { width: min(760px, 100%); background: var(--background, #0b0b0d); border: 1px solid var(--bbx-line); border-radius: 10px;
+  box-shadow: 0 30px 80px -20px #000; display: flex; flex-direction: column; max-height: 88vh; }
+.bbx-modal-head { display: flex; gap: 16px; align-items: flex-start; padding: 22px 24px 16px; border-bottom: 1px solid var(--bbx-line); }
+.bbx-modal-title { font-size: 21px; font-weight: 750; margin: 0; letter-spacing: -0.01em; word-break: break-word; }
+.bbx-modal-body { padding: 20px 24px 24px; overflow: auto; }
+.bbx-kv { display: grid; grid-template-columns: minmax(120px, 170px) 1fr; gap: 10px 18px; margin: 0; }
+.bbx-kv dt { font-family: var(--bbx-mono); font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--bbx-muted); padding-top: 3px; }
+.bbx-kv dd { margin: 0; word-break: break-word; }
+.bbx-row-open { cursor: pointer; }
+.bbx-engage { display: flex; gap: 24px; align-items: center; flex-wrap: wrap; padding: 22px 26px; border-color: color-mix(in srgb, ${SIGNAL} 45%, transparent);
+  background: radial-gradient(120% 140% at 100% 50%, color-mix(in srgb, ${SIGNAL} 12%, transparent), transparent 60%), var(--bbx-panel); }
+.bbx-engage .bbx-cta { margin: 0; }
+.bbx-engage-title { font-size: 24px; font-weight: 800; letter-spacing: -0.01em; margin: 4px 0 2px; }
+.bbx-shieldline { display: flex; gap: 14px; align-items: center; padding: 14px 18px; }
 `
 
 const SEVERITY_ORDER = { critical: 4, high: 3, medium: 2, low: 1, info: 0 }
@@ -1180,29 +1196,27 @@ function ConnectedAgents() {
   })
 }
 
-function TraderShieldPanel({ setTab }) {
-  const cards = useDash('shields', 'api/shields')
-  const events = useDash('trader-events', 'api/shields/trader/events', POLL_MS)
-  const card = asList(cards.data).find(item => item && item.shield_id === 'trader')
-  if (!card) return null
-  const engaged = !!asObject(card.mode).enabled
+// Turn a shield on or off: the dashboard's own switch (POST /api/settings, shields.<id>.enabled), so an
+// earlier choice of wallets and addresses is kept.
+async function setShield(card, enabled) {
+  return saveSettings(
+    { shields: { [card.shield_id]: { enabled } } },
+    enabled ? `${card.name} is engaged. Restart your agent so it picks the change up.` : `${card.name} is off.`
+  )
+}
+
+const shieldCards = data => asList(data).filter(item => item && item.shield_id)
+const shieldOn = card => !!asObject(card.mode).enabled
+
+// What a shield protects on this machine (its status columns) and its recent events.
+function ShieldStatus({ card }) {
+  const events = useDash(`shield-events-${card.shield_id}`, `api/shields/${card.shield_id}/events`, POLL_MS)
+  const engaged = shieldOn(card)
   const markTone = state => (state === 'ok' || state === 'on' || state === 'secured' ? 'ok' : state === 'warn' || state === 'watched' ? 'warn' : state === 'bad' || state === 'attention' ? 'bad' : 'none')
   const markGlyph = tone => ({ ok: '✓', warn: '~', none: '–', bad: '!' })[tone]
   const eventRows = asList(events.data)
-  return jsxs('section', {
-    className: 'bbx-section',
+  return jsxs('div', {
     children: [
-      jsx(Heading, {
-        title: jsxs('span', { style: { display: 'inline-flex', gap: 12, alignItems: 'center' }, children: [card.name, card.beta ? jsx(Pill, { tone: 'blocked', children: 'BETA' }) : null] }),
-        sub: card.tagline || 'What Blackbox found on this machine, and how it keeps your agent away from it.',
-        actions: jsxs('div', {
-          style: { display: 'flex', gap: 12, alignItems: 'center' },
-          children: [
-            jsx(Pill, { tone: engaged ? (card.blocking ? 'ok' : 'medium') : 'neutral', children: engaged ? (card.blocking ? '● Blocking' : '● Watching') : 'Off' }),
-            jsx('button', { type: 'button', className: 'bbx-btn', onClick: () => setTab('settings'), children: engaged ? 'Edit settings' : 'Turn on in settings' })
-          ]
-        })
-      }),
       jsxs('div', {
         className: 'bbx-panel',
         children: [
@@ -1263,16 +1277,323 @@ function TraderShieldPanel({ setTab }) {
   })
 }
 
+// Overview's shield line: the dashboard's "Engage" banner while a shield is off, a one-line status once on.
+function ShieldBanner({ setTab }) {
+  const cards = useDash('shields', 'api/shields')
+  const [busy, setBusy] = useState('')
+  return jsx('div', {
+    style: { display: 'flex', flexDirection: 'column', gap: 12 },
+    children: shieldCards(cards.data).map(card => {
+      if (shieldOn(card))
+        return jsxs('div', {
+          className: 'bbx-panel bbx-shieldline',
+          children: [
+            jsx(Codicon, { name: 'shield' }),
+            jsxs('div', {
+              style: { flex: 1, minWidth: 0 },
+              children: [
+                jsxs('div', { style: { fontWeight: 700 }, children: [card.name, jsx('span', { className: 'bbx-ok', style: { marginLeft: 10 }, children: card.blocking ? '● Blocking' : '● Watching' })] }),
+                jsx('div', { className: 'bbx-small', children: card.tagline })
+              ]
+            }),
+            jsx('button', { type: 'button', className: 'bbx-btn', onClick: () => setTab('shields'), children: 'Open Shields' })
+          ]
+        }, card.shield_id)
+      return jsxs('div', {
+        className: 'bbx-panel bbx-engage',
+        children: [
+          jsxs('div', {
+            style: { flex: 1, minWidth: 220 },
+            children: [
+              jsx('div', { className: 'bbx-kicker', children: card.beta ? 'New · Beta' : 'New' }),
+              jsx('div', { className: 'bbx-engage-title', children: card.name }),
+              jsx('div', { className: 'bbx-sub', children: card.tagline })
+            ]
+          }),
+          jsxs('div', {
+            style: { display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' },
+            children: [
+              jsx('button', {
+                type: 'button',
+                className: 'bbx-cta',
+                disabled: busy === card.shield_id,
+                onClick: async () => {
+                  setBusy(card.shield_id)
+                  await setShield(card, true)
+                  setBusy('')
+                },
+                children: busy === card.shield_id ? 'Engaging…' : `Engage ${card.name}`
+              }),
+              jsx('button', { type: 'button', className: 'bbx-btn', style: { padding: '12px 18px' }, onClick: () => setTab('shields'), children: 'Learn more →' })
+            ]
+          })
+        ]
+      }, card.shield_id)
+    })
+  })
+}
+
+// The Shields tab: each shield with its switch, what it protects on this machine, its recent events
+// and its settings. The one place a shield is set up; Overview only engages it.
+function ShieldsTab() {
+  const cards = useDash('shields', 'api/shields')
+  const settings = useDash('settings', 'api/settings')
+  const [confirming, setConfirming] = useState('')
+  const sections = asObject(asObject(settings.data).shields)
+  return jsx('div', {
+    className: 'bbx-wrap',
+    style: { padding: 0 },
+    children: jsx(Loading, {
+      query: cards,
+      empty: 'No shields are available in this Blackbox.',
+      children: data => {
+        const list = shieldCards(data)
+        if (!list.length) return null
+        return jsxs('div', {
+          style: { display: 'flex', flexDirection: 'column', gap: 40 },
+          children: list.map(card => {
+            const engaged = shieldOn(card)
+            const section = asObject(sections[card.shield_id])
+            return jsxs('section', {
+              className: 'bbx-section',
+              children: [
+                jsx(Heading, {
+                  title: jsxs('span', { style: { display: 'inline-flex', gap: 12, alignItems: 'center' }, children: [card.name, card.beta ? jsx(Pill, { tone: 'blocked', children: 'BETA' }) : null] }),
+                  sub: card.tagline,
+                  actions: jsxs('div', {
+                    style: { display: 'flex', gap: 12, alignItems: 'center' },
+                    children: [
+                      jsx(Pill, { tone: engaged ? (card.blocking ? 'ok' : 'medium') : 'neutral', children: engaged ? (card.blocking ? '● Blocking' : '● Watching') : 'Off' }),
+                      engaged
+                        ? jsx('button', { type: 'button', className: 'bbx-btn', onClick: () => setConfirming(card.shield_id), children: 'Turn off' })
+                        : jsx('button', { type: 'button', className: 'bbx-cta', style: { margin: 0, padding: '10px 20px', fontSize: 14 }, onClick: () => setShield(card, true), children: `Engage ${card.name}` })
+                    ]
+                  })
+                }),
+                confirming === card.shield_id
+                  ? jsxs('div', {
+                      className: 'bbx-panel bbx-confirm',
+                      children: [
+                        jsx('span', { style: { flex: 1, minWidth: 220 }, children: `Turn off ${card.name}? Your agent could then read what it protects on this machine.` }),
+                        jsx('button', {
+                          type: 'button',
+                          className: 'bbx-btn danger',
+                          onClick: async () => {
+                            setConfirming('')
+                            await setShield(card, false)
+                          },
+                          children: 'Turn off'
+                        }),
+                        jsx('button', { type: 'button', className: 'bbx-btn', onClick: () => setConfirming(''), children: 'Keep it on' })
+                      ]
+                    })
+                  : null,
+                jsx(ShieldStatus, { card }),
+                card.shield_id === 'trader' && Object.keys(section).length ? jsx(TraderShieldSettings, { section }, JSON.stringify(section.mode)) : null
+              ]
+            }, card.shield_id)
+          })
+        })
+      }
+    })
+  })
+}
+
+
 function Overview({ status, setTab, readiness, ctx }) {
   return jsxs('div', {
     className: 'bbx-wrap',
     style: { padding: 0 },
     children: [
       syncInProgress(readiness) ? jsx(FirstSyncBanner, { r: readiness, setTab, ctx }) : null,
-      jsx(StatCards, { status }),
       jsx(ConnectedAgents, {}),
-      jsx(TraderShieldPanel, { setTab })
+      jsx(StatCards, { status }),
+      jsx(ShieldBanner, { setTab })
     ]
+  })
+}
+
+
+// ---------------------------------------------------------------- pop-ups
+
+// One pop-up over the page, as the dashboard's modals: Escape or a click outside closes it, and the
+// page underneath keeps its place (tab, page of a table, the map's zoom).
+function Modal({ title, sub, tags, onClose, children }) {
+  useEffect(() => {
+    const onKey = event => {
+      if (event.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+  return jsx('div', {
+    className: 'bbx-modal-backdrop',
+    onMouseDown: event => {
+      if (event.target === event.currentTarget) onClose()
+    },
+    children: jsxs('div', {
+      className: 'bbx-modal',
+      role: 'dialog',
+      'aria-modal': 'true',
+      children: [
+        jsxs('div', {
+          className: 'bbx-modal-head',
+          children: [
+            jsxs('div', {
+              style: { minWidth: 0, flex: 1 },
+              children: [
+                tags ? jsx('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }, children: tags }) : null,
+                jsx('h2', { className: 'bbx-modal-title', children: title }),
+                sub ? jsx('div', { className: 'bbx-small bbx-mono', style: { marginTop: 6, wordBreak: 'break-all' }, children: sub }) : null
+              ]
+            }),
+            jsx('button', { type: 'button', className: 'bbx-iconbtn', title: 'Close (Esc)', onClick: onClose, children: jsx(Codicon, { name: 'close' }) })
+          ]
+        }),
+        jsx('div', { className: 'bbx-modal-body', children })
+      ]
+    })
+  })
+}
+
+// Label / value rows, the dashboard's detail grid. rows: [label, value, mono?]; empty values are skipped.
+function DetailGrid({ rows }) {
+  const shown = rows.filter(row => row[1] !== undefined && row[1] !== null && String(row[1]) !== '')
+  if (!shown.length) return null
+  return jsx('dl', {
+    className: 'bbx-kv',
+    children: shown.flatMap(([label, value, mono], index) => [
+      jsx('dt', { children: label }, `t${index}`),
+      jsx('dd', { className: mono ? 'bbx-mono' : '', children: String(value) }, `d${index}`)
+    ])
+  })
+}
+
+const TIER_NAMES = { public: 'Verifiable graph (VM)', community: 'Community graph (SWM)', local: 'Local graph (WM)' }
+const fullDate = seconds => (typeof seconds === 'number' && seconds > 0 ? new Date(seconds * 1000).toLocaleString() : '')
+
+// The fields the dashboard's threat pop-up shows for each kind of threat (index.html detailRows).
+function threatRows(t) {
+  const rows = []
+  const type = t.category
+  if (type === 'dependency') rows.push(['Ecosystem', t.ecosystem], ['Package', t.package, true], ['Version', t.version, true], ['Fixed in', t.fixed_version, true])
+  else if (type === 'injection') rows.push(['OWASP', t.owasp], ['Pattern', t.pattern, true])
+  else if (type === 'escalation') rows.push(['Tool', t.tool, true], ['Arg shape', t.arg_shape, true])
+  else if (type === 'fileaccess') rows.push(['Tool', t.tool, true], ['File category', t.file_category])
+  else if (type === 'ioc') rows.push(['Threat type', t.kind || t.reportReason], ['Indicator', t.iocType || t.ioc_type], ['Feed', t.sourceId])
+  else if (type === 'skill') rows.push(['Skill', t.skill, true], ['Version', t.skill_version, true], ['Danger shape', t.danger_shape, true])
+  rows.push(['Source', asList(t.sources).join('; ')], ['Contributor', t.contributor], ['Last updated', t.modified], ['Graph', TIER_NAMES[t.tier] || 'Threat graph'])
+  if (t.tier === 'community') rows.push(['Stage', t.stage ? `${t.stage}${t.stageReason ? ` — ${t.stageReason}` : ''}` : ''])
+  return rows
+}
+
+function threatTags(threat, t) {
+  return [
+    jsx(Pill, { tone: t.severity || threat.severity, children: cap(t.severity || threat.severity || 'unknown') }, 'severity'),
+    jsx(TypeCell, { type: t.category || threat.category }, 'type'),
+    t.curated ? jsx(Pill, { tone: 'ok', children: 'Verified' }, 'verified') : null
+  ]
+}
+
+// The signed proof behind a community threat (GET /api/threat-proof), as the dashboard shows it.
+function ThreatProof({ identifier }) {
+  const query = useDash('threat-proof', `api/threat-proof?tier=community&identifier=${encodeURIComponent(identifier)}`, SLOW_POLL_MS)
+  const proof = asObject(query.data)
+  const reports = asList(proof.reports)
+  if (query.isLoading || proof.error) return null
+  return jsxs('div', {
+    style: { display: 'flex', flexDirection: 'column', gap: 12 },
+    children: [
+      jsx('div', { className: 'bbx-label', children: 'Proof' }),
+      reports.length
+        ? reports.map((report, index) => jsx(DetailGrid, { rows: [['Signature', report.verified ? '✓ valid' : 'not checked'], ['Reported by', report.reporter, true], ['Signed by', report.signer, true], ['Fingerprint', report.fingerprint, true], ['Signed on', report.day]] }, index))
+        : jsx('div', { className: 'bbx-small', children: 'No signed report for this threat has reached this node yet.' })
+    ]
+  })
+}
+
+function ThreatModal({ threat, onClose }) {
+  const tier = threat.tier || 'public'
+  const query = useDash('threat', `api/threat?identifier=${encodeURIComponent(threat.identifier)}&tier=${encodeURIComponent(tier)}`, SLOW_POLL_MS)
+  const t = { tier, ...asObject(query.data) }
+  return jsx(Modal, {
+    title: t.name || threat.name || threat.identifier,
+    sub: threat.identifier,
+    tags: threatTags(threat, t),
+    onClose,
+    children: threat.local
+      ? jsx(DetailGrid, { rows: [['Graph', TIER_NAMES.local], ['Seen on this machine', `${threat.count} time(s)`], ['Identifier', threat.identifier, true]] })
+      : jsx(Loading, {
+          query,
+          children: () => {
+            if (!t.found) return jsx('div', { className: 'bbx-empty', style: { padding: 0 }, children: 'This threat is not in the graph on this node.' })
+            return jsxs('div', {
+              style: { display: 'flex', flexDirection: 'column', gap: 18 },
+              children: [
+                t.description ? jsx('p', { style: { margin: 0, lineHeight: 1.6 }, children: t.description }) : null,
+                jsx(DetailGrid, { rows: threatRows(t) }),
+                asList(t.references).length
+                  ? jsxs('div', { children: [jsx('div', { className: 'bbx-label', style: { marginBottom: 8 }, children: 'References' }), ...asList(t.references).map((ref, index) => jsx('div', { className: 'bbx-small bbx-mono', style: { wordBreak: 'break-all' }, children: ref }, index))] })
+                  : null,
+                tier === 'community' ? jsx(ThreatProof, { identifier: threat.identifier }) : null
+              ]
+            })
+          }
+        })
+  })
+}
+
+// One finding from Threats detected: what happened here, and the matching threat in the verified graph.
+function FindingModal({ row, onClose }) {
+  const verified = useDash('threat', `api/threat?identifier=${encodeURIComponent(row.identifier || '')}&tier=public`, SLOW_POLL_MS)
+  const t = asObject(verified.data)
+  return jsx(Modal, {
+    title: row.title || row.identifier || 'Threat',
+    sub: row.identifier,
+    tags: [
+      jsx(Pill, { tone: row.severity, children: cap(row.severity || 'unknown') }, 'severity'),
+      jsx(TypeCell, { type: row.category }, 'type'),
+      jsx(Pill, { tone: row.decision === 'block' ? 'blocked' : 'neutral', children: row.decision === 'block' ? 'Blocked' : 'Flagged' }, 'outcome')
+    ],
+    onClose,
+    children: jsxs('div', {
+      style: { display: 'flex', flexDirection: 'column', gap: 18 },
+      children: [
+        jsx(DetailGrid, { rows: [['Time', fullDate(row.ts)], ['Agent', cap(row.framework || 'agent')], ['Tool', row.tool_name, true], ['Reasoning', row.evidence], ['Rule source', row.source], ['Session', row.session_id, true]] }),
+        t.found
+          ? jsxs('div', { style: { display: 'flex', flexDirection: 'column', gap: 12 }, children: [jsx('div', { className: 'bbx-label', children: 'In the verified threat graph' }), t.description ? jsx('p', { style: { margin: 0, lineHeight: 1.6 }, children: t.description }) : null, jsx(DetailGrid, { rows: threatRows({ tier: 'public', ...t }) })] })
+          : null
+      ]
+    })
+  })
+}
+
+// One row of Agent activity, with everything the dashboard's activity pop-up shows (index.html
+// activityDetailBodyHTML) and the raw record. All of it stays on this machine.
+function ActivityModal({ entry, onClose }) {
+  const detail = asObject(entry.detail)
+  const args = asObject(detail.args)
+  const command = args.command || args.path || args.url || args.query || ''
+  const pkg = entry.ecosystem || detail.ecosystem ? `${entry.ecosystem || detail.ecosystem}:${entry.name || detail.name || ''}@${entry.version || detail.version || ''}` : ''
+  return jsx(Modal, {
+    title: EVENT_LABELS[entry.event] || cap(entry.event || 'Activity'),
+    sub: fullDate(entry.ts),
+    onClose,
+    children: jsxs('div', {
+      style: { display: 'flex', flexDirection: 'column', gap: 18 },
+      children: [
+        jsx(DetailGrid, {
+          rows: [
+            ['Agent', cap(entry.framework || 'hermes')], ['Event', EVENT_LABELS[entry.event] || entry.event], ['Time', fullDate(entry.ts)],
+            ['Session', detail.session_id, true], ['Tool', detail.tool_name, true], ['Command', command, true],
+            ['Model', detail.model], ['Provider', detail.provider], ['Duration', detail.duration_ms != null ? `${detail.duration_ms} ms` : ''],
+            ['Path', entry.path || detail.path, true], ['Mode', entry.mode || detail.mode], ['Package', pkg, true], ['Via', entry.tool || detail.tool, true]
+          ]
+        }),
+        jsx('div', { className: 'bbx-label', children: 'Raw record' }),
+        jsx('pre', { className: 'bbx-log', style: { maxHeight: 320 }, children: JSON.stringify(entry, null, 2) })
+      ]
+    })
   })
 }
 
@@ -1391,6 +1712,7 @@ function reasonOf(row) {
 }
 
 function ThreatsDetected() {
+  const [shown, setShown] = useState(null)
   const [order, setOrder] = useState('newest')
   const [page, setPage] = useState(0)
   const query = useDash('findings-all', 'api/findings?limit=500', POLL_MS)
@@ -1421,6 +1743,9 @@ function ThreatsDetected() {
                     jsx('tbody', {
                       children: rows.slice(current * PAGE_SIZE, (current + 1) * PAGE_SIZE).map((row, index) =>
                         jsxs('tr', {
+                          className: 'bbx-row-open',
+                          title: 'Open this threat',
+                          onClick: () => setShown(row),
                           children: [
                             jsx('td', { style: { width: 130 }, children: timeCell(row.ts) }),
                             jsx('td', { style: { width: 110 }, children: jsx('span', { style: { color: '#3FA568', fontFamily: 'var(--bbx-mono)' }, children: cap(row.framework || 'agent') }) }),
@@ -1439,7 +1764,8 @@ function ThreatsDetected() {
             })
           }
         })
-      })
+      }),
+      shown ? jsx(FindingModal, { row: shown, onClose: () => setShown(null) }) : null
     ]
   })
 }
@@ -1458,6 +1784,7 @@ function activityDetails(entry) {
 }
 
 function AgentActivity() {
+  const [shown, setShown] = useState(null)
   const [filter, setFilter] = useState('all')
   const [page, setPage] = useState(0)
   const query = useDash('audit-all', 'api/audit?limit=500', POLL_MS)
@@ -1489,6 +1816,9 @@ function AgentActivity() {
                     jsx('tbody', {
                       children: rows.slice(current * PAGE_SIZE, (current + 1) * PAGE_SIZE).map((entry, index) =>
                         jsxs('tr', {
+                          className: 'bbx-row-open',
+                          title: 'Open this activity',
+                          onClick: () => setShown(entry),
                           children: [
                             jsx('td', { style: { width: 130 }, children: timeCell(entry.ts) }),
                             jsx('td', { style: { width: 110 }, children: cap(entry.framework || 'agent') }),
@@ -1505,40 +1835,8 @@ function AgentActivity() {
             })
           }
         })
-      })
-    ]
-  })
-}
-
-function ThreatDetail({ threat, onClose }) {
-  const query = useDash('threat', `api/threat?identifier=${encodeURIComponent(threat.identifier)}&tier=${encodeURIComponent(threat.tier || 'public')}`, SLOW_POLL_MS)
-  return jsxs('section', {
-    className: 'bbx-section',
-    children: [
-      jsx(Heading, { title: threat.name || threat.identifier, actions: jsx('button', { type: 'button', className: 'bbx-btn', onClick: onClose, children: 'Back to the graph' }) }),
-      jsx('div', {
-        className: 'bbx-panel',
-        style: { padding: '22px 24px' },
-        children: threat.local
-          ? jsxs('div', { style: { display: 'flex', flexDirection: 'column', gap: 10 }, children: [jsxs('div', { style: { display: 'flex', gap: 10 }, children: [jsx(Pill, { tone: threat.severity, children: cap(threat.severity) }), jsx(TypeCell, { type: threat.category })] }), jsx('div', { className: 'bbx-small bbx-mono', children: threat.identifier }), jsx('div', { children: `Seen ${threat.count} time(s) on this machine — each one is in Threats detected below.` })] })
-          : jsx(Loading, {
-              query,
-              children: data => {
-                const t = asObject(data)
-                if (!t.found) return jsx('div', { className: 'bbx-empty', children: 'This threat is not in the graph on this node.' })
-                return jsxs('div', {
-                  style: { display: 'flex', flexDirection: 'column', gap: 14 },
-                  children: [
-                    jsxs('div', { style: { display: 'flex', gap: 10, alignItems: 'center' }, children: [jsx(Pill, { tone: t.severity, children: cap(t.severity) }), jsx(TypeCell, { type: t.category })] }),
-                    t.description ? jsx('p', { style: { margin: 0, maxWidth: '72ch' }, children: t.description }) : null,
-                    jsx('div', { className: 'bbx-small bbx-mono', children: t.identifier }),
-                    asList(t.sources).length ? jsxs('div', { children: [jsx('div', { className: 'bbx-label', children: 'Sources' }), jsx('div', { children: asList(t.sources).join(' · ') })] }) : null,
-                    asList(t.references).length ? jsxs('div', { children: [jsx('div', { className: 'bbx-label', children: 'References' }), ...asList(t.references).map((ref, index) => jsx('div', { className: 'bbx-small bbx-mono', children: ref }, index))] }) : null
-                  ]
-                })
-              }
-            })
-      })
+      }),
+      shown ? jsx(ActivityModal, { entry: shown, onClose: () => setShown(null) }) : null
     ]
   })
 }
@@ -1594,7 +1892,6 @@ function ThreatGraphTab({ readiness }) {
     community: 'Threats reported by other Blackbox nodes. They only ever flag.',
     local: 'Threats Blackbox found on this machine.'
   }
-  if (open) return jsx(ThreatDetail, { threat: open, onClose: () => setOpen(null) })
   return jsxs('div', {
     className: 'bbx-wrap',
     style: { padding: 0 },
@@ -1635,7 +1932,8 @@ function ThreatGraphTab({ readiness }) {
         ]
       }),
       jsx(ThreatsDetected, {}),
-      jsx(AgentActivity, {})
+      jsx(AgentActivity, {}),
+      open ? jsx(ThreatModal, { threat: open, onClose: () => setOpen(null) }) : null
     ]
   })
 }
@@ -1745,7 +2043,7 @@ function TraderShieldSettings({ section }) {
   return jsxs('section', {
     className: 'bbx-section',
     children: [
-      jsx(Heading, { title: 'Trader Shield', sub: 'Keep your AI agent away from your crypto wallets and keys.' }),
+      jsx(Heading, { title: 'Settings', sub: 'Which wallets and addresses Trader Shield guards.' }),
       jsxs('div', {
         className: 'bbx-panel',
         children: [
@@ -1855,14 +2153,12 @@ function SettingsTab() {
       query,
       children: data => {
         const settings = asObject(data)
-        const trader = asObject(asObject(settings.shields).trader)
         return jsxs('div', {
           style: { display: 'flex', flexDirection: 'column', gap: 40 },
           children: [
             jsxs('section', { className: 'bbx-section', children: [jsx(Heading, { title: 'Mode', sub: 'Audit records what agents do; Block also stops threats.' }), jsx(ModeCard, { mode: settings.mode === 'block' ? 'block' : 'audit', blockSeverity: settings.block_severity })] }),
             // keyed by what was saved, so a change made elsewhere (the switch, the dashboard) reloads the form
             jsx(ProtectionSettings, { initial: settings }, JSON.stringify([settings.block_severity, settings.report_min_severity, settings.categories, settings.protected_paths])),
-            Object.keys(trader).length ? jsx(TraderShieldSettings, { section: trader }, JSON.stringify(trader.mode)) : null,
             jsx(CommunitySettings, { sharing: !!settings.report })
           ]
         })
@@ -2090,7 +2386,8 @@ function FirstSyncBanner({ r, setTab, ctx }) {
   const percent = typeof sync.percent === 'number' ? sync.percent : null
   const countText = typeof sync.total === 'number' && sync.total > 0 ? `${num(sync.downloaded)} of ${num(sync.total)} graph assets` : ''
   // the meter's own sentence may already carry the counts ("Downloading verified assets: 70 of 974.")
-  const counts = countText && !String(sync.phaseText || '').includes(` of ${sync.total}`) ? countText : ''
+  const phaseHasCounts = [` of ${sync.total}`, ` of ${num(sync.total)}`].some(text => String(sync.phaseText || '').includes(text))
+  const counts = countText && !phaseHasCounts ? countText : ''
   const rules = typeof r.rules === 'number' ? r.rules : 0
   const stalled = sync.phase === 'stalled'
   const kicker = stalled ? 'Sync stopped making progress' : rules > 0 ? 'Still syncing' : 'First sync in progress'
@@ -2160,7 +2457,7 @@ function BlackboxPage({ ctx }) {
                 className: 'bbx-tabs',
                 style: { marginLeft: 12 },
                 role: 'tablist',
-                children: [['overview', 'Overview'], ['graph', 'Threat graph'], ['settings', 'Settings']].map(([id, label]) =>
+                children: [['overview', 'Overview'], ['graph', 'Threat graph'], ['shields', 'Shields'], ['settings', 'Settings']].map(([id, label]) =>
                   jsx('button', { type: 'button', role: 'tab', className: 'bbx-tab', 'aria-selected': tab === id ? 'true' : 'false', onClick: () => setTab(id), children: label }, id)
                 )
               }),
@@ -2172,6 +2469,7 @@ function BlackboxPage({ ctx }) {
           setupScreen ? jsx(GettingReady, { r }) : null,
           !setupScreen && tab === 'overview' ? (s ? jsx(Overview, { status: s, setTab, readiness: r, ctx }) : jsx('div', { className: 'bbx-empty', children: 'Loading…' })) : null,
           !setupScreen && tab === 'graph' ? jsx(ThreatGraphTab, { readiness: r }) : null,
+          !setupScreen && tab === 'shields' ? jsx(ShieldsTab, {}) : null,
           !setupScreen && tab === 'settings' ? jsx(SettingsTab, {}) : null
         ]
       })
