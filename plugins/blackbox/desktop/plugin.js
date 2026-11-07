@@ -1212,7 +1212,9 @@ const shieldOn = card => !!asObject(card.mode).enabled
 function ShieldStatus({ card }) {
   const events = useDash(`shield-events-${card.shield_id}`, `api/shields/${card.shield_id}/events`, POLL_MS)
   const engaged = shieldOn(card)
-  const markTone = state => (state === 'ok' || state === 'on' || state === 'secured' ? 'ok' : state === 'warn' || state === 'watched' ? 'warn' : state === 'bad' || state === 'attention' ? 'bad' : 'none')
+  // The shield's row states (shields/trader/status.py): ok ✓ secured, watch ~ watched (flagged only),
+  // none – not protected, warn ! needs attention — drawn as the dashboard draws them (static/shields.js).
+  const markTone = state => ({ ok: 'ok', watch: 'warn', warn: 'bad', none: 'none' })[state] || 'none'
   const markGlyph = tone => ({ ok: '✓', warn: '~', none: '–', bad: '!' })[tone]
   const eventRows = asList(events.data)
   return jsxs('div', {
