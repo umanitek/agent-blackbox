@@ -956,6 +956,14 @@ const PAGE_CSS = `
   background: transparent; color: var(--bbx-text); cursor: pointer; font: inherit; }
 .bbx-catrow:last-child { border-bottom: 0; }
 .bbx-catrow:hover { background: var(--bbx-hover); }
+.bbx-health { display: flex; flex-direction: column; gap: 8px; }
+.bbx-health-item { display: flex; gap: 12px; align-items: flex-start; padding: 12px 16px; border-radius: 6px; border: 1px solid var(--bbx-line); background: var(--bbx-panel); }
+.bbx-health-item.red { color: #E5484D; border-color: color-mix(in srgb, #E5484D 45%, transparent); background: color-mix(in srgb, #E5484D 7%, transparent); }
+.bbx-health-item.action { border-color: color-mix(in srgb, #E5A00D 45%, transparent); background: color-mix(in srgb, #E5A00D 7%, transparent); }
+.bbx-health-item.info { color: var(--bbx-muted); }
+.bbx-bell { position: relative; }
+.bbx-bell-count { position: absolute; top: -6px; right: -6px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: ${SIGNAL}; color: #fff;
+  font-size: 10.5px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
 `
 
 const SEVERITY_ORDER = { critical: 4, high: 3, medium: 2, low: 1, info: 0 }
@@ -2374,11 +2382,12 @@ function reasonOf(row) {
 }
 
 function ThreatsDetected() {
-  const [shown, setShown] = useState(null)
+  const [shown, setShown] = useState(null)   // the finding whose pop-up is open
   const [order, setOrder] = useState('newest')
   const [page, setPage] = useState(0)
   const query = useDash('findings-all', 'api/findings?limit=500', POLL_MS)
   return jsxs('section', {
+    id: 'bbx-findings',
     className: 'bbx-section',
     children: [
       jsx(Heading, {
@@ -2432,17 +2441,81 @@ function ThreatsDetected() {
   })
 }
 
-function activityDetails(entry) {
+// One Agent activity row's details, as the dashboard writes them (index.html detailCellHTML,
+// toolActionText, parseToolResult, fmtDuration): a main line and a line of facts under it.
+// cmdById maps a tool call id to its command, so a tool's result row names what it answered.
+const durationText = ms => {
+  const value = Number(ms) || 0
+  if (value < 1000) return `${Math.round(value)} ms`
+  if (value < 60000) return `${(value / 1000).toFixed(1)} s`
+  return `${(value / 60000).toFixed(1)} min`
+}
+const toolAction = args => {
+  const a = asObject(args)
+  return String(a.command || a.cmd || a.script || a.path || a.file || a.filename || a.url || a.query || '')
+}
+// A tool result's outcome: blocked, error, or its exit code (null when it says nothing).
+function toolResult(result) {
+  let value = result
+  if (typeof result === 'string') {
+    try {
+      value = JSON.parse(result)
+    } catch (error) {
+      return null
+    }
+  }
+  const r = asObject(value)
+  if (typeof r.error === 'string' && r.error) return /^BLOCKED/i.test(r.error) ? { text: 'blocked', tone: 'blocked' } : { text: 'error', tone: 'high' }
+  if (r.exit_code !== undefined && r.exit_code !== null) return Number(r.exit_code) === 0 ? { text: 'exit 0', tone: 'ok' } : { text: `exit ${r.exit_code}`, tone: 'medium' }
+  return null
+}
+const shortSession = id => String(id || '').slice(-6)
+
+function activityLines(entry, cmdById) {
   const detail = asObject(entry.detail)
-  const args = asObject(detail.args)
-  let main = ''
-  if (entry.event === 'file_access') main = `${entry.mode || 'read'} ${entry.path || ''}`
-  else if (entry.event === 'dependency_install') main = `${entry.ecosystem ? entry.ecosystem + ':' : ''}${entry.name || ''}${entry.version ? '@' + entry.version : ''}`
-  else if (entry.event === 'flagged' || entry.event === 'blocked') main = asObject(entry.finding).title || asObject(entry.finding).identifier || 'Threat'
-  else if (entry.event && entry.event.startsWith('session')) main = `session ${String(detail.session_id || '').replace(/^local-/, '').slice(0, 6)}`
-  else main = String(args.command || args.path || args.url || args.query || detail.tool_name || entry.tool || '').slice(0, 180)
-  const via = entry.tool || detail.tool_name
-  return jsxs('div', { children: [jsx('div', { className: 'bbx-mono', style: { fontSize: 13, wordBreak: 'break-word' }, children: main || EVENT_LABELS[entry.event] || entry.event }), via ? jsx('div', { className: 'bbx-small bbx-mono', children: `via ${via}` }) : null] })
+  const event = entry.event
+  if (event === 'flagged' || event === 'blocked') {
+    const finding = asObject(entry.finding)
+    return [finding.title || finding.identifier || 'Threat', [finding.identifier, finding.severity, finding.tool_name || detail.tool_name ? `via ${finding.tool_name || detail.tool_name}` : ''].filter(Boolean).join(' · ')]
+  }
+  if (event === 'pre_tool_call' || event === 'post_tool_call') {
+    const action = toolAction(detail.args) || (detail.tool_call_id ? cmdById.get(detail.tool_call_id) || '' : '')
+    const result = event === 'post_tool_call' ? toolResult(detail.result) : null
+    return [
+      action ? `${detail.tool_name || 'tool'}  ${action}` : detail.tool_name || 'tool',
+      [result ? result.text : '', detail.duration_ms != null ? durationText(detail.duration_ms) : '', entry.findingCount ? `${entry.findingCount} finding${entry.findingCount === 1 ? '' : 's'}` : '',
+        entry.sandbox ? 'sandbox test' : detail.session_id ? `session ${shortSession(detail.session_id)}` : ''].filter(Boolean).join(' · ')
+    ]
+  }
+  if (event === 'pre_api_request') return [detail.model || detail.provider || 'API request', [detail.provider && detail.model ? detail.provider : '', detail.session_id ? `session ${shortSession(detail.session_id)}` : ''].filter(Boolean).join(' · ')]
+  if (event === 'session_start') return [`session ${shortSession(detail.session_id) || 'started'}`, [detail.session_id, detail.resumed_from ? `resumed from ${shortSession(detail.resumed_from)}` : ''].filter(Boolean).join(' · ')]
+  if (event === 'session_end')
+    return [`session ${shortSession(detail.session_id) || 'ended'}`, [detail.interrupted ? 'interrupted' : detail.completed ? 'completed' : detail.reason || '', detail.message_count != null ? `${detail.message_count} messages` : '', detail.duration_ms != null ? durationText(detail.duration_ms) : ''].filter(Boolean).join(' · ')]
+  if (event === 'message_received') return ['Inbound agent message', [detail.channel, detail.session_id ? `session ${shortSession(detail.session_id)}` : '', detail.content_length != null ? `${detail.content_length} characters` : ''].filter(Boolean).join(' · ')]
+  if (event === 'file_access') return [`${entry.mode || detail.mode || ''} ${entry.path || detail.path || ''}`.trim(), entry.tool || detail.tool ? `via ${entry.tool || detail.tool}` : '']
+  if (event === 'dependency_install') return [`${entry.ecosystem || detail.ecosystem || ''}:${entry.name || detail.name || ''}@${entry.version || detail.version || ''}`, entry.tool || detail.tool ? `via ${entry.tool || detail.tool}` : '']
+  return [detail.identifier || detail.name || detail.path || EVENT_LABELS[event] || event || 'event', '']
+}
+
+function activityDetails(entry, cmdById) {
+  const [main, facts] = activityLines(entry, cmdById || new Map())
+  return jsxs('div', {
+    children: [
+      jsx('div', { className: 'bbx-mono', style: { fontSize: 13, wordBreak: 'break-word' }, children: main }),
+      facts ? jsx('div', { className: 'bbx-small bbx-mono', children: facts }) : null
+    ]
+  })
+}
+
+// tool_call_id → command, from every tool call that carried one (a result row has no arguments).
+function commandsById(entries) {
+  const map = new Map()
+  for (const entry of entries) {
+    const detail = asObject(entry.detail)
+    const action = toolAction(detail.args)
+    if (detail.tool_call_id && action && !map.has(detail.tool_call_id)) map.set(detail.tool_call_id, action)
+  }
+  return map
 }
 
 function AgentActivity() {
@@ -2465,6 +2538,7 @@ function AgentActivity() {
           empty: 'No activity recorded yet.',
           children: data => {
             const all = asList(asObject(data).entries)
+            const cmdById = commandsById(all)
             const rows = filter === 'threats' ? all.filter(entry => entry.event === 'flagged' || entry.event === 'blocked' || (entry.severity && entry.severity !== 'info')) : all
             if (!rows.length) return null
             const pages = Math.ceil(rows.length / PAGE_SIZE)
@@ -2485,7 +2559,7 @@ function AgentActivity() {
                             jsx('td', { style: { width: 130 }, children: timeCell(entry.ts) }),
                             jsx('td', { style: { width: 110 }, children: cap(entry.framework || 'agent') }),
                             jsx('td', { style: { width: 170 }, children: jsx(Pill, { tone: entry.event === 'blocked' ? 'blocked' : entry.event === 'flagged' ? entry.severity || 'high' : 'neutral', children: EVENT_LABELS[entry.event] || entry.event }) }),
-                            jsx('td', { children: activityDetails(entry) })
+                            jsx('td', { children: activityDetails(entry, cmdById) })
                           ]
                         }, `${entry.ts}-${index}`)
                       )
@@ -3105,6 +3179,59 @@ function FirstSyncBanner({ r, setTab, ctx }) {
   })
 }
 
+// ---------------------------------------------------------------- health, node and the threat bell
+
+// The dashboard's health strip (index.html loadHealth / renderHealth, GET /api/health): every alarm
+// Blackbox raises for this machine, with what to do. INFO items are quiet; red items are marked red.
+function HealthStrip() {
+  const query = useDash('health', 'api/health', POLL_MS)
+  const items = asList(asObject(query.data).items).map(asObject)
+  if (!items.length) return null
+  return jsx('div', {
+    className: 'bbx-health',
+    children: items.map((item, index) => {
+      const tone = item.red ? 'red' : item.class === 'info' || item.klass === 'info' ? 'info' : 'action'
+      return jsxs('div', {
+        className: `bbx-health-item ${tone}`,
+        children: [
+          jsx(Codicon, { name: tone === 'info' ? 'info' : 'warning' }),
+          jsxs('div', { children: [jsx('div', { style: { fontWeight: 600 }, children: item.message }), item.what_to_do ? jsx('div', { className: 'bbx-small', children: item.what_to_do }) : null] })
+        ]
+      }, index)
+    })
+  })
+}
+
+// "Node offline" next to the mode, when the dashboard reports the DKG node unreachable.
+function NodePill() {
+  const status = useDash('graph-status', 'api/graph-status')
+  if (asObject(status.data).node_reachable !== false) return null
+  return jsx('span', { className: 'bbx-modepill', style: { color: '#E5484D', borderColor: 'color-mix(in srgb, #E5484D 50%, transparent)' }, title: 'The local DKG node does not answer: verified checks run from the last rules Blackbox compiled.', children: 'Node offline' })
+}
+
+const BELL_SEEN_KEY = 'threatsSeenUntil' // ctx.storage: the newest finding the person has looked at
+
+// The dashboard's threat bell: how many findings arrived since you last looked; a click marks them
+// seen and opens Threats detected.
+function ThreatBell({ ctx, onOpen }) {
+  const findings = useDash('findings-all', 'api/findings?limit=500', POLL_MS)
+  const [seenUntil, setSeenUntil] = useState(() => Number(ctx.storage.get(BELL_SEEN_KEY, 0)) || 0)
+  const rows = asList(asObject(findings.data).findings).map(asObject)
+  const newest = rows.reduce((max, row) => Math.max(max, Number(row.ts || 0)), 0)
+  const unread = rows.filter(row => Number(row.ts || 0) > seenUntil).length
+  return jsxs('button', {
+    type: 'button',
+    className: 'bbx-iconbtn bbx-bell',
+    title: unread ? `${unread} new threat${unread === 1 ? '' : 's'} since you last looked` : 'No new threats',
+    onClick: () => {
+      ctx.storage.set(BELL_SEEN_KEY, newest)
+      setSeenUntil(newest)
+      onOpen()
+    },
+    children: [jsx(Codicon, { name: 'bell' }), unread ? jsx('span', { className: 'bbx-bell-count', children: unread > 99 ? '99+' : String(unread) }) : null]
+  })
+}
+
 // ---------------------------------------------------------------- the page
 
 function BlackboxPage({ ctx }) {
@@ -3143,11 +3270,13 @@ function BlackboxPage({ ctx }) {
                 )
               }),
               jsx('div', { className: 'bbx-spacer' }),
+              setupScreen ? null : jsx(NodePill, {}),
+              setupScreen ? null : jsx(ThreatBell, { ctx, onOpen: () => { setTab('graph'); setTimeout(() => { const el = document.getElementById('bbx-findings'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }) }, 250) } }),
               s ? jsx('button', { type: 'button', className: `bbx-modepill${s.mode === 'block' ? ' block' : ''}`, title: 'Change the mode in Settings', onClick: () => setTab('settings'), children: s.mode === 'block' ? 'Block mode' : 'Audit mode' }) : null,
               s && s.dashboardUrl && !setupScreen ? jsx('button', { type: 'button', className: 'bbx-iconbtn', title: 'Open the dashboard in your browser', onClick: () => openDashboard(ctx, s.dashboardUrl), children: jsx(Codicon, { name: 'link-external' }) }) : null
             ]
           }),
-          setupScreen ? jsx(GettingReady, { r }) : null,
+          setupScreen ? jsx(GettingReady, { r }) : jsx(HealthStrip, {}),
           !setupScreen && tab === 'overview' ? (s ? jsx(Overview, { status: s, setTab, readiness: r, ctx }) : jsx('div', { className: 'bbx-empty', children: 'Loading…' })) : null,
           !setupScreen && tab === 'graph' ? jsx(ThreatGraphTab, { readiness: r }) : null,
           !setupScreen && tab === 'shields' ? jsx(ShieldsTab, {}) : null,
