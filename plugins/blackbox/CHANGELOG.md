@@ -57,6 +57,9 @@ that the two version fields agree.
 - The Desktop page opens with your connected agents, then the stats, then Trader Shield as the
   dashboard's "Engage Trader Shield" card (one line once it is on). A new **Shields** tab turns each
   shield on or off (turning off asks first) and holds what it protects, its events and its settings.
+- A shield's recent events are clickable, as on the dashboard: each opens the shield's events window
+  with the full local record (what happened, what to do, the details, what happened in that session),
+  private to this machine and refreshed live; View all lists every event.
 - Clicking a threat (on the map, in search or in Threats detected) or an Agent activity row opens a
   pop-up with the same details as the dashboard's, over the page, instead of leaving it.
 

@@ -896,6 +896,37 @@ const PAGE_CSS = `
 .bbx-engage .bbx-cta { margin: 0; }
 .bbx-engage-title { font-size: 24px; font-weight: 800; letter-spacing: -0.01em; margin: 4px 0 2px; }
 .bbx-shieldline { display: flex; gap: 14px; align-items: center; padding: 14px 18px; }
+.bbx-modal.bbx-wev { width: min(1100px, 100%); height: 86vh; max-height: 86vh; }
+.bbx-wev-private { display: flex; gap: 10px; align-items: flex-start; margin: 0 24px; padding: 10px 14px; border-radius: 6px; font-size: 12.5px;
+  border: 1px solid var(--bbx-line); background: var(--bbx-panel); color: var(--bbx-muted); }
+.bbx-wev-body { display: grid; grid-template-columns: minmax(220px, 320px) 1fr; flex: 1; min-height: 0; margin-top: 12px; border-top: 1px solid var(--bbx-line); }
+.bbx-wev-list { overflow: auto; border-right: 1px solid var(--bbx-line); }
+.bbx-wev-item { display: flex; flex-direction: column; gap: 4px; width: 100%; text-align: left; padding: 12px 16px; border: 0; border-bottom: 1px solid var(--bbx-line);
+  background: transparent; color: var(--bbx-text); cursor: pointer; font: inherit; }
+.bbx-wev-item:hover { background: var(--bbx-hover); }
+.bbx-wev-item.current { background: color-mix(in srgb, ${SIGNAL} 8%, transparent); box-shadow: inset 3px 0 0 ${SIGNAL}; }
+.bbx-wev-cmd { font-family: var(--bbx-mono); font-size: 11.5px; color: var(--bbx-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; }
+.bbx-wev-new { font-family: var(--bbx-mono); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: ${SIGNAL}; }
+.bbx-wev-chip { font-family: var(--bbx-mono); font-size: 10.5px; letter-spacing: 0.1em; text-transform: uppercase; padding: 2px 8px; border-radius: 3px; border: 1px solid;
+  align-self: flex-start; white-space: nowrap; flex: none; }
+.bbx-wev-chip.blocked { color: ${SIGNAL}; border-color: color-mix(in srgb, ${SIGNAL} 50%, transparent); background: color-mix(in srgb, ${SIGNAL} 9%, transparent); }
+.bbx-wev-chip.flagged { color: #E5A00D; border-color: color-mix(in srgb, #E5A00D 50%, transparent); background: color-mix(in srgb, #E5A00D 9%, transparent); }
+.bbx-wev-detail { overflow: auto; padding: 20px 26px 28px; display: flex; flex-direction: column; gap: 14px; }
+.bbx-wev-title { font-size: 20px; font-weight: 750; margin: 0; }
+.bbx-wev-story { margin: 0; line-height: 1.65; max-width: 72ch; }
+.bbx-wev-todo { margin: 6px 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }
+.bbx-wev-steps { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.bbx-wev-step { display: grid; grid-template-columns: 70px 1fr; gap: 10px; font-size: 13px; padding: 6px 8px; border-radius: 4px; }
+.bbx-wev-step.this { background: color-mix(in srgb, ${SIGNAL} 9%, transparent); }
+.bbx-wev-step code { font-family: var(--bbx-mono); font-size: 12px; word-break: break-all; }
+.bbx-wev-off { font-family: var(--bbx-mono); font-size: 11.5px; color: var(--bbx-muted); }
+.bbx-wev-kind { font-family: var(--bbx-mono); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--bbx-muted); margin-right: 8px; }
+.bbx-wev-here { margin-left: 8px; color: ${SIGNAL}; font-weight: 600; }
+.bbx-evlist { display: flex; flex-direction: column; gap: 4px; max-height: 360px; overflow: auto; }
+.bbx-ev { display: flex; gap: 10px; align-items: flex-start; text-align: left; padding: 8px 10px; border-radius: 6px; border: 1px solid transparent;
+  background: transparent; color: var(--bbx-text); cursor: pointer; font: inherit; }
+.bbx-ev:hover { background: var(--bbx-hover); border-color: var(--bbx-line); }
+@media (max-width: 760px) { .bbx-wev-body { grid-template-columns: 1fr; } .bbx-wev-list { max-height: 30vh; border-right: 0; border-bottom: 1px solid var(--bbx-line); } }
 `
 
 const SEVERITY_ORDER = { critical: 4, high: 3, medium: 2, low: 1, info: 0 }
@@ -1196,6 +1227,195 @@ function ConnectedAgents() {
   })
 }
 
+// ---------------------------------------------------------------- a shield's events window
+
+// The dashboard's events window (static/shields.js openWindow / renderList / renderDetail): every time
+// the agent reached for something the shield protects, and the full local record of the one picked —
+// its story, what to do, the details and what happened in that session. Read from this machine's own
+// logs (GET /api/shields/<id>/events); never shared.
+const EVENT_OUTCOMES = { blocked: 'blocked', flagged: 'flagged' }
+const STEP_KINDS = { api: 'model', tool: 'tool', file: 'file', dependency: 'install', threat: 'threat', session: 'session' }
+const outcomeOf = event => EVENT_OUTCOMES[asObject(event).outcome] || 'flagged'
+const eventWhen = seconds =>
+  typeof seconds === 'number' && seconds > 0
+    ? new Date(seconds * 1000).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', second: '2-digit' })
+    : ''
+const stepOffset = (ts, start) => {
+  const s = Math.max(0, Number(ts || 0) - Number(start || 0))
+  return s < 60 ? `+${s.toFixed(1)}s` : `+${Math.floor(s / 60)}m ${Math.round(s % 60)}s`
+}
+const ENTITIES = { '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&#39;': "'", '&#x27;': "'" }
+const decodeEntities = text => String(text).replace(/&(amp|lt|gt|quot|#39|#x27);/g, match => ENTITIES[match])
+
+// The event's story keeps only <b> and <q> from the server (shields.js safeStory); drawn as React
+// elements, never as HTML.
+function Story({ text }) {
+  const parts = String(text || '').split(/(<\/?[bq]>)/)
+  const out = []
+  let bold = false
+  let quote = false
+  parts.forEach((part, index) => {
+    if (part === '<b>') bold = true
+    else if (part === '</b>') bold = false
+    else if (part === '<q>') quote = true
+    else if (part === '</q>') quote = false
+    else if (part) {
+      const shown = decodeEntities(part)
+      out.push(bold ? jsx('b', { children: quote ? `“${shown}”` : shown }, index) : quote ? `“${shown}”` : shown)
+    }
+  })
+  return jsx('p', { className: 'bbx-wev-story', children: out })
+}
+
+function EventTimeline({ event }) {
+  const session = asObject(event.session)
+  const steps = asList(event.timeline).map(asObject).slice()
+  const start = session.start || (steps[0] && steps[0].ts) || 0
+  if (session.start) steps.unshift({ type: 'session', ts: session.start, label: 'Session started' })
+  if (session.end && session.status && session.status !== 'active') steps.push({ type: 'session', ts: session.end, label: `Session ended (${session.status})` })
+  return jsx('ol', {
+    className: 'bbx-wev-steps',
+    children: steps.map((step, index) => {
+      const flags = asList(step.threats).filter(threat => threat !== step.result)
+      const titles = step.type === 'threat' ? asList(step.threat_titles) : []
+      return jsxs('li', {
+        className: `bbx-wev-step${step.this ? ' this' : ''}`,
+        children: [
+          jsx('span', { className: 'bbx-wev-off', children: stepOffset(step.ts, start) }),
+          jsxs('span', {
+            children: [
+              jsx('span', { className: 'bbx-wev-kind', children: STEP_KINDS[step.type] || step.type }),
+              step.type === 'tool' ? jsxs('span', { children: [step.tool ? `${step.tool}: ` : '', jsx('code', { children: step.label })] }) : step.label,
+              titles.length ? jsxs('span', { children: [': ', jsx('b', { children: titles.join('; ') })] }) : null,
+              step.result ? ` → ${step.result}` : '',
+              flags.length ? ` · ${flags.join(', ')}` : '',
+              step.this ? jsx('span', { className: 'bbx-wev-here', children: '← this event' }) : null
+            ]
+          })
+        ]
+      }, index)
+    })
+  })
+}
+
+function EventDetail({ event }) {
+  if (!event) return jsx('div', { className: 'bbx-empty', children: 'No events yet.' })
+  const outcome = outcomeOf(event)
+  return jsxs('article', {
+    className: 'bbx-wev-detail',
+    children: [
+      jsx('span', { className: `bbx-wev-chip ${outcome}`, children: outcome }),
+      jsx('h3', { className: 'bbx-wev-title', children: event.title || event.identifier }),
+      jsx('div', { className: 'bbx-small', children: `${eventWhen(event.ts)}${event.tool ? ` · via ${event.tool}` : ''}` }),
+      jsx(Story, { text: event.story }),
+      asList(event.what_to_do).length
+        ? jsxs('section', { children: [jsx('div', { className: 'bbx-label', children: 'What to do' }), jsx('ul', { className: 'bbx-wev-todo', children: asList(event.what_to_do).map((item, index) => jsx('li', { children: item }, index)) })] })
+        : null,
+      asList(event.facts).length
+        ? jsxs('section', { children: [jsx('div', { className: 'bbx-label', children: 'The details' }), jsx(DetailGrid, { rows: asList(event.facts).map(asObject).map(fact => [fact.label, fact.value, !!fact.mono]) })] })
+        : null,
+      jsxs('section', { children: [jsx('div', { className: 'bbx-label', children: 'What happened in that session' }), jsx(EventTimeline, { event })] })
+    ]
+  })
+}
+
+// The event a row was clicked for: same rule, nearest time (shields.js pick).
+function pickEvent(events, identifier, ts) {
+  if (!identifier) return 0
+  let best = 0
+  let gap = Infinity
+  events.forEach((event, index) => {
+    const distance = Math.abs(Number(event.ts || 0) - Number(ts || 0))
+    if (event.identifier === identifier && distance < gap) {
+      best = index
+      gap = distance
+    }
+  })
+  return best
+}
+
+function ShieldEventsWindow({ card, start, onClose }) {
+  const query = useDash(`shield-events-${card.shield_id}`, `api/shields/${card.shield_id}/events`, POLL_MS)
+  const events = asList(query.data).map(asObject)
+  const [selected, setSelected] = useState(null)
+  const firstNewest = useRef(null)
+  if (firstNewest.current === null && events.length) firstNewest.current = Number(events[0].ts || 0)
+  const index = selected === null ? pickEvent(events, start.identifier, start.ts) : Math.min(selected, Math.max(0, events.length - 1))
+  useEffect(() => {
+    const onKey = keyEvent => {
+      if (keyEvent.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+  return jsx('div', {
+    className: 'bbx-modal-backdrop',
+    onMouseDown: mouse => {
+      if (mouse.target === mouse.currentTarget) onClose()
+    },
+    children: jsxs('div', {
+      className: 'bbx-modal bbx-wev',
+      role: 'dialog',
+      'aria-modal': 'true',
+      children: [
+        jsxs('div', {
+          className: 'bbx-modal-head',
+          children: [
+            jsxs('div', {
+              style: { flex: 1, minWidth: 0 },
+              children: [
+                jsx('div', { className: 'bbx-kicker', children: `${card.name}${card.beta ? ' · Beta' : ''}` }),
+                jsx('h2', { className: 'bbx-modal-title', children: 'Events' }),
+                jsx('div', { className: 'bbx-small', children: 'Every time your agent reached for something this shield protects — what it was doing, and what Blackbox did.' })
+              ]
+            }),
+            jsx('button', { type: 'button', className: 'bbx-iconbtn', title: 'Close (Esc)', onClick: onClose, children: jsx(Codicon, { name: 'close' }) })
+          ]
+        }),
+        jsxs('div', {
+          className: 'bbx-wev-private',
+          children: [
+            jsx(Codicon, { name: 'lock' }),
+            jsxs('span', { children: [jsx('b', { children: 'Private to this machine. ' }), "This report is read from Blackbox's own logs on this computer. These events are never shared with the community graph — not even a summary — and secrets in commands or messages were removed before they were written down."] })
+          ]
+        }),
+        jsx(Loading, {
+          query,
+          empty: 'No events yet.',
+          children: () =>
+            events.length
+              ? jsxs('div', {
+                  className: 'bbx-wev-body',
+                  children: [
+                    jsx('nav', {
+                      className: 'bbx-wev-list',
+                      'aria-label': 'Events',
+                      children: events.map((event, position) => {
+                        const fresh = firstNewest.current !== null && Number(event.ts || 0) > firstNewest.current
+                        const session = asObject(event.session)
+                        return jsxs('button', {
+                          type: 'button',
+                          className: `bbx-wev-item${position === index ? ' current' : ''}`,
+                          onClick: () => setSelected(position),
+                          children: [
+                            jsxs('div', { style: { display: 'flex', gap: 8, alignItems: 'center' }, children: [jsx('span', { className: `bbx-wev-chip ${outcomeOf(event)}`, children: outcomeOf(event) }), fresh ? jsx('span', { className: 'bbx-wev-new', children: 'New' }) : null] }),
+                            jsx('div', { style: { fontWeight: 600 }, children: event.title || event.identifier }),
+                            jsx('div', { className: 'bbx-small', children: [when(event.ts), session.model].filter(Boolean).join(' · ') }),
+                            event.command ? jsx('code', { className: 'bbx-wev-cmd', children: event.command }) : null
+                          ]
+                        }, `${event.identifier}-${event.ts}-${position}`)
+                      })
+                    }),
+                    jsx(EventDetail, { event: events[index] })
+                  ]
+                })
+              : null
+        })
+      ]
+    })
+  })
+}
+
 // Turn a shield on or off: the dashboard's own switch (POST /api/settings, shields.<id>.enabled), so an
 // earlier choice of wallets and addresses is kept.
 async function setShield(card, enabled) {
@@ -1209,8 +1429,11 @@ const shieldCards = data => asList(data).filter(item => item && item.shield_id)
 const shieldOn = card => !!asObject(card.mode).enabled
 
 // What a shield protects on this machine (its status columns) and its recent events.
+const RECENT_EVENTS = 20
+
 function ShieldStatus({ card }) {
   const events = useDash(`shield-events-${card.shield_id}`, `api/shields/${card.shield_id}/events`, POLL_MS)
+  const [opened, setOpened] = useState(null)   // { identifier, ts } of the event the window opens on
   const engaged = shieldOn(card)
   // The shield's row states (shields/trader/status.py): ok ✓ secured, watch ~ watched (flagged only),
   // none – not protected, warn ! needs attention — drawn as the dashboard draws them (static/shields.js).
@@ -1219,6 +1442,7 @@ function ShieldStatus({ card }) {
   const eventRows = asList(events.data)
   return jsxs('div', {
     children: [
+      opened ? jsx(ShieldEventsWindow, { card, start: opened, onClose: () => setOpened(null) }) : null,
       jsxs('div', {
         className: 'bbx-panel',
         children: [
@@ -1254,12 +1478,32 @@ function ShieldStatus({ card }) {
               jsxs('div', {
                 className: 'bbx-col',
                 children: [
-                  jsx('div', { className: 'bbx-label', children: 'Recent events' }),
+                  jsxs('div', {
+                    style: { display: 'flex', alignItems: 'center', gap: 10 },
+                    children: [
+                      jsx('div', { className: 'bbx-label', title: 'The latest times your agent reached for something this shield protects, and what Blackbox did. Click one for the full story.', children: 'Recent events' }),
+                      jsx('div', { className: 'bbx-spacer' }),
+                      eventRows.length ? jsx('button', { type: 'button', className: 'bbx-linkbtn', onClick: () => setOpened({ identifier: '', ts: 0 }), children: 'View all →' }) : null
+                    ]
+                  }),
                   eventRows.length
-                    ? eventRows.slice(0, 6).map((row, index) =>
-                        jsxs('div', { className: 'bbx-check', children: [jsx('span', { className: `bbx-mark ${row.decision === 'block' || row.blocked ? 'bad' : 'warn'}`, children: '!' }), jsxs('div', { children: [jsx('div', { style: { fontWeight: 600 }, children: row.title || row.what || 'Wallet event' }), jsx('div', { className: 'bbx-small', children: when(row.ts) })] })] }, index)
-                      )
-                    : jsx('div', { className: 'bbx-small', children: 'Nothing yet — no agent has reached for anything Trader Shield protects.' })
+                    ? jsx('div', {
+                        className: 'bbx-evlist',
+                        children: eventRows.slice(0, RECENT_EVENTS).map((row, index) =>
+                          jsxs('button', {
+                            type: 'button',
+                            className: 'bbx-ev',
+                            title: 'Open the full report',
+                            onClick: () => setOpened({ identifier: row.identifier, ts: row.ts }),
+                            children: [
+                              jsx('span', { className: `bbx-wev-chip ${outcomeOf(row)}`, children: outcomeOf(row) }),
+                              jsxs('span', { style: { minWidth: 0 }, children: [jsx('div', { style: { fontWeight: 600 }, children: row.title || row.identifier }), jsx('div', { className: 'bbx-small', children: [when(row.ts), row.tool ? `via ${row.tool}` : ''].filter(Boolean).join(' · ') })] }),
+                              row.sandbox ? jsx(Pill, { tone: 'neutral', children: 'SANDBOX' }) : null
+                            ]
+                          }, `${row.identifier}-${row.ts}-${index}`)
+                        )
+                      })
+                    : jsx('div', { className: 'bbx-small', children: `Nothing yet — no agent has reached for anything ${card.name} protects.` })
                 ]
               })
             ]
