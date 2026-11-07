@@ -232,7 +232,7 @@ function buildBubbleGraph(centerLabel, threats, totals, ecosystemTotals) {
     }
     const hidden = total - Math.min(leaves.length, LEAVES_PER_TYPE)
     if (hidden > 0) {
-      const index = add({ id: `${nodes[hubIndex].id}:more`, kind: 'more', type, label: `+${hidden.toLocaleString()} more`, color, val: 4 })
+      const index = add({ id: `${nodes[hubIndex].id}:more`, kind: 'more', type, ecosystem: nodes[hubIndex].ecosystem, total, label: `+${hidden.toLocaleString()} more`, color, val: 4 })
       links.push({ from: hubIndex, to: index, length: 30, kind: 'threat' })
     }
   }
@@ -261,7 +261,7 @@ function buildBubbleGraph(centerLabel, threats, totals, ecosystemTotals) {
       ecosystems.sort((a, b) => (ecosystemTotals[b] || 0) - (ecosystemTotals[a] || 0))
       for (const ecosystem of ecosystems) {
         const ecosystemTotal = ecosystemTotals[ecosystem] || 0
-        const ecosystemIndex = add({ id: `eco:${ecosystem}`, kind: 'hub', type, label: ecosystem, total: ecosystemTotal, color: category.color, val: hubValue(ecosystemTotal) * 0.8 })
+        const ecosystemIndex = add({ id: `eco:${ecosystem}`, kind: 'hub', type, ecosystem, label: ecosystem, total: ecosystemTotal, color: category.color, val: hubValue(ecosystemTotal) * 0.8 })
         links.push({ from: hubIndex, to: ecosystemIndex, length: 64, kind: 'hub' })
         addLeaves(ecosystemIndex, type, byEcosystem.get(ecosystem) || [], ecosystemTotal)
       }
@@ -667,7 +667,7 @@ function BubbleMap({ graph, loading, onPick }) {
           event.currentTarget.style.cursor = node ? (node.kind === 'leaf' ? 'pointer' : 'grab') : 'default'
           if (live.current.hover !== node) {
             live.current.hover = node
-            setHover(node && node.kind === 'leaf' ? node : null)
+            setHover(node && node.kind !== 'center' ? node : null)
             wake()
           }
         },
@@ -676,7 +676,7 @@ function BubbleMap({ graph, loading, onPick }) {
           live.current.pointer = null
           if (!pointer) return
           if (pointer.node) pointer.node.fixed = false
-          if (!pointer.moved && pointer.node && pointer.node.kind === 'leaf') onPick(pointer.node.threat)
+          if (!pointer.moved && pointer.node && pointer.node.kind !== 'center') onPick(pointer.node)
           wake()
         },
         onMouseLeave: () => {
@@ -694,7 +694,13 @@ function BubbleMap({ graph, loading, onPick }) {
               border: '1px solid var(--ui-stroke-secondary)', background: 'var(--background, #0b0b0d)', fontSize: 12.5 },
             children: [
               jsx('div', { style: { fontWeight: 600 }, children: hover.label }),
-              jsx('div', { style: { color: 'var(--ui-text-tertiary)' }, children: `${hover.severity || 'unknown'} · ${GRAPH_CATEGORIES[hover.type] ? GRAPH_CATEGORIES[hover.type].name : 'Other'}${hover.threat.count > 1 ? ` · seen ${hover.threat.count}×` : ''}` })
+              jsx('div', {
+                style: { color: 'var(--ui-text-tertiary)' },
+                children:
+                  hover.kind === 'leaf'
+                    ? `${hover.severity || 'unknown'} · ${GRAPH_CATEGORIES[hover.type] ? GRAPH_CATEGORIES[hover.type].name : 'Other'}${asObject(hover.threat).count > 1 ? ` · seen ${hover.threat.count}×` : ''}`
+                    : `${typeof hover.total === 'number' ? hover.total.toLocaleString() : ''} threats · click to list them`
+              })
             ]
           })
         : null,
@@ -945,6 +951,11 @@ const PAGE_CSS = `
 .bbx-convo.user { border-color: color-mix(in srgb, ${SIGNAL} 55%, transparent); }
 .bbx-convo-text { margin: 0; font-family: var(--bbx-mono); font-size: 12px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; max-height: 260px; overflow: auto;
   background: var(--bbx-panel); border: 1px solid var(--bbx-line); border-radius: 6px; padding: 10px 12px; }
+.bbx-catlist { display: flex; flex-direction: column; border: 1px solid var(--bbx-line); border-radius: 6px; overflow: hidden; }
+.bbx-catrow { display: flex; gap: 12px; align-items: center; text-align: left; padding: 10px 14px; border: 0; border-bottom: 1px solid var(--bbx-line);
+  background: transparent; color: var(--bbx-text); cursor: pointer; font: inherit; }
+.bbx-catrow:last-child { border-bottom: 0; }
+.bbx-catrow:hover { background: var(--bbx-hover); }
 `
 
 const SEVERITY_ORDER = { critical: 4, high: 3, medium: 2, low: 1, info: 0 }
@@ -2140,6 +2151,114 @@ function ActivityModal({ entry, onClose }) {
   })
 }
 
+// ---------------------------------------------------------------- a threat type's pop-up
+
+// What each threat type is, in one line (index.html CAT_SUMMARY).
+const TYPE_SUMMARY = {
+  dependency: 'Known vulnerable or malicious packages and versions observed during dependency checks.',
+  injection: 'Prompt and instruction patterns that can redirect an agent, leak data, or bypass policy.',
+  escalation: 'Tool calls and command shapes that can raise privilege or escape the expected workflow.',
+  fileaccess: 'Reads, writes, and path access patterns that touch sensitive or unusual files.',
+  skill: 'Skill and plugin activity with behavior that deserves extra review.',
+  secret: 'Possible credentials, tokens, or other sensitive values exposed in agent context.',
+  ioc: 'Indicators of compromise published by verified threat sources.',
+  other: 'Signals that do not fit a narrower category yet.'
+}
+const CATEGORY_PAGE = 25
+const severityMix = items => {
+  const counts = { critical: 0, high: 0, medium: 0, low: 0, info: 0 }
+  items.forEach(item => {
+    const severity = counts[item.severity] === undefined ? 'info' : item.severity
+    counts[severity] += 1
+  })
+  return Object.keys(counts).filter(key => counts[key]).map(key => `${key} ${counts[key].toLocaleString()}`).join(' · ') || 'none'
+}
+
+function ThreatList({ items, onOpen, empty }) {
+  if (!items.length) return jsx('div', { className: 'bbx-small', children: empty })
+  return jsx('div', {
+    className: 'bbx-catlist',
+    children: items.map((item, index) =>
+      jsxs('button', {
+        type: 'button',
+        className: 'bbx-catrow',
+        onClick: () => onOpen(item),
+        children: [
+          jsx(Pill, { tone: item.severity, children: cap(item.severity || 'info') }),
+          jsxs('span', {
+            style: { minWidth: 0, flex: 1 },
+            children: [
+              jsx('div', { style: { fontWeight: 600 }, children: item.name || item.title || item.identifier }),
+              jsx('div', { className: 'bbx-small bbx-mono', style: { wordBreak: 'break-all' }, children: [item.identifier, item.count > 1 ? `seen ${item.count} times` : '', dateFull(item.modified || item.ts)].filter(Boolean).join(' · ') })
+            ]
+          }),
+          jsx(Codicon, { name: 'chevron-right' })
+        ]
+      }, `${item.identifier}-${index}`)
+    )
+  })
+}
+
+// A hub (or "+N more") of the Verifiable / Community graph: the dashboard's category pop-up
+// (openCategoryModal) — what the type is, how many, the severity mix — and every threat of it,
+// page by page from the node (GET /api/graph?category=&ecosystem=&offset=), each one opening.
+function CategoryModal({ focus, onOpenThreat, onClose }) {
+  const [page, setPage] = useState(0)
+  const ecosystem = focus.ecosystem ? `&ecosystem=${encodeURIComponent(focus.ecosystem)}` : ''
+  const query = useDash('graph-category', `api/graph?tier=${focus.tier}&limit=${CATEGORY_PAGE}&offset=${page * CATEGORY_PAGE}&category=${encodeURIComponent(focus.type)}${ecosystem}`, SLOW_POLL_MS)
+  const data = asObject(query.data)
+  const items = asList(data.threats).map(asObject)
+  const total = typeof focus.total === 'number' ? focus.total : items.length
+  const pages = Math.max(1, Math.ceil(total / CATEGORY_PAGE))
+  const category = GRAPH_CATEGORIES[focus.type] || GRAPH_CATEGORIES.other
+  return jsx(Modal, {
+    title: focus.ecosystem ? `${category.name} · ${focus.ecosystem}` : category.name,
+    tags: [jsx(TypeCell, { type: focus.type }, 'type'), jsx(Pill, { tone: 'neutral', children: 'Category' }, 'kind')],
+    onClose,
+    children: jsxs('div', {
+      style: { display: 'flex', flexDirection: 'column', gap: 18 },
+      children: [
+        jsx('p', { style: { margin: 0, lineHeight: 1.6 }, children: TYPE_SUMMARY[focus.type] || TYPE_SUMMARY.other }),
+        jsx(DetailGrid, { rows: [['Graph', TIER_NAMES[focus.tier] || 'Threat graph'], ['Ecosystem', focus.ecosystem, true], ['Threats', total.toLocaleString()], ['Severity mix (this page)', items.length ? severityMix(items) : '']] }),
+        jsx(Loading, {
+          query,
+          children: () =>
+            jsxs('div', {
+              children: [
+                jsx(ThreatList, { items: items.map(item => ({ ...item, tier: focus.tier })), onOpen: onOpenThreat, empty: 'The node could not list threats in this category just now. Try again in a moment.' }),
+                pages > 1 ? jsx(Pager, { page, pages, total, onPage: setPage }) : null
+              ]
+            })
+        })
+      ]
+    })
+  })
+}
+
+// A hub of the Local graph: every threat of that type seen on this machine (openLocalCategoryModal),
+// newest first; each opens its full finding record.
+function LocalCategoryModal({ focus, threats, onOpenThreat, onClose }) {
+  const items = threats.filter(threat => (GRAPH_CATEGORIES[threat.category] ? threat.category : 'other') === focus.type)
+    .sort((a, b) => Number(asObject(b.finding).ts || 0) - Number(asObject(a.finding).ts || 0))
+  const findings = items.map(item => asObject(item.finding))
+  const blocked = findings.filter(finding => finding.decision === 'block').length
+  const category = GRAPH_CATEGORIES[focus.type] || GRAPH_CATEGORIES.other
+  return jsx(Modal, {
+    title: category.name,
+    tags: [jsx(TypeCell, { type: focus.type }, 'type'), jsx(Pill, { tone: 'neutral', children: 'Local' }, 'kind')],
+    onClose,
+    children: jsxs('div', {
+      style: { display: 'flex', flexDirection: 'column', gap: 18 },
+      children: [
+        jsx('p', { style: { margin: 0, lineHeight: 1.6 }, children: TYPE_SUMMARY[focus.type] || TYPE_SUMMARY.other }),
+        jsx(DetailGrid, { rows: [['Graph', 'Local · this machine only'], ['Threats of this type', items.length.toLocaleString()], ['Blocked', `${blocked} of ${items.length}`], ['Severity mix', severityMix(items)]] }),
+        jsx('div', { className: 'bbx-label', children: 'Each threat, and how often it was seen · click one for the full story' }),
+        jsx(ThreatList, { items: items.map(item => ({ ...item, ts: asObject(item.finding).ts })), onOpen: onOpenThreat, empty: 'Nothing of this type on this machine yet.' })
+      ]
+    })
+  })
+}
+
 // ---------------------------------------------------------------- Threat graph tab
 
 function SyncPanel() {
@@ -2391,6 +2510,7 @@ function AgentActivity() {
 function ThreatGraphTab({ readiness }) {
   const [tier, setTier] = useState('public')
   const [open, setOpen] = useState(null)
+  const [focus, setFocus] = useState(null)   // a hub or "+N more" whose list is open
   const status = useDash('graph-status', 'api/graph-status')
   const community = useDash('community-stats', 'api/community-stats')
   // A sample of each threat type, asked for separately: the graph lists one type after another, so a
@@ -2472,7 +2592,17 @@ function ThreatGraphTab({ readiness }) {
                 empty: readiness.stage === 'syncing' && tier === 'public'
                   ? 'The verified map draws itself as the first sync brings threats in; the sync above shows how far it is.'
                   : `No ${tierLabel.toLowerCase()} threats to draw yet.`,
-                children: () => (graph ? jsx(BubbleMap, { graph, loading: map.isPlaceholderData, onPick: threat => setOpen(threat) }) : null)
+                children: () =>
+                  graph
+                    ? jsx(BubbleMap, {
+                        graph,
+                        loading: map.isPlaceholderData,
+                        onPick: node => {
+                          if (node.kind === 'leaf') setOpen(node.threat)
+                          else setFocus({ type: node.type, ecosystem: node.ecosystem || '', total: node.total, tier: mapData.loadedTier || tier })
+                        }
+                      })
+                    : null
               })
             ]
           })
@@ -2480,7 +2610,11 @@ function ThreatGraphTab({ readiness }) {
       }),
       jsx(ThreatsDetected, {}),
       jsx(AgentActivity, {}),
-      open ? jsx(ThreatModal, { threat: open, onClose: () => setOpen(null) }) : null
+      open ? jsx(ThreatModal, { threat: open, onClose: () => setOpen(null) }) : null,
+      focus && !open && focus.tier === 'local'
+        ? jsx(LocalCategoryModal, { focus, threats: localThreats(asList(mapData.findings)), onOpenThreat: threat => setOpen(threat), onClose: () => setFocus(null) })
+        : null,
+      focus && !open && focus.tier !== 'local' ? jsx(CategoryModal, { focus, onOpenThreat: threat => setOpen(threat), onClose: () => setFocus(null) }) : null
     ]
   })
 }
