@@ -852,6 +852,7 @@ const PAGE_CSS = `
 .bbx-disclose-row { display: grid; grid-template-columns: 18px 1fr; gap: 12px; font-size: 13px; color: var(--bbx-muted); line-height: 1.5; }
 .bbx-disclose-row .codicon { margin-top: 2px; color: var(--bbx-text); }
 .bbx-stepper { overflow: hidden; }
+.bbx-preview { padding: 24px 26px; display: flex; flex-direction: column; gap: 16px; }
 .bbx-progress { height: 3px; background: var(--bbx-hover); }
 .bbx-progress > i { display: block; height: 100%; background: var(--bbx-signal); transition: width .6s ease; }
 .bbx-stepper-head { display: flex; align-items: center; padding: 16px 22px 6px; }
@@ -1943,7 +1944,7 @@ function readySteps(r) {
   const sync = asObject(r.sync)
   const syncState = r.stage === 'ready' ? 'done' : r.stage === 'syncing' ? 'active' : 'waiting'
   const percent = typeof sync.percent === 'number' ? ` · ${sync.percent.toFixed(1)}%` : ''
-  steps.push({ id: 'sync', label: 'Sync the verified threat graph', state: syncState, detail: syncState === 'active' ? `${sync.phaseText || 'Starting the first sync.'}${percent}` : '' })
+  steps.push({ id: 'sync', label: 'Download the verified threat graph', state: syncState, detail: syncState === 'active' ? `${sync.phaseText || 'Starting the first sync.'}${percent}` : '' })
   return steps
 }
 
@@ -2057,18 +2058,22 @@ function GettingReady({ r }) {
                 ]
               })
             : null,
-          offerSetup
-            ? jsxs('div', {
-                className: 'bbx-disclose',
-                children: [
-                  jsx('div', { className: 'bbx-label', children: 'What setup does' }),
-                  ...SETUP_DISCLOSURE.map(([icon, text]) => jsxs('div', { className: 'bbx-disclose-row', children: [jsx(Codicon, { name: icon }), jsx('span', { children: text })] }, icon))
-                ]
-              })
-            : null
         ]
       }),
-      jsx(SetupSteps, { r })
+      r.stage === 'setup-needed' ? jsx(SetupPreview, {}) : jsx(SetupSteps, { r })
+    ]
+  })
+}
+
+// Before setup starts: what clicking the button will do — a plain list, never a progress list that
+// reads as something already running.
+function SetupPreview() {
+  return jsxs('div', {
+    className: 'bbx-panel bbx-preview',
+    children: [
+      jsx('div', { className: 'bbx-label', children: 'What happens when you click Set up' }),
+      ...SETUP_DISCLOSURE.map(([icon, text]) => jsxs('div', { className: 'bbx-disclose-row', children: [jsx(Codicon, { name: icon }), jsx('span', { children: text })] }, icon)),
+      jsx('div', { className: 'bbx-small', children: 'It takes a few minutes; you watch each step here as it happens, and this page switches to Blackbox by itself when setup is done.' })
     ]
   })
 }
