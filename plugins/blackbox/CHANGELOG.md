@@ -38,6 +38,27 @@ that the two version fields agree.
 
 ## [Unreleased]
 
+### Added
+
+- **Set up Blackbox from Hermes Desktop.** After a plugin-catalog install the Blackbox page no
+  longer shows empty cards: it says the built-in rules already protect, lists what setup will do,
+  and runs `hermes blackbox setup` with one button, showing each step live (check this Mac, connect
+  to Hermes, install the threat-graph node, turn on protection, start the dashboard, keep the node
+  running, final checks) with the log one click away. Setup is refused while a run is going or once
+  it is done.
+- **The first sync, live.** While Umanitek's verified threat graph loads for the first time, the
+  Overview opens with its phase, percentage and asset counts, refreshed every few seconds, and the
+  empty verified map says why it is empty.
+
+### Changed
+
+- The Desktop page refreshes every 4 seconds, as the dashboard does (was 10 to 30).
+
+### Fixed
+
+- A fresh dashboard no longer says "UNPROTECTED: run `blackbox sync --wait`" while setup's own first
+  sync is running: its health check reads the sync meter before judging the first sync.
+
 ## [1.3.0] - 2026-11-06
 
 ### Added

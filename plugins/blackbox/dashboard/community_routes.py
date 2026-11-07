@@ -273,7 +273,7 @@ def health_payload(community_read: CommunityReadSource, node_reachable: Callable
                            pending_shares=retries.pending, shares_given_up=retries.given_up,
                            sharing_consent_problem=community.consent.why_not(),
                            verified_lookup_problem=ruleset.live.HEALTH.read().problem(),
-                           first_sync=sync_meter.WATCH.first_sync(),
+                           first_sync=sync_meter.first_sync_state(),
                            admission=_admission_value(cfg))
     items = health.operator_health(inputs)
     return {"items": [{**item.as_dict(), "red": health.red(item)} for item in items],

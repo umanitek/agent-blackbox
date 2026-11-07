@@ -96,6 +96,7 @@ class SyncProgressWatch:
         self._last_change: Optional[float] = None
         self._last_counts: Optional[tuple[Optional[int], ...]] = None
         self._status = ""
+        self._observed = False
 
     def _load(self) -> None:
         """Read the remembered times once (under the lock)."""
@@ -130,6 +131,7 @@ class SyncProgressWatch:
         now = self._clock()
         with self._lock:
             self._load()
+            self._observed = True
             if meter.state == "synced":
                 if self._since is not None:
                     self._since = self._last_change = self._last_counts = None
@@ -154,6 +156,12 @@ class SyncProgressWatch:
         """"running" / "stalled" while a sync is in progress, else "" (for the health checks)."""
         with self._lock:
             return self._status
+
+    @property
+    def observed(self) -> bool:
+        """Whether this process has recorded a reading yet: before it, "" means "not read", not "not syncing"."""
+        with self._lock:
+            return self._observed
 
 
 #: The dashboard process's watch (see :class:`SyncProgressWatch`), remembered in the Blackbox home.

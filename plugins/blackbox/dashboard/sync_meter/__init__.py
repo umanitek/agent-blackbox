@@ -32,6 +32,7 @@ Registered by :func:`.server.create_app` through
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from dataclasses import asdict, dataclass, field, replace
@@ -41,6 +42,8 @@ from ... import ruleset
 from ...kernel.dkg_client import DkgClient
 from ...sync import read_recovery_backlog
 from .progress import STALL_SECONDS, WATCH, SyncProgress, SyncProgressWatch, sync_phase
+
+logger = logging.getLogger(__name__)
 
 #: Seconds one meter reading is reused — the page polls every few seconds and
 #: the node only moves every minute or two, so the node is asked at most this often.
@@ -276,9 +279,32 @@ def register_sync_meter_routes(app: Any, *, load_config: Callable[[], Any],
                 cached["body"], cached["at"] = asdict(meter), time.monotonic()
             return dict(cached["body"])
 
+    _READER.handler = verified_sync
     return verified_sync
 
 
+class _ReaderHolder:
+    """The dashboard's one registered ``/api/verified-sync`` handler (one dashboard per process)."""
+
+    handler: Optional[Callable[[], dict[str, Any]]] = None
+
+
+_READER = _ReaderHolder()
+
+
+def first_sync_state() -> str:
+    """:meth:`SyncProgressWatch.first_sync` for the health checks, after one meter reading when this
+    process has not read the meter yet — the first health poll of a fresh dashboard comes before the
+    page's first meter poll, and an unread watch said "" (no sync running), so a first sync in progress
+    showed "UNPROTECTED: run blackbox sync --wait" (KI-475). Reads the meter at most once per process."""
+    if not WATCH.observed and _READER.handler is not None:
+        try:
+            _READER.handler()
+        except Exception as exc:   # health: allow BLE001 -- a meter that cannot be read leaves the health check as it was
+            logger.debug("blackbox: sync meter unreadable for the health check: %s", exc)
+    return WATCH.first_sync()
+
+
 __all__ = ["STALL_SECONDS", "WATCH", "GraphSizeAnchor", "SyncMeter", "SyncProgress", "SyncProgressWatch",
-           "build_sync_meter", "lookup_status", "read_sync_meter", "register_sync_meter_routes", "sync_phase",
+           "build_sync_meter", "first_sync_state", "lookup_status", "read_sync_meter", "register_sync_meter_routes", "sync_phase",
            "verified_graph_still_arriving"]

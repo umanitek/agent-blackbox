@@ -27,7 +27,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { jsx, jsxs } from 'react/jsx-runtime'
 
 const PAGE = '/blackbox'
-const POLL_MS = 10000 // the live event refreshes at once; polling covers a dropped connection
+const POLL_MS = 4000 // the dashboard's own refresh; the live event refreshes at once
 const SLOW_POLL_MS = 30000
 const STATUS_KEY = ['blackbox', 'status']
 const FINDINGS_KEY = ['blackbox', 'findings']
@@ -52,7 +52,7 @@ async function dash(path, opts) {
 }
 
 function useDash(key, path, interval) {
-  return useQuery({ queryKey: ['blackbox', 'dash', key, path], queryFn: () => dash(path), refetchInterval: interval || SLOW_POLL_MS })
+  return useQuery({ queryKey: ['blackbox', 'dash', key, path], queryFn: () => dash(path), refetchInterval: interval || POLL_MS })
 }
 
 const refreshDash = () => queryClient.invalidateQueries({ queryKey: ['blackbox', 'dash'] })
@@ -827,6 +827,58 @@ const PAGE_CSS = `
   background: color-mix(in srgb, ${SIGNAL} 6%, transparent); }
 .bbx-graphwrap { padding: 0; overflow: hidden; }
 .bbx-searchbar { display: flex; gap: 10px; align-items: center; padding: 14px 20px; border-bottom: 1px solid var(--bbx-line); flex-wrap: wrap; }
+.bbx-ready { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 40px; align-items: start; }
+@media (max-width: 960px) { .bbx-ready { grid-template-columns: 1fr; } }
+.bbx-ready-main { display: flex; flex-direction: column; gap: 22px; padding-top: 12px; }
+.bbx-kicker { font-family: var(--bbx-mono); font-size: 11px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--bbx-signal); }
+.bbx-hero { font-size: 38px; line-height: 1.08; font-weight: 800; letter-spacing: -0.025em; margin: -8px 0 0; text-wrap: balance; }
+.bbx-hero-sub { font-size: 15.5px; line-height: 1.6; color: var(--bbx-muted); margin: 0; max-width: 60ch; }
+.bbx-shieldnote { display: flex; gap: 10px; align-items: flex-start; padding: 12px 14px; border-radius: 6px; font-size: 13px;
+  color: #3FA568; border: 1px solid color-mix(in srgb, #3FA568 35%, transparent); background: color-mix(in srgb, #3FA568 7%, transparent); }
+.bbx-alert { padding: 12px 14px; border-radius: 6px; font-family: var(--bbx-mono); font-size: 12.5px; color: #E5484D;
+  border: 1px solid color-mix(in srgb, #E5484D 40%, transparent); background: color-mix(in srgb, #E5484D 7%, transparent); }
+.bbx-ready-actions { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
+.bbx-cta { font-size: 15px; font-weight: 700; padding: 13px 26px; border-radius: 6px; border: 0; cursor: pointer; color: #fff;
+  background: var(--bbx-signal); box-shadow: 0 8px 24px -10px ${SIGNAL}; transition: transform .12s, filter .12s; margin-bottom: 6px; }
+.bbx-cta:hover { filter: brightness(1.08); transform: translateY(-1px); }
+.bbx-cta:disabled { opacity: 0.6; cursor: default; transform: none; }
+.bbx-cmd { display: inline-flex; align-items: center; gap: 10px; padding: 6px 6px 6px 14px; border-radius: 6px; border: 1px solid var(--bbx-line);
+  background: var(--bbx-panel); font-family: var(--bbx-mono); font-size: 13px; max-width: 100%; }
+.bbx-cmd code { font-family: inherit; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bbx-cmd-prompt { color: var(--bbx-faint); }
+.bbx-cmd .bbx-btn { padding: 5px 10px; font-size: 12px; }
+.bbx-disclose { display: flex; flex-direction: column; gap: 10px; padding-top: 6px; border-top: 1px solid var(--bbx-line); }
+.bbx-disclose .bbx-label { padding-top: 16px; }
+.bbx-disclose-row { display: grid; grid-template-columns: 18px 1fr; gap: 12px; font-size: 13px; color: var(--bbx-muted); line-height: 1.5; }
+.bbx-disclose-row .codicon { margin-top: 2px; color: var(--bbx-text); }
+.bbx-stepper { overflow: hidden; }
+.bbx-progress { height: 3px; background: var(--bbx-hover); }
+.bbx-progress > i { display: block; height: 100%; background: var(--bbx-signal); transition: width .6s ease; }
+.bbx-stepper-head { display: flex; align-items: center; padding: 16px 22px 6px; }
+.bbx-steps { list-style: none; margin: 0; padding: 6px 0 10px; }
+.bbx-step { display: grid; grid-template-columns: 28px 1fr; gap: 14px; padding: 11px 22px; align-items: start; color: var(--bbx-faint); }
+.bbx-step.done { color: var(--bbx-muted); }
+.bbx-step.active { color: var(--bbx-text); background: color-mix(in srgb, ${SIGNAL} 6%, transparent); }
+.bbx-step.failed { color: #E5484D; }
+.bbx-step-label { font-size: 14.5px; font-weight: 600; padding-top: 3px; }
+.bbx-step-detail { font-family: var(--bbx-mono); font-size: 12px; color: var(--bbx-muted); margin-top: 4px; }
+.bbx-stepmark { width: 26px; height: 26px; border-radius: 50%; border: 1.5px solid var(--bbx-line); display: inline-flex; align-items: center;
+  justify-content: center; font-family: var(--bbx-mono); font-size: 11.5px; }
+.bbx-stepmark.done { border-color: #3FA568; background: #3FA568; color: #fff; }
+.bbx-stepmark.active { border-color: var(--bbx-signal); color: var(--bbx-signal); }
+.bbx-stepmark.failed { border-color: #E5484D; background: #E5484D; color: #fff; }
+.bbx-spin { width: 12px; height: 12px; border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent; display: inline-block;
+  animation: bbx-spin .8s linear infinite; }
+.bbx-spin.big { width: 54px; height: 54px; border-width: 3px; color: var(--bbx-signal); position: absolute; }
+@keyframes bbx-spin { to { transform: rotate(360deg); } }
+.bbx-logwrap { border-top: 1px solid var(--bbx-line); padding: 12px 22px 16px; display: flex; flex-direction: column; gap: 10px; }
+.bbx-linkbtn { display: inline-flex; gap: 6px; align-items: center; border: 0; background: transparent; color: var(--bbx-muted); cursor: pointer; font-size: 12.5px; padding: 0; }
+.bbx-linkbtn:hover { color: var(--bbx-text); }
+.bbx-log { margin: 0; max-height: 240px; overflow: auto; font-family: var(--bbx-mono); font-size: 11.5px; line-height: 1.55; white-space: pre-wrap;
+  color: var(--bbx-muted); background: var(--bbx-panel); border: 1px solid var(--bbx-line); border-radius: 6px; padding: 12px 14px; }
+.bbx-syncbanner { display: flex; gap: 24px; align-items: center; padding: 22px 24px; flex-wrap: wrap;
+  border-left: 3px solid var(--bbx-signal); background: color-mix(in srgb, ${SIGNAL} 4%, var(--bbx-panel)); }
+.bbx-syncbanner-ring { position: relative; width: 54px; height: 54px; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 600; flex: none; }
 `
 
 const SEVERITY_ORDER = { critical: 4, high: 3, medium: 2, low: 1, info: 0 }
@@ -1210,11 +1262,12 @@ function TraderShieldPanel({ setTab }) {
   })
 }
 
-function Overview({ status, setTab }) {
+function Overview({ status, setTab, readiness, ctx }) {
   return jsxs('div', {
     className: 'bbx-wrap',
     style: { padding: 0 },
     children: [
+      readiness.stage === 'syncing' ? jsx(FirstSyncBanner, { r: readiness, setTab, ctx }) : null,
       jsx(StatCards, { status }),
       jsx(ConnectedAgents, {}),
       jsx(TraderShieldPanel, { setTab })
@@ -1285,7 +1338,7 @@ function FindThreat({ onOpen }) {
   const [search, setSearch] = useState('')
   const [term, setTerm] = useState('')
   const [page, setPage] = useState(0)
-  const query = useDash('graph-search', term ? `api/graph?tier=public&limit=${PAGE_SIZE}&offset=${page * PAGE_SIZE}&q=${encodeURIComponent(term)}` : 'api/graph?tier=public&limit=1')
+  const query = useDash('graph-search', term ? `api/graph?tier=public&limit=${PAGE_SIZE}&offset=${page * PAGE_SIZE}&q=${encodeURIComponent(term)}` : 'api/graph?tier=public&limit=1', SLOW_POLL_MS)
   return jsxs('div', {
     children: [
       jsxs('form', {
@@ -1457,7 +1510,7 @@ function AgentActivity() {
 }
 
 function ThreatDetail({ threat, onClose }) {
-  const query = useDash('threat', `api/threat?identifier=${encodeURIComponent(threat.identifier)}&tier=${encodeURIComponent(threat.tier || 'public')}`)
+  const query = useDash('threat', `api/threat?identifier=${encodeURIComponent(threat.identifier)}&tier=${encodeURIComponent(threat.tier || 'public')}`, SLOW_POLL_MS)
   return jsxs('section', {
     className: 'bbx-section',
     children: [
@@ -1489,7 +1542,7 @@ function ThreatDetail({ threat, onClose }) {
   })
 }
 
-function ThreatGraphTab() {
+function ThreatGraphTab({ readiness }) {
   const [tier, setTier] = useState('public')
   const [open, setOpen] = useState(null)
   const status = useDash('graph-status', 'api/graph-status')
@@ -1571,7 +1624,9 @@ function ThreatGraphTab() {
               jsx(FindThreat, { onOpen: setOpen }),
               jsx(Loading, {
                 query: map,
-                empty: `No ${tierLabel.toLowerCase()} threats to draw yet.`,
+                empty: readiness.stage === 'syncing' && tier === 'public'
+                  ? 'The verified map draws itself as the first sync brings threats in; the sync above shows how far it is.'
+                  : `No ${tierLabel.toLowerCase()} threats to draw yet.`,
                 children: () => (graph ? jsx(BubbleMap, { graph, loading: map.isPlaceholderData, onPick: threat => setOpen(threat) }) : null)
               })
             ]
@@ -1815,12 +1870,248 @@ function SettingsTab() {
   })
 }
 
+// ---------------------------------------------------------------- getting ready (setup → first sync)
+
+// Where this machine is between plugin install and synced, from Blackbox's own /readiness route
+// (desktop/readiness.py decides the stage): setup-needed → installing (or setup-failed) → starting →
+// syncing (the first sync) → ready. Polled fast while something is moving, like the dashboard.
+const READINESS_KEY = ['blackbox', 'readiness']
+const READINESS_POLL_MS = { installing: 2000, starting: 2000, 'setup-needed': 8000, 'setup-failed': 8000, syncing: POLL_MS, ready: SLOW_POLL_MS }
+const SETUP_SCREEN_STAGES = ['setup-needed', 'installing', 'setup-failed', 'starting']
+const SETUP_COMMAND = 'hermes blackbox setup'
+// What setup does to this machine, said before the button (the catalog's own disclosure, in plain words).
+const SETUP_DISCLOSURE = [
+  ['package', 'Installs the OriginTrail DKG node from npm, checksum-verified, with a local graph store (Oxigraph, or Blazegraph when Docker runs). Node.js too, if it is missing.'],
+  ['globe', "Joins the DKG peer-to-peer network to download Umanitek's verified threat graph: about 30 minutes and up to 8 GB of disk the first time."],
+  ['play-circle', 'Starts the node and the Blackbox dashboard (127.0.0.1:9700) now and at every login.'],
+  ['lock', 'Threat sharing stays off until you turn it on. Nothing leaves this machine before that.']
+]
+
+const fetchReadiness = () => (rest ? rest('/readiness') : Promise.resolve({ available: false }))
+
+function useReadiness() {
+  return useQuery({
+    queryKey: READINESS_KEY,
+    queryFn: fetchReadiness,
+    refetchInterval: query => READINESS_POLL_MS[asObject(query.state.data).stage] || POLL_MS
+  })
+}
+
+function duration(fromSeconds) {
+  if (typeof fromSeconds !== 'number' || fromSeconds <= 0) return ''
+  const total = Math.max(0, Math.round(Date.now() / 1000 - fromSeconds))
+  const minutes = Math.floor(total / 60)
+  return minutes > 0 ? `${minutes}m ${String(total % 60).padStart(2, '0')}s` : `${total}s`
+}
+
+function CopyCommand({ text }) {
+  const [copied, setCopied] = useState(false)
+  const copy = () => {
+    const done = () => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1600)
+    }
+    try {
+      navigator.clipboard.writeText(text).then(done, () => host.notify({ kind: 'warning', message: `Copy this: ${text}` }))
+    } catch (error) {
+      host.notify({ kind: 'warning', message: `Copy this: ${text}` })
+    }
+  }
+  return jsxs('div', {
+    className: 'bbx-cmd',
+    children: [
+      jsx('span', { className: 'bbx-cmd-prompt', children: '$' }),
+      jsx('code', { children: text }),
+      jsx('button', { type: 'button', className: 'bbx-btn', onClick: copy, children: copied ? 'Copied' : 'Copy' })
+    ]
+  })
+}
+
+function StepMark({ state, number }) {
+  if (state === 'done') return jsx('span', { className: 'bbx-stepmark done', children: jsx(Codicon, { name: 'check' }) })
+  if (state === 'failed') return jsx('span', { className: 'bbx-stepmark failed', children: jsx(Codicon, { name: 'close' }) })
+  if (state === 'active') return jsx('span', { className: 'bbx-stepmark active', children: jsx('span', { className: 'bbx-spin' }) })
+  return jsx('span', { className: 'bbx-stepmark', children: String(number) })
+}
+
+// Setup's own steps (from the installer's section headings) and, last, the first sync.
+function readySteps(r) {
+  const steps = asList(r.steps).map(step => ({ ...step }))
+  const sync = asObject(r.sync)
+  const syncState = r.stage === 'ready' ? 'done' : r.stage === 'syncing' ? 'active' : 'waiting'
+  const percent = typeof sync.percent === 'number' ? ` · ${sync.percent.toFixed(1)}%` : ''
+  steps.push({ id: 'sync', label: 'Sync the verified threat graph', state: syncState, detail: syncState === 'active' ? `${sync.phaseText || 'Starting the first sync.'}${percent}` : '' })
+  return steps
+}
+
+function SetupSteps({ r }) {
+  const [showLog, setShowLog] = useState(r.stage === 'setup-failed')
+  const steps = readySteps(r)
+  const done = steps.filter(step => step.state === 'done').length
+  const setup = asObject(r.setup)
+  const lines = asList(setup.logTail)
+  return jsxs('div', {
+    className: 'bbx-panel bbx-stepper',
+    children: [
+      jsx('div', { className: 'bbx-progress', children: jsx('i', { style: { width: `${Math.round((done / steps.length) * 100)}%` } }) }),
+      jsxs('div', {
+        className: 'bbx-stepper-head',
+        children: [
+          jsx('span', { className: 'bbx-label', children: `${done} of ${steps.length} done` }),
+          jsx('div', { className: 'bbx-spacer' }),
+          setup.state === 'running' && setup.started ? jsx('span', { className: 'bbx-label', children: duration(setup.started) }) : null
+        ]
+      }),
+      jsx('ol', {
+        className: 'bbx-steps',
+        children: steps.map((step, index) =>
+          jsxs('li', {
+            className: `bbx-step ${step.state}`,
+            children: [
+              jsx(StepMark, { state: step.state, number: index + 1 }),
+              jsxs('div', { children: [jsx('div', { className: 'bbx-step-label', children: step.label }), step.detail ? jsx('div', { className: 'bbx-step-detail', children: step.detail }) : null] })
+            ]
+          }, step.id)
+        )
+      }),
+      lines.length
+        ? jsxs('div', {
+            className: 'bbx-logwrap',
+            children: [
+              jsxs('button', { type: 'button', className: 'bbx-linkbtn', onClick: () => setShowLog(!showLog), children: [jsx(Codicon, { name: showLog ? 'chevron-down' : 'chevron-right' }), showLog ? 'Hide details' : 'Show details'] }),
+              showLog ? jsx('pre', { className: 'bbx-log', children: lines.join('\n') }) : null
+            ]
+          })
+        : null
+    ]
+  })
+}
+
+async function startSetup() {
+  try {
+    const answer = await rest('/setup', { method: 'POST', body: {} })
+    if (!answer || answer.started !== true) host.notify({ kind: 'warning', message: `Setup did not start: ${(answer && (answer.reason || answer.error)) || 'unknown reason'}` })
+  } catch (error) {
+    host.notify({ kind: 'error', message: `Setup did not start: ${String((error && error.message) || error)}` })
+  }
+  queryClient.invalidateQueries({ queryKey: READINESS_KEY })
+}
+
+const SETUP_COPY = {
+  'setup-needed': {
+    kicker: 'One last step',
+    title: 'Finish setting up Blackbox',
+    sub: "The plugin is installed and its built-in rules already protect your agent: protected files, secrets and Trader Shield. Setup adds the local threat-graph node, so every action is also checked against Umanitek's verified threat graph."
+  },
+  installing: {
+    kicker: 'Setting up',
+    title: 'Setting up Blackbox',
+    sub: 'This takes a few minutes. Keep using Hermes; setup carries on if you leave this page, and the built-in rules protect your agent meanwhile.'
+  },
+  'setup-failed': {
+    kicker: 'Setup stopped',
+    title: 'Setup did not finish',
+    sub: 'Setup undoes its own changes when it stops, so it is safe to run again. The details below say where it stopped.'
+  },
+  starting: {
+    kicker: 'Starting',
+    title: 'Starting the threat-graph node',
+    sub: 'Blackbox is installed and its node is starting. This usually takes under a minute.'
+  }
+}
+
+function GettingReady({ r }) {
+  const [starting, setStarting] = useState(false)
+  const copy = SETUP_COPY[r.stage] || SETUP_COPY['setup-needed']
+  const offerSetup = r.stage === 'setup-needed' || r.stage === 'setup-failed'
+  const error = asObject(r.setup).error
+  const run = async () => {
+    setStarting(true)
+    await startSetup()
+    setStarting(false)
+  }
+  return jsxs('div', {
+    className: 'bbx-ready',
+    children: [
+      jsxs('div', {
+        className: 'bbx-ready-main',
+        children: [
+          jsx('div', { className: 'bbx-kicker', children: copy.kicker }),
+          jsx('h1', { className: 'bbx-hero', children: copy.title }),
+          jsx('p', { className: 'bbx-hero-sub', children: copy.sub }),
+          r.stage === 'setup-failed' && error ? jsx('div', { className: 'bbx-alert', children: error }) : null,
+          jsxs('div', {
+            className: 'bbx-shieldnote',
+            children: [jsx(Codicon, { name: 'shield' }), jsx('span', { children: 'Protected now by the built-in rules. Verified threat-graph checks switch on as the graph arrives.' })]
+          }),
+          offerSetup
+            ? jsxs('div', {
+                className: 'bbx-ready-actions',
+                children: [
+                  jsx('button', { type: 'button', className: 'bbx-cta', disabled: starting, onClick: run, children: starting ? 'Starting…' : r.stage === 'setup-failed' ? 'Run setup again' : 'Set up Blackbox' }),
+                  jsx('div', { className: 'bbx-small', children: 'Prefer a terminal? Run this instead:' }),
+                  jsx(CopyCommand, { text: SETUP_COMMAND })
+                ]
+              })
+            : null,
+          offerSetup
+            ? jsxs('div', {
+                className: 'bbx-disclose',
+                children: [
+                  jsx('div', { className: 'bbx-label', children: 'What setup does' }),
+                  ...SETUP_DISCLOSURE.map(([icon, text]) => jsxs('div', { className: 'bbx-disclose-row', children: [jsx(Codicon, { name: icon }), jsx('span', { children: text })] }, icon))
+                ]
+              })
+            : null
+        ]
+      }),
+      jsx(SetupSteps, { r })
+    ]
+  })
+}
+
+// Overview's banner during the first sync: live phase, percentage and counts, every few seconds.
+function FirstSyncBanner({ r, setTab, ctx }) {
+  const sync = asObject(r.sync)
+  const percent = typeof sync.percent === 'number' ? sync.percent : null
+  const counts = typeof sync.total === 'number' && sync.total > 0 ? `${num(sync.downloaded)} of ${num(sync.total)} graph assets` : ''
+  return jsxs('div', {
+    className: 'bbx-panel bbx-syncbanner',
+    children: [
+      jsxs('div', {
+        className: 'bbx-syncbanner-ring',
+        children: [jsx('span', { className: 'bbx-spin big' }), jsx('span', { className: 'bbx-mono', children: percent === null ? '…' : `${Math.round(percent)}%` })]
+      }),
+      jsxs('div', {
+        style: { flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8 },
+        children: [
+          jsx('div', { className: 'bbx-label', style: { color: 'var(--bbx-signal)' }, children: 'First sync in progress' }),
+          jsx('div', { style: { fontSize: 17, fontWeight: 700 }, children: "Loading Umanitek's verified threat graph" }),
+          jsx('div', { className: 'bbx-small', children: [sync.phaseText || 'Starting the first sync.', counts, sync.runningSince ? `running ${duration(sync.runningSince)}` : ''].filter(Boolean).join(' · ') }),
+          jsx('div', { className: 'bbx-bar', children: jsx('i', { style: { width: `${Math.max(2, Math.min(100, percent || 0))}%` } }) }),
+          jsx('div', { className: 'bbx-small', children: 'You are protected by the built-in rules now; verified checks switch on as the rules compile. About 30 minutes on a new machine. You can close this page.' })
+        ]
+      }),
+      jsxs('div', {
+        style: { display: 'flex', flexDirection: 'column', gap: 8 },
+        children: [
+          jsx('button', { type: 'button', className: 'bbx-btn', onClick: () => setTab('graph'), children: 'Watch the sync' }),
+          asObject(r.dashboard).up ? jsx('button', { type: 'button', className: 'bbx-btn', onClick: () => openDashboard(ctx, r.dashboard.url), children: 'Open dashboard' }) : null
+        ]
+      })
+    ]
+  })
+}
+
 // ---------------------------------------------------------------- the page
 
 function BlackboxPage({ ctx }) {
   const [tab, setTab] = useState('overview')
   const status = useStatus()
+  const ready = useReadiness()
   const s = status.data
+  const r = asObject(ready.data)
+  const setupScreen = r.available === true && SETUP_SCREEN_STAGES.includes(r.stage)
   if (s && !s.available) {
     return jsxs('div', {
       className: 'bbx',
@@ -1841,7 +2132,7 @@ function BlackboxPage({ ctx }) {
             className: 'bbx-top',
             children: [
               jsxs('div', { className: 'bbx-brand', children: ['BLACKB', jsx('span', { className: 'bbx-brand-dot' }), 'X'] }),
-              jsxs('div', {
+              setupScreen ? null : jsxs('div', {
                 className: 'bbx-tabs',
                 style: { marginLeft: 12 },
                 role: 'tablist',
@@ -1851,12 +2142,13 @@ function BlackboxPage({ ctx }) {
               }),
               jsx('div', { className: 'bbx-spacer' }),
               s ? jsx('button', { type: 'button', className: `bbx-modepill${s.mode === 'block' ? ' block' : ''}`, title: 'Change the mode in Settings', onClick: () => setTab('settings'), children: s.mode === 'block' ? 'Block mode' : 'Audit mode' }) : null,
-              s && s.dashboardUrl ? jsx('button', { type: 'button', className: 'bbx-iconbtn', title: 'Open the dashboard in your browser', onClick: () => openDashboard(ctx, s.dashboardUrl), children: jsx(Codicon, { name: 'link-external' }) }) : null
+              s && s.dashboardUrl && !setupScreen ? jsx('button', { type: 'button', className: 'bbx-iconbtn', title: 'Open the dashboard in your browser', onClick: () => openDashboard(ctx, s.dashboardUrl), children: jsx(Codicon, { name: 'link-external' }) }) : null
             ]
           }),
-          tab === 'overview' ? (s ? jsx(Overview, { status: s, setTab }) : jsx('div', { className: 'bbx-empty', children: 'Loading…' })) : null,
-          tab === 'graph' ? jsx(ThreatGraphTab, {}) : null,
-          tab === 'settings' ? jsx(SettingsTab, {}) : null
+          setupScreen ? jsx(GettingReady, { r }) : null,
+          !setupScreen && tab === 'overview' ? (s ? jsx(Overview, { status: s, setTab, readiness: r, ctx }) : jsx('div', { className: 'bbx-empty', children: 'Loading…' })) : null,
+          !setupScreen && tab === 'graph' ? jsx(ThreatGraphTab, { readiness: r }) : null,
+          !setupScreen && tab === 'settings' ? jsx(SettingsTab, {}) : null
         ]
       })
     ]

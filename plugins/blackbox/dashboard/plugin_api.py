@@ -6,7 +6,8 @@ Blackbox's package, so relative imports cannot work here. It finds the Blackbox 
 already loaded in this process (the one whose folder holds this file) and reads everything through
 its ``desktop`` module; if Blackbox is not loaded here, it loads its own copy of the package once.
 The routes read protection status and the newest findings (never evidence or commands), and
-``POST /mode`` switches between audit and block, and ``/dash/<path>`` forwards an allowlisted set
+``POST /mode`` switches between audit and block, ``GET /readiness`` says where the machine is between
+plugin install and synced and ``POST /setup`` starts ``hermes blackbox setup`` (``desktop.readiness``), and ``/dash/<path>`` forwards an allowlisted set
 of the running dashboard's own API (threat graph, Trader Shield, agents, community, settings) so the
 Desktop page shows every panel without a second copy of its logic (``desktop.dashboard_link``). Hermes refuses every request here that does not
 carry Desktop's own credential (401), so an agent's ``curl`` cannot reach the switch; Blackbox's
@@ -87,6 +88,22 @@ def findings(limit: int = Query(50, ge=1, le=100)) -> Any:
 def mode(body: dict[str, Any] = Body(default={})) -> Any:
     try:
         return {"available": True, **_desktop_module().set_mode(str(body.get("mode") or ""))}
+    except Exception as exc:   # health: allow BLE001 -- the Desktop page shows "unavailable", never an HTML 500
+        return _unavailable(exc)
+
+
+@router.get("/readiness")
+def readiness() -> Any:
+    try:
+        return {"available": True, **_desktop_module().readiness_status()}
+    except Exception as exc:   # health: allow BLE001 -- the Desktop page shows "unavailable", never an HTML 500
+        return _unavailable(exc)
+
+
+@router.post("/setup")
+def setup() -> Any:
+    try:
+        return {"available": True, **_desktop_module().start_setup()}
     except Exception as exc:   # health: allow BLE001 -- the Desktop page shows "unavailable", never an HTML 500
         return _unavailable(exc)
 

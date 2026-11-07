@@ -8,6 +8,8 @@ This module is the one door both use — a Facade over the config, the ruleset a
 - :func:`findings_payload` — the newest findings for the page's list;
 - :func:`dashboard_link` — the one :class:`~.dashboard_link.DashboardLink` the Desktop routes forward
   the dashboard's own API through (every other panel: threat graph, Trader Shield, agents, settings);
+- :func:`readiness_status` / :func:`start_setup` — where the machine is between plugin install and synced, and
+  the page's "Set up Blackbox" button (``readiness.py``: one owned ``hermes blackbox setup`` run);
 - :func:`set_mode` — the page's Audit / Block switch, saved through the dashboard's own checked path
   (``kernel.settings.write_settings``); reached only through Desktop's authenticated route;
 - :func:`announce_findings` — called by the hook right after findings are recorded; pushes one
@@ -41,6 +43,7 @@ from .. import audit, ruleset
 from ..kernel import settings
 from ..kernel.config import load_blackbox_config
 from ..kernel.constants import SEVERITY_RANK
+from . import readiness as readiness_mod
 from .dashboard_link import DashboardLink, LinkAnswer
 
 logger = logging.getLogger(__name__)
@@ -218,4 +221,25 @@ def set_mode(mode: str) -> dict[str, Any]:
     return {"ok": bool(result.get("ok")), "mode": load_blackbox_config().mode, "errors": list(result.get("errors") or [])}
 
 
-__all__ = ["FINDING_EVENT", "MODES", "PLUGIN_ID", "FindingAlert", "announce_findings", "findings_payload", "set_mode", "status_payload"]
+#: Stages in which the page offers setup; once the node is installed and answering, setup is done.
+_SETUP_STAGES = ("setup-needed", "setup-failed", "starting")
+
+
+def readiness_status() -> dict[str, Any]:
+    """Where this machine is between plugin install and synced: stage, setup steps, node, dashboard,
+    sync (shape: :func:`.readiness.readiness_payload`)."""
+    rules, _ = _rules(load_blackbox_config())
+    return readiness_mod.readiness_payload(rules, dashboard_link())
+
+
+def start_setup() -> dict[str, Any]:
+    """Start ``hermes blackbox setup`` for the person at the Desktop page. Refused while a run is
+    going or once setup is done (``{"started": False, "reason": ...}``)."""
+    stage = readiness_status().get("stage")
+    if stage not in _SETUP_STAGES:
+        return {"started": False, "reason": f"nothing to set up (Blackbox is {stage})"}
+    return readiness_mod.start_setup()
+
+
+__all__ = ["FINDING_EVENT", "MODES", "PLUGIN_ID", "FindingAlert", "announce_findings", "findings_payload", "readiness_status",
+           "set_mode", "start_setup", "status_payload"]
