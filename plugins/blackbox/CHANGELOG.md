@@ -58,6 +58,9 @@ that the two version fields agree.
 
 - A fresh dashboard no longer says "UNPROTECTED: run `blackbox sync --wait`" while setup's own first
   sync is running: its health check reads the sync meter before judging the first sync.
+- On a fresh install the first sync of the verified threat graph starts within seconds of setup
+  finishing. It could wait an hour: setup's own compile left an empty ruleset that the dashboard
+  took for a finished one.
 
 ## [1.3.0] - 2026-11-06
 
