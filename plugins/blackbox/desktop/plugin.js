@@ -1267,7 +1267,7 @@ function Overview({ status, setTab, readiness, ctx }) {
     className: 'bbx-wrap',
     style: { padding: 0 },
     children: [
-      readiness.stage === 'syncing' ? jsx(FirstSyncBanner, { r: readiness, setTab, ctx }) : null,
+      syncInProgress(readiness) ? jsx(FirstSyncBanner, { r: readiness, setTab, ctx }) : null,
       jsx(StatCards, { status }),
       jsx(ConnectedAgents, {}),
       jsx(TraderShieldPanel, { setTab })
@@ -1893,7 +1893,10 @@ function useReadiness() {
   return useQuery({
     queryKey: READINESS_KEY,
     queryFn: fetchReadiness,
-    refetchInterval: query => READINESS_POLL_MS[asObject(query.state.data).stage] || POLL_MS
+    refetchInterval: query => {
+      const r = asObject(query.state.data)
+      return syncInProgress(r) ? POLL_MS : READINESS_POLL_MS[r.stage] || POLL_MS
+    }
   })
 }
 
@@ -2070,11 +2073,27 @@ function GettingReady({ r }) {
   })
 }
 
-// Overview's banner during the first sync: live phase, percentage and counts, every few seconds.
+// The sync meter's phases while the graph is still arriving (dashboard/sync_meter/progress.py sync_phase).
+const SYNC_MOVING_PHASES = ['finding', 'queued', 'downloading', 'compiling', 'stalled']
+// Whether Overview shows the sync banner: the first sync before any rule, and every sync the meter
+// says is still arriving — protection starts with the first rules, the graph keeps coming.
+const syncInProgress = r => r.stage === 'syncing' || SYNC_MOVING_PHASES.includes(asObject(r.sync).phase)
+
+// Overview's banner while the verified graph arrives: live phase, percentage and counts, every few seconds.
 function FirstSyncBanner({ r, setTab, ctx }) {
   const sync = asObject(r.sync)
   const percent = typeof sync.percent === 'number' ? sync.percent : null
-  const counts = typeof sync.total === 'number' && sync.total > 0 ? `${num(sync.downloaded)} of ${num(sync.total)} graph assets` : ''
+  const countText = typeof sync.total === 'number' && sync.total > 0 ? `${num(sync.downloaded)} of ${num(sync.total)} graph assets` : ''
+  // the meter's own sentence may already carry the counts ("Downloading verified assets: 70 of 974.")
+  const counts = countText && !String(sync.phaseText || '').includes(` of ${sync.total}`) ? countText : ''
+  const rules = typeof r.rules === 'number' ? r.rules : 0
+  const stalled = sync.phase === 'stalled'
+  const kicker = stalled ? 'Sync stopped making progress' : rules > 0 ? 'Still syncing' : 'First sync in progress'
+  const note = stalled
+    ? 'Blackbox keeps protecting with what it has. Check the node with blackbox status, then run blackbox sync --wait.'
+    : rules > 0
+      ? `${num(rules)} verified rules protect you now; more switch on as the rest of the graph arrives. You can close this page.`
+      : 'You are protected by the built-in rules now; verified checks switch on as the rules compile. About 30 minutes on a new machine. You can close this page.'
   return jsxs('div', {
     className: 'bbx-panel bbx-syncbanner',
     children: [
@@ -2085,11 +2104,11 @@ function FirstSyncBanner({ r, setTab, ctx }) {
       jsxs('div', {
         style: { flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8 },
         children: [
-          jsx('div', { className: 'bbx-label', style: { color: 'var(--bbx-signal)' }, children: 'First sync in progress' }),
+          jsx('div', { className: 'bbx-label', style: { color: stalled ? '#E5A00D' : 'var(--bbx-signal)' }, children: kicker }),
           jsx('div', { style: { fontSize: 17, fontWeight: 700 }, children: "Loading Umanitek's verified threat graph" }),
           jsx('div', { className: 'bbx-small', children: [sync.phaseText || 'Starting the first sync.', counts, sync.runningSince ? `running ${duration(sync.runningSince)}` : ''].filter(Boolean).join(' · ') }),
           jsx('div', { className: 'bbx-bar', children: jsx('i', { style: { width: `${Math.max(2, Math.min(100, percent || 0))}%` } }) }),
-          jsx('div', { className: 'bbx-small', children: 'You are protected by the built-in rules now; verified checks switch on as the rules compile. About 30 minutes on a new machine. You can close this page.' })
+          jsx('div', { className: 'bbx-small', children: note })
         ]
       }),
       jsxs('div', {

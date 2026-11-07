@@ -46,9 +46,10 @@ that the two version fields agree.
   to Hermes, install the threat-graph node, turn on protection, start the dashboard, keep the node
   running, final checks) with the log one click away. Setup is refused while a run is going or once
   it is done.
-- **The first sync, live.** While Umanitek's verified threat graph loads for the first time, the
-  Overview opens with its phase, percentage and asset counts, refreshed every few seconds, and the
-  empty verified map says why it is empty.
+- **The sync, live.** While Umanitek's verified threat graph arrives, the Overview opens with its
+  phase, percentage and asset counts, refreshed every few seconds: "First sync in progress" before
+  any rule, then "Still syncing" with how many verified rules already protect, or "Sync stopped
+  making progress" with what to do. The empty verified map says why it is empty.
 
 ### Changed
 
