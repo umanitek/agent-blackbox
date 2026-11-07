@@ -225,11 +225,22 @@ def set_mode(mode: str) -> dict[str, Any]:
 _SETUP_STAGES = ("setup-needed", "setup-failed", "starting")
 
 
+def _verified_rules(cfg: Any) -> Optional[int]:
+    """Compiled rules from the verified graph only, None when the ruleset cannot be read. Community
+    reports are left out: they only ever flag, and two of them once read as "2 verified rules
+    protect you now" (and as a finished first sync) on a node that had no verified rule yet."""
+    try:
+        counts = ruleset.get(cfg).counts()
+    except Exception as exc:   # health: allow BLE001 -- a ruleset that cannot load reads as "unknown", never an error
+        logger.warning("blackbox: ruleset unreadable for Desktop: %s", exc)
+        return None
+    return sum(count for category, count in counts.items() if category != "community")
+
+
 def readiness_status() -> dict[str, Any]:
     """Where this machine is between plugin install and synced: stage, setup steps, node, dashboard,
-    sync (shape: :func:`.readiness.readiness_payload`)."""
-    rules, _ = _rules(load_blackbox_config())
-    return readiness_mod.readiness_payload(rules, dashboard_link())
+    sync (shape: :func:`.readiness.readiness_payload`); ``rules`` counts verified rules only."""
+    return readiness_mod.readiness_payload(_verified_rules(load_blackbox_config()), dashboard_link())
 
 
 def start_setup() -> dict[str, Any]:

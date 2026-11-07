@@ -300,3 +300,21 @@ def test_with_no_meter_route_the_health_check_is_unchanged(monkeypatch):
     monkeypatch.setattr(sync_meter, "WATCH", sync_progress.SyncProgressWatch())
     monkeypatch.setattr(sync_meter._READER, "handler", None)
     assert sync_meter.first_sync_state() == ""
+
+
+def test_community_reports_are_not_counted_as_verified_rules(monkeypatch):
+    """bb-test-1 (2026-11-07): with two community reports and no verified rule yet the banner said
+    "2 verified rules protect you now", and the stage read as a finished first sync."""
+    class Rules:
+        def counts(self):
+            return {"injection": 0, "escalation": 0, "dependency": 0, "fileaccess": 0, "skill": 0, "ioc": 0, "community": 2}
+    monkeypatch.setattr(desktop.ruleset, "get", lambda cfg: Rules())
+    assert desktop._verified_rules(object()) == 0
+    assert stage_of(ReadinessFacts("done", True, True, desktop._verified_rules(object()))) == "syncing"
+
+
+def test_an_unreadable_ruleset_is_unknown_not_zero(monkeypatch):
+    def broken(cfg):
+        raise OSError("ruleset.json unreadable")
+    monkeypatch.setattr(desktop.ruleset, "get", broken)
+    assert desktop._verified_rules(object()) is None
