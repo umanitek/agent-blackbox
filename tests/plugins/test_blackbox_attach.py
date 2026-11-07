@@ -91,8 +91,10 @@ def test_discover_hermes_homes_finds_default_and_profile(fake_env):
     assert fake_env["profile"] in homes
 
 
-def test_discover_hermes_homes_skips_managed_blackbox_chat_profile(fake_env):
-    blackbox = fake_env["hermes_default"] / "profiles" / "blackbox"
+@pytest.mark.parametrize("name", ["agent-blackbox", "blackbox"])
+def test_discover_hermes_homes_skips_managed_blackbox_chat_profile(fake_env, name):
+    """KI-479: the assistant's profile is ``agent-blackbox``; the list looked only for ``blackbox``."""
+    blackbox = fake_env["hermes_default"] / "profiles" / name
     blackbox.mkdir(parents=True)
     (blackbox / "SOUL.md").write_text(
         "<!-- managed-by: hermes-blackbox-chat -->\n# Agent Blackbox\n",
@@ -843,3 +845,21 @@ def test_with_no_tty_and_no_controlling_terminal_nothing_is_asked(monkeypatch):
     monkeypatch.setattr(attach_command, "open", no_tty, raising=False)
 
     assert attach_command._ask_terminal("Protect? ") is None
+
+
+def test_a_profile_named_like_blackbox_without_the_managed_soul_is_listed(fake_env):
+    """Only Blackbox's own managed profile is hidden; a person's profile of that name is an agent."""
+    theirs = fake_env["hermes_default"] / "profiles" / "agent-blackbox"
+    theirs.mkdir(parents=True)
+    (theirs / "SOUL.md").write_text("# My own agent\n", encoding="utf-8")
+
+    assert theirs in attach.discover_hermes_homes()
+
+
+def test_the_chat_command_dashboard_and_agent_list_share_one_profile_name():
+    from plugins.blackbox.chat import command as chat_command
+    from plugins.blackbox.dashboard import server
+    from plugins.blackbox.kernel import constants
+
+    assert chat_command._BLACKBOX_CHAT_PROFILE == constants.BLACKBOX_CHAT_PROFILE
+    assert server._BLACKBOX_PROFILE == constants.BLACKBOX_CHAT_PROFILE

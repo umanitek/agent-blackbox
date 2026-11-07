@@ -28,6 +28,7 @@ from collections import Counter, deque
 from pathlib import Path
 from typing import Any, Dict, List, Set, Tuple
 
+from ..kernel import constants
 from ..kernel.browser_boundary import BrowserBoundary
 from .. import shields
 from ..sync import read_durable_progress, state as sync_state
@@ -54,7 +55,7 @@ _RULESET_HEAVY_REFRESH_MIN_SEC = 15 * 60.0
 _BLACKBOX_READY_PERCENT = 80.0
 _BLACKBOX_MIN_OVERDUE_SEC = 10 * 60.0
 _BLACKBOX_STALLED_SYNC_SEC = 10 * 60.0
-_BLACKBOX_PROFILE = "agent-blackbox"
+_BLACKBOX_PROFILE = constants.BLACKBOX_CHAT_PROFILE
 _LOOPBACK_HOST_NAMES = frozenset({"127.0.0.1", "localhost", "[::1]"})  # the only Hosts the dashboard answers to
 _BLACKBOX_RUNTIME_HOST = "127.0.0.1"
 _BLACKBOX_RUNTIME_PORT = 9121
@@ -796,7 +797,6 @@ def create_app(*, manage_blackbox: bool = False):
     from .. import attach, audit, community, ruleset
     from ..kernel import settings
     from ..sync import state as sync_state
-    from ..kernel import constants
     from ..kernel.config import load_blackbox_config
     from ..kernel.dkg_client import DkgClient, DkgError, extract_binding
 

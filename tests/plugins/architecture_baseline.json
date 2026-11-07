@@ -21,7 +21,7 @@
     "dashboard/server.py::_profile_activity_state": 61,
     "dashboard/server.py::_sync_activity": 271,
     "dashboard/server.py::_sync_ruleset_once": 63,
-    "dashboard/server.py::create_app": 1121,
+    "dashboard/server.py::create_app": 1120,
     "dashboard/server.py::create_app._blackbox_runtime_loop": 87,
     "dashboard/server.py::create_app._ruleset_sync_loop": 48,
     "dashboard/server.py::create_app.agents": 166,

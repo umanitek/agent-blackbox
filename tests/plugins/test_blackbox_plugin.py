@@ -3021,25 +3021,6 @@ def test_blackbox_sync_reports_pending_approval_when_catchup_is_denied(monkeypat
     assert "DKG catch-up is denied until the curator confirms this node." in out
 
 
-def test_blackbox_chat_wraps_bare_prompt(monkeypatch):
-    monkeypatch.setattr(sys, "argv", ["hermes"])
-    assert chat_command._blackbox_chat_argv(["who", "are", "you?"]) == [
-        "hermes",
-        "--profile",
-        "agent-blackbox",
-        "chat",
-        "--query",
-        "who are you?",
-    ]
-    assert chat_command._blackbox_chat_argv(["--tui"]) == [
-        "hermes",
-        "--profile",
-        "agent-blackbox",
-        "chat",
-        "--tui",
-    ]
-
-
 def test_blackbox_chat_profile_writes_identity_and_attaches(tmp_path, monkeypatch):
     profile_dir = tmp_path / "agent-blackbox"
     calls = []

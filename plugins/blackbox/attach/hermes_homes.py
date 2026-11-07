@@ -19,8 +19,6 @@ from ..kernel import yaml_files
 
 logger = logging.getLogger(__name__)
 
-_BLACKBOX_CHAT_PROFILE = "blackbox"
-_BLACKBOX_CHAT_SOUL_MARKER = "<!-- managed-by: hermes-blackbox-chat -->"
 
 
 def discover_hermes_homes() -> list[Path]:
@@ -76,15 +74,16 @@ def is_managed_blackbox_chat_profile(path: Path) -> bool:
     """Return True for the internal Blackbox control chat profile.
 
     The dashboard's attach/connected-agent surfaces list protected workloads.
-    The managed ``blackbox`` profile is the operator/control profile launched by
+    The managed ``agent-blackbox`` profile (``blackbox`` on older installs) is the operator/control profile launched by
     ``hermes blackbox chat``; showing it as a defended agent is misleading.
     """
     try:
         resolved = path.expanduser()
-        if resolved.name != _BLACKBOX_CHAT_PROFILE or resolved.parent.name != "profiles":
+        names = (constants.BLACKBOX_CHAT_PROFILE, constants.LEGACY_BLACKBOX_CHAT_PROFILE)
+        if resolved.name not in names or resolved.parent.name != "profiles":
             return False
         soul = resolved / "SOUL.md"
-        return soul.exists() and _BLACKBOX_CHAT_SOUL_MARKER in soul.read_text(encoding="utf-8-sig")
+        return soul.exists() and constants.BLACKBOX_CHAT_SOUL_MARKER in soul.read_text(encoding="utf-8-sig")
     except Exception:
         return False
 
