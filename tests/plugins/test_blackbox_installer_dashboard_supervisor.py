@@ -54,7 +54,7 @@ class Machine:
     """
 
     def __init__(self, tmp_path: Path, *, system: str = "Linux", unit: bool = False,
-                 loaded: bool = False, answers: int | None = 0) -> None:
+                 loaded: bool = False, answers: int | None = 0, bootstrap_fails: bool = False) -> None:
         self.home = tmp_path
         self.calls = tmp_path / "calls"
         self.launched = tmp_path / "launched"
@@ -68,7 +68,8 @@ class Machine:
         launchctl_print = "exit 0" if loaded else "exit 113"
         bodies = {
             "systemctl": f'echo "systemctl $*" >> "{self.calls}"; exit 0',
-            "launchctl": f'echo "launchctl $*" >> "{self.calls}"; [ "$1" = print ] && {launchctl_print}; exit 0',
+            "launchctl": (f'echo "launchctl $*" >> "{self.calls}"; [ "$1" = print ] && {launchctl_print}; '
+                          + ('[ "$1" = bootstrap ] && exit 5; ' if bootstrap_fails else "") + "exit 0"),
             "curl": curl,
             "uname": f"echo {system}",
             "node": "exit 0",
@@ -186,13 +187,27 @@ def test_a_loaded_launch_agent_is_reloaded_through_launchd_on_update(tmp_path):
     assert any(call.startswith("launchctl bootstrap gui/1000 ") for call in calls)
 
 
-def test_a_launch_agent_not_loaded_waits_for_the_next_login(tmp_path):
+def test_a_first_install_on_a_mac_hands_the_dashboard_to_launchd_now(tmp_path):
+    """LES-066 (2026-11-08, fresh Mac): the agent used to load only at the next login, so the
+    installer's own dashboard ran unsupervised until then. It is loaded at once; launchd's copy
+    takes the port over from the one the installer started."""
     machine = Machine(tmp_path, system="Darwin", loaded=False)
     result = machine.run("start_dashboard", "register_dashboard_service")
     assert result.returncode == 0, result.stderr
     assert machine.launched.exists()
-    assert "next login" in result.stdout
-    assert not any(call.split()[1] in {"bootstrap", "kickstart", "bootout"} for call in machine.recorded())
+    calls = machine.recorded()
+    assert any(call.startswith("launchctl bootstrap gui/1000 ") and call.endswith("ai.umanitek.blackbox-dashboard.plist")
+               for call in calls), calls
+    assert not any(call.split()[1] in {"kickstart", "bootout"} for call in calls)
+    assert "the dashboard runs under it" in result.stdout
+
+
+def test_a_launch_agent_that_will_not_load_says_so_and_keeps_the_running_dashboard(tmp_path):
+    machine = Machine(tmp_path, system="Darwin", loaded=False, bootstrap_fails=True)
+    result = machine.run("start_dashboard", "register_dashboard_service")
+    assert result.returncode == 0, result.stderr
+    assert machine.launched.exists()
+    assert "next login" in result.stdout and "launchctl bootstrap" in result.stdout
 
 
 def test_the_rollback_restarts_the_dashboard_after_the_files_are_back():

@@ -101,6 +101,29 @@ def dependency_key(ecosystem: str, name: str, version: str) -> str:
     return f"{ecosystem.strip().lower()}:{canonical_package_name(ecosystem, name)}@{version.strip()}"
 
 
+_PYPI_RELEASE = re.compile(r"v?(\d+(?:\.\d+)*)(.*)")
+
+
+def version_spellings(ecosystem: str, version: str) -> list[str]:
+    """Every spelling of *version* that names the same release, the given one first.
+
+    PyPI (PEP 440) ignores a leading ``v``, leading zeros and trailing ``.0`` segments, so
+    ``1``, ``1.0`` and ``v1.0.0`` are one release; a rule written with one spelling must
+    match an install written with another. Identifiers keep their own spelling (they are
+    signed and shared); only the lookup tries the equivalents. Other ecosystems: as given.
+    """
+    given = version.strip()
+    match = _PYPI_RELEASE.fullmatch(given.lower()) if ecosystem.strip().lower() == "pypi" else None
+    if not given or match is None:
+        return [given]
+    parts = [str(int(part)) for part in match.group(1).split(".")]
+    while len(parts) > 1 and parts[-1] == "0":
+        parts.pop()
+    rest = match.group(2)
+    spellings = [given] + [".".join(parts + ["0"] * pad) + rest for pad in range(0, 4 - min(len(parts), 3))]
+    return list(dict.fromkeys(spellings))
+
+
 def dependency_identifier(ecosystem: str, name: str, version: str) -> str:
     """``dep:{ecosystem}:{canonical-name}@{version}`` (see :func:`dependency_key`)."""
     return f"dep:{dependency_key(ecosystem, name, version)}"

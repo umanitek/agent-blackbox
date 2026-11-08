@@ -74,6 +74,12 @@ that the two version fields agree.
 
 ### Fixed
 
+- On a Mac the installer hands the dashboard to its login service at once, so a crashed
+  dashboard is restarted from the first day (it used to run unsupervised until the next login).
+- A Python package rule matches every spelling of the same release: a rule for version 1 now also
+  stops `pip install <name>==1.0` and `==1.0.0` (PEP 440 treats them as one release).
+- The check never fails on an odd tool input (a tool name that is not text, arguments sent as JSON
+  text): such a failure used to let the action through unchecked.
 - After a restart or reboot the page no longer says half the threat graph is missing: the node
   re-checks the assets it already holds, and that re-check is no longer counted as data still to
   download (a fresh Mac fell from 100% to 51% of a "1,842-asset" graph that has 971).

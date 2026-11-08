@@ -9,8 +9,10 @@ Blackbox fault must never break the host agent.
 
 from __future__ import annotations
 
+import functools
+import json
 import logging
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 from .. import audit, detection, killlist, overrides, ruleset, shields
 from ..kernel import config as config_mod, constants
 from ..kernel.config import BlackboxConfig
@@ -114,6 +116,31 @@ def _raw_findings(cfg: BlackboxConfig, rs: Any, tool_name: str, args: Any,
     return raw
 
 
+def _normalised_call(tool_name: Any, args: Any) -> tuple[str, Any]:
+    """``(tool_name, args)`` the checks can read: the name as text, and *args* as the object it
+    encodes when a host hands the arguments over as JSON text (Hermes passes a dict; another host,
+    or a raw model reply, may pass the string) — the same fields are checked either way."""
+    name = tool_name if isinstance(tool_name, str) else str(tool_name or "")
+    if isinstance(args, str) and args.lstrip().startswith("{"):
+        try:
+            parsed = json.loads(args)
+        except ValueError:
+            return name, args
+        return name, parsed if isinstance(parsed, dict) else args
+    return name, args
+
+
+def _with_normalised_call(hook: Callable[..., Any]) -> Callable[..., Any]:
+    """Run *hook* on :func:`_normalised_call`'s ``(tool_name, args)`` — an odd shape there once made
+    detection raise, and a raising hook lets the call through (fail-open)."""
+    @functools.wraps(hook)
+    def wrapper(tool_name: Any = "", args: Any = None, **kwargs: Any) -> Any:
+        name, normalised = _normalised_call(tool_name, args)
+        return hook(tool_name=name, args=normalised, **kwargs)
+    return wrapper
+
+
+@_with_normalised_call
 def on_pre_tool_call(
     tool_name: str = "",
     args: Any = None,

@@ -43,7 +43,9 @@ def _dependency_candidates(dep: dict[str, Any]) -> list[Any]:
     unpinned ``install <pkg>`` (which has no version to key on)."""
     ecosystem = dep["ecosystem"].lower()
     version = dep.get("version") or ""
-    return ([(ecosystem, dep["name"], version)] if version else []) + [(ecosystem, dep["name"], "*")]
+    # Every spelling of the same release (PyPI: 1 == 1.0 == 1.0.0), the given one first.
+    exact = [(ecosystem, dep["name"], spelling) for spelling in threat_ids.version_spellings(ecosystem, version)] if version else []
+    return exact + [(ecosystem, dep["name"], "*")]
 
 
 def dependency_rules(ruleset: Any, candidates: list[Any]) -> dict[str, dict[str, Any]]:
