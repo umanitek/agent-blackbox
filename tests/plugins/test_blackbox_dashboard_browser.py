@@ -221,6 +221,11 @@ def test_the_dashboard_renders_clean_at_desktop_and_phone_widths(served, tmp_pat
         # Every shield's own page was opened too, so its errors and overflow are in the checks above
         # (the Trader page once overflowed a phone on an unbreakable path and had no icon, 2026-10-14).
         assert "/shields/trader" in sections["shield-pages"], (width, sections["shield-pages"])
+        # Attach agent opens from a click on its icon or label, and Escape closes it (2026-11-08).
+        assert sections["attach-dialog"] == "opened/closed", (width, sections["attach-dialog"])
+        # An empty /api/shields (a cold dashboard) is "still checking", never "Not engaged" (2026-11-08).
+        assert "not engaged" not in sections["trader-status-while-cold"].lower(), (width, sections["trader-status-while-cold"])
+        assert "checking" in sections["trader-status-while-cold"].lower(), (width, sections["trader-status-while-cold"])
         # The verified-sync meter is measured against the graph's real size (564 assets).
         assert sections["vs-pct"] == "22.0%", (width, sections["vs-pct"])
         assert sections["vs-chip"].lower() == "syncing", (width, sections["vs-chip"])

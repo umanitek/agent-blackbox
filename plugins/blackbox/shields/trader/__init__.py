@@ -25,7 +25,7 @@ import re
 from pathlib import Path
 from typing import Any, Mapping
 
-from ...detection import Finding
+from ...detection import FIELD_WALLET_SECRET_SENT, Finding
 from ...kernel import crypto_secrets
 from ...kernel.config import load_blackbox_config
 from ..contract import (Capability, FindingKind, SettingField, SettingOption, Shield, ShieldEvent, ShieldMode,
@@ -84,7 +84,13 @@ _CLAIMED = re.compile("|".join(fnmatch.translate(kind.identifier) for kind in FI
 
 
 def claims(finding: Mapping[str, Any]) -> bool:
-    """Whether *finding* is a Trader Shield finding (the mode gate applies to it)."""
+    """Whether *finding* is a Trader Shield finding (the mode gate applies to it).
+
+    A wallet secret on its way off the machine is not: that is a built-in rule that counts
+    with the shield off too (KI-488 — a seed phrase has no right destination)."""
+    fields = finding.get("fields")
+    if isinstance(fields, Mapping) and fields.get(FIELD_WALLET_SECRET_SENT) is True:
+        return False
     return _CLAIMED.match(str(finding.get("identifier") or "")) is not None
 
 

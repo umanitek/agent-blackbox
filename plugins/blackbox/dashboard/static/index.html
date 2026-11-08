@@ -913,7 +913,9 @@
   .wp-mode { font-size: 11px; font-weight: 700; letter-spacing: .08em; padding: 4px 10px; border-radius: 999px; }
   .wp-mode.block { background: var(--secure-soft); color: var(--secure); box-shadow: inset 0 0 0 1px var(--secure); }   /* green: secured */
   .wp-mode.audit { background: var(--caution-soft); color: var(--caution); box-shadow: inset 0 0 0 1px var(--caution); }  /* amber: watched only */
-  .wp-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 0; }
+  /* --wp-cols (set by shields.js) = the card's columns. WHY: the legend spans every track, so
+     auto-fit alone keeps an empty one; a minimum of 1/cols of the width leaves exactly that many. */
+  .wp-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(max(260px, calc((100% - 2px) / var(--wp-cols, 3))), 1fr)); gap: 0; }
   .wp-col { padding: 16px 20px; border-right: 1px solid var(--border); display: grid; gap: 10px; align-content: start; }
   .wp-col:last-child { border-right: 0; }
   .wp-h { font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
@@ -1957,7 +1959,10 @@
   @media (max-width: 520px) {
     .wrap, .header-inner, .banner { padding-left: 16px; padding-right: 16px; }
     .section { margin-top: 26px; }
-    .section-head { align-items: flex-start; }
+    /* A wide control group (a shield card's mode + Edit settings) wraps under the title
+       instead of squeezing the subtitle into a narrow column. */
+    .section-head { align-items: flex-start; flex-wrap: wrap; }
+    .section-htext { flex: 1 1 240px; }
     .graph-stage { height: 390px; }
     .graph-search { width: auto; flex: 1 1 180px; min-height: 40px; }
     thead th, tbody td { padding-left: 12px; padding-right: 12px; }
@@ -2760,6 +2765,8 @@
     filter: invert(1);
     opacity: 0.96;
   }
+  /* The logo file is dark ink: inverted to white on the dark theme, drawn as is on the light one. */
+  :root[data-theme="light"] .endorsement img { filter: none; opacity: 0.82; }
 
   @media (max-width: 860px) {
     .header-inner { position: relative; padding-left: 24px; padding-right: 24px; }
@@ -5124,40 +5131,106 @@
 
     // label
     var big = isCenter || isSession || isHub;
-      // Keep key labels at a stable screen size. Graph-unit fonts disappear
-      // when a 10k-node scene zooms to fit, hiding the totals users care about.
-      var screenFontPx = (isCenter ? 12 : isHub ? 10.5 : isSession ? 7 : 5.5);
-      var labelScale = Math.max(Number(scale) || 1, 0.45);
-      var fontPx = screenFontPx / labelScale;
-      // Declutter: tool-call / "+more" labels are secondary — show only when
-      // zoomed in. Threat leaves appear a touch earlier; sessions/hubs/center always.
-      if ((isCall || isMore) && scale < 1.35) { ctx.restore(); return; }
-      if (isThreat && scale < 0.9) { ctx.restore(); return; }
-      ctx.font = (big ? "600 " : "500 ") + fontPx + "px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "top";
-    var txt = node.label || "";
-    var ty = node.y + r + 3.2 / labelScale;
+    // Declutter: tool-call / "+more" labels are secondary — show only when
+    // zoomed in. Threat leaves appear a touch earlier.
+    if ((isCall || isMore) && scale < 1.35) { ctx.restore(); return; }
+    if (isThreat && scale < 0.9) { ctx.restore(); return; }
+    // WHY queued: centre, session and hub labels are drawn by drawKeyLabels after
+    // every node, so a leaf cluster never paints over them and two never overlap.
+    if (big) { keyLabels.push({ node: node, r: r, alpha: ctx.globalAlpha }); ctx.restore(); return; }
+    var labelScale = Math.max(Number(scale) || 1, 0.45);
+    ctx.font = "500 " + (5.5 / labelScale) + "px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "top";
+    drawLabelText(ctx, node.label || "", node.x, node.y + r + 3.2 / labelScale, LABEL_MUTED, scale);
+    ctx.restore();
+  }
+
+  function drawLabelText(ctx, text, x, y, color, scale) {
     // subtle shadow for legibility over the dark field
     ctx.fillStyle = GRAPH_LABEL_SHADOW;
-    ctx.fillText(txt, node.x + 0.4 / scale, ty + 0.4 / scale);
-    ctx.fillStyle = isCenter ? MINT : (big ? LABEL : LABEL_MUTED);
-    ctx.fillText(txt, node.x, ty);
+    ctx.fillText(text, x + 0.4 / scale, y + 0.4 / scale);
+    ctx.fillStyle = color;
+    ctx.fillText(text, x, y);
+  }
 
-    // Magnitude labels always use corpus totals, never the rendered leaf sample.
-    if ((isHub || isCenter) && (isHub ? node.count : node.threatTotal) != null) {
-      var cy = ty + fontPx + 2 / labelScale;
-      ctx.font = "700 " + ((screenFontPx + 1.2) / labelScale) + "px 'IBM Plex Mono', ui-monospace, monospace";
-      var magnitude = isHub ? node.count : node.threatTotal;
-      var cstr = magnitude.toLocaleString() + " THREAT" + (magnitude === 1 ? "" : "S") +
+  // Key labels (centre, sessions, category hubs) queued by nodeCanvas during one frame.
+  var keyLabels = [];
+
+  function keyLabelRank(job) {
+    var kind = job.node.kind;
+    if (kind === "center") return Infinity;
+    if (kind === "session") return 1e15;
+    return Number(job.node.count || 0);
+  }
+
+  // Draws the queued key labels on top of the frame, most important first. Labels
+  // keep a stable screen size (graph-unit fonts vanish when a 10k-node scene zooms
+  // to fit). Each goes under its node, else above it; one that would land on a
+  // label already drawn is left out until zooming in makes room for it.
+  function drawKeyLabels(ctx, scale) {
+    var jobs = keyLabels;
+    keyLabels = [];
+    jobs.sort(function (a, b) { return keyLabelRank(b) - keyLabelRank(a); });
+    // WHY a low floor: a phone-width canvas fits the graph at ~0.2 zoom; key labels
+    // keep their screen size there too (the overlap check makes room for them).
+    var labelScale = Math.max(Number(scale) || 1, 0.12);
+    var sizeFactor = ctx.canvas.clientWidth && ctx.canvas.clientWidth < 600 ? 0.85 : 1;
+    var gap = 3 / labelScale;
+    var placed = [];
+    var overlaps = function (box) {
+      return placed.some(function (o) { return box.left < o.right && o.left < box.right && box.top < o.bottom && o.top < box.bottom; });
+    };
+    jobs.forEach(function (job) {
+      var node = job.node;
+      var isCenter = node.kind === "center";
+      var isHub = node.kind === "hub";
+      var screenFontPx = (isCenter ? 12 : (isHub ? 10.5 : 7)) * sizeFactor;
+      var namePx = screenFontPx / labelScale;
+      var countPx = (screenFontPx + 1.2) / labelScale;
+      var nameFont = "600 " + namePx + "px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+      var countFont = "700 " + countPx + "px 'IBM Plex Mono', ui-monospace, monospace";
+      var name = node.label || "";
+      // Magnitude labels always use corpus totals, never the rendered leaf sample.
+      var magnitude = isHub ? node.count : (isCenter ? node.threatTotal : null);
+      var count = magnitude == null ? "" : magnitude.toLocaleString() + " THREAT" + (magnitude === 1 ? "" : "S") +
         (isHub && node.sandboxCount ? " + " + node.sandboxCount.toLocaleString() + " TEST" + (node.sandboxCount === 1 ? "" : "S") : "");
-      ctx.fillStyle = GRAPH_LABEL_SHADOW;
-      ctx.fillText(cstr, node.x + 0.4 / scale, cy + 0.4 / scale);
-      ctx.fillStyle = isCenter ? MINT : node.color;
-      ctx.fillText(cstr, node.x, cy);
-    }
+      ctx.save();
+      ctx.font = nameFont;
+      var width = ctx.measureText(name).width;
+      ctx.font = countFont;
+      if (count) width = Math.max(width, ctx.measureText(count).width);
+      var height = namePx + (count ? 2 / labelScale + countPx : 0);
+      var below = node.y + job.r + 3.2 / labelScale;
+      var above = node.y - job.r - 3.2 / labelScale - height;
+      var top = null;
+      [below, above].some(function (candidate) {
+        var box = { left: node.x - width / 2 - gap, right: node.x + width / 2 + gap, top: candidate - gap, bottom: candidate + height + gap };
+        if (isCenter || !overlaps(box)) { placed.push(box); top = candidate; return true; }
+        return false;
+      });
+      if (top !== null) {
+        // A plate in the page background keeps the label readable over its own leaf cluster.
+        ctx.globalAlpha = job.alpha * 0.92;
+        ctx.fillStyle = BG;
+        ctx.beginPath();
+        var plate = [node.x - width / 2 - gap, top - gap / 2, width + 2 * gap, height + gap];
+        if (typeof ctx.roundRect === "function") ctx.roundRect(plate[0], plate[1], plate[2], plate[3], 3 / labelScale);
+        else ctx.rect(plate[0], plate[1], plate[2], plate[3]);
+        ctx.fill();
+        ctx.globalAlpha = job.alpha;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "top";
+        ctx.font = nameFont;
+        drawLabelText(ctx, name, node.x, top, isCenter ? MINT : LABEL, scale);
+        if (count) {
+          ctx.font = countFont;
+          drawLabelText(ctx, count, node.x, top + namePx + 2 / labelScale, isCenter ? MINT : node.color, scale);
+        }
+      }
       ctx.restore();
-    }
+    });
+  }
 
   // enlarge the clickable/hover area to match the drawn node + label
   function nodePointerArea(node, color, ctx) {
@@ -6221,6 +6294,8 @@
       .nodeVal(function (n) { return n.val; })
       .nodeLabel(nodeTooltip)
       .nodeCanvasObject(nodeCanvas)
+      .onRenderFramePre(function () { keyLabels = []; })
+      .onRenderFramePost(drawKeyLabels)
       .nodePointerAreaPaint(nodePointerArea)
       .linkColor(function (l) {
         if (l.kind === "hub") return "rgba(128,202,156,0.35)";
@@ -6240,7 +6315,9 @@
         // frame the whole network once it first settles
           if (!didInitialZoom && fg) {
             didInitialZoom = true;
-            try { fg.zoomToFit(450, 42); } catch (e) {}
+            // A narrow canvas gets more margin: its search box and view buttons cover the top.
+            var fitPadding = (el.clientWidth || 600) < 600 ? 72 : 42;
+            try { fg.zoomToFit(450, fitPadding); } catch (e) {}
           }
       });
       tuneForces(fg, false, 0);
@@ -6390,7 +6467,7 @@
       }
       // ``setCount`` keeps the latest committed number and adds the loader
       // while a newer verified snapshot is arriving (community included — live).
-      setCount("count-" + t, graphTotalForTier(t), "tab:" + t, false);
+      setCount("count-" + t, graphTotalForTier(t), "tab:" + t, true);
     });
 
     // The community tier is LIVE: it renders through the same force-graph
@@ -8161,18 +8238,23 @@
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", wireSettings);
   else wireSettings();
   document.addEventListener("click", function (e) {
-    if (e.target && e.target.id === "attach-open") openAttachModal();
-    if (e.target && e.target.id === "attach-close") closeAttachModal();
-    if (e.target && e.target.id === "attach-cancel") closeAttachModal();
-    if (e.target && e.target.id === "attach-apply") attachSelected();
-    if (e.target && e.target.id === "attach-modal") closeAttachModal();
-    if (e.target && e.target.id === "activity-close") closeActivityModal();
-    if (e.target && e.target.id === "activity-modal") closeActivityModal();
+    var target = e.target instanceof Element ? e.target : null;
+    if (!target) return;
+    // WHY closest(): these buttons hold an icon and a label, and a click on either
+    // lands on the child — only the backdrop checks below want the exact element.
+    var button = target.closest("#attach-open, #attach-close, #attach-cancel, #attach-apply, #activity-close");
+    var id = button ? button.id : target.id;
+    if (id === "attach-open") openAttachModal();
+    if (id === "attach-close" || id === "attach-cancel" || id === "attach-modal") closeAttachModal();
+    if (id === "attach-apply") attachSelected();
+    if (id === "activity-close" || id === "activity-modal") closeActivityModal();
   });
   document.addEventListener("keydown", function (e) {
     if (e.key === "Escape") {
       var overlay = document.getElementById("activity-modal");
       if (overlay && overlay.classList.contains("open")) closeActivityModal();
+      var attach = document.getElementById("attach-modal");
+      if (attach && attach.classList.contains("open")) closeAttachModal();
     }
   });
 

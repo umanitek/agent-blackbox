@@ -29,7 +29,7 @@ from .action_parsing import (FETCH_TOOL_PREFIXES, HOST_FILE_AND_SKILL_TOOLS, SEN
 from .content_scanners import SKILL_DANGER_SHAPES
 from .osv import DEPENDENCY_ECOSYSTEMS, advisory_kind
 from .reviewer_setup import cmd_setup_llm
-from .finding import KIND_FLAG_ONLY
+from .finding import FIELD_WALLET_SECRET_SENT, KIND_FLAG_ONLY
 from .paths.guard_settings import detect_guard_tamper
 from .detectors import (
     ANSWERED_BY_FALLBACK,
@@ -60,6 +60,7 @@ __all__ = [
                              'DEPENDENCY_ECOSYSTEMS',
                              'ESCALATION_SHAPES',
                              'FETCH_TOOL_PREFIXES',
+                             'FIELD_WALLET_SECRET_SENT',
                              'HOST_FILE_AND_SKILL_TOOLS',
                              'KIND_FLAG_ONLY',
                              'SENSITIVE_PATH_CATEGORIES',

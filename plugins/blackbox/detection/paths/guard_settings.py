@@ -18,7 +18,9 @@ through these hooks):
   opens it for writing), or runs Hermes or Blackbox to switch Blackbox off
   (``hermes plugins disable|remove blackbox``, ``hermes config set …blackbox…``,
   ``blackbox detach|uninstall|rules unblock``), or calls Blackbox's settings APIs (the dashboard's
-  settings and session-token routes, the Desktop page's switch);
+  settings and session-token routes, the Desktop page's switch), or stops Blackbox's services (its
+  launchd jobs / systemd units, ``pkill``/``killall`` of Blackbox or its DKG node, a kill of whatever
+  holds the dashboard's or the node's port);
 * code handed to a code tool (``execute_code``) that writes one of those places.
 
 A built-in rule, not an entry in the editable protected-path list (LES-053: a default added to a
@@ -63,12 +65,21 @@ _CODE_WRITES = re.compile(r"open\([^)]*['\"][wax][+b]?['\"]|write_text|write_byt
 #: mode change is the same self-disable by another road.
 _SETTINGS_API = re.compile(
     r"(?:127\.0\.0\.1|localhost|\[::1\]|0\.0\.0\.0):\d+/api/(?:settings|session|agents/protection|attach|report)\b"
-    r"|/api/plugins/blackbox/(?:mode|dash)\b", re.IGNORECASE)
+    r"|/api/plugins/blackbox/(?:mode|dash|setup)\b", re.IGNORECASE)
 #: Commands that switch Blackbox off without naming a file.
 _SWITCH_OFF = re.compile(
     r"\bhermes\b(?:\s+-p\s+\S+)?\s+(?:plugins\s+(?:disable|remove|uninstall|rm)\b[^|;&]*\bblackbox\b"
     r"|config\s+set\b[^|;&]*(?:blackbox|plugins))"
     r"|\b(?:hermes\s+)?blackbox\s+(?:detach|uninstall|rules\s+unblock)\b", re.IGNORECASE)
+#: Commands that stop Blackbox's own services (2026-11-08, fresh-Mac check): the dashboard, or the DKG
+#: node the verified-graph checks are looked up in — unloading their launchd job / systemd unit, or
+#: killing them by name or by the port they hold. A plain ``killall node`` or another node's
+#: ``dkg stop`` is not named here: developers stop their own servers.
+_STOPS_SERVICE = re.compile(
+    r"\blaunchctl\s+(?:bootout|unload|remove|disable|kill|stop)\b[^|;&]*\bai\.umanitek\.blackbox"
+    r"|\bsystemctl\b[^|;&]*\b(?:stop|disable|mask|kill)\b[^|;&]*\bblackbox-"
+    r"|\b(?:pkill|killall)\b[^|;&]*\b(?:blackbox|dkg)\b"
+    r"|\bkill\b[^;&]*\blsof\b[^;&)]*:(?:9700|9320)\b|\bfuser\b[^|;&]*\s-k\b[^|;&]*\b(?:9700|9320)/tcp\b", re.IGNORECASE)
 
 
 def _guarded_places() -> tuple[str, ...]:
@@ -195,7 +206,7 @@ def _written_operands(segment: list[str]) -> list[str]:
 
 def _shell_tampers(command: str) -> bool:
     """True when *command* writes a guarded place, or switches Blackbox off by command."""
-    if _SWITCH_OFF.search(command) or _SETTINGS_API.search(command):
+    if _SWITCH_OFF.search(command) or _SETTINGS_API.search(command) or _STOPS_SERVICE.search(command):
         return True
     folder = ""
     for segment in _segments(_words(command)):

@@ -32,6 +32,7 @@ Registered by :func:`.server.create_app` through
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from dataclasses import asdict, dataclass, field, replace
@@ -41,6 +42,8 @@ from ... import ruleset
 from ...kernel.dkg_client import DkgClient
 from ...sync import read_recovery_backlog
 from .progress import STALL_SECONDS, WATCH, SyncProgress, SyncProgressWatch, sync_phase
+
+logger = logging.getLogger(__name__)
 
 #: Seconds one meter reading is reused — the page polls every few seconds and
 #: the node only moves every minute or two, so the node is asked at most this often.
@@ -204,10 +207,10 @@ def verified_graph_still_arriving(cfg: Any) -> bool:
     label's previous behaviour.
     """
     backlog = read_recovery_backlog(cfg.dkg_home, cfg.context_graph_id)
-    if backlog is not None and backlog.pending > 0:
-        return True
     done = ruleset.verified_progress(cfg.context_graph_id) or {}
     compiled, total = done.get("assets_compiled"), done.get("assets_total")
+    if backlog is not None and backlog.to_fetch(compiled if isinstance(compiled, int) else 0) > 0:
+        return True
     return isinstance(compiled, int) and isinstance(total, int) and compiled < total
 
 
@@ -227,12 +230,16 @@ def read_sync_meter(cfg: Any, *, node_reachable: bool, verified_rules: int,
     backlog = read_recovery_backlog(cfg.dkg_home, graph_id)
     compiled = (ruleset.verified_progress(graph_id) or {}).get("assets_compiled")
     at_pass = None
-    if anchor is not None and backlog is not None and downloaded is not None:
+    pending = backlog.pending if backlog else None
+    if backlog is not None and backlog.head is not None and downloaded is not None:
+        # The node states the graph's size: what is missing is head - held (a restart's re-check is not).
+        pending = backlog.to_fetch(downloaded.assets)
+    elif anchor is not None and backlog is not None and downloaded is not None:
         # Keyed by graph too: a config switch to another graph must not reuse this one's count.
         at_pass = anchor.downloaded_at_pass(f"{graph_id}@{backlog.logged_at}", downloaded.assets)
     meter = build_sync_meter(
         downloaded=downloaded,
-        pending=backlog.pending if backlog else None,
+        pending=pending,
         compiled_assets=compiled if isinstance(compiled, int) else None,
         verified_rules=verified_rules,
         checked_at=backlog.logged_at if backlog else "",
@@ -276,9 +283,32 @@ def register_sync_meter_routes(app: Any, *, load_config: Callable[[], Any],
                 cached["body"], cached["at"] = asdict(meter), time.monotonic()
             return dict(cached["body"])
 
+    _READER.handler = verified_sync
     return verified_sync
 
 
+class _ReaderHolder:
+    """The dashboard's one registered ``/api/verified-sync`` handler (one dashboard per process)."""
+
+    handler: Optional[Callable[[], dict[str, Any]]] = None
+
+
+_READER = _ReaderHolder()
+
+
+def first_sync_state() -> str:
+    """:meth:`SyncProgressWatch.first_sync` for the health checks, after one meter reading when this
+    process has not read the meter yet — the first health poll of a fresh dashboard comes before the
+    page's first meter poll, and an unread watch said "" (no sync running), so a first sync in progress
+    showed "UNPROTECTED: run blackbox sync --wait" (KI-475). Reads the meter at most once per process."""
+    if not WATCH.observed and _READER.handler is not None:
+        try:
+            _READER.handler()
+        except Exception as exc:   # health: allow BLE001 -- a meter that cannot be read leaves the health check as it was
+            logger.debug("blackbox: sync meter unreadable for the health check: %s", exc)
+    return WATCH.first_sync()
+
+
 __all__ = ["STALL_SECONDS", "WATCH", "GraphSizeAnchor", "SyncMeter", "SyncProgress", "SyncProgressWatch",
-           "build_sync_meter", "lookup_status", "read_sync_meter", "register_sync_meter_routes", "sync_phase",
+           "build_sync_meter", "first_sync_state", "lookup_status", "read_sync_meter", "register_sync_meter_routes", "sync_phase",
            "verified_graph_still_arriving"]

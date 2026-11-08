@@ -860,10 +860,22 @@ def test_the_worker_refreshes_soon_when_nothing_was_ever_compiled():
     from plugins.blackbox.ruleset import compiler
     cfg = BlackboxConfig(sync_interval=3600)
     never = compiler.Ruleset()                                   # synced_at 0
-    compiled = compiler.Ruleset()
-    compiled.synced_at = time.time()                          # compiled just now
+    compiled = compiler.Ruleset(injection=[{"id": "inj-1"}])
+    compiled.synced_at = time.time()                          # compiled just now, with a rule
     assert sync_timing.initial_sync_delay(cfg, never, 5.0, 10.0) == 10.0
     assert 3590.0 <= sync_timing.initial_sync_delay(cfg, compiled, 5.0, 10.0) <= 3600.0
+
+
+def test_the_worker_refreshes_soon_when_setup_compiled_an_empty_ruleset():
+    """Judge-path test, bb-judge-2 (2026-11-07): setup compiles once before the node holds any graph,
+    so a fresh home has a timestamp and no rules; the dashboard took that for "compiled" and put the
+    first sync an hour away — the Desktop page sat on "Finding the graph" with nothing asking for it."""
+    from plugins.blackbox.dashboard import sync_timing
+    from plugins.blackbox.kernel.config import BlackboxConfig
+    from plugins.blackbox.ruleset import compiler
+    empty = compiler.Ruleset()
+    empty.synced_at = time.time()                             # setup's compile: no rules yet
+    assert sync_timing.initial_sync_delay(BlackboxConfig(sync_interval=3600), empty, 5.0, 10.0) == 10.0
 
 
 def test_the_first_refresh_follows_the_rulesets_own_schedule(monkeypatch):
@@ -875,7 +887,7 @@ def test_the_first_refresh_follows_the_rulesets_own_schedule(monkeypatch):
     from plugins.blackbox.ruleset import compiler
     monkeypatch.setattr(sync_timing.time, "time", lambda: 1_000_000.0)
     cfg = BlackboxConfig(sync_interval=3600)
-    catching_up = compiler.Ruleset()
+    catching_up = compiler.Ruleset(injection=[{"id": "inj-1"}])   # the first asset's rules
     catching_up.synced_at = 1_000_000.0 - 3600 + 120          # the refresh cycle asked for 120 s
 
     assert sync_timing.initial_sync_delay(cfg, catching_up, 5.0, 10.0) == 120.0

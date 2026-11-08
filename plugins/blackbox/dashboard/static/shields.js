@@ -200,6 +200,7 @@
       mode.className = "wp-mode " + (card.blocking ? "block" : "audit");
       mode.textContent = card.blocking ? "● Blocking" : "Watching only · audit mode";
       mode.title = card.blocking ? "Threats are stopped before the action runs." : "Threats are recorded and shown, but not stopped. Turn on Block in Settings to stop them.";
+      body.style.setProperty("--wp-cols", String(card.sections.length + 1));   // + the events column
       body.innerHTML = card.sections.map(function (part) {
         return '<div class="wp-col"><div class="wp-h">' + esc(part.title) + help(part.help) + "</div>" + part.rows.map(rowHTML).join("") + "</div>";
       }).join("") + eventsColumnHTML(card) + LEGEND;

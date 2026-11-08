@@ -93,7 +93,7 @@ def test_a_restarted_dashboards_new_token_is_fetched_once(dashboard):
 
 
 @pytest.mark.parametrize("method,path", [
-    ("POST", "api/blackbox-chat"),
+    ("GET", "api/blackbox-chat"),
     ("GET", "api/session"),
     ("GET", "api/../api/session"),
     ("POST", "api/graph-status"),
@@ -119,7 +119,8 @@ def test_every_panel_route_is_allowed():
     reads = ["api/findings", "api/audit", "api/graph-status", "api/verified-sync", "api/graph", "api/threat",
              "api/shields", "api/shields/trader/events", "api/agents", "api/community-stats", "api/reports",
              "api/trust", "api/settings", "shields/trader/content.json"]
-    writes = ["api/settings", "api/agents/protection", "api/agents/rescan", "api/sync"]
+    writes = ["api/settings", "api/agents/protection", "api/agents/rescan", "api/sync", "api/blackbox-chat",
+              "api/playground/run", "api/playground/wallets/run"]
     assert all(DashboardLink.allowed("GET", path) for path in reads)
     assert all(DashboardLink.allowed("POST", path) for path in writes)
 
@@ -136,3 +137,17 @@ def test_every_route_the_desktop_panels_call_is_allowed():
     assert [path for path in calls if not DashboardLink.allowed("POST", path)] == []
     assert [path for path in reads if not DashboardLink.allowed("GET", path)] == []
 
+
+
+def test_an_assistant_turn_and_a_playground_test_get_the_long_timeout(dashboard, monkeypatch):
+    """A chat turn takes up to 120 s on the dashboard and a Playground test ~90 s; the 15 s read
+    limit would cut both off (Desktop parity, 2026-11-07)."""
+    import importlib
+    link_module = importlib.import_module("plugins.blackbox.desktop.dashboard_link")   # the package's dashboard_link() shadows the name
+    seen = []
+    real = link_module.urllib.request.urlopen
+    monkeypatch.setattr(link_module.urllib.request, "urlopen", lambda request, timeout: seen.append(timeout) or real(request, timeout=timeout))
+    link = DashboardLink(dashboard.port)
+    link.forward("POST", "api/blackbox-chat", "", {"message": "hi"})
+    link.forward("POST", "api/settings", "", {"mode": "block"})
+    assert seen[-1] == link_module._TIMEOUT_S and link_module._LONG_TIMEOUT_S in seen

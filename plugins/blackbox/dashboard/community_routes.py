@@ -259,7 +259,7 @@ def _admission_value(cfg: Any) -> str:
 
 def health_payload(community_read: CommunityReadSource, node_reachable: Callable[[Any], bool]) -> dict[str, Any]:
     """R10: the operator's health items from the same inputs `blackbox status` uses."""
-    from .. import audit, community, ruleset
+    from .. import audit, community, ruleset, sync
     from ..kernel import health
     from ..kernel.config import load_blackbox_config
     from . import sync_meter
@@ -269,11 +269,13 @@ def health_payload(community_read: CommunityReadSource, node_reachable: Callable
     rs = ruleset.peek(cfg)
     read = community_read(cfg) if getattr(cfg, "context_graph_id", "") else None
     retries = community.share_retry_stats()
-    inputs = health.gather(cfg, rs, node_reachable(cfg), read, audit.blocked_counts_by_identifier(), time.time(),
+    reachable = node_reachable(cfg)
+    inputs = health.gather(cfg, rs, reachable, read, audit.blocked_counts_by_identifier(), time.time(),
+                           node_starting=not reachable and sync.node_starting(cfg),
                            pending_shares=retries.pending, shares_given_up=retries.given_up,
                            sharing_consent_problem=community.consent.why_not(),
                            verified_lookup_problem=ruleset.live.HEALTH.read().problem(),
-                           first_sync=sync_meter.WATCH.first_sync(),
+                           first_sync=sync_meter.first_sync_state(),
                            admission=_admission_value(cfg))
     items = health.operator_health(inputs)
     return {"items": [{**item.as_dict(), "red": health.red(item)} for item in items],

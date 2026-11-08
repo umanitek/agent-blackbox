@@ -3294,9 +3294,16 @@ DASHUNIT
 </dict></plist>
 DASHPLIST
             if [ "$(blackbox_dashboard_supervisor)" != launchd ]; then
-                # Registered for the next login only: the dashboard started above keeps
-                # running now, and loading the agent here would start a second one.
-                ok "LaunchAgent registered (blackbox-dashboard) — starts at your next login"
+                # LES-066: hand the dashboard to launchd NOW, not at the next login — until then
+                # nothing restarts it after a crash. launchd's dashboard replaces the one started
+                # above on its port (`blackbox dashboard` stops only a Blackbox dashboard there).
+                if ! launchctl bootstrap "gui/$(id -u)" "$plist" >/dev/null 2>&1; then
+                    warn "LaunchAgent registered (blackbox-dashboard) but not loaded — it starts at your next login; to load it now: launchctl bootstrap gui/$(id -u) $plist"
+                elif blackbox_dashboard_answers_within "http://127.0.0.1:${BLACKBOX_DASHBOARD_PORT:-9700}/api/health" "$BLACKBOX_DASHBOARD_ANSWER_WAIT_SECONDS"; then
+                    ok "LaunchAgent registered (blackbox-dashboard) — the dashboard runs under it"
+                else
+                    warn "LaunchAgent loaded (blackbox-dashboard) but the dashboard has not answered yet; check it with: launchctl print gui/$(id -u)/$BLACKBOX_DASHBOARD_LAUNCHD_LABEL"
+                fi
                 return 0
             fi
             # Loaded: the agent runs the dashboard now. It takes a rewritten plist only when

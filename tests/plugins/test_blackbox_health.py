@@ -46,6 +46,9 @@ def test_a_healthy_node_has_nothing_to_do():
 
 @pytest.mark.parametrize("over, klass, needle", [
     ({"node_reachable": False}, health.HealthClass.ACTION, "stale"),
+    # 2026-11-08 (fresh Mac, after a reboot): a node still inside its restart wait is starting, not stale
+    ({"node_reachable": False, "node_starting": True}, health.HealthClass.INFO, "starting"),
+    ({"node_starting": True, "ruleset_age_s": 2_000.0}, health.HealthClass.ACTION, "stale"),   # an old ruleset still alarms
     ({"ruleset_age_s": 2_000.0}, health.HealthClass.ACTION, "stale"),
     ({"ruleset_age_s": None}, health.HealthClass.ACTION, "stale"),
     ({"rule_count": 0}, health.HealthClass.ACTION, "UNPROTECTED"),

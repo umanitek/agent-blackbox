@@ -337,3 +337,16 @@ def test_the_captured_payload_has_every_section_and_no_address(home, monkeypatch
     assert titles == ["Found on this machine", "Always watching", "Needs attention"]
     assert all(section["rows"] for section in captured[0]["sections"])
     assert OWN not in FIXTURE.read_text(encoding="utf-8").lower()
+
+
+def test_an_off_shield_does_not_tick_its_own_checks(home, monkeypatch):
+    """2026-11-08 (bb-test-4): with Trader Shield off, Desktop's Shields tab still ticked "Seed phrases
+    — checker on" while a seed phrase went out unchecked. Off, its own checks read "not protected";
+    protected files are a built-in rule and stay on."""
+    _config(monkeypatch, mode="block")
+    off = _rows(_card(trader_mode.build(enabled=False)), "Always watching")
+    on = _rows(_card(trader_mode.build(enabled=True)), "Always watching")
+    for name in ("Seed phrases", "Private keys"):
+        assert off[name].state == "none" and "off" in off[name].sub, off[name]
+        assert on[name].state == "ok"
+    assert off["Protected files"].state == "ok"

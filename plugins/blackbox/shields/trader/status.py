@@ -154,6 +154,10 @@ def _watching_section(active: ShieldMode, block: bool, protected_paths: tuple[st
     if exchanges:
         rows.append(StatusRow(*on, text="Exchange API keys", sub=" · ".join(exchanges) + " — only to their own site"))
         rows.append(StatusRow(*on, text="Token approvals", sub="known drainer blocked · unlimited approvals flagged"))
+    if not active.enabled:
+        # Off, the shield's own checks do not run (2026-11-08: the card still ticked them while a
+        # seed phrase went out unchecked); protected files are a built-in rule and stay on.
+        rows = [StatusRow(*_NOT_PROTECTED, text=row.text, sub="off — engage Trader Shield to watch this") for row in rows]
     rows.append(StatusRow(*on, text="Protected files",
                           sub=" · ".join(paths[:_PATHS_SHOWN]) + (" …" if len(paths) > _PATHS_SHOWN else "") +
                               " · file tools and terminal"))   # FIX-0103: the terminal follows the same rule

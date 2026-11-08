@@ -6,9 +6,12 @@ Blackbox's package, so relative imports cannot work here. It finds the Blackbox 
 already loaded in this process (the one whose folder holds this file) and reads everything through
 its ``desktop`` module; if Blackbox is not loaded here, it loads its own copy of the package once.
 The routes read protection status and the newest findings (never evidence or commands), and
-``POST /mode`` switches between audit and block, and ``/dash/<path>`` forwards an allowlisted set
+``POST /mode`` switches between audit and block, ``GET /readiness`` says where the machine is between
+plugin install and synced and ``POST /setup`` starts ``hermes blackbox setup`` (``desktop.readiness``), and ``/dash/<path>`` forwards an allowlisted set
 of the running dashboard's own API (threat graph, Trader Shield, agents, community, settings) so the
-Desktop page shows every panel without a second copy of its logic (``desktop.dashboard_link``). Hermes refuses every request here that does not
+Desktop page shows every panel without a second copy of its logic (``desktop.dashboard_link``);
+``POST /dash-call/<path>`` + ``GET /dash-call/<id>`` run the calls that outlast Desktop's 30 s request
+limit in the background (``desktop.long_calls``). Hermes refuses every request here that does not
 carry Desktop's own credential (401), so an agent's ``curl`` cannot reach the switch; Blackbox's
 tamper rule also flags any agent command aimed at these routes.
 
@@ -22,10 +25,11 @@ import importlib.util
 import sys
 from pathlib import Path
 from types import ModuleType
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from fastapi import APIRouter, Body, Query, Request
 from fastapi.responses import JSONResponse
+from starlette.concurrency import run_in_threadpool
 
 router = APIRouter()
 
@@ -91,16 +95,57 @@ def mode(body: dict[str, Any] = Body(default={})) -> Any:
         return _unavailable(exc)
 
 
-async def _forward(request: Request, path: str) -> Any:
+@router.get("/readiness")
+def readiness() -> Any:
     try:
-        body = await request.json() if request.method == "POST" else None
+        return {"available": True, **_desktop_module().readiness_status()}
+    except Exception as exc:   # health: allow BLE001 -- the Desktop page shows "unavailable", never an HTML 500
+        return _unavailable(exc)
+
+
+@router.post("/setup")
+def setup() -> Any:
+    try:
+        return {"available": True, **_desktop_module().start_setup()}
+    except Exception as exc:   # health: allow BLE001 -- the Desktop page shows "unavailable", never an HTML 500
+        return _unavailable(exc)
+
+
+async def _json_body(request: Request) -> Any:
+    try:
+        return await request.json() if request.method == "POST" else None
     except ValueError:
-        body = {}
+        return {}
+
+
+async def _answer(call: Callable[[], Any]) -> Any:
+    """Run a blocking dashboard *call* on a worker thread and send its LinkAnswer.
+
+    WHY a thread: these routes run on Hermes' own event loop, so a blocking request made here
+    froze every Desktop request (the whole page went blank while one assistant turn ran)."""
     try:
-        answer = _desktop_module().dashboard_link().forward(request.method, path, request.url.query, body)
+        answer = await run_in_threadpool(call)
     except Exception as exc:   # health: allow BLE001 -- the Desktop page shows "unavailable", never an HTML 500
         return _unavailable(exc)
     return JSONResponse(answer.body, status_code=answer.status)
+
+
+async def _forward(request: Request, path: str) -> Any:
+    body = await _json_body(request)
+    return await _answer(lambda: _desktop_module().dashboard_link().forward(request.method, path, request.url.query, body))
+
+
+@router.post("/dash-call/{path:path}")
+async def dash_call_start(request: Request, path: str) -> Any:
+    """Start a dashboard call that outlasts Desktop's 30 s limit (an assistant turn, a Playground test)."""
+    body = await _json_body(request)
+    return await _answer(lambda: _desktop_module().long_calls().start(path, body))
+
+
+@router.get("/dash-call/{call_id}")
+async def dash_call_result(call_id: str) -> Any:
+    """202 while the call runs, then the dashboard's own answer."""
+    return await _answer(lambda: _desktop_module().long_calls().result(call_id))
 
 
 @router.get("/dash/{path:path}")

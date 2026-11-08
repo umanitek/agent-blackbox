@@ -17,6 +17,12 @@ from typing import Any, Dict, Optional
 #: approval a trading bot sends every day (KI-385). The hook's blocking rule reads it.
 KIND_FLAG_ONLY = "flag-only"
 
+#: ``Finding.fields`` key set on a wallet secret (seed phrase, private key) that a call SENDS
+#: off the machine. A wallet secret has no right destination, so this one is a built-in rule:
+#: it counts whether or not Trader Shield is on (KI-488) — the shield claims every other
+#: wallet-secret finding (one merely written or read locally) and gates it by its mode.
+FIELD_WALLET_SECRET_SENT = "walletSecretSent"
+
 
 @dataclass
 class Finding:

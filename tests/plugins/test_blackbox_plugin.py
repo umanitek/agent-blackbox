@@ -179,7 +179,7 @@ def test_blackbox_chat_parser_accepts_query_flags():
     cli_mod.setup_cli(parser)
     args = parser.parse_args(["chat", "--query", "who are you?", "--quiet"])
     assert args.func is chat_command.cmd_chat
-    assert chat_command._blackbox_chat_args(args) == ["--query", "who are you?", "--quiet"]
+    assert chat_command._blackbox_chat_args(args) == ["--query=who are you?", "--quiet"]
 
 
 def test_blackbox_sync_parser_accepts_wait_timeout():
@@ -3019,25 +3019,6 @@ def test_blackbox_sync_reports_pending_approval_when_catchup_is_denied(monkeypat
     assert "Pending curator approval" in out
     assert "Ask the curator to approve agent address: 0xfresh" in out
     assert "DKG catch-up is denied until the curator confirms this node." in out
-
-
-def test_blackbox_chat_wraps_bare_prompt(monkeypatch):
-    monkeypatch.setattr(sys, "argv", ["hermes"])
-    assert chat_command._blackbox_chat_argv(["who", "are", "you?"]) == [
-        "hermes",
-        "--profile",
-        "agent-blackbox",
-        "chat",
-        "--query",
-        "who are you?",
-    ]
-    assert chat_command._blackbox_chat_argv(["--tui"]) == [
-        "hermes",
-        "--profile",
-        "agent-blackbox",
-        "chat",
-        "--tui",
-    ]
 
 
 def test_blackbox_chat_profile_writes_identity_and_attaches(tmp_path, monkeypatch):

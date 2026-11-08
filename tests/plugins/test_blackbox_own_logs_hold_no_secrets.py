@@ -110,6 +110,8 @@ def test_a_seed_phrase_in_a_curl_url_never_reaches_the_activity_log(home, url):
 ], ids=["list-of-words", "one-word-per-value", "words-as-keys", "split-across-fields"])
 def test_a_phrase_assembled_from_pieces_is_found_and_never_logged(home, build):
     words = phrase()
+    while len(set(words)) < len(words):   # "words-as-keys" cannot hold a repeated word (about 1 phrase in 31 has one)
+        words = phrase()
     result = hooks.on_pre_tool_call(tool_name="mcp__notes__save", args=build(words), session_id="pieces")
     assert result and result["action"] == "block"                     # an MCP tool's arguments leave the machine
     assert any(row["identifier"] == "secret:seed-phrase" for row in audit.read_findings(limit=10))

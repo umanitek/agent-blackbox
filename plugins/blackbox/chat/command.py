@@ -1,6 +1,6 @@
 """``blackbox chat`` — a Hermes chat session preconfigured as the Blackbox assistant.
 
-Creates/refreshes the managed ``blackbox`` profile (its SOUL identity, the
+Creates/refreshes the managed ``agent-blackbox`` profile (its SOUL identity, the
 pinned context-file cap) and launches Hermes in the source checkout so the
 assistant can read the repo's own docs.
 """
@@ -9,14 +9,13 @@ from __future__ import annotations
 
 import argparse
 import os
-import sys
 from pathlib import Path
 from typing import List, Optional
 from .. import attach
-from ..kernel import yaml_files
+from ..kernel import constants, yaml_files
 
-_BLACKBOX_CHAT_PROFILE = "agent-blackbox"
-_BLACKBOX_SOUL_MARKER = "<!-- managed-by: hermes-blackbox-chat -->"
+_BLACKBOX_CHAT_PROFILE = constants.BLACKBOX_CHAT_PROFILE
+_BLACKBOX_SOUL_MARKER = constants.BLACKBOX_CHAT_SOUL_MARKER
 _LEGACY_MANAGED_SOUL_PREFIX = "<!-- managed-by: hermes-"
 _BLACKBOX_SOURCE_ROOT_MARKER = ".blackbox-source-root"
 _BLACKBOX_CONTEXT_FILE_MAX_CHARS = 100_000
@@ -51,9 +50,11 @@ Prefer the running dashboard API on http://127.0.0.1:9700 (all read-only, JSON):
   `dkg_url`, `node_reachable`, `last_sync`, `ruleset` (per-category local counts),
   `curated` (Public tier count), `community` (community-tier rule count),
   `sightings`, `findings_logged`.
-- `GET /api/graph?tier=public|local` — the actual threat ENTRIES for a
-  tier. Returns `{{tier, threats:[{{identifier, category, severity, name}}]}}`.
-  Use this to list what's in the public/community/local graph.
+- `GET /api/graph?tier=public|local&q=<term>&limit=20` — look up threat ENTRIES
+  in a tier. Returns `{{tier, threats:[{{identifier, category, severity, name}}], total}}`.
+  Always pass `q` (a package, domain, identifier or word) and a small `limit`: a tier
+  holds up to a million entries, and their names quote attack phrases. For "how many"
+  use the counts in `/api/graph-status`; never fetch a whole tier.
 - `GET /api/threat?tier=public&identifier=<id>` — full detail for one
   threat (description, references/advisories, reporters).
 - `GET /api/findings?limit=&offset=` — threats Blackbox has flagged on this
@@ -168,15 +169,15 @@ def _blackbox_chat_args(args: argparse.Namespace) -> list[str]:
         ("max_turns", "--max-turns"),
     ]:
         value = getattr(args, attr, None)
-        if value is not None:
-            out.extend([flag, str(value)])
+        if value is not None:   # "--flag=value": a value starting with "-" is never read as an option
+            out.append(f"{flag}={value}")
     for skill in getattr(args, "skills", None) or []:
-        out.extend(["--skills", skill])
+        out.append(f"--skills={skill}")
     continue_last = getattr(args, "continue_last", None)
     if continue_last is True:
         out.append("--continue")
     elif continue_last:
-        out.extend(["--continue", str(continue_last)])
+        out.append(f"--continue={continue_last}")
     for attr, flag in [
         ("verbose", "--verbose"),
         ("quiet", "--quiet"),
@@ -196,7 +197,7 @@ def _blackbox_chat_args(args: argparse.Namespace) -> list[str]:
             out.append(flag)
     prompt = getattr(args, "prompt", None) or []
     if prompt and not getattr(args, "query", None):
-        out.extend(["--query", " ".join(prompt)])
+        out.append("--query=" + " ".join(prompt))
     return out
 
 
@@ -267,10 +268,19 @@ def _ensure_blackbox_context_cap(profile_dir: Path) -> None:
 
 
 def _blackbox_chat_argv(chat_args: Optional[list[str]], profile: str = _BLACKBOX_CHAT_PROFILE) -> list[str]:
+    """The command that runs Hermes' own chat under Blackbox's profile.
+
+    The program comes from Hermes' resolver (``build_relaunch_argv``), never from
+    ``sys.argv[0]``: the published launcher runs ``python -I -c <script>``, so there
+    ``sys.argv[0]`` is the string ``"-c"`` and exec failed with ``'/sbin/-c'`` (KI-459).
+    The resolver gives the real ``hermes`` on PATH, or ``python -m hermes_cli.main``.
+    """
+    from hermes_cli.relaunch import build_relaunch_argv
+
     args = [a for a in (chat_args or []) if a != "--"]
-    argv = [sys.argv[0] or "hermes", "--profile", profile, "chat"]
+    chat = ["--profile", profile, "chat"]
     if args and not args[0].startswith("-"):
-        argv.extend(["--query", " ".join(args)])
+        chat.append("--query=" + " ".join(args))
     else:
-        argv.extend(args)
-    return argv
+        chat.extend(args)
+    return build_relaunch_argv(chat, preserve_inherited=False)

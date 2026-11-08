@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import secrets
 import shutil
 import socket
@@ -28,6 +29,7 @@ from collections import Counter, deque
 from pathlib import Path
 from typing import Any, Dict, List, Set, Tuple
 
+from ..kernel import constants
 from ..kernel.browser_boundary import BrowserBoundary
 from .. import shields
 from ..sync import read_durable_progress, state as sync_state
@@ -54,7 +56,7 @@ _RULESET_HEAVY_REFRESH_MIN_SEC = 15 * 60.0
 _BLACKBOX_READY_PERCENT = 80.0
 _BLACKBOX_MIN_OVERDUE_SEC = 10 * 60.0
 _BLACKBOX_STALLED_SYNC_SEC = 10 * 60.0
-_BLACKBOX_PROFILE = "agent-blackbox"
+_BLACKBOX_PROFILE = constants.BLACKBOX_CHAT_PROFILE
 _LOOPBACK_HOST_NAMES = frozenset({"127.0.0.1", "localhost", "[::1]"})  # the only Hosts the dashboard answers to
 _BLACKBOX_RUNTIME_HOST = "127.0.0.1"
 _BLACKBOX_RUNTIME_PORT = 9121
@@ -796,7 +798,6 @@ def create_app(*, manage_blackbox: bool = False):
     from .. import attach, audit, community, ruleset
     from ..kernel import settings
     from ..sync import state as sync_state
-    from ..kernel import constants
     from ..kernel.config import load_blackbox_config
     from ..kernel.dkg_client import DkgClient, DkgError, extract_binding
 
@@ -1198,17 +1199,10 @@ def create_app(*, manage_blackbox: bool = False):
             return JSONResponse({"ok": False, "errors": ["internal error"]}, status_code=500)
 
     def _clean_chat_output(text: str) -> str:
-        lines: list[str] = []
-        for line in (text or "").splitlines():
-            stripped = line.strip()
-            if not stripped:
-                continue
-            if stripped.startswith("session_id:"):
-                continue
-            if "Context file AGENTS.md TRUNCATED" in stripped:
-                continue
-            lines.append(line.rstrip())
-        return "\n".join(lines).strip()
+        # Blank lines are kept (one at most in a row): they are the answer's paragraph breaks.
+        lines = [line.rstrip() for line in (text or "").splitlines()
+                 if not line.strip().startswith("session_id:") and "Context file AGENTS.md TRUNCATED" not in line]
+        return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
 
     def _parse_chat_session_id(text: str) -> str | None:
         for line in (text or "").splitlines():
@@ -1227,9 +1221,10 @@ def create_app(*, manage_blackbox: bool = False):
             return JSONResponse({"ok": False, "error": "Message is too long."}, status_code=400)
         session_id = str((payload or {}).get("session_id") or "").strip()
         hermes = shutil.which("hermes") or os.environ.get("HERMES_BIN") or "hermes"
-        argv = [hermes, "blackbox", "chat", "--query", message, "--quiet", "--pass-session-id"]
-        if session_id:
-            argv.extend(["--resume", session_id])
+        # WHY "--opt=value": a question or id starting with "-" would otherwise be read as an option.
+        argv = [hermes, "blackbox", "chat", f"--query={message}", "--quiet", "--pass-session-id"]
+        if session_id and len(session_id) <= 128 and all(c.isalnum() or c in "_.:-" for c in session_id):
+            argv.append(f"--resume={session_id}")
         try:
             proc = subprocess.run(
                 argv,
@@ -1240,9 +1235,9 @@ def create_app(*, manage_blackbox: bool = False):
             )
         except subprocess.TimeoutExpired:
             return JSONResponse({"ok": False, "error": "Blackbox took too long to answer."}, status_code=504)
-        except Exception as exc:
-            logger.debug("blackbox dashboard: chat failed: %s", exc)
-            return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+        except (OSError, ValueError) as exc:   # the browser gets a plain message, never the system error
+            logger.warning("blackbox dashboard: could not start the assistant: %s", exc)
+            return JSONResponse({"ok": False, "error": "Blackbox could not start the assistant."}, status_code=500)
         next_session_id = _parse_chat_session_id(proc.stderr) or _parse_chat_session_id(proc.stdout) or session_id
         answer = _clean_chat_output(proc.stdout)
         err = _clean_chat_output(proc.stderr)

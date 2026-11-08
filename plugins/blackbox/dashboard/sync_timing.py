@@ -36,7 +36,8 @@ logger = logging.getLogger(__name__)
 def initial_sync_delay(cfg: Any, cached: Any, min_retry_s: float, empty_retry_s: float) -> float:
     """Seconds the worker sleeps before its first refresh.
 
-    Never compiled: the short empty-ruleset retry. Compiled: whatever the
+    Never compiled, or compiled with no rules (a fresh install: setup compiles before the node has
+    any graph): the short empty-ruleset retry. Compiled: whatever the
     ruleset's own schedule asks for — a generation compiled just now waits one
     sync_interval as before, but one that asked for an early refresh (the
     verified graph still arriving, KI-288) gets it. Before, a dashboard
@@ -45,9 +46,20 @@ def initial_sync_delay(cfg: Any, cached: Any, min_retry_s: float, empty_retry_s:
     for an hour while 100+ assets landed).
     """
     never_compiled = not float(getattr(cached, "synced_at", 0.0) or 0.0)
-    if never_compiled:
+    if never_compiled or not _holds_rules(cached):
         return max(min_retry_s, empty_retry_s)
     return next_sync_delay(cfg, cached, 0.0, min_retry_s)
+
+
+def _holds_rules(cached: Any) -> bool:
+    """Whether the compiled ruleset holds any rule. Setup compiles once while the node is still
+    empty, so a fresh home has a timestamp and no rules; counting that as "compiled" put the first
+    sync an hour away (judge-path test, bb-judge-2, 2026-11-07). The worker's loop already retries
+    soon while the verified tier is empty; the first wait now follows the same rule."""
+    try:
+        return sum(cached.counts().values()) > 0
+    except (AttributeError, TypeError, ValueError):
+        return False
 
 
 def next_sync_delay(cfg: Any, cached: Any, elapsed_s: float, min_retry_s: float) -> float:

@@ -121,6 +121,10 @@ _RECONCILE_PASS_RE = re.compile(
     r'^(?P<logged_at>\S+ \S+) .*VM reconcile pass timing for "(?P<graph>[^"]+)".*\bpending=(?P<pending>\d+)',
     re.MULTILINE,
 )
+# Beside each pass the node logs the graph's on-chain size: ``reconcile <graph>: watermark A -> B
+# (head=N, …, pending=M)``. After a restart the node re-checks assets it already holds, so
+# ``pending`` then counts held assets too; ``head`` is the graph's real size.
+_RECONCILE_HEAD_RE = re.compile(r"^\S+ \S+ .*\breconcile (?P<graph>.+?): watermark \d+ -> \d+ \(head=(?P<head>\d+)", re.MULTILINE)
 # The node logs one reconcile pass every minute or two; the last megabyte of
 # its log always holds the newest one without reading a multi-GB file.
 _RECONCILE_TAIL_BYTES = 1_000_000
@@ -131,12 +135,19 @@ class RecoveryBacklog:
     """The node's own count of verified assets it knows exist on chain but
     has not yet downloaded, from its newest reconcile pass.
 
-    ``pending`` — assets still to fetch; ``logged_at`` — the node's timestamp
-    of that pass (``YYYY-MM-DD HH:MM:SS``), so callers can show its age.
+    ``pending`` — the pass's reconcile backlog; ``logged_at`` — the node's timestamp
+    of that pass (``YYYY-MM-DD HH:MM:SS``), so callers can show its age; ``head`` — the
+    graph's on-chain size from the same pass, None when the log does not state it.
     """
 
     pending: int
     logged_at: str
+    head: Optional[int] = None
+
+    def to_fetch(self, held: int) -> int:
+        """Assets still missing when the node holds *held*: ``head - held`` when the size is
+        known (a re-check of held assets after a restart is not missing data), else ``pending``."""
+        return max(0, self.head - held) if self.head is not None else self.pending
 
 
 def read_recovery_backlog(dkg_home: str, context_graph_id: str) -> Optional[RecoveryBacklog]:
@@ -162,4 +173,6 @@ def read_recovery_backlog(dkg_home: str, context_graph_id: str) -> Optional[Reco
             newest = match
     if newest is None:
         return None
-    return RecoveryBacklog(pending=int(newest.group("pending")), logged_at=newest.group("logged_at"))
+    heads = [int(match.group("head")) for match in _RECONCILE_HEAD_RE.finditer(text) if match.group("graph") == context_graph_id]
+    return RecoveryBacklog(pending=int(newest.group("pending")), logged_at=newest.group("logged_at"),
+                           head=heads[-1] if heads else None)

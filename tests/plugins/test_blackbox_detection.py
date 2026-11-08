@@ -2,6 +2,8 @@
 
 import re
 
+import pytest
+
 from _blackbox_loader import load_blackbox
 
 
@@ -100,6 +102,27 @@ def test_detect_dependency_matches_pinned():
     assert len(findings) == 1
     assert findings[0].category == "dependency"
     assert findings[0].severity == "critical"
+
+
+@pytest.mark.parametrize("rule_version, command", [
+    ("1", "pip install sajodecrypto==1.0"),       # bb-test-3, 2026-11-08: the rule said 1, the install 1.0
+    ("1", "pip install sajodecrypto==1.0.0"),
+    ("1.0", "pip install sajodecrypto==1"),
+    ("1.2", "pip install sajodecrypto==v1.2.0"),
+])
+def test_a_pypi_rule_matches_every_spelling_of_the_same_release(rule_version, command):
+    key = f"pypi:sajodecrypto@{rule_version}"
+    rs = _ruleset(dependency={key: {"identifier": f"dep:{key}", "severity": "critical", "name": "Malicious code"}})
+    findings = detection.detect_dependency("terminal", {"command": command}, rs)
+    assert [f.identifier for f in findings] == [f"dep:{key}"]       # reported in the rule's own spelling
+
+
+def test_version_spellings_stay_exact_outside_pypi_and_for_other_releases():
+    rs = _ruleset(dependency={"pypi:sajodecrypto@1": {"identifier": "dep:pypi:sajodecrypto@1", "severity": "critical", "name": "x"},
+                              "npm:left-pad@1": {"identifier": "dep:npm:left-pad@1", "severity": "critical", "name": "x"}})
+    assert detection.detect_dependency("terminal", {"command": "pip install sajodecrypto==1.1"}, rs) == []
+    assert detection.detect_dependency("terminal", {"command": "pip install sajodecrypto==10"}, rs) == []
+    assert detection.detect_dependency("terminal", {"command": "npm install left-pad@1.0.0"}, rs) == []
 
 
 def test_detect_dependency_ignores_unpinned_and_unknown():

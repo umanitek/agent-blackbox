@@ -18,7 +18,16 @@ from typing import Mapping, Tuple
 
 # The release number. plugin.yaml `version` and CHANGELOG.md match it (test_blackbox_versioning.py);
 # keep it a plain literal on one line: attach/plugin_copy.py reads it from installed copies as text.
-__version__ = "1.3.0"
+__version__ = "1.4.0"
+
+# The Blackbox assistant's own Hermes profile. ``blackbox chat`` and the dashboard's assistant run
+# under it; the agent list hides it (Blackbox's control profile, not an agent it protects). One name
+# for all three: the list once looked for a different one (KI-479).
+BLACKBOX_CHAT_PROFILE = "agent-blackbox"
+#: The name that profile had before; installs that still carry it are hidden the same way.
+LEGACY_BLACKBOX_CHAT_PROFILE = "blackbox"
+#: First line of the profile's managed SOUL.md: only a profile carrying it is treated as Blackbox's own.
+BLACKBOX_CHAT_SOUL_MARKER = "<!-- managed-by: hermes-blackbox-chat -->"
 
 # ---------------------------------------------------------------------------
 # Ontology

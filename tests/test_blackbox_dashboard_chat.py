@@ -963,7 +963,7 @@ def test_blackbox_dashboard_chat_starts_session(monkeypatch):
 
     assert res.status_code == 200
     assert res.json() == {"ok": True, "answer": "hello", "session_id": "sid-1"}
-    assert calls == [["/bin/hermes", "blackbox", "chat", "--query", "hi", "--quiet", "--pass-session-id"]]
+    assert calls == [["/bin/hermes", "blackbox", "chat", "--query=hi", "--quiet", "--pass-session-id"]]
 
 
 def test_blackbox_dashboard_chat_resumes_session(monkeypatch):
@@ -988,15 +988,55 @@ def test_blackbox_dashboard_chat_resumes_session(monkeypatch):
             "/bin/hermes",
             "blackbox",
             "chat",
-            "--query",
-            "which of these?",
+            "--query=which of these?",
             "--quiet",
             "--pass-session-id",
-            "--resume",
-            "sid-1",
+            "--resume=sid-1",
         ]
     ]
 
+
+def _chat(monkeypatch, fake_run, body):
+    monkeypatch.setattr(server.shutil, "which", lambda name: "/bin/hermes")
+    monkeypatch.setattr(server.subprocess, "run", fake_run)
+    monkeypatch.setattr(attach_plugin_copy, "repo_root", lambda: Path("/tmp/repo"))
+    client = TestClient(server.create_app(), base_url="http://127.0.0.1")
+    token = client.get("/api/session").json()["token"]
+    return client.post("/api/blackbox-chat", json=body, headers={"X-Blackbox-Token": token})
+
+
+def test_blackbox_dashboard_chat_drops_a_session_id_that_is_not_one(monkeypatch):
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 0, stdout="ok\n", stderr="")
+
+    res = _chat(monkeypatch, fake_run, {"message": "-v", "session_id": "--yolo x"})
+
+    assert res.status_code == 200
+    assert calls == [["/bin/hermes", "blackbox", "chat", "--query=-v", "--quiet", "--pass-session-id"]]
+
+
+def test_blackbox_dashboard_chat_never_shows_the_system_error(monkeypatch):
+    def fake_run(argv, **kwargs):
+        raise FileNotFoundError(2, "No such file or directory", "/usr/local/sbin/-c")
+
+    res = _chat(monkeypatch, fake_run, {"message": "hi"})
+
+    assert res.status_code == 500
+    assert res.json() == {"ok": False, "error": "Blackbox could not start the assistant."}
+
+
+def test_blackbox_dashboard_chat_keeps_the_answers_paragraph_breaks(monkeypatch):
+    out = "session_id: abc\nFirst paragraph.\n\n\n\nSecond paragraph:\n- one\n- two\n\n"
+
+    def fake_run(argv, **kwargs):
+        return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
+
+    res = _chat(monkeypatch, fake_run, {"message": "hi"})
+
+    assert res.json()["answer"] == "First paragraph.\n\nSecond paragraph:\n- one\n- two"
 
 def test_attach_targets_include_unavailable_supported_agents(monkeypatch):
     def fake_attach_all(*, hermes=True, openclaw=True, dry_run=False):

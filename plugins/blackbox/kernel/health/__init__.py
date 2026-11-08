@@ -57,9 +57,13 @@ class HealthItem:
     klass: HealthClass
     message: str
     what_to_do: str
+    #: A stable name for an item a page shows in its own way (``first-sync``: the sync card already
+    #: tells it), so the page can leave the strip's copy out without matching on the wording.
+    key: str = ""
 
     def as_dict(self) -> dict:
-        return {"audience": self.audience, "class": self.klass.value, "message": self.message, "what_to_do": self.what_to_do}
+        return {"audience": self.audience, "class": self.klass.value, "message": self.message,
+                "what_to_do": self.what_to_do, "key": self.key}
 
 
 #: A ruleset older than this many sync intervals is stale.
@@ -72,6 +76,7 @@ HEARTBEAT_SILENCE_DAYS = 2
 #: only, and `blackbox setup` installs the rest (the same installer curl runs).
 NODE_INSTALL_HINT = ("finish the install: hermes blackbox setup — until then the built-in rules "
                      "(protected paths, secrets, Trader Shield) still protect")
+NODE_STARTING_HINT = "nothing to do — it answers within a few minutes of a restart; the last rules keep protecting"
 
 _CURATOR = "curator"
 
@@ -148,7 +153,9 @@ def _node_and_ruleset(inputs: HealthInputs) -> list[HealthItem]:
                            "threat graph is not loaded", NODE_INSTALL_HINT)]
     items = []
     stale = inputs.ruleset_age_s is None or inputs.ruleset_age_s > STALE_INTERVALS * max(1.0, inputs.sync_interval_s)
-    if not inputs.node_reachable or stale:
+    if inputs.node_starting and not inputs.node_reachable and not stale:   # LES-011: starting is not stale
+        items.append(HealthItem(_OPERATOR, HealthClass.INFO, "the DKG node is starting", NODE_STARTING_HINT, key="node-starting"))
+    elif not inputs.node_reachable or stale:
         why = "the DKG node is unreachable" if not inputs.node_reachable else "the local ruleset is old"
         items.append(HealthItem(_OPERATOR, HealthClass.ACTION, f"my node is stale: {why}",
                                 "run `blackbox sync --wait`; check the DKG node is running"))
@@ -177,7 +184,7 @@ def _empty_ruleset_item(first_sync: str) -> HealthItem:
                           "(about 30 minutes on a new machine)",
                           "nothing to do — verified checks switch on as the rules compile; until then the "
                           "built-in rules (protected paths, secrets, Trader Shield) protect; the Threat graph "
-                          "card shows each step")
+                          "card shows each step", key="first-sync")
     if first_sync == "stalled":
         return HealthItem(_OPERATOR, HealthClass.ACTION,
                           "UNPROTECTED: the first sync of the verified threat graph has stopped making progress",
@@ -320,7 +327,7 @@ def node_installed(cfg: Any, node_reachable: bool) -> bool:
 
 def gather(cfg: Any, rs: Any, node_reachable: bool, read: Optional[Any], blocked_by_identifier: Mapping[str, int],
            now: float, *, pending_shares: int = 0, shares_given_up: int = 0, sharing_consent_problem: str = "",
-           verified_lookup_problem: str = "", first_sync: str = "", admission: str = "",
+           verified_lookup_problem: str = "", first_sync: str = "", admission: str = "", node_starting: bool = False,
            watch: Optional[manifest_watcher.ManifestWatchInputs] = None) -> HealthInputs:
     """Build :class:`HealthInputs` from a config, a compiled ruleset, node reachability, the last community
     read (or None), how many actions each threat blocked here (``audit.blocked_counts_by_identifier()``), the
@@ -347,7 +354,7 @@ def gather(cfg: Any, rs: Any, node_reachable: bool, read: Optional[Any], blocked
         pending_shares=int(pending_shares),
         sharing_consent_problem=sharing_consent_problem if getattr(cfg, "community_enabled", False) else "",
         verified_lookup_problem=verified_lookup_problem,
-        first_sync=first_sync,
+        first_sync=first_sync, node_starting=node_starting,
         admission=admission, sharing_enabled=bool(getattr(cfg, "community_enabled", False)),
         shares_given_up=int(shares_given_up),
         curators_last_day=(view.last_statement_day if view is not None else ""),

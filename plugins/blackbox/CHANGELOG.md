@@ -38,6 +38,117 @@ that the two version fields agree.
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-11-08
+
+### Added
+
+- **Set up Blackbox from Hermes Desktop.** After a plugin-catalog install the Blackbox page no
+  longer shows empty cards: it says the built-in rules already protect, lists what setup will do,
+  and runs `hermes blackbox setup` with one button, showing each step live (check this Mac, connect
+  to Hermes, install the threat-graph node, turn on protection, start the dashboard, keep the node
+  running, final checks) with the log one click away. Setup is refused while a run is going or once
+  it is done.
+- **The sync, live.** While Umanitek's verified threat graph arrives, the Overview opens with its
+  phase, percentage and asset counts, refreshed every few seconds: "First sync in progress" before
+  any rule, then "Still syncing" with how many verified rules already protect, or "Sync stopped
+  making progress" with what to do. The empty verified map says why it is empty.
+- **The Blackbox assistant in Desktop.** The chat button in the page header opens the dashboard's
+  assistant beside the page: its three example questions, a running conversation kept on this
+  computer (New chat starts over), and progress messages while it works.
+- **Docs and the Playground in Desktop.** The book button opens the dashboard's documentation in
+  your browser. With Sandbox mode on, the Overview holds the Playground: send a listed threat of
+  each kind through the real check, and run every wallet test Trader Shield has for this machine
+  (one at a time or Run all), each with its result.
+
+### Changed
+
+- A seed phrase or wallet private key on its way off the machine (posted, put in a web
+  address, sent by a script or a messaging tool) is blocked even with Trader Shield off — a
+  wallet secret has no right destination. Writing or reading one on the machine stays Trader
+  Shield's to watch.
+- The Desktop page refreshes every 4 seconds, as the dashboard does (was 10 to 30).
+- The Desktop page opens with your connected agents, then the stats, then Trader Shield as the
+  dashboard's "Engage Trader Shield" card (one line once it is on). A new **Shields** tab turns each
+  shield on or off (turning off asks first) and holds what it protects, its events and its settings.
+- A shield's recent events are clickable, as on the dashboard: each opens the shield's events window
+  with the full local record (what happened, what to do, the details, what happened in that session),
+  private to this machine and refreshed live; View all lists every event.
+- Clicking a threat (on the map, in search or in Threats detected) or an Agent activity row opens a
+  pop-up with the same details as the dashboard's, over the page, instead of leaving it.
+
+### Fixed
+
+- The Desktop page's "Open findings" card opens Threats detected, as the bell does (it was
+  a count you could not click through).
+- An agent can no longer stop Blackbox's own services: unloading or stopping its login
+  services, killing its dashboard or node by name, or killing whatever holds their ports is
+  treated like editing Blackbox's settings (ordinary process commands stay allowed).
+- The Desktop Shields tab no longer ticks Trader Shield's checks while the shield is off — each
+  shows "off — engage Trader Shield to watch this".
+- The Desktop "Threats detected" table fits beside the sidebar: the outcome sits under the
+  severity and long reasons wrap instead of squeezing every column.
+- On a Mac the installer hands the dashboard to its login service at once, so a crashed
+  dashboard is restarted from the first day (it used to run unsupervised until the next login).
+- A Python package rule matches every spelling of the same release: a rule for version 1 now also
+  stops `pip install <name>==1.0` and `==1.0.0` (PEP 440 treats them as one release).
+- The check never fails on an odd tool input (a tool name that is not text, arguments sent as JSON
+  text): such a failure used to let the action through unchecked.
+- After a restart or reboot the page no longer says half the threat graph is missing: the node
+  re-checks the assets it already holds, and that re-check is no longer counted as data still to
+  download (a fresh Mac fell from 100% to 51% of a "1,842-asset" graph that has 971).
+- In the minute after a reboot, while the DKG node reopens its store, the page says "the DKG node is
+  starting" (and Desktop's header "Node starting") instead of a red "my node is stale — run
+  `blackbox sync --wait`".
+- The Blackbox assistant looks threats up instead of reading a whole graph tier into the model: its
+  answers are faster, and its own request no longer trips Blackbox's prompt-injection alert on the
+  attack phrases quoted in threat names.
+- Turning on Trader Shield, or saving its settings, no longer tells you to restart your agent: a
+  running agent picks the change up at once (README and the Trader Shield page updated too).
+- Desktop: a long package name in Threats detected, or the graph on a Retina screen, no longer
+  pushes the page sideways past the window; the tabs line up with the header once the first sync
+  is done; the first-sync note is not shown twice; the "recording, not blocking" notice waits until
+  setup has finished instead of covering the setup page; "Watching" (audit mode) is amber like the
+  Shields tab; the Attach agent tile shows a close icon while it is open.
+- "Attach agent" on the dashboard opens its window again from a click on its icon or label (only
+  a click on the button's edge did anything), and Escape closes that window.
+- The Trader Shield page no longer says "Not engaged" for the first moments after the dashboard
+  starts: it shows "Checking this machine…" until the dashboard knows, then the real state.
+- Threat graph labels stay readable in the dashboard and in Desktop: hub names and threat counts
+  sit on a small plate above the dots, two labels never land on each other, and on a phone they
+  keep a readable size instead of shrinking to a few pixels.
+- Layout and sizing: the umanitek logo at the foot of the dashboard shows on the light theme; the
+  tier tabs show "970,000" like the cards; the Trader Shield card has no empty fourth column and
+  its header wraps on a phone; the Trader Shield page's headline fits in four lines on a laptop
+  and its picture no longer runs into the status box on a phone; the docs search box and figure
+  labels fit on a phone; Desktop's five summary cards sit 3 + 2 beside Hermes' sidebar instead of
+  five squeezed columns, and its wordmark reads BLACKB●X.
+- A fresh dashboard no longer says "UNPROTECTED: run `blackbox sync --wait`" while setup's own first
+  sync is running: its health check reads the sync meter before judging the first sync.
+- On a fresh install the first sync of the verified threat graph starts within seconds of setup
+  finishing. It could wait an hour: setup's own compile left an empty ruleset that the dashboard
+  took for a finished one.
+- The Blackbox assistant answers again, in the dashboard and in Desktop. On Hermes 0.23 every
+  question failed with "No such file or directory: '/usr/local/sbin/-c'": it re-ran Hermes by the
+  name of the running program, which Hermes' new launcher reports as `-c`.
+- The assistant's own Hermes profile no longer appears in Connected agents as an idle agent.
+- One slow request (an assistant answer) no longer freezes the Desktop page: it used to empty
+  every card until the answer came back.
+- A question to the assistant that starts with a dash ("-v", "--why") is asked as written
+  instead of failing, and when the assistant cannot start, the page says so in plain words
+  instead of showing the system's error text.
+- Desktop's assistant shows `code` and **bold** in its answers as formatting, not as symbols.
+- Desktop no longer says "0 connected agents" above an agent it protects: like the dashboard, it
+  counts only agents active right now and shows nothing when none is.
+- Desktop's assistant: "New chat" while an answer is on its way really starts a new chat (the old
+  answer no longer comes back), closing and reopening the assistant mid-answer keeps that answer,
+  and answers keep their paragraph breaks.
+- A long Desktop request (an assistant answer, a Playground test) no longer gives up after one
+  failed check while it is still running, and Playground "Run all" stops when you leave the page.
+- Desktop's threat bell counts the same threats the findings list shows, and clicking it before
+  the list has loaded no longer marks every threat as new again.
+- A Shield's list setting in Desktop (addresses, names) can be typed one entry per line; Enter and
+  commas no longer vanish as you type them.
+
 ## [1.3.0] - 2026-11-06
 
 ### Added
@@ -137,7 +248,8 @@ The first version in the Hermes plugin catalog (commit `7d697683`, added by Herm
 in NousResearch/hermes-agent#140529). Its `plugin.yaml` said 1.0.0 while Blackbox's own code and
 dashboard reported 1.1.0; 1.1.0 is therefore skipped, so no two different builds share a number.
 
-[Unreleased]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.3.0...main
+[Unreleased]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.4.0...main
+[1.4.0]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.3.0...blackbox-v1.4.0
 [1.3.0]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.2.0...blackbox-v1.3.0
 [1.2.0]: https://github.com/umanitek/agent-blackbox/compare/7d697683e0d56608cfe3fee374d6a6866702058a...blackbox-v1.2.0
 [1.0.0]: https://github.com/umanitek/agent-blackbox/tree/7d697683e0d56608cfe3fee374d6a6866702058a/plugins/blackbox
