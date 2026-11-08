@@ -1201,13 +1201,8 @@ def create_app(*, manage_blackbox: bool = False):
         lines: list[str] = []
         for line in (text or "").splitlines():
             stripped = line.strip()
-            if not stripped:
-                continue
-            if stripped.startswith("session_id:"):
-                continue
-            if "Context file AGENTS.md TRUNCATED" in stripped:
-                continue
-            lines.append(line.rstrip())
+            if stripped and not stripped.startswith("session_id:") and "Context file AGENTS.md TRUNCATED" not in stripped:
+                lines.append(line.rstrip())
         return "\n".join(lines).strip()
 
     def _parse_chat_session_id(text: str) -> str | None:
@@ -1227,9 +1222,10 @@ def create_app(*, manage_blackbox: bool = False):
             return JSONResponse({"ok": False, "error": "Message is too long."}, status_code=400)
         session_id = str((payload or {}).get("session_id") or "").strip()
         hermes = shutil.which("hermes") or os.environ.get("HERMES_BIN") or "hermes"
-        argv = [hermes, "blackbox", "chat", "--query", message, "--quiet", "--pass-session-id"]
-        if session_id:
-            argv.extend(["--resume", session_id])
+        # WHY "--opt=value": a question or id starting with "-" would otherwise be read as an option.
+        argv = [hermes, "blackbox", "chat", f"--query={message}", "--quiet", "--pass-session-id"]
+        if session_id and len(session_id) <= 128 and all(c.isalnum() or c in "_.:-" for c in session_id):
+            argv.append(f"--resume={session_id}")
         try:
             proc = subprocess.run(
                 argv,
@@ -1240,9 +1236,9 @@ def create_app(*, manage_blackbox: bool = False):
             )
         except subprocess.TimeoutExpired:
             return JSONResponse({"ok": False, "error": "Blackbox took too long to answer."}, status_code=504)
-        except Exception as exc:
-            logger.debug("blackbox dashboard: chat failed: %s", exc)
-            return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+        except (OSError, ValueError) as exc:   # the browser gets a plain message, never the system error
+            logger.warning("blackbox dashboard: could not start the assistant: %s", exc)
+            return JSONResponse({"ok": False, "error": "Blackbox could not start the assistant."}, status_code=500)
         next_session_id = _parse_chat_session_id(proc.stderr) or _parse_chat_session_id(proc.stdout) or session_id
         answer = _clean_chat_output(proc.stdout)
         err = _clean_chat_output(proc.stderr)

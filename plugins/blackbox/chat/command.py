@@ -167,15 +167,15 @@ def _blackbox_chat_args(args: argparse.Namespace) -> list[str]:
         ("max_turns", "--max-turns"),
     ]:
         value = getattr(args, attr, None)
-        if value is not None:
-            out.extend([flag, str(value)])
+        if value is not None:   # "--flag=value": a value starting with "-" is never read as an option
+            out.append(f"{flag}={value}")
     for skill in getattr(args, "skills", None) or []:
-        out.extend(["--skills", skill])
+        out.append(f"--skills={skill}")
     continue_last = getattr(args, "continue_last", None)
     if continue_last is True:
         out.append("--continue")
     elif continue_last:
-        out.extend(["--continue", str(continue_last)])
+        out.append(f"--continue={continue_last}")
     for attr, flag in [
         ("verbose", "--verbose"),
         ("quiet", "--quiet"),
@@ -195,7 +195,7 @@ def _blackbox_chat_args(args: argparse.Namespace) -> list[str]:
             out.append(flag)
     prompt = getattr(args, "prompt", None) or []
     if prompt and not getattr(args, "query", None):
-        out.extend(["--query", " ".join(prompt)])
+        out.append("--query=" + " ".join(prompt))
     return out
 
 
@@ -278,7 +278,7 @@ def _blackbox_chat_argv(chat_args: Optional[list[str]], profile: str = _BLACKBOX
     args = [a for a in (chat_args or []) if a != "--"]
     chat = ["--profile", profile, "chat"]
     if args and not args[0].startswith("-"):
-        chat.extend(["--query", " ".join(args)])
+        chat.append("--query=" + " ".join(args))
     else:
         chat.extend(args)
     return build_relaunch_argv(chat, preserve_inherited=False)

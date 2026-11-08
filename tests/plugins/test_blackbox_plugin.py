@@ -179,7 +179,7 @@ def test_blackbox_chat_parser_accepts_query_flags():
     cli_mod.setup_cli(parser)
     args = parser.parse_args(["chat", "--query", "who are you?", "--quiet"])
     assert args.func is chat_command.cmd_chat
-    assert chat_command._blackbox_chat_args(args) == ["--query", "who are you?", "--quiet"]
+    assert chat_command._blackbox_chat_args(args) == ["--query=who are you?", "--quiet"]
 
 
 def test_blackbox_sync_parser_accepts_wait_timeout():

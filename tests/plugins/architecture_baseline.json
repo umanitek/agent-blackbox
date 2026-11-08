@@ -1,7 +1,7 @@
 {
   "_comment": "Baselined when the structure guard landed (2026-10-01). Numbers may only shrink: lower them in the commit that shrinks the code; delete an entry once it is under the alarm. Never raise one. HEADROOM BUDGET (2026-10-11) for files under the alarm that new curator work will grow \u2014 they may NOT be added here; a feature commit may not carry any past 400 lines, so an extraction (own commit, suite green) lands first: curate/service/beat.py 23 lines left (377), ruleset/compiler.py 51 (349), curate/verbs.py 68 (332), community/trust/authority_read.py 138 (262), kernel/signing/key_manifest.py 147 (253).",
   "files": {
-    "dashboard/server.py": 1923,
+    "dashboard/server.py": 1919,
     "kernel/config.py": 359,
     "kernel/dkg_client.py": 627,
     "sync/command.py": 1395
@@ -21,7 +21,7 @@
     "dashboard/server.py::_profile_activity_state": 61,
     "dashboard/server.py::_sync_activity": 271,
     "dashboard/server.py::_sync_ruleset_once": 63,
-    "dashboard/server.py::create_app": 1120,
+    "dashboard/server.py::create_app": 1116,
     "dashboard/server.py::create_app._blackbox_runtime_loop": 87,
     "dashboard/server.py::create_app._ruleset_sync_loop": 48,
     "dashboard/server.py::create_app.agents": 166,

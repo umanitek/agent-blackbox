@@ -7,8 +7,10 @@ the program the chat command execs.
 
 from __future__ import annotations
 
+import argparse
 import sys
 
+from plugins.blackbox import cli as cli_mod
 from plugins.blackbox.chat import command as chat_command
 
 
@@ -21,8 +23,7 @@ def test_blackbox_chat_wraps_bare_prompt(monkeypatch):
         "--profile",
         "agent-blackbox",
         "chat",
-        "--query",
-        "who are you?",
+        "--query=who are you?",
     ]
     assert chat_command._blackbox_chat_argv(["--tui"]) == [
         "/opt/bin/hermes",
@@ -47,7 +48,7 @@ def test_blackbox_chat_under_the_published_c_launcher_runs_the_real_hermes(tmp_p
     argv = chat_command._blackbox_chat_argv(["hi"])
 
     assert argv[0] == str(shim)
-    assert argv[1:] == ["--profile", "agent-blackbox", "chat", "--query", "hi"]
+    assert argv[1:] == ["--profile", "agent-blackbox", "chat", "--query=hi"]
 
 
 def test_blackbox_chat_without_a_hermes_program_runs_the_module(tmp_path, monkeypatch):
@@ -57,3 +58,10 @@ def test_blackbox_chat_without_a_hermes_program_runs_the_module(tmp_path, monkey
     argv = chat_command._blackbox_chat_argv(["--tui"])
 
     assert argv == [sys.executable, "-m", "hermes_cli.main", "--profile", "agent-blackbox", "chat", "--tui"]
+
+
+def test_a_question_starting_with_a_dash_stays_the_question():
+    parser = argparse.ArgumentParser()
+    cli_mod.setup_cli(parser)
+    args = parser.parse_args(["chat", "--query=--why did it block?", "--resume=sid-1"])
+    assert chat_command._blackbox_chat_args(args) == ["--query=--why did it block?", "--resume=sid-1"]

@@ -3514,6 +3514,18 @@ const CHAT_WAITING = [
 ]
 
 // A failed turn: the last line says what went wrong; the whole output stays one click away.
+// The assistant answers in Markdown. Inline `code` and **bold** become elements (never HTML), the rest stays text.
+const CHAT_INLINE = /(`[^`\n]+`|\*\*[^*\n]+\*\*)/
+
+function chatInline(text) {
+  return String(text || '').split(CHAT_INLINE).map((part, index) => {
+    if (index % 2 === 0) return part
+    return part.startsWith('`')
+      ? jsx('code', { className: 'bbx-mono', children: part.slice(1, -1) }, index)
+      : jsx('strong', { children: part.slice(2, -2) }, index)
+  })
+}
+
 function ChatFailure({ text }) {
   const lines = String(text || '').split('\n').map(line => line.trim()).filter(Boolean)
   const last = lines.length ? lines[lines.length - 1] : 'Blackbox chat failed.'
@@ -3605,7 +3617,7 @@ function AssistantDrawer({ ctx, onClose }) {
                     ...CHAT_PROMPTS.map(([label, prompt]) => jsx('button', { type: 'button', className: 'bbx-btn', style: { textAlign: 'left' }, onClick: () => send(prompt), children: label }, label))
                   ]
                 }),
-            ...turns.map((turn, index) => jsx('div', { className: `bbx-chat-turn ${turn.role}`, children: turn.role === 'error' ? jsx(ChatFailure, { text: turn.text }) : turn.text }, index)),
+            ...turns.map((turn, index) => jsx('div', { className: `bbx-chat-turn ${turn.role}`, children: turn.role === 'error' ? jsx(ChatFailure, { text: turn.text }) : turn.role === 'assistant' ? chatInline(turn.text) : turn.text }, index)),
             busy ? jsxs('div', { className: 'bbx-chat-turn assistant waiting', children: [jsx('span', { className: 'bbx-spin', style: { marginRight: 8 } }), CHAT_WAITING[waiting]] }) : null,
             jsx('div', { ref: end })
           ]

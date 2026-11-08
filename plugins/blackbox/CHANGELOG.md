@@ -83,6 +83,10 @@ that the two version fields agree.
 - The assistant's own Hermes profile no longer appears in Connected agents as an idle agent.
 - One slow request (an assistant answer) no longer freezes the Desktop page: it used to empty
   every card until the answer came back.
+- A question to the assistant that starts with a dash ("-v", "--why") is asked as written
+  instead of failing, and when the assistant cannot start, the page says so in plain words
+  instead of showing the system's error text.
+- Desktop's assistant shows `code` and **bold** in its answers as formatting, not as symbols.
 
 ## [1.3.0] - 2026-11-06
 
