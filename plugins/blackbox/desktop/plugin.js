@@ -1298,6 +1298,7 @@ function ConnectedAgents() {
   }
   const a = asObject(agents.data)
   const list = asList(a.agents).filter(agent => agent.is_local !== false)
+  const active = Number.isFinite(Number(a.connected_count)) ? Number(a.connected_count) : list.filter(agent => agent.is_active).length
   return jsxs('section', {
     className: 'bbx-section',
     children: [
@@ -1306,7 +1307,8 @@ function ConnectedAgents() {
         actions: jsxs('div', {
           style: { display: 'flex', gap: 12, alignItems: 'center' },
           children: [
-            jsx('span', { className: 'bbx-small', children: `${num(a.connected_count ?? list.length)} connected agent${a.connected_count === 1 ? '' : 's'}` }),
+            // Like the dashboard: the count of agents active right now, and nothing when none is (the cards say idle).
+            active ? jsx('span', { className: 'bbx-small', children: `${num(active)} connected agent${active === 1 ? '' : 's'}` }) : null,
             jsx('button', { type: 'button', className: 'bbx-iconbtn', title: 'Rescan this machine for agents', onClick: rescan, children: jsx(Codicon, { name: 'refresh' }) })
           ]
         })

@@ -87,6 +87,8 @@ that the two version fields agree.
   instead of failing, and when the assistant cannot start, the page says so in plain words
   instead of showing the system's error text.
 - Desktop's assistant shows `code` and **bold** in its answers as formatting, not as symbols.
+- Desktop no longer says "0 connected agents" above an agent it protects: like the dashboard, it
+  counts only agents active right now and shows nothing when none is.
 
 ## [1.3.0] - 2026-11-06
 
