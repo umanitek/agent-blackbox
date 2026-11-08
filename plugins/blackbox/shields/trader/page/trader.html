@@ -59,7 +59,7 @@
   .mono { font-family: var(--mono); }
   .eyebrow { font-family: var(--mono); font-size: 12px; letter-spacing: .14em; text-transform: uppercase; color: var(--signal); }
   h1, h2, h3 { margin: 0; text-wrap: balance; font-stretch: 112%; letter-spacing: -.01em; }
-  h1 { font-size: clamp(40px, 7vw, 76px); line-height: .98; font-weight: 900; text-transform: uppercase; }
+  h1 { font-size: clamp(40px, 4.4vw, 60px); line-height: .98; font-weight: 900; text-transform: uppercase; }
   h2 { font-size: clamp(28px, 4vw, 42px); line-height: 1.05; font-weight: 850; text-transform: uppercase; }
   h3 { font-size: 18px; font-weight: 750; }
   p { margin: 0; max-width: 64ch; }
@@ -236,7 +236,7 @@
     font-family: var(--mono); font-size: 12px; display: grid; place-items: center; }
   .qs li b { color: var(--text); } .qs code { font-family: var(--mono); font-size: 12.5px; background: var(--elevated); padding: 2px 7px; border-radius: 3px; overflow-wrap: anywhere; }
   @media (max-width: 900px) {
-    .hero { grid-template-columns: 1fr; } .stage { height: 360px; }
+    .hero { grid-template-columns: 1fr; } .stage { height: 360px; margin-top: 36px; }   /* the tilted top layer rises past its box */
     .flow { grid-template-columns: 1fr 1fr; } .fstep:not(:last-child)::after { display: none; }
     .systems { grid-template-columns: 1fr 1fr; }
     .grid3, .outcomes { grid-template-columns: 1fr; } .grid2 { grid-template-columns: 1fr; } .stats { grid-template-columns: 1fr 1fr; }
@@ -537,7 +537,7 @@
   // ---- Live status from this machine: this shield's card in the dashboard's /api/shields ----
   function renderStatus(d) {
     var el = document.getElementById("status");
-    if (!d || !d.mode || !d.mode.enabled) {
+    if (!d.mode || !d.mode.enabled) {
       el.innerHTML = '<span class="state off">Not engaged</span><span class="detail">Trader Shield is off on this machine.</span>';
       return;
     }
@@ -550,12 +550,19 @@
     engage.textContent = "Trader Shield is engaged";
     engage.disabled = true;
   }
-  function loadStatus() { getJSON("../../api/shields").then(function (all) {
-    renderStatus((all || []).filter(function (d) { return d.shield_id === ID; })[0]);
-  }).catch(function () {
+  // WHY retry: a freshly started dashboard answers /api/shields with [] while it reads the
+  // machine; a missing card means "not known yet", never "off" — so ask again before saying anything.
+  var STATUS_TRIES = 8, STATUS_RETRY_MS = 1500;
+  function statusUnavailable() {
     document.getElementById("status").innerHTML = '<span class="state off">Status unavailable</span><span class="detail">Is the Blackbox dashboard running?</span>';
-  }); }
-  loadStatus();
+  }
+  function loadStatus(triesLeft) { getJSON("../../api/shields").then(function (all) {
+    var card = (all || []).filter(function (d) { return d.shield_id === ID; })[0];
+    if (card) renderStatus(card);
+    else if (triesLeft > 1) setTimeout(function () { loadStatus(triesLeft - 1); }, STATUS_RETRY_MS);
+    else statusUnavailable();
+  }).catch(statusUnavailable); }
+  loadStatus(STATUS_TRIES);
 
   // ---- Engage: the same settings call the dashboard makes (session token required) ----
   document.getElementById("engage").addEventListener("click", function () {

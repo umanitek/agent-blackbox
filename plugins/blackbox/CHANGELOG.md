@@ -72,6 +72,19 @@ that the two version fields agree.
 
 ### Fixed
 
+- "Attach agent" on the dashboard opens its window again from a click on its icon or label (only
+  a click on the button's edge did anything), and Escape closes that window.
+- The Trader Shield page no longer says "Not engaged" for the first moments after the dashboard
+  starts: it shows "Checking this machine…" until the dashboard knows, then the real state.
+- Threat graph labels stay readable in the dashboard and in Desktop: hub names and threat counts
+  sit on a small plate above the dots, two labels never land on each other, and on a phone they
+  keep a readable size instead of shrinking to a few pixels.
+- Layout and sizing: the umanitek logo at the foot of the dashboard shows on the light theme; the
+  tier tabs show "970,000" like the cards; the Trader Shield card has no empty fourth column and
+  its header wraps on a phone; the Trader Shield page's headline fits in four lines on a laptop
+  and its picture no longer runs into the status box on a phone; the docs search box and figure
+  labels fit on a phone; Desktop's five summary cards sit 3 + 2 beside Hermes' sidebar instead of
+  five squeezed columns, and its wordmark reads BLACKB●X.
 - A fresh dashboard no longer says "UNPROTECTED: run `blackbox sync --wait`" while setup's own first
   sync is running: its health check reads the sync meter before judging the first sync.
 - On a fresh install the first sync of the verified threat graph starts within seconds of setup

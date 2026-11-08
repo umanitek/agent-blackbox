@@ -318,6 +318,21 @@ function themeColor(element, name, fallback) {
   return value || fallback
 }
 
+// A plate colour for graph labels drawn in *label*: white behind dark text, near-black behind light
+// text. WHY a pixel read: Hermes' theme colours may be oklch()/color() strings no regex can parse, and
+// the canvas sits on see-through tinted panels, so the page background cannot be read either.
+function labelPlate(label) {
+  try {
+    const probe = document.createElement('canvas').getContext('2d')
+    probe.fillStyle = label
+    probe.fillRect(0, 0, 1, 1)
+    const [r, g, b] = probe.getImageData(0, 0, 1, 1).data
+    return r + g + b > 382 ? 'rgb(24, 24, 24)' : 'rgb(255, 255, 255)'
+  } catch {
+    return 'rgb(255, 255, 255)'
+  }
+}
+
 function seedLayout(nodes, links, previous) {
   // Bubbles the last graph also had (the centre, the hubs) start where they were, so switching tier
   // reshapes the map instead of redrawing it from nothing; the rest start next to their hub.
@@ -529,16 +544,54 @@ function drawGraph(canvas, nodes, links, view, hover, theme) {
   context.textBaseline = 'top'
   const showLeafLabels = k >= 1.6
   for (const node of nodes) {
+    if (node.kind === 'hub' || node.kind === 'center') continue
     const isLeaf = node.kind === 'leaf'
     if (isLeaf && !showLeafLabels && hover !== node) continue
     context.font = `${isLeaf ? 500 : 600} ${(isLeaf ? 9.5 : 11) / k}px system-ui, sans-serif`
     context.fillStyle = node.kind === 'more' ? theme.muted : theme.label
     context.fillText(isLeaf ? truncate(node.label, 28) : node.label, node.x, node.y + node.r + 4 / k)
-    if (node.kind === 'hub' || node.kind === 'center') {
-      context.font = `600 ${9.5 / k}px ui-monospace, monospace`
-      context.fillStyle = node.color
-      context.fillText(`${node.total.toLocaleString()} THREATS`, node.x, node.y + node.r + 17 / k)
-    }
+  }
+  drawKeyLabels(context, nodes, k, theme)
+}
+
+// Centre and hub labels (name + threat count), most important first, each on a plate in the
+// page colour so it reads over its own leaf ring. A label goes under its bubble, else above it;
+// one that would land on a label already drawn waits until zooming in makes room.
+function drawKeyLabels(context, nodes, k, theme) {
+  const nameFont = `600 ${11 / k}px system-ui, sans-serif`
+  const countFont = `600 ${9.5 / k}px ui-monospace, monospace`
+  const height = 28 / k
+  const gap = 2 / k
+  const rank = node => node.kind === 'center' ? Infinity : Number(node.total || 0)
+  const placed = []
+  const overlaps = box => placed.some(o => box.left < o.right && o.left < box.right && box.top < o.bottom && o.top < box.bottom)
+  const keyNodes = nodes.filter(node => node.kind === 'hub' || node.kind === 'center').sort((a, b) => rank(b) - rank(a))
+  for (const node of keyNodes) {
+    const count = `${Number(node.total || 0).toLocaleString()} THREATS`
+    context.font = nameFont
+    let width = context.measureText(node.label).width
+    context.font = countFont
+    width = Math.max(width, context.measureText(count).width) + 8 / k
+    const below = node.y + node.r + gap
+    const above = node.y - node.r - gap - height
+    const top = [below, above].find(candidate => {
+      const box = { left: node.x - width / 2 - gap, right: node.x + width / 2 + gap, top: candidate - gap, bottom: candidate + height + gap }
+      if (node.kind !== 'center' && overlaps(box)) return false
+      placed.push(box)
+      return true
+    })
+    if (top === undefined) continue
+    context.save()
+    context.globalAlpha = 0.9
+    context.fillStyle = theme.plate
+    context.fillRect(node.x - width / 2, top, width, height)
+    context.restore()
+    context.font = nameFont
+    context.fillStyle = theme.label
+    context.fillText(node.label, node.x, top + 2 / k)
+    context.font = countFont
+    context.fillStyle = node.color
+    context.fillText(count, node.x, top + 15 / k)
   }
 }
 
@@ -577,12 +630,14 @@ function BubbleMap({ graph, loading, onPick }) {
     state.alpha = carried ? 0.6 : 1
     state.fitted = false
     state.target = null
+    const label = themeColor(canvas, '--ui-text-secondary', '#F1EFE9')
     const theme = {
-      label: themeColor(canvas, '--ui-text-secondary', '#F1EFE9'),
+      label,
       muted: themeColor(canvas, '--ui-text-tertiary', '#A8A49D'),
       outline: 'rgba(255,255,255,0.20)',
       more: 'rgba(255,255,255,0.05)',
-      grid: 'rgba(128,128,128,0.08)'
+      grid: 'rgba(128,128,128,0.08)',
+      plate: labelPlate(label)
     }
     let frame = 0
     let ticks = 0
@@ -782,7 +837,7 @@ const PAGE_CSS = `
   color: var(--bbx-text); font-size: 14px; line-height: 1.5; height: 100%; overflow: auto; }
 .bbx-wrap { max-width: 1240px; margin: 0 auto; padding: 28px 32px 64px; display: flex; flex-direction: column; gap: 40px; }
 .bbx-top { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
-.bbx-brand { font-size: 26px; font-weight: 800; letter-spacing: -0.02em; display: flex; align-items: center; gap: 10px; }
+.bbx-brand { font-size: 26px; font-weight: 800; letter-spacing: -0.02em; display: flex; align-items: center; gap: 2px; }
 .bbx-brand-dot { width: 16px; height: 16px; border-radius: 50%; background: var(--bbx-signal); display: inline-block; }
 .bbx-spacer { flex: 1; }
 .bbx-tabs { display: inline-flex; padding: 3px; border: 1px solid var(--bbx-line); border-radius: 6px; gap: 2px; }
@@ -804,8 +859,9 @@ const PAGE_CSS = `
 .bbx-head { display: flex; align-items: flex-end; gap: 16px; flex-wrap: wrap; }
 .bbx-panel { border: 1px solid var(--bbx-line); border-radius: 6px; background: var(--bbx-panel); }
 .bbx-label { font-family: var(--bbx-mono); font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--bbx-muted); }
-.bbx-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
-@media (min-width: 1000px) { .bbx-stats { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
+/* Five across only when the page itself is wide enough (it sits beside Hermes' sidebar, so the
+   window width says nothing); otherwise 3 + 2, never five squeezed cards. */
+.bbx-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(max(180px, calc((100% - 48px) / 5)), 1fr)); gap: 12px; }
 .bbx-stat { padding: 16px 18px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .bbx-stat.warm { border-left: 3px solid color-mix(in srgb, ${SIGNAL} 60%, transparent); }
 .bbx-stat-value { font-family: var(--bbx-mono); font-size: clamp(17px, 1.7vw, 24px); font-weight: 500; line-height: 1.15; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

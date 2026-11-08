@@ -77,6 +77,21 @@ for (const vp of viewports) {
   // community threats live in the Threat graph's Community tab and the two summary tiles.
   sections["community-panel-present"] = (await page.locator("#community-panel").count()) > 0;
   const spillingCells = await cellSqueeze();
+  // "Attach agent" opens its dialog from a click on anything inside the button (its icon or
+  // label — the click target is then the child), and Escape closes it (2026-11-08 review).
+  sections["attach-dialog"] = await page.evaluate(async () => {
+    const button = document.getElementById("attach-open");
+    const overlay = document.getElementById("attach-modal");
+    if (!button || !overlay) return "missing";
+    let child = button.querySelector("*");
+    if (!child) { child = document.createElement("span"); child.textContent = "label"; button.appendChild(child); }
+    child.click();
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const opened = overlay.classList.contains("open");
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    return `${opened ? "opened" : "stayed shut"}/${overlay.classList.contains("open") ? "stayed open" : "closed"}`;
+  });
   const communityTab = page.locator("#tab-community");
   if (await communityTab.count()) {
     await communityTab.click();
@@ -100,6 +115,13 @@ for (const vp of viewports) {
     checks.push(await overflow(`shield-page ${card.page}`));
     sections["shield-pages"].push(card.page);
   }
+  // A freshly started dashboard answers /api/shields with [] while it reads the machine: the
+  // Trader page must say it is still checking, never "Not engaged" (2026-11-08 review).
+  await page.route("**/api/shields", (route) => route.fulfill({ status: 200, contentType: "application/json", body: "[]" }));
+  await page.goto(base + "/shields/trader", { waitUntil: "domcontentloaded", timeout: 30000 });
+  await page.waitForTimeout(1200);
+  sections["trader-status-while-cold"] = (await page.locator("#status").innerText()).trim();
+  await page.unroute("**/api/shields");
   summary.push({ viewport: vp, consoleErrors, pageErrors, failedRequests, checks, sections, spillingCells });
   await context.close();
 }

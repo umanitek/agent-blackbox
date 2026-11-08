@@ -28,6 +28,10 @@ def home(monkeypatch, tmp_path):
     # Isolation, not a check: a beat still running (or a test's stub that never clears the
     # flag, as the wedged-beat test's does) would refuse the next test's first pulse().
     _beat_finished(strict=False)
+    # A beat slower than the wait (a loaded machine: one took over 5 s in a 27-minute suite run,
+    # 2026-11-08) would still hold the flag; clear it so the next test starts from a clean state.
+    with pulse_beat._pulsing_lock:
+        pulse_beat._pulsing = False
     with pulse_beat._pulsing_lock:
         pulse_beat._pulsing = False
     community.PULSE.reset()
