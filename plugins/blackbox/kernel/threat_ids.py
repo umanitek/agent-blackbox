@@ -120,7 +120,7 @@ def version_spellings(ecosystem: str, version: str) -> list[str]:
     while len(parts) > 1 and parts[-1] == "0":
         parts.pop()
     rest = match.group(2)
-    spellings = [given] + [".".join(parts + ["0"] * pad) + rest for pad in range(0, 4 - min(len(parts), 3))]
+    spellings = [given] + [".".join(parts + ["0"] * pad) + rest for pad in range(4 - min(len(parts), 3))]
     return list(dict.fromkeys(spellings))
 
 

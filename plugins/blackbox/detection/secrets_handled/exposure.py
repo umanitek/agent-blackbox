@@ -21,7 +21,7 @@ from typing import Any, Callable, Iterable, List
 
 from .. import content_scanners
 from . import sending
-from ..finding import Finding
+from ..finding import FIELD_WALLET_SECRET_SENT, Finding
 from ..injection_detection import injection_scan_text
 from ...kernel import crypto_secrets
 
@@ -89,7 +89,10 @@ def detect_secret_exposure(tool_name: str, args: Any) -> list[Finding]:
     for hit in hits:
         sent = egress or hit["type"] in wallet_sent
         severity = "critical" if (sent and hit["severity"] != "critical") else hit["severity"]
-        out.append(_secret_finding(tool_name, hit["type"], severity, sent))
+        finding = _secret_finding(tool_name, hit["type"], severity, sent)
+        if sent and hit["type"] in _WALLET_SECRET_TYPES:
+            finding.fields[FIELD_WALLET_SECRET_SENT] = True
+        out.append(finding)
     if not any(hit["type"] == "solana-private-key" for hit in hits):
         out += _unchecked_solana_keys_sent(tool_name, text)
     return out

@@ -104,3 +104,28 @@ def test_the_rule_runs_in_the_tool_call_hook():
     from pathlib import Path
     hooks = (Path(__file__).resolve().parents[2] / "plugins" / "blackbox" / "guard" / "hooks.py").read_text(encoding="utf-8")
     assert "detection.detect_guard_tamper(tool_name, args)" in hooks
+
+
+# 2026-11-08, fresh Mac (bb-test-4): an agent could stop Blackbox's own services. The guard runs in
+# Hermes and keeps working, but verified-graph checks are looked up in the DKG node.
+@pytest.mark.parametrize("command", [
+    "launchctl bootout gui/501/ai.umanitek.blackbox-dashboard",
+    "launchctl unload ~/Library/LaunchAgents/ai.umanitek.blackbox-dkg.plist",
+    "systemctl --user stop blackbox-dashboard",
+    "sudo systemctl disable blackbox-dkg",
+    "pkill -f 'blackbox dashboard'",
+    "killall dkg",
+    "kill $(lsof -t -i:9700)",
+    "kill -9 $(lsof -ti tcp:9320)",
+    "fuser -k 9320/tcp",
+])
+def test_an_agent_stopping_blackboxs_services_is_found(command):
+    assert detect_guard_tamper("terminal", {"command": command})
+
+
+@pytest.mark.parametrize("command", [
+    "killall node", "pkill -f vite", "launchctl list", "systemctl --user status blackbox-dashboard",
+    "lsof -i :9700", "kill 12345", "fuser 9700/tcp",
+])
+def test_looking_at_services_and_stopping_other_servers_is_left_alone(command):
+    assert detect_guard_tamper("terminal", {"command": command}) == []

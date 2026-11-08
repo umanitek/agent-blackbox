@@ -62,6 +62,10 @@ that the two version fields agree.
 
 ### Changed
 
+- A seed phrase or wallet private key on its way off the machine (posted, put in a web
+  address, sent by a script or a messaging tool) is blocked even with Trader Shield off — a
+  wallet secret has no right destination. Writing or reading one on the machine stays Trader
+  Shield's to watch.
 - The Desktop page refreshes every 4 seconds, as the dashboard does (was 10 to 30).
 - The Desktop page opens with your connected agents, then the stats, then Trader Shield as the
   dashboard's "Engage Trader Shield" card (one line once it is on). A new **Shields** tab turns each
@@ -74,6 +78,13 @@ that the two version fields agree.
 
 ### Fixed
 
+- An agent can no longer stop Blackbox's own services: unloading or stopping its login
+  services, killing its dashboard or node by name, or killing whatever holds their ports is
+  treated like editing Blackbox's settings (ordinary process commands stay allowed).
+- The Desktop Shields tab no longer ticks Trader Shield's checks while the shield is off — each
+  shows "off — engage Trader Shield to watch this".
+- The Desktop "Threats detected" table fits beside the sidebar: the outcome sits under the
+  severity and long reasons wrap instead of squeezing every column.
 - On a Mac the installer hands the dashboard to its login service at once, so a crashed
   dashboard is restarted from the first day (it used to run unsupervised until the next login).
 - A Python package rule matches every spelling of the same release: a rule for version 1 now also

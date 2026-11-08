@@ -892,10 +892,12 @@ const PAGE_CSS = `
 .bbx-table { width: 100%; border-collapse: collapse; }
 .bbx-table th { text-align: left; font-family: var(--bbx-mono); font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--bbx-muted);
   font-weight: 500; padding: 14px 20px; border-bottom: 1px solid var(--bbx-line); }
-.bbx-table td { padding: 14px 20px; border-bottom: 1px solid var(--bbx-line); vertical-align: top; overflow-wrap: break-word; }
-/* The text columns (reasoning, details) may break a long package name or path; the time stays whole. */
-.bbx-table td:nth-child(n+4) { overflow-wrap: anywhere; }
+.bbx-table td { padding: 14px 16px; border-bottom: 1px solid var(--bbx-line); vertical-align: top; overflow-wrap: break-word; }
+/* The time stays whole; the text column (reasoning, details) keeps room to read and breaks only a
+   name longer than itself; a table that still does not fit scrolls inside its panel. */
 .bbx-table td:first-child { white-space: nowrap; }
+.bbx-table td.bbx-text { min-width: 180px; overflow-wrap: anywhere; }
+.bbx-stack { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
 .bbx-table tr:last-child td { border-bottom: 0; }
 .bbx-table tbody tr:hover td { background: var(--bbx-hover); }
 .bbx-mono { font-family: var(--bbx-mono); }
@@ -2606,7 +2608,7 @@ function ThreatsDetected() {
                 jsxs('table', {
                   className: 'bbx-table',
                   children: [
-                    jsx('thead', { children: jsxs('tr', { children: [jsx('th', { children: 'Time' }), jsx('th', { children: 'Agent' }), jsx('th', { children: 'Severity' }), jsx('th', { children: 'Type' }), jsx('th', { children: 'Reasoning' }), jsx('th', { children: 'Outcome' })] }) }),
+                    jsx('thead', { children: jsxs('tr', { children: [jsx('th', { children: 'Time' }), jsx('th', { children: 'Agent' }), jsx('th', { children: 'Severity' }), jsx('th', { children: 'Type' }), jsx('th', { children: 'Reasoning' })] }) }),
                     jsx('tbody', {
                       children: rows.slice(current * PAGE_SIZE, (current + 1) * PAGE_SIZE).map((row, index) =>
                         jsxs('tr', {
@@ -2615,11 +2617,11 @@ function ThreatsDetected() {
                           onClick: () => setShown(row),
                           children: [
                             jsx('td', { style: { width: 130 }, children: timeCell(row.ts) }),
-                            jsx('td', { style: { width: 110 }, children: jsx('span', { style: { color: '#3FA568', fontFamily: 'var(--bbx-mono)' }, children: cap(row.framework || 'agent') }) }),
-                            jsx('td', { style: { width: 110 }, children: jsx(Pill, { tone: row.severity, children: cap(row.severity || 'unknown') }) }),
-                            jsx('td', { style: { width: 180 }, children: jsx(TypeCell, { type: row.category }) }),
-                            jsx('td', { children: reasonOf(row) }),
-                            jsx('td', { style: { width: 100 }, children: jsx(Pill, { tone: row.decision === 'block' ? 'blocked' : 'neutral', children: row.decision === 'block' ? 'Blocked' : 'Flagged' }) })
+                            jsx('td', { children: jsx('span', { style: { color: '#3FA568', fontFamily: 'var(--bbx-mono)' }, children: cap(row.framework || 'agent') }) }),
+                            // Severity with the outcome under it: six columns did not fit beside Hermes' sidebar.
+                            jsx('td', { children: jsxs('div', { className: 'bbx-stack', children: [jsx(Pill, { tone: row.severity, children: cap(row.severity || 'unknown') }), jsx(Pill, { tone: row.decision === 'block' ? 'blocked' : 'neutral', children: row.decision === 'block' ? 'Blocked' : 'Flagged' })] }) }),
+                            jsx('td', { children: jsx(TypeCell, { type: row.category }) }),
+                            jsx('td', { className: 'bbx-text', children: reasonOf(row) })
                           ]
                         }, `${row.ts}-${index}`)
                       )
@@ -2755,7 +2757,7 @@ function AgentActivity() {
                             jsx('td', { style: { width: 130 }, children: timeCell(entry.ts) }),
                             jsx('td', { style: { width: 110 }, children: cap(entry.framework || 'agent') }),
                             jsx('td', { style: { width: 170 }, children: jsx(Pill, { tone: entry.event === 'blocked' ? 'blocked' : entry.event === 'flagged' ? entry.severity || 'high' : 'neutral', children: EVENT_LABELS[entry.event] || entry.event }) }),
-                            jsx('td', { children: activityDetails(entry, cmdById) })
+                            jsx('td', { className: 'bbx-text', children: activityDetails(entry, cmdById) })
                           ]
                         }, `${entry.ts}-${index}`)
                       )
