@@ -78,6 +78,8 @@ that the two version fields agree.
 
 ### Fixed
 
+- The Desktop page's "Open findings" card opens Threats detected, as the bell does (it was
+  a count you could not click through).
 - An agent can no longer stop Blackbox's own services: unloading or stopping its login
   services, killing its dashboard or node by name, or killing whatever holds their ports is
   treated like editing Blackbox's settings (ordinary process commands stay allowed).

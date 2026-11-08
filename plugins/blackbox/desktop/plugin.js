@@ -876,6 +876,8 @@ const PAGE_CSS = `
    window width says nothing); otherwise 3 + 2, never five squeezed cards. */
 .bbx-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(max(180px, calc((100% - 48px) / 5)), 1fr)); gap: 12px; }
 .bbx-stat { padding: 16px 18px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+button.bbx-stat { font: inherit; color: inherit; text-align: left; cursor: pointer; }
+button.bbx-stat:hover { border-color: color-mix(in srgb, ${SIGNAL} 45%, var(--bbx-line)); }
 .bbx-stat.warm { border-left: 3px solid color-mix(in srgb, ${SIGNAL} 60%, transparent); }
 .bbx-stat-value { font-family: var(--bbx-mono); font-size: clamp(17px, 1.7vw, 24px); font-weight: 500; line-height: 1.15; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .bbx-stat-note { font-family: var(--bbx-mono); font-size: 11.5px; color: var(--bbx-muted); line-height: 1.45; }
@@ -1267,7 +1269,14 @@ function FirstDetectionCard() {
   })
 }
 
-function StatCards({ status }) {
+// Threats detected lives on the Threat graph tab: switch to it, then scroll the table into view
+// once the tab has drawn it. The bell and the Open findings card both open it this way.
+function showFindings(setTab) {
+  setTab('graph')
+  setTimeout(() => { const el = document.getElementById('bbx-findings'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }) }, 250)
+}
+
+function StatCards({ status, setTab }) {
   const graph = useDash('graph-status', 'api/graph-status')
   const community = useDash('community-stats', 'api/community-stats')
   const findings = useDash('findings-all', 'api/findings?limit=500', POLL_MS)
@@ -1282,8 +1291,9 @@ function StatCards({ status }) {
   const openCount = typeof total === 'number' ? Math.max(rows.length, total - (raw.length - rows.length)) : rows.length
   const sharing = !!asObject(settings.data).report
   const minutes = g.sync_interval ? Math.round(g.sync_interval / 60) : null
-  const card = (icon, label, value, note, extra, warm) =>
-    jsxs('div', {
+  const card = (icon, label, value, note, extra, warm, onOpen) =>
+    jsxs(onOpen ? 'button' : 'div', {
+      ...(onOpen ? { type: 'button', onClick: onOpen, title: 'Open Threats detected' } : {}),
       className: `bbx-panel bbx-stat${warm ? ' warm' : ''}`,
       children: [
         jsxs('div', { className: 'bbx-label', style: { display: 'flex', gap: 8, alignItems: 'center' }, children: [jsx(Codicon, { name: icon }), label] }),
@@ -1295,7 +1305,8 @@ function StatCards({ status }) {
   return jsxs('div', {
     className: 'bbx-stats',
     children: [
-      card('warning', 'Open findings', num(openCount), critical ? `${critical} critical` : 'across all sessions'),
+      card('warning', 'Open findings', num(openCount), critical ? `${critical} critical` : 'across all sessions', null, false,
+        setTab ? () => showFindings(setTab) : null),
       card('shield', 'Verified threats synced', num(g.curated), "from Umanitek's curated graph"),
       card('history', 'Last sync', ago(g.last_sync), minutes ? `auto every ${minutes >= 60 ? `${Math.round(minutes / 60)}h` : `${minutes}m`}` : ''),
       card('organization', 'Community graph', num(c.community_threats), [c.graph && c.graph.split('/').pop(), `${num(c.contributing_agents)} agents`, `${num(c.corroborated_2plus)} with 2+ reporters`].filter(Boolean).join(' · '),
@@ -1887,7 +1898,7 @@ function Overview({ status, setTab, readiness, ctx }) {
     children: [
       syncInProgress(readiness) ? jsx(FirstSyncBanner, { r: readiness, setTab, ctx }) : null,
       jsx(ConnectedAgents, {}),
-      jsx(StatCards, { status }),
+      jsx(StatCards, { status, setTab }),
       jsx(ShieldBanner, { setTab }),
       jsx(Playground, {})
     ]
@@ -3917,7 +3928,7 @@ function BlackboxPage({ ctx }) {
               setupScreen ? null : jsx(NodePill, {}),
               setupScreen ? null : jsx('button', { type: 'button', className: 'bbx-iconbtn', title: 'Blackbox assistant', onClick: () => setChatOpen(true), children: jsx(Codicon, { name: 'comment-discussion' }) }),
               setupScreen || !(s && s.dashboardUrl) ? null : jsx('button', { type: 'button', className: 'bbx-iconbtn', title: 'Docs (opens in your browser)', onClick: () => openDashboard(ctx, new URL('docs', s.dashboardUrl).href), children: jsx(Codicon, { name: 'book' }) }),
-              setupScreen ? null : jsx(ThreatBell, { ctx, onOpen: () => { setTab('graph'); setTimeout(() => { const el = document.getElementById('bbx-findings'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }) }, 250) } }),
+              setupScreen ? null : jsx(ThreatBell, { ctx, onOpen: () => showFindings(setTab) }),
               s ? jsx('button', { type: 'button', className: `bbx-modepill${s.mode === 'block' ? ' block' : ''}`, title: 'Change the mode in Settings', onClick: () => setTab('settings'), children: s.mode === 'block' ? 'Block mode' : 'Audit mode' }) : null,
               s && s.dashboardUrl && !setupScreen ? jsx('button', { type: 'button', className: 'bbx-iconbtn', title: 'Open the dashboard in your browser', onClick: () => openDashboard(ctx, s.dashboardUrl), children: jsx(Codicon, { name: 'link-external' }) }) : null
             ]
