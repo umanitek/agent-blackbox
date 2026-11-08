@@ -207,10 +207,10 @@ def verified_graph_still_arriving(cfg: Any) -> bool:
     label's previous behaviour.
     """
     backlog = read_recovery_backlog(cfg.dkg_home, cfg.context_graph_id)
-    if backlog is not None and backlog.pending > 0:
-        return True
     done = ruleset.verified_progress(cfg.context_graph_id) or {}
     compiled, total = done.get("assets_compiled"), done.get("assets_total")
+    if backlog is not None and backlog.to_fetch(compiled if isinstance(compiled, int) else 0) > 0:
+        return True
     return isinstance(compiled, int) and isinstance(total, int) and compiled < total
 
 
@@ -230,12 +230,16 @@ def read_sync_meter(cfg: Any, *, node_reachable: bool, verified_rules: int,
     backlog = read_recovery_backlog(cfg.dkg_home, graph_id)
     compiled = (ruleset.verified_progress(graph_id) or {}).get("assets_compiled")
     at_pass = None
-    if anchor is not None and backlog is not None and downloaded is not None:
+    pending = backlog.pending if backlog else None
+    if backlog is not None and backlog.head is not None and downloaded is not None:
+        # The node states the graph's size: what is missing is head - held (a restart's re-check is not).
+        pending = backlog.to_fetch(downloaded.assets)
+    elif anchor is not None and backlog is not None and downloaded is not None:
         # Keyed by graph too: a config switch to another graph must not reuse this one's count.
         at_pass = anchor.downloaded_at_pass(f"{graph_id}@{backlog.logged_at}", downloaded.assets)
     meter = build_sync_meter(
         downloaded=downloaded,
-        pending=backlog.pending if backlog else None,
+        pending=pending,
         compiled_assets=compiled if isinstance(compiled, int) else None,
         verified_rules=verified_rules,
         checked_at=backlog.logged_at if backlog else "",

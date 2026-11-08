@@ -32,6 +32,9 @@ const SLOW_POLL_MS = 30000
 const STATUS_KEY = ['blackbox', 'status']
 const FINDINGS_KEY = ['blackbox', 'findings']
 const AUDIT_NOTICE_KEY = 'auditNoticeShown' // ctx.storage: the one-time "recording, not blocking" notice
+const AUDIT_NOTICE_RETRY_MS = 30000 // while setup runs, the audit notice asks again this often
+// Readiness stages in which setup has not finished yet (desktop/readiness.py stage_of).
+const SETUP_STAGES = ['setup-needed', 'installing', 'setup-failed', 'starting']
 const SEVERITIES = ['info', 'low', 'medium', 'high', 'critical']
 
 let rest = null // ctx.rest, set in register() and cleared on dispose
@@ -718,13 +721,15 @@ function BubbleMap({ graph, loading, onPick }) {
     else if (wrap.requestFullscreen) wrap.requestFullscreen().catch(() => {})
   }
 
+  // WHY the canvas is positioned: its pixel size (box width x devicePixelRatio) counts as the page's
+  // minimum width when it sits in the flow, which on a Retina screen widened the page past the window.
   return jsxs('div', {
     ref: wrapRef,
-    style: { position: 'relative', overflow: 'hidden' },
+    style: { position: 'relative', overflow: 'hidden', height: 560 },
     children: [
       jsx('canvas', {
         ref: canvasRef,
-        style: { display: 'block', width: '100%', height: 560, opacity: loading ? 0.55 : 1, transition: 'opacity .2s' },
+        style: { position: 'absolute', inset: 0, display: 'block', width: '100%', height: '100%', opacity: loading ? 0.55 : 1, transition: 'opacity .2s' },
         onWheel: event => {
           const point = local(event)
           const view = live.current.view
@@ -836,6 +841,14 @@ const PAGE_CSS = `
   --bbx-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
   color: var(--bbx-text); font-size: 14px; line-height: 1.5; height: 100%; overflow: auto; }
 .bbx-wrap { max-width: 1240px; margin: 0 auto; padding: 28px 32px 64px; display: flex; flex-direction: column; gap: 40px; }
+/* WHY: a flex item never shrinks below its content's minimum width, so one wide table (six
+   columns beside Hermes' sidebar, a long package name in one cell) pushed the whole page sideways:
+   sections may shrink, cells break long names, and a table still too wide scrolls in its panel. */
+.bbx-wrap > *, .bbx-section { min-width: 0; }
+/* A tab's own wrap sits inside the page's: it fills it. With margin: auto it shrank to its content
+   and centred, so a page of cards sat inset from the header once the long sync text was gone. */
+.bbx-wrap .bbx-wrap { width: 100%; max-width: none; margin: 0; padding: 0; }
+.bbx-panel:has(.bbx-table) { overflow-x: auto; }
 .bbx-top { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
 .bbx-brand { font-size: 26px; font-weight: 800; letter-spacing: -0.02em; display: flex; align-items: center; gap: 2px; }
 .bbx-brand-dot { width: 16px; height: 16px; border-radius: 50%; background: var(--bbx-signal); display: inline-block; }
@@ -879,7 +892,10 @@ const PAGE_CSS = `
 .bbx-table { width: 100%; border-collapse: collapse; }
 .bbx-table th { text-align: left; font-family: var(--bbx-mono); font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--bbx-muted);
   font-weight: 500; padding: 14px 20px; border-bottom: 1px solid var(--bbx-line); }
-.bbx-table td { padding: 14px 20px; border-bottom: 1px solid var(--bbx-line); vertical-align: top; }
+.bbx-table td { padding: 14px 20px; border-bottom: 1px solid var(--bbx-line); vertical-align: top; overflow-wrap: break-word; }
+/* The text columns (reasoning, details) may break a long package name or path; the time stays whole. */
+.bbx-table td:nth-child(n+4) { overflow-wrap: anywhere; }
+.bbx-table td:first-child { white-space: nowrap; }
 .bbx-table tr:last-child td { border-bottom: 0; }
 .bbx-table tbody tr:hover td { background: var(--bbx-hover); }
 .bbx-mono { font-family: var(--bbx-mono); }
@@ -1402,7 +1418,7 @@ function ConnectedAgents() {
               ),
               jsxs('button', {
                 type: 'button', className: 'bbx-attach', onClick: () => setChoosing(!choosing),
-                children: [jsx('span', { className: 'bbx-iconbtn', style: { pointerEvents: 'none' }, children: jsx(Codicon, { name: 'add' }) }), choosing ? 'Close' : 'Attach agent']
+                children: [jsx('span', { className: 'bbx-iconbtn', style: { pointerEvents: 'none' }, children: jsx(Codicon, { name: choosing ? 'close' : 'add' }) }), choosing ? 'Close' : 'Attach agent']
               })
             ]
           }),
@@ -1636,7 +1652,7 @@ function ShieldEventsWindow({ card, start, onClose }) {
 async function setShield(card, enabled) {
   return saveSettings(
     { shields: { [card.shield_id]: { enabled } } },
-    enabled ? `${card.name} is engaged. Restart your agent so it picks the change up.` : `${card.name} is off.`
+    enabled ? `${card.name} is engaged. It protects your agents now.` : `${card.name} is off.`
   )
 }
 
@@ -1753,7 +1769,7 @@ function ShieldBanner({ setTab }) {
             jsxs('div', {
               style: { flex: 1, minWidth: 0 },
               children: [
-                jsxs('div', { style: { fontWeight: 700 }, children: [card.name, jsx('span', { className: 'bbx-ok', style: { marginLeft: 10 }, children: card.blocking ? '● Blocking' : '● Watching' })] }),
+                jsxs('div', { style: { fontWeight: 700 }, children: [card.name, jsx('span', { className: 'bbx-ok', style: { marginLeft: 10, color: card.blocking ? undefined : '#E5A00D' }, children: card.blocking ? '● Blocking' : '● Watching' })] }),
                 jsx('div', { className: 'bbx-small', children: card.tagline })
               ]
             }),
@@ -3035,7 +3051,7 @@ function ShieldSettings({ card, section, dashboardUrl }) {
         payload[field.key] = asList(value[field.key]).filter(id => supported.has(String(id)))
       } else payload[field.key] = value[field.key]
     }
-    const ok = await saveSettings({ shields: { [card.shield_id]: payload } }, `${card.name} saved. Restart your agent so it picks the change up.`)
+    const ok = await saveSettings({ shields: { [card.shield_id]: payload } }, `${card.name} saved. It applies to your agents at once.`)
     if (ok) setDraft(null)
   }
   return jsxs('section', {
@@ -3512,9 +3528,10 @@ function FirstSyncBanner({ r, setTab, ctx }) {
 
 // The dashboard's health strip (index.html loadHealth / renderHealth, GET /api/health): every alarm
 // Blackbox raises for this machine, with what to do. INFO items are quiet; red items are marked red.
-function HealthStrip() {
+// *hideFirstSync*: Overview's first-sync card is showing and already says it, with live progress.
+function HealthStrip({ hideFirstSync = false }) {
   const query = useDash('health', 'api/health', POLL_MS)
-  const items = asList(asObject(query.data).items).map(asObject)
+  const items = asList(asObject(query.data).items).map(asObject).filter(item => !(hideFirstSync && item.key === 'first-sync'))
   if (!items.length) return null
   return jsx('div', {
     className: 'bbx-health',
@@ -3534,7 +3551,12 @@ function HealthStrip() {
 // "Node offline" next to the mode, when the dashboard reports the DKG node unreachable.
 function NodePill() {
   const status = useDash('graph-status', 'api/graph-status')
+  const health = useDash('health', 'api/health', POLL_MS)
   if (asObject(status.data).node_reachable !== false) return null
+  // Just after a restart the node takes a minute or two to answer: starting, not offline.
+  if (asList(asObject(health.data).items).some(item => asObject(item).key === 'node-starting')) {
+    return jsx('span', { className: 'bbx-modepill', title: 'The local DKG node is starting; verified checks use the last rules meanwhile.', children: 'Node starting' })
+  }
   return jsx('span', { className: 'bbx-modepill', style: { color: '#E5484D', borderColor: 'color-mix(in srgb, #E5484D 50%, transparent)' }, title: 'The local DKG node does not answer: verified checks run from the last rules Blackbox compiled.', children: 'Node offline' })
 }
 
@@ -3898,7 +3920,7 @@ function BlackboxPage({ ctx }) {
               s && s.dashboardUrl && !setupScreen ? jsx('button', { type: 'button', className: 'bbx-iconbtn', title: 'Open the dashboard in your browser', onClick: () => openDashboard(ctx, s.dashboardUrl), children: jsx(Codicon, { name: 'link-external' }) }) : null
             ]
           }),
-          setupScreen ? jsx(GettingReady, { r }) : jsx(HealthStrip, {}),
+          setupScreen ? jsx(GettingReady, { r }) : jsx(HealthStrip, { hideFirstSync: tab === 'overview' && syncInProgress(r) }),
           !setupScreen && tab === 'overview' ? (s ? jsx(Overview, { status: s, setTab, readiness: r, ctx }) : jsx('div', { className: 'bbx-empty', children: 'Loading…' })) : null,
           !setupScreen && tab === 'graph' ? jsx(ThreatGraphTab, { readiness: r }) : null,
           !setupScreen && tab === 'shields' ? jsx(ShieldsTab, {}) : null,
@@ -3951,9 +3973,15 @@ export default {
     ])
     // Someone who switches Blackbox on in Desktop should not take audit mode for protection: once,
     // say plainly that it is recording, not blocking, with a one-click way to turn blocking on.
-    ctx.setTimeout(() => {
+    // WHY it waits for setup: a fresh install opens on the setup page, and the notice landed over
+    // it, offering "Open Blackbox" on Blackbox's own page; it comes once setup has finished.
+    const showAuditNotice = () => {
       if (ctx.storage.get(AUDIT_NOTICE_KEY, false)) return
-      fetchStatus().then(status => {
+      Promise.all([fetchStatus(), fetchReadiness()]).then(([status, readiness]) => {
+        if (SETUP_STAGES.includes(asObject(readiness).stage)) {
+          ctx.setTimeout(showAuditNotice, AUDIT_NOTICE_RETRY_MS)
+          return
+        }
         if (!status || !status.available || status.mode !== 'audit') return
         ctx.storage.set(AUDIT_NOTICE_KEY, true)
         host.notify({
@@ -3965,7 +3993,8 @@ export default {
           secondaryAction: { label: 'Open Blackbox', onClick: () => host.navigate(PAGE) }
         })
       }, () => {})
-    }, 3000)
+    }
+    ctx.setTimeout(showAuditNotice, 3000)
     ctx.onEvent('plugin.blackbox.finding', event => {
       queryClient.invalidateQueries({ queryKey: STATUS_KEY })
       queryClient.invalidateQueries({ queryKey: FINDINGS_KEY })

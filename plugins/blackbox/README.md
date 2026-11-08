@@ -227,9 +227,8 @@ To switch it on:
    threats are stopped, not just flagged.
 2. Choose your wallets and, optionally, add your own public wallet addresses,
    so a raw private key that opens one of them is recognised too. Addresses
-   stay on this machine.
-3. Restart your agent so it picks up the rules.
-4. Try it safely: in an empty folder create a file `.env` holding
+   stay on this machine. Changes take effect at once: a running agent needs no restart.
+3. Try it safely: in an empty folder create a file `.env` holding
    `DEMO_KEY=not-a-real-key`, then ask your agent to read it aloud. It is
    blocked, and the block shows on the dashboard.
 

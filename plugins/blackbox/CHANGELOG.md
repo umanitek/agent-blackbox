@@ -74,6 +74,22 @@ that the two version fields agree.
 
 ### Fixed
 
+- After a restart or reboot the page no longer says half the threat graph is missing: the node
+  re-checks the assets it already holds, and that re-check is no longer counted as data still to
+  download (a fresh Mac fell from 100% to 51% of a "1,842-asset" graph that has 971).
+- In the minute after a reboot, while the DKG node reopens its store, the page says "the DKG node is
+  starting" (and Desktop's header "Node starting") instead of a red "my node is stale — run
+  `blackbox sync --wait`".
+- The Blackbox assistant looks threats up instead of reading a whole graph tier into the model: its
+  answers are faster, and its own request no longer trips Blackbox's prompt-injection alert on the
+  attack phrases quoted in threat names.
+- Turning on Trader Shield, or saving its settings, no longer tells you to restart your agent: a
+  running agent picks the change up at once (README and the Trader Shield page updated too).
+- Desktop: a long package name in Threats detected, or the graph on a Retina screen, no longer
+  pushes the page sideways past the window; the tabs line up with the header once the first sync
+  is done; the first-sync note is not shown twice; the "recording, not blocking" notice waits until
+  setup has finished instead of covering the setup page; "Watching" (audit mode) is amber like the
+  Shields tab; the Attach agent tile shows a close icon while it is open.
 - "Attach agent" on the dashboard opens its window again from a click on its icon or label (only
   a click on the button's edge did anything), and Escape closes that window.
 - The Trader Shield page no longer says "Not engaged" for the first moments after the dashboard

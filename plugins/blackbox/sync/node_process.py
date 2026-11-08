@@ -17,6 +17,7 @@ Usage::
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import Iterator, List, Optional
 
@@ -82,3 +83,16 @@ def managed_daemon_pid(cfg: BlackboxConfig) -> Optional[int]:
         return recorded
     process = next(managed_daemons(cfg), None)
     return process.pid if process is not None else None
+
+
+def node_starting(cfg: BlackboxConfig, grace_s: float) -> bool:
+    """Whether a node of ours is running but started less than *grace_s* seconds ago: it may not
+    answer yet (reopening its store takes about a minute after a boot), so it is starting, not down."""
+    pid = managed_daemon_pid(cfg)
+    if pid is None:
+        return False
+    try:
+        return time.time() - psutil.Process(pid).create_time() < grace_s
+    except (OSError, psutil.Error):
+        return False
+

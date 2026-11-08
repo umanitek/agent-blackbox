@@ -28,8 +28,17 @@ from .command import cmd_sync as _sync_with_node
 from .progress import read_durable_progress, read_recovery_backlog
 from .snapshot_readiness import defaults as snapshot_defaults, validate_requested_profile as validate_snapshot_profile
 
-__all__ = ["cmd_sync", "progress", "read_durable_progress", "read_recovery_backlog",
+__all__ = ["cmd_sync", "node_starting", "progress", "read_durable_progress", "read_recovery_backlog",
            "snapshot_defaults", "state", "validate_snapshot_profile"]
+
+
+def node_starting(cfg) -> bool:
+    """Whether Blackbox's DKG node is running but still inside its restart wait
+    (``BLACKBOX_DKG_RUNTIME_WAIT_SECONDS``): health reports it starting, not stale."""
+    from .managed_node import node_ready_wait_seconds
+    from .node_process import node_starting as _starting
+
+    return _starting(cfg, node_ready_wait_seconds())
 
 
 def cmd_sync(args: argparse.Namespace) -> int:

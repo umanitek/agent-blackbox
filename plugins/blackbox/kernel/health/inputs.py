@@ -73,6 +73,9 @@ class HealthInputs:
     #: Whether the graph's owner has admitted this node, as the node's own listing says
     #: (``community.Admission`` value: owner / approved / waiting / open / unknown; "" = not read).
     admission: str = ""
+    #: The node's process is running but younger than the restart grace (``sync.node_starting``):
+    #: an unreachable node is then starting up, not stale.
+    node_starting: bool = False
     #: Community sharing is on (``cfg.community_enabled``): a "waiting" node's shares are refused.
     sharing_enabled: bool = False
     #: trust-and-threat-lab R1: why the shipped legacy asset list was refused ("" = fine) — the

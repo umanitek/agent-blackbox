@@ -50,9 +50,11 @@ Prefer the running dashboard API on http://127.0.0.1:9700 (all read-only, JSON):
   `dkg_url`, `node_reachable`, `last_sync`, `ruleset` (per-category local counts),
   `curated` (Public tier count), `community` (community-tier rule count),
   `sightings`, `findings_logged`.
-- `GET /api/graph?tier=public|local` — the actual threat ENTRIES for a
-  tier. Returns `{{tier, threats:[{{identifier, category, severity, name}}]}}`.
-  Use this to list what's in the public/community/local graph.
+- `GET /api/graph?tier=public|local&q=<term>&limit=20` — look up threat ENTRIES
+  in a tier. Returns `{{tier, threats:[{{identifier, category, severity, name}}], total}}`.
+  Always pass `q` (a package, domain, identifier or word) and a small `limit`: a tier
+  holds up to a million entries, and their names quote attack phrases. For "how many"
+  use the counts in `/api/graph-status`; never fetch a whole tier.
 - `GET /api/threat?tier=public&identifier=<id>` — full detail for one
   threat (description, references/advisories, reporters).
 - `GET /api/findings?limit=&offset=` — threats Blackbox has flagged on this

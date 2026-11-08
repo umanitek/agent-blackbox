@@ -121,3 +121,28 @@ def test_a_restart_with_a_stale_pidfile_goes_through_systemd(cfg, monkeypatch):
     managed_node._restart_managed_dkg(cfg)
 
     assert commands == [["systemctl", "restart", "blackbox-dkg.service"]]
+
+
+def test_a_node_started_inside_the_restart_wait_is_starting(monkeypatch, cfg):
+    """2026-11-08: after a reboot the node answers only once its store has reopened; until then
+    health says it is starting. A node older than the wait, or none at all, is not."""
+    import time as clock
+
+    started = {"at": clock.time() - 30}
+
+    class Process:
+        def __init__(self, pid):
+            if pid != 4242:
+                raise node_process.psutil.NoSuchProcess(pid)
+
+        def create_time(self):
+            return started["at"]
+
+    monkeypatch.setattr(node_process.psutil, "Process", Process)
+    monkeypatch.setattr(node_process, "managed_daemon_pid", lambda c: 4242)
+    assert node_process.node_starting(cfg, 300) is True
+    started["at"] = clock.time() - 600
+    assert node_process.node_starting(cfg, 300) is False
+    monkeypatch.setattr(node_process, "managed_daemon_pid", lambda c: None)
+    assert node_process.node_starting(cfg, 300) is False
+

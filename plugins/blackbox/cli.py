@@ -14,7 +14,7 @@ import argparse
 import logging
 from typing import Any
 import time
-from . import attach, audit, community, ruleset
+from . import attach, audit, community, ruleset, sync
 from .kernel import health
 from .kernel import yaml_files
 from .kernel.config import load_blackbox_config
@@ -191,7 +191,8 @@ def _print_health(cfg: Any, rs: Any, client: DkgClient, reachable: bool) -> None
     items = health.operator_health(health.gather(cfg, rs, reachable, read, audit.blocked_counts_by_identifier(), time.time(),
                                                  pending_shares=retries.pending, shares_given_up=retries.given_up,
                                                  sharing_consent_problem=community.consent.why_not(),
-                                                 verified_lookup_problem=ruleset.live.HEALTH.read().problem()))
+                                                 verified_lookup_problem=ruleset.live.HEALTH.read().problem(),
+                                                 node_starting=not reachable and sync.node_starting(cfg)))
     items += status_health_items(time.time())   # a curator node's own alarms: self-test suspension, halted quorum
     if cfg.context_graph_id:   # who curates, who is trusted, what is confirmed (the dashboard's trust panel shows the same)
         for line in community.trust_status_lines(community.trust_panel(read)):

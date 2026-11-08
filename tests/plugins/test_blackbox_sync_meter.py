@@ -54,6 +54,35 @@ def test_a_log_without_a_pass_for_the_graph_is_an_unknown_backlog(tmp_path):
     assert read_recovery_backlog(str(tmp_path), VM_GRAPH) is None
 
 
+def _watermark_line(stamp: str, graph: str, head: int, pending: int) -> str:
+    """The node's per-pass watermark line, which states the graph's size (DKG 10.0.26, bb-test-3)."""
+    return (f"{stamp} system 089e1d24 [DKGAgent] reconcile {graph}: watermark 45 -> 48 "
+            f"(head={head}, processed=10, reconciled=10, pending={pending})\n")
+
+
+def test_the_backlog_carries_the_graphs_size_from_the_watermark_line(tmp_path):
+    (tmp_path / "daemon.log").write_text(
+        _watermark_line("2026-11-08 16:25:36", OTHER_GRAPH, 50, 5)
+        + _watermark_line("2026-11-08 16:25:36", VM_GRAPH, 971, 801)
+        + _reconcile_line("2026-11-08 16:25:36", VM_GRAPH, 801), encoding="utf-8")
+
+    backlog = read_recovery_backlog(str(tmp_path), VM_GRAPH)
+
+    assert backlog.head == 971 and backlog.pending == 801
+    assert backlog.to_fetch(971) == 0 and backlog.to_fetch(900) == 71
+    assert RecoveryBacklog(pending=12, logged_at="x").to_fetch(500) == 12   # no size stated: the pass's count
+
+
+def test_a_restart_rechecking_a_held_graph_is_not_still_arriving(tmp_path, monkeypatch):
+    """2026-11-08, fresh Mac after a reboot: the node re-checked the 971 assets it held (pending=801)
+    and the page fell from 100% to 51% of a "1,842-asset" graph. Held = head means nothing is missing."""
+    (tmp_path / "daemon.log").write_text(_watermark_line("2026-11-08 16:25:36", VM_GRAPH, 971, 801)
+                                         + _reconcile_line("2026-11-08 16:25:36", VM_GRAPH, 801), encoding="utf-8")
+    monkeypatch.setattr(ruleset, "verified_progress", lambda graph: {"assets_compiled": 971, "assets_total": 971})
+
+    assert sync_meter.verified_graph_still_arriving(_cfg(tmp_path)) is False
+
+
 # --- downloaded totals (one aggregate _meta query) --------------------------
 
 def test_the_totals_query_is_one_owner_pinned_aggregate_over_confirmed_assets():
