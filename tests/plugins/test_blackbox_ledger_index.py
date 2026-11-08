@@ -105,7 +105,7 @@ def test_a_lost_or_damaged_index_key_closes_the_ledger_and_is_never_replaced_by_
 def test_a_damaged_index_is_an_empty_index(home):
     _filled(home)
     document = json.loads((home / "reputation_salts.json").read_text(encoding="utf-8"))
-    for damaged in ({**document, "sealed": document["sealed"][:-2] + "00"}, {**document, "sealed": "zz"}, {"v": 2}, {"v": 3, "sealed": "00"}):
+    for damaged in ({**document, "sealed": document["sealed"][:-2] + format(int(document["sealed"][-2:], 16) ^ 0xFF, "02x")}, {**document, "sealed": "zz"}, {"v": 2}, {"v": 3, "sealed": "00"}):
         (home / "reputation_salts.json").write_text(json.dumps(damaged), encoding="utf-8")
         assert _ledger(home).keys() == []
 

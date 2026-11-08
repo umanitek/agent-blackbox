@@ -89,6 +89,15 @@ that the two version fields agree.
 - Desktop's assistant shows `code` and **bold** in its answers as formatting, not as symbols.
 - Desktop no longer says "0 connected agents" above an agent it protects: like the dashboard, it
   counts only agents active right now and shows nothing when none is.
+- Desktop's assistant: "New chat" while an answer is on its way really starts a new chat (the old
+  answer no longer comes back), closing and reopening the assistant mid-answer keeps that answer,
+  and answers keep their paragraph breaks.
+- A long Desktop request (an assistant answer, a Playground test) no longer gives up after one
+  failed check while it is still running, and Playground "Run all" stops when you leave the page.
+- Desktop's threat bell counts the same threats the findings list shows, and clicking it before
+  the list has loaded no longer marks every threat as new again.
+- A Shield's list setting in Desktop (addresses, names) can be typed one entry per line; Enter and
+  commas no longer vanish as you type them.
 
 ## [1.3.0] - 2026-11-06
 

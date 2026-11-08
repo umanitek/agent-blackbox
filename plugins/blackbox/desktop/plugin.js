@@ -49,16 +49,21 @@ async function dash(path, opts) {
 // started in the background on the backend (desktop/long_calls.py), then read back every 1.5 s.
 const LONG_CALL_POLL_MS = 1500
 const LONG_CALL_LIMIT_MS = 150000
+const LONG_CALL_POLL_FAILURES = 3 // failed polls in a row before the page gives up on a call
 
 async function dashLong(path, body) {
   if (!rest) return { error: 'Blackbox is not loaded', unavailable: true }
   const started = await callRest(`/dash-call/${path}`, { method: 'POST', body })
   if (!started.call_id) return started
   const deadline = Date.now() + LONG_CALL_LIMIT_MS
+  let failures = 0
   while (Date.now() < deadline) {
     await new Promise(resolve => setTimeout(resolve, LONG_CALL_POLL_MS))
-    const answer = await callRest(`/dash-call/${started.call_id}`)
-    if (!answer.running) return answer
+    const answer = asObject(await callRest(`/dash-call/${started.call_id}`))
+    if (answer.running) continue
+    // WHY: an error without the dashboard's own `ok` is the poll failing (a Hermes hiccup), not the
+    // call's answer; the call keeps running on the backend, so ask again before giving up.
+    if ('ok' in answer || !answer.error || ++failures >= LONG_CALL_POLL_FAILURES) return answer
   }
   return { error: 'Blackbox took too long to answer.' }
 }
@@ -1106,7 +1111,7 @@ function Heading({ title, sub, actions }) {
 }
 
 function openDashboard(ctx, url) {
-  const open = ctx ? ctx.os.openExternal : openExternal
+  const open = ctx ? url => ctx.os.openExternal(url) : openExternal
   if (!open) return
   open(url).then(opened => {
     if (!opened) host.notify({ kind: 'warning', message: `Open ${url} in your browser` })
@@ -1298,7 +1303,7 @@ function ConnectedAgents() {
   }
   const a = asObject(agents.data)
   const list = asList(a.agents).filter(agent => agent.is_local !== false)
-  const active = Number.isFinite(Number(a.connected_count)) ? Number(a.connected_count) : list.filter(agent => agent.is_active).length
+  const active = a.connected_count != null && Number.isFinite(Number(a.connected_count)) ? Number(a.connected_count) : list.filter(agent => agent.is_active).length
   return jsxs('section', {
     className: 'bbx-section',
     children: [
@@ -2926,6 +2931,11 @@ function ProtectionSettings({ initial }) {
   })
 }
 
+// A list field's entries: the saved list, or the text being typed (one per line, or comma/space separated).
+function typedLines(value) {
+  return typeof value === 'string' ? value.split(/[\s,]+/).filter(Boolean) : asList(value)
+}
+
 // A shield's settings, drawn from the fields the shield declares (dashboard static/shields.js
 // renderSettings / fieldHTML / linesOf): toggles, a pick of packs (ones not supported yet are shown and
 // cannot be picked), and lines checked against the field's own pattern — a refused line is left out,
@@ -2963,7 +2973,7 @@ function ShieldSettings({ card, section, dashboardUrl }) {
   const save = async () => {
     const payload = {}
     for (const field of fields) {
-      if (field.kind === 'lines') payload[field.key] = shieldLines(field, asList(value[field.key])).kept
+      if (field.kind === 'lines') payload[field.key] = shieldLines(field, typedLines(value[field.key])).kept
       else if (field.kind === 'multi-pick') {
         const supported = new Set(asList(field.options).map(asObject).filter(option => option.status === 'supported').map(option => String(option.id)))
         payload[field.key] = asList(value[field.key]).filter(id => supported.has(String(id)))
@@ -3024,7 +3034,7 @@ function ShieldSettings({ card, section, dashboardUrl }) {
               }, field.key)
             }
             if (field.kind === 'lines') {
-              const counted = shieldLines(field, asList(value[field.key]))
+              const counted = shieldLines(field, typedLines(value[field.key]))
               return jsxs('div', {
                 className: 'bbx-setrow',
                 style: { flexDirection: 'column', alignItems: 'stretch' },
@@ -3035,8 +3045,8 @@ function ShieldSettings({ card, section, dashboardUrl }) {
                     style: { minHeight: 70 },
                     disabled: !on,
                     spellCheck: false,
-                    value: asList(value[field.key]).join('\n'),
-                    onChange: event => change(field.key, event.target.value.split(/[\s,]+/).filter(Boolean))
+                    value: typeof value[field.key] === 'string' ? value[field.key] : asList(value[field.key]).join('\n'),
+                    onChange: event => change(field.key, event.target.value) // split on save, so Enter and commas can be typed
                   }),
                   counted.refused
                     ? jsx('div', { className: 'bbx-small', style: { color: '#E5484D' }, children: `${counted.refused} line${counted.refused === 1 ? ' is' : 's are'} not accepted and left out — never saved or sent.` })
@@ -3479,7 +3489,7 @@ const BELL_SEEN_KEY = 'threatsSeenUntil' // ctx.storage: the newest finding the 
 function ThreatBell({ ctx, onOpen }) {
   const findings = useDash('findings-all', 'api/findings?limit=500', POLL_MS)
   const [seenUntil, setSeenUntil] = useState(() => Number(ctx.storage.get(BELL_SEEN_KEY, 0)) || 0)
-  const rows = asList(asObject(findings.data).findings).map(asObject)
+  const rows = dedupeFindings(asList(asObject(findings.data).findings))
   const newest = rows.reduce((max, row) => Math.max(max, Number(row.ts || 0)), 0)
   const unread = rows.filter(row => Number(row.ts || 0) > seenUntil).length
   return jsxs('button', {
@@ -3487,8 +3497,9 @@ function ThreatBell({ ctx, onOpen }) {
     className: 'bbx-iconbtn bbx-bell',
     title: unread ? `${unread} new threat${unread === 1 ? '' : 's'} since you last looked` : 'No new threats',
     onClick: () => {
-      ctx.storage.set(BELL_SEEN_KEY, newest)
-      setSeenUntil(newest)
+      const seen = Math.max(seenUntil, newest) // findings not loaded yet must not mark everything unread
+      ctx.storage.set(BELL_SEEN_KEY, seen)
+      setSeenUntil(seen)
       onOpen()
     },
     children: [jsx(Codicon, { name: 'bell' }), unread ? jsx('span', { className: 'bbx-bell-count', children: unread > 99 ? '99+' : String(unread) }) : null]
@@ -3503,6 +3514,20 @@ function ThreatBell({ ctx, onOpen }) {
 const CHAT_KEY = 'chatHistory'
 const CHAT_SESSION_KEY = 'chatSession'
 const CHAT_KEEP = 50
+// The assistant turn in flight lives here, not in the drawer: closing the drawer mid-turn must not
+// lose the answer or let a second turn resume the same session at once. "New chat" bumps chatEpoch
+// so a reply that lands afterwards is dropped instead of bringing the old chat back.
+let chatPending = null
+let chatEpoch = 0
+
+async function askAssistant(ctx, question) {
+  const epoch = chatEpoch
+  const answer = asObject(await dashLong('api/blackbox-chat', { message: question, session_id: ctx.storage.get(CHAT_SESSION_KEY, '') || '' }))
+  if (epoch !== chatEpoch) return
+  if (answer.session_id) ctx.storage.set(CHAT_SESSION_KEY, answer.session_id)
+  const turn = answer.ok ? { role: 'assistant', text: answer.answer || '(no response)', at: Date.now() } : { role: 'error', text: answer.error || 'Blackbox chat failed.', at: Date.now() }
+  ctx.storage.set(CHAT_KEY, [...asList(ctx.storage.get(CHAT_KEY, [])), turn].slice(-CHAT_KEEP))
+}
 const CHAT_PROMPTS = [
   ['What needs attention?', 'Summarize the current dashboard state. Which protected agents, findings, graph tiers, or sync issues need attention right now?'],
   ['Show protected agents', 'List the protected local agents exactly as the dashboard sees them. Include framework, path, status, and any recent reports.'],
@@ -3542,9 +3567,21 @@ function ChatFailure({ text }) {
 function AssistantDrawer({ ctx, onClose }) {
   const [turns, setTurns] = useState(() => asList(ctx.storage.get(CHAT_KEY, [])))
   const [text, setText] = useState('')
-  const [busy, setBusy] = useState(false)
+  const [busy, setBusy] = useState(() => !!chatPending)
   const [waiting, setWaiting] = useState(0)
   const end = useRef(null)
+  const mounted = useRef(true)
+  const follow = async () => {
+    await chatPending
+    if (!mounted.current) return
+    setTurns(asList(ctx.storage.get(CHAT_KEY, [])))
+    setBusy(!!chatPending)
+  }
+  useEffect(() => {
+    mounted.current = true
+    if (chatPending) follow()   // reopened mid-turn: show the answer when it lands
+    return () => { mounted.current = false }
+  }, [])
   useEffect(() => {
     if (end.current) end.current.scrollIntoView({ block: 'end' })
   }, [turns.length, busy])
@@ -3568,16 +3605,13 @@ function AssistantDrawer({ ctx, onClose }) {
   }
   const send = async message => {
     const question = String(message || '').trim()
-    if (!question || busy) return
-    let current = remember([...turns, { role: 'user', text: question, at: Date.now() }])
+    if (!question || busy || chatPending) return
+    remember([...turns, { role: 'user', text: question, at: Date.now() }])
     setText('')
     setBusy(true)
     setWaiting(0)
-    const answer = await dashLong('api/blackbox-chat', { message: question, session_id: ctx.storage.get(CHAT_SESSION_KEY, '') || '' })
-    const reply = asObject(answer)
-    if (reply.session_id) ctx.storage.set(CHAT_SESSION_KEY, reply.session_id)
-    current = remember([...current, reply.ok ? { role: 'assistant', text: reply.answer || '(no response)', at: Date.now() } : { role: 'error', text: reply.error || 'Blackbox chat failed.', at: Date.now() }])
-    setBusy(false)
+    chatPending = askAssistant(ctx, question).catch(() => null).finally(() => { chatPending = null })
+    await follow()
   }
   return jsx('div', {
     className: 'bbx-modal-backdrop bbx-drawer-backdrop',
@@ -3598,6 +3632,7 @@ function AssistantDrawer({ ctx, onClose }) {
                   type: 'button',
                   className: 'bbx-btn',
                   onClick: () => {
+                    chatEpoch += 1
                     ctx.storage.set(CHAT_SESSION_KEY, '')
                     remember([])
                   },
@@ -3664,11 +3699,17 @@ function Playground() {
   const wallets = useDash('playground-wallets', 'api/playground/wallets', SLOW_POLL_MS)
   const [busy, setBusy] = useState('')
   const [results, setResults] = useState({})
+  const mounted = useRef(true)
+  useEffect(() => {
+    mounted.current = true
+    return () => { mounted.current = false }
+  }, [])
   const s = asObject(state.data)
   if (!s.sandbox) return null
   const run = async (key, path, body) => {
     setBusy(key)
     const answer = asObject(await dashLong(path, body))
+    if (!mounted.current) return
     setResults(previous => ({ ...previous, [key]: answer.ok ? asObject(answer.result) : { error: answer.error || answer.reason || 'The test could not run.' } }))
     setBusy('')
     refreshDash()
@@ -3721,7 +3762,7 @@ function Playground() {
                     className: 'bbx-btn',
                     disabled: !!busy,
                     onClick: async () => {
-                      for (const test of walletList) await run(`wallet:${test.id}`, 'api/playground/wallets/run', { id: test.id })
+                      for (const test of walletList) if (mounted.current) await run(`wallet:${test.id}`, 'api/playground/wallets/run', { id: test.id })
                     },
                     children: 'Run all'
                   })

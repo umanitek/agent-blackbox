@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import secrets
 import shutil
 import socket
@@ -1198,12 +1199,10 @@ def create_app(*, manage_blackbox: bool = False):
             return JSONResponse({"ok": False, "errors": ["internal error"]}, status_code=500)
 
     def _clean_chat_output(text: str) -> str:
-        lines: list[str] = []
-        for line in (text or "").splitlines():
-            stripped = line.strip()
-            if stripped and not stripped.startswith("session_id:") and "Context file AGENTS.md TRUNCATED" not in stripped:
-                lines.append(line.rstrip())
-        return "\n".join(lines).strip()
+        # Blank lines are kept (one at most in a row): they are the answer's paragraph breaks.
+        lines = [line.rstrip() for line in (text or "").splitlines()
+                 if not line.strip().startswith("session_id:") and "Context file AGENTS.md TRUNCATED" not in line]
+        return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
 
     def _parse_chat_session_id(text: str) -> str | None:
         for line in (text or "").splitlines():

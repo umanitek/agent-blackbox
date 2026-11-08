@@ -1028,6 +1028,16 @@ def test_blackbox_dashboard_chat_never_shows_the_system_error(monkeypatch):
     assert res.json() == {"ok": False, "error": "Blackbox could not start the assistant."}
 
 
+def test_blackbox_dashboard_chat_keeps_the_answers_paragraph_breaks(monkeypatch):
+    out = "session_id: abc\nFirst paragraph.\n\n\n\nSecond paragraph:\n- one\n- two\n\n"
+
+    def fake_run(argv, **kwargs):
+        return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
+
+    res = _chat(monkeypatch, fake_run, {"message": "hi"})
+
+    assert res.json()["answer"] == "First paragraph.\n\nSecond paragraph:\n- one\n- two"
+
 def test_attach_targets_include_unavailable_supported_agents(monkeypatch):
     def fake_attach_all(*, hermes=True, openclaw=True, dry_run=False):
         if hermes and not openclaw:
