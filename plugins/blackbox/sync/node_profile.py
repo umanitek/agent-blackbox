@@ -83,7 +83,8 @@ def node_sync_settings(cfg: BlackboxConfig) -> dict[str, str]:
     """
     from . import native   # sibling module; lazy so the two never import-cycle
 
-    if cfg.snapshot_sync is not None:
+    # An unusable snapshot block is still a request for snapshot mode: the node keeps that profile.
+    if cfg.snapshot_sync is not None or getattr(cfg, "snapshot_sync_error", ""):
         # The VM reconciler stays ON beside the snapshot download: its pass line
         # (``pending=N`` in daemon.log) is the only place the node states the graph's
         # size mid-sync, and the dashboard's progress bar reads it (Amos, 2026-10-28:

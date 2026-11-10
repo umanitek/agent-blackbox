@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 import os
-from .snapshot_config import SnapshotSyncConfig, snapshot_config
+from .snapshot_config import SnapshotSyncConfig, snapshot_fields
 
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -56,6 +56,7 @@ class BlackboxConfig:
     #: Existing and older-daemon installs retain their explicitly named legacy mode.
     detection_backend: str = "legacy-cache"
     snapshot_sync: SnapshotSyncConfig | None = None
+    snapshot_sync_error: str = ""   # why the saved block was set aside; sync refuses while set (KI-490)
     semantic: SemanticConfig = field(default_factory=SemanticConfig)
     context_graph_id: str = constants.DEFAULT_CONTEXT_GRAPH_ID
     graph_peer_id: str = constants.DEFAULT_GRAPH_PEER_ID
@@ -261,7 +262,7 @@ def load_blackbox_config(*, entry: dict[str, Any] | None = None) -> BlackboxConf
         logger.info("blackbox: switching stale graph_peer_id %s -> %s", graph_peer_id, constants.DEFAULT_GRAPH_PEER_ID)
         graph_peer_id = constants.DEFAULT_GRAPH_PEER_ID
     return BlackboxConfig(
-        mode=mode, semantic=semantic_config(entry), snapshot_sync=snapshot_config(entry),
+        mode=mode, semantic=semantic_config(entry), **snapshot_fields(entry),
         detection_backend=str(entry.get("detection_backend", "legacy-cache")).strip().lower(),
         context_graph_id=context_graph_id,
         graph_peer_id=graph_peer_id,

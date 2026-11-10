@@ -1,5 +1,8 @@
 """Explicit trust configuration for the public core snapshot sync capability."""
+import logging
 from dataclasses import dataclass
+
+logger = logging.getLogger(__name__)
 
 DKG_CORE_CHAIN_CACHE = "DKG_Core_chain_cache"
 REGISTERED_BASE_CORES = "base-mainnet-registered-cores"
@@ -43,6 +46,33 @@ def snapshot_config(entry):
             or len(set(peers)) != len(peers)):
         raise ValueError("snapshot_sync needs a positive on_chain_id, explicit trusted_core_peers or DKG_Core_chain_cache, and core-cache or rpc-only mode")
     return SnapshotSyncConfig(graph_id, tuple(peers), mode, policy)
+
+
+#: Block errors this process has already logged (every hook loads the config).
+_WARNED_ERRORS: set[str] = set()
+
+
+def snapshot_fields(entry) -> dict:
+    """The two ``BlackboxConfig`` fields for *entry*'s block, never raising.
+
+    ``{"snapshot_sync": settings or None, "snapshot_sync_error": "" or why}``. An invalid
+    block is set aside with its reason rather than raised: the config is loaded by every
+    hook, so raising let every tool call through unchecked (KI-490). Sync refuses while the
+    error is set — there is no automatic trust fallback. Code validating a block someone is
+    about to save calls :func:`snapshot_config` and gets the ValueError.
+
+    Usage::
+
+        BlackboxConfig(mode=mode, **snapshot_fields(entry))
+    """
+    try:
+        return {"snapshot_sync": snapshot_config(entry), "snapshot_sync_error": ""}
+    except ValueError as exc:
+        if str(exc) not in _WARNED_ERRORS:
+            _WARNED_ERRORS.add(str(exc))
+            logger.warning("blackbox: the snapshot_sync block in config.yaml is invalid (%s); protection "
+                           "keeps running and sync is refused until it is corrected", exc)
+        return {"snapshot_sync": None, "snapshot_sync_error": str(exc)}
 
 
 def query_evidence(config, url, home):

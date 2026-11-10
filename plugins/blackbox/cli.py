@@ -118,6 +118,9 @@ def _cmd_status(args: argparse.Namespace) -> int:
         print(f"Graph protection unavailable: {exc}")
         return 2
     print("Agent Blackbox")
+    if cfg.snapshot_sync_error:
+        print(f"  WARNING:           snapshot_sync in config.yaml is invalid ({cfg.snapshot_sync_error}); "
+              "sync is refused until it is corrected")
     if getattr(cfg, 'detection_backend', 'legacy-cache') == "dkg":
         print("  protection source: live local graph queries (no ruleset export)")
         print("  counts below:      confirmed graph entities; not a full-coverage proof")

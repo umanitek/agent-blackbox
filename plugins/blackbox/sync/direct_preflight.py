@@ -5,6 +5,12 @@ from . import native
 
 
 def valid(cfg):
+    if getattr(cfg, "snapshot_sync_error", ""):
+        # The operator asked for snapshot sync and the block cannot be used: never fall
+        # back to another sync mode on our own.
+        print(f"snapshot_sync in config.yaml is invalid: {cfg.snapshot_sync_error}. "
+              "Correct or remove that block, then run sync again.")
+        return False
     if getattr(cfg, "detection_backend", "legacy-cache") != "dkg":
         return True
     try:

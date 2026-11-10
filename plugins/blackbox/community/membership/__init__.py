@@ -139,6 +139,8 @@ class CommunityMembership:
         graph = str(getattr(cfg, "context_graph_id", "") or "")
         if not graph:
             return False, "no graph configured"
+        if getattr(cfg, "snapshot_sync_error", ""):
+            return False, "snapshot_sync configuration invalid; subscription unchanged"
         if getattr(cfg, "snapshot_sync", None) is not None:
             # Adding shared memory can schedule catch-up. Do not race the owned
             # foreground snapshot; existing local community protections still read.
