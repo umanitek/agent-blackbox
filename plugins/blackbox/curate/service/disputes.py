@@ -42,6 +42,7 @@ from typing import AbstractSet, Any, Iterable, Mapping, Optional
 
 from ...community import reputation
 from ...kernel import yaml_files
+from ...kernel.bounded_files import read_json_object
 from ...kernel.health import HealthClass, HealthItem
 from .. import keys
 from ..lab import Evidence
@@ -144,11 +145,7 @@ class DisputeStore:
 
     @staticmethod
     def _read(path: Path) -> dict[str, Any]:
-        try:
-            data = json.loads(path.read_text(encoding="utf-8-sig"))
-        except (OSError, ValueError):
-            return {}
-        return data if isinstance(data, dict) else {}
+        return read_json_object(path) or {}
 
     @staticmethod
     def _write_private(path: Path, data: Mapping[str, Any]) -> None:

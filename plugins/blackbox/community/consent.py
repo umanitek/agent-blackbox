@@ -41,7 +41,7 @@ from pathlib import Path
 from typing import Any, Mapping, Optional
 
 from ..kernel import constants
-from ..kernel.bounded_files import atomic_write
+from ..kernel.bounded_files import atomic_write, read_json_object
 
 logger = logging.getLogger(__name__)
 
@@ -94,11 +94,8 @@ def _text(value: Any) -> str:
 def current() -> Optional[SharingConsentRecord]:
     """The saved sharing choice, or None when there is no readable record (a missing
     file, malformed JSON, or JSON that is not an object)."""
-    try:
-        data = json.loads(_record_path().read_text(encoding="utf-8-sig"))
-    except (OSError, ValueError):
-        return None
-    if not isinstance(data, dict):
+    data = read_json_object(_record_path())
+    if data is None:
         return None
     return SharingConsentRecord(terms_hash=_text(data.get("terms_hash")), terms_version=_text(data.get("terms_version")),
                                 accepted_at=_text(data.get("accepted_at")), withdrawn_at=_text(data.get("withdrawn_at")))

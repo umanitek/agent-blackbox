@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from plugins.blackbox.kernel.bounded_files import atomic_write
+from plugins.blackbox.kernel.bounded_files import atomic_write, read_json_object
 from plugins.blackbox.kernel.health import days_between, today_utc
 
 PLUGIN = Path(__file__).resolve().parents[2] / "plugins" / "blackbox"
@@ -86,6 +86,33 @@ def test_a_plain_write_keeps_the_process_default_permissions(tmp_path):
         os.umask(old)
 
     assert stat.S_IMODE((tmp_path / "state.json").stat().st_mode) == 0o644
+
+
+def test_a_json_object_file_reads_back_as_its_object(tmp_path):
+    target = tmp_path / "state.json"
+    atomic_write(target, '{"a": 1, "nested": {"b": [1, 2]}}')
+
+    assert read_json_object(target) == {"a": 1, "nested": {"b": [1, 2]}}
+
+
+def test_a_byte_order_mark_is_dropped(tmp_path):
+    target = tmp_path / "state.json"
+    target.write_bytes(b"\xef\xbb\xbf" + b'{"a": 1}')      # what Windows Notepad saves
+
+    assert read_json_object(target) == {"a": 1}
+
+
+@pytest.mark.parametrize("content", [None, b"", b"{not json", b"[1, 2]", b'"text"', b"null", b"\xff\xfe\x00", b"[" * 100_000])
+def test_anything_that_is_not_a_readable_json_object_is_none_never_an_error(tmp_path, content):
+    target = tmp_path / "state.json"
+    if content is not None:                                   # None: the file does not exist
+        target.write_bytes(content)
+
+    assert read_json_object(target) is None
+
+
+def test_a_folder_in_the_files_place_is_none(tmp_path):
+    assert read_json_object(tmp_path) is None
 
 
 def test_no_module_rolls_its_own_replace():

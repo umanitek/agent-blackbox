@@ -43,7 +43,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional, TypedDict
 
 from ..kernel import constants, health
-from ..kernel.bounded_files import atomic_write
+from ..kernel.bounded_files import atomic_write, read_json_object
 from ..kernel.config import load_blackbox_config
 from ..kernel.dkg_client import DkgClient
 
@@ -167,11 +167,7 @@ class SetupRun:
         return self._folder() / "run.json"
 
     def _read_record(self) -> dict[str, Any]:
-        try:
-            data = json.loads(self._record_path().read_text(encoding="utf-8-sig"))
-            return data if isinstance(data, dict) else {}
-        except (OSError, ValueError):
-            return {}
+        return read_json_object(self._record_path()) or {}
 
     def _write_record(self, record: dict[str, Any]) -> None:
         atomic_write(self._record_path(), json.dumps(record))

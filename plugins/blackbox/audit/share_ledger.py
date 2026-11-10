@@ -15,6 +15,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List
 from ..kernel import constants
+from ..kernel.bounded_files import read_json_object
 from . import log_store
 from . import redaction
 
@@ -130,14 +131,7 @@ _LEDGER_SCAN_LIMIT = 100_000
 
 
 def _read_rate_state() -> dict[str, Any]:
-    path = _rate_state_path()
-    if not path.exists():
-        return {}
-    try:
-        state = json.loads(path.read_text(encoding="utf-8-sig"))
-        return state if isinstance(state, dict) else {}
-    except Exception:
-        return {}
+    return read_json_object(_rate_state_path()) or {}
 
 
 def recently_reported(identifier: str, cooldown: int = REPORT_COOLDOWN_SECS) -> bool:

@@ -58,6 +58,7 @@ from pathlib import Path
 from typing import Callable, Collection, Iterable, Mapping, Optional
 
 from ...kernel import constants, signing, threat_ids, yaml_files
+from ...kernel.bounded_files import read_json_object
 from ...kernel.signing import CuratorStatement
 
 logger = logging.getLogger(__name__)
@@ -285,11 +286,7 @@ class TrustStore:
             return StoredTrust()
 
     def _read(self) -> dict[str, object]:
-        try:
-            data = json.loads(self._path.read_text(encoding="utf-8-sig"))
-            return data if isinstance(data, dict) else {}
-        except (OSError, ValueError):
-            return {}   # missing or unreadable: rebuilt from the network
+        return read_json_object(self._path) or {}   # missing or unreadable: rebuilt from the network
 
     def _write(self, data: Mapping[str, object]) -> None:
         try:

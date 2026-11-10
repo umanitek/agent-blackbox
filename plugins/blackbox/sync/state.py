@@ -11,7 +11,7 @@ from typing import Any
 import psutil
 
 from ..kernel import constants
-from ..kernel.bounded_files import atomic_write
+from ..kernel.bounded_files import atomic_write, read_json_object
 
 _STALE_RUNNING_SECONDS = 3_600
 
@@ -58,11 +58,8 @@ def write(status: str, **details: Any) -> dict[str, Any]:
 
 def read() -> dict[str, Any]:
     """Read current transfer state, rejecting abandoned running markers."""
-    try:
-        state = json.loads(_path().read_text(encoding="utf-8-sig"))
-    except (OSError, ValueError, TypeError):
-        return {}
-    if not isinstance(state, dict):
+    state = read_json_object(_path())
+    if state is None:
         return {}
     if state.get("status") == "running":
         updated = float(state.get("updated_at") or 0)

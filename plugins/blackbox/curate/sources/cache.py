@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from .. import keys
-from ...kernel.bounded_files import atomic_write
+from ...kernel.bounded_files import atomic_write, read_json_object
 
 NOT_LISTED_TTL_SECONDS = 24 * 60 * 60
 _FILE = "not_listed_cache.json"
@@ -60,12 +60,7 @@ class NotListedCache:
                 self._write(entries)
 
     def _read(self) -> Entries:
-        try:
-            data = json.loads(self._path.read_text(encoding="utf-8-sig"))
-        except (OSError, ValueError):
-            return {}
-        if not isinstance(data, dict):
-            return {}
+        data = read_json_object(self._path) or {}
         return {str(source): {str(identifier): float(expires) for identifier, expires in listed.items()
                               if isinstance(expires, (int, float))}
                 for source, listed in data.items() if isinstance(listed, dict)}
