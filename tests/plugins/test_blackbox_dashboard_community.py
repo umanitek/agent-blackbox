@@ -218,3 +218,20 @@ def test_dashboard_page_keys_community_reload_on_the_tier_version():
     page = (Path(dashboard_pkg.__file__).parent / "static" / "index.html").read_text(encoding="utf-8")
     assert "status.community_version" in page
     assert 'resetGraphOnVersionChange("community", previousCommunityVersion' in page
+
+
+# --- KI-498: the boot warm-up really runs (it used to fail on its second call, silently) ---
+
+def test_the_boot_warm_up_runs_every_read_without_failing(monkeypatch, tmp_path, caplog):
+    import logging
+    import threading
+    monkeypatch.setenv("BLACKBOX_HOME", str(tmp_path / "bbhome"))
+    monkeypatch.setenv("BLACKBOX_CONTEXT_GRAPH_ID", DEV_GRAPH)
+    monkeypatch.setattr(rs_mod, "peek", lambda cfg: _community_ruleset())
+    with caplog.at_level(logging.WARNING, logger="plugins.blackbox.dashboard.server"):
+        with TestClient(server.create_app(), base_url="http://127.0.0.1:9700"):
+            pass                                     # leaving the app stops the warm-up's wait
+        for thread in threading.enumerate():
+            if thread.name == "blackbox-warm":
+                thread.join(timeout=20)
+    assert not [r for r in caplog.records if "cache warm failed" in r.getMessage()]

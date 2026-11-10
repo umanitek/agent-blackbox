@@ -1888,19 +1888,19 @@ def create_app(*, manage_blackbox: bool = False):
         def _warm() -> None:
             try:
                 cfg = load_blackbox_config()
-                # Check liveness synchronously first, so the reads below see
-                # the node's true state, not the cold default.
+                # Liveness first, so the reads below see the node's true state, not the cold default.
                 _liveness.check_now(cfg)
                 # Touch each cached endpoint to warm it. Two passes: the first
                 # spawns the refresh, the second lands it.
                 for _ in range(2):
                     graph_status()
-                    graph("public")
+                    graph(tier="public", limit=5000, offset=0, q="", category="", ecosystem="")   # explicit: outside a request the Query(...) defaults are objects
                     community_endpoints.reports(50)
                     agents()
-                    time.sleep(2.5)
+                    if _blackbox_stop.wait(2.5):   # the dashboard is shutting down: stop warming
+                        break
             except Exception as exc:  # pragma: no cover - best effort
-                logger.debug("blackbox dashboard: cache warm failed: %s", exc)
+                logger.warning("blackbox dashboard: cache warm failed: %s", type(exc).__name__)
         threading.Thread(target=_warm, name="blackbox-warm", daemon=True).start()
 
     return app
