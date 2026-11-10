@@ -48,6 +48,7 @@ from .detectors import (
     discover_dependency_candidates,
     discover_injection,
     injection_scan_text,
+    run_isolated,
 )
 from .paths.shell_files import shell_file_args
 from .shell_shapes import ESCALATION_SHAPES, SHELL_TOOLS, command_from_args
@@ -93,6 +94,7 @@ __all__ = [
                              'parse_downloads',
                              'parse_shell_reads',
                              'reviewer',
+                             'run_isolated',
                              'shell_file_args',
                              'skill_install_arg',
 ]

@@ -58,9 +58,17 @@ def _power_value(match: re.Match) -> int:
     base, exponent = (match.group(1), match.group(2)) if match.group(1) else (match.group(3), match.group(4))
     if match.group(5):
         base, exponent = "2", match.group(5)
-    if int(exponent) > _HUGE_EXPONENT:
+    # Read as text first: int() refuses decimal text past 4,300 digits, and one such number
+    # once ended every check for the call (KI-489).
+    base, exponent = base.lstrip("0") or "0", exponent.lstrip("0") or "0"
+    minus_one = 1 if match.group(6) else 0
+    if exponent == "0":
+        return 1 - minus_one
+    if base in ("0", "1"):
+        return int(base) - minus_one
+    if len(exponent) > len(str(_HUGE_EXPONENT)) or int(exponent) > _HUGE_EXPONENT or len(base) > _FLOOR_DIGITS:
         return UNLIMITED_FLOOR
-    return int(base) ** int(exponent) - (1 if match.group(6) else 0)
+    return int(base) ** int(exponent) - minus_one
 
 
 def is_unlimited(text: str) -> bool:
@@ -82,7 +90,8 @@ def is_unlimited(text: str) -> bool:
     if digits.isdigit():
         # WHY not int(…, 0): it refuses a leading zero; and a number this long is past the
         # floor without converting it (int() refuses very long digit strings).
-        return len(digits.lstrip("0")) > _FLOOR_DIGITS or int(digits) >= UNLIMITED_FLOOR
+        significant = digits.lstrip("0") or "0"
+        return len(significant) > _FLOOR_DIGITS or int(significant) >= UNLIMITED_FLOOR
     try:
         return int(digits, 16) >= UNLIMITED_FLOOR if digits.lower().startswith("0x") else False
     except ValueError:

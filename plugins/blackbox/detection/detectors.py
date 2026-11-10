@@ -18,7 +18,7 @@ are caught per rule and oversized inputs are capped.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Iterable, List
+from typing import Any, Callable, Dict, Iterable, List
 
 from . import action_parsing
 from . import osv
@@ -274,6 +274,37 @@ def discover_dependency_candidates(tool_name: str, args: Any, ruleset: Any, osv_
     return out
 
 
+def run_isolated(label: str, detector: Callable[[], Iterable[Finding]]) -> list[Finding]:
+    """*detector*'s findings, or none when it raises: one broken check never ends the others.
+
+    The hook is fail-open at its outer boundary, so an exception that escaped a single
+    detector used to let the whole call pass unchecked (KI-489). Every detector the hook
+    runs goes through here; a failure is logged as a WARNING under *label* (the exception
+    class only — its text may quote the arguments) and costs that detector's findings alone.
+
+    Usage::
+
+        findings += run_isolated("detect_ioc", lambda: detect_ioc(tool_name, args, ruleset, context))
+    """
+    try:
+        return list(detector())
+    except Exception as exc:
+        logger.warning("blackbox: detector %s raised %s; its findings are missing for this call",
+                       label, type(exc).__name__)
+        return []
+
+
+def _injection_findings(tool_name: str, args: Any, ruleset: Any, discover: bool) -> list[Finding]:
+    """Injection findings in the call's arguments: graph rules always, built-in candidates when *discover*."""
+    args_text = injection_scan_text(args)
+    # Text in a skill being installed is "in-skill"; other arguments have no context (stays local).
+    context = "in-skill" if action_parsing.skill_install_arg(tool_name, args) else None
+    findings = run_isolated("detect_injection", lambda: detect_injection(args_text, ruleset, context))
+    if discover:
+        findings += run_isolated("discover_injection", lambda: discover_injection(args_text, ruleset, context))
+    return findings
+
+
 def detect_all(tool_name: str, args: Any, ruleset: Any, discover: bool = True) -> list[Finding]:
     """Run every detector (graph rules + built-in discovery) across categories.
 
@@ -282,24 +313,25 @@ def detect_all(tool_name: str, args: Any, ruleset: Any, discover: bool = True) -
     are suppressed — a curated fileaccess/skill/escalation rule keeps firing.
     Dependency OSV auto-discovery is NOT run here — it is best-effort and runs
     off the blocking path (see :mod:`hooks`).
+
+    Each detector runs through :func:`run_isolated`, in the order listed.
     """
+    checks: list[tuple[str, Callable[[], Iterable[Finding]]]] = [
+        ("detect_escalation", lambda: detect_escalation(tool_name, args, ruleset)),
+        ("detect_dependency", lambda: detect_dependency(tool_name, args, ruleset)),
+        ("injection", lambda: _injection_findings(tool_name, args, ruleset, discover)),
+        ("detect_fileaccess", lambda: detect_fileaccess(tool_name, args, ruleset)),
+        ("detect_skill", lambda: detect_skill(tool_name, args, ruleset)),
+        ("detect_ioc", lambda: detect_ioc(tool_name, args, ruleset, ioc_context(tool_name, args))),
+        # Secret exposure always runs (not gated by discovery): personal, never shared.
+        ("detect_secret_exposure", lambda: detect_secret_exposure(tool_name, args)),
+        ("detect_exchange_key_misdirection", lambda: detect_exchange_key_misdirection(tool_name, args)),
+        ("detect_token_approvals", lambda: detect_token_approvals(tool_name, args, ruleset)),
+        ("detect_keychain_access", lambda: detect_keychain_access(tool_name, args)),
+    ]
     findings: list[Finding] = []
-    findings.extend(detect_escalation(tool_name, args, ruleset))
-    findings.extend(detect_dependency(tool_name, args, ruleset))
-    args_text = injection_scan_text(args)
-    # Text in a skill being installed is "in-skill"; other arguments have no context (stays local).
-    context = "in-skill" if action_parsing.skill_install_arg(tool_name, args) else None
-    findings.extend(detect_injection(args_text, ruleset, context))
-    if discover:
-        findings.extend(discover_injection(args_text, ruleset, context))
-    findings.extend(detect_fileaccess(tool_name, args, ruleset))
-    findings.extend(detect_skill(tool_name, args, ruleset))
-    findings.extend(detect_ioc(tool_name, args, ruleset, ioc_context(tool_name, args)))
-    # Secret exposure always runs (not gated by discovery): personal, never shared.
-    findings.extend(detect_secret_exposure(tool_name, args))
-    findings.extend(detect_exchange_key_misdirection(tool_name, args))
-    findings.extend(detect_token_approvals(tool_name, args, ruleset))
-    findings.extend(detect_keychain_access(tool_name, args))
+    for label, detector in checks:
+        findings.extend(run_isolated(label, detector))
     if not discover:
         findings = [f for f in findings if f.source != "heuristic"]
     return findings
