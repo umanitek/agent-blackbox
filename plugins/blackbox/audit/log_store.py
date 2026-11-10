@@ -14,6 +14,7 @@ import threading
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, Iterator, List, TypeVar
 from ..kernel import constants
+from ..kernel.bounded_files import append_line, read_jsonl
 
 T = TypeVar("T")
 
@@ -107,8 +108,7 @@ def cached(key: str, paths: Iterable[Path], build: Callable[[], T]) -> T:
 def _append_jsonl(path: Path, record: dict[str, Any]) -> None:
     line = json.dumps(record, ensure_ascii=False)
     with _lock:
-        with path.open("a", encoding="utf-8") as fh:
-            fh.write(line + "\n")
+        append_line(path, line)
         _trim_if_needed(path)
 
 
@@ -167,22 +167,7 @@ def _audit_files() -> list[tuple[Path, str]]:
 def _load_jsonl(path: Path, default_event: str) -> list[dict[str, Any]]:
     """Load a jsonl file, tagging each row with ``event=default_event`` when
     the line has no explicit event (e.g. file_access.jsonl, dependencies.jsonl)."""
-    if not path.exists():
-        return []
-    try:
-        lines = path.read_text(encoding="utf-8-sig").splitlines()
-    except Exception:
-        return []
-    out: list[dict[str, Any]] = []
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            row = json.loads(line)
-        except Exception:
-            continue
-        if "event" not in row:
-            row["event"] = default_event
-        out.append(row)
-    return out
+    rows = read_jsonl(path)
+    for row in rows:
+        row.setdefault("event", default_event)
+    return rows

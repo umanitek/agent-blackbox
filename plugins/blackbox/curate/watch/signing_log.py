@@ -25,7 +25,6 @@ Usage::
 from __future__ import annotations
 
 import json
-import os
 import threading
 import time
 from dataclasses import asdict, dataclass
@@ -35,6 +34,7 @@ from typing import Callable, List, Optional
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from ...kernel import signing
+from ...kernel.bounded_files import append_line, read_jsonl
 from .. import keys
 
 _LOG_FILE = "signing_log.jsonl"
@@ -75,22 +75,14 @@ class SigningLog:
         row = SigningRow(kind=envelope.statement_type, digest=signing.content_id(envelope),
                          key=signing.public_key_hex(key), action=action, at=self._clock())
         with self._lock:
-            self._path.parent.mkdir(parents=True, exist_ok=True)
-            descriptor = os.open(self._path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
-            with os.fdopen(descriptor, "a", encoding="utf-8") as handle:
-                handle.write(json.dumps(asdict(row), sort_keys=True) + "\n")
+            append_line(self._path, json.dumps(asdict(row), sort_keys=True), mode=0o600)
         return row
 
     def rows(self) -> list[SigningRow]:
         """Every well-formed row, oldest first (a damaged line is skipped)."""
-        try:
-            lines = self._path.read_text(encoding="utf-8-sig").splitlines()
-        except OSError:
-            return []
         parsed: list[SigningRow] = []
-        for line in lines:
+        for entry in read_jsonl(self._path):
             try:
-                entry = json.loads(line)
                 parsed.append(SigningRow(kind=str(entry["kind"]), digest=str(entry["digest"]), key=str(entry["key"]),
                                          action=str(entry["action"]), at=float(entry["at"])))
             except (ValueError, KeyError, TypeError):

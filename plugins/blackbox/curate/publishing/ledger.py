@@ -50,6 +50,7 @@ try:  # POSIX: curator nodes. Elsewhere the in-process lock below still holds.
 except ImportError:  # pragma: no cover - Windows
     fcntl = None  # type: ignore[assignment]
 
+from ...kernel.bounded_files import append_line
 from .. import keys
 from .errors import PublishLedgerError
 
@@ -362,10 +363,5 @@ class PublishLedger:
         return {step.record.batch_id: step.record for step in self._load()}
 
     def _append(self, record: BatchRecord) -> BatchRecord:
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        descriptor = os.open(self._path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
-        with os.fdopen(descriptor, "a", encoding="utf-8") as handle:
-            handle.write(_to_line(record) + "\n")
-            handle.flush()
-            os.fsync(handle.fileno())
+        append_line(self._path, _to_line(record), mode=0o600, durable=True)
         return record

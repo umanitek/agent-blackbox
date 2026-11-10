@@ -78,4 +78,5 @@ def _read_up_to(descriptor: int, limit: int) -> bytes:
 from .probe_stamp import ProbeStamp   # the stamp shares this package: a small file read on the hot path
 from .atomic_write import atomic_write   # and the one torn-free write
 from .json_files import read_json_object   # and the one "a JSON object, or nothing" read
-__all__ = ["ProbeStamp", "atomic_write", "read_json_object", "read_small_text"]   # the surface other modules may import
+from .jsonl import append_line, read_jsonl   # and the one log-file append and read
+__all__ = ["ProbeStamp", "append_line", "atomic_write", "read_json_object", "read_jsonl", "read_small_text"]   # the surface other modules may import

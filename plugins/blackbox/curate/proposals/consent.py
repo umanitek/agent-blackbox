@@ -24,12 +24,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import threading
 import time
 from pathlib import Path
 from typing import Optional, Tuple
 
+from ...kernel.bounded_files import append_line, read_jsonl
 from .. import keys
 
 #: Operators type this many hex characters of the content hash.
@@ -110,20 +110,10 @@ class ConsentLedger:
             return False, "this code expired (10 minutes); show it again"
         return True, "consent by typed code"
 
-    def _entries(self):
-        try:
-            with self._path.open("r", encoding="utf-8-sig") as fh:
-                for line in fh:
-                    try:
-                        yield json.loads(line)
-                    except ValueError:
-                        continue
-        except OSError:
-            return
+    def _entries(self) -> list[dict]:
+        return read_jsonl(self._path)
 
     def _append(self, entry: dict) -> None:
         entry = {"ts": self._clock(), **entry}
         with self._lock:
-            self._path.parent.mkdir(parents=True, exist_ok=True)
-            with os.fdopen(os.open(self._path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600), "a", encoding="utf-8") as fh:  # windows-footgun: ok — a WRITE (mode "w"/"a"); writes stay utf-8
-                fh.write(json.dumps(entry, sort_keys=True) + "\n")
+            append_line(self._path, json.dumps(entry, sort_keys=True), mode=0o600)

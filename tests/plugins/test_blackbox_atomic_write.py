@@ -130,3 +130,65 @@ def test_days_between_reads_iso_days_and_never_raises():
     assert days_between("2026-10-22", "2026-10-01") == -21
     assert days_between("not a day", "2026-10-22") == 0
     assert len(today_utc()) == 10 and today_utc()[4] == "-"
+
+
+# --- the one log-file append and read (kernel/bounded_files/jsonl.py) ---
+
+def test_appended_lines_read_back_in_order_and_create_the_folder(tmp_path):
+    from plugins.blackbox.kernel.bounded_files import append_line, read_jsonl
+    log = tmp_path / "deep" / "audit.jsonl"
+
+    append_line(log, '{"n": 1}')
+    append_line(log, '{"n": 2, "text": "café"}')
+
+    assert read_jsonl(log) == [{"n": 1}, {"n": 2, "text": "café"}]
+    assert log.read_text(encoding="utf-8").endswith("\n")
+
+
+def test_a_damaged_blank_or_non_object_line_is_skipped_not_fatal(tmp_path):
+    from plugins.blackbox.kernel.bounded_files import read_jsonl
+    log = tmp_path / "audit.jsonl"
+    log.write_text('{"n": 1}\n\n{broken\n[1, 2]\n"text"\n7\n   \n{"n": 2}\n', encoding="utf-8")
+
+    assert read_jsonl(log) == [{"n": 1}, {"n": 2}]
+
+
+def test_a_missing_log_is_an_empty_log(tmp_path):
+    from plugins.blackbox.kernel.bounded_files import read_jsonl
+    assert read_jsonl(tmp_path / "nothing.jsonl") == [] and read_jsonl(tmp_path) == []
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits")
+def test_a_private_log_is_created_0600_and_a_plain_one_is_not(tmp_path):
+    from plugins.blackbox.kernel.bounded_files import append_line
+    old = os.umask(0o022)
+    try:
+        append_line(tmp_path / "private.jsonl", "{}", mode=0o600)
+        append_line(tmp_path / "plain.jsonl", "{}")
+    finally:
+        os.umask(old)
+
+    assert stat.S_IMODE((tmp_path / "private.jsonl").stat().st_mode) == 0o600
+    assert stat.S_IMODE((tmp_path / "plain.jsonl").stat().st_mode) == 0o644
+
+
+def test_a_durable_append_is_flushed_to_the_disk(tmp_path, monkeypatch):
+    from plugins.blackbox.kernel.bounded_files import append_line
+    synced: list[int] = []
+    real_fsync = os.fsync
+    monkeypatch.setattr(os, "fsync", lambda fd: (synced.append(fd), real_fsync(fd))[1])
+
+    append_line(tmp_path / "ledger.jsonl", "{}", mode=0o600, durable=True)
+    append_line(tmp_path / "plain.jsonl", "{}")
+
+    assert len(synced) == 1
+
+
+def test_the_audit_reader_survives_a_line_that_is_json_but_not_an_object(tmp_path):
+    """The audit reader used to raise on such a line (`"event" not in 7`)."""
+    from plugins.blackbox.audit import log_store
+    log = tmp_path / "file_access.jsonl"
+    log.write_text('{"path": "a"}\n7\n[1]\n{"path": "b", "event": "seen"}\n', encoding="utf-8")
+
+    assert log_store._load_jsonl(log, "file_access") == [{"path": "a", "event": "file_access"},
+                                                          {"path": "b", "event": "seen"}]
