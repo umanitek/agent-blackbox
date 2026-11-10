@@ -211,8 +211,14 @@ def _stop_unsupervised_node(plan: UninstallPlan, report: list[str]) -> None:
     pid_file = plan.dkg_home / "daemon.pid" if plan.dkg_home else None
     if not pid_file or not pid_file.is_file():
         return
+    from .. import sync   # sync's public entry: which process is our node
+    from ..kernel.config import load_blackbox_config
     try:
         pid = int(pid_file.read_text(encoding="utf-8-sig").strip())
+        # The file can name a pid the system has since given to another program (KI-496):
+        # never signal a process that is not this installation's node.
+        if not sync.is_node_process(load_blackbox_config(), pid):
+            return
         os.kill(pid, signal.SIGTERM)
         report.append(f"stopped Blackbox's DKG node (pid {pid})")
     except (ValueError, OSError):

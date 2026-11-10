@@ -199,3 +199,46 @@ def test_only_a_blackbox_dashboard_on_the_port_is_stopped(monkeypatch):
     monkeypatch.setattr(command, "_stop", lambda pids: stopped.append(set(pids)))
     assert command.stop_running_dashboard(9700) == [11]
     assert stopped == [{11}]                                       # 22 is someone else's: left alone
+
+
+# --- KI-496: daemon.pid is a hint; only this installation's node is ever signalled ---
+
+@pytest.fixture()
+def node_pid_file(machine, monkeypatch):
+    """The machine's plan with daemon.pid = 4242, and os.kill recorded instead of run."""
+    plan = _plan(machine)
+    (plan.dkg_home / "daemon.pid").write_text("4242\n", encoding="utf-8")
+    signalled: list[int] = []
+    monkeypatch.setattr(uninstall.os, "kill", lambda pid, sig: signalled.append(pid))
+    return plan, signalled
+
+
+def test_a_pid_that_is_not_our_node_is_never_signalled(node_pid_file, monkeypatch):
+    from plugins.blackbox import sync
+    plan, signalled = node_pid_file
+    monkeypatch.setattr(sync, "is_node_process", lambda cfg, pid: False)
+    report: list[str] = []
+
+    uninstall._stop_unsupervised_node(plan, report)
+
+    assert signalled == [] and report == []
+
+
+def test_our_own_node_is_stopped(node_pid_file, monkeypatch):
+    from plugins.blackbox import sync
+    plan, signalled = node_pid_file
+    monkeypatch.setattr(sync, "is_node_process", lambda cfg, pid: pid == 4242)
+    report: list[str] = []
+
+    uninstall._stop_unsupervised_node(plan, report)
+
+    assert signalled == [4242] and report == ["stopped Blackbox's DKG node (pid 4242)"]
+
+
+def test_the_real_check_refuses_a_live_process_that_is_not_a_dkg_node(node_pid_file):
+    plan, signalled = node_pid_file
+    (plan.dkg_home / "daemon.pid").write_text(str(os.getpid()), encoding="utf-8")   # this test run itself
+
+    uninstall._stop_unsupervised_node(plan, [])
+
+    assert signalled == []

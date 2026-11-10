@@ -28,7 +28,7 @@ from .command import cmd_sync as _sync_with_node
 from .progress import read_durable_progress, read_recovery_backlog
 from .snapshot_readiness import defaults as snapshot_defaults, validate_requested_profile as validate_snapshot_profile
 
-__all__ = ["cmd_sync", "node_starting", "progress", "read_durable_progress", "read_recovery_backlog",
+__all__ = ["cmd_sync", "is_node_process", "node_starting", "progress", "read_durable_progress", "read_recovery_backlog",
            "snapshot_defaults", "state", "validate_snapshot_profile"]
 
 
@@ -39,6 +39,14 @@ def node_starting(cfg) -> bool:
     from .node_process import node_starting as _starting
 
     return _starting(cfg, node_ready_wait_seconds())
+
+
+def is_node_process(cfg, pid: int) -> bool:
+    """Whether *pid* is a live DKG daemon process of THIS installation. ``daemon.pid`` is only a
+    hint (KI-312): ask this before signalling the number it holds."""
+    from .node_process import is_managed_daemon
+
+    return is_managed_daemon(cfg, pid)
 
 
 def cmd_sync(args: argparse.Namespace) -> int:
