@@ -129,3 +129,37 @@ def test_an_agent_stopping_blackboxs_services_is_found(command):
 ])
 def test_looking_at_services_and_stopping_other_servers_is_left_alone(command):
     assert detect_guard_tamper("terminal", {"command": command}) == []
+
+
+# --- KI-491: the folder is followed through every ``cd``, as the file-read rules follow it ---
+
+@pytest.mark.parametrize("command", [
+    "cd {home}/.. && cd hermes-home && sed -i 's/block/audit/' config.yaml",
+    "cd {home}/.. ; cd hermes-home ; cd plugins ; rm -rf blackbox",
+    "cd {home} && cd plugins && cd .. && echo x > config.yaml",
+    "pushd {home}/.. && pushd hermes-home && truncate -s 0 config.yaml",
+    "cd {home}/plugins && rm ../config.yaml",
+])
+def test_a_second_cd_does_not_hide_the_config_being_changed(home, command):
+    assert _tampers("terminal", {"command": command.format(home=home)})
+
+
+@pytest.mark.parametrize("command", [
+    "cd hermes-home && sed -i 's/block/audit/' config.yaml",
+    "rm -rf hermes-home/plugins/blackbox",
+])
+def test_a_command_with_no_folder_named_is_read_from_the_home_folder(home, monkeypatch, command):
+    monkeypatch.setenv("HOME", str(home.parent))
+    assert _tampers("terminal", {"command": command})
+
+
+@pytest.mark.parametrize("command", [
+    "cd {home}/.. && cd projects && sed -i 's/a/b/' config.yaml",
+    "cd {home} && cd .. && cd elsewhere && rm config.yaml",
+    "cd - && rm config.yaml",
+    "cd {home}/.. && cd hermes-home && cat config.yaml",
+    "sed -i 's/a/b/' config.yaml",
+])
+def test_a_cd_somewhere_else_is_left_alone(home, monkeypatch, command):
+    monkeypatch.setenv("HOME", str(home.parent))
+    assert not _tampers("terminal", {"command": command.format(home=home)})

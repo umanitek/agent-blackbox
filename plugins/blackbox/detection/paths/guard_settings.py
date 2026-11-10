@@ -37,7 +37,6 @@ from __future__ import annotations
 
 import os
 import re
-import shlex
 from typing import Any
 
 from .. import action_parsing, shell_shapes
@@ -96,6 +95,7 @@ def _guarded(path: str) -> bool:
     expanded = os.path.expanduser(os.path.expandvars(str(path)))
     if not os.path.isabs(expanded):
         return False
+    expanded = os.path.normpath(expanded)   # ``~/.hermes/../.hermes/config.yaml`` is the config
     return any(protected._protected_path_match(expanded, place) for place in _guarded_places())
 
 
@@ -148,15 +148,6 @@ def _file_tool_tampers(access: dict[str, str], args: Any) -> bool:
     return _edit_reaches_blackbox(access["path"], [edit for edit in edits if isinstance(edit, str) and edit])
 
 
-def _words(command: str) -> list[str]:
-    try:
-        lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|<>")
-        lexer.whitespace_split = True
-        return list(lexer)
-    except ValueError:
-        return command.split()
-
-
 def _place(word: str, folder: str) -> str:
     """*word* as a path, joined onto the folder an earlier ``cd`` moved to when it is relative."""
     if folder and not os.path.isabs(os.path.expanduser(os.path.expandvars(word))):
@@ -166,13 +157,12 @@ def _place(word: str, folder: str) -> str:
 
 def _inline_code(command: str) -> list[str]:
     """Code handed to an interpreter on the command line (``python3 -c CODE``)."""
-    words = _words(command)
+    words = shell_files._words(command)
     return [words[index + 1] for index, word in enumerate(words[:-1])
             if word in ("-c", "-e", "--eval", "-r", "-E") and index > 0
             and words[index - 1].rsplit("/", 1)[-1].lower() in shell_files._INTERPRETERS]
 
 
-_SEPARATOR_WORDS = frozenset({";", "&&", "||", "|", "&", ">", ">>", "<", "|&"})
 #: Commands whose LAST operand is where they write; their other operands are only read (``mv`` also
 #: removes its sources, so for it every operand counts).
 _DESTINATION_LAST = frozenset({"cp", "ln", "install", "rsync", "ditto"})
@@ -181,7 +171,7 @@ _DESTINATION_LAST = frozenset({"cp", "ln", "install", "rsync", "ditto"})
 def _segments(words: list[str]) -> list[list[str]]:
     segments, current = [], []
     for word in words:
-        if word in _SEPARATOR_WORDS:
+        if word in shell_files._SEPARATORS:
             segments.append(current)
             current = []
         else:
@@ -204,14 +194,27 @@ def _written_operands(segment: list[str]) -> list[str]:
     return operands if name in _WRITING_COMMANDS else []
 
 
+#: Where a command is taken to start when nothing says. The hook cannot see the agent's
+#: folder; home is where Hermes's folder sits, so ``cd .hermes && …`` is read as ``~/.hermes``.
+_START_FOLDER = "~"
+
+
+def _moved_to(segment: list[str], folder: str) -> str:
+    """The folder after one ``cd``/``pushd`` command: shell_files' rule (a relative target joins
+    onto the folder already known — KI-491: ``cd ~ && cd .hermes``), with a ``$VARIABLE`` target
+    kept as written for :func:`_guarded` to expand. ``""`` when it cannot be named (``cd -``)."""
+    moved, _ = shell_files._cd(segment, 0, folder)
+    return moved or next((word for word in segment[1:] if word.startswith("$")), "")
+
+
 def _shell_tampers(command: str) -> bool:
     """True when *command* writes a guarded place, or switches Blackbox off by command."""
     if _SWITCH_OFF.search(command) or _SETTINGS_API.search(command) or _STOPS_SERVICE.search(command):
         return True
-    folder = ""
-    for segment in _segments(_words(command)):
+    folder = _START_FOLDER
+    for segment in _segments(shell_files._words(command)):
         if segment and segment[0].rsplit("/", 1)[-1].lower() in ("cd", "pushd"):
-            folder = segment[1] if len(segment) > 1 else "~"
+            folder = _moved_to(segment, folder)
             continue
         if any(_guarded(_place(word, folder)) for word in _written_operands(segment)):
             return True
