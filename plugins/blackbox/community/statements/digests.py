@@ -23,13 +23,16 @@ Usage (from the reader)::
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
+from datetime import date
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
 from ...kernel import signing, sparql_text
 from ...kernel.dkg_client import extract_binding
 from ...kernel import threat_ids
-from ..digest import DigestEntry, digest_subject, parse_entries
+from ...kernel.health import today_utc
+from ..digest import DigestEntry, digest_subject, iso_week, parse_entries
 from ..report_signer import DIGEST_STATEMENT
 from ..verification import SIGNED_STATEMENT_VAR
 from .curator_view import CuratorView
@@ -79,6 +82,22 @@ SELECT ?r ?reporter ?isoWeek ?signedStatement WHERE {{
 """
 
 
+#: An ISO week as :func:`..digest.iso_week` writes it: ``2026-W40`` (weeks 01-53).
+_ISO_WEEK = re.compile(r"\d{4}-W(?:0[1-9]|[1-4]\d|5[0-3])")
+
+
+def _week_is_readable(week: str) -> bool:
+    """Whether a digest's signed ``week`` is an ISO week no later than this reader's own.
+
+    Heat is shown for :func:`latest_week`, the maximum over every admitted digest — so one
+    self-signed digest for a far-future (or malformed, higher-sorting) week moved everyone's
+    "latest" to a week no real digest covers and emptied the heat map (KI-498). Weeks are
+    fixed-width, so text order is date order."""
+    if not isinstance(week, str) or not _ISO_WEEK.fullmatch(week):
+        return False
+    return week <= iso_week(date.fromisoformat(today_utc()))
+
+
 def _verified(row: Mapping[str, Any], environment: str, graph: str) -> Optional[VerifiedDigest]:
     envelope = signing.from_text(extract_binding(row.get(SIGNED_STATEMENT_VAR)))
     author = signing.verify(envelope, statement_type=DIGEST_STATEMENT, environment=environment, graph=graph)
@@ -87,7 +106,7 @@ def _verified(row: Mapping[str, Any], environment: str, graph: str) -> Optional[
     payload = envelope.payload
     reporter, week = payload.get("reporter", ""), payload.get("week", "")
     entries = parse_entries(payload.get("entries", ""))
-    if not threat_ids.is_agent_address(reporter) or not week or entries is None:
+    if not threat_ids.is_agent_address(reporter) or not _week_is_readable(week) or entries is None:
         return None
     subject = digest_subject(reporter, week)
     shown = (extract_binding(row.get("r")), extract_binding(row.get("reporter")).strip().lower(),
