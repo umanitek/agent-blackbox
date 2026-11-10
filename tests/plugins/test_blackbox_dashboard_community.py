@@ -271,3 +271,16 @@ def test_background_work_that_raises_is_a_warning_not_a_crash(caplog):
             pass
     messages = [r.getMessage() for r in caplog.records]
     assert any("test work failed: RuntimeError" in m for m in messages) and not any("secret-looking" in m for m in messages)
+
+
+def test_background_work_starts_again_each_time_its_app_starts():
+    from fastapi import FastAPI
+    from plugins.blackbox.dashboard import lifecycle
+
+    app, calls = FastAPI(), []
+    lifecycle.run_in_background(app, [lambda: calls.append("ran")], name="test work")
+    for _ in range(3):                               # one app, served three times (a module-scoped test app does this)
+        with TestClient(app):
+            pass
+
+    assert calls == ["ran", "ran", "ran"]

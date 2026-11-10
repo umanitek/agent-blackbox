@@ -76,9 +76,9 @@ def run_in_background(app: Any, calls: Sequence[Callable[[], Any]], *, name: str
     outlived its app ran into whatever used the process next). Best-effort: a call that
     raises ends the work with a WARNING naming *name*.
     """
-    stopping = threading.Event()
+    running: list[tuple[threading.Thread, threading.Event]] = []   # one entry per start of the app
 
-    def work() -> None:
+    def work(stopping: threading.Event) -> None:
         try:
             for index in range(passes):
                 if index and stopping.wait(pause_s):
@@ -90,11 +90,17 @@ def run_in_background(app: Any, calls: Sequence[Callable[[], Any]], *, name: str
         except Exception as exc:   # health: allow BLE001 -- best-effort background work; only the class is logged
             logger.warning("blackbox dashboard: %s failed: %s", name, type(exc).__name__)
 
-    thread = threading.Thread(target=work, name=name, daemon=True)
+    def start() -> None:
+        # A fresh thread and stop flag each time: an app can start, stop and start again.
+        stopping = threading.Event()
+        thread = threading.Thread(target=work, args=(stopping,), name=name, daemon=True)
+        running.append((thread, stopping))
+        thread.start()
 
     def stop() -> None:
-        stopping.set()
-        if thread.is_alive():
+        while running:
+            thread, stopping = running.pop()
+            stopping.set()
             thread.join(timeout=join_s)
 
-    _chain(app, thread.start, stop)
+    _chain(app, start, stop)
