@@ -417,6 +417,23 @@ def test_a_proposal_id_that_is_not_an_id_never_names_a_file(tmp_path):
     assert list(tmp_path.rglob("*.json")) == []
 
 
+@pytest.mark.parametrize("outcome, state, code", [
+    ("published to graph as name", ProposalState.APPROVED, 0),
+    ("not published — the code did not match. Confirmation code: 1234", ProposalState.APPROVED, 2),   # KI-498
+    ("not published — written, but it cannot be read back yet", ProposalState.APPROVED, 2),
+    ("anything", ProposalState.PUBLISHED, 0),
+])
+def test_curate_approve_exits_non_zero_unless_it_published(monkeypatch, capsys, outcome, state, code):
+    import argparse
+    from plugins.blackbox.curate import commands
+    proposal = Proposal(id="0" * 16, kind="k", identifier="i", graph="g", envelope="e", checks={},
+                        created=0.0, updated=0.0, state=state)
+    monkeypatch.setattr(commands, "_ctx", lambda args: None)
+    monkeypatch.setattr(commands.verbs, "approve", lambda *args, **kwargs: (proposal, outcome))
+    args = argparse.Namespace(proposal_id=proposal.id, evidence="", code=None, yes=True, root=False)
+    assert commands._approve(args) == code
+
+
 # ------------------------------------------------------------------ nothing is left half-done
 
 
