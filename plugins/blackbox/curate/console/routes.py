@@ -30,9 +30,10 @@ Usage::
 import threading
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone, UTC
+from datetime import timezone
 from typing import Any, Callable, Dict, Optional
 
+from ...kernel.health import utc_day
 from ...kernel import threat_ids
 from ...kernel.signing import key_manifest, trust_anchors
 from ...kernel.signing import Authority
@@ -76,7 +77,7 @@ class ConsoleServices:
     metrics: MetricsSources = field(default_factory=MetricsSources)
 
     def today(self) -> str:
-        return datetime.fromtimestamp(self.clock(), UTC).date().isoformat()
+        return utc_day(self.clock())
 
 
 class _Refused(Exception):

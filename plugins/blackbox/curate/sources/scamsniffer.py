@@ -33,10 +33,11 @@ from __future__ import annotations
 import threading
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone, UTC
+from datetime import timezone
 from typing import Callable, Dict, FrozenSet, Optional, Tuple
 from urllib.parse import urlsplit
 
+from ...kernel.health import utc_day
 from ...kernel import threat_ids
 from ..service.evidence import Lookup
 from .client import HttpClient, UrllibClient
@@ -107,7 +108,7 @@ class ScamSnifferSource:
                 self._snapshots.pop(list_file, None)
                 self._failed_at[list_file] = now
                 return None
-            day = datetime.fromtimestamp(now, UTC).date().isoformat()
+            day = utc_day(now)
             self._snapshots[list_file] = snapshot = _Snapshot(entries, day, now)
             return snapshot
 

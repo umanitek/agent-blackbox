@@ -29,10 +29,11 @@ from __future__ import annotations
 import json
 import logging
 import time
-from datetime import date, datetime, timedelta, timezone, UTC
+from datetime import date, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from ... import community
+from ...kernel.health import utc_day
 from ...kernel import constants, signing
 from ...kernel.signing import KEY_MANIFEST_STATEMENT
 from ...kernel.signing import CuratorStatement
@@ -148,7 +149,7 @@ def publish_due(client: Any, cfg: Any, now: Optional[float] = None) -> int:
     if days <= 0:
         return 0
     when = time.time() if now is None else now
-    today = datetime.fromtimestamp(when, UTC).date().isoformat()
+    today = utc_day(when)
     epoch = community.keep_alive.current_epoch(when, days)
     live = store()
     sent, retired = 0, []

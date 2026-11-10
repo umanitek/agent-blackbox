@@ -35,7 +35,6 @@ from __future__ import annotations
 import json
 import threading
 from dataclasses import asdict, dataclass
-from datetime import datetime, UTC
 from enum import Enum
 from pathlib import Path
 from typing import AbstractSet, Any, Iterable, Mapping, Optional
@@ -43,7 +42,7 @@ from typing import AbstractSet, Any, Iterable, Mapping, Optional
 from ...community import reputation
 from ...kernel import yaml_files
 from ...kernel.bounded_files import read_json_object
-from ...kernel.health import HealthClass, HealthItem
+from ...kernel.health import HealthClass, HealthItem, utc_day
 from .. import keys
 from ..lab import Evidence
 from ..queue import Lane
@@ -194,7 +193,7 @@ class DisputeOutcome:
 def lookup_item(record: DisputeRecord) -> LookupItem:
     """The dispute as the look-up step sees it: lane ``dispute``, due every beat while open."""
     return LookupItem(identifier=record.identifier, lane=Lane.DISPUTE,
-                      first_seen=datetime.fromtimestamp(record.filed_at, UTC).date().isoformat())
+                      first_seen=utc_day(record.filed_at))
 
 
 def facts_from_lookup(result: LookupResult, *, citable_sources: AbstractSet[str],

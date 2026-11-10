@@ -297,3 +297,24 @@ def test_the_reputation_index_key_is_never_left_empty_and_two_creators_agree(tmp
     first = sealed_index.load_or_create_key(path)
     assert first is not None and len(first) == 32
     assert sealed_index.load_or_create_key(path) == first
+
+
+# --- UTC day helpers (kernel/health/days.py) ---
+
+def test_an_epoch_time_reads_as_its_utc_day_whatever_the_machines_time_zone(monkeypatch):
+    import time
+    from plugins.blackbox.kernel.health import utc_day, utc_day_or
+    just_before_midnight_utc = 1_793_577_599      # 2026-11-01T23:59:59Z
+    for zone in ("Pacific/Kiritimati", "America/Port_of_Spain", "UTC"):      # UTC+14, UTC-4, UTC
+        monkeypatch.setenv("TZ", zone)
+        if hasattr(time, "tzset"):
+            time.tzset()
+        assert utc_day(just_before_midnight_utc) == "2026-11-01"
+        assert utc_day(just_before_midnight_utc + 1) == "2026-11-02"
+    assert utc_day_or(just_before_midnight_utc, "fallback") == "2026-11-01"
+
+
+@pytest.mark.parametrize("missing", [None, 0, "", "not a time", float("inf"), 1e30, [1]])
+def test_an_absent_or_unreadable_time_gives_the_fallback_day(missing):
+    from plugins.blackbox.kernel.health import utc_day_or
+    assert utc_day_or(missing, "2026-11-10") == "2026-11-10"

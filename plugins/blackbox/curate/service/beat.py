@@ -46,11 +46,12 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import replace
-from datetime import datetime, timezone, UTC
+from datetime import timezone
 from typing import TYPE_CHECKING, Callable, List, Mapping, Optional, Sequence
 
 from ... import community
 from ...community import reputation
+from ...kernel.health import utc_day
 from ...kernel import signing
 from ...kernel.signing import CuratorStatement
 from .. import keys, publishing, queue, verbs
@@ -132,7 +133,7 @@ class Beat:
                   *(f"author:{key}" for key in ledger.keys())]
         ctx = self._context(wanted)
         my_key = keys.curator_key_store().public_key_hex()
-        today = datetime.fromtimestamp(self._clock(), UTC).date().isoformat()
+        today = utc_day(self._clock())
         suspended = self_test.why_suspended(self._tester.check(today))   # a failed self-test signs nothing
         why_not = ""
         if ctx.manifest is None or my_key not in ctx.manifest.curator_keys:

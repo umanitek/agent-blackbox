@@ -42,11 +42,11 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone, UTC
+from datetime import timezone
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from ... import community
-from ...kernel.health import HealthItem
+from ...kernel.health import HealthItem, utc_day_or
 from ...kernel.signing import CuratorStatement
 from .. import console, intake, verbs, watch
 from ..context import CurateContext
@@ -120,7 +120,7 @@ class ServiceSteps:
             return
         view = run.queue_view()
         rules = compiled.community
-        items = [LookupItem(item.identifier, item.lane, first_seen=_day(rules[item.identifier].get("firstSeen"), run.today))
+        items = [LookupItem(item.identifier, item.lane, first_seen=utc_day_or(rules[item.identifier].get("firstSeen"), run.today))
                  for item in view.new if not _settled(run, item.identifier)]
         run.looked_up = self._sources.lookup(items, self._lookup_budget, today=run.today)
         run.checks.update({result.item.identifier: own_check_from(result.verdicts) for result in run.looked_up})
@@ -223,12 +223,6 @@ def _authors_by_identifier(ctx: CurateContext) -> dict[str, tuple[str, ...]]:
     return {identifier: tuple(keys) for identifier, keys in authors.items()}
 
 
-def _day(first_seen: object, today: str) -> str:
-    """The UTC day of a ``firstSeen`` epoch; *today* when it is absent or unreadable."""
-    try:
-        return datetime.fromtimestamp(float(first_seen), UTC).date().isoformat() if first_seen else today
-    except (TypeError, ValueError, OverflowError, OSError):
-        return today
 
 
 __all__ = ["ADVISORY_SOURCE", "LabWiring", "LedgerCheck", "ServiceSteps",

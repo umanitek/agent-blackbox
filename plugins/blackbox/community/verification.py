@@ -27,12 +27,13 @@ Usage::
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, timezone, UTC
+from datetime import date, timedelta, timezone
 
 import logging
 from dataclasses import dataclass
 from typing import Dict, Any, Iterable, List, Mapping, Optional, Tuple
 
+from ..kernel.health import today_utc
 from ..kernel import constants, signing, threat_ids
 from ..kernel.dkg_client import extract_binding
 from . import report_builder, report_schema
@@ -103,7 +104,7 @@ class ReportVerifier:
     def __init__(self, environment: str, graph: str, today: Optional[str] = None) -> None:
         self._environment = environment
         self._graph = graph
-        self._today = today or _utc_today()
+        self._today = today or today_utc()
         #: R10b: why rows were dropped — "env_mismatch" (signed for another network / graph:
         #: a config mistake), "future_dated" (a modified client), "other" (unsigned / forged).
         #: "schema" — signed and well attributed, but a value the closed report schema refuses today.
@@ -159,8 +160,6 @@ class ReportVerifier:
                             SIGNED_STATEMENT_VAR: text})
 
 
-def _utc_today() -> str:
-    return datetime.now(UTC).date().isoformat()
 
 
 def _tomorrow(today: str) -> str:
