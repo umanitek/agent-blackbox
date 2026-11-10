@@ -25,8 +25,9 @@ from typing import Optional
 _DEFAULT_MODE = 0o666
 
 
-def atomic_write(path: Path, text: str, *, mode: Optional[int] = None, durable: bool = False) -> None:
-    """Write *text* (UTF-8) to *path* via temp file + rename; parent folders are created.
+def atomic_write(path: Path, text: str | bytes, *, mode: Optional[int] = None, durable: bool = False) -> None:
+    """Write *text* (UTF-8; or bytes, written as they are) to *path* via temp file + rename;
+    parent folders are created.
 
     *mode* — the permission bits the file is created with from the start (``0o600`` for a
     secret); None keeps the process default. *durable* — also flush the bytes to the disk
@@ -37,7 +38,8 @@ def atomic_write(path: Path, text: str, *, mode: Optional[int] = None, durable: 
     tmp = path.with_name(f"{path.name}.tmp.{os.getpid()}.{secrets.token_hex(6)}")
     try:
         descriptor = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, _DEFAULT_MODE if mode is None else mode)
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        opened = os.fdopen(descriptor, "wb") if isinstance(text, bytes) else os.fdopen(descriptor, "w", encoding="utf-8")
+        with opened as handle:
             handle.write(text)
             if durable:
                 handle.flush()

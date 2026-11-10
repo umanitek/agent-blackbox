@@ -9,12 +9,15 @@ from __future__ import annotations
 import contextlib
 import contextvars
 import json
+import logging
 import os
 import threading
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, Iterator, List, TypeVar
 from ..kernel import constants
-from ..kernel.bounded_files import append_line, read_jsonl
+from ..kernel.bounded_files import append_line, atomic_write, file_lock, read_jsonl
+
+logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
@@ -53,6 +56,11 @@ def in_sandbox_run() -> bool:
 _LOG_MAX_BYTES = 8 * 1024 * 1024  # trim each log at 8 MB
 _LOG_KEEP_BYTES = 4 * 1024 * 1024  # keep the most recent ~4 MB after trimming
 _lock = threading.Lock()
+#: One lock file per log folder, shared by every agent process that writes there.
+_LOGS_LOCK_FILE = ".logs.lock"
+#: The longest a record waits for another process's append or trim. A hook must never
+#: stall on a lock: past this, the record is written without it (and no trim is tried).
+_LOGS_LOCK_WAIT_S = 0.5
 
 
 def _home() -> Path:
@@ -106,14 +114,35 @@ def cached(key: str, paths: Iterable[Path], build: Callable[[], T]) -> T:
 
 
 def _append_jsonl(path: Path, record: dict[str, Any]) -> None:
+    """Append *record* to the log at *path*, trimming the log when it is past its cap.
+
+    Several agent processes write the same logs, so the append and the trim happen under
+    the folder's cross-process lock: a trim reads the tail and swaps it in while no one
+    else is appending, so no record is lost and no reader sees a half-written log. When
+    the lock cannot be had in :data:`_LOGS_LOCK_WAIT_S` the record is still written (a
+    record is never dropped for a lock) and the trim waits for a later append."""
     line = json.dumps(record, ensure_ascii=False)
-    with _lock:
+    with _lock, _logs_lock(path) as locked:
         append_line(path, line)
-        _trim_if_needed(path)
+        if locked:
+            _trim_if_needed(path)
+
+
+@contextlib.contextmanager
+def _logs_lock(path: Path) -> Iterator[bool]:
+    """The cross-process lock for *path*'s folder; yields False when it could not be taken."""
+    with contextlib.ExitStack() as held:
+        try:
+            locked = held.enter_context(file_lock(path.with_name(_LOGS_LOCK_FILE), timeout_s=_LOGS_LOCK_WAIT_S))
+        except OSError as exc:
+            logger.debug("blackbox: log lock unavailable (%s); writing without it", exc)
+            locked = False
+        yield locked
 
 
 def _trim_if_needed(path: Path) -> None:
-    """Keep the tail of *path* when it grows past the cap (whole lines only)."""
+    """Keep the tail of *path* when it grows past the cap (whole lines only). The caller
+    holds the logs lock; the kept tail replaces the log in one rename."""
     try:
         if path.stat().st_size <= _LOG_MAX_BYTES:
             return
@@ -124,9 +153,9 @@ def _trim_if_needed(path: Path) -> None:
         nl = tail.find(b"\n")
         if nl != -1:
             tail = tail[nl + 1 :]
-        path.write_bytes(tail)
-    except Exception:  # pragma: no cover - defensive
-        pass
+        atomic_write(path, tail)
+    except OSError as exc:
+        logger.warning("blackbox: could not trim %s (%s); it keeps growing until a trim succeeds", path.name, exc)
 
 
 def _findings_files() -> list[tuple[Path, str]]:
