@@ -224,14 +224,50 @@ def test_dashboard_page_keys_community_reload_on_the_tier_version():
 
 def test_the_boot_warm_up_runs_every_read_without_failing(monkeypatch, tmp_path, caplog):
     import logging
-    import threading
     monkeypatch.setenv("BLACKBOX_HOME", str(tmp_path / "bbhome"))
     monkeypatch.setenv("BLACKBOX_CONTEXT_GRAPH_ID", DEV_GRAPH)
     monkeypatch.setattr(rs_mod, "peek", lambda cfg: _community_ruleset())
-    with caplog.at_level(logging.WARNING, logger="plugins.blackbox.dashboard.server"):
+    with caplog.at_level(logging.WARNING, logger="plugins.blackbox.dashboard.lifecycle"):
         with TestClient(server.create_app(), base_url="http://127.0.0.1:9700"):
-            pass                                     # leaving the app stops the warm-up's wait
-        for thread in threading.enumerate():
-            if thread.name == "blackbox-warm":
-                thread.join(timeout=20)
+            pass                                     # leaving the app ends the warm-up and waits for it
     assert not [r for r in caplog.records if "cache warm failed" in r.getMessage()]
+
+
+def test_background_work_runs_in_passes_and_calls_nothing_after_its_app_stops():
+    import threading
+    from fastapi import FastAPI
+    from plugins.blackbox.dashboard import lifecycle
+
+    app, calls, first_pass_done, release = FastAPI(), [], threading.Event(), threading.Event()
+
+    def slow():
+        calls.append("slow")
+        first_pass_done.set()
+        release.wait(5)                              # a read still in flight when the app stops
+    lifecycle.run_in_background(app, [lambda: calls.append("quick"), slow, lambda: calls.append("after")],
+                                name="test work", passes=2, pause_s=30.0, join_s=0.2)
+    with TestClient(app):
+        assert first_pass_done.wait(5)
+    release.set()                                    # the app is gone: the read in flight returns…
+    for thread in threading.enumerate():
+        if thread.name == "test work":
+            thread.join(5)
+
+    assert calls == ["quick", "slow"]                # …and nothing after it was called: no "after", no second pass
+
+
+def test_background_work_that_raises_is_a_warning_not_a_crash(caplog):
+    import logging
+    from fastapi import FastAPI
+    from plugins.blackbox.dashboard import lifecycle
+
+    app = FastAPI()
+
+    def broken():
+        raise RuntimeError("secret-looking detail")
+    lifecycle.run_in_background(app, [broken], name="test work")
+    with caplog.at_level(logging.WARNING, logger="plugins.blackbox.dashboard.lifecycle"):
+        with TestClient(app):
+            pass
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("test work failed: RuntimeError" in m for m in messages) and not any("secret-looking" in m for m in messages)

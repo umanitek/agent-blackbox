@@ -1881,27 +1881,17 @@ def create_app(*, manage_blackbox: bool = False):
             logger.debug("blackbox dashboard: threat detail query failed: %s", exc)
         return detail
 
-    @lifecycle.on_startup(app)
-    def _warm_node_caches() -> None:
-        """Prime the SWR node caches at boot so the first load shows data
-        instead of a "Loading…" window. Off-thread, fail-open."""
-        def _warm() -> None:
-            try:
-                cfg = load_blackbox_config()
-                # Liveness first, so the reads below see the node's true state, not the cold default.
-                _liveness.check_now(cfg)
-                # Touch each cached endpoint to warm it. Two passes: the first
-                # spawns the refresh, the second lands it.
-                for _ in range(2):
-                    graph_status()
-                    graph(tier="public", limit=5000, offset=0, q="", category="", ecosystem="")   # explicit: outside a request the Query(...) defaults are objects
-                    community_endpoints.reports(50)
-                    agents()
-                    if _blackbox_stop.wait(2.5):   # the dashboard is shutting down: stop warming
-                        break
-            except Exception as exc:  # pragma: no cover - best effort
-                logger.warning("blackbox dashboard: cache warm failed: %s", type(exc).__name__)
-        threading.Thread(target=_warm, name="blackbox-warm", daemon=True).start()
+    # Prime the SWR node caches at boot so the first load shows data instead of a "Loading…"
+    # window. Liveness first, so the reads see the node's true state; two passes: the first
+    # spawns each refresh, the second lands it. Ends with the app (lifecycle.run_in_background).
+    lifecycle.run_in_background(app, name="cache warm", passes=2, pause_s=2.5, calls=[
+        lambda: _liveness.check_now(load_blackbox_config()),
+        graph_status,
+        # Explicit arguments: outside a request the Query(...) defaults are objects (KI-498).
+        lambda: graph(tier="public", limit=5000, offset=0, q="", category="", ecosystem=""),
+        lambda: community_endpoints.reports(50),
+        agents,
+    ])
 
     return app
 
