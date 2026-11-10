@@ -13,10 +13,9 @@ secret (KI-377), then scrubs each string as before.
 
 from __future__ import annotations
 
-import re
 from typing import Any, Callable, Optional
 
-from ..kernel.redaction import redact_secret_values
+from ..kernel.redaction import SECRET_NAME_RE, redact_secret_values
 from ..kernel import crypto_secrets, display_safety
 
 # ---------------------------------------------------------------------------
@@ -36,11 +35,8 @@ _MAX_DEPTH = 5
 _MAX_ITEMS = 50
 _SOLANA_KEY_BYTES = 64
 
-_SECRET_KEY_RE = re.compile(
-    r"(api[_-]?key|token|secret|password|passwd|credential|authorization|private[_-]?key"
-    r"|client[_-]?secret|access[_-]?token|refresh[_-]?token)",
-    re.IGNORECASE,
-)
+#: A key whose NAME says it holds a secret: the kernel's one list of such names.
+_SECRET_KEY_RE = SECRET_NAME_RE
 
 
 def sanitize_text(value: str, max_len: int = _MAX_TEXT) -> str:
