@@ -89,9 +89,7 @@ class UninstallPlan:
 
 
 def _configured_dkg_home(home: Path) -> Optional[Path]:
-    entry = (((yaml_files.load_yaml(home / "config.yaml").get("plugins") or {}).get("entries") or {})
-             .get("blackbox") or {})
-    raw = entry.get("dkg_home") if isinstance(entry, dict) else None
+    raw = yaml_files.blackbox_entry(yaml_files.load_yaml(home / "config.yaml")).get("dkg_home")
     return Path(str(raw)).expanduser() if raw else None
 
 
@@ -114,9 +112,8 @@ def build_plan(*, purge: bool, keep_logs: bool, now: Optional[_dt.datetime] = No
     dkg_home: Optional[Path] = None
     dashboard_port = 9700
     for home in hermes_homes:
-        entry = (((yaml_files.load_yaml(home / "config.yaml").get("plugins") or {}).get("entries") or {})
-                 .get("blackbox") or {})
-        if isinstance(entry, dict) and str(entry.get("dashboard_port", "")).isdigit():
+        entry = yaml_files.blackbox_entry(yaml_files.load_yaml(home / "config.yaml"))
+        if str(entry.get("dashboard_port", "")).isdigit():
             dashboard_port = int(entry["dashboard_port"])
             break
     for home in hermes_homes or (constants.hermes_home(),):

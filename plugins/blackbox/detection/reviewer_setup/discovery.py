@@ -119,10 +119,8 @@ def _hermes_llm_candidate() -> Optional[dict[str, str]]:
 
 def stored_llm_entry() -> dict[str, Any]:
     """The ``plugins.entries.blackbox.llm`` mapping as saved in the active Hermes home's config.yaml."""
-    data = yaml_files.load_yaml(constants.hermes_home() / "config.yaml")
-    for key in ("plugins", "entries", "blackbox", "llm"):
-        data = data.get(key) if isinstance(data, dict) else None
-    return data if isinstance(data, dict) else {}
+    llm = yaml_files.blackbox_entry(yaml_files.load_yaml(constants.hermes_home() / "config.yaml")).get("llm")
+    return llm if isinstance(llm, dict) else {}
 
 
 def copied_key_env(provider: str, api_key: str) -> str:

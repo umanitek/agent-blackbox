@@ -110,3 +110,36 @@ def test_saving_settings_fails_and_leaves_an_unreadable_config_alone(tmp_path, m
 
     assert settings._persist_locked({"mode": "block"}) is False
     assert (home / "config.yaml").read_text(encoding="utf-8") == BROKEN
+
+
+# --- one way to read Blackbox's own entry out of a Hermes config ---
+
+@pytest.mark.parametrize("config, expected", [
+    ({"plugins": {"entries": {"blackbox": {"mode": "block"}}}}, {"mode": "block"}),
+    ({"plugins": {"entries": {"blackbox": {}}}}, {}),
+    ({"plugins": {"entries": {}}}, {}),
+    ({"plugins": {"enabled": ["blackbox"]}}, {}),
+    ({}, {}),
+    ({"plugins": None}, {}),
+    ({"plugins": {"entries": None}}, {}),
+    ({"plugins": {"entries": {"blackbox": "on"}}}, {}),        # not a mapping: no settings
+    ({"plugins": ["blackbox"]}, {}),
+    (None, {}),
+    ("not a mapping", {}),
+])
+def test_the_blackbox_entry_is_its_mapping_or_empty_and_reading_creates_nothing(config, expected):
+    import copy
+    before = copy.deepcopy(config)
+
+    assert yaml_files.blackbox_entry(config) == expected
+    assert config == before
+
+
+def test_the_loaded_settings_and_the_stored_reviewer_settings_come_through_it(tmp_path, monkeypatch):
+    from plugins.blackbox.detection.reviewer_setup import discovery
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    yaml_files.dump_yaml(tmp_path / "config.yaml", {"plugins": {"entries": {"blackbox": {
+        "mode": "block", "llm": {"provider": "anthropic"}}}}})
+
+    assert config_mod.load_blackbox_config().mode == "block"
+    assert discovery.stored_llm_entry() == {"provider": "anthropic"}

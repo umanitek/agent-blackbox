@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Mapping, Tuple
 
-from . import constants
+from . import constants, yaml_files
 from .config_values.semantic import SemanticConfig, semantic_config
 from .host_secrets import read_host_secret
 
@@ -189,9 +189,7 @@ def _blackbox_entry() -> dict[str, Any]:
     except Exception as exc:  # pragma: no cover - defensive
         logger.debug("blackbox: config load failed (%s); using defaults", exc)
         return {}
-    entries = ((cfg.get("plugins") or {}).get("entries") or {})
-    entry = entries.get("blackbox") or {}
-    return entry if isinstance(entry, dict) else {}
+    return yaml_files.blackbox_entry(cfg)
 
 
 #: The separate community graph's settings (2026-10-12 to 2026-10-16), config keys and environment

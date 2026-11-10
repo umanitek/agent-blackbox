@@ -26,7 +26,7 @@ from .config import DETECTION_CATEGORIES, load_blackbox_config
 
 logger = logging.getLogger(__name__)
 
-_GEAR_KEYS = ("plugins", "entries", "blackbox")
+_GEAR_KEYS = yaml_files.BLACKBOX_ENTRY_PATH
 #: Most protected paths a save may list (each is matched on every file-access call).
 MAX_PROTECTED_PATHS = 100
 

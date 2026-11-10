@@ -102,6 +102,29 @@ def load_yaml(path: Path) -> dict[str, Any]:
         return {}
 
 
+#: Where Blackbox's own settings sit inside a Hermes ``config.yaml``.
+BLACKBOX_ENTRY_PATH = ("plugins", "entries", "blackbox")
+
+
+def blackbox_entry(config: Any) -> dict[str, Any]:
+    """Blackbox's settings inside a Hermes config mapping — ``config["plugins"]["entries"]["blackbox"]``
+    — or ``{}`` when any step is missing or is not a mapping. A read: nothing is created.
+
+    THE way to reach the entry for reading; five places walked those three keys by hand.
+    Code that must CREATE the entry before writing it decides for itself what a non-mapping
+    in the way means (the settings save replaces it, the snapshot set-up refuses), and walks
+    :data:`BLACKBOX_ENTRY_PATH`.
+
+    Usage::
+
+        port = blackbox_entry(load_yaml(home / "config.yaml")).get("dashboard_port")
+    """
+    node = config
+    for key in BLACKBOX_ENTRY_PATH:
+        node = node.get(key) if isinstance(node, dict) else None
+    return node if isinstance(node, dict) else {}
+
+
 def dump_yaml(path: Path, data: dict[str, Any]) -> None:
     editor = _roundtrip_editor() if _keeps_comments(data) else None
     if editor is not None:
