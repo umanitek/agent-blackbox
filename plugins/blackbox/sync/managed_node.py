@@ -34,7 +34,7 @@ from .node_profile import (
     _set_persisted_dkg_sync_state,
     node_sync_settings,
 )
-from ..kernel.bounded_files import atomic_write
+from ..kernel.bounded_files import atomic_write, file_lock
 
 logger = logging.getLogger(__name__)
 
@@ -52,44 +52,8 @@ def _uses_managed_dkg(cfg: BlackboxConfig, args: argparse.Namespace) -> bool:
 @contextmanager
 def _managed_sync_lock():
     """Hold the one cross-process slot used by dashboard and manual syncs."""
-    path = constants.blackbox_home() / "sync-window.lock"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    handle = path.open("a+b")
-    acquired = False
-    try:
-        if os.name == "nt":  # pragma: no cover - exercised on Windows
-            import msvcrt
-
-            if path.stat().st_size == 0:
-                handle.write(b"0")
-                handle.flush()
-            handle.seek(0)
-            try:
-                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-                acquired = True
-            except OSError:
-                pass
-        else:
-            import fcntl
-
-            try:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                acquired = True
-            except BlockingIOError:
-                pass
+    with file_lock(constants.blackbox_home() / "sync-window.lock", blocking=False) as acquired:
         yield acquired
-    finally:
-        if acquired:
-            if os.name == "nt":  # pragma: no cover - exercised on Windows
-                import msvcrt
-
-                handle.seek(0)
-                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-            else:
-                import fcntl
-
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-        handle.close()
 
 
 def _dkg_sync_environment(cfg: BlackboxConfig) -> dict[str, str]:

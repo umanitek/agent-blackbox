@@ -192,3 +192,49 @@ def test_the_audit_reader_survives_a_line_that_is_json_but_not_an_object(tmp_pat
 
     assert log_store._load_jsonl(log, "file_access") == [{"path": "a", "event": "file_access"},
                                                           {"path": "b", "event": "seen"}]
+
+
+# --- the one cross-process lock (kernel/bounded_files/locking.py) ---
+
+def test_a_second_holder_is_refused_until_the_first_lets_go(tmp_path):
+    from plugins.blackbox.kernel.bounded_files import file_lock
+    lock = tmp_path / "deep" / "work.lock"
+
+    with file_lock(lock) as first:
+        with file_lock(lock, blocking=False) as second:      # another open file: the same as another process
+            assert (first, second) == (True, False)
+    with file_lock(lock, blocking=False) as again:
+        assert again is True
+
+
+def test_a_bounded_wait_gives_up_after_its_time(tmp_path):
+    import time
+    from plugins.blackbox.kernel.bounded_files import file_lock
+    lock = tmp_path / "work.lock"
+
+    with file_lock(lock):
+        started = time.monotonic()
+        with file_lock(lock, timeout_s=0.15) as waited:
+            elapsed = time.monotonic() - started
+
+    assert waited is False and 0.1 <= elapsed < 2.0
+
+
+def test_the_lock_is_released_when_the_work_raises(tmp_path):
+    from plugins.blackbox.kernel.bounded_files import file_lock
+    lock = tmp_path / "work.lock"
+
+    with pytest.raises(RuntimeError):
+        with file_lock(lock):
+            raise RuntimeError("the work failed")
+    with file_lock(lock, blocking=False) as again:
+        assert again is True
+
+
+def test_a_lock_file_that_cannot_be_opened_is_an_error_for_the_caller_to_decide(tmp_path):
+    from plugins.blackbox.kernel.bounded_files import file_lock
+    (tmp_path / "in-the-way").write_text("a file, not a folder", encoding="utf-8")
+
+    with pytest.raises(OSError):
+        with file_lock(tmp_path / "in-the-way" / "work.lock"):
+            pass

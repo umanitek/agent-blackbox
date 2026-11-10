@@ -38,7 +38,6 @@
     "ruleset/compiler.py::Ruleset.graph_entries": 47,
     "ruleset/compiler.py::build_from_rows": 51,
     "ruleset/fetching.py::fetch_tier": 49,
-    "ruleset/locks.py::_ruleset_refresh_lock": 75,
     "ruleset/refresh_cycle.py::_refresh_unlocked": 62,
     "ruleset/row_adapters.py::_row_to_rule": 100,
     "sync/command.py::_catchup_authoritative_vm": 463,

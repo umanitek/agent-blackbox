@@ -79,4 +79,5 @@ from .probe_stamp import ProbeStamp   # the stamp shares this package: a small f
 from .atomic_write import atomic_write   # and the one torn-free write
 from .json_files import read_json_object   # and the one "a JSON object, or nothing" read
 from .jsonl import append_line, read_jsonl   # and the one log-file append and read
-__all__ = ["ProbeStamp", "append_line", "atomic_write", "read_json_object", "read_jsonl", "read_small_text"]   # the surface other modules may import
+from .locking import file_lock   # and the one cross-process lock
+__all__ = ["ProbeStamp", "append_line", "atomic_write", "file_lock", "read_json_object", "read_jsonl", "read_small_text"]   # the surface other modules may import
