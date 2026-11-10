@@ -288,7 +288,7 @@ def run_isolated(label: str, detector: Callable[[], Iterable[Finding]]) -> list[
     """
     try:
         return list(detector())
-    except Exception as exc:
+    except Exception as exc:   # health: allow BLE001 -- the isolation boundary; the message may quote the call's arguments, so only the class is logged
         logger.warning("blackbox: detector %s raised %s; its findings are missing for this call",
                        label, type(exc).__name__)
         return []
