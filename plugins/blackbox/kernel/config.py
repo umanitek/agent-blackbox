@@ -245,46 +245,20 @@ def load_blackbox_config(*, entry: dict[str, Any] | None = None) -> BlackboxConf
     configured_dkg_home = entry.get("dkg_home") or entry.get("dkgHome")
     configured_dkg_url = entry.get("dkg_url") or entry.get("dkgUrl")
     if _is_default_dkg_home(configured_dkg_home):
-        logger.info(
-            "blackbox: switching shared default dkg_home %s -> %s",
-            configured_dkg_home,
-            default_dkg_home,
-        )
+        logger.info("blackbox: switching shared default dkg_home %s -> %s", configured_dkg_home, default_dkg_home)
         configured_dkg_home = ""
-    dkg_home = str(
-        configured_dkg_home
-        or dkg_home_env
-        or default_dkg_home
-    ).strip()
-    dkg_bin = str(
-        entry.get("dkg_bin")
-        or entry.get("dkgBin")
-        or _first_env("BLACKBOX_DKG_BIN")
-        or constants.blackbox_dkg_bin()
-    ).strip()
+    dkg_home = str(configured_dkg_home or dkg_home_env or default_dkg_home).strip()
+    dkg_bin = str(entry.get("dkg_bin") or entry.get("dkgBin") or _first_env("BLACKBOX_DKG_BIN")
+                  or constants.blackbox_dkg_bin()).strip()
     dkg_url_env = _first_env("BLACKBOX_DKG_DAEMON_URL", "BLACKBOX_DKG_URL")
-    dkg_url = str(
-        configured_dkg_url
-        or dkg_url_env
-        or _default_dkg_url()
-    ).rstrip("/")
+    dkg_url = str(configured_dkg_url or dkg_url_env or _default_dkg_url()).rstrip("/")
     if not configured_dkg_home and dkg_url in {"http://127.0.0.1:9200", "http://localhost:9200"}:
         dkg_url = _default_dkg_url()
-    graph_peer_id = str(
-        _env_or(
-            entry,
-            env="BLACKBOX_GRAPH_PEER_ID",
-            key="graph_peer_id",
-            default=constants.DEFAULT_GRAPH_PEER_ID,
-        )
-    ).strip()
+    graph_peer_id = str(_env_or(entry, env="BLACKBOX_GRAPH_PEER_ID", key="graph_peer_id",
+                                default=constants.DEFAULT_GRAPH_PEER_ID)).strip()
     # Replace old bootstrap peers (custom ones untouched); the default is in that set too (KI-335).
     if graph_peer_id in constants.LEGACY_GRAPH_PEER_IDS and graph_peer_id != constants.DEFAULT_GRAPH_PEER_ID:
-        logger.info(
-            "blackbox: switching stale graph_peer_id %s -> %s",
-            graph_peer_id,
-            constants.DEFAULT_GRAPH_PEER_ID,
-        )
+        logger.info("blackbox: switching stale graph_peer_id %s -> %s", graph_peer_id, constants.DEFAULT_GRAPH_PEER_ID)
         graph_peer_id = constants.DEFAULT_GRAPH_PEER_ID
     return BlackboxConfig(
         mode=mode, semantic=semantic_config(entry), snapshot_sync=snapshot_config(entry),
