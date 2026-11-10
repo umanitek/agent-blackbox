@@ -262,7 +262,7 @@ def _remove_from_agents(plan: UninstallPlan, report: list[str]) -> list[Path]:
     hermes_installed: list[Path] = []
     for home in plan.hermes_homes:
         config = home / "config.yaml"
-        data = yaml_files.load_yaml(config)
+        data = yaml_files.load_yaml(config)   # an unreadable config has no entry to remove: never written
         entries = (data.get("plugins") or {}).get("entries")
         if isinstance(entries, dict) and "blackbox" in entries:
             del entries["blackbox"]

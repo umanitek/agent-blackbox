@@ -133,7 +133,7 @@ def attach_hermes(home: Path, *, dry_run: bool = False) -> dict[str, Any]:
         report["copied"] = needs
 
         config_path = home / "config.yaml"
-        data = yaml_files.load_yaml(config_path)
+        data = yaml_files.load_for_edit(config_path)   # unreadable: reported below, never rewritten
         config_enabled = enabled_list_has(data, "blackbox")
         if config_enabled and files_ready:
             report["already"] = True

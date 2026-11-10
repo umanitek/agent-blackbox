@@ -315,9 +315,7 @@ def _persist_locked(updates: dict[str, Any]) -> bool:
     # Standalone fallback: plain YAML read-modify-write of the active home.
     try:
         path = constants.hermes_home() / "config.yaml"
-        data = yaml_files.load_yaml(path)
-        if not isinstance(data, dict):
-            data = {}
+        data = yaml_files.load_for_edit(path)   # unreadable: the save fails, the file stays
         entry = _dig(data, _GEAR_KEYS)
         _apply(entry, updates)
         yaml_files.dump_yaml(path, data)

@@ -8,11 +8,14 @@ assistant can read the repo's own docs.
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 from pathlib import Path
 from typing import List, Optional
 from .. import attach
 from ..kernel import constants, yaml_files
+
+logger = logging.getLogger(__name__)
 
 _BLACKBOX_CHAT_PROFILE = constants.BLACKBOX_CHAT_PROFILE
 _BLACKBOX_SOUL_MARKER = constants.BLACKBOX_CHAT_SOUL_MARKER
@@ -259,7 +262,11 @@ def _ensure_blackbox_context_cap(profile_dir: Path) -> None:
                 encoding="utf-8",
             )
         return
-    data = yaml_files.load_yaml(config_path)
+    try:
+        data = yaml_files.load_for_edit(config_path)
+    except yaml_files.UnreadableYaml as exc:
+        logger.warning("blackbox chat: %s", exc)   # the profile's config is left as it is
+        return
     current = data.get("context_file_max_chars")
     if isinstance(current, int) and current >= _BLACKBOX_CONTEXT_FILE_MAX_CHARS:
         return
