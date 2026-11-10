@@ -8042,7 +8042,15 @@
         throw refused;
       }
       throw err;
-    }).then(function (tok) {
+    }).then(send).then(function (res) {
+      if (res.status !== 403) return res;
+      // The token is minted when the dashboard starts. A dashboard restarted since this page
+      // loaded refuses the old one: fetch the new token and send the change once more (KI-498).
+      __bbToken = null;
+      return getSessionToken().then(send, function () { return res; });
+    });
+
+    function send(tok) {
       return fetch(url, {
         method: "POST",
         headers: {
@@ -8052,12 +8060,12 @@
         },
         cache: "no-store",
         body: JSON.stringify(body)
+      }).then(function (r) {
+        return r.json().catch(function () { return {}; }).then(function (j) {
+          return { ok: r.ok, status: r.status, body: j };
+        });
       });
-    }).then(function (r) {
-      return r.json().catch(function () { return {}; }).then(function (j) {
-        return { ok: r.ok, status: r.status, body: j };
-      });
-    });
+    }
   }
 
   function saveSettings() {
