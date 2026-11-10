@@ -1,13 +1,13 @@
 """Local-only DKG transport for security decisions. No proxy, redirect or silent empty fallback."""
 from __future__ import annotations
 
-import ipaddress
 import json
 import re
 import time
 import http.client
 import urllib.parse
 
+from ...kernel import local_http
 from ...kernel.dkg_client import DkgClient, DkgError, signed_request_headers
 
 MAX_RESPONSE_BYTES = 1024 * 1024 + 4096
@@ -33,11 +33,11 @@ def local_url(value: str) -> str:
     parsed = urllib.parse.urlsplit(value)
     if parsed.scheme not in {"http", "https"} or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in {"", "/"}:
         raise GraphReadUnavailable("LOCAL_DKG_REQUIRED")
-    host = parsed.hostname
+    host = parsed.hostname or ""
     if host == "localhost":
         host = "127.0.0.1"  # no DNS resolution for action-derived query data
     try:
-        if not ipaddress.ip_address(host or "").is_loopback:
+        if not local_http.is_loopback_host(host):
             raise ValueError
         port = parsed.port
     except ValueError:

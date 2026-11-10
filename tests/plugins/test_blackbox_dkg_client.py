@@ -631,3 +631,58 @@ def test_the_node_client_does_not_follow_a_redirect(tmp_path):
         close_elsewhere()
 
     assert refused.value.status_code == 302 and elsewhere_hits == []
+
+
+# --- one answer to "is this address on this machine?" (kernel/local_http) ---
+
+local_http = load_blackbox("kernel.local_http")
+
+
+@pytest.mark.parametrize("host", ["127.0.0.1", "127.0.0.2", "127.255.255.254", "localhost", "LOCALHOST", "::1", "[::1]",
+                                  "::ffff:127.0.0.1"])
+def test_loopback_hosts_are_local(host):
+    assert local_http.is_loopback_host(host)
+
+
+@pytest.mark.parametrize("host", ["", "10.0.0.5", "192.168.1.10", "100.79.253.59", "0.0.0.0", "example.com",
+                                  "localhost.example.com", "127.0.0.1.example.com", "localhost.", "::ffff:10.0.0.1",
+                                  "2130706433", "0x7f.0.0.1", "not an address"])
+def test_everything_else_is_not_local_and_no_name_is_looked_up(host):
+    assert not local_http.is_loopback_host(host)
+
+
+@pytest.mark.parametrize("url, local", [
+    ("http://127.0.0.1:9320", True), ("https://localhost:7878/query", True), ("http://[::1]:9200", True),
+    ("http://127.0.0.2:9320", True),
+    ("http://10.0.0.5:9320", False), ("http://node.example:9320", False),
+    ("http://127.0.0.1@evil.example/", False),              # the host is evil.example
+    ("ftp://127.0.0.1/", False), ("file:///etc/passwd", False), ("127.0.0.1:9320", False), ("", False),
+    ("http://[::1", False),                                 # does not parse
+])
+def test_a_url_is_local_only_as_http_on_a_loopback_host(url, local):
+    assert local_http.is_loopback_url(url) is local
+
+
+def test_the_four_callers_give_the_same_answer_for_the_same_address():
+    from plugins.blackbox import audit
+    from plugins.blackbox.curate.lab import transport as lab_transport
+    from plugins.blackbox.kernel.store import loopback_store_url
+    from plugins.blackbox.ruleset import local_graph_url
+
+    def direct(url):
+        try:
+            local_graph_url(url)
+            return True
+        except Exception:
+            return False
+
+    for url, local in (("http://127.0.0.2:9320", True), ("http://localhost:9320", True), ("http://10.0.0.5:9320", False)):
+        answers = {audit.node_is_local(url), lab_transport.is_loopback_url(url),
+                   bool(loopback_store_url({"storeUrl": url})), direct(url)}
+        assert answers == {local}, (url, answers)
+
+
+def test_the_private_audit_gate_says_no_when_it_cannot_read_the_url():
+    from plugins.blackbox import audit
+    assert audit.node_is_local("") is True                  # no URL set: the default is loopback
+    assert audit.node_is_local("http://[::1") is False      # unreadable: it used to count as local
