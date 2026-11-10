@@ -20,15 +20,11 @@ from plugins.blackbox.kernel.health import days_between, today_utc
 
 PLUGIN = Path(__file__).resolve().parents[2] / "plugins" / "blackbox"
 
-#: Files that may call os.replace themselves: the implementation, writers that also
-#: fsync their secret (a torn-free write is not a durable one), and the installer helper
-#: that runs standalone without the plugin on its path.
+#: Files that may call os.replace themselves: the implementation, and the two that run
+#: standalone without the plugin on their path (the node launcher's limits file, the
+#: installer helper). Writers that fsync use ``atomic_write(..., durable=True)``.
 MAY_REPLACE = {
     "kernel/bounded_files/atomic_write.py",
-    "curate/console/root_signer.py",
-    "curate/console/roster.py",
-    "curate/lab/jobs.py",
-    "curate/service/disputes.py",
     "sync/process_limits.py",
     "setup/blackbox-dkg-runtime-fingerprint.py",
 }
@@ -52,6 +48,44 @@ def test_a_secret_is_created_0600_from_the_start(tmp_path):
 
     assert stat.S_IMODE(target.stat().st_mode) == 0o600
     assert target.read_text(encoding="utf-8") == "secret"
+
+
+def test_a_durable_write_is_flushed_to_the_disk_before_the_rename(tmp_path, monkeypatch):
+    order: list[str] = []
+    real_fsync, real_replace = os.fsync, os.replace
+    monkeypatch.setattr(os, "fsync", lambda fd: (order.append("fsync"), real_fsync(fd))[1])
+    monkeypatch.setattr(os, "replace", lambda src, dst: (order.append("replace"), real_replace(src, dst))[1])
+
+    atomic_write(tmp_path / "counter.json", "{}", mode=0o600, durable=True)
+    atomic_write(tmp_path / "plain.json", "{}")
+
+    assert order == ["fsync", "replace", "replace"]          # only the durable write syncs, and before its rename
+
+
+def test_a_failed_write_leaves_no_temp_file_and_keeps_the_old_content(tmp_path, monkeypatch):
+    target = tmp_path / "state.json"
+    atomic_write(target, "old")
+
+    def refuse(src, dst):
+        raise OSError("disk full")
+    monkeypatch.setattr(os, "replace", refuse)
+
+    with pytest.raises(OSError):
+        atomic_write(target, "new")
+
+    assert target.read_text(encoding="utf-8") == "old"
+    assert not [p.name for p in tmp_path.iterdir() if ".tmp." in p.name]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits")
+def test_a_plain_write_keeps_the_process_default_permissions(tmp_path):
+    old = os.umask(0o022)
+    try:
+        atomic_write(tmp_path / "state.json", "{}")
+    finally:
+        os.umask(old)
+
+    assert stat.S_IMODE((tmp_path / "state.json").stat().st_mode) == 0o644
 
 
 def test_no_module_rolls_its_own_replace():

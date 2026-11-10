@@ -33,8 +33,6 @@ Usage::
 from __future__ import annotations
 
 import json
-import os
-import secrets
 import threading
 from dataclasses import asdict, dataclass
 from datetime import datetime, UTC
@@ -154,12 +152,7 @@ class DisputeStore:
 
     @staticmethod
     def _write_private(path: Path, data: Mapping[str, Any]) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_name(f"{path.name}.tmp.{os.getpid()}.{secrets.token_hex(6)}")
-        descriptor = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            handle.write(json.dumps(dict(data)))
-        os.replace(tmp, path)
+        yaml_files.atomic_write(path, json.dumps(dict(data)), mode=0o600)
 
 
 class DisputeAction(Enum):

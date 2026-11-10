@@ -33,7 +33,6 @@ import dataclasses
 import hashlib
 import json
 import logging
-import os
 import re
 import threading
 import time
@@ -43,6 +42,7 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional
 from urllib.parse import urlsplit, urlunsplit
 
+from ...kernel.bounded_files import atomic_write
 from .. import keys
 from ..queue import Lane
 from . import evidence_schema
@@ -291,9 +291,5 @@ def _record_from_mapping(row: dict) -> LabJobRecord:
 
 
 def _write_atomic(path: Path, text: str) -> None:
-    """Write *text* to *path* through a private (0600) temp file and a rename."""
-    temporary = path.with_name(path.name + ".tmp")
-    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-        handle.write(text)
-    os.replace(temporary, path)
+    """Write *text* to *path* as a private (0600) file, torn-free (the kernel's one write)."""
+    atomic_write(path, text, mode=0o600)

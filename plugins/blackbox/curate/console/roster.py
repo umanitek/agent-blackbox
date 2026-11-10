@@ -34,9 +34,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
-import os
 import re
-import secrets
 import threading
 from dataclasses import dataclass
 from datetime import date, timedelta
@@ -44,6 +42,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Dict, List, Mapping, Optional, Tuple
 
+from ...kernel.bounded_files import atomic_write
 from ...kernel.signing import key_manifest
 from ...kernel.signing import KeyManifest
 from .. import keys
@@ -256,13 +255,7 @@ class ConsoleState:
         decided = sorted((j for j in joins.values() if j.state is not JoinState.PENDING), key=lambda j: j.received_at)
         rows = {"joins": [j.as_dict() for j in pending + decided[-MAX_DECIDED_JOINS:]],
                 "signedLists": [dataclasses.asdict(s) for s in lists[-MAX_SIGNED_LISTS:]]}
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self._path.with_name(f"{self._path.name}.tmp.{os.getpid()}.{secrets.token_hex(8)}")
-        with os.fdopen(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w", encoding="utf-8") as handle:  # windows-footgun: ok — a WRITE (mode "w"/"a"); writes stay utf-8
-            json.dump(rows, handle, sort_keys=True)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(tmp, self._path)
+        atomic_write(self._path, json.dumps(rows, sort_keys=True), mode=0o600, durable=True)
 
 
 # -- the next list ---------------------------------------------------------------

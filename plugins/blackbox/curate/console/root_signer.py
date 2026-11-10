@@ -40,6 +40,7 @@ from pathlib import Path
 from typing import Callable, Iterator, Optional, Protocol, Tuple
 
 from ...kernel import signing
+from ...kernel.bounded_files import atomic_write
 from ...kernel.signing import KeyManifest
 from .. import keys
 from ..context import CurateContext, ManifestDraft
@@ -135,13 +136,8 @@ class TotpSecondFactor:
             return None
 
     def _write(self, secret: bytes, last_step: int) -> None:
-        tmp = self._path.with_name(f"{self._path.name}.tmp.{os.getpid()}.{secrets.token_hex(8)}")
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, _FILE_MODE)
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump({"secret": base64.b32encode(secret).decode("ascii"), "last_step": last_step}, handle)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(tmp, self._path)
+        state = {"secret": base64.b32encode(secret).decode("ascii"), "last_step": last_step}
+        atomic_write(self._path, json.dumps(state), mode=_FILE_MODE, durable=True)
 
 
 def totp_code(secret: bytes, step: int) -> str:
