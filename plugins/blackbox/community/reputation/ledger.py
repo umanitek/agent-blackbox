@@ -37,6 +37,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ...kernel import constants
+from ...kernel.health import today_utc
 from . import sealed_index
 from .bands import ReporterStanding, ReputationBand
 from .scoring import Outcome, beta_reputation
@@ -191,7 +192,8 @@ class ReputationLedger:
         except (OSError, ValueError, AttributeError, TypeError):
             pass   # missing or unreadable: an empty ledger
         salts = self._load_salts()
-        cutoff = (date.today() - timedelta(days=RETENTION_DAYS)).isoformat()
+        # UTC, like every `last_day` it is compared with: the machine's local date is a day off for part of each day.
+        cutoff = (date.fromisoformat(today_utc()) - timedelta(days=RETENTION_DAYS)).isoformat()
         live = {p: e for p, e in entries.items() if e.get("last_day", "") >= cutoff or not e.get("outcomes")}
         live_salts = {key: salt for key, salt in salts.items() if pseudonym(salt, key) in live or not entries}
         return {"salts": live_salts, "entries": live, "publishers": publishers}
