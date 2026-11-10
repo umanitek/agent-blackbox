@@ -42,6 +42,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional, Sequence
 
+from .. import sync   # sync's public entry: the service names, which process is our node
 from ..kernel import constants, yaml_files
 
 #: Files a node needs to keep its identity and wallet (DKG home), and Blackbox's own reporter
@@ -51,9 +52,8 @@ BLACKBOX_KEY_FILES = ("reporter_key.pem", "sharing_consent.json")
 #: A file only Blackbox's installer writes into the DKG home it manages: proof the folder is ours.
 DKG_HOME_MARKER = "blackbox-process-limits.json"
 SHIM_MARKER = "managed-by: agent-blackbox-installer"
-LAUNCHD_LABELS = ("ai.umanitek.blackbox-dashboard", "ai.umanitek.blackbox-dkg")
-SYSTEMD_UNITS = ("blackbox-dashboard.service", "blackbox-dkg.service")
-WINDOWS_TASKS = ("Agent Blackbox dashboard", "Agent Blackbox DKG node")
+# The services to remove: the names the installers register, owned by sync (one place to rename).
+LAUNCHD_LABELS, SYSTEMD_UNITS, WINDOWS_TASKS = sync.LAUNCHD_LABELS, sync.SYSTEMD_UNITS, sync.WINDOWS_TASKS
 
 Runner = Callable[[Sequence[str]], int]
 
@@ -131,7 +131,7 @@ def build_plan(*, purge: bool, keep_logs: bool, now: Optional[_dt.datetime] = No
     shim_dir = Path.home() / ".local" / "bin"
     shim = next((p for p in (shim_dir / "blackbox", shim_dir / "blackbox.cmd")
                  if p.is_file() and SHIM_MARKER in p.read_text(encoding="utf-8-sig", errors="ignore")), None)
-    system_units = tuple(p for p in (Path("/etc/systemd/system") / u for u in SYSTEMD_UNITS) if p.exists())
+    system_units = tuple(p for p in (sync.SYSTEM_UNIT_DIR / u for u in SYSTEMD_UNITS) if p.exists())
     return UninstallPlan(
         system=platform.system(), hermes_homes=hermes_homes, blackbox_home=blackbox_home, dkg_home=dkg_home,
         key_files=tuple(p for p in keys if p.is_file()),
@@ -208,7 +208,6 @@ def _stop_unsupervised_node(plan: UninstallPlan, report: list[str]) -> None:
     pid_file = plan.dkg_home / "daemon.pid" if plan.dkg_home else None
     if not pid_file or not pid_file.is_file():
         return
-    from .. import sync   # sync's public entry: which process is our node
     from ..kernel.config import load_blackbox_config
     try:
         pid = int(pid_file.read_text(encoding="utf-8-sig").strip())

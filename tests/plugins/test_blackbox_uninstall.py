@@ -242,3 +242,17 @@ def test_the_real_check_refuses_a_live_process_that_is_not_a_dkg_node(node_pid_f
     uninstall._stop_unsupervised_node(plan, [])
 
     assert signalled == []
+
+
+def test_uninstall_and_the_node_service_name_the_same_services():
+    """The names were typed in both modules: renaming one in the installer meant two edits."""
+    from plugins.blackbox import sync
+    from plugins.blackbox.sync import node_service
+
+    assert uninstall.LAUNCHD_LABELS is sync.LAUNCHD_LABELS and uninstall.SYSTEMD_UNITS is sync.SYSTEMD_UNITS
+    assert node_service.LAUNCHD_LABEL in uninstall.LAUNCHD_LABELS
+    assert f"{node_service.SYSTEMD_UNIT}.service" in uninstall.SYSTEMD_UNITS
+    # The values the installers register (scripts/blackbox-install.sh): changing one here is a change there.
+    assert uninstall.LAUNCHD_LABELS == ("ai.umanitek.blackbox-dashboard", "ai.umanitek.blackbox-dkg")
+    assert uninstall.SYSTEMD_UNITS == ("blackbox-dashboard.service", "blackbox-dkg.service")
+    assert uninstall.WINDOWS_TASKS == ("Agent Blackbox dashboard", "Agent Blackbox DKG node")

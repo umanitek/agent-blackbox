@@ -21,6 +21,7 @@ import argparse
 from pathlib import Path
 
 from . import node_service, progress, state
+from .node_service import LAUNCHD_LABELS, SYSTEMD_UNITS, SYSTEM_UNIT_DIR, WINDOWS_TASKS
 from ..kernel import health
 from ..kernel.config import load_blackbox_config
 from ..kernel.dkg_client import DkgClient
@@ -28,7 +29,7 @@ from .command import cmd_sync as _sync_with_node
 from .progress import read_durable_progress, read_recovery_backlog
 from .snapshot_readiness import defaults as snapshot_defaults, validate_requested_profile as validate_snapshot_profile
 
-__all__ = ["cmd_sync", "is_node_process", "node_starting", "progress", "read_durable_progress", "read_recovery_backlog",
+__all__ = ["LAUNCHD_LABELS", "SYSTEMD_UNITS", "SYSTEM_UNIT_DIR", "WINDOWS_TASKS", "cmd_sync", "is_node_process", "node_starting", "progress", "read_durable_progress", "read_recovery_backlog",
            "snapshot_defaults", "state", "validate_snapshot_profile"]
 
 

@@ -41,9 +41,17 @@ from ..kernel.config import BlackboxConfig
 
 logger = logging.getLogger(__name__)
 
+# THE names of the background services the installers register (scripts/blackbox-install.sh|.ps1
+# use the same ones). Uninstall removes the services by these names, through ``sync``'s entry.
 LAUNCHD_LABEL = "ai.umanitek.blackbox-dkg"   # = BLACKBOX_DKG_LAUNCHD_LABEL in scripts/blackbox-install.sh
 SYSTEMD_UNIT = "blackbox-dkg"
 SYSTEM_UNIT_DIR = Path("/etc/systemd/system")
+DASHBOARD_LAUNCHD_LABEL = "ai.umanitek.blackbox-dashboard"
+DASHBOARD_SYSTEMD_UNIT = "blackbox-dashboard"
+WINDOWS_TASKS = ("Agent Blackbox dashboard", "Agent Blackbox DKG node")
+#: Every service Blackbox registers, per platform, the dashboard first.
+LAUNCHD_LABELS = (DASHBOARD_LAUNCHD_LABEL, LAUNCHD_LABEL)
+SYSTEMD_UNITS = (f"{DASHBOARD_SYSTEMD_UNIT}.service", f"{SYSTEMD_UNIT}.service")
 # launchd keeps no journal, so the installer sends the LaunchAgent node's stderr here (in the node's
 # home, = blackbox_dkg_launchd_error_log in the installer). The node writes its warnings there too,
 # a few MB a day, so it is trimmed in place: launchd holds it open for appending, and a replaced
