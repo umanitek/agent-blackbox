@@ -24,7 +24,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from . import constants, host_secrets
+from . import constants, host_secrets, local_http
 from .snapshot_config import query_evidence
 from .sparql_text import run_query
 from .sparql_text import extract_binding, normalize_bindings, rows_or_fallback  # re-exported: callers import them from here
@@ -197,7 +197,7 @@ class DkgClient:
             headers.update(signed_request_headers(self.token, method, path, data))
         req = urllib.request.Request(f"{self.url}{path}", data=data, headers=headers, method=method)
         try:
-            with urllib.request.urlopen(req, timeout=timeout or _TIMEOUT) as resp:
+            with local_http.open_direct(req, timeout=timeout or _TIMEOUT) as resp:
                 raw = resp.read()
         except urllib.error.HTTPError as exc:
             detail = exc.read(1024).decode("utf-8", errors="replace")

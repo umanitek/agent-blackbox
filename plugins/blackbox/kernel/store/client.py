@@ -25,6 +25,8 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
+from .. import local_http
+
 logger = logging.getLogger(__name__)
 
 #: A lookup on the hot path waits at most this long. Bench p95 was 5 ms on a
@@ -96,7 +98,7 @@ class StoreClient:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(request, timeout=timeout or self.timeout) as response:
+            with local_http.open_direct(request, timeout=timeout or self.timeout) as response:
                 raw = response.read()
         except urllib.error.HTTPError as exc:
             return StoreAnswer(None, f"http {exc.code}")

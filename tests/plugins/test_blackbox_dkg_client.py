@@ -42,7 +42,7 @@ def _capture(monkeypatch, body='{"ok": true}'):
         captured.update(call)
         return _FakeResponse(body)
 
-    monkeypatch.setattr(dkg_client.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(dkg_client.local_http, "open_direct", fake_urlopen)
     return captured
 
 
@@ -65,7 +65,7 @@ def _capture_sequence(monkeypatch, bodies):
         captured.update(call)
         return _FakeResponse(remaining.pop(0))
 
-    monkeypatch.setattr(dkg_client.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(dkg_client.local_http, "open_direct", fake_urlopen)
     return captured
 
 
@@ -159,7 +159,7 @@ def test_share_rejects_oversized_literal_before_http(monkeypatch):
     def fail_urlopen(req, timeout=None):
         raise AssertionError("urlopen should not be called")
 
-    monkeypatch.setattr(dkg_client.urllib.request, "urlopen", fail_urlopen)
+    monkeypatch.setattr(dkg_client.local_http, "open_direct", fail_urlopen)
     client = dkg_client.DkgClient(url="http://node", token="tok")
     rows = [{
         "subject": "urn:test:s",
@@ -289,7 +289,7 @@ def test_request_join_tolerates_older_daemon_without_profile_endpoint(monkeypatc
             return _FakeResponse('{"delegation":{"agentAddress":"0x66bc7cd539d3bb0be39158dd14f27b38342c7e6a"}}')
         return _FakeResponse('{"delivered":1}')
 
-    monkeypatch.setattr(dkg_client.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(dkg_client.local_http, "open_direct", fake_urlopen)
     client = dkg_client.DkgClient(url="http://node", token="tok")
 
     assert client.request_join("cg", "peer") == {"delivered": 1}
@@ -393,7 +393,7 @@ def test_query_fails_open_on_http_error(monkeypatch):
     def raise_http(req, timeout=None):
         raise urllib.error.HTTPError(req.full_url, 500, "err", {}, io.BytesIO(b"boom"))
 
-    monkeypatch.setattr(dkg_client.urllib.request, "urlopen", raise_http)
+    monkeypatch.setattr(dkg_client.local_http, "open_direct", raise_http)
     client = dkg_client.DkgClient(url="http://node", token="t")
     # query() swallows DkgError and returns [] (read paths fail open).
     assert client.query("SELECT * WHERE {?s ?p ?o}", "cg") == []
@@ -403,7 +403,7 @@ def test_write_path_raises_dkg_error_on_http_error(monkeypatch):
     def raise_http(req, timeout=None):
         raise urllib.error.HTTPError(req.full_url, 403, "forbidden", {}, io.BytesIO(b"nope"))
 
-    monkeypatch.setattr(dkg_client.urllib.request, "urlopen", raise_http)
+    monkeypatch.setattr(dkg_client.local_http, "open_direct", raise_http)
     client = dkg_client.DkgClient(url="http://node", token="t")
     with pytest.raises(dkg_client.DkgError) as exc_info:
         client.share_knowledge_asset("cg", "n", [])
@@ -418,7 +418,7 @@ def test_share_is_idempotent_on_already_finalized(monkeypatch):
     def raise_finalized(req, timeout=None):
         raise urllib.error.HTTPError(req.full_url, 500, "err", {}, io.BytesIO(body))
 
-    monkeypatch.setattr(dkg_client.urllib.request, "urlopen", raise_finalized)
+    monkeypatch.setattr(dkg_client.local_http, "open_direct", raise_finalized)
     client = dkg_client.DkgClient(url="http://node", token="t")
     res = client.share_knowledge_asset("cg", "threat-abc", [])
     assert res.get("idempotent") is True
@@ -574,3 +574,60 @@ def test_request_omits_signature_without_token():
         assert _header(headers, "Authorization") is None
     finally:
         pytest_mp.undo()
+
+
+# --- KI-497: Blackbox's own services are reached directly — no environment proxy, no redirects ---
+
+def _one_shot_server(status: int, headers: dict[str, str], body: bytes = b"{}"):
+    """A loopback HTTP server answering every request with *status*; returns (url, hits, close)."""
+    import http.server
+    import threading
+
+    hits: list[str] = []
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            hits.append(self.path)
+            self.send_response(status)
+            for name, value in headers.items():
+                self.send_header(name, value)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return f"http://127.0.0.1:{server.server_address[1]}", hits, server.shutdown
+
+
+def test_the_node_client_ignores_a_proxy_named_in_the_environment(monkeypatch, tmp_path):
+    node_url, node_hits, close_node = _one_shot_server(200, {"Content-Type": "application/json"}, b'{"ok": true}')
+    proxy_url, proxy_hits, close_proxy = _one_shot_server(200, {"Content-Type": "application/json"}, b'{"proxy": true}')
+    for name in ("HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"):
+        monkeypatch.setenv(name, proxy_url)
+    for name in ("NO_PROXY", "no_proxy"):
+        monkeypatch.delenv(name, raising=False)
+    try:
+        answer = dkg_client.DkgClient(url=node_url, dkg_home=str(tmp_path), token="t").request("GET", "/api/status")
+    finally:
+        close_node()
+        close_proxy()
+
+    assert answer == {"ok": True}
+    assert node_hits == ["/api/status"] and proxy_hits == []
+
+
+def test_the_node_client_does_not_follow_a_redirect(tmp_path):
+    elsewhere_url, elsewhere_hits, close_elsewhere = _one_shot_server(200, {}, b'{"elsewhere": true}')
+    node_url, _node_hits, close_node = _one_shot_server(302, {"Location": elsewhere_url + "/taken"})
+    try:
+        with pytest.raises(dkg_client.DkgError) as refused:
+            dkg_client.DkgClient(url=node_url, dkg_home=str(tmp_path), token="t").request("GET", "/api/status")
+    finally:
+        close_node()
+        close_elsewhere()
+
+    assert refused.value.status_code == 302 and elsewhere_hits == []

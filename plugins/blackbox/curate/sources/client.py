@@ -28,6 +28,8 @@ import urllib.parse
 import urllib.request
 from typing import Any, List, Mapping, Optional, Protocol
 
+from ...kernel.local_http import RefuseRedirects
+
 logger = logging.getLogger(__name__)
 
 #: Each socket operation waits at most this long; the beat must not stall on one source.
@@ -54,17 +56,12 @@ class HttpClient(Protocol):
         (any non-2xx — urlscan's "still scanning" 404 included — or a body over *max_bytes*)."""
 
 
-class _RefuseRedirects(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, *args: Any, **kwargs: Any) -> None:
-        return None
-
-
 class UrllibClient:
     """The real :class:`HttpClient` — stdlib only, no redirects, bounded reads."""
 
     def __init__(self, timeout: float = SOURCE_TIMEOUT_SECONDS) -> None:
         self._timeout = timeout
-        self._opener = urllib.request.build_opener(_RefuseRedirects())
+        self._opener = urllib.request.build_opener(RefuseRedirects())
 
     def post(self, url: str, *, headers: Mapping[str, str], form: Optional[Mapping[str, str]] = None,
              json_body: Optional[JsonObject] = None) -> Optional[JsonObject]:

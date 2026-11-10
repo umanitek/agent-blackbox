@@ -41,7 +41,7 @@ def urlopen(monkeypatch):
             raise calls.answer
         return _Response(calls.answer)
 
-    monkeypatch.setattr(store.client.urllib.request, "urlopen", fake)
+    monkeypatch.setattr(store.client.local_http, "open_direct", fake)
     return calls
 
 

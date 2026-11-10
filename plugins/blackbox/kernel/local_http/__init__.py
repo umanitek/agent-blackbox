@@ -1,4 +1,18 @@
-"""Bounded HTTP reads with an absolute deadline, including response headers."""
+"""Blackbox's HTTP transport rules, in one place.
+
+* :func:`open_direct` — how Blackbox talks to its OWN services (the DKG node, the node's
+  store, the dashboard): straight to the address given, never through a proxy named in the
+  environment (``HTTP_PROXY`` would be handed the bearer token, the request signature and
+  every lookup — KI-497), and never following a redirect.
+* :class:`RefuseRedirects` — the redirect rule alone, for clients of outside services that
+  may legitimately use the operator's proxy.
+* :func:`request` — a bounded read with an absolute deadline, including response headers.
+
+Usage::
+
+    with local_http.open_direct(urllib.request.Request(url, headers=headers), timeout=5) as response:
+        raw = response.read()
+"""
 from __future__ import annotations
 
 import http.client
@@ -6,6 +20,7 @@ import socket
 import threading
 import time
 import urllib.parse
+import urllib.request
 
 
 def request(url, method, path, data, headers, *, deadline, max_bytes):
@@ -51,4 +66,24 @@ def request(url, method, path, data, headers, *, deadline, max_bytes):
         connection.close()
 
 
-__all__ = ["request"]
+class RefuseRedirects(urllib.request.HTTPRedirectHandler):
+    """Never follow a redirect: the answer comes from the address asked, or it is an error."""
+
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+#: No environment proxy, no redirects. Built once; an opener is safe to share between threads.
+_DIRECT = urllib.request.build_opener(urllib.request.ProxyHandler({}), RefuseRedirects())
+
+
+def open_direct(http_request: urllib.request.Request, timeout: float):
+    """Send *http_request* straight to its address and return the response (a context manager).
+
+    Raises what ``urllib.request.urlopen`` raises (``HTTPError``, ``URLError``, ``OSError``);
+    a redirect arrives as its ``HTTPError`` (3xx) instead of being followed.
+    """
+    return _DIRECT.open(http_request, timeout=timeout)
+
+
+__all__ = ["RefuseRedirects", "open_direct", "request"]
