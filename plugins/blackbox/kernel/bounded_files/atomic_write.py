@@ -11,6 +11,8 @@ Usage::
     atomic_write(path, json.dumps(state))              # a plain file
     atomic_write(path, text, mode=0o600)               # a secret: created 0600, never world-readable
     atomic_write(path, text, mode=0o600, durable=True) # …and on the disk before the rename (fsync)
+    if not create_once(key_path, pem):                 # a key: written whole, never over an existing one
+        ...                                            # another process made it first: read theirs
 """
 
 from __future__ import annotations
@@ -49,3 +51,31 @@ def atomic_write(path: Path, text: str | bytes, *, mode: Optional[int] = None, d
         with contextlib.suppress(OSError):
             os.unlink(tmp)
         raise
+
+
+def create_once(path: Path, data: bytes, *, mode: int = 0o600) -> bool:
+    """Create *path* holding *data* — whole, on the disk, and only if it does not exist yet.
+
+    For a secret made on first use (a signing key, an index key). The bytes go to a private
+    temp file (*mode* from the first byte, fsynced), which is then hard-linked to *path*: the
+    link refuses to replace an existing file, and a crash at any point leaves either no file or
+    the complete one — never an empty key. Returns False when *path* already exists (it is
+    left as it is: the caller reads it). Parent folders are created.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # Unique per creator (process AND thread), so concurrent first uses never collide.
+    tmp = path.with_name(f"{path.name}.tmp.{os.getpid()}.{secrets.token_hex(8)}")
+    descriptor = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
+    try:
+        try:
+            os.write(descriptor, data)
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        os.link(tmp, path)   # refuses to overwrite an existing file
+    except FileExistsError:
+        return False
+    finally:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+    return True

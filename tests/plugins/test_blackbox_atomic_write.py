@@ -238,3 +238,62 @@ def test_a_lock_file_that_cannot_be_opened_is_an_error_for_the_caller_to_decide(
     with pytest.raises(OSError):
         with file_lock(tmp_path / "in-the-way" / "work.lock"):
             pass
+
+
+# --- create a secret file once (kernel/bounded_files.create_once) ---
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits")
+def test_a_new_secret_is_written_whole_private_and_leaves_no_temp_file(tmp_path):
+    from plugins.blackbox.kernel.bounded_files import create_once
+    target = tmp_path / "deep" / "key.pem"
+
+    assert create_once(target, b"the key") is True
+
+    assert target.read_bytes() == b"the key" and stat.S_IMODE(target.stat().st_mode) == 0o600
+    assert [p.name for p in target.parent.iterdir()] == ["key.pem"]
+
+
+def test_an_existing_secret_is_never_replaced(tmp_path):
+    from plugins.blackbox.kernel.bounded_files import create_once
+    target = tmp_path / "key.pem"
+    create_once(target, b"first")
+
+    assert create_once(target, b"second") is False
+
+    assert target.read_bytes() == b"first"
+    assert not [p.name for p in tmp_path.iterdir() if ".tmp." in p.name]
+
+
+def test_a_crash_while_writing_leaves_no_file_rather_than_an_empty_one(tmp_path, monkeypatch):
+    from plugins.blackbox.kernel.bounded_files import create_once
+    target = tmp_path / "key.pem"
+
+    def crash(fd, data):
+        raise OSError("power cut")
+    monkeypatch.setattr(os, "write", crash)
+
+    with pytest.raises(OSError):
+        create_once(target, b"the key")
+
+    assert not target.exists()
+    assert not [p.name for p in tmp_path.iterdir() if ".tmp." in p.name]
+
+
+def test_the_reputation_index_key_is_never_left_empty_and_two_creators_agree(tmp_path, monkeypatch):
+    """The old creation opened the key file, then wrote: a crash in between left an empty
+    file that read as malformed for good, and the reputation ledger could never be saved."""
+    from plugins.blackbox.community.reputation import sealed_index
+    path = tmp_path / "index.key"
+    real_write = os.write
+
+    def crash(fd, data):
+        raise OSError("power cut")
+    monkeypatch.setattr(os, "write", crash)
+    with pytest.raises(OSError):
+        sealed_index.load_or_create_key(path)
+    assert not path.exists()                        # nothing half-made: the next use starts clean
+
+    monkeypatch.setattr(os, "write", real_write)
+    first = sealed_index.load_or_create_key(path)
+    assert first is not None and len(first) == 32
+    assert sealed_index.load_or_create_key(path) == first

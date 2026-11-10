@@ -12,6 +12,7 @@ import re
 from pathlib import Path
 from typing import Any, Dict, Optional
 from ..kernel import constants
+from ..kernel.bounded_files import atomic_write
 from . import compiler
 from . import safe_regex
 from . import row_adapters
@@ -119,11 +120,7 @@ def _restore_live_scope(rs: compiler.Ruleset, data: dict[str, Any]) -> None:
 
 def _write_cache(rs: compiler.Ruleset) -> None:
     try:
-        home = constants.blackbox_home()
-        home.mkdir(parents=True, exist_ok=True)
-        tmp = _cache_path().with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(_serialize(rs)), encoding="utf-8")
-        tmp.replace(_cache_path())
+        atomic_write(_cache_path(), json.dumps(_serialize(rs)))
     except Exception as exc:  # pragma: no cover - fail open
         logger.debug("blackbox: ruleset cache write failed: %s", exc)
 
