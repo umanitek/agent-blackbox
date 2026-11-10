@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from ..kernel import yaml_files
+from ..kernel.config import load_blackbox_config
 from . import declined
 from . import hermes_homes
 from . import openclaw_bridge
@@ -36,21 +37,35 @@ logger = logging.getLogger(__name__)
 
 
 def attach_all(*, hermes: bool = True, openclaw: bool = True, dry_run: bool = False,
-               explicit: bool = False) -> dict[str, Any]:
-    """Attach Blackbox to every discovered target. Returns a combined report.
+               explicit: bool = False, auto_attach: bool | None = None) -> dict[str, Any]:
+    """Attach Blackbox to the discovered targets this call may touch. Returns a combined report.
 
-    An automatic sweep (the default) skips targets the operator switched off
-    (:mod:`.declined`); ``explicit=True`` — the operator's own ``blackbox attach`` —
-    attaches them too, which also clears their switch-off."""
+    * ``explicit=True`` — the operator's own ``blackbox attach`` — attaches every target,
+      which also clears a switch-off (:mod:`.declined`).
+    * ``dry_run=True`` reports every target not switched off, and writes nothing.
+    * Otherwise this is an AUTOMATIC sweep and asks :func:`automatic_targets` (a full pass):
+      with ``auto_attach`` off (the default) only targets already attached are refreshed and
+      nothing new is joined (KI-492: ``blackbox dashboard`` runs at every login and used to
+      attach every agent on the machine). *auto_attach* defaults to the saved setting.
+    """
     report: dict[str, Any] = {"hermes": [], "openclaw": [], "dry_run": dry_run}
+    targets: list[Target] = []
     if hermes:
-        for home in hermes_homes.discover_hermes_homes():
-            if explicit or not declined.is_declined("hermes", home):
-                report["hermes"].append(hermes_homes.attach_hermes(home, dry_run=dry_run))
+        targets += [("hermes", home) for home in hermes_homes.discover_hermes_homes()]
     if openclaw:
-        for ws in openclaw_discovery.discover_openclaw_workspaces():
-            if explicit or not declined.is_declined("openclaw", ws):
-                report["openclaw"].append(openclaw_bridge.attach_openclaw(ws, dry_run=dry_run))
+        targets += [("openclaw", workspace) for workspace in openclaw_discovery.discover_openclaw_workspaces()]
+    if explicit:
+        chosen = targets
+    elif dry_run:
+        chosen = [target for target in targets if not declined.is_declined(*target)]
+    else:
+        if auto_attach is None:
+            auto_attach = load_blackbox_config().auto_attach
+        allowed = automatic_targets(targets, (), reconcile=True, auto_attach=auto_attach)
+        chosen = [target for target in targets if target in allowed]
+    attach_one = {"hermes": hermes_homes.attach_hermes, "openclaw": openclaw_bridge.attach_openclaw}
+    for kind, path in chosen:
+        report[kind].append(attach_one[kind](path, dry_run=dry_run))
     report["count"] = _protected_count(report)
     return report
 

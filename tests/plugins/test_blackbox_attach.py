@@ -482,7 +482,7 @@ def test_detach_openclaw_removes_block(fake_env):
 
 
 def test_attach_all_reports_targets(fake_env):
-    report = attach.attach_all()
+    report = attach.attach_all(auto_attach=True)   # the opted-in sweep joins every target
     assert report["count"] >= 2  # at least default home + openclaw ws
     assert all(row["ok"] for row in report["hermes"])
     assert all(row["ok"] for row in report["openclaw"])
@@ -614,12 +614,12 @@ def _protected(home):
 def test_a_switched_off_hermes_home_is_skipped_by_the_automatic_sweep(fake_env, monkeypatch, tmp_path):
     monkeypatch.setenv("BLACKBOX_HOME", str(tmp_path / "bb"))
     profile = fake_env["profile"]
-    attach.attach_all(openclaw=False)
+    attach.attach_all(openclaw=False, auto_attach=True)
     assert _protected(profile)
 
     attach.detach_hermes(profile)
     assert attach.is_declined("hermes", profile)
-    attach.attach_all(openclaw=False)              # the timer's sweep
+    attach.attach_all(openclaw=False, auto_attach=True)   # the timer's sweep
 
     assert not _protected(profile)
     assert _protected(fake_env["hermes_default"])  # the others are still kept protected
@@ -863,3 +863,41 @@ def test_the_chat_command_dashboard_and_agent_list_share_one_profile_name():
 
     assert chat_command._BLACKBOX_CHAT_PROFILE == constants.BLACKBOX_CHAT_PROFILE
     assert server._BLACKBOX_PROFILE == constants.BLACKBOX_CHAT_PROFILE
+
+
+# --- KI-492: an automatic sweep honours auto_attach itself (default off) ---
+
+def test_an_automatic_sweep_joins_nothing_new_by_default(fake_env, monkeypatch, tmp_path):
+    monkeypatch.setenv("BLACKBOX_HOME", str(tmp_path / "bb"))
+
+    report = attach.attach_all()   # what `blackbox dashboard` runs at every login
+
+    assert report["hermes"] == [] and report["openclaw"] == []
+    assert not (fake_env["profile"] / "config.yaml").exists() and not _protected(fake_env["hermes_default"])
+
+
+def test_an_automatic_sweep_refreshes_only_what_is_already_attached(fake_env, monkeypatch, tmp_path):
+    monkeypatch.setenv("BLACKBOX_HOME", str(tmp_path / "bb"))
+    attach.attach_hermes(fake_env["hermes_default"])   # the operator named this one
+
+    report = attach.attach_all()
+
+    assert [row["target"] for row in report["hermes"]] == [str(fake_env["hermes_default"])]
+    assert not (fake_env["profile"] / "config.yaml").exists()
+
+
+def test_the_saved_auto_attach_setting_opts_the_sweep_in(fake_env, monkeypatch, tmp_path):
+    monkeypatch.setenv("BLACKBOX_HOME", str(tmp_path / "bb"))
+    monkeypatch.setenv("BLACKBOX_AUTO_ATTACH", "true")
+
+    attach.attach_all(openclaw=False)
+
+    assert _protected(fake_env["profile"]) and _protected(fake_env["hermes_default"])
+
+
+def test_a_dry_run_still_lists_every_target(fake_env, monkeypatch, tmp_path):
+    monkeypatch.setenv("BLACKBOX_HOME", str(tmp_path / "bb"))
+
+    report = attach.attach_all(dry_run=True)
+
+    assert len(report["hermes"]) >= 2 and not (fake_env["profile"] / "config.yaml").exists()
