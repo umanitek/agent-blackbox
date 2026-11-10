@@ -35,7 +35,7 @@ from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from ..kernel import constants, rdf_terms, signing, sparql_text
+from ..kernel import constants, rdf_terms, signing, sparql_text, threat_ids
 from ..kernel.dkg_client import extract_binding
 from ..kernel.signing import KeyManifest
 
@@ -50,7 +50,6 @@ REGISTRIES = ("skill", "mcp")
 #: ≤20 new disables a version may add (plan §06). Wider needs are versions.
 MAX_ENTRIES = 40
 _DAY = re.compile(r"\d{4}-\d{2}-\d{2}")
-_HASH = re.compile(r"[0-9a-f]{64}")
 _NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._@/:-]{0,127}")
 
 
@@ -111,7 +110,7 @@ class KillEntry:
 
     def valid(self) -> bool:
         return (self.registry in REGISTRIES and bool(_NAME.fullmatch(self.identifier) or self.identifier == "*")
-                and (not self.artifact_hash or bool(_HASH.fullmatch(self.artifact_hash)))
+                and (not self.artifact_hash or threat_ids.is_hex64(self.artifact_hash))
                 and self.reason in constants.REVOCATION_REASONS + ("malware", "compromised", "impersonation")
                 and (not self.publisher or bool(_NAME.fullmatch(self.publisher)))
                 and (not self.tool_prefix or (len(self.tool_prefix) >= 3 and bool(_NAME.fullmatch(self.tool_prefix))))

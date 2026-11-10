@@ -56,7 +56,6 @@ REDUCTION_SCHEMA = frozenset({"identifier", "reason", "day"})
 
 _DAY = re.compile(r"\d{4}-\d{2}-\d{2}")
 _ADDRESS = re.compile(r"0x[0-9a-f]{40}")
-_KEY_HEX = re.compile(r"[0-9a-f]{64}")
 _LANES = frozenset({"1", "2", "3", "4", "5"})
 
 #: The reader variable carrying the envelope.
@@ -172,11 +171,11 @@ def _backlog(extras: Mapping[str, str]) -> Optional[dict[str, str]]:
 
 
 def _heartbeat(extras: Mapping[str, str]) -> Optional[dict[str, str]]:
-    return dict(extras) if set(extras) == {"key"} and _KEY_HEX.fullmatch(extras["key"]) else None
+    return dict(extras) if set(extras) == {"key"} and threat_ids.is_hex64(extras["key"]) else None
 
 
 def _away(extras: Mapping[str, str]) -> Optional[dict[str, str]]:
-    ok = (set(extras) == {"key", "from", "until"} and _KEY_HEX.fullmatch(extras["key"])
+    ok = (set(extras) == {"key", "from", "until"} and threat_ids.is_hex64(extras["key"])
           and _DAY.fullmatch(extras["from"]) and _DAY.fullmatch(extras["until"]))
     return dict(extras) if ok else None
 
@@ -215,7 +214,7 @@ _VALIDATORS: dict[CuratorStatement, Callable[[Mapping[str, str]], Optional[dict[
 
 def _identifier_ok(kind: CuratorStatement, identifier: str) -> bool:
     if kind is CuratorStatement.COUNTED_AUTHORS:   # "author:<reporter key>" — the signer, never a claimed address
-        return identifier.startswith("author:") and bool(_KEY_HEX.fullmatch(identifier[len("author:"):]))
+        return identifier.startswith("author:") and threat_ids.is_hex64(identifier[len("author:"):])
     if kind in (CuratorStatement.BACKLOG, CuratorStatement.AWAY, CuratorStatement.PAUSE, CuratorStatement.HEARTBEAT):
         return identifier == "curator"
     try:

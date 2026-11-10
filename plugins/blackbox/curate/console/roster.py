@@ -42,6 +42,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Dict, List, Mapping, Optional, Tuple
 
+from ...kernel import threat_ids
 from ...kernel.bounded_files import atomic_write
 from ...kernel.signing import key_manifest
 from ...kernel.signing import KeyManifest
@@ -57,7 +58,6 @@ ALARM_DAYS_LEFT = 5
 MAX_PENDING_JOINS = 32
 MAX_DECIDED_JOINS = 64
 MAX_SIGNED_LISTS = 50
-_KEY_HEX = re.compile(r"[0-9a-f]{64}")
 _DAY = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 
@@ -125,7 +125,7 @@ class JoinRequest:
     def new(cls, curator_key: str, operator: str, self_test: SelfTestReport, now: float) -> JoinRequest:
         """Bounded at the boundary (:class:`RosterError`); the full K2 operator
         rules run when the list naming it is built (:func:`with_curator`)."""
-        if not _KEY_HEX.fullmatch(curator_key):
+        if not threat_ids.is_hex64(curator_key):
             raise RosterError("the curator key must be an Ed25519 public key (64 lower-case hex)")
         if not operator.strip() or len(operator) > key_manifest.MAX_OPERATOR_LENGTH:
             raise RosterError(f"the operator must be a name of 1-{key_manifest.MAX_OPERATOR_LENGTH} characters")

@@ -865,3 +865,39 @@ if __name__ == "__main__":
             (_fixtures.FIXTURES_DIR / _name).write_text(_text, encoding="utf-8")
     else:
         sys.exit("usage: python -m tests.plugins.test_blackbox_lab_evidence --write")
+
+
+# --- the one "64 lowercase hex characters" check (kernel.threat_ids.is_hex64) ---
+
+def test_exactly_64_lowercase_hex_characters_and_nothing_else():
+    from plugins.blackbox.kernel import threat_ids
+    good = "0123456789abcdef" * 4
+
+    assert threat_ids.is_hex64(good)
+    for bad in (good + "\n", "\n" + good, good + " ", good[:-1], good + "0", good.upper(), "0x" + good[2:],
+                good[:-1] + "g", "", None, 64, good.encode("ascii")):
+        assert not threat_ids.is_hex64(bad), repr(bad)
+
+
+def test_a_lab_digest_or_job_key_with_a_trailing_newline_is_refused():
+    """The lab's own check was written `^…$` with `match`, where `$` also matches before a
+    final newline: a digest or job key read back from a log line with its newline passed."""
+    from plugins.blackbox.curate.lab import evidence_schema
+    digest = "ab" * 32
+    key = f"{digest}:2:{digest}"
+
+    assert evidence_schema.is_sha256(digest) and evidence_schema.is_job_key(key)
+    assert not evidence_schema.is_sha256(digest + "\n")
+    assert not evidence_schema.is_job_key(key + "\n")
+    assert not evidence_schema.is_job_key("x" + key)
+
+
+def test_the_labs_own_copy_of_the_check_agrees_with_the_kernels():
+    """evidence_schema is standard-library only (the lab runner loads it alone), so it keeps a
+    copy of the check; the two must never drift apart."""
+    from plugins.blackbox.curate.lab import evidence_schema
+    from plugins.blackbox.kernel import threat_ids
+    good = "0123456789abcdef" * 4
+
+    for value in (good, good + "\n", "\n" + good, good.upper(), good[:-1], good + "0", "0x" + good[2:], "", None, 64):
+        assert evidence_schema.is_sha256(value) is threat_ids.is_hex64(value), repr(value)

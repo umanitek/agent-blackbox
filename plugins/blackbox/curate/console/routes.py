@@ -33,6 +33,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone, UTC
 from typing import Any, Callable, Dict, Optional
 
+from ...kernel import threat_ids
 from ...kernel.signing import key_manifest, trust_anchors
 from ...kernel.signing import Authority
 from .. import publishing
@@ -47,7 +48,7 @@ from .roster import (ConsoleState, JoinRequest, JoinState, RosterError, SelfTest
 
 MAX_PASSPHRASE_LENGTH = 1024
 _SECOND_FACTOR_PATTERN = r"^[0-9]{6}$"
-_KEY_PATTERN = r"^[0-9a-f]{64}$"
+_KEY_PATTERN = rf"^{threat_ids.HEX64_PATTERN}$"
 
 
 def _default_signer(ctx: CurateContext) -> RootSigner:

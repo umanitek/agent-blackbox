@@ -84,7 +84,6 @@ PROMOTABLE_PREFIXES = ("dep:", "ioc:", "skill:", "fileaccess:")
 #: The member-asset payload's closed key set.
 PAYLOAD_KEYS = frozenset({"identifier", "report", "reportDigest", "reporterKey", "severity", "day"})
 
-_DIGEST = _KEY = re.compile(r"[0-9a-f]{64}")
 _DAY = re.compile(r"\d{4}-\d{2}-\d{2}")
 _REPORT_SUBJECT = re.compile(r"urn:guardian:report:(0x[0-9a-f]{40}):[0-9a-f]{16}")
 _MAX_IDENTIFIER_CHARS = 512
@@ -166,9 +165,9 @@ def reference_refusal(payload: Mapping[str, str]) -> str:
     match = _REPORT_SUBJECT.fullmatch(report)
     if match is None or threat_ids.report_uri(identifier, match.group(1)) != report:
         return "the report is not a reporter's own report of this identifier"
-    if not _DIGEST.fullmatch(str(payload.get("reportDigest") or "")):
+    if not threat_ids.is_hex64(str(payload.get("reportDigest") or "")):
         return "the report digest is 64 lower-case hex characters"
-    if not _KEY.fullmatch(str(payload.get("reporterKey") or "")):
+    if not threat_ids.is_hex64(str(payload.get("reporterKey") or "")):
         return "the reporter key is 64 lower-case hex characters"
     return ""
 

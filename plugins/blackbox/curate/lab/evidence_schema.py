@@ -35,9 +35,12 @@ MAX_HOST_CHARS = 253
 #: Lab levels: 1–2 on Lab 1, 3 via urlscan, 4 in a microVM on the KVM host.
 LEVELS = (1, 2, 3, 4)
 
-_SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _HOSTNAME = re.compile(r"^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$")
-_JOB_KEY = re.compile(r"^([0-9a-f]{64}):([1-4]):([0-9a-f]{64})$")
+#: 64 lowercase hex characters. This file is loaded on its own by the lab runner (standard
+#: library only), so it cannot import the kernel's ``threat_ids.is_hex64``; a test holds the two
+#: to the same answers. Used with ``fullmatch``: ``^…$`` with ``match`` let a trailing newline pass.
+_SHA256 = re.compile(r"[0-9a-f]{64}")
+_JOB_KEY = re.compile(r"([0-9a-f]{64}):([1-4]):([0-9a-f]{64})")
 
 
 class EvidenceError(ValueError):
@@ -110,19 +113,19 @@ def job_key(threat_digest: str, level: int, image_sha256: str) -> str:
     """``"<threat digest>:<level>:<image hash>"`` — the one key a lab job and its
     evidence share. Both hashes are lowercase sha256 hex."""
     key = f"{threat_digest}:{level}:{image_sha256}"
-    if not _JOB_KEY.match(key):
+    if not _JOB_KEY.fullmatch(key):
         raise EvidenceError("job key needs two sha256 hex digests and a level 1-4")
     return key
 
 
 def is_sha256(value: object) -> bool:
     """Whether *value* is lowercase sha256 hex."""
-    return isinstance(value, str) and bool(_SHA256.match(value))
+    return isinstance(value, str) and _SHA256.fullmatch(value) is not None
 
 
 def is_job_key(value: object) -> bool:
     """Whether *value* has the shape :func:`job_key` builds."""
-    return isinstance(value, str) and bool(_JOB_KEY.match(value))
+    return isinstance(value, str) and bool(_JOB_KEY.fullmatch(value))
 
 
 def validate_evidence(mapping: Mapping[str, Any]) -> Evidence:
@@ -137,7 +140,7 @@ def validate_evidence(mapping: Mapping[str, Any]) -> Evidence:
     if unknown or missing:
         raise EvidenceError(f"evidence fields: unknown {sorted(unknown)}, missing {sorted(missing)}")
     key = _text(mapping["job_key"], "job_key")
-    matched = _JOB_KEY.match(key)
+    matched = _JOB_KEY.fullmatch(key)
     if not matched:
         raise EvidenceError("job_key is not '<sha256>:<level>:<sha256>'")
     image = _sha256(mapping["image_sha256"], "image_sha256")

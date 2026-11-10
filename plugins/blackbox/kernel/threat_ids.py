@@ -21,6 +21,20 @@ from typing import Optional, Tuple
 # ---------------------------------------------------------------------------
 
 
+#: 64 lowercase hex characters — what a SHA-256 digest and an Ed25519 public key both look like.
+HEX64_PATTERN = r"[0-9a-f]{64}"
+_HEX64 = re.compile(HEX64_PATTERN)
+
+
+def is_hex64(value: object) -> bool:
+    """Whether *value* is exactly 64 lowercase hex characters (a sha256 digest, or a signing
+    key as Blackbox writes it) and nothing else — no upper case, no ``0x``, no trailing newline.
+
+    THE check: it was spelled out in ten places, and the one written ``^…$`` with ``match``
+    accepted a trailing newline. Usage: ``if not threat_ids.is_hex64(digest): refuse``."""
+    return isinstance(value, str) and _HEX64.fullmatch(value) is not None
+
+
 def stable_hash(value: str, length: int = 24) -> str:
     """SHA-256 hex digest of *value*, truncated to *length* chars."""
     return hashlib.sha256(value.encode("utf-8")).hexdigest()[:length]

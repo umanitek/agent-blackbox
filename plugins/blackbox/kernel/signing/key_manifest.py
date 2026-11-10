@@ -55,6 +55,7 @@ from typing import Dict, FrozenSet, Iterable, Mapping, Optional, Tuple
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+from .. import threat_ids
 from . import envelope as signing
 from .trust_anchors import RootPins
 
@@ -81,8 +82,6 @@ MANIFEST_TIME_LOCK_DAYS = 0
 THRESHOLD_FLOOR_BY_OPERATORS: Mapping[int, int] = {2: 2, 3: 2, 4: 2, 5: 3, 6: 3, 7: 4, 8: 4}
 #: The longest operator name (an organisation, e.g. "Umoja Ark").
 MAX_OPERATOR_LENGTH = 64
-_KEY_HEX = re.compile(r"[0-9a-f]{64}")
-_SHA256_HEX = re.compile(r"[0-9a-f]{64}")
 
 
 class KeyManifestError(ValueError):
@@ -238,7 +237,7 @@ def _validate(manifest: KeyManifest) -> None:
         raise KeyManifestError("the break-glass key must be one of the curator keys")
     if manifest.issued_day and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", manifest.issued_day):
         raise KeyManifestError("issued_day must be a UTC day (YYYY-MM-DD)")
-    if not all(isinstance(k, str) and _KEY_HEX.fullmatch(k) for k in keys):
+    if not all(threat_ids.is_hex64(k) for k in keys):
         raise KeyManifestError("curator keys must be Ed25519 public keys (64 lower-case hex)")
     if len(set(keys)) != len(keys) or tuple(sorted(keys)) != keys:
         raise KeyManifestError("curator keys must be distinct and sorted")
@@ -250,7 +249,7 @@ def _validate(manifest: KeyManifest) -> None:
         raise KeyManifestError("root_epoch must be >= 0 and version >= 1")
     if not (manifest.environment and manifest.graph and manifest.promotion_author):
         raise KeyManifestError("environment, graph and promotion author are required")
-    if not _SHA256_HEX.fullmatch(manifest.legacy_assets_hash):
+    if not threat_ids.is_hex64(manifest.legacy_assets_hash):
         raise KeyManifestError("legacy_assets_hash must be a sha256 hex digest")
 
 
