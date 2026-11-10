@@ -901,3 +901,24 @@ def test_the_labs_own_copy_of_the_check_agrees_with_the_kernels():
 
     for value in (good, good + "\n", "\n" + good, good.upper(), good[:-1], good + "0", "0x" + good[2:], "", None, 64):
         assert evidence_schema.is_sha256(value) is threat_ids.is_hex64(value), repr(value)
+
+
+# --- the one spelling of the JSON that is hashed or signed (kernel.signing.canonical_json) ---
+
+def test_canonical_json_is_sorted_compact_ascii_and_the_same_for_the_same_value():
+    from plugins.blackbox.kernel import signing
+
+    assert signing.canonical_json({"b": 1, "a": [1, {"d": 2, "c": "café"}]}) == '{"a":[1,{"c":"caf\\u00e9","d":2}],"b":1}'
+    assert signing.canonical_json({"b": 1, "a": 2}) == signing.canonical_json({"a": 2, "b": 1})
+
+
+def test_the_envelope_the_kill_list_and_the_lab_evidence_all_write_that_spelling():
+    """The lab's schema file is standard-library only, so it spells the rule itself: held equal here."""
+    import json
+    from plugins.blackbox.curate.lab import evidence_schema
+    from plugins.blackbox.kernel import signing
+    value = {"z": ["café", {"y": 1, "x": None}], "a": True}
+
+    assert signing.canonical_json(value) == json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    source = (__import__("pathlib").Path(evidence_schema.__file__)).read_text(encoding="utf-8")
+    assert 'json.dumps(to_mapping(evidence), sort_keys=True, separators=(",", ":"))' in source

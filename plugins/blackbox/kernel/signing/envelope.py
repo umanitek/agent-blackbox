@@ -109,7 +109,16 @@ class SignedEnvelope:
         """The envelope as compact JSON — the form stored in the graph."""
         document = _domain_document(self)
         document["sigs"] = [{"signer": s.signer, "sig": s.value} for s in self.signatures]
-        return json.dumps(document, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+        return canonical_json(document)
+
+
+def canonical_json(value: Any) -> str:
+    """*value* as THE text that is hashed or signed: keys sorted, no spaces, ASCII only (anything
+    else escaped). The same value is the same bytes on every node — so this spelling is
+    written once; a digest or a signature made from another spelling would not verify.
+
+    Usage: ``hashlib.sha256(canonical_json(payload).encode("ascii"))``."""
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
 
 
 def _domain_document(envelope: SignedEnvelope) -> dict[str, Any]:
@@ -128,8 +137,7 @@ def _domain_document(envelope: SignedEnvelope) -> dict[str, Any]:
 
 def _signed_message(envelope: SignedEnvelope) -> bytes:
     """The exact bytes every signature covers: domain tag + canonical JSON."""
-    body = json.dumps(_domain_document(envelope), sort_keys=True, separators=(",", ":"), ensure_ascii=True)
-    return _DOMAIN_TAG + body.encode("ascii")
+    return _DOMAIN_TAG + canonical_json(_domain_document(envelope)).encode("ascii")
 
 
 def content_id(envelope: SignedEnvelope) -> str:

@@ -129,7 +129,7 @@ class KillList:
 
     def to_payload(self) -> dict[str, str]:
         return {"version": str(self.version), "day": self.day,
-                "entries": json.dumps([e.as_json() for e in self.entries], sort_keys=True, separators=(",", ":"))}
+                "entries": signing.canonical_json([e.as_json() for e in self.entries])}
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, str], sequence: int) -> Optional[KillList]:

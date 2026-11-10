@@ -207,7 +207,7 @@ def _sign_after_consent(ctx: CurateContext, store: ProposalStore, payloads: list
                         args: argparse.Namespace, *, review: list[str]) -> int:
     """Show *payloads* and their code; with the matching code, sign each one
     (first signature), store it as a proposal and send it when ``--to`` names a peer."""
-    content = json.dumps(payloads, sort_keys=True, separators=(",", ":"))
+    content = signing.canonical_json(payloads)
     ledger = consent.ConsentLedger()
     code = ledger.show(content, f"{CORRECTION_STATEMENT} × {len(payloads)} · graph {ctx.verified_graph}")
     for line in review:
