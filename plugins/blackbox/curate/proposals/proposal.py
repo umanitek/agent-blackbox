@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import secrets
 import threading
 import time
@@ -129,6 +130,10 @@ class Proposal:
             raise ProposalError(f"malformed proposal: {exc}") from exc
 
 
+#: What :meth:`Proposal.new` produces: ``threat_ids.stable_hash(envelope, 16)``.
+_PROPOSAL_ID = re.compile(r"[0-9a-f]{16}")
+
+
 class ProposalStore:
     """The curator's private proposals, one JSON file each. One lock; atomic writes."""
 
@@ -136,15 +141,24 @@ class ProposalStore:
         self._dir = directory or (keys.curate_home() / "proposals")
         self._lock = threading.Lock()
 
+    def _path(self, proposal_id: str) -> Optional[Path]:
+        """The file for *proposal_id*, or None when it is not an id (16 hex characters). The id
+        becomes a file name and can arrive from another node: nothing else may name a path (KI-494)."""
+        if not isinstance(proposal_id, str) or not _PROPOSAL_ID.fullmatch(proposal_id):
+            return None
+        return self._dir / f"{proposal_id}.json"
+
     def save(self, proposal: Proposal) -> None:
+        target = self._path(proposal.id)
+        if target is None:
+            raise ProposalError("a proposal id is 16 hex characters; not saved")
         with self._lock:
             self._dir.mkdir(parents=True, exist_ok=True)
-            target = self._dir / f"{proposal.id}.json"
             atomic_write(target, proposal.to_json())
 
     def get(self, proposal_id: str) -> Optional[Proposal]:
-        path = self._dir / f"{proposal_id}.json"
-        if not path.is_file():
+        path = self._path(proposal_id)
+        if path is None or not path.is_file():
             return None
         return Proposal.from_json(path.read_text(encoding="utf-8-sig"))
 

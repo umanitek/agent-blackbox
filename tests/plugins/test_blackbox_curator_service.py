@@ -380,6 +380,43 @@ def test_messages_that_are_not_a_curators_proposal_are_dropped(svc):
     assert [p.id for p in svc.proposals("B") if p.kind == Kind.REJECTION.value] == [genuine.id]
 
 
+def test_curate_inbox_admits_exactly_what_the_beat_admits(svc, monkeypatch, capsys):
+    """KI-494: the command used to save every received proposal unchecked, over one already held."""
+    import argparse
+    from plugins.blackbox.curate import commands
+    svc.report(PKG)
+    genuine = _human_proposal(svc, Kind.REJECTION, PKG, {"reason": "benign"})
+    outsider = Ed25519PrivateKey.generate()                              # gitleaks:allow — a throwaway test key
+    with svc.team.a:
+        manifest = svc.team.ctx(svc.team.a).manifest
+    forged = signing.sign(outsider, statement_type=Kind.REJECTION.value, environment=manifest.environment, graph=GRAPH,
+                          payload={"identifier": PKG, "day": TODAY, "reason": "benign"}, chain=manifest.chain,
+                          root_epoch=manifest.root_epoch, sequence=9)
+    outsiders = Proposal.new(Kind.REJECTION.value, PKG, forged, GRAPH, checks={}).transition(ProposalState.PROPOSED)
+    path_shaped = dataclasses.replace(genuine, id="../../../escaped")
+    node = svc.team.reader.node
+    for proposal in (outsiders, path_shaped):
+        node.request("POST", "/api/chat", {"to": "B", "text": transport.PROPOSAL_PREFIX + proposal.to_json()})
+    with svc.team.b:
+        monkeypatch.setattr(commands, "_ctx", lambda args: svc.team.ctx(svc.team.b))
+        assert commands._inbox(argparse.Namespace()) == 0
+        held = {p.id for p in ProposalStore().all()}
+        escaped = list(keys.curate_home().parent.rglob("escaped.json"))
+    assert genuine.id in held and outsiders.id not in held and escaped == []
+    assert "ignored 2 message(s) that no curator signed" in capsys.readouterr().out
+
+
+def test_a_proposal_id_that_is_not_an_id_never_names_a_file(tmp_path):
+    from plugins.blackbox.curate.proposals.proposal import ProposalError
+    store = ProposalStore(tmp_path / "curate" / "proposals")
+    crafted = Proposal(id="../../escaped", kind="k", identifier="i", graph="g", envelope="e", checks={},
+                       created=0.0, updated=0.0)
+    with pytest.raises(ProposalError):
+        store.save(crafted)
+    assert store.get("../../escaped") is None and store.get("") is None
+    assert list(tmp_path.rglob("*.json")) == []
+
+
 # ------------------------------------------------------------------ nothing is left half-done
 
 

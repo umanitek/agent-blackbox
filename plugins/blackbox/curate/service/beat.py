@@ -165,12 +165,10 @@ class Beat:
     # -- 2 read --------------------------------------------------------------
 
     def _read(self, run: Run) -> None:
-        for proposal in transport.receive_proposals(run.ctx.client, transport.InboxCursor()):
-            if not inbox.from_a_curator(run.ctx.manifest, proposal):
-                run.dropped += 1
-            elif run.store.get(proposal.id) is None:   # never reset a proposal this node already acted on
-                run.store.save(proposal)
-                run.received += 1
+        saved, dropped = inbox.admit(run.ctx.manifest, run.store,
+                                     transport.receive_proposals(run.ctx.client, transport.InboxCursor()))
+        run.received += len(saved)
+        run.dropped += dropped
 
     # -- 3 co-sign -----------------------------------------------------------
 

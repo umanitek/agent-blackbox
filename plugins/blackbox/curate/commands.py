@@ -26,6 +26,7 @@ from ..kernel.signing import Authority
 from ..kernel.signing import CuratorStatement
 from . import console, dossier, handoff, intake, keys, node_ui_views, promotion, publishing, queue, verbs, watch
 from .proposals import transport
+from .service import inbox
 from .ladder import outcomes
 from .upkeep import heartbeat, published
 from .context import CurateContext, build_context, verified_identifiers
@@ -218,11 +219,13 @@ def _propose_promotion(ctx: CurateContext, store: ProposalStore, args: argparse.
 def _inbox(args: argparse.Namespace) -> int:
     ctx = _ctx(args)
     store = ProposalStore()
-    received = transport.receive_proposals(ctx.client, transport.InboxCursor())
-    for proposal in received:
-        store.save(proposal)
+    # The same admission as the service beat: only what a curator signed, never over one already held.
+    saved, dropped = inbox.admit(ctx.manifest, store, transport.receive_proposals(ctx.client, transport.InboxCursor()))
+    for proposal in saved:
         print(f"received {proposal.id} ({proposal.kind} · {_term(proposal.identifier, 80)})")
-    if not received:
+    if dropped:
+        print(f"ignored {dropped} message(s) that no curator signed")
+    if not saved:
         print("no new proposals")
     return 0
 
