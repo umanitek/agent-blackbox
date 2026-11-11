@@ -142,6 +142,8 @@ that the two version fields agree.
 - **Desktop says the first sync is done only when verified rules have arrived.** Community reports that
   Blackbox can match against were counted as verified rules, so the setup page could call the first sync
   finished too early.
+- **A sync failure is no longer hidden by an older catch-up job.** The dashboard's sync activity read a
+  job time written in milliseconds as newer than the failure and dropped the failure's reason.
 
 ### Changed
 

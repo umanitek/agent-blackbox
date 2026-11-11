@@ -1156,3 +1156,17 @@ def test_new_retryable_failure_is_not_hidden_by_old_running_job():
                   "error": 'POST /api/shared-memory/catchup {"retryable":true,"errorCode":"DURABLE_CATCHUP_ALL_PEERS_FAILED"}'})
     assert activity["status"] == "waiting"
     assert activity["phase"] == "waiting-for-publisher-capacity"
+
+
+def test_an_older_job_stamped_in_milliseconds_never_hides_the_transfer_failure():
+    """current_transfer_error read times with float(): an ISO string became 0 and a DKG job's
+    epoch MILLISECONDS beat any seconds value, so an OLDER catch-up job hid the failure (and its
+    "publisher busy" reason) while catchup_supersedes_failure, beside it, said no. Both now read
+    times through sync_timing.sync_time."""
+    from plugins.blackbox.dashboard.sync_labels import current_transfer_error
+    failed_at = 1_800_000_000.0
+    transfer = {"status": "failed", "updated_at": failed_at, "error": "publisher busy"}
+    older_job = {"status": "running", "startedAt": int((failed_at - 60) * 1000)}   # milliseconds, a minute before
+    newer_job = {"status": "running", "startedAt": "2027-01-15T08:01:40+00:00"}    # ISO, after
+    assert current_transfer_error(transfer, older_job) == "publisher busy"
+    assert current_transfer_error(transfer, newer_job) == ""
