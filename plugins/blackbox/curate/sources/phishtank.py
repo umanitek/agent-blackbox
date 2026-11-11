@@ -53,10 +53,13 @@ class PhishTankSource:
         self._client = client or UrllibClient()
         self._key = key
 
+    def applies(self, identifier: str) -> bool:
+        return (threat_ids.parse_ioc_identifier(identifier) or ("", ""))[0] == "url"
+
     def check(self, identifier: str) -> SourceVerdict:
-        ioc_type, url = threat_ids.parse_ioc_identifier(identifier) or ("", "")
-        if ioc_type != "url":
+        if not self.applies(identifier):
             return SourceVerdict(Lookup.NOT_APPLICABLE, source=NAME)
+        _ioc_type, url = threat_ids.parse_ioc_identifier(identifier)
         app_key = self._key()
         if not app_key:
             return SourceVerdict(Lookup.UNAVAILABLE, source=NAME)

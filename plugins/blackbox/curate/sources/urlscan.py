@@ -132,6 +132,9 @@ class UrlscanSource:
         self._lock = threading.Lock()
         self._scans: dict[str, _Pending | UrlscanScan] = {}
 
+    def applies(self, identifier: str) -> bool:
+        return visit_url(identifier) is not None
+
     def check(self, identifier: str) -> SourceVerdict:
         url = visit_url(identifier)
         if url is None:

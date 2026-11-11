@@ -1219,3 +1219,53 @@ def test_the_registry_sources_all_get_a_recheck_and_osv_goes_by_id():
     rechecks = withdrawal.rechecks_for(sources.SOURCES, client=FakeOsv({}))
     assert set(rechecks) == {source.name for source in sources.SOURCES}
     assert rechecks["osv"](WITHDRAWN_DEP) is Lookup.UNAVAILABLE   # by id: the fake knows no advisory
+
+
+# --- a source that does not apply spends nothing --------------------------------------------------
+
+class UrlOnlySource(FakeSource):
+    """Applies to `ioc:url:` identifiers only, with ONE request per period."""
+
+    def __init__(self) -> None:
+        super().__init__(Lookup.CLEAN, name="url-only",
+                         terms=SourceTerms(citable=True, reuse_state=REUSE_CLEARED, limit_requests=1, limit_seconds=3600))
+
+    def applies(self, identifier: str) -> bool:
+        return identifier.startswith("ioc:url:")
+
+    def check(self, identifier: str) -> SourceVerdict:
+        if not self.applies(identifier):
+            return SourceVerdict(Lookup.NOT_APPLICABLE, source=self.name)
+        return super().check(identifier)
+
+
+def test_items_a_source_does_not_apply_to_leave_its_rate_limit_untouched(tmp_path):
+    """A source that does not apply used to take a token first: unrelated items drained it and the
+    item it does apply to read UNAVAILABLE ("could not tell"), blocking the lab and the policy."""
+    source = UrlOnlySource()
+    items = [_item("dep:npm:a@1.0.0", age=3), _item("dep:npm:b@1.0.0", age=2), _item("ioc:url:https://x.example/", age=1)]
+    results = _registry(tmp_path, source).lookup(items, LookupBudget(), today=TODAY)
+    statuses = {result.item.identifier: result.verdicts[0].status for result in results}
+    assert statuses["dep:npm:a@1.0.0"] is Lookup.NOT_APPLICABLE
+    assert statuses["ioc:url:https://x.example/"] is Lookup.CLEAN
+    assert source.asked == ["ioc:url:https://x.example/"]
+
+
+@pytest.mark.parametrize("identifier", ["dep:npm:a@1.0.0", "dep:npm:a@*", "ioc:domain:x.example", "ioc:url:https://x.example/",
+                                        "ioc:ip:203.0.113.7", "ioc:hash:" + "a" * 64, "ioc:hash:" + "b" * 32,
+                                        "ioc:wallet:0x" + "c" * 40, "skill:x@1", "injection:" + "d" * 16])
+def test_every_real_source_says_not_applicable_exactly_where_it_does_not_apply(identifier):
+    """`applies()` is the same rule `check()` uses, for every source (so skipping the token on it
+    never changes an answer). Checked without the network: a fake transport fails if asked."""
+    from plugins.blackbox.curate.sources import abusech, osv, phishtank, scamsniffer, urlscan
+
+    class NoNetwork:
+        def __getattr__(self, name):
+            raise AssertionError("no network")
+
+    for source in (abusech.UrlhausSource(NoNetwork()), abusech.ThreatFoxSource(NoNetwork()),
+                   abusech.MalwareBazaarSource(NoNetwork()), phishtank.PhishTankSource(NoNetwork(), key=lambda: None),
+                   scamsniffer.ScamSnifferSource(NoNetwork()), urlscan.UrlscanSource(NoNetwork(), key=lambda: None),
+                   osv.OsvSource(status=lambda *a: ("unavailable", None))):
+        if not source.applies(identifier):
+            assert source.check(identifier).status is Lookup.NOT_APPLICABLE, (source.name, identifier)

@@ -22,7 +22,7 @@ Usage::
 from __future__ import annotations
 
 from ...detection import osv
-from ..service.evidence import AdvisoryStatus, Lookup, own_check
+from ..service.evidence import AdvisoryStatus, Lookup, osv_applies, own_check
 from .protocol import REUSE_CLEARED, SourceTerms, SourceVerdict
 
 NAME = "osv"
@@ -37,6 +37,9 @@ class OsvSource:
 
     def __init__(self, status: AdvisoryStatus = osv.advisory_status) -> None:
         self._status = status
+
+    def applies(self, identifier: str) -> bool:
+        return osv_applies(identifier)
 
     def check(self, identifier: str) -> SourceVerdict:
         answer = own_check(identifier, self._status)

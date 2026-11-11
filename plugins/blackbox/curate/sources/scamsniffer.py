@@ -80,6 +80,9 @@ class ScamSnifferSource:
         self._snapshots: dict[str, _Snapshot] = {}
         self._failed_at: dict[str, float] = {}
 
+    def applies(self, identifier: str) -> bool:
+        return _lookup_target(identifier) is not None
+
     def check(self, identifier: str) -> SourceVerdict:
         target = _lookup_target(identifier)
         if target is None:

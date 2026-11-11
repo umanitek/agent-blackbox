@@ -77,6 +77,11 @@ class Source(Protocol):
     name: str
     terms: SourceTerms
 
+    def applies(self, identifier: str) -> bool:
+        """Whether this source can answer about *identifier* at all — from the identifier alone,
+        no network. :meth:`check` answers NOT_APPLICABLE exactly where this is False."""
+        ...
+
     def check(self, identifier: str) -> SourceVerdict: ...
 
 
@@ -111,6 +116,11 @@ class SourceRegistry:
                      for item in select_for_lookup(items, budget, today))
 
     def _ask(self, source: Source, identifier: str) -> SourceVerdict:
+        # Before the cache and the rate limit: an item a source cannot answer about spends none
+        # of its requests (they used to drain it, and the items it CAN answer read "could not tell").
+        applies = getattr(source, "applies", None)   # a source without it is asked about everything
+        if applies is not None and not applies(identifier):
+            return SourceVerdict(Lookup.NOT_APPLICABLE, source=source.name)
         if self._cache.is_not_listed(source.name, identifier):
             return SourceVerdict(Lookup.CLEAN, source=source.name)
         if not self._buckets[source.name].take():
