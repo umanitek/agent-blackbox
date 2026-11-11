@@ -53,9 +53,9 @@ PAUSE_SECONDS = 0.2
 #: Total seconds one refresh spends here; the rest waits for the next refresh.
 BUDGET_SECONDS = 120.0
 
-_TYPE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
-_DP = "urn:defender:p:"
-_BP = "urn:blackbox:p:"
+_TYPE = constants.RDF_TYPE
+_DP = constants.DEFENDER_PREDICATES
+_BP = constants.BLACKBOX_PREDICATES
 #: Key prefix of the per-ecosystem dependency counts (``"dependency:npm"``).
 ECOSYSTEM_COUNT_PREFIX = "dependency:"
 _DKG = "http://dkg.io/ontology/"

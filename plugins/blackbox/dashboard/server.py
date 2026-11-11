@@ -1828,7 +1828,7 @@ def create_app(*, manage_blackbox: bool = False):
         # FILTER NOT EXISTS (~3x slower, re-scans the view per row) and folds the
         # reporter count into the same round-trip.
         lit = sparql_text.sparql_string_literal(identifier)   # the kernel's one escaper: quotes, backslashes, newlines
-        rdf_type = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
+        rdf_type = constants.RDF_TYPE
         try:
             # Skip the point-lookup on an unreachable node so opening a threat
             # can't hang on a dead node.

@@ -968,3 +968,27 @@ def test_a_package_identifier_missing_a_part_is_not_one(identifier):
 
     assert threat_ids.parse_dependency_identifier(identifier) is None
     assert novelty_facts.dependency_parts(identifier) is None
+
+
+# --- ontology addresses come from kernel.constants; a module never retypes one as its own constant ---
+
+def test_the_ontology_addresses_keep_their_published_values():
+    """The published corpus uses these exact strings: a changed character matches nothing."""
+    from plugins.blackbox.kernel import constants
+
+    assert constants.RDF_TYPE == "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
+    assert constants.BLACKBOX_ONTOLOGY == "http://umanitek.ai/ontology/guardian/"
+    assert constants.DEFENDER_PREDICATES == "urn:defender:p:"
+    assert constants.BLACKBOX_PREDICATES == "urn:blackbox:p:"
+
+
+def test_no_module_assigns_one_of_those_addresses_to_a_constant_of_its_own():
+    import re
+    from pathlib import Path
+    plugin = Path(__file__).resolve().parents[2] / "plugins" / "blackbox"
+    retyped = re.compile(
+        r'^\s*\w+\s*=\s*"(?:http://www\.w3\.org/1999/02/22-rdf-syntax-ns#type|urn:defender:p:|urn:blackbox:p:'
+        r'|http://umanitek\.ai/ontology/guardian/)"\s*(?:#.*)?$', re.MULTILINE)
+    offenders = sorted(str(path.relative_to(plugin)) for path in plugin.rglob("*.py")
+                       if path.name != "constants.py" and retyped.search(path.read_text(encoding="utf-8-sig")))
+    assert offenders == [], f"use kernel.constants instead: {offenders}"

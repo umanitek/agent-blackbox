@@ -7,6 +7,7 @@ No command text, file contents or credential values are sent to the node.
 from __future__ import annotations
 
 from ...detection import command_text, parse_dependency_installs, iter_ioc_candidates, injection_scan_text
+from ...kernel import constants
 from ...kernel import threat_ids
 from ...kernel.sparql_text import is_safe_iri, sparql_string_literal as literal
 from ...kernel.dkg_client import extract_binding
@@ -14,9 +15,9 @@ from ..graph_queries import _context_graph_data_uri, _owner_pin
 from .client import GraphReadUnavailable
 
 MAX_CANDIDATES = 64
-G = "http://umanitek.ai/ontology/guardian/"
-DP = "urn:defender:p:"
-BP = "urn:blackbox:p:"
+G = constants.BLACKBOX_ONTOLOGY
+DP = constants.DEFENDER_PREDICATES
+BP = constants.BLACKBOX_PREDICATES
 
 
 def candidates(tool: str, args) -> tuple[list[str], list[str]]:

@@ -41,6 +41,8 @@ BLACKBOX_ONTOLOGY = "http://umanitek.ai/ontology/guardian/"
 
 # rdf:type IRIs -------------------------------------------------------------
 RDF_TYPE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
+DEFENDER_PREDICATES = "urn:defender:p:"   # the ``dp:`` prefix: predicates of the imported corpus
+BLACKBOX_PREDICATES = "urn:blackbox:p:"   # the ``bp:`` prefix: predicates Blackbox's own records add
 XSD_DATETIME = "http://www.w3.org/2001/XMLSchema#dateTime"
 
 REPORT_TYPE_IRI = f"{BLACKBOX_ONTOLOGY}ThreatReport"

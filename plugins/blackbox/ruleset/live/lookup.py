@@ -27,6 +27,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+from ...kernel import constants
 from ...kernel import crypto_secrets
 from ...kernel.dkg_client import extract_binding
 from ...kernel.sparql_text import sparql_string_literal as literal
@@ -55,8 +56,8 @@ CHECKSUM_SPELLINGS = 64
 #: window) otherwise costs every tool call the 2 s timeout per chunk, dependency and IOC each.
 RETRY_AFTER_SECONDS = 10.0
 
-_DP = "urn:defender:p:"
-_BP = "urn:blackbox:p:"
+_DP = constants.DEFENDER_PREDICATES
+_BP = constants.BLACKBOX_PREDICATES
 
 DependencyCandidate = tuple[str, str, str]   # (ecosystem, package name, version or "*")
 

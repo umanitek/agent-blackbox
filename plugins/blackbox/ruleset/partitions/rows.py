@@ -13,13 +13,16 @@ from __future__ import annotations
 import itertools
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
+from ...kernel import constants
+
 Row = dict[str, str]
 Triple = tuple[str, str, str]
 
-_RDF_TYPE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
-_DP = "urn:defender:p:"
-_G = "http://umanitek.ai/ontology/guardian/"
-_BP = "urn:blackbox:p:"
+# Short local names for the kernel's ontology addresses (the one source: kernel.constants).
+_RDF_TYPE = constants.RDF_TYPE
+_DP = constants.DEFENDER_PREDICATES
+_G = constants.BLACKBOX_ONTOLOGY
+_BP = constants.BLACKBOX_PREDICATES
 _SCHEMA = "http://schema.org/"
 _IDENTIFIER = f"{_G}identifier"
 
