@@ -33,20 +33,14 @@ from __future__ import annotations
 from typing import AbstractSet, Any, Callable, Iterable, Mapping, Optional, Tuple
 
 from ...community import reputation
+from ...kernel import threat_ids
 
 OsvLookup = Callable[[str, str, str], Optional[Mapping[str, str]]]
 
 
 def dependency_parts(identifier: str) -> Optional[tuple[str, str, str]]:
     """``(ecosystem, name, version)`` of a ``dep:eco:name@version`` identifier, else None."""
-    if not identifier.startswith("dep:"):
-        return None
-    try:
-        _, ecosystem, rest = identifier.split(":", 2)
-        name, version = rest.rsplit("@", 1)
-    except ValueError:
-        return None
-    return (ecosystem, name, version) if ecosystem and name and version else None
+    return threat_ids.parse_dependency_identifier(identifier)
 
 
 def _cluster(author: str, counted: Mapping[str, Any]) -> str:

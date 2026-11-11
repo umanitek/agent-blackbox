@@ -256,13 +256,10 @@ def materialize_community_rules(rs: compiler.Ruleset) -> None:
             pkg = str(rule.get("packageName") or "").lower()
             ver = str(rule.get("packageVersion") or "")
             if not (eco and pkg and ver):
-                try:
-                    _, rest = identifier.split(":", 1)
-                    eco, tail = rest.split(":", 1)
-                    pkg, ver = tail.rsplit("@", 1)
-                    eco, pkg = eco.lower(), pkg.lower()
-                except ValueError:
+                parsed = threat_ids.parse_dependency_identifier(identifier)
+                if parsed is None:
                     continue
+                eco, pkg, ver = parsed[0].lower(), parsed[1].lower(), parsed[2]
             key = threat_ids.dependency_key(eco, pkg, ver)
             if key not in rs.dependency:  # public beats community
                 rs.dependency[key] = {

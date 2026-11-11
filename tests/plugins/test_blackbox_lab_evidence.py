@@ -943,3 +943,28 @@ def test_a_well_formed_ioc_identifier_reads_as_its_type_and_value(identifier, pa
 def test_anything_else_is_not_an_ioc_identifier(identifier):
     from plugins.blackbox.kernel import threat_ids
     assert threat_ids.parse_ioc_identifier(identifier) is None
+
+
+# --- reading a `dep:<ecosystem>:<name>@<version>` identifier: one parser for every reader ---
+
+@pytest.mark.parametrize("identifier, parsed", [
+    ("dep:npm:left-pad@1.3.0", ("npm", "left-pad", "1.3.0")),
+    ("dep:npm:@scope/pkg@2.0.0", ("npm", "@scope/pkg", "2.0.0")),      # the LAST @ is the version
+    ("dep:pypi:Requests@2.31.0", ("pypi", "Requests", "2.31.0")),
+])
+def test_a_package_identifier_reads_the_same_for_the_kernel_and_the_curators_ladder(identifier, parsed):
+    from plugins.blackbox.curate.ladder import novelty_facts
+    from plugins.blackbox.kernel import threat_ids
+
+    assert threat_ids.parse_dependency_identifier(identifier) == parsed
+    assert novelty_facts.dependency_parts(identifier) == parsed
+
+
+@pytest.mark.parametrize("identifier", ["dep:npm:left-pad", "dep:npm:@1.0.0", "dep::left-pad@1.0.0", "dep:npm:left-pad@",
+                                        "npm:left-pad@1.0.0", "ioc:domain:evil.example", ""])
+def test_a_package_identifier_missing_a_part_is_not_one(identifier):
+    from plugins.blackbox.curate.ladder import novelty_facts
+    from plugins.blackbox.kernel import threat_ids
+
+    assert threat_ids.parse_dependency_identifier(identifier) is None
+    assert novelty_facts.dependency_parts(identifier) is None

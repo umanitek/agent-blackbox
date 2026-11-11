@@ -210,14 +210,11 @@ def _dependency_rule(row: dict[str, Any], identifier: str, common: dict[str, Any
     pkg = extract_binding(row.get("packageName")).lower()
     ver = extract_binding(row.get("packageVersion"))
     if not (eco and pkg and ver):
-        # Fall back to parsing the identifier: dep:{eco}:{name}@{version}
-        try:
-            _, rest = identifier.split(":", 1)
-            eco2, tail = rest.split(":", 1)
-            pkg2, ver2 = tail.rsplit("@", 1)
-            eco, pkg, ver = eco2.lower(), pkg2.lower(), ver2
-        except ValueError:
+        # Fall back to the identifier itself: dep:{eco}:{name}@{version}
+        parsed = threat_ids.parse_dependency_identifier(identifier)
+        if parsed is None:
             return None
+        eco, pkg, ver = parsed[0].lower(), parsed[1].lower(), parsed[2]
     rule = {
         **common,
         "ecosystem": eco,
