@@ -185,9 +185,10 @@ def expand_template(template: str) -> str:
     root from the environment now (``$XDG_CONFIG_HOME`` → ``~/.config``, ``%APPDATA%`` →
     ``~/AppData/Roaming``, ``%LOCALAPPDATA%`` → ``~/AppData/Local`` when unset)."""
     home = os.path.expanduser("~")
-    roots = {"~": home, "$XDG_CONFIG_HOME": os.environ.get("XDG_CONFIG_HOME", os.path.join(home, ".config")),
-             "%APPDATA%": os.environ.get("APPDATA", os.path.join(home, "AppData", "Roaming")),
-             "%LOCALAPPDATA%": os.environ.get("LOCALAPPDATA", os.path.join(home, "AppData", "Local"))}
+    # An EMPTY variable means its default too (`or`): it would make the glob relative to the current folder.
+    roots = {"~": home, "$XDG_CONFIG_HOME": os.environ.get("XDG_CONFIG_HOME") or os.path.join(home, ".config"),
+             "%APPDATA%": os.environ.get("APPDATA") or os.path.join(home, "AppData", "Roaming"),
+             "%LOCALAPPDATA%": os.environ.get("LOCALAPPDATA") or os.path.join(home, "AppData", "Local")}
     root, *below = template.split("/")
     return os.path.join(roots[root], *below)
 

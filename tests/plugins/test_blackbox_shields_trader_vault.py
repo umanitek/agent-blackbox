@@ -359,3 +359,17 @@ def test_every_vault_and_firefox_row_gives_the_recorded_findings(attack_home, ro
     assert all(finding.identifier == f"fileaccess:{row['tool']}:crypto-wallet" for finding in found)
     if row["outcome"] == "blocked":
         assert found, row["id"]
+
+
+@pytest.mark.parametrize("variable", ["XDG_CONFIG_HOME", "APPDATA", "LOCALAPPDATA"])
+def test_an_empty_folder_variable_means_its_default_never_the_current_folder(monkeypatch, variable):
+    """An empty XDG_CONFIG_HOME (set but blank) made the browser-root glob relative to whatever
+    folder the agent was in; an empty value now means the variable's default, like unset."""
+    import os
+
+    from plugins.blackbox.shields.trader.detectors import expand_template
+
+    monkeypatch.setenv(variable, "")
+    template = {"XDG_CONFIG_HOME": "$XDG_CONFIG_HOME/google-chrome*", "APPDATA": "%APPDATA%/Mozilla",
+                "LOCALAPPDATA": "%LOCALAPPDATA%/Google"}[variable]
+    assert os.path.isabs(expand_template(template))
