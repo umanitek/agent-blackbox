@@ -112,8 +112,9 @@ class SourceRegistry:
     def lookup(self, items: Sequence[LookupItem], budget: LookupBudget, *, today: str) -> tuple[LookupResult, ...]:
         """Ask every source about the items *budget* selects for *today*
         (at most ``budget.items_per_beat``, lane order, oldest first)."""
-        return tuple(LookupResult(item, tuple(self._ask(source, item.identifier) for source in self._sources))
-                     for item in select_for_lookup(items, budget, today))
+        with self._cache.session():   # one read and one merged write of the cache per beat
+            return tuple(LookupResult(item, tuple(self._ask(source, item.identifier) for source in self._sources))
+                         for item in select_for_lookup(items, budget, today))
 
     def _ask(self, source: Source, identifier: str) -> SourceVerdict:
         # Before the cache and the rate limit: an item a source cannot answer about spends none

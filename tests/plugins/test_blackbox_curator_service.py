@@ -102,6 +102,10 @@ class NeverCached:
     def forget(self, source, identifier):
         pass
 
+    def session(self):
+        import contextlib
+        return contextlib.nullcontext()
+
 
 def node_sources(lookup):
     return SourceRegistry([NodeSource(lookup)], cache=NeverCached())

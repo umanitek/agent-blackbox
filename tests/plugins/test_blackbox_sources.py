@@ -1298,3 +1298,27 @@ def test_an_answer_arriving_in_time_is_read_whole():
     data = b'{"query_status": "ok"}' * 10_000
     assert source_client._read_until(Body(data), max_bytes=len(data), deadline=float("inf")) == data
     assert len(source_client._read_until(Body(data), max_bytes=10, deadline=float("inf"))) == 11   # over the cap: caller drops it
+
+
+def test_a_beat_reads_the_not_listed_cache_once_and_writes_it_once(tmp_path, monkeypatch):
+    """Each source × item lookup re-read the whole cache file and each CLEAN answer rewrote it —
+    up to 700 parses per beat. A beat now reads it once and writes it once, merged into the file
+    as it is then (another process's entries written meanwhile are kept)."""
+    from plugins.blackbox.curate.sources import cache as cache_module
+    path = tmp_path / "nl.json"
+    cache = NotListedCache(path)
+    reads, writes = [], []
+    real_read, real_write = NotListedCache._read, NotListedCache._write
+    monkeypatch.setattr(NotListedCache, "_read", lambda self: reads.append(1) or real_read(self))
+    monkeypatch.setattr(NotListedCache, "_write", lambda self, entries: writes.append(1) or real_write(self, entries))
+    with cache.session():
+        for number in range(20):
+            assert not cache.is_not_listed("osv", f"dep:npm:p{number}@1")
+            cache.remember_not_listed("osv", f"dep:npm:p{number}@1")
+        NotListedCache(path).remember_not_listed("urlscan", "ioc:url:elsewhere")   # another writer, mid-beat
+        cache.forget("osv", "dep:npm:p3@1")
+    assert len(writes) == 2   # the other writer's one, and this session's one
+    after = NotListedCache(path)
+    assert after.is_not_listed("osv", "dep:npm:p0@1") and not after.is_not_listed("osv", "dep:npm:p3@1")
+    assert after.is_not_listed("urlscan", "ioc:url:elsewhere")
+    assert cache_module.NOT_LISTED_TTL_SECONDS == 24 * 60 * 60
