@@ -79,6 +79,11 @@ that the two version fields agree.
 - **Curator commands.** `blackbox curate approve` exits with an error when nothing was published;
   `curate inbox` admits only proposals a curator signed; a sighting digest dated in a week that
   does not exist is ignored instead of emptying the heat map.
+- **Advisories OSV labels "moderate" are shown.** Dependency discovery dropped them without a
+  word; they now appear as medium. A package looked up while offline is checked again later
+  instead of being remembered as clean.
+- **The site that carried a prompt injection is named for OpenAI-direct and Codex agents too.**
+  The injection itself was already found for them; the site finding was missing.
 - **Secrets in logged settings.** The words that mark a setting as secret are now one list for
   every place Blackbox redacts, so a name redacted in one log is redacted in all of them.
 
