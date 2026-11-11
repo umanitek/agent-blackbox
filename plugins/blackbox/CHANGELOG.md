@@ -90,6 +90,13 @@ that the two version fields agree.
   now say it could not check yet.
 - **A manual report made in sandbox mode stays in the sandbox.** `blackbox report` with Sandbox
   mode on now goes to the sandbox lane only, like automatic reports, and is not re-published.
+- **Curator consent codes expire and are single-use, as documented.** `curate publish` restarted
+  a code's 10-minute life on every attempt, and two publishes of one code at the same moment could
+  both go through. A code now expires 10 minutes after it was shown and is used once.
+- **A curator's second publish to Verified Memory does not pay again.** When the first attempt
+  could not read its statement back yet, the next attempt published (and paid) again instead of
+  looking first. A publish that timed out now says it could not tell whether it was published,
+  not that nothing was.
 - **Curator commands.** `blackbox curate approve` exits with an error when nothing was published;
   `curate inbox` admits only proposals a curator signed; a sighting digest dated in a week that
   does not exist is ignored instead of emptying the heat map.

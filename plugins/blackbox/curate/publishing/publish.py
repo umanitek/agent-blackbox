@@ -104,8 +104,11 @@ def publish(ctx: CurateContext, store: ProposalStore, proposal_id: str, *, typed
     except VerbError:
         ledger.release(proposal.envelope, "the write was refused")
         raise
-    except Exception as exc:   # the node refused or failed: nothing was published, the operator may retry
+    except Exception as exc:   # the node refused or failed; the operator may retry (a retry looks first)
         ledger.release(proposal.envelope, str(exc))
+        if isinstance(exc, DkgError) and not definite_refusal(exc):   # a 5xx, a timeout: it may have landed (LES-011)
+            raise VerbError(f"the write could not tell whether it was published ({exc}); publishing again looks "
+                            "it up before writing anything") from exc
         raise VerbError(f"the write failed, nothing was published: {exc}") from exc
     if outcome is PublishOutcome.UNCONFIRMED:
         ledger.release(proposal.envelope, "written but not readable")
@@ -218,8 +221,12 @@ def _write(ctx: CurateContext, proposal: Proposal, envelope: signing.SignedEnvel
         return _write_promotion(ctx, proposal, envelope)
     name, quads = _asset(proposal, envelope)
     if home == VERIFIED_GRAPH:
-        node_routes.publish_to_verified_memory(ctx.client, graph, name, quads)
-        already, view = False, constants.VIEW_VERIFIABLE_MEMORY
+        # A Verified-Memory publish is paid: look first, so a retry after an attempt whose
+        # read-back lagged (UNCONFIRMED) finds the statement instead of paying again.
+        view = constants.VIEW_VERIFIABLE_MEMORY
+        already = _readable(ctx, graph, view, quads)
+        if not already:
+            node_routes.publish_to_verified_memory(ctx.client, graph, name, quads)
     else:
         already, view = _share(ctx, graph, name, quads), constants.VIEW_SHARED_WORKING_MEMORY
     if not _readable(ctx, graph, view, quads):
