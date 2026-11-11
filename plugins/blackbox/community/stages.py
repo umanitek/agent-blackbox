@@ -241,8 +241,7 @@ def _terminal_stage(verdict: Optional[CuratorStatement]) -> Optional[StageResult
 
 def _by_corroboration(identifier: str, clusters: Clusters, threshold: Threshold, span_days: float,
                       verdict: Optional[CuratorStatement]) -> StageResult:
-    if verdict is CuratorStatement.CONFIRMATION:
-        return StageResult(Stage.CORROBORATED, Enforcement.FLAG, "confirmed by the curator")
+    # A CONFIRMATION never reaches here: :func:`_stage` answers it before any hold.
     if not threshold.met(clusters):
         if clusters.total == 0:
             return StageResult(Stage.REPORTED, Enforcement.MONITOR, "reported by unlisted authors only")
