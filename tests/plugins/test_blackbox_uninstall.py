@@ -173,7 +173,7 @@ def test_windows_tasks_are_ended_and_deleted(machine):
 
 
 def test_without_a_terminal_nothing_is_removed_without_yes(machine, monkeypatch, capsys):
-    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    monkeypatch.setattr(uninstall.terminal_question, "ask", lambda prompt: None)   # no terminal to ask
     args = argparse.Namespace(purge=False, keep_logs=False, dry_run=False, yes=False)
     assert uninstall.cmd_uninstall(args) == 1
     assert (machine / ".hermes" / "blackbox").exists()
@@ -287,3 +287,22 @@ def test_uninstall_also_removes_blackbox_from_its_own_chat_profile(machine):
     _execute(plan)
     assert not (chat / "plugins" / "blackbox").exists()
     assert "blackbox" not in (yaml_files.load_yaml(chat / "config.yaml").get("plugins") or {}).get("enabled", [])
+
+
+@pytest.mark.parametrize("answer, removed", [("y\n", True), ("n\n", False)])
+def test_under_a_pipe_the_question_goes_to_the_terminal(machine, monkeypatch, answer, removed):
+    """Under `curl … | bash` stdin is the pipe; uninstall refused outright although a terminal
+    was there. It now asks the terminal the way `blackbox attach` does (kernel.terminal_question)."""
+    import io
+    monkeypatch.setattr("sys.stdin", io.StringIO("y\n"))   # the pipe: never read as the answer
+
+    class Terminal(io.StringIO):   # what the operator types; what is written to it is the prompt
+        def write(self, text):
+            return len(text)
+
+    monkeypatch.setattr(uninstall.terminal_question, "open", lambda *a, **k: Terminal(answer), raising=False)
+    executed = []
+    monkeypatch.setattr(uninstall, "execute", lambda plan: executed.append(plan) or [])   # only the decision is tested
+    args = argparse.Namespace(purge=False, keep_logs=False, dry_run=False, yes=False)
+    assert uninstall.cmd_uninstall(args) == 0
+    assert bool(executed) is removed

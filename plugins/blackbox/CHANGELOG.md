@@ -128,6 +128,8 @@ that the two version fields agree.
   say when a config's comments could not be kept, and name the copy that still has them.
 - **Switching an agent off through a link to its folder sticks.** An agent switched off (or back on)
   through a symlink or another spelling of its folder is the same agent to the automatic re-attach.
+- **`blackbox uninstall` asks at your terminal when it is run from a pipe.** Like `blackbox attach`, it
+  asks the terminal itself instead of refusing outright; with no terminal it still needs `--yes`.
 
 ### Changed
 

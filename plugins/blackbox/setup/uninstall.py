@@ -37,13 +37,12 @@ import platform
 import shutil
 import signal
 import subprocess
-import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional, Sequence
 
 from .. import sync   # sync's public entry: the service names, which process is our node
-from ..kernel import constants, yaml_files
+from ..kernel import constants, terminal_question, yaml_files
 from ..kernel.host_command import hermes_argv
 
 #: Files a node needs to keep its identity and wallet (DKG home), and Blackbox's own reporter
@@ -324,10 +323,11 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
     if args.dry_run:
         return 0
     if not args.yes:
-        if not sys.stdin.isatty():
+        answer = terminal_question.ask("Remove Blackbox? [y/N] ")   # the terminal, even under curl | bash
+        if answer is None:
             print("Not removing anything without a yes: run with --yes, or at a terminal.")
             return 1
-        if input("Remove Blackbox? [y/N] ").strip().lower() not in ("y", "yes"):
+        if answer.strip().lower() not in ("y", "yes"):
             print("Nothing removed.")
             return 0
     for line in execute(plan):

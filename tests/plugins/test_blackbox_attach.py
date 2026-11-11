@@ -894,7 +894,8 @@ def test_with_no_tty_and_no_controlling_terminal_nothing_is_asked(monkeypatch):
         raise OSError("no controlling terminal")
 
     monkeypatch.setattr("sys.stdin", io.StringIO("y\n"))   # a pipe: never read as the operator's answer
-    monkeypatch.setattr(attach_command, "open", no_tty, raising=False)
+    from plugins.blackbox.kernel import terminal_question
+    monkeypatch.setattr(terminal_question, "open", no_tty, raising=False)
 
     assert attach_command._ask_terminal("Protect? ") is None
 
