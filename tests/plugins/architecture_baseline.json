@@ -10,7 +10,6 @@
     "attach/openclaw_bridge.py::_merge_openclaw": 53,
     "attach/openclaw_bridge.py::attach_openclaw": 63,
     "attach/openclaw_discovery.py::discover_openclaw_workspaces": 67,
-    "attach/openclaw_json5.py::_json5_to_json": 156,
     "audit/activity.py::_build_local_activity": 122,
     "cli.py::setup_cli": 46,
     "community/report_cli/report_command.py::cmd_report": 28,
