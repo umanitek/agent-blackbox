@@ -107,8 +107,9 @@ def read_curator_view(client: DkgClient, cfg: BlackboxConfig, environment: str =
     stored = store.load(graph) if graph else trust_store.StoredTrust()
     statements, readable, complete = _community_statements(client, graph, stored, interest)
     verified_graph = cfg.context_graph_id
-    verified = _resolve_verified(client, cfg, environment, verified_roots,
-                                 store.load(verified_graph) if verified_graph else trust_store.StoredTrust(), today)
+    # One graph since 2026-10-16: the verified graph's entry is usually the one just loaded.
+    verified_stored = stored if verified_graph == graph else store.load(verified_graph)
+    verified = _resolve_verified(client, cfg, environment, verified_roots, verified_stored, today)
     community = _resolve_community(client, cfg, environment, community_roots, stored, today)
     kept, community_keys = _verifiable(statements, verified, community, graph)
     admission = raising_budget.admit([row for row in kept if trust_store.statement_key(row) in community_keys],
