@@ -15,7 +15,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List
 from ..kernel import constants
-from ..kernel.bounded_files import read_json_object
+from ..kernel.bounded_files import atomic_write, read_json_object
 from . import log_store
 from . import redaction
 
@@ -169,7 +169,7 @@ def mark_reported(identifier: str) -> None:
                 k: v for k, v in stamps.items()
                 if isinstance(v, (int, float)) and (now - v) < REPORT_COOLDOWN_SECS
             }
-            _rate_state_path().write_text(json.dumps(state), encoding="utf-8")
+            atomic_write(_rate_state_path(), json.dumps(state))   # a torn file would reset every cooldown
     except Exception as exc:  # pragma: no cover - fail open
         logger.debug("blackbox: mark_reported failed (%s)", exc)
 
@@ -202,7 +202,7 @@ def allow_report(daily_limit: int) -> bool:
                 logger.debug("blackbox: daily report limit %s reached", daily_limit)
                 return False
             state["count"] = int(state.get("count", 0)) + 1
-            path.write_text(json.dumps(state), encoding="utf-8")
+            atomic_write(path, json.dumps(state))   # a torn file would reset the daily cap
             return True
     except Exception as exc:  # pragma: no cover - fail open
         logger.debug("blackbox: rate-limit state failed (%s); allowing", exc)

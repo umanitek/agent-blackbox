@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import List, Optional
 from .. import attach
 from ..kernel import constants, yaml_files
+from ..kernel.bounded_files import atomic_write
 
 logger = logging.getLogger(__name__)
 
@@ -249,7 +250,7 @@ def _write_blackbox_soul(profile_dir: Path) -> None:
                 backup.write_text(existing, encoding="utf-8")
             except OSError:
                 pass
-    soul_path.write_text(_BLACKBOX_SOUL, encoding="utf-8")
+    atomic_write(soul_path, _BLACKBOX_SOUL)   # never a half-written persona
 
 
 @yaml_files.edits_config

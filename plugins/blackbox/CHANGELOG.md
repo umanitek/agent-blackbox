@@ -121,6 +121,8 @@ that the two version fields agree.
   in Trader Shield's report now says what the agent reached for and why it matters.
 - **An empty `APPDATA` no longer points Trader Shield at the top of the disk.** Like an empty
   `XDG_CONFIG_HOME`, it now counts as unset when Trader Shield works out where a wallet app keeps its files.
+- **A crash while recording a report can no longer reset the report limits.** The file that holds the
+  per-threat cooldowns and the daily cap is replaced whole, never rewritten in place.
 
 ### Changed
 

@@ -465,3 +465,17 @@ def test_every_sender_passes_its_config_to_the_gate():
     import inspect
 
     assert inspect.signature(community_sharing.send_report).parameters["cfg"].default is inspect.Parameter.empty
+
+
+def test_the_rate_state_is_replaced_whole_never_rewritten_in_place(monkeypatch, bb_home):
+    """report_rate.json was rewritten in place: a crash or a second process mid-write left a torn
+    file, which reads as {} and so reset every cooldown and the daily cap (failing toward MORE
+    reports). Both writers now go through the kernel's temp-file + rename."""
+    from plugins.blackbox.audit import share_ledger
+    written = []
+    real = share_ledger.atomic_write
+    monkeypatch.setattr(share_ledger, "atomic_write", lambda path, text: (written.append(path.name), real(path, text)))
+    share_ledger.mark_reported("dep:npm:evil-pkg@1.0.0")
+    assert share_ledger.allow_report(5)
+    assert written == ["report_rate.json", "report_rate.json"]
+    assert share_ledger.recently_reported("dep:npm:evil-pkg@1.0.0")
