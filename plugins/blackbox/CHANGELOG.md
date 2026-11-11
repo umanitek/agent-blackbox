@@ -134,6 +134,9 @@ that the two version fields agree.
   list no longer stops the removal half-way, after the services were already stopped.
 - **One damaged line in a log no longer empties the dashboard's findings.** A findings line that is
   not a JSON object is skipped like any other damaged line; the activity total counts only rows it shows.
+- **The Playground's sandbox lane shows other members' tests safely.** Their text is cleaned and
+  defanged like the Community graph's, a threat's category comes from its identifier, and a test can no
+  longer break the threat window by filling its sources with text.
 
 ### Changed
 

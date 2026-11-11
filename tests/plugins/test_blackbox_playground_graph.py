@@ -154,3 +154,46 @@ def test_the_advisory_number_never_names_the_threat():
     assert dict(entry.fields)["schema:identifier"] == "MAL-2025-47041"
     (bubble,) = graph.graph_page(view)["threats"]
     assert bubble["category"] == "dependency"
+
+
+# --- What other members wrote is served sanitized (audit 06/#9) --------------
+
+HOSTILE = (
+    _rows("urn:guardian:report:b:7", identifier="dep:npm:bad@1.0.0", reporter=B + "‮", severity="high",
+          category="injection", sources="https://evil.example/x", note="see http://evil.example/\x1b[31m")
+)
+
+
+def _hostile_client(monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setattr(bb_config, "load_blackbox_config",
+                        lambda: dataclasses.replace(bb_config.BlackboxConfig(), community_sandbox=True))
+    monkeypatch.setattr(playground, "read_lane",
+                        lambda cfg: playground.LaneView("0xabc/graph", True, entries_from_rows(HOSTILE, own=A.lower())))
+    app = FastAPI()
+    playground_routes.register(app, lambda *a: None)
+    return TestClient(app)
+
+
+def test_a_members_own_category_field_never_names_the_category():
+    """category_of fell back to the member's ``category`` field; the category now comes from the
+    identifier alone, as on /api/graph (KI-197)."""
+    view = playground.LaneView("0xabc/graph", True, entries_from_rows(HOSTILE, own=A.lower()))
+    assert graph.graph_page(view)["threats"][0]["category"] == "dependency"
+    assert graph.category_of("secret:seed-phrase") == "secret" and graph.category_of("nope") == "other"
+
+
+def test_lane_text_is_sanitized_and_cannot_fill_a_list_shaped_key(monkeypatch):
+    """The sandbox lane served other members' text raw, and a member's string ``sources`` reached the
+    modal, which maps it as a list and threw. Strings are now stripped and defanged like the
+    community tier's, and a lane field never fills sources / references / profile."""
+    client = _hostile_client(monkeypatch)
+    detail = client.get("/api/playground/threat", params={"identifier": "dep:npm:bad@1.0.0"}).json()
+    assert detail["found"] and "sources" not in detail
+    assert "\x1b" not in detail["note"] and "hxxp" in detail["note"]
+    assert all("‮" not in reporter for reporter in detail["sandboxReporters"])
+    lane = client.get("/api/playground").json()["lane"]["entries"][0]
+    assert "‮" not in lane["reporter"]
+    assert all("\x1b" not in value for _key, value in lane["fields"])

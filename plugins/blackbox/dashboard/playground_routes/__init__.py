@@ -47,9 +47,30 @@ def state_payload() -> dict[str, Any]:
         "graph": cfg.context_graph_id,
         "kinds": list(playground.KINDS),
         "tests": playground.recent_tests(limit=20) if cfg.community_sandbox else [],
-        "lane": view.to_dict() if view is not None else {"graph": cfg.context_graph_id, "readable": False,
-                                                         "agents": 0, "entries": []},
+        "lane": _safe_lane(view.to_dict()) if view is not None else {"graph": cfg.context_graph_id, "readable": False,
+                                                                     "agents": 0, "entries": []},
     }
+
+
+# The lane is what OTHER members wrote: every string in it is sanitized like the community tier's
+# (safe_payloads — stripped, clamped, defanged; identifiers verbatim but stripped), never served raw.
+
+def _safe_lane(lane: dict[str, Any]) -> dict[str, Any]:
+    from ..safe_payloads import safe_identifier, safe_text
+    lane["entries"] = [{**entry, "identifier": safe_identifier(entry["identifier"]),
+                        "reporter": safe_text(entry["reporter"], 64), "severity": safe_text(entry["severity"], 16),
+                        "fields": [(safe_text(key, 64), safe_text(value, 300)) for key, value in entry["fields"]]}
+                       for entry in lane["entries"]]
+    return lane
+
+
+def _safe_detail(detail: dict[str, Any]) -> dict[str, Any]:
+    from ..safe_payloads import safe_identifier, safe_text
+    out = {safe_text(key, 64): (safe_text(value, 300) if isinstance(value, str) else value) for key, value in detail.items()}
+    out["identifier"] = safe_identifier(detail["identifier"])
+    if "sandboxReporters" in detail:
+        out["sandboxReporters"] = [safe_text(reporter, 64) for reporter in detail["sandboxReporters"]]
+    return out
 
 
 def _sandbox_view() -> Any:
@@ -65,15 +86,20 @@ def graph_payload(q: str, category: str, ecosystem: str, offset: int, limit: int
     """The sandbox lane as a Community graph page."""
     from ... import playground
 
-    return playground.graph.graph_page(_sandbox_view(), q=q, category=category, ecosystem=ecosystem,
+    from ..safe_payloads import safe_identifier, safe_text
+
+    page = playground.graph.graph_page(_sandbox_view(), q=q, category=category, ecosystem=ecosystem,
                                        offset=offset, limit=limit)
+    page["threats"] = [{**threat, "identifier": safe_identifier(threat["identifier"]), "name": safe_text(threat["name"]),
+                        "severity": safe_text(threat["severity"], 16)} for threat in page["threats"]]
+    return page
 
 
 def threat_payload(identifier: str) -> dict[str, Any]:
     """One sandbox threat as a Community threat detail."""
     from ... import playground
 
-    return playground.graph.threat_detail(_sandbox_view(), identifier)
+    return _safe_detail(playground.graph.threat_detail(_sandbox_view(), identifier))
 
 
 def local_payload() -> dict[str, Any]:
