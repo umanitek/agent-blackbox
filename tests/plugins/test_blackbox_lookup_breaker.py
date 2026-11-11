@@ -75,3 +75,19 @@ def test_a_skipped_lookup_is_not_counted_as_a_failure(tmp_path, clock):
         lookup.iocs(["ioc:domain:example.test"])
 
     assert lookup.health.read().failures == 1
+
+
+def test_a_steady_ok_state_is_read_from_disk_once_per_process(tmp_path, monkeypatch):
+    """When the file already said "ok", record(known=True) returned without keeping that state,
+    so every later lookup in that agent process read the JSON file again — about four file reads
+    per tool call on the hot path. The state read from the file is now kept."""
+    path = tmp_path / "state.json"
+    LookupHealth(path).record(True)          # another process wrote "ok"
+    health = LookupHealth(path)
+    reads = []
+    real = LookupHealth._read_file
+    monkeypatch.setattr(LookupHealth, "_read_file", lambda self: reads.append(1) or real(self))
+    for _ in range(20):
+        health.record(True)
+        health.read()
+    assert len(reads) == 1 and health.read().state == "ok"
