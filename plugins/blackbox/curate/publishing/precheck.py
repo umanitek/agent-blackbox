@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import AbstractSet, Any, Callable, Iterable, Optional, Protocol, Sequence, Tuple
+from typing import AbstractSet, Any, Callable, Iterable, Optional, Protocol, Sequence
 
 from ...kernel import threat_ids
 
@@ -135,22 +135,11 @@ def strict_verified_subset(compiled: Any) -> VerifiedSubset:
     reading a store that could not tell as "none listed" (precheck's contract)."""
 
     def lookup(identifiers: Iterable[str]) -> set[str]:
-        wanted = {str(identifier) for identifier in identifiers}
         if compiled is None:
             raise PrecheckUnavailable("no compiled ruleset to check against")
-        found = {str(rule.get("identifier") or "") for _category, rule in compiled.iter_rules()
-                 if rule.get("source") == "public" and rule.get("identifier") in wanted}
-        dependencies = [parsed for ident in wanted if (parsed := threat_ids.parse_dependency_identifier(ident))]
-        iocs = [ident for ident in wanted if ident.startswith("ioc:")]
-        if not dependencies and not iocs:
-            return found
-        live = compiled.live_lookup() if callable(getattr(compiled, "live_lookup", None)) else None
-        if live is None:
-            raise PrecheckUnavailable("the live verified lookup is not ready")
-        for answer in ([live.dependencies(dependencies)] if dependencies else []) + ([live.iocs(iocs)] if iocs else []):
-            if not answer.known:
-                raise PrecheckUnavailable(f"the verified store could not tell ({answer.reason or 'no reason'})")
-            found |= {rule["identifier"] for rule in answer.rules.values() if rule.get("identifier") in wanted}
+        found, unknown = compiled.verified_subset_answer(identifiers)   # the ruleset's one scan
+        if unknown:
+            raise PrecheckUnavailable(unknown)
         return found
 
     return lookup
