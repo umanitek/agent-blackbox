@@ -113,3 +113,18 @@ def test_a_due_generation_is_refreshed_although_it_was_compiled_moments_ago(cloc
     refresh_cycle.get(_Config())
 
     assert started == ["blackbox-ruleset"]
+
+
+def test_a_rules_cache_that_cannot_be_saved_is_said_out_loud(tmp_path, monkeypatch, caplog):
+    """A failed ruleset.json write was logged at DEBUG: on a full disk the node kept serving a
+    generation that never persisted and nothing visible said so (fail-open ≠ fail-silent)."""
+    import logging
+    from plugins.blackbox.ruleset import compiler, disk_cache
+
+    def disk_full(path, text, **_kw):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(disk_cache, "atomic_write", disk_full)
+    with caplog.at_level(logging.WARNING):
+        disk_cache._write_cache(compiler.Ruleset())
+    assert any("could not save the rules" in record.getMessage() for record in caplog.records)

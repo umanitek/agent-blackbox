@@ -119,18 +119,21 @@ def _restore_live_scope(rs: compiler.Ruleset, data: dict[str, Any]) -> None:
 
 
 def _write_cache(rs: compiler.Ruleset) -> None:
+    """Persist *rs* (temp file + rename). A failure is logged at WARNING: fail-open is not
+    fail-silent — a full disk would otherwise keep serving a generation that never persists."""
     try:
         atomic_write(_cache_path(), json.dumps(_serialize(rs)))
-    except Exception as exc:  # pragma: no cover - fail open
-        logger.debug("blackbox: ruleset cache write failed: %s", exc)
+    except (OSError, TypeError, ValueError) as exc:
+        logger.warning("blackbox: could not save the rules to %s (%s); they stay in memory only", _cache_path(), exc)
 
 
 def _read_cache() -> Optional[compiler.Ruleset]:
+    """The persisted generation, or None when there is none or it cannot be read (said at WARNING)."""
     path = _cache_path()
     if not path.exists():
         return None
     try:
         return _deserialize(json.loads(path.read_text(encoding="utf-8-sig")))
-    except Exception as exc:  # pragma: no cover - fail open
-        logger.debug("blackbox: ruleset cache read failed: %s", exc)
+    except Exception as exc:  # health: allow BLE001 -- a damaged or older cache of any shape is rebuilt by the next refresh, never fatal
+        logger.warning("blackbox: could not read the saved rules in %s (%s); the next refresh rebuilds them", path, exc)
         return None
