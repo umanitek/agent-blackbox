@@ -37,6 +37,13 @@ _ACTION_BY_INJECTION_CONTEXT = {"in-fetched-page": "model-input", "in-tool-outpu
                                 "in-tool-input": "use-tool"}
 
 
+def is_reportable_tool(tool: str) -> bool:
+    """Whether *tool* (lower-case) may travel in a report as written: a host tool, a name of
+    the reportable tool shape, or one of ``mcp-tool`` / ``other``. The report schema asks this;
+    :func:`canonical_tool` maps any other tool onto it."""
+    return tool in vocab.OTHER_TOOLS or tool in _HOST_TOOLS or bool(vocab.TOOL_SHAPE.fullmatch(tool))
+
+
 def canonical_tool(tool_name: str) -> str:
     """The tool name a report may carry: a host tool verbatim, any other tool
     ``mcp-tool`` (MCP naming) or ``other`` — never a private tool's own name.

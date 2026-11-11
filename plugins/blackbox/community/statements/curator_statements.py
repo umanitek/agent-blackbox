@@ -48,7 +48,7 @@ from ...kernel import constants, rdf_terms, signing, sparql_text, threat_ids
 from ...kernel.dkg_client import extract_binding
 from ...kernel.signing import KeyManifest
 from ...kernel.signing import CuratorStatement
-from .. import report_schema
+from .. import report_schema, verification
 
 #: The frozen payload schema of reduction-only statements (revocation,
 #: rejection): every reader version must accept it, forever. Never edit.
@@ -59,7 +59,7 @@ _ADDRESS = re.compile(r"0x[0-9a-f]{40}")
 _LANES = frozenset({"1", "2", "3", "4", "5"})
 
 #: The reader variable carrying the envelope.
-SIGNED_STATEMENT_VAR = "signedStatement"
+SIGNED_STATEMENT_VAR = verification.SIGNED_STATEMENT_VAR   # the reader query variable that carries the envelope
 
 
 @dataclass(frozen=True)

@@ -58,6 +58,7 @@ from typing import Callable, Dict, Mapping, Optional, Tuple
 
 from .. import detection
 from ..kernel import constants, display_safety, threat_ids
+from .sighting import fields as sighting_fields
 from .sighting import vocab as sighting_vocab
 
 #: Longest identifier / evidence value a report may carry.
@@ -257,7 +258,7 @@ def _sighting_fields(given: Mapping[str, str], *, matched_by: str) -> dict[str, 
     out = {key: _one_of(key, given[key], allowed) for key, allowed in _SIGHTING_SETS.items() if given.get(key)}
     if given.get("agent_tool"):
         tool = str(given["agent_tool"]).strip().lower()
-        if tool not in sighting_vocab.OTHER_TOOLS and not (tool in _HOST_TOOLS or sighting_vocab.TOOL_SHAPE.fullmatch(tool)):
+        if not sighting_fields.is_reportable_tool(tool):
             _fail("agent_tool must be a host tool name, mcp-tool or other")
         out["agent_tool"] = tool
     if given.get("attack_technique"):
@@ -273,7 +274,6 @@ def _sighting_fields(given: Mapping[str, str], *, matched_by: str) -> dict[str, 
     return out
 
 
-_HOST_TOOLS = frozenset({*detection.SHELL_TOOLS, *detection.HOST_FILE_AND_SKILL_TOOLS})
 
 _VALIDATORS: dict[str, Callable[[Mapping[str, str]], tuple[Optional[str], dict[str, str]]]] = {
     "injection": _injection,

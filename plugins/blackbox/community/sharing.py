@@ -16,9 +16,8 @@ import threading
 from enum import Enum
 from typing import Any, NamedTuple, Optional
 from .. import audit, detection
-from .. import community
 from ..kernel import constants, threat_ids
-from . import consent, keep_alive, membership, report_schema, report_signer, share_retry
+from . import consent, keep_alive, membership, report_builder, report_schema, report_signer, share_retry
 from ..kernel.config import BlackboxConfig
 from ..kernel.dkg_client import DkgClient, DkgError
 
@@ -266,7 +265,7 @@ def share_report(client: DkgClient, cfg: BlackboxConfig, finding: dict[str, Any]
     identifier = str(finding.get("identifier") or "")
     subject = threat_ids.report_uri(identifier, reporter)
     name = report_asset_name(cfg, identifier, reporter)
-    quads = community.build_report_quads(
+    quads = report_builder.build_report_quads(
         identifier=identifier,
         category=str(finding.get("category") or ""),
         severity=str(finding.get("severity") or "info"),

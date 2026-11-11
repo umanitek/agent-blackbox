@@ -328,7 +328,7 @@ def test_the_sandbox_share_uses_its_own_asset_name_and_lane(monkeypatch):
     cfg = dataclasses.replace(bb_config.BlackboxConfig(), report=True, context_graph_id=TEST_GRAPH,
                               community_sandbox=True)
     monkeypatch.setattr(sharing.report_signer, "resolve_report_signer", lambda client, graph: object())
-    monkeypatch.setattr(sharing.community, "build_report_quads", lambda **kw: [])
+    monkeypatch.setattr(sharing.report_builder, "build_report_quads", lambda **kw: [])
     monkeypatch.setattr(sharing, "shareable_fields", lambda finding: {})
 
     def fake_send(client, graph, name, quads, lane=constants.COMMUNITY_SUB_GRAPH, *, cfg, reduces=False):
