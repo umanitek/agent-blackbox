@@ -84,6 +84,8 @@ that the two version fields agree.
   instead of being remembered as clean.
 - **The site that carried a prompt injection is named for OpenAI-direct and Codex agents too.**
   The injection itself was already found for them; the site finding was missing.
+- **`blackbox status` lists every attached OpenClaw agent.** One whose config has comments, or
+  is named by `OPENCLAW_CONFIG_PATH`, was attached but missing from the list.
 - **Secrets in logged settings.** The words that mark a setting as secret are now one list for
   every place Blackbox redacts, so a name redacted in one log is redacted in all of them.
 

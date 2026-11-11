@@ -16,7 +16,6 @@ from typing import Any
 import time
 from . import attach, audit, community, ruleset, sync
 from .kernel import health
-from .kernel import yaml_files
 from .kernel.config import load_blackbox_config, reads_graph_directly
 from .kernel.dkg_client import DkgClient, DkgError
 from .attach import add_attach_parsers
@@ -205,27 +204,11 @@ def _print_health(cfg: Any, rs: Any, client: DkgClient, reachable: bool) -> None
 
 
 def _print_attached_targets() -> None:
-    """List which local Hermes homes / OpenClaw workspaces have Blackbox attached."""
-    attached_hermes = []
-    for home in attach.discover_hermes_homes():
-        try:
-            data = yaml_files.load_yaml(home / "config.yaml")
-            if attach.enabled_list_has(data, "blackbox"):
-                attached_hermes.append(str(home))
-        except Exception:
-            continue
-    attached_openclaw = []
-    for ws in attach.discover_openclaw_workspaces():
-        try:
-            import json as _json
-
-            cfg_path = ws / "openclaw.json"
-            data = _json.loads(cfg_path.read_text(encoding="utf-8-sig")) if cfg_path.exists() else {}
-            allow = ((data.get("plugins") or {}).get("allow")) if isinstance(data, dict) else None
-            if isinstance(allow, list) and "blackbox" in allow:
-                attached_openclaw.append(str(ws))
-        except Exception:
-            continue
+    """List which local Hermes homes / OpenClaw workspaces have Blackbox attached, by
+    attach's own check (``attach.is_attached``) — the one a sweep and the dashboard use."""
+    attached_hermes = [str(home) for home in attach.discover_hermes_homes() if attach.is_attached("hermes", home)]
+    attached_openclaw = [str(target) for target in attach.discover_openclaw_workspaces()
+                         if attach.is_attached("openclaw", target)]
     print(f"  attached (hermes): {len(attached_hermes)}")
     for path in attached_hermes:
         print(f"      - {path}")

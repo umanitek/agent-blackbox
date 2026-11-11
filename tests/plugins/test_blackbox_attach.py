@@ -901,3 +901,30 @@ def test_a_dry_run_still_lists_every_target(fake_env, monkeypatch, tmp_path):
     report = attach.attach_all(dry_run=True)
 
     assert len(report["hermes"]) >= 2 and not (fake_env["profile"] / "config.yaml").exists()
+
+
+def test_status_lists_attached_agents_with_attach_own_check(monkeypatch, tmp_path, capsys):
+    """`blackbox status` kept its own "is it attached?" reading: plain JSON and a fixed file
+    name. An OpenClaw config with comments, or one named by $OPENCLAW_CONFIG_PATH, was attached
+    and shown as not attached."""
+    from plugins.blackbox import attach, cli
+
+    commented = tmp_path / "workspace"
+    commented.mkdir()
+    (commented / "openclaw.json").write_text('{\n  // my agents\n  "plugins": {"allow": ["blackbox",],},\n}\n',
+                                             encoding="utf-8")
+    named_file = tmp_path / "custom-openclaw.json5"
+    named_file.write_text('{"plugins": {"allow": ["blackbox"]}}', encoding="utf-8")
+    off = tmp_path / "off"
+    off.mkdir()
+    (off / "openclaw.json").write_text('{"plugins": {"allow": ["other"]}}', encoding="utf-8")
+    home = tmp_path / "hermes-home"
+    home.mkdir()
+    (home / "config.yaml").write_text("plugins:\n  enabled:\n    - blackbox\n", encoding="utf-8")
+    monkeypatch.setattr(attach, "discover_hermes_homes", lambda: [home])
+    monkeypatch.setattr(attach, "discover_openclaw_workspaces", lambda: [commented, named_file, off])
+    cli._print_attached_targets()
+    out = capsys.readouterr().out
+    assert "attached (hermes): 1" in out and str(home) in out
+    assert "attached (openclaw): 2" in out and str(commented) in out and str(named_file) in out
+    assert str(off) not in out
