@@ -287,7 +287,10 @@ def _logo(kind: str, title: str, evidence: str) -> str:
     """The wallet's logo URL for a vault event whose pack ships a logo, else ""."""
     if kind != "vault":
         return ""
-    return trader_mode.logo_url(_named(title or evidence, "").lower().replace(" ", ""))
+    name = _named(title or evidence, "").strip().lower()   # the display name the finding carries
+    pack_id = next((pack_id for pack_id, display in trader_mode.supported_wallets().items()
+                    if display.lower() == name), "")   # by name: ids are hyphenated ("coinbase-wallet")
+    return trader_mode.logo_url(pack_id)
 
 
 def _event(threat: dict[str, Any], step: dict[str, Any], session: dict[str, Any], index: int,

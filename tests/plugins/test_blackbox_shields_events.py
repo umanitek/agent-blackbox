@@ -282,3 +282,16 @@ def test_a_long_session_keeps_the_steps_nearest_the_event():
     assert [step["label"] for step in window if step["this"]] == ["step 70"]
     assert window[0]["label"] == f"step {70 - events.MAX_TIMELINE_STEPS // 2}"
 
+
+
+def test_every_supported_wallet_with_a_logo_shows_it_on_its_vault_event():
+    """The logo was looked up by squashing the display name ("Coinbase Wallet" -> "coinbasewallet"),
+    which matches no pack id ("coinbase-wallet"): only single-word wallets got their logo."""
+    from plugins.blackbox.shields.trader import mode
+
+    with_logo = {pack_id: name for pack_id, name in mode.supported_wallets().items() if mode.logo_url(pack_id)}
+    assert "coinbase-wallet" in with_logo or "trust-wallet" in with_logo or len(with_logo) > 1
+    for pack_id, name in with_logo.items():
+        event = _event("fileaccess:terminal:crypto-wallet", title=f"Read of a crypto wallet's key store ({name})",
+                       evidence=f"copy crypto-wallet ({name})", action=ARCHIVE_CHROME)
+        assert event.logo == f"/shields/trader/packs/{pack_id}/logo.svg", name
