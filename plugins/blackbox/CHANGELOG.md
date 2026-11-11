@@ -47,6 +47,9 @@ that the two version fields agree.
 - **A typo in `snapshot_sync` no longer switches protection off.** A saved `snapshot_sync` block
   that cannot be used is reported (`blackbox status` says so, sync refuses to start) while every
   check keeps running. Saving such a block is refused.
+- **A long command is checked like a short one.** The protected-path, keychain, guard-settings
+  and dangerous-command checks read a command whole up to 100,000 characters, and a longer one
+  by its first and last 50,000. They used to read only its first 8,000.
 - **The guard-settings rule follows `cd`.** A command that reaches Blackbox's own settings through
   several `cd` steps is recognised like one that names the file directly.
 - **A `config.yaml` that cannot be read is never written over.** Attach, the assistant's profile
