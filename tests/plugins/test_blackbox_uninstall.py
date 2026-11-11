@@ -258,3 +258,15 @@ def test_uninstall_and_the_node_service_name_the_same_services():
     assert uninstall.LAUNCHD_LABELS == ("ai.umanitek.blackbox-dashboard", "ai.umanitek.blackbox-dkg")
     assert uninstall.SYSTEMD_UNITS == ("blackbox-dashboard.service", "blackbox-dkg.service")
     assert uninstall.WINDOWS_TASKS == ("Agent Blackbox dashboard", "Agent Blackbox DKG node")
+
+
+@pytest.mark.parametrize("plugins", ["blackbox", ["blackbox"], 7])
+def test_a_config_whose_plugins_is_not_a_mapping_does_not_crash_the_plan(tmp_path, plugins):
+    """`blackbox uninstall` built its plan by reading `plugins.enabled`; a `plugins` that is a
+    string or list (a hand-edited config) raised AttributeError and the command crashed."""
+    from plugins.blackbox.kernel import yaml_files
+
+    home = tmp_path / "hermes"
+    home.mkdir()
+    yaml_files.dump_yaml(home / "config.yaml", {"plugins": plugins})
+    assert uninstall._names_blackbox(home) is False

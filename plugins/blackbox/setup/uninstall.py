@@ -95,8 +95,9 @@ def _configured_dkg_home(home: Path) -> Optional[Path]:
 
 
 def _names_blackbox(home: Path) -> bool:
-    plugins = yaml_files.load_yaml(home / "config.yaml").get("plugins") or {}
-    enabled = plugins.get("enabled") or []
+    plugins = yaml_files.load_yaml(home / "config.yaml").get("plugins")
+    plugins = plugins if isinstance(plugins, dict) else {}   # a hand-edited string or list names nothing
+    enabled = plugins.get("enabled") if isinstance(plugins.get("enabled"), list) else []
     entries = plugins.get("entries") or {}
     return "blackbox" in enabled or (isinstance(entries, dict) and "blackbox" in entries) \
         or (home / "plugins" / "blackbox").exists()
