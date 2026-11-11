@@ -384,9 +384,9 @@ def _cmd_sync_impl(args: argparse.Namespace) -> int:
                 )
 
         may_probe_private = private_graph and not getattr(args, "wait", False)
-        # An active successor graph (T2) rides the same sync, fail-open.
-        side_subscriptions.ensure_side_subscriptions(client, cfg)
         if not subscribed and (admitted or not private_graph or may_probe_private):
+            # An active successor graph (T2) rides the same sync, fail-open — not on every poll.
+            side_subscriptions.ensure_side_subscriptions(client, cfg)
             try:
                 subscription = client.subscribe_context_graph(cfg.context_graph_id)
                 subscribed = True
