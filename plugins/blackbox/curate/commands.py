@@ -31,6 +31,7 @@ from .ladder import outcomes
 from .upkeep import heartbeat, published
 from .context import CurateContext, build_context, verified_identifiers
 from .proposals import ProposalState, ProposalStore
+from .publishing.errors import guarded
 from ..kernel.health import today_utc
 
 _term = display_safety.term_safe
@@ -41,14 +42,7 @@ _term = display_safety.term_safe
 
 def cmd_curate(args: argparse.Namespace) -> int:
     verb: Callable[[argparse.Namespace], int] = _VERBS.get(args.verb or "", _usage)
-    try:
-        return verb(args)
-    except verbs.VerbError as exc:
-        print(f"Refused: {exc}")
-        return 2
-    except Exception as exc:  # the outermost CLI boundary: a readable line, never a traceback
-        print(f"curate {args.verb} failed: {_term(str(exc), 200)}")
-        return 1
+    return guarded(verb)(args)
 
 
 def _usage(args: argparse.Namespace) -> int:

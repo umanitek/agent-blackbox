@@ -822,7 +822,7 @@ def test_a_community_curator_cannot_correct_verified_rows(monkeypatch, tmp_path,
 
 def test_the_cli_prints_a_refusal_and_exits_2(monkeypatch, capsys):
     monkeypatch.setattr(correction_verbs, "build_context", lambda *a, **k: pytest.fail("refused before reading the node"))
-    run = correction_verbs._guarded(correction_verbs.cmd_correct)
+    run = correction_verbs.guarded(correction_verbs.cmd_correct)
     assert run(_args(identifier="dep:npm:left-pad@1.3.0")) == 2
     assert capsys.readouterr().out.startswith("Refused: a correction suppresses an ADDRESS")
 
