@@ -1059,3 +1059,29 @@ def test_the_console_default_services_render_metrics_without_a_node(routed):
     res = routed.http.get("/api/metrics", headers=routed.headers)
     assert res.status_code == 200 and tuple(res.json()) == METRIC_NAMES
     assert res.json()["seconds_since_last_batch"] == NEVER
+
+
+@pytest.mark.parametrize("failure, status", [(OSError("disk full"), 500), ("proposal", 409)])
+def test_a_console_action_that_fails_to_save_answers_json_not_a_bare_500(failure, status):
+    """Every console answer is `{"error"}` (never a traceback, never plain text): a save that
+    failed (OSError) or a proposal state refusal escaped as the framework's plain-text 500."""
+    pytest.importorskip("fastapi")
+    import json as json_module
+
+    from plugins.blackbox.curate.console import routes
+    from plugins.blackbox.curate.proposals.proposal import ProposalError
+
+    error = ProposalError("a DRAFT cannot jump to PUBLISHED") if failure == "proposal" else failure
+
+    def work():
+        raise error
+
+    answer = routes._answer(work)
+    assert answer.status_code == status and "error" in json_module.loads(answer.body)
+    assert "disk full" not in answer.body.decode()                     # no internal detail for an I/O failure
+
+
+def test_the_passphrase_length_limit_is_defined_once():
+    from plugins.blackbox.curate.console import app, routes
+
+    assert routes.MAX_PASSPHRASE_LENGTH is app.MAX_PASSPHRASE_LENGTH
