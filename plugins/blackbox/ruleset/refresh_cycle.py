@@ -81,6 +81,18 @@ def _latest_cached_ruleset(context_graph_id: str = "") -> Optional[compiler.Rule
     return cached
 
 
+def _current_or_empty(config: BlackboxConfig) -> compiler.Ruleset:
+    """The generation for *config*'s graph — memory, else the disk copy written for this graph,
+    else an empty ruleset — stored as the current one (what :func:`get` and :func:`peek` serve)."""
+    cached = _latest_cached_ruleset(config.context_graph_id)
+    if cached is None:
+        disk = disk_cache._read_cache()
+        cached = (disk if _matches_context_graph(disk, config.context_graph_id)
+                  else compiler.Ruleset(context_graph_id=config.context_graph_id))
+        _memory.store(cached)
+    return cached
+
+
 _EMPTY_RULESET_RETRY_S = 30.0
 #: While the verified graph is only partly compiled, refresh again this soon so
 #: the rules reach the whole graph in minutes, not hours (KI-288); long enough
@@ -348,15 +360,7 @@ def get(config: Optional[BlackboxConfig] = None) -> compiler.Ruleset:
     config = config or load_blackbox_config()
     if reads_graph_directly(config):
         return GraphView(config)
-    cached = _latest_cached_ruleset(config.context_graph_id)
-    if cached is None:
-        disk = disk_cache._read_cache()
-        cached = (
-            disk
-            if _matches_context_graph(disk, config.context_graph_id)
-            else compiler.Ruleset(context_graph_id=config.context_graph_id)
-        )
-        _memory.store(cached)
+    cached = _current_or_empty(config)
     refresh_after = max(1.0, float(config.sync_interval or 1))
     if cached.source_count("public") > 0:
         refresh_after = max(refresh_after, _NONEMPTY_REFRESH_MIN_S)
@@ -388,13 +392,5 @@ def peek(config: Optional[BlackboxConfig] = None) -> compiler.Ruleset:
     config = config or load_blackbox_config()
     if reads_graph_directly(config):
         return GraphView(config)
-    cached = _latest_cached_ruleset(config.context_graph_id)
-    if cached is None:
-        disk = disk_cache._read_cache()
-        cached = (
-            disk
-            if _matches_context_graph(disk, config.context_graph_id)
-            else compiler.Ruleset(context_graph_id=config.context_graph_id)
-        )
-        _memory.store(cached)
+    cached = _current_or_empty(config)
     return cached
