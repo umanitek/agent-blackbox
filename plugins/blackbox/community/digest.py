@@ -28,16 +28,13 @@ Usage::
 
 from __future__ import annotations
 
-import json
 import logging
-import os
-import secrets
 import threading
 from dataclasses import dataclass
-from datetime import date, datetime, timezone, UTC
+from datetime import date, datetime, UTC
 from enum import Enum
 from pathlib import Path
-from typing import Callable, Dict, List, Mapping, Optional, Tuple
+from typing import Callable, Mapping, Optional
 
 from .. import audit
 from ..kernel import constants, rdf_terms, threat_ids
@@ -46,7 +43,7 @@ from ..kernel.dkg_client import DkgClient
 from ..kernel import identity
 from . import report_signer, sharing
 from .report_signer import DIGEST_STATEMENT, ReportSigner
-from ..kernel.bounded_files import atomic_write
+from ..kernel.bounded_files import read_json_object, write_json_object
 
 logger = logging.getLogger(__name__)
 
@@ -171,8 +168,8 @@ class SightingTally:
                 return False
 
     def _load(self) -> dict[str, object]:
+        data = read_json_object(self._path) or {}
         try:
-            data = json.loads(self._path.read_text(encoding="utf-8-sig"))
             weeks = {str(w): {str(k): int(v) for k, v in dict(c).items()} for w, c in dict(data["weeks"]).items()}
             return {"weeks": weeks, "published": [str(w) for w in data.get("published", [])]}
         except (OSError, ValueError, KeyError, TypeError):
@@ -183,11 +180,7 @@ class SightingTally:
         for week in sorted(weeks)[:-_KEEP_WEEKS]:
             weeks.pop(week, None)
         state["published"] = [w for w in state["published"] if w in weeks]  # type: ignore[index]
-        try:
-            self._path.parent.mkdir(parents=True, exist_ok=True)
-            atomic_write(self._path, json.dumps(state))
-        except OSError as exc:   # fail-open: an unwritable home only loses this week's counts
-            logger.warning("blackbox: could not save the sighting tally (%s)", exc)
+        write_json_object(self._path, state, what="the sighting tally")   # fail-open: only this week's counts are lost
 
 
 def record_verified_sighting(identifier: str) -> None:

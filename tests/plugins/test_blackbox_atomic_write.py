@@ -343,3 +343,18 @@ def test_the_dashboard_port_default_is_named_once():
     assert BlackboxConfig().dashboard_port == constants.DEFAULT_DASHBOARD_PORT
     assert inspect.signature(server.start_dashboard).parameters["port"].default == constants.DEFAULT_DASHBOARD_PORT
     assert uninstall.UninstallPlan.__dataclass_fields__["dashboard_port"].default == constants.DEFAULT_DASHBOARD_PORT
+
+
+def test_a_json_state_file_is_saved_whole_or_a_warning_says_it_was_not(tmp_path, caplog):
+    import logging
+
+    from plugins.blackbox.kernel.bounded_files import read_json_object, write_json_object
+
+    path = tmp_path / "deep" / "state.json"
+    assert write_json_object(path, {"pending": [1, 2]}, what="the test queue") is True
+    assert read_json_object(path) == {"pending": [1, 2]}
+    blocked = tmp_path / "a-file"
+    blocked.write_text("x", encoding="utf-8")
+    with caplog.at_level(logging.WARNING):
+        assert write_json_object(blocked / "state.json", {}, what="the test queue") is False
+    assert "could not save the test queue" in caplog.text

@@ -26,20 +26,17 @@ Usage::
 
 from __future__ import annotations
 
-import json
 import logging
-import os
-import secrets
 import threading
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Iterable, Optional
 
 from ...kernel import constants
 from ..statements.lifetimes import lifetime_days
 from .epochs import Epoch
-from ...kernel.bounded_files import atomic_write
+from ...kernel.bounded_files import read_json_object, write_json_object
 
 logger = logging.getLogger(__name__)
 
@@ -161,15 +158,12 @@ class LiveReportStore:
             return len(live) - len(kept)
 
     def _load(self) -> list[LiveReport]:
+        data = read_json_object(self._path) or {}
         try:
-            data = json.loads(self._path.read_text(encoding="utf-8-sig"))
             return [LiveReport.from_json(item) for item in data.get("live", [])]
         except (OSError, ValueError, KeyError, TypeError):
             return []   # missing or unreadable: nothing to keep alive
 
     def _save(self, live: list[LiveReport]) -> None:
-        try:
-            self._path.parent.mkdir(parents=True, exist_ok=True)
-            atomic_write(self._path, json.dumps({"live": [r.as_json() for r in live]}))
-        except OSError as exc:   # fail-open: an unwritable home only loses the keep-alive memory
-            logger.warning("blackbox: could not save the live-reports store (%s)", exc)
+        # fail-open: an unwritable home only loses the keep-alive memory
+        write_json_object(self._path, {"live": [r.as_json() for r in live]}, what="the live-reports store")

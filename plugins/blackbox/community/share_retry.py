@@ -28,21 +28,18 @@ Usage::
 
 from __future__ import annotations
 
-import json
 import logging
-import os
-import secrets
 import threading
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Optional
 
 from .. import audit
 from ..kernel import constants
 from ..kernel.dkg_client import DkgClient
 from . import keep_alive
-from ..kernel.bounded_files import atomic_write
+from ..kernel.bounded_files import read_json_object, write_json_object
 
 logger = logging.getLogger(__name__)
 
@@ -192,8 +189,8 @@ class ShareRetryQueue:
     # -- storage -------------------------------------------------------------
 
     def _load(self) -> tuple[list[PendingShare], list[dict[str, Any]]]:
+        data = read_json_object(self._path) or {}
         try:
-            data = json.loads(self._path.read_text(encoding="utf-8-sig"))
             pending = [PendingShare.from_json(item) for item in data.get("pending", [])]
             given_up = [dict(item) for item in data.get("given_up", [])]
             return pending, given_up
@@ -201,11 +198,9 @@ class ShareRetryQueue:
             return [], []   # missing or unreadable: an empty queue
 
     def _save(self, pending: list[PendingShare], given_up: list[dict[str, Any]]) -> None:
-        try:
-            self._path.parent.mkdir(parents=True, exist_ok=True)
-            atomic_write(self._path, json.dumps({"pending": [s.as_json() for s in pending], "given_up": given_up}))
-        except OSError as exc:   # fail-open: an unwritable home only loses the retry memory
-            logger.warning("blackbox: could not save the share retry queue (%s)", exc)
+        # fail-open: an unwritable home only loses the retry memory
+        write_json_object(self._path, {"pending": [s.as_json() for s in pending], "given_up": given_up},
+                          what="the share retry queue")
 
 
 def default_queue() -> ShareRetryQueue:

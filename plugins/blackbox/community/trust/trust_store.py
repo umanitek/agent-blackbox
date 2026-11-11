@@ -48,7 +48,6 @@ Usage::
 
 from __future__ import annotations
 
-import json
 import logging
 import threading
 import time
@@ -58,8 +57,8 @@ from pathlib import Path
 from typing import Callable, Collection, Iterable, Mapping, Optional
 
 from ...kernel.health import utc_day
-from ...kernel import constants, signing, threat_ids, yaml_files
-from ...kernel.bounded_files import read_json_object
+from ...kernel import constants, signing, threat_ids
+from ...kernel.bounded_files import read_json_object, write_json_object
 from ...kernel.signing import CuratorStatement
 
 logger = logging.getLogger(__name__)
@@ -290,10 +289,7 @@ class TrustStore:
         return read_json_object(self._path) or {}   # missing or unreadable: rebuilt from the network
 
     def _write(self, data: Mapping[str, object]) -> None:
-        try:
-            yaml_files.atomic_write(self._path, json.dumps({"version": 1, **dict(data)}))
-        except OSError as exc:
-            logger.warning("blackbox: could not save the community trust store (%s)", exc)
+        write_json_object(self._path, {"version": 1, **dict(data)}, what="the community trust store")
 
 
 def _plain_rows(value: object) -> list[Row]:

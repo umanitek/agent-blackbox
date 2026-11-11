@@ -15,13 +15,23 @@ Usage::
     record = read_json_object(path)            # None: no readable record
     if record is None:
         ...
+    write_json_object(path, {"live": rows}, what="the live-reports store")   # False: warned, not saved
+
+:func:`write_json_object` is the matching save for state whose loss is survivable: it creates
+the folder, writes torn-free, and on failure logs a WARNING naming *what* and returns False.
+State that must not be lost silently (a consent record, a curator roster) keeps its own write.
 """
 
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
+
+from .atomic_write import atomic_write
+
+logger = logging.getLogger(__name__)
 
 
 def read_json_object(path: Path) -> Optional[dict[str, Any]]:
@@ -32,3 +42,16 @@ def read_json_object(path: Path) -> Optional[dict[str, Any]]:
     except (OSError, ValueError, RecursionError):
         return None
     return data if isinstance(data, dict) else None
+
+
+def write_json_object(path: Path, data: Mapping[str, Any], *, what: str, mode: Optional[int] = None) -> bool:
+    """Save *data* as JSON in *path* (folders created, temp file + rename, *mode* if given).
+    True when it is on disk; False after a WARNING "could not save <what>" when it is not —
+    for state a lost write only forgets (a queue, a cache, a tally), never for a security record."""
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write(path, json.dumps(dict(data)), mode=mode)
+        return True
+    except OSError as exc:
+        logger.warning("blackbox: could not save %s (%s)", what, exc)
+        return False
