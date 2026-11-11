@@ -191,7 +191,7 @@ def test_a_typed_consent_code_can_be_used_again_after_a_write_that_did_not_land(
     with team.b:
         store = ProposalStore()
         envelope = store.get(proposal.id).envelope
-        code = consent.confirmation_code(envelope)
+        code = consent.ConsentLedger().show(envelope, "shown to the operator")   # as `curate show` / the console do
         strict = team.ctx(team.b, sandbox=False)
         _, outcome = publishing.publish(strict, store, proposal.id, typed_code=code, yes=False)
         assert outcome.startswith("not published") and "read back" in outcome

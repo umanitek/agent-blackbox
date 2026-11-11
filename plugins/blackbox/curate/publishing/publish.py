@@ -91,7 +91,10 @@ def publish(ctx: CurateContext, store: ProposalStore, proposal_id: str, *, typed
     if envelope is None or not has_quorum(ctx, proposal, envelope):
         raise VerbError("the proposal does not carry enough curator signatures to publish")
     ledger = consent.ConsentLedger()
-    code = ledger.show(proposal.envelope, summary(proposal))
+    # A code is shown when the operator has not typed one; showing it again here, right before
+    # checking a typed code, restarted its 10-minute life on every attempt.
+    code = (consent.confirmation_code(proposal.envelope) if typed_code or yes or standing
+            else ledger.show(proposal.envelope, summary(proposal)))
     ok, why = (ledger.standing(proposal.envelope, standing) if standing
                else ledger.consent(proposal.envelope, typed=typed_code, sandbox=ctx.sandbox, yes=yes))
     if not ok:
