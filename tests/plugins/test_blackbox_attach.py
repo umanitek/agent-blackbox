@@ -928,3 +928,18 @@ def test_status_lists_attached_agents_with_attach_own_check(monkeypatch, tmp_pat
     assert "attached (hermes): 1" in out and str(home) in out
     assert "attached (openclaw): 2" in out and str(commented) in out and str(named_file) in out
     assert str(off) not in out
+
+
+def test_detach_exits_non_zero_when_a_target_failed(monkeypatch, capsys):
+    """`blackbox attach` exits 1 when a target failed; `detach` said 0 whatever happened."""
+    import argparse
+
+    from plugins.blackbox import attach
+    from plugins.blackbox.attach import command
+
+    report = {"hermes": [{"target": "/h", "error": "config.yaml cannot be read"}], "openclaw": []}
+    monkeypatch.setattr(attach, "detach_all", lambda **kw: report)
+    args = argparse.Namespace(openclaw_only=False, hermes_only=False, remove_files=False, dry_run=False)
+    assert command.cmd_detach(args) == 1
+    report["hermes"] = [{"target": "/h", "disabled": True}]
+    assert command.cmd_detach(args) == 0

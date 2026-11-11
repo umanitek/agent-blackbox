@@ -159,7 +159,8 @@ def cmd_detach(args: argparse.Namespace) -> int:
         else:
             print(f"  {prefix} {row['target']} (openclaw)")
     print("\nBlackbox detached. Restart any running agent to apply.")
-    return 0
+    failed = any(row.get("error") for group in ("hermes", "openclaw") for row in report.get(group, []))
+    return 1 if failed else 0   # like `attach`: a target that failed is a failed command
 
 
 def print_hermes_attach_row(row: dict[str, Any], prefix: str) -> None:
