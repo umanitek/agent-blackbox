@@ -26,9 +26,8 @@ from typing import Any, Mapping
 from ...detection import FIELD_WALLET_SECRET_SENT, Finding
 from ...kernel import crypto_secrets
 from ...kernel.config import load_blackbox_config
-from ..contract import (Capability, SettingField, SettingOption, Shield, ShieldEvent, ShieldMode,
+from ..contract import (BrowserRoot, Capability, Pack, SettingField, SettingOption, Shield, ShieldEvent, ShieldMode,
                         ShieldStatus)
-from ..packs import load_packs
 from ..self_test import SELF_TESTS
 from . import detectors, events, kinds, mode, self_tests, status
 from .detectors import own_keys
@@ -120,6 +119,13 @@ def _status(active: ShieldMode) -> ShieldStatus:
     return status.build(active, allows)
 
 
+def _use_data(packs: tuple[Pack, ...], roots: tuple[BrowserRoot, ...]) -> None:
+    """Take the packs (the mode chooses among them) and browser roots (the key-store scan
+    and the card read them) the registry loaded — once, at its import, never on the hot path."""
+    mode.use_packs(packs)
+    detectors.use_roots(roots)
+
+
 def _events() -> list[ShieldEvent]:
     """Every event this shield claims, told under Blackbox's audit/block mode now."""
     return events.report(claims, blocking=bool(load_blackbox_config().block_enabled))
@@ -132,12 +138,9 @@ TRADER = Shield(
     claims=claims, allows=allows, status=_status, events=_events,
     settings_fields=settings_fields, finding_kinds=FINDING_KINDS, capabilities=CAPABILITIES,
     packs=HERE / "wallets", page=HERE / "page" / "trader.html", attacks=HERE / "attacks.json",
-    detectors=detectors.DETECTORS, browser_roots=HERE / "browsers.json",
+    detectors=detectors.DETECTORS, browser_roots=HERE / "browsers.json", use_data=_use_data,
 )
 
-# The mode chooses among the packs, read once here at import (never on the hot path).
-# The registry reads them again for its own view (logos, health): two import-time reads.
-mode.use_packs(load_packs(TRADER))
 
 # The Playground lists Trader's self-tests through the registry, never this package.
 SELF_TESTS.register(TRADER.id, self_tests.build)

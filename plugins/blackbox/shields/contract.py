@@ -351,7 +351,7 @@ class Shield:
     *packs* is the folder of pack folders; the shield's own folder is its parent, and
     every file the loader reads must lie inside it. *detectors* are the pack kinds'
     validators (see :class:`PackDetector`); *browser_roots* is its ``browsers.json``,
-    when it ships one.
+    when it ships one. *use_data* receives the packs and roots the registry loaded (read once).
     """
 
     id: str
@@ -373,6 +373,7 @@ class Shield:
     attacks: Path
     detectors: tuple[PackDetector, ...] = ()
     browser_roots: Optional[Path] = None
+    use_data: Optional[Callable[[tuple[Pack, ...], tuple[BrowserRoot, ...]], None]] = None
 
     @property
     def folder(self) -> Path:

@@ -30,7 +30,6 @@ Usage::
 
 from __future__ import annotations
 
-import functools
 import glob
 import os
 import re
@@ -42,7 +41,7 @@ from typing import Any, Callable, Mapping, Optional
 from ....detection import SHELL_TOOLS, Finding, command_from_args, file_access_arg, shell_file_args
 from ....kernel import threat_ids
 from ...contract import BrowserRoot, Pack, PackDetector, ShieldMode
-from ...packs import COMMON_FIELDS, load_browser_roots
+from ...packs import COMMON_FIELDS
 from .. import mode as trader_mode
 from . import app_folder
 from .app_folder import AppFolderMatcher, expand_template
@@ -173,11 +172,19 @@ def owner(path: str) -> Optional[Owner]:
     return matcher().owner(path) or app_matcher().owner(normalize_path(path))
 
 
-@functools.cache
+#: Every root in Trader's ``browsers.json``, handed in by the shield (:func:`use_roots`).
+_roots: tuple[BrowserRoot, ...] = ()
+
+
+def use_roots(roots: tuple[BrowserRoot, ...]) -> None:
+    """Set the browser roots the registry loaded (the shield calls this once, at registry import)."""
+    global _roots
+    _roots = tuple(roots)
+
+
 def browser_roots() -> tuple[BrowserRoot, ...]:
-    """Every root in Trader's ``browsers.json``, loaded and validated once."""
-    from ...trader import TRADER   # here, not at the top: the shield record imports this module before it exists
-    return load_browser_roots(TRADER)[0]
+    """Every root in Trader's ``browsers.json``, as the registry loaded and validated it."""
+    return _roots
 
 
 class _ExistingStores:
