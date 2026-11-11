@@ -27,7 +27,7 @@ from typing import Callable, Optional
 from ...kernel import threat_ids
 from ..service.evidence import Lookup
 from .client import HttpClient, UrllibClient
-from .credentials import CredentialsError, load_credentials
+from .credentials import key_for
 from .protocol import REUSE_CLEARED, SourceTerms, SourceVerdict
 
 NAME = "phishtank"
@@ -36,11 +36,7 @@ ENDPOINT = "https://checkurl.phishtank.com/checkurl/"
 TERMS = SourceTerms(citable=True, reuse_state=REUSE_CLEARED, limit_requests=250, limit_seconds=60 * 60)
 
 
-def _default_key() -> Optional[str]:
-    try:
-        return load_credentials().get(APP_KEY_NAME)
-    except CredentialsError:
-        return None
+_default_key = key_for(APP_KEY_NAME)   # the credentials file, read when asked
 
 
 class PhishTankSource:

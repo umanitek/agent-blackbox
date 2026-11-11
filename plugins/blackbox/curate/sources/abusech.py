@@ -42,7 +42,7 @@ from typing import Callable, Dict, Optional, Tuple
 from ...kernel import threat_ids
 from ..service.evidence import Lookup
 from .client import HttpClient, JsonObject, UrllibClient
-from .credentials import CredentialsError, load_credentials
+from .credentials import key_for
 from .protocol import REUSE_LOOKUP_ONLY, SourceTerms, SourceVerdict
 
 AUTH_KEY_NAME = "abusech"
@@ -66,11 +66,7 @@ _BAZAAR_HASH_LENGTHS = frozenset({32, 40, 64})
 _THREATFOX_TIME_FORMAT = "%Y-%m-%d %H:%M:%S UTC"
 
 
-def _default_key() -> Optional[str]:
-    try:
-        return load_credentials().get(AUTH_KEY_NAME)
-    except CredentialsError:
-        return None   # a file we may not use is the same as no key: could not tell
+_default_key = key_for(AUTH_KEY_NAME)   # the credentials file, read when asked
 
 
 class AbuseChFetcher:

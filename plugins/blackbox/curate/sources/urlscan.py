@@ -58,7 +58,7 @@ from ...kernel import threat_ids
 from ..lab.jobs import strip_query
 from ..service.evidence import Lookup
 from .client import HttpClient, JsonObject, UrllibClient
-from .credentials import CredentialsError, load_credentials
+from .credentials import key_for
 from .protocol import REUSE_NEEDS_FOUNDER, SourceTerms, SourceVerdict
 
 NAME = "urlscan"
@@ -84,11 +84,7 @@ _UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{1
 _LISTS = ("domains", "ips", "hashes")
 
 
-def _default_key() -> Optional[str]:
-    try:
-        return load_credentials().get(API_KEY_NAME)
-    except CredentialsError:
-        return None
+_default_key = key_for(API_KEY_NAME)   # the credentials file, read when asked
 
 
 @dataclass(frozen=True)

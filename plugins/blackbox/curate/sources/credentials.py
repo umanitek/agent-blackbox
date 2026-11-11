@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import stat
 from pathlib import Path
-from typing import Mapping, Optional
+from typing import Callable, Mapping, Optional
 
 from .. import keys
 
@@ -50,3 +50,15 @@ def load_credentials(path: Optional[Path] = None) -> Mapping[str, str]:
     if not isinstance(data, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in data.items()):
         raise CredentialsError(f"{path} must be a JSON object of source name to key")
     return dict(data)
+
+
+def key_for(name: str) -> Callable[[], Optional[str]]:
+    """A source's default key lookup: *name* from the credentials file, read when asked. A file
+    that may not be used (too open, malformed) gives no key — the source then answers "could
+    not tell", never a guess. Usage: ``_default_key = credentials.key_for("URLSCAN_API_KEY")``."""
+    def lookup() -> Optional[str]:
+        try:
+            return load_credentials().get(name)
+        except CredentialsError:
+            return None
+    return lookup
