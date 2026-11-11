@@ -119,6 +119,8 @@ that the two version fields agree.
   is in; a user folder such as "marc" or "operator" no longer makes a Chrome wallet read Arc or Opera.
 - **An approval to a spender Blackbox cannot check is told like any other approval.** Its event
   in Trader Shield's report now says what the agent reached for and why it matters.
+- **An empty `APPDATA` no longer points Trader Shield at the top of the disk.** Like an empty
+  `XDG_CONFIG_HOME`, it now counts as unset when Trader Shield works out where a wallet app keeps its files.
 
 ### Changed
 

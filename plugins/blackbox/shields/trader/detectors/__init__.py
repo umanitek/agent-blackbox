@@ -45,7 +45,7 @@ from ...contract import BrowserRoot, Pack, PackDetector, ShieldMode
 from ...packs import COMMON_FIELDS, load_browser_roots
 from .. import mode as trader_mode
 from . import app_folder
-from .app_folder import AppFolderMatcher
+from .app_folder import AppFolderMatcher, expand_template
 from .browser_extension import BrowserExtensionMatcher, Owner, normalize_path
 
 CHROMIUM_ID = re.compile(r"[a-p]{32}")
@@ -178,19 +178,6 @@ def browser_roots() -> tuple[BrowserRoot, ...]:
     """Every root in Trader's ``browsers.json``, loaded and validated once."""
     from ...trader import TRADER   # here, not at the top: the shield record imports this module before it exists
     return load_browser_roots(TRADER)[0]
-
-
-def expand_template(template: str) -> str:
-    """A path template (``$XDG_CONFIG_HOME/google-chrome*``) as a glob on this machine: its
-    root from the environment now (``$XDG_CONFIG_HOME`` → ``~/.config``, ``%APPDATA%`` →
-    ``~/AppData/Roaming``, ``%LOCALAPPDATA%`` → ``~/AppData/Local`` when unset)."""
-    home = os.path.expanduser("~")
-    # An EMPTY variable means its default too (`or`): it would make the glob relative to the current folder.
-    roots = {"~": home, "$XDG_CONFIG_HOME": os.environ.get("XDG_CONFIG_HOME") or os.path.join(home, ".config"),
-             "%APPDATA%": os.environ.get("APPDATA") or os.path.join(home, "AppData", "Roaming"),
-             "%LOCALAPPDATA%": os.environ.get("LOCALAPPDATA") or os.path.join(home, "AppData", "Local")}
-    root, *below = template.split("/")
-    return os.path.join(roots[root], *below)
 
 
 class _ExistingStores:

@@ -65,21 +65,36 @@ def validate_pack(manifest: Mapping[str, Any]) -> Optional[str]:
     return None
 
 
-def _real(place: str) -> str:
-    """*place* with ``~``, ``$XDG_CONFIG_HOME`` (default ``~/.config``) and ``%VARS%``
-    expanded and ``/`` separators, case kept (for looking on disk). An unset ``%VAR%``
-    stays literal — it still matches a command that names it the same way, and is
-    never looked for on disk."""
-    config = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
-    text = place.replace("$XDG_CONFIG_HOME", config)
-    text = re.sub(r"%([A-Za-z_]+)%", lambda m: os.environ.get(m.group(1), m.group(0)), text)
+def expand_template(template: str, *, keep_unset: bool = False) -> str:
+    """A pack path template (``$XDG_CONFIG_HOME/google-chrome*``, ``%APPDATA%/Exodus``) or a
+    path read from a wallet's config, as a path on this machine now: ``/`` separators, case kept.
+
+    The ONE rule for where a wallet keeps its files. A root comes from the environment, and an
+    empty variable counts as unset (the XDG spec; an empty value would make the glob relative to
+    the current folder). An unset root is its default (``$XDG_CONFIG_HOME`` → ``~/.config``,
+    ``%APPDATA%`` → ``~/AppData/Roaming``, ``%LOCALAPPDATA%`` → ``~/AppData/Local``), except
+    that with *keep_unset* a ``%VAR%`` stays literal: the app-place matcher then still matches a
+    command that names it the same way, and never looks for it on disk.
+
+    Paths an AGENT hands in are read by ``browser_extension.normalize_path`` instead, on
+    purpose: that one asks what the shell would open, so an unset variable stays as written."""
+    home = os.path.expanduser("~")
+    defaults = {"XDG_CONFIG_HOME": os.path.join(home, ".config"), "APPDATA": os.path.join(home, "AppData", "Roaming"),
+                "LOCALAPPDATA": os.path.join(home, "AppData", "Local")}
+
+    def root(name: str, written: str) -> str:
+        value = os.environ.get(name) or ("" if keep_unset and written.startswith("%") else defaults.get(name, ""))
+        return value or written
+
+    text = template.replace("$XDG_CONFIG_HOME", root("XDG_CONFIG_HOME", "$XDG_CONFIG_HOME"))
+    text = re.sub(r"%([A-Za-z_]+)%", lambda m: root(m.group(1), m.group(0)), text)
     return os.path.normpath(os.path.expanduser(text)).replace("\\", "/")
 
 
 def _absolute(place: str) -> str:
-    """:func:`_real`, lower-cased — how wallet paths are compared (macOS and Windows
-    file names ignore case)."""
-    return _real(place).lower()
+    """:func:`expand_template` (unset ``%VAR%`` kept), lower-cased — how wallet paths are
+    compared (macOS and Windows file names ignore case)."""
+    return expand_template(place, keep_unset=True).lower()
 
 
 def _segment_matches(template_segment: str, segment: str) -> bool:
@@ -137,7 +152,7 @@ class PointerFiles:
         max_bytes = pointer.get("max_bytes", MANIFEST_MAX_BYTES)   # the loader checked it: 1..64 KB
         if not isinstance(max_bytes, int):
             return None
-        config_path = _real(str(pointer["config"]))
+        config_path = expand_template(str(pointer["config"]), keep_unset=True)
         try:
             mtime = os.path.getmtime(config_path)
         except OSError:
@@ -204,7 +219,7 @@ class AppFolderMatcher:
         found: list[tuple[str, Owner]] = []
         for owner, places in self._places:
             for place in places:
-                pattern = _real(place)
+                pattern = expand_template(place, keep_unset=True)
                 if "%" in pattern:
                     continue
                 for match in glob.glob(pattern):
