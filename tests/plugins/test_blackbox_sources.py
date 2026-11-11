@@ -1269,3 +1269,32 @@ def test_every_real_source_says_not_applicable_exactly_where_it_does_not_apply(i
                    osv.OsvSource(status=lambda *a: ("unavailable", None))):
         if not source.applies(identifier):
             assert source.check(identifier).status is Lookup.NOT_APPLICABLE, (source.name, identifier)
+
+
+def test_a_source_that_trickles_its_answer_is_given_up_at_the_deadline(monkeypatch):
+    """Each read waited at most the socket timeout, but a source sending a little before every
+    timeout could hold the curator beat for as long as it liked. The body has a deadline now."""
+    clock = Clock(0.0)
+
+    class Trickle:
+        def read(self, size):
+            clock.now += 4.0                      # each read just inside the 5-second socket timeout
+            return b"x"
+
+    monkeypatch.setattr(source_client.time, "monotonic", clock)
+    assert source_client._read_until(Trickle(), max_bytes=10_000, deadline=60.0) is None
+    assert clock.now <= 64.0                       # gave up within the deadline plus one read
+
+
+def test_an_answer_arriving_in_time_is_read_whole():
+    class Body:
+        def __init__(self, data):
+            self.data = data
+
+        def read(self, size):
+            part, self.data = self.data[:size], self.data[size:]
+            return part
+
+    data = b'{"query_status": "ok"}' * 10_000
+    assert source_client._read_until(Body(data), max_bytes=len(data), deadline=float("inf")) == data
+    assert len(source_client._read_until(Body(data), max_bytes=10, deadline=float("inf"))) == 11   # over the cap: caller drops it

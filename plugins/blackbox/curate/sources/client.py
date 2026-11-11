@@ -23,6 +23,7 @@ from __future__ import annotations
 import http.client
 import json
 import logging
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -34,6 +35,11 @@ logger = logging.getLogger(__name__)
 
 #: Each socket operation waits at most this long; the beat must not stall on one source.
 SOURCE_TIMEOUT_SECONDS = 5.0
+#: The slowest answer worth waiting for: a body arriving slower than this is given up, so a source
+#: that trickles bytes (each read inside the per-operation timeout) cannot hold the beat without end.
+MIN_BYTES_PER_SECOND = 256 * 1024
+#: The chunk read between deadline checks.
+_CHUNK_BYTES = 64 * 1024
 #: A source answer larger than this is not read (a look-up answer is a few KB).
 MAX_ANSWER_BYTES = 2_000_000
 #: Sent on every request; PhishTank requires a descriptive User-Agent.
@@ -83,17 +89,35 @@ class UrllibClient:
 
     def _send(self, request: urllib.request.Request, max_bytes: int) -> Any:
         """The decoded JSON answer, or ``None`` when the request could not tell."""
+        deadline = time.monotonic() + self._timeout + max_bytes / MIN_BYTES_PER_SECOND
         try:
             with self._opener.open(request, timeout=self._timeout) as response:
-                raw = response.read(max_bytes + 1)
+                raw = _read_until(response, max_bytes, deadline)
         except (urllib.error.URLError, http.client.HTTPException, OSError, ValueError) as exc:
             # Never log the request: its headers carry the source's key.
             logger.debug("blackbox: source request to %s failed: %s",
                          urllib.parse.urlsplit(request.full_url).netloc, type(exc).__name__)
             return None
-        if len(raw) > max_bytes:
+        if raw is None or len(raw) > max_bytes:   # past the deadline, or over the size cap
             return None
         try:
             return json.loads(raw.decode("utf-8"))
         except ValueError:
             return None
+
+
+def _read_until(response: Any, max_bytes: int, deadline: float) -> Optional[bytes]:
+    """Up to ``max_bytes + 1`` bytes of *response*, read in chunks; None once *deadline*
+    (``time.monotonic()``) passes. Each read still waits at most the socket timeout, so the
+    whole read ends within the deadline plus one timeout."""
+    chunks: list[bytes] = []
+    size = 0
+    while size <= max_bytes:
+        if time.monotonic() > deadline:
+            return None
+        chunk = response.read(min(_CHUNK_BYTES, max_bytes + 1 - size))
+        if not chunk:
+            break
+        chunks.append(chunk)
+        size += len(chunk)
+    return b"".join(chunks)
