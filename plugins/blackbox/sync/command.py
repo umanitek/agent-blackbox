@@ -3,8 +3,8 @@
 Drives the local node's catch-up of the verified graph (curator peer first,
 generic peers as fallback; the subscription includes the shared memory the
 community's reports live in), then compiles the ruleset. The catch-up route is one
-:class:`_CatchupSync` run (its state and its steps); ``_catchup_authoritative_vm`` is the
-remaining long function of quality item G4.
+:class:`_CatchupSync` run (its state and its steps), and the pinned curator's recovery one
+:class:`_PinnedRecovery` (quality item G4).
 """
 
 from __future__ import annotations
@@ -542,461 +542,274 @@ def _catchup_authoritative_vm(
     *,
     on_progress: Optional[Callable[[int], None]] = None,
 ) -> bool:
-    """Recover and verify the public graph's durable VM snapshot."""
-    catchup = getattr(client, "catchup_from_peer", None)
-    if not callable(catchup) or not graph_peer_id:
+    """Recover and verify the public graph's durable VM snapshot from the pinned peer."""
+    return _PinnedRecovery(client, context_graph_id, graph_peer_id, deadline, on_progress).run()
+
+
+#: Error text that marks a recovery request as worth retrying within the deadline: the node
+#: shedding load, a request aborted mid-flight, or a node restart window (~20-40 s: refused
+#: connections, a fronting proxy's 502) — retrying beats leaving the ruleset stale until the
+#: next hourly run (KI-065).
+_RETRYABLE_RECOVERY_ERRORS = (
+    "backpressure", "store scheduler", "queue wait timeout", "queue wait exceeded", "request aborted",
+    "timed out", "exceeded its", "totaltimeoutms", "connection refused", "connection reset",
+    "upstream node unreachable",
+)
+
+
+class _PinnedRecovery:
+    """One recovery of the verified graph's durable VM snapshot from the pinned curator peer
+    (State, as one object: the fields are the pass counters, each method one step).
+
+    Each pass asks the node to fetch from the peer (``catchup_from_peer``, synchronous) behind a
+    wall-clock watchdog; a transient error waits and retries; a pass that inserted triples
+    reports progress and goes again until the snapshot boundary is complete; a pass that
+    inserted nothing is success only at a complete, verified boundary (or the release floor).
+    """
+
+    #: How often a long request prints proof of life.
+    HEARTBEAT_SECONDS = 10.0
+
+    def __init__(self, client: DkgClient, graph: str, peer: str, deadline: float,
+                 on_progress: Optional[Callable[[int], None]]) -> None:
+        self.client, self.graph, self.peer, self.deadline, self.on_progress = client, graph, peer, deadline, on_progress
+        self.catchup = getattr(client, "catchup_from_peer", None)
+        self.home = str(getattr(client, "dkg_home", "") or "")
+        self.backpressure_notice_printed = False
+        self.backpressure_retries = self.empty_public_passes = self.incomplete_empty_passes = 0
+        self.last_incomplete_safe_current: Optional[int] = None
+        self.public_progress_seen = False
+        self.still_active = False
+        self.progress_cursor: Any = None
+
+    def _write(self, status: str, **fields: Any) -> None:
+        sync_state.write(status, context_graph_id=self.graph, graph_peer_id=self.peer, **fields)
+
+    def _fail(self, error: str, *, say: bool = False, **fields: Any) -> bool:
+        self._write("failed", error=error, **fields)
+        if say:
+            print(f"  {error}")
         return False
-    sync_state.write(
-        "running",
-        context_graph_id=context_graph_id,
-        graph_peer_id=graph_peer_id,
-        phase="recovering-verifiable-memory",
-    )
-    print("Syncing the complete verifiable VM snapshot...")
-    backpressure_notice_printed = False
-    backpressure_retries = 0
-    empty_public_passes = 0
-    incomplete_empty_passes = 0
-    last_incomplete_safe_current: Optional[int] = None
-    heartbeat_seconds = 10.0
 
-    try:
-        _connect_verifiable_source(
-            client,
-            context_graph_id,
-            graph_peer_id,
-            deadline,
-        )
-    except DkgError as exc:
-        error = f"verifiable graph source is unreachable: {exc}"
-        sync_state.write(
-            "failed",
-            context_graph_id=context_graph_id,
-            graph_peer_id=graph_peer_id,
-            error=error,
-        )
-        print(f"  {error}")
-        return False
+    def _pause(self) -> None:
+        time.sleep(min(2.0, max(0.2, self.deadline - time.monotonic())))
 
-    # Legacy DKG builds report durable completion only in daemon.log. Bound
-    # that compatibility signal to this recovery invocation so a completed
-    # transfer from an earlier command cannot satisfy a new request.
-    progress_cursor = capture_durable_progress_cursor(
-        str(getattr(client, "dkg_home", "") or "")
-    )
-
-    # DKG authenticates the configured graph id against its on-chain name-hash
-    # commitment. Request that graph directly instead of making VM availability
-    # depend on a separately materialized ontology graph.
-    public_progress_seen = False
-
-    while True:
-        remaining = deadline - time.monotonic()
-        if remaining <= 1:
-            sync_state.write(
-                "failed",
-                context_graph_id=context_graph_id,
-                graph_peer_id=graph_peer_id,
-                error="authoritative sync deadline reached",
-            )
+    def run(self) -> bool:
+        if not callable(self.catchup) or not self.peer:
             return False
-        pass_budget_ms = (
-            constants.DEFAULT_GRAPH_SYNC_PASS_BUDGET_MS
-            if public_progress_seen
-            else constants.INITIAL_GRAPH_SYNC_PASS_BUDGET_MS
-        )
-        budget_ms = max(
-            1_000,
-            min(
-                pass_budget_ms,
-                int(max(1.0, remaining - 10) * 1_000),
-            ),
-        )
-        request_still_active = False
+        self._write("running", phase="recovering-verifiable-memory")
+        print("Syncing the complete verifiable VM snapshot...")
         try:
-            # The DKG endpoint is synchronous and its final verification/store
-            # phase can outlive a socket inactivity timeout. Run it behind a
-            # daemon-thread wall-clock guard so a misbehaving daemon cannot pin
-            # a fresh install forever. Polling also gives operators visible
-            # proof of life while the request is legitimately busy.
-            outcome: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=1)
-
-            def _recover() -> None:
-                try:
-                    outcome.put(("ok", catchup(
-                        context_graph_id,
-                        graph_peer_id,
-                        budget_ms=budget_ms,
-                    )))
-                except BaseException as exc:  # delivered back to the caller
-                    outcome.put(("error", exc))
-
-            worker = threading.Thread(
-                target=_recover,
-                name="blackbox-curator-vm-recovery",
-                daemon=True,
-            )
-            worker.start()
-            request_started = time.monotonic()
-            request_deadline = min(
-                deadline,
-                request_started
-                + max(
-                    (budget_ms / 1_000) + 60.0,
-                    constants.GRAPH_SYNC_SETTLEMENT_TIMEOUT_S
-                    + constants.GRAPH_SYNC_WATCHDOG_HEADROOM_S,
-                ),
-            )
-            request_timeout_seconds = max(
-                1,
-                int(request_deadline - request_started),
-            )
-            heartbeat = 0
-            while True:
-                wait_for = min(
-                    heartbeat_seconds,
-                    max(0.0, request_deadline - time.monotonic()),
-                )
-                if wait_for <= 0:
-                    request_still_active = worker.is_alive()
-                    raise DkgError(
-                        "verifiable VM sync watchdog reached its "
-                        f"{request_timeout_seconds}s settlement deadline"
-                        + (
-                            " while the DKG request remains active"
-                            if request_still_active
-                            else ""
-                        )
-                    )
-                try:
-                    outcome_kind, outcome_value = outcome.get(timeout=wait_for)
-                    break
-                except queue.Empty:
-                    heartbeat += 1
-                    elapsed = int(heartbeat * heartbeat_seconds)
-                    print(
-                        f"  verifiable VM sync is still active "
-                        f"({elapsed}s elapsed)...",
-                        flush=True,
-                    )
-                    sync_state.write(
-                        "running",
-                        context_graph_id=context_graph_id,
-                        graph_peer_id=graph_peer_id,
-                        phase="recovering-verifiable-memory",
-                    )
-            if outcome_kind == "error":
-                raise outcome_value
-            result = outcome_value
+            _connect_verifiable_source(self.client, self.graph, self.peer, self.deadline)
         except DkgError as exc:
-            error = str(exc)
-            normalized_error = error.lower()
-            compact_error = "".join(normalized_error.split())
-            retryable = not request_still_active and (
-                '"retryable":true' in compact_error
-                or any(
-                    marker in normalized_error
-                    for marker in (
-                        "backpressure",
-                        "store scheduler",
-                        "queue wait timeout",
-                        "queue wait exceeded",
-                        "request aborted",
-                        "timed out",
-                        "exceeded its",
-                        "totaltimeoutms",
-                        # A node restart window (~20-40s) is transient: the
-                        # API refuses connections, or a fronting proxy
-                        # answers 502. Retrying within the deadline beats
-                        # failing the whole sync and leaving the ruleset
-                        # stale until the next hourly run (KI-065).
-                        "connection refused",
-                        "connection reset",
-                        "upstream node unreachable",
-                    )
-                )
-            )
-            if retryable and deadline - time.monotonic() > 4:
-                backpressure_retries += 1
-                sync_state.write(
-                    "running",
-                    context_graph_id=context_graph_id,
-                    graph_peer_id=graph_peer_id,
-                    phase="waiting-for-dkg-capacity",
-                )
-                if not backpressure_notice_printed:
-                    print("DKG graph sync is pausing briefly before a safe resume...")
-                    backpressure_notice_printed = True
-                retry_delay = min(
-                    constants.GRAPH_SYNC_RETRY_BACKOFF_MAX_S,
-                    constants.GRAPH_SYNC_RETRY_BACKOFF_INITIAL_S
-                    * (2 ** min(backpressure_retries - 1, 4)),
-                )
-                time.sleep(
-                    min(retry_delay, max(0.2, deadline - time.monotonic()))
-                )
-                continue
-            sync_state.write(
-                "failed",
-                context_graph_id=context_graph_id,
-                graph_peer_id=graph_peer_id,
-                error=error,
-            )
-            logger.debug("blackbox: verifiable graph recovery failed: %s", exc)
+            return self._fail(f"verifiable graph source is unreachable: {exc}", say=True)
+        # Legacy DKG builds report durable completion only in daemon.log: bound that signal to
+        # THIS invocation, so a transfer completed by an earlier command cannot satisfy it.
+        # (The configured graph id is requested directly: DKG authenticates it on chain.)
+        self.progress_cursor = capture_durable_progress_cursor(self.home)
+        while True:
+            remaining = self.deadline - time.monotonic()
+            if remaining <= 1:
+                return self._fail("authoritative sync deadline reached")
+            pass_budget_ms = (constants.DEFAULT_GRAPH_SYNC_PASS_BUDGET_MS if self.public_progress_seen
+                              else constants.INITIAL_GRAPH_SYNC_PASS_BUDGET_MS)
+            budget_ms = max(1_000, min(pass_budget_ms, int(max(1.0, remaining - 10) * 1_000)))
+            try:
+                result = self._ask(budget_ms)
+            except DkgError as exc:
+                if self._retrying_after(exc):
+                    continue
+                logger.debug("blackbox: verifiable graph recovery failed: %s", exc)
+                return self._fail(str(exc))
+            verdict = self._settle(result)
+            if verdict is not None:
+                return verdict
+
+    def _ask(self, budget_ms: int) -> Any:
+        """One synchronous recovery request, behind a daemon-thread wall-clock watchdog (its final
+        verification / store phase can outlive a socket timeout; a misbehaving daemon must not pin
+        a fresh install forever), printing proof of life while it is legitimately busy."""
+        self.still_active = False
+        outcome: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=1)
+
+        def recover() -> None:
+            try:
+                outcome.put(("ok", self.catchup(self.graph, self.peer, budget_ms=budget_ms)))
+            except BaseException as exc:  # health: allow BLE001 -- handed back to the caller's thread, which re-raises it
+                outcome.put(("error", exc))
+
+        worker = threading.Thread(target=recover, name="blackbox-curator-vm-recovery", daemon=True)
+        worker.start()
+        started = time.monotonic()
+        request_deadline = min(self.deadline, started + max(
+            (budget_ms / 1_000) + 60.0, constants.GRAPH_SYNC_SETTLEMENT_TIMEOUT_S + constants.GRAPH_SYNC_WATCHDOG_HEADROOM_S))
+        kind, value = self._await(outcome, worker, request_deadline, max(1, int(request_deadline - started)))
+        if kind == "error":
+            raise value
+        return value
+
+    def _await(self, outcome: Any, worker: threading.Thread, request_deadline: float, timeout_s: int) -> tuple[str, Any]:
+        heartbeat = 0
+        while True:
+            wait_for = min(self.HEARTBEAT_SECONDS, max(0.0, request_deadline - time.monotonic()))
+            if wait_for <= 0:
+                self.still_active = worker.is_alive()
+                raise DkgError(f"verifiable VM sync watchdog reached its {timeout_s}s settlement deadline"
+                               + (" while the DKG request remains active" if self.still_active else ""))
+            try:
+                return outcome.get(timeout=wait_for)
+            except queue.Empty:
+                heartbeat += 1
+                print(f"  verifiable VM sync is still active ({int(heartbeat * self.HEARTBEAT_SECONDS)}s elapsed)...",
+                      flush=True)
+                self._write("running", phase="recovering-verifiable-memory")
+
+    def _retrying_after(self, exc: DkgError) -> bool:
+        """True (after waiting) when *exc* is transient and the deadline leaves room to retry."""
+        error = str(exc).lower()
+        retryable = not self.still_active and (
+            '"retryable":true' in "".join(error.split()) or any(marker in error for marker in _RETRYABLE_RECOVERY_ERRORS))
+        if not (retryable and self.deadline - time.monotonic() > 4):
             return False
+        self.backpressure_retries += 1
+        self._write("running", phase="waiting-for-dkg-capacity")
+        if not self.backpressure_notice_printed:
+            print("DKG graph sync is pausing briefly before a safe resume...")
+            self.backpressure_notice_printed = True
+        retry_delay = min(constants.GRAPH_SYNC_RETRY_BACKOFF_MAX_S,
+                          constants.GRAPH_SYNC_RETRY_BACKOFF_INITIAL_S * (2 ** min(self.backpressure_retries - 1, 4)))
+        time.sleep(min(retry_delay, max(0.2, self.deadline - time.monotonic())))
+        return True
+
+    def _peer_error(self, result: Any) -> tuple[bool, str]:
+        """(the peer accepted a durable, VM-only recovery, its error text)."""
         results = result.get("results") if isinstance(result, dict) else None
-        peer_result = next(
-            (
-                item
-                for item in (results or [])
-                if isinstance(item, dict)
-                and str(item.get("peerId") or "") == graph_peer_id
-            ),
-            None,
-        )
-        peer_error = ""
-        if isinstance(peer_result, dict):
-            peer_error = str(
-                peer_result.get("durableError")
-                or peer_result.get("error")
-                or peer_result.get("errors")
-                or ""
-            )
-        explicit_incomplete = bool(
-            isinstance(result, dict)
-            and result.get("durableComplete") is False
-            and result.get("retryable") is True
-            and str(result.get("errorCode") or "")
-            == "DURABLE_CATCHUP_INCOMPLETE"
-        )
-        attempted = bool(
-            isinstance(result, dict)
-            and (result.get("ok") is True or explicit_incomplete)
-            and result.get("includeDurable") is True
-            and result.get("includeSharedMemory") is False
-            and int(result.get("peersAttempted") or 0) >= 1
-            and isinstance(peer_result, dict)
-            and not peer_error
-        )
+        peer_result = next((item for item in (results or []) if isinstance(item, dict)
+                            and str(item.get("peerId") or "") == self.peer), None)
+        peer_error = str(peer_result.get("durableError") or peer_result.get("error") or peer_result.get("errors") or "") \
+            if isinstance(peer_result, dict) else ""
+        explicit_incomplete = bool(isinstance(result, dict) and result.get("durableComplete") is False
+                                   and result.get("retryable") is True
+                                   and str(result.get("errorCode") or "") == "DURABLE_CATCHUP_INCOMPLETE")
+        attempted = bool(isinstance(result, dict) and (result.get("ok") is True or explicit_incomplete)
+                         and result.get("includeDurable") is True and result.get("includeSharedMemory") is False
+                         and int(result.get("peersAttempted") or 0) >= 1 and isinstance(peer_result, dict) and not peer_error)
+        return attempted, peer_error
+
+    def _settle(self, result: Any) -> Optional[bool]:
+        """What one answered pass means: True / False when the recovery is over, None to go again."""
+        attempted, peer_error = self._peer_error(result)
         if not attempted:
-            error = str(
-                (result or {}).get("error")
-                or peer_error
-                or "graph source did not accept durable VM recovery"
-            )
-            sync_state.write(
-                "failed",
-                context_graph_id=context_graph_id,
-                graph_peer_id=graph_peer_id,
-                error=error,
-            )
+            error = str((result or {}).get("error") or peer_error or "graph source did not accept durable VM recovery")
             logger.debug("blackbox: graph source did not attempt VM recovery: %s", error)
-            return False
-        backpressure_retries = 0
+            return self._fail(error)
+        self.backpressure_retries = 0
         inserted = int(result.get("totalDurableInsertedTriples") or 0)
-        request_progress = read_durable_progress(
-            str(getattr(client, "dkg_home", "") or ""),
-            context_graph_id,
-            after=progress_cursor,
-        )
+        request_progress = read_durable_progress(self.home, self.graph, after=self.progress_cursor)
         apply_completion_contract(request_progress, result)
-        sync_state.write(
-            "running",
-            context_graph_id=context_graph_id,
-            graph_peer_id=graph_peer_id,
-            phase=(
-                "recovering-verifiable-memory"
-                if inserted > 0
-                else "refreshing-verifiable-memory"
-            ),
-            inserted_durable_triples=inserted,
-            **request_progress,
-        )
+        self._write("running", phase="recovering-verifiable-memory" if inserted > 0 else "refreshing-verifiable-memory",
+                    inserted_durable_triples=inserted, **request_progress)
         # The whole log gives the cumulative numbers; completion comes only from THIS
         # invocation (its log lines or the node's answer), never an earlier run's lines.
-        durable_progress = read_durable_progress(str(getattr(client, "dkg_home", "") or ""), context_graph_id)
+        durable_progress = read_durable_progress(self.home, self.graph)
         durable_progress["snapshot_complete"] = request_progress.get("snapshot_complete") is True
         if inserted <= 0:
-            expected = int(durable_progress.get("expected_triples") or 0)
-            safe_current = int(durable_progress.get("safe_current_triples") or 0)
-            if expected > 0 and safe_current < expected:
-                public_progress_seen = public_progress_seen or safe_current > 0
-                if (
-                    last_incomplete_safe_current is None
-                    or safe_current > last_incomplete_safe_current
-                ):
-                    incomplete_empty_passes = 1
-                else:
-                    incomplete_empty_passes += 1
-                last_incomplete_safe_current = safe_current
-                if incomplete_empty_passes >= _MAX_EMPTY_PUBLIC_PASSES:
-                    error = (
-                        "public VM manifest made no durable progress after "
-                        f"{incomplete_empty_passes} pinned passes "
-                        f"({safe_current:,}/{expected:,})"
-                    )
-                    sync_state.write(
-                        "failed",
-                        context_graph_id=context_graph_id,
-                        graph_peer_id=graph_peer_id,
-                        phase="stalled-verifiable-memory",
-                        inserted_durable_triples=0,
-                        error=error,
-                        **durable_progress,
-                    )
-                    print(f"  {error}")
-                    return False
-                sync_state.write(
-                    "running",
-                    context_graph_id=context_graph_id,
-                    graph_peer_id=graph_peer_id,
-                    phase="recovering-verifiable-memory",
-                    inserted_durable_triples=0,
-                    **durable_progress,
-                )
-                print(
-                    "  verifiable VM pass settled without committed triples; "
-                    f"snapshot remains incomplete ({safe_current:,}/{expected:,}); "
-                    "retrying the pinned source"
-                )
-                time.sleep(min(2.0, max(0.2, deadline - time.monotonic())))
-                continue
-            count_threats = getattr(client, "threat_count", None)
-            local_threats: Optional[int] = None
-            if callable(count_threats):
-                try:
-                    local_threats = int(count_threats(context_graph_id) or 0)
-                except (DkgError, TypeError, ValueError):
-                    local_threats = None
-            if (
-                context_graph_id == constants.DEFAULT_CONTEXT_GRAPH_ID
-                and local_threats is not None
-                and local_threats >= constants.DEFAULT_GRAPH_RELEASE_THREAT_FLOOR
-            ):
-                print(
-                    "  verifiable VM release floor is complete "
-                    f"({local_threats:,} threats verified and stored)"
-                )
-                return True
-            if durable_progress.get("snapshot_complete") is True:
-                expected = int(durable_progress.get("expected_triples") or 0)
-                if expected > 0:
-                    print(
-                        f"  verifiable VM snapshot complete "
-                        f"({expected:,} triples verified and stored)"
-                    )
-                else:
-                    print("  verifiable VM snapshot complete")
-                print("  verifiable VM sync settled (no new triples)")
-                return True
+            return self._settle_empty(durable_progress)
+        return self._settle_advanced(inserted, durable_progress)
 
-            # A failed graph-scoped batch may have committed earlier KAs before
-            # a later KA failed chain authentication.  Those rows are useful as
-            # a partial ruleset, but their presence is not evidence that the
-            # authoritative manifest settled.  Only the safe manifest boundary
-            # above may turn a zero-insert response into success.
-            empty_public_passes += 1
-            safe_current = int(durable_progress.get("safe_current_triples") or 0)
-            expected = int(durable_progress.get("expected_triples") or 0)
-            if safe_current > 0:
-                public_progress_seen = True
-            if (
-                empty_public_passes < _MAX_EMPTY_PUBLIC_PASSES
-                and deadline - time.monotonic() > 4
-            ):
-                if expected > 0:
-                    print(
-                        "  public VM snapshot remains incomplete "
-                        f"({safe_current:,}/{expected:,} safe triples"
-                        + (
-                            f", {local_threats:,} local threats"
-                            if local_threats is not None and local_threats > 0
-                            else ""
-                        )
-                        + "); retrying the pinned source"
-                    )
-                else:
-                    print(
-                        "  public VM returned no complete manifest boundary; "
-                        "retrying the pinned source"
-                    )
-                time.sleep(min(2.0, max(0.2, deadline - time.monotonic())))
-                continue
-            if expected > 0:
-                error = (
-                    "public VM snapshot remains incomplete after "
-                    f"{empty_public_passes} pinned passes "
-                    f"({safe_current}/{expected} safe triples)"
-                )
-                phase = "incomplete-verifiable-memory"
-            else:
-                error = (
-                    "public VM returned no complete manifest boundary after "
-                    f"{empty_public_passes} pinned passes"
-                )
-                phase = "empty-verifiable-memory"
-            sync_state.write(
-                "failed",
-                context_graph_id=context_graph_id,
-                graph_peer_id=graph_peer_id,
-                phase=phase,
-                error=error,
-                **durable_progress,
-            )
-            print(f"  {error}")
-            return False
-        empty_public_passes = 0
-        incomplete_empty_passes = 0
-        last_incomplete_safe_current = int(
-            durable_progress.get("safe_current_triples") or 0
-        )
-        print(f"  verifiable VM sync advanced ({inserted:,} triples inserted)")
-        if on_progress is not None:
-            on_progress(inserted)
-        public_progress_seen = True
-        if context_graph_id == constants.DEFAULT_CONTEXT_GRAPH_ID:
-            count_threats = getattr(client, "threat_count", None)
-            if callable(count_threats):
-                try:
-                    local_threats = int(count_threats(context_graph_id) or 0)
-                except (DkgError, TypeError, ValueError):
-                    local_threats = 0
-                if local_threats >= constants.DEFAULT_GRAPH_RELEASE_THREAT_FLOOR:
-                    print(
-                        "  verifiable VM release floor is complete "
-                        f"({local_threats:,} threats verified and stored)"
-                    )
-                    return True
-        # DKG's bounded rootless recovery deletes its transient page checkpoint
-        # after the safe offset reaches the manifest total. Reissuing the full
-        # snapshot request then starts a new scan at offset zero; it is not a
-        # required idempotent EOF round. The HTTP response above is delivered
-        # only after verification and store materialization settle, so combine
-        # that successful response with the managed daemon's safe graph boundary
-        # to recognize completion without downloading the snapshot again.
-        if durable_progress.get("snapshot_complete") is True:
-            expected = int(durable_progress.get("expected_triples") or 0)
-            sync_state.write(
-                "running",
-                context_graph_id=context_graph_id,
-                graph_peer_id=graph_peer_id,
-                phase="refreshing-verifiable-memory",
-                inserted_durable_triples=inserted,
-                **durable_progress,
-            )
-            if expected > 0:
-                print(
-                    f"  verifiable VM snapshot complete "
-                    f"({expected:,} triples verified and stored)"
-                )
-            else:
-                print("  verifiable VM snapshot complete")
+    def _local_threats(self, failed: Optional[int]) -> Optional[int]:
+        count_threats = getattr(self.client, "threat_count", None)
+        if not callable(count_threats):
+            return None
+        try:
+            return int(count_threats(self.graph) or 0)
+        except (DkgError, TypeError, ValueError):
+            return failed
+
+    def _release_floor_reached(self, local_threats: Optional[int]) -> bool:
+        if (self.graph == constants.DEFAULT_CONTEXT_GRAPH_ID and local_threats is not None
+                and local_threats >= constants.DEFAULT_GRAPH_RELEASE_THREAT_FLOOR):
+            print(f"  verifiable VM release floor is complete ({local_threats:,} threats verified and stored)")
             return True
-        # A transport interruption can yield a verified prefix and a successful
-        # HTTP response. Repeat the pinned pass until the safe manifest boundary
-        # is complete. The zero-insert path remains a compatibility fallback for
-        # DKG builds that do not emit rootless durable progress.
-        time.sleep(min(2.0, max(0.2, deadline - time.monotonic())))
+        return False
+
+    @staticmethod
+    def _say_complete(expected: int) -> None:
+        print(f"  verifiable VM snapshot complete ({expected:,} triples verified and stored)" if expected > 0
+              else "  verifiable VM snapshot complete")
+
+    def _settle_empty(self, durable_progress: dict[str, Any]) -> Optional[bool]:
+        """A pass that committed nothing: success only at a complete, verified boundary."""
+        expected = int(durable_progress.get("expected_triples") or 0)
+        safe_current = int(durable_progress.get("safe_current_triples") or 0)
+        if expected > 0 and safe_current < expected:
+            return self._settle_stalled(durable_progress, safe_current, expected)
+        local_threats = self._local_threats(failed=None)
+        if self._release_floor_reached(local_threats):
+            return True
+        if durable_progress.get("snapshot_complete") is True:
+            self._say_complete(expected)
+            print("  verifiable VM sync settled (no new triples)")
+            return True
+        # A failed graph-scoped batch may have committed earlier KAs before a later one failed
+        # chain authentication: useful as partial rules, but not evidence the manifest settled.
+        self.empty_public_passes += 1
+        if safe_current > 0:
+            self.public_progress_seen = True
+        if self.empty_public_passes < _MAX_EMPTY_PUBLIC_PASSES and self.deadline - time.monotonic() > 4:
+            if expected > 0:
+                print(f"  public VM snapshot remains incomplete ({safe_current:,}/{expected:,} safe triples"
+                      + (f", {local_threats:,} local threats" if local_threats is not None and local_threats > 0 else "")
+                      + "); retrying the pinned source")
+            else:
+                print("  public VM returned no complete manifest boundary; retrying the pinned source")
+            self._pause()
+            return None
+        if expected > 0:
+            error = (f"public VM snapshot remains incomplete after {self.empty_public_passes} pinned passes "
+                     f"({safe_current}/{expected} safe triples)")
+            phase = "incomplete-verifiable-memory"
+        else:
+            error = f"public VM returned no complete manifest boundary after {self.empty_public_passes} pinned passes"
+            phase = "empty-verifiable-memory"
+        return self._fail(error, say=True, phase=phase, **durable_progress)
+
+    def _settle_stalled(self, durable_progress: dict[str, Any], safe_current: int, expected: int) -> Optional[bool]:
+        """A committed-nothing pass below a known boundary: retry while it moves, fail once it stalls."""
+        self.public_progress_seen = self.public_progress_seen or safe_current > 0
+        if self.last_incomplete_safe_current is None or safe_current > self.last_incomplete_safe_current:
+            self.incomplete_empty_passes = 1
+        else:
+            self.incomplete_empty_passes += 1
+        self.last_incomplete_safe_current = safe_current
+        if self.incomplete_empty_passes >= _MAX_EMPTY_PUBLIC_PASSES:
+            return self._fail(f"public VM manifest made no durable progress after {self.incomplete_empty_passes} pinned "
+                              f"passes ({safe_current:,}/{expected:,})", say=True, phase="stalled-verifiable-memory",
+                              inserted_durable_triples=0, **durable_progress)
+        self._write("running", phase="recovering-verifiable-memory", inserted_durable_triples=0, **durable_progress)
+        print("  verifiable VM pass settled without committed triples; "
+              f"snapshot remains incomplete ({safe_current:,}/{expected:,}); retrying the pinned source")
+        self._pause()
+        return None
+
+    def _settle_advanced(self, inserted: int, durable_progress: dict[str, Any]) -> Optional[bool]:
+        """A pass that committed triples: report progress; done at the release floor or a complete
+        boundary (DKG's bounded recovery drops its page checkpoint at the total, so asking again
+        would restart at offset zero), else go again (a transport cut can leave a verified prefix)."""
+        self.empty_public_passes = self.incomplete_empty_passes = 0
+        self.last_incomplete_safe_current = int(durable_progress.get("safe_current_triples") or 0)
+        print(f"  verifiable VM sync advanced ({inserted:,} triples inserted)")
+        if self.on_progress is not None:
+            self.on_progress(inserted)
+        self.public_progress_seen = True
+        if self.graph == constants.DEFAULT_CONTEXT_GRAPH_ID and self._release_floor_reached(self._local_threats(failed=0)):
+            return True
+        if durable_progress.get("snapshot_complete") is True:
+            self._write("running", phase="refreshing-verifiable-memory", inserted_durable_triples=inserted, **durable_progress)
+            self._say_complete(int(durable_progress.get("expected_triples") or 0))
+            return True
+        self._pause()
+        return None
 
 
 def _peer_discovery_pending(exc: DkgError) -> bool:
