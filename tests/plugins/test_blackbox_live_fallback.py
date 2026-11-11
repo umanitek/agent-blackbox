@@ -139,3 +139,20 @@ def test_sqlite_is_opened_only_when_the_store_could_not_tell_and_closed_after(tm
     assert fallback_index.OnDemandIndex.for_scope(SCOPE) is None   # fallback off (the default): nothing
     assert INDEXED.ready   # a generation's lookup holds the proxy, never an open index
     assert isinstance(compiler.Ruleset(verified_scope=INDEXED).live_lookup().fallback, fallback_index.OnDemandIndex)
+
+
+def test_a_graph_name_that_cannot_be_an_iri_never_reaches_a_query():
+    """Three readers wrote store-sourced graph names into queries as <{graph}> with no check;
+    they now go through the kernel's sparql_iri and an unsafe name is left out."""
+    from plugins.blackbox.ruleset.live import asset_facts
+
+    hostile = "urn:x> } ; DROP { <urn:y"
+    asked = []
+
+    class Client:
+        def query(self, sparql, *_a, **_k):
+            asked.append(sparql)
+            return []
+
+    assert fallback_index._read_asset(Client(), CG, hostile) is None and asked == []
+    assert asset_facts._values(["urn:graph:a", hostile]) == "<urn:graph:a>"

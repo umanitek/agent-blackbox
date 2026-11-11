@@ -38,7 +38,7 @@ from datetime import date
 from enum import Enum
 from typing import Any, Dict, FrozenSet, Iterable, List, Mapping, Optional, Tuple
 
-from ...kernel import constants, threat_ids
+from ...kernel import constants, sparql_text, threat_ids
 from ...kernel.dkg_client import extract_binding
 from ...kernel.store import StoreClient
 from .. import row_adapters
@@ -217,7 +217,9 @@ def totals(facts: Mapping[str, AssetFacts], graphs: Iterable[str]) -> tuple[dict
 
 
 def _values(batch: list[str]) -> str:
-    return " ".join(f"<{graph}>" for graph in batch)
+    """*batch* as a VALUES list; a graph name that cannot be written as ``<iri>`` is left out
+    (store-sourced text never reaches a query unchecked — kernel ``sparql_iri``)."""
+    return " ".join(filter(None, map(sparql_text.sparql_iri, batch)))
 
 
 def _queries(batch: list[str]) -> list[tuple[str, str]]:
@@ -273,7 +275,8 @@ def _read_meta(store: StoreClient, batch: list[str]) -> Optional[dict[str, tuple
     """Asset graph → (UAL, day) for *batch*, each pair bound to its own ``_meta``
     graph; the day is ``dkg:publishedAt``'s UTC day ("" when absent or not a
     date). None when the store failed."""
-    pairs = " ".join(f"(<{graph}> <{meta}>)" for graph in batch if (meta := _meta_graph(graph)))
+    pairs = " ".join(f"({sparql_text.sparql_iri(graph)} {sparql_text.sparql_iri(meta)})" for graph in batch
+                     if (meta := _meta_graph(graph)) and sparql_text.is_safe_iri(graph) and sparql_text.is_safe_iri(meta))
     if not pairs:
         return {}
     answer = store.select(f"SELECT ?g ?ual ?at WHERE {{ VALUES (?g ?m) {{ {pairs} }} GRAPH ?m {{ "

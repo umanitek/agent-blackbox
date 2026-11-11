@@ -28,7 +28,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from ...kernel import constants, threat_ids
+from ...kernel import constants, sparql_text, threat_ids
 from ...kernel.dkg_client import DkgClient, extract_binding
 from .. import row_adapters
 from ..partitions import rows_from_triples
@@ -187,11 +187,14 @@ class OnDemandIndex:
 def _read_asset(client: DkgClient, cg_id: str, graph: str) -> Optional[list[tuple[str, str, str]]]:
     """Every triple of one asset's graph, cursor-paged by subject; None on failure."""
     failure = object()
+    graph_iri = sparql_text.sparql_iri(graph)
+    if not graph_iri:   # not writable as <iri>: never put into a query
+        return None
     triples: list[tuple[str, str, str]] = []
     after = ""
     while True:
-        cursor = f'FILTER(STR(?threat) > {json.dumps(after)})' if after else ""
-        page = client.query(f"SELECT ?threat ?p ?o WHERE {{ GRAPH <{graph}> {{ ?threat ?p ?o }} {cursor} }} "
+        cursor = sparql_text.cursor_filter(after, variable="threat") if after else ""
+        page = client.query(f"SELECT ?threat ?p ?o WHERE {{ GRAPH {graph_iri} {{ ?threat ?p ?o }} {cursor} }} "
                             f"ORDER BY STR(?threat) ?p ?o LIMIT {PAGE_TRIPLES}", cg_id, view=None, on_error=failure)
         if page is failure:
             return None
