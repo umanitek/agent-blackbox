@@ -129,7 +129,7 @@ def test_the_run_route_takes_a_json_body_and_answers_409(monkeypatch):
 
     monkeypatch.setattr(playground, "run_test", refuse)
     app = FastAPI()
-    playground_routes.register(app, lambda *a: None)
+    playground_routes.register(app, lambda key, producer, default, ttl=None: producer())
     reply = TestClient(app).post("/api/playground/run", json={"kind": "domain"})
     assert reply.status_code == 409 and reply.json() == {"ok": False, "error": "refused domain"}
     assert TestClient(app).get("/playground.js").status_code == 200

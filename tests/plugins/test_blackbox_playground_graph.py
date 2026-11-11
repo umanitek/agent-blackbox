@@ -90,7 +90,7 @@ def test_the_routes_serve_the_sandbox_lane_in_sandbox_mode(monkeypatch):
                         lambda: dataclasses.replace(bb_config.BlackboxConfig(), community_sandbox=True))
     monkeypatch.setattr(playground, "read_lane", lambda cfg: _view())
     app = FastAPI()
-    playground_routes.register(app, lambda *a: None)
+    playground_routes.register(app, lambda key, producer, default, ttl=None: producer())
     client = TestClient(app)
     page = client.get("/api/playground/graph", params={"tier": "community", "limit": 200}).json()
     assert page["total"] == 2
@@ -173,7 +173,7 @@ def _hostile_client(monkeypatch):
     monkeypatch.setattr(playground, "read_lane",
                         lambda cfg: playground.LaneView("0xabc/graph", True, entries_from_rows(HOSTILE, own=A.lower())))
     app = FastAPI()
-    playground_routes.register(app, lambda *a: None)
+    playground_routes.register(app, lambda key, producer, default, ttl=None: producer())
     return TestClient(app)
 
 
@@ -197,3 +197,34 @@ def test_lane_text_is_sanitized_and_cannot_fill_a_list_shaped_key(monkeypatch):
     lane = client.get("/api/playground").json()["lane"]["entries"][0]
     assert "‮" not in lane["reporter"]
     assert all("\x1b" not in value for _key, value in lane["fields"])
+
+
+def test_the_routes_read_the_lane_through_the_dashboards_cache(monkeypatch):
+    """read_lane (a node query of up to 4000 rows) ran on every /api/playground hit — every 5 s
+    per tab and every 4 s from Desktop (LES-040). The routes now read it through the
+    dashboard's stale-while-revalidate cache, under one key per graph."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setattr(bb_config, "load_blackbox_config",
+                        lambda: dataclasses.replace(bb_config.BlackboxConfig(), community_sandbox=True))
+    reads, asked = [], []
+    monkeypatch.setattr(playground, "read_lane", lambda cfg: reads.append(cfg) or _view())
+    store: dict = {}
+
+    def swr(key, producer, default, ttl=None):
+        asked.append((key, ttl))
+        if key not in store:
+            store[key] = producer()
+        return store[key]
+
+    app = FastAPI()
+    playground_routes.register(app, swr)
+    client = TestClient(app)
+    for _ in range(3):
+        client.get("/api/playground")
+        client.get("/api/playground/graph")
+        client.get("/api/playground/threat", params={"identifier": "dep:npm:evil-pkg@1.0.0"})
+    assert len(reads) == 1 and len(asked) == 9
+    assert {key for key, _ in asked} == {f"playground:lane:{bb_config.BlackboxConfig().context_graph_id}"}
+    assert {ttl for _, ttl in asked} == {playground_routes.LANE_TTL_SECONDS}

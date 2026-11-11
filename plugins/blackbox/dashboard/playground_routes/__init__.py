@@ -32,15 +32,25 @@ SCRIPT = HERE / "playground.js"
 NO_CACHE = {"Cache-Control": "no-store"}
 
 Cache = Callable[..., Any]
+#: Reads the sandbox lane for a config: the node itself, or (in the routes) the dashboard's cache.
+LaneReader = Callable[[Any], Any]
+#: How old a cached sandbox lane may be (LES-040: a recurring node query is cached — the panel
+#: polls every 5 s per tab and Desktop every 4 s; a member's new test shows within this).
+LANE_TTL_SECONDS = 10.0
 
 
-def state_payload() -> dict[str, Any]:
+def _read_now(cfg: Any) -> Any:
+    from ... import playground
+    return playground.read_lane(cfg)
+
+
+def state_payload(lane_of: LaneReader = _read_now) -> dict[str, Any]:
     """Everything the panel draws, in one read."""
     from ... import playground
     from ...kernel.config import load_blackbox_config
 
     cfg = load_blackbox_config()
-    view = playground.read_lane(cfg) if cfg.community_sandbox else None
+    view = lane_of(cfg) if cfg.community_sandbox else None
     return {
         "sandbox": cfg.community_sandbox,
         "sharing": cfg.community_enabled,
@@ -73,33 +83,34 @@ def _safe_detail(detail: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _sandbox_view() -> Any:
+def _sandbox_view(lane_of: LaneReader) -> Any:
     """The sandbox lane when sandbox mode is on, else an empty unreadable view."""
     from ... import playground
     from ...kernel.config import load_blackbox_config
 
     cfg = load_blackbox_config()
-    return playground.read_lane(cfg) if cfg.community_sandbox else playground.LaneView(cfg.context_graph_id, False, ())
+    return lane_of(cfg) if cfg.community_sandbox else playground.LaneView(cfg.context_graph_id, False, ())
 
 
-def graph_payload(q: str, category: str, ecosystem: str, offset: int, limit: int) -> dict[str, Any]:
+def graph_payload(q: str, category: str, ecosystem: str, offset: int, limit: int,
+                  lane_of: LaneReader = _read_now) -> dict[str, Any]:
     """The sandbox lane as a Community graph page."""
     from ... import playground
 
     from ..safe_payloads import safe_identifier, safe_text
 
-    page = playground.graph.graph_page(_sandbox_view(), q=q, category=category, ecosystem=ecosystem,
+    page = playground.graph.graph_page(_sandbox_view(lane_of), q=q, category=category, ecosystem=ecosystem,
                                        offset=offset, limit=limit)
     page["threats"] = [{**threat, "identifier": safe_identifier(threat["identifier"]), "name": safe_text(threat["name"]),
                         "severity": safe_text(threat["severity"], 16)} for threat in page["threats"]]
     return page
 
 
-def threat_payload(identifier: str) -> dict[str, Any]:
+def threat_payload(identifier: str, lane_of: LaneReader = _read_now) -> dict[str, Any]:
     """One sandbox threat as a Community threat detail."""
     from ... import playground
 
-    return _safe_detail(playground.graph.threat_detail(_sandbox_view(), identifier))
+    return _safe_detail(playground.graph.threat_detail(_sandbox_view(lane_of), identifier))
 
 
 def local_payload() -> dict[str, Any]:
@@ -145,9 +156,17 @@ def wallet_run_payload(body: Any) -> tuple[int, dict[str, Any]]:
 
 
 def register(app: Any, swr: Cache) -> None:
-    """Add the panel script and the two Playground routes to *app* (*swr* is unused: never cached)."""
+    """Add the panel script and the Playground routes to *app*. The sandbox lane is read through
+    *swr* (the dashboard's stale-while-revalidate node cache): one node query per graph per
+    :data:`LANE_TTL_SECONDS`, however many tabs poll — never one per request."""
     from fastapi import Body, Query
     from fastapi.responses import FileResponse, JSONResponse
+    from ... import playground
+
+    def cached_lane(cfg: Any) -> Any:
+        graph = cfg.context_graph_id
+        view = swr(f"playground:lane:{graph}", lambda: playground.read_lane(cfg), None, LANE_TTL_SECONDS)
+        return view if view is not None else playground.LaneView(graph, False, ())   # first read still in flight
 
     @app.get("/playground.js")
     def playground_script() -> Any:
@@ -155,12 +174,12 @@ def register(app: Any, swr: Cache) -> None:
 
     @app.get("/api/playground")
     def playground_state() -> Any:
-        return JSONResponse(state_payload(), headers=NO_CACHE)
+        return JSONResponse(state_payload(cached_lane), headers=NO_CACHE)
 
     @app.get("/api/playground/graph")
     def playground_graph(q: str = Query(""), category: str = Query(""), ecosystem: str = Query(""),
                          offset: int = Query(0), limit: int = Query(200)) -> Any:
-        return JSONResponse(graph_payload(q, category, ecosystem, offset, limit), headers=NO_CACHE)
+        return JSONResponse(graph_payload(q, category, ecosystem, offset, limit, cached_lane), headers=NO_CACHE)
 
     @app.get("/api/playground/local")
     def playground_local() -> Any:
@@ -168,7 +187,7 @@ def register(app: Any, swr: Cache) -> None:
 
     @app.get("/api/playground/threat")
     def playground_threat(identifier: str = Query(..., min_length=1)) -> Any:
-        return JSONResponse(threat_payload(identifier), headers=NO_CACHE)
+        return JSONResponse(threat_payload(identifier, cached_lane), headers=NO_CACHE)
 
     # A plain (sync) handler: FastAPI runs it in its thread pool, so a test that waits
     # up to ~90 s for its share never blocks the dashboard. The body is a plain dict
