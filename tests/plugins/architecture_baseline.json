@@ -43,6 +43,6 @@
     "sync/command.py::_cmd_sync_impl": 619,
     "sync/managed_node.py::_managed_dkg_node_executable": 38,
     "sync/managed_node.py::_restart_managed_dkg": 43,
-    "sync/progress.py::read_durable_progress": 62
+    "sync/progress.py::read_durable_progress": 49
   }
 }
