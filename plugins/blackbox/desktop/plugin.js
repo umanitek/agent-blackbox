@@ -94,8 +94,9 @@ function serverRefusal(text) {
   }
 }
 
-function useDash(key, path, interval) {
-  return useQuery({ queryKey: ['blackbox', 'dash', key, path], queryFn: () => dash(path), refetchInterval: interval || POLL_MS })
+// enabled=false keeps the hook (hooks run in a fixed order) but sends nothing, e.g. a lookup with no identifier.
+function useDash(key, path, interval, enabled = true) {
+  return useQuery({ queryKey: ['blackbox', 'dash', key, path], queryFn: () => dash(path), refetchInterval: interval || POLL_MS, enabled })
 }
 
 const refreshDash = () => queryClient.invalidateQueries({ queryKey: ['blackbox', 'dash'] })
@@ -2286,7 +2287,9 @@ function FindingModal({ row, onClose }) {
   const key = sourceKey(finding)
   const badge = SOURCE_BADGES[key]
   const fromGraph = finding.identifier && key !== 'heuristic'
-  const verified = useDash('threat', `api/threat?identifier=${encodeURIComponent(fromGraph ? finding.identifier : '')}&tier=public`, SLOW_POLL_MS)
+  // Only a graph finding has a verified record to look up; a heuristic one asked with an empty
+  // identifier every 30 s and got a 422 through Hermes each time.
+  const verified = useDash('threat', `api/threat?identifier=${encodeURIComponent(finding.identifier || '')}&tier=public`, SLOW_POLL_MS, fromGraph)
   const t = fromGraph ? asObject(verified.data) : {}
   const blocked = finding.decision === 'block' || finding.event === 'blocked'
   const seen = finding.sightings > 1 ? `${finding.sightings} times${finding.firstSeen ? ` · first ${dateFull(finding.firstSeen)}` : ''} · last ${dateFull(finding.ts)}` : ''

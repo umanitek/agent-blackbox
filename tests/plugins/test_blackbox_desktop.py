@@ -262,3 +262,13 @@ def test_plugin_js_parses_as_an_es_module(tmp_path):
     result = subprocess.run([node, "--check", str(copy)], capture_output=True, text=True, timeout=60,
                             env={**os.environ, "NODE_OPTIONS": ""}, check=False)
     assert result.returncode == 0, result.stderr
+
+
+def test_the_finding_window_asks_for_a_verified_record_only_for_a_graph_finding():
+    """A heuristic finding has no verified record, yet its window asked /api/threat with an
+    empty identifier every 30 s (a 422 forwarded through Hermes each time). The lookup is now
+    switched off unless the finding came from the graph."""
+    source = (PLUGIN / "desktop" / "plugin.js").read_text(encoding="utf-8")
+    assert "function useDash(key, path, interval, enabled = true)" in source
+    assert "refetchInterval: interval || POLL_MS, enabled })" in source
+    assert "SLOW_POLL_MS, fromGraph)" in source and "fromGraph ? finding.identifier : ''" not in source
