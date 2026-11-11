@@ -126,6 +126,8 @@ that the two version fields agree.
 - **Detaching an OpenClaw agent keeps a copy of its config.** `blackbox detach` saves
   `openclaw.json.before-blackbox-detach.bak` before it rewrites the file, as attach does. Both now
   say when a config's comments could not be kept, and name the copy that still has them.
+- **Switching an agent off through a link to its folder sticks.** An agent switched off (or back on)
+  through a symlink or another spelling of its folder is the same agent to the automatic re-attach.
 
 ### Changed
 

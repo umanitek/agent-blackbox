@@ -657,6 +657,37 @@ def test_an_explicit_attach_turns_it_back_on_and_forgets_the_switch_off(fake_env
     assert _protected(profile) and not attach.is_declined("hermes", profile)
 
 
+def test_a_switch_off_named_through_a_symlink_is_the_same_agent(fake_env, monkeypatch, tmp_path):
+    """The switch-off record keyed a target by ``~`` expansion only while the sweep matched by
+    the resolved folder: a home named through a symlink was switched off under one id and
+    checked under another, so the record neither held nor cleared."""
+    monkeypatch.setenv("BLACKBOX_HOME", str(tmp_path / "bb"))
+    profile = fake_env["profile"]
+    alias = tmp_path / "profile-link"
+    alias.symlink_to(profile, target_is_directory=True)
+
+    attach.detach_hermes(alias)
+    assert attach.is_declined("hermes", profile)
+    attach.attach_hermes(profile)
+    assert not attach.is_declined("hermes", alias)
+
+
+def test_a_switch_off_recorded_before_the_resolved_spelling_still_holds(fake_env, monkeypatch, tmp_path):
+    """Records written before targets were keyed by their resolved folder keep working: a sweep
+    must never re-attach an agent the operator switched off because its spelling changed."""
+    import json
+    from pathlib import Path
+    monkeypatch.setenv("BLACKBOX_HOME", str(tmp_path / "bb"))
+    alias = tmp_path / "profile-link"
+    alias.symlink_to(fake_env["profile"], target_is_directory=True)
+    (tmp_path / "bb").mkdir()
+    (tmp_path / "bb" / "attach_declined.json").write_text(
+        json.dumps({"targets": [f"hermes:{Path(str(alias)).expanduser()}"]}), encoding="utf-8")
+    assert attach.is_declined("hermes", alias)
+    attach.attach_hermes(alias)
+    assert not attach.is_declined("hermes", alias)
+
+
 def test_a_dry_run_detach_records_nothing(fake_env, monkeypatch, tmp_path):
     monkeypatch.setenv("BLACKBOX_HOME", str(tmp_path / "bb"))
     attach.attach_hermes(fake_env["profile"])

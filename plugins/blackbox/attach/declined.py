@@ -49,9 +49,24 @@ FILE_NAME = "attach_declined.json"
 _lock = threading.Lock()
 
 
+def same_path(path: str | Path) -> str:
+    """One spelling per folder, so ``~/x``, ``/home/me/x/`` and a symlink to it compare equal."""
+    path = Path(str(path)).expanduser()
+    try:
+        return str(path.resolve())
+    except OSError:
+        return str(path)
+
+
 def _key(kind: str, target: str | Path) -> str:
-    """One spelling per target: the kind, then the path with ``~`` expanded."""
-    return f"{str(kind).lower()}:{Path(str(target)).expanduser()}"
+    """One spelling per target: the kind, then the folder as :func:`same_path` spells it."""
+    return f"{str(kind).lower()}:{same_path(target)}"
+
+
+def _keys(kind: str, target: str | Path) -> set[str]:
+    """Every spelling a record of *target* may be stored under: :func:`_key`, and the one records
+    were written in before it (``~`` expanded only) — a switch-off recorded then must still hold."""
+    return {_key(kind, target), f"{str(kind).lower()}:{Path(str(target)).expanduser()}"}
 
 
 def _path() -> Path:
@@ -80,17 +95,17 @@ def _write(keys: set[str]) -> None:
 def is_declined(kind: str, target: str | Path) -> bool:
     """Whether the operator switched protection off for this target (automatic sweeps skip it)."""
     with _lock:
-        return _key(kind, target) in _read()
+        return bool(_keys(kind, target) & _read())
 
 
 def _change(kind: str, target: str | Path, *, present: bool) -> None:
     """Record (*present*) or forget the operator's switch-off. Logged, never raised, on a write error."""
-    key = _key(kind, target)
+    spellings = _keys(kind, target)
     with _lock:
         keys = _read()
-        if (key in keys) == present:
+        if bool(spellings & keys) == present:
             return
-        keys = keys | {key} if present else keys - {key}
+        keys = keys | {_key(kind, target)} if present else keys - spellings
         try:
             _write(keys)
         except OSError:

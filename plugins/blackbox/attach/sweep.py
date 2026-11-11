@@ -80,11 +80,11 @@ def attach_named(paths: Iterable[str | Path], *, hermes: bool = True, openclaw: 
     :func:`attach_all` report shape plus ``"unknown"`` (the paths that were not agents).
     Naming a target the operator switched off earlier switches it back on (:mod:`.declined`)."""
     report: dict[str, Any] = {"hermes": [], "openclaw": [], "dry_run": dry_run, "unknown": []}
-    workspaces = {_same_path(ws) for ws in openclaw_discovery.discover_openclaw_workspaces()}
-    homes = {_same_path(home) for home in hermes_homes.discover_hermes_homes()}
+    workspaces = {declined.same_path(ws) for ws in openclaw_discovery.discover_openclaw_workspaces()}
+    homes = {declined.same_path(home) for home in hermes_homes.discover_hermes_homes()}
     for raw in paths:
         path = Path(str(raw)).expanduser()
-        key = _same_path(path)
+        key = declined.same_path(path)
         if key in workspaces:
             if openclaw:
                 report["openclaw"].append(openclaw_bridge.attach_openclaw(path, dry_run=dry_run))
@@ -95,14 +95,6 @@ def attach_named(paths: Iterable[str | Path], *, hermes: bool = True, openclaw: 
             report["unknown"].append(str(path))
     report["count"] = _protected_count(report)
     return report
-
-
-def _same_path(path: Path) -> str:
-    """One spelling per folder, so ``~/x``, ``/home/me/x/`` and a symlink to it compare equal."""
-    try:
-        return str(path.expanduser().resolve())
-    except OSError:
-        return str(path.expanduser())
 
 
 #: One discovered target: (kind, path) with kind ``"hermes"`` or ``"openclaw"``.
