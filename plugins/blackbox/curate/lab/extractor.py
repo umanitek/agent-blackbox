@@ -69,7 +69,7 @@ from ...kernel import threat_ids
 from ...kernel.public_suffix import registrable_domain
 from . import evidence_schema
 from .evidence_schema import Check, Evidence, EvidenceError, NoteCode
-from .jobs import _URL_START, LabJob
+from .jobs import LabJob, url_part
 
 #: The DOM the extractor reads. Past this it reads the start and notes the cap.
 MAX_DOM_CHARS = 1_000_000
@@ -295,7 +295,7 @@ def _contact_host(value: Any) -> Optional[str]:
     try:
         # The schema's own host rule (same package), so the extractor and the
         # validator can never disagree on what a host is.
-        return evidence_schema._host(host, "contacted_hosts")
+        return evidence_schema.canonical_host(host, "contacted_hosts")
     except EvidenceError:
         return None
 
@@ -304,10 +304,10 @@ def _identifier_host(identifier: str) -> Optional[str]:
     """The host an identifier names: a URL's host (past any ``url:``/``ioc:url:``
     prefix, found by the job store's own URL rule), or the value of an ``ioc:domain:``
     identifier (what a domain visit is built from) or a bare ``domain:`` one."""
-    url_start = _URL_START.search(identifier)
-    if url_start is not None:
+    url = url_part(identifier)
+    if url is not None:
         try:
-            return _contact_host(urlsplit(identifier[url_start.start():]).hostname)
+            return _contact_host(urlsplit(url).hostname)
         except ValueError:
             return None
     parsed = threat_ids.parse_ioc_identifier(identifier)

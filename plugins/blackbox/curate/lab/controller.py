@@ -47,12 +47,13 @@ from typing import Any, Callable, Dict, Iterable, Mapping, Optional
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from ...kernel import signing, threat_ids
+from ...kernel.bounded_files import atomic_write
 from .. import keys
 from ..context import LAB_EVIDENCE_STATEMENT, CurateContext, EvidenceDraft
 from ..queue import Lane
 from . import evidence_schema
 from .evidence_schema import Evidence, EvidenceError
-from .jobs import WAITING_STATES, LabJob, LabJobRecord, LabJobState, LabJobStore, _write_atomic
+from .jobs import WAITING_STATES, LabJob, LabJobRecord, LabJobState, LabJobStore
 from .transport import LabAnswer, LabOutcome, LabTransport
 
 logger = logging.getLogger(__name__)
@@ -276,7 +277,7 @@ class LabController:
         evidence_dir = self._lab_dir / "evidence"
         evidence_dir.mkdir(parents=True, exist_ok=True)
         # The envelope lands first: evidence without its envelope never verifies.
-        _write_atomic(evidence_dir / f"{evidence_digest(evidence)}{_ENVELOPE_SUFFIX}", envelope.to_text() + "\n")
+        atomic_write(evidence_dir / f"{evidence_digest(evidence)}{_ENVELOPE_SUFFIX}", envelope.to_text() + "\n", mode=0o600)
         return self._store.complete(key, evidence)
 
     # -- the attempt count, kept across restarts -----------------------------------
@@ -294,7 +295,7 @@ class LabController:
 
     def _save_attempts(self) -> None:
         self._lab_dir.mkdir(parents=True, exist_ok=True)
-        _write_atomic(self._lab_dir / _ATTEMPTS_FILE, json.dumps(self._attempts, sort_keys=True))
+        atomic_write(self._lab_dir / _ATTEMPTS_FILE, json.dumps(self._attempts, sort_keys=True), mode=0o600)
 
     def _load_attempts(self) -> dict[str, int]:
         try:

@@ -55,7 +55,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Mapping, Optional, Union
 
 from ...kernel import threat_ids
-from ..lab.jobs import strip_query
+from ..lab import strip_query
 from ..service.evidence import Lookup
 from .client import HttpClient, JsonObject, UrllibClient
 from .credentials import key_for

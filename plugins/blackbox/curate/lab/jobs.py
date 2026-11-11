@@ -113,14 +113,21 @@ class LabJobRecord:
     evidence_sha256: Optional[str] = None
 
 
+def url_part(identifier: str) -> Optional[str]:
+    """The URL inside *identifier* — past any ``url:`` / ``ioc:url:`` prefix — or None when it
+    holds no ``scheme://``: THE URL rule the job store and the extractor share."""
+    url_start = _URL_START.search(identifier)
+    return identifier[url_start.start():] if url_start is not None else None
+
+
 def strip_query(identifier: str) -> str:
     """*identifier* without a URL query string, fragment or user name/password
     (they can carry personal data). Works on a bare URL and on a prefixed one
     (``url:https://…``); an identifier without ``://`` is returned unchanged."""
-    url_start = _URL_START.search(identifier)
-    if url_start is None:
+    url = url_part(identifier)
+    if url is None:
         return identifier
-    prefix, url = identifier[:url_start.start()], identifier[url_start.start():]
+    prefix = identifier[:len(identifier) - len(url)]
     scheme, netloc, path, _query, _fragment = urlsplit(url)
     return prefix + urlunsplit((scheme, netloc.rpartition("@")[2], path, "", ""))
 
@@ -200,7 +207,7 @@ class LabJobStore:
             self._evidence_dir.mkdir(parents=True, exist_ok=True)
             # Content-addressed: an existing file already holds these exact bytes.
             if not (self._evidence_dir / f"{digest}.json").exists():
-                _write_atomic(self._evidence_dir / f"{digest}.json", text + "\n")
+                atomic_write(self._evidence_dir / f"{digest}.json", text + "\n", mode=0o600)   # private (0600), torn-free
             return self._move(key, LabJobState.DONE, finished_at=self._clock(), evidence_sha256=digest)
 
     def could_not_tell(self, key: str) -> LabJobRecord:
@@ -264,7 +271,7 @@ class LabJobStore:
     def _save(self) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         lines = (json.dumps(_record_to_mapping(r), sort_keys=True) for r in self._records.values())
-        _write_atomic(self._path, "".join(line + "\n" for line in lines))
+        atomic_write(self._path, "".join(line + "\n" for line in lines), mode=0o600)   # private (0600), torn-free
 
     def _load(self) -> dict[str, LabJobRecord]:
         records: dict[str, LabJobRecord] = {}
@@ -307,7 +314,3 @@ def _record_from_mapping(row: dict) -> LabJobRecord:
     return LabJobRecord(job, LabJobState(row["state"]), row.get("started_at"), row.get("finished_at"),
                         evidence_sha256)
 
-
-def _write_atomic(path: Path, text: str) -> None:
-    """Write *text* to *path* as a private (0600) file, torn-free (the kernel's one write)."""
-    atomic_write(path, text, mode=0o600)

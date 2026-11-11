@@ -156,7 +156,7 @@ def validate_evidence(mapping: Mapping[str, Any]) -> Evidence:
         level=level,
         started_at=started,
         finished_at=finished,
-        contacted_hosts=_capped(mapping["contacted_hosts"], "contacted_hosts", MAX_CONTACTED_HOSTS, _host),
+        contacted_hosts=_capped(mapping["contacted_hosts"], "contacted_hosts", MAX_CONTACTED_HOSTS, canonical_host),
         file_fingerprints=_capped(mapping["file_fingerprints"], "file_fingerprints", MAX_FILE_FINGERPRINTS, _sha256),
         observations=_observations(mapping["observations"]),
         notes=_capped(mapping["notes"], "notes", MAX_NOTES, _note),
@@ -204,7 +204,9 @@ def _sha256(value: Any, field: str) -> str:
     return value
 
 
-def _host(value: Any, field: str) -> str:
+def canonical_host(value: Any, field: str) -> str:
+    """*value* as the one spelling evidence stores a host in (an IP address canonical, a
+    hostname lowercase and well-formed), else :class:`EvidenceError` naming *field*."""
     host = _text(value, field)
     if len(host) > MAX_HOST_CHARS:
         raise EvidenceError(f"{field}: a host is at most {MAX_HOST_CHARS} characters")

@@ -33,7 +33,7 @@ at import time, and these read ``curate.service``):
 """
 
 from .evidence_schema import Check, Evidence, EvidenceError, NoteCode, Observation, to_json, validate_evidence
-from .jobs import LabJob, LabJobError, LabJobRecord, LabJobState, LabJobStore
+from .jobs import LabJob, LabJobError, LabJobRecord, LabJobState, LabJobStore, strip_query
 from .transport import LabAnswer, LabOutcome, LabTransport
 from .extractor import extract
 from .controller import (Extractor, LabController, LabMetrics, ScaleStep, SignedEvidence,
@@ -60,6 +60,7 @@ __all__ = [
                          "SignedEvidence",
                          "extract",
                          "lab_only_verdict_may_block",
+                         "strip_query",
                          "to_json",
                          "validate_evidence",
                          "verify_signed_evidence",
