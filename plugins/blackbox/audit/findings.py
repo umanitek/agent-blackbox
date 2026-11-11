@@ -8,11 +8,11 @@ framework helpers serve the CLI and dashboard.
 
 from __future__ import annotations
 
-import json
 import logging
 import time
 from typing import Any, Dict, List, Optional
 from ..kernel import constants
+from ..kernel.bounded_files import read_jsonl
 from . import log_store
 from . import redaction
 
@@ -135,21 +135,7 @@ def _all_findings() -> list[dict[str, Any]]:
 def _load_finding_rows(files: list[tuple[Any, str]]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for path, default_fw in files:
-        if not path.exists():
-            continue
-        try:
-            lines = path.read_text(encoding="utf-8-sig").splitlines()
-        except OSError:
-            continue
-        for line in lines:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rec = json.loads(line)
-            except ValueError:
-                continue
-            rows.append(_flatten_finding_row(rec, default_fw))
+        rows.extend(_flatten_finding_row(rec, default_fw) for rec in read_jsonl(path))   # object rows only
     rows = _dedupe_finding_rows(rows)
     # Newest-first across all logs; rows with no numeric ts keep insertion order.
     rows.sort(key=lambda r: r.get("ts") or 0, reverse=True)
@@ -334,20 +320,5 @@ def record_dependency(ecosystem: str, name: str, version: str, tool: str = "") -
 
 def read_file_access(limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
     """Return file-access visibility records newest-first, paged."""
-    path = log_store._home() / "file_access.jsonl"
-    if not path.exists():
-        return []
-    try:
-        lines = path.read_text(encoding="utf-8-sig").splitlines()
-    except Exception:
-        return []
-    out: list[dict[str, Any]] = []
-    for line in reversed(lines):
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            out.append(json.loads(line))
-        except Exception:
-            continue
-    return out[offset : offset + limit]
+    rows = read_jsonl(log_store._home() / "file_access.jsonl")
+    return rows[::-1][offset : offset + limit]

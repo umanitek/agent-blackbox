@@ -132,6 +132,8 @@ that the two version fields agree.
   asks the terminal itself instead of refusing outright; with no terminal it still needs `--yes`.
 - **`blackbox uninstall` finishes on a hand-edited Hermes config.** A `plugins:` written as text or a
   list no longer stops the removal half-way, after the services were already stopped.
+- **One damaged line in a log no longer empties the dashboard's findings.** A findings line that is
+  not a JSON object is skipped like any other damaged line; the activity total counts only rows it shows.
 
 ### Changed
 

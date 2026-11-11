@@ -15,7 +15,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List
 from ..kernel import constants
-from ..kernel.bounded_files import atomic_write, read_json_object
+from ..kernel.bounded_files import atomic_write, read_json_object, read_jsonl
 from . import log_store
 from . import redaction
 
@@ -88,24 +88,7 @@ def read_share_ledger(limit: int = 100) -> list[dict[str, Any]]:
     The offline half of ``blackbox report --status`` (the graph-backed half
     is the Q9 reporter-profile query, merged by the caller when reachable).
     """
-    path = log_store._home() / _REPORTS_LOG
-    if not path.exists():
-        return []
-    rows: list[dict[str, Any]] = []
-    try:
-        with path.open("r", encoding="utf-8-sig") as fh:
-            for line in fh:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    item = json.loads(line)
-                except Exception:
-                    continue
-                if isinstance(item, dict):
-                    rows.append(item)
-    except Exception:  # pragma: no cover - fail open
-        return []
+    rows = read_jsonl(log_store._home() / _REPORTS_LOG)
     return list(reversed(rows[-max(1, limit):]))
 
 
