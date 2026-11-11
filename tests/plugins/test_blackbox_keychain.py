@@ -12,6 +12,7 @@ import pytest
 
 from plugins.blackbox.detection import detect_all
 from plugins.blackbox.detection.paths.keychain import detect_keychain_access
+from plugins.blackbox.shields.trader import TRADER
 from plugins.blackbox.shields.trader import mode as trader_mode
 from plugins.blackbox.ruleset import Ruleset
 
@@ -56,5 +57,5 @@ def test_it_runs_with_every_detector_whatever_the_protected_path_list():
 
 def test_it_belongs_to_trader_shield():
     row = {"identifier": "fileaccess:terminal:macos-keychain", "fields": {}}
-    assert trader_mode.allows_finding(row, trader_mode.build(enabled=True, wallets=()))   # any wallet choice
-    assert not trader_mode.allows_finding(row, trader_mode.build(enabled=False))
+    assert TRADER.allows(row, trader_mode.build(enabled=True, wallets=()))   # any wallet choice
+    assert not TRADER.allows(row, trader_mode.build(enabled=False))

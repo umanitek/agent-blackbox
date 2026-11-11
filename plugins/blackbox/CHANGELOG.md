@@ -117,6 +117,8 @@ that the two version fields agree.
   every place Blackbox redacts, so a name redacted in one log is redacted in all of them.
 - **Trader Shield names the right browser.** A wallet is shown under the browser whose folder it
   is in; a user folder such as "marc" or "operator" no longer makes a Chrome wallet read Arc or Opera.
+- **An approval to a spender Blackbox cannot check is told like any other approval.** Its event
+  in Trader Shield's report now says what the agent reached for and why it matters.
 
 ### Changed
 

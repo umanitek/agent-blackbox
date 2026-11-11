@@ -24,6 +24,7 @@ from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from plugins.blackbox.detection.secrets_handled.exposure import detect_own_wallet_keys, detect_secret_exposure
 from plugins.blackbox.kernel import redaction
 from plugins.blackbox.kernel.crypto_secrets import address_of, find_bitcoin_private_keys, find_solana_secret_keys
+from plugins.blackbox.shields.trader import TRADER
 from plugins.blackbox.shields.trader import mode as trader_mode
 from plugins.blackbox.kernel.crypto_secrets import solana_key
 
@@ -181,5 +182,5 @@ def test_a_look_alike_with_a_broken_checksum_is_not_a_key():
 
 
 def test_bitcoin_keys_belong_to_trader_shield():
-    assert trader_mode.belongs_to_mode("secret:bitcoin-private-key")
-    assert not trader_mode.allows_finding({"identifier": "secret:bitcoin-private-key"}, trader_mode.build(enabled=False))
+    assert TRADER.claims({"identifier": "secret:bitcoin-private-key"})
+    assert not TRADER.allows({"identifier": "secret:bitcoin-private-key"}, trader_mode.build(enabled=False))

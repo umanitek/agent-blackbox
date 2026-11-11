@@ -99,11 +99,11 @@ def test_a_named_pack_wins_over_the_display_wallet():
     assert not _allowed(VAULT, phantom_only, {"pack": "metamask", "wallet": "phantom"})
 
 
-def test_a_store_without_a_pack_is_still_gated_by_its_legacy_wallet_name():
-    # Transitional until the dashboard panel stops asking by fields["wallet"]: a store with
-    # no pack but a wallet id follows that wallet's tick, not the shield-level rule.
-    assert _allowed(VAULT, trader_mode.build(enabled=True, wallets=("metamask",)), {"wallet": "metamask"})
-    assert not _allowed(VAULT, trader_mode.build(enabled=True, wallets=("phantom",)), {"wallet": "metamask"})
+def test_a_store_is_gated_by_its_pack_never_by_the_old_wallet_field():
+    # The gate reads fields["pack"] only (the panel asks by pack since shields); a store that
+    # names no pack is the shield's as a whole and counts while any wallet is chosen.
+    assert _allowed(VAULT, trader_mode.build(enabled=True, wallets=("phantom",)), {"wallet": "metamask"})
+    assert not _allowed(VAULT, trader_mode.build(enabled=True, wallets=()), {"wallet": "metamask"})
 
 
 def test_a_shield_level_secret_counts_whenever_the_shield_is_on():
@@ -276,19 +276,30 @@ def test_detect_all_no_longer_raises_key_stores_the_shield_does():
 
 # -- what Trader claims ---------------------------------------------------------------
 
-#: The identifiers Trader claimed before the registry (``mode.belongs_to_mode``): ten.
-CLAIMED_BEFORE = trader_mode.WALLET_SECRET_IDENTIFIERS | {"*" + trader_mode.WALLET_FILE_SUFFIX,
-                                                          "*" + trader_mode.KEYCHAIN_FILE_SUFFIX}
+#: The identifiers Trader claimed before the registry (``mode.belongs_to_mode``, since retired): ten.
+CLAIMED_BEFORE = frozenset({
+    "secret:seed-phrase", "secret:wallet-private-key", "secret:solana-private-key", "secret:bitcoin-private-key",
+    "secret:exchange-api-key", "secret:token-approval-drainer", "secret:token-approval-unlimited",
+    "secret:token-approval-unchecked-spender", "*:crypto-wallet", "*:macos-keychain"})
 
 
 def test_trader_claims_exactly_the_identifiers_it_claimed_before():
     declared = {kind.identifier for kind in TRADER.finding_kinds}
     assert declared == CLAIMED_BEFORE and len(declared) == 10
-    samples = [identifier.replace("*", "fileaccess:terminal") for identifier in CLAIMED_BEFORE] + [
-        "fileaccess:terminal:ssh-private-key", "secret:aws-access-key", "secret:seed-phrase-x",
-        "xsecret:seed-phrase", "fileaccess:read_file:crypto-wallet-backup", "ioc:wallet:0xabc", ""]
-    for identifier in samples:
-        assert TRADER.claims({"identifier": identifier}) == trader_mode.belongs_to_mode(identifier), identifier
+    for identifier in CLAIMED_BEFORE:
+        assert TRADER.claims({"identifier": identifier.replace("*", "fileaccess:terminal")}), identifier
+    for identifier in ("fileaccess:terminal:ssh-private-key", "secret:aws-access-key", "secret:seed-phrase-x",
+                       "xsecret:seed-phrase", "fileaccess:read_file:crypto-wallet-backup", "ioc:wallet:0xabc", ""):
+        assert not TRADER.claims({"identifier": identifier}), identifier
+
+
+def test_every_claimed_finding_is_one_the_events_report_can_tell():
+    """The gate and the events report read one table (kinds.py): a claimed finding always has
+    an event kind — the unchecked-spender approval once had none, so its event said nothing."""
+    from plugins.blackbox.shields.trader import kinds
+    for identifier in CLAIMED_BEFORE:
+        assert kinds.event_kind(identifier.replace("*", "fileaccess:terminal")), identifier
+    assert kinds.event_kind("secret:token-approval-unchecked-spender") == "approval"
 
 
 def test_every_claiming_capability_names_a_declared_kind():

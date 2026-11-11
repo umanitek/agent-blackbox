@@ -18,6 +18,7 @@ import pytest
 from _trader_attack_table import ATTACKS
 from plugins.blackbox.shields.contract import Pack
 from plugins.blackbox.shields.trader import detectors
+from plugins.blackbox.shields.trader import TRADER
 from plugins.blackbox.shields.trader import mode as trader_mode
 from plugins.blackbox.shields.trader.detectors import browser_extension
 from plugins.blackbox.shields.trader.detectors.browser_extension import BrowserExtensionMatcher, Owner
@@ -158,8 +159,8 @@ def test_a_firefox_vault_read_is_pack_less_and_counts_while_trader_shield_is_on(
     assert "pack" not in finding.fields and finding.fields["wallet"] == trader_mode.ANY_EXTENSION_WALLET
     assert detectors.detect("read_file", {"path": path}, trader_mode.build(enabled=True, wallets=())) == [finding]
     as_dict = {"identifier": finding.identifier, "fields": finding.fields}
-    assert trader_mode.allows_finding(as_dict, trader_mode.build(enabled=True))
-    assert not trader_mode.allows_finding(as_dict, trader_mode.build(enabled=False))
+    assert TRADER.allows(as_dict, trader_mode.build(enabled=True))
+    assert not TRADER.allows(as_dict, trader_mode.build(enabled=False))
 
 
 def test_only_chosen_packs_are_returned():
