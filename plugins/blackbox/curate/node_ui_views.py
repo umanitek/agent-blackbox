@@ -18,13 +18,13 @@ from dataclasses import dataclass
 from typing import List, Tuple
 
 from ..kernel import constants
-from ..kernel import rdf_terms
+from ..kernel import rdf_terms, sparql_text
 
 PROFILE_NS = "http://dkg.io/ontology/profile/"
 RDF_TYPE = constants.RDF_TYPE
 SCHEMA_DESCRIPTION = "http://schema.org/description"
 CATALOG_IRI = "urn:blackbox:query-catalog:umanitek-guardian"
-_G = "PREFIX g: <http://umanitek.ai/ontology/guardian/>\n"
+_G = sparql_text.GUARDIAN_PREFIX + "\n"
 
 
 @dataclass(frozen=True)

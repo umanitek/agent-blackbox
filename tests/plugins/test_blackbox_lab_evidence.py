@@ -992,3 +992,24 @@ def test_no_module_assigns_one_of_those_addresses_to_a_constant_of_its_own():
     offenders = sorted(str(path.relative_to(plugin)) for path in plugin.rglob("*.py")
                        if path.name != "constants.py" and retyped.search(path.read_text(encoding="utf-8-sig")))
     assert offenders == [], f"use kernel.constants instead: {offenders}"
+
+
+def test_the_guardian_ontology_address_is_spelled_only_in_kernel_constants():
+    """Every query takes its `g:` prefix from `sparql_text.GUARDIAN_PREFIX` and every IRI from
+    `kernel.constants`; a retyped copy of the address could drift from the published corpus.
+    (curate/lab/ is standard-library only by design and keeps its own copies, with parity tests.)"""
+    from pathlib import Path
+
+    plugin = Path(__file__).resolve().parents[2] / "plugins" / "blackbox"
+    spelled = [str(path.relative_to(plugin)) for path in plugin.rglob("*.py")
+               if "http://umanitek.ai/ontology/guardian/" in path.read_text(encoding="utf-8")
+               and path.relative_to(plugin).parts[:2] != ("curate", "lab")]
+    assert spelled == ["kernel/constants.py"]
+
+
+def test_a_page_cursor_is_escaped_and_absent_on_the_first_page():
+    from plugins.blackbox.kernel import sparql_text
+
+    assert sparql_text.cursor_filter("") == ""
+    assert sparql_text.cursor_filter('urn:x:"1"') == 'FILTER(STR(?r) > "urn:x:\\"1\\"")'
+    assert sparql_text.cursor_filter("urn:y", variable="threat") == 'FILTER(STR(?threat) > "urn:y")'

@@ -50,9 +50,9 @@ class VerifiedDispute:
 
 def disputes_sparql(after: str) -> str:
     """One page of FalsePositive rows after the subject cursor *after*."""
-    cursor = f"FILTER(STR(?r) > {sparql_text.sparql_string_literal(after)})" if after else ""
+    cursor = sparql_text.cursor_filter(after)
     return f"""
-PREFIX g: <http://umanitek.ai/ontology/guardian/>
+{sparql_text.GUARDIAN_PREFIX}
 SELECT ?r ?identifier ?reporter ?reportReason ?signedStatement WHERE {{
   ?r a g:FalsePositive ;
      g:identifier ?identifier ;

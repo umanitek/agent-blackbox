@@ -41,7 +41,7 @@ def community_report_count(client: DkgClient, cfg: BlackboxConfig) -> int:
         return 0
     sparql = (
         "SELECT (COUNT(DISTINCT ?r) AS ?n) WHERE { "
-        "?r a <http://umanitek.ai/ontology/guardian/ThreatReport> }"
+        f"?r a <{constants.REPORT_TYPE_IRI}> }}"
     )
     rows = client.query(
         sparql,
@@ -79,11 +79,9 @@ COMMUNITY_PAUSE_SUBJECT = "urn:guardian:community:pause"
 
 def _community_reports_sparql(after: str) -> str:
     """Catalog query Q1: cursor-paged ThreatReport fetch with OPTIONAL harvest."""
-    cursor = ""
-    if after:
-        cursor = f"FILTER(STR(?r) > {sparql_text.sparql_string_literal(after)})"
+    cursor = sparql_text.cursor_filter(after)
     return f"""
-PREFIX g: <http://umanitek.ai/ontology/guardian/>
+{sparql_text.GUARDIAN_PREFIX}
 SELECT ?r ?identifier ?reporter ?severity ?kind ?iocType ?toolName ?argShape
        ?packageName ?packageVersion ?packageEcosystem ?category ?skillName
        ?dangerShape ?pattern ?injectionContext ?skillArtifactHash ?skillRegistry ?iocContext ?reportReason

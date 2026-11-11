@@ -67,9 +67,9 @@ class HeatEstimate:
 
 def digests_sparql(after: str) -> str:
     """One page of SightingDigest rows after the subject cursor *after*."""
-    cursor = f"FILTER(STR(?r) > {sparql_text.sparql_string_literal(after)})" if after else ""
+    cursor = sparql_text.cursor_filter(after)
     return f"""
-PREFIX g: <http://umanitek.ai/ontology/guardian/>
+{sparql_text.GUARDIAN_PREFIX}
 SELECT ?r ?reporter ?isoWeek ?signedStatement WHERE {{
   ?r a g:SightingDigest ;
      g:reporter ?reporter ;

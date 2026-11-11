@@ -214,7 +214,7 @@ def statements_sparql(after: str, identifier: str = "") -> str:
     """One page of promotion statements after the subject cursor *after*
     (``sparql_text.page_rows`` pages it) — only those about *identifier* when
     given: ``?r`` the statement, ``?report``, ``?signedStatement``."""
-    cursor = f"FILTER(STR(?r) > {sparql_text.sparql_string_literal(after)})" if after else ""
+    cursor = sparql_text.cursor_filter(after)
     about = f"FILTER(STRSTARTS(STR(?r), {sparql_text.sparql_string_literal(_statement_prefix(identifier))}))" if identifier else ""
     return (f"SELECT ?r ?report ?signedStatement WHERE {{ "
             f"?r a <{constants.CURATOR_STATEMENT_TYPE_IRI}> ; <{PROMOTES_REPORT_PRED}> ?report ; "

@@ -210,7 +210,7 @@ def parse_kill_list(row: Mapping[str, Any], manifest: Optional[KeyManifest], *, 
 
 def kill_list_sparql(after: str) -> str:
     """One page of kill-list rows after the subject cursor *after*."""
-    cursor = f"FILTER(STR(?r) > {sparql_text.sparql_string_literal(after)})" if after else ""
+    cursor = sparql_text.cursor_filter(after)
     return f"""
 PREFIX g: <{constants.BLACKBOX_ONTOLOGY}>
 SELECT ?r ?signedStatement WHERE {{

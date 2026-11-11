@@ -19,6 +19,8 @@ from __future__ import annotations
 import time
 from typing import Any, Callable, Dict, List, Optional
 
+from . import constants
+
 
 # Safety ceiling so a misbehaving node can never spin the pager forever.
 MAX_ROWS = 1_000_000
@@ -40,6 +42,16 @@ def sparql_string_literal(value: object) -> str:
 
 #: Characters that end an ``<iri>`` early or are never legal inside one.
 _UNSAFE_IN_IRI = frozenset('<>"{}|^`\\')
+
+
+#: The ``g:`` prefix every graph query declares (the guardian ontology, ``constants.BLACKBOX_ONTOLOGY``).
+GUARDIAN_PREFIX = f"PREFIX g: <{constants.BLACKBOX_ONTOLOGY}>"
+
+
+def cursor_filter(after: str, variable: str = "r") -> str:
+    """The FILTER that resumes a subject-ordered page after the subject *after* ("" on the first
+    page): ``FILTER(STR(?r) > "<after>")``, the value escaped as a SPARQL string literal."""
+    return f"FILTER(STR(?{variable}) > {sparql_string_literal(after)})" if after else ""
 
 
 def is_safe_iri(value: object) -> bool:

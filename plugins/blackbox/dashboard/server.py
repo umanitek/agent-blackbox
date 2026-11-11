@@ -1065,7 +1065,7 @@ def create_app(*, manage_blackbox: bool = False):
         if blackbox_thread is not None:
             blackbox_thread.join(timeout=6)
 
-    _PREFIX = "PREFIX g: <http://umanitek.ai/ontology/guardian/> "
+    _PREFIX = sparql_text.GUARDIAN_PREFIX + " "
 
     def _count_query(client: DkgClient, cfg: Any, where: str, view: str) -> int:
         """Run a single-``?n``-binding COUNT query; 0 on any failure (fail-open)."""

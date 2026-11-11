@@ -253,7 +253,7 @@ def _legacy_threats_sparql(
   OPTIONAL {{ ?threat g:skillVersion ?skillVersion . }}
   OPTIONAL {{ ?threat g:dangerShape ?dangerShape . }}"""
     body, columns = _scoped(body, graph_uri, graph_prefix)
-    return f"""PREFIX g: <http://umanitek.ai/ontology/guardian/>
+    return f"""{sparql_text.GUARDIAN_PREFIX}
 PREFIX schema: <http://schema.org/>
 SELECT DISTINCT {columns}
 WHERE {{
@@ -363,7 +363,7 @@ def signed_rows_sparql(graphs: Sequence[str], limit: int) -> str:
 # ---------------------------------------------------------------------------
 
 # This fallback keeps already-published proof-era rows effective.
-_PROOFS_SPARQL = """PREFIX g: <http://umanitek.ai/ontology/guardian/>
+_PROOFS_SPARQL = sparql_text.GUARDIAN_PREFIX + """
 SELECT ?proof ?root ?member WHERE {
   ?proof a g:CurationProof .
   ?proof g:anchorRoot ?root .

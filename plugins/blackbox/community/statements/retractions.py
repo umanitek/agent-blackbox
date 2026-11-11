@@ -55,9 +55,9 @@ _PAGE_SIZE = 5000
 
 def retractions_sparql(after: str) -> str:
     """One page of Retraction rows after the subject cursor *after*."""
-    cursor = f"FILTER(STR(?r) > {sparql_text.sparql_string_literal(after)})" if after else ""
+    cursor = sparql_text.cursor_filter(after)
     return f"""
-PREFIX g: <http://umanitek.ai/ontology/guardian/>
+{sparql_text.GUARDIAN_PREFIX}
 SELECT ?r ?identifier ?reporter ?signedStatement WHERE {{
   ?r a g:Retraction ;
      g:identifier ?identifier ;
