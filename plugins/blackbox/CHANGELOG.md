@@ -38,6 +38,55 @@ that the two version fields agree.
 
 ## [Unreleased]
 
+### Fixed
+
+- **One check that fails no longer ends the others.** If a single detector hits an error on a
+  call (for example on a number thousands of digits long), the rest of the checks still run and
+  can still block; the failure is logged. Arguments nested too deep to read are checked as text
+  instead of raising an error to Hermes.
+- **A typo in `snapshot_sync` no longer switches protection off.** A saved `snapshot_sync` block
+  that cannot be used is reported (`blackbox status` says so, sync refuses to start) while every
+  check keeps running. Saving such a block is refused.
+- **The guard-settings rule follows `cd`.** A command that reaches Blackbox's own settings through
+  several `cd` steps is recognised like one that names the file directly.
+- **A `config.yaml` that cannot be read is never written over.** Attach, the assistant's profile
+  setup, settings saves and uninstall leave an unreadable file alone and say so, instead of
+  replacing it with a nearly empty one. Blackbox's own changes to a `config.yaml` also wait for
+  each other, so a settings save and an automatic attach in the dashboard cannot undo one another.
+- **`blackbox dashboard` honours `auto_attach`.** Starting the dashboard no longer attaches every
+  agent on the machine when automatic attach is off.
+- **The agent's action no longer waits for the node after a finding.** The finding is recorded
+  and the block is returned at once; the private audit record and the community share follow in
+  the background. A slow or stopped node could hold a blocked action for minutes.
+- **Community rules stay in force while they are refreshed.** Between full syncs the community
+  rules were briefly missing each time they were re-read from the node. They are now replaced in
+  one step.
+- **Large file writes are checked quickly.** Writing a large file with few spaces (a minified
+  file, an encoded blob) could hold the agent for several seconds per call.
+- **Blackbox talks to its own node and dashboard directly.** Requests to the local node and the
+  local dashboard no longer go through a proxy set in the environment, and do not follow
+  redirects.
+- **Uninstall stops only Blackbox's node.** The process number saved by the node is checked to be
+  the Blackbox node before it is stopped. Uninstall and the dashboard's assistant also use the
+  Hermes they are running in, not another `hermes` found on the PATH.
+- **The audit logs lose no record under load.** When several agents write while one trims a full
+  log, every record is kept.
+- **A dashboard page left open keeps working after the dashboard restarts** (it used to answer
+  "403" until reloaded), and the first page after a start is no longer slow because the start-up
+  reads did not run.
+- **A manual report made in sandbox mode stays in the sandbox.** `blackbox report` with Sandbox
+  mode on now goes to the sandbox lane only, like automatic reports, and is not re-published.
+- **Curator commands.** `blackbox curate approve` exits with an error when nothing was published;
+  `curate inbox` admits only proposals a curator signed; a sighting digest dated in a week that
+  does not exist is ignored instead of emptying the heat map.
+- **Secrets in logged settings.** The words that mark a setting as secret are now one list for
+  every place Blackbox redacts, so a name redacted in one log is redacted in all of them.
+
+### Changed
+
+- A mode or severity written with stray spaces or capitals in `config.yaml` (`mode: " Block "`)
+  is read as that value. It used to fall back to the default.
+
 ## [1.4.0] - 2026-11-08
 
 ### Added
