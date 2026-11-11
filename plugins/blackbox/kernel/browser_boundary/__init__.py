@@ -112,8 +112,10 @@ class BrowserBoundary:
     def _token_matches(self, request: Any) -> bool:
         expected = self._token_for(request) or ""
         presented = request.headers.get(TOKEN_HEADER, "")
-        # An absent expected token never matches, even an absent presented one.
-        return bool(expected) and secrets.compare_digest(presented, expected)
+        # An absent expected token never matches, even an absent presented one. Compared as UTF-8
+        # bytes: `compare_digest` refuses a str with characters outside ASCII (a header the server
+        # decoded as latin-1), which used to escape as a 500 instead of this 403.
+        return bool(expected) and secrets.compare_digest(presented.encode("utf-8"), expected.encode("utf-8"))
 
 
 __all__ = ["SAFE_METHODS", "TOKEN_HEADER", "BrowserBoundary", "TokenLookup"]

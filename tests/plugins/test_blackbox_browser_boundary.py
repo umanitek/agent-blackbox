@@ -142,7 +142,7 @@ def test_token_is_compared_in_constant_time(loopback_client, monkeypatch):
 
     monkeypatch.setattr(browser_boundary.secrets, "compare_digest", spy)
     assert loopback_client.post("/change", headers={"X-Blackbox-Token": "guess"}).status_code == 403
-    assert calls == [("guess", PROCESS_TOKEN)]
+    assert calls == [(b"guess", PROCESS_TOKEN.encode())]   # as bytes: any header value compares, never raises
 
 
 # ------------------------------------------------------------------ KI-390: the port is part of the origin
@@ -199,3 +199,10 @@ def test_the_dashboard_escape_covers_the_single_quote():
     rendered = subprocess.run([node, "-e", esc + "console.log(esc(\"<a title='x' href=\\\"y\\\">&</a>\"));"],
                               capture_output=True, text=True, check=True).stdout.strip()
     assert rendered == "&lt;a title=&#39;x&#39; href=&quot;y&quot;&gt;&amp;&lt;/a&gt;"
+
+
+def test_a_token_with_characters_outside_ascii_is_refused_not_an_error(loopback_client):
+    """The server decodes headers as latin-1; comparing such a str raised TypeError inside the
+    middleware, so the request got a 500 instead of a 403 (still refused, but not as designed)."""
+    response = loopback_client.post("/change", headers={"X-Blackbox-Token": "tok\xe9n".encode("latin-1")})
+    assert response.status_code == 403 and response.json() == {"error": "missing or invalid session token"}
