@@ -24,14 +24,12 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any, FrozenSet, Iterable, List, Mapping, Optional, Tuple
+from typing import Any, Iterable, Mapping, Optional
 
-from ...kernel import signing, sparql_text, threat_ids
-from ...kernel.dkg_client import extract_binding
+from ...kernel import sparql_text, threat_ids
 from ..report_signer import RETRACT_STATEMENT
-from ..verification import SIGNED_STATEMENT_VAR, VerifiedReport
+from ..verification import VerifiedReport, shown_as_signed, signed_by, verified_rows
 
-from ..verification import unique_by_subject
 
 logger = logging.getLogger(__name__)
 
@@ -73,40 +71,24 @@ SELECT ?r ?identifier ?reporter ?signedStatement WHERE {{
 def _verified_withdrawal(row: Mapping[str, Any], environment: str, graph: str) -> Optional[VerifiedRetraction]:
     """The retraction in *row* when it is signed for this network and graph
     and its shown fields match what was signed; else None."""
-    envelope = signing.from_text(extract_binding(row.get(SIGNED_STATEMENT_VAR)))
-    author = signing.verify(envelope, statement_type=RETRACT_STATEMENT, environment=environment, graph=graph)
-    if author is None or envelope is None:
+    signed = signed_by(row, RETRACT_STATEMENT, environment, graph)
+    if signed is None:
         return None
-    identifier = envelope.payload.get("identifier", "")
-    reporter = envelope.payload.get("reporter", "")
+    author, payload = signed
+    identifier, reporter = payload.get("identifier", ""), payload.get("reporter", "")
     if not identifier or not threat_ids.is_agent_address(reporter):
         return None
-    subject = threat_ids.report_uri(identifier, reporter) + ":retract"
-    shown = (
-        extract_binding(row.get("r")),
-        extract_binding(row.get("identifier")).strip(),
-        extract_binding(row.get("reporter")).strip().lower(),
-    )
-    if envelope.payload.get("subject") != subject or shown != (subject, identifier, reporter):
+    subject = threat_ids.retraction_subject(identifier, reporter)
+    if payload.get("subject") != subject or not shown_as_signed(
+            row, {"r": subject, "identifier": identifier, "reporter": reporter}):
         return None
     return VerifiedRetraction(author=author, identifier=identifier, subject=subject, reporter=reporter,
-                              day=envelope.payload.get("day", ""))
+                              day=payload.get("day", ""))
 
 
 def verified_retractions(rows: Iterable[Mapping[str, Any]], environment: str, graph: str) -> list[VerifiedRetraction]:
     """Every retraction row that verifies; the rest are dropped and counted in the log."""
-    found: list[VerifiedRetraction] = []
-    dropped = 0
-    for row in rows:
-        retraction = _verified_withdrawal(row, environment, graph)
-        if retraction is None:
-            dropped += 1
-        else:
-            found.append(retraction)
-    if dropped:
-        logger.info("blackbox: community read ignored %d unsigned or unverifiable retraction row(s)", dropped)
-    return unique_by_subject(found)
-
+    return verified_rows(rows, lambda row: _verified_withdrawal(row, environment, graph), "retraction")[0]
 
 
 def apply_retractions(reports: Iterable[VerifiedReport], withdrawn: frozenset[Withdrawal]) -> list[VerifiedReport]:

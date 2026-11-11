@@ -79,6 +79,17 @@ def report_uri(identifier: str, agent_address: str) -> str:
     return f"urn:guardian:report:{addr}:{stable_hash(identifier, 16)}"
 
 
+def dispute_subject(identifier: str, agent_address: str) -> str:
+    """The subject of a reporter's DISPUTE of *identifier*: its report subject + ``:fp``
+    (one per reporter and threat, beside the report). Writers and readers both use this."""
+    return report_uri(identifier, agent_address) + ":fp"
+
+
+def retraction_subject(identifier: str, agent_address: str) -> str:
+    """The subject of a reporter's RETRACTION of *identifier*: its report subject + ``:retract``."""
+    return report_uri(identifier, agent_address) + ":retract"
+
+
 def is_agent_address(value: object) -> bool:
     """Whether *value* has the shape of a DKG agent address (an EVM address:
     ``0x`` + 40 hex characters). The reporter field of every statement that

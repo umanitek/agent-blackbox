@@ -27,11 +27,11 @@ Usage::
 
 from __future__ import annotations
 
-from datetime import date, timedelta, timezone
+from datetime import date, timedelta
 
 import logging
 from dataclasses import dataclass
-from typing import Dict, Any, Iterable, List, Mapping, Optional, Tuple
+from typing import Any, Callable, Iterable, Mapping, Optional
 
 from ..kernel.health import today_utc
 from ..kernel import constants, signing, threat_ids
@@ -233,15 +233,51 @@ def unique_by_subject(found: list[Any]) -> list[Any]:
 def verify_report_rows(rows: Iterable[Mapping[str, Any]], verifier: ReportVerifier) -> tuple[list[VerifiedReport], int]:
     """(verified reports, number of rows dropped). Logs the drop count —
     a sudden jump is the visible sign of forged or unsigned traffic."""
-    reports: list[VerifiedReport] = []
+    return verified_rows(rows, verifier.verify, "report")
+
+
+# --- the steps every member-signed statement is read with (reports, disputes, retractions, digests)
+
+def signed_by(row: Mapping[str, Any], statement_type: str, environment: str,
+              graph: str) -> Optional[tuple[str, Mapping[str, str]]]:
+    """``(author key, signed payload)`` of the statement in *row*'s ``signedStatement``
+    column when it is a valid *statement_type* signature for this network and graph;
+    None otherwise. The author is what the signature proves — never a row column (LES-014)."""
+    envelope = signing.from_text(extract_binding(row.get(SIGNED_STATEMENT_VAR)))
+    author = signing.verify(envelope, statement_type=statement_type, environment=environment, graph=graph)
+    if author is None or envelope is None:
+        return None
+    return author, envelope.payload
+
+
+def shown_as_signed(row: Mapping[str, Any], signed: Mapping[str, str]) -> bool:
+    """Whether each column of *row* named in *signed* shows the signed value: ``r`` (the
+    subject) exactly, the rest with surrounding spaces ignored, ``reporter`` in lower case.
+    A row whose shown columns differ from its signature is a re-labelled copy: dropped."""
+    for column, value in signed.items():
+        shown = extract_binding(row.get(column))
+        if column != "r":
+            shown = shown.strip()
+        if column == "reporter":
+            shown = shown.lower()
+        if shown != value:
+            return False
+    return True
+
+
+def verified_rows(rows: Iterable[Mapping[str, Any]], verify: Callable[[Mapping[str, Any]], Optional[Any]],
+                  kind: str) -> tuple[list[Any], int]:
+    """``(verified statements, rows dropped)``: *verify* each row (None = drop), log how many were
+    dropped (a jump is the visible sign of forged traffic), keep one statement per subject."""
+    found: list[Any] = []
     dropped = 0
     for row in rows:
-        report = verifier.verify(row)
-        if report is None:
+        statement = verify(row)
+        if statement is None:
             dropped += 1
         else:
-            reports.append(report)
+            found.append(statement)
     if dropped:
-        logger.info("blackbox: community read dropped %d unsigned or unverifiable report row(s)", dropped)
-    return unique_by_subject(reports), dropped
+        logger.info("blackbox: community read dropped %d unsigned or unverifiable %s row(s)", dropped, kind)
+    return unique_by_subject(found), dropped
 

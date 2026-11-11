@@ -98,7 +98,7 @@ def submit_false_positive(client: DkgClient, cfg, identifier: str, reason: Optio
     q = report_builder.build_false_positive_quads(identifier=identifier, reporter_address=reporter,
                                                   reason=reason, signer=signer)
     name = f"fp-{threat_ids.stable_hash(identifier + reporter, 16)}"
-    subject = threat_ids.report_uri(identifier, reporter) + ":fp"
+    subject = threat_ids.dispute_subject(identifier, reporter)
     outcome, detail = send_and_record(client, cfg, identifier=identifier, category="false-positive",
                                        severity="info", subject=subject, name=name, quads=q, reduces=True)
     if outcome is sharing.ShareOutcome.FAILED:
@@ -136,7 +136,7 @@ def submit_retraction(client: DkgClient, cfg, identifier: str, reporter: str,
     quads = report_builder.build_retraction_quads(identifier=identifier, reporter_address=reporter,
                                                   framework=sharing.HOST_FRAMEWORK, signer=signer)
     name = f"retract-{threat_ids.stable_hash(identifier + reporter, 16)}"
-    subject = threat_ids.report_uri(identifier, reporter) + ":retract"
+    subject = threat_ids.retraction_subject(identifier, reporter)
     outcome, detail = send_and_record(client, cfg, identifier=identifier, category="retraction",
                                       severity="info", subject=subject, name=name, quads=quads, reduces=True)
     if outcome is sharing.ShareOutcome.FAILED:

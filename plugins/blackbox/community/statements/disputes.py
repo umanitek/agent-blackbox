@@ -20,14 +20,13 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Iterable, List, Mapping, Optional
+from typing import Any, Iterable, Mapping, Optional
 
-from ...kernel import constants, signing, sparql_text, threat_ids
+from ...kernel import constants, sparql_text, threat_ids
 from ...kernel.dkg_client import extract_binding
 from ..report_signer import DISPUTE_STATEMENT
-from ..verification import SIGNED_STATEMENT_VAR
 
-from ..verification import unique_by_subject
+from ..verification import shown_as_signed, signed_by, verified_rows
 
 logger = logging.getLogger(__name__)
 
@@ -66,22 +65,18 @@ SELECT ?r ?identifier ?reporter ?reportReason ?signedStatement WHERE {{
 
 
 def _verified(row: Mapping[str, Any], environment: str, graph: str) -> Optional[VerifiedDispute]:
-    envelope = signing.from_text(extract_binding(row.get(SIGNED_STATEMENT_VAR)))
-    author = signing.verify(envelope, statement_type=DISPUTE_STATEMENT, environment=environment, graph=graph)
-    if author is None or envelope is None:
+    signed = signed_by(row, DISPUTE_STATEMENT, environment, graph)
+    if signed is None:
         return None
-    payload = envelope.payload
+    author, payload = signed
     identifier, reporter, reason = payload.get("identifier", ""), payload.get("reporter", ""), payload.get("reason", "")
     if not identifier or not threat_ids.is_agent_address(reporter) or reason not in constants.FALSE_POSITIVE_REASONS:
         return None
-    subject = threat_ids.report_uri(identifier, reporter) + ":fp"
-    shown = (
-        extract_binding(row.get("r")),
-        extract_binding(row.get("identifier")).strip(),
-        extract_binding(row.get("reporter")).strip().lower(),
-        extract_binding(row.get("reportReason")).strip() or reason,   # a row may omit it; the signed one counts
-    )
-    if payload.get("subject") != subject or shown != (subject, identifier, reporter, reason):
+    subject = threat_ids.dispute_subject(identifier, reporter)
+    shown = {"r": subject, "identifier": identifier, "reporter": reporter}
+    if extract_binding(row.get("reportReason")).strip():   # a row may omit it; the signed one counts
+        shown["reportReason"] = reason
+    if payload.get("subject") != subject or not shown_as_signed(row, shown):
         return None
     return VerifiedDispute(subject=subject, identifier=identifier, author=author, reporter=reporter,
                            reason=reason, day=payload.get("day", ""))
@@ -89,14 +84,4 @@ def _verified(row: Mapping[str, Any], environment: str, graph: str) -> Optional[
 
 def verified_disputes(rows: Iterable[Mapping[str, Any]], environment: str, graph: str) -> list[VerifiedDispute]:
     """Every dispute row that verifies; the rest are dropped and counted in the log."""
-    found: list[VerifiedDispute] = []
-    dropped = 0
-    for row in rows:
-        dispute = _verified(row, environment, graph)
-        if dispute is None:
-            dropped += 1
-        else:
-            found.append(dispute)
-    if dropped:
-        logger.info("blackbox: community read ignored %d unsigned or unverifiable dispute row(s)", dropped)
-    return unique_by_subject(found)
+    return verified_rows(rows, lambda row: _verified(row, environment, graph), "dispute")[0]

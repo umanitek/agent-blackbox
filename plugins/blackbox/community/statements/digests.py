@@ -26,18 +26,16 @@ import logging
 import re
 from dataclasses import dataclass
 from datetime import date
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
+from typing import Any, Iterable, Mapping, Optional
 
-from ...kernel import signing, sparql_text
-from ...kernel.dkg_client import extract_binding
+from ...kernel import sparql_text
 from ...kernel import threat_ids
 from ...kernel.health import today_utc
 from ..digest import DigestEntry, digest_subject, iso_week, parse_entries
 from ..report_signer import DIGEST_STATEMENT
-from ..verification import SIGNED_STATEMENT_VAR
+from ..verification import shown_as_signed, signed_by, verified_rows
 from .curator_view import CuratorView
 
-from ..verification import unique_by_subject
 
 logger = logging.getLogger(__name__)
 
@@ -99,37 +97,23 @@ def _week_is_readable(week: str) -> bool:
 
 
 def _verified(row: Mapping[str, Any], environment: str, graph: str) -> Optional[VerifiedDigest]:
-    envelope = signing.from_text(extract_binding(row.get(SIGNED_STATEMENT_VAR)))
-    author = signing.verify(envelope, statement_type=DIGEST_STATEMENT, environment=environment, graph=graph)
-    if author is None or envelope is None:
+    signed = signed_by(row, DIGEST_STATEMENT, environment, graph)
+    if signed is None:
         return None
-    payload = envelope.payload
+    author, payload = signed
     reporter, week = payload.get("reporter", ""), payload.get("week", "")
     entries = parse_entries(payload.get("entries", ""))
     if not threat_ids.is_agent_address(reporter) or not _week_is_readable(week) or entries is None:
         return None
     subject = digest_subject(reporter, week)
-    shown = (extract_binding(row.get("r")), extract_binding(row.get("reporter")).strip().lower(),
-             extract_binding(row.get("isoWeek")).strip())
-    if payload.get("subject") != subject or shown != (subject, reporter, week):
+    if payload.get("subject") != subject or not shown_as_signed(row, {"r": subject, "reporter": reporter, "isoWeek": week}):
         return None
     return VerifiedDigest(subject=subject, author=author, reporter=reporter, week=week, entries=entries)
 
 
 def verified_digests(rows: Iterable[Mapping[str, Any]], environment: str, graph: str) -> list[VerifiedDigest]:
     """Every digest row that verifies; the rest are dropped and counted in the log."""
-    found: list[VerifiedDigest] = []
-    dropped = 0
-    for row in rows:
-        digest = _verified(row, environment, graph)
-        if digest is None:
-            dropped += 1
-        else:
-            found.append(digest)
-    if dropped:
-        logger.info("blackbox: community read ignored %d unsigned or unverifiable digest row(s)", dropped)
-    return unique_by_subject(found)
-
+    return verified_rows(rows, lambda row: _verified(row, environment, graph), "digest")[0]
 
 
 def one_per_author_week(digests: Iterable[VerifiedDigest], first_seen: Mapping[str, float]) -> list[VerifiedDigest]:
