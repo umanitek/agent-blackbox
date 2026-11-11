@@ -18,9 +18,11 @@ from typing import Any, Mapping
 
 from . import constants, yaml_files
 from .config_values import schema
-from .config_values.schema import DETECTION_CATEGORIES   # noqa: F401 -- part of this module's surface
 from .config_values.semantic import SemanticConfig, semantic_config
 from .host_secrets import read_host_secret
+
+#: Re-exported: callers read the category list from here.
+DETECTION_CATEGORIES = schema.DETECTION_CATEGORIES
 
 logger = logging.getLogger(__name__)
 

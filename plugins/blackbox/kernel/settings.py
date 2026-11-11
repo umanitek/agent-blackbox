@@ -24,7 +24,7 @@ from . import constants
 from . import yaml_files
 from .config import load_blackbox_config
 from .config_values import schema
-from .config_values.schema import DETECTION_CATEGORIES, MAX_PROTECTED_PATHS   # noqa: F401 -- MAX_ is part of this module's surface
+from .config_values.schema import DETECTION_CATEGORIES, MAX_PROTECTED_PATHS
 
 logger = logging.getLogger(__name__)
 
