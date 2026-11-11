@@ -18,17 +18,17 @@ from __future__ import annotations
 
 import logging
 import threading
-from typing import Any, Callable, Dict, Iterable, List, NamedTuple, Tuple
+from typing import Any, Callable, Iterable, NamedTuple
 
 from . import constants
 from . import yaml_files
-from .config import DETECTION_CATEGORIES, load_blackbox_config
+from .config import load_blackbox_config
+from .config_values import schema
+from .config_values.schema import DETECTION_CATEGORIES, MAX_PROTECTED_PATHS   # noqa: F401 -- MAX_ is part of this module's surface
 
 logger = logging.getLogger(__name__)
 
 _GEAR_KEYS = yaml_files.BLACKBOX_ENTRY_PATH
-#: Most protected paths a save may list (each is matched on every file-access call).
-MAX_PROTECTED_PATHS = 100
 
 
 class ShieldSettings(NamedTuple):
@@ -105,13 +105,13 @@ def _validate(payload: dict[str, Any], *, sharing_consent: bool = False) -> tupl
         return {}, ["payload must be an object"]
 
     if "mode" in payload:
-        mode = str(payload["mode"]).lower()
-        (updates.__setitem__("mode", mode) if mode in ("audit", "block") else errors.append(f"invalid mode: {payload['mode']!r}"))
+        mode = schema.choice(schema.Mode, payload["mode"])
+        (updates.__setitem__("mode", mode) if mode else errors.append(f"invalid mode: {payload['mode']!r}"))
 
     for key in ("block_severity", "report_min_severity"):
         if key in payload:
-            val = str(payload[key]).lower()
-            if val in constants.SEVERITY_RANK:
+            val = schema.severity(payload[key])
+            if val:
                 updates[key] = val
             else:
                 errors.append(f"invalid {key}: {payload[key]!r}")
@@ -128,40 +128,14 @@ def _validate(payload: dict[str, Any], *, sharing_consent: bool = False) -> tupl
                 updates[key] = payload[key]
 
     if "categories" in payload:
-        cats = payload["categories"]
-        detection: dict[str, Any] = {}
-        if isinstance(cats, dict):
-            for cat in DETECTION_CATEGORIES:
-                item = cats.get(cat)
-                if not isinstance(item, dict):
-                    continue
-                setting: dict[str, Any] = {}
-                if "enabled" in item:
-                    if isinstance(item["enabled"], bool):
-                        setting["enabled"] = item["enabled"]
-                    else:
-                        errors.append(f"{cat}.enabled must be a boolean")
-                if "min_severity" in item:
-                    ms = str(item["min_severity"]).lower()
-                    if ms in constants.SEVERITY_RANK:
-                        setting["min_severity"] = ms
-                    else:
-                        errors.append(f"invalid {cat}.min_severity: {item['min_severity']!r}")
-                if setting:
-                    detection[cat] = setting
-        else:
+        if not isinstance(payload["categories"], dict):
             errors.append("categories must be an object")
-        updates["detection"] = detection
+        updates["detection"] = schema.category_settings(payload["categories"], errors)
 
     if "protected_paths" in payload:
         raw = payload["protected_paths"]
         if isinstance(raw, list) and len(raw) <= MAX_PROTECTED_PATHS:
-            paths: list[str] = []
-            for item in raw:
-                text = str(item or "").strip()
-                if text and text not in paths:
-                    paths.append(text)
-            updates["protected_paths"] = paths
+            updates["protected_paths"] = schema.path_list(raw)
         else:
             errors.append(f"protected_paths must be a list of up to {MAX_PROTECTED_PATHS} paths")
 
@@ -191,7 +165,7 @@ def _validate_llm(raw: Any, errors: list[str]) -> dict[str, Any]:
             errors.append("llm.enabled must be a boolean")
     if "provider" in raw:
         prov = str(raw["provider"]).strip().lower()
-        if prov in ("openai", "anthropic", ""):
+        if prov == "" or schema.choice(schema.Provider, prov):
             llm["provider"] = prov
         else:
             errors.append(f"invalid llm.provider: {raw['provider']!r}")

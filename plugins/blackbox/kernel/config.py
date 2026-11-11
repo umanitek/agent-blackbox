@@ -14,15 +14,13 @@ import os
 from .snapshot_config import SnapshotSyncConfig, snapshot_fields
 
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any, Dict, Mapping, Tuple
+from typing import Any, Mapping
 
 from . import constants, yaml_files
+from .config_values import schema
+from .config_values.schema import DETECTION_CATEGORIES   # noqa: F401 -- part of this module's surface
 from .config_values.semantic import SemanticConfig, semantic_config
 from .host_secrets import read_host_secret
-
-#: The detection categories a user can tune individually.
-DETECTION_CATEGORIES = ("injection", "escalation", "dependency", "fileaccess", "skill", "secret", "ioc")
 
 logger = logging.getLogger(__name__)
 
@@ -50,10 +48,10 @@ from .config_values import (_as_bool, _as_int, _as_float, _env_or, _first_env,
 class BlackboxConfig:
     """Resolved Blackbox settings for the current process."""
 
-    mode: str = "audit"
+    mode: str = schema.Mode.AUDIT.value
     #: Opt in to "dkg" after upgrading the local query capability.
     #: Existing and older-daemon installs retain their explicitly named legacy mode.
-    detection_backend: str = "legacy-cache"
+    detection_backend: str = schema.DetectionBackend.LEGACY_CACHE.value
     snapshot_sync: SnapshotSyncConfig | None = None
     snapshot_sync_error: str = ""   # why the saved block was set aside; sync refuses while set (KI-490)
     semantic: SemanticConfig = field(default_factory=SemanticConfig)
@@ -106,7 +104,7 @@ class BlackboxConfig:
     @property
     def block_enabled(self) -> bool:
         """True when the plugin is allowed to block tool calls."""
-        return self.mode.lower() == "block"
+        return self.mode.lower() == schema.Mode.BLOCK
 
     @property
     def community_enabled(self) -> bool:
@@ -129,7 +127,7 @@ class BlackboxConfig:
         """True when the optional LLM reviewer is enabled and fully configured."""
         return bool(
             self.llm_enabled
-            and self.llm_provider in ("openai", "anthropic")
+            and schema.choice(schema.Provider, self.llm_provider) is not None
             and self.llm_model
             and self.llm_api_key
         )
@@ -209,23 +207,14 @@ def load_blackbox_config(*, entry: dict[str, Any] | None = None) -> BlackboxConf
     """Resolve the saved or proposed entry with the same environment precedence."""
     entry = _blackbox_entry() if entry is None else entry
     _note_retired_community_settings(entry)
-    mode = str(_env_or(entry, env="BLACKBOX_MODE", key="mode", default="audit")).lower()
-    mode = mode if mode in {"audit", "block"} else "audit"
-    block_severity = str(
-        _env_or(entry, env="BLACKBOX_BLOCK_SEVERITY", key="block_severity", default="critical")
-    ).lower()
-    if block_severity not in constants.SEVERITY_RANK:
-        block_severity = "critical"
-    report_min_severity = str(_env_or(entry, env="BLACKBOX_REPORT_MIN_SEVERITY", key="report_min_severity",
-                                      default="high")).lower()
-    if report_min_severity not in constants.SEVERITY_RANK:
-        report_min_severity = "high"
-    categories = _normalize_categories(entry.get("detection"))
+    mode = schema.choice(schema.Mode, _env_or(entry, env="BLACKBOX_MODE", key="mode", default="")) or schema.Mode.AUDIT.value
+    block_severity = schema.severity(_env_or(entry, env="BLACKBOX_BLOCK_SEVERITY", key="block_severity", default="")) or "critical"
+    report_min_severity = schema.severity(_env_or(entry, env="BLACKBOX_REPORT_MIN_SEVERITY", key="report_min_severity",
+                                                  default="")) or "high"
+    categories = schema.category_settings(entry.get("detection"))
     protected_paths = _normalize_protected_paths(entry.get("protected_paths"))
     llm_entry = entry.get("llm") if isinstance(entry.get("llm"), dict) else {}
-    llm_provider = str(_env_or(llm_entry, env="BLACKBOX_LLM_PROVIDER", key="provider", default="")).strip().lower()
-    if llm_provider not in ("openai", "anthropic", ""):
-        llm_provider = ""
+    llm_provider = schema.choice(schema.Provider, _env_or(llm_entry, env="BLACKBOX_LLM_PROVIDER", key="provider", default="")) or ""
     llm_model = str(_env_or(llm_entry, env="BLACKBOX_LLM_MODEL", key="model", default="")).strip()
     referenced_key = read_host_secret(str(llm_entry.get("api_key_env") or "").strip())   # KI-371: a variable's name
     llm_api_key = (read_host_secret("BLACKBOX_LLM_API_KEY") or str(llm_entry.get("api_key") or "").strip() or referenced_key)
@@ -260,7 +249,7 @@ def load_blackbox_config(*, entry: dict[str, Any] | None = None) -> BlackboxConf
         graph_peer_id = constants.DEFAULT_GRAPH_PEER_ID
     return BlackboxConfig(
         mode=mode, semantic=semantic_config(entry), **snapshot_fields(entry),
-        detection_backend=str(entry.get("detection_backend", "legacy-cache")).strip().lower(),
+        detection_backend=str(entry.get("detection_backend", schema.DetectionBackend.LEGACY_CACHE.value)).strip().lower(),
         context_graph_id=context_graph_id,
         graph_peer_id=graph_peer_id,
         dkg_url=dkg_url,
@@ -292,26 +281,6 @@ def load_blackbox_config(*, entry: dict[str, Any] | None = None) -> BlackboxConf
     )
 
 
-def _normalize_categories(raw: Any) -> dict[str, dict[str, Any]]:
-    """Validate the ``detection`` config mapping into per-category policy dicts."""
-    out: dict[str, dict[str, Any]] = {}
-    if not isinstance(raw, dict):
-        return out
-    for category in DETECTION_CATEGORIES:
-        item = raw.get(category)
-        if not isinstance(item, dict):
-            continue
-        setting: dict[str, Any] = {}
-        if isinstance(item.get("enabled"), bool):
-            setting["enabled"] = item["enabled"]
-        min_sev = str(item.get("min_severity") or "").lower()
-        if min_sev in constants.SEVERITY_RANK:
-            setting["min_severity"] = min_sev
-        if setting:
-            out[category] = setting
-    return out
-
-
 def _normalize_protected_paths(raw: Any) -> tuple[str, ...]:
     """Validate ``protected_paths`` into a tuple of non-empty pattern strings.
 
@@ -323,9 +292,4 @@ def _normalize_protected_paths(raw: Any) -> tuple[str, ...]:
         return DEFAULT_PROTECTED_PATHS
     if not isinstance(raw, (list, tuple)):
         return ()
-    out = []
-    for item in raw:
-        text = str(item or "").strip()
-        if text and text not in out:
-            out.append(text)
-    return tuple(out[:100])
+    return tuple(schema.path_list(raw)[:schema.MAX_PROTECTED_PATHS])
