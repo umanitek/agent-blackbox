@@ -137,6 +137,8 @@ that the two version fields agree.
 - **The Playground's sandbox lane shows other members' tests safely.** Their text is cleaned and
   defanged like the Community graph's, a threat's category comes from its identifier, and a test can no
   longer break the threat window by filling its sources with text.
+- **Desktop's status bar counts every action of the day.** On a day with more than 100 findings the
+  count stopped at the newest 100; it now counts everything from the last 24 hours.
 
 ### Changed
 

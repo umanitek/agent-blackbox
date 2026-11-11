@@ -125,6 +125,18 @@ def _rows(limit: int) -> list[dict[str, Any]]:
         return []
 
 
+def _rows_since(since: float) -> list[dict[str, Any]]:
+    """Every finding row stamped at or after *since*, newest first — however many there are (the
+    page's list cap never limits a count). The log is newest first, so the cut is the first older row."""
+    try:
+        rows = _rows(audit.count_findings())   # both read the one cached parse of the logs
+    except Exception as exc:   # health: allow BLE001 -- an unreadable log counts as empty on the page
+        logger.warning("blackbox: findings unreadable for Desktop: %s", exc)
+        return []
+    newer = next((index for index, row in enumerate(rows) if float(row.get("ts") or 0) < since), len(rows))
+    return rows[:newer]
+
+
 def _action_key(row: Mapping[str, Any]) -> tuple[Any, ...]:
     """Findings of one checked action share the record's time, event and session (one row per finding)."""
     return (row.get("ts"), row.get("event"), row.get("session_id"))
@@ -172,7 +184,7 @@ def status_payload() -> dict[str, Any]:
     cfg = load_blackbox_config()
     rules, synced_at = _rules(cfg)
     since = time.time() - _DAY_SECONDS
-    today = [action for action in _actions(_rows(MAX_FINDINGS)) if action["time"] >= since]
+    today = [action for action in _actions(_rows_since(since)) if action["time"] >= since]
     return {
         "mode": cfg.mode,
         "blockSeverity": cfg.block_severity,

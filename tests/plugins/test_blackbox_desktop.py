@@ -272,3 +272,14 @@ def test_the_finding_window_asks_for_a_verified_record_only_for_a_graph_finding(
     assert "function useDash(key, path, interval, enabled = true)" in source
     assert "refetchInterval: interval || POLL_MS, enabled })" in source
     assert "SLOW_POLL_MS, fromGraph)" in source and "fromGraph ? finding.identifier : ''" not in source
+
+
+def test_today_counts_every_action_of_the_last_day_not_only_the_newest_hundred(monkeypatch):
+    """`today` was built from the newest 100 finding rows (the page's list cap), so a busy day
+    showed at most 100 in the status chip. It now counts every action of the last 24 hours."""
+    monkeypatch.setattr(desktop.ruleset, "get", lambda cfg: _Rules())
+    for index in range(desktop.MAX_FINDINGS + 5):
+        _record(monkeypatch, [_finding_dict(title=f"action {index}", identifier=f"ioc:domain:x{index}.example")],
+                "flag", session=f"s{index}", when=_REAL_TIME() - 600 + index)
+    assert desktop.status_payload()["today"] == {"findings": desktop.MAX_FINDINGS + 5, "blocked": 0}
+    assert len(desktop.findings_payload(limit=500)["findings"]) == desktop.MAX_FINDINGS   # the list keeps its cap
