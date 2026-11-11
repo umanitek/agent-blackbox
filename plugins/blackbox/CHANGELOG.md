@@ -130,6 +130,8 @@ that the two version fields agree.
   through a symlink or another spelling of its folder is the same agent to the automatic re-attach.
 - **`blackbox uninstall` asks at your terminal when it is run from a pipe.** Like `blackbox attach`, it
   asks the terminal itself instead of refusing outright; with no terminal it still needs `--yes`.
+- **`blackbox uninstall` finishes on a hand-edited Hermes config.** A `plugins:` written as text or a
+  list no longer stops the removal half-way, after the services were already stopped.
 
 ### Changed
 

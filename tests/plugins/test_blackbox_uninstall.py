@@ -272,6 +272,17 @@ def test_a_config_whose_plugins_is_not_a_mapping_does_not_crash_the_plan(tmp_pat
     assert uninstall._names_blackbox(home) is False
 
 
+@pytest.mark.parametrize("plugins", ["blackbox", ["blackbox"]])
+def test_a_config_whose_plugins_is_not_a_mapping_does_not_crash_the_removal(machine, plugins):
+    """The plan survived such a config, but the removal step walked plugins.entries by hand and
+    raised AttributeError half-way through — after the services were already stopped."""
+    from plugins.blackbox.kernel import yaml_files
+
+    yaml_files.dump_yaml(machine / ".hermes" / "config.yaml", {"plugins": plugins})
+    _execute(_plan(machine))   # the plugin folder still names this home as Blackbox's
+    assert yaml_files.load_yaml(machine / ".hermes" / "config.yaml") == {"plugins": plugins}   # nothing to remove: untouched
+
+
 def test_uninstall_also_removes_blackbox_from_its_own_chat_profile(machine):
     """`blackbox chat` attaches Blackbox to its managed profile (~/.hermes/profiles/agent-blackbox).
     Discovery hides that profile from the dashboard, and uninstall found homes only through

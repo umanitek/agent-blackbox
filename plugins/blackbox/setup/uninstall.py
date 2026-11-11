@@ -269,7 +269,8 @@ def _remove_from_agents(plan: UninstallPlan, report: list[str]) -> list[Path]:
             detach_hermes(home)
         config = home / "config.yaml"
         data = yaml_files.load_yaml(config)   # an unreadable config has no entry to remove: never written
-        entries = (data.get("plugins") or {}).get("entries")
+        plugins = data.get("plugins")
+        entries = plugins.get("entries") if isinstance(plugins, dict) else None   # hand-edited: nothing to remove
         if isinstance(entries, dict) and "blackbox" in entries:
             del entries["blackbox"]
             yaml_files.dump_yaml(config, data)
