@@ -284,3 +284,67 @@ def test_background_work_starts_again_each_time_its_app_starts():
             pass
 
     assert calls == ["ran", "ran", "ran"]
+
+
+# --- a value that goes back into a graph query is escaped or checked by the kernel, never by hand ---
+
+@pytest.mark.parametrize("value, safe", [
+    ("urn:guardian:threat:abc123", True),
+    ("did:dkg:context-graph:0xabc/agent-blackbox-vm/_verifiable_memory/a1", True),
+    ("urn:x> } ?s ?p ?o . { <urn:y", False),                 # closes the brackets and adds a pattern
+    ("urn:x y", False), ("urn:x\ny", False), ("urn:x\ty", False), ("urn:x y", False),
+    ('urn:"x"', False), ("urn:{x}", False), ("urn:x|y", False), ("urn:x^y", False), ("urn:`x`", False),
+    ("urn:x\\y", False), ("", False), (None, False), (7, False),
+])
+def test_only_an_address_that_cannot_break_out_of_its_brackets_is_written(value, safe):
+    from plugins.blackbox.kernel import sparql_text
+
+    assert sparql_text.is_safe_iri(value) is safe
+    assert sparql_text.sparql_iri(value) == (f"<{value}>" if safe else "")
+
+
+def test_the_threat_route_sends_a_hostile_identifier_as_one_escaped_literal(monkeypatch, tmp_path):
+    """The route escaped only backslashes and quotes by hand: a newline in the identifier
+    reached the node as a broken query. It also wrote the rule's subject between <> unchecked."""
+    monkeypatch.setenv("BLACKBOX_HOME", str(tmp_path / "bbhome"))
+    monkeypatch.setenv("BLACKBOX_CONTEXT_GRAPH_ID", DEV_GRAPH)
+    sent: list[str] = []
+
+    class Node:
+        def __init__(self, **kwargs):
+            pass
+
+        def reachable(self, timeout=None):
+            return True
+
+        def status(self, timeout=None):
+            return {}
+
+        def agent_identity(self):
+            return {}
+
+        def query(self, sparql, graph, **kwargs):
+            sent.append(sparql)
+            return []
+    from plugins.blackbox.kernel import dkg_client as dkg_module
+    monkeypatch.setattr(dkg_module, "DkgClient", Node)   # create_app imports the class when it is called
+    rules = _community_ruleset()
+    hostile_subject = "urn:x> } ?s ?p ?o . { <urn:y"
+    rules.ioc = {"ioc:domain:known.example": {"identifier": "ioc:domain:known.example", "source": "public",
+                                             "severity": "high", "subject": hostile_subject}}
+    monkeypatch.setattr(rs_mod, "peek", lambda cfg: rules)
+    monkeypatch.setattr(rs_mod, "get", lambda cfg: rules)
+    hostile_identifier = 'ioc:domain:x"\n} ?s ?p ?o . {'
+    with TestClient(server.create_app(), base_url="http://127.0.0.1:9700") as client:
+        client.get("/api/graph-status")                      # lets the liveness check learn the node is up
+        for identifier in (hostile_identifier, "ioc:domain:known.example"):
+            for _ in range(20):
+                client.get("/api/threat", params={"tier": "public", "identifier": identifier})
+                if sum("SELECT ?t ?p ?o" in q for q in sent) >= (1 if identifier == hostile_identifier else 2):
+                    break
+
+    lookups = [q for q in sent if "SELECT ?t ?p ?o" in q]             # the route's own point lookups
+    assert lookups, "the route never reached the node"
+    for query in lookups:
+        assert "\n" not in query and hostile_subject not in query      # one line; the unsafe address never written
+    assert any('g:identifier "ioc:domain:x\\"\\n} ?s ?p ?o . {"' in q for q in lookups)

@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from ...kernel.dkg_client import extract_binding
-from ...kernel.sparql_text import sparql_string_literal as literal
+from ...kernel.sparql_text import is_safe_iri, sparql_string_literal as literal
 from ...kernel.store import StoreClient
 from .. import row_adapters
 from ..partitions import rows_from_triples
@@ -228,13 +228,10 @@ class _Browser:
         return entries
 
 
-_FORBIDDEN_IRI_CHARS = frozenset('<>"{}|^`\\ \r\n\t')
-
-
 def _iri(value: str) -> bool:
     """True when *value* can be written as ``<value>`` (it came from the store, but an
     IRI is re-sent only when it cannot break out of the brackets)."""
-    return bool(value) and not any(char in value for char in _FORBIDDEN_IRI_CHARS)
+    return is_safe_iri(value)
 
 
 def _int(cell: Any) -> int:

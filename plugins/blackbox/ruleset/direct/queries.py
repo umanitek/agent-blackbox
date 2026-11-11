@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from ...detection import command_text, parse_dependency_installs, iter_ioc_candidates, injection_scan_text
 from ...kernel import threat_ids
-from ...kernel.sparql_text import sparql_string_literal as literal
+from ...kernel.sparql_text import is_safe_iri, sparql_string_literal as literal
 from ...kernel.dkg_client import extract_binding
 from ..graph_queries import _context_graph_data_uri, _owner_pin
 from .client import GraphReadUnavailable
@@ -78,9 +78,8 @@ def candidate_query(cg_id: str, identifiers: list[str], packages: list[str], *, 
 
 
 def iri(value):
-    from ..graph_queries import _FORBIDDEN_IRI_CHARS
     text = extract_binding(value)
-    if not text or any(c.isspace() or c in _FORBIDDEN_IRI_CHARS for c in text) or ":" not in text:
+    if not is_safe_iri(text) or ":" not in text:
         raise GraphReadUnavailable("QUERY_MALFORMED_RESPONSE")
     return "<" + text + ">"
 

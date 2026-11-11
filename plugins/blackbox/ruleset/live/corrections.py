@@ -21,7 +21,7 @@ Signed payload of a correction (flat str->str, like every envelope)::
     {"action": "suppress", "targetSubjects": "urn:guardian:threat:a urn:guardian:threat:b"}
 
 ``targetSubjects`` is whitespace-separated: subject IRIs never contain
-whitespace (``graph_queries._FORBIDDEN_IRI_CHARS``) but may contain commas.
+whitespace (``kernel.sparql_text.is_safe_iri``) but may contain commas.
 
 Pattern: Specification — :func:`honoured_target` is the one test "does this
 row suppress, and what". Pure: no I/O. Usage::

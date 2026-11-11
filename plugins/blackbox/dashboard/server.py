@@ -29,7 +29,7 @@ from collections import Counter, deque
 from pathlib import Path
 from typing import Any, Dict, List, Set, Tuple
 
-from ..kernel import constants
+from ..kernel import constants, sparql_text
 from ..kernel.browser_boundary import BrowserBoundary
 from .. import shields
 from ..sync import read_durable_progress, state as sync_state
@@ -1827,7 +1827,7 @@ def create_app(*, manage_blackbox: bool = False):
         # returns both and we separate them in Python. Far cheaper than a SPARQL
         # FILTER NOT EXISTS (~3x slower, re-scans the view per row) and folds the
         # reporter count into the same round-trip.
-        lit = identifier.replace("\\", "\\\\").replace('"', '\\"')
+        lit = sparql_text.sparql_string_literal(identifier)   # the kernel's one escaper: quotes, backslashes, newlines
         rdf_type = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
         try:
             # Skip the point-lookup on an unreachable node so opening a threat
@@ -1836,11 +1836,11 @@ def create_app(*, manage_blackbox: bool = False):
             if client is None:
                 rows = []
             else:
-                subject = str(cached_rule.get("subject") or "")
+                subject = sparql_text.sparql_iri(cached_rule.get("subject"))   # "" when it cannot be written as <iri>
                 if subject:
-                    lookup = f"SELECT ?t ?p ?o WHERE {{ VALUES ?t {{ <{subject}> }} ?t ?p ?o }}"
+                    lookup = f"SELECT ?t ?p ?o WHERE {{ VALUES ?t {{ {subject} }} ?t ?p ?o }}"
                 else:
-                    lookup = _PREFIX + f'SELECT ?t ?p ?o WHERE {{ ?t g:identifier "{lit}" . ?t ?p ?o }}'
+                    lookup = _PREFIX + f'SELECT ?t ?p ?o WHERE {{ ?t g:identifier {lit} . ?t ?p ?o }}'
                 agent_address = None
                 if tier == "local":
                     identity = client.agent_identity()

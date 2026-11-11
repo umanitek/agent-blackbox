@@ -1,8 +1,8 @@
 """SPARQL builders for reading the VERIFIED threat graph.
 
 Pure string builders — no I/O. Every untrusted value that reaches a query goes
-through :func:`..kernel.sparql_text.sparql_string_literal`; IRIs are checked against
-``_FORBIDDEN_IRI_CHARS``. Used by :mod:`.fetching` (paged reads) and
+through :func:`..kernel.sparql_text.sparql_string_literal`; IRIs are checked with
+:func:`..kernel.sparql_text.is_safe_iri`. Used by :mod:`.fetching` (paged reads) and
 :mod:`.compiler` (legacy proof reads).
 """
 
@@ -12,7 +12,7 @@ import json
 import re
 from typing import Sequence
 
-from ..kernel import constants
+from ..kernel import constants, sparql_text
 
 _SELECT_COLUMNS = """?threat ?rdfType ?identifier ?severity ?name ?description
        ?pattern ?toolName ?argShape ?packageName ?packageVersion
@@ -28,7 +28,6 @@ PREFIX blackbox: <urn:blackbox:>
 PREFIX bp: <urn:blackbox:p:>
 PREFIX schema: <http://schema.org/>
 """
-_FORBIDDEN_IRI_CHARS = frozenset('<>"{}|^`\\\r\n\t')
 #: A wallet-namespaced graph id starts with its owner's address (lowercased here).
 _WALLET_ADDRESS = re.compile(r"0x[0-9a-f]{40}")
 
@@ -266,7 +265,7 @@ ORDER BY STR(?threat)
 
 def _context_graph_data_uri(cg_id: str) -> str:
     value = str(cg_id or "").strip()
-    if not value or any(char in value for char in _FORBIDDEN_IRI_CHARS):
+    if not sparql_text.is_safe_iri(value):
         return ""
     return f"did:dkg:context-graph:{value}"
 
@@ -352,8 +351,7 @@ def signed_rows_sparql(graphs: Sequence[str], limit: int) -> str:
     named graphs (index lookups, never a scan; LES-013/LES-040) and LIMITed, so
     a caller that gets *limit* rows back knows the answer may be cut short.
     "" when no graph IRI is safe to embed."""
-    values = " ".join(f"<{graph}>" for graph in graphs
-                      if graph and not any(char in _FORBIDDEN_IRI_CHARS for char in graph))
+    values = " ".join(filter(None, (sparql_text.sparql_iri(graph) for graph in graphs)))
     if not values:
         return ""
     return (f"SELECT ?g ?t ?p ?o WHERE {{ VALUES ?g {{ {values} }} GRAPH ?g {{ "

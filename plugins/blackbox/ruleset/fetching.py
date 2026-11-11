@@ -61,7 +61,7 @@ def confirmed_partitions(client: DkgClient, cg_id: str) -> Optional[PartitionLis
         for row in metadata
         if (graph := extract_binding(row.get("assertionGraph"))).startswith(vm_prefix)
         and graph != vm_prefix
-        and not any(char in graph for char in graph_queries._FORBIDDEN_IRI_CHARS)
+        and sparql_text.is_safe_iri(graph)
     ]
     graphs = frozenset(graph for graph, _status in partition_metadata)
     confirmed = tuple(sorted({graph for graph, status in partition_metadata if status == "confirmed"}))

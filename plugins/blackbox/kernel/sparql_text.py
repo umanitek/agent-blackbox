@@ -38,6 +38,26 @@ def sparql_string_literal(value: object) -> str:
     return f'"{text}"'
 
 
+#: Characters that end an ``<iri>`` early or are never legal inside one.
+_UNSAFE_IN_IRI = frozenset('<>"{}|^`\\')
+
+
+def is_safe_iri(value: object) -> bool:
+    """Whether *value* can be written as ``<value>`` in a query: non-empty text with no
+    whitespace of any kind and none of the characters that close or break the brackets.
+
+    THE check for an address (a graph, a subject) that goes back into SPARQL. An IRI has no
+    escape syntax, so an unsafe one is never repaired — the caller leaves it out. Three
+    modules kept their own character set (one without the space, one with no check at all)."""
+    return (isinstance(value, str) and bool(value)
+            and not any(char.isspace() or char in _UNSAFE_IN_IRI for char in value))
+
+
+def sparql_iri(value: object) -> str:
+    """``<value>`` when *value* :func:`is_safe_iri`, else ``""`` (nothing to write)."""
+    return f"<{value}>" if is_safe_iri(value) else ""
+
+
 # ---------------------------------------------------------------------------
 # SPARQL binding normalization
 # ---------------------------------------------------------------------------
