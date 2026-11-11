@@ -70,11 +70,9 @@ from typing import Iterable, Mapping, Optional
 
 from .. import constants, rdf_terms, sparql_text, threat_ids
 from .envelope import SignedEnvelope, content_id, from_text, verify
-from .statement_order import CuratorStatement
+from .statement_order import REPORT_STATEMENT, CuratorStatement
 
 PROMOTION_STATEMENT = CuratorStatement.PROMOTION.value
-#: The statement type a report is signed as (``community.report_signer.REPORT_STATEMENT``).
-REPORT_STATEMENT = "blackbox.report"
 #: The statement → the report it promotes (an IRI, so a graph browser follows it).
 PROMOTES_REPORT_PRED = f"{constants.BLACKBOX_ONTOLOGY}promotesReport"
 #: The threat types a report can be promoted as: the ones whose report carries the

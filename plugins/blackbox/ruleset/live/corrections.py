@@ -10,7 +10,7 @@ carries the same kind of curator envelope as a promoted rule, or it is ignored:
 * any other correction counts only with a ``SIGNED_STATEMENT_PRED`` envelope of
   type ``blackbox.correction`` that the manifest in force for its asset accepts
   (``has_quorum``). A correction reduces enforcement, so the break-glass key
-  counts toward it (K2, ``key_manifest._REDUCING_STATEMENTS``);
+  counts toward it (K2, ``statement_order.reduces_enforcement``);
 * the subjects come from the SIGNED payload (``targetSubjects``); the row's
   unsigned ``targetSubject`` only locates one of them. A row re-aimed at a
   subject its envelope does not name suppresses nothing (a transplanted
@@ -40,7 +40,7 @@ from ...kernel.dkg_client import extract_binding
 from ...kernel.signing import key_manifest
 
 #: The statement type a post-pin correction's envelope must carry (reduction-only, K2).
-CORRECTION_STATEMENT = "blackbox.correction"
+CORRECTION_STATEMENT = signing.statement_order.CORRECTION_STATEMENT
 #: Signed payload field naming the subjects a correction may suppress.
 TARGETS_FIELD = "targetSubjects"
 #: Signed payload field naming what the correction does (only suppress is honoured).

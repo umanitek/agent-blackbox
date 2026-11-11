@@ -57,6 +57,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from .. import threat_ids
 from . import envelope as signing
+from .statement_order import reduces_enforcement
 from .trust_anchors import RootPins
 
 #: The statement type of a key manifest (signed by the root).
@@ -172,7 +173,7 @@ class KeyManifest:
         for key, operator in zip(self.curator_keys, self.curator_operators):   # keys are sorted: lowest wins
             if key not in signers or operator in counted:
                 continue
-            if key == self.break_glass_key and not _reduces(statement_type):
+            if key == self.break_glass_key and not reduces_enforcement(statement_type):
                 continue   # R7b: the break-glass key (and so its operator) only ever reduces enforcement
             counted[operator] = key
         return frozenset(counted.values())
@@ -201,15 +202,6 @@ class KeyManifest:
 #: Fields a narrowing list may not change (``narrows``).
 _NARROWING_FIXED_FIELDS = ("environment", "graph", "chain", "promotion_author", "legacy_assets_hash",
                            "min_reader_version", "break_glass_key")
-
-
-#: Statement types a break-glass key may sign (reduction-only; the kill-list and
-#: heartbeat live elsewhere and never reduce). A correction suppresses a threat.
-_REDUCING_STATEMENTS = frozenset({"blackbox.revocation", "blackbox.rejection", "blackbox.correction"})
-
-
-def _reduces(statement_type: str) -> bool:
-    return statement_type in _REDUCING_STATEMENTS
 
 
 def manifest_clock(manifest: KeyManifest, today: str) -> tuple[str, str]:

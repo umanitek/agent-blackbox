@@ -138,7 +138,7 @@ class DisputeDraft:
 
 Draft = PromotionDraft | CorrectionDraft | StatementDraft | KillListDraft | ManifestDraft | EvidenceDraft | DisputeDraft
 #: The statement type of a signed correction (trust-and-threat-lab P5; a reduction, K2).
-CORRECTION_STATEMENT = "blackbox.correction"
+CORRECTION_STATEMENT = signing.statement_order.CORRECTION_STATEMENT
 
 
 @dataclass(frozen=True)

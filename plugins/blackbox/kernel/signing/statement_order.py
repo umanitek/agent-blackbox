@@ -80,6 +80,19 @@ class CuratorStatement(Enum):
 
 
 _TERMINAL = frozenset({CuratorStatement.REVOCATION, CuratorStatement.REJECTION})
+#: The statement type a reporter signs its report as (a community node's own statement, so not a curator verdict).
+REPORT_STATEMENT = "blackbox.report"
+#: The statement type of a signed correction: it withdraws a threat from every tier (not a curator verdict either).
+CORRECTION_STATEMENT = "blackbox.correction"
+#: Every statement type that can only make Blackbox block or flag LESS.
+_REDUCING = frozenset({kind.value for kind in _TERMINAL} | {CORRECTION_STATEMENT})
+
+
+def reduces_enforcement(statement_type: str) -> bool:
+    """True when a statement of this type can only REDUCE enforcement: the terminal curator
+    verdicts (revocation, rejection) and a correction. The one list behind every rule that
+    treats reductions differently from raises (LES-016) — add a new reducing type here."""
+    return statement_type in _REDUCING
 #: Statements that raise enforcement or suppress an alarm (KI-134).
 _RAISING = frozenset({CuratorStatement.PROMOTION, CuratorStatement.PAUSE, CuratorStatement.CONFIRMATION,
                       CuratorStatement.ATTESTATION,
