@@ -176,22 +176,18 @@ class DkgClient:
 
     # -- transport ---------------------------------------------------------
 
-    def request(
-        self,
-        method: str,
-        path: str,
-        body: Optional[dict[str, Any]] = None,
-        timeout: Optional[float] = None,
-    ) -> dict[str, Any]:
+    def encoded(self, method: str, path: str, body: Optional[dict[str, Any]]) -> tuple[Optional[bytes], dict[str, str]]:
+        """``(body bytes, headers)`` for one node request — THE one header builder (subclass
+        transports too): JSON, the bearer token, and the HMAC signature DKG >= 10.0.19 requires."""
         data = json.dumps(body).encode("utf-8") if body is not None else None
-        headers = {"Accept": "application/json"}
-        if data is not None:
-            headers["Content-Type"] = "application/json"
+        headers = {"Accept": "application/json", **({"Content-Type": "application/json"} if data is not None else {})}
         if self.token:
-            headers["Authorization"] = f"Bearer {self.token}"
-            # DKG >= 10.0.19 requires HMAC-signed requests on protected routes
-            # (older daemons ignore the extra headers). See signed_request_headers.
-            headers.update(signed_request_headers(self.token, method, path, data))
+            headers.update({"Authorization": f"Bearer {self.token}", **signed_request_headers(self.token, method, path, data)})
+        return data, headers
+
+    def request(self, method: str, path: str, body: Optional[dict[str, Any]] = None,
+                timeout: Optional[float] = None) -> dict[str, Any]:
+        data, headers = self.encoded(method, path, body)
         req = urllib.request.Request(f"{self.url}{path}", data=data, headers=headers, method=method)
         try:
             with local_http.open_direct(req, timeout=timeout or _TIMEOUT) as resp:

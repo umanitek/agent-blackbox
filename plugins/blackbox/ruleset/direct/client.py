@@ -8,7 +8,7 @@ import http.client
 import urllib.parse
 
 from ...kernel import local_http
-from ...kernel.dkg_client import DkgClient, DkgError, signed_request_headers
+from ...kernel.dkg_client import DkgClient, DkgError
 
 MAX_RESPONSE_BYTES = 1024 * 1024 + 4096
 # Preserve the public failure contract; never echo arbitrary server messages.
@@ -70,11 +70,7 @@ class LocalGraphClient(DkgClient):
             raise GraphReadUnavailable("QUERY_DEADLINE_EXCEEDED")
         if body is not None and self.chain_evidence_mode is not None:
             body = {**body, "chainEvidenceMode": self.chain_evidence_mode}
-        data = json.dumps(body).encode() if body is not None else None
-        headers = {"Accept": "application/json", "Content-Type": "application/json"}
-        if self.token:
-            headers["Authorization"] = f"Bearer {self.token}"
-            headers.update(signed_request_headers(self.token, method, path, data))
+        data, headers = self.encoded(method, path, body)
         from ...kernel.local_http import request
         try:
             status, raw = request(self.url, method, path, data, headers,

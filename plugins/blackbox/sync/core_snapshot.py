@@ -10,7 +10,7 @@ import json
 import time
 from copy import deepcopy
 from ..kernel.config import load_blackbox_config, reads_graph_directly
-from ..kernel.dkg_client import DkgClient, DkgError, signed_request_headers
+from ..kernel.dkg_client import DkgClient, DkgError
 from ..kernel.local_http import request
 from .. import ruleset
 from . import state
@@ -27,11 +27,7 @@ class SnapshotSyncClient(DkgClient):
     def request(self, method, path, body=None, timeout=15):
         if (method, path) not in {("GET", PATH), ("POST", PATH)}:
             raise DkgError("SNAPSHOT_ROUTE_REFUSED")
-        data = json.dumps(body).encode() if body is not None else None
-        headers = {"Content-Type": "application/json", "Accept": "application/json"}
-        if self.token:
-            headers["Authorization"] = f"Bearer {self.token}"
-            headers.update(signed_request_headers(self.token, method, path, data))
+        data, headers = self.encoded(method, path, body)
         try:
             code, raw = request(self.url, method, path, data, headers,
                                 deadline=time.monotonic() + (timeout or 15), max_bytes=65536)
