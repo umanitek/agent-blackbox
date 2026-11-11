@@ -123,6 +123,9 @@ that the two version fields agree.
   `XDG_CONFIG_HOME`, it now counts as unset when Trader Shield works out where a wallet app keeps its files.
 - **A crash while recording a report can no longer reset the report limits.** The file that holds the
   per-threat cooldowns and the daily cap is replaced whole, never rewritten in place.
+- **Detaching an OpenClaw agent keeps a copy of its config.** `blackbox detach` saves
+  `openclaw.json.before-blackbox-detach.bak` before it rewrites the file, as attach does. Both now
+  say when a config's comments could not be kept, and name the copy that still has them.
 
 ### Changed
 

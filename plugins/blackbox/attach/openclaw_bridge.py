@@ -148,12 +148,7 @@ def attach_openclaw(workspace: Path, *, dry_run: bool = False) -> dict[str, Any]
         report["protected"] = load_path is not None and not changed if dry_run else load_path is not None
 
         if changed and not dry_run:
-            # Back up before writing.
-            if config_path.exists():
-                backup = config_path.with_name(config_path.name + ".blackbox.bak")
-                shutil.copy2(config_path, backup)
-                report["backed_up"] = True
-            yaml_files.atomic_write(config_path, json.dumps(data, indent=2) + "\n")
+            _rewrite_config(config_path, data, report, ATTACH_BACKUP_SUFFIX)
         # Honest status: without a load path the blackbox block is recorded but
         # OpenClaw won't actually load the hook, so this workspace isn't protected.
         report["ok"] = load_path is not None
@@ -161,6 +156,30 @@ def attach_openclaw(workspace: Path, *, dry_run: bool = False) -> dict[str, Any]
         logger.debug("blackbox.attach: attach_openclaw(%s) failed: %s", workspace, exc)
         report["error"] = str(exc)
     return report
+
+
+#: The copy of an OpenClaw config kept before attach / detach rewrites it (two names: a
+#: detach must never overwrite the copy attach kept of the config from before Blackbox).
+ATTACH_BACKUP_SUFFIX, DETACH_BACKUP_SUFFIX = ".blackbox.bak", ".before-blackbox-detach.bak"
+
+
+def _rewrite_config(config_path: Path, data: dict[str, Any], report: dict[str, Any], backup_suffix: str) -> None:
+    """Write *data* to *config_path* as JSON, after keeping a copy of the file as it was.
+
+    OpenClaw reads JSON5 but Blackbox writes plain JSON, so a config with comments or JSON5
+    syntax loses them in the rewrite: the report's note then says so and names the copy,
+    where the comments live on."""
+    if config_path.exists():
+        original = config_path.read_text(encoding="utf-8-sig")
+        backup = config_path.with_name(config_path.name + backup_suffix)
+        shutil.copy2(config_path, backup)
+        report["backed_up"] = True
+        try:
+            json.loads(original)
+        except json.JSONDecodeError:
+            lost = f"its comments and JSON5 formatting were not kept; the original is {backup.name}"
+            report["note"] = f"{report['note']}; {lost}" if report.get("note") else lost
+    yaml_files.atomic_write(config_path, json.dumps(data, indent=2) + "\n")
 
 
 def _desired_entry(cfg: dict[str, Any]) -> dict[str, Any]:
@@ -288,7 +307,7 @@ def detach_openclaw(workspace: Path, *, dry_run: bool = False) -> dict[str, Any]
         report["changed"] = changed
         report["already"] = not changed
         if changed and not dry_run:
-            yaml_files.atomic_write(config_path, json.dumps(data, indent=2) + "\n")
+            _rewrite_config(config_path, data, report, DETACH_BACKUP_SUFFIX)
         report["ok"] = True
     except Exception as exc:
         logger.debug("blackbox.attach: detach_openclaw(%s) failed: %s", workspace, exc)

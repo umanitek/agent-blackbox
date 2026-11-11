@@ -325,6 +325,27 @@ def test_attach_openclaw_supports_json5_without_losing_other_config(fake_env):
     assert data["gateway"]["url"] == "http://127.0.0.1:18789"
     assert data["customFlag"] is True
     assert data["plugins"]["allow"] == ["other", "blackbox"]
+    # The comments cannot survive a JSON rewrite: the operator is told, and the copy keeps them.
+    assert "comments" in report["note"] and "openclaw.json.blackbox.bak" in report["note"]
+    assert "// OpenClaw accepts JSON5." in (ws / "openclaw.json.blackbox.bak").read_text(encoding="utf-8")
+
+
+def test_detach_openclaw_keeps_a_copy_and_never_overwrites_the_attach_copy(fake_env):
+    """Detach rewrote the operator's config with no copy at all (attach keeps one); a JSON5
+    config's comments were then gone for good. Detach now keeps its own copy, under a name
+    that never replaces the copy attach kept of the config from before Blackbox."""
+    ws = fake_env["openclaw_ws"]
+    (ws / "openclaw.json").write_text("{\n  // mine\n  customFlag: true,\n}\n", encoding="utf-8")
+    attach.attach_openclaw(ws)
+    before_blackbox = (ws / "openclaw.json.blackbox.bak").read_text(encoding="utf-8")
+    attached = (ws / "openclaw.json").read_text(encoding="utf-8")
+
+    report = attach.detach_openclaw(ws)
+
+    assert report["ok"] and report["backed_up"]
+    assert (ws / "openclaw.json.before-blackbox-detach.bak").read_text(encoding="utf-8") == attached
+    assert (ws / "openclaw.json.blackbox.bak").read_text(encoding="utf-8") == before_blackbox
+    assert "note" not in report   # the attached file was plain JSON: nothing was lost this time
 
 
 def test_attach_openclaw_parse_failure_never_replaces_config(fake_env):
