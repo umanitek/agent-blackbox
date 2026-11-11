@@ -6,7 +6,7 @@ No command text, file contents or credential values are sent to the node.
 """
 from __future__ import annotations
 
-from ...detection import command_text, parse_dependency_installs, iter_ioc_candidates, injection_scan_text
+from ...detection import command_from_args, parse_dependency_installs, iter_ioc_candidates, injection_scan_text
 from ...kernel import constants
 from ...kernel import threat_ids
 from ...kernel.sparql_text import is_safe_iri, sparql_string_literal as literal
@@ -23,7 +23,7 @@ BP = constants.BLACKBOX_PREDICATES
 def candidates(tool: str, args) -> tuple[list[str], list[str]]:
     identifiers = set(iter_ioc_candidates(injection_scan_text(args)))
     packages = set()
-    for dep in parse_dependency_installs(command_text(args)):
+    for dep in parse_dependency_installs(command_from_args(tool, args, any_tool=True)):
         eco, name, version = dep["ecosystem"], dep["name"], dep.get("version")
         packages.add(threat_ids.canonical_package_name(eco, name))
         identifiers.add(threat_ids.dependency_identifier(eco, name, version or "*"))

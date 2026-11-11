@@ -131,7 +131,7 @@ def detect_dependency(tool_name: str, args: Any, ruleset: Any) -> list[Finding]:
     ``dep:{eco}:{name}@{version}`` rule; unpinned installs have no version to
     key on and are skipped here (they surface as advisories elsewhere).
     """
-    command = action_parsing.command_text(args)
+    command = shell_shapes.command_from_args(tool_name, args, any_tool=True)
     if not command:
         return []
     installs = action_parsing.parse_dependency_installs(command)
@@ -229,7 +229,7 @@ def discover_dependency_candidates(tool_name: str, args: Any, ruleset: Any, osv_
     or ``None``, see :func:`.osv.lookup`). Only OSV-flagged installs become
     candidates; clean deps never surface (privacy). Runs OFF the blocking path.
     """
-    command = action_parsing.command_text(args)   # "" parses to no installs
+    command = shell_shapes.command_from_args(tool_name, args, any_tool=True)   # "" parses to no installs
     pinned = [dep for dep in action_parsing.parse_dependency_installs(command) if dep.get("version")]
     covered = dependency_rules(ruleset, [(dep["ecosystem"].lower(), dep["name"], dep["version"]) for dep in pinned])
     out: list[Finding] = []

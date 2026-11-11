@@ -181,20 +181,6 @@ def skill_install_arg(tool_name: str, args: Any) -> Optional[dict[str, str]]:
             "permissions": perms[:_MAX_SKILL_SCAN], "artifact_hash": artifact_hash}
 
 
-def command_text(args: Any) -> str:
-    """The shell command a tool call carries (its ``command``-like argument),
-    or all its string arguments joined; "" for anything else."""
-    if isinstance(args, str):
-        return args
-    if isinstance(args, dict):
-        for key in ("command", "cmd", "shell", "script", "input"):
-            val = args.get(key)
-            if isinstance(val, str) and val:
-                return val
-        # Fall back to any string values joined.
-        return " ".join(v for v in args.values() if isinstance(v, str))
-    return ""
-
 
 # ---------------------------------------------------------------------------
 # Dependency install parsing

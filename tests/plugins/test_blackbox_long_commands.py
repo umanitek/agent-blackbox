@@ -87,3 +87,33 @@ def test_a_remembered_answer_is_a_fresh_list_each_time():
     words = shell_files._words("cat a b")
     words.clear()
     assert shell_files._words("cat a b") == ["cat", "a", "b"]
+
+
+# --- one reader for "the command of this call" -------------------------------------------------
+
+READS = [
+    # (tool, args, the command a shell check reads, the text an install check reads)
+    ("terminal", {"command": "pip install a==1"}, "pip install a==1", "pip install a==1"),
+    ("terminal", "npm i b@2", "npm i b@2", "npm i b@2"),
+    ("terminal", {"note": "x", "other": "pip install c==3"}, "x pip install c==3", "x pip install c==3"),
+    ("run_python", {"code": "pip install d==4"}, "", "pip install d==4"),   # not a shell tool
+    ("run_python", {"cmd": "pip install e==5"}, "pip install e==5", "pip install e==5"),
+    ("write_file", {"path": "a", "content": 7}, "", "a"),
+    ("terminal", None, "", ""),
+    ("terminal", ["pip", "install"], "", ""),
+]
+
+
+@pytest.mark.parametrize("tool, args, shell_read, install_read", READS)
+def test_one_reader_gives_each_check_the_text_it_always_read(tool, args, shell_read, install_read):
+    """Shell checks read the command, falling back to all string arguments for shell tools only;
+    install checks fall back for every tool (a package can be installed through any tool that
+    runs text). Both now come from ``command_from_args``."""
+    assert shell_shapes.command_from_args(tool, args) == shell_read
+    assert shell_shapes.command_from_args(tool, args, any_tool=True) == install_read
+
+
+def test_an_install_through_a_tool_that_is_not_a_shell_is_still_seen():
+    from plugins.blackbox.detection import ioc_detection
+
+    assert ioc_detection.ioc_context("run_python", {"code": "pip install requests==2.31.0"}) == "in-dependency"

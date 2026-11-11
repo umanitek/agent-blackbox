@@ -110,9 +110,14 @@ def _bounded(command: str) -> str:
     return command[:COMMAND_SCAN_WINDOW] + "\n" + command[-COMMAND_SCAN_WINDOW:]
 
 
-def command_from_args(tool_name: str, args: Any) -> str:
-    """The shell command a tool call carries, as the checks read it: its ``command``-like
-    argument, else (shell tools only) its string arguments joined; "" for anything else."""
+def command_from_args(tool_name: str, args: Any, *, any_tool: bool = False) -> str:
+    """The shell command a tool call carries, as the checks read it (bounded, see
+    :data:`COMMAND_SCAN_WINDOW`): its ``command``-like argument, else its string arguments
+    joined — for shell tools only, or for every tool when *any_tool* (install checks: a
+    package can be installed through any tool that runs text); "" for anything else.
+
+    The ONE reader of "the command of this call" — every check asks it, so no two checks can
+    read different commands from the same call."""
     if isinstance(args, str):
         return _bounded(args)
     if not isinstance(args, dict):
@@ -122,7 +127,7 @@ def command_from_args(tool_name: str, args: Any) -> str:
         if isinstance(val, str) and val:
             return _bounded(val)
     # Fall back to concatenating string values for shell-like tools only.
-    if (tool_name or "").lower() in SHELL_TOOLS:
+    if any_tool or (tool_name or "").lower() in SHELL_TOOLS:
         parts = [v for v in args.values() if isinstance(v, str)]
         return _bounded(" ".join(parts))
     return ""
