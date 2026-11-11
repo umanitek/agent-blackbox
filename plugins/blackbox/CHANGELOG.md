@@ -84,6 +84,10 @@ that the two version fields agree.
 - **A refused manual report is recorded once.** `blackbox report` wrote two "reports" rows for a
   report the node refused for now (one "failed", one "retrying"); it now writes the one
   "retrying" row, as automatic reports do.
+- **The dashboard no longer calls a graph "open" while the node is still waiting to learn
+  its policy.** When the graph's on-chain record had arrived empty, the community card could
+  say "open graph: no approval needed" while Blackbox itself was still waiting to decide; both
+  now say it could not check yet.
 - **A manual report made in sandbox mode stays in the sandbox.** `blackbox report` with Sandbox
   mode on now goes to the sandbox lane only, like automatic reports, and is not re-published.
 - **Curator commands.** `blackbox curate approve` exits with an error when nothing was published;

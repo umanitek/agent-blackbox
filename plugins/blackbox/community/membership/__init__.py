@@ -56,7 +56,7 @@ from typing import Any, Callable, Optional
 
 from ...kernel import constants, identity
 from ...kernel.dkg_client import DkgClient, DkgError
-from .join_status import (ADMISSION_TEXT, JOIN_STATE_TEXT, Admission, JoinState, MembershipStatus, has_definition,
+from .join_status import (ADMISSION_TEXT, join_verdict, listing_row, JOIN_STATE_TEXT, Admission, JoinState, MembershipStatus,
                           join_state_of, needs_join, owns, read_join_state, read_membership_status)
 from .readiness import READINESS, GraphReadiness
 
@@ -158,7 +158,7 @@ class CommunityMembership:
         # KI-449: the shared memory is added ONCE per node (the readiness record survives
         # restarts); afterwards only the node's listing is confirmed, never re-subscribed.
         if graph in self._with_shared_memory or self._readiness.shared_memory_added(graph):
-            readable, entry = _listing_row(client, graph)
+            readable, entry = listing_row(client, graph)
             if not readable:   # could not tell: request nothing (LES-011)
                 return False, "the node's listing could not be read; nothing requested"
             if entry and entry.get("subscribed"):
@@ -306,48 +306,9 @@ def pending_join_agents(reply: object) -> list[str]:
     return out
 
 
-def join_verdict(entry: Optional[dict[str, object]]) -> str:
-    """Pure: what this node must do about joining the listed graph.
-
-    * ``member`` — the owner decides who writes AND the node says this node is already
-      admitted (``callerInvolved`` true: its wallet is the curator or on the allowlist);
-    * ``join`` — the owner decides who writes and the node says this node is NOT admitted;
-    * ``open`` — definitely no join step: an unregistered graph whose definition is in,
-      or a registered one whose publish policy is not curated;
-    * ``undecided`` — not listed, the definition or chain record has not arrived, or the
-      node could not tell whether this node is admitted (it leaves ``callerInvolved``
-      out when its allowlist lookup fails) — ask again later, never guess (LES-011).
-
-    ``callerInvolved`` is DKG 10.0.25's own answer for the calling agent: the curator
-    match OR ``callerIsAllowlistedAgentParticipant`` (dkg-agent-cg-resolve.js)."""
-    if not entry:
-        return "undecided"
-    if needs_join(entry):
-        involved = entry.get("callerInvolved")
-        if involved is True:
-            return "member"
-        return "join" if involved is False else "undecided"
-    registered = bool(entry.get("onChainId")) or isinstance(entry.get("onChain"), dict)
-    if registered:
-        on_chain = entry.get("onChain") if isinstance(entry.get("onChain"), dict) else {}
-        return "open" if on_chain.get("publishPolicy") else "undecided"
-    return "open" if has_definition(entry) else "undecided"
-
-
-def _listing_row(client: DkgClient, graph: str) -> tuple[bool, Optional[dict[str, object]]]:
-    """``(readable, row)``: whether the node's listing could be read, and its row for
-    *graph* (None when not listed) — "could not read" and "not listed" kept apart."""
-    try:
-        entries = client.context_graphs()
-    except Exception as exc:  # health: allow BLE001 -- fail-open probe: any failure means "could not tell", and the caller then requests nothing
-        logger.debug("blackbox: subscription probe failed: %s", exc)
-        return False, None
-    return True, next((entry for entry in entries if str(entry.get("id") or "") == graph), None)
-
-
 def _graph_entry(client: DkgClient, graph: str) -> Optional[dict[str, object]]:
     """The node's own listing row for *graph* (``subscribed``, ``accessPolicy``…), or None."""
-    return _listing_row(client, graph)[1]
+    return listing_row(client, graph)[1]
 
 
 #: The process's membership state (see module docstring).
@@ -379,6 +340,7 @@ __all__ = [
     "ensure_report_lane",
     "join_state_of",
     "join_verdict",
+    "listing_row",
     "needs_join",
     "pending_join_agents",
     "read_join_state",

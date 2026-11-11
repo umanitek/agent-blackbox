@@ -26,6 +26,7 @@ from ..kernel.dkg_client import DkgClient, extract_binding
 from ..kernel import sparql_text
 from ..kernel.sparql_text import page_rows
 from .statements import author_budget, curator_view, digests, disputes, retractions, tombstones
+from . import membership
 from .report_signer import network_environment
 from .trust.authority_read import read_curator_view
 from .verification import ReportVerifier, VerifiedReport, verify_report_rows
@@ -202,15 +203,8 @@ def _empty_is_authorised(client: DkgClient, graph: str) -> bool:
     """Membership probe for an EMPTY read: only a node that says it is
     subscribed to the graph and synced may report "the graph is empty".
     Anything else (not subscribed, still syncing, probe failed) is not proof."""
-    try:
-        entries = client.context_graphs()
-    except Exception as exc:  # probe failure is "not proven", never "empty"
-        logger.debug("blackbox: community membership probe failed: %s", exc)
-        return False
-    for entry in entries:
-        if str(entry.get("id") or "") == graph:
-            return bool(entry.get("subscribed")) and bool(entry.get("synced"))
-    return False
+    _readable, entry = membership.listing_row(client, graph)   # a failed probe is "not proven", never "empty"
+    return entry is not None and bool(entry.get("subscribed")) and bool(entry.get("synced"))
 
 
 def read_verified_reports(client: DkgClient, cfg: BlackboxConfig, *, held: Iterable[str] = ()) -> CommunityRead:
