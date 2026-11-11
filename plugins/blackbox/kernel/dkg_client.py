@@ -621,7 +621,3 @@ SELECT (COUNT(DISTINCT ?threat) AS ?n) WHERE {
             return int(extract_binding(rows[0].get("n")) or 0)
         except (TypeError, ValueError):
             return 0
-
-    def register_agent(self, name: str, framework: str = "hermes") -> dict[str, Any]:
-        """Register a new agent on the node → ``{agentAddress, authToken, ...}``."""
-        return self.request("POST", "/api/agent/register", {"name": name, "framework": framework})
