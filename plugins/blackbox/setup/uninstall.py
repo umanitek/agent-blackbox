@@ -85,7 +85,7 @@ class UninstallPlan:
     keep_logs: bool
     shim: Optional[Path]               # our `blackbox` launcher, if this machine has it
     system_units: tuple[Path, ...]     # Linux /etc/systemd/system units (need root)
-    dashboard_port: int = 9700         # where a directly started dashboard would be listening
+    dashboard_port: int = constants.DEFAULT_DASHBOARD_PORT   # where a directly started dashboard would be listening
     notes: tuple[str, ...] = field(default_factory=tuple)
 
 
@@ -111,7 +111,7 @@ def build_plan(*, purge: bool, keep_logs: bool, now: Optional[_dt.datetime] = No
     blackbox_home = constants.blackbox_home()
     notes: list[str] = []
     dkg_home: Optional[Path] = None
-    dashboard_port = 9700
+    dashboard_port = constants.DEFAULT_DASHBOARD_PORT
     for home in hermes_homes:
         entry = yaml_files.blackbox_entry(yaml_files.load_yaml(home / "config.yaml"))
         if str(entry.get("dashboard_port", "")).isdigit():

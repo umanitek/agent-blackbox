@@ -1883,7 +1883,7 @@ def create_app(*, manage_blackbox: bool = False):
     return app
 
 
-def start_dashboard(port: int = 9700) -> None:
+def start_dashboard(port: int = constants.DEFAULT_DASHBOARD_PORT) -> None:
     """Run the dashboard with uvicorn on ``127.0.0.1:{port}`` (blocking)."""
     import uvicorn
 

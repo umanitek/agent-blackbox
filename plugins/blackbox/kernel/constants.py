@@ -173,6 +173,7 @@ LEGACY_CONTEXT_GRAPH_IDS = frozenset({
 #: Default Blackbox-managed local DKG node HTTP endpoint.
 DEFAULT_DKG_PORT = 9320
 DEFAULT_DKG_URL = f"http://127.0.0.1:{DEFAULT_DKG_PORT}"
+DEFAULT_DASHBOARD_PORT = 9700   #: where the local dashboard listens unless `dashboard_port` says otherwise
 
 #: Source peer used for verified catch-up of the default threat graph.
 DEFAULT_GRAPH_PEER_ID = "12D3KooWBJskzr2unXQG9mR3LRZFUJoxWr1PN6hTbyWyKndHXjZM"

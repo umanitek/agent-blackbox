@@ -328,3 +328,18 @@ def test_a_child_hermes_is_this_process_python_running_hermes_entry_module():
 
     assert hermes_argv() == [sys.executable, "-m", "hermes_cli.main"]
     assert hermes_argv("blackbox", "setup") == [sys.executable, "-m", "hermes_cli.main", "blackbox", "setup"]
+
+
+def test_the_dashboard_port_default_is_named_once():
+    """Config, uninstall and the dashboard's own start all take the default from the kernel."""
+    import inspect
+
+    from plugins.blackbox.dashboard import server
+    from plugins.blackbox.kernel import constants
+    from plugins.blackbox.kernel.config import BlackboxConfig
+    from plugins.blackbox.setup import uninstall
+
+    assert constants.DEFAULT_DASHBOARD_PORT == 9700
+    assert BlackboxConfig().dashboard_port == constants.DEFAULT_DASHBOARD_PORT
+    assert inspect.signature(server.start_dashboard).parameters["port"].default == constants.DEFAULT_DASHBOARD_PORT
+    assert uninstall.UninstallPlan.__dataclass_fields__["dashboard_port"].default == constants.DEFAULT_DASHBOARD_PORT

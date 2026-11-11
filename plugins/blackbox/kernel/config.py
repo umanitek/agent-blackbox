@@ -26,8 +26,7 @@ DETECTION_CATEGORIES = ("injection", "escalation", "dependency", "fileaccess", "
 
 logger = logging.getLogger(__name__)
 
-_TRUE = {"1", "true", "yes", "on"}
-_FALSE = {"0", "false", "no", "off"}
+_DASHBOARD_PORT = constants.DEFAULT_DASHBOARD_PORT
 
 #: Sensible out-of-the-box protected paths — high-signal credential stores an agent rarely has a
 #: legitimate reason to read. Applied only when the config key is absent; an explicit (even empty) list wins.
@@ -82,7 +81,7 @@ class BlackboxConfig:
     #: DKG-lookup B9: ``off`` (default: a failed lookup is could-not-tell + an alarm) | ``index`` (opt-in on-disk SQLite last resort).
     verified_lookup_fallback: str = "off"
     block_severity: str = "critical"
-    dashboard_port: int = 9700
+    dashboard_port: int = _DASHBOARD_PORT
     discover: bool = True
     osv_lookup: bool = True
     auto_attach: bool = False   # opt-in: each Hermes profile is its own trust boundary (attach.automatic_targets)
@@ -280,7 +279,7 @@ def load_blackbox_config(*, entry: dict[str, Any] | None = None) -> BlackboxConf
         community_keepalive_epoch_days=_as_float(_env_or(entry, env="BLACKBOX_COMMUNITY_KEEPALIVE_EPOCH_DAYS", key="community_keepalive_epoch_days", default=10.0), 10.0),
         report_min_severity=report_min_severity,
         block_severity=block_severity,
-        dashboard_port=_as_int(_env_or(entry, env="BLACKBOX_DASHBOARD_PORT", key="dashboard_port", default=9700), 9700),
+        dashboard_port=_as_int(_env_or(entry, env="BLACKBOX_DASHBOARD_PORT", key="dashboard_port", default=_DASHBOARD_PORT), _DASHBOARD_PORT),
         discover=_as_bool(_env_or(entry, env="BLACKBOX_DISCOVER", key="discover", default=True), True),
         osv_lookup=_as_bool(_env_or(entry, env="BLACKBOX_OSV_LOOKUP", key="osv_lookup", default=True), True),
         auto_attach=_as_bool(_env_or(entry, env="BLACKBOX_AUTO_ATTACH", key="auto_attach", default=False), False),
