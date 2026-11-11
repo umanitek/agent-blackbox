@@ -100,6 +100,7 @@ def run_test(kind: str, cfg: Optional[BlackboxConfig] = None) -> TestResult:
         verdict = guard.on_pre_tool_call(tool_name=attempt.tool, args=attempt.args, session_id=SESSION_ID,
                                          task_id=task, tool_call_id=task)
         check_ms = round((time.time() - started) * 1000, 1)
+        guard.reports_settled(_SHARE_WAIT_S)   # the follow-up that starts the share runs after the hook
         for worker in [t for t in threading.enumerate() if t.name == _SHARE_THREAD]:
             worker.join(_SHARE_WAIT_S)
         shared = _share_outcome(attempt.identifier)

@@ -100,3 +100,35 @@ def no_graph(monkeypatch):
     from plugins.blackbox.kernel import constants
     monkeypatch.setattr(constants, "DEFAULT_CONTEXT_GRAPH_ID", "")
     monkeypatch.delenv("BLACKBOX_CONTEXT_GRAPH_ID", raising=False)
+
+
+class _InlineReports:
+    """Report follow-up run at once on the calling thread: a test that calls a hook can
+    assert on the private record and the share right after. The real queue has its own
+    tests (test_blackbox_report_queue.py), which ask for ``real_report_queue``."""
+
+    def submit(self, job):
+        job()
+        return True
+
+    def settled(self, timeout_s):
+        return True
+
+
+@pytest.fixture(autouse=True)
+def _report_follow_up_inline(request, monkeypatch):
+    if "real_report_queue" in request.fixturenames:
+        yield
+        return
+    for name in ("plugins.blackbox.guard.report_queue", "hermes_plugins.blackbox.guard.report_queue"):
+        module = sys.modules.get(name)
+        if module is not None:
+            monkeypatch.setattr(module, "REPORTS", _InlineReports())
+    yield
+
+
+@pytest.fixture
+def real_report_queue():
+    """Keep the real background report queue for one test (undoes the autouse inline stub)."""
+    from plugins.blackbox.guard import report_queue
+    return report_queue.REPORTS
