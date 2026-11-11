@@ -1524,3 +1524,18 @@ def test_the_watch_step_delivers_what_the_ledger_checks_raise_once(svc, tmp_path
     svc.beat("A", **steps)
     svc.beat("A", **steps)
     assert len(seen) == 2 and [item.message for item in sink.alarms].count("unexpected verified asset did:dkg:x/1") == 1
+
+
+def test_the_announced_memory_forgets_the_oldest_items_not_the_alphabetically_first(tmp_path, monkeypatch):
+    """Past its cap the memory kept the alphabetically LAST items, so early-sorting identifiers (and
+    the daily dead-man marker) were dropped every round and announced again on every poll."""
+    from plugins.blackbox.curate import intake
+
+    monkeypatch.setattr(intake, "_MAX_SEEN", 3)
+    path = tmp_path / "seen.json"
+    seen = intake._load_seen(path)
+    for item in ("zeta", "yankee", "alpha", "bravo"):                 # delivered in this order
+        seen[item] = None
+        intake._save_seen(path, seen)
+        seen = intake._load_seen(path)
+    assert list(seen) == ["yankee", "alpha", "bravo"]                 # "zeta", the oldest, is forgotten

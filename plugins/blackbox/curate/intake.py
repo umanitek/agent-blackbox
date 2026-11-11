@@ -91,10 +91,10 @@ class AlarmWatcher:
             seen = _load_seen(self._path)
             fresh = [item for item in items if item.message not in seen]
             delivered = [item for item in fresh if sink.notify_alarm(item) is not False]
-            seen.update(item.message for item in delivered)   # an undelivered alarm is tried again next round
+            seen.update(dict.fromkeys(item.message for item in delivered))   # an undelivered alarm is tried again next round
             beat = self._due_beat(seen, items, now)
             if beat is not None and sink.notify_alarm(beat) is not False:
-                seen.add(_BEAT_MARK.format(day=time.strftime("%Y-%m-%d", time.gmtime(now))))
+                seen[_BEAT_MARK.format(day=time.strftime("%Y-%m-%d", time.gmtime(now)))] = None
                 delivered.append(beat)
             _save_seen(self._path, seen)
         return [item.message for item in delivered]
@@ -111,7 +111,7 @@ class AlarmWatcher:
             return True
 
     @staticmethod
-    def _due_beat(seen: set[str], items: list[Any], now: Optional[float]) -> Optional[HealthItem]:
+    def _due_beat(seen: dict[str, None], items: list[Any], now: Optional[float]) -> Optional[HealthItem]:
         if now is None:
             return None
         today = time.strftime("%Y-%m-%d", time.gmtime(now))
@@ -119,15 +119,16 @@ class AlarmWatcher:
         return beat.as_health_item() if beat is not None else None
 
 
-def _load_seen(path: Path) -> set[str]:
+def _load_seen(path: Path) -> dict[str, None]:
+    """What was already announced, oldest first (a dict keeps the order things were added)."""
     try:
-        return set(str(x) for x in json.loads(path.read_text(encoding="utf-8-sig")))
+        return dict.fromkeys(str(x) for x in json.loads(path.read_text(encoding="utf-8-sig")))
     except (OSError, ValueError, TypeError):
-        return set()
+        return {}
 
 
-def _save_seen(path: Path, seen: set[str]) -> None:
-    kept = sorted(seen)[-_MAX_SEEN:]
+def _save_seen(path: Path, seen: dict[str, None]) -> None:
+    kept = list(seen)[-_MAX_SEEN:]   # past the cap the OLDEST are forgotten (it kept the alphabetically last)
     path.parent.mkdir(parents=True, exist_ok=True)
     atomic_write(path, json.dumps(kept))
 
@@ -145,7 +146,7 @@ class IntakeWatcher:
             seen = _load_seen(self._path)
             fresh = [item for item in view.new if item.identifier not in seen]
             delivered = [item for item in fresh if sink.notify(_event(item)) is not False]
-            seen.update(item.identifier for item in delivered)   # KI-261: announced means DELIVERED
+            seen.update(dict.fromkeys(item.identifier for item in delivered))   # KI-261: announced means DELIVERED
             _save_seen(self._path, seen)
         return [item.identifier for item in delivered]
 
