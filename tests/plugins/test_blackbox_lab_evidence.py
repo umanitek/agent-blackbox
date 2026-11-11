@@ -922,3 +922,24 @@ def test_the_envelope_the_kill_list_and_the_lab_evidence_all_write_that_spelling
     assert signing.canonical_json(value) == json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     source = (__import__("pathlib").Path(evidence_schema.__file__)).read_text(encoding="utf-8")
     assert 'json.dumps(to_mapping(evidence), sort_keys=True, separators=(",", ":"))' in source
+
+
+# --- reading an `ioc:<type>:<value>` identifier (kernel.threat_ids.parse_ioc_identifier) ---
+
+@pytest.mark.parametrize("identifier, parsed", [
+    ("ioc:domain:evil.example", ("domain", "evil.example")),
+    ("ioc:url:https://evil.example/a?b=c", ("url", "https://evil.example/a?b=c")),
+    ("ioc:ip:203.0.113.7", ("ip", "203.0.113.7")),
+    ("ioc:wallet:0x" + "ab" * 20, ("wallet", "0x" + "ab" * 20)),
+])
+def test_a_well_formed_ioc_identifier_reads_as_its_type_and_value(identifier, parsed):
+    from plugins.blackbox.kernel import threat_ids
+    assert threat_ids.parse_ioc_identifier(identifier) == parsed
+
+
+@pytest.mark.parametrize("identifier", ["", "ioc:", "ioc:domain", "ioc:domain:", "ioc:nonsense:evil.example",
+                                        "dep:npm:left-pad@1.0.0", "domain:evil.example", "IOC:domain:evil.example",
+                                        "ioc:ip:not-an-address", "ioc:domain:" + "a" * 300, None, 7])
+def test_anything_else_is_not_an_ioc_identifier(identifier):
+    from plugins.blackbox.kernel import threat_ids
+    assert threat_ids.parse_ioc_identifier(identifier) is None

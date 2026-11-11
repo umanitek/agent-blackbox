@@ -108,14 +108,6 @@ class AbuseChFetcher:
         return answer
 
 
-def ioc_parts(identifier: str) -> Optional[tuple[str, str]]:
-    """``(type, value)`` of a well-formed ``ioc:<type>:<value>`` identifier, else None."""
-    parts = identifier.split(":", 2)
-    if len(parts) != 3 or parts[0] != "ioc" or not threat_ids.ioc_value_is_well_formed(parts[1], parts[2]):
-        return None
-    return parts[1], parts[2]
-
-
 def _verdict(source: str, answer: Optional[JsonObject], reference_id: str) -> SourceVerdict:
     """Map an abuse.ch answer: ``ok`` with a reference → FOUND, a not-listed
     status → CLEAN, anything else (no answer, an error status) → UNAVAILABLE."""
@@ -143,7 +135,7 @@ class UrlhausSource:
         self._fetcher = fetcher
 
     def check(self, identifier: str) -> SourceVerdict:
-        parts = ioc_parts(identifier)
+        parts = threat_ids.parse_ioc_identifier(identifier)
         if parts is None or parts[0] not in ("url", "domain", "ip"):
             return SourceVerdict(Lookup.NOT_APPLICABLE, source=self.name)
         ioc_type, value = parts
@@ -167,7 +159,7 @@ class ThreatFoxSource:
         self._now = now
 
     def check(self, identifier: str) -> SourceVerdict:
-        parts = ioc_parts(identifier)
+        parts = threat_ids.parse_ioc_identifier(identifier)
         if parts is None or parts[0] not in _THREATFOX_TYPES:
             return SourceVerdict(Lookup.NOT_APPLICABLE, source=self.name)
         answer = self._fetcher.fetch(THREATFOX_ENDPOINT, json_body={
@@ -214,7 +206,7 @@ class MalwareBazaarSource:
         self._fetcher = fetcher
 
     def check(self, identifier: str) -> SourceVerdict:
-        parts = ioc_parts(identifier)
+        parts = threat_ids.parse_ioc_identifier(identifier)
         if parts is None or parts[0] != "hash" or len(parts[1]) not in _BAZAAR_HASH_LENGTHS:
             return SourceVerdict(Lookup.NOT_APPLICABLE, source=self.name)
         answer = self._fetcher.fetch(MALWAREBAZAAR_ENDPOINT, form={"query": "get_info", "hash": parts[1]})

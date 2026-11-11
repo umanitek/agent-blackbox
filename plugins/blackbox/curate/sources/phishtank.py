@@ -34,7 +34,6 @@ NAME = "phishtank"
 APP_KEY_NAME = "phishtank"
 ENDPOINT = "https://checkurl.phishtank.com/checkurl/"
 TERMS = SourceTerms(citable=True, reuse_state=REUSE_CLEARED, limit_requests=250, limit_seconds=60 * 60)
-_URL_PREFIX = "ioc:url:"
 
 
 def _default_key() -> Optional[str]:
@@ -55,8 +54,8 @@ class PhishTankSource:
         self._key = key
 
     def check(self, identifier: str) -> SourceVerdict:
-        url = identifier[len(_URL_PREFIX):]
-        if not identifier.startswith(_URL_PREFIX) or not threat_ids.ioc_value_is_well_formed("url", url):
+        ioc_type, url = threat_ids.parse_ioc_identifier(identifier) or ("", "")
+        if ioc_type != "url":
             return SourceVerdict(Lookup.NOT_APPLICABLE, source=NAME)
         app_key = self._key()
         if not app_key:

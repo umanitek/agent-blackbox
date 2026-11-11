@@ -357,6 +357,21 @@ def ioc_value_is_well_formed(ioc_type: str, value: str) -> bool:
     return shape.fullmatch(value) is not None
 
 
+def parse_ioc_identifier(identifier: str) -> Optional[tuple[str, str]]:
+    """``(type, value)`` of a well-formed ``ioc:<type>:<value>`` identifier, else None.
+
+    The reading half of :func:`ioc_identifier`: a known type and a value of the shape that type
+    allows (:func:`ioc_value_is_well_formed`). Four curator sources each split and checked this
+    by hand. Usage::
+
+        parsed = parse_ioc_identifier("ioc:domain:evil.example")    # ("domain", "evil.example")
+    """
+    parts = identifier.split(":", 2) if isinstance(identifier, str) else []
+    if len(parts) != 3 or parts[0] != "ioc" or not ioc_value_is_well_formed(parts[1], parts[2]):
+        return None
+    return parts[1], parts[2]
+
+
 def ioc_identifier(ioc_type: str, value: str) -> str:
     """``ioc:{type}:{normalized-value}`` — the shared IOC id (see :func:`normalize_ioc_value`)."""
     return f"ioc:{(ioc_type or '').strip().lower()}:{normalize_ioc_value(ioc_type, value)}"

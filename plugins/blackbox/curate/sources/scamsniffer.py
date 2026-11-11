@@ -122,12 +122,10 @@ def _entries(answer: object) -> Optional[frozenset[str]]:
 
 def _lookup_target(identifier: str) -> Optional[tuple[str, str]]:
     """``(list file, value to match)`` for an identifier ScamSniffer can answer, else None."""
-    parts = identifier.split(":", 2)
-    if len(parts) != 3 or parts[0] != "ioc" or parts[1] not in _FILE_FOR_TYPE:
+    parsed = threat_ids.parse_ioc_identifier(identifier)
+    if parsed is None or parsed[0] not in _FILE_FOR_TYPE:
         return None
-    ioc_type, value = parts[1], parts[2]
-    if not threat_ids.ioc_value_is_well_formed(ioc_type, value):
-        return None
+    ioc_type, value = parsed
     if ioc_type == "url":
         value = urlsplit(value).hostname or ""
     elif ioc_type in ("wallet", "contract") and not threat_ids.EVM_ADDRESS_RE.fullmatch(value):

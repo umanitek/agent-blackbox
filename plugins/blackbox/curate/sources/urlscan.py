@@ -192,13 +192,11 @@ def visit_url(identifier: str) -> Optional[str]:
     """The URL urlscan should open for *identifier*: an ``ioc:url:`` without
     its query, fragment or user info, or ``https://<domain>/`` for an
     ``ioc:domain:``. None for anything else."""
-    parts = identifier.split(":", 2)
-    if len(parts) != 3 or parts[0] != "ioc" or not threat_ids.ioc_value_is_well_formed(parts[1], parts[2]):
-        return None
-    if parts[1] == "url":
-        return strip_query(parts[2])
-    if parts[1] == "domain":
-        return f"https://{parts[2]}/"
+    ioc_type, value = threat_ids.parse_ioc_identifier(identifier) or ("", "")
+    if ioc_type == "url":
+        return strip_query(value)
+    if ioc_type == "domain":
+        return f"https://{value}/"
     return None
 
 
