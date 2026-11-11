@@ -116,3 +116,20 @@ def test_the_hook_keeps_its_other_checks_when_one_of_its_own_detectors_fails(mon
                               shields.snapshot())
 
     assert "secret" in _categories(raw)
+
+
+def _nested_json_text(depth: int) -> str:
+    """Arguments handed over as JSON text, nested deeper than the parser can follow."""
+    return '{"a":' * depth + "1" + "}" * depth
+
+
+def test_arguments_nested_too_deep_to_parse_are_checked_as_text_instead_of_raising():
+    """The parser's "too deep" error is not a ValueError: it used to leave the hook's wrapper,
+    outside the hook's own fail-open handling, so the host saw an exception and no check ran."""
+    text = _nested_json_text(200_000)
+    assert hooks._normalised_call("terminal", text) == ("terminal", text)
+
+
+def test_the_hook_answers_for_arguments_nested_too_deep_to_parse(monkeypatch, tmp_path):
+    monkeypatch.setenv("BLACKBOX_HOME", str(tmp_path))
+    assert hooks.on_pre_tool_call(tool_name="terminal", args=_nested_json_text(200_000)) is None

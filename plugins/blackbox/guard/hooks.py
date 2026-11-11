@@ -129,7 +129,7 @@ def _normalised_call(tool_name: Any, args: Any) -> tuple[str, Any]:
     if isinstance(args, str) and args.lstrip().startswith("{"):
         try:
             parsed = json.loads(args)
-        except ValueError:
+        except (ValueError, RecursionError):   # not JSON, or nested too deep to parse: checked as text
             return name, args
         return name, parsed if isinstance(parsed, dict) else args
     return name, args
