@@ -45,7 +45,7 @@ from enum import Enum
 from typing import Optional
 
 from ... import audit, community, killlist
-from ...kernel import constants, node_routes, rdf_terms, signing, sparql_text, threat_ids
+from ...kernel import constants, dkg_client, node_routes, rdf_terms, signing, sparql_text, threat_ids
 from ...kernel.dkg_client import DkgError
 from ...kernel.signing import key_manifest
 from ...kernel.signing import promotion_statement as statement
@@ -319,7 +319,7 @@ def _share(ctx: CurateContext, graph: str, name: str, quads: list[dict[str, str]
         community.ensure_report_lane(ctx.client, graph)
         result = ctx.client.share_knowledge_asset(graph, name, quads)
     except Exception as exc:
-        if community.ALREADY_SEALED_REPLY in str(exc).lower():
+        if dkg_client.is_already_sealed(exc):
             return True
         raise
     return bool(isinstance(result, dict) and result.get("idempotent"))

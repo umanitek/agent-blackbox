@@ -30,7 +30,7 @@ from typing import Mapping, Optional
 from urllib.parse import quote, urlencode
 
 from ... import community
-from ...kernel import constants, node_routes, signing, sparql_text
+from ...kernel import constants, dkg_client, node_routes, signing, sparql_text
 from ...kernel.dkg_client import DkgClient, DkgError
 from ...kernel.signing import promotion_statement as statement
 from .. import promotion
@@ -123,10 +123,8 @@ class NodeBatchWriter:
 
 
 def _already_sealed(exc: DkgError) -> bool:
-    """The node's answer to a create for a name it already sealed: DKG 10.0.20+
-    (``community.ALREADY_SEALED_REPLY``) and the older "already finalized" text."""
-    message = str(exc).lower()
-    return community.ALREADY_SEALED_REPLY in message or "already finalized" in message
+    """The node's answer to a create for a name it already sealed (``dkg_client.is_already_sealed``)."""
+    return dkg_client.is_already_sealed(exc)
 
 
 def _text(reply: object, key: str) -> str:

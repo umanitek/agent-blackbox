@@ -16,7 +16,7 @@ import threading
 from enum import Enum
 from typing import Any, NamedTuple, Optional
 from .. import audit, detection
-from ..kernel import constants, threat_ids
+from ..kernel import constants, dkg_client, threat_ids
 from . import consent, keep_alive, membership, report_builder, report_schema, report_signer, share_retry
 from ..kernel.config import BlackboxConfig
 from ..kernel.dkg_client import DkgClient, DkgError
@@ -155,10 +155,8 @@ class ShareOutcome(Enum):
     NOT_ALLOWED = "not-allowed"
 
 
-#: The daemon's reply when a report with this name already exists sealed and it
-#: refuses to rewrite it (DKG 10.0.20, captured on the R0P bench 2026-10-01).
-#: Matched narrowly against that exact text (LES-015).
-ALREADY_SEALED_REPLY = "is not an active working memory draft"
+#: Kept for callers that import it here; the text and its check live in ``kernel.dkg_client``.
+ALREADY_SEALED_REPLY = dkg_client.ALREADY_SEALED_REPLY
 
 
 def send_report(client: DkgClient, graph: str, name: str, quads: list[dict[str, str]],
@@ -187,7 +185,7 @@ def send_report(client: DkgClient, graph: str, name: str, quads: list[dict[str, 
         membership.ensure_report_lane(client, graph)   # registers the lanes on the graph owner's node only
         result = client.share_knowledge_asset(graph, name, quads, sub_graph=lane)
     except Exception as exc:  # the outermost send boundary: any failure is FAILED, never raised
-        if isinstance(exc, DkgError) and ALREADY_SEALED_REPLY in str(exc).lower():
+        if isinstance(exc, DkgError) and dkg_client.is_already_sealed(exc):
             return ShareOutcome.REJECTED_SAME_VERSION, "the node already holds this report sealed (not re-sent)"
         logger.debug("blackbox: report share failed: %s", exc)
         return ShareOutcome.FAILED, str(exc)

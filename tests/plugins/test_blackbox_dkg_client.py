@@ -698,3 +698,25 @@ def test_the_client_finds_the_node_home_the_way_the_kernel_does(monkeypatch, tmp
     assert dkg_client._dkg_home() == constants.blackbox_dkg_home() == tmp_path / "dkg"
     monkeypatch.setenv("BLACKBOX_DKG_HOME", str(tmp_path / "custom"))
     assert dkg_client._dkg_home() == tmp_path / "custom" and dkg_client._dkg_home("~/x") == __import__("pathlib").Path("~/x").expanduser()
+# --- "the node already holds this exact asset" is decided once, narrowly ------------------------
+
+@pytest.mark.parametrize("reply, sealed", [
+    ('POST /api/knowledge-assets -> 500: {"error":"Assertion \\"report-x\\" is not an active Working Memory draft; '
+     'reopen it before mutating it"}', True),                     # DKG 10.0.20+, captured on a bench
+    ("Assertion report-x already finalized", True),                # nodes before 10.0.20
+    ("POST /api/knowledge-assets -> 409: already exists", False),  # not proof it is THIS asset
+    ("POST /api/knowledge-assets -> 500: internal error", False),
+    ("timed out", False),
+])
+def test_already_sealed_is_one_narrow_rule_for_every_writer(reply, sealed):
+    """The community share, the curator's share, keep-alive copies and batch seals each matched this
+    reply on their own, with different strings: one node answer was success on one path and a
+    failure on another."""
+    from plugins.blackbox.community import sharing
+    from plugins.blackbox.curate.publishing import node_writers
+    from plugins.blackbox.kernel import dkg_client
+
+    error = dkg_client.DkgError(reply)
+    assert dkg_client.is_already_sealed(error) is sealed
+    assert node_writers._already_sealed(error) is sealed
+    assert sharing.ALREADY_SEALED_REPLY == dkg_client.ALREADY_SEALED_REPLY

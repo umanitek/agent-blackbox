@@ -57,13 +57,17 @@ def _validate_quads_literal_sizes(quads: list[Quad]) -> None:
         raise DkgError(str(exc)) from exc
 
 
-def _is_already_finalized(exc: DkgError) -> bool:
-    """True when a share failed only because the KA already exists sealed.
+#: DKG 10.0.20's reply to a write of a name it already holds sealed (R0P bench, 2026-10-01).
+ALREADY_SEALED_REPLY = "is not an active working memory draft"
 
-    The daemon rejects re-finalizing an assertion with a different (or same)
-    merkle root; for our deterministic threat/report names that just means the
-    content is already on the graph, so the caller can treat it as success.
-    """
+
+def is_already_sealed(exc: BaseException) -> bool:
+    """Final verdict "the node holds this exact asset" for every writer; never "already exists" (LES-015)."""
+    return any(reply in str(exc).lower() for reply in (ALREADY_SEALED_REPLY, "already finalized"))   # 10.0.20+, older
+
+
+def _is_already_finalized(exc: DkgError) -> bool:
+    """Finalize step only: the content is already there, the share goes on (no final verdict)."""
     msg = str(exc).lower()
     return "already finalized" in msg or "already exists" in msg
 
@@ -71,12 +75,8 @@ def _is_already_finalized(exc: DkgError) -> bool:
 def _is_wm_merkle_conflict(exc: DkgError) -> bool:
     """True when the local WM draft/finalized assertion is stale vs SWM."""
     msg = str(exc).lower()
-    return (
-        "wm_draft_conflict" in msg
-        or "draft conflict" in msg
-        or "different merkleroot" in msg
-        or "different merkle root" in msg
-    )
+    return any(text in msg for text in ("wm_draft_conflict", "draft conflict", "different merkleroot",
+                                        "different merkle root"))
 
 
 def _job_id_from_error(exc: DkgError) -> Optional[str]:
