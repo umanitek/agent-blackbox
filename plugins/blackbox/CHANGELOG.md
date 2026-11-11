@@ -115,6 +115,8 @@ that the two version fields agree.
   is named by `OPENCLAW_CONFIG_PATH`, was attached but missing from the list.
 - **Secrets in logged settings.** The words that mark a setting as secret are now one list for
   every place Blackbox redacts, so a name redacted in one log is redacted in all of them.
+- **Trader Shield names the right browser.** A wallet is shown under the browser whose folder it
+  is in; a user folder such as "marc" or "operator" no longer makes a Chrome wallet read Arc or Opera.
 
 ### Changed
 
