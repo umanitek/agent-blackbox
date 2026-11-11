@@ -261,11 +261,10 @@ def _verified_rules(cfg: Any) -> Optional[int]:
     reports are left out: they only ever flag, and two of them once read as "2 verified rules
     protect you now" (and as a finished first sync) on a node that had no verified rule yet."""
     try:
-        counts = ruleset.get(cfg).counts()
+        return ruleset.get(cfg).verified_rule_count()
     except Exception as exc:   # health: allow BLE001 -- a ruleset that cannot load reads as "unknown", never an error
         logger.warning("blackbox: ruleset unreadable for Desktop: %s", exc)
         return None
-    return sum(count for category, count in counts.items() if category != "community")
 
 
 def readiness_status() -> dict[str, Any]:

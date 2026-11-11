@@ -139,6 +139,9 @@ that the two version fields agree.
   longer break the threat window by filling its sources with text.
 - **Desktop's status bar counts every action of the day.** On a day with more than 100 findings the
   count stopped at the newest 100; it now counts everything from the last 24 hours.
+- **Desktop says the first sync is done only when verified rules have arrived.** Community reports that
+  Blackbox can match against were counted as verified rules, so the setup page could call the first sync
+  finished too early.
 
 ### Changed
 

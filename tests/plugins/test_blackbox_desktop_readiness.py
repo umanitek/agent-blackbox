@@ -305,10 +305,12 @@ def test_with_no_meter_route_the_health_check_is_unchanged(monkeypatch):
 def test_community_reports_are_not_counted_as_verified_rules(monkeypatch):
     """bb-test-1 (2026-11-07): with two community reports and no verified rule yet the banner said
     "2 verified rules protect you now", and the stage read as a finished first sync."""
-    class Rules:
-        def counts(self):
-            return {"injection": 0, "escalation": 0, "dependency": 0, "fileaccess": 0, "skill": 0, "ioc": 0, "community": 2}
-    monkeypatch.setattr(desktop.ruleset, "get", lambda cfg: Rules())
+    from plugins.blackbox.ruleset.compiler import Ruleset
+    reported = {"identifier": "dep:npm:x@1.0.0", "source": "community", "severity": "high"}
+    # Two community reports, one of them materialised into the dependency dict (matchable):
+    # counts() minus its "community" key still said 1 here (audit 06/#3).
+    rules = Ruleset(community={"a": reported, "b": reported}, dependency={reported["identifier"]: reported})
+    monkeypatch.setattr(desktop.ruleset, "get", lambda cfg: rules)
     assert desktop._verified_rules(object()) == 0
     assert stage_of(ReadinessFacts("done", True, True, desktop._verified_rules(object()))) == "syncing"
 

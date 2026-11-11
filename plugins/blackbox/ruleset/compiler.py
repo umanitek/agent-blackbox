@@ -297,6 +297,12 @@ class Ruleset(live.LiveAnswering):
         """Graph threats of *source*: the compiled entries plus, for public, the live tiers."""
         return len(self.graph_entries(source)) + (sum(self.live_counts().values()) if source == "public" else 0)
 
+    def verified_rule_count(self) -> int:
+        """THE number of verified rules this node holds (:meth:`graph_count` of ``public``).
+        Not ``counts()`` minus its ``community`` key: the compiled dependency / ioc dicts also
+        hold community-materialised rules, which only ever flag."""
+        return self.graph_count("public")
+
 
 def suppressed_subjects(tagged_rows: Iterable[tuple], pin: live.CorrectionPin = live.NO_PIN) -> frozenset[str]:
     """Subjects the PUBLIC CorrectionSignal rows suppress (``(row, source)`` pairs):
