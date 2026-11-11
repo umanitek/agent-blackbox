@@ -100,3 +100,14 @@ def test_a_damaged_ledger_line_does_not_break_every_later_consent(tmp_path):
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps({"ts": "not-a-number", "event": "shown", "code": code}) + "\n")
     assert ledger.consent('{"a":1}', typed=code, sandbox=False, yes=False)[0] is True
+
+
+def test_a_publish_outcome_is_typed_never_read_from_its_wording():
+    """publish() returned prose that every caller parsed with startswith("published") —
+    "not published — …" contains the word, which is how a refused publish once counted as done.
+    It returns a PublishResult: still the operator's text, plus the typed `published` flag."""
+    from plugins.blackbox.curate.publishing import PublishResult
+    refused = PublishResult("not published — published elsewhere? no", published=False)
+    done = PublishResult("published to g as x", published=True)
+    assert not refused.published and done.published
+    assert str(done) == "published to g as x" and done.startswith("published")   # still the text it was

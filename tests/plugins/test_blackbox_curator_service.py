@@ -429,7 +429,8 @@ def test_curate_approve_exits_non_zero_unless_it_published(monkeypatch, capsys, 
     proposal = Proposal(id="0" * 16, kind="k", identifier="i", graph="g", envelope="e", checks={},
                         created=0.0, updated=0.0, state=state)
     monkeypatch.setattr(commands, "_ctx", lambda args: None)
-    monkeypatch.setattr(commands.verbs, "approve", lambda *args, **kwargs: (proposal, outcome))
+    result = commands.publishing.PublishResult(outcome, published=outcome.startswith("published"))   # what publish() reports
+    monkeypatch.setattr(commands.verbs, "approve", lambda *args, **kwargs: (proposal, result))
     args = argparse.Namespace(proposal_id=proposal.id, evidence="", code=None, yes=True, root=False)
     assert commands._approve(args) == code
 

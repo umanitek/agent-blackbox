@@ -31,7 +31,7 @@ own node (:func:`checked_promotion`); published means everything reads back.
 Usage::
 
     proposal, outcome = publish(ctx, store, proposal_id, typed_code=code, yes=False)
-    outcome.startswith("published")      # True only after the read-back
+    outcome.published                    # True only after the read-back (a PublishResult)
 
 The batch publisher (``batch.py``) writes promotions in batches through the
 same node, split into its ledger's steps (``node_writers.NodeBatchWriter``);
@@ -74,11 +74,29 @@ class PublishOutcome(Enum):
     UNCONFIRMED = "unconfirmed"      # the node accepted the write but it cannot be read back
 
 
+class PublishResult(str):
+    """What a publish did: the text the operator reads (it IS the string, so it prints and logs
+    as before) plus :attr:`published`, the typed outcome callers branch on — True only when the
+    statement was read back from its graph. Never branch on the wording: "not published — …"
+    contains the word, and parsing it is how a refused publish once counted as done.
+
+        proposal, result = publish(...)
+        if result.published: ...
+    """
+
+    published: bool
+
+    def __new__(cls, message: str, *, published: bool) -> PublishResult:
+        result = super().__new__(cls, message)
+        result.published = published
+        return result
+
+
 def publish(ctx: CurateContext, store: ProposalStore, proposal_id: str, *, typed_code: Optional[str], yes: bool,
-            standing: str = "") -> tuple[Proposal, str]:
+            standing: str = "") -> tuple[Proposal, PublishResult]:
     """Write an APPROVED proposal to its graph, behind content-bound consent.
-    Returns (proposal, what happened); the text starts with "published" only
-    when the statement was read back from the graph. *standing* — set ONLY by
+    Returns (proposal, :class:`PublishResult`); ``published`` only when the
+    statement was read back from the graph. *standing* — set ONLY by
     the curator service, after its policy allowed this statement and the
     operator's standing consent was checked (``curate.service``): the policy's
     reason, recorded in the consent ledger in place of a typed code."""
@@ -98,7 +116,7 @@ def publish(ctx: CurateContext, store: ProposalStore, proposal_id: str, *, typed
     ok, why = (ledger.standing(proposal.envelope, standing) if standing
                else ledger.consent(proposal.envelope, typed=typed_code, sandbox=ctx.sandbox, yes=yes))
     if not ok:
-        return proposal, f"not published — {why}. Confirmation code: {code}"
+        return proposal, PublishResult(f"not published — {why}. Confirmation code: {code}", published=False)
     try:
         name, graph, outcome = _write(ctx, proposal, envelope)
     except VerbError:
@@ -112,8 +130,8 @@ def publish(ctx: CurateContext, store: ProposalStore, proposal_id: str, *, typed
         raise VerbError(f"the write failed, nothing was published: {exc}") from exc
     if outcome is PublishOutcome.UNCONFIRMED:
         ledger.release(proposal.envelope, "written but not readable")
-        return proposal, (f"not published — written to {graph} as {name}, but it cannot be read back yet. "
-                          f"Run `blackbox curate publish {proposal.id}` again to re-check.")
+        return proposal, PublishResult(f"not published — written to {graph} as {name}, but it cannot be read back yet. "
+                                       f"Run `blackbox curate publish {proposal.id}` again to re-check.", published=False)
     audit.record_share_outcome(identifier=proposal.identifier, category=f"curator:{proposal.kind.split('.', 1)[-1]}",
                                severity="info", subject=proposal.id, asset_name=name, ok=True, outcome="accepted")
     store.save(proposal.transition(ProposalState.PUBLISHED, note=f"published to {graph} as {name}"))
@@ -122,7 +140,7 @@ def publish(ctx: CurateContext, store: ProposalStore, proposal_id: str, *, typed
     _credit_reporters(ctx, proposal)
     already = " (the node already held it)" if outcome is PublishOutcome.ALREADY_THERE else ""
     twin = f" · {post_advisory_twin(ctx, envelope)}" if proposal.kind in TWINNED_STATEMENTS else ""
-    return proposal, f"published to {graph} as {name}{already}{twin}"
+    return proposal, PublishResult(f"published to {graph} as {name}{already}{twin}", published=True)
 
 
 def require_effective_manifest(ctx: CurateContext) -> None:

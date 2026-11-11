@@ -30,7 +30,7 @@ from . import dossier, keys, promotion
 from .proposals import transport
 from .context import CurateContext, KillListDraft, ManifestDraft, PromotionDraft, StatementDraft
 from .proposals import Proposal, ProposalState, ProposalStore
-from .publishing import MANIFEST_KIND, VerbError, next_sequence, publish, strategies
+from .publishing import MANIFEST_KIND, PublishResult, VerbError, next_sequence, publish, strategies
 from .publishing.publish import checked_promotion
 from ..community import reputation
 
@@ -239,7 +239,7 @@ def propose_kill_list(ctx: CurateContext, store: ProposalStore, *, entries: list
 
 
 def approve(ctx: CurateContext, store: ProposalStore, proposal_id: str, *, evidence: str,
-            typed_code: Optional[str], yes: bool, root: bool = False, standing: str = "") -> tuple[Proposal, str]:
+            typed_code: Optional[str], yes: bool, root: bool = False, standing: str = "") -> tuple[Proposal, PublishResult]:
     """Second signature + consent + publish. Returns (proposal, what happened).
     *root* (SANDBOX, kill lists): also add the root key's signature — the third
     signature a wide or popular kill needs (R14). *standing* — the curator

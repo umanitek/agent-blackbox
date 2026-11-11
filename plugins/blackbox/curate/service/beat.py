@@ -161,7 +161,7 @@ class Beat:
             _, outcome = publishing.publish(run.ctx, run.store, waiting[-1].id, typed_code=None, yes=False, standing=standing(decision))
         else:
             _, outcome = heartbeat.publish_heartbeat(run.ctx, run.store, standing=standing(decision))
-        run.heartbeat = "published" if outcome.startswith("published") else outcome
+        run.heartbeat = "published" if outcome.published else str(outcome)
 
     # -- 2 read --------------------------------------------------------------
 
@@ -252,10 +252,10 @@ class Beat:
         return True
 
     @staticmethod
-    def _record(run: Run, decision: PolicyDecision, done: list[str], what: str, outcome: str, identifier: str) -> None:
+    def _record(run: Run, decision: PolicyDecision, done: list[str], what: str, outcome: publishing.PublishResult, identifier: str) -> None:
         """A publish that was read back counts (and spends the daily limit); anything else is an error to retry."""
         run.settled.add(identifier)
-        if not outcome.startswith("published"):
+        if not outcome.published:
             run.errors.append(f"{what}: {outcome}")
             return
         done.append(what)

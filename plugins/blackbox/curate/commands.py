@@ -228,20 +228,19 @@ def _approve(args: argparse.Namespace) -> int:
     proposal, outcome = verbs.approve(_ctx(args), ProposalStore(), args.proposal_id, evidence=args.evidence,
                                       typed_code=args.code, yes=args.yes, root=args.root)
     print(f"{proposal.id}: {outcome}")
-    # "not published — …" contains the word: the outcome must START with it (as `curate publish` checks).
-    return 0 if proposal.state is ProposalState.PUBLISHED or outcome.startswith("published") else 2
+    return 0 if proposal.state is ProposalState.PUBLISHED or outcome.published else 2
 
 
 def _publish(args: argparse.Namespace) -> int:
     proposal, outcome = publishing.publish(_ctx(args), ProposalStore(), args.proposal_id, typed_code=args.code, yes=args.yes)
     print(f"{proposal.id}: {outcome}")
-    return 0 if outcome.startswith("published") else 2
+    return 0 if outcome.published else 2
 
 
 def _heartbeat(args: argparse.Namespace) -> int:
     proposal, outcome = heartbeat.publish_heartbeat(_ctx(args), ProposalStore(), typed_code=args.code, yes=args.yes)
     print(f"heartbeat {proposal.id}: {outcome}")
-    return 0 if outcome.startswith("published") else 2
+    return 0 if outcome.published else 2
 
 
 def _upkeep(args: argparse.Namespace) -> int:

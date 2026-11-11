@@ -26,10 +26,10 @@ from .batch import BatchMetrics, BatchPublisher, BatchRunReport
 from .errors import VerbError
 from .ledger import PublishLedger
 from .precheck import PrecheckResult, PrecheckUnavailable, precheck, strict_verified_subset
-from .publish import MANIFEST_KIND, PublishOutcome, publish, summary
+from .publish import MANIFEST_KIND, PublishOutcome, PublishResult, publish, summary
 from .row_builders import ROW_BUILDERS, ConfirmedEntry, RowBuildError, RowBuilder, promotion_payload
 from .sequences import next_sequence
 
 __all__ = ["MANIFEST_KIND", "ROW_BUILDERS", "BatchMetrics", "BatchPublisher", "BatchRunReport", "ConfirmedEntry",
-           "PrecheckResult", "PrecheckUnavailable", "PublishLedger", "PublishOutcome", "RowBuildError", "RowBuilder",
+           "PrecheckResult", "PrecheckUnavailable", "PublishLedger", "PublishOutcome", "PublishResult", "RowBuildError", "RowBuilder",
            "VerbError", "next_sequence", "precheck", "promotion_payload", "publish", "strict_verified_subset", "summary"]

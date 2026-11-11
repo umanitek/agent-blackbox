@@ -160,8 +160,7 @@ class ConsoleActions:
             raise _Refused(404, "no staged key list with that id")
         _proposal, outcome = publishing.publish(self._context(), store, proposal_id, typed_code=confirmation_code,
                                                 yes=False)
-        # publish() promises: the text starts with "published" only after the read-back.
-        return {"published": outcome.startswith("published"), "outcome": outcome}
+        return {"published": outcome.published, "outcome": str(outcome)}
 
     # -- the steps ---------------------------------------------------------------------
 
