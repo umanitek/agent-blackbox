@@ -317,3 +317,73 @@ def test_an_unwritable_stamp_never_blocks_a_probe(tmp_path):
 
     pulse = pulse_module.CommunityPulse(clock=_Clock(), stamp=ProbeStamp(tmp_path / "missing-dir" / "x" / "stamp"))
     assert pulse.due(20) is True
+
+
+# ------------------------------------------------------------------ the live generation is never edited
+
+def _community_rule(identifier: str) -> dict:
+    return {"identifier": identifier, "source": "community", "severity": "medium"}
+
+
+def test_a_derived_ruleset_has_its_own_tables_and_shares_the_rules():
+    rule = _community_rule(THREAT)
+    live_rules = compiler.Ruleset(ioc={THREAT: rule}, skill=[rule], community={THREAT: rule}, synced_at=5.0)
+    live_rules.graph_entries("community")                     # fill the per-generation cache
+    copy = live_rules.derive()
+    del copy.ioc[THREAT]
+    copy.skill.append(_community_rule("skill:other"))
+    copy.community.clear()
+    copy.synced_at = 9.0
+    assert live_rules.ioc == {THREAT: rule} and live_rules.skill == [rule] and live_rules.community == {THREAT: rule}
+    assert live_rules.synced_at == 5.0 and copy._graph_entries_cache == {}
+    assert live_rules.derive().ioc[THREAT] is rule            # the rules themselves are shared, not copied
+
+
+def test_hooks_keep_the_community_rules_while_the_pulse_reads_the_node(monkeypatch):
+    """The pulse used to delete the community rules from the generation hooks were reading,
+    then read the node for seconds, and only then put them back."""
+    cfg = BlackboxConfig(report=True, context_graph_id=VM_GRAPH)
+    live_rules = compiler.Ruleset(context_graph_id=VM_GRAPH, ioc={THREAT: _community_rule(THREAT)},
+                                  community={THREAT: _community_rule(THREAT)}, synced_at=time.time())
+    refresh_cycle._memory.store(live_rules)
+    seen_during_read = []
+
+    def node_read(rs, client, config, prior):
+        seen_during_read.append((THREAT in refresh_cycle._memory.memory_only().ioc, rs is live_rules))
+
+    monkeypatch.setattr(community_tier, "apply_community_tier", node_read)
+    monkeypatch.setattr(pulse_beat.curator_tier, "withdraw_revoked", lambda rs, client, config: 0)
+    pulse_beat._reapply_community(cfg, object())
+    assert seen_during_read == [(True, False)]                # still served; the pulse works on a copy
+    assert THREAT in live_rules.ioc and refresh_cycle._memory.memory_only() is not live_rules
+
+
+def test_a_revocation_seen_on_the_pulse_is_served_before_the_slower_community_read(monkeypatch):
+    cfg = BlackboxConfig(report=True, context_graph_id=VM_GRAPH)
+    verified = {"identifier": THREAT, "source": "public", "severity": "high"}
+    refresh_cycle._memory.store(compiler.Ruleset(context_graph_id=VM_GRAPH, ioc={THREAT: verified}, synced_at=time.time()))
+
+    def revoke(rs, client, config):
+        rs.curator_revoked = rs.curator_revoked | {THREAT}
+        return rs.drop_identifiers({THREAT})
+
+    served_during_read = []
+    monkeypatch.setattr(pulse_beat.curator_tier, "withdraw_revoked", revoke)
+    monkeypatch.setattr(community_tier, "apply_community_tier",
+                        lambda rs, client, config, prior: served_during_read.append(THREAT in refresh_cycle._memory.memory_only().ioc))
+    pulse_beat._reapply_community(cfg, object())
+    assert served_during_read == [False]                      # the reduction did not wait for the read
+
+
+def test_keeping_the_last_good_generation_leaves_the_one_in_use_untouched():
+    cfg = BlackboxConfig(context_graph_id=VM_GRAPH)
+    in_use = compiler.Ruleset(context_graph_id=VM_GRAPH, ioc={THREAT: _community_rule(THREAT)}, synced_at=5.0)
+    kept = refresh_cycle._reuse_generation(in_use, VM_GRAPH, None, cfg)
+    assert kept is not in_use and in_use.synced_at == 5.0 and kept.synced_at > 5.0
+    assert kept.ioc == in_use.ioc and refresh_cycle._memory.memory_only() is kept
+
+
+def test_a_derived_ruleset_keeps_the_read_state_set_after_a_refresh():
+    live_rules = compiler.Ruleset()
+    live_rules.community_read_unavailable = True              # set by the community tier, not a declared field
+    assert live_rules.derive().community_read_unavailable is True

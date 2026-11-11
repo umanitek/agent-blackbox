@@ -42,7 +42,7 @@ def _shell_words(text: str) -> list[str]:
 _SHELL_QUOTING = re.compile(r"""['"\\]""")
 #: What every command-line approval contains once the quoting is gone: ``spl-token``, or the
 #: name of an approval call followed by its opening parenthesis.
-_COMMAND_APPROVAL = re.compile(r"spl-token|(?:%s)\s*\(" % "|".join(map(re.escape, CALLS_BY_NAME)), re.IGNORECASE)
+_COMMAND_APPROVAL = re.compile(rf"spl-token|(?:{'|'.join(map(re.escape, CALLS_BY_NAME))})\s*\(", re.IGNORECASE)
 
 
 def _may_hold_command_approval(text: str) -> bool:

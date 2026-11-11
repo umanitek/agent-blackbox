@@ -210,9 +210,11 @@ def _partition_listing(client: DkgClient, context_graph_id: str) -> Optional[fet
 
 def _reuse_generation(rs: compiler.Ruleset, context_graph_id: str, client: Optional[DkgClient],
                       config: BlackboxConfig, listing: Optional[fetching.PartitionListing] = None) -> compiler.Ruleset:
-    """Keep *rs* (last-good verified tier) as the new generation: re-stamp it,
-    refresh its community tier (it must refresh on every path — R0 tri-state),
-    write it to disk and memory."""
+    """Keep *rs* (last-good verified tier) as the new generation: a copy of it,
+    re-stamped, with its community tier refreshed (it must refresh on every path —
+    R0 tri-state), written to disk and memory. *rs* itself may be the generation
+    hooks are reading, so it is not edited."""
+    rs = rs.derive()
     rs.context_graph_id = context_graph_id
     rs.synced_at = time.time()
     _schedule_next_refresh(rs, config, False)   # a deferred read while catching up retries soon

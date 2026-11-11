@@ -10,6 +10,7 @@ Usage: ``rs = build_from_rows(rows, cfg)``; detection reads ``rs.dependency`` et
 
 from __future__ import annotations
 
+import copy
 import logging
 import time
 from dataclasses import dataclass, field
@@ -85,6 +86,10 @@ def _copy_community_stats(entry: dict[str, Any], rule: dict[str, Any]) -> None:
             entry[key] = rule[key]
 
 
+#: The rule tables of a :class:`Ruleset` — what :meth:`Ruleset.derive` gives a copy of its own.
+_TABLES = ("injection", "escalation", "dependency", "fileaccess", "skill", "ioc", "graph_threats", "community", "kill_list")
+
+
 @dataclass
 class Ruleset(live.LiveAnswering):
     """Compiled detection rules. See :mod:`detection` for how each is used.
@@ -152,6 +157,26 @@ class Ruleset(live.LiveAnswering):
         init=False,
         repr=False,
     )
+
+    def derive(self) -> Ruleset:
+        """A copy to change and then publish (copy-on-write).
+
+        The generation in memory is read by every hook thread, so nothing edits it: a
+        step that adds or withdraws rules between refreshes works on ``derive()`` and
+        installs the result (``_memory.store``). The copy has its own tables — changing
+        them never shows in this generation — and shares the rule dicts inside, which
+        are replaced, never edited. Usage::
+
+            rs = refresh_cycle.peek(config).derive()
+            community_tier.reapply_community_tier(rs, client, config)
+            disk_cache._write_cache(rs); refresh_cycle._memory.store(rs)
+        """
+        derived = copy.copy(self)   # every attribute, the read-state flags set after a refresh included
+        for table in _TABLES:
+            held = getattr(self, table)
+            setattr(derived, table, type(held)(held))
+        derived._graph_entries_cache = {}
+        return derived
 
     def refresh_due(self, interval: float) -> float:
         """Epoch seconds when this generation should be refreshed: its own early

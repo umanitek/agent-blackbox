@@ -547,10 +547,11 @@ def test_empty_refresh_keeps_last_verified_rules(monkeypatch):
 
     rs = ruleset_mod.refresh(config_mod.BlackboxConfig(), _Empty())
 
-    assert rs is prior
+    # the kept generation is a re-stamped COPY: the one hooks were reading is not edited
+    assert rs is not prior and prior.synced_at == 100.0
     assert rs.synced_at == 1000.0
-    assert len(rs.dependency) == 1
-    assert writes == [prior]
+    assert rs.dependency == prior.dependency and len(rs.dependency) == 1
+    assert writes == [rs]
 
 
 def test_empty_refresh_prefers_newer_nonempty_disk_cache(monkeypatch):
@@ -575,8 +576,8 @@ def test_empty_refresh_prefers_newer_nonempty_disk_cache(monkeypatch):
 
     rs = ruleset_mod.refresh(config_mod.BlackboxConfig(), _Empty())
 
-    assert rs is disk
-    assert len(rs.dependency) == 1
+    assert rs.dependency == disk.dependency and len(rs.dependency) == 1   # the disk generation's rules, in a copy
+    assert disk.synced_at == 900.0
 
 
 def test_peek_reloads_cache_replaced_by_another_process(monkeypatch):
