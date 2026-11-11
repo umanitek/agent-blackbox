@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Set, Tuple
 
 from ..kernel import constants, sparql_text
-from ..kernel.browser_boundary import BrowserBoundary
+from ..kernel.browser_boundary import LOOPBACK_HOSTS, BrowserBoundary
 from ..kernel.host_command import hermes_argv
 from .. import shields
 from ..sync import read_durable_progress, state as sync_state
@@ -56,7 +56,6 @@ _BLACKBOX_READY_PERCENT = 80.0
 _BLACKBOX_MIN_OVERDUE_SEC = 10 * 60.0
 _BLACKBOX_STALLED_SYNC_SEC = 10 * 60.0
 _BLACKBOX_PROFILE = constants.BLACKBOX_CHAT_PROFILE
-_LOOPBACK_HOST_NAMES = frozenset({"127.0.0.1", "localhost", "[::1]"})  # the only Hosts the dashboard answers to
 _BLACKBOX_RUNTIME_HOST = "127.0.0.1"
 _BLACKBOX_RUNTIME_PORT = 9121
 _BLACKBOX_RESTART_DELAY_SEC = 2.0
@@ -796,7 +795,7 @@ def create_app(*, manage_blackbox: bool = False):
     # receives the token via /api/session (same-origin only, unreachable
     # through DNS rebinding thanks to the Host gate).
     _session_token = secrets.token_urlsafe(32)
-    BrowserBoundary(_LOOPBACK_HOST_NAMES, lambda _request: _session_token).install(app)
+    BrowserBoundary(LOOPBACK_HOSTS, lambda _request: _session_token).install(app)   # loopback Hosts only
 
     @app.get("/api/session")
     def session():

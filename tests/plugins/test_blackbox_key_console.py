@@ -426,7 +426,8 @@ def test_an_authenticated_session_cannot_be_logged_in_again():
     assert sessions.login("unknown", CONSOLE_PASSPHRASE) is None
 
 
-@pytest.mark.parametrize("host", ["127.0.0.1", "localhost", "[::1]", "", f"{MAGIC_DNS}:443"])
+@pytest.mark.parametrize("host", ["127.0.0.1", "localhost", "[::1]", "", f"{MAGIC_DNS}:443",
+                                  "127.0.0.2", "LocalHost"])   # any loopback (kernel.local_http), not three spellings
 def test_console_settings_refuse_a_loopback_or_ported_host(host):
     with pytest.raises(ValueError):
         ConsoleSettings(LOGIN, host, _CONSOLE_HASH)

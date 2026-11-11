@@ -38,6 +38,7 @@ import secrets
 from dataclasses import dataclass
 from typing import Any, Optional
 
+from ...kernel import local_http
 from ...kernel.browser_boundary import BrowserBoundary
 from .session import ConsoleSessions
 
@@ -69,7 +70,7 @@ class ConsoleSettings:
         if not self.tailscale_login.strip():
             raise ValueError("tailscale_login must name the one allowed Tailscale login")
         host = self.magic_dns_host.strip().lower()
-        if not host or host in {"127.0.0.1", "localhost", "[::1]"} or ":" in host:
+        if not host or local_http.is_loopback_host(host) or ":" in host:
             raise ValueError("magic_dns_host must be the node's MagicDNS name (no port, not loopback)")
 
 

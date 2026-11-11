@@ -27,7 +27,7 @@ the change is refused.
 Usage::
 
     token = secrets.token_urlsafe(32)
-    BrowserBoundary({"127.0.0.1", "localhost", "[::1]"}, lambda request: token).install(app)
+    BrowserBoundary(LOOPBACK_HOSTS, lambda request: token).install(app)
 
     # per session, on a MagicDNS host:
     BrowserBoundary({"node.tailnet.ts.net"}, sessions.token_for_request).install(app)
@@ -47,6 +47,10 @@ TOKEN_HEADER = "x-blackbox-token"
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
 _DEFAULT_PORTS = {"http": "80", "https": "443"}
+
+
+#: The Host names of a page served on this machine only (IPv6 bracketed, as a Host header spells it).
+LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "[::1]"})
 
 
 def _split_authority(value: str) -> tuple[str, str]:
@@ -118,4 +122,4 @@ class BrowserBoundary:
         return bool(expected) and secrets.compare_digest(presented.encode("utf-8"), expected.encode("utf-8"))
 
 
-__all__ = ["SAFE_METHODS", "TOKEN_HEADER", "BrowserBoundary", "TokenLookup"]
+__all__ = ["LOOPBACK_HOSTS", "SAFE_METHODS", "TOKEN_HEADER", "BrowserBoundary", "TokenLookup"]
