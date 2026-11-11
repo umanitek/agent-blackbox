@@ -27,7 +27,7 @@ from ..kernel.dkg_client import DkgClient, DkgError
 from .progress import apply_completion_contract, capture_durable_progress_cursor, read_durable_progress
 from ..kernel import display_safety
 from . import managed_node, native, direct_preflight, side_subscriptions
-from .catchup_job import _catchup_denied, _catchup_job_id, _catchup_status
+from .catchup_job import _catchup_job_id, _catchup_status
 
 logger = logging.getLogger(__name__)
 _MAX_EMPTY_PUBLIC_PASSES = 3
@@ -171,19 +171,14 @@ def _cmd_sync_with_managed_dkg(cfg: BlackboxConfig, args: argparse.Namespace) ->
 def _cmd_sync_impl(args: argparse.Namespace) -> int:
     cfg = load_blackbox_config()
     client = DkgClient(url=cfg.dkg_url, dkg_home=cfg.dkg_home, config=cfg)
-    private_graph = _should_request_private_join(cfg)
     release_graph = cfg.context_graph_id == constants.DEFAULT_CONTEXT_GRAPH_ID
-    managed_graph = private_graph or release_graph
     authoritative_available = bool(
         cfg.graph_peer_id and callable(getattr(client, "catchup_from_peer", None))
     )
-    admitted = not private_graph
-    pending_approval = private_graph
     # The pinned curator remains the preferred foreground source, but the DKG
     # subscription is still persisted below. That durable subscription is what
     # lets DKG continue reconciling after this command exits or the node restarts.
     subscribed = False
-    catchup_restarted = False
     baseline_catchup_known = False
     baseline_catchup_job_id = ""
     fresh_catchup_seen = False
@@ -197,7 +192,6 @@ def _cmd_sync_impl(args: argparse.Namespace) -> int:
     authoritative_complete = False
     authoritative_target = 0
     sync_complete = False
-    last_join_attempt = float("-inf")
     deadline = time.monotonic() + max(1, int(getattr(args, "timeout", 180) or 180))
     track_sync = bool(getattr(args, "wait", False))
 
@@ -216,17 +210,10 @@ def _cmd_sync_impl(args: argparse.Namespace) -> int:
             "running",
             context_graph_id=cfg.context_graph_id,
             graph_peer_id=cfg.graph_peer_id,
-            phase="joining" if private_graph else "network-catchup",
+            phase="network-catchup",
             public_entries=known_public,
             community_entries=known_community,
         )
-
-    agent_address = ""
-    try:
-        identity = client.agent_identity()
-        agent_address = str(identity.get("agentAddress") or "")
-    except (DkgError, AttributeError):
-        pass
 
     if getattr(args, "wait", False):
         try:
@@ -235,13 +222,6 @@ def _cmd_sync_impl(args: argparse.Namespace) -> int:
             baseline_catchup_job_id = _catchup_job_id(baseline_catchup)
         except (DkgError, AttributeError):
             pass
-
-    if private_graph:
-        status, admitted = _request_join(client, cfg.context_graph_id, cfg.graph_peer_id)
-        pending_approval = not admitted
-        last_join_attempt = time.monotonic()
-        if status:
-            print(status)
 
     rs = ruleset.Ruleset()
     public_count = 0
@@ -306,22 +286,6 @@ def _cmd_sync_impl(args: argparse.Namespace) -> int:
 
     while True:
         now = time.monotonic()
-        if (
-            private_graph
-            and not admitted
-            and getattr(args, "wait", False)
-            and now - last_join_attempt >= 10.0
-        ):
-            status, curator_confirmed = _request_join(
-                client, cfg.context_graph_id, cfg.graph_peer_id
-            )
-            admitted = admitted or curator_confirmed
-            if curator_confirmed:
-                pending_approval = False
-            last_join_attempt = time.monotonic()
-            if status and attempt % 10 == 0:
-                print(status)
-
         # The release graph has one known complete source peer. A fresh node
         # asks it first instead of downloading unrelated durable graphs from
         # every generic peer and only falling back minutes later.
@@ -383,8 +347,7 @@ def _cmd_sync_impl(args: argparse.Namespace) -> int:
                     and public_count >= authoritative_target
                 )
 
-        may_probe_private = private_graph and not getattr(args, "wait", False)
-        if not subscribed and (admitted or not private_graph or may_probe_private):
+        if not subscribed:
             # An active successor graph (T2) rides the same sync, fail-open — not on every poll.
             side_subscriptions.ensure_side_subscriptions(client, cfg)
             try:
@@ -397,32 +360,12 @@ def _cmd_sync_impl(args: argparse.Namespace) -> int:
                 ):
                     fresh_catchup_seen = True
                     fresh_catchup_job_id = subscription_job_id
-                if not private_graph:
-                    admitted = True
-                    pending_approval = False
-                if private_graph:
-                    if track_sync:
-                        sync_state.write(
-                            "running",
-                            context_graph_id=cfg.context_graph_id,
-                            graph_peer_id=cfg.graph_peer_id,
-                            phase="network-catchup",
-                            public_entries=public_count,
-                            community_entries=community_count,
-                        )
-                    print(
-                        f"Requested subscription to {cfg.context_graph_id}; "
-                        "verifying private-graph catch-up authorization."
-                    )
-                else:
-                    print(f"Subscribed to {cfg.context_graph_id}; DKG catch-up started.")
+                print(f"Subscribed to {cfg.context_graph_id}; DKG catch-up started.")
             except DkgError as exc:
                 last_subscribe_error = str(exc)
-                if not private_graph:
-                    print(f"warning: could not subscribe to {cfg.context_graph_id}: {exc}")
+                print(f"warning: could not subscribe to {cfg.context_graph_id}: {exc}")
 
         catchup_state = ""
-        catchup_includes_swm = False
         catchup_job_id = ""
         exact_job_status = False
         if getattr(args, "wait", False) and subscribed:
@@ -434,7 +377,6 @@ def _cmd_sync_impl(args: argparse.Namespace) -> int:
                 )
                 last_catchup = catchup
                 catchup_state = str(catchup.get("status") or "").lower()
-                catchup_includes_swm = catchup.get("includeSharedMemory") is True
                 catchup_job_id = _catchup_job_id(catchup)
                 if catchup_job_id and (
                     not baseline_catchup_known
@@ -443,16 +385,13 @@ def _cmd_sync_impl(args: argparse.Namespace) -> int:
                     fresh_catchup_seen = True
                     if not fresh_catchup_job_id or not exact_job_status:
                         fresh_catchup_job_id = catchup_job_id
-                if _catchup_denied(catchup):
-                    pending_approval = True
-                    admitted = False
             except DkgError:
                 pass
         retryable_catchup = (
             not authoritative_recovered
             and getattr(args, "wait", False)
             and subscribed
-            and (catchup_restarted or fresh_catchup_seen)
+            and fresh_catchup_seen
             and catchup_state in {"deferred", "unreachable"}
         )
         if retryable_catchup and now >= next_catchup_retry_at and now < deadline:
@@ -484,14 +423,14 @@ def _cmd_sync_impl(args: argparse.Namespace) -> int:
             catchup_state in {"queued", "running"}
             or (
                 getattr(args, "wait", False)
-                and (catchup_restarted or fresh_catchup_seen)
+                and fresh_catchup_seen
                 and not fresh_job_complete
                 and catchup_state not in {"failed", "cancelled", "denied"}
             )
         )
         catchup_failed = (
             not authoritative_recovered
-            and (catchup_restarted or fresh_catchup_seen)
+            and fresh_catchup_seen
             and catchup_state in {"failed", "cancelled", "denied"}
         )
         if subscribed:
@@ -524,35 +463,6 @@ def _cmd_sync_impl(args: argparse.Namespace) -> int:
         public_count = _ruleset_graph_count(rs, "public")
         community_count = _ruleset_graph_count(rs, "community")
 
-        if (
-            managed_graph
-            and subscribed
-            and not release_graph
-            and not catchup_restarted
-            and (
-                catchup_includes_swm
-                or (not fresh_catchup_seen and catchup_state == "done")
-            )
-            and not (
-                authoritative_available
-                and getattr(args, "wait", False)
-                and public_count > 0
-            )
-        ):
-            try:
-                client.restart_context_graph_catchup(cfg.context_graph_id)
-                catchup_restarted = True
-                if catchup_includes_swm:
-                    print("Replaced a legacy SWM catch-up with VM-only sync.")
-                elif private_graph:
-                    print("Restarted DKG catch-up after approval; waiting for threat rows.")
-                else:
-                    print("Restarted DKG catch-up; waiting for public threat rows.")
-                if getattr(args, "wait", False):
-                    continue
-            except DkgError as exc:
-                logger.debug("blackbox: catch-up restart failed: %s", exc)
-
         # A terminal generic catch-up is not success by itself.  A completed,
         # idempotent source-pinned recovery is: it has independently
         # verified the durable VM snapshot and may satisfy this gate on the
@@ -571,7 +481,7 @@ def _cmd_sync_impl(args: argparse.Namespace) -> int:
                 not catchup_active
                 and catchup_cache_refreshed
                 and (
-                    not (catchup_restarted or fresh_catchup_seen)
+                    not fresh_catchup_seen
                     or fresh_job_complete
                 )
             )
@@ -586,7 +496,7 @@ def _cmd_sync_impl(args: argparse.Namespace) -> int:
         authoritative_recovery_ready = base_sync_complete or release_graph
         if (
             authoritative_recovery_ready
-            and managed_graph
+            and release_graph
             and getattr(args, "wait", False)
             and authoritative_available
             and not authoritative_attempted
@@ -674,7 +584,7 @@ def _cmd_sync_impl(args: argparse.Namespace) -> int:
             break
         if (
             not authoritative_recovered
-            and (catchup_restarted or fresh_catchup_seen)
+            and fresh_catchup_seen
             and catchup_state in {
                 "failed", "cancelled", "denied"
             }
@@ -711,10 +621,7 @@ def _cmd_sync_impl(args: argparse.Namespace) -> int:
             break
         attempt += 1
         if attempt == 1 or attempt % 10 == 0:
-            if private_graph and pending_approval:
-                suffix = f" for agent {agent_address}" if agent_address else ""
-                print(f"Waiting for private graph membership confirmation{suffix}...")
-            elif authoritative_recovered and not authoritative_complete:
+            if authoritative_recovered and not authoritative_complete:
                 print(
                     "Waiting for public VM reconciliation "
                     f"({public_count:,}/{authoritative_target:,} entries)..."
@@ -754,20 +661,12 @@ def _cmd_sync_impl(args: argparse.Namespace) -> int:
     print(f"  Community reports: shared memory of {display_safety.term_safe(cfg.context_graph_id)} "
           f"[sharing {'on' if cfg.community_enabled else 'off'}]")
     if not sync_complete:
-        if private_graph and (pending_approval or not subscribed):
-            print("  This graph is not supported; Agent Blackbox only uses its public VM graph.")
-            if agent_address:
-                print(f"  Ask the curator to approve agent address: {agent_address}")
-            if last_subscribe_error:
-                logger.debug("blackbox: subscribe pending: %s", last_subscribe_error)
-            if _catchup_denied(last_catchup):
-                print("  DKG catch-up is denied until the curator confirms this node.")
-        elif not subscribed:
+        if not subscribed:
             print("  Required public VM subscription could not be persisted.")
             if last_subscribe_error:
                 print(f"  DKG subscription error: {last_subscribe_error}")
             print("  Retry with `hermes blackbox sync --wait`.")
-        elif (catchup_restarted or fresh_catchup_seen) and str(
+        elif fresh_catchup_seen and str(
             last_catchup.get("status") or ""
         ).lower() in {
             "failed", "cancelled", "denied"
@@ -1345,51 +1244,3 @@ def _connect_verifiable_source(
     if last_error is not None:
         raise last_error
     raise DkgError("publisher discovery deadline reached")
-
-
-def _should_request_private_join(cfg: BlackboxConfig) -> bool:
-    """Private graph membership is never part of Agent Blackbox."""
-    return False
-
-
-def _request_join(client: DkgClient, cg_id: str, graph_peer_id: str) -> tuple[Optional[str], bool]:
-    """Submit one native private-graph join request.
-
-    The boolean reports that the curator itself confirmed current membership
-    and refreshed the signed peer-key delegation.  A local participant list
-    can be stale after a store migration or curator restart, so it must not be
-    used as the authorization signal for starting private catch-up.
-    """
-    if not graph_peer_id:
-        return None, False
-    try:
-        result = client.request_join(cg_id, graph_peer_id)
-    except DkgError as exc:
-        return f"warning: could not request join for {cg_id}: {exc}", False
-    if not isinstance(result, dict):
-        return f"Join request submitted for {cg_id}; curator approval is still required.", False
-    if result.get("alreadyMember") or result.get("already_member"):
-        return (
-            f"Join request: the curator confirmed membership for {cg_id} "
-            "and refreshed this node's peer binding.",
-            True,
-        )
-    delivered = result.get("delivered")
-    if isinstance(delivered, list):
-        delivered_count = len(delivered)
-    elif isinstance(delivered, bool):
-        delivered_count = 1 if delivered else 0
-    elif isinstance(delivered, str) and delivered.lower() == "local":
-        delivered_count = 1
-    else:
-        try:
-            delivered_count = int(delivered or result.get("deliveredCount") or 0)
-        except (TypeError, ValueError):
-            delivered_count = 0
-    if delivered_count:
-        return (
-            f"Join request sent for {cg_id}: delivered to {delivered_count} curator host(s); "
-            "approval is pending.",
-            False,
-        )
-    return f"Join request could not reach a graph host for {cg_id}; retrying.", False

@@ -487,7 +487,6 @@ def _run_sync(monkeypatch, node):
             return {"injection": 0, "escalation": 0, "dependency": 1, "fileaccess": 0, "skill": 0}
 
     monkeypatch.setattr(native, "handles", lambda _cfg: False)
-    monkeypatch.setattr(sync_command, "_request_join", lambda *args, **kwargs: None)
     monkeypatch.setattr(sync_command, "DkgClient", lambda url, **_kw: node)
     monkeypatch.setattr(managed_node, "DkgClient", lambda url, **_kw: node)
     monkeypatch.setattr(sync_command, "load_blackbox_config",

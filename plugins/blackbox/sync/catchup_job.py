@@ -7,19 +7,6 @@ from typing import Any, Dict
 from ..kernel.dkg_client import DkgClient, DkgError
 
 
-def _catchup_denied(catchup: dict[str, Any]) -> bool:
-    if not isinstance(catchup, dict):
-        return False
-    status = str(catchup.get("status") or "").lower()
-    if status == "denied":
-        return True
-    result = catchup.get("result") if isinstance(catchup.get("result"), dict) else {}
-    if result.get("denied") is True:
-        return True
-    error = str(catchup.get("error") or result.get("error") or "").lower()
-    return any(term in error for term in ("denied", "unauthorized", "unconfirmed"))
-
-
 def _catchup_job_id(catchup: Any) -> str:
     if not isinstance(catchup, dict):
         return ""
