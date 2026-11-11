@@ -101,6 +101,18 @@ _RAISING = frozenset({CuratorStatement.PROMOTION, CuratorStatement.PAUSE, Curato
 _SINGLE_KEY = frozenset({CuratorStatement.IN_REVIEW, CuratorStatement.DEFERRAL, CuratorStatement.DEFERRAL_LAPSED,
                          CuratorStatement.AWAY, CuratorStatement.HEARTBEAT})
 
+#: A curator's DEFERRAL holds a threat for this many whole UTC days after the day it was signed
+#: and lapses on the next (plan §12). Readers, the curator authorities' combined verdict and the
+#: curator service all ask :func:`deferral_in_force`, so they end a deferral on the same day.
+DEFERRAL_LAPSE_DAYS = 30
+
+
+def deferral_in_force(age_days: int) -> bool:
+    """Whether a deferral signed *age_days* whole UTC days ago still holds. A day that could not
+    be read counts as age 0 at the callers: it never ends a hold early."""
+    return age_days <= DEFERRAL_LAPSE_DAYS
+
+
 
 def restriction(kind: CuratorStatement) -> int:
     """How strongly a verdict holds enforcement DOWN — the order used whenever

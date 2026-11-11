@@ -332,3 +332,26 @@ def test_a_dispute_keeps_every_other_field_of_the_stage():
         assert (disputed.enforcement, disputed.disputed) == (enforcement, True)
         assert (disputed.source, disputed.counted, disputed.confusable_of) == ("curator", 4, "lodash")
         assert disputed.reason.startswith("corroborated; disputed by")
+
+
+# ------------------------------------------------------------------ one deferral clock for readers and curators
+
+
+@pytest.mark.parametrize("age_days, in_force", [(0, True), (30, True), (31, False), (45, False)])
+def test_readers_and_curators_end_a_deferral_on_the_same_day(age_days, in_force):
+    """A deferral holds for 30 whole UTC days and lapses on the 31st — for the reader's stage, the
+    curator authorities' combined verdict and the curator service alike. The reader counted
+    fractional days, so for most of day 30 it had already lapsed while the curators held it."""
+    from datetime import datetime, timedelta
+    from plugins.blackbox.curate.service import policy
+    from plugins.blackbox.kernel.signing import statement_order
+
+    keys = _keys("p", 3)
+    view = _view([(k, f"org{i}") for i, k in enumerate(keys)])
+    late_today = datetime.fromtimestamp(NOW, tz=UTC).replace(hour=23, minute=0)
+    signed_day = (late_today.date() - timedelta(days=age_days)).isoformat()
+    stage = stages.stage_for("dep:npm:x@1", keys, NOW - 10 * DAY, view, 0, Kind.DEFERRAL, late_today.timestamp(),
+                             verdict_day=signed_day)
+    assert (stage.stage is Stage.DEFERRED) is in_force
+    assert statement_order.deferral_in_force(age_days) is in_force
+    assert policy._lapse("dep:npm:x@1", policy.Facts(deferral_age_days=age_days))[0] is (not in_force)

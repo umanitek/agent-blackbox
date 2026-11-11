@@ -33,13 +33,13 @@ from __future__ import annotations
 
 from ..kernel import constants
 
-from datetime import datetime, timezone, UTC
+from datetime import date, datetime, timezone, UTC
 
 from dataclasses import dataclass, replace
 from enum import Enum
 from typing import Dict, Iterable, Mapping, Optional, Tuple
 
-from ..kernel.signing import CuratorStatement
+from ..kernel.signing import CuratorStatement, statement_order
 from .statements.curator_view import CuratorView
 from . import allowlist
 from .statements.lifetimes import lifetime_days
@@ -160,7 +160,7 @@ class StageResult:
 
 #: CLOCKS (§12): a curator DEFERRAL lapses this many days after its signed day — readers
 #: compute it themselves (KI-229); a DEFERRAL_LAPSED statement is confirmation, not the clock.
-DEFERRAL_LAPSE_DAYS = 30
+DEFERRAL_LAPSE_DAYS = statement_order.DEFERRAL_LAPSE_DAYS   # one clock for readers and curators
 
 
 def stage_for(identifier: str, authors: Iterable[str], first_seen: float, view: CuratorView,
@@ -274,13 +274,14 @@ def _whole_package_without_scope_reason(identifier: str, fields: Optional[Mappin
 
 
 def _deferral_lapsed(verdict_day: str, now: float) -> bool:
-    """True when a DEFERRAL signed on *verdict_day* is older than DEFERRAL_LAPSE_DAYS (KI-229).
-    An undated or unparseable day never lapses (fail toward MONITOR)."""
+    """True when a DEFERRAL signed on *verdict_day* no longer holds on the UTC day of *now*
+    (KI-229; whole days, :func:`statement_order.deferral_in_force`). An undated or unparseable
+    day never lapses (fail toward MONITOR)."""
     try:
-        signed = datetime.fromisoformat(verdict_day).replace(tzinfo=UTC).timestamp()
+        signed = date.fromisoformat(verdict_day)
     except (TypeError, ValueError):
         return False
-    return (now - signed) / _DAY_SECONDS > DEFERRAL_LAPSE_DAYS
+    return not statement_order.deferral_in_force((datetime.fromtimestamp(now, tz=UTC).date() - signed).days)
 
 
 def _third_party_without_partner(identifier: str, clusters: Clusters) -> bool:

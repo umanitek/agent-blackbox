@@ -36,13 +36,13 @@ from dataclasses import replace
 from datetime import date
 from typing import Dict, Optional
 
-from ...kernel.signing import CuratorStatement
+from ...kernel.signing import CuratorStatement, statement_order
 from ..statements.curator_statements import CuratorRecord
 from ..statements.curator_view import STAGE_ENFORCEMENT_RANK, CountedAuthor, CuratorView
 
 #: A curator DEFERRAL holds a threat down for this many days after its signed
 #: day (plan §12 clocks; the stage machine applies the same clock).
-DEFERRAL_HOLD_DAYS = 30
+DEFERRAL_HOLD_DAYS = statement_order.DEFERRAL_LAPSE_DAYS   # one clock for readers and curators
 
 
 def combine(verified: CuratorView, community: CuratorView, *, today: str) -> CuratorView:
@@ -72,7 +72,7 @@ def _holds_down(record: CuratorRecord, today: str) -> int:
     cancels the other authority's confirmation)."""
     if record.kind.terminal:
         return 3
-    if record.kind is CuratorStatement.DEFERRAL and _days_since(record.day, today) <= DEFERRAL_HOLD_DAYS:
+    if record.kind is CuratorStatement.DEFERRAL and statement_order.deferral_in_force(_days_since(record.day, today)):
         return 2
     return 1 if record.kind is CuratorStatement.CONFIRMATION else 0
 

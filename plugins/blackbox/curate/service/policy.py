@@ -35,7 +35,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Callable, Dict, Mapping, Tuple
 
-from ...kernel.signing import CuratorStatement
+from ...kernel.signing import CuratorStatement, statement_order
 from ..queue import BLOCKABLE_PREFIXES
 
 #: The most the service itself signs per UTC day — below every reader's own
@@ -44,7 +44,7 @@ from ..queue import BLOCKABLE_PREFIXES
 SERVICE_CONFIRMATIONS_PER_DAY = 50
 SERVICE_LISTINGS_PER_DAY = 10
 #: A deferral the service signed lapses after this many days (the reader's own clock is the same).
-DEFERRAL_LAPSE_DAYS = 30
+DEFERRAL_LAPSE_DAYS = statement_order.DEFERRAL_LAPSE_DAYS   # one clock for readers and curators
 
 
 class Action(Enum):
@@ -130,7 +130,7 @@ def _defer(identifier: str, facts: Facts) -> tuple[bool, str]:
 
 
 def _lapse(identifier: str, facts: Facts) -> tuple[bool, str]:
-    if facts.deferral_age_days <= DEFERRAL_LAPSE_DAYS:
+    if statement_order.deferral_in_force(facts.deferral_age_days):
         return False, f"a deferral lapses after {DEFERRAL_LAPSE_DAYS} days"
     return True, f"the deferral is {facts.deferral_age_days} days old"
 
