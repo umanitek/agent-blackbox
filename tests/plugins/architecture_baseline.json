@@ -13,7 +13,7 @@
     "attach/openclaw_json5.py::_json5_to_json": 156,
     "audit/activity.py::_build_local_activity": 122,
     "cli.py::setup_cli": 46,
-    "community/report_cli/report_command.py::cmd_report": 57,
+    "community/report_cli/report_command.py::cmd_report": 28,
     "curate/catalog_import.py::_entry_to_threat": 114,
     "dashboard/server.py::_blackbox_sync_health": 110,
     "dashboard/server.py::_network_sync_once": 54,

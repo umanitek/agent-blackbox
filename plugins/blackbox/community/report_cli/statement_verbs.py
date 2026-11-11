@@ -1,7 +1,7 @@
 """Statements about reports — `blackbox report --false-positive` and
-`--retract` — and the send-and-record step every manual statement shares.
+`--retract` — the report verb itself, and the send-and-record step they all share.
 
-:func:`send_and_record` sends one built statement and writes the local share
+:func:`submit_report` sends one manual report. :func:`send_and_record` sends one built statement and writes the local share
 ledger (KI-015: every attempt, success or failure). :func:`submit_statement`
 dispatches to the DISPUTE verb (:func:`submit_false_positive`) or the RETRACT
 verb (:func:`submit_retraction`, Refine R1). Called by
@@ -11,13 +11,13 @@ verb (:func:`submit_retraction`, Refine R1). Called by
 from __future__ import annotations
 
 import argparse
-from typing import Dict, List, Optional, Tuple
+from typing import Optional
 
 from ... import audit
 from ...kernel import display_safety, threat_ids
 from ...kernel.dkg_client import DkgClient
 from .. import keep_alive as keep_alive_mod
-from .. import report_builder, report_schema, report_signer, sharing
+from .. import report_builder, report_schema, report_signer, share_retry, sharing
 
 
 def send_and_record(client: DkgClient, cfg, *, identifier: str, category: str, severity: str,
@@ -38,6 +38,54 @@ def send_and_record(client: DkgClient, cfg, *, identifier: str, category: str, s
         keep_alive_mod.remember_accepted_share(cfg, name=name, identifier=identifier, subject=subject,
                                                severity=severity, quads=quads)
     return outcome, detail
+
+
+def submit_report(client: DkgClient, cfg, finding: dict, reporter: str, signer: report_signer.ReportSigner) -> int:
+    """Send one validated manual report (lifecycle: SUBMIT + ACKNOWLEDGE): cooldown and daily
+    cap first, then build, send, ledger; a refused write is queued for retry. *finding* is
+    ``{"identifier", "category", "severity", "fields"}`` from the report command's factory.
+    Prints the outcome and returns the exit code."""
+    identifier = finding["identifier"]
+    if audit.recently_reported(identifier):
+        print(f"Already reported within the cooldown window: {display_safety.term_safe(identifier)}")
+        return 0
+    if not audit.allow_report(cfg.daily_report_limit):
+        print(f"Daily report cap reached ({cfg.daily_report_limit}); try again tomorrow.")
+        return 2
+    subject = threat_ids.report_uri(identifier, reporter)
+    name = f"report-{threat_ids.stable_hash(identifier + reporter, 16)}"
+    q = report_builder.build_report_quads(
+        identifier=identifier,
+        category=finding["category"],
+        severity=finding["severity"],
+        reporter_address=reporter,
+        framework=sharing.HOST_FRAMEWORK,
+        signer=signer,
+        **finding["fields"],
+    )
+    outcome, detail = send_and_record(client, cfg, identifier=identifier, category=finding["category"],
+                                       severity=finding["severity"], subject=subject, name=name, quads=q, keep_alive=True)
+    if outcome is sharing.ShareOutcome.FAILED:
+        return _queue_refused_share(cfg, finding, subject=subject, name=name, quads=q, detail=detail)
+    audit.mark_reported(identifier)
+    if outcome is sharing.ShareOutcome.REJECTED_SAME_VERSION:
+        print(f"Already shared with the community — not re-sent ({display_safety.term_safe(detail, 120)}).")
+        return 0
+    print("Report shared with the community.")
+    print(f"  identifier: {display_safety.term_safe(identifier)}")
+    print(f"  subject:    {display_safety.term_safe(subject)}")
+    return 0
+
+
+def _queue_refused_share(cfg, finding, *, subject: str, name: str, quads, detail: str) -> int:
+    """R16: a refused write is queued for automatic retry, and the operator is told so."""
+    share_retry.queue_failed_share(graph=cfg.context_graph_id, name=name, identifier=finding["identifier"],
+                                   category=finding["category"], severity=finding["severity"], subject=subject,
+                                   quads=quads, error=detail)
+    print(f"Share refused for now: {display_safety.term_safe(detail, 160)}")
+    print("Queued for automatic retry (a newly subscribed node is refused for a few minutes). "
+          "`blackbox report --status` shows it as 'retrying' until it lands.")
+    return 1
 
 
 def submit_false_positive(client: DkgClient, cfg, identifier: str, reason: Optional[str], reporter: str,
