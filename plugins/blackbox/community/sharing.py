@@ -219,7 +219,7 @@ def _share_sighting(
     """
     identifier = str(finding.get("identifier") or "")
     subject = threat_ids.report_uri(identifier, reporter)
-    name = f"{'sandbox' if cfg.community_sandbox else 'report'}-{threat_ids.stable_hash(identifier + reporter, 16)}"
+    name = report_asset_name(cfg, identifier, reporter)
     signer = report_signer.resolve_report_signer(client, cfg.context_graph_id)
     if signer is None:
         _ledger_share(finding, subject, name, ok=False, error="cannot sign reports (no network id or reporter key)")
@@ -242,6 +242,12 @@ def _share_sighting(
         _ledger_share(finding, subject, name, ok=False, error=str(exc), outcome=ShareOutcome.FAILED.value)
         return
     _after_send(cfg, finding, name, subject, q, outcome, detail)
+
+
+def report_asset_name(cfg: BlackboxConfig, identifier: str, reporter: str) -> str:
+    """The asset name this node shares its report of *identifier* under: ``report-<hash>``, or
+    ``sandbox-<hash>`` in sandbox mode, so a test never takes the name of the real report."""
+    return f"{'sandbox' if cfg.community_sandbox else 'report'}-{threat_ids.stable_hash(identifier + reporter, 16)}"
 
 
 def community_lane(cfg: BlackboxConfig) -> str:

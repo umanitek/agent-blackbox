@@ -22,13 +22,15 @@ from .. import report_builder, report_schema, report_signer, share_retry, sharin
 
 def send_and_record(client: DkgClient, cfg, *, identifier: str, category: str, severity: str,
                      subject: str, name: str, quads: list[dict[str, str]],
-                     keep_alive: bool = False) -> tuple[sharing.ShareOutcome, str]:
+                     keep_alive: bool = False, lane: Optional[str] = None) -> tuple[sharing.ShareOutcome, str]:
     """Send one built statement to the community and record the attempt
     in the local share ledger, success or failure (KI-015). Returns
     (outcome, detail) for the caller to report. *keep_alive* (reports only —
     disputes and retractions are final) remembers an ACCEPTED statement so this
-    node re-publishes it each epoch (R5)."""
-    outcome, detail = sharing.send_report(client, cfg.context_graph_id, name, quads)
+    node re-publishes it each epoch (R5). *lane* is the sub-graph to send to (default: the
+    community's reports; a report made in sandbox mode names the sandbox lane)."""
+    outcome, detail = (sharing.send_report(client, cfg.context_graph_id, name, quads, lane=lane) if lane
+                       else sharing.send_report(client, cfg.context_graph_id, name, quads))
     audit.record_share_outcome(
         identifier=identifier, category=category, severity=severity,
         subject=subject, asset_name=name, ok=outcome is sharing.ShareOutcome.ACCEPTED,
@@ -44,7 +46,19 @@ def submit_report(client: DkgClient, cfg, finding: dict, reporter: str, signer: 
     """Send one validated manual report (lifecycle: SUBMIT + ACKNOWLEDGE): cooldown and daily
     cap first, then build, send, ledger; a refused write is queued for retry. *finding* is
     ``{"identifier", "category", "severity", "fields"}`` from the report command's factory.
-    Prints the outcome and returns the exit code."""
+    Prints the outcome and returns the exit code.
+
+    In sandbox mode the report is a test, like an automatic one: it goes to the sandbox lane
+    under a ``sandbox-`` name, uses the sandbox's own ledger, cooldown and cap, and is never
+    kept alive or retried — so it cannot silence or mix with a real report of the same threat."""
+    if cfg.community_sandbox:
+        with audit.sandbox_run():
+            return _send_report(client, cfg, finding, reporter, signer)
+    return _send_report(client, cfg, finding, reporter, signer)
+
+
+def _send_report(client: DkgClient, cfg, finding: dict, reporter: str, signer: report_signer.ReportSigner) -> int:
+    sandbox = cfg.community_sandbox
     identifier = finding["identifier"]
     if audit.recently_reported(identifier):
         print(f"Already reported within the cooldown window: {display_safety.term_safe(identifier)}")
@@ -53,7 +67,7 @@ def submit_report(client: DkgClient, cfg, finding: dict, reporter: str, signer: 
         print(f"Daily report cap reached ({cfg.daily_report_limit}); try again tomorrow.")
         return 2
     subject = threat_ids.report_uri(identifier, reporter)
-    name = f"report-{threat_ids.stable_hash(identifier + reporter, 16)}"
+    name = sharing.report_asset_name(cfg, identifier, reporter)
     q = report_builder.build_report_quads(
         identifier=identifier,
         category=finding["category"],
@@ -64,14 +78,19 @@ def submit_report(client: DkgClient, cfg, finding: dict, reporter: str, signer: 
         **finding["fields"],
     )
     outcome, detail = send_and_record(client, cfg, identifier=identifier, category=finding["category"],
-                                       severity=finding["severity"], subject=subject, name=name, quads=q, keep_alive=True)
+                                       severity=finding["severity"], subject=subject, name=name, quads=q,
+                                       keep_alive=not sandbox, lane=sharing.community_lane(cfg))
+    if outcome is sharing.ShareOutcome.FAILED and sandbox:   # a test is never queued for retry
+        print(f"Sandbox test share refused: {display_safety.term_safe(detail, 160)}")
+        return 1
     if outcome is sharing.ShareOutcome.FAILED:
         return _queue_refused_share(cfg, finding, subject=subject, name=name, quads=q, detail=detail)
     audit.mark_reported(identifier)
     if outcome is sharing.ShareOutcome.REJECTED_SAME_VERSION:
         print(f"Already shared with the community — not re-sent ({display_safety.term_safe(detail, 120)}).")
         return 0
-    print("Report shared with the community.")
+    print("Sandbox mode: test report sent to the sandbox lane only; nothing reached the community's reports."
+          if sandbox else "Report shared with the community.")
     print(f"  identifier: {display_safety.term_safe(identifier)}")
     print(f"  subject:    {display_safety.term_safe(subject)}")
     return 0
