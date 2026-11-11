@@ -975,7 +975,7 @@ def test_a_revocation_is_followed_by_its_advisory_twin(monkeypatch, tmp_path, cu
 def test_the_twin_waits_for_the_read_back_and_other_statements_have_none(monkeypatch, tmp_path, capsys, curators):
     class UnreadableNode(FakeNode):
         def query(self, sparql, cg_id=None, view=None, on_error=None, **kw):
-            return on_error
+            return []   # answers, but the statement is not there yet (a FAILED read pays nothing at all)
 
     node = UnreadableNode()
     proposal, _ = _propose_correction(monkeypatch, tmp_path, capsys, curators, node)

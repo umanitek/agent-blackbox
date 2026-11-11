@@ -40,10 +40,13 @@ class LaggingNode(FakeNode):
     def __init__(self):
         super().__init__()
         self.caught_up = False
+        self.read_fails = False
         self.publish_fails: DkgError | None = None
 
     def query(self, sparql, cg_id=None, view=None, on_error=None, **kw):
-        return super().query(sparql, cg_id, view, on_error, **kw) if self.caught_up else on_error
+        if self.read_fails:
+            return on_error                                   # the read itself failed: could not tell
+        return super().query(sparql, cg_id, view, on_error, **kw) if self.caught_up else []
 
     def request(self, method, path, body=None, timeout=None):
         if path.endswith("/vm/publish") and self.publish_fails is not None:
@@ -119,3 +122,14 @@ def test_a_promotion_signed_only_by_the_break_glass_key_is_refused_before_anyone
                           checks={})
     verbs._check_first_signer(ctx, honest.parsed(), honest, hexes[0])               # an ordinary curator's: fine
     assert inbox.from_a_curator(manifest, honest) is True
+
+
+def test_a_publish_that_cannot_read_verified_memory_first_pays_nothing(monkeypatch, tmp_path, curators):
+    """Looking first only protects against paying twice if "could not read" is not taken as
+    "not there": then nothing is published and the operator is told to run publish again."""
+    node = LaggingNode()
+    node.read_fails = True
+    store, revocation = _approved_revocation(monkeypatch, tmp_path, curators, node)
+    with pytest.raises(verbs.VerbError, match="could not read Verified Memory"):
+        verbs.approve(_ctx(node, curators["manifest"]), store, revocation.id, evidence="", typed_code=None, yes=True)
+    assert node.vm_published == []

@@ -62,7 +62,7 @@ class FakeNode:
         if "VALUES ?r" in sparql and any(f"<{quad['subject']}>" in sparql and quad["object"] in sparql
                                          for quad in written if quad["predicate"].endswith("signedStatement")):
             return [{"r": "readable"}]
-        return on_error
+        return []   # a node that answered: nothing matched ("could not tell" is a failed query, not this)
 
     def write_private_knowledge_asset(self, cg, name, quads):
         self.sealed.append((cg, name, quads))

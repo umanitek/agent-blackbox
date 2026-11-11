@@ -225,6 +225,9 @@ def _write(ctx: CurateContext, proposal: Proposal, envelope: signing.SignedEnvel
         # read-back lagged (UNCONFIRMED) finds the statement instead of paying again.
         view = constants.VIEW_VERIFIABLE_MEMORY
         already = _readable(ctx, graph, view, quads)
+        if already is None:   # could not tell whether it is there: never pay on a guess (LES-011)
+            raise VerbError("could not read Verified Memory to check whether this is already published; "
+                            "nothing was published — run publish again")
         if not already:
             node_routes.publish_to_verified_memory(ctx.client, graph, name, quads)
     else:
@@ -248,6 +251,9 @@ def _write_promotion(ctx: CurateContext, proposal: Proposal,
     except ValueError as exc:
         raise VerbError(f"the promotion is not acceptable: {exc}") from exc
     already = _readable(ctx, graph, constants.VIEW_VERIFIABLE_MEMORY, quads)
+    if already is None:   # could not tell whether it is there: never pay on a guess (LES-011)
+        raise VerbError("could not read Verified Memory to check whether this promotion is already published; "
+                        "nothing more was published — run publish again")
     if not already:
         try:
             node_routes.publish_to_verified_memory(ctx.client, graph, name, quads)
@@ -325,17 +331,19 @@ def _share(ctx: CurateContext, graph: str, name: str, quads: list[dict[str, str]
     return bool(isinstance(result, dict) and result.get("idempotent"))
 
 
-def _readable(ctx: CurateContext, graph: str, view: str, quads: list[dict[str, str]]) -> bool:
-    """True when the signed statement just written can be read from *graph*:
-    an exact lookup of its subject AND its signed text (so another node's
-    statement under the same subject does not count). Quads that carry no
-    signed statement have nothing to read back and count as readable."""
+def _readable(ctx: CurateContext, graph: str, view: str, quads: list[dict[str, str]]) -> Optional[bool]:
+    """Whether the signed statement just written can be read from *graph*: an exact lookup of
+    its subject AND its signed text (so another node's statement under the same subject does
+    not count). True / False when the node answered; None when the read cannot be believed (a
+    failed query or a slow empty answer — "could not tell" is never "not there", LES-011).
+    Quads that carry no signed statement have nothing to read back and count as readable."""
     signed = next((q for q in quads if q["predicate"] == constants.SIGNED_STATEMENT_PRED), None)
     if signed is None:
         return True
     sparql = (f"SELECT ?r WHERE {{ VALUES ?r {{ <{signed['subject']}> }} "
               f"?r <{constants.SIGNED_STATEMENT_PRED}> {signed['object']} }} LIMIT 1")
-    return bool(sparql_text.query_rows(ctx.client, sparql, graph, view))
+    rows = sparql_text.query_rows(ctx.client, sparql, graph, view)
+    return None if rows is None else bool(rows)
 
 
 def summary(proposal: Proposal) -> str:
