@@ -14,7 +14,7 @@ import contextvars
 import logging
 import threading
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, NamedTuple, Optional
 from .. import audit, detection
 from .. import community
 from ..kernel import constants, threat_ids
@@ -231,30 +231,53 @@ def _share_sighting(
     does not share (R0b): the refusal is ledgered like any failure. Fail-open.
     """
     identifier = str(finding.get("identifier") or "")
-    subject = threat_ids.report_uri(identifier, reporter)
-    name = report_asset_name(cfg, identifier, reporter)
     signer = report_signer.resolve_report_signer(client, cfg.context_graph_id)
     if signer is None:
-        _ledger_share(finding, subject, name, ok=False, error="cannot sign reports (no network id or reporter key)")
+        _ledger_share(finding, threat_ids.report_uri(identifier, reporter), report_asset_name(cfg, identifier, reporter),
+                      ok=False, error="cannot sign reports (no network id or reporter key)")
         return
     try:
-        # Reports contain signatures, never raw prompts, paths, or source files.
-        fields = shareable_fields(finding)
-        q = community.build_report_quads(
-            identifier=identifier,
-            category=str(finding.get("category") or ""),
-            severity=str(finding.get("severity") or "info"),
-            reporter_address=reporter,
-            framework=HOST_FRAMEWORK,
-            signer=signer,
-            **fields,
-        )
-        outcome, detail = send_report(client, cfg.context_graph_id, name, q, lane=community_lane(cfg), cfg=cfg)
-    except Exception as exc:  # pragma: no cover - fail open (building the report failed)
+        share_report(client, cfg, finding, reporter, signer)
+    except Exception as exc:  # health: allow BLE001 -- the background share's boundary: a report that cannot be built is ledgered as failed, never raised into the worker
         logger.debug("blackbox: sighting share error: %s", exc)
-        _ledger_share(finding, subject, name, ok=False, error=str(exc), outcome=ShareOutcome.FAILED.value)
-        return
-    _after_send(cfg, finding, name, subject, q, outcome, detail)
+        _ledger_share(finding, threat_ids.report_uri(identifier, reporter), report_asset_name(cfg, identifier, reporter),
+                      ok=False, error=str(exc), outcome=ShareOutcome.FAILED.value)
+
+
+class ShareResult(NamedTuple):
+    """What :func:`share_report` did: the send's outcome and detail, the asset name and
+    the report subject (``urn:guardian:report:<reporter>:<hash>``) it was shared under."""
+
+    outcome: ShareOutcome
+    detail: str
+    name: str
+    subject: str
+
+
+def share_report(client: DkgClient, cfg: BlackboxConfig, finding: dict[str, Any], reporter: str,
+                 signer: report_signer.ReportSigner) -> ShareResult:
+    """Build, send and record ONE report of *finding* — the one path for automatic and manual
+    reports alike. *finding* is a finding dict (``identifier``, ``category``, ``severity``,
+    ``fields``, optionally the guard's ``sighting``); only :func:`shareable_fields` of it leave
+    the machine, never prompt or command text. Afterwards (:func:`_after_send`): a refused real
+    report is queued for retry (the queue ledgers its final outcome), anything else is ledgered,
+    an accepted real report is kept alive; a sandbox report is only ledgered, in the sandbox.
+    Raises when the report cannot be built (the caller decides how to fail)."""
+    identifier = str(finding.get("identifier") or "")
+    subject = threat_ids.report_uri(identifier, reporter)
+    name = report_asset_name(cfg, identifier, reporter)
+    quads = community.build_report_quads(
+        identifier=identifier,
+        category=str(finding.get("category") or ""),
+        severity=str(finding.get("severity") or "info"),
+        reporter_address=reporter,
+        framework=HOST_FRAMEWORK,
+        signer=signer,
+        **shareable_fields(finding),
+    )
+    outcome, detail = send_report(client, cfg.context_graph_id, name, quads, lane=community_lane(cfg), cfg=cfg)
+    _after_send(cfg, finding, name, subject, quads, outcome, detail)
+    return ShareResult(outcome, detail, name, subject)
 
 
 def report_asset_name(cfg: BlackboxConfig, identifier: str, reporter: str) -> str:

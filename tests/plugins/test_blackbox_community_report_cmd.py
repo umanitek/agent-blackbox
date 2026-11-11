@@ -133,8 +133,11 @@ def test_share_failure_exits_nonzero_and_ledgers(monkeypatch, bb_home, capsys):
     rc = report_command.cmd_report(_args(type="ioc", ioc_type="domain", value="evil.example", context="fetched-by-tool"))
     assert rc == 1
     assert "refused for now" in capsys.readouterr().out
+    # queued for retry, like an automatic report: ONE ledger row, "retrying" (it used to add a second, "failed")
+    from plugins.blackbox.community import share_retry
+    assert [share.identifier for share in share_retry.default_queue().pending()] == ["ioc:domain:evil.example"]
     rows = audit.read_share_ledger()
-    assert rows and rows[0]["ok"] is False
+    assert len(rows) == 1 and rows[0]["ok"] is False and rows[0]["outcome"] == share_retry.OUTCOME_RETRYING
 
 
 def test_cooldown_short_circuits_resubmission(wired, capsys):
@@ -345,14 +348,14 @@ class _LaneClient(FakeClient):
 
 
 def _sandbox_node(monkeypatch, fail=False):
-    from plugins.blackbox.community.report_cli import statement_verbs
+    from plugins.blackbox.community import sharing
 
     client, kept, queued = _LaneClient(fail), [], []
     monkeypatch.setattr(report_command, "load_blackbox_config", lambda: CFG_SANDBOX)
     monkeypatch.setattr(report_command, "DkgClient", lambda **kw: client)
     monkeypatch.setattr(kernel_identity, "reporter_address", lambda c: REPORTER)
-    monkeypatch.setattr(statement_verbs.keep_alive_mod, "remember_accepted_share", lambda *a, **k: kept.append(k))
-    monkeypatch.setattr(statement_verbs.share_retry, "queue_failed_share", lambda **k: queued.append(k))
+    monkeypatch.setattr(sharing.keep_alive, "remember_accepted_share", lambda *a, **k: kept.append(k))
+    monkeypatch.setattr(sharing.share_retry, "queue_failed_share", lambda **k: queued.append(k))
     return client, kept, queued
 
 

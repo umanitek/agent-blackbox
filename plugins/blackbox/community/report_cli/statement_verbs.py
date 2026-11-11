@@ -14,24 +14,20 @@ import argparse
 from typing import Optional
 
 from ... import audit
-from ...kernel import constants, display_safety, threat_ids
+from ...kernel import display_safety, threat_ids
 from ...kernel.dkg_client import DkgClient
 from .. import keep_alive as keep_alive_mod
-from .. import report_builder, report_schema, report_signer, share_retry, sharing
+from .. import report_builder, report_schema, report_signer, sharing
 
 
 def send_and_record(client: DkgClient, cfg, *, identifier: str, category: str, severity: str,
                      subject: str, name: str, quads: list[dict[str, str]],
-                     keep_alive: bool = False, lane: Optional[str] = None,
                      reduces: bool = False) -> tuple[sharing.ShareOutcome, str]:
-    """Send one built statement to the community and record the attempt
-    in the local share ledger, success or failure (KI-015). Returns
-    (outcome, detail) for the caller to report. *keep_alive* (reports only —
-    disputes and retractions are final) remembers an ACCEPTED statement so this
-    node re-publishes it each epoch (R5). *lane* is the sub-graph to send to (default: the
-    community's reports; a report made in sandbox mode names the sandbox lane)."""
-    outcome, detail = sharing.send_report(client, cfg.context_graph_id, name, quads,
-                                          lane=lane or constants.COMMUNITY_SUB_GRAPH, cfg=cfg, reduces=reduces)
+    """Send one built statement (a dispute or a retraction; reports go through
+    :func:`.sharing.share_report`) and record the attempt in the local share ledger,
+    success or failure (KI-015). Returns (outcome, detail) for the caller to report.
+    Disputes and retractions are final: never kept alive, never queued."""
+    outcome, detail = sharing.send_report(client, cfg.context_graph_id, name, quads, cfg=cfg, reduces=reduces)
     if outcome is sharing.ShareOutcome.NOT_ALLOWED:   # nothing left the machine: no ledger row
         return outcome, detail
     audit.record_share_outcome(
@@ -39,15 +35,12 @@ def send_and_record(client: DkgClient, cfg, *, identifier: str, category: str, s
         subject=subject, asset_name=name, ok=outcome is sharing.ShareOutcome.ACCEPTED,
         error=detail, outcome=outcome.value,
     )
-    if keep_alive and outcome is sharing.ShareOutcome.ACCEPTED:
-        keep_alive_mod.remember_accepted_share(cfg, name=name, identifier=identifier, subject=subject,
-                                               severity=severity, quads=quads)
     return outcome, detail
 
 
 def submit_report(client: DkgClient, cfg, finding: dict, reporter: str, signer: report_signer.ReportSigner) -> int:
     """Send one validated manual report (lifecycle: SUBMIT + ACKNOWLEDGE): cooldown and daily
-    cap first, then build, send, ledger; a refused write is queued for retry. *finding* is
+    cap first, then :func:`.sharing.share_report` (the same path as automatic reports). *finding* is
     ``{"identifier", "category", "severity", "fields"}`` from the report command's factory.
     Prints the outcome and returns the exit code.
 
@@ -69,28 +62,18 @@ def _send_report(client: DkgClient, cfg, finding: dict, reporter: str, signer: r
     if not audit.allow_report(cfg.daily_report_limit):
         print(f"Daily report cap reached ({cfg.daily_report_limit}); try again tomorrow.")
         return 2
-    subject = threat_ids.report_uri(identifier, reporter)
-    name = sharing.report_asset_name(cfg, identifier, reporter)
-    q = report_builder.build_report_quads(
-        identifier=identifier,
-        category=finding["category"],
-        severity=finding["severity"],
-        reporter_address=reporter,
-        framework=sharing.HOST_FRAMEWORK,
-        signer=signer,
-        **finding["fields"],
-    )
-    outcome, detail = send_and_record(client, cfg, identifier=identifier, category=finding["category"],
-                                       severity=finding["severity"], subject=subject, name=name, quads=q,
-                                       keep_alive=not sandbox, lane=sharing.community_lane(cfg))
+    outcome, detail, _name, subject = sharing.share_report(client, cfg, finding, reporter, signer)
     if outcome is sharing.ShareOutcome.NOT_ALLOWED:
         print(f"Not submitted: {display_safety.term_safe(detail, 160)}.")
         return 2
     if outcome is sharing.ShareOutcome.FAILED and sandbox:   # a test is never queued for retry
         print(f"Sandbox test share refused: {display_safety.term_safe(detail, 160)}")
         return 1
-    if outcome is sharing.ShareOutcome.FAILED:
-        return _queue_refused_share(cfg, finding, subject=subject, name=name, quads=q, detail=detail)
+    if outcome is sharing.ShareOutcome.FAILED:   # the share path queued it for retry
+        print(f"Share refused for now: {display_safety.term_safe(detail, 160)}")
+        print("Queued for automatic retry (a newly subscribed node is refused for a few minutes). "
+              "`blackbox report --status` shows it as 'retrying' until it lands.")
+        return 1
     audit.mark_reported(identifier)
     if outcome is sharing.ShareOutcome.REJECTED_SAME_VERSION:
         print(f"Already shared with the community — not re-sent ({display_safety.term_safe(detail, 120)}).")
@@ -100,17 +83,6 @@ def _send_report(client: DkgClient, cfg, finding: dict, reporter: str, signer: r
     print(f"  identifier: {display_safety.term_safe(identifier)}")
     print(f"  subject:    {display_safety.term_safe(subject)}")
     return 0
-
-
-def _queue_refused_share(cfg, finding, *, subject: str, name: str, quads, detail: str) -> int:
-    """R16: a refused write is queued for automatic retry, and the operator is told so."""
-    share_retry.queue_failed_share(graph=cfg.context_graph_id, name=name, identifier=finding["identifier"],
-                                   category=finding["category"], severity=finding["severity"], subject=subject,
-                                   quads=quads, error=detail)
-    print(f"Share refused for now: {display_safety.term_safe(detail, 160)}")
-    print("Queued for automatic retry (a newly subscribed node is refused for a few minutes). "
-          "`blackbox report --status` shows it as 'retrying' until it lands.")
-    return 1
 
 
 def submit_false_positive(client: DkgClient, cfg, identifier: str, reason: Optional[str], reporter: str,

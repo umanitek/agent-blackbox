@@ -77,6 +77,13 @@ that the two version fields agree.
 - **A dashboard page left open keeps working after the dashboard restarts** (it used to answer
   "403" until reloaded), and the first page after a start is no longer slow because the start-up
   reads did not run.
+- **Nothing is shared while sharing is off, whichever part of Blackbox sends it.** The check that
+  sharing is switched on and your consent is in force now sits at the one place reports leave
+  the machine, not only in each feature that sends. Disputes and retractions still go through,
+  because they only withdraw.
+- **A refused manual report is recorded once.** `blackbox report` wrote two "reports" rows for a
+  report the node refused for now (one "failed", one "retrying"); it now writes the one
+  "retrying" row, as automatic reports do.
 - **A manual report made in sandbox mode stays in the sandbox.** `blackbox report` with Sandbox
   mode on now goes to the sandbox lane only, like automatic reports, and is not re-published.
 - **Curator commands.** `blackbox curate approve` exits with an error when nothing was published;
