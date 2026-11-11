@@ -9,10 +9,12 @@ discovery tasks alike.
 
 from __future__ import annotations
 
+import contextlib
 import contextvars
 import functools
 import logging
-from typing import Any, Dict, List, Optional
+import threading
+from typing import Any, Dict, Iterator, List, Optional
 from .. import audit, desktop, detection, shields
 from .. import community
 from ..kernel import identity
@@ -131,7 +133,28 @@ def _share_findings(cfg: BlackboxConfig, event: str, finding_dicts: list[dict[st
             continue
         if client is None or not audit.allow_report(cfg.daily_report_limit):
             continue
-        community.spawn_community_share(client, cfg, finding, reporter)
+        worker = community.spawn_community_share(client, cfg, finding, reporter)
+        collected = _COLLECTED_SHARES.get()
+        if collected is not None:
+            collected.append(worker)
+
+
+#: The share threads started under :func:`collecting_shares` (None outside one).
+_COLLECTED_SHARES: contextvars.ContextVar[Optional[list[threading.Thread]]] = contextvars.ContextVar(
+    "blackbox_collected_shares", default=None)
+
+
+@contextlib.contextmanager
+def collecting_shares() -> Iterator[list[threading.Thread]]:
+    """Collect every community share started inside the block — the report follow-up runs with
+    the caller's context copied, so its shares land here too — so a caller waits for its OWN shares
+    only (the Playground), never another agent's share running at the same time."""
+    started: list[threading.Thread] = []
+    token = _COLLECTED_SHARES.set(started)
+    try:
+        yield started
+    finally:
+        _COLLECTED_SHARES.reset(token)
 
 
 def blackbox_block_message(findings: list[detection.Finding]) -> str:

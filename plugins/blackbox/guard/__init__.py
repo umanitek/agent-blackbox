@@ -8,7 +8,8 @@ Hermes calls these hooks around every tool call and model request:
 * :func:`on_session_start` / :func:`on_session_end` — per-session context.
 * :func:`blackbox_block_message` — the text shown when a call is blocked.
 * :func:`reports_settled` — wait until the report follow-up of earlier calls is done
-  (the Playground and tests; a hook never waits for it).
+  (the Playground and tests; a hook never waits for it); :func:`collecting_shares` — the
+  community shares started inside a block, so the Playground waits for its own only.
 
 Internals: :mod:`.hooks` (entry points) → :mod:`.reporting` (filter, record,
 share) → :mod:`.report_queue` (the node-facing follow-up, after the hook answered) · :mod:`.session_context` (bounded conversation memory) ·
@@ -31,6 +32,7 @@ from .hooks import (
     on_session_start,
 )
 from . import report_queue
+from .reporting import collecting_shares
 
 
 def reports_settled(timeout_s: float) -> bool:
@@ -41,6 +43,7 @@ def reports_settled(timeout_s: float) -> bool:
 
 __all__ = [
     "blackbox_block_message",
+    "collecting_shares",
     "on_post_tool_call",
     "on_pre_api_request",
     "on_pre_tool_call",

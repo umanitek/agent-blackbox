@@ -23,7 +23,6 @@ shipped with the plugin (LES-058).
 from __future__ import annotations
 
 import random
-import threading
 import time
 from dataclasses import asdict, dataclass
 from typing import Any, Iterator, Optional
@@ -36,7 +35,6 @@ SESSION_ID = "blackbox-sandbox"   # every sandbox test runs under this agent ses
 _TRIES = 12                        # random windows of the live tier to look in
 _WINDOW = 40                       # rules per window
 _SHARE_WAIT_S = 90.0               # the share thread's node round trip (seal → share → poll)
-_SHARE_THREAD = "blackbox-community-share"
 
 
 class PlaygroundRefused(Exception):
@@ -95,13 +93,13 @@ def run_test(kind: str, cfg: Optional[BlackboxConfig] = None) -> TestResult:
     require_sandbox(cfg)
     attempt = _pick(ruleset.get(cfg), kind)
     started = time.time()
-    with audit.sandbox_run():
+    with audit.sandbox_run(), guard.collecting_shares() as shares:
         task = f"sandbox-{int(started * 1000)}-{random.SystemRandom().randrange(1 << 24):06x}"
         verdict = guard.on_pre_tool_call(tool_name=attempt.tool, args=attempt.args, session_id=SESSION_ID,
                                          task_id=task, tool_call_id=task)
         check_ms = round((time.time() - started) * 1000, 1)
         guard.reports_settled(_SHARE_WAIT_S)   # the follow-up that starts the share runs after the hook
-        for worker in [t for t in threading.enumerate() if t.name == _SHARE_THREAD]:
+        for worker in list(shares):   # this test's own shares, never another agent's
             worker.join(_SHARE_WAIT_S)
         shared = _share_outcome(attempt.identifier)
     blocked = bool(verdict) and verdict.get("action") == "block"
