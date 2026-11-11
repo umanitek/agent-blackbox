@@ -63,6 +63,11 @@ EVIDENCE_PAYLOAD_KEYS: Mapping[str, str] = {
     "reportReason": "reason",               # Refine R1 (§04)
     "matchedBy": "matched_by",              # trust-and-threat-lab §03.6 (common field)
     "blackboxVersion": "blackbox_version",  # trust-and-threat-lab §03.6 (common field)
+    # Signed by every writer but not selected by the reader's query: taken from the signed payload
+    # (a test checks that every key the builder signs is listed here, so none is lost on read).
+    "owaspCategory": "owasp_category",
+    "advisoryId": "advisory_id",            # its predicate is schema:identifier — never the ?identifier column
+    "skillVersion": "skill_version",
     # threat-profiles §03.2: not in the reader's query — taken from the signed payload.
     **sighting_vocab.SIGHTING_PAYLOAD_VARS,
 }

@@ -148,3 +148,26 @@ def test_epoch_copies_of_one_statement_count_once(tmp_path, monkeypatch):
     assert len(disputes.verified_disputes([d1, d2], NETWORK, GRAPH)) == 1
     r1, r2 = signed_retraction_row("dep:npm:x@1", one), signed_retraction_row("dep:npm:x@1", one)
     assert len(retractions.verified_retractions([r1, r2], NETWORK, GRAPH)) == 1
+
+
+# --- what a report signs is what a reader keeps ------------------------------------------------
+
+def test_every_field_a_report_signs_is_read_back():
+    """The builder signed `owasp_category`, `advisory_id` and `skill_version`, but the reader's
+    field table did not list them, so the verified report silently lost them."""
+    from plugins.blackbox.community import report_builder, verification
+
+    assert report_builder.PAYLOAD_FIELD_KEYS <= set(verification.EVIDENCE_PAYLOAD_KEYS.values())
+
+
+@pytest.mark.parametrize("identifier, evidence, var, value", [
+    ("dep:npm:evil-pkg@1.0.0", {"advisory_id": "MAL-2026-1"}, "advisoryId", "MAL-2026-1"),
+    ("skill:helper@2.1.0", {"registry": "clawhub", "skill_name": "helper", "skill_version": "2.1.0"},
+     "skillVersion", "2.1.0"),
+])
+def test_a_signed_field_the_query_does_not_select_is_kept_from_the_signature(identifier, evidence, var, value):
+    from _community_rows import GRAPH, NETWORK, Reporter, signed_row
+    from plugins.blackbox.community.verification import ReportVerifier
+
+    report = ReportVerifier(NETWORK, GRAPH).verify(signed_row(identifier, Reporter("0xfields"), **evidence))
+    assert report is not None and (var, value) in report.fields
