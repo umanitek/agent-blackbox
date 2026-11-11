@@ -3076,8 +3076,8 @@ def test_blackbox_chat_cwd_prefers_recorded_source_root(tmp_path, monkeypatch):
     (repo / "plugins" / "blackbox" / "cli.py").write_text("", encoding="utf-8")
     (installed / ".blackbox-source-root").write_text(str(repo), encoding="utf-8")
 
-    monkeypatch.setattr(chat_command, "__file__", str(installed / "chat" / "command.py"))
-    monkeypatch.setattr(chat_command.attach, "repo_root", lambda: tmp_path / "wrong")
+    plugin_copy = chat_command.attach.plugin_copy   # the one reader of the marker (attach.repo_root)
+    monkeypatch.setattr(plugin_copy, "__file__", str(installed / "attach" / "plugin_copy.py"))
 
     assert chat_command._blackbox_chat_cwd() == repo.resolve()
 

@@ -21,7 +21,6 @@ logger = logging.getLogger(__name__)
 _BLACKBOX_CHAT_PROFILE = constants.BLACKBOX_CHAT_PROFILE
 _BLACKBOX_SOUL_MARKER = constants.BLACKBOX_CHAT_SOUL_MARKER
 _LEGACY_MANAGED_SOUL_PREFIX = "<!-- managed-by: hermes-"
-_BLACKBOX_SOURCE_ROOT_MARKER = ".blackbox-source-root"
 _BLACKBOX_CONTEXT_FILE_MAX_CHARS = 100_000
 _BLACKBOX_SOUL = f"""{_BLACKBOX_SOUL_MARKER}
 # Agent Blackbox
@@ -206,27 +205,13 @@ def _blackbox_chat_args(args: argparse.Namespace) -> list[str]:
 
 
 def _blackbox_chat_cwd() -> Optional[Path]:
-    candidates: list[Path] = []
-    # this file is plugins/blackbox/chat/command.py -> the plugin root is two up
-    marker = Path(__file__).resolve().parents[1] / _BLACKBOX_SOURCE_ROOT_MARKER
+    """The Blackbox checkout chat runs in (an installed copy's recorded source, else the copy's
+    own repo — ``attach.repo_root`` reads the marker), or None when neither holds the plugin."""
     try:
-        if marker.exists():
-            marked = Path(marker.read_text(encoding="utf-8-sig").strip()).expanduser()
-            candidates.append(marked)
-    except Exception:
-        pass
-    try:
-        candidates.append(attach.repo_root())
-    except Exception:
-        pass
-    for candidate in candidates:
-        try:
-            resolved = candidate.resolve()
-        except Exception:
-            continue
-        if (resolved / "plugins" / "blackbox" / "cli.py").exists():
-            return resolved
-    return None
+        root = attach.repo_root().resolve()
+    except OSError:
+        return None
+    return root if (root / "plugins" / "blackbox" / "cli.py").exists() else None
 
 
 def _write_blackbox_soul(profile_dir: Path) -> None:
