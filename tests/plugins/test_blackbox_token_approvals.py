@@ -360,3 +360,49 @@ def test_a_router_at_the_same_address_everywhere_stays_exempt_without_a_chain():
 ])
 def test_the_chain_a_call_names_is_read_or_left_unknown(text, chain):
     assert chain_named(text) == chain
+
+
+# --- the command-line reader runs only where a command-line approval could be ---------------
+
+def test_a_large_text_with_no_approval_wording_is_not_split_into_shell_words():
+    """Splitting one 540 KB word (a minified file, an encoded blob) took seconds, on every call."""
+    import time
+
+    from plugins.blackbox.detection.transactions.approval_forms import approvals_in
+
+    started = time.perf_counter()
+    assert approvals_in("a" * 540_000) == []
+    assert time.perf_counter() - started < 0.5
+
+
+@pytest.mark.parametrize("command", [
+    "cast send 0xA0b8 'approve(address,uint256)' {spender} {amount}",
+    "cast send 0xA0b8 'appr''ove(address,uint256)' {spender} {amount}",          # quotes inside the name
+    "cast send 0xA0b8 appr\\ove\\(address,uint256\\) {spender} {amount}",        # backslashes inside it
+    "cast send 0xA0b8 \"approve\"'(address,uint256)' {spender} {amount}",
+    "cast send 0xA0b8 'function approve (address spender, uint256 amount)' {spender} {amount}",
+    "cast send 0xA0b8 'SetApprovalForAll(address,bool)' {spender} true",
+    "cast send 0xA0b8 'increaseAllowance(address,uint256)' {spender} {amount}",
+    "spl-token approve {solana} ALL {solana}",
+    "spl-'token' approve {solana} ALL {solana}",
+    "/usr/bin/spl-\\token approve {solana} ALL {solana}",
+])
+def test_a_command_line_approval_is_still_read_however_its_name_is_quoted(command):
+    from plugins.blackbox.detection.transactions.approval_forms import approvals_in
+
+    text = command.format(spender="0x" + "de" * 20, amount=str(2**256 - 1),
+                          solana="9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin")
+    assert len(approvals_in(text)) == 1 and approvals_in(text)[0].unlimited is True
+
+
+def test_the_gate_never_hides_what_the_word_reader_would_find():
+    """Whatever the shell-word reader finds in a text, the cheap gate lets that text through."""
+    from plugins.blackbox.detection.transactions import approval_forms, cast_forms
+    from plugins.blackbox.detection.transactions.approval_calls import CALLS_BY_NAME
+
+    spender, amount = "0x" + "de" * 20, "5"
+    for name in CALLS_BY_NAME:
+        for spelling in (name, name.upper(), f"{name[:2]}''{name[2:]}", f"{name[:3]}\\{name[3:]}", f'"{name}" '):
+            text = f"cast send 0xA0b8 {spelling}'(address,uint256)' {spender} {amount}"
+            found = cast_forms.from_words(approval_forms._shell_words(text))
+            assert not found or approval_forms._may_hold_command_approval(text), text
