@@ -27,7 +27,7 @@ from collections import Counter, deque
 from pathlib import Path
 from typing import Any, Dict, List, Set, Tuple
 
-from ..kernel import constants, sparql_text
+from ..kernel import constants, sparql_text, threat_ids
 from ..kernel.browser_boundary import LOOPBACK_HOSTS, BrowserBoundary
 from ..kernel.host_command import hermes_argv
 from .. import shields
@@ -1789,10 +1789,7 @@ def create_app(*, manage_blackbox: bool = False):
             return direct_reads.lookup(cfg, identifier, tier)
         if tier == "community":
             return graph_pages.community_threat(ruleset.peek(cfg), identifier)
-        prefix = identifier.split(":", 1)[0].lower() if ":" in identifier else ""
-        category = prefix if prefix in ("dep", "injection", "escalation", "fileaccess", "skill", "ioc") else "other"
-        if category == "dep":
-            category = "dependency"
+        category = threat_ids.category_for(identifier)
         detail: dict[str, Any] = {
             "identifier": identifier,
             "tier": tier,
