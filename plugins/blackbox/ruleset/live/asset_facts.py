@@ -41,6 +41,7 @@ from typing import Any, Dict, FrozenSet, Iterable, List, Mapping, Optional, Tupl
 from ...kernel import constants, threat_ids
 from ...kernel.dkg_client import extract_binding
 from ...kernel.store import StoreClient
+from .. import row_adapters
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +68,7 @@ class AssetTier(Enum):
     """What an asset's rules may do: BLOCK (blockable as verified) or FLAG (flag only)."""
 
     BLOCK = "block"
-    FLAG = "flag"
+    FLAG = row_adapters.FLAG_TIER   # the one spelling (row_adapters, which live may import)
 
 
 @dataclass(frozen=True)
