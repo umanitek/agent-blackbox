@@ -97,6 +97,8 @@ that the two version fields agree.
   could not read its statement back yet, the next attempt published (and paid) again instead of
   looking first. A publish that timed out now says it could not tell whether it was published,
   not that nothing was.
+- **`blackbox curate watch` raises the same alarms as the curator service.** It left out the
+  self-test's alarm, so a curator suspended by a failing self-test was silent through it.
 - **Curator commands.** `blackbox curate approve` exits with an error when nothing was published;
   `curate inbox` admits only proposals a curator signed; a sighting digest dated in a week that
   does not exist is ignored instead of emptying the heat map.

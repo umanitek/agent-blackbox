@@ -26,7 +26,7 @@ from ..kernel.signing import Authority
 from ..kernel.signing import CuratorStatement
 from . import console, dossier, handoff, intake, keys, node_ui_views, promotion, publishing, queue, verbs, watch
 from .proposals import transport
-from .service import inbox
+from .service import inbox, steps
 from .ladder import outcomes
 from .upkeep import heartbeat, published
 from .context import CurateContext, build_context, verified_identifiers
@@ -295,7 +295,7 @@ def _watch(args: argparse.Namespace) -> int:
             announced = watcher.poll(queue.delta_view(compiled.community, verified_identifiers(compiled, compiled.community)), sink)
             if announced:
                 print(f"announced {len(announced)} new threat(s): " + ", ".join(_term(a, 60) for a in announced[:10]))
-        items = verbs.curator_alarms(ctx, compiled, today=today_utc(), now=now) + watch.manifest_items(ctx.manifest, now)
+        items = steps.alarm_items(ctx, today=today_utc(), now=now)   # the beat's own assembly
         delivered = alarms.poll(items, sink, now=now)   # R10b + W1 items + the daily dead-man beat
         alarms.post_metrics(lambda: console.collect_metrics(console.MetricsSources(), lambda: ctx, now),
                             sink, now)   # F-035: C4's one record, built only when the hourly post is due
