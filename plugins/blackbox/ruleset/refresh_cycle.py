@@ -17,7 +17,7 @@ import threading
 import time
 from typing import Any, List, Optional
 from ..kernel import constants
-from ..kernel.config import BlackboxConfig, load_blackbox_config
+from ..kernel.config import BlackboxConfig, load_blackbox_config, reads_graph_directly
 from ..kernel.dkg_client import DkgClient
 from . import compiler
 from . import disk_cache
@@ -108,7 +108,7 @@ def refresh(
     generation started before that barrier.
     """
     config = config or load_blackbox_config()
-    if getattr(config, 'detection_backend', 'legacy-cache') == "dkg":
+    if reads_graph_directly(config):
         result = GraphView(config)
         result.counts()  # live capability/readiness check; no rule extraction
         return result
@@ -141,7 +141,7 @@ def _refresh_unlocked(
 ) -> compiler.Ruleset:
     """Refresh while the caller holds :func:`_ruleset_refresh_lock`."""
     config = config or load_blackbox_config()
-    if getattr(config, 'detection_backend', 'legacy-cache') == "dkg":
+    if reads_graph_directly(config):
         return refresh(config)  # internal/background callers also cannot export
     context_graph_id = config.context_graph_id
     client = client or DkgClient(url=config.dkg_url, dkg_home=config.dkg_home, config=config)
@@ -344,7 +344,7 @@ def get(config: Optional[BlackboxConfig] = None) -> compiler.Ruleset:
     """
     global _refreshing
     config = config or load_blackbox_config()
-    if getattr(config, 'detection_backend', 'legacy-cache') == "dkg":
+    if reads_graph_directly(config):
         return GraphView(config)
     cached = _latest_cached_ruleset(config.context_graph_id)
     if cached is None:
@@ -384,7 +384,7 @@ def peek(config: Optional[BlackboxConfig] = None) -> compiler.Ruleset:
     Request handlers read without starting extra background transfers.
     """
     config = config or load_blackbox_config()
-    if getattr(config, 'detection_backend', 'legacy-cache') == "dkg":
+    if reads_graph_directly(config):
         return GraphView(config)
     cached = _latest_cached_ruleset(config.context_graph_id)
     if cached is None:

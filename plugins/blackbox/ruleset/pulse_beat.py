@@ -23,7 +23,7 @@ from typing import Optional
 from agent.memory_provider import spawn_context_thread
 
 from .. import community
-from ..kernel.config import BlackboxConfig, load_blackbox_config
+from ..kernel.config import BlackboxConfig, load_blackbox_config, reads_graph_directly
 from ..kernel.dkg_client import DkgClient
 from . import community_tier, curator_tier, disk_cache, locks
 
@@ -66,7 +66,7 @@ def _background_pulse(config: BlackboxConfig) -> None:
         from . import refresh_cycle   # lazy: refresh_cycle imports this module
 
         client = DkgClient(url=config.dkg_url, dkg_home=config.dkg_home, config=config)
-        if config.detection_backend == "dkg":
+        if reads_graph_directly(config):
             from .direct.community import refresh
             refresh(config, client)
             return

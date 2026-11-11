@@ -1,11 +1,12 @@
 """Response shaping for the direct graph backend."""
 from fastapi.responses import JSONResponse
 from ... import ruleset
+from ...kernel.config import reads_graph_directly
 from ...kernel.dkg_client import DkgError
 
 
 def handles(cfg, tier):
-    return tier == "public" and getattr(cfg, "detection_backend", "legacy-cache") == "dkg"
+    return tier == "public" and reads_graph_directly(cfg)
 
 
 def unavailable(exc):
@@ -21,7 +22,7 @@ def status(cfg):
 
 
 def metadata(cfg, rs):
-    direct = getattr(cfg, "detection_backend", "legacy-cache") == "dkg"
+    direct = reads_graph_directly(cfg)
     return {"last_sync": None if direct else rs.synced_at or None,
             "detection_backend": getattr(cfg, "detection_backend", "legacy-cache"),
             "count_kind": "confirmed-entities" if direct else "compiled-rules"}

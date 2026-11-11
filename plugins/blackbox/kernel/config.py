@@ -205,6 +205,13 @@ def _note_retired_community_settings(entry: Mapping[str, Any]) -> None:
             logger.info("blackbox: %s is ignored: community reports live in the verified graph now", name)
 
 
+def reads_graph_directly(cfg: Any) -> bool:
+    """True when *cfg* selects the per-call graph backend (``detection_backend: dkg``): rules are
+    read from the node's store for each call instead of the compiled local file. Accepts any
+    object; one without the field (a partial config in a test) means the compiled file."""
+    return getattr(cfg, "detection_backend", schema.DetectionBackend.LEGACY_CACHE) == schema.DetectionBackend.DKG
+
+
 def load_blackbox_config(*, entry: dict[str, Any] | None = None) -> BlackboxConfig:
     """Resolve the saved or proposed entry with the same environment precedence."""
     entry = _blackbox_entry() if entry is None else entry

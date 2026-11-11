@@ -17,7 +17,7 @@ import time
 from . import attach, audit, community, ruleset, sync
 from .kernel import health
 from .kernel import yaml_files
-from .kernel.config import load_blackbox_config
+from .kernel.config import load_blackbox_config, reads_graph_directly
 from .kernel.dkg_client import DkgClient, DkgError
 from .attach import add_attach_parsers
 from .chat import add_blackbox_chat_args, cmd_chat
@@ -121,7 +121,7 @@ def _cmd_status(args: argparse.Namespace) -> int:
     if cfg.snapshot_sync_error:
         print(f"  WARNING:           snapshot_sync in config.yaml is invalid ({cfg.snapshot_sync_error}); "
               "sync is refused until it is corrected")
-    if getattr(cfg, 'detection_backend', 'legacy-cache') == "dkg":
+    if reads_graph_directly(cfg):
         print("  protection source: live local graph queries (no ruleset export)")
         print("  counts below:      confirmed graph entities; not a full-coverage proof")
     print(f"  mode:              {cfg.mode}")
@@ -143,7 +143,7 @@ def _cmd_status(args: argparse.Namespace) -> int:
     print(f"  ruleset:           {counts['injection']} injection, "
           f"{counts['escalation']} escalation, {counts['dependency']} dependency, "
           f"{counts['fileaccess']} fileaccess, {counts['skill']} skill, {counts['ioc']} ioc")
-    if getattr(cfg, 'detection_backend', 'legacy-cache') != "dkg":
+    if not reads_graph_directly(cfg):
         _print_verified_progress(cfg)
     if not any(counts.values()) and not health.node_installed(cfg, reachable):
         print("  !! SETUP NEEDED:   Blackbox setup has not run — no DKG node, so the verified threat graph is not loaded.")

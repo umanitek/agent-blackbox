@@ -97,3 +97,12 @@ def test_the_enums_compare_equal_to_the_text_the_rest_of_the_plugin_uses():
     assert config.BlackboxConfig().detection_backend == "legacy-cache"
     assert config.DETECTION_CATEGORIES is schema.DETECTION_CATEGORIES
     assert settings.MAX_PROTECTED_PATHS == schema.MAX_PROTECTED_PATHS == 100
+
+
+def test_one_question_decides_whether_rules_are_read_from_the_node_per_call():
+    from types import SimpleNamespace
+
+    assert config.reads_graph_directly(config.BlackboxConfig(detection_backend="dkg")) is True
+    assert config.reads_graph_directly(config.BlackboxConfig()) is False
+    assert config.reads_graph_directly(config.BlackboxConfig(detection_backend="typo")) is False
+    assert config.reads_graph_directly(SimpleNamespace()) is False   # a partial config: the compiled file
