@@ -11,7 +11,7 @@ from typing import Any, Optional
 from ..kernel import constants
 from ..kernel.bounded_files import read_jsonl
 from . import log_store
-from .findings import _bounded_context
+from .findings import _bounded_context, finding_of, is_confirmed
 from . import redaction
 
 # Default severity per non-finding event type. Everything is ``info`` so the
@@ -36,7 +36,7 @@ def _finding_event_rows() -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for path, default_fw in log_store._findings_files():
         for rec in read_jsonl(path):   # object rows only: a damaged line is skipped, never fatal
-            finding = rec.get("finding") or (rec.get("findings") or [{}])[0] or {}
+            finding = finding_of(rec)
             out.append({
                 "ts": rec.get("ts") or 0,
                 "iso": rec.get("iso") or "",
@@ -177,7 +177,7 @@ def _threat_row(row: dict[str, Any], finding: dict[str, Any], detail: dict[str, 
         "severity": (finding.get("severity") or "info").lower(),
         "title": finding.get("title") or finding.get("identifier") or "Threat",
         "source": finding.get("source"),
-        "confirmed": bool(finding.get("confirmed")),
+        "confirmed": is_confirmed(finding),
         "tool": finding.get("tool_name") or detail.get("tool_name"),
         "ts": row.get("ts") or 0,
         "profile": finding.get("sighting") or {},   # threat profiles: goal, at risk, outcome…

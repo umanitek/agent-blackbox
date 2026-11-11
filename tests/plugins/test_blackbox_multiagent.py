@@ -243,3 +243,17 @@ def test_a_damaged_or_non_object_log_line_never_breaks_the_feed_and_is_not_count
     assert [row["event"] for row in rows] == ["session_start"]
     assert audit.count_audit() == len(rows) == 1
     assert audit.read_findings(limit=10) == []
+
+
+def test_a_finding_row_reads_the_same_in_the_findings_list_and_the_activity_view():
+    """Three readers each re-derived a record's finding, and disagreed on a row without
+    `confirmed`: the findings list read it as verified, the Local activity view as heuristic.
+    Both read it through audit.findings' finding_of / is_confirmed now (the writer's default)."""
+    from plugins.blackbox.audit import activity, findings
+    old_row = {"ts": 5, "findings": [{"identifier": "ioc:domain:x.example", "severity": "high"}]}
+    finding = findings.finding_of(old_row)
+    assert finding["identifier"] == "ioc:domain:x.example"
+    listed = findings._flatten_finding_row(old_row, "hermes")
+    shown = activity._threat_row(old_row, finding, {})
+    assert listed["confirmed"] is shown["confirmed"] is True
+    assert findings.finding_of({"finding": "not a mapping"}) == {}

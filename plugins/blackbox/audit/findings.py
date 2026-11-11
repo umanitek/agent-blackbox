@@ -63,9 +63,23 @@ def _bounded_context(ctx: Any) -> Optional[dict[str, Any]]:
     return out
 
 
+def finding_of(record: dict[str, Any]) -> dict[str, Any]:
+    """The finding a findings.jsonl record holds — THE fallback every reader uses: ``finding``,
+    else the first of ``findings`` (older rows), else ``{}``."""
+    found = record.get("finding") or (record.get("findings") or [{}])[0] or {}
+    return found if isinstance(found, dict) else {}
+
+
+def is_confirmed(finding: dict[str, Any]) -> bool:
+    """Whether a recorded finding came from a verified rule. The writer
+    (:func:`_finding_summary`) always records it, defaulting to True; a row without it reads the
+    same way in every view (the activity feed once read it as False, the findings list as True)."""
+    return bool(finding.get("confirmed", True))
+
+
 def _flatten_finding_row(rec: dict[str, Any], default_fw: str) -> dict[str, Any]:
     # Lift the per-line ``finding`` fields up to a dashboard-friendly row.
-    finding = rec.get("finding") or (rec.get("findings") or [{}])[0] or {}
+    finding = finding_of(rec)
     detail = rec.get("detail") or {}
     return {
         "time": rec.get("iso") or rec.get("ts"),
@@ -82,8 +96,8 @@ def _flatten_finding_row(rec: dict[str, Any], default_fw: str) -> dict[str, Any]
         "workspace": finding.get("workspace") or rec.get("workspace") or detail.get("workspace"),
         "tool_name": finding.get("tool_name") or detail.get("tool_name"),
         "evidence": finding.get("evidence") or finding.get("title"),
-        "confirmed": bool(finding.get("confirmed", True)),
-        "source": finding.get("source") or ("public" if finding.get("confirmed", True) else "heuristic"),
+        "confirmed": is_confirmed(finding),
+        "source": finding.get("source") or ("public" if is_confirmed(finding) else "heuristic"),
         # What the hook did with it: "block" | "flag" ("" for rows older than KI-189).
         "decision": str(detail.get("decision") or ""),
         # Local-only conversation snapshot (redacted upstream).
