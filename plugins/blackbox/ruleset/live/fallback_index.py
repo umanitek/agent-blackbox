@@ -154,6 +154,36 @@ class FallbackIndex:
         self._db.close()
 
 
+class OnDemandIndex:
+    """The fallback index as a lookup holds it (Proxy): SQLite is opened only when the store
+    could not tell, and closed right after — a lookup is built per tool call, and opening the
+    index (connect + schema) on every one, even while the store answered, cost two connections
+    per call that were never closed. Same answering methods as :class:`FallbackIndex`."""
+
+    def __init__(self, scope: VerifiedScope) -> None:
+        self.scope = scope
+
+    @classmethod
+    def for_scope(cls, scope: Optional[VerifiedScope]) -> Optional[OnDemandIndex]:
+        """The proxy when the scope enables the fallback, else None (the default)."""
+        return cls(scope) if scope is not None and scope.fallback == FALLBACK_INDEX else None
+
+    def dependencies(self, candidates: Sequence[tuple[str, str, str]]) -> LookupAnswer:
+        return self._asking(lambda index: index.dependencies(candidates))
+
+    def ioc_values(self, identifiers: Sequence[str]) -> LookupAnswer:
+        return self._asking(lambda index: index.ioc_values(identifiers))
+
+    def _asking(self, ask: Any) -> LookupAnswer:
+        index = FallbackIndex.for_scope(self.scope)
+        if index is None:
+            return LookupAnswer({}, COULD_NOT_TELL, "fallback index unavailable")
+        try:
+            return ask(index)
+        finally:
+            index.close()
+
+
 def _read_asset(client: DkgClient, cg_id: str, graph: str) -> Optional[list[tuple[str, str, str]]]:
     """Every triple of one asset's graph, cursor-paged by subject; None on failure."""
     failure = object()

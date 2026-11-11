@@ -41,7 +41,7 @@ class LiveAnswering:
         scope = self.verified_scope
         if scope is None or not scope.ready:
             return None
-        return VerifiedLookup(scope, StoreClient(scope.store_url), fallback=fallback_index.FallbackIndex.for_scope(scope))
+        return VerifiedLookup(scope, StoreClient(scope.store_url), fallback=fallback_index.OnDemandIndex.for_scope(scope))
 
     def dependency_rules(self, candidates: Sequence[tuple[str, str, str]]) -> LookupAnswer:
         """Rules for these ``(ecosystem, name, version)`` candidates, keyed as

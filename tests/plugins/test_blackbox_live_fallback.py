@@ -112,3 +112,30 @@ def test_refresh_scope_records_the_mode(value):
                                CG, previous=None, confirmed=[PART_A], suppressed=set(), revoked=set(),
                                store=FakeStore({}), fallback=value)
     assert scope.fallback == value
+
+
+def test_sqlite_is_opened_only_when_the_store_could_not_tell_and_closed_after(tmp_path, monkeypatch):
+    """A generation's lookup is built per tool call, and it opened the fallback index (connect +
+    schema) every time — two connections per call, never closed, even while the store answered.
+    The lookup now holds an on-demand proxy: SQLite opens only for a could-not-tell answer."""
+    from plugins.blackbox.ruleset.live import lookup as live_lookup
+    monkeypatch.setattr(live_lookup, "RETRY_AFTER_SECONDS", 0.0)
+    monkeypatch.setattr(fallback_index, "index_path", lambda: tmp_path / "idx.sqlite")
+    live.FallbackIndex(INDEXED).index_missing_assets(_Node(GRAPHS), CG)
+    opened, closed = [], []
+    real_init, real_close = live.FallbackIndex.__init__, live.FallbackIndex.close
+    monkeypatch.setattr(live.FallbackIndex, "__init__", lambda self, *a, **k: opened.append(1) or real_init(self, *a, **k))
+    monkeypatch.setattr(live.FallbackIndex, "close", lambda self: closed.append(1) or real_close(self))
+    proxy = fallback_index.OnDemandIndex.for_scope(INDEXED)
+    health = live.LookupHealth(tmp_path / "state.json")
+
+    answering = live.VerifiedLookup(INDEXED, FakeStore(GRAPHS), health=health, fallback=proxy)
+    answering.dependencies([("npm", "react", "18.3.1")])
+    assert opened == []                                            # the store answered: no SQLite
+
+    failing = live.VerifiedLookup(INDEXED, _Failing(), health=health, fallback=proxy)
+    assert failing.dependencies([("npm", "wallet-security-checker", "2.0.3")]).outcome == live.HIT
+    assert opened == [1] and closed == [1]
+    assert fallback_index.OnDemandIndex.for_scope(SCOPE) is None   # fallback off (the default): nothing
+    assert INDEXED.ready   # a generation's lookup holds the proxy, never an open index
+    assert isinstance(compiler.Ruleset(verified_scope=INDEXED).live_lookup().fallback, fallback_index.OnDemandIndex)
