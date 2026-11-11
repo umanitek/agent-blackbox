@@ -35,7 +35,6 @@ import json
 import logging
 import re
 import subprocess
-import sys
 import threading
 import time
 from dataclasses import dataclass
@@ -46,6 +45,7 @@ from ..kernel import constants, health
 from ..kernel.bounded_files import atomic_write, read_json_object
 from ..kernel.config import load_blackbox_config
 from ..kernel.dkg_client import DkgClient
+from ..kernel.host_command import hermes_argv
 
 logger = logging.getLogger(__name__)
 
@@ -244,7 +244,7 @@ def _spawn_detached(command: list[str], log: Any, cwd: Path) -> subprocess.Popen
 
 def setup_command() -> list[str]:
     """``hermes blackbox setup`` in the Hermes this process runs in (the same Python, so the same profile)."""
-    return [sys.executable, "-m", "hermes_cli.main", "blackbox", "setup"]
+    return hermes_argv("blackbox", "setup")
 
 
 RUN = SetupRun(folder=lambda: constants.blackbox_home() / "desktop_setup")

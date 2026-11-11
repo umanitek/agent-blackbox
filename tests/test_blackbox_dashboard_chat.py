@@ -1,4 +1,5 @@
 import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -246,7 +247,7 @@ def test_dashboard_automatic_sync_runs_canonical_verified_cli(monkeypatch):
         "community": 0,
     }
     assert calls[0][0] == [
-        server.sys.executable,
+        sys.executable,
         "-m",
         "hermes_cli.main",
         "blackbox",

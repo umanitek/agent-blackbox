@@ -318,3 +318,13 @@ def test_an_epoch_time_reads_as_its_utc_day_whatever_the_machines_time_zone(monk
 def test_an_absent_or_unreadable_time_gives_the_fallback_day(missing):
     from plugins.blackbox.kernel.health import utc_day_or
     assert utc_day_or(missing, "2026-11-10") == "2026-11-10"
+
+
+def test_a_child_hermes_is_this_process_python_running_hermes_entry_module():
+    """One spelling for every child ``hermes …`` process: this Python, Hermes' entry module."""
+    import sys
+
+    from plugins.blackbox.kernel.host_command import hermes_argv
+
+    assert hermes_argv() == [sys.executable, "-m", "hermes_cli.main"]
+    assert hermes_argv("blackbox", "setup") == [sys.executable, "-m", "hermes_cli.main", "blackbox", "setup"]

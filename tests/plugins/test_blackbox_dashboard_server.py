@@ -1,5 +1,6 @@
 from pathlib import Path
 import re
+import sys
 import time
 from types import SimpleNamespace
 
@@ -106,7 +107,7 @@ def test_graph_tooltip_clears_force_graph_outer_chrome():
 
 
 def test_blackbox_runtime_is_profile_isolated_and_does_not_use_global_stop(monkeypatch):
-    monkeypatch.setattr(server.sys, "executable", "/venv/bin/python")
+    monkeypatch.setattr(sys, "executable", "/venv/bin/python")
 
     argv = server._blackbox_runtime_argv()
 

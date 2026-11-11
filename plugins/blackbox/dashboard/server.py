@@ -22,7 +22,6 @@ import secrets
 import shutil
 import socket
 import subprocess
-import sys
 import threading
 import time
 from collections import Counter, deque
@@ -31,6 +30,7 @@ from typing import Any, Dict, List, Set, Tuple
 
 from ..kernel import constants, sparql_text
 from ..kernel.browser_boundary import BrowserBoundary
+from ..kernel.host_command import hermes_argv
 from .. import shields
 from ..sync import read_durable_progress, state as sync_state
 from . import community_routes, direct_reads, docs_routes, graph_pages, lifecycle, playground_routes, shields_routes, sync_meter, sync_timing
@@ -85,19 +85,8 @@ def _dkg_durable_progress(dkg_home: str, context_graph_id: str) -> dict[str, Any
 
 def _blackbox_runtime_argv(port: int = _BLACKBOX_RUNTIME_PORT) -> list[str]:
     """Command for the dashboard-owned, profile-isolated Agent Blackbox backend."""
-    return [
-        sys.executable,
-        "-m",
-        "hermes_cli.main",
-        "--profile",
-        _BLACKBOX_PROFILE,
-        "serve",
-        "--host",
-        _BLACKBOX_RUNTIME_HOST,
-        "--port",
-        str(int(port)),
-        "--isolated",
-    ]
+    return hermes_argv("--profile", _BLACKBOX_PROFILE, "serve", "--host", _BLACKBOX_RUNTIME_HOST,
+                       "--port", str(int(port)), "--isolated")
 
 
 def _blackbox_runtime_env() -> dict[str, str]:

@@ -9,20 +9,9 @@ Usage: pass ``network_sync_argv(3600)`` as the argv of the child process
 
 from __future__ import annotations
 
-import sys
-from typing import List
+from ..kernel.host_command import hermes_argv
 
 
 def network_sync_argv(timeout: int = 3600) -> list[str]:
     """Run the canonical verified graph sync in an isolated process."""
-    return [
-        sys.executable,
-        "-m",
-        "hermes_cli.main",
-        "blackbox",
-        "sync",
-        "--wait",
-        "--timeout",
-        str(max(1, int(timeout))),
-        "--require-rules",
-    ]
+    return hermes_argv("blackbox", "sync", "--wait", "--timeout", str(max(1, int(timeout))), "--require-rules")
