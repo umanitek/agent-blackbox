@@ -5,6 +5,7 @@ import time
 from types import SimpleNamespace
 
 from _blackbox_loader import load_blackbox
+from _blackbox_fakes import dkg_client_fake
 
 
 server = load_blackbox("dashboard.server")
@@ -945,7 +946,7 @@ def test_node_sync_probe_reports_subscription_from_the_listing(monkeypatch):
             return [{"id": "0xowner/other", "subscribed": True}]
     from plugins.blackbox.dashboard import node_probe
 
-    monkeypatch.setattr(node_probe, "DkgClient", _Client)
+    monkeypatch.setattr(node_probe, "DkgClient", dkg_client_fake(_Client))
     cfg = SimpleNamespace(dkg_url="http://127.0.0.1:9200", dkg_home="/tmp/x", context_graph_id="0xowner/vm")
     probe = node_probe.node_sync_probe(cfg, reachable=True)
     assert probe["subscribed"] is False and probe["catchup"] == {"status": "running"}
@@ -961,7 +962,7 @@ def test_node_sync_probe_treats_an_unreadable_listing_as_unknown(monkeypatch):
             raise RuntimeError("listing unavailable")
     from plugins.blackbox.dashboard import node_probe
 
-    monkeypatch.setattr(node_probe, "DkgClient", _Client)
+    monkeypatch.setattr(node_probe, "DkgClient", dkg_client_fake(_Client))
     cfg = SimpleNamespace(dkg_url="http://127.0.0.1:9200", dkg_home="/tmp/x", context_graph_id="0xowner/vm")
     assert node_probe.node_sync_probe(cfg, reachable=True)["subscribed"] is None
 

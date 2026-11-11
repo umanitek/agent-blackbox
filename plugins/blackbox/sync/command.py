@@ -170,7 +170,7 @@ def _cmd_sync_with_managed_dkg(cfg: BlackboxConfig, args: argparse.Namespace) ->
 
 def _cmd_sync_impl(args: argparse.Namespace) -> int:
     cfg = load_blackbox_config()
-    client = DkgClient(url=cfg.dkg_url, dkg_home=cfg.dkg_home, config=cfg)
+    client = DkgClient.for_config(cfg)
     release_graph = cfg.context_graph_id == constants.DEFAULT_CONTEXT_GRAPH_ID
     authoritative_available = bool(
         cfg.graph_peer_id and callable(getattr(client, "catchup_from_peer", None))

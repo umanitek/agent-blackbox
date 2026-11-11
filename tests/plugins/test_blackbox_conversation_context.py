@@ -11,6 +11,7 @@ import json
 import pytest
 
 from _blackbox_loader import load_blackbox
+from _blackbox_fakes import dkg_client_fake
 
 audit = load_blackbox("audit")
 audit_findings = load_blackbox("audit.findings")
@@ -287,7 +288,7 @@ def test_context_never_reaches_outbound_sighting(monkeypatch):
         def share_knowledge_asset(self, cg, name, quads):
             shared.append({"name": name, "quads": quads})
 
-    monkeypatch.setattr(guard_reporting, "DkgClient", FakeClient)
+    monkeypatch.setattr(guard_reporting, "DkgClient", dkg_client_fake(FakeClient))
     monkeypatch.setattr(audit, "recently_reported", lambda ident: False)
     monkeypatch.setattr(audit, "mark_reported", lambda ident: None)
     monkeypatch.setattr(audit, "write_private_audit_ka", lambda *a, **k: None)

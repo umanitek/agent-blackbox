@@ -259,7 +259,7 @@ def cmd_report(args: argparse.Namespace) -> int:
     refusal = submission_gate.refusal_for(cfg, reduction)
     if refusal is not None:
         return refusal
-    client = DkgClient(url=cfg.dkg_url, dkg_home=cfg.dkg_home, config=cfg)
+    client = DkgClient.for_config(cfg)
     resolved = _reporting_identity(client, cfg.context_graph_id)
     if resolved is None:
         return 1
@@ -333,7 +333,7 @@ def _report_status(cfg, compiled_community: Optional[CompiledCommunity] = None) 
             print("  " + report_tracking.outcome_line(row, compiled))
     if cfg.context_graph_id:
         try:
-            client = DkgClient(url=cfg.dkg_url, dkg_home=cfg.dkg_home, config=cfg)
+            client = DkgClient.for_config(cfg)
             store = reporter_key.ReporterKeyStore()
             own_author = store.public_key_hex() if store.path.exists() else ""
             read = graph_reader.read_verified_reports(client, cfg)

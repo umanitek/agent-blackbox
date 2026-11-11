@@ -100,7 +100,7 @@ def _share_findings(cfg: BlackboxConfig, event: str, finding_dicts: list[dict[st
     """Per finding: cooldown, private audit KA, share-policy decision, background share."""
     client: Optional[DkgClient] = None
     try:
-        client = DkgClient(url=cfg.dkg_url, dkg_home=cfg.dkg_home, config=cfg)
+        client = DkgClient.for_config(cfg)
     except Exception:   # health: allow BLE001 -- the hook boundary is fail-open: a node client that cannot be built must never break the agent's tool call (KI-033)
         client = None
     policy = community.CommunitySharePolicy(cfg)

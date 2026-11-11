@@ -21,6 +21,7 @@ from plugins.blackbox.community.report_cli import report_command
 from plugins.blackbox.sync import command as sync_command
 from plugins.blackbox.kernel.config import BlackboxConfig
 from plugins.blackbox.kernel.dkg_client import DkgError
+from _blackbox_fakes import dkg_client_fake
 
 
 DEV_GRAPH = "0x51E5dE758A45c8b64048E29918421F0bdD6D5d5C/agent-blackbox-community-dev"
@@ -211,7 +212,7 @@ def test_status_screams_when_ruleset_empty(bb_home, tmp_path, monkeypatch, capsy
             return False
 
     monkeypatch.setattr(cli, "load_blackbox_config", lambda: BlackboxConfig(dkg_bin=str(dkg_command)))
-    monkeypatch.setattr(cli, "DkgClient", lambda **kw: QuietClient())
+    monkeypatch.setattr(cli, "DkgClient", dkg_client_fake(lambda **kw: QuietClient()))
     monkeypatch.setattr(cli.ruleset, "get", lambda cfg: EmptyRs())
     monkeypatch.setattr(cli.audit, "count_findings", lambda: 0)
     monkeypatch.setattr(cli, "_print_attached_targets", lambda: None)
@@ -231,7 +232,7 @@ def test_status_quiet_when_rules_present(bb_home, monkeypatch, capsys):
             return True
 
     monkeypatch.setattr(cli, "load_blackbox_config", lambda: BlackboxConfig())
-    monkeypatch.setattr(cli, "DkgClient", lambda **kw: QuietClient())
+    monkeypatch.setattr(cli, "DkgClient", dkg_client_fake(lambda **kw: QuietClient()))
     monkeypatch.setattr(cli.ruleset, "get", lambda cfg: FullRs())
     monkeypatch.setattr(cli.audit, "count_findings", lambda: 0)
     monkeypatch.setattr(cli, "_print_attached_targets", lambda: None)

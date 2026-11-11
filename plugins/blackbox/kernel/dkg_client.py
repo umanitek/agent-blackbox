@@ -155,24 +155,20 @@ def signed_request_headers(token: str, method: str, path: str, body: Optional[by
 
 
 class DkgClient:
-    """Minimal DKG v10 HTTP client. Construct with an explicit url/token or
-    let :meth:`from_env` resolve them."""
+    """Minimal DKG v10 HTTP client: :meth:`for_config` for a Blackbox config's node; with no
+    arguments the daemon's own URL and token are found."""
 
-    def __init__(
-        self,
-        url: Optional[str] = None,
-        token: Optional[str] = None,
-        dkg_home: Optional[str] = None,
-        config=None,
-    ) -> None:
+    def __init__(self, url: Optional[str] = None, token: Optional[str] = None,
+                 dkg_home: Optional[str] = None, config=None) -> None:
         self.url = (url or load_daemon_url()).rstrip("/")
         self.dkg_home = str(_dkg_home(dkg_home))
         self.token = token if token is not None else load_token(self.dkg_home)
         self._chain_evidence = query_evidence(config, self.url, self.dkg_home)
 
     @classmethod
-    def from_env(cls) -> DkgClient:
-        return cls()
+    def for_config(cls, cfg: Any) -> DkgClient:
+        """THE client for a Blackbox config's node (its URL, node home and chain-evidence mode)."""
+        return cls(url=cfg.dkg_url, dkg_home=cfg.dkg_home, config=cfg)
 
     # -- transport ---------------------------------------------------------
 

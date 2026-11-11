@@ -60,7 +60,7 @@ def report_standing(cfg) -> int:
     if not cfg.context_graph_id:
         print("No graph configured.")
         return 0
-    client = DkgClient(url=cfg.dkg_url, dkg_home=cfg.dkg_home, config=cfg)
+    client = DkgClient.for_config(cfg)
     read = graph_reader.read_verified_reports(client, cfg)
     if not read.available:
         print(f"Community reports unavailable right now: {display_safety.term_safe(read.reason, 160)}")

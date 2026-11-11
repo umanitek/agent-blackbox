@@ -74,7 +74,7 @@ def route(cfg: BlackboxConfig, older_route: SyncRoute) -> SyncRoute:
 def sync(args: argparse.Namespace) -> int:
     """``blackbox sync`` for the default graph: observe the node's own recovery."""
     cfg = load_blackbox_config()
-    return run(DkgClient(url=cfg.dkg_url, dkg_home=cfg.dkg_home, config=cfg), cfg, args)
+    return run(DkgClient.for_config(cfg), cfg, args)
 
 
 @dataclass

@@ -156,7 +156,7 @@ def _refresh_unlocked(
     if reads_graph_directly(config):
         return refresh(config)  # internal/background callers also cannot export
     context_graph_id = config.context_graph_id
-    client = client or DkgClient(url=config.dkg_url, dkg_home=config.dkg_home, config=config)
+    client = client or DkgClient.for_config(config)
     listing = _partition_listing(client, context_graph_id)   # ONE _meta read, shared with the scope
     # The verified (public) tier is the only one read; None = the read failed.
     public_rows = fetching.fetch_tier(client, context_graph_id, constants.VIEW_VERIFIABLE_MEMORY, listing=listing)

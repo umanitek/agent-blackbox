@@ -252,7 +252,7 @@ RUN = SetupRun(folder=lambda: constants.blackbox_home() / "desktop_setup")
 
 def _node_reachable(cfg: Any) -> Optional[bool]:
     try:
-        return DkgClient(url=cfg.dkg_url, dkg_home=cfg.dkg_home, config=cfg).reachable(timeout=NODE_PROBE_SECONDS)
+        return DkgClient.for_config(cfg).reachable(timeout=NODE_PROBE_SECONDS)
     except Exception as exc:   # health: allow BLE001 -- a probe that cannot run is "could not tell" (LES-011)
         logger.debug("blackbox: node probe for Desktop could not run: %s", exc)
         return None

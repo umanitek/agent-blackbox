@@ -20,6 +20,7 @@ from plugins.blackbox.community.report_cli import report_command
 from plugins.blackbox.kernel import constants
 from plugins.blackbox.kernel import identity as kernel_identity
 from plugins.blackbox.kernel.config import BlackboxConfig
+from _blackbox_fakes import dkg_client_fake
 
 
 DEV_GRAPH = "0x51E5dE758A45c8b64048E29918421F0bdD6D5d5C/agent-blackbox-community-dev"
@@ -63,7 +64,7 @@ def wired(monkeypatch, bb_home):
     """Community on, identity resolved, fake client captured."""
     client = FakeClient()
     monkeypatch.setattr(report_command, "load_blackbox_config", lambda: CFG_ON)
-    monkeypatch.setattr(report_command, "DkgClient", lambda **kw: client)
+    monkeypatch.setattr(report_command, "DkgClient", dkg_client_fake(lambda **kw: client))
     monkeypatch.setattr(kernel_identity, "reporter_address", lambda c: REPORTER)
     return client
 
@@ -128,7 +129,7 @@ def test_manual_report_lands_via_shared_pipeline(wired, capsys):
 def test_share_failure_exits_nonzero_and_ledgers(monkeypatch, bb_home, capsys):
     client = FakeClient(fail=True)
     monkeypatch.setattr(report_command, "load_blackbox_config", lambda: CFG_ON)
-    monkeypatch.setattr(report_command, "DkgClient", lambda **kw: client)
+    monkeypatch.setattr(report_command, "DkgClient", dkg_client_fake(lambda **kw: client))
     monkeypatch.setattr(kernel_identity, "reporter_address", lambda c: REPORTER)
     rc = report_command.cmd_report(_args(type="ioc", ioc_type="domain", value="evil.example", context="fetched-by-tool"))
     assert rc == 1
@@ -168,7 +169,7 @@ def test_gate_off_is_loud_not_silent(monkeypatch, bb_home, capsys):
 def test_ghost_identity_refused(monkeypatch, bb_home, capsys):
     """No resolvable identity -> refuse; there is no placeholder to report under."""
     monkeypatch.setattr(report_command, "load_blackbox_config", lambda: CFG_ON)
-    monkeypatch.setattr(report_command, "DkgClient", lambda **kw: FakeClient())
+    monkeypatch.setattr(report_command, "DkgClient", dkg_client_fake(lambda **kw: FakeClient()))
     monkeypatch.setattr(kernel_identity, "reporter_address", lambda c: None)
     rc = report_command.cmd_report(_args(type="ioc", ioc_type="domain", value="evil.example", context="fetched-by-tool"))
     assert rc == 1
@@ -320,7 +321,7 @@ def test_a_failed_dispute_is_recorded_in_the_ledger(monkeypatch, bb_home, capsys
     """KI-015: every share attempt, success or failure, lands in the local
     ledger — a failed dispute used to leave no trace (found building R1c)."""
     monkeypatch.setattr(report_command, "load_blackbox_config", lambda: CFG_ON)
-    monkeypatch.setattr(report_command, "DkgClient", lambda **kw: FakeClient(fail=True))
+    monkeypatch.setattr(report_command, "DkgClient", dkg_client_fake(lambda **kw: FakeClient(fail=True)))
     monkeypatch.setattr(kernel_identity, "reporter_address", lambda c: REPORTER)
     assert report_command.cmd_report(_args(false_positive="dep:npm:innocent@2.0.0", reason="wrong")) == 1
     rows = audit.read_share_ledger()
@@ -352,7 +353,7 @@ def _sandbox_node(monkeypatch, fail=False):
 
     client, kept, queued = _LaneClient(fail), [], []
     monkeypatch.setattr(report_command, "load_blackbox_config", lambda: CFG_SANDBOX)
-    monkeypatch.setattr(report_command, "DkgClient", lambda **kw: client)
+    monkeypatch.setattr(report_command, "DkgClient", dkg_client_fake(lambda **kw: client))
     monkeypatch.setattr(kernel_identity, "reporter_address", lambda c: REPORTER)
     monkeypatch.setattr(sharing.keep_alive, "remember_accepted_share", lambda *a, **k: kept.append(k))
     monkeypatch.setattr(sharing.share_retry, "queue_failed_share", lambda **k: queued.append(k))

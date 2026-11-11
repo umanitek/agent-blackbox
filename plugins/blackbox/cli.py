@@ -108,7 +108,7 @@ def _add_sync_parser(sub) -> None:
 
 def _cmd_status(args: argparse.Namespace) -> int:
     cfg = load_blackbox_config()
-    client = DkgClient(url=cfg.dkg_url, dkg_home=cfg.dkg_home, config=cfg)
+    client = DkgClient.for_config(cfg)
     reachable = client.reachable()
     try:
         rs = ruleset.get(cfg)

@@ -2,7 +2,7 @@
   "_comment": "Baselined when the structure guard landed (2026-10-01). Numbers may only shrink: lower them in the commit that shrinks the code; delete an entry once it is under the alarm. Never raise one. HEADROOM BUDGET (2026-10-11) for files under the alarm that new curator work will grow \u2014 they may NOT be added here; a feature commit may not carry any past 400 lines, so an extraction (own commit, suite green) lands first: curate/service/beat.py 23 lines left (377), ruleset/compiler.py 51 (349), curate/verbs.py 68 (332), community/trust/authority_read.py 138 (262), kernel/signing/key_manifest.py 147 (253).",
   "files": {
     "dashboard/server.py": 1891,
-    "kernel/dkg_client.py": 616,
+    "kernel/dkg_client.py": 612,
     "sync/command.py": 1246
   },
   "functions": {

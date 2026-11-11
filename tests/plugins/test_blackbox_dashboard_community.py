@@ -20,6 +20,7 @@ from fastapi.testclient import TestClient
 from plugins.blackbox import ruleset as rs_mod
 from plugins.blackbox.dashboard import server
 from plugins.blackbox.ruleset import Ruleset
+from _blackbox_fakes import dkg_client_fake
 
 
 DEV_GRAPH = "0x51E5dE758A45c8b64048E29918421F0bdD6D5d5C/agent-blackbox-community-dev"
@@ -327,7 +328,7 @@ def test_the_threat_route_sends_a_hostile_identifier_as_one_escaped_literal(monk
             sent.append(sparql)
             return []
     from plugins.blackbox.kernel import dkg_client as dkg_module
-    monkeypatch.setattr(dkg_module, "DkgClient", Node)   # create_app imports the class when it is called
+    monkeypatch.setattr(dkg_module, "DkgClient", dkg_client_fake(Node))   # create_app imports the class when it is called
     rules = _community_ruleset()
     hostile_subject = "urn:x> } ?s ?p ?o . { <urn:y"
     rules.ioc = {"ioc:domain:known.example": {"identifier": "ioc:domain:known.example", "source": "public",

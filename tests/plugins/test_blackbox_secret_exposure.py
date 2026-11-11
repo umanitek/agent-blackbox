@@ -9,6 +9,7 @@ TYPE — and it is redacted from the audit log.
 """
 
 from _blackbox_loader import load_blackbox
+from _blackbox_fakes import dkg_client_fake
 
 
 audit = load_blackbox("audit")
@@ -85,7 +86,7 @@ def test_secret_finding_is_local_only(monkeypatch):
     shared = []
     monkeypatch.setattr(hooks.audit, "record", lambda **k: None)
     monkeypatch.setattr(community_sharing, "_share_sighting", lambda *a, **k: shared.append(a))
-    monkeypatch.setattr(guard_reporting, "DkgClient", lambda *a, **k: object())
+    monkeypatch.setattr(guard_reporting, "DkgClient", dkg_client_fake(lambda *a, **k: object()))
     finding = detection.Finding(
         identifier="secret:openai-api-key", category="secret", severity="high",
         title="Secret exposed: openai-api-key", source="secret", confirmed=False,

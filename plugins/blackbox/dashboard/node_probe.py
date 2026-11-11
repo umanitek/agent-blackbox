@@ -188,7 +188,7 @@ class NodeLiveness:
 def node_sync_probe(cfg: Any, *, reachable: bool) -> Optional[dict[str, Any]]:
     if not reachable:
         return None
-    client = DkgClient(url=cfg.dkg_url, dkg_home=cfg.dkg_home, config=cfg)
+    client = DkgClient.for_config(cfg)
     try:
         catchup = client.catchup_status(cfg.context_graph_id)
     except Exception:

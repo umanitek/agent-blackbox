@@ -24,6 +24,7 @@ from plugins.blackbox.community.sighting import vocab
 from plugins.blackbox.community.verification import ReportVerifier
 from plugins.blackbox.guard import injection_sites, reporting
 from plugins.blackbox.kernel import signing, threat_ids
+from _blackbox_fakes import dkg_client_fake
 
 IOC_DOMAIN = "ioc:domain:evil.example"
 VERIFIED_SUBJECT = "urn:defender:signal:" + "ab" * 12
@@ -303,7 +304,7 @@ def test_the_local_record_carries_the_profile(monkeypatch, tmp_path):
     monkeypatch.setenv("BLACKBOX_HOME", str(tmp_path))
     recorded = []
     monkeypatch.setattr(reporting.audit, "record", lambda **kw: recorded.append(kw))
-    monkeypatch.setattr(reporting, "DkgClient", lambda **kw: (_ for _ in ()).throw(RuntimeError("no node")))
+    monkeypatch.setattr(reporting, "DkgClient", dkg_client_fake(lambda **kw: (_ for _ in ()).throw(RuntimeError("no node"))))
     finding = detection.Finding(identifier=IOC_DOMAIN, category="ioc", severity="high", title="evil",
                                 tool_name="web_fetch", source="public", rule_subject=VERIFIED_SUBJECT,
                                 fields={"ioc_type": "domain", "ioc_context": "fetched-by-tool"})

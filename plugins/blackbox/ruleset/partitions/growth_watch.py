@@ -72,7 +72,7 @@ class GrowthWatch:
 
         def node_assets() -> Optional[int]:
             config = load_config()
-            client = DkgClient(url=config.dkg_url, dkg_home=config.dkg_home, config=config)
+            client = DkgClient.for_config(config)
             totals = verified_download_totals(client, config.context_graph_id, timeout=PROBE_TIMEOUT_SECONDS)
             return totals.assets if totals is not None else None
 

@@ -1091,7 +1091,7 @@ def create_app(*, manage_blackbox: bool = False):
     # Node liveness: cached, debounced, and its outages logged (KI-335). The
     # 5 s check timeout stays generous — /api/status can take a couple of
     # seconds under load, and the debounce absorbs one check that still misses.
-    _liveness = NodeLiveness(lambda cfg, timeout: DkgClient(url=cfg.dkg_url, dkg_home=cfg.dkg_home, config=cfg).reachable(timeout=timeout),
+    _liveness = NodeLiveness(lambda cfg, timeout: DkgClient.for_config(cfg).reachable(timeout=timeout),
                              ttl=15.0, timeout=5.0)
     _node_reachable = _liveness.reachable
     _node_read_log = RepeatGate()
@@ -1106,7 +1106,7 @@ def create_app(*, manage_blackbox: bool = False):
             if not getattr(cfg, "context_graph_id", "") or not _node_reachable(cfg):
                 return None   # keep the cached value; retry next poll
             try:
-                read = community.read_verified_reports(DkgClient(url=cfg.dkg_url, dkg_home=cfg.dkg_home, config=cfg), cfg)
+                read = community.read_verified_reports(DkgClient.for_config(cfg), cfg)
                 return read if read.available else None  # unavailable: keep cached
             except Exception as exc:  # pragma: no cover - fail open
                 logger.debug("blackbox dashboard: community read failed: %s", exc)
@@ -1420,7 +1420,7 @@ def create_app(*, manage_blackbox: bool = False):
             if not _node_reachable(cfg):
                 return None   # retry next poll; don't cache a "down" as empty
             try:
-                ident = DkgClient(url=cfg.dkg_url, dkg_home=cfg.dkg_home, config=cfg).agent_identity() or {}
+                ident = DkgClient.for_config(cfg).agent_identity() or {}
                 return str(ident.get("agentAddress") or ident.get("agentDid") or "")
             except Exception as exc:  # pragma: no cover - fail open
                 logger.debug("blackbox dashboard: agent identity failed: %s", exc)
@@ -1755,7 +1755,7 @@ def create_app(*, manage_blackbox: bool = False):
                 return None   # keep the default (empty) cached briefly; retry next poll
             seen: dict[str, dict[str, Any]] = {}
             try:
-                client = DkgClient(url=cfg.dkg_url, dkg_home=cfg.dkg_home, config=cfg)
+                client = DkgClient.for_config(cfg)
                 agent_address = str(client.agent_identity().get("agentAddress") or "")
                 # This machine's private audit records live in its OWN graph (audit.local_graph).
                 local_graph = audit.local_audit_graph(client) or cfg.context_graph_id
@@ -1815,7 +1815,7 @@ def create_app(*, manage_blackbox: bool = False):
         try:
             # Skip the point-lookup on an unreachable node so opening a threat
             # can't hang on a dead node.
-            client = DkgClient(url=cfg.dkg_url, dkg_home=cfg.dkg_home, config=cfg) if _node_reachable(cfg) else None
+            client = DkgClient.for_config(cfg) if _node_reachable(cfg) else None
             if client is None:
                 rows = []
             else:

@@ -33,6 +33,7 @@ from plugins.blackbox.kernel.config import BlackboxConfig
 from plugins.blackbox.kernel.signing import key_manifest
 from plugins.blackbox.kernel.signing.authority import Authority
 from plugins.blackbox.kernel.signing.statement_order import CuratorStatement as Kind
+from _blackbox_fakes import dkg_client_fake
 
 VM_GRAPH = GRAPH   # one graph (2026-10-16): the community lives in the verified graph's shared memory
 CFG = BlackboxConfig(report=True, context_graph_id=VM_GRAPH)
@@ -376,7 +377,7 @@ def test_a_revocations_advisory_twin_makes_the_next_pulse_withdraw_the_blocked_r
     view = SimpleNamespace(revoked=frozenset())
     monkeypatch.setattr(curator_tier.community, "read_curator_view", lambda client, cfg, *a, **k: view)
     graph = _TwinGraph()
-    monkeypatch.setattr(pulse_beat, "DkgClient", lambda *a, **k: graph)
+    monkeypatch.setattr(pulse_beat, "DkgClient", dkg_client_fake(lambda *a, **k: graph))
 
     cfg = BlackboxConfig(report=True, context_graph_id=VM_GRAPH, community_poll_interval=20)
     rule = {"identifier": blocked, "source": "public", "severity": "critical", "kind": "malware",

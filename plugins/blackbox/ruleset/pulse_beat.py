@@ -65,7 +65,7 @@ def _background_pulse(config: BlackboxConfig) -> None:
     try:
         from . import refresh_cycle   # lazy: refresh_cycle imports this module
 
-        client = DkgClient(url=config.dkg_url, dkg_home=config.dkg_home, config=config)
+        client = DkgClient.for_config(config)
         if reads_graph_directly(config):
             from .direct.community import refresh
             refresh(config, client)

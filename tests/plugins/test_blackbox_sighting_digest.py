@@ -24,6 +24,7 @@ from plugins.blackbox.guard import reporting
 from plugins.blackbox.kernel import signing
 from plugins.blackbox.kernel.config import BlackboxConfig
 from plugins.blackbox.detection import Finding
+from _blackbox_fakes import dkg_client_fake
 
 CFG = BlackboxConfig(report=True, context_graph_id=GRAPH)
 THREAT = "dep:npm:evil@1.0.0"
@@ -72,7 +73,7 @@ def test_only_verified_tier_matches_enter_the_tally(monkeypatch, home):
     """A community-only match would tell whoever listed the value who met it (KI-158)."""
     monkeypatch.setattr(audit, "record", lambda **kw: None)
     monkeypatch.setattr(audit, "write_private_audit_ka", lambda *a, **k: None)
-    monkeypatch.setattr(reporting, "DkgClient", lambda **kw: None)
+    monkeypatch.setattr(reporting, "DkgClient", dkg_client_fake(lambda **kw: None))
     findings = [Finding(identifier=THREAT, category="dependency", severity="high", title="t", source="public"),
                 Finding(identifier="ioc:domain:listed.example", category="ioc", severity="high", title="t",
                         source="community", confirmed=False),

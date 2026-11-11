@@ -49,7 +49,7 @@ def refresh(cfg, client=None):
     with locks._ruleset_refresh_lock(blocking=False) as acquired:
         if not acquired:
             return False
-        client = client or DkgClient(url=cfg.dkg_url, dkg_home=cfg.dkg_home, config=cfg)
+        client = client or DkgClient.for_config(cfg)
         prior = read(cfg)
         rules = Ruleset(context_graph_id=cfg.context_graph_id)
         community_tier.apply_community_tier(rules, client, cfg, prior)

@@ -12,6 +12,7 @@ import json
 
 import pytest
 from _blackbox_loader import load_blackbox
+from _blackbox_fakes import dkg_client_fake
 
 config_mod = load_blackbox("kernel.config")
 cli_mod = load_blackbox("cli")
@@ -119,8 +120,8 @@ def test_service_managed_node_is_restarted_through_systemd(dkg_home, monkeypatch
     monkeypatch.setattr(managed_node, "_systemd_unit_of", lambda _pid: "blackbox-dkg.service")
     monkeypatch.setattr(managed_node, "_dkg_sync_environment", lambda _cfg: {})
     monkeypatch.setattr(managed_node.subprocess, "run", run)
-    monkeypatch.setattr(sync_command, "DkgClient", Client)
-    monkeypatch.setattr(managed_node, "DkgClient", Client)
+    monkeypatch.setattr(sync_command, "DkgClient", dkg_client_fake(Client))
+    monkeypatch.setattr(managed_node, "DkgClient", dkg_client_fake(Client))
     cfg = config_mod.BlackboxConfig(dkg_home=str(dkg_home), dkg_bin=str(dkg_home / "dkg"))
 
     managed_node._restart_managed_dkg(cfg)

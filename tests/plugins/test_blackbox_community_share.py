@@ -31,6 +31,7 @@ from plugins.blackbox.kernel import threat_ids
 from plugins.blackbox.kernel import constants
 from plugins.blackbox.kernel.config import BlackboxConfig
 from plugins.blackbox.kernel.dkg_client import DkgError
+from _blackbox_fakes import dkg_client_fake
 
 
 DEV_GRAPH = "0x51E5dE758A45c8b64048E29918421F0bdD6D5d5C/agent-blackbox-community-dev"
@@ -186,7 +187,7 @@ def _run_pipeline(monkeypatch, cfg, findings, client=None, reporter=REPORTER):
     """Drive _report_and_audit with a fake client; capture spawned shares."""
     client = client or FakeClient()
     spawned = []
-    monkeypatch.setattr(guard_reporting, "DkgClient", lambda *a, **k: client)
+    monkeypatch.setattr(guard_reporting, "DkgClient", dkg_client_fake(lambda *a, **k: client))
     monkeypatch.setattr(kernel_identity, "reporter_address", lambda c: reporter)
     monkeypatch.setattr(audit, "write_private_audit_ka", lambda *a, **k: None)
     monkeypatch.setattr(community_pkg, "spawn_community_share",
@@ -250,7 +251,7 @@ def test_hook_returns_before_share_completes(monkeypatch, bb_home):
         finished.set()
 
     client = FakeClient()
-    monkeypatch.setattr(guard_reporting, "DkgClient", lambda *a, **k: client)
+    monkeypatch.setattr(guard_reporting, "DkgClient", dkg_client_fake(lambda *a, **k: client))
     monkeypatch.setattr(kernel_identity, "reporter_address", lambda c: REPORTER)
     monkeypatch.setattr(audit, "write_private_audit_ka", lambda *a, **k: None)
     monkeypatch.setattr(community_sharing, "_share_sighting", slow_share)

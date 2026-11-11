@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 from _blackbox_loader import load_blackbox
+from _blackbox_fakes import dkg_client_fake
 
 cli = load_blackbox("cli")
 config = load_blackbox("kernel.config")
@@ -22,7 +23,7 @@ def test_empty_graph_status_distinguishes_setup_and_compilation(
     cfg = config.BlackboxConfig(dkg_bin=str(command), detection_backend=backend)
     counts = dict.fromkeys(["injection", "escalation", "dependency", "fileaccess", "skill", "ioc"], 0)
     monkeypatch.setattr(cli, "load_blackbox_config", lambda: cfg)
-    monkeypatch.setattr(cli, "DkgClient", lambda **kwargs: SimpleNamespace(reachable=lambda: False))
+    monkeypatch.setattr(cli, "DkgClient", dkg_client_fake(lambda **kwargs: SimpleNamespace(reachable=lambda: False)))
     monkeypatch.setattr(cli.ruleset, "get", lambda cfg: SimpleNamespace(counts=lambda: counts))
     monkeypatch.setattr(cli.ruleset, "verified_progress", lambda graph: {
         "assets_total": 10, "assets_compiled": 3,

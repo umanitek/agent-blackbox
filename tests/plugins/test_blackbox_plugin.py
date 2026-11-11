@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from _blackbox_loader import load_blackbox
+from _blackbox_fakes import dkg_client_fake
 
 blackbox = load_blackbox()
 hooks = load_blackbox("guard.hooks")
@@ -127,8 +128,8 @@ def test_release_floor_completion_uses_deduplicated_rule_target(monkeypatch):
         context_graph_id=constants.DEFAULT_CONTEXT_GRAPH_ID,
         graph_peer_id=constants.DEFAULT_GRAPH_PEER_ID,
     )
-    monkeypatch.setattr(sync_command, "DkgClient", Client)
-    monkeypatch.setattr(managed_node, "DkgClient", Client)
+    monkeypatch.setattr(sync_command, "DkgClient", dkg_client_fake(Client))
+    monkeypatch.setattr(managed_node, "DkgClient", dkg_client_fake(Client))
     monkeypatch.setattr(sync_command, "load_blackbox_config", lambda: cfg)
     monkeypatch.setattr(sync_command.ruleset, "refresh", lambda *_args, **_kwargs: LocalRules())
     monkeypatch.setattr(sync_command.sync_state, "write", lambda *_args, **_kwargs: {})
@@ -536,8 +537,8 @@ def test_managed_dkg_restart_waits_for_draining_worker_before_start(tmp_path, mo
     monkeypatch.setattr(managed_node.subprocess, "run", run)
     monkeypatch.setattr(managed_node.psutil, "Process", process)
     monkeypatch.setattr(managed_node.node_service, "registered", lambda _cfg: None)  # no service; not the real LaunchAgent (KI-465)
-    monkeypatch.setattr(sync_command, "DkgClient", Client)
-    monkeypatch.setattr(managed_node, "DkgClient", Client)
+    monkeypatch.setattr(sync_command, "DkgClient", dkg_client_fake(Client))
+    monkeypatch.setattr(managed_node, "DkgClient", dkg_client_fake(Client))
     monkeypatch.setattr(sync_command.time, "sleep", sleeps.append)
 
     managed_node._restart_managed_dkg(cfg)
@@ -589,8 +590,8 @@ def test_blackbox_sync_require_rules_fails_empty_ruleset(monkeypatch, capsys):
                 "skill": 0,
             }
 
-    monkeypatch.setattr(sync_command, "DkgClient", FakeClient)
-    monkeypatch.setattr(managed_node, "DkgClient", FakeClient)
+    monkeypatch.setattr(sync_command, "DkgClient", dkg_client_fake(FakeClient))
+    monkeypatch.setattr(managed_node, "DkgClient", dkg_client_fake(FakeClient))
     monkeypatch.setattr(
         sync_command, "load_blackbox_config",
         lambda: config_mod.BlackboxConfig(context_graph_id="cg", dkg_url=constants.DEFAULT_DKG_URL),
@@ -625,8 +626,8 @@ def test_blackbox_sync_public_graph_subscribes_without_join(monkeypatch):
                 "skill": 0,
             }
 
-    monkeypatch.setattr(sync_command, "DkgClient", FakeClient)
-    monkeypatch.setattr(managed_node, "DkgClient", FakeClient)
+    monkeypatch.setattr(sync_command, "DkgClient", dkg_client_fake(FakeClient))
+    monkeypatch.setattr(managed_node, "DkgClient", dkg_client_fake(FakeClient))
     monkeypatch.setattr(
         sync_command, "load_blackbox_config",
         lambda: config_mod.BlackboxConfig(context_graph_id="cg", dkg_url=constants.DEFAULT_DKG_URL),
@@ -680,8 +681,8 @@ def test_blackbox_sync_waits_for_custom_public_graph_catchup(monkeypatch):
 
     refreshes = []
     peeks = []
-    monkeypatch.setattr(sync_command, "DkgClient", FakeClient)
-    monkeypatch.setattr(managed_node, "DkgClient", FakeClient)
+    monkeypatch.setattr(sync_command, "DkgClient", dkg_client_fake(FakeClient))
+    monkeypatch.setattr(managed_node, "DkgClient", dkg_client_fake(FakeClient))
     monkeypatch.setattr(
         sync_command, "load_blackbox_config",
         lambda: config_mod.BlackboxConfig(
@@ -751,8 +752,8 @@ def test_custom_public_sync_retries_forced_refresh_lock_contention(monkeypatch):
             raise ruleset_mod.RulesetRefreshLockUnavailable("busy")
         return FakeRuleset(2)
 
-    monkeypatch.setattr(sync_command, "DkgClient", FakeClient)
-    monkeypatch.setattr(managed_node, "DkgClient", FakeClient)
+    monkeypatch.setattr(sync_command, "DkgClient", dkg_client_fake(FakeClient))
+    monkeypatch.setattr(managed_node, "DkgClient", dkg_client_fake(FakeClient))
     monkeypatch.setattr(
         sync_command, "load_blackbox_config",
         lambda: config_mod.BlackboxConfig(context_graph_id="owner/custom"),
@@ -803,8 +804,8 @@ def test_custom_public_sync_retries_incomplete_forced_query(monkeypatch):
             raise ruleset_mod.RulesetRefreshIncomplete("empty snapshot")
         return FakeRuleset()
 
-    monkeypatch.setattr(sync_command, "DkgClient", FakeClient)
-    monkeypatch.setattr(managed_node, "DkgClient", FakeClient)
+    monkeypatch.setattr(sync_command, "DkgClient", dkg_client_fake(FakeClient))
+    monkeypatch.setattr(managed_node, "DkgClient", dkg_client_fake(FakeClient))
     monkeypatch.setattr(
         sync_command, "load_blackbox_config",
         lambda: config_mod.BlackboxConfig(context_graph_id="owner/custom"),
@@ -894,8 +895,8 @@ def test_custom_public_sync_retries_terminal_job_and_adopts_replacement(
         def graph_count(self, source):
             return self.public if source == "public" else 0
 
-    monkeypatch.setattr(sync_command, "DkgClient", FakeClient)
-    monkeypatch.setattr(managed_node, "DkgClient", FakeClient)
+    monkeypatch.setattr(sync_command, "DkgClient", dkg_client_fake(FakeClient))
+    monkeypatch.setattr(managed_node, "DkgClient", dkg_client_fake(FakeClient))
     monkeypatch.setattr(
         sync_command, "load_blackbox_config",
         lambda: config_mod.BlackboxConfig(context_graph_id="owner/custom"),
@@ -956,8 +957,8 @@ def test_custom_public_sync_polls_original_job_when_latest_changes(monkeypatch):
         def graph_count(self, source):
             return 1 if source == "public" else 0
 
-    monkeypatch.setattr(sync_command, "DkgClient", FakeClient)
-    monkeypatch.setattr(managed_node, "DkgClient", FakeClient)
+    monkeypatch.setattr(sync_command, "DkgClient", dkg_client_fake(FakeClient))
+    monkeypatch.setattr(managed_node, "DkgClient", dkg_client_fake(FakeClient))
     monkeypatch.setattr(
         sync_command, "load_blackbox_config",
         lambda: config_mod.BlackboxConfig(context_graph_id="owner/custom"),
@@ -1016,8 +1017,8 @@ def test_custom_public_sync_retries_exact_job_after_transient_status_error(
         def graph_count(self, source):
             return 1 if source == "public" else 0
 
-    monkeypatch.setattr(sync_command, "DkgClient", FakeClient)
-    monkeypatch.setattr(managed_node, "DkgClient", FakeClient)
+    monkeypatch.setattr(sync_command, "DkgClient", dkg_client_fake(FakeClient))
+    monkeypatch.setattr(managed_node, "DkgClient", dkg_client_fake(FakeClient))
     monkeypatch.setattr(
         sync_command, "load_blackbox_config",
         lambda: config_mod.BlackboxConfig(context_graph_id="owner/custom"),
@@ -1101,8 +1102,8 @@ def test_blackbox_sync_waits_for_public_vm_when_community_arrives_first(monkeypa
         refreshes.append((cfg, client))
         return FakeRuleset(public=2 if len(refreshes) > 1 else 0)
 
-    monkeypatch.setattr(sync_command, "DkgClient", FakeClient)
-    monkeypatch.setattr(managed_node, "DkgClient", FakeClient)
+    monkeypatch.setattr(sync_command, "DkgClient", dkg_client_fake(FakeClient))
+    monkeypatch.setattr(managed_node, "DkgClient", dkg_client_fake(FakeClient))
     monkeypatch.setattr(
         sync_command, "load_blackbox_config",
         lambda: config_mod.BlackboxConfig(
@@ -1199,8 +1200,8 @@ def test_blackbox_sync_recovers_curator_snapshot_then_waits_for_vm(
             return [{"identifier": f"dep:{i}"} for i in range(5_254, 23_001)]
 
     states = []
-    monkeypatch.setattr(sync_command, "DkgClient", FakeClient)
-    monkeypatch.setattr(managed_node, "DkgClient", FakeClient)
+    monkeypatch.setattr(sync_command, "DkgClient", dkg_client_fake(FakeClient))
+    monkeypatch.setattr(managed_node, "DkgClient", dkg_client_fake(FakeClient))
     monkeypatch.setattr(sync_command.sync_state, "write", lambda status, **data: states.append((status, data)))
     monkeypatch.setattr(
         sync_command, "load_blackbox_config",
@@ -1301,8 +1302,8 @@ def test_blackbox_sync_uses_authoritative_publisher_for_empty_local_store(
                 return [{"identifier": f"dep:{index}"} for index in range(self.public)]
             return []
 
-    monkeypatch.setattr(sync_command, "DkgClient", FakeClient)
-    monkeypatch.setattr(managed_node, "DkgClient", FakeClient)
+    monkeypatch.setattr(sync_command, "DkgClient", dkg_client_fake(FakeClient))
+    monkeypatch.setattr(managed_node, "DkgClient", dkg_client_fake(FakeClient))
     monkeypatch.setattr(
         sync_command, "load_blackbox_config",
         lambda: config_mod.BlackboxConfig(
@@ -1385,8 +1386,8 @@ def test_required_release_sync_fails_when_subscription_cannot_be_persisted(
         state.update(status=status, **details)
         return dict(state)
 
-    monkeypatch.setattr(sync_command, "DkgClient", FakeClient)
-    monkeypatch.setattr(managed_node, "DkgClient", FakeClient)
+    monkeypatch.setattr(sync_command, "DkgClient", dkg_client_fake(FakeClient))
+    monkeypatch.setattr(managed_node, "DkgClient", dkg_client_fake(FakeClient))
     monkeypatch.setattr(
         sync_command, "load_blackbox_config",
         lambda: config_mod.BlackboxConfig(
@@ -1463,8 +1464,8 @@ def test_blackbox_sync_fails_instead_of_waiting_on_empty_zero_insert_snapshot(
         def graph_count(self, _source):
             return 0
 
-    monkeypatch.setattr(sync_command, "DkgClient", FakeClient)
-    monkeypatch.setattr(managed_node, "DkgClient", FakeClient)
+    monkeypatch.setattr(sync_command, "DkgClient", dkg_client_fake(FakeClient))
+    monkeypatch.setattr(managed_node, "DkgClient", dkg_client_fake(FakeClient))
     monkeypatch.setattr(
         sync_command, "load_blackbox_config",
         lambda: config_mod.BlackboxConfig(
@@ -1544,8 +1545,8 @@ def test_required_release_sync_persists_subscription_after_direct_connect_failur
         def graph_count(self, _source):
             return 0
 
-    monkeypatch.setattr(sync_command, "DkgClient", FakeClient)
-    monkeypatch.setattr(managed_node, "DkgClient", FakeClient)
+    monkeypatch.setattr(sync_command, "DkgClient", dkg_client_fake(FakeClient))
+    monkeypatch.setattr(managed_node, "DkgClient", dkg_client_fake(FakeClient))
     monkeypatch.setattr(
         sync_command, "load_blackbox_config",
         lambda: config_mod.BlackboxConfig(
@@ -1720,8 +1721,8 @@ def test_blackbox_sync_does_not_accept_deferred_catchup_as_complete(
                 return [{"identifier": f"dep:{index}"} for index in range(4)]
             return []
 
-    monkeypatch.setattr(sync_command, "DkgClient", FakeClient)
-    monkeypatch.setattr(managed_node, "DkgClient", FakeClient)
+    monkeypatch.setattr(sync_command, "DkgClient", dkg_client_fake(FakeClient))
+    monkeypatch.setattr(managed_node, "DkgClient", dkg_client_fake(FakeClient))
     monkeypatch.setattr(
         sync_command, "load_blackbox_config",
         lambda: config_mod.BlackboxConfig(
@@ -1778,8 +1779,8 @@ def test_blackbox_sync_does_not_fall_back_to_generic_running_catchup(monkeypatch
             return {"jobId": "fresh", "status": "running"}
 
     cached = ruleset_mod.Ruleset()
-    monkeypatch.setattr(sync_command, "DkgClient", FakeClient)
-    monkeypatch.setattr(managed_node, "DkgClient", FakeClient)
+    monkeypatch.setattr(sync_command, "DkgClient", dkg_client_fake(FakeClient))
+    monkeypatch.setattr(managed_node, "DkgClient", dkg_client_fake(FakeClient))
     monkeypatch.setattr(
         sync_command, "load_blackbox_config",
         lambda: config_mod.BlackboxConfig(
@@ -2527,8 +2528,8 @@ def test_blackbox_sync_ctrl_c_records_cancellation_and_returns_130(monkeypatch, 
         state.update(status=status, pid=os.getpid(), **details)
         return dict(state)
 
-    monkeypatch.setattr(sync_command, "DkgClient", FakeClient)
-    monkeypatch.setattr(managed_node, "DkgClient", FakeClient)
+    monkeypatch.setattr(sync_command, "DkgClient", dkg_client_fake(FakeClient))
+    monkeypatch.setattr(managed_node, "DkgClient", dkg_client_fake(FakeClient))
     monkeypatch.setattr(
         sync_command, "load_blackbox_config",
         lambda: config_mod.BlackboxConfig(
@@ -2635,8 +2636,8 @@ def test_blackbox_sync_does_not_accept_stale_public_rows_after_fresh_catchup_fai
         def graph_count(self, source):
             return 2 if source == "public" else 0
 
-    monkeypatch.setattr(sync_command, "DkgClient", FakeClient)
-    monkeypatch.setattr(managed_node, "DkgClient", FakeClient)
+    monkeypatch.setattr(sync_command, "DkgClient", dkg_client_fake(FakeClient))
+    monkeypatch.setattr(managed_node, "DkgClient", dkg_client_fake(FakeClient))
     monkeypatch.setattr(
         sync_command, "load_blackbox_config",
         lambda: config_mod.BlackboxConfig(
@@ -2707,8 +2708,8 @@ def test_blackbox_sync_uses_curator_when_generic_catchup_peer_fails(monkeypatch,
                 return [{"identifier": f"dep:{index}"} for index in range(self.public)]
             return [{"identifier": "dep:2"}]
 
-    monkeypatch.setattr(sync_command, "DkgClient", FakeClient)
-    monkeypatch.setattr(managed_node, "DkgClient", FakeClient)
+    monkeypatch.setattr(sync_command, "DkgClient", dkg_client_fake(FakeClient))
+    monkeypatch.setattr(managed_node, "DkgClient", dkg_client_fake(FakeClient))
     monkeypatch.setattr(
         sync_command, "load_blackbox_config",
         lambda: config_mod.BlackboxConfig(

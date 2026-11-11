@@ -13,6 +13,7 @@ from plugins.blackbox.community import pulse as pulse_module
 from plugins.blackbox.kernel.config import BlackboxConfig
 from plugins.blackbox.ruleset import community_tier, compiler, refresh_cycle
 from plugins.blackbox.ruleset import pulse_beat
+from _blackbox_fakes import dkg_client_fake
 
 VM_GRAPH = GRAPH   # one graph (2026-10-16): the community lives in the verified graph's shared memory
 THREAT = "ioc:domain:fresh.example"
@@ -155,7 +156,7 @@ def test_a_changed_graph_re_applies_the_community_tier_and_writes_it_through(mon
     """The whole beat: probe → changed → reapply onto the cached generation → disk + memory."""
     cfg = BlackboxConfig(report=True, context_graph_id=VM_GRAPH, community_poll_interval=20)
     graph = _Graph([signed_row(THREAT, Reporter("0xa"))])
-    monkeypatch.setattr(pulse_beat, "DkgClient", lambda *a, **k: graph)
+    monkeypatch.setattr(pulse_beat, "DkgClient", dkg_client_fake(lambda *a, **k: graph))
     rs = compiler.Ruleset(context_graph_id=VM_GRAPH)
     rs.synced_at = time.time()
     refresh_cycle._memory.store(rs)
@@ -176,7 +177,7 @@ def test_a_process_that_starts_with_an_empty_tier_applies_the_reports_already_th
     first full refresh was an hour away. The first probe now applies when the cached tier is empty."""
     cfg = BlackboxConfig(report=True, context_graph_id=VM_GRAPH, community_poll_interval=20)
     graph = _Graph([signed_row(THREAT, Reporter("0xa"))])          # the report is ALREADY there
-    monkeypatch.setattr(pulse_beat, "DkgClient", lambda *a, **k: graph)
+    monkeypatch.setattr(pulse_beat, "DkgClient", dkg_client_fake(lambda *a, **k: graph))
     rs = compiler.Ruleset(context_graph_id=VM_GRAPH)
     rs.synced_at = time.time()
     refresh_cycle._memory.store(rs)                                   # no community tier yet
@@ -238,7 +239,7 @@ def test_a_wedged_beat_does_not_stall_the_pulse_forever(monkeypatch):
 
 def test_the_pulse_is_off_without_a_graph_or_with_interval_zero(monkeypatch):
     called = []
-    monkeypatch.setattr(pulse_beat, "DkgClient", lambda *a, **k: called.append(1))
+    monkeypatch.setattr(pulse_beat, "DkgClient", dkg_client_fake(lambda *a, **k: called.append(1)))
     assert pulse_beat.pulse(BlackboxConfig(context_graph_id="", community_poll_interval=20)) is False
     assert pulse_beat.pulse(BlackboxConfig(context_graph_id=GRAPH, community_poll_interval=0)) is False
     assert called == []
@@ -248,7 +249,7 @@ def test_the_pulse_retries_refused_shares_on_its_beat(monkeypatch, tmp_path):
     from plugins.blackbox.community import share_retry
     cfg = BlackboxConfig(report=True, context_graph_id=VM_GRAPH, community_poll_interval=20)
     drained = threading.Event()
-    monkeypatch.setattr(pulse_beat, "DkgClient", lambda *a, **k: _Graph())
+    monkeypatch.setattr(pulse_beat, "DkgClient", dkg_client_fake(lambda *a, **k: _Graph()))
     monkeypatch.setattr(community, "retry_due_shares", lambda client, cfg, queue=None: drained.set() or 0)
     assert pulse_beat.pulse(cfg) is True
     assert drained.wait(5)
@@ -282,7 +283,7 @@ def test_the_beat_runs_membership_so_a_fresh_node_subscribes_without_a_full_refr
     for 7+ minutes. The beat always runs, so membership — now the verified graph's
     subscription with its shared memory — runs on the beat."""
     calls = []
-    monkeypatch.setattr(pulse_beat, "DkgClient", lambda *a, **k: object())
+    monkeypatch.setattr(pulse_beat, "DkgClient", dkg_client_fake(lambda *a, **k: object()))
     monkeypatch.setattr(pulse_beat.community, "ensure_community_subscription",
                         lambda client, cfg: calls.append(cfg.context_graph_id) or (True, "subscribed"))
     monkeypatch.setattr(refresh_cycle, "_retry_shares", lambda client, cfg: None)   # lazy import inside the beat

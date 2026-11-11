@@ -26,6 +26,7 @@ from pathlib import Path
 import pytest
 
 from _community_rows import GRAPH, NETWORK, Reporter, signed_dispute_row, signed_retraction_row, signed_row
+from _blackbox_fakes import dkg_client_fake
 
 REPO = Path(__file__).resolve().parents[2]
 SCRIPT = Path(__file__).with_name("dashboard_browser_pass.mjs")
@@ -148,7 +149,7 @@ def fixture_app(monkeypatch, tmp_path):
         def __getattr__(self, name):
             return lambda *a, **k: {}
 
-    monkeypatch.setattr(dkg_module, "DkgClient", FakeDkg)       # create_app imports it from here
+    monkeypatch.setattr(dkg_module, "DkgClient", dkg_client_fake(FakeDkg))       # create_app imports it from here
     monkeypatch.setattr(ruleset_pkg, "peek", lambda cfg: rs)
     monkeypatch.setattr(ruleset_pkg, "get", lambda cfg=None: rs)
     monkeypatch.setattr(community, "read_verified_reports", lambda client, cfg: read)

@@ -55,7 +55,7 @@ def cmd_sync(args: argparse.Namespace) -> int:
     install brings the plugin only — it says how to install one instead of waiting on a node that
     is not there (exit 2 with ``--wait``); otherwise :func:`.command.cmd_sync`."""
     cfg = load_blackbox_config()
-    if not health.node_installed(cfg, DkgClient(url=cfg.dkg_url, dkg_home=cfg.dkg_home, config=cfg).reachable()):
+    if not health.node_installed(cfg, DkgClient.for_config(cfg).reachable()):
         print("Blackbox setup has not run, so there is no DKG node and no threat graph to sync. "
               f"To {health.NODE_INSTALL_HINT}.")
         return 2 if getattr(args, "wait", False) else 0

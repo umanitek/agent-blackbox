@@ -279,7 +279,7 @@ def build_context(compiled_ruleset: Optional[CompiledRuleset], *, authority: Opt
     """Resolve the context from the live node. The node must be reachable.
     *interest* — identifiers the verb is about (their statements are looked up)."""
     cfg = load_blackbox_config()
-    client = DkgClient(url=cfg.dkg_url, dkg_home=cfg.dkg_home, config=cfg)
+    client = DkgClient.for_config(cfg)
     status = client.status()
     environment = community.network_environment(status)
     view = community.read_curator_view(client, cfg, environment, interest=interest)

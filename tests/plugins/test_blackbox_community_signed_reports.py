@@ -19,6 +19,7 @@ from plugins.blackbox.community import report_builder, report_signer, sharing
 from plugins.blackbox.community.report_cli import report_command
 from plugins.blackbox.kernel import constants, signing
 from plugins.blackbox.kernel.config import BlackboxConfig
+from _blackbox_fakes import dkg_client_fake
 
 GRAPH = "0xabc/agent-blackbox-community-test"
 NETWORK = "test-network-id"
@@ -126,7 +127,7 @@ def test_automatic_share_refuses_when_it_cannot_sign(monkeypatch, tmp_path):
 def test_cli_report_refuses_when_it_cannot_sign(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("BLACKBOX_HOME", str(tmp_path))
     monkeypatch.setattr(report_command, "load_blackbox_config", lambda: BlackboxConfig(report=True, context_graph_id=GRAPH))
-    monkeypatch.setattr(report_command, "DkgClient", lambda **kw: _Status({}))
+    monkeypatch.setattr(report_command, "DkgClient", dkg_client_fake(lambda **kw: _Status({})))
     monkeypatch.setattr(report_command.identity, "reporter_address", lambda client: REPORTER)
     args = argparse.Namespace(false_positive=None, status=False)
     assert report_command.cmd_report(args) == 1

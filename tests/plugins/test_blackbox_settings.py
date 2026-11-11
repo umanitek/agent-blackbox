@@ -24,6 +24,7 @@ from pathlib import Path
 import pytest
 
 from _blackbox_loader import load_blackbox
+from _blackbox_fakes import dkg_client_fake
 
 
 config_mod = load_blackbox("kernel.config")
@@ -432,7 +433,7 @@ def test_report_and_audit_never_shares_custom_finding(monkeypatch):
             shared["called"] = True
             return {}
 
-    monkeypatch.setattr(guard_reporting, "DkgClient", FakeClient)
+    monkeypatch.setattr(guard_reporting, "DkgClient", dkg_client_fake(FakeClient))
     monkeypatch.setattr(
         hooks.audit,
         "write_private_audit_ka",
@@ -470,7 +471,7 @@ def test_report_and_audit_shares_non_custom_finding(monkeypatch):
             shared["called"] = True
             return {}
 
-    monkeypatch.setattr(guard_reporting, "DkgClient", FakeClient)
+    monkeypatch.setattr(guard_reporting, "DkgClient", dkg_client_fake(FakeClient))
     monkeypatch.setattr(hooks.audit, "write_private_audit_ka", lambda *a, **k: None)
     monkeypatch.setattr(hooks.audit, "recently_reported", lambda ident: False)
     monkeypatch.setattr(hooks.audit, "allow_report", lambda *a, **k: True)

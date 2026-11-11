@@ -168,7 +168,7 @@ def _read_rules(progress, *, complete):
     if not complete and time.monotonic() < progress.next_compile:
         return
     progress.next_compile = time.monotonic() + 30.0
-    client = DkgClient(url=cfg.dkg_url, dkg_home=cfg.dkg_home, config=cfg)
+    client = DkgClient.for_config(cfg)
     compiled = ruleset.refresh(cfg, client, wait_for_lock=False, force_query=complete)
     progress.usable = compiled.source_count("public")
 
