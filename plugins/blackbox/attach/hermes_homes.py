@@ -21,8 +21,11 @@ logger = logging.getLogger(__name__)
 
 
 
-def discover_hermes_homes() -> list[Path]:
+def discover_hermes_homes(*, include_managed: bool = False) -> list[Path]:
     """Return every local Hermes home directory to protect.
+
+    Blackbox's own chat profile (:func:`is_managed_blackbox_chat_profile`) is left out — it is
+    not an agent to defend — unless *include_managed* (uninstall: Blackbox must leave it too).
 
     Includes the resolved default home, ``~/.hermes``, every existing
     ``~/.hermes/profiles/*/`` directory, and (on Windows) ``%LOCALAPPDATA%/hermes``.
@@ -56,7 +59,7 @@ def discover_hermes_homes() -> list[Path]:
     try:
         if profiles_dir.is_dir():
             for child in sorted(profiles_dir.iterdir()):
-                if child.is_dir() and not is_managed_blackbox_chat_profile(child):
+                if child.is_dir() and (include_managed or not is_managed_blackbox_chat_profile(child)):
                     _add(child)
     except Exception:
         pass

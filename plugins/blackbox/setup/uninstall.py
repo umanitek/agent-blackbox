@@ -107,7 +107,7 @@ def build_plan(*, purge: bool, keep_logs: bool, now: Optional[_dt.datetime] = No
                homes: Optional[Sequence[Path]] = None) -> UninstallPlan:
     """Work out what this machine's Blackbox consists of. Reads only; changes nothing."""
     from ..attach import discover_hermes_homes   # attach's public entry
-    candidates = list(homes) if homes is not None else discover_hermes_homes()
+    candidates = list(homes) if homes is not None else discover_hermes_homes(include_managed=True)   # its chat profile too
     hermes_homes = tuple(h for h in dict.fromkeys(Path(h).expanduser() for h in candidates) if _names_blackbox(h))
     blackbox_home = constants.blackbox_home()
     notes: list[str] = []
@@ -262,10 +262,12 @@ These files are secrets: keep this folder private.
 @yaml_files.edits_config
 def _remove_from_agents(plan: UninstallPlan, report: list[str]) -> list[Path]:
     """Detach every agent; returns the Hermes homes where Hermes itself installed the plugin."""
-    from ..attach import detach_all   # attach's public entry
+    from ..attach import detach_all, detach_hermes, is_managed_blackbox_chat_profile   # attach's public entry
     detach_all(hermes=True, openclaw=True, remove_files=False, dry_run=False)
     hermes_installed: list[Path] = []
     for home in plan.hermes_homes:
+        if is_managed_blackbox_chat_profile(home):   # the sweep leaves Blackbox's own chat profile alone
+            detach_hermes(home)
         config = home / "config.yaml"
         data = yaml_files.load_yaml(config)   # an unreadable config has no entry to remove: never written
         entries = (data.get("plugins") or {}).get("entries")

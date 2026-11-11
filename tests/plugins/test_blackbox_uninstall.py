@@ -270,3 +270,20 @@ def test_a_config_whose_plugins_is_not_a_mapping_does_not_crash_the_plan(tmp_pat
     home.mkdir()
     yaml_files.dump_yaml(home / "config.yaml", {"plugins": plugins})
     assert uninstall._names_blackbox(home) is False
+
+
+def test_uninstall_also_removes_blackbox_from_its_own_chat_profile(machine):
+    """`blackbox chat` attaches Blackbox to its managed profile (~/.hermes/profiles/agent-blackbox).
+    Discovery hides that profile from the dashboard, and uninstall found homes only through
+    discovery, so the plugin copy and its `plugins.enabled` entry survived an uninstall."""
+    from plugins.blackbox.kernel import constants, yaml_files
+
+    chat = machine / ".hermes" / "profiles" / constants.BLACKBOX_CHAT_PROFILE
+    (chat / "plugins" / "blackbox").mkdir(parents=True)
+    (chat / "config.yaml").write_text("plugins:\n  enabled:\n    - blackbox\n", encoding="utf-8")
+    (chat / "SOUL.md").write_text(constants.BLACKBOX_CHAT_SOUL_MARKER + "\n", encoding="utf-8")   # as `blackbox chat` writes it
+    plan = dataclasses.replace(uninstall.build_plan(purge=False, keep_logs=False), system="Darwin")
+    assert chat in plan.hermes_homes
+    _execute(plan)
+    assert not (chat / "plugins" / "blackbox").exists()
+    assert "blackbox" not in (yaml_files.load_yaml(chat / "config.yaml").get("plugins") or {}).get("enabled", [])

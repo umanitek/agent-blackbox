@@ -69,6 +69,10 @@ that the two version fields agree.
 - **Blackbox talks to its own node and dashboard directly.** Requests to the local node and the
   local dashboard no longer go through a proxy set in the environment, and do not follow
   redirects.
+- **Uninstall also removes Blackbox from its own chat profile.** The plugin copy that
+  `blackbox chat` puts in `~/.hermes/profiles/agent-blackbox` was left behind. Uninstall also no
+  longer crashes on a config.yaml whose `plugins:` section is not a mapping, and `blackbox detach`
+  exits with an error when a target could not be detached.
 - **Uninstall stops only Blackbox's node.** The process number saved by the node is checked to be
   the Blackbox node before it is stopped. Uninstall and the dashboard's assistant also use the
   Hermes they are running in, not another `hermes` found on the PATH.
