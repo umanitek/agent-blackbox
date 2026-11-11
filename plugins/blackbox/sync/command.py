@@ -196,8 +196,7 @@ class _CatchupSync:
         self.authoritative_available = bool(cfg.graph_peer_id and callable(getattr(client, "catchup_from_peer", None)))
         self.deadline = time.monotonic() + max(1, int(getattr(args, "timeout", 180) or 180))
         # The catch-up job and the subscription.
-        self.subscribed = False
-        self.baseline_known, self.baseline_job_id = False, ""
+        self.subscribed, self.baseline_known, self.baseline_job_id = False, False, ""
         self.fresh_seen, self.fresh_job_id, self.refreshed_job_id = False, "", ""
         self.retry_attempts, self.next_retry_at = 0, 0.0
         self.last_subscribe_error, self.last_catchup = "", {}
@@ -207,9 +206,8 @@ class _CatchupSync:
         self.auth_target = 0
         # The rules.
         self.rs: Any = ruleset.Ruleset()
-        self.public_count = self.community_count = 0
+        self.public_count = self.community_count = self.attempt = 0
         self.initial_rules_ready = self.sync_complete = False
-        self.attempt = 0
 
     def run(self) -> int:
         """Run the sync to completion, failure or the deadline; the exit code (2 = required rules missing)."""
@@ -630,11 +628,13 @@ class _PinnedRecovery:
         verification / store phase can outlive a socket timeout; a misbehaving daemon must not pin
         a fresh install forever), printing proof of life while it is legitimately busy."""
         self.still_active = False
+        if not callable(catchup := self.catchup):   # run() refuses this before any pass (said for the type checker)
+            raise DkgError("this node cannot recover from a peer")
         outcome: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=1)
 
         def recover() -> None:
             try:
-                outcome.put(("ok", self.catchup(self.graph, self.peer, budget_ms=budget_ms)))
+                outcome.put(("ok", catchup(self.graph, self.peer, budget_ms=budget_ms)))
             except BaseException as exc:  # health: allow BLE001 -- handed back to the caller's thread, which re-raises it
                 outcome.put(("error", exc))
 

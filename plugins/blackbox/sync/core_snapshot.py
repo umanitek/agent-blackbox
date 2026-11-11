@@ -57,7 +57,7 @@ class _Progress:
         result = self.coverage if result is None else result
         state.write(status, context_graph_id=self.cfg.context_graph_id, phase=phase,
                     chain_evidence_mode=self.cfg.snapshot_sync.mode, job_id=self.job_id,
-                    public_entries=self.usable, count_kind=("sampled-usable-rules" if reads_graph_directly(self.cfg) else "compiled-rules"),
+                    public_entries=self.usable, count_kind=state.count_kind(reads_graph_directly(self.cfg)),
                     detection_ready=self.readiness_state == "ready", graph_complete=result.get("current") is True,
                     readiness_state=self.readiness_state, readiness_error=self.readiness_error,
                     complete=result.get("current") is True,

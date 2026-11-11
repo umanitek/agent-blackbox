@@ -99,7 +99,7 @@ class _Observation:
             graph_peer_id=cfg.graph_peer_id,
             phase=phase,
             public_entries=self.verified_rules,
-            count_kind="sampled-usable-rules" if reads_graph_directly(cfg) else "compiled-rules",
+            count_kind=sync_state.count_kind(reads_graph_directly(cfg)),
             community_entries=0,
             detection_ready=self.verified_rules > 0,
             graph_complete=False,
