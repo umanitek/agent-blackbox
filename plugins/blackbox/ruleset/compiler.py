@@ -3,7 +3,7 @@
 :class:`Ruleset` holds the O(1) lookup dicts detection matches against
 (dependency, ioc, injection, escalation, fileaccess, skill) plus the
 community display tier. :func:`build_from_rows` compiles verified rows (via
-:mod:`.row_adapters`) and :func:`verified_identifiers` answers the legacy proof check.
+:mod:`.row_adapters`).
 
 Usage: ``rs = build_from_rows(rows, cfg)``; detection reads ``rs.dependency`` etc.
 """
@@ -14,64 +14,13 @@ import copy
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, FrozenSet, Iterable, List, Optional, Sequence, Tuple
-from ..kernel import constants, threat_ids
-from . import anchors
-from ..kernel.dkg_client import DkgClient, extract_binding
-from . import graph_queries
+from typing import Any, Iterable, Optional
+from ..kernel import threat_ids
+from ..kernel.dkg_client import extract_binding
 from . import row_adapters
 from . import live
 
 logger = logging.getLogger(__name__)
-
-def _fetch_proofs(client: DkgClient, cg_id: str) -> dict[str, dict[str, Any]]:
-    """Legacy proofs from the VM view: subject -> {root, members}. Fail-open
-    to {} — no proofs simply means no community row can be promoted."""
-    try:
-        rows = client.query(graph_queries._PROOFS_SPARQL, cg_id, view=constants.VIEW_VERIFIABLE_MEMORY, on_error=None)
-    except Exception as exc:  # pragma: no cover - fail open
-        logger.debug("blackbox: proof query failed: %s", exc)
-        return {}
-    proofs: dict[str, dict[str, Any]] = {}
-    for row in rows or []:
-        subj = extract_binding(row.get("proof"))
-        root = extract_binding(row.get("root"))
-        member = extract_binding(row.get("member"))
-        if not (subj and root and member):
-            continue
-        entry = proofs.setdefault(subj, {"root": root, "members": set()})
-        if entry["root"] == root:
-            entry["members"].add(member)
-    return proofs
-
-
-def verified_identifiers(community_rows: list[dict[str, Any]], proofs: dict[str, dict[str, Any]]) -> set:
-    """Identifiers of SWM threat rows covered by a matching VM proof.
-
-    A proof verifies only when EVERY member is present locally and the batch
-    root recomputed over their anchor hashes equals the published root — a
-    tampered or missing row invalidates its whole batch, never silently
-    passes. Verified identifiers earn the blockable ``public`` tier.
-    """
-    candidates: list[dict[str, str]] = []
-    for row in community_rows:
-        # Hash only threat-subject rows: reports (urn:guardian:report:*) share
-        # the identifier and would shadow the threat row's hash.
-        if not extract_binding(row.get("threat")).startswith("urn:guardian:threat:"):
-            continue
-        candidates.append({k: extract_binding(row.get(k)) for k in anchors.ANCHOR_FIELDS})
-    if not candidates or not proofs:
-        return set()
-    hashes = anchors.anchor_hashes_from_rows(candidates)
-    ok: set = set()
-    for entry in proofs.values():
-        members = entry["members"]
-        if not members or not members.issubset(hashes.keys()):
-            continue
-        root = anchors.anchor_root((ident, hashes[ident]) for ident in members)
-        if root == entry["root"]:
-            ok |= members
-    return ok
 
 
 def _copy_community_stats(entry: dict[str, Any], rule: dict[str, Any]) -> None:

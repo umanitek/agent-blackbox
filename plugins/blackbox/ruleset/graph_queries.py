@@ -356,16 +356,3 @@ def signed_rows_sparql(graphs: Sequence[str], limit: int) -> str:
         return ""
     return (f"SELECT ?g ?t ?p ?o WHERE {{ VALUES ?g {{ {values} }} GRAPH ?g {{ "
             f"?t <{constants.SIGNED_STATEMENT_PRED}> ?signed . ?t ?p ?o . }} }} LIMIT {int(limit)}")
-
-
-# ---------------------------------------------------------------------------
-# Legacy proof verification (backward compatibility)
-# ---------------------------------------------------------------------------
-
-# This fallback keeps already-published proof-era rows effective.
-_PROOFS_SPARQL = sparql_text.GUARDIAN_PREFIX + """
-SELECT ?proof ?root ?member WHERE {
-  ?proof a g:CurationProof .
-  ?proof g:anchorRoot ?root .
-  ?proof g:anchorMember ?member .
-}"""
