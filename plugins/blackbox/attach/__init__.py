@@ -43,9 +43,11 @@ from .openclaw_bridge import attach_openclaw, detach_openclaw
 from .openclaw_discovery import discover_openclaw_workspaces
 from .plugin_copy import copy_plugin_tree, repo_root
 from .declined import is_declined
+from .report import AttachReport
 from .sweep import attach_all, attach_named, automatic_targets, detach_all, is_attached
 
 __all__ = [
+    "AttachReport",
     "add_attach_parsers",
     "attach_all",
     "attach_hermes",

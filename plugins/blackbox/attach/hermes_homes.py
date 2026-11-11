@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Optional
 from ..kernel import constants
 from . import plugin_copy
+from .report import AttachReport
 from ..kernel import yaml_files
 
 logger = logging.getLogger(__name__)
@@ -121,7 +122,7 @@ def _enable_in(data: dict[str, Any]) -> None:
 
 @declined.remembers("hermes", switched_off=False)
 @yaml_files.edits_config
-def attach_hermes(home: Path, *, dry_run: bool = False) -> dict[str, Any]:
+def attach_hermes(home: Path, *, dry_run: bool = False) -> AttachReport:
     """Enable Blackbox in a single Hermes *home*.
 
     Copies the plugin into ``<home>/plugins/blackbox/`` (only when missing or a
@@ -130,7 +131,7 @@ def attach_hermes(home: Path, *, dry_run: bool = False) -> dict[str, Any]:
     per-target report dict; fails open (``ok=False`` + ``error`` on failure).
     """
     home = home.expanduser()
-    report: dict[str, Any] = {
+    report: AttachReport = {
         "target": str(home),
         "kind": "hermes",
         "ok": False,
@@ -174,14 +175,14 @@ def attach_hermes(home: Path, *, dry_run: bool = False) -> dict[str, Any]:
 
 @declined.remembers("hermes", switched_off=True)
 @yaml_files.edits_config
-def detach_hermes(home: Path, *, remove_files: bool = False, dry_run: bool = False) -> dict[str, Any]:
+def detach_hermes(home: Path, *, remove_files: bool = False, dry_run: bool = False) -> AttachReport:
     """Disable Blackbox in a single Hermes *home*.
 
     Removes ``blackbox`` from ``plugins.enabled`` (idempotent) and, when
     *remove_files* is set, deletes ``<home>/plugins/blackbox/``. Fails open.
     """
     home = home.expanduser()
-    report: dict[str, Any] = {
+    report: AttachReport = {
         "target": str(home),
         "kind": "hermes",
         "ok": False,

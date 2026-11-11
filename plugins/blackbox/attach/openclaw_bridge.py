@@ -16,6 +16,7 @@ from typing import Any, Optional
 from ..kernel import constants
 from . import openclaw_discovery
 from . import plugin_copy
+from .report import AttachReport
 from ..kernel import yaml_files
 
 logger = logging.getLogger(__name__)
@@ -93,7 +94,7 @@ def _is_missing_pre_blackbox_load_path(value: Any) -> bool:
 
 
 @declined.remembers("openclaw", switched_off=False)
-def attach_openclaw(workspace: Path, *, dry_run: bool = False) -> dict[str, Any]:
+def attach_openclaw(workspace: Path, *, dry_run: bool = False) -> AttachReport:
     """Enable Blackbox in a single OpenClaw *workspace*.
 
     Backs up ``openclaw.json``, then idempotently merges:
@@ -106,7 +107,7 @@ def attach_openclaw(workspace: Path, *, dry_run: bool = False) -> dict[str, Any]
     """
     workspace = workspace.expanduser()
     config_path = openclaw_discovery._openclaw_config_path(workspace)
-    report: dict[str, Any] = {
+    report: AttachReport = {
         "target": str(workspace),
         "config_path": str(config_path),
         "kind": "openclaw",
@@ -163,7 +164,7 @@ def attach_openclaw(workspace: Path, *, dry_run: bool = False) -> dict[str, Any]
 ATTACH_BACKUP_SUFFIX, DETACH_BACKUP_SUFFIX = ".blackbox.bak", ".before-blackbox-detach.bak"
 
 
-def _rewrite_config(config_path: Path, data: dict[str, Any], report: dict[str, Any], backup_suffix: str) -> None:
+def _rewrite_config(config_path: Path, data: dict[str, Any], report: AttachReport, backup_suffix: str) -> None:
     """Write *data* to *config_path* as JSON, after keeping a copy of the file as it was.
 
     OpenClaw reads JSON5 but Blackbox writes plain JSON, so a config with comments or JSON5
@@ -263,11 +264,11 @@ def _merge_openclaw(data: dict[str, Any], cfg: dict[str, Any], load_path: Option
 
 
 @declined.remembers("openclaw", switched_off=True)
-def detach_openclaw(workspace: Path, *, dry_run: bool = False) -> dict[str, Any]:
+def detach_openclaw(workspace: Path, *, dry_run: bool = False) -> AttachReport:
     """Disable Blackbox in a single OpenClaw *workspace* (idempotent, fail-open)."""
     workspace = workspace.expanduser()
     config_path = openclaw_discovery._openclaw_config_path(workspace)
-    report: dict[str, Any] = {
+    report: AttachReport = {
         "target": str(workspace),
         "kind": "openclaw",
         "ok": False,

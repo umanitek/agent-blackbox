@@ -41,6 +41,7 @@ from typing import Any, Callable
 
 from ..kernel import constants
 from ..kernel.yaml_files import atomic_write
+from .report import AttachReport
 
 logger = logging.getLogger(__name__)
 
@@ -112,13 +113,13 @@ def _change(kind: str, target: str | Path, *, present: bool) -> None:
             logger.warning("blackbox.attach: could not save %s", FILE_NAME, exc_info=True)
 
 
-def remembers(kind: str, *, switched_off: bool) -> Callable[[Callable[..., dict[str, Any]]], Callable[..., dict[str, Any]]]:
+def remembers(kind: str, *, switched_off: bool) -> Callable[[Callable[..., AttachReport]], Callable[..., AttachReport]]:
     """Decorate an attach (``switched_off=False``) or detach (``switched_off=True``) of one
     target: after a real (not ``dry_run``) call whose report says ``ok``, record or forget the
     operator's switch-off for that target. The wrapped function's first argument is the target."""
-    def wrap(function: Callable[..., dict[str, Any]]) -> Callable[..., dict[str, Any]]:
+    def wrap(function: Callable[..., AttachReport]) -> Callable[..., AttachReport]:
         @functools.wraps(function)
-        def recorded(target: Path, *args: Any, dry_run: bool = False, **kwargs: Any) -> dict[str, Any]:
+        def recorded(target: Path, *args: Any, dry_run: bool = False, **kwargs: Any) -> AttachReport:
             report = function(target, *args, dry_run=dry_run, **kwargs)
             if not dry_run and report.get("ok"):
                 _change(kind, target, present=switched_off)
