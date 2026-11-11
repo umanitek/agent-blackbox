@@ -28,6 +28,7 @@ from ...kernel.dkg_client import extract_binding
 from ...kernel.signing import key_manifest
 from ...kernel.signing import RootPins
 from ..statements import curator_statements
+from . import ordered_policy
 
 
 def key_manifests_sparql(after: str) -> str:
@@ -74,26 +75,17 @@ def trusted_manifests(rows: Iterable[Mapping[str, Any]], environment: str, graph
     return verdicts
 
 
-Order = tuple[int, int]
+Order = ordered_policy.Order
+
+
+def _ordered(verdict: key_manifest.ManifestVerdict) -> ordered_policy.Ordered:
+    return ordered_policy.Ordered(verdict.manifest.order, verdict.manifest.content_hash(), verdict.freeze_only)
 
 
 def conflict_orders(manifests: Iterable[TrustedManifest]) -> set[Order]:
-    """The orders at which trusted manifests conflict: two different contents
-    at one (root epoch, version), pending ones included (a conflicting list
-    freezes at once — it is the defender's tool), or any freeze-only verdict
-    (K1: a pinned root signing another epoch may freeze, never lead — D30)."""
-    contents: dict[Order, set[str]] = {}
-    conflicts: set[Order] = set()
-    for verdict in map(_verdict, manifests):
-        contents.setdefault(verdict.manifest.order, set()).add(verdict.manifest.content_hash())
-        if verdict.freeze_only:
-            conflicts.add(verdict.manifest.order)
-    return conflicts | {order for order, hashes in contents.items() if len(hashes) > 1}
-
-
-def _freezing(conflicts: set[Order], sticky_order: Optional[Order]) -> set[Order]:
-    """The conflicts that move the reader: those ABOVE its sticky order (D31 rule 3)."""
-    return {order for order in conflicts if sticky_order is None or order > sticky_order}
+    """The orders at which trusted manifests conflict (:func:`.ordered_policy.conflict_orders`:
+    two contents at one order, pending ones included, or any freeze-only verdict — K1, D30)."""
+    return ordered_policy.conflict_orders(_ordered(_verdict(item)) for item in manifests)
 
 
 def effective_manifest(manifests: Iterable[TrustedManifest], today: str, sticky_order: Optional[Order] = None, *,
@@ -121,18 +113,9 @@ def _in_force_and_effective(manifests: Iterable[TrustedManifest], today: str, st
     """(the newest usable list past its time-lock, the list acted on) — the second
     is the first advanced through any narrowing lists (:func:`effective_manifest`)."""
     verdicts = [_verdict(item) for item in manifests]
-    conflicts = conflict_orders(verdicts)
-    freezing = _freezing(conflicts, sticky_order)
-    ceiling = min(freezing, default=None)
-
-    def usable(manifest: key_manifest.KeyManifest) -> bool:
-        if ceiling is not None and manifest.order >= ceiling:
-            return False
-        if manifest.order == sticky_order and sticky_hash:
-            return manifest.content_hash() == sticky_hash
-        return manifest.order not in conflicts
-
-    usable_manifests = [v.manifest for v in verdicts if not v.freeze_only and usable(v.manifest)]
+    conflicts = ordered_policy.conflict_orders(map(_ordered, verdicts))
+    usable_manifests = [v.manifest for v in verdicts if not v.freeze_only and ordered_policy.usable(
+        _ordered(v), conflicts=conflicts, sticky_order=sticky_order, sticky_hash=sticky_hash)]
     in_force = [m for m in usable_manifests if key_manifest.manifest_clock(m, today)[0] != "pending"]
     dated = [m for m in in_force if m.issued_day]
     current = key_manifest.newest(dated or in_force)
@@ -169,19 +152,17 @@ def freeze_order(manifests: Iterable[TrustedManifest], sticky_order: Optional[Or
     """The lowest conflict above *sticky_order* — the order this reader is frozen
     at (None: not frozen). The trust store keeps its rows (with the sticky
     list's), so a flood of conflicting higher versions cannot push the freeze out."""
-    return min(_freezing(conflict_orders(manifests), sticky_order), default=None)
+    return ordered_policy.freeze_order((_ordered(_verdict(item)) for item in manifests), sticky_order)
 
 
 def manifests_conflict(manifests: Iterable[TrustedManifest], sticky_order: Optional[Order] = None) -> bool:
     """R10b SECURITY: a conflict that FREEZES this reader — two trusted manifests
     with one (root epoch, version) but different content, or a freeze-only one,
     above *sticky_order* (all of them without one)."""
-    return bool(_freezing(conflict_orders(manifests), sticky_order))
+    return ordered_policy.freeze_order((_ordered(_verdict(item)) for item in manifests), sticky_order) is not None
 
 
 def ignored_conflict(manifests: Iterable[TrustedManifest], sticky_order: Optional[Order]) -> bool:
     """T1 SECURITY: a conflict at or below the sticky order — ignored (it cannot
     move this reader), but someone with a root key is signing old orders."""
-    if sticky_order is None:
-        return False
-    return any(order <= sticky_order for order in conflict_orders(manifests))
+    return ordered_policy.ignored_conflict((_ordered(_verdict(item)) for item in manifests), sticky_order)
