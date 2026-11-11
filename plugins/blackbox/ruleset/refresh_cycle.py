@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from typing import Optional
+from typing import Any, Optional
 from ..kernel import constants
 from ..kernel.config import BlackboxConfig, load_blackbox_config, reads_graph_directly
 from ..kernel.dkg_client import DkgClient
@@ -145,6 +145,34 @@ def refresh(
         return _refresh_unlocked(config, client, require_complete=force_query)
 
 
+class _StatusOnce:
+    """The node client for ONE refresh, asking the node for its status once (Proxy).
+
+    The store lanes, the scope's store address, the manifest environment, the migration
+    environment and the promoted copies each asked ``client.status(timeout=5.0)`` — up to five
+    calls of up to 5 s against a busy node, whose answers could disagree within one generation.
+    The first answer (or failure, re-raised) is what every reader of this refresh gets; every
+    other attribute is the wrapped client's."""
+
+    def __init__(self, client: Any) -> None:
+        self._client = client
+        self._answer: Optional[tuple[bool, Any]] = None   # (answered, the status or the error)
+
+    def status(self, timeout: Optional[float] = None) -> Any:
+        if self._answer is None:
+            try:
+                self._answer = (True, self._client.status(timeout=timeout) if timeout is not None else self._client.status())
+            except Exception as exc:   # health: allow BLE001 -- remembered and re-raised to every caller, as the node answered
+                self._answer = (False, exc)
+        answered, value = self._answer
+        if not answered:
+            raise value
+        return value
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._client, name)
+
+
 def _refresh_unlocked(
     config: Optional[BlackboxConfig] = None,
     client: Optional[DkgClient] = None,
@@ -156,7 +184,7 @@ def _refresh_unlocked(
     if reads_graph_directly(config):
         return refresh(config)  # internal/background callers also cannot export
     context_graph_id = config.context_graph_id
-    client = client or DkgClient.for_config(config)
+    client = _StatusOnce(client or DkgClient.for_config(config))   # one node status per refresh
     listing = _partition_listing(client, context_graph_id)   # ONE _meta read, shared with the scope
     # The verified (public) tier is the only one read; None = the read failed.
     public_rows = fetching.fetch_tier(client, context_graph_id, constants.VIEW_VERIFIABLE_MEMORY, listing=listing)
