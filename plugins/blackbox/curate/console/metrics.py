@@ -42,7 +42,7 @@ from ...kernel.health import key_fingerprint, utc_day, utc_day_or
 from ...kernel.signing import CuratorStatement
 from .. import queue
 from ..context import CurateContext, verified_identifiers
-from ..lab.jobs import LabJobState, LabJobStore
+from ..lab.jobs import WAITING_STATES, LabJobStore
 from ..publishing.ledger import PublishLedger
 from ..sources import LookupItem, queue_metrics
 from ..proposals import DeliveryLedger
@@ -58,7 +58,6 @@ NEVER = "never"
 FLOOR_BATCHES = 2
 #: Reader update uptake is the share of installs on the newest release this long after it ships.
 UPTAKE_AFTER_SECONDS = 7 * 86_400
-_WAITING_LAB_STATES = (LabJobState.QUEUED, LabJobState.RUNNING)
 
 #: A reading of an age that may be "never" (a readable store that has no such event yet).
 Age = int | str
@@ -249,7 +248,7 @@ def _key_list_values(ctx: CurateContext, today: str) -> dict[str, object]:
 
 
 def _lab_values(store: LabJobStore, now: float) -> dict[str, object]:
-    waiting = [record for record in store.records() if record.state in _WAITING_LAB_STATES]
+    waiting = [record for record in store.records() if record.state in WAITING_STATES]
     oldest = min((record.job.requested_at for record in waiting), default=now)
     return {"lab_queue_depth": len(waiting), "lab_oldest_job_age_seconds": int(max(0.0, now - oldest))}
 

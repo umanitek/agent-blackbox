@@ -52,7 +52,7 @@ from ..context import LAB_EVIDENCE_STATEMENT, CurateContext, EvidenceDraft
 from ..queue import Lane
 from . import evidence_schema
 from .evidence_schema import Evidence, EvidenceError
-from .jobs import LabJob, LabJobRecord, LabJobState, LabJobStore, _write_atomic
+from .jobs import WAITING_STATES, LabJob, LabJobRecord, LabJobState, LabJobStore, _write_atomic
 from .transport import LabAnswer, LabOutcome, LabTransport
 
 logger = logging.getLogger(__name__)
@@ -225,7 +225,7 @@ class LabController:
         """jobs/h, queue depth and oldest job age, from the job store."""
         now = self._clock()
         records = self._store.records()
-        waiting = [r for r in records if r.state in (LabJobState.QUEUED, LabJobState.RUNNING)]
+        waiting = [r for r in records if r.state in WAITING_STATES]
         finished = [r for r in records if r.finished_at is not None and now - r.finished_at <= _HOUR]
         oldest = min((r.job.requested_at for r in waiting), default=now)
         return LabMetrics(jobs_per_hour=len(finished), queue_depth=len(waiting), oldest_job_age=now - oldest)

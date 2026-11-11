@@ -33,7 +33,7 @@ from typing import Any, Callable, Optional
 
 from ...kernel import display_safety, threat_ids
 from ..proposals import ConsentLedger, confirmation_code
-from .jobs import LabJobState, LabJobStore, strip_query, threat_digest
+from .jobs import WAITING_STATES, LabJobState, LabJobStore, strip_query, threat_digest
 from .trigger import LabRequests
 
 STATUS = "status"
@@ -99,7 +99,7 @@ def status_command(*, store: Optional[LabJobStore] = None, requests: Optional[La
     counts = Counter(record.state for record in records)
     print("lab jobs: " + ", ".join(f"{state.value} {counts.get(state, 0)}"
                                    for state in LabJobState if state is not LabJobState.REFUSED))
-    waiting = [r.job.requested_at for r in records if r.state in (LabJobState.QUEUED, LabJobState.RUNNING)]
+    waiting = [r.job.requested_at for r in records if r.state in WAITING_STATES]
     if waiting:
         print(f"oldest waiting job: {int((clock() - min(waiting)) // 60)} min")
     print(f"typed requests on file: {len((requests or LabRequests()).requested_digests())}")

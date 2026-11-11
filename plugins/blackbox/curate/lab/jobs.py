@@ -97,6 +97,10 @@ class LabJob:
     requested_at: float
 
 
+#: The jobs not finished yet — what the controller's metrics, the console and `lab status`
+#: count as the queue (and the oldest of them as its age).
+WAITING_STATES = frozenset({LabJobState.QUEUED, LabJobState.RUNNING})
+
 @dataclass(frozen=True)
 class LabJobRecord:
     """A job and where it stands. ``evidence_sha256`` names the stored evidence
