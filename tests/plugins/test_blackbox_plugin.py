@@ -3258,7 +3258,7 @@ def test_share_sighting_forwards_candidate_fields(monkeypatch, tmp_path):
             shared["quads"] = q
             return {}
 
-    cfg = config_mod.BlackboxConfig(context_graph_id="0xabc/agent-blackbox-community-test")
+    cfg = config_mod.BlackboxConfig(report=True, context_graph_id="0xabc/agent-blackbox-community-test")   # sharing on
     finding = {
         "identifier": "fileaccess:read_file:ssh-private-key",
         "category": "fileaccess", "severity": "critical", "confirmed": False,

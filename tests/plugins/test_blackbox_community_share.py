@@ -366,8 +366,12 @@ class _SendClient:
         return self.result if self.result is not None else {"state": "succeeded"}
 
 
+#: Sharing switched on (consent is in force by the suite's autouse stub).
+SHARING_ON = BlackboxConfig(report=True, context_graph_id=DEV_GRAPH)
+
+
 def _send(client, name="report-x"):
-    return community_sharing.send_report(client, DEV_GRAPH, name, [])
+    return community_sharing.send_report(client, DEV_GRAPH, name, [], cfg=SHARING_ON)
 
 
 def test_new_report_is_accepted(bb_home):
@@ -424,3 +428,40 @@ def test_auto_share_of_an_existing_report_is_ledgered_as_already_shared(bb_home)
     row = audit.read_share_ledger(limit=1)[0]
     assert row["identifier"] == "ioc:domain:again.example"
     assert row["outcome"] == "already-shared" and row["ok"] is False
+
+
+# --------------------------------------------------------------------------- the gate at the send itself
+
+def test_nothing_is_sent_while_sharing_is_off(monkeypatch, tmp_path):
+    """The rule "sharing on AND consent in force" is enforced where data leaves the machine,
+    not only by each sender beforehand: a sender that forgot its own check still sends nothing."""
+    monkeypatch.setenv("BLACKBOX_HOME", str(tmp_path))
+    client = _SendClient()
+    outcome, why = community_sharing.send_report(client, DEV_GRAPH, "report-x", [],
+                                                 cfg=BlackboxConfig(report=False, context_graph_id=DEV_GRAPH))
+    assert outcome is community_sharing.ShareOutcome.NOT_ALLOWED and why and client.calls == 0
+
+
+def test_nothing_is_sent_once_consent_is_withdrawn(monkeypatch, tmp_path, real_consent):
+    monkeypatch.setenv("BLACKBOX_HOME", str(tmp_path))
+    client = _SendClient()
+    outcome, why = community_sharing.send_report(client, DEV_GRAPH, "report-x", [], cfg=SHARING_ON)
+    assert outcome is community_sharing.ShareOutcome.NOT_ALLOWED and client.calls == 0
+    assert why == real_consent.why_not()
+
+
+def test_a_statement_that_only_reduces_is_sent_with_sharing_off(monkeypatch, tmp_path, real_consent):
+    """Disputes and retractions reduce enforcement: they get through whatever the switch says
+    (LES-016), as `blackbox report --false-positive / --retract` always allowed."""
+    monkeypatch.setenv("BLACKBOX_HOME", str(tmp_path))
+    client = _SendClient()
+    outcome, _ = community_sharing.send_report(client, DEV_GRAPH, "fp-x", [], reduces=True,
+                                               cfg=BlackboxConfig(report=False, context_graph_id=DEV_GRAPH))
+    assert outcome is community_sharing.ShareOutcome.ACCEPTED and client.calls == 1
+
+
+def test_every_sender_passes_its_config_to_the_gate():
+    """No caller can reach the network without handing the gate its config."""
+    import inspect
+
+    assert inspect.signature(community_sharing.send_report).parameters["cfg"].default is inspect.Parameter.empty

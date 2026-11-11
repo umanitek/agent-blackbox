@@ -253,9 +253,7 @@ def publish_due_digests(client: DkgClient, cfg: BlackboxConfig, tally: Optional[
     an identity and a signer. Every attempt is ledgered (category
     ``digest``). Fail-open."""
     from . import consent   # round 4: withdrawal must stop the weekly digest too
-    if not consent.in_force():
-        return 0
-    if not cfg.community_enabled:
+    if not consent.sharing_on(cfg):   # send_report enforces it too
         return 0
     tally = tally or SightingTally()
     due = tally.due_weeks()
@@ -271,7 +269,9 @@ def publish_due_digests(client: DkgClient, cfg: BlackboxConfig, tally: Optional[
         entries = build_digest(tally.counts(week))
         quads = build_digest_quads(reporter_address=reporter, week=week, entries=entries, signer=signer)
         name = f"digest-{threat_ids.stable_hash(reporter + week, 16)}"
-        outcome, detail = sharing.send_report(client, cfg.context_graph_id, name, quads)
+        outcome, detail = sharing.send_report(client, cfg.context_graph_id, name, quads, cfg=cfg)
+        if outcome is sharing.ShareOutcome.NOT_ALLOWED:   # switched off meanwhile: the week stays unpublished
+            break
         audit.record_share_outcome(identifier=f"digest:{week}", category="digest", severity="info",
                                    subject=digest_subject(reporter, week), asset_name=name,
                                    ok=outcome is sharing.ShareOutcome.ACCEPTED, error=detail, outcome=outcome.value)

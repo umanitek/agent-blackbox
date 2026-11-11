@@ -145,12 +145,15 @@ class ShareOutcome(Enum):
     ``ACCEPTED`` — a new report reached the network. ``REJECTED_SAME_VERSION``
     — this exact report was shared before; peers refuse a same-version
     re-share (KI-103), so it is not re-sent and is NOT counted as a new
-    contribution. ``FAILED`` — the send failed.
+    contribution. ``FAILED`` — the send failed. ``NOT_ALLOWED`` — nothing was sent:
+    sharing is off or consent is not in force (the detail says which); the caller stops
+    and keeps what it had, it is not a failure to retry.
     """
 
     ACCEPTED = "accepted"
     REJECTED_SAME_VERSION = "already-shared"
     FAILED = "failed"
+    NOT_ALLOWED = "not-allowed"
 
 
 #: The daemon's reply when a report with this name already exists sealed and it
@@ -160,15 +163,25 @@ ALREADY_SEALED_REPLY = "is not an active working memory draft"
 
 
 def send_report(client: DkgClient, graph: str, name: str, quads: list[dict[str, str]],
-                lane: str = constants.COMMUNITY_SUB_GRAPH) -> tuple[ShareOutcome, str]:
+                lane: str = constants.COMMUNITY_SUB_GRAPH, *, cfg: Any,
+                reduces: bool = False) -> tuple[ShareOutcome, str]:
     """Send one built report into *lane* (a shared-memory sub-graph) and say honestly
     what happened: (outcome, detail).
+
+    THE outbound gate is here, where data leaves the machine: unless *reduces*, nothing
+    is sent while ``consent.sharing_on(cfg)`` is false (``NOT_ALLOWED``, the reason in
+    *detail*). Senders may check first to skip their work, but a sender that forgets
+    still sends nothing. *reduces* — a dispute or a retraction: it only lowers
+    enforcement, so it goes through whatever the switch says (LES-016). *cfg* has no
+    default on purpose: every caller hands the gate its config.
 
     A report this node already got onto the network (its ledger says so) is
     not re-sent; neither is one the daemon reports as already sealed. Both
     come back as REJECTED_SAME_VERSION — before KI-180 the first was logged
     as a failure, before KI-104 the second as a success.
     """
+    if not reduces and not consent.sharing_on(cfg):
+        return ShareOutcome.NOT_ALLOWED, consent.why_not() or "community sharing is off"
     if audit.previously_accepted(name):
         return ShareOutcome.REJECTED_SAME_VERSION, "already shared earlier; a same-version re-share is refused by peers"
     try:
@@ -236,7 +249,7 @@ def _share_sighting(
             signer=signer,
             **fields,
         )
-        outcome, detail = send_report(client, cfg.context_graph_id, name, q, lane=community_lane(cfg))
+        outcome, detail = send_report(client, cfg.context_graph_id, name, q, lane=community_lane(cfg), cfg=cfg)
     except Exception as exc:  # pragma: no cover - fail open (building the report failed)
         logger.debug("blackbox: sighting share error: %s", exc)
         _ledger_share(finding, subject, name, ok=False, error=str(exc), outcome=ShareOutcome.FAILED.value)
@@ -260,6 +273,9 @@ def _after_send(cfg: BlackboxConfig, finding: dict[str, Any], name: str, subject
     """Ledger one send; a refused real share is queued for retry, an accepted one kept alive.
     A sandbox test is only ledgered (in the sandbox folder): never retried, never kept alive."""
     identifier = str(finding.get("identifier") or "")
+    if outcome is ShareOutcome.NOT_ALLOWED:   # nothing left the machine: nothing to ledger or retry
+        logger.debug("blackbox: community share not sent: %s", detail)
+        return
     if cfg.community_sandbox:
         _ledger_share(finding, subject, name, ok=outcome is ShareOutcome.ACCEPTED, error=detail, outcome=outcome.value)
         return

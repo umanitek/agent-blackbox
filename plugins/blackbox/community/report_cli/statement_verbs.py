@@ -14,7 +14,7 @@ import argparse
 from typing import Optional
 
 from ... import audit
-from ...kernel import display_safety, threat_ids
+from ...kernel import constants, display_safety, threat_ids
 from ...kernel.dkg_client import DkgClient
 from .. import keep_alive as keep_alive_mod
 from .. import report_builder, report_schema, report_signer, share_retry, sharing
@@ -22,15 +22,18 @@ from .. import report_builder, report_schema, report_signer, share_retry, sharin
 
 def send_and_record(client: DkgClient, cfg, *, identifier: str, category: str, severity: str,
                      subject: str, name: str, quads: list[dict[str, str]],
-                     keep_alive: bool = False, lane: Optional[str] = None) -> tuple[sharing.ShareOutcome, str]:
+                     keep_alive: bool = False, lane: Optional[str] = None,
+                     reduces: bool = False) -> tuple[sharing.ShareOutcome, str]:
     """Send one built statement to the community and record the attempt
     in the local share ledger, success or failure (KI-015). Returns
     (outcome, detail) for the caller to report. *keep_alive* (reports only —
     disputes and retractions are final) remembers an ACCEPTED statement so this
     node re-publishes it each epoch (R5). *lane* is the sub-graph to send to (default: the
     community's reports; a report made in sandbox mode names the sandbox lane)."""
-    outcome, detail = (sharing.send_report(client, cfg.context_graph_id, name, quads, lane=lane) if lane
-                       else sharing.send_report(client, cfg.context_graph_id, name, quads))
+    outcome, detail = sharing.send_report(client, cfg.context_graph_id, name, quads,
+                                          lane=lane or constants.COMMUNITY_SUB_GRAPH, cfg=cfg, reduces=reduces)
+    if outcome is sharing.ShareOutcome.NOT_ALLOWED:   # nothing left the machine: no ledger row
+        return outcome, detail
     audit.record_share_outcome(
         identifier=identifier, category=category, severity=severity,
         subject=subject, asset_name=name, ok=outcome is sharing.ShareOutcome.ACCEPTED,
@@ -80,6 +83,9 @@ def _send_report(client: DkgClient, cfg, finding: dict, reporter: str, signer: r
     outcome, detail = send_and_record(client, cfg, identifier=identifier, category=finding["category"],
                                        severity=finding["severity"], subject=subject, name=name, quads=q,
                                        keep_alive=not sandbox, lane=sharing.community_lane(cfg))
+    if outcome is sharing.ShareOutcome.NOT_ALLOWED:
+        print(f"Not submitted: {display_safety.term_safe(detail, 160)}.")
+        return 2
     if outcome is sharing.ShareOutcome.FAILED and sandbox:   # a test is never queued for retry
         print(f"Sandbox test share refused: {display_safety.term_safe(detail, 160)}")
         return 1
@@ -122,7 +128,7 @@ def submit_false_positive(client: DkgClient, cfg, identifier: str, reason: Optio
     name = f"fp-{threat_ids.stable_hash(identifier + reporter, 16)}"
     subject = threat_ids.report_uri(identifier, reporter) + ":fp"
     outcome, detail = send_and_record(client, cfg, identifier=identifier, category="false-positive",
-                                       severity="info", subject=subject, name=name, quads=q)
+                                       severity="info", subject=subject, name=name, quads=q, reduces=True)
     if outcome is sharing.ShareOutcome.FAILED:
         print(f"Dispute FAILED: {display_safety.term_safe(detail, 160)}")
         print("The attempt is recorded in your local reports ledger.")
@@ -160,7 +166,7 @@ def submit_retraction(client: DkgClient, cfg, identifier: str, reporter: str,
     name = f"retract-{threat_ids.stable_hash(identifier + reporter, 16)}"
     subject = threat_ids.report_uri(identifier, reporter) + ":retract"
     outcome, detail = send_and_record(client, cfg, identifier=identifier, category="retraction",
-                                      severity="info", subject=subject, name=name, quads=quads)
+                                      severity="info", subject=subject, name=name, quads=quads, reduces=True)
     if outcome is sharing.ShareOutcome.FAILED:
         print(f"Retraction FAILED: {display_safety.term_safe(detail, 160)}")
         print("The attempt is recorded in your local reports ledger.")

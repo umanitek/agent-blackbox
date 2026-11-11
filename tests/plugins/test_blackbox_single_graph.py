@@ -101,7 +101,8 @@ def test_send_report_writes_into_the_lane_it_is_given(monkeypatch):
             return {}
 
     monkeypatch.setattr(sharing.audit, "previously_accepted", lambda name: False)
-    outcome, _ = sharing.send_report(_Client(), TEST_GRAPH, "sandbox-abc", [], lane=constants.SANDBOX_SUB_GRAPH)
+    on = bb_config.BlackboxConfig(report=True, context_graph_id=TEST_GRAPH)
+    outcome, _ = sharing.send_report(_Client(), TEST_GRAPH, "sandbox-abc", [], lane=constants.SANDBOX_SUB_GRAPH, cfg=on)
     assert outcome is sharing.ShareOutcome.ACCEPTED
     assert seen == {"graph": TEST_GRAPH, "name": "sandbox-abc", "sub_graph": "sandbox"}
 
@@ -330,8 +331,8 @@ def test_the_sandbox_share_uses_its_own_asset_name_and_lane(monkeypatch):
     monkeypatch.setattr(sharing.community, "build_report_quads", lambda **kw: [])
     monkeypatch.setattr(sharing, "shareable_fields", lambda finding: {})
 
-    def fake_send(client, graph, name, quads, lane=constants.COMMUNITY_SUB_GRAPH):
-        sent.update(graph=graph, name=name, lane=lane)
+    def fake_send(client, graph, name, quads, lane=constants.COMMUNITY_SUB_GRAPH, *, cfg, reduces=False):
+        sent.update(graph=graph, name=name, lane=lane, reduces=reduces)
         return sharing.ShareOutcome.ACCEPTED, ""
 
     ledgered = []
@@ -341,6 +342,7 @@ def test_the_sandbox_share_uses_its_own_asset_name_and_lane(monkeypatch):
                         lambda *a, **k: pytest.fail("a sandbox test is never kept alive"))
     sharing._share_sighting(object(), cfg, {"identifier": "ioc:domain:example.test", "severity": "high"}, "0x" + "ab" * 20)
     assert sent["lane"] == "sandbox" and sent["name"].startswith("sandbox-") and sent["graph"] == TEST_GRAPH
+    assert sent["reduces"] is False
     assert ledgered == ["accepted"]
 
 

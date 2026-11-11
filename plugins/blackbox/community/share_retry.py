@@ -238,12 +238,14 @@ def retry_due_shares(client: DkgClient, cfg: Any, queue: Optional[ShareRetryQueu
     """
     from . import consent, sharing   # the drain uses the one send path; sharing queues through this module
 
-    if not getattr(cfg, "community_enabled", False) or not consent.in_force():   # round 4: consent gates retries
+    if not consent.sharing_on(cfg):   # round 4: consent gates retries (send_report enforces it too)
         return 0
     store = queue or default_queue()
     accepted = 0
     for share in store.due():
-        outcome, detail = sharing.send_report(client, share.graph, share.name, list(share.quads))
+        outcome, detail = sharing.send_report(client, share.graph, share.name, list(share.quads), cfg=cfg)
+        if outcome is sharing.ShareOutcome.NOT_ALLOWED:   # switched off meanwhile: the queue is kept as it is
+            break
         if outcome is sharing.ShareOutcome.FAILED:
             if store.reschedule(share, detail) is None:
                 audit.record_share_outcome(identifier=share.identifier, category=share.category, severity=share.severity,
