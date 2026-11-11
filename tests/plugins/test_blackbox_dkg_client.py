@@ -686,3 +686,15 @@ def test_the_private_audit_gate_says_no_when_it_cannot_read_the_url():
     from plugins.blackbox import audit
     assert audit.node_is_local("") is True                  # no URL set: the default is loopback
     assert audit.node_is_local("http://[::1") is False      # unreadable: it used to count as local
+
+
+def test_the_client_finds_the_node_home_the_way_the_kernel_does(monkeypatch, tmp_path):
+    """The client kept its own copy of "where is Blackbox's node": a BLACKBOX_DKG_HOME of only
+    spaces became a folder named by spaces (the kernel's rule treats it as unset)."""
+    from plugins.blackbox.kernel import constants, dkg_client
+
+    monkeypatch.setenv("BLACKBOX_HOME", str(tmp_path))
+    monkeypatch.setenv("BLACKBOX_DKG_HOME", "   ")
+    assert dkg_client._dkg_home() == constants.blackbox_dkg_home() == tmp_path / "dkg"
+    monkeypatch.setenv("BLACKBOX_DKG_HOME", str(tmp_path / "custom"))
+    assert dkg_client._dkg_home() == tmp_path / "custom" and dkg_client._dkg_home("~/x") == __import__("pathlib").Path("~/x").expanduser()

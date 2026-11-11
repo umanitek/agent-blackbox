@@ -90,10 +90,7 @@ def _job_id_from_error(exc: DkgError) -> Optional[str]:
 
 
 def _dkg_home(explicit: Optional[str] = None) -> Path:
-    if explicit:
-        return Path(explicit).expanduser()
-    env = os.environ.get("BLACKBOX_DKG_HOME")
-    return Path(env).expanduser() if env else constants.blackbox_dkg_home()
+    return Path(explicit).expanduser() if explicit else constants.blackbox_dkg_home()   # the kernel's one rule
 
 
 def load_daemon_url() -> str:
