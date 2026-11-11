@@ -6,6 +6,7 @@ from ..sync import snapshot_defaults, validate_snapshot_profile
 from ..kernel.snapshot_config import DKG_CORE_CHAIN_CACHE, REGISTERED_BASE_CORES, snapshot_config
 
 
+@yaml_files.edits_config
 def configure(args):
     graph_id = getattr(args, "snapshot_graph_id", None)
     peers = getattr(args, "trusted_core_peer", None)

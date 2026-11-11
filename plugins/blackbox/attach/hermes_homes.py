@@ -102,6 +102,7 @@ def enabled_list_has(data: dict[str, Any], name: str) -> bool:
 
 
 @declined.remembers("hermes", switched_off=False)
+@yaml_files.edits_config
 def attach_hermes(home: Path, *, dry_run: bool = False) -> dict[str, Any]:
     """Enable Blackbox in a single Hermes *home*.
 
@@ -163,6 +164,7 @@ def attach_hermes(home: Path, *, dry_run: bool = False) -> dict[str, Any]:
 
 
 @declined.remembers("hermes", switched_off=True)
+@yaml_files.edits_config
 def detach_hermes(home: Path, *, remove_files: bool = False, dry_run: bool = False) -> dict[str, Any]:
     """Disable Blackbox in a single Hermes *home*.
 

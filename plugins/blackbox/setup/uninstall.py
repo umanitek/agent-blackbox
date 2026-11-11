@@ -258,6 +258,7 @@ These files are secrets: keep this folder private.
 """
 
 
+@yaml_files.edits_config
 def _remove_from_agents(plan: UninstallPlan, report: list[str]) -> list[Path]:
     """Detach every agent; returns the Hermes homes where Hermes itself installed the plugin."""
     from ..attach import detach_all   # attach's public entry

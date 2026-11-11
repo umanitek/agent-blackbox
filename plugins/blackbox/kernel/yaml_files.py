@@ -14,6 +14,13 @@ Usage::
     data.setdefault("plugins", {})["enabled"] = ["blackbox"]
     yaml_files.dump_yaml(path, data)
 
+Read, change, write back is three steps; two of them at once in one process can
+lose a change. Every function that writes a config back is marked
+:func:`edits_config` and so runs under this process's one config-edit lock::
+
+    @yaml_files.edits_config
+    def enable(path): ...load_for_edit, change, dump_yaml...
+
 A ``config.yaml`` is the user's own file: Hermes Desktop writes a 2,400-line one,
 almost all of it comments that document every setting. Where Hermes ships its
 comment-preserving editor (``hermes_yaml.roundtrip_yaml``, Hermes 0.21.7+),
@@ -26,11 +33,12 @@ lines of Hermes Desktop's config). Data that did not come from :func:`load_yaml`
 
 from __future__ import annotations
 
+import functools
 import io
 import logging
-import os
+import threading
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Callable, TypeVar
 from .bounded_files import atomic_write   # the kernel's one torn-free write (re-exported for yaml callers)
 
 logger = logging.getLogger(__name__)
@@ -63,6 +71,23 @@ def _roundtrip_editor() -> Any:
 def _keeps_comments(data: Any) -> bool:
     """Whether *data* was read by the round-trip editor (ruamel's CommentedMap carries ``.ca``)."""
     return hasattr(data, "ca")
+
+
+_Edit = TypeVar("_Edit", bound=Callable[..., Any])
+#: Held for a whole read-change-write of a config file. Re-entrant: an edit may call another.
+#: It serialises this process only (the dashboard saves settings and attaches agents in one
+#: process); another program writing the same file — Hermes itself — is not held by it.
+_EDIT_LOCK = threading.RLock()
+
+
+def edits_config(function: _Edit) -> _Edit:
+    """Decorator for a function that reads a config file, changes it and writes it back:
+    it runs while holding the one config-edit lock, so two edits never interleave."""
+    @functools.wraps(function)
+    def locked(*args: Any, **kwargs: Any) -> Any:
+        with _EDIT_LOCK:
+            return function(*args, **kwargs)
+    return locked   # type: ignore[return-value]
 
 
 class UnreadableYaml(ValueError):

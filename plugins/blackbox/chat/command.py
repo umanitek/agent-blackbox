@@ -252,6 +252,7 @@ def _write_blackbox_soul(profile_dir: Path) -> None:
     soul_path.write_text(_BLACKBOX_SOUL, encoding="utf-8")
 
 
+@yaml_files.edits_config
 def _ensure_blackbox_context_cap(profile_dir: Path) -> None:
     config_path = profile_dir / "config.yaml"
     if yaml_files.yaml is None:

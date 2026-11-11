@@ -17,7 +17,6 @@ and falls back to a plain YAML read-modify-write for standalone installs.
 from __future__ import annotations
 
 import logging
-import threading
 from typing import Any, Callable, Iterable, NamedTuple
 
 from . import constants
@@ -255,23 +254,18 @@ def _is_error_list(errors: Any) -> bool:
     return isinstance(errors, (list, tuple)) and all(isinstance(error, str) for error in errors)
 
 
-#: KI-030: settings persistence is read-modify-write; concurrent dashboard
-#: saves raced and could silently drop each other's changes. One process-wide
-#: lock serializes writers (the dashboard is the only writer, single process).
-_persist_lock = threading.Lock()
-
-
+@yaml_files.edits_config
 def _persist(updates: dict[str, Any]) -> bool:
     """Merge *updates* into the blackbox config entry. Prefer hermes' writer.
 
-    Serialized under ``_persist_lock`` so concurrent saves can never lose
-    updates (KI-030); both writers below end in atomic tmp+rename inside
-    their respective helpers.
+    Held under the kernel's one config-edit lock (``yaml_files.edits_config``) so
+    concurrent saves, and a save beside an attach, can never lose updates (KI-030);
+    both writers end in atomic tmp+rename inside their respective helpers.
     """
-    with _persist_lock:
-        return _persist_locked(updates)
+    return _persist_locked(updates)
 
 
+@yaml_files.edits_config   # also for a direct caller; the lock is re-entrant
 def _persist_locked(updates: dict[str, Any]) -> bool:
     try:
         from hermes_cli import config as hconfig
