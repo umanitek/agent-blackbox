@@ -943,3 +943,14 @@ def test_detach_exits_non_zero_when_a_target_failed(monkeypatch, capsys):
     assert command.cmd_detach(args) == 1
     report["hermes"] = [{"target": "/h", "disabled": True}]
     assert command.cmd_detach(args) == 0
+
+
+def test_a_hermes_attach_that_changed_something_says_so_and_a_repeat_does_not(fake_env):
+    """The automatic attach writes an audit record for every target whose report says `changed`.
+    OpenClaw reports set it; Hermes reports never did, so attaching a Hermes home automatically
+    was never recorded."""
+    home = fake_env["hermes_default"]
+    assert attach.attach_hermes(home)["changed"] is True
+    assert attach.attach_hermes(home)["changed"] is False
+    assert attach.attach_hermes(fake_env["hermes_profile"] if "hermes_profile" in fake_env else home,
+                                dry_run=True)["changed"] is False

@@ -158,10 +158,10 @@ def attach_hermes(home: Path, *, dry_run: bool = False) -> dict[str, Any]:
                 _enable_in(data)
                 yaml_files.dump_yaml(config_path, data)
             report["enabled"] = True
-        # A dry-run reports the protection that exists now, not the state an
-        # attach *could* create.  This keeps dashboard cards honest when config
-        # says enabled but the plugin files are missing or stale.
+        # A dry-run reports the protection that exists now, not the state an attach *could* create
+        # (dashboard cards stay honest when config says enabled but the files are missing or stale).
         report["protected"] = (config_enabled and files_ready) if dry_run else True
+        report["changed"] = not dry_run and bool(report["copied"] or report["enabled"])   # what auto-attach audits
         report["ok"] = True
     except Exception as exc:  # fail open per target
         logger.debug("blackbox.attach: attach_hermes(%s) failed: %s", home, exc)
