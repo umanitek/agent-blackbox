@@ -101,6 +101,21 @@ def enabled_list_has(data: dict[str, Any], name: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
+
+def _enable_in(data: dict[str, Any]) -> None:
+    """Add ``blackbox`` to *data*'s ``plugins.enabled`` (a parsed config.yaml), creating the
+    section or list where it is missing or not of the right kind; every other key is kept."""
+    plugins = data.setdefault("plugins", {})
+    if not isinstance(plugins, dict):
+        plugins = {}
+        data["plugins"] = plugins
+    enabled = plugins.get("enabled")
+    if not isinstance(enabled, list):
+        enabled = []
+        plugins["enabled"] = enabled
+    if "blackbox" not in enabled:
+        enabled.append("blackbox")
+
 @declined.remembers("hermes", switched_off=False)
 @yaml_files.edits_config
 def attach_hermes(home: Path, *, dry_run: bool = False) -> dict[str, Any]:
@@ -140,16 +155,7 @@ def attach_hermes(home: Path, *, dry_run: bool = False) -> dict[str, Any]:
             report["already"] = True
         elif not config_enabled:
             if not dry_run:
-                plugins = data.setdefault("plugins", {})
-                if not isinstance(plugins, dict):
-                    plugins = {}
-                    data["plugins"] = plugins
-                enabled = plugins.get("enabled")
-                if not isinstance(enabled, list):
-                    enabled = []
-                    plugins["enabled"] = enabled
-                if "blackbox" not in enabled:
-                    enabled.append("blackbox")
+                _enable_in(data)
                 yaml_files.dump_yaml(config_path, data)
             report["enabled"] = True
         # A dry-run reports the protection that exists now, not the state an

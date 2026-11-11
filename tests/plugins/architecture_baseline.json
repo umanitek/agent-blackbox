@@ -6,7 +6,7 @@
     "sync/command.py": 1395
   },
   "functions": {
-    "attach/hermes_homes.py::attach_hermes": 58,
+    "attach/hermes_homes.py::attach_hermes": 49,
     "attach/openclaw_bridge.py::_merge_openclaw": 53,
     "attach/openclaw_bridge.py::attach_openclaw": 68,
     "attach/openclaw_discovery.py::discover_openclaw_workspaces": 67,
