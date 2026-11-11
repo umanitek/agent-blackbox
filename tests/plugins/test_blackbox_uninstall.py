@@ -14,6 +14,7 @@ import dataclasses
 import json
 import os
 import stat
+import sys
 from pathlib import Path
 
 import pytest
@@ -98,7 +99,8 @@ def test_uninstall_removes_blackbox_and_keeps_the_keys(machine):
     assert not (machine / ".local" / "bin" / "blackbox").exists()
     assert not list((machine / "Library" / "LaunchAgents").glob("ai.umanitek.*"))
     assert [c[:2] for c in calls[:2]] == [["launchctl", "bootout"]] * 2
-    assert calls[-1][-3:] == ["plugins", "remove", "blackbox"]                # the running code goes last
+    # the running code goes last, removed by the Hermes that is running (never another one on PATH)
+    assert calls[-1][-6:] == [sys.executable, "-m", "hermes_cli.main", "plugins", "remove", "blackbox"]
     config = (hermes / "config.yaml").read_text(encoding="utf-8")
     assert "blackbox" not in config and "# the model" in config and "browser" in config
     # kept, private, and explained

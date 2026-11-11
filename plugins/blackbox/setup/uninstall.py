@@ -44,6 +44,7 @@ from typing import Callable, Optional, Sequence
 
 from .. import sync   # sync's public entry: the service names, which process is our node
 from ..kernel import constants, yaml_files
+from ..kernel.host_command import hermes_argv
 
 #: Files a node needs to keep its identity and wallet (DKG home), and Blackbox's own reporter
 #: identity and sharing consent ($BLACKBOX_HOME). Moved to the backup unless --purge.
@@ -291,10 +292,11 @@ def _delete_data(plan: UninstallPlan, report: list[str]) -> None:
         report.append(f"removed {plan.shim}")
 
 
-def execute(plan: UninstallPlan, *, run: Runner = _run, hermes: str = "hermes",
+def execute(plan: UninstallPlan, *, run: Runner = _run,
             stop_dashboard: Callable[[int], list[int]] = _stop_dashboard_on) -> list[str]:
     """Carry out *plan*; returns what was done (and what needs root), in order. *run* and
     *stop_dashboard* are the two ways it reaches running processes (tests pass fakes)."""
+    remove_plugin = hermes_argv("plugins", "remove", "blackbox")   # the Hermes running this, never another on PATH
     report: list[str] = []
     _stop_services(plan, run, report)
     _stop_running_dashboard(plan, stop_dashboard, report)
@@ -304,8 +306,8 @@ def execute(plan: UninstallPlan, *, run: Runner = _run, hermes: str = "hermes",
     _delete_data(plan, report)
     for home in hermes_installed:   # last: this removes the code that is running
         env_home = str(home)
-        code = run(["env", f"HERMES_HOME={env_home}", hermes, "plugins", "remove", "blackbox"]) \
-            if plan.system != "Windows" else run([hermes, "plugins", "remove", "blackbox"])
+        code = run(["env", f"HERMES_HOME={env_home}", *remove_plugin]) \
+            if plan.system != "Windows" else run(remove_plugin)
         report.append(f"removed the Blackbox plugin from {home}" if code == 0
                       else f"run to finish: hermes plugins remove blackbox   (Hermes home {home})")
     return report

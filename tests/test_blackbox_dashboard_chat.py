@@ -10,6 +10,9 @@ from plugins.blackbox import attach
 from plugins.blackbox.attach import plugin_copy as attach_plugin_copy
 from plugins.blackbox.dashboard import server
 
+#: A child `hermes` is the Hermes that is running: this Python, never whichever `hermes` is on PATH.
+THIS_HERMES = [sys.executable, "-m", "hermes_cli.main"]
+
 
 def test_dashboard_public_graph_uses_vm_verified_ruleset_rows(monkeypatch):
     from plugins.blackbox import audit, ruleset
@@ -954,7 +957,6 @@ def test_blackbox_dashboard_chat_starts_session(monkeypatch):
         calls.append(argv)
         return subprocess.CompletedProcess(argv, 0, stdout="hello\n", stderr="\nsession_id: sid-1\n")
 
-    monkeypatch.setattr(server.shutil, "which", lambda name: "/bin/hermes")
     monkeypatch.setattr(server.subprocess, "run", fake_run)
     monkeypatch.setattr(attach_plugin_copy, "repo_root", lambda: Path("/tmp/repo"))
 
@@ -964,7 +966,7 @@ def test_blackbox_dashboard_chat_starts_session(monkeypatch):
 
     assert res.status_code == 200
     assert res.json() == {"ok": True, "answer": "hello", "session_id": "sid-1"}
-    assert calls == [["/bin/hermes", "blackbox", "chat", "--query=hi", "--quiet", "--pass-session-id"]]
+    assert calls == [[*THIS_HERMES, "blackbox", "chat", "--query=hi", "--quiet", "--pass-session-id"]]
 
 
 def test_blackbox_dashboard_chat_resumes_session(monkeypatch):
@@ -974,7 +976,6 @@ def test_blackbox_dashboard_chat_resumes_session(monkeypatch):
         calls.append(argv)
         return subprocess.CompletedProcess(argv, 0, stdout="follow-up\n", stderr="\nsession_id: sid-1\n")
 
-    monkeypatch.setattr(server.shutil, "which", lambda name: "/bin/hermes")
     monkeypatch.setattr(server.subprocess, "run", fake_run)
     monkeypatch.setattr(attach_plugin_copy, "repo_root", lambda: Path("/tmp/repo"))
 
@@ -986,7 +987,7 @@ def test_blackbox_dashboard_chat_resumes_session(monkeypatch):
     assert res.json() == {"ok": True, "answer": "follow-up", "session_id": "sid-1"}
     assert calls == [
         [
-            "/bin/hermes",
+            *THIS_HERMES,
             "blackbox",
             "chat",
             "--query=which of these?",
@@ -998,7 +999,6 @@ def test_blackbox_dashboard_chat_resumes_session(monkeypatch):
 
 
 def _chat(monkeypatch, fake_run, body):
-    monkeypatch.setattr(server.shutil, "which", lambda name: "/bin/hermes")
     monkeypatch.setattr(server.subprocess, "run", fake_run)
     monkeypatch.setattr(attach_plugin_copy, "repo_root", lambda: Path("/tmp/repo"))
     client = TestClient(server.create_app(), base_url="http://127.0.0.1")
@@ -1016,7 +1016,7 @@ def test_blackbox_dashboard_chat_drops_a_session_id_that_is_not_one(monkeypatch)
     res = _chat(monkeypatch, fake_run, {"message": "-v", "session_id": "--yolo x"})
 
     assert res.status_code == 200
-    assert calls == [["/bin/hermes", "blackbox", "chat", "--query=-v", "--quiet", "--pass-session-id"]]
+    assert calls == [[*THIS_HERMES, "blackbox", "chat", "--query=-v", "--quiet", "--pass-session-id"]]
 
 
 def test_blackbox_dashboard_chat_never_shows_the_system_error(monkeypatch):

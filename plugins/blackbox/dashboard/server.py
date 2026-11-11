@@ -19,7 +19,6 @@ import logging
 import os
 import re
 import secrets
-import shutil
 import socket
 import subprocess
 import threading
@@ -1209,9 +1208,8 @@ def create_app(*, manage_blackbox: bool = False):
         if len(message) > 4000:
             return JSONResponse({"ok": False, "error": "Message is too long."}, status_code=400)
         session_id = str((payload or {}).get("session_id") or "").strip()
-        hermes = shutil.which("hermes") or os.environ.get("HERMES_BIN") or "hermes"
         # WHY "--opt=value": a question or id starting with "-" would otherwise be read as an option.
-        argv = [hermes, "blackbox", "chat", f"--query={message}", "--quiet", "--pass-session-id"]
+        argv = hermes_argv("blackbox", "chat", f"--query={message}", "--quiet", "--pass-session-id")
         if session_id and len(session_id) <= 128 and all(c.isalnum() or c in "_.:-" for c in session_id):
             argv.append(f"--resume={session_id}")
         try:
