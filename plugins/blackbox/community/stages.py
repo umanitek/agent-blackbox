@@ -298,9 +298,9 @@ def _apply_disputes(result: StageResult, clusters: Clusters, dispute_weight: int
     (Σ counted dispute weight ≥ the corroborating weight)."""
     if dispute_weight <= 0:
         return result
+    # A dispute changes enforcement and the reason only; who attested the stage, its counted
+    # weight and a look-alike name stay as they were (replace, never rebuild).
     if dispute_weight >= clusters.total and result.enforcement is Enforcement.FLAG:
-        return StageResult(result.stage, Enforcement.MONITOR,
-                           f"{result.reason}; disputed by {dispute_weight} counted author(s) — decayed to monitor",
-                           disputed=True)
-    return StageResult(result.stage, result.enforcement, f"{result.reason}; disputed by {dispute_weight} counted author(s)",
-                       disputed=True)
+        return replace(result, enforcement=Enforcement.MONITOR, disputed=True,
+                       reason=f"{result.reason}; disputed by {dispute_weight} counted author(s) — decayed to monitor")
+    return replace(result, disputed=True, reason=f"{result.reason}; disputed by {dispute_weight} counted author(s)")

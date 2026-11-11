@@ -311,3 +311,24 @@ def test_a_curator_deferral_lapses_after_thirty_days_on_the_reader(monkeypatch):
     undated = stages.stage_for("dep:npm:x@1", keys, NOW - 10 * DAY, view, 0, Kind.DEFERRAL, NOW)
     assert deferred.stage is Stage.DEFERRED and undated.stage is Stage.DEFERRED
     assert (lapsed.stage, lapsed.enforcement) == (Stage.CORROBORATED, Enforcement.FLAG) and "lapsed" in lapsed.reason
+
+
+# ------------------------------------------------------------------ a dispute changes enforcement, nothing else
+
+
+def test_a_disputed_attestation_still_says_the_curator_attested_it():
+    keys = _keys("p", 3)
+    partners = [(k, f"org{i}") for i, k in enumerate(keys)]
+    for weight in (1, 3):                                                   # tagged, then decayed
+        disputed = _stage("dep:npm:x@1", keys, _attested("corroborated", partners=partners), dispute_weight=weight)
+        assert disputed.disputed is True and disputed.source == "curator"
+
+
+def test_a_dispute_keeps_every_other_field_of_the_stage():
+    looks_like = stages.StageResult(Stage.CORROBORATED, Enforcement.FLAG, "corroborated", source="curator",
+                                    counted=4, confusable_of="lodash")
+    for weight, enforcement in ((1, Enforcement.FLAG), (4, Enforcement.MONITOR)):
+        disputed = stages._apply_disputes(looks_like, stages.Clusters(partner=2, established=2), weight)
+        assert (disputed.enforcement, disputed.disputed) == (enforcement, True)
+        assert (disputed.source, disputed.counted, disputed.confusable_of) == ("curator", 4, "lodash")
+        assert disputed.reason.startswith("corroborated; disputed by")
