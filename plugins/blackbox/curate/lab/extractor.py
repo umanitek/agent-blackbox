@@ -65,6 +65,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping, Optional
 from urllib.parse import urlsplit
 
+from ...kernel import threat_ids
 from ...kernel.public_suffix import registrable_domain
 from . import evidence_schema
 from .evidence_schema import Check, Evidence, EvidenceError, NoteCode
@@ -301,13 +302,17 @@ def _contact_host(value: Any) -> Optional[str]:
 
 def _identifier_host(identifier: str) -> Optional[str]:
     """The host an identifier names: a URL's host (past any ``url:``/``ioc:url:``
-    prefix, found by the job store's own URL rule) or a ``domain:`` value."""
+    prefix, found by the job store's own URL rule), or the value of an ``ioc:domain:``
+    identifier (what a domain visit is built from) or a bare ``domain:`` one."""
     url_start = _URL_START.search(identifier)
     if url_start is not None:
         try:
             return _contact_host(urlsplit(identifier[url_start.start():]).hostname)
         except ValueError:
             return None
+    parsed = threat_ids.parse_ioc_identifier(identifier)
+    if parsed is not None and parsed[0] == "domain":
+        return _contact_host(parsed[1])
     if identifier.startswith("domain:"):
         return _contact_host(identifier[len("domain:"):])
     return None

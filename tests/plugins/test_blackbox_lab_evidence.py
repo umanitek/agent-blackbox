@@ -1013,3 +1013,14 @@ def test_a_page_cursor_is_escaped_and_absent_on_the_first_page():
     assert sparql_text.cursor_filter("") == ""
     assert sparql_text.cursor_filter('urn:x:"1"') == 'FILTER(STR(?r) > "urn:x:\\"1\\"")'
     assert sparql_text.cursor_filter("urn:y", variable="threat") == 'FILTER(STR(?threat) > "urn:y")'
+
+
+def test_a_domain_visit_answers_whether_it_was_redirected_off_the_domain():
+    """Real identifiers are `ioc:domain:<host>` (the urlscan visit is built from exactly that); the
+    extractor only understood a bare `domain:` prefix, so a domain visit never answered this check."""
+    off = extractor.extract(_job(identifier="ioc:domain:example-phish.test", level=3),
+                            _raw(urlscan=_urlscan("evil.example.test", brands=())))
+    assert _observed(off)[Check.REDIRECTED_OFF_DOMAIN] is True
+    same = extractor.extract(_job(identifier="ioc:domain:example-phish.test", level=3),
+                             _raw(urlscan=_urlscan("www.example-phish.test", brands=())))
+    assert _observed(same)[Check.REDIRECTED_OFF_DOMAIN] is False
