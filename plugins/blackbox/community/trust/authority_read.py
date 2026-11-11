@@ -270,8 +270,7 @@ def _verifiable(statements: Iterable[Row], verified: _Resolved, community: _Reso
 
 def _copy_rank(row: Row) -> tuple[int, str]:
     """Which of several verified copies of one statement is kept — lower wins."""
-    text = str(row.get("signedStatement", ""))
-    return text.count('"signer":'), text
+    return signing.copy_rank(str(row.get("signedStatement", "")))
 
 
 def known_curator_statements(client: DkgClient, cfg: BlackboxConfig, identifiers: Iterable[str], *,

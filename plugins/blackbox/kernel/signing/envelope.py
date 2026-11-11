@@ -162,6 +162,15 @@ def canonical_text(envelope: SignedEnvelope) -> str:
     return replace(envelope, signatures=tuple(first[signer] for signer in sorted(first))).to_text()
 
 
+def copy_rank(text: str) -> tuple[int, str]:
+    """Which of several copies of ONE signed statement to keep — the lower rank wins: fewest
+    signatures first (anyone may add a signature of their own to a genuine statement), then
+    the smallest text (KI-266). Signatures are counted from the parsed envelope, never from
+    the text's spelling; a text that does not parse ranks with none."""
+    envelope = from_text(text)
+    return (len(envelope.signatures) if envelope is not None else 0), text
+
+
 def is_canonical(text: str) -> bool:
     """True when *text* is exactly its own canonical form. Parsing accepts
     more than that; a file in which every byte must matter (an export bundle)

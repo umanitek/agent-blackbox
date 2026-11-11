@@ -133,14 +133,9 @@ def _signed_statements(rows: Iterable[Mapping[str, str]], manifest: KeyManifest,
         envelope = signing.from_text(text)
         slot = found.setdefault((record.kind, record.identifier), {})
         content = signing.content_id(envelope)
-        if content not in slot or (len(envelope.signatures), text) < _rank(slot[content][1]):
+        if content not in slot or signing.copy_rank(text) < signing.copy_rank(slot[content][1]):
             slot[content] = (record, text)
     return found
-
-
-def _rank(text: str) -> tuple[int, str]:
-    envelope = signing.from_text(text)
-    return (len(envelope.signatures) if envelope is not None else 0), text
 
 
 def _canonical_rows(rows: Iterable[Mapping[str, str]]) -> list[dict[str, str]]:
