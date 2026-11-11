@@ -37,9 +37,9 @@ def from_a_curator(manifest: Optional[KeyManifest], proposal: Proposal) -> bool:
     if (proposal.id, proposal.kind, proposal.graph) != (threat_ids.stable_hash(proposal.envelope, 16),
                                                         envelope.statement_type, envelope.graph):
         return False
-    signers = signing.verified_signers(envelope, statement_type=envelope.statement_type, environment=manifest.environment,
-                                       graph=envelope.graph, chain=manifest.chain, root_epoch=manifest.root_epoch)
-    return bool(signers & frozenset(manifest.curator_keys))
+    # The manifest's own rule (one key per operator, break-glass only on reductions) — never a
+    # hand-made "any curator key signed it".
+    return bool(manifest.curator_signers(envelope, statement_type=envelope.statement_type, graph=envelope.graph))
 
 
 def admit(manifest: Optional[KeyManifest], store: ProposalStore,

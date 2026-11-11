@@ -89,3 +89,33 @@ def test_a_definite_refusal_still_says_nothing_was_published(monkeypatch, tmp_pa
     store, revocation = _approved_revocation(monkeypatch, tmp_path, curators, node)
     with pytest.raises(verbs.VerbError, match="nothing was published"):
         verbs.approve(_ctx(node, curators["manifest"]), store, revocation.id, evidence="", typed_code=None, yes=True)
+
+
+# --- a promotion first-signed by the break-glass key is refused at once, not stuck at publish ---
+
+def test_a_promotion_signed_only_by_the_break_glass_key_is_refused_before_anyone_cosigns_it():
+    """The break-glass key only ever reduces enforcement (R7b), so it never counts toward a
+    promotion. Approve and inbox admission checked "a curator key signed this" by hand, without
+    that rule: such a promotion was co-signed, saved APPROVED, then stuck at publish."""
+    from test_blackbox_curate import THREAT, _payload
+    from plugins.blackbox.curate.context import PromotionDraft
+    from plugins.blackbox.curate.proposals.proposal import Proposal
+    from plugins.blackbox.curate.service import inbox
+    from plugins.blackbox.kernel import signing
+    from plugins.blackbox.kernel.signing import key_manifest as km
+
+    keys = [Ed25519PrivateKey.generate() for _ in range(3)]
+    hexes = [signing.public_key_hex(k) for k in keys]
+    manifest = km.KeyManifest(environment=NETWORK, graph=VM_GRAPH, chain="", root_epoch=1, version=1, threshold=2,
+                              **km.roster(dict(zip(hexes, ("acme", "globex", "vault")))), promotion_author="0x" + "1" * 40,
+                              legacy_assets_hash=km.legacy_assets_hash([]), break_glass_key=hexes[2])
+    ctx = _ctx(FakeNode(), manifest)
+    envelope = ctx.sign(PromotionDraft(_payload(), sequence=1), keys[2])          # the break-glass key alone
+    proposal = Proposal.new(Kind.PROMOTION.value, THREAT, envelope, VM_GRAPH, checks={})
+    with pytest.raises(verbs.VerbError, match="not signed by a curator key"):
+        verbs._check_first_signer(ctx, envelope, proposal, hexes[0])
+    assert inbox.from_a_curator(manifest, proposal) is False
+    honest = Proposal.new(Kind.PROMOTION.value, THREAT, ctx.sign(PromotionDraft(_payload(), sequence=1), keys[1]), VM_GRAPH,
+                          checks={})
+    verbs._check_first_signer(ctx, honest.parsed(), honest, hexes[0])               # an ordinary curator's: fine
+    assert inbox.from_a_curator(manifest, honest) is True
