@@ -31,7 +31,7 @@ import urllib.error
 import urllib.request
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Protocol
+from typing import Any, Optional, Protocol
 
 from ...kernel.health import HealthClass, HealthItem
 from ...kernel.health import manifest_watch

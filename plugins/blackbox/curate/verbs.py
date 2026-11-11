@@ -16,8 +16,8 @@ Numbering, the quorum check, consent and the write itself live in
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, timedelta, timezone, UTC
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
+from datetime import date, datetime, timedelta, UTC
+from typing import Any, Iterable, Mapping, Optional
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 

@@ -13,7 +13,7 @@ import logging
 import os
 import threading
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, Iterator, List, TypeVar
+from typing import Any, Callable, Iterable, Iterator, TypeVar
 from ..kernel import constants
 from ..kernel.bounded_files import append_line, atomic_write, file_lock, read_jsonl
 

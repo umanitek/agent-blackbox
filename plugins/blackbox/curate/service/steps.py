@@ -42,8 +42,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from datetime import timezone
-from typing import Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Callable, Optional, Sequence
 
 from ... import community
 from ...kernel.health import HealthItem, utc_day_or

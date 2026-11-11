@@ -7,7 +7,7 @@ Reads the audit and findings logs back into one severity-tagged event stream
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 from ..kernel import constants
 from ..kernel.bounded_files import read_jsonl
 from . import log_store

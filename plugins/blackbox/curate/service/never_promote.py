@@ -33,7 +33,7 @@ import ipaddress
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Optional
 
 _RANGES_FILE = Path(__file__).with_name("never_promote_ranges.json")
 #: The only identifier kind the rule applies to: a bare IP address IOC.

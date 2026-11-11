@@ -27,7 +27,7 @@ import json
 import threading
 import time
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Optional
 
 from . import trust_routes
 from .lifecycle import on_shutdown, on_startup

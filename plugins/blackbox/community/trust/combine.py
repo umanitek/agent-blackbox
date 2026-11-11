@@ -34,7 +34,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import date
-from typing import Dict, Optional
+from typing import Optional
 
 from ...kernel.signing import CuratorStatement, statement_order
 from ..statements.curator_statements import CuratorRecord

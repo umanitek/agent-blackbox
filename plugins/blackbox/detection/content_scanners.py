@@ -9,7 +9,6 @@ checked against the ruleset by identifier.
 from __future__ import annotations
 
 import re
-from typing import Dict, List
 from . import shell_shapes
 from ..kernel import crypto_secrets, redaction, threat_ids
 

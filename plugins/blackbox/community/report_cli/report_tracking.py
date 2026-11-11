@@ -13,7 +13,7 @@ Called by :func:`.report_command.cmd_report` (``--status`` / ``--standing``).
 from __future__ import annotations
 
 from datetime import date
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Optional
 
 from ...kernel import display_safety, reporter_key
 from ...kernel.dkg_client import DkgClient

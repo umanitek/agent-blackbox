@@ -9,7 +9,7 @@ own file without an import cycle.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 #: ``Finding.kind`` of a finding that may flag but must never block, whatever its
 #: ``source`` and severity and whatever ``block_severity`` the operator chose — e.g.

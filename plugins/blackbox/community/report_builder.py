@@ -11,8 +11,8 @@ Usage: ``community.build_report_quads(identifier, severity=..., reporter_address
 
 from __future__ import annotations
 
-from datetime import datetime, timezone, UTC
-from typing import Dict, List, Optional, Tuple
+from datetime import datetime, UTC
+from typing import Optional
 from ..kernel import constants
 from ..kernel import rdf_terms
 from ..kernel import signing, threat_ids

@@ -43,7 +43,7 @@ from decimal import Decimal, InvalidOperation
 from enum import Enum
 from pathlib import Path
 from types import MappingProxyType
-from typing import Callable, Dict, FrozenSet, Iterable, Iterator, List, Mapping, Optional, Sequence, Tuple
+from typing import Callable, Iterable, Iterator, Mapping, Optional, Sequence
 
 try:  # POSIX: curator nodes. Elsewhere the in-process lock below still holds.
     import fcntl

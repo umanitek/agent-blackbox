@@ -36,8 +36,8 @@ from __future__ import annotations
 import json
 import threading
 import time
-from datetime import datetime, timedelta, timezone, UTC
-from typing import Callable, Dict, Optional, Tuple
+from datetime import datetime, timedelta, UTC
+from typing import Callable, Optional
 
 from ...kernel import threat_ids
 from ..service.evidence import Lookup

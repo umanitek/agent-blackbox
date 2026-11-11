@@ -14,7 +14,7 @@ organisations, evidence references, identifiers — passes through
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict
+from typing import Any, Callable
 
 from .safe_payloads import safe_identifier, safe_text
 

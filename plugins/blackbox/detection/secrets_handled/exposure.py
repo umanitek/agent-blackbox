@@ -17,7 +17,7 @@ value) and blockable.
 from __future__ import annotations
 
 import re
-from typing import Any, Callable, Iterable, List
+from typing import Any, Callable, Iterable
 
 from .. import content_scanners
 from . import sending

@@ -52,7 +52,7 @@ import re
 import threading
 import time
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Mapping, Optional, Union
+from typing import Any, Callable, Mapping, Optional
 
 from ...kernel import threat_ids
 from ..lab import strip_query

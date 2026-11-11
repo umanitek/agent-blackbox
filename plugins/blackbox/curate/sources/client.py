@@ -27,7 +27,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Any, List, Mapping, Optional, Protocol
+from typing import Any, Mapping, Optional, Protocol
 
 from ...kernel.local_http import RefuseRedirects
 

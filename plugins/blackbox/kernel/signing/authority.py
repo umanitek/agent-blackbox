@@ -37,7 +37,7 @@ Usage::
 from __future__ import annotations
 
 from enum import Enum
-from typing import FrozenSet, Mapping, Optional, Tuple, Union
+from typing import Mapping, Optional
 
 from .graph_migration import GRAPH_MIGRATION_STATEMENT
 from .key_manifest import KEY_MANIFEST_STATEMENT

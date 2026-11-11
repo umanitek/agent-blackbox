@@ -29,8 +29,8 @@ from __future__ import annotations
 import json
 import logging
 import time
-from datetime import date, timedelta, timezone
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from datetime import date, timedelta
+from typing import Any, Iterable, Optional
 
 from ... import community
 from ...kernel.health import utc_day

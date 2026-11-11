@@ -31,8 +31,7 @@ import logging
 import threading
 import time
 from dataclasses import dataclass, field
-from datetime import timezone
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Optional
 
 from ...kernel.health import utc_day
 from ...kernel import threat_ids

@@ -15,7 +15,7 @@ because asking is a different concern from compiling.
 
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, Optional, Sequence, Tuple
+from typing import Any, Iterable, Optional, Sequence
 
 from ...kernel import threat_ids
 from ...kernel.store import StoreClient

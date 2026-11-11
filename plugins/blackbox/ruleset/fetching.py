@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, FrozenSet, List, Optional, Tuple
+from typing import Any, Callable, Optional
 from ..kernel import constants
 from ..kernel.dkg_client import DkgClient, extract_binding
 from ..kernel import sparql_text

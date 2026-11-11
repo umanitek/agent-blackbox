@@ -36,7 +36,7 @@ import time
 from dataclasses import dataclass, field, replace
 from datetime import date
 from enum import Enum
-from typing import Any, Dict, FrozenSet, Iterable, List, Mapping, Optional, Tuple
+from typing import Any, Iterable, Mapping, Optional
 
 from ...kernel import constants, sparql_text, threat_ids
 from ...kernel.dkg_client import extract_binding

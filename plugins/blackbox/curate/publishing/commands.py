@@ -33,7 +33,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Callable, Iterable, Mapping, Optional, Sequence
 
 from ...kernel import constants, display_safety, signing, sparql_text, threat_ids
 from ...kernel.signing import promotion_statement as statement

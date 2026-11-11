@@ -15,7 +15,6 @@ Pattern: a Constant table (:data:`COMMUNITY_VIEWS`, :data:`VERIFIED_VIEWS`).
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Tuple
 
 from ..kernel import constants
 from ..kernel import rdf_terms, sparql_text

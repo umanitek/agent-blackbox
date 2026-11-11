@@ -22,12 +22,12 @@ import urllib.parse
 import urllib.request
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from . import constants, host_secrets, local_http
 from .snapshot_config import query_evidence
 from .sparql_text import run_query
-from .sparql_text import extract_binding, normalize_bindings, rows_or_fallback  # re-exported: callers import them from here
+from .sparql_text import extract_binding  # re-exported: callers import them from here
 
 logger = logging.getLogger(__name__)
 

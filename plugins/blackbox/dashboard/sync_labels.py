@@ -12,7 +12,7 @@ Three pure helpers, so the route body stays a wiring list:
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any
 
 from .sync_timing import sync_time
 

@@ -24,7 +24,7 @@ import logging
 import threading
 import urllib.error
 import urllib.request
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Optional
 
 from ..kernel import constants
 

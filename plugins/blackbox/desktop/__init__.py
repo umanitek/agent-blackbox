@@ -47,7 +47,7 @@ from ..kernel import settings
 from ..kernel.config import load_blackbox_config
 from ..kernel.constants import SEVERITY_RANK
 from . import readiness as readiness_mod
-from .dashboard_link import DashboardLink, LinkAnswer
+from .dashboard_link import DashboardLink
 from .long_calls import LongCalls
 
 logger = logging.getLogger(__name__)

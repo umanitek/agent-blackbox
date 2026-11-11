@@ -33,7 +33,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 from enum import Enum
-from typing import Callable, Dict, Mapping, Tuple
+from typing import Callable, Mapping
 
 from ...kernel.signing import CuratorStatement, statement_order
 from ..queue import BLOCKABLE_PREFIXES

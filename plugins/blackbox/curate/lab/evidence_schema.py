@@ -24,7 +24,7 @@ import json
 import re
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Callable, Dict, Mapping, Tuple, Union
+from typing import Any, Callable, Mapping
 
 #: Caps from §03.5: the extractor drops nothing silently — over a cap is an error.
 MAX_CONTACTED_HOSTS = 20

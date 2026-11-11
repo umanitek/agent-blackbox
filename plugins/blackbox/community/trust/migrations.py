@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import json
 from datetime import date, timedelta
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Set, Tuple
+from typing import Any, Iterable, Mapping, Optional
 
 from ...kernel import signing, sparql_text, threat_ids
 from ...kernel.dkg_client import extract_binding

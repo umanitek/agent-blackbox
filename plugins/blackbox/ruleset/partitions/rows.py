@@ -11,7 +11,7 @@ Usage: ``rows = rows_from_triples(partition_iri, [(subject, predicate, object), 
 from __future__ import annotations
 
 import itertools
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Iterable, Optional, Sequence
 
 from ...kernel import constants
 

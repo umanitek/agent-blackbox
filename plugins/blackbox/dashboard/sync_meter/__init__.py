@@ -36,7 +36,7 @@ import logging
 import threading
 import time
 from dataclasses import asdict, dataclass, field, replace
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Optional
 
 from ... import ruleset
 from ...kernel.dkg_client import DkgClient

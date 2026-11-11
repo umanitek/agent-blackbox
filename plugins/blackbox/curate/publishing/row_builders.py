@@ -45,7 +45,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Dict, List, Mapping, Optional, Protocol, Sequence, Tuple
+from typing import Mapping, Optional, Protocol, Sequence
 
 from ...kernel import constants, rdf_terms, signing, threat_ids
 from ...kernel.signing import promotion_statement as statement

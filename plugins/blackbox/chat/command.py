@@ -11,7 +11,7 @@ import argparse
 import logging
 import os
 from pathlib import Path
-from typing import List, Optional
+from typing import Optional
 from .. import attach
 from ..kernel import constants, yaml_files
 from ..kernel.bounded_files import atomic_write

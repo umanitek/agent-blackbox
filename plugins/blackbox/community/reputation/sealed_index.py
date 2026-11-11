@@ -26,7 +26,7 @@ from __future__ import annotations
 import json
 import secrets
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Optional
 
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM

@@ -41,15 +41,14 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import re
 import secrets
 import threading
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone, UTC
+from datetime import datetime, UTC
 from pathlib import Path
-from typing import Any, Callable, Dict, FrozenSet, Iterable, List, Mapping, Optional, Set
+from typing import Any, Callable, Iterable, Mapping, Optional
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 

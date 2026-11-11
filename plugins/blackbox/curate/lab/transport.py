@@ -40,7 +40,7 @@ import time
 import urllib.parse
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 from ...kernel.local_http import is_loopback_url
 from .jobs import LabJob

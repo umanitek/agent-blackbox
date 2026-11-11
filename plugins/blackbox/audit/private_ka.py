@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 import time
 from urllib.parse import urlsplit
-from typing import Any, Dict
+from typing import Any
 from ..kernel import constants, local_http
 from . import redaction
 

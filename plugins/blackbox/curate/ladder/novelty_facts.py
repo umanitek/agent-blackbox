@@ -30,7 +30,7 @@ Usage::
 
 from __future__ import annotations
 
-from typing import AbstractSet, Any, Callable, Iterable, Mapping, Optional, Tuple
+from typing import AbstractSet, Any, Callable, Iterable, Mapping, Optional
 
 from ...community import reputation
 from ...kernel import threat_ids

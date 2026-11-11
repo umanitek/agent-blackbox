@@ -46,8 +46,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import replace
-from datetime import timezone
-from typing import TYPE_CHECKING, Callable, List, Mapping, Optional, Sequence
+from typing import TYPE_CHECKING, Callable, Mapping, Optional, Sequence
 
 from ... import community
 from ...community import reputation

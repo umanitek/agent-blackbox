@@ -30,7 +30,7 @@ import json
 import logging
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import FrozenSet, Iterable
+from typing import Iterable
 
 from ...kernel import constants, public_suffix
 

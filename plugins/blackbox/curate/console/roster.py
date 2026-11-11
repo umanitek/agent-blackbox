@@ -40,7 +40,7 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from enum import Enum
 from pathlib import Path
-from typing import Dict, List, Mapping, Optional, Tuple
+from typing import Mapping, Optional
 
 from ...kernel import threat_ids
 from ...kernel.bounded_files import atomic_write

@@ -39,9 +39,9 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta, timezone, UTC
+from datetime import date, datetime, timedelta, UTC
 from pathlib import Path
-from typing import Iterable, List, Mapping, Optional, Tuple
+from typing import Iterable, Mapping, Optional
 
 from ..signing.key_manifest import KEY_MANIFEST_STATEMENT, MANIFEST_VALID_DAYS
 from ..yaml_files import atomic_write

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 from ..kernel import constants
 from ..kernel.bounded_files import read_jsonl
 from . import log_store

@@ -26,7 +26,7 @@ import logging
 import sqlite3
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Optional, Sequence
 
 from ...kernel import constants, sparql_text, threat_ids
 from ...kernel.dkg_client import DkgClient, extract_binding

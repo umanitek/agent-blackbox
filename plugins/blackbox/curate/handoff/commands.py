@@ -10,8 +10,6 @@ through ``term_safe``.
 
 from __future__ import annotations
 
-import os
-import secrets
 from pathlib import Path
 from typing import Optional
 

@@ -26,7 +26,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, timedelta
-from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+from typing import Iterable, Mapping, Optional, Sequence
 
 from ...kernel import constants, signing, threat_ids
 from ...kernel.signing import Authority

@@ -33,7 +33,7 @@ row suppress, and what". Pure: no I/O. Usage::
 
 from __future__ import annotations
 
-from typing import Any, FrozenSet, Iterable, Mapping, NamedTuple, Optional, Tuple
+from typing import Any, Iterable, Mapping, NamedTuple, Optional
 
 from ...kernel import constants, signing
 from ...kernel.dkg_client import extract_binding

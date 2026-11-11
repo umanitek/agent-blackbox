@@ -13,7 +13,7 @@ import functools
 import json
 import logging
 from typing import Any, Callable, Optional
-from .. import audit, detection, killlist, overrides, ruleset, shields
+from .. import audit, detection, killlist, overrides, shields
 from ..kernel import config as config_mod, constants
 from ..kernel.config import BlackboxConfig
 from . import api_request, background, graph_rules

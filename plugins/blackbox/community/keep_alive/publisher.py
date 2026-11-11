@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any, Dict, Iterable, Optional
+from typing import Any, Iterable, Optional
 
 from ... import audit
 from ...kernel import threat_ids

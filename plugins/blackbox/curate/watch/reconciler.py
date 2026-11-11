@@ -18,7 +18,7 @@ Usage::
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Protocol, Sequence
+from typing import Iterable, Protocol, Sequence
 
 from ...kernel.health import HealthClass, HealthItem
 from .signing_log import SigningRow

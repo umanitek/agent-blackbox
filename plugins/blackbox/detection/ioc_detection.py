@@ -6,7 +6,7 @@ Split out of :mod:`.detectors` (which runs it inside ``detect_all``).
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from . import action_parsing
 from . import shell_shapes

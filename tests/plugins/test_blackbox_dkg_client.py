@@ -504,7 +504,8 @@ def test_malformed_query_reply_is_a_failure_for_sentinel_callers(monkeypatch):
 
 def test_normalize_bindings_nested_shape():
     result = {"results": {"bindings": [{"n": {"value": "3"}}]}}
-    assert dkg_client.normalize_bindings(result) == [{"n": {"value": "3"}}]
+    from plugins.blackbox.kernel.sparql_text import normalize_bindings   # its home (dkg_client no longer re-exports it)
+    assert normalize_bindings(result) == [{"n": {"value": "3"}}]
 
 
 # ---------------------------------------------------------------------------

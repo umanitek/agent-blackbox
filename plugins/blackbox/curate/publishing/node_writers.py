@@ -29,7 +29,6 @@ from dataclasses import dataclass
 from typing import Mapping, Optional
 from urllib.parse import quote, urlencode
 
-from ... import community
 from ...kernel import constants, dkg_client, node_routes, signing, sparql_text
 from ...kernel.dkg_client import DkgClient, DkgError
 from ...kernel.signing import promotion_statement as statement

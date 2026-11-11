@@ -21,7 +21,7 @@ Usage::
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Optional, Protocol, Sequence, Tuple
+from typing import Optional, Protocol, Sequence
 
 from ..service.evidence import Lookup, OwnCheck
 from .budget import LookupBudget, LookupItem, TokenBucket, select_for_lookup

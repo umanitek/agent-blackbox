@@ -53,8 +53,8 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone, UTC
-from typing import Callable, Dict, Mapping, Optional, Tuple
+from datetime import datetime, timedelta, UTC
+from typing import Callable, Mapping, Optional
 
 from .. import detection
 from ..kernel import constants, display_safety, threat_ids

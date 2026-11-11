@@ -7,7 +7,7 @@ for the curator tooling (build item R6) to adopt — or delete.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 from ..kernel import threat_ids
 from ..kernel import constants
 

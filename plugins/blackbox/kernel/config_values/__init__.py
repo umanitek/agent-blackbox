@@ -1,7 +1,7 @@
 """Configuration value coercion and local path defaults."""
 import os
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 from .. import constants
 _TRUE = {"1", "true", "yes", "on"}
 _FALSE = {"0", "false", "no", "off"}

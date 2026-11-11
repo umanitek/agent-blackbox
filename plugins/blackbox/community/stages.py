@@ -33,11 +33,11 @@ from __future__ import annotations
 
 from ..kernel import constants
 
-from datetime import date, datetime, timezone, UTC
+from datetime import date, datetime, UTC
 
 from dataclasses import dataclass, replace
 from enum import Enum
-from typing import Dict, Iterable, Mapping, Optional, Tuple
+from typing import Iterable, Mapping, Optional
 
 from ..kernel.signing import CuratorStatement, statement_order
 from .statements.curator_view import CuratorView

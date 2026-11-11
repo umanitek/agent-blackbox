@@ -10,7 +10,7 @@ import json
 import logging
 import re
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 from ..kernel import constants
 from ..kernel.bounded_files import atomic_write
 from . import compiler

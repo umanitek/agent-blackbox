@@ -14,7 +14,7 @@ Split out of :mod:`.detectors` (which runs them inside ``detect_all``).
 from __future__ import annotations
 
 import logging
-from typing import Any, List, Optional
+from typing import Any, Optional
 
 from . import content_scanners
 from .finding import Finding, _rule_source, rule_subject

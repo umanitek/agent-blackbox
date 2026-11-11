@@ -22,7 +22,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import TYPE_CHECKING, Dict, List, Sequence
+from typing import TYPE_CHECKING, Sequence
 
 from ...kernel.health import HealthClass, HealthItem
 

@@ -8,7 +8,7 @@ on a daemon thread, each fail-open, each reporting through :mod:`.reporting`.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict
+from typing import Any
 from .. import audit, detection, shields
 from ..kernel import threat_ids
 from ..kernel import constants

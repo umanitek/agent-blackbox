@@ -33,8 +33,7 @@ from __future__ import annotations
 import threading
 import time
 from dataclasses import dataclass
-from datetime import timezone
-from typing import Callable, Dict, FrozenSet, Optional, Tuple
+from typing import Callable, Optional
 from urllib.parse import urlsplit
 
 from ...kernel.health import utc_day

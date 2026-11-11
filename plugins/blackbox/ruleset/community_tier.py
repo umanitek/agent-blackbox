@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import AbstractSet, Any, Dict, Optional, Set
+from typing import AbstractSet, Any, Optional
 
 from .. import community
 from ..kernel import threat_ids

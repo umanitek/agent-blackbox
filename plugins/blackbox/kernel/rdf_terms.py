@@ -10,8 +10,8 @@ Usage: ``make_quad(subject, constants.SEVERITY_PRED, literal("high"))``.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone, UTC
-from typing import Dict, Iterable, Optional
+from datetime import datetime, UTC
+from typing import Iterable, Optional
 from . import constants
 
 # A quad is a ``{subject, predicate, object}`` dict. ``object`` is a ready N-Triples

@@ -62,7 +62,7 @@ from __future__ import annotations
 import ipaddress
 import posixpath
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Mapping, Optional
 from urllib.parse import urlsplit
 
 from ...kernel import threat_ids

@@ -25,7 +25,7 @@ import threading
 import time
 from collections import Counter, deque
 from pathlib import Path
-from typing import Any, Dict, List, Set, Tuple
+from typing import Any
 
 from ..kernel import constants, sparql_text, threat_ids
 from ..kernel.browser_boundary import LOOPBACK_HOSTS, BrowserBoundary
@@ -39,7 +39,7 @@ from .node_probe import NodeLiveness, NodeReadCache, RepeatGate, node_sync_probe
 from .sync_labels import (_community_progress, _is_hidden_swm_catchup_error, _is_retryable_durable_catchup_error,
                           _sync_label, current_transfer_error, not_subscribed_activity)
 from .threat_detail_fields import DETAIL_FIELDS
-from .safe_payloads import graph_tier_item, safe_identifier, safe_text
+from .safe_payloads import graph_tier_item, safe_text
 
 logger = logging.getLogger(__name__)
 
@@ -786,7 +786,7 @@ def create_app(*, manage_blackbox: bool = False):
     from ..kernel import settings
     from ..sync import state as sync_state
     from ..kernel.config import load_blackbox_config
-    from ..kernel.dkg_client import DkgClient, DkgError, extract_binding
+    from ..kernel.dkg_client import DkgClient, extract_binding
 
     app = FastAPI(title="Agent Blackbox", docs_url=None, redoc_url=None)
 

@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import FrozenSet, Iterable, Mapping, Tuple
+from typing import Iterable, Mapping
 
 from .. import constants, threat_ids
 

@@ -45,7 +45,7 @@ Usage::
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 from urllib.parse import quote, urlencode
 
 from . import sparql_text

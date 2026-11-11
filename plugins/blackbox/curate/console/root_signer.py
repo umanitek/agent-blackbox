@@ -37,7 +37,7 @@ import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Callable, Iterator, Optional, Protocol, Tuple
+from typing import Callable, Iterator, Optional, Protocol
 
 from ...kernel import signing
 from ...kernel.bounded_files import atomic_write, file_lock
