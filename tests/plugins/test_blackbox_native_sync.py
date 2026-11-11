@@ -299,21 +299,27 @@ def test_a_plain_sync_of_another_graph_keeps_the_catch_up_route(dkg_home, monkey
     assert routes == ["catch-up"]
 
 
-def test_the_successor_subscription_is_asked_only_while_not_yet_subscribed():
+def test_the_successor_subscription_is_asked_only_while_not_yet_subscribed(monkeypatch):
     """The older sync route asked ensure_side_subscriptions on EVERY 3-second poll: a status call,
     a migrations read and a trust-store load each time, plus a re-subscribe (and a printed line)
-    whenever a successor exists — the pattern KI-449 removed from the native route. It is now
-    asked only inside the `not subscribed` branch, beside each verified-subscription attempt.
-    (Structural until _cmd_sync_impl is split and its loop can be driven by a test.)"""
-    import ast
-    from pathlib import Path
+    whenever a successor exists — the pattern KI-449 removed from the native route. It is asked
+    beside each verified-subscription attempt only, so a failed attempt is still retried."""
+    DkgError, BlackboxConfig = sync_command.DkgError, sync_command.BlackboxConfig   # the same load as the code under test
 
-    source = (Path(__file__).resolve().parents[2] / "plugins" / "blackbox" / "sync" / "command.py").read_text(encoding="utf-8")
-    tree = ast.parse(source)
-    calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
-             and isinstance(node.func, ast.Attribute) and node.func.attr == "ensure_side_subscriptions"]
-    assert len(calls) == 1
-    guarded = [branch for branch in ast.walk(tree) if isinstance(branch, ast.If)
-               and "not subscribed" in ast.unparse(branch.test)
-               and any(node is calls[0] for statement in branch.body for node in ast.walk(statement))]
-    assert guarded, "ensure_side_subscriptions must run only while the verified graph is not yet subscribed"
+    asked = []
+    monkeypatch.setattr(sync_command.side_subscriptions, "ensure_side_subscriptions", lambda client, cfg: asked.append(1))
+
+    class Node:
+        answers = [DkgError("node busy"), {"jobId": "job-1"}]
+
+        def subscribe_context_graph(self, _graph):
+            answer = self.answers.pop(0)
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+
+    run = sync_command._CatchupSync(BlackboxConfig(context_graph_id="owner/custom"), Node(),
+                                    argparse.Namespace(wait=False, timeout=5))
+    for _poll in range(4):
+        run._subscribe()
+    assert run.subscribed and len(asked) == 2   # the failed attempt and the one that succeeded; never again

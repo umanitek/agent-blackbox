@@ -2,9 +2,9 @@
 
 Drives the local node's catch-up of the verified graph (curator peer first,
 generic peers as fallback; the subscription includes the shared memory the
-community's reports live in), then compiles the ruleset. ``_cmd_sync_impl``
-and ``_catchup_authoritative_vm`` are the two long functions quality item G4
-will turn into an explicit state machine.
+community's reports live in), then compiles the ruleset. The catch-up route is one
+:class:`_CatchupSync` run (its state and its steps); ``_catchup_authoritative_vm`` is the
+remaining long function of quality item G4.
 """
 
 from __future__ import annotations
@@ -169,523 +169,361 @@ def _cmd_sync_with_managed_dkg(cfg: BlackboxConfig, args: argparse.Namespace) ->
 
 
 def _cmd_sync_impl(args: argparse.Namespace) -> int:
+    """The catch-up route of ``blackbox sync`` (custom graph / peer, or no native route)."""
     cfg = load_blackbox_config()
-    client = DkgClient.for_config(cfg)
-    release_graph = cfg.context_graph_id == constants.DEFAULT_CONTEXT_GRAPH_ID
-    authoritative_available = bool(
-        cfg.graph_peer_id and callable(getattr(client, "catchup_from_peer", None))
-    )
-    # The pinned curator remains the preferred foreground source, but the DKG
-    # subscription is still persisted below. That durable subscription is what
-    # lets DKG continue reconciling after this command exits or the node restarts.
-    subscribed = False
-    baseline_catchup_known = False
-    baseline_catchup_job_id = ""
-    fresh_catchup_seen = False
-    fresh_catchup_job_id = ""
-    refreshed_catchup_job_id = ""
-    catchup_retry_attempts = 0
-    next_catchup_retry_at = 0.0
-    authoritative_attempted = False
-    authoritative_recovered = False
-    authoritative_cache_refreshed = False
-    authoritative_complete = False
-    authoritative_target = 0
-    sync_complete = False
-    deadline = time.monotonic() + max(1, int(getattr(args, "timeout", 180) or 180))
-    track_sync = bool(getattr(args, "wait", False))
+    return _CatchupSync(cfg, DkgClient.for_config(cfg), args).run()
 
-    if (
-        release_graph
-        and getattr(args, "wait", False)
-        and getattr(args, "require_rules", False)
-        and not authoritative_available
-    ):
-        print("  Required curator-pinned VM recovery is unavailable in this DKG build.")
-        return 2
 
-    if track_sync:
-        known_public, known_community = _last_sync_counts(cfg.context_graph_id)
-        sync_state.write(
-            "running",
-            context_graph_id=cfg.context_graph_id,
-            graph_peer_id=cfg.graph_peer_id,
-            phase="network-catchup",
-            public_entries=known_public,
-            community_entries=known_community,
-        )
+_FAILED_JOB_STATES = frozenset({"failed", "cancelled", "denied"})
 
-    if getattr(args, "wait", False):
-        try:
-            baseline_catchup = client.catchup_status(cfg.context_graph_id)
-            baseline_catchup_known = True
-            baseline_catchup_job_id = _catchup_job_id(baseline_catchup)
-        except (DkgError, AttributeError):
-            pass
 
-    rs = ruleset.Ruleset()
-    public_count = 0
-    community_count = 0
-    initial_rules_ready = False
-    attempt = 0
-    last_subscribe_error = ""
-    last_catchup: dict[str, Any] = {}
+class _CatchupSync:
+    """One ``blackbox sync`` over the node's catch-up (State, as one object: the fields are the
+    run's state, each method one step of the loop in :meth:`run`).
 
-    if release_graph and getattr(args, "wait", False):
-        local_release = _complete_local_release_ruleset(cfg, client)
-        if local_release is not None:
-            rs = local_release
-            counts = rs.counts()
-            public_count = _ruleset_graph_count(rs, "public")
-            initial_rules_ready = public_count > 0
-            authoritative_attempted = True
-            authoritative_recovered = True
-            authoritative_cache_refreshed = True
-            authoritative_complete = initial_rules_ready
-            authoritative_target = public_count
-            print(
-                "Local confirmed VM already contains the complete "
-                f"release ({public_count:,} enforceable threats)."
-            )
+    The steps, in loop order: recover from the pinned curator first (release graph, ``--wait``);
+    persist the subscription (DKG keeps reconciling after this command exits); poll the
+    catch-up job, retrying a deferred/unreachable one; refresh the rules once its job is done;
+    decide whether the sync is complete. The pinned curator stays the preferred foreground
+    source; the durable subscription is what lets DKG continue after exit or a restart.
+    """
 
-    def _record_verified_pass(_inserted_triples: int) -> None:
-        """Publish only locally committed threat counts between DKG passes."""
-        nonlocal rs, public_count, authoritative_target, initial_rules_ready
-        previous_public = public_count
-        became_ready = False
-        count_threats = getattr(client, "threat_count", None)
-        if callable(count_threats):
-            public_count = max(public_count, int(count_threats(cfg.context_graph_id) or 0))
-        if public_count > 0 and not initial_rules_ready:
-            # The DKG request has settled and its atomic store commit is now
-            # queryable. Build one partial verified cache before announcing
-            # readiness so an installer can safely open a useful dashboard
-            # while the same single-flight transfer continues.
+    def __init__(self, cfg: BlackboxConfig, client: DkgClient, args: argparse.Namespace) -> None:
+        self.cfg, self.client, self.args = cfg, client, args
+        self.wait = bool(getattr(args, "wait", False))
+        self.require_rules = bool(getattr(args, "require_rules", False))
+        self.release_graph = cfg.context_graph_id == constants.DEFAULT_CONTEXT_GRAPH_ID
+        self.authoritative_available = bool(cfg.graph_peer_id and callable(getattr(client, "catchup_from_peer", None)))
+        self.deadline = time.monotonic() + max(1, int(getattr(args, "timeout", 180) or 180))
+        # The catch-up job and the subscription.
+        self.subscribed = False
+        self.baseline_known, self.baseline_job_id = False, ""
+        self.fresh_seen, self.fresh_job_id, self.refreshed_job_id = False, "", ""
+        self.retry_attempts, self.next_retry_at = 0, 0.0
+        self.last_subscribe_error, self.last_catchup = "", {}
+        self.catchup_state, self.catchup_job_id, self.exact_job_status = "", "", False
+        # The pinned curator's recovery.
+        self.auth_attempted = self.auth_recovered = self.auth_cache_refreshed = self.auth_complete = False
+        self.auth_target = 0
+        # The rules.
+        self.rs: Any = ruleset.Ruleset()
+        self.public_count = self.community_count = 0
+        self.initial_rules_ready = self.sync_complete = False
+        self.attempt = 0
+
+    def run(self) -> int:
+        """Run the sync to completion, failure or the deadline; the exit code (2 = required rules missing)."""
+        if self.release_graph and self.wait and self.require_rules and not self.authoritative_available:
+            print("  Required curator-pinned VM recovery is unavailable in this DKG build.")
+            return 2
+        self._start()
+        while True:
+            outcome = self._step()
+            if outcome == "stop":
+                break
+            if outcome == "wait":
+                time.sleep(min(3.0, max(0.2, self.deadline - time.monotonic())))
+        self._finish_tracking()
+        return self._report()
+
+    def _start(self) -> None:
+        cfg = self.cfg
+        if self.wait:
+            known_public, known_community = _last_sync_counts(cfg.context_graph_id)
+            sync_state.write("running", context_graph_id=cfg.context_graph_id, graph_peer_id=cfg.graph_peer_id,
+                             phase="network-catchup", public_entries=known_public, community_entries=known_community)
             try:
-                partial_rules = ruleset.refresh(cfg, client)
-            except Exception as exc:
+                self.baseline_job_id = _catchup_job_id(self.client.catchup_status(cfg.context_graph_id))
+                self.baseline_known = True
+            except (DkgError, AttributeError):
+                pass
+        if self.release_graph and self.wait:
+            local_release = _complete_local_release_ruleset(cfg, self.client)
+            if local_release is not None:
+                self.rs = local_release
+                self.public_count = _ruleset_graph_count(self.rs, "public")
+                self.initial_rules_ready = self.public_count > 0
+                self.auth_attempted = self.auth_recovered = self.auth_cache_refreshed = True
+                self.auth_complete = self.initial_rules_ready
+                self.auth_target = self.public_count
+                print(f"Local confirmed VM already contains the complete release ({self.public_count:,} enforceable threats).")
+
+    def _write_running(self, phase: str, **fields: Any) -> None:
+        sync_state.write("running", context_graph_id=self.cfg.context_graph_id, graph_peer_id=self.cfg.graph_peer_id,
+                         phase=phase, public_entries=self.public_count, community_entries=self.community_count, **fields)
+
+    def _record_verified_pass(self, _inserted_triples: int) -> None:
+        """Between DKG passes: publish only locally committed threat counts, and build one
+        partial verified cache before announcing readiness (an installer may then open a
+        useful dashboard while the same single-flight transfer continues)."""
+        previous_public, became_ready = self.public_count, False
+        count_threats = getattr(self.client, "threat_count", None)
+        if callable(count_threats):
+            self.public_count = max(self.public_count, int(count_threats(self.cfg.context_graph_id) or 0))
+        if self.public_count > 0 and not self.initial_rules_ready:
+            try:
+                partial_rules = ruleset.refresh(self.cfg, self.client)
+            except Exception as exc:   # health: allow BLE001 -- a partial cache that cannot build waits for the next pass
                 logger.debug("blackbox: initial verified rules cache is not ready: %s", exc)
             else:
                 cached_public = _ruleset_graph_count(partial_rules, "public")
                 if cached_public > 0:
-                    rs = partial_rules
-                    public_count = max(public_count, cached_public)
-                    initial_rules_ready = True
-                    became_ready = True
-        authoritative_target = max(authoritative_target, public_count)
-        sync_state.write(
-            "running",
-            context_graph_id=cfg.context_graph_id,
-            graph_peer_id=cfg.graph_peer_id,
-            phase="recovering-verifiable-memory",
-            public_entries=public_count,
-            community_entries=community_count,
-        )
-        if initial_rules_ready and (public_count != previous_public or became_ready):
-            print(f"  {public_count:,} verified threats ready")
+                    self.rs, self.public_count = partial_rules, max(self.public_count, cached_public)
+                    self.initial_rules_ready = became_ready = True
+        self.auth_target = max(self.auth_target, self.public_count)
+        self._write_running("recovering-verifiable-memory")
+        if self.initial_rules_ready and (self.public_count != previous_public or became_ready):
+            print(f"  {self.public_count:,} verified threats ready")
 
-    while True:
+    def _recover(self, *, on_failure_refresh: bool) -> None:
+        """Ask the pinned curator for the verified graph (once per run), then take the rules it
+        left. A failed recovery reads the cache as it is (*on_failure_refresh*: refresh it)."""
+        cfg, client = self.cfg, self.client
+        self.auth_attempted = True
+        self.auth_recovered = _catchup_authoritative_vm(client, cfg.context_graph_id, cfg.graph_peer_id,
+                                                        self.deadline, on_progress=self._record_verified_pass)
+        if self.auth_recovered:
+            try:
+                self.rs = ruleset.refresh(cfg, client, force_query=True)
+            except ruleset.RulesetRefreshUnavailable:
+                self.rs = ruleset.peek(cfg)
+            else:
+                self.auth_cache_refreshed = True
+        else:
+            self.rs = ruleset.refresh(cfg, client) if on_failure_refresh else ruleset.peek(cfg)
+        cached_public = _ruleset_graph_count(self.rs, "public")
+        self.public_count = cached_public if self.auth_cache_refreshed else max(self.public_count, cached_public)
+        self.community_count = _ruleset_graph_count(self.rs, "community")
+        self.auth_target = self.public_count if self.auth_cache_refreshed else max(self.auth_target, self.public_count)
+
+    def _recover_first(self) -> None:
+        """The release graph has one known complete source peer: a fresh node asks it first
+        instead of downloading unrelated graphs from every generic peer. If that fails, the
+        ordinary subscription / catch-up below stays available."""
+        if not (self.release_graph and self.wait and self.authoritative_available and not self.auth_attempted):
+            return
+        # Successful passes already refreshed the cache via _record_verified_pass; a failure
+        # before any pass settled does not launch a competing full-store query (peek).
+        self._recover(on_failure_refresh=False)
+        if not self.auth_recovered and self.require_rules:
+            print("  Foreground curator recovery did not complete; persisting the DKG subscription for native reconciliation.")
+        if self.auth_recovered:
+            # A complete foreground snapshot; the subscription below still lets DKG own future updates.
+            self.fresh_seen = True
+            self.auth_complete = (self.auth_cache_refreshed and self.auth_target > 0
+                                  and self.public_count >= self.auth_target)
+
+    def _is_new_job(self, job_id: str) -> bool:
+        return bool(job_id) and (not self.baseline_known or job_id != self.baseline_job_id)
+
+    def _subscribe(self) -> None:
+        if self.subscribed:
+            return
+        # An active successor graph (T2) rides the same sync, fail-open — not on every poll.
+        side_subscriptions.ensure_side_subscriptions(self.client, self.cfg)
+        try:
+            job_id = _catchup_job_id(self.client.subscribe_context_graph(self.cfg.context_graph_id))
+            self.subscribed = True
+            if self._is_new_job(job_id):
+                self.fresh_seen, self.fresh_job_id = True, job_id
+            print(f"Subscribed to {self.cfg.context_graph_id}; DKG catch-up started.")
+        except DkgError as exc:
+            self.last_subscribe_error = str(exc)
+            print(f"warning: could not subscribe to {self.cfg.context_graph_id}: {exc}")
+
+    def _poll_catchup(self) -> None:
+        self.catchup_state, self.catchup_job_id, self.exact_job_status = "", "", False
+        if not (self.wait and self.subscribed):
+            return
+        try:
+            catchup, self.exact_job_status = _catchup_status(self.client, self.cfg.context_graph_id, self.fresh_job_id)
+        except DkgError:
+            return
+        self.last_catchup = catchup
+        self.catchup_state = str(catchup.get("status") or "").lower()
+        self.catchup_job_id = _catchup_job_id(catchup)
+        if self._is_new_job(self.catchup_job_id):
+            self.fresh_seen = True
+            if not self.fresh_job_id or not self.exact_job_status:
+                self.fresh_job_id = self.catchup_job_id
+
+    def _retried_deferred_job(self, now: float) -> bool:
+        """Replace a deferred / unreachable fresh catch-up (backing off); True when one was asked."""
+        retryable = (not self.auth_recovered and self.wait and self.subscribed and self.fresh_seen
+                     and self.catchup_state in {"deferred", "unreachable"})
+        if not (retryable and self.next_retry_at <= now < self.deadline):
+            return False
+        self.retry_attempts += 1
+        self.next_retry_at = now + min(10.0, float(2 ** min(self.retry_attempts - 1, 3)))
+        try:
+            replacement = self.client.subscribe_context_graph(self.cfg.context_graph_id)
+        except DkgError as exc:
+            self.last_subscribe_error = str(exc)
+            return False
+        self.fresh_seen, self.fresh_job_id = True, _catchup_job_id(replacement)
+        self.last_catchup = replacement if isinstance(replacement, dict) else {}
+        print(f"Retrying DKG catch-up after {self.catchup_state} state (attempt {self.retry_attempts}).")
+        return True
+
+    def _fresh_job_complete(self) -> bool:
+        return self.catchup_state == "done" and (
+            self.exact_job_status or not self.fresh_job_id or self.catchup_job_id == self.fresh_job_id)
+
+    def _refresh_rules(self, fresh_job_complete: bool, barrier_job_id: str) -> None:
+        """Refresh the rules once the catch-up job is done; while it is pending or failed only the
+        cheap job status is polled (DKG applies catch-up atomically: a full VM query then cannot
+        see useful partial rules and competes with the store write that must finish first)."""
+        if not self.subscribed:
+            return
+        pending = not self.auth_recovered and (
+            self.catchup_state in {"queued", "running"}
+            or (self.wait and self.fresh_seen and not fresh_job_complete and self.catchup_state not in _FAILED_JOB_STATES))
+        failed = not self.auth_recovered and self.fresh_seen and self.catchup_state in _FAILED_JOB_STATES
+        if pending or failed:
+            self.rs = ruleset.peek(self.cfg)
+            return
+        force_catchup = fresh_job_complete and barrier_job_id != self.refreshed_job_id
+        force_authoritative = self.auth_recovered and not self.auth_cache_refreshed
+        try:
+            self.rs = ruleset.refresh(self.cfg, self.client, force_query=force_catchup or force_authoritative)
+        except ruleset.RulesetRefreshUnavailable:
+            self.rs = ruleset.peek(self.cfg)
+        else:
+            if force_catchup:
+                self.refreshed_job_id = barrier_job_id
+            if force_authoritative:
+                self.auth_cache_refreshed = True
+
+    def _base_sync_complete(self, fresh_job_complete: bool, barrier_job_id: str) -> bool:
+        """Rules are here and the fresh catch-up has landed. A terminal generic catch-up is not
+        success by itself; a completed, idempotent pinned recovery is (it verified the snapshot)."""
+        authoritative_ready = self.auth_recovered and self.auth_cache_refreshed
+        cache_refreshed = not fresh_job_complete or self.refreshed_job_id == barrier_job_id
+        catchup_complete = authoritative_ready or (not self.wait or (
+            self.catchup_state not in {"queued", "running"} and cache_refreshed
+            and (not self.fresh_seen or fresh_job_complete)))
+        return self.public_count > 0 and catchup_complete
+
+    def _authoritative_empty(self) -> bool:
+        """After a pinned recovery: update its target / completeness; True (stop, failed) when
+        the curator's VM holds no public threat at all."""
+        if self.auth_recovered and self.public_count > self.auth_target:
+            self.auth_target = self.public_count
+        if not self.auth_recovered:
+            return False
+        self.auth_complete = self.auth_cache_refreshed and self.auth_target > 0 and self.public_count >= self.auth_target
+        if self.auth_target > 0:
+            return False
+        sync_state.write("failed", context_graph_id=self.cfg.context_graph_id, graph_peer_id=self.cfg.graph_peer_id,
+                         phase="empty-verifiable-memory", public_entries=0, expected_public_entries=0,
+                         community_entries=self.community_count, error="authoritative VM returned no public threat entries")
+        print("  authoritative VM returned zero public threat entries; the required ruleset is unavailable.")
+        return True
+
+    def _step(self) -> str:
+        """One pass of the loop: "again" (go round at once), "wait" (sleep first) or "stop"."""
         now = time.monotonic()
-        # The release graph has one known complete source peer. A fresh node
-        # asks it first instead of downloading unrelated durable graphs from
-        # every generic peer and only falling back minutes later.
-        # If the direct path fails, the ordinary subscription/catch-up path
-        # below remains available for compatibility and recovery.
-        if (
-            release_graph
-            and getattr(args, "wait", False)
-            and authoritative_available
-            and not authoritative_attempted
-        ):
-            authoritative_attempted = True
-            authoritative_recovered = _catchup_authoritative_vm(
-                client,
-                cfg.context_graph_id,
-                cfg.graph_peer_id,
-                deadline,
-                on_progress=_record_verified_pass,
-            )
-            if not authoritative_recovered and getattr(args, "require_rules", False):
-                print(
-                    "  Foreground curator recovery did not complete; "
-                    "persisting the DKG subscription for native reconciliation."
-                )
-            # Successful DKG passes already refreshed the verified cache via
-            # ``_record_verified_pass``. If the pinned source failed before a
-            # pass settled, do not launch a competing full-store query merely
-            # to decide whether to persist the background subscription.
-            if authoritative_recovered:
-                try:
-                    rs = ruleset.refresh(cfg, client, force_query=True)
-                except ruleset.RulesetRefreshUnavailable:
-                    rs = ruleset.peek(cfg)
-                else:
-                    authoritative_cache_refreshed = True
+        self._recover_first()
+        self._subscribe()
+        self._poll_catchup()
+        if self._retried_deferred_job(now):
+            return "again"
+        fresh_job_complete = self._fresh_job_complete()
+        barrier_job_id = self.catchup_job_id or self.fresh_job_id or "<unscoped>"
+        self._refresh_rules(fresh_job_complete, barrier_job_id)
+        self.public_count = _ruleset_graph_count(self.rs, "public")
+        self.community_count = _ruleset_graph_count(self.rs, "community")
+        base_complete = self._base_sync_complete(fresh_job_complete, barrier_job_id)
+        # A clean local store has no public rows yet: waiting for base_complete before asking
+        # the release source would deadlock that first sync, so the release graph asks at once.
+        if ((base_complete or self.release_graph) and self.release_graph and self.wait
+                and self.authoritative_available and not self.auth_attempted):
+            self._recover(on_failure_refresh=True)
+        if self._authoritative_empty():
+            return "stop"
+        self.sync_complete = base_complete and (not self.auth_attempted or self.auth_complete) and self.subscribed
+        if self.auth_recovered and not self.sync_complete:
+            phase = ("persisting-subscription" if not self.subscribed
+                     else "refreshing-verifiable-memory" if not self.auth_complete else "network-catchup")
+            self._write_running(phase, expected_public_entries=self.auth_target)
+        if self.sync_complete or (not self.auth_recovered and self.fresh_seen and self.catchup_state in _FAILED_JOB_STATES):
+            return "stop"
+        return self._at_deadline() or self._waiting()
+
+    def _at_deadline(self) -> str:
+        """"stop" (recording why) when this run may not wait any longer, else ""."""
+        if self.wait and time.monotonic() < self.deadline:
+            return ""
+        cfg = self.cfg
+        if not self.subscribed:
+            error = "required DKG subscription could not be persisted"
+            error = f"{error}: {self.last_subscribe_error}" if self.last_subscribe_error else error
+            sync_state.write("failed", context_graph_id=cfg.context_graph_id, graph_peer_id=cfg.graph_peer_id,
+                             phase="persisting-subscription", public_entries=self.public_count,
+                             expected_public_entries=self.auth_target or self.public_count,
+                             community_entries=self.community_count, error=error)
+        elif self.auth_recovered and not self.auth_complete:
+            sync_state.write("failed", context_graph_id=cfg.context_graph_id, graph_peer_id=cfg.graph_peer_id,
+                             phase="refreshing-verifiable-memory", public_entries=self.public_count,
+                             expected_public_entries=self.auth_target, community_entries=self.community_count,
+                             error="public VM reconciliation deadline reached")
+        return "stop"
+
+    def _waiting(self) -> str:
+        self.attempt += 1
+        if self.attempt == 1 or self.attempt % 10 == 0:
+            if self.auth_recovered and not self.auth_complete:
+                print(f"Waiting for public VM reconciliation ({self.public_count:,}/{self.auth_target:,} entries)...")
             else:
-                rs = ruleset.peek(cfg)
-            counts = rs.counts()
-            cached_public = _ruleset_graph_count(rs, "public")
-            public_count = (
-                cached_public
-                if authoritative_cache_refreshed
-                else max(public_count, cached_public)
-            )
-            community_count = _ruleset_graph_count(rs, "community")
-            authoritative_target = (
-                public_count
-                if authoritative_cache_refreshed
-                else max(authoritative_target, public_count)
-            )
-            if authoritative_recovered:
-                # The pinned pass established a complete foreground snapshot.
-                # Still flow through the subscription call below so that DKG
-                # owns future updates and restart-safe reconciliation.
-                fresh_catchup_seen = True
-                authoritative_complete = (
-                    authoritative_cache_refreshed
-                    and authoritative_target > 0
-                    and public_count >= authoritative_target
-                )
+                print(f"Waiting for DKG catch-up ({self.catchup_state or 'syncing'})...")
+        return "wait"
 
-        if not subscribed:
-            # An active successor graph (T2) rides the same sync, fail-open — not on every poll.
-            side_subscriptions.ensure_side_subscriptions(client, cfg)
-            try:
-                subscription = client.subscribe_context_graph(cfg.context_graph_id)
-                subscribed = True
-                subscription_job_id = _catchup_job_id(subscription)
-                if subscription_job_id and (
-                    not baseline_catchup_known
-                    or subscription_job_id != baseline_catchup_job_id
-                ):
-                    fresh_catchup_seen = True
-                    fresh_catchup_job_id = subscription_job_id
-                print(f"Subscribed to {cfg.context_graph_id}; DKG catch-up started.")
-            except DkgError as exc:
-                last_subscribe_error = str(exc)
-                print(f"warning: could not subscribe to {cfg.context_graph_id}: {exc}")
-
-        catchup_state = ""
-        catchup_job_id = ""
-        exact_job_status = False
-        if getattr(args, "wait", False) and subscribed:
-            try:
-                catchup, exact_job_status = _catchup_status(
-                    client,
-                    cfg.context_graph_id,
-                    fresh_catchup_job_id,
-                )
-                last_catchup = catchup
-                catchup_state = str(catchup.get("status") or "").lower()
-                catchup_job_id = _catchup_job_id(catchup)
-                if catchup_job_id and (
-                    not baseline_catchup_known
-                    or catchup_job_id != baseline_catchup_job_id
-                ):
-                    fresh_catchup_seen = True
-                    if not fresh_catchup_job_id or not exact_job_status:
-                        fresh_catchup_job_id = catchup_job_id
-            except DkgError:
-                pass
-        retryable_catchup = (
-            not authoritative_recovered
-            and getattr(args, "wait", False)
-            and subscribed
-            and fresh_catchup_seen
-            and catchup_state in {"deferred", "unreachable"}
-        )
-        if retryable_catchup and now >= next_catchup_retry_at and now < deadline:
-            catchup_retry_attempts += 1
-            next_catchup_retry_at = now + min(
-                10.0,
-                float(2 ** min(catchup_retry_attempts - 1, 3)),
-            )
-            try:
-                replacement = client.subscribe_context_graph(cfg.context_graph_id)
-                replacement_job_id = _catchup_job_id(replacement)
-                fresh_catchup_seen = True
-                fresh_catchup_job_id = replacement_job_id
-                last_catchup = replacement if isinstance(replacement, dict) else {}
-                print(
-                    "Retrying DKG catch-up after "
-                    f"{catchup_state} state (attempt {catchup_retry_attempts})."
-                )
-                continue
-            except DkgError as exc:
-                last_subscribe_error = str(exc)
-        fresh_job_complete = catchup_state == "done" and (
-            exact_job_status
-            or not fresh_catchup_job_id
-            or catchup_job_id == fresh_catchup_job_id
-        )
-        barrier_job_id = catchup_job_id or fresh_catchup_job_id or "<unscoped>"
-        catchup_pending = not authoritative_recovered and (
-            catchup_state in {"queued", "running"}
-            or (
-                getattr(args, "wait", False)
-                and fresh_catchup_seen
-                and not fresh_job_complete
-                and catchup_state not in {"failed", "cancelled", "denied"}
-            )
-        )
-        catchup_failed = (
-            not authoritative_recovered
-            and fresh_catchup_seen
-            and catchup_state in {"failed", "cancelled", "denied"}
-        )
-        if subscribed:
-            if catchup_pending or catchup_failed:
-                # DKG applies durable catch-up atomically. A full VM query here
-                # cannot expose useful partial rules and competes with the
-                # Blazegraph write that must finish first. Poll only the cheap
-                # job status until the transfer reaches a terminal state.
-                rs = ruleset.peek(cfg)
-            else:
-                force_catchup_query = (
-                    fresh_job_complete
-                    and barrier_job_id != refreshed_catchup_job_id
-                )
-                force_authoritative_query = (
-                    authoritative_recovered
-                    and not authoritative_cache_refreshed
-                )
-                force_query = force_catchup_query or force_authoritative_query
-                try:
-                    rs = ruleset.refresh(cfg, client, force_query=force_query)
-                except ruleset.RulesetRefreshUnavailable:
-                    rs = ruleset.peek(cfg)
-                else:
-                    if force_catchup_query:
-                        refreshed_catchup_job_id = barrier_job_id
-                    if force_authoritative_query:
-                        authoritative_cache_refreshed = True
-        counts = rs.counts()
-        public_count = _ruleset_graph_count(rs, "public")
-        community_count = _ruleset_graph_count(rs, "community")
-
-        # A terminal generic catch-up is not success by itself.  A completed,
-        # idempotent source-pinned recovery is: it has independently
-        # verified the durable VM snapshot and may satisfy this gate on the
-        # following loop iteration.
-        authoritative_fallback_ready = (
-            authoritative_recovered and authoritative_cache_refreshed
-        )
-        catchup_active = catchup_state in {"queued", "running"}
-        catchup_cache_refreshed = (
-            not fresh_job_complete
-            or refreshed_catchup_job_id == barrier_job_id
-        )
-        fresh_catchup_complete = authoritative_fallback_ready or (
-            not getattr(args, "wait", False)
-            or (
-                not catchup_active
-                and catchup_cache_refreshed
-                and (
-                    not fresh_catchup_seen
-                    or fresh_job_complete
-                )
-            )
-        )
-        base_sync_complete = public_count > 0 and fresh_catchup_complete
-        # A clean local store has no public rows yet.  Waiting for
-        # ``base_sync_complete`` before contacting the configured release
-        # source deadlocks that exact first-sync case when generic peers do
-        # not hold the graph.  Once the release graph is subscribed, pin the
-        # authoritative source immediately; the recovery helper already
-        # waits through DKG backpressure and verifies completion atomically.
-        authoritative_recovery_ready = base_sync_complete or release_graph
-        if (
-            authoritative_recovery_ready
-            and release_graph
-            and getattr(args, "wait", False)
-            and authoritative_available
-            and not authoritative_attempted
-        ):
-            authoritative_attempted = True
-            authoritative_recovered = _catchup_authoritative_vm(
-                client,
-                cfg.context_graph_id,
-                cfg.graph_peer_id,
-                deadline,
-                on_progress=_record_verified_pass,
-            )
-            if authoritative_recovered:
-                try:
-                    rs = ruleset.refresh(cfg, client, force_query=True)
-                except ruleset.RulesetRefreshUnavailable:
-                    rs = ruleset.peek(cfg)
-                else:
-                    authoritative_cache_refreshed = True
-            else:
-                rs = ruleset.refresh(cfg, client)
-            counts = rs.counts()
-            cached_public = _ruleset_graph_count(rs, "public")
-            public_count = (
-                cached_public
-                if authoritative_cache_refreshed
-                else max(public_count, cached_public)
-            )
-            community_count = _ruleset_graph_count(rs, "community")
-            authoritative_target = (
-                public_count
-                if authoritative_cache_refreshed
-                else max(authoritative_target, public_count)
-            )
-        if authoritative_recovered and public_count > authoritative_target:
-            authoritative_target = public_count
-        if authoritative_recovered:
-            authoritative_complete = (
-                authoritative_cache_refreshed
-                and authoritative_target > 0
-                and public_count >= authoritative_target
-            )
-            if authoritative_target <= 0:
-                error = "authoritative VM returned no public threat entries"
-                sync_state.write(
-                    "failed",
-                    context_graph_id=cfg.context_graph_id,
-                    graph_peer_id=cfg.graph_peer_id,
-                    phase="empty-verifiable-memory",
-                    public_entries=0,
-                    expected_public_entries=0,
-                    community_entries=community_count,
-                    error=error,
-                )
-                print(
-                    "  authoritative VM returned zero public threat entries; "
-                    "the required ruleset is unavailable."
-                )
-                break
-        subscription_ready = subscribed
-        sync_complete = (
-            base_sync_complete
-            and (not authoritative_attempted or authoritative_complete)
-            and subscription_ready
-        )
-        if authoritative_recovered and not sync_complete:
-            sync_state.write(
-                "running",
-                context_graph_id=cfg.context_graph_id,
-                graph_peer_id=cfg.graph_peer_id,
-                phase=(
-                    "persisting-subscription"
-                    if not subscription_ready
-                    else (
-                        "refreshing-verifiable-memory"
-                        if not authoritative_complete
-                        else "network-catchup"
-                    )
-                ),
-                public_entries=public_count,
-                expected_public_entries=authoritative_target,
-                community_entries=community_count,
-            )
-        if sync_complete:
-            break
-        if (
-            not authoritative_recovered
-            and fresh_catchup_seen
-            and catchup_state in {
-                "failed", "cancelled", "denied"
-            }
-        ):
-            break
-
-        now = time.monotonic()
-        if not getattr(args, "wait", False) or now >= deadline:
-            if not subscribed:
-                error = "required DKG subscription could not be persisted"
-                if last_subscribe_error:
-                    error = f"{error}: {last_subscribe_error}"
-                sync_state.write(
-                    "failed",
-                    context_graph_id=cfg.context_graph_id,
-                    graph_peer_id=cfg.graph_peer_id,
-                    phase="persisting-subscription",
-                    public_entries=public_count,
-                    expected_public_entries=authoritative_target or public_count,
-                    community_entries=community_count,
-                    error=error,
-                )
-            elif authoritative_recovered and not authoritative_complete:
-                sync_state.write(
-                    "failed",
-                    context_graph_id=cfg.context_graph_id,
-                    graph_peer_id=cfg.graph_peer_id,
-                    phase="refreshing-verifiable-memory",
-                    public_entries=public_count,
-                    expected_public_entries=authoritative_target,
-                    community_entries=community_count,
-                    error="public VM reconciliation deadline reached",
-                )
-            break
-        attempt += 1
-        if attempt == 1 or attempt % 10 == 0:
-            if authoritative_recovered and not authoritative_complete:
-                print(
-                    "Waiting for public VM reconciliation "
-                    f"({public_count:,}/{authoritative_target:,} entries)..."
-                )
-            else:
-                state = catchup_state or "syncing"
-                print(f"Waiting for DKG catch-up ({state})...")
-        time.sleep(min(3.0, max(0.2, deadline - now)))
-
-    if track_sync:
+    def _finish_tracking(self) -> None:
+        if not self.wait:
+            return
+        cfg = self.cfg
         current_transfer = sync_state.read_for_graph(cfg.context_graph_id)
-        if sync_complete:
-            sync_state.write(
-                "done",
-                context_graph_id=cfg.context_graph_id,
-                graph_peer_id=cfg.graph_peer_id,
-                phase="complete",
-                public_entries=public_count,
-                expected_public_entries=authoritative_target or public_count,
-                community_entries=community_count,
-            )
+        if self.sync_complete:
+            sync_state.write("done", context_graph_id=cfg.context_graph_id, graph_peer_id=cfg.graph_peer_id,
+                             phase="complete", public_entries=self.public_count,
+                             expected_public_entries=self.auth_target or self.public_count,
+                             community_entries=self.community_count)
         elif current_transfer.get("status") == "running":
-            sync_state.write(
-                "failed",
-                context_graph_id=cfg.context_graph_id,
-                graph_peer_id=cfg.graph_peer_id,
-                phase=str(current_transfer.get("phase") or "network-catchup"),
-                public_entries=public_count,
-                community_entries=community_count,
-                error="required threat graph sync did not complete before the deadline",
-            )
+            sync_state.write("failed", context_graph_id=cfg.context_graph_id, graph_peer_id=cfg.graph_peer_id,
+                             phase=str(current_transfer.get("phase") or "network-catchup"),
+                             public_entries=self.public_count, community_entries=self.community_count,
+                             error="required threat graph sync did not complete before the deadline")
 
-    print(f"Ruleset synced from {cfg.context_graph_id}:")
-    print(f"  {counts['injection']} injection, {counts['escalation']} escalation, "
-          f"{counts['dependency']} dependency")
-    print(f"  {public_count:,} public VM (curated)")
-    print(f"  Community reports: shared memory of {display_safety.term_safe(cfg.context_graph_id)} "
-          f"[sharing {'on' if cfg.community_enabled else 'off'}]")
-    if not sync_complete:
-        if not subscribed:
+    def _report(self) -> int:
+        counts = self.rs.counts()
+        print(f"Ruleset synced from {self.cfg.context_graph_id}:")
+        print(f"  {counts['injection']} injection, {counts['escalation']} escalation, {counts['dependency']} dependency")
+        print(f"  {self.public_count:,} public VM (curated)")
+        print(f"  Community reports: shared memory of {display_safety.term_safe(self.cfg.context_graph_id)} "
+              f"[sharing {'on' if self.cfg.community_enabled else 'off'}]")
+        if self.sync_complete:
+            return 0
+        if not self.subscribed:
             print("  Required public VM subscription could not be persisted.")
-            if last_subscribe_error:
-                print(f"  DKG subscription error: {last_subscribe_error}")
+            if self.last_subscribe_error:
+                print(f"  DKG subscription error: {self.last_subscribe_error}")
             print("  Retry with `hermes blackbox sync --wait`.")
-        elif fresh_catchup_seen and str(
-            last_catchup.get("status") or ""
-        ).lower() in {
-            "failed", "cancelled", "denied"
-        }:
-            detail = last_catchup.get("error") or (last_catchup.get("result") or {}).get("error")
+        elif self.fresh_seen and str(self.last_catchup.get("status") or "").lower() in _FAILED_JOB_STATES:
+            detail = self.last_catchup.get("error") or (self.last_catchup.get("result") or {}).get("error")
             print(f"  Fresh DKG catch-up failed{f': {detail}' if detail else '.'}")
-        elif authoritative_attempted and authoritative_target == 0:
+        elif self.auth_attempted and self.auth_target == 0:
             print("  The authoritative curator VM returned zero public threat entries.")
             print("  No rules are available to protect this node.")
-        elif authoritative_attempted and not authoritative_complete:
+        elif self.auth_attempted and not self.auth_complete:
             print("  Authoritative curator VM transfer is incomplete.")
             print("  Retry with `hermes blackbox sync --wait`.")
         else:
             print("  0 rules — DKG has not made curated VM threat rows queryable yet.")
             print("  Retry with `hermes blackbox sync --wait`.")
-        if getattr(args, "require_rules", False):
+        if self.require_rules:
             print("  Required ruleset sync is incomplete.")
             return 2
-    return 0
+        return 0
 
 
 def _ruleset_graph_count(rs: Any, source: str) -> int:
