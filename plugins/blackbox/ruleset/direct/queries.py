@@ -11,7 +11,7 @@ from ...kernel import constants
 from ...kernel import threat_ids
 from ...kernel.sparql_text import is_safe_iri, sparql_string_literal as literal
 from ...kernel.dkg_client import extract_binding
-from ..graph_queries import _context_graph_data_uri, _owner_pin
+from ..graph_queries import context_graph_data_uri, owner_pin
 from .client import GraphReadUnavailable
 
 MAX_CANDIDATES = 64
@@ -34,13 +34,13 @@ def candidates(tool: str, args) -> tuple[list[str], list[str]]:
 
 
 def confirmed_scope(cg_id: str) -> str:
-    graph = _context_graph_data_uri(cg_id)
+    graph = context_graph_data_uri(cg_id)
     if not graph:
         raise GraphReadUnavailable("INVALID_CONTEXT_GRAPH")
     return f'''GRAPH <{graph}/_meta> {{
       ?ka <http://dkg.io/ontology/assertionGraph> ?sourceGraph ;
           <http://dkg.io/ontology/status> "confirmed" .
-      {_owner_pin(cg_id).replace('dkg:kaUal', '<http://dkg.io/ontology/kaUal>')}
+      {owner_pin(cg_id)}
     }}
     FILTER(STRSTARTS(STR(?sourceGraph), {literal(graph + '/_verifiable_memory/')}))'''
 

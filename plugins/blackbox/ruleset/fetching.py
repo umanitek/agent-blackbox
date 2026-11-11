@@ -55,7 +55,7 @@ def confirmed_partitions(client: DkgClient, cg_id: str) -> Optional[PartitionLis
     metadata = client.query(partition_query, cg_id, view=None, on_error=_QUERY_ERROR)
     if metadata is _QUERY_ERROR:
         return None
-    vm_prefix = f"{graph_queries._context_graph_data_uri(cg_id)}/_verifiable_memory/"
+    vm_prefix = f"{graph_queries.context_graph_data_uri(cg_id)}/_verifiable_memory/"
     partition_metadata = [
         (graph, extract_binding(row.get("status")))
         for row in metadata
@@ -86,7 +86,7 @@ def fetch_tier(
         listing = listing or confirmed_partitions(client, cg_id)
         if listing is None:
             return None
-        data_graph = graph_queries._context_graph_data_uri(cg_id)
+        data_graph = graph_queries.context_graph_data_uri(cg_id)
         small_tiers = _verified_small_tier_rows(client, cg_id, f"{data_graph}/_verifiable_memory/", listing)
         if small_tiers is None:
             return None

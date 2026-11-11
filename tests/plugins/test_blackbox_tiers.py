@@ -594,7 +594,7 @@ def test_verified_partitions_are_pinned_to_the_graph_owner():
     from plugins.blackbox.ruleset import graph_queries
     owner = "0x37b1Fdfd134e2b17583bCBdD3034F91504cD9C70"
     sparql = graph_queries._verified_partitions_sparql(f"{owner}/agent-blackbox-vm")
-    assert "dkg:kaUal ?kaUal" in sparql
+    assert "<http://dkg.io/ontology/kaUal> ?kaUal" in sparql   # one spelling, with or without a PREFIX
     assert f'"/{owner.lower()}/"' in sparql      # UALs are compared lowercase
 
 

@@ -94,7 +94,7 @@ def test_the_totals_query_is_one_owner_pinned_aggregate_over_confirmed_assets():
 
 
 def test_the_totals_query_shares_the_partition_listings_owner_pin():
-    pin = graph_queries._owner_pin(VM_GRAPH)
+    pin = graph_queries.owner_pin(VM_GRAPH)
 
     assert pin and pin in graph_queries._verified_partitions_sparql(VM_GRAPH)
     assert pin in graph_queries._verified_partition_totals_sparql(VM_GRAPH)
