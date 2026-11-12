@@ -30,7 +30,7 @@ from typing import Any
 from ..kernel import constants, sparql_text, threat_ids
 from ..kernel.browser_boundary import LOOPBACK_HOSTS, BrowserBoundary
 from ..kernel.host_command import hermes_argv
-from .. import shields
+from .. import attach, shields
 from ..sync import read_durable_progress
 from . import community_routes, direct_reads, docs_routes, graph_pages, lifecycle, playground_routes, shields_routes, sync_meter, sync_timing
 from .graph_pages import _balanced_graph_entries, _graph_entries
@@ -619,7 +619,7 @@ def _profile_activity_state(
     states: dict[tuple[str, str], dict[str, Any]] = {}
     canonical: dict[str, tuple[str, str]] = {}
     for row in attach_rows:
-        if not row.get("target") or not row.get("protected", row.get("already")):
+        if not row.get("target") or not attach.is_protected(row):
             continue
         framework = str(row.get("kind") or "").lower()
         workspace = _workspace_key(row.get("target"))
@@ -673,7 +673,7 @@ def create_app(*, manage_blackbox: bool = False):
     from fastapi import Body, FastAPI, Query
     from fastapi.responses import FileResponse, JSONResponse, HTMLResponse
 
-    from .. import attach, audit, community, ruleset
+    from .. import audit, community, ruleset
     from ..kernel import settings
     from ..sync import state as sync_state
     from ..kernel.config import load_blackbox_config
@@ -844,10 +844,7 @@ def create_app(*, manage_blackbox: bool = False):
                 _rescan_state["last_reconcile"] = now
             for kind, target in sorted(targets):
                 try:
-                    if kind == "hermes":
-                        row = attach.attach_hermes(Path(target))
-                    else:
-                        row = attach.attach_openclaw(Path(target))
+                    row = attach.set_protection(kind, target, True) or {}
                     touched.append(row)
                     if row.get("error"):
                         logger.warning("blackbox rescan: attach %s %s failed: %s", kind, target, row["error"])
@@ -1314,7 +1311,7 @@ def create_app(*, manage_blackbox: bool = False):
         protected_local_fw = {
             str(row.get("kind") or "").lower()
             for row in attach_rows
-            if row.get("target") and row.get("protected", row.get("already"))
+            if row.get("target") and attach.is_protected(row)
         }
 
         # Read local evidence once, then split it by framework + workspace.
@@ -1383,7 +1380,7 @@ def create_app(*, manage_blackbox: bool = False):
             attached = [
                 (str(row.get("kind") or "").lower(), str(row.get("target") or ""))
                 for row in attach_rows
-                if row.get("protected", row.get("already")) and row.get("target")
+                if attach.is_protected(row) and row.get("target")
             ]
             fw_with_ws = {fw for fw, _ in attached}
             local_addr_lc = local_addr.lower()
@@ -1458,7 +1455,7 @@ def create_app(*, manage_blackbox: bool = False):
                 if not isinstance(row, dict):
                     continue
                 saw_row = True
-                row["protected"] = bool(row.get("protected", row.get("already")))
+                row["protected"] = attach.is_protected(row)
                 row["available"] = bool(row.get("target")) and not row.get("error")
                 if not row["available"]:
                     row["disabled_reason"] = str(row.get("error") or supported[kind])
@@ -1494,10 +1491,9 @@ def create_app(*, manage_blackbox: bool = False):
                 target = str(item.get("target") or "").strip()
                 if not target:
                     continue
-                if kind == "hermes":
-                    rows.append(attach.attach_hermes(Path(target)) if item.get("enabled") else attach.detach_hermes(Path(target)))
-                elif kind == "openclaw":
-                    rows.append(attach.attach_openclaw(Path(target)) if item.get("enabled") else attach.detach_openclaw(Path(target)))
+                row = attach.set_protection(kind, target, bool(item.get("enabled")))
+                if row is not None:
+                    rows.append(row)
         ok = all(row.get("ok") for row in rows) if rows else False
         return JSONResponse({"ok": ok, "targets": rows}, status_code=200 if ok else 400)
 

@@ -1007,3 +1007,16 @@ def test_a_hermes_attach_that_changed_something_says_so_and_a_repeat_does_not(fa
     assert attach.attach_hermes(home)["changed"] is False
     assert attach.attach_hermes(fake_env["hermes_profile"] if "hermes_profile" in fake_env else home,
                                 dry_run=True)["changed"] is False
+
+
+def test_one_dispatch_switches_protection_by_agent_kind(fake_env, monkeypatch, tmp_path):
+    """The dashboard wrote `if kind == "hermes": … elif "openclaw": …` in its rescan and its
+    protection route (and the "is protected" rule four times); attach owns both now."""
+    monkeypatch.setenv("BLACKBOX_HOME", str(tmp_path / "bb"))
+    profile = fake_env["profile"]
+    on = attach.set_protection("hermes", str(profile), True)
+    assert on["ok"] and attach.is_protected(on) and _protected(profile)
+    off = attach.set_protection("HERMES", str(profile), False)
+    assert off["ok"] and not _protected(profile)
+    assert attach.set_protection("unknown-kind", str(profile), True) is None
+    assert attach.is_protected({"already": True}) and not attach.is_protected({"protected": False, "already": True})
