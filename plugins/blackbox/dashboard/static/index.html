@@ -3469,13 +3469,6 @@
     return SEV[s] ? s : "info";
   }
 
-  function fmtTime(v) {
-    if (v == null) return "-";
-    var d = (typeof v === "number") ? new Date(v * (v < 1e12 ? 1000 : 1)) : new Date(v);
-    if (isNaN(d.getTime())) return esc(v);
-    return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-  }
-
   function fmtAgo(v) {
     if (v == null) return "-";
     var d = (typeof v === "number") ? new Date(v * (v < 1e12 ? 1000 : 1)) : new Date(v);
@@ -4732,47 +4725,6 @@
   // the call that tripped them.
   function clip(s, n) { s = String(s || ""); n = n || 22; return s.length > n ? s.slice(0, n - 1) + "…" : s; }
 
-  // Map a local action event → a threat category (drives node colour + glyph).
-  function localCallCat(ev) {
-    if (ev.type === "file") return "fileaccess";
-    if (ev.type === "dependency") return "dependency";
-    var t = String(ev.tool || "").toLowerCase();
-    if (/terminal|shell|bash|command|exec|run/.test(t)) return "escalation";
-    if (/skill|plugin|install/.test(t)) return "skill";
-    if (/read|open|cat|write|edit|patch|create|delete|file/.test(t)) return "fileaccess";
-    return "other";
-  }
-  // A short label for an action node.
-  function localCallLabel(ev) {
-    if (ev.type === "file") {
-      var p = String(ev.path || ""); var base = p.split("/").pop() || p;
-      return (ev.mode || "read") + (base ? " " + base : "");
-    }
-    if (ev.type === "dependency") return (ev.name || "dep") + (ev.version ? "@" + ev.version : "");
-    return ev.tool || "tool";
-  }
-  // Highest severity among a call's threats, as a sevClass string (or null).
-  function callMaxSev(threats) {
-    var best = null, bestRank = 0;
-    (threats || []).forEach(function (t) {
-      var sc = sevClass(t.severity), r = SEV_RANK[sc] || 0;
-      if (r > bestRank) { bestRank = r; best = sc; }
-    });
-    return best;
-  }
-
-  // A compact {title, severity, identifier, ts, tool} view of a threat, for
-  // listing inside the session/call detail modals.
-  function threatBrief(t) {
-    return {
-      title: t.title || t.identifier || "Threat", severity: sevClass(t.severity),
-      identifier: t.identifier || "", ts: t.ts || 0, tool: t.tool || ""
-    };
-  }
-  // The full package coordinate for a dependency-install event.
-  function depCoord(ev) {
-    return (ev.ecosystem ? ev.ecosystem + ":" : "") + (ev.name || "") + (ev.version ? "@" + ev.version : "");
-  }
   // Shape a local threat into the finding object openFindingModal expects,
   // carrying the session's agent + timestamp so the modal shows "Detected …".
   function localFinding(t, s) {
