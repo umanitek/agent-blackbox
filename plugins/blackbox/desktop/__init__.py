@@ -4,8 +4,8 @@ Hermes Desktop loads a plugin's ``desktop/plugin.js`` (this folder) as a native 
 and reaches the plugin's backend through ``/api/plugins/blackbox/…`` (``dashboard/plugin_api.py``).
 This module is the one door both use — a Facade over the config, the ruleset and the findings log:
 
-- :func:`status_payload` — protection at a glance for the status bar and the page header;
-- :func:`findings_payload` — the newest findings for the page's list;
+- :func:`status_payload` — protection at a glance for the status bar and the page header (the page's
+  findings list reads the dashboard's own findings, through :func:`dashboard_link`);
 - :func:`dashboard_link` — the one :class:`~.dashboard_link.DashboardLink` the Desktop routes forward
   the dashboard's own API through (every other panel: threat graph, Trader Shield, agents, settings);
 - :func:`long_calls` — the assistant turn and Playground tests, which outlast Desktop's 30 s request
@@ -23,14 +23,13 @@ its most severe finding and says how many more matched (``more``), and today's c
 
 The alert carries what a person needs to react — title, severity, category, the tool, blocked or
 flagged — and never the evidence, the command, its arguments or any matched text: those stay in the
-local log, which the page reads through :func:`findings_payload` on this machine only.
+local log, which the page reads from the dashboard on this machine only.
 
 Fail-open throughout: a Hermes without plugin events, a ruleset that cannot load, or an unreadable
 log gives a calm answer, never an exception into the hook or the Desktop app.
 
     from plugins.blackbox import desktop
-    desktop.status_payload()            # {"mode": "audit", "rules": 1234, "today": {...}, ...}
-    desktop.findings_payload(limit=20)  # {"findings": [...], "total": 42}
+    desktop.status_payload()            # {"mode": "audit", "blockSeverity": …, "today": {...}, "dashboardUrl": …}
     desktop.announce_findings("pre_tool_call", finding_dicts, {"decision": "block"})
 """
 
@@ -55,8 +54,6 @@ logger = logging.getLogger(__name__)
 #: The catalog name: Hermes namespaces the event as ``plugin.<PLUGIN_ID>.<event>``.
 PLUGIN_ID = "blackbox"
 FINDING_EVENT = "finding"
-#: The page shows at most this many findings; the full history is on the local dashboard.
-MAX_FINDINGS = 100
 _DAY_SECONDS = 86_400
 
 
@@ -156,45 +153,20 @@ def _actions(rows: Sequence[Mapping[str, Any]]) -> list[FindingAlert]:
     return [_alert(group, group[0], float(group[0].get("ts") or 0), sandbox=False) for group in grouped.values()]
 
 
-def findings_payload(limit: int = 20) -> dict[str, Any]:
-    """The newest checked actions with findings, newest first (``{"findings": [...], "total": n}``,
-    where ``total`` counts every finding in the log)."""
-    limit = max(1, min(int(limit), MAX_FINDINGS))
-    actions = _actions(_rows(MAX_FINDINGS))[:limit]
-    try:
-        total = audit.count_findings()
-    except Exception:   # health: allow BLE001 -- a count is a nicety; the list still shows
-        total = len(actions)
-    return {"findings": actions, "total": total}
-
-
-def _rules(cfg: Any) -> tuple[Optional[int], float]:
-    """(rules loaded or None when the ruleset cannot be read, when it was last synced)."""
-    try:
-        rules = ruleset.get(cfg)
-        return sum(rules.counts().values()), float(getattr(rules, "synced_at", 0) or 0)
-    except Exception as exc:   # health: allow BLE001 -- a ruleset that cannot load reads as "unknown", never an error
-        logger.warning("blackbox: ruleset unreadable for Desktop: %s", exc)
-        return None, 0.0
-
-
 def status_payload() -> dict[str, Any]:
-    """Protection at a glance: mode, rules loaded, today's checked actions with findings (and how
-    many were blocked), the newest one, the local dashboard's address."""
+    """Protection at a glance — exactly what the status bar and the page header read (polled every
+    4 s, so nothing here loads the ruleset): mode, block severity, today's checked actions with
+    findings and how many were blocked, the local dashboard's address."""
     cfg = load_blackbox_config()
-    rules, synced_at = _rules(cfg)
     since = time.time() - _DAY_SECONDS
     today = [action for action in _actions(_rows_since(since)) if action["time"] >= since]
     return {
         "mode": cfg.mode,
         "blockSeverity": cfg.block_severity,
-        "rules": rules,
-        "syncedAt": synced_at,
         "today": {
             "findings": len(today),
             "blocked": sum(1 for item in today if item["outcome"] == "blocked"),
         },
-        "last": today[0] if today else None,
         "dashboardUrl": f"http://127.0.0.1:{cfg.dashboard_port}/",
     }
 

@@ -1,11 +1,11 @@
-"""Blackbox's routes for Hermes Desktop: ``/api/plugins/blackbox/status`` and ``/findings``.
+"""Blackbox's routes for Hermes Desktop: ``/api/plugins/blackbox/status``, ``/mode`` and the dashboard link.
 
 Hermes mounts this file for the Desktop half (``desktop/plugin.js``, ``ctx.rest('/status')``) when
 the plugin is enabled. Hermes imports it on its own, as ``hermes_dashboard_plugin_blackbox``, outside
 Blackbox's package, so relative imports cannot work here. It finds the Blackbox package Hermes
 already loaded in this process (the one whose folder holds this file) and reads everything through
 its ``desktop`` module; if Blackbox is not loaded here, it loads its own copy of the package once.
-The routes read protection status and the newest findings (never evidence or commands), and
+The routes read protection status (never evidence or commands), and
 ``POST /mode`` switches between audit and block, ``GET /readiness`` says where the machine is between
 plugin install and synced and ``POST /setup`` starts ``hermes blackbox setup`` (``desktop.readiness``), and ``/dash/<path>`` forwards an allowlisted set
 of the running dashboard's own API (threat graph, Trader Shield, agents, community, settings) so the
@@ -15,7 +15,7 @@ limit in the background (``desktop.long_calls``). Hermes refuses every request h
 carry Desktop's own credential (401), so an agent's ``curl`` cannot reach the switch; Blackbox's
 tamper rule also flags any agent command aimed at these routes.
 
-Data shapes are documented on ``desktop.status_payload`` and ``desktop.findings_payload``.
+Data shapes are documented on ``desktop.status_payload``.
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any, Callable, Optional
 
-from fastapi import APIRouter, Body, Query, Request
+from fastapi import APIRouter, Body, Request
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
@@ -75,14 +75,6 @@ def _unavailable(exc: Exception) -> dict[str, Any]:
 def status() -> Any:
     try:
         return {"available": True, **_desktop_module().status_payload()}
-    except Exception as exc:   # health: allow BLE001 -- the Desktop page shows "unavailable", never an HTML 500
-        return _unavailable(exc)
-
-
-@router.get("/findings")
-def findings(limit: int = Query(50, ge=1, le=100)) -> Any:
-    try:
-        return {"available": True, **_desktop_module().findings_payload(limit=limit)}
     except Exception as exc:   # health: allow BLE001 -- the Desktop page shows "unavailable", never an HTML 500
         return _unavailable(exc)
 

@@ -4,7 +4,7 @@
 // blocks something an agent tried to do.
 //
 // Data: Blackbox's own Desktop routes (dashboard/plugin_api.py) through ctx.rest — /status,
-// /findings and /mode, and /dash/<route>, which forwards an allowlisted set of the running
+// /mode, and /dash/<route>, which forwards an allowlisted set of the running
 // dashboard's own API (desktop/dashboard_link.py), so every panel here shows exactly what the
 // dashboard shows. Hermes answers these routes only for this app's own credential. The live alert
 // comes from the `plugin.blackbox.finding` event (desktop/__init__.py) and never carries commands
@@ -30,7 +30,6 @@ const PAGE = '/blackbox'
 const POLL_MS = 4000 // the dashboard's own refresh; the live event refreshes at once
 const SLOW_POLL_MS = 30000
 const STATUS_KEY = ['blackbox', 'status']
-const FINDINGS_KEY = ['blackbox', 'findings']
 const AUDIT_NOTICE_KEY = 'auditNoticeShown' // ctx.storage: the one-time "recording, not blocking" notice
 const AUDIT_NOTICE_RETRY_MS = 30000 // while setup runs, the audit notice asks again this often
 // Readiness stages in which setup has not finished yet (desktop/readiness.py stage_of).
@@ -4016,7 +4015,6 @@ export default {
     ctx.setTimeout(showAuditNotice, 3000)
     ctx.onEvent('plugin.blackbox.finding', event => {
       queryClient.invalidateQueries({ queryKey: STATUS_KEY })
-      queryClient.invalidateQueries({ queryKey: FINDINGS_KEY })
       refreshDash()
       announce(ctx, event && event.payload)
     })
