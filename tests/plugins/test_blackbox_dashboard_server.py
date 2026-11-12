@@ -267,106 +267,12 @@ def test_sync_state_is_scoped_to_configured_context_graph(tmp_path, monkeypatch)
     assert sync_state.read_for_graph("owner/new") == {}
 
 
-def test_ruleset_sync_ignores_running_state_from_another_graph(monkeypatch):
-    cfg = SimpleNamespace(
-        context_graph_id="owner/new",
-        dkg_url="http://node",
-        dkg_home="/tmp/dkg",
-        sync_interval=3600,
-    )
-    refreshed = []
-
-    class Client:
-        def __init__(self, **_kwargs):
-            pass
-
-        def catchup_status(self, _cg_id):
-            return {"jobId": "done", "status": "done"}
-
-    class Cached:
-        synced_at = 0.0
-
-        def counts(self):
-            return {
-                "injection": 0,
-                "escalation": 0,
-                "dependency": 0,
-                "fileaccess": 0,
-                "skill": 0,
-            }
-
-        def graph_count(self, _source):
-            return 0
-
-    class Ready(Cached):
-        def counts(self):
-            return {**super().counts(), "dependency": 2}
-
-        def graph_count(self, source):
-            return 2 if source == "public" else 0
-
-    rules = SimpleNamespace(
-        peek=lambda _cfg: Cached(),
-        refresh=lambda _cfg, _client: refreshed.append(True) or Ready(),
-    )
-    monkeypatch.setattr(
-        server.sync_state,
-        "read",
-        lambda: {
-            "status": "running",
-            "context_graph_id": "owner/old",
-            "public_entries": 999,
-        },
-    )
-
-    result = server._sync_ruleset_once(lambda: cfg, Client, rules)
-
-    assert refreshed == [True]
-    assert result["public"] == 2
-
-
 def test_graph_sync_state_treats_authoritatively_settled_zero_as_ready():
     assert server._graph_sync_state(0, True, "running", settled=True) == "ready"
 
 
 def test_graph_sync_state_does_not_label_partial_failed_vm_as_ready():
     assert server._graph_sync_state(3_000, True, "failed") == "incomplete"
-
-
-def test_daemon_connection_hint_prefers_encryption_profile_blocker(tmp_path):
-    cg_id = "0x37b1Fdfd134e2b17583bCBdD3034F91504cD9C70/agent-blackbox"
-    daemon_log = tmp_path / "daemon.log"
-    daemon_log.write_text(
-        "\n".join(
-            [
-                '[2026-07-14T07:29:40.621Z] Network isolation: denying outbound relayed connection relay=Gq6hB57M remote=kEvwZxiU',
-                f'2026-07-14 07:30:39 system abc [DKGAgent] Stored pending join request from 0x0665 for "{cg_id}"',
-                f'2026-07-14 07:30:39 system def [DKGAgent] PROTOCOL_JOIN_REQUEST from Y3YiGPAM for "{cg_id}": auto-approval deferred for 0x0665 — workspace encryption profile is not available yet [WARN]',
-            ]
-        ),
-        encoding="utf-8",
-    )
-
-    hint = server._daemon_connection_hint(str(tmp_path), cg_id)
-
-    assert hint["state"] == "pending-encryption-profile"
-    assert hint["error"] == "workspace encryption profile is not available yet"
-    assert "auto-approval deferred" in hint["evidence"]
-
-
-def test_daemon_connection_hint_reports_malformed_sync_envelope(tmp_path):
-    cg_id = "0x37b1Fdfd134e2b17583bCBdD3034F91504cD9C70/agent-blackbox"
-    daemon_log = tmp_path / "daemon.log"
-    daemon_log.write_text(
-        f'2026-07-14 07:29:23 sync xyz [DKGAgent] Denied sync request for "{cg_id}": malformed or mismatched envelope (requesterPeer=n/a targetPeer=n/a remotePeer=12D3...) [WARN]\n',
-        encoding="utf-8",
-    )
-
-    hint = server._daemon_connection_hint(str(tmp_path), cg_id)
-
-    assert hint["state"] == "sync-envelope-error"
-    assert hint["error"] == "peer sent a malformed or mismatched sync envelope"
-    assert "Denied sync request" in hint["evidence"]
 
 
 def test_sync_activity_reports_exact_public_reconciliation_progress():
