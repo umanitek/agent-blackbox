@@ -141,6 +141,8 @@ that the two version fields agree.
   count stopped at the newest 100; it now counts everything from the last 24 hours.
 - **An older finding shows the same trust everywhere.** A recorded finding that does not say whether it
   came from a verified rule now reads the same in the findings list and the Local activity view.
+- **The dashboard links a threat's references only when they are web addresses.** Anything else is
+  shown as plain text, as Desktop already did.
 - **Desktop says the first sync is done only when verified rules have arrived.** Community reports that
   Blackbox can match against were counted as verified rules, so the setup page could call the first sync
   finished too early.

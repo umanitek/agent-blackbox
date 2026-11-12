@@ -5629,11 +5629,16 @@
         '<div class="m-v' + (c.mono ? ' mono' : '') + '">' + esc(c.v) + '</div></div>';
     }).join("") + '</div>';
   }
+  // A reference becomes a link only as an http(s) address: graph and finding data choose these
+  // strings, and a javascript: (or data:) link clicked here would run in the dashboard's own
+  // origin, which holds the session token. Anything else is shown as text (Desktop does the same).
+  function isWebLink(u) { return /^https?:\/\/[^\s]+$/i.test(String(u || "").trim()); }
   function refsHTML(refs) {
     if (!Array.isArray(refs) || !refs.length) return "";
     return '<div class="modal-refs"><div class="rh">Advisories &amp; references</div>' +
       refs.map(function (u) {
-        return '<a href="' + esc(u) + '" target="_blank" rel="noopener noreferrer">' + linkIconSVG() + '<span>' + esc(u) + '</span></a>';
+        if (!isWebLink(u)) return '<span class="ref-text">' + esc(u) + '</span>';
+        return '<a href="' + esc(String(u).trim()) + '" target="_blank" rel="noopener noreferrer">' + linkIconSVG() + '<span>' + esc(u) + '</span></a>';
       }).join("") + '</div>';
   }
   // Map an advisory id to its canonical report page.
