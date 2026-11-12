@@ -1609,24 +1609,6 @@ def create_app(*, manage_blackbox: bool = False):
                 })
         return {"targets": targets}
 
-    @app.post("/api/attach")
-    def attach_selected(payload: dict[str, Any] = Body(...)) -> Any:
-        """Attach Blackbox to selected local targets."""
-        rows: list[dict[str, Any]] = []
-        for item in payload.get("targets") or []:
-            if not isinstance(item, dict):
-                continue
-            kind = str(item.get("kind") or "").lower()
-            target = str(item.get("target") or "").strip()
-            if not target:
-                continue
-            if kind == "hermes":
-                rows.append(attach.attach_hermes(Path(target)))
-            elif kind == "openclaw":
-                rows.append(attach.attach_openclaw(Path(target)))
-        ok = all(row.get("ok") for row in rows) if rows else False
-        return JSONResponse({"ok": ok, "targets": rows}, status_code=200 if ok else 400)
-
     @app.post("/api/agents/protection")
     def save_agent_protection(payload: dict[str, Any] = Body(...)) -> Any:
         """Apply desired protection for selected targets — under the rescan's lock, so a sweep already under way never re-attaches a target switched off meanwhile."""

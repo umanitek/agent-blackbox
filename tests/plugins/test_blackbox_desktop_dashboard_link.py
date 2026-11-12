@@ -151,3 +151,13 @@ def test_an_assistant_turn_and_a_playground_test_get_the_long_timeout(dashboard,
     link.forward("POST", "api/blackbox-chat", "", {"message": "hi"})
     link.forward("POST", "api/settings", "", {"mode": "block"})
     assert seen[-1] == link_module._TIMEOUT_S and link_module._LONG_TIMEOUT_S in seen
+
+
+def test_agents_are_switched_only_through_the_protection_route():
+    """POST /api/attach attached targets without the lock /api/agents/protection holds (a rescan
+    under way could undo or race it, LES-065) and neither page used it; it is gone, and Desktop
+    may not forward a POST to it."""
+    from plugins.blackbox.desktop.dashboard_link import DashboardLink
+    assert not DashboardLink.allowed("POST", "api/attach")
+    assert DashboardLink.allowed("POST", "api/agents/protection")
+    assert DashboardLink.allowed("GET", "api/attach-targets")
