@@ -320,3 +320,22 @@ def test_an_unreadable_ruleset_is_unknown_not_zero(monkeypatch):
         raise OSError("ruleset.json unreadable")
     monkeypatch.setattr(desktop.ruleset, "get", broken)
     assert desktop._verified_rules(object()) is None
+
+
+def test_the_readiness_poll_counts_the_rules_once_per_reading_and_keeps_readings_apart(tmp_path, monkeypatch):
+    """Desktop polls readiness every 2 s; the rule count (a ruleset load) ran on every poll,
+    before the 1.5 s cache was even asked, and the cache ignored what it was built for, so a
+    caller with another setup run got this one's reading."""
+    from plugins.blackbox.desktop import readiness
+    monkeypatch.setattr(readiness, "_node_reachable", lambda cfg: False)
+    readiness._cache.clear()
+    counted = []
+    run_a = readiness.SetupRun(folder=lambda: tmp_path / "a")
+    run_b = readiness.SetupRun(folder=lambda: tmp_path / "b")
+    count = lambda: counted.append(1) or 7
+    for _ in range(5):
+        assert readiness.readiness_payload(count, None, run=run_a)["rules"] == 7
+    assert len(counted) == 1
+    readiness.readiness_payload(count, None, run=run_b)
+    assert len(counted) == 2          # another run: its own reading, not run_a's
+    readiness._cache.clear()

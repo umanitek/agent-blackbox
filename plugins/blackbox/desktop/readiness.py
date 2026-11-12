@@ -285,17 +285,20 @@ def _sync_reading(link: Any) -> tuple[bool, Optional[dict[str, Any]]]:
 
 
 class _Cache:
-    """One shared reading for :data:`CACHE_SECONDS` (several Desktop windows poll at once)."""
+    """One shared reading for :data:`CACHE_SECONDS` (several Desktop windows poll at once), kept
+    per *key* — what the reading was built FOR (the setup run and the link): a caller asking
+    about another run never gets this one's answer."""
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._at = -1e9
+        self._key: Any = None
         self._body: Optional[dict[str, Any]] = None
 
-    def get(self, build: Callable[[], dict[str, Any]]) -> dict[str, Any]:
+    def get(self, key: Any, build: Callable[[], dict[str, Any]]) -> dict[str, Any]:
         with self._lock:
-            if self._body is None or time.monotonic() - self._at >= CACHE_SECONDS:
-                self._body, self._at = build(), time.monotonic()
+            if self._body is None or key != self._key or time.monotonic() - self._at >= CACHE_SECONDS:
+                self._body, self._at, self._key = build(), time.monotonic(), key
             return dict(self._body)
 
     def clear(self) -> None:
@@ -306,7 +309,8 @@ class _Cache:
 _cache = _Cache()
 
 
-def _build(rules: Optional[int], link: Any, run: SetupRun) -> dict[str, Any]:
+def _build(rules: RuleCount, link: Any, run: SetupRun) -> dict[str, Any]:
+    rules = rules() if callable(rules) else rules   # counted only when a reading is actually built
     cfg = load_blackbox_config()
     run_state = run.state()
     reachable = _node_reachable(cfg)
@@ -327,10 +331,15 @@ def _build(rules: Optional[int], link: Any, run: SetupRun) -> dict[str, Any]:
     }
 
 
-def readiness_payload(rules: Optional[int], link: Any, run: SetupRun = RUN) -> dict[str, Any]:
-    """Where this machine is (see the module doc); *rules* is the compiled verified-rule count
-    (None = unreadable) and *link* the :class:`~.dashboard_link.DashboardLink` to read the sync meter through."""
-    return _cache.get(lambda: _build(rules, link, run))
+#: The compiled verified-rule count (None = unreadable), or a function that counts it. The page
+#: polls every 2 s: pass the function, so the ruleset is loaded once per cached reading, not per poll.
+RuleCount = Optional[int] | Callable[[], Optional[int]]
+
+
+def readiness_payload(rules: RuleCount, link: Any, run: SetupRun = RUN) -> dict[str, Any]:
+    """Where this machine is (see the module doc); *rules* is a :data:`RuleCount` and *link* the
+    :class:`~.dashboard_link.DashboardLink` to read the sync meter through."""
+    return _cache.get((id(run), id(link)), lambda: _build(rules, link, run))
 
 
 def start_setup(run: SetupRun = RUN) -> dict[str, Any]:

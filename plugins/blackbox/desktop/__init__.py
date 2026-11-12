@@ -242,7 +242,7 @@ def _verified_rules(cfg: Any) -> Optional[int]:
 def readiness_status() -> dict[str, Any]:
     """Where this machine is between plugin install and synced: stage, setup steps, node, dashboard,
     sync (shape: :func:`.readiness.readiness_payload`); ``rules`` counts verified rules only."""
-    return readiness_mod.readiness_payload(_verified_rules(load_blackbox_config()), dashboard_link())
+    return readiness_mod.readiness_payload(lambda: _verified_rules(load_blackbox_config()), dashboard_link())
 
 
 def start_setup() -> dict[str, Any]:
