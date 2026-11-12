@@ -1207,8 +1207,9 @@ function ago(seconds) {
 }
 
 // Several detectors can record the same threat at the same moment (one record each); the dashboard
-// shows it once, choosing the record with the strongest source, then the highest severity
-// (index.html findingDisplayKey / findingRepresentativeRank / dedupeFindings). Same rules here.
+// shows it once, choosing the record with the strongest source, then the highest severity. The
+// dashboard serves that decision with every row (display_key / display_rank, from
+// audit/finding_display.py); the functions below only key rows from an older running dashboard.
 const normalizedText = text => String(text || '').toLowerCase().replace(/\s+/g, ' ').trim()
 const lastUserText = finding => {
   const turns = asList(asObject(finding.context).turns).map(asObject)
@@ -1217,13 +1218,15 @@ const lastUserText = finding => {
 }
 const SOURCE_RANK = { public: 6, custom: 5, community: 4, secret: 3, llm: 2, heuristic: 1 }
 function findingDisplayKey(finding) {
+  if (typeof finding.display_key === 'string' && finding.display_key) return finding.display_key
   const agent = [finding.framework || '', finding.workspace || '', finding.agent_id || finding.agentId || finding.profile || ''].join('\u001e')
   const occurrence =
     finding.turn_id || finding.turnId || finding.task_id || finding.taskId ||
     [finding.session_id || finding.sessionId || '', normalizedText(lastUserText(finding)), Math.floor(Number(finding.ts || 0))].join('\u001e')
   return [agent, occurrence, finding.category || finding.type || '', normalizedText(finding.evidence || finding.matched || finding.title || finding.identifier || '')].join('\u001f')
 }
-const representativeRank = finding => (SOURCE_RANK[sourceKey(finding)] || 0) * 10 + (SEVERITY_ORDER[finding.severity] || 0)
+const representativeRank = finding =>
+  typeof finding.display_rank === 'number' ? finding.display_rank : (SOURCE_RANK[sourceKey(finding)] || 0) * 10 + (SEVERITY_ORDER[finding.severity] || 0)
 function dedupeFindings(rows) {
   const unique = []
   const indexByKey = new Map()

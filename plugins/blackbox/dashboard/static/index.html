@@ -6674,6 +6674,9 @@
   // of the key, so an identical threat observed by another agent still shows.
   function findingDisplayKey(f) {
     f = f || {};
+    // The dashboard serves the key with every row (audit/finding_display.py, the one rule);
+    // this function only keys rows from an older running dashboard.
+    if (typeof f.display_key === "string" && f.display_key) return f.display_key;
     var agent = [
       f.framework || "",
       f.workspace || "",
@@ -6699,6 +6702,7 @@
   }
 
   function findingRepresentativeRank(f) {
+    if (typeof f.display_rank === "number") return f.display_rank;   // served with the row
     var sourceRank = { public: 6, custom: 5, community: 4, secret: 3, llm: 2, heuristic: 1 };
     return (sourceRank[srcKey(f)] || 0) * 10 + (SEV_RANK[sevClass(f.severity)] || 0);
   }

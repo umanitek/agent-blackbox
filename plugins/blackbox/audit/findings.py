@@ -13,7 +13,7 @@ import time
 from typing import Any, Optional
 from ..kernel import constants
 from ..kernel.bounded_files import read_jsonl
-from . import log_store
+from . import finding_display, log_store
 from . import redaction
 
 logger = logging.getLogger(__name__)
@@ -81,7 +81,7 @@ def _flatten_finding_row(rec: dict[str, Any], default_fw: str) -> dict[str, Any]
     # Lift the per-line ``finding`` fields up to a dashboard-friendly row.
     finding = finding_of(rec)
     detail = rec.get("detail") or {}
-    return {
+    row = {
         "time": rec.get("iso") or rec.get("ts"),
         "ts": rec.get("ts") or 0,
         "event": rec.get("event"),
@@ -104,6 +104,9 @@ def _flatten_finding_row(rec: dict[str, Any], default_fw: str) -> dict[str, Any]
         "context": _bounded_context(detail.get("context") or finding.get("context")),
         "found_in": finding.get("found_in") or "",
     }
+    # What the pages group on (one threat on screen) and which row stands for it — served, not re-derived.
+    row["display_key"], row["display_rank"] = finding_display.display_key(row), finding_display.display_rank(row)
+    return row
 
 
 def _dedupe_finding_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
