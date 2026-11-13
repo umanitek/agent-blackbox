@@ -297,3 +297,29 @@ def test_a_plain_sync_of_another_graph_keeps_the_catch_up_route(dkg_home, monkey
     sync_command.cmd_sync(argparse.Namespace(wait=False, require_rules=False, timeout=60))
 
     assert routes == ["catch-up"]
+
+
+def test_the_successor_subscription_is_asked_only_while_not_yet_subscribed(monkeypatch):
+    """The older sync route asked ensure_side_subscriptions on EVERY 3-second poll: a status call,
+    a migrations read and a trust-store load each time, plus a re-subscribe (and a printed line)
+    whenever a successor exists — the pattern KI-449 removed from the native route. It is asked
+    beside each verified-subscription attempt only, so a failed attempt is still retried."""
+    DkgError, BlackboxConfig = sync_command.DkgError, sync_command.BlackboxConfig   # the same load as the code under test
+
+    asked = []
+    monkeypatch.setattr(sync_command.side_subscriptions, "ensure_side_subscriptions", lambda client, cfg: asked.append(1))
+
+    class Node:
+        answers = [DkgError("node busy"), {"jobId": "job-1"}]
+
+        def subscribe_context_graph(self, _graph):
+            answer = self.answers.pop(0)
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+
+    run = sync_command._CatchupSync(BlackboxConfig(context_graph_id="owner/custom"), Node(),
+                                    argparse.Namespace(wait=False, timeout=5))
+    for _poll in range(4):
+        run._subscribe()
+    assert run.subscribed and len(asked) == 2   # the failed attempt and the one that succeeded; never again

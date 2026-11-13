@@ -53,11 +53,12 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone, UTC
-from typing import Callable, Dict, Mapping, Optional, Tuple
+from datetime import datetime, timedelta, UTC
+from typing import Callable, Mapping, Optional
 
 from .. import detection
 from ..kernel import constants, display_safety, threat_ids
+from .sighting import fields as sighting_fields
 from .sighting import vocab as sighting_vocab
 
 #: Longest identifier / evidence value a report may carry.
@@ -70,7 +71,6 @@ MAX_CLOCK_SKEW = timedelta(minutes=10)
 REPORT_CORE_KEYS = frozenset({"subject", "identifier", "category", "severity", "reporter", "framework", "day"})
 
 _SAFE_TOKEN = re.compile(r"[A-Za-z0-9._@:/+~-]+")       # package names/versions, tool names, advisory ids
-_SHA256_HEX = re.compile(r"[0-9a-f]{64}")
 #: A heuristic's id is its pattern hash; a verified-corpus id is the threat's
 #: slug (``injection:seed-000``) — either way a lowercase slug, never free text.
 _INJECTION_ID = re.compile(r"injection:[a-z0-9][a-z0-9._-]{0,63}")
@@ -210,7 +210,7 @@ def _skill(ev: Mapping[str, str]) -> tuple[Optional[str], dict[str, str]]:
         if ev.get("skill_name") or ev.get("skill_version") or ev.get("registry"):
             _fail("a local skill is reported by artifact hash + danger shape, never by name or version (KI-159)")
         digest = str(ev.get("artifact_hash") or "").strip().lower()
-        if not _SHA256_HEX.fullmatch(digest):
+        if not threat_ids.is_hex64(digest):
             _fail("artifact_hash must be the sha256 hex of the skill's code")
         shape = _one_of("danger_shape", ev.get("danger_shape"), detection.SKILL_DANGER_SHAPES)
         return threat_ids.skill_artifact_identifier(digest, shape), {"artifact_hash": digest, "danger_shape": shape}
@@ -258,7 +258,7 @@ def _sighting_fields(given: Mapping[str, str], *, matched_by: str) -> dict[str, 
     out = {key: _one_of(key, given[key], allowed) for key, allowed in _SIGHTING_SETS.items() if given.get(key)}
     if given.get("agent_tool"):
         tool = str(given["agent_tool"]).strip().lower()
-        if tool not in sighting_vocab.OTHER_TOOLS and not (tool in _HOST_TOOLS or sighting_vocab.TOOL_SHAPE.fullmatch(tool)):
+        if not sighting_fields.is_reportable_tool(tool):
             _fail("agent_tool must be a host tool name, mcp-tool or other")
         out["agent_tool"] = tool
     if given.get("attack_technique"):
@@ -274,7 +274,6 @@ def _sighting_fields(given: Mapping[str, str], *, matched_by: str) -> dict[str, 
     return out
 
 
-_HOST_TOOLS = frozenset({*detection.SHELL_TOOLS, *detection.HOST_FILE_AND_SKILL_TOOLS})
 
 _VALIDATORS: dict[str, Callable[[Mapping[str, str]], tuple[Optional[str], dict[str, str]]]] = {
     "injection": _injection,

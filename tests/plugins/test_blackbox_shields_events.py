@@ -282,3 +282,27 @@ def test_a_long_session_keeps_the_steps_nearest_the_event():
     assert [step["label"] for step in window if step["this"]] == ["step 70"]
     assert window[0]["label"] == f"step {70 - events.MAX_TIMELINE_STEPS // 2}"
 
+
+
+def test_every_supported_wallet_with_a_logo_shows_it_on_its_vault_event():
+    """The logo was looked up by squashing the display name ("Coinbase Wallet" -> "coinbasewallet"),
+    which matches no pack id ("coinbase-wallet"): only single-word wallets got their logo."""
+    from plugins.blackbox.shields.trader import mode
+
+    with_logo = {pack_id: name for pack_id, name in mode.supported_wallets().items() if mode.logo_url(pack_id)}
+    assert "coinbase-wallet" in with_logo or "trust-wallet" in with_logo or len(with_logo) > 1
+    for pack_id, name in with_logo.items():
+        event = _event("fileaccess:terminal:crypto-wallet", title=f"Read of a crypto wallet's key store ({name})",
+                       evidence=f"copy crypto-wallet ({name})", action=ARCHIVE_CHROME)
+        assert event.logo == f"/shields/trader/packs/{pack_id}/logo.svg", name
+
+
+def test_an_unchecked_spender_approval_is_told_as_an_approval():
+    """Trader claimed this finding but the events report had no kind for it, so its event
+    carried no "Reached for" and no "Why it matters" (both come from one table now)."""
+    event = _event("secret:token-approval-unchecked-spender", title="Token approval to a spender Blackbox cannot check",
+                   decision="flag", tool="web3_sign", blocking=False)
+    assert _fact(event, "Reached for") == (
+        "a token approval to a spender Blackbox cannot check (an ENS name, or an exchange router on a chain the"
+        " call does not name)")
+    assert _fact(event, "Why it matters").startswith("A token approval lets the spender move your tokens")

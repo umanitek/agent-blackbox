@@ -1,6 +1,7 @@
 """Resolve per-action graph rules and preserve explicit degraded-read evidence."""
 import logging
 from .. import audit, ruleset
+from ..kernel.config import reads_graph_directly
 
 logger = logging.getLogger(__name__)
 
@@ -10,7 +11,7 @@ def detection_rules(cfg, tool_name, args):
         return ruleset.get(cfg), {"backend": "legacy-cache"}
     from ..ruleset import read_for_action
     from .. import killlist
-    if getattr(cfg, 'detection_backend', 'legacy-cache') != "dkg":
+    if not reads_graph_directly(cfg):
         from ..ruleset import DetectionRead
         read = DetectionRead(ruleset.Ruleset(), code="INVALID_DETECTION_BACKEND")
     else:

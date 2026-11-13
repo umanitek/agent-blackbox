@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from ...kernel import constants, yaml_files
+from ...kernel.bounded_files import read_json_object
 
 logger = logging.getLogger(__name__)
 
@@ -60,11 +61,8 @@ class GraphReadiness:
     def _read(self) -> dict[str, dict[str, float]]:
         with self._lock:
             if self._cache is None:
-                try:
-                    data = json.loads(self._store().read_text(encoding="utf-8-sig"))
-                    self._cache = {g: dict(v) for g, v in data.items() if isinstance(v, dict)} if isinstance(data, dict) else {}
-                except (OSError, ValueError):
-                    self._cache = {}
+                data = read_json_object(self._store()) or {}
+                self._cache = {g: dict(v) for g, v in data.items() if isinstance(v, dict)}
             return self._cache
 
 

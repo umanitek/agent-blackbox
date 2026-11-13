@@ -52,13 +52,13 @@ import re
 import threading
 import time
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Mapping, Optional, Union
+from typing import Any, Callable, Mapping, Optional
 
 from ...kernel import threat_ids
-from ..lab.jobs import strip_query
+from ..lab import strip_query
 from ..service.evidence import Lookup
 from .client import HttpClient, JsonObject, UrllibClient
-from .credentials import CredentialsError, load_credentials
+from .credentials import key_for
 from .protocol import REUSE_NEEDS_FOUNDER, SourceTerms, SourceVerdict
 
 NAME = "urlscan"
@@ -84,11 +84,7 @@ _UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{1
 _LISTS = ("domains", "ips", "hashes")
 
 
-def _default_key() -> Optional[str]:
-    try:
-        return load_credentials().get(API_KEY_NAME)
-    except CredentialsError:
-        return None
+_default_key = key_for(API_KEY_NAME)   # the credentials file, read when asked
 
 
 @dataclass(frozen=True)
@@ -131,6 +127,9 @@ class UrlscanSource:
         self._clock = clock
         self._lock = threading.Lock()
         self._scans: dict[str, _Pending | UrlscanScan] = {}
+
+    def applies(self, identifier: str) -> bool:
+        return visit_url(identifier) is not None
 
     def check(self, identifier: str) -> SourceVerdict:
         url = visit_url(identifier)
@@ -192,13 +191,11 @@ def visit_url(identifier: str) -> Optional[str]:
     """The URL urlscan should open for *identifier*: an ``ioc:url:`` without
     its query, fragment or user info, or ``https://<domain>/`` for an
     ``ioc:domain:``. None for anything else."""
-    parts = identifier.split(":", 2)
-    if len(parts) != 3 or parts[0] != "ioc" or not threat_ids.ioc_value_is_well_formed(parts[1], parts[2]):
-        return None
-    if parts[1] == "url":
-        return strip_query(parts[2])
-    if parts[1] == "domain":
-        return f"https://{parts[2]}/"
+    ioc_type, value = threat_ids.parse_ioc_identifier(identifier) or ("", "")
+    if ioc_type == "url":
+        return strip_query(value)
+    if ioc_type == "domain":
+        return f"https://{value}/"
     return None
 
 

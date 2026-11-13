@@ -10,25 +10,23 @@ from __future__ import annotations
 import logging
 import time
 from urllib.parse import urlsplit
-from typing import Any, Dict
-from ..kernel import constants
+from typing import Any
+from ..kernel import constants, local_http
 from . import redaction
 
 logger = logging.getLogger(__name__)
-
-_LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost", "::1", "[::1]"})
-
 
 def node_is_local(url: str) -> bool:
     """Whether a DKG node URL points at THIS machine (KI-223). The private audit record
     carries redacted command/prompt text; it may only ever be written to a node on the
     same host — a remote ``dkg_url`` (a shared bench node, a cloud node) is not "local".
-    An empty or unparseable URL counts as local (the default is loopback)."""
+    An empty URL counts as local (the default is loopback); one that cannot be read does
+    not — this is a privacy gate, and it answers "no" when it cannot tell."""
     try:
         host = urlsplit(url).hostname or ""
     except ValueError:
-        return True
-    return not host or host.lower() in _LOCAL_HOSTS
+        return False
+    return not host or local_http.is_loopback_host(host)
 
 
 def write_private_audit_ka(client: Any, cg_id: str, event: str, finding: dict[str, Any]) -> None:

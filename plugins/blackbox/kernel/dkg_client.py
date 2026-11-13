@@ -22,12 +22,12 @@ import urllib.parse
 import urllib.request
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
-from . import constants, host_secrets
+from . import constants, host_secrets, local_http
 from .snapshot_config import query_evidence
 from .sparql_text import run_query
-from .sparql_text import extract_binding, normalize_bindings, rows_or_fallback  # re-exported: callers import them from here
+from .sparql_text import extract_binding  # re-exported: callers import them from here
 
 logger = logging.getLogger(__name__)
 
@@ -57,13 +57,17 @@ def _validate_quads_literal_sizes(quads: list[Quad]) -> None:
         raise DkgError(str(exc)) from exc
 
 
-def _is_already_finalized(exc: DkgError) -> bool:
-    """True when a share failed only because the KA already exists sealed.
+#: DKG 10.0.20's reply to a write of a name it already holds sealed (R0P bench, 2026-10-01).
+ALREADY_SEALED_REPLY = "is not an active working memory draft"
 
-    The daemon rejects re-finalizing an assertion with a different (or same)
-    merkle root; for our deterministic threat/report names that just means the
-    content is already on the graph, so the caller can treat it as success.
-    """
+
+def is_already_sealed(exc: BaseException) -> bool:
+    """Final verdict "the node holds this exact asset" for every writer; never "already exists" (LES-015)."""
+    return any(reply in str(exc).lower() for reply in (ALREADY_SEALED_REPLY, "already finalized"))   # 10.0.20+, older
+
+
+def _is_already_finalized(exc: DkgError) -> bool:
+    """Finalize step only: the content is already there, the share goes on (no final verdict)."""
     msg = str(exc).lower()
     return "already finalized" in msg or "already exists" in msg
 
@@ -71,12 +75,8 @@ def _is_already_finalized(exc: DkgError) -> bool:
 def _is_wm_merkle_conflict(exc: DkgError) -> bool:
     """True when the local WM draft/finalized assertion is stale vs SWM."""
     msg = str(exc).lower()
-    return (
-        "wm_draft_conflict" in msg
-        or "draft conflict" in msg
-        or "different merkleroot" in msg
-        or "different merkle root" in msg
-    )
+    return any(text in msg for text in ("wm_draft_conflict", "draft conflict", "different merkleroot",
+                                        "different merkle root"))
 
 
 def _job_id_from_error(exc: DkgError) -> Optional[str]:
@@ -90,10 +90,7 @@ def _job_id_from_error(exc: DkgError) -> Optional[str]:
 
 
 def _dkg_home(explicit: Optional[str] = None) -> Path:
-    if explicit:
-        return Path(explicit).expanduser()
-    env = os.environ.get("BLACKBOX_DKG_HOME")
-    return Path(env).expanduser() if env else constants.blackbox_dkg_home()
+    return Path(explicit).expanduser() if explicit else constants.blackbox_dkg_home()   # the kernel's one rule
 
 
 def load_daemon_url() -> str:
@@ -158,46 +155,38 @@ def signed_request_headers(token: str, method: str, path: str, body: Optional[by
 
 
 class DkgClient:
-    """Minimal DKG v10 HTTP client. Construct with an explicit url/token or
-    let :meth:`from_env` resolve them."""
+    """Minimal DKG v10 HTTP client: :meth:`for_config` for a Blackbox config's node; with no
+    arguments the daemon's own URL and token are found."""
 
-    def __init__(
-        self,
-        url: Optional[str] = None,
-        token: Optional[str] = None,
-        dkg_home: Optional[str] = None,
-        config=None,
-    ) -> None:
+    def __init__(self, url: Optional[str] = None, token: Optional[str] = None,
+                 dkg_home: Optional[str] = None, config=None) -> None:
         self.url = (url or load_daemon_url()).rstrip("/")
         self.dkg_home = str(_dkg_home(dkg_home))
         self.token = token if token is not None else load_token(self.dkg_home)
         self._chain_evidence = query_evidence(config, self.url, self.dkg_home)
 
     @classmethod
-    def from_env(cls) -> DkgClient:
-        return cls()
+    def for_config(cls, cfg: Any) -> DkgClient:
+        """THE client for a Blackbox config's node (its URL, node home and chain-evidence mode)."""
+        return cls(url=cfg.dkg_url, dkg_home=cfg.dkg_home, config=cfg)
 
     # -- transport ---------------------------------------------------------
 
-    def request(
-        self,
-        method: str,
-        path: str,
-        body: Optional[dict[str, Any]] = None,
-        timeout: Optional[float] = None,
-    ) -> dict[str, Any]:
+    def encoded(self, method: str, path: str, body: Optional[dict[str, Any]]) -> tuple[Optional[bytes], dict[str, str]]:
+        """``(body bytes, headers)`` for one node request — THE one header builder (subclass
+        transports too): JSON, the bearer token, and the HMAC signature DKG >= 10.0.19 requires."""
         data = json.dumps(body).encode("utf-8") if body is not None else None
-        headers = {"Accept": "application/json"}
-        if data is not None:
-            headers["Content-Type"] = "application/json"
+        headers = {"Accept": "application/json", **({"Content-Type": "application/json"} if data is not None else {})}
         if self.token:
-            headers["Authorization"] = f"Bearer {self.token}"
-            # DKG >= 10.0.19 requires HMAC-signed requests on protected routes
-            # (older daemons ignore the extra headers). See signed_request_headers.
-            headers.update(signed_request_headers(self.token, method, path, data))
+            headers.update({"Authorization": f"Bearer {self.token}", **signed_request_headers(self.token, method, path, data)})
+        return data, headers
+
+    def request(self, method: str, path: str, body: Optional[dict[str, Any]] = None,
+                timeout: Optional[float] = None) -> dict[str, Any]:
+        data, headers = self.encoded(method, path, body)
         req = urllib.request.Request(f"{self.url}{path}", data=data, headers=headers, method=method)
         try:
-            with urllib.request.urlopen(req, timeout=timeout or _TIMEOUT) as resp:
+            with local_http.open_direct(req, timeout=timeout or _TIMEOUT) as resp:
                 raw = resp.read()
         except urllib.error.HTTPError as exc:
             detail = exc.read(1024).decode("utf-8", errors="replace")
@@ -621,7 +610,3 @@ SELECT (COUNT(DISTINCT ?threat) AS ?n) WHERE {
             return int(extract_binding(rows[0].get("n")) or 0)
         except (TypeError, ValueError):
             return 0
-
-    def register_agent(self, name: str, framework: str = "hermes") -> dict[str, Any]:
-        """Register a new agent on the node → ``{agentAddress, authToken, ...}``."""
-        return self.request("POST", "/api/agent/register", {"name": name, "framework": framework})

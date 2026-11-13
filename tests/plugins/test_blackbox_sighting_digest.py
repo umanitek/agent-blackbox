@@ -24,6 +24,7 @@ from plugins.blackbox.guard import reporting
 from plugins.blackbox.kernel import signing
 from plugins.blackbox.kernel.config import BlackboxConfig
 from plugins.blackbox.detection import Finding
+from _blackbox_fakes import dkg_client_fake
 
 CFG = BlackboxConfig(report=True, context_graph_id=GRAPH)
 THREAT = "dep:npm:evil@1.0.0"
@@ -72,7 +73,7 @@ def test_only_verified_tier_matches_enter_the_tally(monkeypatch, home):
     """A community-only match would tell whoever listed the value who met it (KI-158)."""
     monkeypatch.setattr(audit, "record", lambda **kw: None)
     monkeypatch.setattr(audit, "write_private_audit_ka", lambda *a, **k: None)
-    monkeypatch.setattr(reporting, "DkgClient", lambda **kw: None)
+    monkeypatch.setattr(reporting, "DkgClient", dkg_client_fake(lambda **kw: None))
     findings = [Finding(identifier=THREAT, category="dependency", severity="high", title="t", source="public"),
                 Finding(identifier="ioc:domain:listed.example", category="ioc", severity="high", title="t",
                         source="community", confirmed=False),
@@ -259,3 +260,29 @@ def test_the_community_read_carries_digests_and_heat_from_the_latest_week(monkey
                                          _digest_row(alice, "2026-W40", {THREAT: 50})]), CFG)
     assert [d.week for d in read.digests] == ["2026-W39", "2026-W40"]
     assert read.heat[THREAT].week == "2026-W40" and read.heat[THREAT].agents == 55
+
+
+# --- KI-498: a digest's week is a real ISO week, never after the reader's own ---
+
+@pytest.mark.parametrize("week", ["9999-W99", "9999-W01", "2026-W00", "2026-W54", "2026-40", "zzzz", "2026-W4", "2026-W401"])
+def test_a_digest_for_a_week_that_is_malformed_or_in_the_future_is_ignored(week):
+    alice = Reporter("0xf79e09c14d5c229b89c4ac719117cf2bd56fe5f1")
+    assert digest_reader.verified_digests([_digest_row(alice, week, {THREAT: 3})], NETWORK, GRAPH) == []
+
+
+def test_one_far_future_digest_no_longer_moves_the_latest_week(monkeypatch):
+    alice, mallory = Reporter("0xf79e09c14d5c229b89c4ac719117cf2bd56fe5f1"), Reporter("0xff95c511e7c83f83bfefc70b7bba74f0ad0cbe50")
+    rows = [_digest_row(alice, "2026-W40", {THREAT: 12}), _digest_row(mallory, "9999-W52", {THREAT: 1})]
+
+    found = digest_reader.verified_digests(rows, NETWORK, GRAPH)
+
+    assert digest_reader.latest_week(found) == "2026-W40"
+    assert digest_reader.heat_for_week(found, _counted(alice), "2026-W40")[THREAT].digests == 1
+
+
+def test_the_readers_own_week_is_still_accepted(monkeypatch):
+    alice = Reporter("0xf79e09c14d5c229b89c4ac719117cf2bd56fe5f1")
+    monkeypatch.setattr(digest_reader, "today_utc", lambda: "2026-10-01")   # a Thursday in 2026-W40
+
+    assert len(digest_reader.verified_digests([_digest_row(alice, "2026-W40", {THREAT: 3})], NETWORK, GRAPH)) == 1
+    assert digest_reader.verified_digests([_digest_row(alice, "2026-W41", {THREAT: 3})], NETWORK, GRAPH) == []

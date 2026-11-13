@@ -22,14 +22,15 @@ Usage::
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
-import os
 import threading
 import time
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Iterator, Optional
 
+from ...kernel.bounded_files import append_line, file_lock, read_jsonl
 from .. import keys
 
 #: Operators type this many hex characters of the content hash.
@@ -67,13 +68,16 @@ class ConsentLedger:
           within :data:`CODE_TTL_SECONDS`, and not consumed before.
         """
         code = confirmation_code(content)
-        if yes and not typed:
-            verdict = (True, "sandbox: consent by --yes") if sandbox else (False, "--yes is refused outside the sandbox")
-        elif (typed or "").strip().lower() != code:
-            verdict = (False, "the typed code does not match this content")
-        else:
-            verdict = self._fresh_and_unused(code)
-        self._append({"event": "consent" if verdict[0] else "refused", "code": code, "why": verdict[1]})
+        # One step under the ledger's cross-process lock: "unused?" and "now used" cannot interleave
+        # between two publishes of one code (each caller builds its own ConsentLedger).
+        with self._exclusive():
+            if yes and not typed:
+                verdict = (True, "sandbox: consent by --yes") if sandbox else (False, "--yes is refused outside the sandbox")
+            elif (typed or "").strip().lower() != code:
+                verdict = (False, "the typed code does not match this content")
+            else:
+                verdict = self._fresh_and_unused(code)
+            self._append({"event": "consent" if verdict[0] else "refused", "code": code, "why": verdict[1]})
         return verdict
 
     def standing(self, content: str, why: str) -> tuple[bool, str]:
@@ -97,7 +101,7 @@ class ConsentLedger:
             if entry.get("code") != code:
                 continue
             if entry.get("event") == "shown":
-                shown_at = float(entry.get("ts") or 0)
+                shown_at = _timestamp(entry.get("ts"), shown_at)
             elif entry.get("event") == "consent":
                 spent = True
             elif entry.get("event") == "released":
@@ -110,20 +114,25 @@ class ConsentLedger:
             return False, "this code expired (10 minutes); show it again"
         return True, "consent by typed code"
 
-    def _entries(self):
-        try:
-            with self._path.open("r", encoding="utf-8-sig") as fh:
-                for line in fh:
-                    try:
-                        yield json.loads(line)
-                    except ValueError:
-                        continue
-        except OSError:
-            return
+    def _entries(self) -> list[dict]:
+        return read_jsonl(self._path)
+
+    @contextlib.contextmanager
+    def _exclusive(self) -> Iterator[None]:
+        """This process's lock and the ledger's file lock, held together (a waiting
+        consent blocks rather than proceeding unlocked)."""
+        with self._lock, file_lock(self._path.with_name(self._path.name + ".lock")):
+            yield
 
     def _append(self, entry: dict) -> None:
         entry = {"ts": self._clock(), **entry}
-        with self._lock:
-            self._path.parent.mkdir(parents=True, exist_ok=True)
-            with os.fdopen(os.open(self._path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600), "a", encoding="utf-8") as fh:  # windows-footgun: ok — a WRITE (mode "w"/"a"); writes stay utf-8
-                fh.write(json.dumps(entry, sort_keys=True) + "\n")
+        append_line(self._path, json.dumps(entry, sort_keys=True), mode=0o600)
+
+
+def _timestamp(value: object, previous: Optional[float]) -> Optional[float]:
+    """A "shown" line's ``ts`` (0, long expired, when missing). A ``ts`` that is not a number is
+    a damaged line: it is skipped (*previous* stands) — it never breaks every later consent."""
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return previous

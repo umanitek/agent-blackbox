@@ -34,7 +34,7 @@ from .node_profile import (
     _set_persisted_dkg_sync_state,
     node_sync_settings,
 )
-from ..kernel.bounded_files import atomic_write
+from ..kernel.bounded_files import atomic_write, file_lock
 
 logger = logging.getLogger(__name__)
 
@@ -52,44 +52,8 @@ def _uses_managed_dkg(cfg: BlackboxConfig, args: argparse.Namespace) -> bool:
 @contextmanager
 def _managed_sync_lock():
     """Hold the one cross-process slot used by dashboard and manual syncs."""
-    path = constants.blackbox_home() / "sync-window.lock"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    handle = path.open("a+b")
-    acquired = False
-    try:
-        if os.name == "nt":  # pragma: no cover - exercised on Windows
-            import msvcrt
-
-            if path.stat().st_size == 0:
-                handle.write(b"0")
-                handle.flush()
-            handle.seek(0)
-            try:
-                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-                acquired = True
-            except OSError:
-                pass
-        else:
-            import fcntl
-
-            try:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                acquired = True
-            except BlockingIOError:
-                pass
+    with file_lock(constants.blackbox_home() / "sync-window.lock", blocking=False) as acquired:
         yield acquired
-    finally:
-        if acquired:
-            if os.name == "nt":  # pragma: no cover - exercised on Windows
-                import msvcrt
-
-                handle.seek(0)
-                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-            else:
-                import fcntl
-
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-        handle.close()
 
 
 def _dkg_sync_environment(cfg: BlackboxConfig) -> dict[str, str]:
@@ -326,7 +290,7 @@ def _stop_managed_dkg(cfg: BlackboxConfig, old_pid: Optional[int], env: dict[str
     # worker is still draining sync jobs. Starting immediately then sees
     # the old PID and refuses with "Daemon already running". Wait for the
     # exact managed worker and API listener to disappear first.
-    stopped = DkgClient(url=cfg.dkg_url, dkg_home=cfg.dkg_home, config=cfg)
+    stopped = DkgClient.for_config(cfg)
     stop_deadline = time.monotonic() + 45
     while time.monotonic() < stop_deadline:
         pid_running = old_pid is not None and node_process.is_managed_daemon(cfg, old_pid)
@@ -372,7 +336,7 @@ def _wait_for_managed_dkg_ready(cfg: BlackboxConfig, detail: str) -> None:
 
     *detail* is the start command's output, appended to the error for context.
     """
-    client = DkgClient(url=cfg.dkg_url, dkg_home=cfg.dkg_home, config=cfg)
+    client = DkgClient.for_config(cfg)
     wait_seconds = node_ready_wait_seconds()
     deadline = time.monotonic() + wait_seconds
     while time.monotonic() < deadline:

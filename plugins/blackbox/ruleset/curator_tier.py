@@ -38,7 +38,7 @@ from dataclasses import replace
 from typing import Any, Optional
 
 from .. import community, killlist
-from ..kernel import constants, signing
+from ..kernel import constants, signing, sparql_text
 from ..kernel.config import BlackboxConfig
 from ..kernel.dkg_client import DkgClient
 from . import compiler
@@ -114,7 +114,7 @@ def _apply_kill_list(rs: compiler.Ruleset, client: DkgClient, config: BlackboxCo
         rs.kill_list = previous.as_cache() if previous is not None else {}
         return
     try:
-        rows = community.page_rows(client, config.context_graph_id, constants.VIEW_VERIFIABLE_MEMORY,
+        rows = sparql_text.page_rows(client, config.context_graph_id, constants.VIEW_VERIFIABLE_MEMORY,
                                    killlist.kill_list_sparql) or []
         parsed = [p for p in (killlist.parse_kill_list(row, view.manifest, graph=config.context_graph_id) for row in rows)
                   if p is not None]
@@ -124,7 +124,7 @@ def _apply_kill_list(rs: compiler.Ruleset, client: DkgClient, config: BlackboxCo
             signers = view.manifest.curator_signers(envelope, statement_type=killlist.KILL_LIST_STATEMENT)
             roots = signing.verified_signers(envelope, statement_type=killlist.KILL_LIST_STATEMENT,
                                              environment=view.manifest.environment, graph=config.context_graph_id)
-            roots &= community.curator_trusted_roots(view.manifest.environment)
+            roots &= signing.trusted_roots(view.manifest.environment)
             decision = killlist.admit(kill_list, signers=signers, root_signers=roots, previous=previous,
                                       now=time.time(), is_popular=_popular)
             if decision.refused:

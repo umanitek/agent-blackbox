@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import Dict, Iterable, List, Sequence, Set, TypedDict
+from typing import Iterable, Sequence, TypedDict
 
 from ..kernel import constants
 from .verification import VerifiedReport

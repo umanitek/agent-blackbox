@@ -6,23 +6,24 @@ No command text, file contents or credential values are sent to the node.
 """
 from __future__ import annotations
 
-from ...detection import command_text, parse_dependency_installs, iter_ioc_candidates, injection_scan_text
+from ...detection import command_from_args, parse_dependency_installs, iter_ioc_candidates, injection_scan_text
+from ...kernel import constants
 from ...kernel import threat_ids
-from ...kernel.sparql_text import sparql_string_literal as literal
+from ...kernel.sparql_text import is_safe_iri, sparql_string_literal as literal
 from ...kernel.dkg_client import extract_binding
-from ..graph_queries import _context_graph_data_uri, _owner_pin
+from ..graph_queries import context_graph_data_uri, owner_pin
 from .client import GraphReadUnavailable
 
 MAX_CANDIDATES = 64
-G = "http://umanitek.ai/ontology/guardian/"
-DP = "urn:defender:p:"
-BP = "urn:blackbox:p:"
+G = constants.BLACKBOX_ONTOLOGY
+DP = constants.DEFENDER_PREDICATES
+BP = constants.BLACKBOX_PREDICATES
 
 
 def candidates(tool: str, args) -> tuple[list[str], list[str]]:
     identifiers = set(iter_ioc_candidates(injection_scan_text(args)))
     packages = set()
-    for dep in parse_dependency_installs(command_text(args)):
+    for dep in parse_dependency_installs(command_from_args(tool, args, any_tool=True)):
         eco, name, version = dep["ecosystem"], dep["name"], dep.get("version")
         packages.add(threat_ids.canonical_package_name(eco, name))
         identifiers.add(threat_ids.dependency_identifier(eco, name, version or "*"))
@@ -33,13 +34,13 @@ def candidates(tool: str, args) -> tuple[list[str], list[str]]:
 
 
 def confirmed_scope(cg_id: str) -> str:
-    graph = _context_graph_data_uri(cg_id)
+    graph = context_graph_data_uri(cg_id)
     if not graph:
         raise GraphReadUnavailable("INVALID_CONTEXT_GRAPH")
     return f'''GRAPH <{graph}/_meta> {{
       ?ka <http://dkg.io/ontology/assertionGraph> ?sourceGraph ;
           <http://dkg.io/ontology/status> "confirmed" .
-      {_owner_pin(cg_id).replace('dkg:kaUal', '<http://dkg.io/ontology/kaUal>')}
+      {owner_pin(cg_id)}
     }}
     FILTER(STRSTARTS(STR(?sourceGraph), {literal(graph + '/_verifiable_memory/')}))'''
 
@@ -78,9 +79,8 @@ def candidate_query(cg_id: str, identifiers: list[str], packages: list[str], *, 
 
 
 def iri(value):
-    from ..graph_queries import _FORBIDDEN_IRI_CHARS
     text = extract_binding(value)
-    if not text or any(c.isspace() or c in _FORBIDDEN_IRI_CHARS for c in text) or ":" not in text:
+    if not is_safe_iri(text) or ":" not in text:
         raise GraphReadUnavailable("QUERY_MALFORMED_RESPONSE")
     return "<" + text + ">"
 

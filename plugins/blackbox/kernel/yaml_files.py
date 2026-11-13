@@ -1,8 +1,25 @@
 """YAML config files (Hermes ``config.yaml`` and friends), read and written safely.
 
-:func:`load_yaml` never raises (unreadable -> ``{}``); :func:`dump_yaml` writes
-through :func:`atomic_write` (temp file + rename) so a concurrent reader never
-sees a torn file. ``yaml`` is None only if PyYAML is somehow absent.
+:func:`load_yaml` never raises (unreadable -> ``{}``) and is for READING only.
+Code that changes a file and writes it back reads it with :func:`load_for_edit`,
+which raises :class:`UnreadableYaml` when the file is there but cannot be read —
+writing ``{}`` plus one key over a config with a typo in it destroyed the user's
+file (KI-493). :func:`dump_yaml` writes through :func:`atomic_write` (temp file +
+rename) so a concurrent reader never sees a torn file. ``yaml`` is None only if
+PyYAML is somehow absent.
+
+Usage::
+
+    data = yaml_files.load_for_edit(path)      # {} for a missing or empty file
+    data.setdefault("plugins", {})["enabled"] = ["blackbox"]
+    yaml_files.dump_yaml(path, data)
+
+Read, change, write back is three steps; two of them at once in one process can
+lose a change. Every function that writes a config back is marked
+:func:`edits_config` and so runs under this process's one config-edit lock::
+
+    @yaml_files.edits_config
+    def enable(path): ...load_for_edit, change, dump_yaml...
 
 A ``config.yaml`` is the user's own file: Hermes Desktop writes a 2,400-line one,
 almost all of it comments that document every setting. Where Hermes ships its
@@ -16,11 +33,12 @@ lines of Hermes Desktop's config). Data that did not come from :func:`load_yaml`
 
 from __future__ import annotations
 
+import functools
 import io
 import logging
-import os
+import threading
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Callable, TypeVar
 from .bounded_files import atomic_write   # the kernel's one torn-free write (re-exported for yaml callers)
 
 logger = logging.getLogger(__name__)
@@ -55,17 +73,81 @@ def _keeps_comments(data: Any) -> bool:
     return hasattr(data, "ca")
 
 
-def load_yaml(path: Path) -> dict[str, Any]:
-    if yaml is None or not path.exists():
+_Edit = TypeVar("_Edit", bound=Callable[..., Any])
+#: Held for a whole read-change-write of a config file. Re-entrant: an edit may call another.
+#: It serialises this process only (the dashboard saves settings and attaches agents in one
+#: process); another program writing the same file — Hermes itself — is not held by it.
+_EDIT_LOCK = threading.RLock()
+
+
+def edits_config(function: _Edit) -> _Edit:
+    """Decorator for a function that reads a config file, changes it and writes it back:
+    it runs while holding the one config-edit lock, so two edits never interleave."""
+    @functools.wraps(function)
+    def locked(*args: Any, **kwargs: Any) -> Any:
+        with _EDIT_LOCK:
+            return function(*args, **kwargs)
+    return locked   # type: ignore[return-value]
+
+
+class UnreadableYaml(ValueError):
+    """A YAML file that exists but cannot be read as a mapping; it must not be written over."""
+
+
+def load_for_edit(path: Path) -> dict[str, Any]:
+    """*path*'s mapping, for code that will change it and write it back.
+
+    ``{}`` for a missing or empty file (there is nothing to lose). Raises
+    :class:`UnreadableYaml` when the file exists and cannot be read, cannot be parsed,
+    or holds something other than a mapping — the caller leaves the file alone.
+    """
+    if not path.exists():
         return {}
+    if yaml is None:
+        raise UnreadableYaml(f"{path} cannot be read: no YAML library")
     try:
         text = path.read_text(encoding="utf-8-sig")
         editor = _roundtrip_editor()
         data = editor.load(text) if editor is not None else yaml.safe_load(text)
     except Exception as exc:
-        logger.debug("blackbox.attach: could not parse %s (%s)", path, exc)
+        raise UnreadableYaml(f"{path} could not be read ({type(exc).__name__}); it was not changed") from exc
+    if data is None:
         return {}
-    return data if isinstance(data, dict) else {}
+    if not isinstance(data, dict):
+        raise UnreadableYaml(f"{path} is not a settings mapping; it was not changed")
+    return data
+
+
+def load_yaml(path: Path) -> dict[str, Any]:
+    """*path*'s mapping for reading: ``{}`` when it is missing or unreadable. Never raises."""
+    try:
+        return load_for_edit(path)
+    except UnreadableYaml as exc:
+        logger.debug("blackbox: %s", exc)
+        return {}
+
+
+#: Where Blackbox's own settings sit inside a Hermes ``config.yaml``.
+BLACKBOX_ENTRY_PATH = ("plugins", "entries", "blackbox")
+
+
+def blackbox_entry(config: Any) -> dict[str, Any]:
+    """Blackbox's settings inside a Hermes config mapping — ``config["plugins"]["entries"]["blackbox"]``
+    — or ``{}`` when any step is missing or is not a mapping. A read: nothing is created.
+
+    THE way to reach the entry for reading; five places walked those three keys by hand.
+    Code that must CREATE the entry before writing it decides for itself what a non-mapping
+    in the way means (the settings save replaces it, the snapshot set-up refuses), and walks
+    :data:`BLACKBOX_ENTRY_PATH`.
+
+    Usage::
+
+        port = blackbox_entry(load_yaml(home / "config.yaml")).get("dashboard_port")
+    """
+    node = config
+    for key in BLACKBOX_ENTRY_PATH:
+        node = node.get(key) if isinstance(node, dict) else None
+    return node if isinstance(node, dict) else {}
 
 
 def dump_yaml(path: Path, data: dict[str, Any]) -> None:

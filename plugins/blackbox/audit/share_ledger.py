@@ -13,8 +13,9 @@ import json
 import logging
 import time
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 from ..kernel import constants
+from ..kernel.bounded_files import atomic_write, read_json_object, read_jsonl
 from . import log_store
 from . import redaction
 
@@ -87,24 +88,7 @@ def read_share_ledger(limit: int = 100) -> list[dict[str, Any]]:
     The offline half of ``blackbox report --status`` (the graph-backed half
     is the Q9 reporter-profile query, merged by the caller when reachable).
     """
-    path = log_store._home() / _REPORTS_LOG
-    if not path.exists():
-        return []
-    rows: list[dict[str, Any]] = []
-    try:
-        with path.open("r", encoding="utf-8-sig") as fh:
-            for line in fh:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    item = json.loads(line)
-                except Exception:
-                    continue
-                if isinstance(item, dict):
-                    rows.append(item)
-    except Exception:  # pragma: no cover - fail open
-        return []
+    rows = read_jsonl(log_store._home() / _REPORTS_LOG)
     return list(reversed(rows[-max(1, limit):]))
 
 
@@ -130,14 +114,7 @@ _LEDGER_SCAN_LIMIT = 100_000
 
 
 def _read_rate_state() -> dict[str, Any]:
-    path = _rate_state_path()
-    if not path.exists():
-        return {}
-    try:
-        state = json.loads(path.read_text(encoding="utf-8-sig"))
-        return state if isinstance(state, dict) else {}
-    except Exception:
-        return {}
+    return read_json_object(_rate_state_path()) or {}
 
 
 def recently_reported(identifier: str, cooldown: int = REPORT_COOLDOWN_SECS) -> bool:
@@ -175,7 +152,7 @@ def mark_reported(identifier: str) -> None:
                 k: v for k, v in stamps.items()
                 if isinstance(v, (int, float)) and (now - v) < REPORT_COOLDOWN_SECS
             }
-            _rate_state_path().write_text(json.dumps(state), encoding="utf-8")
+            atomic_write(_rate_state_path(), json.dumps(state))   # a torn file would reset every cooldown
     except Exception as exc:  # pragma: no cover - fail open
         logger.debug("blackbox: mark_reported failed (%s)", exc)
 
@@ -208,7 +185,7 @@ def allow_report(daily_limit: int) -> bool:
                 logger.debug("blackbox: daily report limit %s reached", daily_limit)
                 return False
             state["count"] = int(state.get("count", 0)) + 1
-            path.write_text(json.dumps(state), encoding="utf-8")
+            atomic_write(path, json.dumps(state))   # a torn file would reset the daily cap
             return True
     except Exception as exc:  # pragma: no cover - fail open
         logger.debug("blackbox: rate-limit state failed (%s); allowing", exc)

@@ -102,6 +102,10 @@ class NeverCached:
     def forget(self, source, identifier):
         pass
 
+    def session(self):
+        import contextlib
+        return contextlib.nullcontext()
+
 
 def node_sources(lookup):
     return SourceRegistry([NodeSource(lookup)], cache=NeverCached())
@@ -378,6 +382,61 @@ def test_messages_that_are_not_a_curators_proposal_are_dropped(svc):
     report = svc.beat("B", peers=[])
     assert (report.received, report.dropped) == (1, 2)                   # the two non-proposals are not even counted
     assert [p.id for p in svc.proposals("B") if p.kind == Kind.REJECTION.value] == [genuine.id]
+
+
+def test_curate_inbox_admits_exactly_what_the_beat_admits(svc, monkeypatch, capsys):
+    """KI-494: the command used to save every received proposal unchecked, over one already held."""
+    import argparse
+    from plugins.blackbox.curate import commands
+    svc.report(PKG)
+    genuine = _human_proposal(svc, Kind.REJECTION, PKG, {"reason": "benign"})
+    outsider = Ed25519PrivateKey.generate()                              # gitleaks:allow — a throwaway test key
+    with svc.team.a:
+        manifest = svc.team.ctx(svc.team.a).manifest
+    forged = signing.sign(outsider, statement_type=Kind.REJECTION.value, environment=manifest.environment, graph=GRAPH,
+                          payload={"identifier": PKG, "day": TODAY, "reason": "benign"}, chain=manifest.chain,
+                          root_epoch=manifest.root_epoch, sequence=9)
+    outsiders = Proposal.new(Kind.REJECTION.value, PKG, forged, GRAPH, checks={}).transition(ProposalState.PROPOSED)
+    path_shaped = dataclasses.replace(genuine, id="../../../escaped")
+    node = svc.team.reader.node
+    for proposal in (outsiders, path_shaped):
+        node.request("POST", "/api/chat", {"to": "B", "text": transport.PROPOSAL_PREFIX + proposal.to_json()})
+    with svc.team.b:
+        monkeypatch.setattr(commands, "_ctx", lambda args: svc.team.ctx(svc.team.b))
+        assert commands._inbox(argparse.Namespace()) == 0
+        held = {p.id for p in ProposalStore().all()}
+        escaped = list(keys.curate_home().parent.rglob("escaped.json"))
+    assert genuine.id in held and outsiders.id not in held and escaped == []
+    assert "ignored 2 message(s) that no curator signed" in capsys.readouterr().out
+
+
+def test_a_proposal_id_that_is_not_an_id_never_names_a_file(tmp_path):
+    from plugins.blackbox.curate.proposals.proposal import ProposalError
+    store = ProposalStore(tmp_path / "curate" / "proposals")
+    crafted = Proposal(id="../../escaped", kind="k", identifier="i", graph="g", envelope="e", checks={},
+                       created=0.0, updated=0.0)
+    with pytest.raises(ProposalError):
+        store.save(crafted)
+    assert store.get("../../escaped") is None and store.get("") is None
+    assert list(tmp_path.rglob("*.json")) == []
+
+
+@pytest.mark.parametrize("outcome, state, code", [
+    ("published to graph as name", ProposalState.APPROVED, 0),
+    ("not published — the code did not match. Confirmation code: 1234", ProposalState.APPROVED, 2),   # KI-498
+    ("not published — written, but it cannot be read back yet", ProposalState.APPROVED, 2),
+    ("anything", ProposalState.PUBLISHED, 0),
+])
+def test_curate_approve_exits_non_zero_unless_it_published(monkeypatch, capsys, outcome, state, code):
+    import argparse
+    from plugins.blackbox.curate import commands
+    proposal = Proposal(id="0" * 16, kind="k", identifier="i", graph="g", envelope="e", checks={},
+                        created=0.0, updated=0.0, state=state)
+    monkeypatch.setattr(commands, "_ctx", lambda args: None)
+    result = commands.publishing.PublishResult(outcome, published=outcome.startswith("published"))   # what publish() reports
+    monkeypatch.setattr(commands.verbs, "approve", lambda *args, **kwargs: (proposal, result))
+    args = argparse.Namespace(proposal_id=proposal.id, evidence="", code=None, yes=True, root=False)
+    assert commands._approve(args) == code
 
 
 # ------------------------------------------------------------------ nothing is left half-done
@@ -1470,3 +1529,18 @@ def test_the_watch_step_delivers_what_the_ledger_checks_raise_once(svc, tmp_path
     svc.beat("A", **steps)
     svc.beat("A", **steps)
     assert len(seen) == 2 and [item.message for item in sink.alarms].count("unexpected verified asset did:dkg:x/1") == 1
+
+
+def test_the_announced_memory_forgets_the_oldest_items_not_the_alphabetically_first(tmp_path, monkeypatch):
+    """Past its cap the memory kept the alphabetically LAST items, so early-sorting identifiers (and
+    the daily dead-man marker) were dropped every round and announced again on every poll."""
+    from plugins.blackbox.curate import intake
+
+    monkeypatch.setattr(intake, "_MAX_SEEN", 3)
+    path = tmp_path / "seen.json"
+    seen = intake._load_seen(path)
+    for item in ("zeta", "yankee", "alpha", "bravo"):                 # delivered in this order
+        seen[item] = None
+        intake._save_seen(path, seen)
+        seen = intake._load_seen(path)
+    assert list(seen) == ["yankee", "alpha", "bravo"]                 # "zeta", the oldest, is forgotten

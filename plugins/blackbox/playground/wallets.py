@@ -20,15 +20,14 @@ Usage::
 
 from __future__ import annotations
 
-import random
 import time
 from dataclasses import asdict, dataclass
 from typing import Any, Optional
 
-from .. import audit, guard, shields
+from .. import audit, shields
 from ..kernel.config import BlackboxConfig, load_blackbox_config
 from ..kernel.constants import SEVERITY_RANK
-from .runner import SESSION_ID, PlaygroundRefused
+from .runner import PlaygroundRefused, check_in_sandbox
 
 #: How many recent sandbox findings are read to find this run's own (one run adds a few).
 _FINDINGS_READ = 50
@@ -87,11 +86,8 @@ def run_wallet_test(test_id: str, cfg: Optional[BlackboxConfig] = None) -> Walle
         raise PlaygroundRefused("That test is not available on this machine any more; reload the list.")
     shield, test = found
     started = time.time()
-    task = f"sandbox-wallet-{int(started * 1000)}-{random.SystemRandom().randrange(1 << 24):06x}"
     with audit.sandbox_run():
-        verdict = guard.on_pre_tool_call(tool_name=test.tool, args=test.hook_args(), session_id=SESSION_ID,
-                                         task_id=task, tool_call_id=task)
-        check_ms = round((time.time() - started) * 1000, 1)
+        verdict, check_ms, task = check_in_sandbox(test.tool, test.hook_args(), started, prefix="sandbox-wallet")
         rows = _this_run(task)
     blocked = bool(verdict) and verdict.get("action") == "block"
     decision = "blocked" if blocked else ("flagged" if rows else "allowed")

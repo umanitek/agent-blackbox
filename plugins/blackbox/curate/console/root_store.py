@@ -22,8 +22,6 @@ Usage::
 
 from __future__ import annotations
 
-import os
-import secrets
 from pathlib import Path
 from typing import Optional
 
@@ -36,6 +34,7 @@ from cryptography.hazmat.primitives.serialization import (
 )
 
 from ...kernel import signing
+from ...kernel.bounded_files import create_once
 from .. import keys
 
 ROOT_FILE = "root_a.enc.pem"
@@ -75,7 +74,7 @@ class EncryptedRootStore:
         key = Ed25519PrivateKey.generate()
         pem = key.private_bytes(Encoding.PEM, PrivateFormat.PKCS8,
                                 BestAvailableEncryption(passphrase.encode("utf-8")))
-        if not self._link_new(pem):
+        if not create_once(self._path, pem, mode=_FILE_MODE):
             raise RootStoreError(f"a root already exists at {self._path}; it is never replaced")
         return signing.public_key_hex(key)
 
@@ -97,22 +96,3 @@ class EncryptedRootStore:
         if not isinstance(key, Ed25519PrivateKey):
             raise RootStoreError(f"the root at {self._path} is not an Ed25519 key")
         return key
-
-    def _link_new(self, pem: bytes) -> bool:
-        """Atomically create the file holding *pem* (0600 from the first byte);
-        False when it already exists (it is never replaced)."""
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self._path.with_name(f"{self._path.name}.tmp.{os.getpid()}.{secrets.token_hex(8)}")
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, _FILE_MODE)
-        try:
-            os.write(fd, pem)
-            os.fsync(fd)
-        finally:
-            os.close(fd)
-        try:
-            os.link(tmp, self._path)
-        except FileExistsError:
-            return False
-        finally:
-            tmp.unlink(missing_ok=True)
-        return True

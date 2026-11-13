@@ -43,6 +43,7 @@ from plugins.blackbox.kernel.signing import promotion_statement as statement
 from plugins.blackbox.ruleset import compiler
 from plugins.blackbox.ruleset.live import promoted
 from test_blackbox_curate import _machine
+from _blackbox_fakes import dkg_client_fake
 
 # The package re-exports the publish FUNCTION under the submodule's name.
 publish_module = importlib.import_module("plugins.blackbox.curate.publishing.publish")
@@ -242,7 +243,7 @@ def test_the_way_a_promotion_takes_follows_the_version_the_curators_node_reports
     node.share(report)
     _machine(monkeypatch, tmp_path, "A", curators["a"])
     monkeypatch.setattr(context_module, "load_blackbox_config", lambda: CFG)
-    monkeypatch.setattr(context_module, "DkgClient", lambda **_kw: node)
+    monkeypatch.setattr(context_module, "DkgClient", dkg_client_fake(lambda **_kw: node))
     monkeypatch.setattr(community, "read_curator_view",
                         lambda client, cfg, environment, interest=(): CuratorView(manifest=curators["manifest"]))
     for version, way in (("10.0.25", strategies.MEMBER_ASSET), ("10.0.24", strategies.CURATOR_ASSET)):

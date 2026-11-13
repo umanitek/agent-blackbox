@@ -15,7 +15,7 @@ and the graph, never from what a message claims:
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Iterable, Optional
 
 from ... import community
 from ...kernel import constants, signing, sparql_text, threat_ids
@@ -25,7 +25,7 @@ from ...kernel.signing import VERIFIED_GRAPH
 from ...kernel.signing import KeyManifest
 from ...kernel.signing import CuratorStatement
 from ..context import CurateContext
-from ..proposals import Proposal
+from ..proposals import Proposal, ProposalStore
 
 
 def from_a_curator(manifest: Optional[KeyManifest], proposal: Proposal) -> bool:
@@ -37,9 +37,33 @@ def from_a_curator(manifest: Optional[KeyManifest], proposal: Proposal) -> bool:
     if (proposal.id, proposal.kind, proposal.graph) != (threat_ids.stable_hash(proposal.envelope, 16),
                                                         envelope.statement_type, envelope.graph):
         return False
-    signers = signing.verified_signers(envelope, statement_type=envelope.statement_type, environment=manifest.environment,
-                                       graph=envelope.graph, chain=manifest.chain, root_epoch=manifest.root_epoch)
-    return bool(signers & frozenset(manifest.curator_keys))
+    # The manifest's own rule (one key per operator, break-glass only on reductions) — never a
+    # hand-made "any curator key signed it".
+    return bool(manifest.curator_signers(envelope, statement_type=envelope.statement_type, graph=envelope.graph))
+
+
+def admit(manifest: Optional[KeyManifest], store: ProposalStore,
+          received: Iterable[Proposal]) -> tuple[list[Proposal], int]:
+    """Save the proposals among *received* that a curator really sent and this node does not hold yet.
+
+    Returns ``(saved, dropped)``: *dropped* counts messages that fail :func:`from_a_curator`.
+    A proposal already held is neither — it is left as it is, so a re-sent message never
+    resets one this node acted on. THE one way a received proposal reaches the store: the
+    service beat and ``curate inbox`` both come through here.
+
+    Usage::
+
+        saved, dropped = inbox.admit(ctx.manifest, store, transport.receive_proposals(client, cursor))
+    """
+    saved: list[Proposal] = []
+    dropped = 0
+    for proposal in received:
+        if not from_a_curator(manifest, proposal):
+            dropped += 1
+        elif store.get(proposal.id) is None:
+            store.save(proposal)
+            saved.append(proposal)
+    return saved, dropped
 
 
 def published_elsewhere(ctx: CurateContext, proposal: Proposal, envelope: signing.SignedEnvelope) -> bool:

@@ -24,6 +24,7 @@ from plugins.blackbox.community.report_signer import (
 from plugins.blackbox.kernel import constants, signing
 from plugins.blackbox.kernel import identity as kernel_identity
 from plugins.blackbox.kernel.config import BlackboxConfig
+from _blackbox_fakes import dkg_client_fake
 
 CFG = BlackboxConfig(report=True, context_graph_id=GRAPH, daily_report_limit=50)
 THREAT = "ioc:domain:evil.example"
@@ -145,7 +146,7 @@ def wired(monkeypatch, tmp_path):
     monkeypatch.setenv("BLACKBOX_HOME", str(tmp_path / "bbhome"))
     client = _GraphClient([])
     monkeypatch.setattr(report_command, "load_blackbox_config", lambda: CFG)
-    monkeypatch.setattr(report_command, "DkgClient", lambda **kw: client)
+    monkeypatch.setattr(report_command, "DkgClient", dkg_client_fake(lambda **kw: client))
     monkeypatch.setattr(kernel_identity, "reporter_address", lambda c: "0x" + "a" * 40)
     return client
 

@@ -29,6 +29,7 @@ Usage::
 
 from __future__ import annotations
 
+import fnmatch
 import logging
 from typing import Any, Callable, Mapping
 
@@ -38,15 +39,16 @@ from ...kernel.display_safety import log_safe
 from ..contract import ShieldMode, ShieldStatus, StatusRow, StatusSection
 from ..packs import chosen_but_unavailable
 from . import detectors, mode as trader_mode
+from .detectors.browser_extension import normalize_path
 
 logger = logging.getLogger(__name__)
 
 #: The gate a found store is checked against (the shield's own ``allows``).
 Gate = Callable[[Mapping[str, Any], ShieldMode], bool]
 
-#: Which browser a key-store path belongs to, by a word in it (first match wins).
-_BROWSERS = (("brave", "Brave"), ("edge", "Edge"), ("vivaldi", "Vivaldi"), ("opera", "Opera"), ("arc", "Arc"),
-             ("chromium", "Chromium"), ("chrome", "Chrome"), ("firefox", "Firefox"), ("mozilla", "Firefox"))
+#: How each ``browser`` id in browsers.json is written on the card.
+_BROWSER_NAMES = {"arc": "Arc", "brave": "Brave", "chrome": "Chrome", "chromium": "Chromium", "edge": "Edge",
+                  "firefox": "Firefox", "opera": "Opera", "vivaldi": "Vivaldi"}
 #: Which storage area a key-store folder is (Chromium constants / Firefox storage), in plain words.
 _AREAS = (("Local Extension Settings", "vault"), ("Sync Extension Settings", "synced copy"),
           ("IndexedDB", "backup copy"), ("moz-extension", "extension storage"))
@@ -68,10 +70,17 @@ def _app_labels() -> dict[str, str]:
             if pack.status == "supported" and isinstance(pack.data.get("label"), str)}
 
 
-def browser_of(path: str) -> str:
-    """The browser a key-store or profile path belongs to ("Chrome", "Brave"…), or "a browser"."""
-    low = path.lower()
-    return next((label for key, label in _BROWSERS if key in low), "a browser")
+def browser_of(path: str, unknown: str = "a browser") -> str:
+    """The browser a key-store or profile path belongs to ("Chrome", "Brave"…), or *unknown*.
+
+    It is the browser whose folder (a root in browsers.json) the path sits in — never a word
+    found anywhere in the path, which named a Chrome vault under a home folder "marc" Arc."""
+    folders = normalize_path(path).split("/")
+    for root in detectors.browser_roots():
+        pattern = normalize_path(detectors.expand_template(root.path))
+        if fnmatch.fnmatchcase("/".join(folders[:pattern.count("/") + 1]), pattern):
+            return _BROWSER_NAMES.get(root.browser, root.browser.title())
+    return unknown
 
 
 def found_wallets() -> list[dict[str, Any]]:
@@ -83,7 +92,7 @@ def found_wallets() -> list[dict[str, Any]]:
     grouped: dict[tuple[str, str, str], dict[str, Any]] = {}
     for path, wallet in detectors.EXISTING_STORES.get():
         low = path.lower()
-        browser = labels.get(wallet.pack) or next((label for key, label in _BROWSERS if key in low), "Browser")
+        browser = labels.get(wallet.pack) or browser_of(path, "Browser")
         area = ("key file" if low.endswith(".json") else "wallet folder") if wallet.pack in labels else \
             next((label for key, label in _AREAS if key.lower() in low), "storage")
         parts = path.split("/")

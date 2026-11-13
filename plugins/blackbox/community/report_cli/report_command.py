@@ -10,10 +10,10 @@ from __future__ import annotations
 
 import argparse
 import logging
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Optional
 from ... import audit
 from ... import detection
-from .. import consent, graph_stats, report_builder, report_schema, report_signer, sharing, share_retry
+from .. import consent, graph_stats, report_schema, report_signer, sharing
 from . import report_rights, report_tracking, statement_verbs, submission_gate
 from .. import reader as graph_reader
 from ...kernel import constants, threat_ids
@@ -139,17 +139,6 @@ _REPORT_FIELDS = {
 }
 
 
-def _queue_refused_share(cfg, finding, *, subject: str, name: str, quads, detail: str) -> int:
-    """R16: a refused write is queued for automatic retry, and the operator is told so."""
-    share_retry.queue_failed_share(graph=cfg.context_graph_id, name=name, identifier=finding["identifier"],
-                                   category=finding["category"], severity=finding["severity"], subject=subject,
-                                   quads=quads, error=detail)
-    print(f"Share refused for now: {display_safety.term_safe(detail, 160)}")
-    print("Queued for automatic retry (a newly subscribed node is refused for a few minutes). "
-          "`blackbox report --status` shows it as 'retrying' until it lands.")
-    return 1
-
-
 def _report_finding_from_args(args: argparse.Namespace) -> tuple[Optional[dict], str]:
     """Factory: parsed report args → the finding dict the share path expects.
 
@@ -270,7 +259,7 @@ def cmd_report(args: argparse.Namespace) -> int:
     refusal = submission_gate.refusal_for(cfg, reduction)
     if refusal is not None:
         return refusal
-    client = DkgClient(url=cfg.dkg_url, dkg_home=cfg.dkg_home, config=cfg)
+    client = DkgClient.for_config(cfg)
     resolved = _reporting_identity(client, cfg.context_graph_id)
     if resolved is None:
         return 1
@@ -282,36 +271,7 @@ def cmd_report(args: argparse.Namespace) -> int:
         print(f"Invalid report: {err}")
         print("Nothing was submitted.")
         return 2
-    identifier = finding["identifier"]
-    if audit.recently_reported(identifier):
-        print(f"Already reported within the cooldown window: {display_safety.term_safe(identifier)}")
-        return 0
-    if not audit.allow_report(cfg.daily_report_limit):
-        print(f"Daily report cap reached ({cfg.daily_report_limit}); try again tomorrow.")
-        return 2
-    subject = threat_ids.report_uri(identifier, reporter)
-    name = f"report-{threat_ids.stable_hash(identifier + reporter, 16)}"
-    q = report_builder.build_report_quads(
-        identifier=identifier,
-        category=finding["category"],
-        severity=finding["severity"],
-        reporter_address=reporter,
-        framework=sharing.HOST_FRAMEWORK,
-        signer=signer,
-        **finding["fields"],
-    )
-    outcome, detail = statement_verbs.send_and_record(client, cfg, identifier=identifier, category=finding["category"],
-                                       severity=finding["severity"], subject=subject, name=name, quads=q, keep_alive=True)
-    if outcome is sharing.ShareOutcome.FAILED:
-        return _queue_refused_share(cfg, finding, subject=subject, name=name, quads=q, detail=detail)
-    audit.mark_reported(identifier)
-    if outcome is sharing.ShareOutcome.REJECTED_SAME_VERSION:
-        print(f"Already shared with the community — not re-sent ({display_safety.term_safe(detail, 120)}).")
-        return 0
-    print("Report shared with the community.")
-    print(f"  identifier: {display_safety.term_safe(identifier)}")
-    print(f"  subject:    {display_safety.term_safe(subject)}")
-    return 0
+    return statement_verbs.submit_report(client, cfg, finding, reporter, signer)
 
 
 def _reporting_identity(client: DkgClient, graph: str) -> Optional[tuple[str, report_signer.ReportSigner]]:
@@ -373,7 +333,7 @@ def _report_status(cfg, compiled_community: Optional[CompiledCommunity] = None) 
             print("  " + report_tracking.outcome_line(row, compiled))
     if cfg.context_graph_id:
         try:
-            client = DkgClient(url=cfg.dkg_url, dkg_home=cfg.dkg_home, config=cfg)
+            client = DkgClient.for_config(cfg)
             store = reporter_key.ReporterKeyStore()
             own_author = store.public_key_hex() if store.path.exists() else ""
             read = graph_reader.read_verified_reports(client, cfg)

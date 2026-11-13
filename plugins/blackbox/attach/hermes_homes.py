@@ -12,17 +12,21 @@ import logging
 import os
 import shutil
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 from ..kernel import constants
 from . import plugin_copy
+from .report import AttachReport
 from ..kernel import yaml_files
 
 logger = logging.getLogger(__name__)
 
 
 
-def discover_hermes_homes() -> list[Path]:
+def discover_hermes_homes(*, include_managed: bool = False) -> list[Path]:
     """Return every local Hermes home directory to protect.
+
+    Blackbox's own chat profile (:func:`is_managed_blackbox_chat_profile`) is left out — it is
+    not an agent to defend — unless *include_managed* (uninstall: Blackbox must leave it too).
 
     Includes the resolved default home, ``~/.hermes``, every existing
     ``~/.hermes/profiles/*/`` directory, and (on Windows) ``%LOCALAPPDATA%/hermes``.
@@ -56,7 +60,7 @@ def discover_hermes_homes() -> list[Path]:
     try:
         if profiles_dir.is_dir():
             for child in sorted(profiles_dir.iterdir()):
-                if child.is_dir() and not is_managed_blackbox_chat_profile(child):
+                if child.is_dir() and (include_managed or not is_managed_blackbox_chat_profile(child)):
                     _add(child)
     except Exception:
         pass
@@ -101,8 +105,24 @@ def enabled_list_has(data: dict[str, Any], name: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
+
+def _enable_in(data: dict[str, Any]) -> None:
+    """Add ``blackbox`` to *data*'s ``plugins.enabled`` (a parsed config.yaml), creating the
+    section or list where it is missing or not of the right kind; every other key is kept."""
+    plugins = data.setdefault("plugins", {})
+    if not isinstance(plugins, dict):
+        plugins = {}
+        data["plugins"] = plugins
+    enabled = plugins.get("enabled")
+    if not isinstance(enabled, list):
+        enabled = []
+        plugins["enabled"] = enabled
+    if "blackbox" not in enabled:
+        enabled.append("blackbox")
+
 @declined.remembers("hermes", switched_off=False)
-def attach_hermes(home: Path, *, dry_run: bool = False) -> dict[str, Any]:
+@yaml_files.edits_config
+def attach_hermes(home: Path, *, dry_run: bool = False) -> AttachReport:
     """Enable Blackbox in a single Hermes *home*.
 
     Copies the plugin into ``<home>/plugins/blackbox/`` (only when missing or a
@@ -111,7 +131,7 @@ def attach_hermes(home: Path, *, dry_run: bool = False) -> dict[str, Any]:
     per-target report dict; fails open (``ok=False`` + ``error`` on failure).
     """
     home = home.expanduser()
-    report: dict[str, Any] = {
+    report: AttachReport = {
         "target": str(home),
         "kind": "hermes",
         "ok": False,
@@ -133,28 +153,19 @@ def attach_hermes(home: Path, *, dry_run: bool = False) -> dict[str, Any]:
         report["copied"] = needs
 
         config_path = home / "config.yaml"
-        data = yaml_files.load_yaml(config_path)
+        data = yaml_files.load_for_edit(config_path)   # unreadable: reported below, never rewritten
         config_enabled = enabled_list_has(data, "blackbox")
         if config_enabled and files_ready:
             report["already"] = True
         elif not config_enabled:
             if not dry_run:
-                plugins = data.setdefault("plugins", {})
-                if not isinstance(plugins, dict):
-                    plugins = {}
-                    data["plugins"] = plugins
-                enabled = plugins.get("enabled")
-                if not isinstance(enabled, list):
-                    enabled = []
-                    plugins["enabled"] = enabled
-                if "blackbox" not in enabled:
-                    enabled.append("blackbox")
+                _enable_in(data)
                 yaml_files.dump_yaml(config_path, data)
             report["enabled"] = True
-        # A dry-run reports the protection that exists now, not the state an
-        # attach *could* create.  This keeps dashboard cards honest when config
-        # says enabled but the plugin files are missing or stale.
+        # A dry-run reports the protection that exists now, not the state an attach *could* create
+        # (dashboard cards stay honest when config says enabled but the files are missing or stale).
         report["protected"] = (config_enabled and files_ready) if dry_run else True
+        report["changed"] = not dry_run and bool(report["copied"] or report["enabled"])   # what auto-attach audits
         report["ok"] = True
     except Exception as exc:  # fail open per target
         logger.debug("blackbox.attach: attach_hermes(%s) failed: %s", home, exc)
@@ -163,14 +174,15 @@ def attach_hermes(home: Path, *, dry_run: bool = False) -> dict[str, Any]:
 
 
 @declined.remembers("hermes", switched_off=True)
-def detach_hermes(home: Path, *, remove_files: bool = False, dry_run: bool = False) -> dict[str, Any]:
+@yaml_files.edits_config
+def detach_hermes(home: Path, *, remove_files: bool = False, dry_run: bool = False) -> AttachReport:
     """Disable Blackbox in a single Hermes *home*.
 
     Removes ``blackbox`` from ``plugins.enabled`` (idempotent) and, when
     *remove_files* is set, deletes ``<home>/plugins/blackbox/``. Fails open.
     """
     home = home.expanduser()
-    report: dict[str, Any] = {
+    report: AttachReport = {
         "target": str(home),
         "kind": "hermes",
         "ok": False,

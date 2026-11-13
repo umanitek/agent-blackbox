@@ -34,7 +34,7 @@ Usage::
 
     mode = current()
     wallets(mode), addresses(mode)       # ("metamask", "phantom", ...), ()
-    allows_finding(finding_dict, mode)   # False while the mode is off
+    mode.enabled                         # the shield's gate (``TRADER.allows``) reads this
 """
 
 from __future__ import annotations
@@ -44,17 +44,9 @@ from typing import Any, Iterable, Mapping, Optional
 
 from ..contract import Pack, ShieldMode
 
-#: Findings that belong to the mode: seed phrases, labelled private keys, Solana and Bitcoin keys (any wallet)…
-WALLET_SECRET_IDENTIFIERS = frozenset({"secret:seed-phrase", "secret:wallet-private-key", "secret:solana-private-key",
-                                       "secret:bitcoin-private-key",
-                                       "secret:exchange-api-key",    # …an exchange key sent to a site not its own
-                                       "secret:token-approval-drainer", "secret:token-approval-unlimited",    # …token approvals
-                                       "secret:token-approval-unchecked-spender"})
-#: …and key-store access, which names its wallet in ``fields["wallet"]``.
+#: How a key-store finding's identifier ends (it names its pack in ``fields["pack"]``).
 WALLET_FILE_SUFFIX = ":crypto-wallet"
-#: …and the macOS keychain (saved passwords, the browsers' Safe Storage keys), any wallet.
-KEYCHAIN_FILE_SUFFIX = ":macos-keychain"
-#: ``fields["wallet"]`` of a Firefox extension key store: Firefox names each install's
+#: The id of a Firefox extension key store's wallet: Firefox names each install's
 #: storage by a random UUID, so the folder cannot be tied to one wallet. It belongs to
 #: EVERY chosen wallet — counted whenever the mode is on with any wallet chosen.
 ANY_EXTENSION_WALLET = "any-extension"
@@ -107,13 +99,6 @@ def supported_wallets() -> dict[str, str]:
     return {pack.id: pack.name for pack in _packs if pack.status == "supported"}
 
 
-def belongs_to_mode(identifier: str) -> bool:
-    """Whether a finding identifier is a Trader Shield finding — THE list the mode gate
-    and the dashboard's wallet events both use."""
-    return (identifier in WALLET_SECRET_IDENTIFIERS or identifier.endswith(WALLET_FILE_SUFFIX)
-            or identifier.endswith(KEYCHAIN_FILE_SUFFIX))
-
-
 def build(enabled: bool = False, wallets: Optional[tuple[str, ...]] = None,
           addresses: tuple[str, ...] = ()) -> ShieldMode:
     """Trader's mode: ``enabled``; ``wallets`` — supported wallet ids to guard (None:
@@ -133,30 +118,6 @@ def wallets(mode: ShieldMode) -> tuple[str, ...]:
 def addresses(mode: ShieldMode) -> tuple[str, ...]:
     """The operator's own addresses in *mode* (personal: never shown outside Settings)."""
     return tuple(mode.options.get(ADDRESSES, ()))
-
-
-def protects(mode: ShieldMode, wallet_id: str) -> bool:
-    """Whether the wallet *wallet_id* is guarded under *mode* — THE rule the gate
-    and the dashboard both use. ``ANY_EXTENSION_WALLET`` (a store no folder name ties
-    to one wallet) is guarded whenever any wallet is chosen."""
-    wallet_id = str(wallet_id or "").lower()
-    if wallet_id == ANY_EXTENSION_WALLET:
-        return mode.enabled and bool(wallets(mode))
-    return mode.enabled and wallet_id in wallets(mode)
-
-
-def allows_finding(finding: Mapping[str, Any], mode: ShieldMode) -> bool:
-    """Whether a finding may flag or block under *mode*. Findings that are
-    not wallet findings are always allowed (this mode governs wallets only)."""
-    identifier = str(finding.get("identifier") or "")
-    if identifier in WALLET_SECRET_IDENTIFIERS:
-        return mode.enabled
-    if identifier.endswith(KEYCHAIN_FILE_SUFFIX):
-        return mode.enabled
-    if identifier.endswith(WALLET_FILE_SUFFIX):
-        fields = finding.get("fields")
-        return protects(mode, str((fields.get("wallet") if isinstance(fields, Mapping) else None) or ""))
-    return True
 
 
 def _wallet_list(raw: Any) -> tuple[str, ...]:

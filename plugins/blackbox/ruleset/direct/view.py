@@ -4,6 +4,7 @@ from __future__ import annotations
 import time
 
 from ...kernel.sparql_text import sparql_string_literal as literal
+from ...kernel import threat_ids
 from ...kernel.dkg_client import extract_binding
 from ..compiler import Ruleset
 from .reader import compile_reply, validate_config, read_candidates
@@ -138,8 +139,9 @@ def lookup(cfg, identifier, *, client=None):
     validate_config(cfg)
     client = client or LocalGraphClient(cfg)
     packages = []
-    if identifier.startswith("dep:"):
-        packages = [identifier.split(":", 2)[-1].rsplit("@", 1)[0]]
+    parsed = threat_ids.parse_dependency_identifier(identifier)
+    if parsed is not None:
+        packages = [parsed[1]]
     rules = compile_reply(cfg, read_candidates(cfg, client, [identifier], packages))
     return next((r for _, r in rules.iter_rules() if r.get("identifier") == identifier), None)
 

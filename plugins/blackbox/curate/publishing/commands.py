@@ -31,10 +31,9 @@ Pattern: Command — one function per verb over :class:`.context.CurateContext`.
 from __future__ import annotations
 
 import argparse
-import functools
 import json
 import logging
-from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Callable, Iterable, Mapping, Optional, Sequence
 
 from ...kernel import constants, display_safety, signing, sparql_text, threat_ids
 from ...kernel.signing import promotion_statement as statement
@@ -44,7 +43,7 @@ from ..proposals import consent, transport
 from ..context import CORRECTION_STATEMENT, CorrectionDraft, CurateContext, build_context
 from ..proposals import Proposal, ProposalState, ProposalStore
 from . import never_flag, row_builders
-from .errors import VerbError
+from .errors import VerbError, guarded
 from .publish import require_effective_manifest
 from .sequences import next_sequence
 
@@ -67,33 +66,18 @@ def add_publishing_parser(verbs_: Any) -> None:
     c.add_argument("--reason", required=True, help="why it is not a threat (one line)")
     c.add_argument("--source", required=True, help="where that is established, e.g. misp-warninglists:public-dns-v4")
     _add_signing_options(c)
-    c.set_defaults(func=_guarded(cmd_correct))
+    c.set_defaults(func=guarded(cmd_correct))
     n = verbs_.add_parser("never-flag", help="Review a MISP warninglist file and sign its addresses as corrections")
     n.add_argument("file", help="a MISP warninglist list.json (public DNS resolvers, Cisco Umbrella top 1K)")
     n.add_argument("--reason", default="known-good address (never-flag list)", help="the reason every correction carries")
     _add_signing_options(n)
-    n.set_defaults(func=_guarded(cmd_never_flag))
+    n.set_defaults(func=guarded(cmd_never_flag))
 
 
 def _add_signing_options(parser: Any) -> None:
     parser.add_argument("--code", default=None, help="the 8-hex code shown for exactly this content (signs it)")
     parser.add_argument("--yes", action="store_true", help="SANDBOX only: consent without typing the code")
     parser.add_argument("--to", default="", metavar="PEER", help="send the proposal(s) to this curator (name or peer id)")
-
-
-def _guarded(verb: Callable[[argparse.Namespace], int]) -> Callable[[argparse.Namespace], int]:
-    """The CLI boundary every curate verb has: a refusal or failure is one readable line."""
-    @functools.wraps(verb)
-    def run(args: argparse.Namespace) -> int:
-        try:
-            return verb(args)
-        except VerbError as exc:
-            print(f"Refused: {exc}")
-            return 2
-        except Exception as exc:
-            print(f"curate {args.verb} failed: {_term(str(exc), 200)}")
-            return 1
-    return run
 
 
 def cmd_correct(args: argparse.Namespace, *, context: Optional[CurateContext] = None,
@@ -207,9 +191,10 @@ def _sign_after_consent(ctx: CurateContext, store: ProposalStore, payloads: list
                         args: argparse.Namespace, *, review: list[str]) -> int:
     """Show *payloads* and their code; with the matching code, sign each one
     (first signature), store it as a proposal and send it when ``--to`` names a peer."""
-    content = json.dumps(payloads, sort_keys=True, separators=(",", ":"))
+    content = signing.canonical_json(payloads)
     ledger = consent.ConsentLedger()
-    code = ledger.show(content, f"{CORRECTION_STATEMENT} × {len(payloads)} · graph {ctx.verified_graph}")
+    code = (consent.confirmation_code(content) if args.code or args.yes   # never re-shown right before its check
+            else ledger.show(content, f"{CORRECTION_STATEMENT} × {len(payloads)} · graph {ctx.verified_graph}"))
     for line in review:
         print(line)
     for payload in payloads:

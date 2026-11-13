@@ -26,6 +26,7 @@ from pathlib import Path
 import pytest
 
 from _community_rows import GRAPH, NETWORK, Reporter, signed_dispute_row, signed_retraction_row, signed_row
+from _blackbox_fakes import dkg_client_fake
 
 REPO = Path(__file__).resolve().parents[2]
 SCRIPT = Path(__file__).with_name("dashboard_browser_pass.mjs")
@@ -148,7 +149,7 @@ def fixture_app(monkeypatch, tmp_path):
         def __getattr__(self, name):
             return lambda *a, **k: {}
 
-    monkeypatch.setattr(dkg_module, "DkgClient", FakeDkg)       # create_app imports it from here
+    monkeypatch.setattr(dkg_module, "DkgClient", dkg_client_fake(FakeDkg))       # create_app imports it from here
     monkeypatch.setattr(ruleset_pkg, "peek", lambda cfg: rs)
     monkeypatch.setattr(ruleset_pkg, "get", lambda cfg=None: rs)
     monkeypatch.setattr(community, "read_verified_reports", lambda client, cfg: read)
@@ -281,3 +282,21 @@ def test_a_read_only_view_says_changes_are_off_instead_of_network_error(served, 
     assert summary["pageErrors"] == [], summary
     assert "switched off in this view" in summary["saveStatus"] and "Network error" not in summary["saveStatus"]
     assert summary["engageButton"].startswith("Engage ")   # back to its label, not stuck on "Engaging…"
+
+
+STALE_TOKEN = Path(__file__).with_name("dashboard_stale_token.mjs")
+
+
+def test_a_page_opened_before_a_dashboard_restart_can_still_save(served, tmp_path):
+    """KI-498: the page kept its first session token for good, so after a dashboard restart
+    every change answered HTTP 403 until the page was reloaded."""
+    chromium = _chromium()
+    if chromium is None:
+        pytest.skip("no Chromium build in Playwright's cache (npx playwright install chromium)")
+    result = subprocess.run(["node", str(STALE_TOKEN), served, str(tmp_path)], capture_output=True, text=True, timeout=240,
+                            cwd=str(REPO), env={**os.environ, "PW_EXEC": chromium}, check=False)
+    assert result.returncode == 0, result.stderr[-2000:]
+    summary = json.loads((tmp_path / "stale-token-summary.json").read_text(encoding="utf-8"))
+    assert summary["pageErrors"] == [], summary
+    assert summary["settingsPosts"] == [403, 200], summary     # refused once, then sent again with the new token
+    assert summary["sessionReads"] == 2 and "403" not in summary["saveStatus"], summary

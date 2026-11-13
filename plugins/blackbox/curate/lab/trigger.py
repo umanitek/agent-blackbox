@@ -65,14 +65,14 @@ Usage (the beat's submit step)::
 from __future__ import annotations
 
 import json
-import os
 import threading
 import time
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import AbstractSet, Callable, FrozenSet, Iterable, Mapping, Optional, Protocol, Tuple
+from typing import AbstractSet, Callable, Iterable, Mapping, Optional, Protocol
 
+from ...kernel.bounded_files import append_line, read_jsonl
 from .. import keys
 from ..queue import Lane, QueueItem
 from ..service.evidence import Lookup, OwnCheck
@@ -255,25 +255,15 @@ class LabRequests:
         row = {"ts": self._clock(), "act": TYPED_REQUEST_ACT, "threat_digest": threat_digest(strip_query(identifier)),
                "code": code}
         with self._lock:
-            self._path.parent.mkdir(parents=True, exist_ok=True)
-            descriptor = os.open(self._path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
-            with os.fdopen(descriptor, "a", encoding="utf-8") as handle:
-                handle.write(json.dumps(row, sort_keys=True) + "\n")
+            append_line(self._path, json.dumps(row, sort_keys=True), mode=0o600)
 
     def requested_digests(self) -> frozenset[str]:
         """Threat digests a curator has requested (unreadable lines are skipped)."""
         digests = set()
         with self._lock:
-            try:
-                lines = self._path.read_text(encoding="utf-8-sig").splitlines()
-            except FileNotFoundError:
-                return frozenset()
-        for line in lines:
-            try:
-                row = json.loads(line)
-            except ValueError:
-                continue
-            if not isinstance(row, dict) or row.get("act") != TYPED_REQUEST_ACT:
+            rows = read_jsonl(self._path)
+        for row in rows:
+            if row.get("act") != TYPED_REQUEST_ACT:
                 continue
             if evidence_schema.is_sha256(row.get("threat_digest")):
                 digests.add(row["threat_digest"])

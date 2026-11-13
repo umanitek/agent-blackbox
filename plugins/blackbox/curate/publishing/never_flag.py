@@ -32,7 +32,7 @@ from __future__ import annotations
 import ipaddress
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Any, FrozenSet, List, Mapping, Tuple
+from typing import Any, Mapping
 
 from ...kernel import public_suffix, threat_ids
 

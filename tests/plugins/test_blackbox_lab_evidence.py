@@ -865,3 +865,162 @@ if __name__ == "__main__":
             (_fixtures.FIXTURES_DIR / _name).write_text(_text, encoding="utf-8")
     else:
         sys.exit("usage: python -m tests.plugins.test_blackbox_lab_evidence --write")
+
+
+# --- the one "64 lowercase hex characters" check (kernel.threat_ids.is_hex64) ---
+
+def test_exactly_64_lowercase_hex_characters_and_nothing_else():
+    from plugins.blackbox.kernel import threat_ids
+    good = "0123456789abcdef" * 4
+
+    assert threat_ids.is_hex64(good)
+    for bad in (good + "\n", "\n" + good, good + " ", good[:-1], good + "0", good.upper(), "0x" + good[2:],
+                good[:-1] + "g", "", None, 64, good.encode("ascii")):
+        assert not threat_ids.is_hex64(bad), repr(bad)
+
+
+def test_a_lab_digest_or_job_key_with_a_trailing_newline_is_refused():
+    """The lab's own check was written `^…$` with `match`, where `$` also matches before a
+    final newline: a digest or job key read back from a log line with its newline passed."""
+    from plugins.blackbox.curate.lab import evidence_schema
+    digest = "ab" * 32
+    key = f"{digest}:2:{digest}"
+
+    assert evidence_schema.is_sha256(digest) and evidence_schema.is_job_key(key)
+    assert not evidence_schema.is_sha256(digest + "\n")
+    assert not evidence_schema.is_job_key(key + "\n")
+    assert not evidence_schema.is_job_key("x" + key)
+
+
+def test_the_labs_own_copy_of_the_check_agrees_with_the_kernels():
+    """evidence_schema is standard-library only (the lab runner loads it alone), so it keeps a
+    copy of the check; the two must never drift apart."""
+    from plugins.blackbox.curate.lab import evidence_schema
+    from plugins.blackbox.kernel import threat_ids
+    good = "0123456789abcdef" * 4
+
+    for value in (good, good + "\n", "\n" + good, good.upper(), good[:-1], good + "0", "0x" + good[2:], "", None, 64):
+        assert evidence_schema.is_sha256(value) is threat_ids.is_hex64(value), repr(value)
+
+
+# --- the one spelling of the JSON that is hashed or signed (kernel.signing.canonical_json) ---
+
+def test_canonical_json_is_sorted_compact_ascii_and_the_same_for_the_same_value():
+    from plugins.blackbox.kernel import signing
+
+    assert signing.canonical_json({"b": 1, "a": [1, {"d": 2, "c": "café"}]}) == '{"a":[1,{"c":"caf\\u00e9","d":2}],"b":1}'
+    assert signing.canonical_json({"b": 1, "a": 2}) == signing.canonical_json({"a": 2, "b": 1})
+
+
+def test_the_envelope_the_kill_list_and_the_lab_evidence_all_write_that_spelling():
+    """The lab's schema file is standard-library only, so it spells the rule itself: held equal here."""
+    import json
+    from plugins.blackbox.curate.lab import evidence_schema
+    from plugins.blackbox.kernel import signing
+    value = {"z": ["café", {"y": 1, "x": None}], "a": True}
+
+    assert signing.canonical_json(value) == json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    source = (__import__("pathlib").Path(evidence_schema.__file__)).read_text(encoding="utf-8")
+    assert 'json.dumps(to_mapping(evidence), sort_keys=True, separators=(",", ":"))' in source
+
+
+# --- reading an `ioc:<type>:<value>` identifier (kernel.threat_ids.parse_ioc_identifier) ---
+
+@pytest.mark.parametrize("identifier, parsed", [
+    ("ioc:domain:evil.example", ("domain", "evil.example")),
+    ("ioc:url:https://evil.example/a?b=c", ("url", "https://evil.example/a?b=c")),
+    ("ioc:ip:203.0.113.7", ("ip", "203.0.113.7")),
+    ("ioc:wallet:0x" + "ab" * 20, ("wallet", "0x" + "ab" * 20)),
+])
+def test_a_well_formed_ioc_identifier_reads_as_its_type_and_value(identifier, parsed):
+    from plugins.blackbox.kernel import threat_ids
+    assert threat_ids.parse_ioc_identifier(identifier) == parsed
+
+
+@pytest.mark.parametrize("identifier", ["", "ioc:", "ioc:domain", "ioc:domain:", "ioc:nonsense:evil.example",
+                                        "dep:npm:left-pad@1.0.0", "domain:evil.example", "IOC:domain:evil.example",
+                                        "ioc:ip:not-an-address", "ioc:domain:" + "a" * 300, None, 7])
+def test_anything_else_is_not_an_ioc_identifier(identifier):
+    from plugins.blackbox.kernel import threat_ids
+    assert threat_ids.parse_ioc_identifier(identifier) is None
+
+
+# --- reading a `dep:<ecosystem>:<name>@<version>` identifier: one parser for every reader ---
+
+@pytest.mark.parametrize("identifier, parsed", [
+    ("dep:npm:left-pad@1.3.0", ("npm", "left-pad", "1.3.0")),
+    ("dep:npm:@scope/pkg@2.0.0", ("npm", "@scope/pkg", "2.0.0")),      # the LAST @ is the version
+    ("dep:pypi:Requests@2.31.0", ("pypi", "Requests", "2.31.0")),
+])
+def test_a_package_identifier_reads_the_same_for_the_kernel_and_the_curators_ladder(identifier, parsed):
+    from plugins.blackbox.curate.ladder import novelty_facts
+    from plugins.blackbox.kernel import threat_ids
+
+    assert threat_ids.parse_dependency_identifier(identifier) == parsed
+    assert novelty_facts.dependency_parts(identifier) == parsed
+
+
+@pytest.mark.parametrize("identifier", ["dep:npm:left-pad", "dep:npm:@1.0.0", "dep::left-pad@1.0.0", "dep:npm:left-pad@",
+                                        "npm:left-pad@1.0.0", "ioc:domain:evil.example", ""])
+def test_a_package_identifier_missing_a_part_is_not_one(identifier):
+    from plugins.blackbox.curate.ladder import novelty_facts
+    from plugins.blackbox.kernel import threat_ids
+
+    assert threat_ids.parse_dependency_identifier(identifier) is None
+    assert novelty_facts.dependency_parts(identifier) is None
+
+
+# --- ontology addresses come from kernel.constants; a module never retypes one as its own constant ---
+
+def test_the_ontology_addresses_keep_their_published_values():
+    """The published corpus uses these exact strings: a changed character matches nothing."""
+    from plugins.blackbox.kernel import constants
+
+    assert constants.RDF_TYPE == "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
+    assert constants.BLACKBOX_ONTOLOGY == "http://umanitek.ai/ontology/guardian/"
+    assert constants.DEFENDER_PREDICATES == "urn:defender:p:"
+    assert constants.BLACKBOX_PREDICATES == "urn:blackbox:p:"
+
+
+def test_no_module_assigns_one_of_those_addresses_to_a_constant_of_its_own():
+    import re
+    from pathlib import Path
+    plugin = Path(__file__).resolve().parents[2] / "plugins" / "blackbox"
+    retyped = re.compile(
+        r'^\s*\w+\s*=\s*"(?:http://www\.w3\.org/1999/02/22-rdf-syntax-ns#type|urn:defender:p:|urn:blackbox:p:'
+        r'|http://umanitek\.ai/ontology/guardian/)"\s*(?:#.*)?$', re.MULTILINE)
+    offenders = sorted(str(path.relative_to(plugin)) for path in plugin.rglob("*.py")
+                       if path.name != "constants.py" and retyped.search(path.read_text(encoding="utf-8-sig")))
+    assert offenders == [], f"use kernel.constants instead: {offenders}"
+
+
+def test_the_guardian_ontology_address_is_spelled_only_in_kernel_constants():
+    """Every query takes its `g:` prefix from `sparql_text.GUARDIAN_PREFIX` and every IRI from
+    `kernel.constants`; a retyped copy of the address could drift from the published corpus.
+    (curate/lab/ is standard-library only by design and keeps its own copies, with parity tests.)"""
+    from pathlib import Path
+
+    plugin = Path(__file__).resolve().parents[2] / "plugins" / "blackbox"
+    spelled = [str(path.relative_to(plugin)) for path in plugin.rglob("*.py")
+               if "http://umanitek.ai/ontology/guardian/" in path.read_text(encoding="utf-8")
+               and path.relative_to(plugin).parts[:2] != ("curate", "lab")]
+    assert spelled == ["kernel/constants.py"]
+
+
+def test_a_page_cursor_is_escaped_and_absent_on_the_first_page():
+    from plugins.blackbox.kernel import sparql_text
+
+    assert sparql_text.cursor_filter("") == ""
+    assert sparql_text.cursor_filter('urn:x:"1"') == 'FILTER(STR(?r) > "urn:x:\\"1\\"")'
+    assert sparql_text.cursor_filter("urn:y", variable="threat") == 'FILTER(STR(?threat) > "urn:y")'
+
+
+def test_a_domain_visit_answers_whether_it_was_redirected_off_the_domain():
+    """Real identifiers are `ioc:domain:<host>` (the urlscan visit is built from exactly that); the
+    extractor only understood a bare `domain:` prefix, so a domain visit never answered this check."""
+    off = extractor.extract(_job(identifier="ioc:domain:example-phish.test", level=3),
+                            _raw(urlscan=_urlscan("evil.example.test", brands=())))
+    assert _observed(off)[Check.REDIRECTED_OFF_DOMAIN] is True
+    same = extractor.extract(_job(identifier="ioc:domain:example-phish.test", level=3),
+                             _raw(urlscan=_urlscan("www.example-phish.test", brands=())))
+    assert _observed(same)[Check.REDIRECTED_OFF_DOMAIN] is False

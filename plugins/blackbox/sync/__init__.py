@@ -21,6 +21,7 @@ import argparse
 from pathlib import Path
 
 from . import node_service, progress, state
+from .node_service import LAUNCHD_LABELS, SYSTEMD_UNITS, SYSTEM_UNIT_DIR, WINDOWS_TASKS
 from ..kernel import health
 from ..kernel.config import load_blackbox_config
 from ..kernel.dkg_client import DkgClient
@@ -28,7 +29,7 @@ from .command import cmd_sync as _sync_with_node
 from .progress import read_durable_progress, read_recovery_backlog
 from .snapshot_readiness import defaults as snapshot_defaults, validate_requested_profile as validate_snapshot_profile
 
-__all__ = ["cmd_sync", "node_starting", "progress", "read_durable_progress", "read_recovery_backlog",
+__all__ = ["LAUNCHD_LABELS", "SYSTEMD_UNITS", "SYSTEM_UNIT_DIR", "WINDOWS_TASKS", "cmd_sync", "is_node_process", "node_starting", "progress", "read_durable_progress", "read_recovery_backlog",
            "snapshot_defaults", "state", "validate_snapshot_profile"]
 
 
@@ -41,12 +42,20 @@ def node_starting(cfg) -> bool:
     return _starting(cfg, node_ready_wait_seconds())
 
 
+def is_node_process(cfg, pid: int) -> bool:
+    """Whether *pid* is a live DKG daemon process of THIS installation. ``daemon.pid`` is only a
+    hint (KI-312): ask this before signalling the number it holds."""
+    from .node_process import is_managed_daemon
+
+    return is_managed_daemon(cfg, pid)
+
+
 def cmd_sync(args: argparse.Namespace) -> int:
     """``blackbox sync``. On a machine with no DKG node for Blackbox — a Hermes plugin-catalog
     install brings the plugin only — it says how to install one instead of waiting on a node that
     is not there (exit 2 with ``--wait``); otherwise :func:`.command.cmd_sync`."""
     cfg = load_blackbox_config()
-    if not health.node_installed(cfg, DkgClient(url=cfg.dkg_url, dkg_home=cfg.dkg_home, config=cfg).reachable()):
+    if not health.node_installed(cfg, DkgClient.for_config(cfg).reachable()):
         print("Blackbox setup has not run, so there is no DKG node and no threat graph to sync. "
               f"To {health.NODE_INSTALL_HINT}.")
         return 2 if getattr(args, "wait", False) else 0

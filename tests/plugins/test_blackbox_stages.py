@@ -311,3 +311,47 @@ def test_a_curator_deferral_lapses_after_thirty_days_on_the_reader(monkeypatch):
     undated = stages.stage_for("dep:npm:x@1", keys, NOW - 10 * DAY, view, 0, Kind.DEFERRAL, NOW)
     assert deferred.stage is Stage.DEFERRED and undated.stage is Stage.DEFERRED
     assert (lapsed.stage, lapsed.enforcement) == (Stage.CORROBORATED, Enforcement.FLAG) and "lapsed" in lapsed.reason
+
+
+# ------------------------------------------------------------------ a dispute changes enforcement, nothing else
+
+
+def test_a_disputed_attestation_still_says_the_curator_attested_it():
+    keys = _keys("p", 3)
+    partners = [(k, f"org{i}") for i, k in enumerate(keys)]
+    for weight in (1, 3):                                                   # tagged, then decayed
+        disputed = _stage("dep:npm:x@1", keys, _attested("corroborated", partners=partners), dispute_weight=weight)
+        assert disputed.disputed is True and disputed.source == "curator"
+
+
+def test_a_dispute_keeps_every_other_field_of_the_stage():
+    looks_like = stages.StageResult(Stage.CORROBORATED, Enforcement.FLAG, "corroborated", source="curator",
+                                    counted=4, confusable_of="lodash")
+    for weight, enforcement in ((1, Enforcement.FLAG), (4, Enforcement.MONITOR)):
+        disputed = stages._apply_disputes(looks_like, stages.Clusters(partner=2, established=2), weight)
+        assert (disputed.enforcement, disputed.disputed) == (enforcement, True)
+        assert (disputed.source, disputed.counted, disputed.confusable_of) == ("curator", 4, "lodash")
+        assert disputed.reason.startswith("corroborated; disputed by")
+
+
+# ------------------------------------------------------------------ one deferral clock for readers and curators
+
+
+@pytest.mark.parametrize("age_days, in_force", [(0, True), (30, True), (31, False), (45, False)])
+def test_readers_and_curators_end_a_deferral_on_the_same_day(age_days, in_force):
+    """A deferral holds for 30 whole UTC days and lapses on the 31st — for the reader's stage, the
+    curator authorities' combined verdict and the curator service alike. The reader counted
+    fractional days, so for most of day 30 it had already lapsed while the curators held it."""
+    from datetime import datetime, timedelta
+    from plugins.blackbox.curate.service import policy
+    from plugins.blackbox.kernel.signing import statement_order
+
+    keys = _keys("p", 3)
+    view = _view([(k, f"org{i}") for i, k in enumerate(keys)])
+    late_today = datetime.fromtimestamp(NOW, tz=UTC).replace(hour=23, minute=0)
+    signed_day = (late_today.date() - timedelta(days=age_days)).isoformat()
+    stage = stages.stage_for("dep:npm:x@1", keys, NOW - 10 * DAY, view, 0, Kind.DEFERRAL, late_today.timestamp(),
+                             verdict_day=signed_day)
+    assert (stage.stage is Stage.DEFERRED) is in_force
+    assert statement_order.deferral_in_force(age_days) is in_force
+    assert policy._lapse("dep:npm:x@1", policy.Facts(deferral_age_days=age_days))[0] is (not in_force)

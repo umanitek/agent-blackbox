@@ -14,11 +14,10 @@ import contextvars
 import logging
 import threading
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, NamedTuple, Optional
 from .. import audit, detection
-from .. import community
-from ..kernel import constants, threat_ids
-from . import consent, keep_alive, membership, report_schema, report_signer, share_retry
+from ..kernel import constants, dkg_client, threat_ids
+from . import consent, keep_alive, membership, report_builder, report_schema, report_signer, share_retry
 from ..kernel.config import BlackboxConfig
 from ..kernel.dkg_client import DkgClient, DkgError
 
@@ -145,37 +144,48 @@ class ShareOutcome(Enum):
     ``ACCEPTED`` — a new report reached the network. ``REJECTED_SAME_VERSION``
     — this exact report was shared before; peers refuse a same-version
     re-share (KI-103), so it is not re-sent and is NOT counted as a new
-    contribution. ``FAILED`` — the send failed.
+    contribution. ``FAILED`` — the send failed. ``NOT_ALLOWED`` — nothing was sent:
+    sharing is off or consent is not in force (the detail says which); the caller stops
+    and keeps what it had, it is not a failure to retry.
     """
 
     ACCEPTED = "accepted"
     REJECTED_SAME_VERSION = "already-shared"
     FAILED = "failed"
+    NOT_ALLOWED = "not-allowed"
 
 
-#: The daemon's reply when a report with this name already exists sealed and it
-#: refuses to rewrite it (DKG 10.0.20, captured on the R0P bench 2026-10-01).
-#: Matched narrowly against that exact text (LES-015).
-ALREADY_SEALED_REPLY = "is not an active working memory draft"
+#: Kept for callers that import it here; the text and its check live in ``kernel.dkg_client``.
+ALREADY_SEALED_REPLY = dkg_client.ALREADY_SEALED_REPLY
 
 
 def send_report(client: DkgClient, graph: str, name: str, quads: list[dict[str, str]],
-                lane: str = constants.COMMUNITY_SUB_GRAPH) -> tuple[ShareOutcome, str]:
+                lane: str = constants.COMMUNITY_SUB_GRAPH, *, cfg: Any,
+                reduces: bool = False) -> tuple[ShareOutcome, str]:
     """Send one built report into *lane* (a shared-memory sub-graph) and say honestly
     what happened: (outcome, detail).
+
+    THE outbound gate is here, where data leaves the machine: unless *reduces*, nothing
+    is sent while ``consent.sharing_on(cfg)`` is false (``NOT_ALLOWED``, the reason in
+    *detail*). Senders may check first to skip their work, but a sender that forgets
+    still sends nothing. *reduces* — a dispute or a retraction: it only lowers
+    enforcement, so it goes through whatever the switch says (LES-016). *cfg* has no
+    default on purpose: every caller hands the gate its config.
 
     A report this node already got onto the network (its ledger says so) is
     not re-sent; neither is one the daemon reports as already sealed. Both
     come back as REJECTED_SAME_VERSION — before KI-180 the first was logged
     as a failure, before KI-104 the second as a success.
     """
+    if not reduces and not consent.sharing_on(cfg):
+        return ShareOutcome.NOT_ALLOWED, consent.why_not() or "community sharing is off"
     if audit.previously_accepted(name):
         return ShareOutcome.REJECTED_SAME_VERSION, "already shared earlier; a same-version re-share is refused by peers"
     try:
         membership.ensure_report_lane(client, graph)   # registers the lanes on the graph owner's node only
         result = client.share_knowledge_asset(graph, name, quads, sub_graph=lane)
     except Exception as exc:  # the outermost send boundary: any failure is FAILED, never raised
-        if isinstance(exc, DkgError) and ALREADY_SEALED_REPLY in str(exc).lower():
+        if isinstance(exc, DkgError) and dkg_client.is_already_sealed(exc):
             return ShareOutcome.REJECTED_SAME_VERSION, "the node already holds this report sealed (not re-sent)"
         logger.debug("blackbox: report share failed: %s", exc)
         return ShareOutcome.FAILED, str(exc)
@@ -218,30 +228,59 @@ def _share_sighting(
     does not share (R0b): the refusal is ledgered like any failure. Fail-open.
     """
     identifier = str(finding.get("identifier") or "")
-    subject = threat_ids.report_uri(identifier, reporter)
-    name = f"{'sandbox' if cfg.community_sandbox else 'report'}-{threat_ids.stable_hash(identifier + reporter, 16)}"
     signer = report_signer.resolve_report_signer(client, cfg.context_graph_id)
     if signer is None:
-        _ledger_share(finding, subject, name, ok=False, error="cannot sign reports (no network id or reporter key)")
+        _ledger_share(finding, threat_ids.report_uri(identifier, reporter), report_asset_name(cfg, identifier, reporter),
+                      ok=False, error="cannot sign reports (no network id or reporter key)")
         return
     try:
-        # Reports contain signatures, never raw prompts, paths, or source files.
-        fields = shareable_fields(finding)
-        q = community.build_report_quads(
-            identifier=identifier,
-            category=str(finding.get("category") or ""),
-            severity=str(finding.get("severity") or "info"),
-            reporter_address=reporter,
-            framework=HOST_FRAMEWORK,
-            signer=signer,
-            **fields,
-        )
-        outcome, detail = send_report(client, cfg.context_graph_id, name, q, lane=community_lane(cfg))
-    except Exception as exc:  # pragma: no cover - fail open (building the report failed)
+        share_report(client, cfg, finding, reporter, signer)
+    except Exception as exc:  # health: allow BLE001 -- the background share's boundary: a report that cannot be built is ledgered as failed, never raised into the worker
         logger.debug("blackbox: sighting share error: %s", exc)
-        _ledger_share(finding, subject, name, ok=False, error=str(exc), outcome=ShareOutcome.FAILED.value)
-        return
-    _after_send(cfg, finding, name, subject, q, outcome, detail)
+        _ledger_share(finding, threat_ids.report_uri(identifier, reporter), report_asset_name(cfg, identifier, reporter),
+                      ok=False, error=str(exc), outcome=ShareOutcome.FAILED.value)
+
+
+class ShareResult(NamedTuple):
+    """What :func:`share_report` did: the send's outcome and detail, the asset name and
+    the report subject (``urn:guardian:report:<reporter>:<hash>``) it was shared under."""
+
+    outcome: ShareOutcome
+    detail: str
+    name: str
+    subject: str
+
+
+def share_report(client: DkgClient, cfg: BlackboxConfig, finding: dict[str, Any], reporter: str,
+                 signer: report_signer.ReportSigner) -> ShareResult:
+    """Build, send and record ONE report of *finding* — the one path for automatic and manual
+    reports alike. *finding* is a finding dict (``identifier``, ``category``, ``severity``,
+    ``fields``, optionally the guard's ``sighting``); only :func:`shareable_fields` of it leave
+    the machine, never prompt or command text. Afterwards (:func:`_after_send`): a refused real
+    report is queued for retry (the queue ledgers its final outcome), anything else is ledgered,
+    an accepted real report is kept alive; a sandbox report is only ledgered, in the sandbox.
+    Raises when the report cannot be built (the caller decides how to fail)."""
+    identifier = str(finding.get("identifier") or "")
+    subject = threat_ids.report_uri(identifier, reporter)
+    name = report_asset_name(cfg, identifier, reporter)
+    quads = report_builder.build_report_quads(
+        identifier=identifier,
+        category=str(finding.get("category") or ""),
+        severity=str(finding.get("severity") or "info"),
+        reporter_address=reporter,
+        framework=HOST_FRAMEWORK,
+        signer=signer,
+        **shareable_fields(finding),
+    )
+    outcome, detail = send_report(client, cfg.context_graph_id, name, quads, lane=community_lane(cfg), cfg=cfg)
+    _after_send(cfg, finding, name, subject, quads, outcome, detail)
+    return ShareResult(outcome, detail, name, subject)
+
+
+def report_asset_name(cfg: BlackboxConfig, identifier: str, reporter: str) -> str:
+    """The asset name this node shares its report of *identifier* under: ``report-<hash>``, or
+    ``sandbox-<hash>`` in sandbox mode, so a test never takes the name of the real report."""
+    return f"{'sandbox' if cfg.community_sandbox else 'report'}-{threat_ids.stable_hash(identifier + reporter, 16)}"
 
 
 def community_lane(cfg: BlackboxConfig) -> str:
@@ -254,6 +293,9 @@ def _after_send(cfg: BlackboxConfig, finding: dict[str, Any], name: str, subject
     """Ledger one send; a refused real share is queued for retry, an accepted one kept alive.
     A sandbox test is only ledgered (in the sandbox folder): never retried, never kept alive."""
     identifier = str(finding.get("identifier") or "")
+    if outcome is ShareOutcome.NOT_ALLOWED:   # nothing left the machine: nothing to ledger or retry
+        logger.debug("blackbox: community share not sent: %s", detail)
+        return
     if cfg.community_sandbox:
         _ledger_share(finding, subject, name, ok=outcome is ShareOutcome.ACCEPTED, error=detail, outcome=outcome.value)
         return

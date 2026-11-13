@@ -23,7 +23,9 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
+
+from .. import local_http
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +34,6 @@ logger = logging.getLogger(__name__)
 #: trouble, and the caller's answer is "could not tell", not "clean".
 LOOKUP_TIMEOUT_SECONDS = 2.0
 
-_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1", "[::1]"})
 
 
 @dataclass(frozen=True)
@@ -64,10 +65,7 @@ def loopback_store_url(node_status: dict[str, Any]) -> str:
     url = str(node_status.get("storeUrl") or "").strip()
     if not url:
         return ""
-    parsed = urllib.parse.urlsplit(url)
-    if parsed.scheme not in ("http", "https") or (parsed.hostname or "") not in _LOOPBACK_HOSTS:
-        return ""
-    return url
+    return url if local_http.is_loopback_url(url) else ""
 
 
 class StoreClient:
@@ -96,7 +94,7 @@ class StoreClient:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(request, timeout=timeout or self.timeout) as response:
+            with local_http.open_direct(request, timeout=timeout or self.timeout) as response:
                 raw = response.read()
         except urllib.error.HTTPError as exc:
             return StoreAnswer(None, f"http {exc.code}")

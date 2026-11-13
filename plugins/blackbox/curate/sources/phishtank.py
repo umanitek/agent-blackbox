@@ -27,21 +27,16 @@ from typing import Callable, Optional
 from ...kernel import threat_ids
 from ..service.evidence import Lookup
 from .client import HttpClient, UrllibClient
-from .credentials import CredentialsError, load_credentials
+from .credentials import key_for
 from .protocol import REUSE_CLEARED, SourceTerms, SourceVerdict
 
 NAME = "phishtank"
 APP_KEY_NAME = "phishtank"
 ENDPOINT = "https://checkurl.phishtank.com/checkurl/"
 TERMS = SourceTerms(citable=True, reuse_state=REUSE_CLEARED, limit_requests=250, limit_seconds=60 * 60)
-_URL_PREFIX = "ioc:url:"
 
 
-def _default_key() -> Optional[str]:
-    try:
-        return load_credentials().get(APP_KEY_NAME)
-    except CredentialsError:
-        return None
+_default_key = key_for(APP_KEY_NAME)   # the credentials file, read when asked
 
 
 class PhishTankSource:
@@ -54,10 +49,13 @@ class PhishTankSource:
         self._client = client or UrllibClient()
         self._key = key
 
+    def applies(self, identifier: str) -> bool:
+        return (threat_ids.parse_ioc_identifier(identifier) or ("", ""))[0] == "url"
+
     def check(self, identifier: str) -> SourceVerdict:
-        url = identifier[len(_URL_PREFIX):]
-        if not identifier.startswith(_URL_PREFIX) or not threat_ids.ioc_value_is_well_formed("url", url):
+        if not self.applies(identifier):
             return SourceVerdict(Lookup.NOT_APPLICABLE, source=NAME)
+        _ioc_type, url = threat_ids.parse_ioc_identifier(identifier)
         app_key = self._key()
         if not app_key:
             return SourceVerdict(Lookup.UNAVAILABLE, source=NAME)

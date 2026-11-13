@@ -13,6 +13,7 @@ from plugins.blackbox.community import pulse as pulse_module
 from plugins.blackbox.kernel.config import BlackboxConfig
 from plugins.blackbox.ruleset import community_tier, compiler, refresh_cycle
 from plugins.blackbox.ruleset import pulse_beat
+from _blackbox_fakes import dkg_client_fake
 
 VM_GRAPH = GRAPH   # one graph (2026-10-16): the community lives in the verified graph's shared memory
 THREAT = "ioc:domain:fresh.example"
@@ -155,7 +156,7 @@ def test_a_changed_graph_re_applies_the_community_tier_and_writes_it_through(mon
     """The whole beat: probe → changed → reapply onto the cached generation → disk + memory."""
     cfg = BlackboxConfig(report=True, context_graph_id=VM_GRAPH, community_poll_interval=20)
     graph = _Graph([signed_row(THREAT, Reporter("0xa"))])
-    monkeypatch.setattr(pulse_beat, "DkgClient", lambda *a, **k: graph)
+    monkeypatch.setattr(pulse_beat, "DkgClient", dkg_client_fake(lambda *a, **k: graph))
     rs = compiler.Ruleset(context_graph_id=VM_GRAPH)
     rs.synced_at = time.time()
     refresh_cycle._memory.store(rs)
@@ -176,7 +177,7 @@ def test_a_process_that_starts_with_an_empty_tier_applies_the_reports_already_th
     first full refresh was an hour away. The first probe now applies when the cached tier is empty."""
     cfg = BlackboxConfig(report=True, context_graph_id=VM_GRAPH, community_poll_interval=20)
     graph = _Graph([signed_row(THREAT, Reporter("0xa"))])          # the report is ALREADY there
-    monkeypatch.setattr(pulse_beat, "DkgClient", lambda *a, **k: graph)
+    monkeypatch.setattr(pulse_beat, "DkgClient", dkg_client_fake(lambda *a, **k: graph))
     rs = compiler.Ruleset(context_graph_id=VM_GRAPH)
     rs.synced_at = time.time()
     refresh_cycle._memory.store(rs)                                   # no community tier yet
@@ -238,7 +239,7 @@ def test_a_wedged_beat_does_not_stall_the_pulse_forever(monkeypatch):
 
 def test_the_pulse_is_off_without_a_graph_or_with_interval_zero(monkeypatch):
     called = []
-    monkeypatch.setattr(pulse_beat, "DkgClient", lambda *a, **k: called.append(1))
+    monkeypatch.setattr(pulse_beat, "DkgClient", dkg_client_fake(lambda *a, **k: called.append(1)))
     assert pulse_beat.pulse(BlackboxConfig(context_graph_id="", community_poll_interval=20)) is False
     assert pulse_beat.pulse(BlackboxConfig(context_graph_id=GRAPH, community_poll_interval=0)) is False
     assert called == []
@@ -248,7 +249,7 @@ def test_the_pulse_retries_refused_shares_on_its_beat(monkeypatch, tmp_path):
     from plugins.blackbox.community import share_retry
     cfg = BlackboxConfig(report=True, context_graph_id=VM_GRAPH, community_poll_interval=20)
     drained = threading.Event()
-    monkeypatch.setattr(pulse_beat, "DkgClient", lambda *a, **k: _Graph())
+    monkeypatch.setattr(pulse_beat, "DkgClient", dkg_client_fake(lambda *a, **k: _Graph()))
     monkeypatch.setattr(community, "retry_due_shares", lambda client, cfg, queue=None: drained.set() or 0)
     assert pulse_beat.pulse(cfg) is True
     assert drained.wait(5)
@@ -282,7 +283,7 @@ def test_the_beat_runs_membership_so_a_fresh_node_subscribes_without_a_full_refr
     for 7+ minutes. The beat always runs, so membership — now the verified graph's
     subscription with its shared memory — runs on the beat."""
     calls = []
-    monkeypatch.setattr(pulse_beat, "DkgClient", lambda *a, **k: object())
+    monkeypatch.setattr(pulse_beat, "DkgClient", dkg_client_fake(lambda *a, **k: object()))
     monkeypatch.setattr(pulse_beat.community, "ensure_community_subscription",
                         lambda client, cfg: calls.append(cfg.context_graph_id) or (True, "subscribed"))
     monkeypatch.setattr(refresh_cycle, "_retry_shares", lambda client, cfg: None)   # lazy import inside the beat
@@ -317,3 +318,73 @@ def test_an_unwritable_stamp_never_blocks_a_probe(tmp_path):
 
     pulse = pulse_module.CommunityPulse(clock=_Clock(), stamp=ProbeStamp(tmp_path / "missing-dir" / "x" / "stamp"))
     assert pulse.due(20) is True
+
+
+# ------------------------------------------------------------------ the live generation is never edited
+
+def _community_rule(identifier: str) -> dict:
+    return {"identifier": identifier, "source": "community", "severity": "medium"}
+
+
+def test_a_derived_ruleset_has_its_own_tables_and_shares_the_rules():
+    rule = _community_rule(THREAT)
+    live_rules = compiler.Ruleset(ioc={THREAT: rule}, skill=[rule], community={THREAT: rule}, synced_at=5.0)
+    live_rules.graph_entries("community")                     # fill the per-generation cache
+    copy = live_rules.derive()
+    del copy.ioc[THREAT]
+    copy.skill.append(_community_rule("skill:other"))
+    copy.community.clear()
+    copy.synced_at = 9.0
+    assert live_rules.ioc == {THREAT: rule} and live_rules.skill == [rule] and live_rules.community == {THREAT: rule}
+    assert live_rules.synced_at == 5.0 and copy._graph_entries_cache == {}
+    assert live_rules.derive().ioc[THREAT] is rule            # the rules themselves are shared, not copied
+
+
+def test_hooks_keep_the_community_rules_while_the_pulse_reads_the_node(monkeypatch):
+    """The pulse used to delete the community rules from the generation hooks were reading,
+    then read the node for seconds, and only then put them back."""
+    cfg = BlackboxConfig(report=True, context_graph_id=VM_GRAPH)
+    live_rules = compiler.Ruleset(context_graph_id=VM_GRAPH, ioc={THREAT: _community_rule(THREAT)},
+                                  community={THREAT: _community_rule(THREAT)}, synced_at=time.time())
+    refresh_cycle._memory.store(live_rules)
+    seen_during_read = []
+
+    def node_read(rs, client, config, prior):
+        seen_during_read.append((THREAT in refresh_cycle._memory.memory_only().ioc, rs is live_rules))
+
+    monkeypatch.setattr(community_tier, "apply_community_tier", node_read)
+    monkeypatch.setattr(pulse_beat.curator_tier, "withdraw_revoked", lambda rs, client, config: 0)
+    pulse_beat._reapply_community(cfg, object())
+    assert seen_during_read == [(True, False)]                # still served; the pulse works on a copy
+    assert THREAT in live_rules.ioc and refresh_cycle._memory.memory_only() is not live_rules
+
+
+def test_a_revocation_seen_on_the_pulse_is_served_before_the_slower_community_read(monkeypatch):
+    cfg = BlackboxConfig(report=True, context_graph_id=VM_GRAPH)
+    verified = {"identifier": THREAT, "source": "public", "severity": "high"}
+    refresh_cycle._memory.store(compiler.Ruleset(context_graph_id=VM_GRAPH, ioc={THREAT: verified}, synced_at=time.time()))
+
+    def revoke(rs, client, config):
+        rs.curator_revoked = rs.curator_revoked | {THREAT}
+        return rs.drop_identifiers({THREAT})
+
+    served_during_read = []
+    monkeypatch.setattr(pulse_beat.curator_tier, "withdraw_revoked", revoke)
+    monkeypatch.setattr(community_tier, "apply_community_tier",
+                        lambda rs, client, config, prior: served_during_read.append(THREAT in refresh_cycle._memory.memory_only().ioc))
+    pulse_beat._reapply_community(cfg, object())
+    assert served_during_read == [False]                      # the reduction did not wait for the read
+
+
+def test_keeping_the_last_good_generation_leaves_the_one_in_use_untouched():
+    cfg = BlackboxConfig(context_graph_id=VM_GRAPH)
+    in_use = compiler.Ruleset(context_graph_id=VM_GRAPH, ioc={THREAT: _community_rule(THREAT)}, synced_at=5.0)
+    kept = refresh_cycle._reuse_generation(in_use, VM_GRAPH, None, cfg)
+    assert kept is not in_use and in_use.synced_at == 5.0 and kept.synced_at > 5.0
+    assert kept.ioc == in_use.ioc and refresh_cycle._memory.memory_only() is kept
+
+
+def test_a_derived_ruleset_keeps_the_read_state_set_after_a_refresh():
+    live_rules = compiler.Ruleset()
+    live_rules.community_read_unavailable = True              # set by the community tier, not a declared field
+    assert live_rules.derive().community_read_unavailable is True

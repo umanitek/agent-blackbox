@@ -220,3 +220,14 @@ def test_browser_roots_match_the_recorded_roots_on_every_layout(layout):
     entries = json.loads((TRADER.folder / "browsers.json").read_text(encoding="utf-8"))
     data = {_mixed_case(_expand(entry["path"], layout)).lower() for entry in entries}
     assert data == recorded
+
+
+def test_the_shield_uses_the_registrys_one_read_of_its_packs_and_browser_roots():
+    """The packs and browsers.json were read two or three times at import (the registry, the
+    mode, and the key-store scan under its own cache), so a bad pack's warning was logged more
+    than once. The registry reads them once and hands the same objects to the shield."""
+    from plugins.blackbox import shields
+    from plugins.blackbox.shields.trader import detectors, mode as trader_mode
+    loaded = shields._DATA["trader"]
+    assert trader_mode.wallet_packs() is loaded.packs and loaded.packs
+    assert detectors.browser_roots() is loaded.roots and loaded.roots

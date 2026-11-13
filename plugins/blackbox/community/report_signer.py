@@ -35,7 +35,7 @@ from ..kernel.dkg_client import DkgClient
 
 logger = logging.getLogger(__name__)
 
-REPORT_STATEMENT = "blackbox.report"
+REPORT_STATEMENT = signing.statement_order.REPORT_STATEMENT
 DISPUTE_STATEMENT = "blackbox.dispute"
 RETRACT_STATEMENT = "blackbox.retract"   # Refine R1: a reporter withdrawing its own report
 DIGEST_STATEMENT = "blackbox.digest"     # Refine R2b: a reporter's weekly sighting digest

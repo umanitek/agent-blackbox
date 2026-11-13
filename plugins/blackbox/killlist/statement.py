@@ -31,11 +31,11 @@ import json
 import re
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Dict, List, Mapping, Optional, Tuple
+from typing import Any, Mapping, Optional
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from ..kernel import constants, rdf_terms, signing, sparql_text
+from ..kernel import constants, rdf_terms, signing, sparql_text, threat_ids
 from ..kernel.dkg_client import extract_binding
 from ..kernel.signing import KeyManifest
 
@@ -50,7 +50,6 @@ REGISTRIES = ("skill", "mcp")
 #: ≤20 new disables a version may add (plan §06). Wider needs are versions.
 MAX_ENTRIES = 40
 _DAY = re.compile(r"\d{4}-\d{2}-\d{2}")
-_HASH = re.compile(r"[0-9a-f]{64}")
 _NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._@/:-]{0,127}")
 
 
@@ -111,7 +110,7 @@ class KillEntry:
 
     def valid(self) -> bool:
         return (self.registry in REGISTRIES and bool(_NAME.fullmatch(self.identifier) or self.identifier == "*")
-                and (not self.artifact_hash or bool(_HASH.fullmatch(self.artifact_hash)))
+                and (not self.artifact_hash or threat_ids.is_hex64(self.artifact_hash))
                 and self.reason in constants.REVOCATION_REASONS + ("malware", "compromised", "impersonation")
                 and (not self.publisher or bool(_NAME.fullmatch(self.publisher)))
                 and (not self.tool_prefix or (len(self.tool_prefix) >= 3 and bool(_NAME.fullmatch(self.tool_prefix))))
@@ -130,7 +129,7 @@ class KillList:
 
     def to_payload(self) -> dict[str, str]:
         return {"version": str(self.version), "day": self.day,
-                "entries": json.dumps([e.as_json() for e in self.entries], sort_keys=True, separators=(",", ":"))}
+                "entries": signing.canonical_json([e.as_json() for e in self.entries])}
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, str], sequence: int) -> Optional[KillList]:
@@ -211,7 +210,7 @@ def parse_kill_list(row: Mapping[str, Any], manifest: Optional[KeyManifest], *, 
 
 def kill_list_sparql(after: str) -> str:
     """One page of kill-list rows after the subject cursor *after*."""
-    cursor = f"FILTER(STR(?r) > {sparql_text.sparql_string_literal(after)})" if after else ""
+    cursor = sparql_text.cursor_filter(after)
     return f"""
 PREFIX g: <{constants.BLACKBOX_ONTOLOGY}>
 SELECT ?r ?signedStatement WHERE {{

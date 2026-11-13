@@ -24,7 +24,7 @@ import logging
 import re
 import urllib.error
 import urllib.request
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 from utils import model_forces_max_completion_tokens
 

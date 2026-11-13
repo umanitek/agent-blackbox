@@ -84,6 +84,7 @@ class LookupHealth:
             current = self._state or self._read_file()
             if known:
                 if current.state == OK:
+                    self._state = current   # kept: the hot path never re-reads the file in steady state
                     return                                   # steady state: nothing to write
                 self._state = LookupState(OK, "", now, 0, now)
                 self._write(now, force=True)

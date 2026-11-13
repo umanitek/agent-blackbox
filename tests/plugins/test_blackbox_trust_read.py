@@ -26,6 +26,7 @@ from plugins.blackbox.community.trust import trust_store
 from plugins.blackbox.kernel import sparql_text
 from plugins.blackbox.kernel.config import BlackboxConfig
 from plugins.blackbox.ruleset import community_tier, compiler
+from _blackbox_fakes import dkg_client_fake
 
 CFG = BlackboxConfig(report=True, context_graph_id=GRAPH)   # one graph: its shared memory is the community's
 VIEW = "shared-working-memory"
@@ -487,9 +488,8 @@ def _run_sync(monkeypatch, node):
             return {"injection": 0, "escalation": 0, "dependency": 1, "fileaccess": 0, "skill": 0}
 
     monkeypatch.setattr(native, "handles", lambda _cfg: False)
-    monkeypatch.setattr(sync_command, "_request_join", lambda *args, **kwargs: None)
-    monkeypatch.setattr(sync_command, "DkgClient", lambda url, **_kw: node)
-    monkeypatch.setattr(managed_node, "DkgClient", lambda url, **_kw: node)
+    monkeypatch.setattr(sync_command, "DkgClient", dkg_client_fake(lambda url, **_kw: node))
+    monkeypatch.setattr(managed_node, "DkgClient", dkg_client_fake(lambda url, **_kw: node))
     monkeypatch.setattr(sync_command, "load_blackbox_config",
                         lambda: config_mod.BlackboxConfig(context_graph_id=OLD_GRAPH, dkg_url=constants.DEFAULT_DKG_URL))
     monkeypatch.setattr(sync_command.ruleset, "refresh", lambda cfg, client, **_kw: Rules())

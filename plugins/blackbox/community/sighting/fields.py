@@ -18,7 +18,7 @@ Usage::
 
 from __future__ import annotations
 
-from typing import Any, Dict, Mapping
+from typing import Any, Mapping
 
 from ... import detection
 from ...kernel import constants
@@ -35,6 +35,13 @@ _ACTION_BY_IOC_CONTEXT = {"fetched-by-tool": "fetch", "in-dependency": "install-
 _ACTION_BY_INJECTION_CONTEXT = {"in-fetched-page": "model-input", "in-tool-output": "model-input",
                                 "in-user-prompt": "model-input", "in-skill": "install-skill",
                                 "in-tool-input": "use-tool"}
+
+
+def is_reportable_tool(tool: str) -> bool:
+    """Whether *tool* (lower-case) may travel in a report as written: a host tool, a name of
+    the reportable tool shape, or one of ``mcp-tool`` / ``other``. The report schema asks this;
+    :func:`canonical_tool` maps any other tool onto it."""
+    return tool in vocab.OTHER_TOOLS or tool in _HOST_TOOLS or bool(vocab.TOOL_SHAPE.fullmatch(tool))
 
 
 def canonical_tool(tool_name: str) -> str:

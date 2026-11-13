@@ -29,20 +29,21 @@ Usage::
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import hashlib
 import json
 import logging
-import os
 import re
 import threading
 import time
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Iterator, Optional
 from urllib.parse import urlsplit, urlunsplit
 
+from ...kernel.bounded_files import atomic_write, file_lock
 from .. import keys
 from ..queue import Lane
 from . import evidence_schema
@@ -96,6 +97,10 @@ class LabJob:
     requested_at: float
 
 
+#: The jobs not finished yet — what the controller's metrics, the console and `lab status`
+#: count as the queue (and the oldest of them as its age).
+WAITING_STATES = frozenset({LabJobState.QUEUED, LabJobState.RUNNING})
+
 @dataclass(frozen=True)
 class LabJobRecord:
     """A job and where it stands. ``evidence_sha256`` names the stored evidence
@@ -108,14 +113,21 @@ class LabJobRecord:
     evidence_sha256: Optional[str] = None
 
 
+def url_part(identifier: str) -> Optional[str]:
+    """The URL inside *identifier* — past any ``url:`` / ``ioc:url:`` prefix — or None when it
+    holds no ``scheme://``: THE URL rule the job store and the extractor share."""
+    url_start = _URL_START.search(identifier)
+    return identifier[url_start.start():] if url_start is not None else None
+
+
 def strip_query(identifier: str) -> str:
     """*identifier* without a URL query string, fragment or user name/password
     (they can carry personal data). Works on a bare URL and on a prefixed one
     (``url:https://…``); an identifier without ``://`` is returned unchanged."""
-    url_start = _URL_START.search(identifier)
-    if url_start is None:
+    url = url_part(identifier)
+    if url is None:
         return identifier
-    prefix, url = identifier[:url_start.start()], identifier[url_start.start():]
+    prefix = identifier[:len(identifier) - len(url)]
     scheme, netloc, path, _query, _fragment = urlsplit(url)
     return prefix + urlunsplit((scheme, netloc.rpartition("@")[2], path, "", ""))
 
@@ -128,8 +140,10 @@ def threat_digest(identifier: str) -> str:
 class LabJobStore:
     """Every lab job this curator node asked for, at ``<curate home>/lab/jobs.jsonl``.
 
-    One lock guards the in-memory index and the file; each change rewrites the
-    file atomically (one JSON record per line)."""
+    Several stores share the file (the controller, ``lab status``, the console's metrics), so:
+    a READ never writes (an expired RUNNING job reads COULD_NOT_TELL without being saved), and
+    every CHANGE re-reads the file under its cross-process lock before rewriting it atomically
+    (one JSON record per line) — no store writes back a stale snapshot over another's job."""
 
     def __init__(self, path: Optional[Path] = None, clock: Callable[[], float] = time.time,
                  capacity: int = CAPACITY) -> None:
@@ -152,7 +166,7 @@ class LabJobStore:
         except evidence_schema.EvidenceError as exc:
             raise LabJobError(str(exc)) from None
         job = LabJob(key, stored_identifier, level, lane, requested_by, self._clock())
-        with self._lock:
+        with self._changing():
             known = self._settled(key)
             if known is not None:
                 return known
@@ -162,11 +176,13 @@ class LabJobStore:
 
     def get(self, key: str) -> Optional[LabJobRecord]:
         with self._lock:
+            self._records = self._load()
             return self._settled(key)
 
     def queued(self) -> list[LabJobRecord]:
         """QUEUED jobs in work order: lane first, then oldest request."""
         with self._lock:
+            self._records = self._load()
             waiting = [r for r in self._records.values() if r.state is LabJobState.QUEUED]
         return sorted(waiting, key=lambda r: (r.job.lane.value, r.job.requested_at))
 
@@ -174,10 +190,11 @@ class LabJobStore:
         """Every stored job, each settled (a RUNNING job past its deadline reads
         COULD_NOT_TELL) — what the controller polls and its metrics count."""
         with self._lock:
+            self._records = self._load()
             return [self._settled(key) for key in list(self._records)]
 
     def start(self, key: str) -> LabJobRecord:
-        with self._lock:
+        with self._changing():
             return self._move(key, LabJobState.RUNNING, started_at=self._clock())
 
     def complete(self, key: str, evidence: Evidence) -> LabJobRecord:
@@ -186,15 +203,15 @@ class LabJobStore:
             raise LabJobError("the evidence belongs to another job")
         text = evidence_schema.to_json(evidence)
         digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
-        with self._lock:
+        with self._changing():
             self._evidence_dir.mkdir(parents=True, exist_ok=True)
             # Content-addressed: an existing file already holds these exact bytes.
             if not (self._evidence_dir / f"{digest}.json").exists():
-                _write_atomic(self._evidence_dir / f"{digest}.json", text + "\n")
+                atomic_write(self._evidence_dir / f"{digest}.json", text + "\n", mode=0o600)   # private (0600), torn-free
             return self._move(key, LabJobState.DONE, finished_at=self._clock(), evidence_sha256=digest)
 
     def could_not_tell(self, key: str) -> LabJobRecord:
-        with self._lock:
+        with self._changing():
             return self._move(key, LabJobState.COULD_NOT_TELL, finished_at=self._clock())
 
     def evidence(self, record: Optional[LabJobRecord]) -> Optional[Evidence]:
@@ -206,7 +223,7 @@ class LabJobStore:
 
     def forget_requester(self, peer_id: str) -> int:
         """Erase *peer_id* from every job (data-subject erasure); the count changed."""
-        with self._lock:
+        with self._changing():
             mine = [r for r in self._records.values() if r.job.requested_by == peer_id]
             for record in mine:
                 job = dataclasses.replace(record.job, requested_by="")
@@ -217,21 +234,29 @@ class LabJobStore:
 
     # -- internals (callers hold the lock) ------------------------------------
 
+    @contextlib.contextmanager
+    def _changing(self) -> Iterator[None]:
+        """For a change: this store's lock and the file's cross-process lock, with the
+        records re-read from the file, so another store's newer jobs are kept."""
+        with self._lock, file_lock(self._path.with_name(self._path.name + ".lock")):
+            self._records = self._load()
+            yield
+
     def _open(self) -> list[LabJobRecord]:
         return [r for r in self._records.values() if r.state in (LabJobState.QUEUED, LabJobState.RUNNING)]
 
     def _settled(self, key: str) -> Optional[LabJobRecord]:
-        """The record for *key*, after a RUNNING job past its deadline is moved
-        to COULD_NOT_TELL."""
+        """The record for *key* as it stands now: a RUNNING job past its deadline reads
+        COULD_NOT_TELL. Nothing is saved (a read never writes); the next change saves it."""
         record = self._records.get(key)
         if record is None or record.state is not LabJobState.RUNNING:
             return record
         if self._clock() - (record.started_at or 0) <= DEADLINE_SECONDS[record.job.level]:
             return record
-        return self._move(key, LabJobState.COULD_NOT_TELL, finished_at=self._clock())
+        return dataclasses.replace(record, state=LabJobState.COULD_NOT_TELL, finished_at=self._clock())
 
     def _move(self, key: str, state: LabJobState, **changes) -> LabJobRecord:
-        record = self._records.get(key)
+        record = self._settled(key)   # a RUNNING job past its deadline cannot complete late
         if record is None:
             raise LabJobError("no such lab job")
         if state not in _NEXT.get(record.state, frozenset()):
@@ -246,7 +271,7 @@ class LabJobStore:
     def _save(self) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         lines = (json.dumps(_record_to_mapping(r), sort_keys=True) for r in self._records.values())
-        _write_atomic(self._path, "".join(line + "\n" for line in lines))
+        atomic_write(self._path, "".join(line + "\n" for line in lines), mode=0o600)   # private (0600), torn-free
 
     def _load(self) -> dict[str, LabJobRecord]:
         records: dict[str, LabJobRecord] = {}
@@ -289,11 +314,3 @@ def _record_from_mapping(row: dict) -> LabJobRecord:
     return LabJobRecord(job, LabJobState(row["state"]), row.get("started_at"), row.get("finished_at"),
                         evidence_sha256)
 
-
-def _write_atomic(path: Path, text: str) -> None:
-    """Write *text* to *path* through a private (0600) temp file and a rename."""
-    temporary = path.with_name(path.name + ".tmp")
-    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-        handle.write(text)
-    os.replace(temporary, path)

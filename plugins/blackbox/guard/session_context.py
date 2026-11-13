@@ -8,7 +8,7 @@ local evidence an operator needs to judge it. Nothing here is ever shared.
 from __future__ import annotations
 
 import threading
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 from .. import audit, detection
 
 # ---------------------------------------------------------------------------

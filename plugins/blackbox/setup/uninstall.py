@@ -37,12 +37,13 @@ import platform
 import shutil
 import signal
 import subprocess
-import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional, Sequence
 
-from ..kernel import constants, yaml_files
+from .. import sync   # sync's public entry: the service names, which process is our node
+from ..kernel import constants, terminal_question, yaml_files
+from ..kernel.host_command import hermes_argv
 
 #: Files a node needs to keep its identity and wallet (DKG home), and Blackbox's own reporter
 #: identity and sharing consent ($BLACKBOX_HOME). Moved to the backup unless --purge.
@@ -51,9 +52,8 @@ BLACKBOX_KEY_FILES = ("reporter_key.pem", "sharing_consent.json")
 #: A file only Blackbox's installer writes into the DKG home it manages: proof the folder is ours.
 DKG_HOME_MARKER = "blackbox-process-limits.json"
 SHIM_MARKER = "managed-by: agent-blackbox-installer"
-LAUNCHD_LABELS = ("ai.umanitek.blackbox-dashboard", "ai.umanitek.blackbox-dkg")
-SYSTEMD_UNITS = ("blackbox-dashboard.service", "blackbox-dkg.service")
-WINDOWS_TASKS = ("Agent Blackbox dashboard", "Agent Blackbox DKG node")
+# The services to remove: the names the installers register, owned by sync (one place to rename).
+LAUNCHD_LABELS, SYSTEMD_UNITS, WINDOWS_TASKS = sync.LAUNCHD_LABELS, sync.SYSTEMD_UNITS, sync.WINDOWS_TASKS
 
 Runner = Callable[[Sequence[str]], int]
 
@@ -84,20 +84,19 @@ class UninstallPlan:
     keep_logs: bool
     shim: Optional[Path]               # our `blackbox` launcher, if this machine has it
     system_units: tuple[Path, ...]     # Linux /etc/systemd/system units (need root)
-    dashboard_port: int = 9700         # where a directly started dashboard would be listening
+    dashboard_port: int = constants.DEFAULT_DASHBOARD_PORT   # where a directly started dashboard would be listening
     notes: tuple[str, ...] = field(default_factory=tuple)
 
 
 def _configured_dkg_home(home: Path) -> Optional[Path]:
-    entry = (((yaml_files.load_yaml(home / "config.yaml").get("plugins") or {}).get("entries") or {})
-             .get("blackbox") or {})
-    raw = entry.get("dkg_home") if isinstance(entry, dict) else None
+    raw = yaml_files.blackbox_entry(yaml_files.load_yaml(home / "config.yaml")).get("dkg_home")
     return Path(str(raw)).expanduser() if raw else None
 
 
 def _names_blackbox(home: Path) -> bool:
-    plugins = yaml_files.load_yaml(home / "config.yaml").get("plugins") or {}
-    enabled = plugins.get("enabled") or []
+    plugins = yaml_files.load_yaml(home / "config.yaml").get("plugins")
+    plugins = plugins if isinstance(plugins, dict) else {}   # a hand-edited string or list names nothing
+    enabled = plugins.get("enabled") if isinstance(plugins.get("enabled"), list) else []
     entries = plugins.get("entries") or {}
     return "blackbox" in enabled or (isinstance(entries, dict) and "blackbox" in entries) \
         or (home / "plugins" / "blackbox").exists()
@@ -107,16 +106,15 @@ def build_plan(*, purge: bool, keep_logs: bool, now: Optional[_dt.datetime] = No
                homes: Optional[Sequence[Path]] = None) -> UninstallPlan:
     """Work out what this machine's Blackbox consists of. Reads only; changes nothing."""
     from ..attach import discover_hermes_homes   # attach's public entry
-    candidates = list(homes) if homes is not None else discover_hermes_homes()
+    candidates = list(homes) if homes is not None else discover_hermes_homes(include_managed=True)   # its chat profile too
     hermes_homes = tuple(h for h in dict.fromkeys(Path(h).expanduser() for h in candidates) if _names_blackbox(h))
     blackbox_home = constants.blackbox_home()
     notes: list[str] = []
     dkg_home: Optional[Path] = None
-    dashboard_port = 9700
+    dashboard_port = constants.DEFAULT_DASHBOARD_PORT
     for home in hermes_homes:
-        entry = (((yaml_files.load_yaml(home / "config.yaml").get("plugins") or {}).get("entries") or {})
-                 .get("blackbox") or {})
-        if isinstance(entry, dict) and str(entry.get("dashboard_port", "")).isdigit():
+        entry = yaml_files.blackbox_entry(yaml_files.load_yaml(home / "config.yaml"))
+        if str(entry.get("dashboard_port", "")).isdigit():
             dashboard_port = int(entry["dashboard_port"])
             break
     for home in hermes_homes or (constants.hermes_home(),):
@@ -134,7 +132,7 @@ def build_plan(*, purge: bool, keep_logs: bool, now: Optional[_dt.datetime] = No
     shim_dir = Path.home() / ".local" / "bin"
     shim = next((p for p in (shim_dir / "blackbox", shim_dir / "blackbox.cmd")
                  if p.is_file() and SHIM_MARKER in p.read_text(encoding="utf-8-sig", errors="ignore")), None)
-    system_units = tuple(p for p in (Path("/etc/systemd/system") / u for u in SYSTEMD_UNITS) if p.exists())
+    system_units = tuple(p for p in (sync.SYSTEM_UNIT_DIR / u for u in SYSTEMD_UNITS) if p.exists())
     return UninstallPlan(
         system=platform.system(), hermes_homes=hermes_homes, blackbox_home=blackbox_home, dkg_home=dkg_home,
         key_files=tuple(p for p in keys if p.is_file()),
@@ -211,8 +209,13 @@ def _stop_unsupervised_node(plan: UninstallPlan, report: list[str]) -> None:
     pid_file = plan.dkg_home / "daemon.pid" if plan.dkg_home else None
     if not pid_file or not pid_file.is_file():
         return
+    from ..kernel.config import load_blackbox_config
     try:
         pid = int(pid_file.read_text(encoding="utf-8-sig").strip())
+        # The file can name a pid the system has since given to another program (KI-496):
+        # never signal a process that is not this installation's node.
+        if not sync.is_node_process(load_blackbox_config(), pid):
+            return
         os.kill(pid, signal.SIGTERM)
         report.append(f"stopped Blackbox's DKG node (pid {pid})")
     except (ValueError, OSError):
@@ -255,15 +258,19 @@ These files are secrets: keep this folder private.
 """
 
 
+@yaml_files.edits_config
 def _remove_from_agents(plan: UninstallPlan, report: list[str]) -> list[Path]:
     """Detach every agent; returns the Hermes homes where Hermes itself installed the plugin."""
-    from ..attach import detach_all   # attach's public entry
+    from ..attach import detach_all, detach_hermes, is_managed_blackbox_chat_profile   # attach's public entry
     detach_all(hermes=True, openclaw=True, remove_files=False, dry_run=False)
     hermes_installed: list[Path] = []
     for home in plan.hermes_homes:
+        if is_managed_blackbox_chat_profile(home):   # the sweep leaves Blackbox's own chat profile alone
+            detach_hermes(home)
         config = home / "config.yaml"
-        data = yaml_files.load_yaml(config)
-        entries = (data.get("plugins") or {}).get("entries")
+        data = yaml_files.load_yaml(config)   # an unreadable config has no entry to remove: never written
+        plugins = data.get("plugins")
+        entries = plugins.get("entries") if isinstance(plugins, dict) else None   # hand-edited: nothing to remove
         if isinstance(entries, dict) and "blackbox" in entries:
             del entries["blackbox"]
             yaml_files.dump_yaml(config, data)
@@ -289,10 +296,11 @@ def _delete_data(plan: UninstallPlan, report: list[str]) -> None:
         report.append(f"removed {plan.shim}")
 
 
-def execute(plan: UninstallPlan, *, run: Runner = _run, hermes: str = "hermes",
+def execute(plan: UninstallPlan, *, run: Runner = _run,
             stop_dashboard: Callable[[int], list[int]] = _stop_dashboard_on) -> list[str]:
     """Carry out *plan*; returns what was done (and what needs root), in order. *run* and
     *stop_dashboard* are the two ways it reaches running processes (tests pass fakes)."""
+    remove_plugin = hermes_argv("plugins", "remove", "blackbox")   # the Hermes running this, never another on PATH
     report: list[str] = []
     _stop_services(plan, run, report)
     _stop_running_dashboard(plan, stop_dashboard, report)
@@ -302,8 +310,8 @@ def execute(plan: UninstallPlan, *, run: Runner = _run, hermes: str = "hermes",
     _delete_data(plan, report)
     for home in hermes_installed:   # last: this removes the code that is running
         env_home = str(home)
-        code = run(["env", f"HERMES_HOME={env_home}", hermes, "plugins", "remove", "blackbox"]) \
-            if plan.system != "Windows" else run([hermes, "plugins", "remove", "blackbox"])
+        code = run(["env", f"HERMES_HOME={env_home}", *remove_plugin]) \
+            if plan.system != "Windows" else run(remove_plugin)
         report.append(f"removed the Blackbox plugin from {home}" if code == 0
                       else f"run to finish: hermes plugins remove blackbox   (Hermes home {home})")
     return report
@@ -316,10 +324,11 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
     if args.dry_run:
         return 0
     if not args.yes:
-        if not sys.stdin.isatty():
+        answer = terminal_question.ask("Remove Blackbox? [y/N] ")   # the terminal, even under curl | bash
+        if answer is None:
             print("Not removing anything without a yes: run with --yes, or at a terminal.")
             return 1
-        if input("Remove Blackbox? [y/N] ").strip().lower() not in ("y", "yes"):
+        if answer.strip().lower() not in ("y", "yes"):
             print("Nothing removed.")
             return 0
     for line in execute(plan):

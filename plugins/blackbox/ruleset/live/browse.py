@@ -24,10 +24,11 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Optional, Sequence
 
+from ...kernel import constants
 from ...kernel.dkg_client import extract_binding
-from ...kernel.sparql_text import sparql_string_literal as literal
+from ...kernel.sparql_text import is_safe_iri, sparql_string_literal as literal
 from ...kernel.store import StoreClient
 from .. import row_adapters
 from ..partitions import rows_from_triples
@@ -45,9 +46,9 @@ MAX_DEPTH = 50_000
 #: Triples fetched for a page: subjects × ~15 triples, with headroom.
 _TRIPLES_PER_SUBJECT = 40
 
-_TYPE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
-_DP = "urn:defender:p:"
-_BP = "urn:blackbox:p:"
+_TYPE = constants.RDF_TYPE
+_DP = constants.DEFENDER_PREDICATES
+_BP = constants.BLACKBOX_PREDICATES
 #: The live kinds in page order, and the category each answers to.
 KINDS: tuple[str, ...] = ("dependency", "ioc")
 
@@ -228,13 +229,10 @@ class _Browser:
         return entries
 
 
-_FORBIDDEN_IRI_CHARS = frozenset('<>"{}|^`\\ \r\n\t')
-
-
 def _iri(value: str) -> bool:
     """True when *value* can be written as ``<value>`` (it came from the store, but an
     IRI is re-sent only when it cannot break out of the brackets)."""
-    return bool(value) and not any(char in value for char in _FORBIDDEN_IRI_CHARS)
+    return is_safe_iri(value)
 
 
 def _int(cell: Any) -> int:

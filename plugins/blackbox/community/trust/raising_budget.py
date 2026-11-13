@@ -32,7 +32,7 @@ Usage::
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, FrozenSet, Iterable, List, Mapping, Optional, Tuple
+from typing import Iterable, Mapping, Optional
 
 from ...kernel import signing
 from ...kernel.signing import CuratorStatement

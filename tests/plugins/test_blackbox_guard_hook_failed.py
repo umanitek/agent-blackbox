@@ -12,6 +12,7 @@ import logging
 
 import pytest
 
+from plugins.blackbox import ruleset
 from plugins.blackbox.guard import hooks, reporting
 
 
@@ -28,7 +29,7 @@ def broken_ruleset(monkeypatch):
 
     def explode(cfg):
         raise RuntimeError("boom")
-    monkeypatch.setattr(hooks.ruleset, "get", explode)
+    monkeypatch.setattr(ruleset, "get", explode)
 
 
 def test_a_raising_pre_tool_call_still_allows_the_action(broken_ruleset, recorded, caplog):

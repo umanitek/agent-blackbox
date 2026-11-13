@@ -29,8 +29,6 @@ else reads the key bytes out.
 
 from __future__ import annotations
 
-import os
-import secrets
 import threading
 from pathlib import Path
 from typing import Optional
@@ -44,6 +42,7 @@ from cryptography.hazmat.primitives.serialization import (
 )
 
 from . import constants, signing
+from .bounded_files import create_once
 
 KEY_FILE_NAME = "reporter_key.pem"
 _KEY_FILE_MODE = 0o600
@@ -109,7 +108,7 @@ class ReporterKeyStore:
             raise ReporterKeyError("not an Ed25519 reporter key")
         restored = signing.public_key_hex(key)
         with self._lock:
-            if not self._link_new(pem):
+            if not create_once(self._path, pem, mode=_KEY_FILE_MODE):
                 current = signing.public_key_hex(self._read())
                 if current != restored:
                     raise ReporterKeyError("a different reporter key already exists; erase it first")
@@ -139,26 +138,6 @@ class ReporterKeyStore:
     def _create(self) -> Ed25519PrivateKey:
         key = Ed25519PrivateKey.generate()
         pem = key.private_bytes(Encoding.PEM, PrivateFormat.PKCS8, NoEncryption())
-        if not self._link_new(pem):
+        if not create_once(self._path, pem, mode=_KEY_FILE_MODE):
             return self._read()   # another process created the key meanwhile: keep theirs
         return key
-
-    def _link_new(self, pem: bytes) -> bool:
-        """Atomically create the key file holding *pem* (0600 from the first
-        byte); False when a key file already exists (it is never replaced)."""
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        # Unique per creator (process AND thread), so concurrent first uses never collide.
-        tmp = self._path.with_name(f"{self._path.name}.tmp.{os.getpid()}.{secrets.token_hex(8)}")
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, _KEY_FILE_MODE)
-        try:
-            os.write(fd, pem)
-            os.fsync(fd)
-        finally:
-            os.close(fd)
-        try:
-            os.link(tmp, self._path)   # refuses to overwrite an existing key
-        except FileExistsError:
-            return False
-        finally:
-            tmp.unlink(missing_ok=True)
-        return True

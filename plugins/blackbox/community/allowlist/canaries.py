@@ -21,16 +21,13 @@ Usage (curator machine)::
 
 from __future__ import annotations
 
-import json
 import logging
-import os
-import secrets
 import threading
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Protocol
+from typing import Iterable, Optional, Protocol
 
 from ...kernel import constants
-from ...kernel.bounded_files import atomic_write
+from ...kernel.bounded_files import read_json_object, write_json_object
 
 logger = logging.getLogger(__name__)
 _CANARY_FILE = "canaries.json"
@@ -79,15 +76,11 @@ class CanaryStore:
         return {author: sorted(set(ids)) for author, ids in found.items()}
 
     def _load(self) -> list[str]:
+        data = read_json_object(self._path) or {}
         try:
-            data = json.loads(self._path.read_text(encoding="utf-8-sig"))
             return [str(i) for i in data.get("planted", []) if str(i).strip()]
         except (OSError, ValueError, AttributeError):
             return []
 
     def _save(self, planted: list[str]) -> None:
-        try:
-            self._path.parent.mkdir(parents=True, exist_ok=True)
-            atomic_write(self._path, json.dumps({"planted": planted}))
-        except OSError as exc:
-            logger.warning("blackbox: could not save the canary store (%s)", exc)
+        write_json_object(self._path, {"planted": planted}, what="the canary store")

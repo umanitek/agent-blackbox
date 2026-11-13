@@ -75,26 +75,27 @@ def next_sync_delay(cfg: Any, cached: Any, elapsed_s: float, min_retry_s: float)
     return max(min_retry_s, period_left)
 
 
+def sync_time(value: Any) -> float:
+    """A sync-state time as epoch seconds, 0.0 when missing or unreadable — THE one parse: an ISO
+    string with a zone, epoch seconds, or epoch milliseconds (DKG job timestamps use them)."""
+    try:
+        if isinstance(value, str) and "T" in value:
+            parsed = datetime.fromisoformat(value)
+            value = parsed.timestamp() if parsed.tzinfo else 0
+        value = float(value or 0)
+        if value > 100_000_000_000:   # epoch milliseconds
+            value /= 1000
+        return value if math.isfinite(value) and value > 0 else 0.0
+    except (TypeError, ValueError, OverflowError):
+        return 0.0
+
+
 def catchup_supersedes_failure(catchup: Any, transfer: Any) -> bool:
     """A provably newer live job supersedes the previous attempt's error only."""
     if str(catchup.get("status")).lower() not in {"queued", "running"} or str(transfer.get("status")).lower() != "failed":
         return False
-
-    def timestamp(value):
-        try:
-            if isinstance(value, str) and "T" in value:
-                parsed = datetime.fromisoformat(value)
-                value = parsed.timestamp() if parsed.tzinfo else 0
-            value = float(value)
-            if value > 100_000_000_000:  # DKG job timestamps may use epoch milliseconds.
-                value /= 1000
-            return value if math.isfinite(value) and value > 0 else 0
-        except (TypeError, ValueError, OverflowError):
-            return 0
-
-    started = timestamp(catchup.get("startedAt"))
-    failed = timestamp(transfer.get("updated_at"))
-    return failed > 0 and started > failed
+    failed = sync_time(transfer.get("updated_at"))
+    return failed > 0 and sync_time(catchup.get("startedAt")) > failed
 
 
 def wait_or_wake(seconds: float, stopped: Callable[[], bool], wake: Callable[[], bool], tick_s: float = 0.1,

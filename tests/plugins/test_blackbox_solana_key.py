@@ -17,6 +17,7 @@ from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 from plugins.blackbox.detection import detectors
 from plugins.blackbox.kernel import crypto_secrets, redaction
+from plugins.blackbox.shields.trader import TRADER
 from plugins.blackbox.shields.trader import mode as trader_mode
 
 ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
@@ -130,5 +131,5 @@ def test_a_signature_in_a_command_raises_nothing():
 
 def test_the_solana_finding_counts_only_while_trader_shield_is_on():
     finding = {"identifier": "secret:solana-private-key"}
-    assert trader_mode.allows_finding(finding, trader_mode.build(enabled=True))
-    assert not trader_mode.allows_finding(finding, trader_mode.build(enabled=False))
+    assert TRADER.allows(finding, trader_mode.build(enabled=True))
+    assert not TRADER.allows(finding, trader_mode.build(enabled=False))

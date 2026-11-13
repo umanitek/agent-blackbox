@@ -33,13 +33,13 @@ from __future__ import annotations
 
 from ..kernel import constants
 
-from datetime import datetime, timezone, UTC
+from datetime import date, datetime, UTC
 
 from dataclasses import dataclass, replace
 from enum import Enum
-from typing import Dict, Iterable, Mapping, Optional, Tuple
+from typing import Iterable, Mapping, Optional
 
-from ..kernel.signing import CuratorStatement
+from ..kernel.signing import CuratorStatement, statement_order
 from .statements.curator_view import CuratorView
 from . import allowlist
 from .statements.lifetimes import lifetime_days
@@ -160,7 +160,7 @@ class StageResult:
 
 #: CLOCKS (§12): a curator DEFERRAL lapses this many days after its signed day — readers
 #: compute it themselves (KI-229); a DEFERRAL_LAPSED statement is confirmation, not the clock.
-DEFERRAL_LAPSE_DAYS = 30
+DEFERRAL_LAPSE_DAYS = statement_order.DEFERRAL_LAPSE_DAYS   # one clock for readers and curators
 
 
 def stage_for(identifier: str, authors: Iterable[str], first_seen: float, view: CuratorView,
@@ -241,8 +241,7 @@ def _terminal_stage(verdict: Optional[CuratorStatement]) -> Optional[StageResult
 
 def _by_corroboration(identifier: str, clusters: Clusters, threshold: Threshold, span_days: float,
                       verdict: Optional[CuratorStatement]) -> StageResult:
-    if verdict is CuratorStatement.CONFIRMATION:
-        return StageResult(Stage.CORROBORATED, Enforcement.FLAG, "confirmed by the curator")
+    # A CONFIRMATION never reaches here: :func:`_stage` answers it before any hold.
     if not threshold.met(clusters):
         if clusters.total == 0:
             return StageResult(Stage.REPORTED, Enforcement.MONITOR, "reported by unlisted authors only")
@@ -275,13 +274,14 @@ def _whole_package_without_scope_reason(identifier: str, fields: Optional[Mappin
 
 
 def _deferral_lapsed(verdict_day: str, now: float) -> bool:
-    """True when a DEFERRAL signed on *verdict_day* is older than DEFERRAL_LAPSE_DAYS (KI-229).
-    An undated or unparseable day never lapses (fail toward MONITOR)."""
+    """True when a DEFERRAL signed on *verdict_day* no longer holds on the UTC day of *now*
+    (KI-229; whole days, :func:`statement_order.deferral_in_force`). An undated or unparseable
+    day never lapses (fail toward MONITOR)."""
     try:
-        signed = datetime.fromisoformat(verdict_day).replace(tzinfo=UTC).timestamp()
+        signed = date.fromisoformat(verdict_day)
     except (TypeError, ValueError):
         return False
-    return (now - signed) / _DAY_SECONDS > DEFERRAL_LAPSE_DAYS
+    return not statement_order.deferral_in_force((datetime.fromtimestamp(now, tz=UTC).date() - signed).days)
 
 
 def _third_party_without_partner(identifier: str, clusters: Clusters) -> bool:
@@ -298,9 +298,9 @@ def _apply_disputes(result: StageResult, clusters: Clusters, dispute_weight: int
     (Σ counted dispute weight ≥ the corroborating weight)."""
     if dispute_weight <= 0:
         return result
+    # A dispute changes enforcement and the reason only; who attested the stage, its counted
+    # weight and a look-alike name stay as they were (replace, never rebuild).
     if dispute_weight >= clusters.total and result.enforcement is Enforcement.FLAG:
-        return StageResult(result.stage, Enforcement.MONITOR,
-                           f"{result.reason}; disputed by {dispute_weight} counted author(s) — decayed to monitor",
-                           disputed=True)
-    return StageResult(result.stage, result.enforcement, f"{result.reason}; disputed by {dispute_weight} counted author(s)",
-                       disputed=True)
+        return replace(result, enforcement=Enforcement.MONITOR, disputed=True,
+                       reason=f"{result.reason}; disputed by {dispute_weight} counted author(s) — decayed to monitor")
+    return replace(result, disputed=True, reason=f"{result.reason}; disputed by {dispute_weight} counted author(s)")

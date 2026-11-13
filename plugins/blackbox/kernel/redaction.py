@@ -81,6 +81,18 @@ _REDACTION_ONLY_RULES = (
     ("github-token", re.compile(r"\b(?:gh[pousr]|github_pat)_[A-Za-z0-9_]{16,}")),
 )
 _BEARER_RE = re.compile(r"Bearer\s+[A-Za-z0-9._~+/=-]+", re.IGNORECASE)
+#: THE words that mark a name as holding a secret, as regex fragments matched without regard
+#: to case anywhere inside a longer name (``AWS_SECRET_ACCESS_KEY``, ``refresh_token``,
+#: ``clientSecret``). One list for both places a name is judged: a ``name=value`` in text
+#: (below) and a key of a structure being logged (:data:`SECRET_NAME_RE`, used by
+#: ``audit.redaction``). They were two lists and had drifted: one lacked ``access_key``,
+#: the other ``authorization``.
+SECRET_NAME_WORDS = ("api[_-]?key", "token", "secret", "password", "passwd", "credential",
+                     "authorization", "private[_-]?key", "access[_-]?key")
+_SECRET_NAME_PATTERN = "|".join(SECRET_NAME_WORDS)
+#: Matches a name that holds a secret (search it in the name).
+SECRET_NAME_RE = re.compile(_SECRET_NAME_PATTERN, re.IGNORECASE)
+
 # A secret-named key followed by `:` or `=` and a value: `DB_PASSWORD=...`,
 # `"api_key": "..."`. The key name stays (it explains the log line); the value
 # goes. A value already replaced by a typed marker (`[REDACTED_...]`) is kept.
@@ -90,8 +102,7 @@ _BEARER_RE = re.compile(r"Bearer\s+[A-Za-z0-9._~+/=-]+", re.IGNORECASE)
 # The earlier `\b[...]*(?:keyword)[...]*` re-split every long word run and took
 # seconds per KB on text like "tokens-tokens-..." — on every tool call (KI-373).
 _SECRET_ASSIGNMENT_RE = re.compile(
-    r"(?P<key>\b(?=[A-Za-z0-9_-]{0,64}?(?:api[_-]?key|token|secret|password|passwd|credential"
-    r"|private[_-]?key|client[_-]?secret|access[_-]?key))[A-Za-z0-9_-]{1,64}+[\"']?)"
+    r"(?P<key>\b(?=[A-Za-z0-9_-]{0,64}?(?:" + _SECRET_NAME_PATTERN + r"))[A-Za-z0-9_-]{1,64}+[\"']?)"
     r"(?P<sep>\s*[:=]\s*[\"']?)"
     r"(?P<value>[^\s\"'\[\],;]{8,})",
     re.IGNORECASE,

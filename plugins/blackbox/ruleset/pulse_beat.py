@@ -23,7 +23,7 @@ from typing import Optional
 from agent.memory_provider import spawn_context_thread
 
 from .. import community
-from ..kernel.config import BlackboxConfig, load_blackbox_config
+from ..kernel.config import BlackboxConfig, load_blackbox_config, reads_graph_directly
 from ..kernel.dkg_client import DkgClient
 from . import community_tier, curator_tier, disk_cache, locks
 
@@ -65,8 +65,8 @@ def _background_pulse(config: BlackboxConfig) -> None:
     try:
         from . import refresh_cycle   # lazy: refresh_cycle imports this module
 
-        client = DkgClient(url=config.dkg_url, dkg_home=config.dkg_home, config=config)
-        if config.detection_backend == "dkg":
+        client = DkgClient.for_config(config)
+        if reads_graph_directly(config):
             from .direct.community import refresh
             refresh(config, client)
             return
@@ -118,15 +118,20 @@ def _reapply_community(config: BlackboxConfig, client: DkgClient) -> None:
     """Re-read the community tier onto the cached generation and write it
     through (disk + memory), so every process picks it up on its next call.
     Revocations are withdrawn first, in the full refresh's order (curator
-    tier, then community). Skipped when a full refresh holds the lock — it
+    tier, then community). The work is done on a copy (``Ruleset.derive``) and
+    installed when complete: the generation hooks are reading is never edited. Skipped when a full refresh holds the lock — it
     will read everything."""
     from . import refresh_cycle   # lazy: refresh_cycle imports this module
 
     with locks._ruleset_refresh_lock(blocking=False) as held:
         if not held:
             return
-        rs = refresh_cycle.peek(config)
+        live_rules = refresh_cycle.peek(config)
+        rs = live_rules.derive()   # hooks keep reading live_rules while the node is read
         curator_tier.withdraw_revoked(rs, client, config)
+        if rs.curator_revoked != live_rules.curator_revoked:
+            refresh_cycle._memory.store(rs)   # a withdrawal is served now, not after the community read
+            rs = rs.derive()
         community_tier.reapply_community_tier(rs, client, config)
         rs.community_fingerprint = community.PULSE.last_fingerprint   # KI-208: the baseline travels with the tier
         disk_cache._write_cache(rs)

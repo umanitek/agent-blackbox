@@ -15,7 +15,7 @@ because asking is a different concern from compiling.
 
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, Optional, Sequence, Tuple
+from typing import Any, Iterable, Optional, Sequence
 
 from ...kernel import threat_ids
 from ...kernel.store import StoreClient
@@ -41,7 +41,7 @@ class LiveAnswering:
         scope = self.verified_scope
         if scope is None or not scope.ready:
             return None
-        return VerifiedLookup(scope, StoreClient(scope.store_url), fallback=fallback_index.FallbackIndex.for_scope(scope))
+        return VerifiedLookup(scope, StoreClient(scope.store_url), fallback=fallback_index.OnDemandIndex.for_scope(scope))
 
     def dependency_rules(self, candidates: Sequence[tuple[str, str, str]]) -> LookupAnswer:
         """Rules for these ``(ecosystem, name, version)`` candidates, keyed as
@@ -66,23 +66,31 @@ class LiveAnswering:
         """Which of *identifiers* the verified (public) tier lists: compiled public
         rules, plus live lookups for the ``dep:`` / ``ioc:`` ones. The curate queue,
         the confirmed pool and the shadow metrics ask this instead of materialising
-        every public identifier (there are half a million)."""
+        every public identifier (there are half a million). A lookup that could not
+        tell simply finds nothing; :meth:`verified_subset_answer` says so."""
+        return self.verified_subset_answer(identifiers)[0]
+
+    def verified_subset_answer(self, identifiers: Iterable[str]) -> tuple[set, str]:
+        """``(found, why it may be incomplete)`` — THE scan both readers use: the lenient
+        :meth:`verified_subset` and the curate precheck, which refuses on any reason ("" =
+        complete: no ``dep:`` / ``ioc:`` identifier, or every live lookup answered)."""
         wanted = {str(identifier) for identifier in identifiers}
-        found = {rule.get("identifier") for _cat, rule in self.iter_rules()
+        found = {str(rule.get("identifier") or "") for _cat, rule in self.iter_rules()
                  if rule.get("source") == "public" and rule.get("identifier") in wanted}
-        lookup = self.live_lookup()
-        if lookup is None:
-            return found
         dependencies = [parsed for identifier in wanted
                         if (parsed := threat_ids.parse_dependency_identifier(identifier)) is not None]
-        if dependencies:
-            found |= {rule["identifier"] for rule in lookup.dependencies(dependencies).rules.values()
-                      if rule.get("identifier") in wanted}
         iocs = [identifier for identifier in wanted if identifier.startswith("ioc:")]
-        if iocs:
-            found |= {rule["identifier"] for rule in lookup.iocs(iocs).rules.values()
-                      if rule.get("identifier") in wanted}
-        return found
+        if not dependencies and not iocs:
+            return found, ""
+        lookup = self.live_lookup()
+        if lookup is None:
+            return found, "the live verified lookup is not ready"
+        reason = ""
+        for answer in ([lookup.dependencies(dependencies)] if dependencies else []) + ([lookup.iocs(iocs)] if iocs else []):
+            if not answer.known and not reason:
+                reason = f"the verified store could not tell ({answer.reason or 'no reason'})"
+            found |= {rule["identifier"] for rule in answer.rules.values() if rule.get("identifier") in wanted}
+        return found, reason
 
     def live_browse(self, **filters: Any) -> Optional[browse.LivePage]:
         """One page of the live public tiers for the dashboard (``category``,

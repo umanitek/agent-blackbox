@@ -36,13 +36,13 @@ from __future__ import annotations
 import json
 import threading
 import time
-from datetime import datetime, timedelta, timezone, UTC
-from typing import Callable, Dict, Optional, Tuple
+from datetime import datetime, timedelta, UTC
+from typing import Callable, Optional
 
 from ...kernel import threat_ids
 from ..service.evidence import Lookup
 from .client import HttpClient, JsonObject, UrllibClient
-from .credentials import CredentialsError, load_credentials
+from .credentials import key_for
 from .protocol import REUSE_LOOKUP_ONLY, SourceTerms, SourceVerdict
 
 AUTH_KEY_NAME = "abusech"
@@ -66,11 +66,7 @@ _BAZAAR_HASH_LENGTHS = frozenset({32, 40, 64})
 _THREATFOX_TIME_FORMAT = "%Y-%m-%d %H:%M:%S UTC"
 
 
-def _default_key() -> Optional[str]:
-    try:
-        return load_credentials().get(AUTH_KEY_NAME)
-    except CredentialsError:
-        return None   # a file we may not use is the same as no key: could not tell
+_default_key = key_for(AUTH_KEY_NAME)   # the credentials file, read when asked
 
 
 class AbuseChFetcher:
@@ -108,14 +104,6 @@ class AbuseChFetcher:
         return answer
 
 
-def ioc_parts(identifier: str) -> Optional[tuple[str, str]]:
-    """``(type, value)`` of a well-formed ``ioc:<type>:<value>`` identifier, else None."""
-    parts = identifier.split(":", 2)
-    if len(parts) != 3 or parts[0] != "ioc" or not threat_ids.ioc_value_is_well_formed(parts[1], parts[2]):
-        return None
-    return parts[1], parts[2]
-
-
 def _verdict(source: str, answer: Optional[JsonObject], reference_id: str) -> SourceVerdict:
     """Map an abuse.ch answer: ``ok`` with a reference → FOUND, a not-listed
     status → CLEAN, anything else (no answer, an error status) → UNAVAILABLE."""
@@ -142,11 +130,14 @@ class UrlhausSource:
     def __init__(self, fetcher: AbuseChFetcher) -> None:
         self._fetcher = fetcher
 
+    def applies(self, identifier: str) -> bool:
+        parts = threat_ids.parse_ioc_identifier(identifier)
+        return parts is not None and parts[0] in ("url", "domain", "ip")
+
     def check(self, identifier: str) -> SourceVerdict:
-        parts = ioc_parts(identifier)
-        if parts is None or parts[0] not in ("url", "domain", "ip"):
+        if not self.applies(identifier):
             return SourceVerdict(Lookup.NOT_APPLICABLE, source=self.name)
-        ioc_type, value = parts
+        ioc_type, value = threat_ids.parse_ioc_identifier(identifier)
         if ioc_type == "url":
             answer = self._fetcher.fetch(URLHAUS_URL_ENDPOINT, form={"url": value})
             reference = str(answer.get("id") or "") if answer else ""
@@ -166,10 +157,14 @@ class ThreatFoxSource:
         self._fetcher = fetcher
         self._now = now
 
+    def applies(self, identifier: str) -> bool:
+        parts = threat_ids.parse_ioc_identifier(identifier)
+        return parts is not None and parts[0] in _THREATFOX_TYPES
+
     def check(self, identifier: str) -> SourceVerdict:
-        parts = ioc_parts(identifier)
-        if parts is None or parts[0] not in _THREATFOX_TYPES:
+        if not self.applies(identifier):
             return SourceVerdict(Lookup.NOT_APPLICABLE, source=self.name)
+        parts = threat_ids.parse_ioc_identifier(identifier)
         answer = self._fetcher.fetch(THREATFOX_ENDPOINT, json_body={
             "query": "search_ioc", "search_term": parts[1], "exact_match": True})
         if answer is None or answer.get("query_status") != "ok":
@@ -213,10 +208,14 @@ class MalwareBazaarSource:
     def __init__(self, fetcher: AbuseChFetcher) -> None:
         self._fetcher = fetcher
 
+    def applies(self, identifier: str) -> bool:
+        parts = threat_ids.parse_ioc_identifier(identifier)
+        return parts is not None and parts[0] == "hash" and len(parts[1]) in _BAZAAR_HASH_LENGTHS
+
     def check(self, identifier: str) -> SourceVerdict:
-        parts = ioc_parts(identifier)
-        if parts is None or parts[0] != "hash" or len(parts[1]) not in _BAZAAR_HASH_LENGTHS:
+        if not self.applies(identifier):
             return SourceVerdict(Lookup.NOT_APPLICABLE, source=self.name)
+        parts = threat_ids.parse_ioc_identifier(identifier)
         answer = self._fetcher.fetch(MALWAREBAZAAR_ENDPOINT, form={"query": "get_info", "hash": parts[1]})
         records = answer.get("data") if answer else None
         reference = str(records[0].get("sha256_hash") or "") if (

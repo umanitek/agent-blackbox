@@ -45,7 +45,7 @@ logger = logging.getLogger(__name__)
 #: return no row.
 _STATEMENT_KINDS = ("ThreatReport", "Retraction", "FalsePositive", "SightingDigest", "CuratorStatement", "KeyManifest")
 _FINGERPRINT_SPARQL = (
-    "PREFIX g: <http://umanitek.ai/ontology/guardian/> "
+    sparql_text.GUARDIAN_PREFIX + " "
     "SELECT ?t (COUNT(DISTINCT ?r) AS ?n) (MAX(STR(?r)) AS ?last) WHERE { "
     "VALUES ?t { " + " ".join(f"g:{kind}" for kind in _STATEMENT_KINDS) + " } ?r a ?t } GROUP BY ?t"
 )

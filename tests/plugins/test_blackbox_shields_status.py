@@ -350,3 +350,21 @@ def test_an_off_shield_does_not_tick_its_own_checks(home, monkeypatch):
         assert off[name].state == "none" and "off" in off[name].sub, off[name]
         assert on[name].state == "ok"
     assert off["Protected files"].state == "ok"
+
+
+@pytest.mark.parametrize("user", ["marc", "operator", "medgeman"])   # "arc", "opera", "edge" inside the name
+def test_the_browser_comes_from_the_browser_folder_not_from_words_in_the_users_name(tmp_path, monkeypatch, user):
+    """The card guessed the browser by looking for "arc", "opera", "edge"… ANYWHERE in the path, so a
+    Chrome vault in a home folder named "marc" was shown as Arc. It is now the browser whose folder
+    (browsers.json) the store sits in."""
+    home = tmp_path / user
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(home / ".config"))
+    monkeypatch.setenv("BLACKBOX_HOME", str(home / "bb"))
+    detectors.EXISTING_STORES.reset()
+    _vault(home, "Local Extension Settings", METAMASK_CHROME)
+    [found] = trader_status.found_wallets()
+    assert found["browser"] == "Chrome"
+    assert trader_status.browser_of(str(home / ".config" / "google-chrome" / "Default")) == "Chrome"
+    detectors.EXISTING_STORES.reset()

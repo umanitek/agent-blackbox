@@ -6,7 +6,7 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 from . import openclaw_json5
 
 _OPENCLAW_MIN_VERSION = (2026, 6, 11)

@@ -19,18 +19,25 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..kernel.constants import SEVERITY_RANK
+from ..kernel.threat_ids import category_for
 from .lane import LaneEntry, LaneView
 
-#: Identifier prefix -> the dashboard's threat category (the same names /api/graph uses).
-_CATEGORY_BY_PREFIX = {"ioc": "ioc", "dep": "dependency", "injection": "injection", "skill": "skill",
-                       "fileaccess": "fileaccess", "secret": "secret", "escalation": "escalation"}
-_SEVERITY_RANK = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
+#: Detail keys the page reads as lists or objects: a member's text there would break the modal
+#: (``.map`` on a string), so a lane field never fills one.
+_STRUCTURED_KEYS = frozenset({"sources", "references", "profile"})
 
 
-def category_of(identifier: str, fields: dict[str, str]) -> str:
-    """The threat's category: the report's own ``category`` field when it names one, else its identifier prefix."""
-    prefix = identifier.split(":", 1)[0]
-    return _CATEGORY_BY_PREFIX.get(prefix) or fields.get("category") or "other"
+def category_of(identifier: str) -> str:
+    """The threat's category, from its identifier alone (``kernel.threat_ids.category_for``, as
+    ``/api/graph`` does — a member's own ``category`` field is never trusted, KI-197), plus the
+    sandbox's ``secret`` tests, which the page has a colour for."""
+    category = category_for(identifier)
+    return "secret" if category == "other" and identifier.startswith("secret:") else category
+
+
+def _worst(entries: list[LaneEntry]) -> str:
+    return max((e.severity for e in entries), key=lambda s: SEVERITY_RANK.get(s, -1))
 
 
 def _threats(view: LaneView) -> list[dict[str, Any]]:
@@ -40,11 +47,9 @@ def _threats(view: LaneView) -> list[dict[str, Any]]:
         grouped.setdefault(entry.identifier, []).append(entry)
     threats = []
     for identifier, entries in grouped.items():
-        fields = dict(entries[0].fields)
-        severity = max((e.severity for e in entries), key=lambda s: _SEVERITY_RANK.get(s, -1))
         threats.append({
-            "identifier": identifier, "name": identifier, "category": category_of(identifier, fields),
-            "severity": severity, "reporterCount": len({e.reporter.lower() for e in entries}),
+            "identifier": identifier, "name": identifier, "category": category_of(identifier),
+            "severity": _worst(entries), "reporterCount": len({e.reporter.lower() for e in entries}),
             "stage": "sandbox", "stageReason": "a sandbox test: never a flag or a rule",
             "enforcement": "none", "networkLive": "yes", "sandbox": True, "profile": {},
             "mine": any(e.mine for e in entries),
@@ -84,11 +89,11 @@ def threat_detail(view: LaneView, identifier: str) -> dict[str, Any]:
     entries = [e for e in view.entries if e.identifier == identifier]
     if not entries:
         return {"identifier": identifier, "tier": "community", "sandbox": True, "found": False}
-    detail: dict[str, Any] = dict(entries[0].fields)
+    detail: dict[str, Any] = {key: value for key, value in entries[0].fields if key not in _STRUCTURED_KEYS}
     reporters = sorted({e.reporter for e in entries})
     detail.update({
         "identifier": identifier, "name": identifier, "tier": "community", "source": "sandbox", "sandbox": True,
-        "found": True, "severity": max((e.severity for e in entries), key=lambda s: _SEVERITY_RANK.get(s, -1)),
+        "found": True, "severity": _worst(entries),
         "reporters": len(reporters), "reporterCount": len(reporters), "sandboxReporters": reporters,
         "stage": "sandbox", "enforcement": "none",
         "description": "A sandbox test shared to the verified graph's sandbox lane: shown here, never a flag or a rule.",

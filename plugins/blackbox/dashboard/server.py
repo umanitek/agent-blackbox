@@ -19,20 +19,19 @@ import logging
 import os
 import re
 import secrets
-import shutil
 import socket
 import subprocess
-import sys
 import threading
 import time
-from collections import Counter, deque
+from collections import Counter
 from pathlib import Path
-from typing import Any, Dict, List, Set, Tuple
+from typing import Any
 
-from ..kernel import constants
-from ..kernel.browser_boundary import BrowserBoundary
-from .. import shields
-from ..sync import read_durable_progress, state as sync_state
+from ..kernel import constants, sparql_text, threat_ids
+from ..kernel.browser_boundary import LOOPBACK_HOSTS, BrowserBoundary
+from ..kernel.host_command import hermes_argv
+from .. import attach, shields
+from ..sync import read_durable_progress
 from . import community_routes, direct_reads, docs_routes, graph_pages, lifecycle, playground_routes, shields_routes, sync_meter, sync_timing
 from .graph_pages import _balanced_graph_entries, _graph_entries
 from .network_sync import network_sync_argv as _network_sync_argv
@@ -40,7 +39,7 @@ from .node_probe import NodeLiveness, NodeReadCache, RepeatGate, node_sync_probe
 from .sync_labels import (_community_progress, _is_hidden_swm_catchup_error, _is_retryable_durable_catchup_error,
                           _sync_label, current_transfer_error, not_subscribed_activity)
 from .threat_detail_fields import DETAIL_FIELDS
-from .safe_payloads import graph_tier_item, safe_identifier, safe_text
+from .safe_payloads import graph_tier_item, safe_text
 
 logger = logging.getLogger(__name__)
 
@@ -57,13 +56,10 @@ _BLACKBOX_READY_PERCENT = 80.0
 _BLACKBOX_MIN_OVERDUE_SEC = 10 * 60.0
 _BLACKBOX_STALLED_SYNC_SEC = 10 * 60.0
 _BLACKBOX_PROFILE = constants.BLACKBOX_CHAT_PROFILE
-_LOOPBACK_HOST_NAMES = frozenset({"127.0.0.1", "localhost", "[::1]"})  # the only Hosts the dashboard answers to
 _BLACKBOX_RUNTIME_HOST = "127.0.0.1"
 _BLACKBOX_RUNTIME_PORT = 9121
 _BLACKBOX_RESTART_DELAY_SEC = 2.0
-_join_lock = threading.Lock()
 _network_sync_lock = threading.Lock()
-_connection_states: dict[str, dict[str, Any]] = {}
 
 _STATIC_DIR = Path(__file__).resolve().parent / "static"
 _ASSETS_DIR = Path(__file__).resolve().parent / "assets"
@@ -85,19 +81,8 @@ def _dkg_durable_progress(dkg_home: str, context_graph_id: str) -> dict[str, Any
 
 def _blackbox_runtime_argv(port: int = _BLACKBOX_RUNTIME_PORT) -> list[str]:
     """Command for the dashboard-owned, profile-isolated Agent Blackbox backend."""
-    return [
-        sys.executable,
-        "-m",
-        "hermes_cli.main",
-        "--profile",
-        _BLACKBOX_PROFILE,
-        "serve",
-        "--host",
-        _BLACKBOX_RUNTIME_HOST,
-        "--port",
-        str(int(port)),
-        "--isolated",
-    ]
+    return hermes_argv("--profile", _BLACKBOX_PROFILE, "serve", "--host", _BLACKBOX_RUNTIME_HOST,
+                       "--port", str(int(port)), "--isolated")
 
 
 def _blackbox_runtime_env() -> dict[str, str]:
@@ -115,48 +100,6 @@ def _port_is_listening(host: str, port: int) -> bool:
             return True
     except OSError:
         return False
-
-
-def _recent_daemon_lines(dkg_home: str, *, max_lines: int = 400) -> list[str]:
-    path = Path(dkg_home).expanduser() / "daemon.log"
-    try:
-        with path.open("r", encoding="utf-8-sig", errors="replace") as handle:
-            return list(deque(handle, maxlen=max_lines))
-    except Exception:
-        return []
-
-
-def _daemon_connection_hint(dkg_home: str, cg_id: str) -> dict[str, str]:
-    """Infer the freshest actionable join/sync blocker from daemon.log."""
-    if not dkg_home or not cg_id:
-        return {}
-    for raw in reversed(_recent_daemon_lines(dkg_home)):
-        line = raw.strip()
-        if cg_id not in line:
-            continue
-        lowered = line.lower()
-        if (
-            "auto-approval deferred" in lowered
-            and "workspace encryption profile is not available yet" in lowered
-        ):
-            return {
-                "state": "pending-encryption-profile",
-                "error": "workspace encryption profile is not available yet",
-                "evidence": line,
-            }
-        if "denied sync request" in lowered and "malformed or mismatched envelope" in lowered:
-            return {
-                "state": "sync-envelope-error",
-                "error": "peer sent a malformed or mismatched sync envelope",
-                "evidence": line,
-            }
-        if "stored pending join request" in lowered:
-            return {
-                "state": "pending-approval",
-                "error": "curator approval is still pending",
-                "evidence": line,
-            }
-    return {}
 
 
 def _ruleset_total(rs: Any) -> int:
@@ -236,71 +179,6 @@ def _network_sync_once(
         }
     finally:
         _network_sync_lock.release()
-
-
-def _sync_ruleset_once(load_config: Any, dkg_client_cls: Any, ruleset_mod: Any) -> dict[str, int]:
-    """Ensure one public-graph subscription and refresh curated VM rules."""
-    cfg = load_config()
-    transfer = sync_state.read_for_graph(cfg.context_graph_id)
-    if transfer.get("status") == "running":
-        # A replacement snapshot is staged atomically. Keep serving the last
-        # verified cache while it is received instead of replacing the UI and
-        # enforcement rules with the transfer's initial zero-progress count.
-        peek = getattr(ruleset_mod, "peek", None)
-        if callable(peek):
-            cached_counts = _ruleset_sync_counts(peek(cfg))
-            if cached_counts["public"]:
-                verified = max(
-                    cached_counts["public"],
-                    int(transfer.get("public_entries") or 0),
-                )
-                cached_counts["total"] += verified - cached_counts["public"]
-                cached_counts["public"] = verified
-                return cached_counts
-        public = int(transfer.get("public_entries") or 0)
-        return {"total": public, "public": public, "community": 0}
-    client = dkg_client_cls(url=cfg.dkg_url, dkg_home=cfg.dkg_home)
-    try:
-        catchup = client.catchup_status(cfg.context_graph_id)
-    except Exception:
-        catchup = {}
-    catchup_state = str(catchup.get("status") or "").lower()
-    if catchup_state in {"queued", "running"}:
-        with _join_lock:
-            _connection_states[cfg.context_graph_id] = {
-                "state": "syncing",
-                "updated_at": time.time(),
-            }
-    if catchup_state in {"queued", "running"}:
-        # A catch-up applies complete durable snapshots atomically. Querying
-        # the VM while Blazegraph is ingesting millions of triples only adds
-        # store contention and cannot reveal useful partial rules. Serve the
-        # last-good cache until DKG reports a terminal state.
-        peek = getattr(ruleset_mod, "peek", None)
-        rs = peek(cfg) if callable(peek) else ruleset_mod.refresh(cfg, client)
-        return _ruleset_sync_counts(rs)
-    peek = getattr(ruleset_mod, "peek", None)
-    if callable(peek):
-        cached = peek(cfg)
-        counts = _ruleset_sync_counts(cached)
-        configured_interval = float(getattr(cfg, "sync_interval", 0.0) or 0.0)
-        refresh_interval = max(_RULESET_HEAVY_REFRESH_MIN_SEC, configured_interval)
-        if counts["public"] and time.time() < cached.refresh_due(refresh_interval):
-            with _join_lock:
-                _connection_states[cfg.context_graph_id] = {
-                    "state": "subscribed",
-                    "updated_at": time.time(),
-                }
-            return counts
-    rs = ruleset_mod.refresh(cfg, client)
-    counts = _ruleset_sync_counts(rs)
-    if counts["public"]:
-        with _join_lock:
-            _connection_states[cfg.context_graph_id] = {
-                "state": "subscribed",
-                "updated_at": time.time(),
-            }
-    return counts
 
 
 def _graph_sync_state(
@@ -741,7 +619,7 @@ def _profile_activity_state(
     states: dict[tuple[str, str], dict[str, Any]] = {}
     canonical: dict[str, tuple[str, str]] = {}
     for row in attach_rows:
-        if not row.get("target") or not row.get("protected", row.get("already")):
+        if not row.get("target") or not attach.is_protected(row):
             continue
         framework = str(row.get("kind") or "").lower()
         workspace = _workspace_key(row.get("target"))
@@ -795,11 +673,11 @@ def create_app(*, manage_blackbox: bool = False):
     from fastapi import Body, FastAPI, Query
     from fastapi.responses import FileResponse, JSONResponse, HTMLResponse
 
-    from .. import attach, audit, community, ruleset
+    from .. import audit, community, ruleset
     from ..kernel import settings
     from ..sync import state as sync_state
     from ..kernel.config import load_blackbox_config
-    from ..kernel.dkg_client import DkgClient, DkgError, extract_binding
+    from ..kernel.dkg_client import DkgClient, extract_binding
 
     app = FastAPI(title="Agent Blackbox", docs_url=None, redoc_url=None)
 
@@ -808,7 +686,7 @@ def create_app(*, manage_blackbox: bool = False):
     # receives the token via /api/session (same-origin only, unreachable
     # through DNS rebinding thanks to the Host gate).
     _session_token = secrets.token_urlsafe(32)
-    BrowserBoundary(_LOOPBACK_HOST_NAMES, lambda _request: _session_token).install(app)
+    BrowserBoundary(LOOPBACK_HOSTS, lambda _request: _session_token).install(app)   # loopback Hosts only
 
     @app.get("/api/session")
     def session():
@@ -966,10 +844,7 @@ def create_app(*, manage_blackbox: bool = False):
                 _rescan_state["last_reconcile"] = now
             for kind, target in sorted(targets):
                 try:
-                    if kind == "hermes":
-                        row = attach.attach_hermes(Path(target))
-                    else:
-                        row = attach.attach_openclaw(Path(target))
+                    row = attach.set_protection(kind, target, True) or {}
                     touched.append(row)
                     if row.get("error"):
                         logger.warning("blackbox rescan: attach %s %s failed: %s", kind, target, row["error"])
@@ -1077,21 +952,7 @@ def create_app(*, manage_blackbox: bool = False):
         if blackbox_thread is not None:
             blackbox_thread.join(timeout=6)
 
-    _PREFIX = "PREFIX g: <http://umanitek.ai/ontology/guardian/> "
-
-    def _count_query(client: DkgClient, cfg: Any, where: str, view: str) -> int:
-        """Run a single-``?n``-binding COUNT query; 0 on any failure (fail-open)."""
-        try:
-            rows = client.query(_PREFIX + where, cfg.context_graph_id, view=view)
-        except Exception as exc:  # pragma: no cover - fail open
-            logger.debug("blackbox dashboard: count query failed: %s", exc)
-            return 0
-        if not rows:
-            return 0
-        try:
-            return int(extract_binding(rows[0].get("n")) or "0")
-        except (TypeError, ValueError):
-            return 0
+    _PREFIX = sparql_text.GUARDIAN_PREFIX + " "
 
     # ---- non-blocking node reads -------------------------------------------
     # Node-backed reads are served stale-while-revalidate: the handler returns
@@ -1104,7 +965,7 @@ def create_app(*, manage_blackbox: bool = False):
     # Node liveness: cached, debounced, and its outages logged (KI-335). The
     # 5 s check timeout stays generous — /api/status can take a couple of
     # seconds under load, and the debounce absorbs one check that still misses.
-    _liveness = NodeLiveness(lambda cfg, timeout: DkgClient(url=cfg.dkg_url, dkg_home=cfg.dkg_home, config=cfg).reachable(timeout=timeout),
+    _liveness = NodeLiveness(lambda cfg, timeout: DkgClient.for_config(cfg).reachable(timeout=timeout),
                              ttl=15.0, timeout=5.0)
     _node_reachable = _liveness.reachable
     _node_read_log = RepeatGate()
@@ -1119,7 +980,7 @@ def create_app(*, manage_blackbox: bool = False):
             if not getattr(cfg, "context_graph_id", "") or not _node_reachable(cfg):
                 return None   # keep the cached value; retry next poll
             try:
-                read = community.read_verified_reports(DkgClient(url=cfg.dkg_url, dkg_home=cfg.dkg_home, config=cfg), cfg)
+                read = community.read_verified_reports(DkgClient.for_config(cfg), cfg)
                 return read if read.available else None  # unavailable: keep cached
             except Exception as exc:  # pragma: no cover - fail open
                 logger.debug("blackbox dashboard: community read failed: %s", exc)
@@ -1220,9 +1081,8 @@ def create_app(*, manage_blackbox: bool = False):
         if len(message) > 4000:
             return JSONResponse({"ok": False, "error": "Message is too long."}, status_code=400)
         session_id = str((payload or {}).get("session_id") or "").strip()
-        hermes = shutil.which("hermes") or os.environ.get("HERMES_BIN") or "hermes"
         # WHY "--opt=value": a question or id starting with "-" would otherwise be read as an option.
-        argv = [hermes, "blackbox", "chat", f"--query={message}", "--quiet", "--pass-session-id"]
+        argv = hermes_argv("blackbox", "chat", f"--query={message}", "--quiet", "--pass-session-id")
         if session_id and len(session_id) <= 128 and all(c.isalnum() or c in "_.:-" for c in session_id):
             argv.append(f"--resume={session_id}")
         try:
@@ -1345,11 +1205,7 @@ def create_app(*, manage_blackbox: bool = False):
                 ),
             )
         )
-        with _join_lock:
-            connection = dict(_connection_states.get(cfg.context_graph_id) or {})
-        if connection.get("state") in {"pending-approval", "pending-encryption-profile", "joining"}:
-            if not public:
-                public_state = connection["state"]
+        connection: dict[str, Any] = {}   # no join step in Blackbox: a public graph has no approval to wait for
         unsubscribed = bool(g["node_reachable"]) and g.get("subscribed") is False and not authoritative_running
         if unsubscribed:   # KI-215: never count minutes on a graph this node does not follow
             public_state = "not-subscribed"
@@ -1434,7 +1290,7 @@ def create_app(*, manage_blackbox: bool = False):
             if not _node_reachable(cfg):
                 return None   # retry next poll; don't cache a "down" as empty
             try:
-                ident = DkgClient(url=cfg.dkg_url, dkg_home=cfg.dkg_home, config=cfg).agent_identity() or {}
+                ident = DkgClient.for_config(cfg).agent_identity() or {}
                 return str(ident.get("agentAddress") or ident.get("agentDid") or "")
             except Exception as exc:  # pragma: no cover - fail open
                 logger.debug("blackbox dashboard: agent identity failed: %s", exc)
@@ -1455,7 +1311,7 @@ def create_app(*, manage_blackbox: bool = False):
         protected_local_fw = {
             str(row.get("kind") or "").lower()
             for row in attach_rows
-            if row.get("target") and row.get("protected", row.get("already"))
+            if row.get("target") and attach.is_protected(row)
         }
 
         # Read local evidence once, then split it by framework + workspace.
@@ -1524,7 +1380,7 @@ def create_app(*, manage_blackbox: bool = False):
             attached = [
                 (str(row.get("kind") or "").lower(), str(row.get("target") or ""))
                 for row in attach_rows
-                if row.get("protected", row.get("already")) and row.get("target")
+                if attach.is_protected(row) and row.get("target")
             ]
             fw_with_ws = {fw for fw, _ in attached}
             local_addr_lc = local_addr.lower()
@@ -1599,7 +1455,7 @@ def create_app(*, manage_blackbox: bool = False):
                 if not isinstance(row, dict):
                     continue
                 saw_row = True
-                row["protected"] = bool(row.get("protected", row.get("already")))
+                row["protected"] = attach.is_protected(row)
                 row["available"] = bool(row.get("target")) and not row.get("error")
                 if not row["available"]:
                     row["disabled_reason"] = str(row.get("error") or supported[kind])
@@ -1623,24 +1479,6 @@ def create_app(*, manage_blackbox: bool = False):
                 })
         return {"targets": targets}
 
-    @app.post("/api/attach")
-    def attach_selected(payload: dict[str, Any] = Body(...)) -> Any:
-        """Attach Blackbox to selected local targets."""
-        rows: list[dict[str, Any]] = []
-        for item in payload.get("targets") or []:
-            if not isinstance(item, dict):
-                continue
-            kind = str(item.get("kind") or "").lower()
-            target = str(item.get("target") or "").strip()
-            if not target:
-                continue
-            if kind == "hermes":
-                rows.append(attach.attach_hermes(Path(target)))
-            elif kind == "openclaw":
-                rows.append(attach.attach_openclaw(Path(target)))
-        ok = all(row.get("ok") for row in rows) if rows else False
-        return JSONResponse({"ok": ok, "targets": rows}, status_code=200 if ok else 400)
-
     @app.post("/api/agents/protection")
     def save_agent_protection(payload: dict[str, Any] = Body(...)) -> Any:
         """Apply desired protection for selected targets — under the rescan's lock, so a sweep already under way never re-attaches a target switched off meanwhile."""
@@ -1653,10 +1491,9 @@ def create_app(*, manage_blackbox: bool = False):
                 target = str(item.get("target") or "").strip()
                 if not target:
                     continue
-                if kind == "hermes":
-                    rows.append(attach.attach_hermes(Path(target)) if item.get("enabled") else attach.detach_hermes(Path(target)))
-                elif kind == "openclaw":
-                    rows.append(attach.attach_openclaw(Path(target)) if item.get("enabled") else attach.detach_openclaw(Path(target)))
+                row = attach.set_protection(kind, target, bool(item.get("enabled")))
+                if row is not None:
+                    rows.append(row)
         ok = all(row.get("ok") for row in rows) if rows else False
         return JSONResponse({"ok": ok, "targets": rows}, status_code=200 if ok else 400)
 
@@ -1769,7 +1606,7 @@ def create_app(*, manage_blackbox: bool = False):
                 return None   # keep the default (empty) cached briefly; retry next poll
             seen: dict[str, dict[str, Any]] = {}
             try:
-                client = DkgClient(url=cfg.dkg_url, dkg_home=cfg.dkg_home, config=cfg)
+                client = DkgClient.for_config(cfg)
                 agent_address = str(client.agent_identity().get("agentAddress") or "")
                 # This machine's private audit records live in its OWN graph (audit.local_graph).
                 local_graph = audit.local_audit_graph(client) or cfg.context_graph_id
@@ -1803,10 +1640,7 @@ def create_app(*, manage_blackbox: bool = False):
             return direct_reads.lookup(cfg, identifier, tier)
         if tier == "community":
             return graph_pages.community_threat(ruleset.peek(cfg), identifier)
-        prefix = identifier.split(":", 1)[0].lower() if ":" in identifier else ""
-        category = prefix if prefix in ("dep", "injection", "escalation", "fileaccess", "skill", "ioc") else "other"
-        if category == "dep":
-            category = "dependency"
+        category = threat_ids.category_for(identifier)
         detail: dict[str, Any] = {
             "identifier": identifier,
             "tier": tier,
@@ -1827,20 +1661,20 @@ def create_app(*, manage_blackbox: bool = False):
         # returns both and we separate them in Python. Far cheaper than a SPARQL
         # FILTER NOT EXISTS (~3x slower, re-scans the view per row) and folds the
         # reporter count into the same round-trip.
-        lit = identifier.replace("\\", "\\\\").replace('"', '\\"')
-        rdf_type = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
+        lit = sparql_text.sparql_string_literal(identifier)   # the kernel's one escaper: quotes, backslashes, newlines
+        rdf_type = constants.RDF_TYPE
         try:
             # Skip the point-lookup on an unreachable node so opening a threat
             # can't hang on a dead node.
-            client = DkgClient(url=cfg.dkg_url, dkg_home=cfg.dkg_home, config=cfg) if _node_reachable(cfg) else None
+            client = DkgClient.for_config(cfg) if _node_reachable(cfg) else None
             if client is None:
                 rows = []
             else:
-                subject = str(cached_rule.get("subject") or "")
+                subject = sparql_text.sparql_iri(cached_rule.get("subject"))   # "" when it cannot be written as <iri>
                 if subject:
-                    lookup = f"SELECT ?t ?p ?o WHERE {{ VALUES ?t {{ <{subject}> }} ?t ?p ?o }}"
+                    lookup = f"SELECT ?t ?p ?o WHERE {{ VALUES ?t {{ {subject} }} ?t ?p ?o }}"
                 else:
-                    lookup = _PREFIX + f'SELECT ?t ?p ?o WHERE {{ ?t g:identifier "{lit}" . ?t ?p ?o }}'
+                    lookup = _PREFIX + f'SELECT ?t ?p ?o WHERE {{ ?t g:identifier {lit} . ?t ?p ?o }}'
                 agent_address = None
                 if tier == "local":
                     identity = client.agent_identity()
@@ -1881,32 +1715,22 @@ def create_app(*, manage_blackbox: bool = False):
             logger.debug("blackbox dashboard: threat detail query failed: %s", exc)
         return detail
 
-    @lifecycle.on_startup(app)
-    def _warm_node_caches() -> None:
-        """Prime the SWR node caches at boot so the first load shows data
-        instead of a "Loading…" window. Off-thread, fail-open."""
-        def _warm() -> None:
-            try:
-                cfg = load_blackbox_config()
-                # Check liveness synchronously first, so the reads below see
-                # the node's true state, not the cold default.
-                _liveness.check_now(cfg)
-                # Touch each cached endpoint to warm it. Two passes: the first
-                # spawns the refresh, the second lands it.
-                for _ in range(2):
-                    graph_status()
-                    graph("public")
-                    community_endpoints.reports(50)
-                    agents()
-                    time.sleep(2.5)
-            except Exception as exc:  # pragma: no cover - best effort
-                logger.debug("blackbox dashboard: cache warm failed: %s", exc)
-        threading.Thread(target=_warm, name="blackbox-warm", daemon=True).start()
+    # Prime the SWR node caches at boot so the first load shows data instead of a "Loading…"
+    # window. Liveness first, so the reads see the node's true state; two passes: the first
+    # spawns each refresh, the second lands it. Ends with the app (lifecycle.run_in_background).
+    lifecycle.run_in_background(app, name="cache warm", passes=2, pause_s=2.5, calls=[
+        lambda: _liveness.check_now(load_blackbox_config()),
+        graph_status,
+        # Explicit arguments: outside a request the Query(...) defaults are objects (KI-498).
+        lambda: graph(tier="public", limit=5000, offset=0, q="", category="", ecosystem=""),
+        lambda: community_endpoints.reports(50),
+        agents,
+    ])
 
     return app
 
 
-def start_dashboard(port: int = 9700) -> None:
+def start_dashboard(port: int = constants.DEFAULT_DASHBOARD_PORT) -> None:
     """Run the dashboard with uvicorn on ``127.0.0.1:{port}`` (blocking)."""
     import uvicorn
 

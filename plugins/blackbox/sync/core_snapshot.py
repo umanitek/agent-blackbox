@@ -9,8 +9,8 @@ import http.client
 import json
 import time
 from copy import deepcopy
-from ..kernel.config import load_blackbox_config
-from ..kernel.dkg_client import DkgClient, DkgError, signed_request_headers
+from ..kernel.config import load_blackbox_config, reads_graph_directly
+from ..kernel.dkg_client import DkgClient, DkgError
 from ..kernel.local_http import request
 from .. import ruleset
 from . import state
@@ -27,11 +27,7 @@ class SnapshotSyncClient(DkgClient):
     def request(self, method, path, body=None, timeout=15):
         if (method, path) not in {("GET", PATH), ("POST", PATH)}:
             raise DkgError("SNAPSHOT_ROUTE_REFUSED")
-        data = json.dumps(body).encode() if body is not None else None
-        headers = {"Content-Type": "application/json", "Accept": "application/json"}
-        if self.token:
-            headers["Authorization"] = f"Bearer {self.token}"
-            headers.update(signed_request_headers(self.token, method, path, data))
+        data, headers = self.encoded(method, path, body)
         try:
             code, raw = request(self.url, method, path, data, headers,
                                 deadline=time.monotonic() + (timeout or 15), max_bytes=65536)
@@ -61,7 +57,7 @@ class _Progress:
         result = self.coverage if result is None else result
         state.write(status, context_graph_id=self.cfg.context_graph_id, phase=phase,
                     chain_evidence_mode=self.cfg.snapshot_sync.mode, job_id=self.job_id,
-                    public_entries=self.usable, count_kind=("sampled-usable-rules" if self.cfg.detection_backend == "dkg" else "compiled-rules"),
+                    public_entries=self.usable, count_kind=state.count_kind(reads_graph_directly(self.cfg)),
                     detection_ready=self.readiness_state == "ready", graph_complete=result.get("current") is True,
                     readiness_state=self.readiness_state, readiness_error=self.readiness_error,
                     complete=result.get("current") is True,
@@ -162,7 +158,7 @@ def _observe(job, payload, progress, args):
 
 def _read_rules(progress, *, complete):
     cfg = progress.cfg
-    if cfg.detection_backend == "dkg":
+    if reads_graph_directly(cfg):
         progress.usable = ruleset.ready_sample(cfg, cursor=progress.cursor)
         if complete:
             ruleset.refresh_direct_community(cfg)
@@ -172,7 +168,7 @@ def _read_rules(progress, *, complete):
     if not complete and time.monotonic() < progress.next_compile:
         return
     progress.next_compile = time.monotonic() + 30.0
-    client = DkgClient(url=cfg.dkg_url, dkg_home=cfg.dkg_home, config=cfg)
+    client = DkgClient.for_config(cfg)
     compiled = ruleset.refresh(cfg, client, wait_for_lock=False, force_query=complete)
     progress.usable = compiled.source_count("public")
 

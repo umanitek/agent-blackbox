@@ -21,7 +21,7 @@ Usage (the verified scope, once per refresh that has undecided assets)::
 
 from __future__ import annotations
 
-from typing import Any, Optional, Sequence, Tuple
+from typing import Any, Optional, Sequence
 
 from ...kernel import constants
 from ...kernel.signing import key_manifest

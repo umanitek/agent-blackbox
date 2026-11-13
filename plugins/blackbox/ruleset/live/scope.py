@@ -34,14 +34,14 @@ from .asset_facts import (ECOSYSTEM_COUNT_PREFIX, AssetFacts, AssetTier,
                           read_new_asset_facts, tier_assets, totals)
 from .envelope_tier import decide_by_envelope, rule_disagrees
 from ... import community
-from .. import anchors, fetching, graph_queries
+from .. import anchors, fetching, graph_queries, row_adapters
 
 logger = logging.getLogger(__name__)
 
 #: The rule source a FLAG-tier asset's rules carry: the one non-blocking tier the
 #: detectors know (``confirmed`` False, never auto-shared). A FLAG-tier row is a
 #: wallet publish without a curator envelope — no more trusted than a community row.
-FLAG_ONLY_SOURCE = "community"
+FLAG_ONLY_SOURCE = row_adapters.FLAG_ONLY_SOURCE
 
 
 @dataclass(frozen=True)
@@ -114,12 +114,12 @@ class VerifiedScope:
         if subject in fact.ignored:
             return None
         if fact.tier is AssetTier.FLAG:
-            return _flag_only(rule)
+            return row_adapters.capped_at_flag(rule)
         if not fact.signed:
             return rule
         signed = fact.signed.get(subject)
         if signed is None:
-            return _flag_only(rule)
+            return row_adapters.capped_at_flag(rule)
         return None if rule_disagrees(category, key, rule, signed) else signed.served(rule)
 
     @property
@@ -167,10 +167,6 @@ class VerifiedScope:
             legacy_refused=str(data.get("legacy_refused") or ""),
             built_at=float(data.get("built_at") or 0.0),
         )
-
-
-def _flag_only(rule: dict[str, Any]) -> dict[str, Any]:
-    return {**rule, "source": FLAG_ONLY_SOURCE, "asset_tier": AssetTier.FLAG.value}
 
 
 def _strings(value: Any) -> frozenset[str]:

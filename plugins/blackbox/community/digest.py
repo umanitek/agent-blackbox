@@ -28,16 +28,13 @@ Usage::
 
 from __future__ import annotations
 
-import json
 import logging
-import os
-import secrets
 import threading
 from dataclasses import dataclass
-from datetime import date, datetime, timezone, UTC
+from datetime import date, datetime, UTC
 from enum import Enum
 from pathlib import Path
-from typing import Callable, Dict, List, Mapping, Optional, Tuple
+from typing import Callable, Mapping, Optional
 
 from .. import audit
 from ..kernel import constants, rdf_terms, threat_ids
@@ -46,7 +43,7 @@ from ..kernel.dkg_client import DkgClient
 from ..kernel import identity
 from . import report_signer, sharing
 from .report_signer import DIGEST_STATEMENT, ReportSigner
-from ..kernel.bounded_files import atomic_write
+from ..kernel.bounded_files import read_json_object, write_json_object
 
 logger = logging.getLogger(__name__)
 
@@ -171,8 +168,8 @@ class SightingTally:
                 return False
 
     def _load(self) -> dict[str, object]:
+        data = read_json_object(self._path) or {}
         try:
-            data = json.loads(self._path.read_text(encoding="utf-8-sig"))
             weeks = {str(w): {str(k): int(v) for k, v in dict(c).items()} for w, c in dict(data["weeks"]).items()}
             return {"weeks": weeks, "published": [str(w) for w in data.get("published", [])]}
         except (OSError, ValueError, KeyError, TypeError):
@@ -183,11 +180,7 @@ class SightingTally:
         for week in sorted(weeks)[:-_KEEP_WEEKS]:
             weeks.pop(week, None)
         state["published"] = [w for w in state["published"] if w in weeks]  # type: ignore[index]
-        try:
-            self._path.parent.mkdir(parents=True, exist_ok=True)
-            atomic_write(self._path, json.dumps(state))
-        except OSError as exc:   # fail-open: an unwritable home only loses this week's counts
-            logger.warning("blackbox: could not save the sighting tally (%s)", exc)
+        write_json_object(self._path, state, what="the sighting tally")   # fail-open: only this week's counts are lost
 
 
 def record_verified_sighting(identifier: str) -> None:
@@ -253,9 +246,7 @@ def publish_due_digests(client: DkgClient, cfg: BlackboxConfig, tally: Optional[
     an identity and a signer. Every attempt is ledgered (category
     ``digest``). Fail-open."""
     from . import consent   # round 4: withdrawal must stop the weekly digest too
-    if not consent.in_force():
-        return 0
-    if not cfg.community_enabled:
+    if not consent.sharing_on(cfg):   # send_report enforces it too
         return 0
     tally = tally or SightingTally()
     due = tally.due_weeks()
@@ -271,7 +262,9 @@ def publish_due_digests(client: DkgClient, cfg: BlackboxConfig, tally: Optional[
         entries = build_digest(tally.counts(week))
         quads = build_digest_quads(reporter_address=reporter, week=week, entries=entries, signer=signer)
         name = f"digest-{threat_ids.stable_hash(reporter + week, 16)}"
-        outcome, detail = sharing.send_report(client, cfg.context_graph_id, name, quads)
+        outcome, detail = sharing.send_report(client, cfg.context_graph_id, name, quads, cfg=cfg)
+        if outcome is sharing.ShareOutcome.NOT_ALLOWED:   # switched off meanwhile: the week stays unpublished
+            break
         audit.record_share_outcome(identifier=f"digest:{week}", category="digest", severity="info",
                                    subject=digest_subject(reporter, week), asset_name=name,
                                    ok=outcome is sharing.ShareOutcome.ACCEPTED, error=detail, outcome=outcome.value)

@@ -184,3 +184,34 @@ def test_the_dashboard_pops_up_the_same_words_the_health_check_writes():
     item = health._not_admitted_item(sharing_enabled=True)
     assert 'match: "not admitted to the community graph"' in page
     assert "not admitted to the community graph" in item.message
+
+
+# --- one join decision: the state machine and the dashboard read the same answer ---------------
+
+_ENTRIES = [
+    None,
+    {},
+    {"accessPolicy": "public"},                                              # unregistered, definition in
+    {"accessPolicy": ""},                                                    # unregistered, no definition yet
+    {"accessPolicy": "public", "onChain": {}},                               # chain record present but empty
+    {"accessPolicy": "public", "onChainId": "7", "onChain": {"publishPolicy": "open"}},
+    {"accessPolicy": "public", "onChainId": "7"},                            # registered, policy not in yet
+    {"accessPolicy": "private", "callerInvolved": True},
+    {"accessPolicy": "private", "callerInvolved": False},
+    {"accessPolicy": "private"},                                             # node could not tell
+    {"accessPolicy": "public", "onChain": {"publishPolicy": "curated"}, "callerInvolved": False},
+]
+_SAME_ANSWER = {"member": Admission.APPROVED, "join": Admission.WAITING, "open": Admission.OPEN,
+                "undecided": Admission.UNKNOWN}
+
+
+@pytest.mark.parametrize("entry", _ENTRIES)
+def test_the_dashboard_admission_is_the_state_machines_join_decision(entry):
+    """The two copies disagreed on a chain record that is present but empty: the state machine
+    waited ("undecided") while the dashboard said "open graph". There is one decision now."""
+    assert admission_of(entry, "0x" + "ab" * 20, "0x" + "cd" * 20 + "/graph") is (
+        Admission.UNKNOWN if entry is None else _SAME_ANSWER[community.membership.join_verdict(entry)])
+
+
+def test_an_empty_chain_record_is_not_proof_the_graph_is_open():
+    assert admission_of({"accessPolicy": "public", "onChain": {}}, "", "g") is Admission.UNKNOWN

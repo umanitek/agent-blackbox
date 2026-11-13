@@ -27,7 +27,7 @@ import json
 import threading
 import time
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Optional
 
 from . import trust_routes
 from .lifecycle import on_shutdown, on_startup
@@ -234,7 +234,7 @@ class MembershipStatusCache:
         with self._lock:
             if graph == self._graph and self._clock() - self._at < self.TTL_SECONDS:
                 return self._status
-        status = community.read_membership_status(DkgClient(url=cfg.dkg_url, dkg_home=cfg.dkg_home, config=cfg), graph)
+        status = community.read_membership_status(DkgClient.for_config(cfg), graph)
         with self._lock:
             self._graph, self._at, self._status = graph, self._clock(), status
         return status
@@ -304,7 +304,7 @@ def _node_network(cfg: Any) -> dict[str, str]:
     from ..kernel.dkg_client import DkgClient
 
     try:
-        status = DkgClient(url=cfg.dkg_url, dkg_home=cfg.dkg_home, config=cfg).status(timeout=2.0)
+        status = DkgClient.for_config(cfg).status(timeout=2.0)
     except Exception:   # fail open: the proof still shows the raw network id
         return {}
     return {"id": str(status.get("networkId") or ""),

@@ -14,7 +14,7 @@ Usage (from the reader)::
 
 from __future__ import annotations
 
-from typing import Dict, FrozenSet, Iterable, List, Mapping, Tuple
+from typing import Iterable, Mapping
 
 from ..verification import VerifiedReport
 from .lifetimes import TOMBSTONE_GRACE_DAYS, lifetime_days

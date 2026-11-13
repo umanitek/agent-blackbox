@@ -129,7 +129,44 @@ def test_the_run_route_takes_a_json_body_and_answers_409(monkeypatch):
 
     monkeypatch.setattr(playground, "run_test", refuse)
     app = FastAPI()
-    playground_routes.register(app, lambda *a: None)
+    playground_routes.register(app, lambda key, producer, default, ttl=None: producer())
     reply = TestClient(app).post("/api/playground/run", json={"kind": "domain"})
     assert reply.status_code == 409 and reply.json() == {"ok": False, "error": "refused domain"}
     assert TestClient(app).get("/playground.js").status_code == 200
+
+
+def test_a_test_waits_for_its_own_share_only_never_another_agents(tmp_path, monkeypatch):
+    """run_test joined every live thread NAMED "blackbox-community-share" — a literal copied from
+    community/sharing.py — so it also waited (up to 90 s each) on real agents' shares running at
+    the same time, and a renamed thread would have made the wait a silent no-op. It now waits for
+    the shares started inside its own run (guard.collecting_shares)."""
+    import threading
+    from plugins.blackbox.guard import reporting
+
+    class Recorded(threading.Thread):
+        def __init__(self, name):
+            super().__init__(target=release.wait, name=name, daemon=True)
+            self.joined = False
+
+        def join(self, timeout=None):
+            self.joined = True
+            return super().join(0.05)
+
+    release = threading.Event()
+    other_agents = Recorded("blackbox-community-share")
+    other_agents.start()
+    own = Recorded("blackbox-community-share")
+    monkeypatch.setattr(constants, "blackbox_home", lambda: tmp_path)
+    monkeypatch.setattr(runner.ruleset, "get", lambda cfg: _Rules())
+
+    def hook(**_kwargs):
+        own.start()
+        reporting._COLLECTED_SHARES.get().append(own)   # what the share hand-off does for a share it starts
+        audit.record(event="pre_tool_call", findings=[{"identifier": IDENTIFIER, "severity": "high"}], detail={})
+
+    monkeypatch.setattr(runner.guard, "on_pre_tool_call", hook)
+    try:
+        playground.run_test("domain", _cfg(report=True, community_sandbox=True))
+        assert own.joined and not other_agents.joined
+    finally:
+        release.set()

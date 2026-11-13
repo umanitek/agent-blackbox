@@ -51,11 +51,13 @@ import hashlib
 import re
 from datetime import date, timedelta
 from dataclasses import dataclass
-from typing import Dict, FrozenSet, Iterable, Mapping, Optional, Tuple
+from typing import Iterable, Mapping, Optional
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+from .. import threat_ids
 from . import envelope as signing
+from .statement_order import reduces_enforcement
 from .trust_anchors import RootPins
 
 #: The statement type of a key manifest (signed by the root).
@@ -81,8 +83,6 @@ MANIFEST_TIME_LOCK_DAYS = 0
 THRESHOLD_FLOOR_BY_OPERATORS: Mapping[int, int] = {2: 2, 3: 2, 4: 2, 5: 3, 6: 3, 7: 4, 8: 4}
 #: The longest operator name (an organisation, e.g. "Umoja Ark").
 MAX_OPERATOR_LENGTH = 64
-_KEY_HEX = re.compile(r"[0-9a-f]{64}")
-_SHA256_HEX = re.compile(r"[0-9a-f]{64}")
 
 
 class KeyManifestError(ValueError):
@@ -173,7 +173,7 @@ class KeyManifest:
         for key, operator in zip(self.curator_keys, self.curator_operators):   # keys are sorted: lowest wins
             if key not in signers or operator in counted:
                 continue
-            if key == self.break_glass_key and not _reduces(statement_type):
+            if key == self.break_glass_key and not reduces_enforcement(statement_type):
                 continue   # R7b: the break-glass key (and so its operator) only ever reduces enforcement
             counted[operator] = key
         return frozenset(counted.values())
@@ -204,15 +204,6 @@ _NARROWING_FIXED_FIELDS = ("environment", "graph", "chain", "promotion_author", 
                            "min_reader_version", "break_glass_key")
 
 
-#: Statement types a break-glass key may sign (reduction-only; the kill-list and
-#: heartbeat live elsewhere and never reduce). A correction suppresses a threat.
-_REDUCING_STATEMENTS = frozenset({"blackbox.revocation", "blackbox.rejection", "blackbox.correction"})
-
-
-def _reduces(statement_type: str) -> bool:
-    return statement_type in _REDUCING_STATEMENTS
-
-
 def manifest_clock(manifest: KeyManifest, today: str) -> tuple[str, str]:
     """R7b: ("" | "pending" | "stale", detail day). A dated manifest is PENDING
     before its time-lock ends (issued + MANIFEST_TIME_LOCK_DAYS, the day it takes effect) and
@@ -238,7 +229,7 @@ def _validate(manifest: KeyManifest) -> None:
         raise KeyManifestError("the break-glass key must be one of the curator keys")
     if manifest.issued_day and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", manifest.issued_day):
         raise KeyManifestError("issued_day must be a UTC day (YYYY-MM-DD)")
-    if not all(isinstance(k, str) and _KEY_HEX.fullmatch(k) for k in keys):
+    if not all(threat_ids.is_hex64(k) for k in keys):
         raise KeyManifestError("curator keys must be Ed25519 public keys (64 lower-case hex)")
     if len(set(keys)) != len(keys) or tuple(sorted(keys)) != keys:
         raise KeyManifestError("curator keys must be distinct and sorted")
@@ -250,7 +241,7 @@ def _validate(manifest: KeyManifest) -> None:
         raise KeyManifestError("root_epoch must be >= 0 and version >= 1")
     if not (manifest.environment and manifest.graph and manifest.promotion_author):
         raise KeyManifestError("environment, graph and promotion author are required")
-    if not _SHA256_HEX.fullmatch(manifest.legacy_assets_hash):
+    if not threat_ids.is_hex64(manifest.legacy_assets_hash):
         raise KeyManifestError("legacy_assets_hash must be a sha256 hex digest")
 
 

@@ -9,10 +9,9 @@ every Hermes profile is its own trust and credential boundary.
 from __future__ import annotations
 
 import argparse
-import os
-import sys
-from typing import Any, Optional
+from typing import Any
 from .. import attach
+from ..kernel.terminal_question import ask as _ask_terminal
 
 #: What a bare ``blackbox attach`` tells an operator it could not ask.
 _HOW_TO_CHOOSE = ("Name the agents to protect:  blackbox attach <hermes-home-or-openclaw-workspace> ...\n"
@@ -100,25 +99,6 @@ def _protection_state(row: dict[str, Any]) -> str:
     return "not protected"
 
 
-def _ask_terminal(prompt: str) -> Optional[str]:
-    """Ask on the operator's terminal; None when there is none. Under ``curl … | bash`` stdin is
-    the pipe, so the controlling terminal is opened directly (POSIX ``/dev/tty``)."""
-    if sys.stdin is not None and sys.stdin.isatty():
-        try:
-            return input(prompt)
-        except EOFError:
-            return None
-    if os.name == "nt":
-        return None
-    try:
-        with open("/dev/tty", "r+", encoding="utf-8") as tty:
-            tty.write(prompt)
-            tty.flush()
-            return tty.readline()
-    except OSError:
-        return None
-
-
 def _print_attach_report(report: dict[str, Any], *, dry_run: bool) -> int:
     prefix = "Would protect" if dry_run else "Protected"
     for row in report.get("hermes", []):
@@ -157,9 +137,11 @@ def cmd_detach(args: argparse.Namespace) -> int:
         elif row.get("already"):
             print(f"  - {row['target']} (openclaw): already detached")
         else:
-            print(f"  {prefix} {row['target']} (openclaw)")
+            note = f"  note: {row['note']}" if row.get("note") else ""
+            print(f"  {prefix} {row['target']} (openclaw){note}")
     print("\nBlackbox detached. Restart any running agent to apply.")
-    return 0
+    failed = any(row.get("error") for group in ("hermes", "openclaw") for row in report.get(group, []))
+    return 1 if failed else 0   # like `attach`: a target that failed is a failed command
 
 
 def print_hermes_attach_row(row: dict[str, Any], prefix: str) -> None:

@@ -22,8 +22,8 @@ Usage::
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, timezone, UTC
-from typing import AbstractSet, Callable, List, Optional, Tuple
+from datetime import date, datetime, UTC
+from typing import AbstractSet, Callable, Optional
 
 from .statement import KillEntry, KillList
 

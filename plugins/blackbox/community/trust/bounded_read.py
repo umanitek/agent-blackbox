@@ -32,7 +32,7 @@ Usage::
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Mapping, Sequence, Tuple
+from typing import Any, Iterable, Mapping, Sequence
 
 from ...kernel import constants, signing, sparql_text
 from ...kernel.dkg_client import extract_binding

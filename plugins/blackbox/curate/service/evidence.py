@@ -22,7 +22,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, timedelta
 from enum import Enum
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Optional
 
 from ...community import CuratorView, reputation
 from ...detection import osv
@@ -60,13 +60,19 @@ class OwnCheck:
 NOT_LOOKED_UP = OwnCheck(Lookup.UNAVAILABLE)
 
 
+def osv_applies(identifier: str) -> bool:
+    """Whether OSV can be asked about *identifier*: an exact-version ``dep:`` identifier."""
+    parts = threat_ids.parse_dependency_identifier(identifier)
+    return parts is not None and parts[2] != "*"
+
+
 def own_check(identifier: str, status: AdvisoryStatus = osv.advisory_status) -> OwnCheck:
     """Look *identifier* up in the public advisory source. Only an
     exact-version dependency can be asked about; a vulnerability advisory is
     NOT evidence of malware and reads as clean."""
-    parts = threat_ids.parse_dependency_identifier(identifier)
-    if parts is None or parts[2] == "*":
+    if not osv_applies(identifier):
         return OwnCheck(Lookup.NOT_APPLICABLE)
+    parts = threat_ids.parse_dependency_identifier(identifier)
     state, finding = status(*parts)
     if state == "unavailable":
         return OwnCheck(Lookup.UNAVAILABLE)

@@ -92,3 +92,42 @@ def test_the_faster_rule_still_removes_named_secrets(template, kept_name):
     fake_value = "q" * 6 + "7" * 6   # built at run time: no secret-shaped literal in the repo (LES-022)
     redacted = redact_secret_values(template.format(v=fake_value))
     assert redacted.startswith(kept_name) and "[REDACTED" in redacted
+
+
+# --- one list of the names that hold a secret (kernel.redaction.SECRET_NAME_WORDS) ---
+
+def _fake_value() -> str:
+    return "A" + "b1C2d3E4" * 3          # built here, never a literal: not a real credential
+
+
+@pytest.mark.parametrize("name", ["aws_access_key_id", "AWS_SECRET_ACCESS_KEY", "Authorization", "refresh_token",
+                                  "access-token", "clientSecret", "API_KEY", "apikey", "db_password", "passwd",
+                                  "private_key", "credentials"])
+def test_a_secret_named_key_is_blanked_in_a_logged_structure_and_in_text(name):
+    """The two places a name is judged used two lists: `aws_access_key_id` was blanked as
+    text but not as a structure's key, and `authorization` the other way round."""
+    from plugins.blackbox.audit import redaction as audit_redaction
+    from plugins.blackbox.kernel import redaction as kernel_redaction
+    value = _fake_value()
+
+    assert audit_redaction.redact({name: value}) == {name: "[REDACTED]"}
+    assert value not in kernel_redaction.redact_secret_values(f"{name}={value}")
+
+
+@pytest.mark.parametrize("name", ["author", "note", "path", "keyboard", "monkey", "command", "sequence"])
+def test_an_ordinary_name_is_left_alone_in_both_places(name):
+    from plugins.blackbox.audit import redaction as audit_redaction
+    from plugins.blackbox.kernel import redaction as kernel_redaction
+    value = _fake_value()
+
+    assert audit_redaction.redact({name: "hello"}) == {name: "hello"}
+    assert value in kernel_redaction.redact_secret_values(f"{name}={value}")
+
+
+def test_both_checks_are_built_from_the_one_list():
+    from plugins.blackbox.audit import redaction as audit_redaction
+    from plugins.blackbox.kernel import redaction as kernel_redaction
+
+    assert audit_redaction._SECRET_KEY_RE is kernel_redaction.SECRET_NAME_RE
+    for word in kernel_redaction.SECRET_NAME_WORDS:
+        assert word in kernel_redaction._SECRET_ASSIGNMENT_RE.pattern

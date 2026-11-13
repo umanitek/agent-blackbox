@@ -23,18 +23,19 @@ Usage (from the reader)::
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
+from datetime import date
+from typing import Any, Iterable, Mapping, Optional
 
-from ...kernel import signing, sparql_text
-from ...kernel.dkg_client import extract_binding
+from ...kernel import sparql_text
 from ...kernel import threat_ids
-from ..digest import DigestEntry, digest_subject, parse_entries
+from ...kernel.health import today_utc
+from ..digest import DigestEntry, digest_subject, iso_week, parse_entries
 from ..report_signer import DIGEST_STATEMENT
-from ..verification import SIGNED_STATEMENT_VAR
+from ..verification import shown_as_signed, signed_by, verified_rows
 from .curator_view import CuratorView
 
-from ..verification import unique_by_subject
 
 logger = logging.getLogger(__name__)
 
@@ -66,9 +67,9 @@ class HeatEstimate:
 
 def digests_sparql(after: str) -> str:
     """One page of SightingDigest rows after the subject cursor *after*."""
-    cursor = f"FILTER(STR(?r) > {sparql_text.sparql_string_literal(after)})" if after else ""
+    cursor = sparql_text.cursor_filter(after)
     return f"""
-PREFIX g: <http://umanitek.ai/ontology/guardian/>
+{sparql_text.GUARDIAN_PREFIX}
 SELECT ?r ?reporter ?isoWeek ?signedStatement WHERE {{
   ?r a g:SightingDigest ;
      g:reporter ?reporter ;
@@ -79,38 +80,40 @@ SELECT ?r ?reporter ?isoWeek ?signedStatement WHERE {{
 """
 
 
+#: An ISO week as :func:`..digest.iso_week` writes it: ``2026-W40`` (weeks 01-53).
+_ISO_WEEK = re.compile(r"\d{4}-W(?:0[1-9]|[1-4]\d|5[0-3])")
+
+
+def _week_is_readable(week: str) -> bool:
+    """Whether a digest's signed ``week`` is an ISO week no later than this reader's own.
+
+    Heat is shown for :func:`latest_week`, the maximum over every admitted digest — so one
+    self-signed digest for a far-future (or malformed, higher-sorting) week moved everyone's
+    "latest" to a week no real digest covers and emptied the heat map (KI-498). Weeks are
+    fixed-width, so text order is date order."""
+    if not isinstance(week, str) or not _ISO_WEEK.fullmatch(week):
+        return False
+    return week <= iso_week(date.fromisoformat(today_utc()))
+
+
 def _verified(row: Mapping[str, Any], environment: str, graph: str) -> Optional[VerifiedDigest]:
-    envelope = signing.from_text(extract_binding(row.get(SIGNED_STATEMENT_VAR)))
-    author = signing.verify(envelope, statement_type=DIGEST_STATEMENT, environment=environment, graph=graph)
-    if author is None or envelope is None:
+    signed = signed_by(row, DIGEST_STATEMENT, environment, graph)
+    if signed is None:
         return None
-    payload = envelope.payload
+    author, payload = signed
     reporter, week = payload.get("reporter", ""), payload.get("week", "")
     entries = parse_entries(payload.get("entries", ""))
-    if not threat_ids.is_agent_address(reporter) or not week or entries is None:
+    if not threat_ids.is_agent_address(reporter) or not _week_is_readable(week) or entries is None:
         return None
     subject = digest_subject(reporter, week)
-    shown = (extract_binding(row.get("r")), extract_binding(row.get("reporter")).strip().lower(),
-             extract_binding(row.get("isoWeek")).strip())
-    if payload.get("subject") != subject or shown != (subject, reporter, week):
+    if payload.get("subject") != subject or not shown_as_signed(row, {"r": subject, "reporter": reporter, "isoWeek": week}):
         return None
     return VerifiedDigest(subject=subject, author=author, reporter=reporter, week=week, entries=entries)
 
 
 def verified_digests(rows: Iterable[Mapping[str, Any]], environment: str, graph: str) -> list[VerifiedDigest]:
     """Every digest row that verifies; the rest are dropped and counted in the log."""
-    found: list[VerifiedDigest] = []
-    dropped = 0
-    for row in rows:
-        digest = _verified(row, environment, graph)
-        if digest is None:
-            dropped += 1
-        else:
-            found.append(digest)
-    if dropped:
-        logger.info("blackbox: community read ignored %d unsigned or unverifiable digest row(s)", dropped)
-    return unique_by_subject(found)
-
+    return verified_rows(rows, lambda row: _verified(row, environment, graph), "digest")[0]
 
 
 def one_per_author_week(digests: Iterable[VerifiedDigest], first_seen: Mapping[str, float]) -> list[VerifiedDigest]:

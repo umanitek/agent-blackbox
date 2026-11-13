@@ -37,10 +37,10 @@ Pure and deterministic; reads no files.
 
 from __future__ import annotations
 
+import functools
 import re
 import shlex
 from dataclasses import dataclass
-from typing import List, Tuple
 import itertools
 
 #: Commands that read a file's contents.
@@ -102,16 +102,23 @@ _WINDOWS_PATH = re.compile(r"[A-Za-z]:\\|%[A-Za-z_]+%\\")
 
 
 def _words(command: str) -> list[str]:
+    """The shell words of *command* (a fresh list). Several checks split the same command of
+    one call, so the last few splits are remembered (:func:`_split`)."""
+    return list(_split(command))
+
+
+@functools.lru_cache(maxsize=4)
+def _split(command: str) -> tuple[str, ...]:
     try:
         if _WINDOWS_PATH.search(command):
             lexer = shlex.shlex(command, posix=False, punctuation_chars=";&|<>")
             lexer.whitespace_split = True
-            return [word.strip("\"'") for word in lexer]
+            return tuple(word.strip("\"'") for word in lexer)
         lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|<>")
         lexer.whitespace_split = True
-        return list(lexer)
+        return tuple(lexer)
     except ValueError:  # an unbalanced quote: still find the paths
-        return command.split()
+        return tuple(command.split())
 
 
 def _looks_like_path(word: str) -> bool:
@@ -124,10 +131,14 @@ def shell_file_args(command: str) -> list[ShellFileArg]:
     Flags (``-r``, ``-czf``) are skipped; an argument after a separator
     (``;``, ``&&``, ``|``, a redirect) belongs to the next command. Duplicates
     are removed, first occurrence kept. Where a copy or archive writes is marked
-    ``destination`` (:func:`_destinations`).
+    ``destination`` (:func:`_destinations`). Several checks ask about the same command of one
+    call, so the last few answers are remembered (the arguments are frozen values).
     """
-    if not command:
-        return []
+    return list(_file_args(command)) if command else []
+
+
+@functools.lru_cache(maxsize=4)
+def _file_args(command: str) -> tuple[ShellFileArg, ...]:
     words = _words(command)
     out: list[ShellFileArg] = []
     seen: set = set()
@@ -156,7 +167,7 @@ def shell_file_args(command: str) -> list[ShellFileArg]:
         keep(found)
     for match in _HEREDOC.finditer(command):
         keep(_paths_in_code(match.group("interpreter"), match.group("body")))
-    return out
+    return tuple(out)
 
 
 def _segment_end(words: list[str], start: int) -> int:

@@ -31,6 +31,7 @@ from plugins.blackbox.kernel import threat_ids
 from plugins.blackbox.kernel import constants
 from plugins.blackbox.kernel.config import BlackboxConfig
 from plugins.blackbox.kernel.dkg_client import DkgError
+from _blackbox_fakes import dkg_client_fake
 
 
 DEV_GRAPH = "0x51E5dE758A45c8b64048E29918421F0bdD6D5d5C/agent-blackbox-community-dev"
@@ -186,7 +187,7 @@ def _run_pipeline(monkeypatch, cfg, findings, client=None, reporter=REPORTER):
     """Drive _report_and_audit with a fake client; capture spawned shares."""
     client = client or FakeClient()
     spawned = []
-    monkeypatch.setattr(guard_reporting, "DkgClient", lambda *a, **k: client)
+    monkeypatch.setattr(guard_reporting, "DkgClient", dkg_client_fake(lambda *a, **k: client))
     monkeypatch.setattr(kernel_identity, "reporter_address", lambda c: reporter)
     monkeypatch.setattr(audit, "write_private_audit_ka", lambda *a, **k: None)
     monkeypatch.setattr(community_pkg, "spawn_community_share",
@@ -250,7 +251,7 @@ def test_hook_returns_before_share_completes(monkeypatch, bb_home):
         finished.set()
 
     client = FakeClient()
-    monkeypatch.setattr(guard_reporting, "DkgClient", lambda *a, **k: client)
+    monkeypatch.setattr(guard_reporting, "DkgClient", dkg_client_fake(lambda *a, **k: client))
     monkeypatch.setattr(kernel_identity, "reporter_address", lambda c: REPORTER)
     monkeypatch.setattr(audit, "write_private_audit_ka", lambda *a, **k: None)
     monkeypatch.setattr(community_sharing, "_share_sighting", slow_share)
@@ -366,8 +367,12 @@ class _SendClient:
         return self.result if self.result is not None else {"state": "succeeded"}
 
 
+#: Sharing switched on (consent is in force by the suite's autouse stub).
+SHARING_ON = BlackboxConfig(report=True, context_graph_id=DEV_GRAPH)
+
+
 def _send(client, name="report-x"):
-    return community_sharing.send_report(client, DEV_GRAPH, name, [])
+    return community_sharing.send_report(client, DEV_GRAPH, name, [], cfg=SHARING_ON)
 
 
 def test_new_report_is_accepted(bb_home):
@@ -424,3 +429,54 @@ def test_auto_share_of_an_existing_report_is_ledgered_as_already_shared(bb_home)
     row = audit.read_share_ledger(limit=1)[0]
     assert row["identifier"] == "ioc:domain:again.example"
     assert row["outcome"] == "already-shared" and row["ok"] is False
+
+
+# --------------------------------------------------------------------------- the gate at the send itself
+
+def test_nothing_is_sent_while_sharing_is_off(monkeypatch, tmp_path):
+    """The rule "sharing on AND consent in force" is enforced where data leaves the machine,
+    not only by each sender beforehand: a sender that forgot its own check still sends nothing."""
+    monkeypatch.setenv("BLACKBOX_HOME", str(tmp_path))
+    client = _SendClient()
+    outcome, why = community_sharing.send_report(client, DEV_GRAPH, "report-x", [],
+                                                 cfg=BlackboxConfig(report=False, context_graph_id=DEV_GRAPH))
+    assert outcome is community_sharing.ShareOutcome.NOT_ALLOWED and why and client.calls == 0
+
+
+def test_nothing_is_sent_once_consent_is_withdrawn(monkeypatch, tmp_path, real_consent):
+    monkeypatch.setenv("BLACKBOX_HOME", str(tmp_path))
+    client = _SendClient()
+    outcome, why = community_sharing.send_report(client, DEV_GRAPH, "report-x", [], cfg=SHARING_ON)
+    assert outcome is community_sharing.ShareOutcome.NOT_ALLOWED and client.calls == 0
+    assert why == real_consent.why_not()
+
+
+def test_a_statement_that_only_reduces_is_sent_with_sharing_off(monkeypatch, tmp_path, real_consent):
+    """Disputes and retractions reduce enforcement: they get through whatever the switch says
+    (LES-016), as `blackbox report --false-positive / --retract` always allowed."""
+    monkeypatch.setenv("BLACKBOX_HOME", str(tmp_path))
+    client = _SendClient()
+    outcome, _ = community_sharing.send_report(client, DEV_GRAPH, "fp-x", [], reduces=True,
+                                               cfg=BlackboxConfig(report=False, context_graph_id=DEV_GRAPH))
+    assert outcome is community_sharing.ShareOutcome.ACCEPTED and client.calls == 1
+
+
+def test_every_sender_passes_its_config_to_the_gate():
+    """No caller can reach the network without handing the gate its config."""
+    import inspect
+
+    assert inspect.signature(community_sharing.send_report).parameters["cfg"].default is inspect.Parameter.empty
+
+
+def test_the_rate_state_is_replaced_whole_never_rewritten_in_place(monkeypatch, bb_home):
+    """report_rate.json was rewritten in place: a crash or a second process mid-write left a torn
+    file, which reads as {} and so reset every cooldown and the daily cap (failing toward MORE
+    reports). Both writers now go through the kernel's temp-file + rename."""
+    from plugins.blackbox.audit import share_ledger
+    written = []
+    real = share_ledger.atomic_write
+    monkeypatch.setattr(share_ledger, "atomic_write", lambda path, text: (written.append(path.name), real(path, text)))
+    share_ledger.mark_reported("dep:npm:evil-pkg@1.0.0")
+    assert share_ledger.allow_report(5)
+    assert written == ["report_rate.json", "report_rate.json"]
+    assert share_ledger.recently_reported("dep:npm:evil-pkg@1.0.0")

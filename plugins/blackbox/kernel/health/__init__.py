@@ -27,7 +27,6 @@ Usage::
 from __future__ import annotations
 
 import os
-from datetime import datetime, UTC
 
 from .. import constants
 # Imported under these names to match inputs.py, where HealthInputs has fields called community_authority
@@ -35,12 +34,12 @@ from .. import constants
 from . import community_authority as community_alarms
 from . import manifest_watch as manifest_watcher
 from .manifest_watch import key_fingerprint
-from .days import days_between, today_utc
+from .days import days_between, today_utc, utc_day, utc_day_or
 from .inputs import HealthInputs   # the facts the rules read; its own module (this file is at its size limit)
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Mapping, Optional
-__all__ = ["CURATOR_SILENCE_DAYS", "DRIFT_SHARE", "HEARTBEAT_SILENCE_DAYS", "LANE_SLA_DAYS", "NODE_INSTALL_HINT", "STALE_INTERVALS", "CuratorInputs", "HealthClass", "HealthInputs", "HealthItem", "community_authority", "curator_health", "days_between", "gather", "key_fingerprint", "manifest_watch", "node_installed", "operator_health", "red", "render_lines", "ruleset_age_text", "today_utc"]   # the surface other modules may import (test_blackbox_architecture checks it)
+__all__ = ["CURATOR_SILENCE_DAYS", "DRIFT_SHARE", "HEARTBEAT_SILENCE_DAYS", "LANE_SLA_DAYS", "NODE_INSTALL_HINT", "STALE_INTERVALS", "CuratorInputs", "HealthClass", "HealthInputs", "HealthItem", "community_authority", "curator_health", "days_between", "gather", "key_fingerprint", "manifest_watch", "node_installed", "operator_health", "red", "render_lines", "ruleset_age_text", "today_utc", "utc_day", "utc_day_or"]   # the surface other modules may import (test_blackbox_architecture checks it)
 
 
 class HealthClass(Enum):
@@ -336,7 +335,7 @@ def gather(cfg: Any, rs: Any, node_reachable: bool, read: Optional[Any], blocked
     view = getattr(read, "curator", None)
     revoked = {ident: int(blocked_by_identifier.get(ident, 0)) for ident in (view.revoked if view is not None else ())}
     kill_list = getattr(rs, "kill_list", None) or {}
-    today = datetime.fromtimestamp(now, UTC).date().isoformat()
+    today = utc_day(now)
     return HealthInputs(
         node_reachable=node_reachable,
         node_installed=node_installed(cfg, node_reachable),
@@ -381,7 +380,7 @@ def _heartbeat_missing(view: Any, now: float) -> int:
     """Curator keys in the trusted manifest with no heartbeat inside HEARTBEAT_SILENCE_DAYS."""
     if view is None or view.manifest is None:
         return 0
-    today = datetime.fromtimestamp(now, UTC).date().isoformat()
+    today = utc_day(now)
     missing = 0
     for key in view.manifest.curator_keys:
         last = view.heartbeats.get(key, "")

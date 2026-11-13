@@ -24,13 +24,14 @@ Usage::
 from __future__ import annotations
 
 import json
-import os
 import secrets
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Optional
 
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+from ...kernel.bounded_files import create_once
 
 #: The index file's layout version.
 FORMAT_VERSION = 2
@@ -47,11 +48,11 @@ def load_or_create_key(path: Path) -> Optional[bytes]:
         return raw if len(raw) == _KEY_BYTES else None
     except FileNotFoundError:
         key = secrets.token_bytes(_KEY_BYTES)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(fd, "w", encoding="ascii") as handle:
-            handle.write(key.hex())
-        return key
+        # Written whole or not at all: a key file left EMPTY by a crash would read as
+        # "malformed" for good, and the ledger could never be saved again.
+        if create_once(path, key.hex().encode("ascii")):
+            return key
+        return load_or_create_key(path)   # another process created it meanwhile: use theirs
     except (OSError, ValueError):
         return None
 

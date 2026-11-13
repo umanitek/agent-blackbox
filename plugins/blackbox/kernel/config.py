@@ -11,23 +11,22 @@ from __future__ import annotations
 
 import logging
 import os
-from .snapshot_config import SnapshotSyncConfig, snapshot_config
+from .snapshot_config import SnapshotSyncConfig, snapshot_fields
 
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any, Dict, Mapping, Tuple
+from typing import Any, Mapping
 
-from . import constants
+from . import constants, yaml_files
+from .config_values import schema
 from .config_values.semantic import SemanticConfig, semantic_config
 from .host_secrets import read_host_secret
 
-#: The detection categories a user can tune individually.
-DETECTION_CATEGORIES = ("injection", "escalation", "dependency", "fileaccess", "skill", "secret", "ioc")
+#: Re-exported: callers read the category list from here.
+DETECTION_CATEGORIES = schema.DETECTION_CATEGORIES
 
 logger = logging.getLogger(__name__)
 
-_TRUE = {"1", "true", "yes", "on"}
-_FALSE = {"0", "false", "no", "off"}
+_DASHBOARD_PORT = constants.DEFAULT_DASHBOARD_PORT
 
 #: Sensible out-of-the-box protected paths — high-signal credential stores an agent rarely has a
 #: legitimate reason to read. Applied only when the config key is absent; an explicit (even empty) list wins.
@@ -51,11 +50,12 @@ from .config_values import (_as_bool, _as_int, _as_float, _env_or, _first_env,
 class BlackboxConfig:
     """Resolved Blackbox settings for the current process."""
 
-    mode: str = "audit"
+    mode: str = schema.Mode.AUDIT.value
     #: Opt in to "dkg" after upgrading the local query capability.
     #: Existing and older-daemon installs retain their explicitly named legacy mode.
-    detection_backend: str = "legacy-cache"
+    detection_backend: str = schema.DetectionBackend.LEGACY_CACHE.value
     snapshot_sync: SnapshotSyncConfig | None = None
+    snapshot_sync_error: str = ""   # why the saved block was set aside; sync refuses while set (KI-490)
     semantic: SemanticConfig = field(default_factory=SemanticConfig)
     context_graph_id: str = constants.DEFAULT_CONTEXT_GRAPH_ID
     graph_peer_id: str = constants.DEFAULT_GRAPH_PEER_ID
@@ -81,7 +81,7 @@ class BlackboxConfig:
     #: DKG-lookup B9: ``off`` (default: a failed lookup is could-not-tell + an alarm) | ``index`` (opt-in on-disk SQLite last resort).
     verified_lookup_fallback: str = "off"
     block_severity: str = "critical"
-    dashboard_port: int = 9700
+    dashboard_port: int = _DASHBOARD_PORT
     discover: bool = True
     osv_lookup: bool = True
     auto_attach: bool = False   # opt-in: each Hermes profile is its own trust boundary (attach.automatic_targets)
@@ -106,7 +106,7 @@ class BlackboxConfig:
     @property
     def block_enabled(self) -> bool:
         """True when the plugin is allowed to block tool calls."""
-        return self.mode.lower() == "block"
+        return self.mode.lower() == schema.Mode.BLOCK
 
     @property
     def community_enabled(self) -> bool:
@@ -129,7 +129,7 @@ class BlackboxConfig:
         """True when the optional LLM reviewer is enabled and fully configured."""
         return bool(
             self.llm_enabled
-            and self.llm_provider in ("openai", "anthropic")
+            and schema.choice(schema.Provider, self.llm_provider) is not None
             and self.llm_model
             and self.llm_api_key
         )
@@ -188,9 +188,7 @@ def _blackbox_entry() -> dict[str, Any]:
     except Exception as exc:  # pragma: no cover - defensive
         logger.debug("blackbox: config load failed (%s); using defaults", exc)
         return {}
-    entries = ((cfg.get("plugins") or {}).get("entries") or {})
-    entry = entries.get("blackbox") or {}
-    return entry if isinstance(entry, dict) else {}
+    return yaml_files.blackbox_entry(cfg)
 
 
 #: The separate community graph's settings (2026-10-12 to 2026-10-16), config keys and environment
@@ -207,27 +205,25 @@ def _note_retired_community_settings(entry: Mapping[str, Any]) -> None:
             logger.info("blackbox: %s is ignored: community reports live in the verified graph now", name)
 
 
+def reads_graph_directly(cfg: Any) -> bool:
+    """True when *cfg* selects the per-call graph backend (``detection_backend: dkg``): rules are
+    read from the node's store for each call instead of the compiled local file. Accepts any
+    object; one without the field (a partial config in a test) means the compiled file."""
+    return getattr(cfg, "detection_backend", schema.DetectionBackend.LEGACY_CACHE) == schema.DetectionBackend.DKG
+
+
 def load_blackbox_config(*, entry: dict[str, Any] | None = None) -> BlackboxConfig:
     """Resolve the saved or proposed entry with the same environment precedence."""
     entry = _blackbox_entry() if entry is None else entry
     _note_retired_community_settings(entry)
-    mode = str(_env_or(entry, env="BLACKBOX_MODE", key="mode", default="audit")).lower()
-    mode = mode if mode in {"audit", "block"} else "audit"
-    block_severity = str(
-        _env_or(entry, env="BLACKBOX_BLOCK_SEVERITY", key="block_severity", default="critical")
-    ).lower()
-    if block_severity not in constants.SEVERITY_RANK:
-        block_severity = "critical"
-    report_min_severity = str(_env_or(entry, env="BLACKBOX_REPORT_MIN_SEVERITY", key="report_min_severity",
-                                      default="high")).lower()
-    if report_min_severity not in constants.SEVERITY_RANK:
-        report_min_severity = "high"
-    categories = _normalize_categories(entry.get("detection"))
+    mode = schema.choice(schema.Mode, _env_or(entry, env="BLACKBOX_MODE", key="mode", default="")) or schema.Mode.AUDIT.value
+    block_severity = schema.severity(_env_or(entry, env="BLACKBOX_BLOCK_SEVERITY", key="block_severity", default="")) or "critical"
+    report_min_severity = schema.severity(_env_or(entry, env="BLACKBOX_REPORT_MIN_SEVERITY", key="report_min_severity",
+                                                  default="")) or "high"
+    categories = schema.category_settings(entry.get("detection"))
     protected_paths = _normalize_protected_paths(entry.get("protected_paths"))
     llm_entry = entry.get("llm") if isinstance(entry.get("llm"), dict) else {}
-    llm_provider = str(_env_or(llm_entry, env="BLACKBOX_LLM_PROVIDER", key="provider", default="")).strip().lower()
-    if llm_provider not in ("openai", "anthropic", ""):
-        llm_provider = ""
+    llm_provider = schema.choice(schema.Provider, _env_or(llm_entry, env="BLACKBOX_LLM_PROVIDER", key="provider", default="")) or ""
     llm_model = str(_env_or(llm_entry, env="BLACKBOX_LLM_MODEL", key="model", default="")).strip()
     referenced_key = read_host_secret(str(llm_entry.get("api_key_env") or "").strip())   # KI-371: a variable's name
     llm_api_key = (read_host_secret("BLACKBOX_LLM_API_KEY") or str(llm_entry.get("api_key") or "").strip() or referenced_key)
@@ -245,50 +241,24 @@ def load_blackbox_config(*, entry: dict[str, Any] | None = None) -> BlackboxConf
     configured_dkg_home = entry.get("dkg_home") or entry.get("dkgHome")
     configured_dkg_url = entry.get("dkg_url") or entry.get("dkgUrl")
     if _is_default_dkg_home(configured_dkg_home):
-        logger.info(
-            "blackbox: switching shared default dkg_home %s -> %s",
-            configured_dkg_home,
-            default_dkg_home,
-        )
+        logger.info("blackbox: switching shared default dkg_home %s -> %s", configured_dkg_home, default_dkg_home)
         configured_dkg_home = ""
-    dkg_home = str(
-        configured_dkg_home
-        or dkg_home_env
-        or default_dkg_home
-    ).strip()
-    dkg_bin = str(
-        entry.get("dkg_bin")
-        or entry.get("dkgBin")
-        or _first_env("BLACKBOX_DKG_BIN")
-        or constants.blackbox_dkg_bin()
-    ).strip()
+    dkg_home = str(configured_dkg_home or dkg_home_env or default_dkg_home).strip()
+    dkg_bin = str(entry.get("dkg_bin") or entry.get("dkgBin") or _first_env("BLACKBOX_DKG_BIN")
+                  or constants.blackbox_dkg_bin()).strip()
     dkg_url_env = _first_env("BLACKBOX_DKG_DAEMON_URL", "BLACKBOX_DKG_URL")
-    dkg_url = str(
-        configured_dkg_url
-        or dkg_url_env
-        or _default_dkg_url()
-    ).rstrip("/")
+    dkg_url = str(configured_dkg_url or dkg_url_env or _default_dkg_url()).rstrip("/")
     if not configured_dkg_home and dkg_url in {"http://127.0.0.1:9200", "http://localhost:9200"}:
         dkg_url = _default_dkg_url()
-    graph_peer_id = str(
-        _env_or(
-            entry,
-            env="BLACKBOX_GRAPH_PEER_ID",
-            key="graph_peer_id",
-            default=constants.DEFAULT_GRAPH_PEER_ID,
-        )
-    ).strip()
+    graph_peer_id = str(_env_or(entry, env="BLACKBOX_GRAPH_PEER_ID", key="graph_peer_id",
+                                default=constants.DEFAULT_GRAPH_PEER_ID)).strip()
     # Replace old bootstrap peers (custom ones untouched); the default is in that set too (KI-335).
     if graph_peer_id in constants.LEGACY_GRAPH_PEER_IDS and graph_peer_id != constants.DEFAULT_GRAPH_PEER_ID:
-        logger.info(
-            "blackbox: switching stale graph_peer_id %s -> %s",
-            graph_peer_id,
-            constants.DEFAULT_GRAPH_PEER_ID,
-        )
+        logger.info("blackbox: switching stale graph_peer_id %s -> %s", graph_peer_id, constants.DEFAULT_GRAPH_PEER_ID)
         graph_peer_id = constants.DEFAULT_GRAPH_PEER_ID
     return BlackboxConfig(
-        mode=mode, semantic=semantic_config(entry), snapshot_sync=snapshot_config(entry),
-        detection_backend=str(entry.get("detection_backend", "legacy-cache")).strip().lower(),
+        mode=mode, semantic=semantic_config(entry), **snapshot_fields(entry),
+        detection_backend=str(entry.get("detection_backend", schema.DetectionBackend.LEGACY_CACHE.value)).strip().lower(),
         context_graph_id=context_graph_id,
         graph_peer_id=graph_peer_id,
         dkg_url=dkg_url,
@@ -307,7 +277,7 @@ def load_blackbox_config(*, entry: dict[str, Any] | None = None) -> BlackboxConf
         community_keepalive_epoch_days=_as_float(_env_or(entry, env="BLACKBOX_COMMUNITY_KEEPALIVE_EPOCH_DAYS", key="community_keepalive_epoch_days", default=10.0), 10.0),
         report_min_severity=report_min_severity,
         block_severity=block_severity,
-        dashboard_port=_as_int(_env_or(entry, env="BLACKBOX_DASHBOARD_PORT", key="dashboard_port", default=9700), 9700),
+        dashboard_port=_as_int(_env_or(entry, env="BLACKBOX_DASHBOARD_PORT", key="dashboard_port", default=_DASHBOARD_PORT), _DASHBOARD_PORT),
         discover=_as_bool(_env_or(entry, env="BLACKBOX_DISCOVER", key="discover", default=True), True),
         osv_lookup=_as_bool(_env_or(entry, env="BLACKBOX_OSV_LOOKUP", key="osv_lookup", default=True), True),
         auto_attach=_as_bool(_env_or(entry, env="BLACKBOX_AUTO_ATTACH", key="auto_attach", default=False), False),
@@ -318,26 +288,6 @@ def load_blackbox_config(*, entry: dict[str, Any] | None = None) -> BlackboxConf
         llm_model=llm_model,
         llm_api_key=llm_api_key,
     )
-
-
-def _normalize_categories(raw: Any) -> dict[str, dict[str, Any]]:
-    """Validate the ``detection`` config mapping into per-category policy dicts."""
-    out: dict[str, dict[str, Any]] = {}
-    if not isinstance(raw, dict):
-        return out
-    for category in DETECTION_CATEGORIES:
-        item = raw.get(category)
-        if not isinstance(item, dict):
-            continue
-        setting: dict[str, Any] = {}
-        if isinstance(item.get("enabled"), bool):
-            setting["enabled"] = item["enabled"]
-        min_sev = str(item.get("min_severity") or "").lower()
-        if min_sev in constants.SEVERITY_RANK:
-            setting["min_severity"] = min_sev
-        if setting:
-            out[category] = setting
-    return out
 
 
 def _normalize_protected_paths(raw: Any) -> tuple[str, ...]:
@@ -351,9 +301,4 @@ def _normalize_protected_paths(raw: Any) -> tuple[str, ...]:
         return DEFAULT_PROTECTED_PATHS
     if not isinstance(raw, (list, tuple)):
         return ()
-    out = []
-    for item in raw:
-        text = str(item or "").strip()
-        if text and text not in out:
-            out.append(text)
-    return tuple(out[:100])
+    return tuple(schema.path_list(raw)[:schema.MAX_PROTECTED_PATHS])

@@ -459,3 +459,45 @@ def test_osv_malware_candidate_gives_its_advisory_as_the_reason():
     findings = detection.discover_dependency_candidates(
         "terminal", {"command": "npm install bad-pkg@1.0.0"}, _ruleset(), lambda *a: hit)
     assert findings[0].fields["reason"] == "advisory:MAL-2026-5"
+
+
+# --- OSV answers: severity spelling, and a failed lookup is not an answer -------------------
+
+def _osv_module(monkeypatch):
+    from plugins.blackbox.detection import osv
+
+    monkeypatch.setattr(osv, "_cache", {})
+    return osv
+
+
+@pytest.mark.parametrize("label, expected", [("MODERATE", "medium"), ("moderate", "medium"), ("LOW", "low"),
+                                             ("CRITICAL", "critical"), ("not-a-level", "high"), ("", "high")])
+def test_an_osv_severity_label_becomes_a_level_blackbox_ranks(monkeypatch, label, expected):
+    """OSV writes "moderate"; a label outside the ladder used to rank below everything and the
+    finding was silently dropped."""
+    from plugins.blackbox.kernel import constants
+
+    osv = _osv_module(monkeypatch)
+    answer = {"vulns": [{"id": "GHSA-xxxx-yyyy-zzzz", "database_specific": {"severity": label}}]}
+    monkeypatch.setattr(osv, "_query", lambda *a: answer)
+    found = osv.lookup("npm", "left-pad", "1.0.0")
+    assert found["severity"] == expected and found["severity"] in constants.SEVERITY_RANK
+
+
+def test_a_failed_osv_lookup_is_asked_again_and_an_answer_is_remembered(monkeypatch):
+    osv = _osv_module(monkeypatch)
+    answers = [None, {"vulns": [{"id": "MAL-2026-1"}]}, {"vulns": []}]
+    asked = []
+    monkeypatch.setattr(osv, "_query", lambda *a: (asked.append(a), answers[len(asked) - 1])[1])
+    assert osv.lookup("npm", "left-pad", "1.0.0") is None          # could not ask (offline)
+    assert osv.lookup("npm", "left-pad", "1.0.0")["kind"] == "malware"   # asked again: now it answers
+    assert osv.lookup("npm", "left-pad", "1.0.0")["kind"] == "malware"   # an answer is remembered
+    assert len(asked) == 2
+
+
+def test_a_clean_osv_answer_is_remembered(monkeypatch):
+    osv = _osv_module(monkeypatch)
+    asked = []
+    monkeypatch.setattr(osv, "_query", lambda *a: asked.append(a) or {"vulns": []})
+    assert osv.lookup("npm", "left-pad", "1.0.0") is None and osv.lookup("npm", "left-pad", "1.0.0") is None
+    assert len(asked) == 1

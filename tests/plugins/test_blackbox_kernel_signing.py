@@ -144,3 +144,38 @@ def test_unusable_key_file_is_an_error_never_a_silent_new_identity(tmp_path):
     with pytest.raises(reporter_key.ReporterKeyError):
         reporter_key.ReporterKeyStore(path).load_or_create()
     assert path.read_text(encoding="utf-8") == "not a key"
+
+
+def test_the_reducing_statement_types_are_one_list_and_the_names_are_shared():
+    """Revocation, rejection and correction reduce enforcement; nothing else does. The report and
+    correction type names are defined once and the feature modules read them from there."""
+    from plugins.blackbox.community import report_signer
+    from plugins.blackbox.curate import context as curate_context
+    from plugins.blackbox.kernel.signing import promotion_statement, statement_order
+    from plugins.blackbox.ruleset.live import corrections
+
+    reducing = {"blackbox.revocation", "blackbox.rejection", "blackbox.correction"}
+    every_type = {kind.value for kind in statement_order.CuratorStatement} | {
+        "blackbox.report", "blackbox.correction", "blackbox.kill-list", "blackbox.key-manifest", "blackbox.dispute"}
+    assert {name for name in every_type if statement_order.reduces_enforcement(name)} == reducing
+    assert all(statement_order.reduces_enforcement(kind.value) for kind in statement_order.CuratorStatement
+               if kind.terminal)
+    assert not any(statement_order.reduces_enforcement(kind.value) for kind in statement_order.CuratorStatement
+                   if kind.raises_enforcement)
+    assert report_signer.REPORT_STATEMENT == promotion_statement.REPORT_STATEMENT == "blackbox.report"
+    assert corrections.CORRECTION_STATEMENT == curate_context.CORRECTION_STATEMENT == "blackbox.correction"
+
+
+def test_the_kept_copy_is_chosen_by_the_signatures_it_carries_not_by_its_spelling():
+    """Two readers chose among copies of one statement: one parsed the envelope, one counted the
+    text '"signer":'. A payload key spelled "signer" fooled the count; both now ask one rule."""
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    from plugins.blackbox.kernel import signing
+
+    one = signing.sign(Ed25519PrivateKey.generate(), statement_type="blackbox.report", environment="e", graph="g",
+                       payload={"signer": "x", "subject": "s"})
+    two = signing.cosign(one, Ed25519PrivateKey.generate())
+    assert signing.copy_rank(signing.canonical_text(one))[0] == 1
+    assert signing.copy_rank(signing.canonical_text(two))[0] == 2
+    assert signing.copy_rank("not an envelope") == (0, "not an envelope")

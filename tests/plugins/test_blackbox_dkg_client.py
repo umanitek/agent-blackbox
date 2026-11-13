@@ -42,7 +42,7 @@ def _capture(monkeypatch, body='{"ok": true}'):
         captured.update(call)
         return _FakeResponse(body)
 
-    monkeypatch.setattr(dkg_client.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(dkg_client.local_http, "open_direct", fake_urlopen)
     return captured
 
 
@@ -65,7 +65,7 @@ def _capture_sequence(monkeypatch, bodies):
         captured.update(call)
         return _FakeResponse(remaining.pop(0))
 
-    monkeypatch.setattr(dkg_client.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(dkg_client.local_http, "open_direct", fake_urlopen)
     return captured
 
 
@@ -159,7 +159,7 @@ def test_share_rejects_oversized_literal_before_http(monkeypatch):
     def fail_urlopen(req, timeout=None):
         raise AssertionError("urlopen should not be called")
 
-    monkeypatch.setattr(dkg_client.urllib.request, "urlopen", fail_urlopen)
+    monkeypatch.setattr(dkg_client.local_http, "open_direct", fail_urlopen)
     client = dkg_client.DkgClient(url="http://node", token="tok")
     rows = [{
         "subject": "urn:test:s",
@@ -289,7 +289,7 @@ def test_request_join_tolerates_older_daemon_without_profile_endpoint(monkeypatc
             return _FakeResponse('{"delegation":{"agentAddress":"0x66bc7cd539d3bb0be39158dd14f27b38342c7e6a"}}')
         return _FakeResponse('{"delivered":1}')
 
-    monkeypatch.setattr(dkg_client.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(dkg_client.local_http, "open_direct", fake_urlopen)
     client = dkg_client.DkgClient(url="http://node", token="tok")
 
     assert client.request_join("cg", "peer") == {"delivered": 1}
@@ -393,7 +393,7 @@ def test_query_fails_open_on_http_error(monkeypatch):
     def raise_http(req, timeout=None):
         raise urllib.error.HTTPError(req.full_url, 500, "err", {}, io.BytesIO(b"boom"))
 
-    monkeypatch.setattr(dkg_client.urllib.request, "urlopen", raise_http)
+    monkeypatch.setattr(dkg_client.local_http, "open_direct", raise_http)
     client = dkg_client.DkgClient(url="http://node", token="t")
     # query() swallows DkgError and returns [] (read paths fail open).
     assert client.query("SELECT * WHERE {?s ?p ?o}", "cg") == []
@@ -403,7 +403,7 @@ def test_write_path_raises_dkg_error_on_http_error(monkeypatch):
     def raise_http(req, timeout=None):
         raise urllib.error.HTTPError(req.full_url, 403, "forbidden", {}, io.BytesIO(b"nope"))
 
-    monkeypatch.setattr(dkg_client.urllib.request, "urlopen", raise_http)
+    monkeypatch.setattr(dkg_client.local_http, "open_direct", raise_http)
     client = dkg_client.DkgClient(url="http://node", token="t")
     with pytest.raises(dkg_client.DkgError) as exc_info:
         client.share_knowledge_asset("cg", "n", [])
@@ -418,7 +418,7 @@ def test_share_is_idempotent_on_already_finalized(monkeypatch):
     def raise_finalized(req, timeout=None):
         raise urllib.error.HTTPError(req.full_url, 500, "err", {}, io.BytesIO(body))
 
-    monkeypatch.setattr(dkg_client.urllib.request, "urlopen", raise_finalized)
+    monkeypatch.setattr(dkg_client.local_http, "open_direct", raise_finalized)
     client = dkg_client.DkgClient(url="http://node", token="t")
     res = client.share_knowledge_asset("cg", "threat-abc", [])
     assert res.get("idempotent") is True
@@ -504,7 +504,8 @@ def test_malformed_query_reply_is_a_failure_for_sentinel_callers(monkeypatch):
 
 def test_normalize_bindings_nested_shape():
     result = {"results": {"bindings": [{"n": {"value": "3"}}]}}
-    assert dkg_client.normalize_bindings(result) == [{"n": {"value": "3"}}]
+    from plugins.blackbox.kernel.sparql_text import normalize_bindings   # its home (dkg_client no longer re-exports it)
+    assert normalize_bindings(result) == [{"n": {"value": "3"}}]
 
 
 # ---------------------------------------------------------------------------
@@ -574,3 +575,149 @@ def test_request_omits_signature_without_token():
         assert _header(headers, "Authorization") is None
     finally:
         pytest_mp.undo()
+
+
+# --- KI-497: Blackbox's own services are reached directly — no environment proxy, no redirects ---
+
+def _one_shot_server(status: int, headers: dict[str, str], body: bytes = b"{}"):
+    """A loopback HTTP server answering every request with *status*; returns (url, hits, close)."""
+    import http.server
+    import threading
+
+    hits: list[str] = []
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            hits.append(self.path)
+            self.send_response(status)
+            for name, value in headers.items():
+                self.send_header(name, value)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return f"http://127.0.0.1:{server.server_address[1]}", hits, server.shutdown
+
+
+def test_the_node_client_ignores_a_proxy_named_in_the_environment(monkeypatch, tmp_path):
+    node_url, node_hits, close_node = _one_shot_server(200, {"Content-Type": "application/json"}, b'{"ok": true}')
+    proxy_url, proxy_hits, close_proxy = _one_shot_server(200, {"Content-Type": "application/json"}, b'{"proxy": true}')
+    for name in ("HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"):
+        monkeypatch.setenv(name, proxy_url)
+    for name in ("NO_PROXY", "no_proxy"):
+        monkeypatch.delenv(name, raising=False)
+    try:
+        answer = dkg_client.DkgClient(url=node_url, dkg_home=str(tmp_path), token="t").request("GET", "/api/status")
+    finally:
+        close_node()
+        close_proxy()
+
+    assert answer == {"ok": True}
+    assert node_hits == ["/api/status"] and proxy_hits == []
+
+
+def test_the_node_client_does_not_follow_a_redirect(tmp_path):
+    elsewhere_url, elsewhere_hits, close_elsewhere = _one_shot_server(200, {}, b'{"elsewhere": true}')
+    node_url, _node_hits, close_node = _one_shot_server(302, {"Location": elsewhere_url + "/taken"})
+    try:
+        with pytest.raises(dkg_client.DkgError) as refused:
+            dkg_client.DkgClient(url=node_url, dkg_home=str(tmp_path), token="t").request("GET", "/api/status")
+    finally:
+        close_node()
+        close_elsewhere()
+
+    assert refused.value.status_code == 302 and elsewhere_hits == []
+
+
+# --- one answer to "is this address on this machine?" (kernel/local_http) ---
+
+local_http = load_blackbox("kernel.local_http")
+
+
+@pytest.mark.parametrize("host", ["127.0.0.1", "127.0.0.2", "127.255.255.254", "localhost", "LOCALHOST", "::1", "[::1]",
+                                  "::ffff:127.0.0.1"])
+def test_loopback_hosts_are_local(host):
+    assert local_http.is_loopback_host(host)
+
+
+@pytest.mark.parametrize("host", ["", "10.0.0.5", "192.168.1.10", "100.79.253.59", "0.0.0.0", "example.com",
+                                  "localhost.example.com", "127.0.0.1.example.com", "localhost.", "::ffff:10.0.0.1",
+                                  "2130706433", "0x7f.0.0.1", "not an address"])
+def test_everything_else_is_not_local_and_no_name_is_looked_up(host):
+    assert not local_http.is_loopback_host(host)
+
+
+@pytest.mark.parametrize("url, local", [
+    ("http://127.0.0.1:9320", True), ("https://localhost:7878/query", True), ("http://[::1]:9200", True),
+    ("http://127.0.0.2:9320", True),
+    ("http://10.0.0.5:9320", False), ("http://node.example:9320", False),
+    ("http://127.0.0.1@evil.example/", False),              # the host is evil.example
+    ("ftp://127.0.0.1/", False), ("file:///etc/passwd", False), ("127.0.0.1:9320", False), ("", False),
+    ("http://[::1", False),                                 # does not parse
+])
+def test_a_url_is_local_only_as_http_on_a_loopback_host(url, local):
+    assert local_http.is_loopback_url(url) is local
+
+
+def test_the_four_callers_give_the_same_answer_for_the_same_address():
+    from plugins.blackbox import audit
+    from plugins.blackbox.curate.lab import transport as lab_transport
+    from plugins.blackbox.kernel.store import loopback_store_url
+    from plugins.blackbox.ruleset import local_graph_url
+
+    def direct(url):
+        try:
+            local_graph_url(url)
+            return True
+        except Exception:
+            return False
+
+    for url, local in (("http://127.0.0.2:9320", True), ("http://localhost:9320", True), ("http://10.0.0.5:9320", False)):
+        answers = {audit.node_is_local(url), lab_transport.is_loopback_url(url),
+                   bool(loopback_store_url({"storeUrl": url})), direct(url)}
+        assert answers == {local}, (url, answers)
+
+
+def test_the_private_audit_gate_says_no_when_it_cannot_read_the_url():
+    from plugins.blackbox import audit
+    assert audit.node_is_local("") is True                  # no URL set: the default is loopback
+    assert audit.node_is_local("http://[::1") is False      # unreadable: it used to count as local
+
+
+def test_the_client_finds_the_node_home_the_way_the_kernel_does(monkeypatch, tmp_path):
+    """The client kept its own copy of "where is Blackbox's node": a BLACKBOX_DKG_HOME of only
+    spaces became a folder named by spaces (the kernel's rule treats it as unset)."""
+    from plugins.blackbox.kernel import constants, dkg_client
+
+    monkeypatch.setenv("BLACKBOX_HOME", str(tmp_path))
+    monkeypatch.setenv("BLACKBOX_DKG_HOME", "   ")
+    assert dkg_client._dkg_home() == constants.blackbox_dkg_home() == tmp_path / "dkg"
+    monkeypatch.setenv("BLACKBOX_DKG_HOME", str(tmp_path / "custom"))
+    assert dkg_client._dkg_home() == tmp_path / "custom" and dkg_client._dkg_home("~/x") == __import__("pathlib").Path("~/x").expanduser()
+# --- "the node already holds this exact asset" is decided once, narrowly ------------------------
+
+@pytest.mark.parametrize("reply, sealed", [
+    ('POST /api/knowledge-assets -> 500: {"error":"Assertion \\"report-x\\" is not an active Working Memory draft; '
+     'reopen it before mutating it"}', True),                     # DKG 10.0.20+, captured on a bench
+    ("Assertion report-x already finalized", True),                # nodes before 10.0.20
+    ("POST /api/knowledge-assets -> 409: already exists", False),  # not proof it is THIS asset
+    ("POST /api/knowledge-assets -> 500: internal error", False),
+    ("timed out", False),
+])
+def test_already_sealed_is_one_narrow_rule_for_every_writer(reply, sealed):
+    """The community share, the curator's share, keep-alive copies and batch seals each matched this
+    reply on their own, with different strings: one node answer was success on one path and a
+    failure on another."""
+    from plugins.blackbox.community import sharing
+    from plugins.blackbox.curate.publishing import node_writers
+    from plugins.blackbox.kernel import dkg_client
+
+    error = dkg_client.DkgError(reply)
+    assert dkg_client.is_already_sealed(error) is sealed
+    assert node_writers._already_sealed(error) is sealed
+    assert sharing.ALREADY_SEALED_REPLY == dkg_client.ALREADY_SEALED_REPLY

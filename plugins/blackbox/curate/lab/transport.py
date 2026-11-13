@@ -40,15 +40,15 @@ import time
 import urllib.parse
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
+from ...kernel.local_http import is_loopback_url
 from .jobs import LabJob
 
 #: Every call waits at most this long, start to finish — the ONE hard timeout.
 LAB_TIMEOUT_SECONDS = 10.0
 #: A lab answer larger than this is not read (raw output is summarised on the lab).
 MAX_ANSWER_BYTES = 1_000_000
-_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 #: Lab statuses that mean "busy, ask later" rather than "no".
 _BUSY_STATUSES = frozenset({429})
 
@@ -67,12 +67,6 @@ class LabAnswer:
     outcome: LabOutcome
     body: Optional[dict[str, Any]] = None
     reason: str = ""
-
-
-def is_loopback_url(url: str) -> bool:
-    """Whether *url* is an http(s) URL on this machine."""
-    parsed = urllib.parse.urlsplit(url or "")
-    return parsed.scheme in ("http", "https") and (parsed.hostname or "") in _LOOPBACK_HOSTS
 
 
 class LabTransport:

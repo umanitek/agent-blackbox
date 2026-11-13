@@ -22,6 +22,7 @@ import pytest
 
 from plugins.blackbox.kernel.dkg_client import DkgError
 from plugins.blackbox.sync import managed_node
+from tests.plugins._blackbox_fakes import dkg_client_fake
 
 REPO = Path(__file__).resolve().parents[1]
 INSTALL_SH = REPO / "scripts" / "blackbox-install.sh"
@@ -152,7 +153,7 @@ class _Node:
 def _patched(monkeypatch, ready_after: float) -> None:
     clock = _Clock()
     monkeypatch.setattr(managed_node, "time", clock)
-    monkeypatch.setattr(managed_node, "DkgClient", lambda **_kw: _Node(clock, ready_after))
+    monkeypatch.setattr(managed_node, "DkgClient", dkg_client_fake(lambda **_kw: _Node(clock, ready_after)))
     monkeypatch.delenv(managed_node.NODE_READY_WAIT_ENV, raising=False)
 
 

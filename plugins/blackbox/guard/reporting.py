@@ -9,13 +9,18 @@ discovery tasks alike.
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
+import functools
 import logging
-from typing import Any, Dict, List, Optional
+import threading
+from typing import Any, Iterator, Optional
 from .. import audit, desktop, detection, shields
 from .. import community
 from ..kernel import identity
 from ..kernel.config import BlackboxConfig
 from ..kernel.dkg_client import DkgClient
+from . import report_queue
 
 logger = logging.getLogger(__name__)
 
@@ -62,9 +67,10 @@ def _report_and_audit(cfg: BlackboxConfig, event: str, findings: list[detection.
     """Audit findings locally, then fan out (Observer-style) per finding:
     private WM audit KA always; community share when the policy allows.
 
-    The community share itself runs on a background daemon thread (KI-033) —
-    a slow or down node must never stall the agent's tool call. Only the
-    policy decision (microseconds, no I/O) happens inline.
+    Only the local record and the Desktop alert happen here. Everything that talks
+    to the node — this node's identity, the private audit record, the share — is
+    handed to :data:`report_queue.REPORTS` and runs after the hook has answered: a
+    slow or down node must never stall the agent's tool call (KI-033).
 
     Sandbox mode (2026-10-21): the local finding is still recorded as real, but
     the share fan-out runs inside :func:`audit.sandbox_run` — its cooldowns and
@@ -77,6 +83,12 @@ def _report_and_audit(cfg: BlackboxConfig, event: str, findings: list[detection.
     if not findings:
         return
     desktop.announce_findings(event, finding_dicts, detail)   # fail-open; title/severity/outcome only
+    # copy_context: a follow-up queued inside audit.sandbox_run() ledgers into the sandbox too
+    report_queue.REPORTS.submit(functools.partial(contextvars.copy_context().run, _follow_up, cfg, event, finding_dicts))
+
+
+def _follow_up(cfg: BlackboxConfig, event: str, finding_dicts: list[dict[str, Any]]) -> None:
+    """The node-facing part of reporting, in the sandbox lane when sandbox mode is on."""
     if cfg.community_sandbox:
         with audit.sandbox_run():
             _share_findings(cfg, event, finding_dicts)
@@ -88,7 +100,7 @@ def _share_findings(cfg: BlackboxConfig, event: str, finding_dicts: list[dict[st
     """Per finding: cooldown, private audit KA, share-policy decision, background share."""
     client: Optional[DkgClient] = None
     try:
-        client = DkgClient(url=cfg.dkg_url, dkg_home=cfg.dkg_home, config=cfg)
+        client = DkgClient.for_config(cfg)
     except Exception:   # health: allow BLE001 -- the hook boundary is fail-open: a node client that cannot be built must never break the agent's tool call (KI-033)
         client = None
     policy = community.CommunitySharePolicy(cfg)
@@ -121,7 +133,28 @@ def _share_findings(cfg: BlackboxConfig, event: str, finding_dicts: list[dict[st
             continue
         if client is None or not audit.allow_report(cfg.daily_report_limit):
             continue
-        community.spawn_community_share(client, cfg, finding, reporter)
+        worker = community.spawn_community_share(client, cfg, finding, reporter)
+        collected = _COLLECTED_SHARES.get()
+        if collected is not None:
+            collected.append(worker)
+
+
+#: The share threads started under :func:`collecting_shares` (None outside one).
+_COLLECTED_SHARES: contextvars.ContextVar[Optional[list[threading.Thread]]] = contextvars.ContextVar(
+    "blackbox_collected_shares", default=None)
+
+
+@contextlib.contextmanager
+def collecting_shares() -> Iterator[list[threading.Thread]]:
+    """Collect every community share started inside the block — the report follow-up runs with
+    the caller's context copied, so its shares land here too — so a caller waits for its OWN shares
+    only (the Playground), never another agent's share running at the same time."""
+    started: list[threading.Thread] = []
+    token = _COLLECTED_SHARES.set(started)
+    try:
+        yield started
+    finally:
+        _COLLECTED_SHARES.reset(token)
 
 
 def blackbox_block_message(findings: list[detection.Finding]) -> str:

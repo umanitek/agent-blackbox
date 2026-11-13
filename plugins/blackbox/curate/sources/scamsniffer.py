@@ -33,10 +33,10 @@ from __future__ import annotations
 import threading
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone, UTC
-from typing import Callable, Dict, FrozenSet, Optional, Tuple
+from typing import Callable, Optional
 from urllib.parse import urlsplit
 
+from ...kernel.health import utc_day
 from ...kernel import threat_ids
 from ..service.evidence import Lookup
 from .client import HttpClient, UrllibClient
@@ -79,6 +79,9 @@ class ScamSnifferSource:
         self._snapshots: dict[str, _Snapshot] = {}
         self._failed_at: dict[str, float] = {}
 
+    def applies(self, identifier: str) -> bool:
+        return _lookup_target(identifier) is not None
+
     def check(self, identifier: str) -> SourceVerdict:
         target = _lookup_target(identifier)
         if target is None:
@@ -107,7 +110,7 @@ class ScamSnifferSource:
                 self._snapshots.pop(list_file, None)
                 self._failed_at[list_file] = now
                 return None
-            day = datetime.fromtimestamp(now, UTC).date().isoformat()
+            day = utc_day(now)
             self._snapshots[list_file] = snapshot = _Snapshot(entries, day, now)
             return snapshot
 
@@ -121,12 +124,10 @@ def _entries(answer: object) -> Optional[frozenset[str]]:
 
 def _lookup_target(identifier: str) -> Optional[tuple[str, str]]:
     """``(list file, value to match)`` for an identifier ScamSniffer can answer, else None."""
-    parts = identifier.split(":", 2)
-    if len(parts) != 3 or parts[0] != "ioc" or parts[1] not in _FILE_FOR_TYPE:
+    parsed = threat_ids.parse_ioc_identifier(identifier)
+    if parsed is None or parsed[0] not in _FILE_FOR_TYPE:
         return None
-    ioc_type, value = parts[1], parts[2]
-    if not threat_ids.ioc_value_is_well_formed(ioc_type, value):
-        return None
+    ioc_type, value = parsed
     if ioc_type == "url":
         value = urlsplit(value).hostname or ""
     elif ioc_type in ("wallet", "contract") and not threat_ids.EVM_ADDRESS_RE.fullmatch(value):

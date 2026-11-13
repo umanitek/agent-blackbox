@@ -14,11 +14,25 @@ from __future__ import annotations
 import hashlib
 import ipaddress
 import re
-from typing import Optional, Tuple
+from typing import Optional
 
 # ---------------------------------------------------------------------------
 # Hashing / slugs / URIs
 # ---------------------------------------------------------------------------
+
+
+#: 64 lowercase hex characters — what a SHA-256 digest and an Ed25519 public key both look like.
+HEX64_PATTERN = r"[0-9a-f]{64}"
+_HEX64 = re.compile(HEX64_PATTERN)
+
+
+def is_hex64(value: object) -> bool:
+    """Whether *value* is exactly 64 lowercase hex characters (a sha256 digest, or a signing
+    key as Blackbox writes it) and nothing else — no upper case, no ``0x``, no trailing newline.
+
+    THE check: it was spelled out in ten places, and the one written ``^…$`` with ``match``
+    accepted a trailing newline. Usage: ``if not threat_ids.is_hex64(digest): refuse``."""
+    return isinstance(value, str) and _HEX64.fullmatch(value) is not None
 
 
 def stable_hash(value: str, length: int = 24) -> str:
@@ -63,6 +77,17 @@ def report_uri(identifier: str, agent_address: str) -> str:
         # KI-196: the address was the one free-text field a report carried.
         raise ValueError("a reporter address is an agent address (0x + 40 hex characters)")
     return f"urn:guardian:report:{addr}:{stable_hash(identifier, 16)}"
+
+
+def dispute_subject(identifier: str, agent_address: str) -> str:
+    """The subject of a reporter's DISPUTE of *identifier*: its report subject + ``:fp``
+    (one per reporter and threat, beside the report). Writers and readers both use this."""
+    return report_uri(identifier, agent_address) + ":fp"
+
+
+def retraction_subject(identifier: str, agent_address: str) -> str:
+    """The subject of a reporter's RETRACTION of *identifier*: its report subject + ``:retract``."""
+    return report_uri(identifier, agent_address) + ":retract"
 
 
 def is_agent_address(value: object) -> bool:
@@ -341,6 +366,21 @@ def ioc_value_is_well_formed(ioc_type: str, value: str) -> bool:
     if ioc_type == "domain" and len(value) > 253:
         return False
     return shape.fullmatch(value) is not None
+
+
+def parse_ioc_identifier(identifier: str) -> Optional[tuple[str, str]]:
+    """``(type, value)`` of a well-formed ``ioc:<type>:<value>`` identifier, else None.
+
+    The reading half of :func:`ioc_identifier`: a known type and a value of the shape that type
+    allows (:func:`ioc_value_is_well_formed`). Four curator sources each split and checked this
+    by hand. Usage::
+
+        parsed = parse_ioc_identifier("ioc:domain:evil.example")    # ("domain", "evil.example")
+    """
+    parts = identifier.split(":", 2) if isinstance(identifier, str) else []
+    if len(parts) != 3 or parts[0] != "ioc" or not ioc_value_is_well_formed(parts[1], parts[2]):
+        return None
+    return parts[1], parts[2]
 
 
 def ioc_identifier(ioc_type: str, value: str) -> str:

@@ -29,11 +29,12 @@ from __future__ import annotations
 import json
 import logging
 import time
-from datetime import date, datetime, timedelta, timezone, UTC
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from datetime import date, timedelta
+from typing import Any, Iterable, Optional
 
 from ... import community
-from ...kernel import constants, signing
+from ...kernel.health import utc_day
+from ...kernel import constants, dkg_client, signing
 from ...kernel.signing import KEY_MANIFEST_STATEMENT
 from ...kernel.signing import CuratorStatement
 from .. import keys
@@ -148,7 +149,7 @@ def publish_due(client: Any, cfg: Any, now: Optional[float] = None) -> int:
     if days <= 0:
         return 0
     when = time.time() if now is None else now
-    today = datetime.fromtimestamp(when, UTC).date().isoformat()
+    today = utc_day(when)
     epoch = community.keep_alive.current_epoch(when, days)
     live = store()
     sent, retired = 0, []
@@ -161,7 +162,7 @@ def publish_due(client: Any, cfg: Any, now: Optional[float] = None) -> int:
             community.ensure_report_lane(client, entry.graph)
             client.share_knowledge_asset(entry.graph, community.keep_alive.copy_name(entry.name, epoch), list(entry.quads))
         except Exception as exc:
-            if community.ALREADY_SEALED_REPLY not in str(exc).lower():
+            if not dkg_client.is_already_sealed(exc):
                 logger.info("blackbox: curator keep-alive copy refused this beat (%s); retrying on the next", str(exc)[:120])
                 break
         live.mark_published(entry.name, epoch)

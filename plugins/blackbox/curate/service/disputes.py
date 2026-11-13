@@ -33,18 +33,16 @@ Usage::
 from __future__ import annotations
 
 import json
-import os
-import secrets
 import threading
 from dataclasses import asdict, dataclass
-from datetime import datetime, UTC
 from enum import Enum
 from pathlib import Path
 from typing import AbstractSet, Any, Iterable, Mapping, Optional
 
 from ...community import reputation
 from ...kernel import yaml_files
-from ...kernel.health import HealthClass, HealthItem
+from ...kernel.bounded_files import read_json_object
+from ...kernel.health import HealthClass, HealthItem, utc_day
 from .. import keys
 from ..lab import Evidence
 from ..queue import Lane
@@ -146,20 +144,11 @@ class DisputeStore:
 
     @staticmethod
     def _read(path: Path) -> dict[str, Any]:
-        try:
-            data = json.loads(path.read_text(encoding="utf-8-sig"))
-        except (OSError, ValueError):
-            return {}
-        return data if isinstance(data, dict) else {}
+        return read_json_object(path) or {}
 
     @staticmethod
     def _write_private(path: Path, data: Mapping[str, Any]) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_name(f"{path.name}.tmp.{os.getpid()}.{secrets.token_hex(6)}")
-        descriptor = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            handle.write(json.dumps(dict(data)))
-        os.replace(tmp, path)
+        yaml_files.atomic_write(path, json.dumps(dict(data)), mode=0o600)
 
 
 class DisputeAction(Enum):
@@ -204,7 +193,7 @@ class DisputeOutcome:
 def lookup_item(record: DisputeRecord) -> LookupItem:
     """The dispute as the look-up step sees it: lane ``dispute``, due every beat while open."""
     return LookupItem(identifier=record.identifier, lane=Lane.DISPUTE,
-                      first_seen=datetime.fromtimestamp(record.filed_at, UTC).date().isoformat())
+                      first_seen=utc_day(record.filed_at))
 
 
 def facts_from_lookup(result: LookupResult, *, citable_sources: AbstractSet[str],

@@ -33,9 +33,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from datetime import datetime, timezone, UTC
+from datetime import datetime, UTC
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 from ... import audit
 from .. import consent, digest, share_retry

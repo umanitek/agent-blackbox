@@ -48,12 +48,12 @@ from .detectors import (
     discover_dependency_candidates,
     discover_injection,
     injection_scan_text,
+    run_isolated,
 )
 from .paths.shell_files import shell_file_args
 from .shell_shapes import ESCALATION_SHAPES, SHELL_TOOLS, command_from_args
 
 from .content_scanners import iter_ioc_candidates
-from .action_parsing import command_text
 
 __all__ = [
                              'ANSWERED_BY_FALLBACK',
@@ -70,7 +70,6 @@ __all__ = [
                              'advisory_kind',
                              'cmd_setup_llm',
                              'command_from_args',
-                             'command_text',
                              'detect_all',
                              'detect_custom_fileaccess',
                              'detect_dependency',
@@ -93,6 +92,7 @@ __all__ = [
                              'parse_downloads',
                              'parse_shell_reads',
                              'reviewer',
+                             'run_isolated',
                              'shell_file_args',
                              'skill_install_arg',
 ]

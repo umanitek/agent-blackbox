@@ -31,7 +31,7 @@ own node (:func:`checked_promotion`); published means everything reads back.
 Usage::
 
     proposal, outcome = publish(ctx, store, proposal_id, typed_code=code, yes=False)
-    outcome.startswith("published")      # True only after the read-back
+    outcome.published                    # True only after the read-back (a PublishResult)
 
 The batch publisher (``batch.py``) writes promotions in batches through the
 same node, split into its ledger's steps (``node_writers.NodeBatchWriter``);
@@ -45,7 +45,7 @@ from enum import Enum
 from typing import Optional
 
 from ... import audit, community, killlist
-from ...kernel import constants, node_routes, rdf_terms, signing, sparql_text, threat_ids
+from ...kernel import constants, dkg_client, node_routes, rdf_terms, signing, sparql_text, threat_ids
 from ...kernel.dkg_client import DkgError
 from ...kernel.signing import key_manifest
 from ...kernel.signing import promotion_statement as statement
@@ -74,11 +74,29 @@ class PublishOutcome(Enum):
     UNCONFIRMED = "unconfirmed"      # the node accepted the write but it cannot be read back
 
 
+class PublishResult(str):
+    """What a publish did: the text the operator reads (it IS the string, so it prints and logs
+    as before) plus :attr:`published`, the typed outcome callers branch on — True only when the
+    statement was read back from its graph. Never branch on the wording: "not published — …"
+    contains the word, and parsing it is how a refused publish once counted as done.
+
+        proposal, result = publish(...)
+        if result.published: ...
+    """
+
+    published: bool
+
+    def __new__(cls, message: str, *, published: bool) -> PublishResult:
+        result = super().__new__(cls, message)
+        result.published = published
+        return result
+
+
 def publish(ctx: CurateContext, store: ProposalStore, proposal_id: str, *, typed_code: Optional[str], yes: bool,
-            standing: str = "") -> tuple[Proposal, str]:
+            standing: str = "") -> tuple[Proposal, PublishResult]:
     """Write an APPROVED proposal to its graph, behind content-bound consent.
-    Returns (proposal, what happened); the text starts with "published" only
-    when the statement was read back from the graph. *standing* — set ONLY by
+    Returns (proposal, :class:`PublishResult`); ``published`` only when the
+    statement was read back from the graph. *standing* — set ONLY by
     the curator service, after its policy allowed this statement and the
     operator's standing consent was checked (``curate.service``): the policy's
     reason, recorded in the consent ledger in place of a typed code."""
@@ -91,23 +109,29 @@ def publish(ctx: CurateContext, store: ProposalStore, proposal_id: str, *, typed
     if envelope is None or not has_quorum(ctx, proposal, envelope):
         raise VerbError("the proposal does not carry enough curator signatures to publish")
     ledger = consent.ConsentLedger()
-    code = ledger.show(proposal.envelope, summary(proposal))
+    # A code is shown when the operator has not typed one; showing it again here, right before
+    # checking a typed code, restarted its 10-minute life on every attempt.
+    code = (consent.confirmation_code(proposal.envelope) if typed_code or yes or standing
+            else ledger.show(proposal.envelope, summary(proposal)))
     ok, why = (ledger.standing(proposal.envelope, standing) if standing
                else ledger.consent(proposal.envelope, typed=typed_code, sandbox=ctx.sandbox, yes=yes))
     if not ok:
-        return proposal, f"not published — {why}. Confirmation code: {code}"
+        return proposal, PublishResult(f"not published — {why}. Confirmation code: {code}", published=False)
     try:
         name, graph, outcome = _write(ctx, proposal, envelope)
     except VerbError:
         ledger.release(proposal.envelope, "the write was refused")
         raise
-    except Exception as exc:   # the node refused or failed: nothing was published, the operator may retry
+    except Exception as exc:   # the node refused or failed; the operator may retry (a retry looks first)
         ledger.release(proposal.envelope, str(exc))
+        if isinstance(exc, DkgError) and not definite_refusal(exc):   # a 5xx, a timeout: it may have landed (LES-011)
+            raise VerbError(f"the write could not tell whether it was published ({exc}); publishing again looks "
+                            "it up before writing anything") from exc
         raise VerbError(f"the write failed, nothing was published: {exc}") from exc
     if outcome is PublishOutcome.UNCONFIRMED:
         ledger.release(proposal.envelope, "written but not readable")
-        return proposal, (f"not published — written to {graph} as {name}, but it cannot be read back yet. "
-                          f"Run `blackbox curate publish {proposal.id}` again to re-check.")
+        return proposal, PublishResult(f"not published — written to {graph} as {name}, but it cannot be read back yet. "
+                                       f"Run `blackbox curate publish {proposal.id}` again to re-check.", published=False)
     audit.record_share_outcome(identifier=proposal.identifier, category=f"curator:{proposal.kind.split('.', 1)[-1]}",
                                severity="info", subject=proposal.id, asset_name=name, ok=True, outcome="accepted")
     store.save(proposal.transition(ProposalState.PUBLISHED, note=f"published to {graph} as {name}"))
@@ -116,7 +140,7 @@ def publish(ctx: CurateContext, store: ProposalStore, proposal_id: str, *, typed
     _credit_reporters(ctx, proposal)
     already = " (the node already held it)" if outcome is PublishOutcome.ALREADY_THERE else ""
     twin = f" · {post_advisory_twin(ctx, envelope)}" if proposal.kind in TWINNED_STATEMENTS else ""
-    return proposal, f"published to {graph} as {name}{already}{twin}"
+    return proposal, PublishResult(f"published to {graph} as {name}{already}{twin}", published=True)
 
 
 def require_effective_manifest(ctx: CurateContext) -> None:
@@ -215,8 +239,15 @@ def _write(ctx: CurateContext, proposal: Proposal, envelope: signing.SignedEnvel
         return _write_promotion(ctx, proposal, envelope)
     name, quads = _asset(proposal, envelope)
     if home == VERIFIED_GRAPH:
-        node_routes.publish_to_verified_memory(ctx.client, graph, name, quads)
-        already, view = False, constants.VIEW_VERIFIABLE_MEMORY
+        # A Verified-Memory publish is paid: look first, so a retry after an attempt whose
+        # read-back lagged (UNCONFIRMED) finds the statement instead of paying again.
+        view = constants.VIEW_VERIFIABLE_MEMORY
+        already = _readable(ctx, graph, view, quads)
+        if already is None:   # could not tell whether it is there: never pay on a guess (LES-011)
+            raise VerbError("could not read Verified Memory to check whether this is already published; "
+                            "nothing was published — run publish again")
+        if not already:
+            node_routes.publish_to_verified_memory(ctx.client, graph, name, quads)
     else:
         already, view = _share(ctx, graph, name, quads), constants.VIEW_SHARED_WORKING_MEMORY
     if not _readable(ctx, graph, view, quads):
@@ -238,6 +269,9 @@ def _write_promotion(ctx: CurateContext, proposal: Proposal,
     except ValueError as exc:
         raise VerbError(f"the promotion is not acceptable: {exc}") from exc
     already = _readable(ctx, graph, constants.VIEW_VERIFIABLE_MEMORY, quads)
+    if already is None:   # could not tell whether it is there: never pay on a guess (LES-011)
+        raise VerbError("could not read Verified Memory to check whether this promotion is already published; "
+                        "nothing more was published — run publish again")
     if not already:
         try:
             node_routes.publish_to_verified_memory(ctx.client, graph, name, quads)
@@ -309,23 +343,25 @@ def _share(ctx: CurateContext, graph: str, name: str, quads: list[dict[str, str]
         community.ensure_report_lane(ctx.client, graph)
         result = ctx.client.share_knowledge_asset(graph, name, quads)
     except Exception as exc:
-        if community.ALREADY_SEALED_REPLY in str(exc).lower():
+        if dkg_client.is_already_sealed(exc):
             return True
         raise
     return bool(isinstance(result, dict) and result.get("idempotent"))
 
 
-def _readable(ctx: CurateContext, graph: str, view: str, quads: list[dict[str, str]]) -> bool:
-    """True when the signed statement just written can be read from *graph*:
-    an exact lookup of its subject AND its signed text (so another node's
-    statement under the same subject does not count). Quads that carry no
-    signed statement have nothing to read back and count as readable."""
+def _readable(ctx: CurateContext, graph: str, view: str, quads: list[dict[str, str]]) -> Optional[bool]:
+    """Whether the signed statement just written can be read from *graph*: an exact lookup of
+    its subject AND its signed text (so another node's statement under the same subject does
+    not count). True / False when the node answered; None when the read cannot be believed (a
+    failed query or a slow empty answer — "could not tell" is never "not there", LES-011).
+    Quads that carry no signed statement have nothing to read back and count as readable."""
     signed = next((q for q in quads if q["predicate"] == constants.SIGNED_STATEMENT_PRED), None)
     if signed is None:
         return True
     sparql = (f"SELECT ?r WHERE {{ VALUES ?r {{ <{signed['subject']}> }} "
               f"?r <{constants.SIGNED_STATEMENT_PRED}> {signed['object']} }} LIMIT 1")
-    return bool(sparql_text.query_rows(ctx.client, sparql, graph, view))
+    rows = sparql_text.query_rows(ctx.client, sparql, graph, view)
+    return None if rows is None else bool(rows)
 
 
 def summary(proposal: Proposal) -> str:

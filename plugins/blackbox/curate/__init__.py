@@ -23,7 +23,6 @@ curator role. Public entry: :func:`add_curate_parser` (wired by cli.py) and
 * :mod:`.catalog_import` — threat-catalog import helpers (unused; kept for adoption or deletion).
 """
 
-from typing import List
 
 from ..kernel.health import HealthItem
 from .proposals import transport

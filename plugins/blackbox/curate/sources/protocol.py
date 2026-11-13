@@ -21,7 +21,7 @@ Usage::
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Optional, Protocol, Sequence, Tuple
+from typing import Optional, Protocol, Sequence
 
 from ..service.evidence import Lookup, OwnCheck
 from .budget import LookupBudget, LookupItem, TokenBucket, select_for_lookup
@@ -77,6 +77,11 @@ class Source(Protocol):
     name: str
     terms: SourceTerms
 
+    def applies(self, identifier: str) -> bool:
+        """Whether this source can answer about *identifier* at all — from the identifier alone,
+        no network. :meth:`check` answers NOT_APPLICABLE exactly where this is False."""
+        ...
+
     def check(self, identifier: str) -> SourceVerdict: ...
 
 
@@ -107,10 +112,16 @@ class SourceRegistry:
     def lookup(self, items: Sequence[LookupItem], budget: LookupBudget, *, today: str) -> tuple[LookupResult, ...]:
         """Ask every source about the items *budget* selects for *today*
         (at most ``budget.items_per_beat``, lane order, oldest first)."""
-        return tuple(LookupResult(item, tuple(self._ask(source, item.identifier) for source in self._sources))
-                     for item in select_for_lookup(items, budget, today))
+        with self._cache.session():   # one read and one merged write of the cache per beat
+            return tuple(LookupResult(item, tuple(self._ask(source, item.identifier) for source in self._sources))
+                         for item in select_for_lookup(items, budget, today))
 
     def _ask(self, source: Source, identifier: str) -> SourceVerdict:
+        # Before the cache and the rate limit: an item a source cannot answer about spends none
+        # of its requests (they used to drain it, and the items it CAN answer read "could not tell").
+        applies = getattr(source, "applies", None)   # a source without it is asked about everything
+        if applies is not None and not applies(identifier):
+            return SourceVerdict(Lookup.NOT_APPLICABLE, source=source.name)
         if self._cache.is_not_listed(source.name, identifier):
             return SourceVerdict(Lookup.CLEAN, source=source.name)
         if not self._buckets[source.name].take():

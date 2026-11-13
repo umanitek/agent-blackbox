@@ -75,7 +75,7 @@ def read_lane(cfg: BlackboxConfig, client: Optional[DkgClient] = None) -> LaneVi
     """Ask the local node for the sandbox lane of the community graph. Fail-open."""
     graph = cfg.context_graph_id
     try:
-        client = client or DkgClient(url=cfg.dkg_url, dkg_home=cfg.dkg_home, config=cfg)
+        client = client or DkgClient.for_config(cfg)
         failed = object()
         rows = client.query(_LANE_SPARQL, graph, view=constants.VIEW_SHARED_WORKING_MEMORY,
                             on_error=failed, sub_graph=constants.SANDBOX_SUB_GRAPH)

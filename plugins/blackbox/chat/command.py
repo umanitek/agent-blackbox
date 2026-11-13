@@ -8,16 +8,19 @@ assistant can read the repo's own docs.
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 from pathlib import Path
-from typing import List, Optional
+from typing import Optional
 from .. import attach
 from ..kernel import constants, yaml_files
+from ..kernel.bounded_files import atomic_write
+
+logger = logging.getLogger(__name__)
 
 _BLACKBOX_CHAT_PROFILE = constants.BLACKBOX_CHAT_PROFILE
 _BLACKBOX_SOUL_MARKER = constants.BLACKBOX_CHAT_SOUL_MARKER
 _LEGACY_MANAGED_SOUL_PREFIX = "<!-- managed-by: hermes-"
-_BLACKBOX_SOURCE_ROOT_MARKER = ".blackbox-source-root"
 _BLACKBOX_CONTEXT_FILE_MAX_CHARS = 100_000
 _BLACKBOX_SOUL = f"""{_BLACKBOX_SOUL_MARKER}
 # Agent Blackbox
@@ -202,27 +205,13 @@ def _blackbox_chat_args(args: argparse.Namespace) -> list[str]:
 
 
 def _blackbox_chat_cwd() -> Optional[Path]:
-    candidates: list[Path] = []
-    # this file is plugins/blackbox/chat/command.py -> the plugin root is two up
-    marker = Path(__file__).resolve().parents[1] / _BLACKBOX_SOURCE_ROOT_MARKER
+    """The Blackbox checkout chat runs in (an installed copy's recorded source, else the copy's
+    own repo — ``attach.repo_root`` reads the marker), or None when neither holds the plugin."""
     try:
-        if marker.exists():
-            marked = Path(marker.read_text(encoding="utf-8-sig").strip()).expanduser()
-            candidates.append(marked)
-    except Exception:
-        pass
-    try:
-        candidates.append(attach.repo_root())
-    except Exception:
-        pass
-    for candidate in candidates:
-        try:
-            resolved = candidate.resolve()
-        except Exception:
-            continue
-        if (resolved / "plugins" / "blackbox" / "cli.py").exists():
-            return resolved
-    return None
+        root = attach.repo_root().resolve()
+    except OSError:
+        return None
+    return root if (root / "plugins" / "blackbox" / "cli.py").exists() else None
 
 
 def _write_blackbox_soul(profile_dir: Path) -> None:
@@ -246,9 +235,10 @@ def _write_blackbox_soul(profile_dir: Path) -> None:
                 backup.write_text(existing, encoding="utf-8")
             except OSError:
                 pass
-    soul_path.write_text(_BLACKBOX_SOUL, encoding="utf-8")
+    atomic_write(soul_path, _BLACKBOX_SOUL)   # never a half-written persona
 
 
+@yaml_files.edits_config
 def _ensure_blackbox_context_cap(profile_dir: Path) -> None:
     config_path = profile_dir / "config.yaml"
     if yaml_files.yaml is None:
@@ -259,7 +249,11 @@ def _ensure_blackbox_context_cap(profile_dir: Path) -> None:
                 encoding="utf-8",
             )
         return
-    data = yaml_files.load_yaml(config_path)
+    try:
+        data = yaml_files.load_for_edit(config_path)
+    except yaml_files.UnreadableYaml as exc:
+        logger.warning("blackbox chat: %s", exc)   # the profile's config is left as it is
+        return
     current = data.get("context_file_max_chars")
     if isinstance(current, int) and current >= _BLACKBOX_CONTEXT_FILE_MAX_CHARS:
         return

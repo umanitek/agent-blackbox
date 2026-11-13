@@ -36,7 +36,7 @@ import logging
 import threading
 import time
 from dataclasses import asdict, dataclass, field, replace
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Optional
 
 from ... import ruleset
 from ...kernel.dkg_client import DkgClient
@@ -225,7 +225,7 @@ def read_sync_meter(cfg: Any, *, node_reachable: bool, verified_rules: int,
     graph_id = cfg.context_graph_id
     downloaded = None
     if node_reachable:
-        client = DkgClient(url=cfg.dkg_url, dkg_home=cfg.dkg_home, config=cfg)
+        client = DkgClient.for_config(cfg)
         downloaded = ruleset.verified_download_totals(client, graph_id, timeout=QUERY_TIMEOUT_SECONDS)
     backlog = read_recovery_backlog(cfg.dkg_home, graph_id)
     compiled = (ruleset.verified_progress(graph_id) or {}).get("assets_compiled")

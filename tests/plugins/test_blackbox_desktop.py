@@ -139,7 +139,7 @@ def test_the_page_reads_what_the_recorder_wrote(monkeypatch):
             when=_REAL_TIME() - 60)
     _record(monkeypatch, [_finding_dict(title="Access to a user-protected path", severity="critical",
                                         tool_name="terminal")], "block", session="b")
-    listed = desktop.findings_payload(limit=20)["findings"]
+    listed = desktop._actions(desktop._rows(20))
     assert [(item["outcome"], item["severity"], item["title"], item["tool"]) for item in listed] == [
         ("blocked", "critical", "Access to a user-protected path", "terminal"),
         ("flagged", "high", "older flag", "read_file")]
@@ -151,20 +151,21 @@ def test_two_findings_of_one_action_are_one_row_and_one_count(monkeypatch):
     monkeypatch.setattr(desktop.ruleset, "get", lambda cfg: _Rules())
     _record(monkeypatch, [_finding_dict(), _finding_dict(identifier="fileaccess:read_file:user-protected",
                                                          severity="critical", title="protected")], "flag")
-    listed = desktop.findings_payload()["findings"]
+    listed = desktop._actions(desktop._rows(100))
     assert len(listed) == 1 and listed[0]["severity"] == "critical" and listed[0]["more"] == 1
     assert desktop.status_payload()["today"] == {"findings": 1, "blocked": 0}
 
 
-def test_status_counts_today_and_reads_the_rules(monkeypatch):
-    monkeypatch.setattr(desktop.ruleset, "get", lambda cfg: _Rules())
+def test_status_counts_today_and_serves_only_what_the_page_reads(monkeypatch):
+    """The status is polled every 4 s; it loaded the ruleset each time for `rules` / `syncedAt` /
+    `last`, which the page never read. It now serves the four fields the page uses."""
+    monkeypatch.setattr(desktop.ruleset, "get", lambda cfg: pytest.fail("the status poll must not load the ruleset"))
     _record(monkeypatch, [_finding_dict(title="three days ago")], "block", session="old", when=_REAL_TIME() - 3 * 86_400)
     _record(monkeypatch, [_finding_dict(title="earlier today")], "flag", session="x", when=_REAL_TIME() - 120)
     _record(monkeypatch, [_finding_dict(title="just now")], "block", session="y")
     status = desktop.status_payload()
     assert status["today"] == {"findings": 2, "blocked": 1}
-    assert status["rules"] == 7 and status["syncedAt"] == _Rules.synced_at
-    assert status["last"]["title"] == "just now" and status["last"]["outcome"] == "blocked"
+    assert set(status) == {"mode", "blockSeverity", "today", "dashboardUrl"}
     assert status["dashboardUrl"].startswith("http://127.0.0.1:")
 
 
@@ -174,7 +175,7 @@ def test_status_survives_a_ruleset_and_log_that_cannot_load(monkeypatch):
     monkeypatch.setattr(desktop.ruleset, "get", broken)
     monkeypatch.setattr(audit, "read_findings", broken)
     status = desktop.status_payload()
-    assert status["rules"] is None and status["today"] == {"findings": 0, "blocked": 0} and status["last"] is None
+    assert status["today"] == {"findings": 0, "blocked": 0}
 
 
 def _load_plugin_api() -> types.ModuleType:
@@ -190,10 +191,9 @@ def _load_plugin_api() -> types.ModuleType:
 def test_the_backend_finds_the_loaded_blackbox_and_serves_status(monkeypatch):
     api = _load_plugin_api()
     monkeypatch.setattr(desktop, "status_payload", lambda: {"mode": "audit"})
-    monkeypatch.setattr(desktop, "findings_payload", lambda limit=50: {"findings": [], "total": 0, "limit": limit})
     assert api._desktop_module() is desktop      # the package already loaded, never a second copy
     assert api.status() == {"available": True, "mode": "audit"}
-    assert api.findings(limit=5) == {"available": True, "findings": [], "total": 0, "limit": 5}
+    assert not hasattr(api, "findings")   # the page reads the dashboard's findings; this route was unused
 
 
 def test_the_switch_saves_block_mode_through_the_settings_path():
@@ -262,3 +262,23 @@ def test_plugin_js_parses_as_an_es_module(tmp_path):
     result = subprocess.run([node, "--check", str(copy)], capture_output=True, text=True, timeout=60,
                             env={**os.environ, "NODE_OPTIONS": ""}, check=False)
     assert result.returncode == 0, result.stderr
+
+
+def test_the_finding_window_asks_for_a_verified_record_only_for_a_graph_finding():
+    """A heuristic finding has no verified record, yet its window asked /api/threat with an
+    empty identifier every 30 s (a 422 forwarded through Hermes each time). The lookup is now
+    switched off unless the finding came from the graph."""
+    source = (PLUGIN / "desktop" / "plugin.js").read_text(encoding="utf-8")
+    assert "function useDash(key, path, interval, enabled = true)" in source
+    assert "refetchInterval: interval || POLL_MS, enabled })" in source
+    assert "SLOW_POLL_MS, fromGraph)" in source and "fromGraph ? finding.identifier : ''" not in source
+
+
+def test_today_counts_every_action_of_the_last_day_not_only_the_newest_hundred(monkeypatch):
+    """`today` was built from the newest 100 finding rows (the page's list cap), so a busy day
+    showed at most 100 in the status chip. It now counts every action of the last 24 hours."""
+    monkeypatch.setattr(desktop.ruleset, "get", lambda cfg: _Rules())
+    for index in range(105):
+        _record(monkeypatch, [_finding_dict(title=f"action {index}", identifier=f"ioc:domain:x{index}.example")],
+                "flag", session=f"s{index}", when=_REAL_TIME() - 600 + index)
+    assert desktop.status_payload()["today"] == {"findings": 105, "blocked": 0}

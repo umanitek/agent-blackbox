@@ -31,6 +31,8 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Any, Optional
 
+from ..kernel import local_http
+
 logger = logging.getLogger(__name__)
 
 #: Dashboard routes the Desktop page may read (GET).
@@ -40,7 +42,7 @@ READ_ROUTES = re.compile(
     r"|threat|threat-proof|trust|verified-sync|docs)"
     r"|shields/[a-z0-9_-]{1,40}/(?:content|attacks|graph)\.json")
 #: Dashboard routes the Desktop page may change through (POST).
-WRITE_ROUTES = re.compile(r"api/(?:settings|agents/protection|agents/rescan|attach|sync|playground/run|playground/wallets/run|blackbox-chat)")
+WRITE_ROUTES = re.compile(r"api/(?:settings|agents/protection|agents/rescan|sync|playground/run|playground/wallets/run|blackbox-chat)")
 #: Changes that do real work before they answer: an assistant turn (up to 120 s on the dashboard) and a
 #: Playground test (up to ~90 s waiting for its share). Everything else answers within _TIMEOUT_S.
 LONG_ROUTES = re.compile(r"api/(?:blackbox-chat|playground/run|playground/wallets/run)")
@@ -113,7 +115,8 @@ class DashboardLink:
         request = urllib.request.Request(url, data=data, method=method, headers=headers)
         try:
             timeout = _LONG_TIMEOUT_S if LONG_ROUTES.fullmatch(path) else _TIMEOUT_S
-            with urllib.request.urlopen(request, timeout=timeout) as response:   # loopback only: the URL is built from 127.0.0.1 and the port
+            # Loopback only (the URL is built from 127.0.0.1 and the port), and it carries the session token.
+            with local_http.open_direct(request, timeout=timeout) as response:
                 return LinkAnswer(response.status, _json(response.read(_MAX_BODY_BYTES)))
         except urllib.error.HTTPError as error:
             return LinkAnswer(error.code, _json(error.read(_MAX_BODY_BYTES)) or {"error": error.reason})

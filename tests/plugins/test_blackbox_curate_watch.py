@@ -508,3 +508,24 @@ def test_the_watch_verb_without_a_credential_refuses_to_run_deaf(monkeypatch, tm
     _machine(monkeypatch, tmp_path, "A", curators["a"])
     with pytest.raises(verbs.VerbError, match="alarm_sink.json"):
         commands._watch(argparse.Namespace(webhook="", once=True, interval=60.0))
+
+
+def test_curate_watch_raises_the_beats_alarms_a_suspended_self_test_included(monkeypatch, tmp_path):
+    """`curate watch` assembled its alarms separately from the curator service's beat and left out
+    the self-test's items: a curator suspended by a failing self-test raised no alarm through it."""
+    from types import SimpleNamespace
+
+    from plugins.blackbox.curate.service import self_test
+
+    suspended = HealthItem(audience="curator", klass=HealthClass.SECURITY, message="curator self-test failed", what_to_do="rerun it")
+    monkeypatch.setattr(self_test, "health_items", lambda result: [suspended])
+    monkeypatch.setattr(verbs, "curator_alarms", lambda *a, **k: [])
+    monkeypatch.setattr(watch, "manifest_items", lambda *a, **k: [])
+    monkeypatch.setattr(commands, "_ctx", lambda args: SimpleNamespace(compiled=None, manifest=None))
+    polled = []
+    monkeypatch.setattr(intake.AlarmWatcher, "poll", lambda self, items, sink, now=None: polled.extend(items) or [])
+    monkeypatch.setattr(intake.AlarmWatcher, "post_metrics", lambda self, build, sink, now: None)
+    monkeypatch.setenv("BLACKBOX_HOME", str(tmp_path))
+    args = argparse.Namespace(webhook="https://alarms.example.test/hook", once=True)
+    assert commands._watch(args) == 0
+    assert suspended in polled

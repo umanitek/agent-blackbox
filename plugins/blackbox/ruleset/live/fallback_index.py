@@ -26,9 +26,9 @@ import logging
 import sqlite3
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Optional, Sequence
 
-from ...kernel import constants, threat_ids
+from ...kernel import constants, sparql_text, threat_ids
 from ...kernel.dkg_client import DkgClient, extract_binding
 from .. import row_adapters
 from ..partitions import rows_from_triples
@@ -154,14 +154,47 @@ class FallbackIndex:
         self._db.close()
 
 
+class OnDemandIndex:
+    """The fallback index as a lookup holds it (Proxy): SQLite is opened only when the store
+    could not tell, and closed right after — a lookup is built per tool call, and opening the
+    index (connect + schema) on every one, even while the store answered, cost two connections
+    per call that were never closed. Same answering methods as :class:`FallbackIndex`."""
+
+    def __init__(self, scope: VerifiedScope) -> None:
+        self.scope = scope
+
+    @classmethod
+    def for_scope(cls, scope: Optional[VerifiedScope]) -> Optional[OnDemandIndex]:
+        """The proxy when the scope enables the fallback, else None (the default)."""
+        return cls(scope) if scope is not None and scope.fallback == FALLBACK_INDEX else None
+
+    def dependencies(self, candidates: Sequence[tuple[str, str, str]]) -> LookupAnswer:
+        return self._asking(lambda index: index.dependencies(candidates))
+
+    def ioc_values(self, identifiers: Sequence[str]) -> LookupAnswer:
+        return self._asking(lambda index: index.ioc_values(identifiers))
+
+    def _asking(self, ask: Any) -> LookupAnswer:
+        index = FallbackIndex.for_scope(self.scope)
+        if index is None:
+            return LookupAnswer({}, COULD_NOT_TELL, "fallback index unavailable")
+        try:
+            return ask(index)
+        finally:
+            index.close()
+
+
 def _read_asset(client: DkgClient, cg_id: str, graph: str) -> Optional[list[tuple[str, str, str]]]:
     """Every triple of one asset's graph, cursor-paged by subject; None on failure."""
     failure = object()
+    graph_iri = sparql_text.sparql_iri(graph)
+    if not graph_iri:   # not writable as <iri>: never put into a query
+        return None
     triples: list[tuple[str, str, str]] = []
     after = ""
     while True:
-        cursor = f'FILTER(STR(?threat) > {json.dumps(after)})' if after else ""
-        page = client.query(f"SELECT ?threat ?p ?o WHERE {{ GRAPH <{graph}> {{ ?threat ?p ?o }} {cursor} }} "
+        cursor = sparql_text.cursor_filter(after, variable="threat") if after else ""
+        page = client.query(f"SELECT ?threat ?p ?o WHERE {{ GRAPH {graph_iri} {{ ?threat ?p ?o }} {cursor} }} "
                             f"ORDER BY STR(?threat) ?p ?o LIMIT {PAGE_TRIPLES}", cg_id, view=None, on_error=failure)
         if page is failure:
             return None

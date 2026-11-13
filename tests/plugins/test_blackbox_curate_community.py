@@ -33,6 +33,7 @@ from plugins.blackbox.kernel.config import BlackboxConfig
 from plugins.blackbox.kernel.signing import key_manifest
 from plugins.blackbox.kernel.signing.authority import Authority
 from plugins.blackbox.kernel.signing.statement_order import CuratorStatement as Kind
+from _blackbox_fakes import dkg_client_fake
 
 VM_GRAPH = GRAPH   # one graph (2026-10-16): the community lives in the verified graph's shared memory
 CFG = BlackboxConfig(report=True, context_graph_id=VM_GRAPH)
@@ -191,7 +192,7 @@ def test_a_typed_consent_code_can_be_used_again_after_a_write_that_did_not_land(
     with team.b:
         store = ProposalStore()
         envelope = store.get(proposal.id).envelope
-        code = consent.confirmation_code(envelope)
+        code = consent.ConsentLedger().show(envelope, "shown to the operator")   # as `curate show` / the console do
         strict = team.ctx(team.b, sandbox=False)
         _, outcome = publishing.publish(strict, store, proposal.id, typed_code=code, yes=False)
         assert outcome.startswith("not published") and "read back" in outcome
@@ -376,7 +377,7 @@ def test_a_revocations_advisory_twin_makes_the_next_pulse_withdraw_the_blocked_r
     view = SimpleNamespace(revoked=frozenset())
     monkeypatch.setattr(curator_tier.community, "read_curator_view", lambda client, cfg, *a, **k: view)
     graph = _TwinGraph()
-    monkeypatch.setattr(pulse_beat, "DkgClient", lambda *a, **k: graph)
+    monkeypatch.setattr(pulse_beat, "DkgClient", dkg_client_fake(lambda *a, **k: graph))
 
     cfg = BlackboxConfig(report=True, context_graph_id=VM_GRAPH, community_poll_interval=20)
     rule = {"identifier": blocked, "source": "public", "severity": "critical", "kind": "malware",

@@ -35,13 +35,11 @@ Usage::
 from __future__ import annotations
 
 import os
-import re
 from dataclasses import dataclass
-from typing import FrozenSet, Iterable, Mapping, Tuple
+from typing import Iterable, Mapping
 
-from .. import constants
+from .. import constants, threat_ids
 
-_KEY_HEX = re.compile(r"[0-9a-f]{64}")
 _ROOT_ENV = "BLACKBOX_CURATOR_ROOT_KEYS"
 _COMMUNITY_ROOT_ENV = "BLACKBOX_COMMUNITY_ROOT_KEYS"
 
@@ -54,7 +52,7 @@ COMMUNITY_ROOT_KEYS: Mapping[str, tuple[str, ...]] = {}
 
 def _keys(values: Iterable[str]) -> frozenset[str]:
     """Well-formed keys only (64 lower-case hex); malformed ones are ignored."""
-    return frozenset(k.strip().lower() for k in values if _KEY_HEX.fullmatch(k.strip().lower()))
+    return frozenset(k.strip().lower() for k in values if threat_ids.is_hex64(k.strip().lower()))
 
 
 @dataclass(frozen=True)

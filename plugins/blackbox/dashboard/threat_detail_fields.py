@@ -8,7 +8,6 @@ the published ontology (``kernel.constants`` IRIs) and the legacy
 
 from __future__ import annotations
 
-from typing import Dict
 
 from ..kernel import constants
 

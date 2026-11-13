@@ -46,7 +46,7 @@ from ... import audit
 logger = logging.getLogger(__name__)
 from ...kernel.display_safety import log_safe
 from ..contract import EventFact, SessionSummary, ShieldEvent, TimelineStep
-from . import mode as trader_mode
+from . import kinds, mode as trader_mode
 
 MAX_REPORT_EVENTS = 100
 #: Steps shown per session; a long session keeps the steps nearest the event.
@@ -78,7 +78,9 @@ _KEYS = {"secret:wallet-private-key": "a wallet private key, written next to a k
          "secret:solana-private-key": "a Solana secret key (what Phantom's \"Export private key\" shows, or a Solana CLI key file)",
          "secret:bitcoin-private-key": "a Bitcoin private key (a WIF key, or an xprv / yprv / zprv extended key that opens the whole wallet)"}
 _APPROVALS = {"secret:token-approval-drainer": "a token approval to an address listed as a wallet drainer",
-              "secret:token-approval-unlimited": "an unlimited token approval (approve MAX or approve-all)"}
+              "secret:token-approval-unlimited": "an unlimited token approval (approve MAX or approve-all)",
+              "secret:token-approval-unchecked-spender": "a token approval to a spender Blackbox cannot check "
+                                                         "(an ENS name, or an exchange router on a chain the call does not name)"}
 #: A finding's title or evidence names its wallet or exchange in brackets: "… (MetaMask)".
 _NAMED = re.compile(r"\(([^)]+)\)")
 #: The facts a threat profile adds, in order: (label, its two key spellings, mono). The profile's
@@ -101,21 +103,6 @@ def local_text(value: Any, limit: int) -> str:
     text, and would show the operator's own ``backup.tgz`` as ``backup[.]tgz``. These values
     were redacted when they were logged, and the page escapes them when it inserts them."""
     return log_safe(value if value is not None else "", limit)
-
-
-def kind_of(identifier: str) -> str:
-    """Which kind of event *identifier* is: vault, seed, key, exchange, keychain, approval, or ""."""
-    if identifier.endswith(trader_mode.WALLET_FILE_SUFFIX):
-        return "vault"
-    if identifier == "secret:seed-phrase":
-        return "seed"
-    if identifier in _KEYS:
-        return "key"
-    if identifier == "secret:exchange-api-key":
-        return "exchange"
-    if identifier.endswith(":macos-keychain"):
-        return "keychain"
-    return "approval" if identifier in _APPROVALS else ""
 
 
 def _escaped(text: str) -> str:
@@ -287,7 +274,10 @@ def _logo(kind: str, title: str, evidence: str) -> str:
     """The wallet's logo URL for a vault event whose pack ships a logo, else ""."""
     if kind != "vault":
         return ""
-    return trader_mode.logo_url(_named(title or evidence, "").lower().replace(" ", ""))
+    name = _named(title or evidence, "").strip().lower()   # the display name the finding carries
+    pack_id = next((pack_id for pack_id, display in trader_mode.supported_wallets().items()
+                    if display.lower() == name), "")   # by name: ids are hyphenated ("coinbase-wallet")
+    return trader_mode.logo_url(pack_id)
 
 
 def _event(threat: dict[str, Any], step: dict[str, Any], session: dict[str, Any], index: int,
@@ -295,7 +285,7 @@ def _event(threat: dict[str, Any], step: dict[str, Any], session: dict[str, Any]
     """One event as the report window shows it (see the module doc)."""
     identifier = local_text(threat.get("identifier"), MAX_IDENTIFIER_CHARS)
     title, evidence = local_text(threat.get("title"), 160), local_text(threat.get("evidence"), 160)
-    kind = kind_of(identifier)
+    kind = kinds.event_kind(identifier)
     profile = {key: local_text(value, 48) for key, value in (threat.get("profile") or {}).items()
                if isinstance(value, str)}
     bare = ShieldEvent(

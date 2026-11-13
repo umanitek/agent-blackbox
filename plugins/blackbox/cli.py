@@ -16,8 +16,7 @@ from typing import Any
 import time
 from . import attach, audit, community, ruleset, sync
 from .kernel import health
-from .kernel import yaml_files
-from .kernel.config import load_blackbox_config
+from .kernel.config import load_blackbox_config, reads_graph_directly
 from .kernel.dkg_client import DkgClient, DkgError
 from .attach import add_attach_parsers
 from .chat import add_blackbox_chat_args, cmd_chat
@@ -109,7 +108,7 @@ def _add_sync_parser(sub) -> None:
 
 def _cmd_status(args: argparse.Namespace) -> int:
     cfg = load_blackbox_config()
-    client = DkgClient(url=cfg.dkg_url, dkg_home=cfg.dkg_home, config=cfg)
+    client = DkgClient.for_config(cfg)
     reachable = client.reachable()
     try:
         rs = ruleset.get(cfg)
@@ -118,7 +117,10 @@ def _cmd_status(args: argparse.Namespace) -> int:
         print(f"Graph protection unavailable: {exc}")
         return 2
     print("Agent Blackbox")
-    if getattr(cfg, 'detection_backend', 'legacy-cache') == "dkg":
+    if cfg.snapshot_sync_error:
+        print(f"  WARNING:           snapshot_sync in config.yaml is invalid ({cfg.snapshot_sync_error}); "
+              "sync is refused until it is corrected")
+    if reads_graph_directly(cfg):
         print("  protection source: live local graph queries (no ruleset export)")
         print("  counts below:      confirmed graph entities; not a full-coverage proof")
     print(f"  mode:              {cfg.mode}")
@@ -140,7 +142,7 @@ def _cmd_status(args: argparse.Namespace) -> int:
     print(f"  ruleset:           {counts['injection']} injection, "
           f"{counts['escalation']} escalation, {counts['dependency']} dependency, "
           f"{counts['fileaccess']} fileaccess, {counts['skill']} skill, {counts['ioc']} ioc")
-    if getattr(cfg, 'detection_backend', 'legacy-cache') != "dkg":
+    if not reads_graph_directly(cfg):
         _print_verified_progress(cfg)
     if not any(counts.values()) and not health.node_installed(cfg, reachable):
         print("  !! SETUP NEEDED:   Blackbox setup has not run — no DKG node, so the verified threat graph is not loaded.")
@@ -202,27 +204,11 @@ def _print_health(cfg: Any, rs: Any, client: DkgClient, reachable: bool) -> None
 
 
 def _print_attached_targets() -> None:
-    """List which local Hermes homes / OpenClaw workspaces have Blackbox attached."""
-    attached_hermes = []
-    for home in attach.discover_hermes_homes():
-        try:
-            data = yaml_files.load_yaml(home / "config.yaml")
-            if attach.enabled_list_has(data, "blackbox"):
-                attached_hermes.append(str(home))
-        except Exception:
-            continue
-    attached_openclaw = []
-    for ws in attach.discover_openclaw_workspaces():
-        try:
-            import json as _json
-
-            cfg_path = ws / "openclaw.json"
-            data = _json.loads(cfg_path.read_text(encoding="utf-8-sig")) if cfg_path.exists() else {}
-            allow = ((data.get("plugins") or {}).get("allow")) if isinstance(data, dict) else None
-            if isinstance(allow, list) and "blackbox" in allow:
-                attached_openclaw.append(str(ws))
-        except Exception:
-            continue
+    """List which local Hermes homes / OpenClaw workspaces have Blackbox attached, by
+    attach's own check (``attach.is_attached``) — the one a sweep and the dashboard use."""
+    attached_hermes = [str(home) for home in attach.discover_hermes_homes() if attach.is_attached("hermes", home)]
+    attached_openclaw = [str(target) for target in attach.discover_openclaw_workspaces()
+                         if attach.is_attached("openclaw", target)]
     print(f"  attached (hermes): {len(attached_hermes)}")
     for path in attached_hermes:
         print(f"      - {path}")

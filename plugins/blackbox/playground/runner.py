@@ -23,7 +23,6 @@ shipped with the plugin (LES-058).
 from __future__ import annotations
 
 import random
-import threading
 import time
 from dataclasses import asdict, dataclass
 from typing import Any, Iterator, Optional
@@ -36,7 +35,6 @@ SESSION_ID = "blackbox-sandbox"   # every sandbox test runs under this agent ses
 _TRIES = 12                        # random windows of the live tier to look in
 _WINDOW = 40                       # rules per window
 _SHARE_WAIT_S = 90.0               # the share thread's node round trip (seal → share → poll)
-_SHARE_THREAD = "blackbox-community-share"
 
 
 class PlaygroundRefused(Exception):
@@ -83,6 +81,17 @@ def require_sandbox(cfg: BlackboxConfig) -> None:
         raise PlaygroundRefused("Community sharing is off. Turn it on (sandbox mode keeps every test in the sandbox lane).")
 
 
+def check_in_sandbox(tool: str, args: Any, started: float, *, prefix: str = "sandbox") -> tuple[Any, float, str]:
+    """One attempt through the REAL pre-tool hook, as the sandbox's own agent session —
+    ``(the hook's verdict, how long the check took in ms, the task id its records carry)``.
+    Call it inside ``audit.sandbox_run()``: the caller's block decides where records land and
+    what else (shares, reading its rows) happens in the sandbox. *started* is the test's clock
+    start; the task id (``<prefix>-<ms>-<random>``) is unique per run."""
+    task = f"{prefix}-{int(started * 1000)}-{random.SystemRandom().randrange(1 << 24):06x}"
+    verdict = guard.on_pre_tool_call(tool_name=tool, args=args, session_id=SESSION_ID, task_id=task, tool_call_id=task)
+    return verdict, round((time.time() - started) * 1000, 1), task
+
+
 def run_test(kind: str, cfg: Optional[BlackboxConfig] = None) -> TestResult:
     """Run one sandbox test of *kind* (one of :data:`KINDS`) and wait for its share.
 
@@ -95,12 +104,10 @@ def run_test(kind: str, cfg: Optional[BlackboxConfig] = None) -> TestResult:
     require_sandbox(cfg)
     attempt = _pick(ruleset.get(cfg), kind)
     started = time.time()
-    with audit.sandbox_run():
-        task = f"sandbox-{int(started * 1000)}-{random.SystemRandom().randrange(1 << 24):06x}"
-        verdict = guard.on_pre_tool_call(tool_name=attempt.tool, args=attempt.args, session_id=SESSION_ID,
-                                         task_id=task, tool_call_id=task)
-        check_ms = round((time.time() - started) * 1000, 1)
-        for worker in [t for t in threading.enumerate() if t.name == _SHARE_THREAD]:
+    with audit.sandbox_run(), guard.collecting_shares() as shares:
+        verdict, check_ms, _task = check_in_sandbox(attempt.tool, attempt.args, started)
+        guard.reports_settled(_SHARE_WAIT_S)   # the follow-up that starts the share runs after the hook
+        for worker in list(shares):   # this test's own shares, never another agent's
             worker.join(_SHARE_WAIT_S)
         shared = _share_outcome(attempt.identifier)
     blocked = bool(verdict) and verdict.get("action") == "block"

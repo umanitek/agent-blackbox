@@ -40,7 +40,7 @@ import sys
 import tempfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Optional
 
 
 class ProcessLimitsError(RuntimeError):

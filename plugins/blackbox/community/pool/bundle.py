@@ -40,7 +40,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import AbstractSet, Any, Dict, List, Mapping, Optional, Tuple
+from typing import AbstractSet, Any, Mapping, Optional
 
 from ...kernel import signing
 from ...kernel.signing import KeyManifest

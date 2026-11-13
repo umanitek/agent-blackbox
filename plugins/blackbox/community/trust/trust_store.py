@@ -48,16 +48,17 @@ Usage::
 
 from __future__ import annotations
 
-import json
 import logging
 import threading
 import time
 from dataclasses import dataclass, field, replace
-from datetime import date, datetime, UTC
+from datetime import date
 from pathlib import Path
 from typing import Callable, Collection, Iterable, Mapping, Optional
 
-from ...kernel import constants, signing, threat_ids, yaml_files
+from ...kernel.health import utc_day
+from ...kernel import constants, signing, threat_ids
+from ...kernel.bounded_files import read_json_object, write_json_object
 from ...kernel.signing import CuratorStatement
 
 logger = logging.getLogger(__name__)
@@ -199,7 +200,7 @@ class TrustStore:
             data = self._read()
             before = self._entry(data, graph)
             now = self._clock()
-            today = datetime.fromtimestamp(now, UTC).date().isoformat()
+            today = utc_day(now)
             kept = current_statements(statements, today)
             keys = {statement_key(row) for row in kept}
             source = before.admitted if admitted is None else admitted
@@ -285,17 +286,10 @@ class TrustStore:
             return StoredTrust()
 
     def _read(self) -> dict[str, object]:
-        try:
-            data = json.loads(self._path.read_text(encoding="utf-8-sig"))
-            return data if isinstance(data, dict) else {}
-        except (OSError, ValueError):
-            return {}   # missing or unreadable: rebuilt from the network
+        return read_json_object(self._path) or {}   # missing or unreadable: rebuilt from the network
 
     def _write(self, data: Mapping[str, object]) -> None:
-        try:
-            yaml_files.atomic_write(self._path, json.dumps({"version": 1, **dict(data)}))
-        except OSError as exc:
-            logger.warning("blackbox: could not save the community trust store (%s)", exc)
+        write_json_object(self._path, {"version": 1, **dict(data)}, what="the community trust store")
 
 
 def _plain_rows(value: object) -> list[Row]:

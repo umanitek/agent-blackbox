@@ -19,6 +19,7 @@ from plugins.blackbox.community import report_builder, report_signer, sharing
 from plugins.blackbox.community.report_cli import report_command
 from plugins.blackbox.kernel import constants, signing
 from plugins.blackbox.kernel.config import BlackboxConfig
+from _blackbox_fakes import dkg_client_fake
 
 GRAPH = "0xabc/agent-blackbox-community-test"
 NETWORK = "test-network-id"
@@ -126,7 +127,7 @@ def test_automatic_share_refuses_when_it_cannot_sign(monkeypatch, tmp_path):
 def test_cli_report_refuses_when_it_cannot_sign(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("BLACKBOX_HOME", str(tmp_path))
     monkeypatch.setattr(report_command, "load_blackbox_config", lambda: BlackboxConfig(report=True, context_graph_id=GRAPH))
-    monkeypatch.setattr(report_command, "DkgClient", lambda **kw: _Status({}))
+    monkeypatch.setattr(report_command, "DkgClient", dkg_client_fake(lambda **kw: _Status({})))
     monkeypatch.setattr(report_command.identity, "reporter_address", lambda client: REPORTER)
     args = argparse.Namespace(false_positive=None, status=False)
     assert report_command.cmd_report(args) == 1
@@ -148,3 +149,26 @@ def test_epoch_copies_of_one_statement_count_once(tmp_path, monkeypatch):
     assert len(disputes.verified_disputes([d1, d2], NETWORK, GRAPH)) == 1
     r1, r2 = signed_retraction_row("dep:npm:x@1", one), signed_retraction_row("dep:npm:x@1", one)
     assert len(retractions.verified_retractions([r1, r2], NETWORK, GRAPH)) == 1
+
+
+# --- what a report signs is what a reader keeps ------------------------------------------------
+
+def test_every_field_a_report_signs_is_read_back():
+    """The builder signed `owasp_category`, `advisory_id` and `skill_version`, but the reader's
+    field table did not list them, so the verified report silently lost them."""
+    from plugins.blackbox.community import report_builder, verification
+
+    assert report_builder.PAYLOAD_FIELD_KEYS <= set(verification.EVIDENCE_PAYLOAD_KEYS.values())
+
+
+@pytest.mark.parametrize("identifier, evidence, var, value", [
+    ("dep:npm:evil-pkg@1.0.0", {"advisory_id": "MAL-2026-1"}, "advisoryId", "MAL-2026-1"),
+    ("skill:helper@2.1.0", {"registry": "clawhub", "skill_name": "helper", "skill_version": "2.1.0"},
+     "skillVersion", "2.1.0"),
+])
+def test_a_signed_field_the_query_does_not_select_is_kept_from_the_signature(identifier, evidence, var, value):
+    from _community_rows import GRAPH, NETWORK, Reporter, signed_row
+    from plugins.blackbox.community.verification import ReportVerifier
+
+    report = ReportVerifier(NETWORK, GRAPH).verify(signed_row(identifier, Reporter("0xfields"), **evidence))
+    assert report is not None and (var, value) in report.fields

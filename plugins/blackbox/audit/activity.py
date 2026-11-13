@@ -7,10 +7,11 @@ Reads the audit and findings logs back into one severity-tagged event stream
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 from ..kernel import constants
+from ..kernel.bounded_files import read_jsonl
 from . import log_store
-from .findings import _bounded_context
+from .findings import _bounded_context, finding_of, is_confirmed
 from . import redaction
 
 # Default severity per non-finding event type. Everything is ``info`` so the
@@ -34,21 +35,8 @@ def _finding_event_rows() -> list[dict[str, Any]]:
     """
     out: list[dict[str, Any]] = []
     for path, default_fw in log_store._findings_files():
-        if not path.exists():
-            continue
-        try:
-            lines = path.read_text(encoding="utf-8-sig").splitlines()
-        except Exception:
-            continue
-        for line in lines:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rec = json.loads(line)
-            except Exception:
-                continue
-            finding = rec.get("finding") or (rec.get("findings") or [{}])[0] or {}
+        for rec in read_jsonl(path):   # object rows only: a damaged line is skipped, never fatal
+            finding = finding_of(rec)
             out.append({
                 "ts": rec.get("ts") or 0,
                 "iso": rec.get("iso") or "",
@@ -99,38 +87,28 @@ def _activity_log_paths() -> list[Any]:
     return paths + [path for path, _ in log_store._findings_files()]
 
 
-def _load_merged_audit() -> list[dict[str, Any]]:
+def _raw_activity() -> list[dict[str, Any]]:
+    """Every audit, file-access and dependency row on disk, each tagged with its event and
+    framework (fresh rows, unsorted) — what both activity builders start from."""
     home = log_store._home()
-    merged: list[dict[str, Any]] = []
+    raw: list[dict[str, Any]] = []
     for path, framework in log_store._audit_files():
-        merged.extend(_tag_events(log_store._load_jsonl(path, "event"), "event", framework))
-    merged.extend(_tag_events(log_store._load_jsonl(home / "file_access.jsonl", "file_access"), "file_access"))
-    merged.extend(_tag_events(log_store._load_jsonl(home / "dependencies.jsonl", "dependency_install"), "dependency_install"))
-    merged.extend(_finding_event_rows())
+        raw.extend(_tag_events(log_store._load_jsonl(path, "event"), "event", framework))
+    raw.extend(_tag_events(log_store._load_jsonl(home / "file_access.jsonl", "file_access"), "file_access"))
+    raw.extend(_tag_events(log_store._load_jsonl(home / "dependencies.jsonl", "dependency_install"), "dependency_install"))
+    return raw
+
+
+def _load_merged_audit() -> list[dict[str, Any]]:
+    merged = _raw_activity() + _finding_event_rows()
     merged.sort(key=lambda r: r.get("ts") or 0, reverse=True)
     return merged
 
 
 def count_audit() -> int:
-    """Total merged activity rows on disk (fail-open: returns 0 on any error)."""
-    total = 0
-    paths = [path for path, _ in log_store._audit_files()]
-    paths.extend(log_store._home() / name for name in ("file_access.jsonl", "dependencies.jsonl"))
-    for path in paths:
-        if not path.exists():
-            continue
-        try:
-            total += sum(1 for ln in path.read_text(encoding="utf-8-sig").splitlines() if ln.strip())
-        except Exception:
-            continue
-    for path, _ in log_store._findings_files():
-        if not path.exists():
-            continue
-        try:
-            total += sum(1 for ln in path.read_text(encoding="utf-8-sig").splitlines() if ln.strip())
-        except Exception:
-            continue
-    return total
+    """How many rows the activity feed holds (:func:`read_audit`'s pager total) — the same
+    cached list, so a dashboard poll re-reads no log that has not changed."""
+    return len(log_store.cached(f"audit:{log_store._home()}", _activity_log_paths(), _load_merged_audit))
 
 
 def _tool_action(tool_name: Any, args: Any) -> str:
@@ -199,7 +177,7 @@ def _threat_row(row: dict[str, Any], finding: dict[str, Any], detail: dict[str, 
         "severity": (finding.get("severity") or "info").lower(),
         "title": finding.get("title") or finding.get("identifier") or "Threat",
         "source": finding.get("source"),
-        "confirmed": bool(finding.get("confirmed")),
+        "confirmed": is_confirmed(finding),
         "tool": finding.get("tool_name") or detail.get("tool_name"),
         "ts": row.get("ts") or 0,
         "profile": finding.get("sighting") or {},   # threat profiles: goal, at risk, outcome…
@@ -226,12 +204,7 @@ def read_local_activity(max_sessions: int = 60) -> dict[str, Any]:
 
 
 def _build_local_activity(max_sessions: int) -> dict[str, Any]:   # health: allow CC -- the body read_local_activity had; renamed for the cache (FIX-0162), baselined shrink-only
-    home = log_store._home()
-    raw: list[dict[str, Any]] = []
-    for path, framework in log_store._audit_files():
-        raw.extend(_tag_events(log_store._load_jsonl(path, "event"), "event", framework))
-    raw.extend(_tag_events(log_store._load_jsonl(home / "file_access.jsonl", "file_access"), "file_access"))
-    raw.extend(_tag_events(log_store._load_jsonl(home / "dependencies.jsonl", "dependency_install"), "dependency_install"))
+    raw = _raw_activity()
     findings = _finding_event_rows()
 
     def _sid(entry: dict[str, Any]) -> str:

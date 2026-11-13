@@ -37,7 +37,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field, replace
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
+from typing import Any, Iterable, Mapping, Optional, Sequence
 
 from ...kernel import constants, signing
 from ...kernel.config import BlackboxConfig
@@ -107,8 +107,9 @@ def read_curator_view(client: DkgClient, cfg: BlackboxConfig, environment: str =
     stored = store.load(graph) if graph else trust_store.StoredTrust()
     statements, readable, complete = _community_statements(client, graph, stored, interest)
     verified_graph = cfg.context_graph_id
-    verified = _resolve_verified(client, cfg, environment, verified_roots,
-                                 store.load(verified_graph) if verified_graph else trust_store.StoredTrust(), today)
+    # One graph since 2026-10-16: the verified graph's entry is usually the one just loaded.
+    verified_stored = stored if verified_graph == graph else store.load(verified_graph)
+    verified = _resolve_verified(client, cfg, environment, verified_roots, verified_stored, today)
     community = _resolve_community(client, cfg, environment, community_roots, stored, today)
     kept, community_keys = _verifiable(statements, verified, community, graph)
     admission = raising_budget.admit([row for row in kept if trust_store.statement_key(row) in community_keys],
@@ -270,8 +271,7 @@ def _verifiable(statements: Iterable[Row], verified: _Resolved, community: _Reso
 
 def _copy_rank(row: Row) -> tuple[int, str]:
     """Which of several verified copies of one statement is kept — lower wins."""
-    text = str(row.get("signedStatement", ""))
-    return text.count('"signer":'), text
+    return signing.copy_rank(str(row.get("signedStatement", "")))
 
 
 def known_curator_statements(client: DkgClient, cfg: BlackboxConfig, identifiers: Iterable[str], *,

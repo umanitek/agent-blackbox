@@ -223,3 +223,15 @@ def test_decisions_do_not_reuse_a_previous_profile_or_legacy_export(tmp_path, mo
         assert not load_blackbox("ruleset.pulse_beat").pulse(cfg)
     assert configs[0].dkg_home != configs[1].dkg_home
     assert configs[0].dkg_home == configs[2].dkg_home
+
+
+def test_the_direct_read_carries_the_same_owner_pin_as_the_partition_listing():
+    """direct/queries rebuilt the KI-106 owner pin by .replace()-ing 'dkg:kaUal' in another
+    module's private fragment; a respelling there would have dropped the pin from every direct
+    read silently. Both now use graph_queries.owner_pin, written with the full IRI."""
+    from plugins.blackbox.ruleset import graph_queries
+    from plugins.blackbox.ruleset.direct import queries
+    cg_id = "0x37b1fdfd134e2b17583bcbdd3034f91504cd9c70/agent-blackbox-vm"
+    pin = graph_queries.owner_pin(cg_id)
+    assert pin and pin in queries.confirmed_scope(cg_id)
+    assert pin in graph_queries._verified_partitions_sparql(cg_id)

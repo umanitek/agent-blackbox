@@ -70,11 +70,9 @@ from typing import Iterable, Mapping, Optional
 
 from .. import constants, rdf_terms, sparql_text, threat_ids
 from .envelope import SignedEnvelope, content_id, from_text, verify
-from .statement_order import CuratorStatement
+from .statement_order import REPORT_STATEMENT, CuratorStatement
 
 PROMOTION_STATEMENT = CuratorStatement.PROMOTION.value
-#: The statement type a report is signed as (``community.report_signer.REPORT_STATEMENT``).
-REPORT_STATEMENT = "blackbox.report"
 #: The statement → the report it promotes (an IRI, so a graph browser follows it).
 PROMOTES_REPORT_PRED = f"{constants.BLACKBOX_ONTOLOGY}promotesReport"
 #: The threat types a report can be promoted as: the ones whose report carries the
@@ -84,7 +82,6 @@ PROMOTABLE_PREFIXES = ("dep:", "ioc:", "skill:", "fileaccess:")
 #: The member-asset payload's closed key set.
 PAYLOAD_KEYS = frozenset({"identifier", "report", "reportDigest", "reporterKey", "severity", "day"})
 
-_DIGEST = _KEY = re.compile(r"[0-9a-f]{64}")
 _DAY = re.compile(r"\d{4}-\d{2}-\d{2}")
 _REPORT_SUBJECT = re.compile(r"urn:guardian:report:(0x[0-9a-f]{40}):[0-9a-f]{16}")
 _MAX_IDENTIFIER_CHARS = 512
@@ -166,9 +163,9 @@ def reference_refusal(payload: Mapping[str, str]) -> str:
     match = _REPORT_SUBJECT.fullmatch(report)
     if match is None or threat_ids.report_uri(identifier, match.group(1)) != report:
         return "the report is not a reporter's own report of this identifier"
-    if not _DIGEST.fullmatch(str(payload.get("reportDigest") or "")):
+    if not threat_ids.is_hex64(str(payload.get("reportDigest") or "")):
         return "the report digest is 64 lower-case hex characters"
-    if not _KEY.fullmatch(str(payload.get("reporterKey") or "")):
+    if not threat_ids.is_hex64(str(payload.get("reporterKey") or "")):
         return "the reporter key is 64 lower-case hex characters"
     return ""
 
@@ -217,7 +214,7 @@ def statements_sparql(after: str, identifier: str = "") -> str:
     """One page of promotion statements after the subject cursor *after*
     (``sparql_text.page_rows`` pages it) — only those about *identifier* when
     given: ``?r`` the statement, ``?report``, ``?signedStatement``."""
-    cursor = f"FILTER(STR(?r) > {sparql_text.sparql_string_literal(after)})" if after else ""
+    cursor = sparql_text.cursor_filter(after)
     about = f"FILTER(STRSTARTS(STR(?r), {sparql_text.sparql_string_literal(_statement_prefix(identifier))}))" if identifier else ""
     return (f"SELECT ?r ?report ?signedStatement WHERE {{ "
             f"?r a <{constants.CURATOR_STATEMENT_TYPE_IRI}> ; <{PROMOTES_REPORT_PRED}> ?report ; "

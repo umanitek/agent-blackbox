@@ -19,6 +19,7 @@ import time
 from types import SimpleNamespace
 
 from _blackbox_loader import load_blackbox
+from _blackbox_fakes import dkg_client_fake
 
 
 cli_mod = load_blackbox("cli")
@@ -434,7 +435,7 @@ def test_report_and_audit_keeps_llm_finding_local(monkeypatch):
     class _Client:
         pass
 
-    monkeypatch.setattr(guard_reporting, "DkgClient", lambda *a, **k: _Client())
+    monkeypatch.setattr(guard_reporting, "DkgClient", dkg_client_fake(lambda *a, **k: _Client()))
     finding = detection.Finding(
         identifier="injection:llm:abc",
         category="injection",

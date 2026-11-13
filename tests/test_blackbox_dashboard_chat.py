@@ -1,4 +1,5 @@
 import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -8,6 +9,9 @@ from fastapi.testclient import TestClient
 from plugins.blackbox import attach
 from plugins.blackbox.attach import plugin_copy as attach_plugin_copy
 from plugins.blackbox.dashboard import server
+
+#: A child `hermes` is the Hermes that is running: this Python, never whichever `hermes` is on PATH.
+THIS_HERMES = [sys.executable, "-m", "hermes_cli.main"]
 
 
 def test_dashboard_public_graph_uses_vm_verified_ruleset_rows(monkeypatch):
@@ -246,7 +250,7 @@ def test_dashboard_automatic_sync_runs_canonical_verified_cli(monkeypatch):
         "community": 0,
     }
     assert calls[0][0] == [
-        server.sys.executable,
+        sys.executable,
         "-m",
         "hermes_cli.main",
         "blackbox",
@@ -549,364 +553,6 @@ def test_dashboard_reloads_live_community_tier_when_ruleset_changes():
     assert 'resetGraphOnVersionChange("community", previousRulesetVersion, rulesetVersion(data))' in render_status
 
 
-@pytest.mark.skip(reason="dashboard never joins private graphs")
-def test_ruleset_sync_once_uses_official_join_then_subscribe():
-    class Cfg:
-        dkg_url = "http://127.0.0.1:9320"
-        dkg_home = "/tmp/blackbox-dkg"
-        context_graph_id = "umanitek/guardian-threats-staging"
-        graph_peer_id = "graph-peer"
-
-    events = []
-    membership_checks = 0
-
-    class FakeClient:
-        def __init__(self, *, url, dkg_home):
-            self.url = url
-            self.dkg_home = dkg_home
-            events.append(("client", url, dkg_home))
-
-        def agent_identity(self):
-            return {"agentAddress": "0x66bc7cd539d3bb0be39158dd14f27b38342c7e6a"}
-
-        def context_graph_has_agent(self, cg_id, agent_address):
-            nonlocal membership_checks
-            membership_checks += 1
-            events.append(("membership", cg_id, agent_address))
-            return membership_checks > 1
-
-        def subscribe_context_graph(self, cg_id):
-            events.append(("subscribe", cg_id))
-            return {"catchup": {"status": "running"}}
-
-        def request_join(self, cg_id, graph_peer_id):
-            events.append(("join", cg_id, graph_peer_id))
-            return {"delivered": 1}
-
-    class FakeRuleset:
-        def counts(self):
-            return {"injection": 1, "dependency": 4}
-
-        def source_count(self, source):
-            return 0
-
-    class FakeRulesetModule:
-        @staticmethod
-        def refresh(cfg, client):
-            events.append(("refresh", cfg.context_graph_id, client.url, client.dkg_home))
-            return FakeRuleset()
-
-    server._join_attempts.clear()
-    server._connection_states.clear()
-    first = server._sync_ruleset_once(lambda: Cfg(), FakeClient, FakeRulesetModule)
-    assert first == {"total": 0, "public": 0, "community": 0}
-    assert server._connection_states[Cfg.context_graph_id]["state"] == "joining"
-    second = server._sync_ruleset_once(lambda: Cfg(), FakeClient, FakeRulesetModule)
-    assert server._connection_states[Cfg.context_graph_id]["state"] == "syncing"
-
-    assert second == {"total": 5, "public": 0, "community": 0}
-    assert events == [
-        ("client", "http://127.0.0.1:9320", "/tmp/blackbox-dkg"),
-        ("membership", "umanitek/guardian-threats-staging", "0x66bc7cd539d3bb0be39158dd14f27b38342c7e6a"),
-        ("join", "umanitek/guardian-threats-staging", "graph-peer"),
-        ("client", "http://127.0.0.1:9320", "/tmp/blackbox-dkg"),
-        ("membership", "umanitek/guardian-threats-staging", "0x66bc7cd539d3bb0be39158dd14f27b38342c7e6a"),
-        ("subscribe", "umanitek/guardian-threats-staging"),
-        ("refresh", "umanitek/guardian-threats-staging", "http://127.0.0.1:9320", "/tmp/blackbox-dkg"),
-    ]
-
-
-@pytest.mark.skip(reason="old SWM count contract is no longer applicable")
-def test_ruleset_sync_once_does_not_compete_with_authoritative_sync(monkeypatch):
-    class Cfg:
-        dkg_url = "http://127.0.0.1:9320"
-        dkg_home = "/tmp/blackbox-dkg"
-        context_graph_id = "0x37b1/agent-blackbox"
-        graph_peer_id = "graph-peer"
-
-    class NoClient:
-        def __init__(self, **_kwargs):
-            raise AssertionError("dashboard must not start a second DKG sync")
-
-    class NoRuleset:
-        @staticmethod
-        def refresh(*_args):
-            raise AssertionError("dashboard must not query during authoritative sync")
-
-    monkeypatch.setattr(
-        server.sync_state,
-        "read",
-        lambda: {
-            "status": "running",
-            "public_entries": 1200,
-            "community_entries": 300,
-        },
-    )
-
-    assert server._sync_ruleset_once(lambda: Cfg(), NoClient, NoRuleset) == {
-        "total": 1500,
-        "public": 1200,
-        "community": 300,
-    }
-
-
-def test_dashboard_marks_subscribed_only_after_public_graph_arrives():
-    class Cfg:
-        dkg_url = "http://127.0.0.1:9320"
-        dkg_home = "/tmp/blackbox-dkg"
-        context_graph_id = "0x37b1/agent-blackbox"
-        graph_peer_id = "graph-peer"
-
-    class FakeClient:
-        def __init__(self, *, url, dkg_home):
-            pass
-
-        def agent_identity(self):
-            return {"agentAddress": "0x66bc7cd539d3bb0be39158dd14f27b38342c7e6a"}
-
-        def context_graph_has_agent(self, cg_id, agent_address):
-            return True
-
-        def subscribe_context_graph(self, cg_id):
-            return {"catchup": {"status": "done"}}
-
-        def catchup_status(self, cg_id):
-            return {"status": "done"}
-
-    class ReadyRuleset:
-        def counts(self):
-            return {"dependency": 3}
-
-        def source_count(self, source):
-            return 3 if source == "public" else 0
-
-    class FakeRulesetModule:
-        @staticmethod
-        def refresh(cfg, client):
-            return ReadyRuleset()
-
-    server._connection_states.clear()
-    result = server._sync_ruleset_once(lambda: Cfg(), FakeClient, FakeRulesetModule)
-
-    assert result == {"total": 3, "public": 3, "community": 0}
-    assert server._connection_states[Cfg.context_graph_id]["state"] == "subscribed"
-
-
-@pytest.mark.skip(reason="covered by the public VM sync contract")
-def test_dashboard_restarts_stale_empty_completed_catchup():
-    class Cfg:
-        dkg_url = "http://127.0.0.1:9320"
-        dkg_home = "/tmp/blackbox-dkg"
-        context_graph_id = "0x37b1/agent-blackbox"
-        graph_peer_id = "graph-peer"
-
-    events = []
-
-    class FakeClient:
-        def __init__(self, *, url, dkg_home):
-            pass
-
-        def agent_identity(self):
-            return {"agentAddress": "0x66bc7cd539d3bb0be39158dd14f27b38342c7e6a"}
-
-        def context_graph_has_agent(self, cg_id, agent_address):
-            return True
-
-        def subscribe_context_graph(self, cg_id):
-            events.append(("subscribe", cg_id))
-            return {"catchup": {"status": "done"}}
-
-        def restart_context_graph_catchup(self, cg_id):
-            events.append(("restart", cg_id))
-
-    class EmptyRuleset:
-        def counts(self):
-            return {}
-
-        def source_count(self, source):
-            return 0
-
-    class FakeRulesetModule:
-        @staticmethod
-        def refresh(cfg, client):
-            return EmptyRuleset()
-
-    server._catchup_restarts.clear()
-    result = server._sync_ruleset_once(lambda: Cfg(), FakeClient, FakeRulesetModule)
-
-    assert result == {"total": 0, "public": 0, "community": 0}
-    assert events == [
-        ("subscribe", "0x37b1/agent-blackbox"),
-        ("restart", "0x37b1/agent-blackbox"),
-    ]
-    assert server._connection_states[Cfg.context_graph_id]["state"] == "syncing"
-
-
-@pytest.mark.skip(reason="community SWM is not synced")
-def test_dashboard_restarts_completed_catchup_when_only_community_synced():
-    class Cfg:
-        dkg_url = "http://127.0.0.1:9320"
-        dkg_home = "/tmp/blackbox-dkg"
-        context_graph_id = "0x37b1/agent-blackbox"
-        graph_peer_id = "graph-peer"
-
-    events = []
-
-    class FakeClient:
-        def __init__(self, *, url, dkg_home):
-            pass
-
-        def agent_identity(self):
-            return {"agentAddress": "0x66bc7cd539d3bb0be39158dd14f27b38342c7e6a"}
-
-        def context_graph_has_agent(self, cg_id, agent_address):
-            return True
-
-        def subscribe_context_graph(self, cg_id):
-            events.append(("subscribe", cg_id))
-            return {"catchup": {"status": "done"}}
-
-        def catchup_status(self, cg_id):
-            events.append(("status", cg_id))
-            return {"status": "done"}
-
-        def restart_context_graph_catchup(self, cg_id):
-            events.append(("restart", cg_id))
-
-    class CommunityOnlyRuleset:
-        def counts(self):
-            return {"dependency": 5}
-
-        def source_count(self, source):
-            return 5 if source == "community" else 0
-
-    class FakeRulesetModule:
-        @staticmethod
-        def refresh(cfg, client):
-            return CommunityOnlyRuleset()
-
-    server._catchup_restarts.clear()
-    result = server._sync_ruleset_once(lambda: Cfg(), FakeClient, FakeRulesetModule)
-
-    assert result == {"total": 5, "public": 0, "community": 5}
-    assert events == [
-        ("subscribe", "0x37b1/agent-blackbox"),
-        ("status", "0x37b1/agent-blackbox"),
-        ("restart", "0x37b1/agent-blackbox"),
-    ]
-    assert server._connection_states[Cfg.context_graph_id]["state"] == "syncing"
-
-
-def test_dashboard_clears_stale_pending_approval_once_catchup_is_running():
-    class Cfg:
-        dkg_url = "http://127.0.0.1:9320"
-        dkg_home = "/tmp/blackbox-dkg"
-        context_graph_id = "0x37b1/agent-blackbox"
-        graph_peer_id = "graph-peer"
-
-    class FakeClient:
-        def __init__(self, *, url, dkg_home):
-            pass
-
-        def agent_identity(self):
-            return {"agentAddress": "0x66bc7cd539d3bb0be39158dd14f27b38342c7e6a"}
-
-        def context_graph_has_agent(self, cg_id, agent_address):
-            return True
-
-        def subscribe_context_graph(self, cg_id):
-            return {"catchup": {"status": "running"}}
-
-        def catchup_status(self, cg_id):
-            return {"status": "running"}
-
-    class EmptyRuleset:
-        def counts(self):
-            return {}
-
-        def source_count(self, source):
-            return 0
-
-    class FakeRulesetModule:
-        @staticmethod
-        def refresh(cfg, client):
-            return EmptyRuleset()
-
-    server._connection_states.clear()
-    server._connection_states[Cfg.context_graph_id] = {
-        "state": "pending-approval",
-        "updated_at": 1.0,
-    }
-
-    result = server._sync_ruleset_once(lambda: Cfg(), FakeClient, FakeRulesetModule)
-
-    assert result == {"total": 0, "public": 0, "community": 0}
-    assert server._connection_states[Cfg.context_graph_id]["state"] == "syncing"
-
-
-@pytest.mark.skip(reason="dashboard never repairs sync through a private join")
-def test_dashboard_failed_catchup_with_stale_public_rows_refreshes_join_before_restart():
-    class Cfg:
-        dkg_url = "http://127.0.0.1:9320"
-        dkg_home = "/tmp/blackbox-dkg"
-        context_graph_id = "0x37b1/agent-blackbox"
-        graph_peer_id = "graph-peer"
-
-    events = []
-
-    class FakeClient:
-        def __init__(self, *, url, dkg_home):
-            pass
-
-        def agent_identity(self):
-            return {"agentAddress": "0x66bc7cd539d3bb0be39158dd14f27b38342c7e6a"}
-
-        def context_graph_has_agent(self, cg_id, agent_address):
-            return True  # stale allowlist entry; the new peer binding is missing
-
-        def subscribe_context_graph(self, cg_id):
-            events.append(("subscribe", cg_id))
-            return {"catchup": {"status": "failed"}}
-
-        def catchup_status(self, cg_id):
-            events.append(("status", cg_id))
-            return {"status": "failed"}
-
-        def request_join(self, cg_id, graph_peer_id):
-            events.append(("join", cg_id, graph_peer_id))
-            return {"alreadyMember": True, "delivered": 1}
-
-        def restart_context_graph_catchup(self, cg_id):
-            events.append(("restart", cg_id))
-
-    class StaleRuleset:
-        def counts(self):
-            return {"dependency": 2}
-
-        def source_count(self, source):
-            return 2 if source == "public" else 0
-
-    class FakeRulesetModule:
-        @staticmethod
-        def refresh(cfg, client):
-            events.append(("refresh", cfg.context_graph_id))
-            return StaleRuleset()
-
-    server._join_attempts.clear()
-    server._connection_states.clear()
-    result = server._sync_ruleset_once(lambda: Cfg(), FakeClient, FakeRulesetModule)
-
-    assert result == {"total": 2, "public": 2, "community": 0}
-    assert events == [
-        ("subscribe", "0x37b1/agent-blackbox"),
-        ("refresh", "0x37b1/agent-blackbox"),
-        ("status", "0x37b1/agent-blackbox"),
-        ("join", "0x37b1/agent-blackbox", "graph-peer"),
-        ("restart", "0x37b1/agent-blackbox"),
-    ]
-    assert server._connection_states[Cfg.context_graph_id]["state"] == "syncing"
-
-
 def test_dashboard_graph_has_fullscreen_control():
     html = (Path(server.__file__).parent / "static" / "index.html").read_text(
         encoding="utf-8"
@@ -953,7 +599,6 @@ def test_blackbox_dashboard_chat_starts_session(monkeypatch):
         calls.append(argv)
         return subprocess.CompletedProcess(argv, 0, stdout="hello\n", stderr="\nsession_id: sid-1\n")
 
-    monkeypatch.setattr(server.shutil, "which", lambda name: "/bin/hermes")
     monkeypatch.setattr(server.subprocess, "run", fake_run)
     monkeypatch.setattr(attach_plugin_copy, "repo_root", lambda: Path("/tmp/repo"))
 
@@ -963,7 +608,7 @@ def test_blackbox_dashboard_chat_starts_session(monkeypatch):
 
     assert res.status_code == 200
     assert res.json() == {"ok": True, "answer": "hello", "session_id": "sid-1"}
-    assert calls == [["/bin/hermes", "blackbox", "chat", "--query=hi", "--quiet", "--pass-session-id"]]
+    assert calls == [[*THIS_HERMES, "blackbox", "chat", "--query=hi", "--quiet", "--pass-session-id"]]
 
 
 def test_blackbox_dashboard_chat_resumes_session(monkeypatch):
@@ -973,7 +618,6 @@ def test_blackbox_dashboard_chat_resumes_session(monkeypatch):
         calls.append(argv)
         return subprocess.CompletedProcess(argv, 0, stdout="follow-up\n", stderr="\nsession_id: sid-1\n")
 
-    monkeypatch.setattr(server.shutil, "which", lambda name: "/bin/hermes")
     monkeypatch.setattr(server.subprocess, "run", fake_run)
     monkeypatch.setattr(attach_plugin_copy, "repo_root", lambda: Path("/tmp/repo"))
 
@@ -985,7 +629,7 @@ def test_blackbox_dashboard_chat_resumes_session(monkeypatch):
     assert res.json() == {"ok": True, "answer": "follow-up", "session_id": "sid-1"}
     assert calls == [
         [
-            "/bin/hermes",
+            *THIS_HERMES,
             "blackbox",
             "chat",
             "--query=which of these?",
@@ -997,7 +641,6 @@ def test_blackbox_dashboard_chat_resumes_session(monkeypatch):
 
 
 def _chat(monkeypatch, fake_run, body):
-    monkeypatch.setattr(server.shutil, "which", lambda name: "/bin/hermes")
     monkeypatch.setattr(server.subprocess, "run", fake_run)
     monkeypatch.setattr(attach_plugin_copy, "repo_root", lambda: Path("/tmp/repo"))
     client = TestClient(server.create_app(), base_url="http://127.0.0.1")
@@ -1015,7 +658,7 @@ def test_blackbox_dashboard_chat_drops_a_session_id_that_is_not_one(monkeypatch)
     res = _chat(monkeypatch, fake_run, {"message": "-v", "session_id": "--yolo x"})
 
     assert res.status_code == 200
-    assert calls == [["/bin/hermes", "blackbox", "chat", "--query=-v", "--quiet", "--pass-session-id"]]
+    assert calls == [[*THIS_HERMES, "blackbox", "chat", "--query=-v", "--quiet", "--pass-session-id"]]
 
 
 def test_blackbox_dashboard_chat_never_shows_the_system_error(monkeypatch):
@@ -1155,3 +798,17 @@ def test_new_retryable_failure_is_not_hidden_by_old_running_job():
                   "error": 'POST /api/shared-memory/catchup {"retryable":true,"errorCode":"DURABLE_CATCHUP_ALL_PEERS_FAILED"}'})
     assert activity["status"] == "waiting"
     assert activity["phase"] == "waiting-for-publisher-capacity"
+
+
+def test_an_older_job_stamped_in_milliseconds_never_hides_the_transfer_failure():
+    """current_transfer_error read times with float(): an ISO string became 0 and a DKG job's
+    epoch MILLISECONDS beat any seconds value, so an OLDER catch-up job hid the failure (and its
+    "publisher busy" reason) while catchup_supersedes_failure, beside it, said no. Both now read
+    times through sync_timing.sync_time."""
+    from plugins.blackbox.dashboard.sync_labels import current_transfer_error
+    failed_at = 1_800_000_000.0
+    transfer = {"status": "failed", "updated_at": failed_at, "error": "publisher busy"}
+    older_job = {"status": "running", "startedAt": int((failed_at - 60) * 1000)}   # milliseconds, a minute before
+    newer_job = {"status": "running", "startedAt": "2027-01-15T08:01:40+00:00"}    # ISO, after
+    assert current_transfer_error(transfer, older_job) == "publisher busy"
+    assert current_transfer_error(transfer, newer_job) == ""

@@ -12,7 +12,10 @@ Three pure helpers, so the route body stays a wiring list:
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any
+
+from .sync_timing import sync_time
+
 _SYNC_LABEL_SUFFIX = {
     "ready": "synced",
     "syncing": "syncing",
@@ -94,13 +97,5 @@ def current_transfer_error(transfer: dict[str, Any], catchup: dict[str, Any]) ->
     live job ("Fetching graph snapshot"), not a stale "waiting for publisher" or error.
     """
     newer_job = (str(catchup.get("status") or "").lower() in {"queued", "running"}
-                 and _sync_time(catchup.get("startedAt")) > _sync_time(transfer.get("updated_at")))
+                 and sync_time(catchup.get("startedAt")) > sync_time(transfer.get("updated_at")))
     return "" if newer_job else str(transfer.get("error") or "")
-
-
-def _sync_time(value: Any) -> float:
-    """A sync-state time as seconds (0.0 when missing or unreadable)."""
-    try:
-        return float(value or 0)
-    except (TypeError, ValueError):
-        return 0.0

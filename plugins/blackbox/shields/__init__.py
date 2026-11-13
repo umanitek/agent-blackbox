@@ -91,7 +91,9 @@ def _load_all(shields: Iterable[Shield]) -> dict[str, ShieldData]:
     loaded: dict[str, ShieldData] = {}
     for shield in shields:
         try:
-            loaded[shield.id] = load_shield_data(shield)
+            loaded[shield.id] = data = load_shield_data(shield)
+            if shield.use_data is not None:   # the shield's own copy comes from this one read
+                shield.use_data(data.packs, data.roots)
         except Exception as exc:   # loading never takes the registry (and with it the guard) down
             logger.warning("blackbox: shield %s data could not be loaded: %s", shield.id, exc)
             loaded[shield.id] = ShieldData(health=(f"shield data unavailable — {type(exc).__name__}",))

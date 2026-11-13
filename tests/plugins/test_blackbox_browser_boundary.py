@@ -142,7 +142,7 @@ def test_token_is_compared_in_constant_time(loopback_client, monkeypatch):
 
     monkeypatch.setattr(browser_boundary.secrets, "compare_digest", spy)
     assert loopback_client.post("/change", headers={"X-Blackbox-Token": "guess"}).status_code == 403
-    assert calls == [("guess", PROCESS_TOKEN)]
+    assert calls == [(b"guess", PROCESS_TOKEN.encode())]   # as bytes: any header value compares, never raises
 
 
 # ------------------------------------------------------------------ KI-390: the port is part of the origin
@@ -199,3 +199,30 @@ def test_the_dashboard_escape_covers_the_single_quote():
     rendered = subprocess.run([node, "-e", esc + "console.log(esc(\"<a title='x' href=\\\"y\\\">&</a>\"));"],
                               capture_output=True, text=True, check=True).stdout.strip()
     assert rendered == "&lt;a title=&#39;x&#39; href=&quot;y&quot;&gt;&amp;&lt;/a&gt;"
+
+
+def test_a_token_with_characters_outside_ascii_is_refused_not_an_error(loopback_client):
+    """The server decodes headers as latin-1; comparing such a str raised TypeError inside the
+    middleware, so the request got a 500 instead of a 403 (still refused, but not as designed)."""
+    response = loopback_client.post("/change", headers={"X-Blackbox-Token": "tok\xe9n".encode("latin-1")})
+    assert response.status_code == 403 and response.json() == {"error": "missing or invalid session token"}
+
+
+def test_a_reference_becomes_a_link_only_as_a_web_address():
+    """refsHTML put any reference string into <a href>: graph and finding data choose them, and a
+    javascript: link clicked in the dashboard would run in its origin (the session token's)."""
+    import re
+    import shutil
+    import subprocess
+    from pathlib import Path
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is not installed")
+    html = (Path(__file__).resolve().parents[2] / "plugins" / "blackbox" / "dashboard" / "static" / "index.html").read_text(encoding="utf-8")
+    code = "".join(re.search(rf"\n  function {name}\(.*?\n  \}}\n", html, re.DOTALL).group(0) for name in ("esc", "refsHTML"))
+    code += re.search(r"\n  function isWebLink\(u\) \{.*?\}\n", html).group(0) + "\nfunction linkIconSVG() { return ''; }\n"
+    refs = ["https://osv.dev/vulnerability/MAL-1", "javascript:alert(document.cookie)", " JavaScript:void(0)", "data:text/html,x"]
+    out = subprocess.run([node, "-e", code + f"console.log(refsHTML({refs!r}));"], capture_output=True, text=True, check=True).stdout
+    assert out.count("<a href=") == 1 and 'href="https://osv.dev/vulnerability/MAL-1"' in out
+    assert "href=\"javascript" not in out.lower() and "href=\"data:" not in out

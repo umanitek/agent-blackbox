@@ -152,6 +152,7 @@ CLASSIFIED = {
     "curate/policy_consent.json": "the operator's policy acceptance: names no reporter",
     "curate/service_budget.json": "today's counts: names no reporter",
     "curate/consent.jsonl": "the record of published acts (accountability): codes and summaries",
+    "curate/consent.jsonl.lock": "an empty lock file: one consent at a time; holds nothing",
     "curate/signing_log.jsonl": "the record of signatures this node made: kind, digest, own key, time — names no reporter",
     "curate/proposals/*.json": "the record of proposed and published statements (accountability)",
     "curate/inbox_cursor.json": "a message position: names nobody",

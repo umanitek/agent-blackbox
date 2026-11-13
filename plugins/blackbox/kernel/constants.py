@@ -14,11 +14,11 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Mapping, Tuple
+from typing import Mapping
 
 # The release number. plugin.yaml `version` and CHANGELOG.md match it (test_blackbox_versioning.py);
 # keep it a plain literal on one line: attach/plugin_copy.py reads it from installed copies as text.
-__version__ = "1.4.0"
+__version__ = "1.4.1"
 
 # The Blackbox assistant's own Hermes profile. ``blackbox chat`` and the dashboard's assistant run
 # under it; the agent list hides it (Blackbox's control profile, not an agent it protects). One name
@@ -41,6 +41,8 @@ BLACKBOX_ONTOLOGY = "http://umanitek.ai/ontology/guardian/"
 
 # rdf:type IRIs -------------------------------------------------------------
 RDF_TYPE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
+DEFENDER_PREDICATES = "urn:defender:p:"   # the ``dp:`` prefix: predicates of the imported corpus
+BLACKBOX_PREDICATES = "urn:blackbox:p:"   # the ``bp:`` prefix: predicates Blackbox's own records add
 XSD_DATETIME = "http://www.w3.org/2001/XMLSchema#dateTime"
 
 REPORT_TYPE_IRI = f"{BLACKBOX_ONTOLOGY}ThreatReport"
@@ -171,6 +173,7 @@ LEGACY_CONTEXT_GRAPH_IDS = frozenset({
 #: Default Blackbox-managed local DKG node HTTP endpoint.
 DEFAULT_DKG_PORT = 9320
 DEFAULT_DKG_URL = f"http://127.0.0.1:{DEFAULT_DKG_PORT}"
+DEFAULT_DASHBOARD_PORT = 9700   #: where the local dashboard listens unless `dashboard_port` says otherwise
 
 #: Source peer used for verified catch-up of the default threat graph.
 DEFAULT_GRAPH_PEER_ID = "12D3KooWBJskzr2unXQG9mR3LRZFUJoxWr1PN6hTbyWyKndHXjZM"

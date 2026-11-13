@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 
 _DURABLE_PROGRESS_RE = re.compile(
@@ -38,6 +39,28 @@ def capture_durable_progress_cursor(dkg_home: str) -> Optional[DurableProgressCu
     )
 
 
+#: How much of daemon.log's end the durable-progress read scans.
+_DURABLE_TAIL_BYTES = 4_000_000
+
+
+def _read_log_tail(dkg_home: str, max_bytes: int, after: Optional[DurableProgressCursor] = None) -> Optional[str]:
+    """The last *max_bytes* of the node's daemon.log as text (None when it cannot be read) — THE
+    one tail reader. The size comes from the OPEN handle (fstat): a rotation between open and
+    stat must not pair the new file's size with the old file. With *after*, only what the same
+    log (device + inode) wrote past that cursor; a log truncated in place starts afresh."""
+    try:
+        with (Path(dkg_home) / "daemon.log").open("rb") as handle:
+            stat = os.fstat(handle.fileno())
+            start = max(0, stat.st_size - max_bytes)
+            same_log = after is not None and (stat.st_dev, stat.st_ino) == (after.device, after.inode)
+            if same_log and stat.st_size >= after.offset:
+                start = max(start, after.offset)
+            handle.seek(start)
+            return handle.read().decode("utf-8", errors="replace")
+    except OSError:
+        return None
+
+
 def read_durable_progress(
     dkg_home: str,
     context_graph_id: str,
@@ -53,21 +76,8 @@ def read_durable_progress(
     only progress emitted after that cursor is considered; a rotated log starts
     a fresh window.
     """
-    path = Path(dkg_home) / "daemon.log"
-    try:
-        with path.open("rb") as handle:
-            stat = path.stat()
-            start = max(0, stat.st_size - 4_000_000)
-            if after is not None and (
-                stat.st_dev == after.device and stat.st_ino == after.inode
-            ):
-                # A smaller file was truncated in place and therefore starts a
-                # new log generation. Otherwise exclude all pre-request lines.
-                if stat.st_size >= after.offset:
-                    start = max(start, after.offset)
-            handle.seek(start)
-            text = handle.read().decode("utf-8", errors="replace")
-    except OSError:
+    text = _read_log_tail(dkg_home, _DURABLE_TAIL_BYTES, after)
+    if text is None:
         return {}
 
     matches = []
@@ -160,12 +170,8 @@ def read_recovery_backlog(dkg_home: str, context_graph_id: str) -> Optional[Reco
     None when the log is missing or holds no pass for this graph ("could not
     tell" — never read as zero pending).
     """
-    path = Path(dkg_home) / "daemon.log"
-    try:
-        with path.open("rb") as handle:
-            handle.seek(max(0, path.stat().st_size - _RECONCILE_TAIL_BYTES))
-            text = handle.read().decode("utf-8", errors="replace")
-    except OSError:
+    text = _read_log_tail(dkg_home, _RECONCILE_TAIL_BYTES)
+    if text is None:
         return None
     newest = None
     for match in _RECONCILE_PASS_RE.finditer(text):

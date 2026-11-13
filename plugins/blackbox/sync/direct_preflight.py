@@ -1,11 +1,18 @@
 """Validate direct graph mode before any sync side effect."""
 from .. import ruleset
+from ..kernel.config import reads_graph_directly
 from ..kernel.dkg_client import DkgError
 from . import native
 
 
 def valid(cfg):
-    if getattr(cfg, "detection_backend", "legacy-cache") != "dkg":
+    if getattr(cfg, "snapshot_sync_error", ""):
+        # The operator asked for snapshot sync and the block cannot be used: never fall
+        # back to another sync mode on our own.
+        print(f"snapshot_sync in config.yaml is invalid: {cfg.snapshot_sync_error}. "
+              "Correct or remove that block, then run sync again.")
+        return False
+    if not reads_graph_directly(cfg):
         return True
     try:
         ruleset.validate_config(cfg)

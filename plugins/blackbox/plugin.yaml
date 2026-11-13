@@ -1,5 +1,5 @@
 name: blackbox
-version: "1.4.0"  # the release number; kernel/constants.py __version__ and CHANGELOG.md match it
+version: "1.4.1"  # the release number; kernel/constants.py __version__ and CHANGELOG.md match it
 # The Hermes release this plugin is built and tested against (pm-managed installs,
 # hermes_yaml, the register_* routes it uses). SemVer floor, as the catalog requires.
 requires_hermes: ">=0.21.7"

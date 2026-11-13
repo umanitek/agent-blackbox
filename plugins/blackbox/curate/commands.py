@@ -26,10 +26,12 @@ from ..kernel.signing import Authority
 from ..kernel.signing import CuratorStatement
 from . import console, dossier, handoff, intake, keys, node_ui_views, promotion, publishing, queue, verbs, watch
 from .proposals import transport
+from .service import inbox, steps
 from .ladder import outcomes
 from .upkeep import heartbeat, published
 from .context import CurateContext, build_context, verified_identifiers
 from .proposals import ProposalState, ProposalStore
+from .publishing.errors import guarded
 from ..kernel.health import today_utc
 
 _term = display_safety.term_safe
@@ -40,14 +42,7 @@ _term = display_safety.term_safe
 
 def cmd_curate(args: argparse.Namespace) -> int:
     verb: Callable[[argparse.Namespace], int] = _VERBS.get(args.verb or "", _usage)
-    try:
-        return verb(args)
-    except verbs.VerbError as exc:
-        print(f"Refused: {exc}")
-        return 2
-    except Exception as exc:  # the outermost CLI boundary: a readable line, never a traceback
-        print(f"curate {args.verb} failed: {_term(str(exc), 200)}")
-        return 1
+    return guarded(verb)(args)
 
 
 def _usage(args: argparse.Namespace) -> int:
@@ -218,11 +213,13 @@ def _propose_promotion(ctx: CurateContext, store: ProposalStore, args: argparse.
 def _inbox(args: argparse.Namespace) -> int:
     ctx = _ctx(args)
     store = ProposalStore()
-    received = transport.receive_proposals(ctx.client, transport.InboxCursor())
-    for proposal in received:
-        store.save(proposal)
+    # The same admission as the service beat: only what a curator signed, never over one already held.
+    saved, dropped = inbox.admit(ctx.manifest, store, transport.receive_proposals(ctx.client, transport.InboxCursor()))
+    for proposal in saved:
         print(f"received {proposal.id} ({proposal.kind} · {_term(proposal.identifier, 80)})")
-    if not received:
+    if dropped:
+        print(f"ignored {dropped} message(s) that no curator signed")
+    if not saved:
         print("no new proposals")
     return 0
 
@@ -231,19 +228,19 @@ def _approve(args: argparse.Namespace) -> int:
     proposal, outcome = verbs.approve(_ctx(args), ProposalStore(), args.proposal_id, evidence=args.evidence,
                                       typed_code=args.code, yes=args.yes, root=args.root)
     print(f"{proposal.id}: {outcome}")
-    return 0 if proposal.state is ProposalState.PUBLISHED or "published" in outcome else 2
+    return 0 if proposal.state is ProposalState.PUBLISHED or outcome.published else 2
 
 
 def _publish(args: argparse.Namespace) -> int:
     proposal, outcome = publishing.publish(_ctx(args), ProposalStore(), args.proposal_id, typed_code=args.code, yes=args.yes)
     print(f"{proposal.id}: {outcome}")
-    return 0 if outcome.startswith("published") else 2
+    return 0 if outcome.published else 2
 
 
 def _heartbeat(args: argparse.Namespace) -> int:
     proposal, outcome = heartbeat.publish_heartbeat(_ctx(args), ProposalStore(), typed_code=args.code, yes=args.yes)
     print(f"heartbeat {proposal.id}: {outcome}")
-    return 0 if outcome.startswith("published") else 2
+    return 0 if outcome.published else 2
 
 
 def _upkeep(args: argparse.Namespace) -> int:
@@ -291,7 +288,7 @@ def _watch(args: argparse.Namespace) -> int:
             announced = watcher.poll(queue.delta_view(compiled.community, verified_identifiers(compiled, compiled.community)), sink)
             if announced:
                 print(f"announced {len(announced)} new threat(s): " + ", ".join(_term(a, 60) for a in announced[:10]))
-        items = verbs.curator_alarms(ctx, compiled, today=today_utc(), now=now) + watch.manifest_items(ctx.manifest, now)
+        items = steps.alarm_items(ctx, today=today_utc(), now=now)   # the beat's own assembly
         delivered = alarms.poll(items, sink, now=now)   # R10b + W1 items + the daily dead-man beat
         alarms.post_metrics(lambda: console.collect_metrics(console.MetricsSources(), lambda: ctx, now),
                             sink, now)   # F-035: C4's one record, built only when the hourly post is due

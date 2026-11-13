@@ -16,8 +16,8 @@ Numbering, the quorum check, consent and the write itself live in
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, timedelta, timezone, UTC
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
+from datetime import date, datetime, timedelta, UTC
+from typing import Any, Iterable, Mapping, Optional
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
@@ -30,7 +30,7 @@ from . import dossier, keys, promotion
 from .proposals import transport
 from .context import CurateContext, KillListDraft, ManifestDraft, PromotionDraft, StatementDraft
 from .proposals import Proposal, ProposalState, ProposalStore
-from .publishing import MANIFEST_KIND, VerbError, next_sequence, publish, strategies
+from .publishing import MANIFEST_KIND, PublishResult, VerbError, next_sequence, publish, strategies
 from .publishing.publish import checked_promotion
 from ..community import reputation
 
@@ -239,7 +239,7 @@ def propose_kill_list(ctx: CurateContext, store: ProposalStore, *, entries: list
 
 
 def approve(ctx: CurateContext, store: ProposalStore, proposal_id: str, *, evidence: str,
-            typed_code: Optional[str], yes: bool, root: bool = False, standing: str = "") -> tuple[Proposal, str]:
+            typed_code: Optional[str], yes: bool, root: bool = False, standing: str = "") -> tuple[Proposal, PublishResult]:
     """Second signature + consent + publish. Returns (proposal, what happened).
     *root* (SANDBOX, kill lists): also add the root key's signature — the third
     signature a wide or popular kill needs (R14). *standing* — the curator
@@ -275,14 +275,14 @@ def approve(ctx: CurateContext, store: ProposalStore, proposal_id: str, *, evide
 
 
 def _check_first_signer(ctx: CurateContext, envelope: signing.SignedEnvelope, proposal: Proposal, my_key: str) -> None:
-    signers = ctx.manifest.curator_signers(envelope, statement_type=envelope.statement_type, graph=proposal.graph) \
-        if proposal.kind != CuratorStatement.PROMOTION.value else \
-        signing.verified_signers(envelope, statement_type=envelope.statement_type, environment=ctx.manifest.environment,
-                                 graph=proposal.graph, chain=ctx.manifest.chain, root_epoch=ctx.manifest.root_epoch) \
-        & frozenset(ctx.manifest.curator_keys)
-    if not signers:
+    # The manifest's own rule (one key per operator; the break-glass key never counts toward a
+    # statement that raises enforcement), for promotions too: a promotion signed only by the
+    # break-glass key used to pass here, be co-signed and saved APPROVED, then stick at publish.
+    if not ctx.manifest.curator_signers(envelope, statement_type=envelope.statement_type, graph=proposal.graph):
         raise VerbError("the proposal is not signed by a curator key in the trusted manifest")
-    if my_key in signers:
+    signed = signing.verified_signers(envelope, statement_type=envelope.statement_type, environment=ctx.manifest.environment,
+                                      graph=proposal.graph, chain=ctx.manifest.chain, root_epoch=ctx.manifest.root_epoch)
+    if my_key in signed:
         raise VerbError("you already signed this proposal; the SECOND signature must come from another curator")
 
 

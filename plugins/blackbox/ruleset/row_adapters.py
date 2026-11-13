@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 from ..kernel import constants
 from . import safe_regex
 from ..kernel import threat_ids
@@ -191,12 +191,16 @@ def _row_to_rule(row: dict[str, Any], source: str = "public") -> Optional[tuple]
     return None
 
 
-#: The source and tier a verified rule is served under when it may not block —
-#: the one non-blocking tier the detectors know. They mirror
-#: ``live.scope.FLAG_ONLY_SOURCE`` / ``AssetTier.FLAG`` (``live`` imports this
-#: module, so the values are restated here; a test pins them equal).
+#: The source and tier a verified rule is served under when it may not block — the one
+#: non-blocking tier the detectors know. THE definition: ``live`` reads both from here
+#: (``AssetTier.FLAG`` is :data:`FLAG_TIER`); this module imports nothing from ``live``.
 FLAG_ONLY_SOURCE = "community"
 FLAG_TIER = "flag"
+
+
+def capped_at_flag(rule: dict[str, Any]) -> dict[str, Any]:
+    """*rule* served flag-only (a copy): the FLAG tier's source and tier, never a block."""
+    return {**rule, "source": FLAG_ONLY_SOURCE, "asset_tier": FLAG_TIER}
 
 
 def _dependency_rule(row: dict[str, Any], identifier: str, common: dict[str, Any]) -> Optional[tuple]:
@@ -210,14 +214,11 @@ def _dependency_rule(row: dict[str, Any], identifier: str, common: dict[str, Any
     pkg = extract_binding(row.get("packageName")).lower()
     ver = extract_binding(row.get("packageVersion"))
     if not (eco and pkg and ver):
-        # Fall back to parsing the identifier: dep:{eco}:{name}@{version}
-        try:
-            _, rest = identifier.split(":", 1)
-            eco2, tail = rest.split(":", 1)
-            pkg2, ver2 = tail.rsplit("@", 1)
-            eco, pkg, ver = eco2.lower(), pkg2.lower(), ver2
-        except ValueError:
+        # Fall back to the identifier itself: dep:{eco}:{name}@{version}
+        parsed = threat_ids.parse_dependency_identifier(identifier)
+        if parsed is None:
             return None
+        eco, pkg, ver = parsed[0].lower(), parsed[1].lower(), parsed[2]
     rule = {
         **common,
         "ecosystem": eco,
@@ -227,7 +228,7 @@ def _dependency_rule(row: dict[str, Any], identifier: str, common: dict[str, Any
         "kind": extract_binding(row.get("kind")) or None,
     }
     if rule["kind"] is None and rule["source"] == "public":
-        rule.update(source=FLAG_ONLY_SOURCE, asset_tier=FLAG_TIER)
+        rule = capped_at_flag(rule)
     return ("dependency", threat_ids.dependency_key(eco, pkg, ver), rule)
 
 

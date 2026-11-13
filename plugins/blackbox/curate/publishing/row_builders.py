@@ -45,7 +45,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Dict, List, Mapping, Optional, Protocol, Sequence, Tuple
+from typing import Mapping, Optional, Protocol, Sequence
 
 from ...kernel import constants, rdf_terms, signing, threat_ids
 from ...kernel.signing import promotion_statement as statement
@@ -61,7 +61,7 @@ _EVIDENCE_TRUNCATION_MARKER = " ...[truncated]"
 SIGNED_RULE_FIELDS = ("identifier", "severity", "kind", "ecosystem", "packageName", "packageVersion")
 #: The keys of a curator-asset promotion's payload (:func:`promotion_payload`).
 PAYLOAD_KEYS = frozenset({*SIGNED_RULE_FIELDS, "advisoryId", "name", "report", "reportDigest", "reporterKey"})
-_DEFENDER_PREDICATE = "urn:defender:p:"
+_DEFENDER_PREDICATE = constants.DEFENDER_PREDICATES
 _IOC_SIGNAL_TYPE = "urn:defender:IocSignal"
 
 

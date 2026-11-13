@@ -19,7 +19,7 @@ from enum import Enum
 from typing import Optional
 
 from ...kernel import identity
-from ...kernel.dkg_client import DkgClient, DkgError
+from ...kernel.dkg_client import DkgClient
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +29,19 @@ def has_definition(entry: dict[str, object]) -> bool:
     access policy. A node without it lists the graph with no policy (KI-295)."""
     return str(entry.get("accessPolicy") or "").strip().lower() in {"public", "private"}
 
+
+
+def listing_row(client: DkgClient, graph: str) -> tuple[bool, Optional[dict[str, object]]]:
+    """``(readable, row)``: whether the node's context-graph listing could be read, and its row
+    for *graph* (None when not listed) — "could not read" and "not listed" kept apart. The ONE
+    read of the listing: the join state machine, the dashboard's status and the community
+    read's "is an empty read proof?" check all ask it."""
+    try:
+        entries = client.context_graphs()
+    except Exception as exc:  # health: allow BLE001 -- fail-open probe: any failure means "could not tell" (LES-011)
+        logger.debug("blackbox: context-graph listing unreadable: %s", exc)
+        return False, None
+    return True, next((entry for entry in entries if str(entry.get("id") or "") == graph), None)
 
 class JoinState(Enum):
     """Where this node stands with the graph the community lives in, as its own listing says.
@@ -82,13 +95,8 @@ def join_state_of(entry: Optional[dict[str, object]], *, listing_read: bool) -> 
 
 def read_join_state(client: DkgClient, graph: str) -> JoinState:
     """Ask the node once (its context-graph listing) where it stands with *graph*."""
-    try:
-        entries = client.context_graphs()
-    except Exception as exc:   # could not tell (LES-011)
-        logger.debug("blackbox: community join state unreadable: %s", exc)
-        return JoinState.UNKNOWN
-    entry = next((row for row in entries if str(row.get("id") or "") == graph), None)
-    return join_state_of(entry, listing_read=True)
+    readable, entry = listing_row(client, graph)
+    return join_state_of(entry, listing_read=readable)
 
 
 class Admission(Enum):
@@ -127,15 +135,41 @@ def admission_of(entry: Optional[dict[str, object]], address: str, graph: str) -
         return Admission.UNKNOWN
     if address and owns(address, graph):
         return Admission.OWNER
-    if not needs_join(entry):
+    # The state machine's own decision, so the dashboard can never say "open" while it waits.
+    return _ADMISSION_OF_VERDICT[join_verdict(entry)]
+
+
+#: :func:`join_verdict` -> what the dashboard shows.
+_ADMISSION_OF_VERDICT = {"member": Admission.APPROVED, "join": Admission.WAITING, "open": Admission.OPEN,
+                         "undecided": Admission.UNKNOWN}
+
+
+def join_verdict(entry: Optional[dict[str, object]]) -> str:
+    """Pure: what this node must do about joining the listed graph.
+
+    * ``member`` — the owner decides who writes AND the node says this node is already
+      admitted (``callerInvolved`` true: its wallet is the curator or on the allowlist);
+    * ``join`` — the owner decides who writes and the node says this node is NOT admitted;
+    * ``open`` — definitely no join step: an unregistered graph whose definition is in,
+      or a registered one whose publish policy is not curated;
+    * ``undecided`` — not listed, the definition or chain record has not arrived, or the
+      node could not tell whether this node is admitted (it leaves ``callerInvolved``
+      out when its allowlist lookup fails) — ask again later, never guess (LES-011).
+
+    ``callerInvolved`` is DKG 10.0.25's own answer for the calling agent: the curator
+    match OR ``callerIsAllowlistedAgentParticipant`` (dkg-agent-cg-resolve.js)."""
+    if not entry:
+        return "undecided"
+    if needs_join(entry):
+        involved = entry.get("callerInvolved")
+        if involved is True:
+            return "member"
+        return "join" if involved is False else "undecided"
+    registered = bool(entry.get("onChainId")) or isinstance(entry.get("onChain"), dict)
+    if registered:
         on_chain = entry.get("onChain") if isinstance(entry.get("onChain"), dict) else {}
-        registered = bool(entry.get("onChainId")) or bool(on_chain)
-        decided = on_chain.get("publishPolicy") if registered else has_definition(entry)
-        return Admission.OPEN if decided else Admission.UNKNOWN
-    involved = entry.get("callerInvolved")
-    if involved is True:
-        return Admission.APPROVED
-    return Admission.WAITING if involved is False else Admission.UNKNOWN
+        return "open" if on_chain.get("publishPolicy") else "undecided"
+    return "open" if has_definition(entry) else "undecided"
 
 
 @dataclass(frozen=True)
@@ -150,11 +184,8 @@ class MembershipStatus:
 def read_membership_status(client: DkgClient, graph: str) -> MembershipStatus:
     """Ask the node once (its context-graph listing) where it stands with *graph*:
     connected or not, approved or not. Fail-open: an unreadable listing is UNKNOWN."""
-    try:
-        entries = client.context_graphs()
-    except (DkgError, OSError, ValueError) as exc:   # could not tell (LES-011)
-        logger.debug("blackbox: community membership status unreadable: %s", exc)
+    readable, entry = listing_row(client, graph)
+    if not readable:
         return MembershipStatus(JoinState.UNKNOWN, Admission.UNKNOWN)
-    entry = next((row for row in entries if str(row.get("id") or "") == graph), None)
     address = identity.reporter_address(client) or ""
     return MembershipStatus(join_state_of(entry, listing_read=True), admission_of(entry, address, graph))

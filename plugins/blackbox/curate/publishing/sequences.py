@@ -15,7 +15,6 @@ Usage::
 from __future__ import annotations
 
 import logging
-from typing import List
 
 from ... import community
 from ...kernel import constants, signing, sparql_text

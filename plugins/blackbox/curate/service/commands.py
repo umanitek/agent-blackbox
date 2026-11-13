@@ -25,6 +25,7 @@ from .. import keys
 from ..proposals import CODE_CHARS
 from ..context import build_context
 from ..publishing import VerbError
+from ..publishing.errors import guarded
 from ...kernel import display_safety
 from . import policy
 from .beat import Beat, ContextFactory
@@ -83,23 +84,17 @@ def add_service_parser(verbs_: Any) -> None:
     o.set_defaults(func=cmd_service)
 
 
+@guarded
 def cmd_service(args: argparse.Namespace) -> int:
-    """``run`` or ``policy``; 2 when refused, 1 when it failed."""
-    try:
-        if args.verb == "policy":
-            return policy_command(accept=args.accept, withdraw=args.withdraw, code=args.code)   # local: no context
+    """``run`` or ``policy``; 2 when refused, 1 when it failed (:func:`..publishing.errors.guarded`)."""
+    if args.verb == "policy":
+        return policy_command(accept=args.accept, withdraw=args.withdraw, code=args.code)   # local: no context
 
-        def context(interest: Sequence[str]):
-            return build_context(getattr(args, "compiled_ruleset", None), authority=getattr(args, "authority", None),
-                                 interest=interest)
-        return run_command(context, peers=args.peer or [], interval=args.interval, once=args.once,
-                           publisher=args.publisher)
-    except VerbError as exc:
-        print(f"Refused: {exc}")
-        return 2
-    except Exception as exc:  # the outermost CLI boundary: a readable line, never a traceback
-        print(f"curate {args.verb} failed: {_term(str(exc), 200)}")
-        return 1
+    def context(interest: Sequence[str]):
+        return build_context(getattr(args, "compiled_ruleset", None), authority=getattr(args, "authority", None),
+                             interest=interest)
+    return run_command(context, peers=args.peer or [], interval=args.interval, once=args.once,
+                       publisher=args.publisher)
 
 
 def run_command(context: ContextFactory, *, peers: Sequence[str], interval: float, once: bool, publisher: bool = False,

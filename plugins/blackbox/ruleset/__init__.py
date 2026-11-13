@@ -15,8 +15,8 @@ and serves it to the hot path. Callers use this surface only:
 * :class:`GrowthWatch` + :func:`request_refresh_now` — refresh within ~30 s of new
   verified assets reaching the node instead of at the next hourly sync.
 * :func:`fetch_local_records` — this node's private audit records (the Local tier).
-* :func:`build_from_rows`, :func:`verified_identifiers`, :func:`fetch_tier` —
-  compile / proof / paging entry points used by the dashboard and tests.
+* :func:`build_from_rows`, :func:`fetch_tier` —
+  compile / paging entry points used by the dashboard and tests.
 * ``RulesetRefresh*`` — refresh outcomes callers branch on.
 * :mod:`.live` — the live verified lookups (DKG-lookup): ``rs.live_lookup()``
   asks the node's local store at check time instead of a compiled dict.
@@ -33,7 +33,7 @@ Usage::
 
 from __future__ import annotations
 
-from .compiler import Ruleset, build_from_rows, verified_identifiers
+from .compiler import Ruleset, build_from_rows
 from .errors import RulesetRefreshIncomplete, RulesetRefreshLockUnavailable, RulesetRefreshUnavailable
 from .fetching import fetch_local_records, fetch_tier
 from . import live
@@ -79,6 +79,5 @@ __all__ = [
     "semantic_index_spec",
     "validate_config",
     "verified_download_totals",
-    "verified_identifiers",
     "verified_progress",
 ]

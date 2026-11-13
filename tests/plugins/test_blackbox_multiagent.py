@@ -223,3 +223,37 @@ def test_local_activity_reads_openclaw_visibility_details_and_end_reason():
         "type": "dependency", "ts": 32, "ecosystem": "npm", "name": "left-pad",
         "version": "1.3.0", "tool": "shell", "threats": []
     }
+
+
+def test_a_damaged_or_non_object_log_line_never_breaks_the_feed_and_is_not_counted():
+    """Each log reader had its own read loop; the findings reader handed any JSON value to
+    the row builder, so a line holding a list ended the whole findings view. They all read
+    through kernel.bounded_files.read_jsonl now (object rows only), and the feed's total is
+    the length of the very rows it pages — a damaged line is neither shown nor counted."""
+    home = constants.blackbox_home()
+    home.mkdir(parents=True, exist_ok=True)
+    _write_audit_line(home / "audit.jsonl", framework="hermes", event="session_start", ts=10,
+                      detail={"session_id": "hermes-1"})
+    with (home / "audit.jsonl").open("a", encoding="utf-8") as fh:
+        fh.write("{not json\n[1, 2]\n")
+    (home / "findings.jsonl").write_text('[1, 2]\n"text"\n', encoding="utf-8")
+
+    rows = audit.read_audit(limit=10)
+
+    assert [row["event"] for row in rows] == ["session_start"]
+    assert audit.count_audit() == len(rows) == 1
+    assert audit.read_findings(limit=10) == []
+
+
+def test_a_finding_row_reads_the_same_in_the_findings_list_and_the_activity_view():
+    """Three readers each re-derived a record's finding, and disagreed on a row without
+    `confirmed`: the findings list read it as verified, the Local activity view as heuristic.
+    Both read it through audit.findings' finding_of / is_confirmed now (the writer's default)."""
+    from plugins.blackbox.audit import activity, findings
+    old_row = {"ts": 5, "findings": [{"identifier": "ioc:domain:x.example", "severity": "high"}]}
+    finding = findings.finding_of(old_row)
+    assert finding["identifier"] == "ioc:domain:x.example"
+    listed = findings._flatten_finding_row(old_row, "hermes")
+    shown = activity._threat_row(old_row, finding, {})
+    assert listed["confirmed"] is shown["confirmed"] is True
+    assert findings.finding_of({"finding": "not a mapping"}) == {}

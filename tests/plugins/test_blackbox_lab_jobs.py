@@ -454,3 +454,29 @@ def test_the_lab_verb_does_not_grow_curate_commands():
     curate = Path(__file__).resolve().parents[2] / "plugins" / "blackbox" / "curate"
     text = (curate / "commands.py").read_text(encoding="utf-8")
     assert '"lab"' not in text and "cmd_lab" not in text and "lab.commands" not in text
+
+
+# --- several stores share one file: readers never write, writers never lose another's job ------
+
+def test_reading_jobs_never_rewrites_the_file(store, clock, tmp_path):
+    """The metrics and `lab status` read through their own store; a read used to save its view
+    of an expired job, writing a stale snapshot over the controller's newer one."""
+    record = _request(store, level=4)
+    store.start(record.job.key)
+    path = tmp_path / "lab" / "jobs.jsonl"
+    before = path.read_bytes()
+    clock.now += jobs.DEADLINE_SECONDS[4] + 1
+    reader = LabJobStore(path, clock=clock)
+    assert reader.get(record.job.key).state is LabJobState.COULD_NOT_TELL
+    assert [r.state for r in reader.records()] == [LabJobState.COULD_NOT_TELL]
+    assert path.read_bytes() == before
+
+
+def test_a_job_another_process_added_survives_this_stores_next_write(tmp_path, clock):
+    path = tmp_path / "lab" / "jobs.jsonl"
+    controller = LabJobStore(path, clock=clock)                 # loaded before the request below existed
+    cli = LabJobStore(path, clock=clock)
+    asked = _request(cli, identifier="url:https://first.example.test/")
+    other = _request(controller, identifier="url:https://second.example.test/")
+    keys = {r.job.key for r in LabJobStore(path, clock=clock).records()}
+    assert keys == {asked.job.key, other.job.key}

@@ -20,6 +20,7 @@ from fastapi.testclient import TestClient
 from plugins.blackbox import ruleset as rs_mod
 from plugins.blackbox.dashboard import server
 from plugins.blackbox.ruleset import Ruleset
+from _blackbox_fakes import dkg_client_fake
 
 
 DEV_GRAPH = "0x51E5dE758A45c8b64048E29918421F0bdD6D5d5C/agent-blackbox-community-dev"
@@ -218,3 +219,133 @@ def test_dashboard_page_keys_community_reload_on_the_tier_version():
     page = (Path(dashboard_pkg.__file__).parent / "static" / "index.html").read_text(encoding="utf-8")
     assert "status.community_version" in page
     assert 'resetGraphOnVersionChange("community", previousCommunityVersion' in page
+
+
+# --- KI-498: the boot warm-up really runs (it used to fail on its second call, silently) ---
+
+def test_the_boot_warm_up_runs_every_read_without_failing(monkeypatch, tmp_path, caplog):
+    import logging
+    monkeypatch.setenv("BLACKBOX_HOME", str(tmp_path / "bbhome"))
+    monkeypatch.setenv("BLACKBOX_CONTEXT_GRAPH_ID", DEV_GRAPH)
+    monkeypatch.setattr(rs_mod, "peek", lambda cfg: _community_ruleset())
+    with caplog.at_level(logging.WARNING, logger="plugins.blackbox.dashboard.lifecycle"):
+        with TestClient(server.create_app(), base_url="http://127.0.0.1:9700"):
+            pass                                     # leaving the app ends the warm-up and waits for it
+    assert not [r for r in caplog.records if "cache warm failed" in r.getMessage()]
+
+
+def test_background_work_runs_in_passes_and_calls_nothing_after_its_app_stops():
+    import threading
+    from fastapi import FastAPI
+    from plugins.blackbox.dashboard import lifecycle
+
+    app, calls, first_pass_done, release = FastAPI(), [], threading.Event(), threading.Event()
+
+    def slow():
+        calls.append("slow")
+        first_pass_done.set()
+        release.wait(5)                              # a read still in flight when the app stops
+    lifecycle.run_in_background(app, [lambda: calls.append("quick"), slow, lambda: calls.append("after")],
+                                name="test work", passes=2, pause_s=30.0, join_s=0.2)
+    with TestClient(app):
+        assert first_pass_done.wait(5)
+    release.set()                                    # the app is gone: the read in flight returns…
+    for thread in threading.enumerate():
+        if thread.name == "test work":
+            thread.join(5)
+
+    assert calls == ["quick", "slow"]                # …and nothing after it was called: no "after", no second pass
+
+
+def test_background_work_that_raises_is_a_warning_not_a_crash(caplog):
+    import logging
+    from fastapi import FastAPI
+    from plugins.blackbox.dashboard import lifecycle
+
+    app = FastAPI()
+
+    def broken():
+        raise RuntimeError("secret-looking detail")
+    lifecycle.run_in_background(app, [broken], name="test work")
+    with caplog.at_level(logging.WARNING, logger="plugins.blackbox.dashboard.lifecycle"):
+        with TestClient(app):
+            pass
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("test work failed: RuntimeError" in m for m in messages) and not any("secret-looking" in m for m in messages)
+
+
+def test_background_work_starts_again_each_time_its_app_starts():
+    from fastapi import FastAPI
+    from plugins.blackbox.dashboard import lifecycle
+
+    app, calls = FastAPI(), []
+    lifecycle.run_in_background(app, [lambda: calls.append("ran")], name="test work")
+    for _ in range(3):                               # one app, served three times (a module-scoped test app does this)
+        with TestClient(app):
+            pass
+
+    assert calls == ["ran", "ran", "ran"]
+
+
+# --- a value that goes back into a graph query is escaped or checked by the kernel, never by hand ---
+
+@pytest.mark.parametrize("value, safe", [
+    ("urn:guardian:threat:abc123", True),
+    ("did:dkg:context-graph:0xabc/agent-blackbox-vm/_verifiable_memory/a1", True),
+    ("urn:x> } ?s ?p ?o . { <urn:y", False),                 # closes the brackets and adds a pattern
+    ("urn:x y", False), ("urn:x\ny", False), ("urn:x\ty", False), ("urn:x y", False),
+    ('urn:"x"', False), ("urn:{x}", False), ("urn:x|y", False), ("urn:x^y", False), ("urn:`x`", False),
+    ("urn:x\\y", False), ("", False), (None, False), (7, False),
+])
+def test_only_an_address_that_cannot_break_out_of_its_brackets_is_written(value, safe):
+    from plugins.blackbox.kernel import sparql_text
+
+    assert sparql_text.is_safe_iri(value) is safe
+    assert sparql_text.sparql_iri(value) == (f"<{value}>" if safe else "")
+
+
+def test_the_threat_route_sends_a_hostile_identifier_as_one_escaped_literal(monkeypatch, tmp_path):
+    """The route escaped only backslashes and quotes by hand: a newline in the identifier
+    reached the node as a broken query. It also wrote the rule's subject between <> unchecked."""
+    monkeypatch.setenv("BLACKBOX_HOME", str(tmp_path / "bbhome"))
+    monkeypatch.setenv("BLACKBOX_CONTEXT_GRAPH_ID", DEV_GRAPH)
+    sent: list[str] = []
+
+    class Node:
+        def __init__(self, **kwargs):
+            pass
+
+        def reachable(self, timeout=None):
+            return True
+
+        def status(self, timeout=None):
+            return {}
+
+        def agent_identity(self):
+            return {}
+
+        def query(self, sparql, graph, **kwargs):
+            sent.append(sparql)
+            return []
+    from plugins.blackbox.kernel import dkg_client as dkg_module
+    monkeypatch.setattr(dkg_module, "DkgClient", dkg_client_fake(Node))   # create_app imports the class when it is called
+    rules = _community_ruleset()
+    hostile_subject = "urn:x> } ?s ?p ?o . { <urn:y"
+    rules.ioc = {"ioc:domain:known.example": {"identifier": "ioc:domain:known.example", "source": "public",
+                                             "severity": "high", "subject": hostile_subject}}
+    monkeypatch.setattr(rs_mod, "peek", lambda cfg: rules)
+    monkeypatch.setattr(rs_mod, "get", lambda cfg: rules)
+    hostile_identifier = 'ioc:domain:x"\n} ?s ?p ?o . {'
+    with TestClient(server.create_app(), base_url="http://127.0.0.1:9700") as client:
+        client.get("/api/graph-status")                      # lets the liveness check learn the node is up
+        for identifier in (hostile_identifier, "ioc:domain:known.example"):
+            for _ in range(20):
+                client.get("/api/threat", params={"tier": "public", "identifier": identifier})
+                if sum("SELECT ?t ?p ?o" in q for q in sent) >= (1 if identifier == hostile_identifier else 2):
+                    break
+
+    lookups = [q for q in sent if "SELECT ?t ?p ?o" in q]             # the route's own point lookups
+    assert lookups, "the route never reached the node"
+    for query in lookups:
+        assert "\n" not in query and hostile_subject not in query      # one line; the unsafe address never written
+    assert any('g:identifier "ioc:domain:x\\"\\n} ?s ?p ?o . {"' in q for q in lookups)

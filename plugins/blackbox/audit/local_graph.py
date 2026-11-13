@@ -20,12 +20,11 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import threading
 from typing import Any
 
 from ..kernel import constants
-from ..kernel.bounded_files import atomic_write
+from ..kernel.bounded_files import atomic_write, read_json_object
 
 logger = logging.getLogger(__name__)
 
@@ -73,11 +72,7 @@ def _cache_path():
 
 
 def _read_cache() -> str:
-    try:
-        data = json.loads(_cache_path().read_text(encoding="utf-8-sig"))
-    except (OSError, ValueError):
-        return ""
-    graph = str(data.get("graph") or "") if isinstance(data, dict) else ""
+    graph = str((read_json_object(_cache_path()) or {}).get("graph") or "")
     return graph if graph.endswith("/" + GRAPH_NAME) else ""
 
 

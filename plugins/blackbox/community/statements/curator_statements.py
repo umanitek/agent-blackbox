@@ -39,8 +39,8 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import date, datetime, timezone, UTC
-from typing import AbstractSet, Any, Callable, Dict, FrozenSet, List, Mapping, Optional, Tuple
+from datetime import date, datetime, UTC
+from typing import AbstractSet, Any, Callable, Mapping, Optional
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
@@ -48,7 +48,7 @@ from ...kernel import constants, rdf_terms, signing, sparql_text, threat_ids
 from ...kernel.dkg_client import extract_binding
 from ...kernel.signing import KeyManifest
 from ...kernel.signing import CuratorStatement
-from .. import report_schema
+from .. import report_schema, verification
 
 #: The frozen payload schema of reduction-only statements (revocation,
 #: rejection): every reader version must accept it, forever. Never edit.
@@ -56,11 +56,10 @@ REDUCTION_SCHEMA = frozenset({"identifier", "reason", "day"})
 
 _DAY = re.compile(r"\d{4}-\d{2}-\d{2}")
 _ADDRESS = re.compile(r"0x[0-9a-f]{40}")
-_KEY_HEX = re.compile(r"[0-9a-f]{64}")
 _LANES = frozenset({"1", "2", "3", "4", "5"})
 
 #: The reader variable carrying the envelope.
-SIGNED_STATEMENT_VAR = "signedStatement"
+SIGNED_STATEMENT_VAR = verification.SIGNED_STATEMENT_VAR   # the reader query variable that carries the envelope
 
 
 @dataclass(frozen=True)
@@ -172,11 +171,11 @@ def _backlog(extras: Mapping[str, str]) -> Optional[dict[str, str]]:
 
 
 def _heartbeat(extras: Mapping[str, str]) -> Optional[dict[str, str]]:
-    return dict(extras) if set(extras) == {"key"} and _KEY_HEX.fullmatch(extras["key"]) else None
+    return dict(extras) if set(extras) == {"key"} and threat_ids.is_hex64(extras["key"]) else None
 
 
 def _away(extras: Mapping[str, str]) -> Optional[dict[str, str]]:
-    ok = (set(extras) == {"key", "from", "until"} and _KEY_HEX.fullmatch(extras["key"])
+    ok = (set(extras) == {"key", "from", "until"} and threat_ids.is_hex64(extras["key"])
           and _DAY.fullmatch(extras["from"]) and _DAY.fullmatch(extras["until"]))
     return dict(extras) if ok else None
 
@@ -215,7 +214,7 @@ _VALIDATORS: dict[CuratorStatement, Callable[[Mapping[str, str]], Optional[dict[
 
 def _identifier_ok(kind: CuratorStatement, identifier: str) -> bool:
     if kind is CuratorStatement.COUNTED_AUTHORS:   # "author:<reporter key>" — the signer, never a claimed address
-        return identifier.startswith("author:") and bool(_KEY_HEX.fullmatch(identifier[len("author:"):]))
+        return identifier.startswith("author:") and threat_ids.is_hex64(identifier[len("author:"):])
     if kind in (CuratorStatement.BACKLOG, CuratorStatement.AWAY, CuratorStatement.PAUSE, CuratorStatement.HEARTBEAT):
         return identifier == "curator"
     try:
@@ -351,9 +350,9 @@ def _root_alone_reduction(envelope: signing.SignedEnvelope, kind: CuratorStateme
 
 def curator_statements_sparql(after: str) -> str:
     """One page of curator statements after the subject cursor *after*."""
-    cursor = f"FILTER(STR(?r) > {sparql_text.sparql_string_literal(after)})" if after else ""
+    cursor = sparql_text.cursor_filter(after)
     return f"""
-PREFIX g: <http://umanitek.ai/ontology/guardian/>
+{sparql_text.GUARDIAN_PREFIX}
 SELECT ?r ?identifier ?signedStatement WHERE {{
   ?r a g:CuratorStatement ;
      g:identifier ?identifier ;

@@ -26,7 +26,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import AbstractSet, Any, Mapping, Tuple
+from typing import AbstractSet, Any, Mapping
 
 #: Threat classes whose verified rule may BLOCK (the truth check is mandatory).
 BLOCKABLE_PREFIXES = ("dep:", "escalation:", "fileaccess:", "skill:")

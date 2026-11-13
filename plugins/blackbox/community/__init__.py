@@ -108,8 +108,7 @@ from .trust import ActiveGraph, active_verified_graph, known_curator_statements,
 from .trust import status_lines as trust_status_lines
 from .trust import trust_panel
 from .trust.manifest_history import manifest_on_day, verified_manifest_history
-from ..kernel.sparql_text import page_rows
-from ..kernel.signing import trusted_roots as curator_trusted_roots
+# The community's own curator clock (statements.curator_view.today_utc; tests set it) — not a kernel pass-through.
 from .statements.curator_view import today_utc as curator_today
 
 
@@ -161,7 +160,6 @@ __all__ = [
     "counted_dispute_weight",
     "curator_statement_quads",
     "curator_today",
-    "curator_trusted_roots",
     "ensure_community_subscription",
     "ensure_report_lane",
     "fetch_community_report_rows",
@@ -174,7 +172,6 @@ __all__ = [
     "manifest_on_day",
     "most_reported_threats",
     "network_environment",
-    "page_rows",
     "pool",
     "print_community_status",
     "publish_due_copies",

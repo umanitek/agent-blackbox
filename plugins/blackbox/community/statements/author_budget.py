@@ -29,18 +29,15 @@ Usage::
 
 from __future__ import annotations
 
-import json
 import logging
-import os
-import secrets
 import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Dict, FrozenSet, Iterable, List, Optional, Tuple
+from typing import Callable, Iterable, Optional
 
 from ...kernel import constants, threat_ids
-from ...kernel.bounded_files import atomic_write
+from ...kernel.bounded_files import read_json_object, write_json_object
 
 logger = logging.getLogger(__name__)
 
@@ -109,19 +106,16 @@ class FirstSeenStore:
             return {subject: kept.get(key, now) for subject, key in keys.items()}, baseline_until
 
     def _load(self) -> tuple[dict[str, float], Optional[float]]:
+        data = read_json_object(self._path) or {}
         try:
-            data = json.loads(self._path.read_text(encoding="utf-8-sig"))
             seen = {str(k): float(v) for k, v in dict(data["seen"]).items()}
             return seen, float(data["baseline_until"])
         except (OSError, ValueError, KeyError, TypeError):
             return {}, None   # missing or unreadable: a fresh baseline
 
     def _save(self, seen: dict[str, float], baseline_until: float) -> None:
-        try:
-            self._path.parent.mkdir(parents=True, exist_ok=True)
-            atomic_write(self._path, json.dumps({"baseline_until": baseline_until, "seen": seen}))
-        except OSError as exc:   # fail-open: an unwritable home only loses first-seen memory
-            logger.warning("blackbox: could not save community first-seen times (%s)", exc)
+        # fail-open: an unwritable home only loses first-seen memory
+        write_json_object(self._path, {"baseline_until": baseline_until, "seen": seen}, what="community first-seen times")
 
 
 class AuthorBudget:

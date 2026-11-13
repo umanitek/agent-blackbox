@@ -37,16 +37,27 @@ _RPC_URL = re.compile(r"(?:--rpc-url|--fork-url|\bETH_RPC_URL)[=\s]+['\"]?(https
 _CHAIN_ID_FIELD = re.compile(r"""["']?\bchainId["']?\s*[:=]\s*["']?(0x[0-9a-fA-F]+|\d+)""")
 
 
+#: No chain id is near this long. A longer digit run names no chain — and ``int()`` refuses
+#: decimal text past 4,300 digits, which once ended every check for the call (KI-489).
+_MAX_CHAIN_ID_DIGITS = 20
+
+
+def _decimal_chain_id(digits: str) -> Optional[int]:
+    """A decimal chain id as written (leading zeros allowed), or None when too long to be one."""
+    digits = digits.lstrip("0") or "0"
+    return int(digits) if len(digits) <= _MAX_CHAIN_ID_DIGITS else None
+
+
 def _chain_of_name(word: str) -> Optional[int]:
     word = word.strip().lower()
     if word.isdigit():
-        return int(word)
+        return _decimal_chain_id(word)
     return CHAIN_IDS.get(word)
 
 
-def _chain_id(written: str) -> int:
+def _chain_id(written: str) -> Optional[int]:
     """A ``chainId`` value as written: hex (``0x38``) or decimal (leading zeros allowed)."""
-    return int(written, 16) if written.lower().startswith("0x") else int(written)
+    return int(written, 16) if written.lower().startswith("0x") else _decimal_chain_id(written)
 
 
 def _chain_of_rpc(url: str) -> Optional[int]:

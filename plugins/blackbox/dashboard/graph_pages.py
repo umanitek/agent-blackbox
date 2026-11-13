@@ -14,7 +14,7 @@ Lifted out of ``server.py`` (at its size alarm) as pure functions, so the
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from ..kernel import threat_ids
 from .safe_payloads import graph_tier_item, safe_identifier, safe_text

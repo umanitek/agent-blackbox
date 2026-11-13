@@ -24,7 +24,7 @@ import logging
 import threading
 import urllib.error
 import urllib.request
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Optional
 
 from ..kernel import constants
 
@@ -68,7 +68,14 @@ def osv_ecosystem(ecosystem: str) -> Optional[str]:
 
 
 def _severity_of(vuln: dict[str, Any]) -> str:
-    """Best-effort severity from an OSV vuln record (defaults to ``high``)."""
+    """Severity of an OSV record as a level on Blackbox's ladder: OSV's own label, with its
+    ``moderate`` read as ``medium``; ``high`` when it gives none or one the ladder lacks (a
+    label outside the ladder ranks below every threshold, so the finding would vanish)."""
+    return constants.normalize_severity(_severity_label(vuln), fallback="high")
+
+
+def _severity_label(vuln: dict[str, Any]) -> str:
+    """The severity label an OSV record carries, as written (lower-case); "" when none."""
     # OSV database_specific.severity is the most common human label.
     dbs = vuln.get("database_specific")
     if isinstance(dbs, dict):
@@ -83,7 +90,7 @@ def _severity_of(vuln: dict[str, Any]) -> str:
                 raw = str(aff_dbs.get("severity") or "").strip().lower()
                 if raw:
                     return raw
-    return "high"
+    return ""
 
 
 def _query(osv_eco: str, name: str, version: str) -> Optional[dict[str, Any]]:
@@ -109,7 +116,8 @@ def lookup(ecosystem: str, name: str, version: str) -> Optional[dict[str, str]]:
     ``kind`` is ``malware`` when any advisory is a malicious-package (MAL-)
     one — that advisory is the one returned — else ``vulnerability``.
     Returns ``None`` when the package is clean, the ecosystem is unsupported,
-    the version is missing, or anything fails (fail-open). Cached per process.
+    the version is missing, or anything fails (fail-open). An ANSWER is cached per
+    process; a query that failed is not, so the package is asked about again.
     """
     eco = (ecosystem or "").strip().lower()
     name = (name or "").strip()
@@ -123,7 +131,10 @@ def lookup(ecosystem: str, name: str, version: str) -> Optional[dict[str, str]]:
     with _cache_lock:
         if key in _cache:
             return _cache[key]
-    result = _finding(_query(osv_eco, name, version))
+    answer = _query(osv_eco, name, version)
+    if not isinstance(answer, dict):
+        return None   # could not ask: not "clean", and not remembered
+    result = _finding(answer)
     with _cache_lock:
         _cache[key] = result
     return result

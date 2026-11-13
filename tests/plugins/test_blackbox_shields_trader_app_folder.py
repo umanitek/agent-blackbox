@@ -369,3 +369,14 @@ def test_each_layouts_own_paths_give_the_recorded_findings(layout):
     home_tar, config_zip = RECORDED_ARCHIVE_PACKS[name]
     assert _wallets("terminal", {"command": "tar czf home.tgz ~"}) == home_tar
     assert _wallets("terminal", {"command": "zip -r all.zip ~/AppData ~/Library ~/.config"}) == config_zip
+
+
+@pytest.mark.parametrize("variable", ["APPDATA", "LOCALAPPDATA"])
+def test_an_empty_windows_root_is_unset_not_the_filesystem_root(monkeypatch, variable):
+    """The app-place expander replaced an EMPTY %APPDATA% with "", so %APPDATA%/Exodus became
+    /Exodus — a folder at the filesystem root. Empty counts as unset now, as it always did for
+    $XDG_CONFIG_HOME: the place stays as written (matched literally, never looked for on disk)."""
+    from plugins.blackbox.shields.trader.detectors.app_folder import expand_template
+    monkeypatch.setenv(variable, "")
+    assert expand_template(f"%{variable}%/Exodus", keep_unset=True) == f"%{variable}%/Exodus"
+    assert expand_template(f"%{variable}%/Exodus").endswith("/AppData/" + ("Roaming" if variable == "APPDATA" else "Local") + "/Exodus")

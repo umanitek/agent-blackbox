@@ -39,6 +39,7 @@ ruleset_fetching = load_blackbox("ruleset.fetching")
 ruleset_locks = load_blackbox("ruleset.locks")
 ruleset_refresh = load_blackbox("ruleset.refresh_cycle")
 config_mod = load_blackbox("kernel.config")
+kernel_locking = load_blackbox("kernel.bounded_files.locking")
 
 Ruleset = ruleset_mod.Ruleset
 
@@ -444,7 +445,7 @@ def test_windows_blocking_lock_retries_until_acquired(tmp_path):
     fake = FakeMsvcrt()
     sleeps = []
     with (tmp_path / "ruleset.lock").open("a+b") as handle:
-        assert ruleset_locks._acquire_windows_file_lock(
+        assert kernel_locking.acquire_windows_lock(
             handle,
             blocking=True,
             msvcrt_module=fake,
@@ -478,7 +479,7 @@ def test_windows_blocking_lock_times_out_under_contention(tmp_path):
         clock["value"] += seconds
 
     with (tmp_path / "ruleset.lock").open("a+b") as handle:
-        assert not ruleset_locks._acquire_windows_file_lock(
+        assert not kernel_locking.acquire_windows_lock(
             handle,
             blocking=True,
             msvcrt_module=fake,
@@ -497,11 +498,8 @@ def test_windows_ruleset_lock_does_not_claim_acquisition_after_timeout(
     tmp_path,
 ):
     monkeypatch.setattr(constants, "blackbox_home", lambda: tmp_path)
-    monkeypatch.setattr(ruleset_locks, "_is_windows_platform", lambda: True)
-    monkeypatch.setattr(
-        ruleset_locks, "_acquire_windows_file_lock",
-        lambda *_args, **_kwargs: False,
-    )
+    monkeypatch.setattr(kernel_locking, "_is_windows", lambda: True)
+    monkeypatch.setattr(kernel_locking, "acquire_windows_lock", lambda *_args, **_kwargs: False)
 
     with ruleset_locks._ruleset_refresh_lock(blocking=True) as acquired:
         assert not acquired
@@ -549,10 +547,11 @@ def test_empty_refresh_keeps_last_verified_rules(monkeypatch):
 
     rs = ruleset_mod.refresh(config_mod.BlackboxConfig(), _Empty())
 
-    assert rs is prior
+    # the kept generation is a re-stamped COPY: the one hooks were reading is not edited
+    assert rs is not prior and prior.synced_at == 100.0
     assert rs.synced_at == 1000.0
-    assert len(rs.dependency) == 1
-    assert writes == [prior]
+    assert rs.dependency == prior.dependency and len(rs.dependency) == 1
+    assert writes == [rs]
 
 
 def test_empty_refresh_prefers_newer_nonempty_disk_cache(monkeypatch):
@@ -577,8 +576,8 @@ def test_empty_refresh_prefers_newer_nonempty_disk_cache(monkeypatch):
 
     rs = ruleset_mod.refresh(config_mod.BlackboxConfig(), _Empty())
 
-    assert rs is disk
-    assert len(rs.dependency) == 1
+    assert rs.dependency == disk.dependency and len(rs.dependency) == 1   # the disk generation's rules, in a copy
+    assert disk.synced_at == 900.0
 
 
 def test_peek_reloads_cache_replaced_by_another_process(monkeypatch):

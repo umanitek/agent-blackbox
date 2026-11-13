@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any, Dict, Iterable, Optional
+from typing import Any, Iterable, Optional
 
 from ... import audit
 from ...kernel import threat_ids
@@ -84,14 +84,17 @@ def publish_due_copies(client: DkgClient, cfg: Any, store: Optional[LiveReportSt
     from .. import consent   # round 4: withdrawal must stop keep-alive copies too
 
     days = _epoch_days(cfg)
-    if days <= 0 or not getattr(cfg, "community_enabled", False) or not consent.in_force():
+    if days <= 0 or not consent.sharing_on(cfg):
         return 0
     when = time.time() if now is None else now
     epoch = current_epoch(when, days)
     live = store or LiveReportStore()
     accepted = 0
     for report in live.due(epoch, when)[:MAX_COPIES_PER_BEAT]:
-        outcome, detail = sharing.send_report(client, report.graph, copy_name(report.name, epoch), list(report.quads))
+        outcome, detail = sharing.send_report(client, report.graph, copy_name(report.name, epoch), list(report.quads),
+                                              cfg=cfg)
+        if outcome is sharing.ShareOutcome.NOT_ALLOWED:   # switched off meanwhile: nothing marked published
+            break
         if outcome is sharing.ShareOutcome.FAILED:
             logger.info("blackbox: keep-alive copy refused this beat (%s); retrying on the next refresh",
                         audit.sanitize_text(detail, 120))

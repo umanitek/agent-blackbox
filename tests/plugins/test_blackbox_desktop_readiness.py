@@ -305,10 +305,12 @@ def test_with_no_meter_route_the_health_check_is_unchanged(monkeypatch):
 def test_community_reports_are_not_counted_as_verified_rules(monkeypatch):
     """bb-test-1 (2026-11-07): with two community reports and no verified rule yet the banner said
     "2 verified rules protect you now", and the stage read as a finished first sync."""
-    class Rules:
-        def counts(self):
-            return {"injection": 0, "escalation": 0, "dependency": 0, "fileaccess": 0, "skill": 0, "ioc": 0, "community": 2}
-    monkeypatch.setattr(desktop.ruleset, "get", lambda cfg: Rules())
+    from plugins.blackbox.ruleset.compiler import Ruleset
+    reported = {"identifier": "dep:npm:x@1.0.0", "source": "community", "severity": "high"}
+    # Two community reports, one of them materialised into the dependency dict (matchable):
+    # counts() minus its "community" key still said 1 here (audit 06/#3).
+    rules = Ruleset(community={"a": reported, "b": reported}, dependency={reported["identifier"]: reported})
+    monkeypatch.setattr(desktop.ruleset, "get", lambda cfg: rules)
     assert desktop._verified_rules(object()) == 0
     assert stage_of(ReadinessFacts("done", True, True, desktop._verified_rules(object()))) == "syncing"
 
@@ -318,3 +320,22 @@ def test_an_unreadable_ruleset_is_unknown_not_zero(monkeypatch):
         raise OSError("ruleset.json unreadable")
     monkeypatch.setattr(desktop.ruleset, "get", broken)
     assert desktop._verified_rules(object()) is None
+
+
+def test_the_readiness_poll_counts_the_rules_once_per_reading_and_keeps_readings_apart(tmp_path, monkeypatch):
+    """Desktop polls readiness every 2 s; the rule count (a ruleset load) ran on every poll,
+    before the 1.5 s cache was even asked, and the cache ignored what it was built for, so a
+    caller with another setup run got this one's reading."""
+    from plugins.blackbox.desktop import readiness
+    monkeypatch.setattr(readiness, "_node_reachable", lambda cfg: False)
+    readiness._cache.clear()
+    counted = []
+    run_a = readiness.SetupRun(folder=lambda: tmp_path / "a")
+    run_b = readiness.SetupRun(folder=lambda: tmp_path / "b")
+    count = lambda: counted.append(1) or 7
+    for _ in range(5):
+        assert readiness.readiness_payload(count, None, run=run_a)["rules"] == 7
+    assert len(counted) == 1
+    readiness.readiness_payload(count, None, run=run_b)
+    assert len(counted) == 2          # another run: its own reading, not run_a's
+    readiness._cache.clear()

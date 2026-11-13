@@ -19,13 +19,14 @@ import logging
 import time
 from dataclasses import replace, dataclass, field
 from enum import Enum
-from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Tuple
+from typing import Any, Callable, Iterable, Mapping, Optional
 from ..kernel import constants
 from ..kernel.config import BlackboxConfig
 from ..kernel.dkg_client import DkgClient, extract_binding
 from ..kernel import sparql_text
 from ..kernel.sparql_text import page_rows
 from .statements import author_budget, curator_view, digests, disputes, retractions, tombstones
+from . import membership
 from .report_signer import network_environment
 from .trust.authority_read import read_curator_view
 from .verification import ReportVerifier, VerifiedReport, verify_report_rows
@@ -41,7 +42,7 @@ def community_report_count(client: DkgClient, cfg: BlackboxConfig) -> int:
         return 0
     sparql = (
         "SELECT (COUNT(DISTINCT ?r) AS ?n) WHERE { "
-        "?r a <http://umanitek.ai/ontology/guardian/ThreatReport> }"
+        f"?r a <{constants.REPORT_TYPE_IRI}> }}"
     )
     rows = client.query(
         sparql,
@@ -79,11 +80,9 @@ COMMUNITY_PAUSE_SUBJECT = "urn:guardian:community:pause"
 
 def _community_reports_sparql(after: str) -> str:
     """Catalog query Q1: cursor-paged ThreatReport fetch with OPTIONAL harvest."""
-    cursor = ""
-    if after:
-        cursor = f"FILTER(STR(?r) > {sparql_text.sparql_string_literal(after)})"
+    cursor = sparql_text.cursor_filter(after)
     return f"""
-PREFIX g: <http://umanitek.ai/ontology/guardian/>
+{sparql_text.GUARDIAN_PREFIX}
 SELECT ?r ?identifier ?reporter ?severity ?kind ?iocType ?toolName ?argShape
        ?packageName ?packageVersion ?packageEcosystem ?category ?skillName
        ?dangerShape ?pattern ?injectionContext ?skillArtifactHash ?skillRegistry ?iocContext ?reportReason
@@ -204,15 +203,8 @@ def _empty_is_authorised(client: DkgClient, graph: str) -> bool:
     """Membership probe for an EMPTY read: only a node that says it is
     subscribed to the graph and synced may report "the graph is empty".
     Anything else (not subscribed, still syncing, probe failed) is not proof."""
-    try:
-        entries = client.context_graphs()
-    except Exception as exc:  # probe failure is "not proven", never "empty"
-        logger.debug("blackbox: community membership probe failed: %s", exc)
-        return False
-    for entry in entries:
-        if str(entry.get("id") or "") == graph:
-            return bool(entry.get("subscribed")) and bool(entry.get("synced"))
-    return False
+    _readable, entry = membership.listing_row(client, graph)   # a failed probe is "not proven", never "empty"
+    return entry is not None and bool(entry.get("subscribed")) and bool(entry.get("synced"))
 
 
 def read_verified_reports(client: DkgClient, cfg: BlackboxConfig, *, held: Iterable[str] = ()) -> CommunityRead:

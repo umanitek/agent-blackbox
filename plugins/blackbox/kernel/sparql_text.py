@@ -17,7 +17,9 @@
 from __future__ import annotations
 
 import time
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Optional
+
+from . import constants
 
 
 # Safety ceiling so a misbehaving node can never spin the pager forever.
@@ -36,6 +38,36 @@ def sparql_string_literal(value: object) -> str:
     text = text.replace("\\", "\\\\").replace('"', '\\"')
     text = text.replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
     return f'"{text}"'
+
+
+#: Characters that end an ``<iri>`` early or are never legal inside one.
+_UNSAFE_IN_IRI = frozenset('<>"{}|^`\\')
+
+
+#: The ``g:`` prefix every graph query declares (the guardian ontology, ``constants.BLACKBOX_ONTOLOGY``).
+GUARDIAN_PREFIX = f"PREFIX g: <{constants.BLACKBOX_ONTOLOGY}>"
+
+
+def cursor_filter(after: str, variable: str = "r") -> str:
+    """The FILTER that resumes a subject-ordered page after the subject *after* ("" on the first
+    page): ``FILTER(STR(?r) > "<after>")``, the value escaped as a SPARQL string literal."""
+    return f"FILTER(STR(?{variable}) > {sparql_string_literal(after)})" if after else ""
+
+
+def is_safe_iri(value: object) -> bool:
+    """Whether *value* can be written as ``<value>`` in a query: non-empty text with no
+    whitespace of any kind and none of the characters that close or break the brackets.
+
+    THE check for an address (a graph, a subject) that goes back into SPARQL. An IRI has no
+    escape syntax, so an unsafe one is never repaired — the caller leaves it out. Three
+    modules kept their own character set (one without the space, one with no check at all)."""
+    return (isinstance(value, str) and bool(value)
+            and not any(char.isspace() or char in _UNSAFE_IN_IRI for char in value))
+
+
+def sparql_iri(value: object) -> str:
+    """``<value>`` when *value* :func:`is_safe_iri`, else ``""`` (nothing to write)."""
+    return f"<{value}>" if is_safe_iri(value) else ""
 
 
 # ---------------------------------------------------------------------------

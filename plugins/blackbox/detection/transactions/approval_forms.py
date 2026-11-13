@@ -22,7 +22,7 @@ import re
 import shlex
 
 from . import calldata, cast_forms, permits, script_forms
-from .approval_calls import Approval
+from .approval_calls import CALLS_BY_NAME, Approval
 
 __all__ = ["Approval", "approvals_in"]
 
@@ -38,10 +38,26 @@ def _shell_words(text: str) -> list[str]:
         return text.split()
 
 
+#: Characters a shell removes from a word: quotes and backslashes may sit inside a name.
+_SHELL_QUOTING = re.compile(r"""['"\\]""")
+#: What every command-line approval contains once the quoting is gone: ``spl-token``, or the
+#: name of an approval call followed by its opening parenthesis.
+_COMMAND_APPROVAL = re.compile(rf"spl-token|(?:{'|'.join(map(re.escape, CALLS_BY_NAME))})\s*\(", re.IGNORECASE)
+
+
+def _may_hold_command_approval(text: str) -> bool:
+    """Whether *text* could hold a command-line approval at all. WHY: splitting a text into
+    shell words costs seconds on a large file with few spaces, and this runs on every tool
+    call; a text without these words has nothing for :mod:`.cast_forms` to find. Never False
+    for a text the word reader would find an approval in (a test checks every call name)."""
+    return bool(_COMMAND_APPROVAL.search(_SHELL_QUOTING.sub("", text)))
+
+
 def approvals_in(text: str) -> list[Approval]:
     """Every token approval *text* would send (see the module doc), each once."""
     if not text:
         return []
-    found = (cast_forms.from_words(_shell_words(text)) + calldata.from_text(text)
+    words = _shell_words(text) if _may_hold_command_approval(text) else []
+    found = (cast_forms.from_words(words) + calldata.from_text(text)
              + script_forms.from_text(text) + permits.from_text(text))
     return list(dict.fromkeys(found))

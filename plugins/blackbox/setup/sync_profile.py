@@ -6,6 +6,7 @@ from ..sync import snapshot_defaults, validate_snapshot_profile
 from ..kernel.snapshot_config import DKG_CORE_CHAIN_CACHE, REGISTERED_BASE_CORES, snapshot_config
 
 
+@yaml_files.edits_config
 def configure(args):
     graph_id = getattr(args, "snapshot_graph_id", None)
     peers = getattr(args, "trusted_core_peer", None)
@@ -58,7 +59,7 @@ def _entry():
     except Exception as exc:
         raise ValueError("Existing config.yaml could not be read; it was not changed") from exc
     target = data
-    for key in ("plugins", "entries", "blackbox"):
+    for key in yaml_files.BLACKBOX_ENTRY_PATH:
         target = target.setdefault(key, {})
         if not isinstance(target, dict):
             raise ValueError("Existing Blackbox configuration must be a mapping")

@@ -8,12 +8,12 @@ framework helpers serve the CLI and dashboard.
 
 from __future__ import annotations
 
-import json
 import logging
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 from ..kernel import constants
-from . import log_store
+from ..kernel.bounded_files import read_jsonl
+from . import finding_display, log_store
 from . import redaction
 
 logger = logging.getLogger(__name__)
@@ -63,11 +63,25 @@ def _bounded_context(ctx: Any) -> Optional[dict[str, Any]]:
     return out
 
 
+def finding_of(record: dict[str, Any]) -> dict[str, Any]:
+    """The finding a findings.jsonl record holds — THE fallback every reader uses: ``finding``,
+    else the first of ``findings`` (older rows), else ``{}``."""
+    found = record.get("finding") or (record.get("findings") or [{}])[0] or {}
+    return found if isinstance(found, dict) else {}
+
+
+def is_confirmed(finding: dict[str, Any]) -> bool:
+    """Whether a recorded finding came from a verified rule. The writer
+    (:func:`_finding_summary`) always records it, defaulting to True; a row without it reads the
+    same way in every view (the activity feed once read it as False, the findings list as True)."""
+    return bool(finding.get("confirmed", True))
+
+
 def _flatten_finding_row(rec: dict[str, Any], default_fw: str) -> dict[str, Any]:
     # Lift the per-line ``finding`` fields up to a dashboard-friendly row.
-    finding = rec.get("finding") or (rec.get("findings") or [{}])[0] or {}
+    finding = finding_of(rec)
     detail = rec.get("detail") or {}
-    return {
+    row = {
         "time": rec.get("iso") or rec.get("ts"),
         "ts": rec.get("ts") or 0,
         "event": rec.get("event"),
@@ -82,14 +96,17 @@ def _flatten_finding_row(rec: dict[str, Any], default_fw: str) -> dict[str, Any]
         "workspace": finding.get("workspace") or rec.get("workspace") or detail.get("workspace"),
         "tool_name": finding.get("tool_name") or detail.get("tool_name"),
         "evidence": finding.get("evidence") or finding.get("title"),
-        "confirmed": bool(finding.get("confirmed", True)),
-        "source": finding.get("source") or ("public" if finding.get("confirmed", True) else "heuristic"),
+        "confirmed": is_confirmed(finding),
+        "source": finding.get("source") or ("public" if is_confirmed(finding) else "heuristic"),
         # What the hook did with it: "block" | "flag" ("" for rows older than KI-189).
         "decision": str(detail.get("decision") or ""),
         # Local-only conversation snapshot (redacted upstream).
         "context": _bounded_context(detail.get("context") or finding.get("context")),
         "found_in": finding.get("found_in") or "",
     }
+    # What the pages group on (one threat on screen) and which row stands for it — served, not re-derived.
+    row["display_key"], row["display_rank"] = finding_display.display_key(row), finding_display.display_rank(row)
+    return row
 
 
 def _dedupe_finding_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -135,21 +152,7 @@ def _all_findings() -> list[dict[str, Any]]:
 def _load_finding_rows(files: list[tuple[Any, str]]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for path, default_fw in files:
-        if not path.exists():
-            continue
-        try:
-            lines = path.read_text(encoding="utf-8-sig").splitlines()
-        except OSError:
-            continue
-        for line in lines:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rec = json.loads(line)
-            except ValueError:
-                continue
-            rows.append(_flatten_finding_row(rec, default_fw))
+        rows.extend(_flatten_finding_row(rec, default_fw) for rec in read_jsonl(path))   # object rows only
     rows = _dedupe_finding_rows(rows)
     # Newest-first across all logs; rows with no numeric ts keep insertion order.
     rows.sort(key=lambda r: r.get("ts") or 0, reverse=True)
@@ -334,20 +337,5 @@ def record_dependency(ecosystem: str, name: str, version: str, tool: str = "") -
 
 def read_file_access(limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
     """Return file-access visibility records newest-first, paged."""
-    path = log_store._home() / "file_access.jsonl"
-    if not path.exists():
-        return []
-    try:
-        lines = path.read_text(encoding="utf-8-sig").splitlines()
-    except Exception:
-        return []
-    out: list[dict[str, Any]] = []
-    for line in reversed(lines):
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            out.append(json.loads(line))
-        except Exception:
-            continue
-    return out[offset : offset + limit]
+    rows = read_jsonl(log_store._home() / "file_access.jsonl")
+    return rows[::-1][offset : offset + limit]

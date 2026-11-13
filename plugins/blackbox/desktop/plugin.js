@@ -4,7 +4,7 @@
 // blocks something an agent tried to do.
 //
 // Data: Blackbox's own Desktop routes (dashboard/plugin_api.py) through ctx.rest — /status,
-// /findings and /mode, and /dash/<route>, which forwards an allowlisted set of the running
+// /mode, and /dash/<route>, which forwards an allowlisted set of the running
 // dashboard's own API (desktop/dashboard_link.py), so every panel here shows exactly what the
 // dashboard shows. Hermes answers these routes only for this app's own credential. The live alert
 // comes from the `plugin.blackbox.finding` event (desktop/__init__.py) and never carries commands
@@ -30,7 +30,6 @@ const PAGE = '/blackbox'
 const POLL_MS = 4000 // the dashboard's own refresh; the live event refreshes at once
 const SLOW_POLL_MS = 30000
 const STATUS_KEY = ['blackbox', 'status']
-const FINDINGS_KEY = ['blackbox', 'findings']
 const AUDIT_NOTICE_KEY = 'auditNoticeShown' // ctx.storage: the one-time "recording, not blocking" notice
 const AUDIT_NOTICE_RETRY_MS = 30000 // while setup runs, the audit notice asks again this often
 // Readiness stages in which setup has not finished yet (desktop/readiness.py stage_of).
@@ -94,8 +93,9 @@ function serverRefusal(text) {
   }
 }
 
-function useDash(key, path, interval) {
-  return useQuery({ queryKey: ['blackbox', 'dash', key, path], queryFn: () => dash(path), refetchInterval: interval || POLL_MS })
+// enabled=false keeps the hook (hooks run in a fixed order) but sends nothing, e.g. a lookup with no identifier.
+function useDash(key, path, interval, enabled = true) {
+  return useQuery({ queryKey: ['blackbox', 'dash', key, path], queryFn: () => dash(path), refetchInterval: interval || POLL_MS, enabled })
 }
 
 const refreshDash = () => queryClient.invalidateQueries({ queryKey: ['blackbox', 'dash'] })
@@ -1206,8 +1206,9 @@ function ago(seconds) {
 }
 
 // Several detectors can record the same threat at the same moment (one record each); the dashboard
-// shows it once, choosing the record with the strongest source, then the highest severity
-// (index.html findingDisplayKey / findingRepresentativeRank / dedupeFindings). Same rules here.
+// shows it once, choosing the record with the strongest source, then the highest severity. The
+// dashboard serves that decision with every row (display_key / display_rank, from
+// audit/finding_display.py); the functions below only key rows from an older running dashboard.
 const normalizedText = text => String(text || '').toLowerCase().replace(/\s+/g, ' ').trim()
 const lastUserText = finding => {
   const turns = asList(asObject(finding.context).turns).map(asObject)
@@ -1216,13 +1217,15 @@ const lastUserText = finding => {
 }
 const SOURCE_RANK = { public: 6, custom: 5, community: 4, secret: 3, llm: 2, heuristic: 1 }
 function findingDisplayKey(finding) {
+  if (typeof finding.display_key === 'string' && finding.display_key) return finding.display_key
   const agent = [finding.framework || '', finding.workspace || '', finding.agent_id || finding.agentId || finding.profile || ''].join('\u001e')
   const occurrence =
     finding.turn_id || finding.turnId || finding.task_id || finding.taskId ||
     [finding.session_id || finding.sessionId || '', normalizedText(lastUserText(finding)), Math.floor(Number(finding.ts || 0))].join('\u001e')
   return [agent, occurrence, finding.category || finding.type || '', normalizedText(finding.evidence || finding.matched || finding.title || finding.identifier || '')].join('\u001f')
 }
-const representativeRank = finding => (SOURCE_RANK[sourceKey(finding)] || 0) * 10 + (SEVERITY_ORDER[finding.severity] || 0)
+const representativeRank = finding =>
+  typeof finding.display_rank === 'number' ? finding.display_rank : (SOURCE_RANK[sourceKey(finding)] || 0) * 10 + (SEVERITY_ORDER[finding.severity] || 0)
 function dedupeFindings(rows) {
   const unique = []
   const indexByKey = new Map()
@@ -2286,7 +2289,9 @@ function FindingModal({ row, onClose }) {
   const key = sourceKey(finding)
   const badge = SOURCE_BADGES[key]
   const fromGraph = finding.identifier && key !== 'heuristic'
-  const verified = useDash('threat', `api/threat?identifier=${encodeURIComponent(fromGraph ? finding.identifier : '')}&tier=public`, SLOW_POLL_MS)
+  // Only a graph finding has a verified record to look up; a heuristic one asked with an empty
+  // identifier every 30 s and got a 422 through Hermes each time.
+  const verified = useDash('threat', `api/threat?identifier=${encodeURIComponent(finding.identifier || '')}&tier=public`, SLOW_POLL_MS, fromGraph)
   const t = fromGraph ? asObject(verified.data) : {}
   const blocked = finding.decision === 'block' || finding.event === 'blocked'
   const seen = finding.sightings > 1 ? `${finding.sightings} times${finding.firstSeen ? ` · first ${dateFull(finding.firstSeen)}` : ''} · last ${dateFull(finding.ts)}` : ''
@@ -4010,7 +4015,6 @@ export default {
     ctx.setTimeout(showAuditNotice, 3000)
     ctx.onEvent('plugin.blackbox.finding', event => {
       queryClient.invalidateQueries({ queryKey: STATUS_KEY })
-      queryClient.invalidateQueries({ queryKey: FINDINGS_KEY })
       refreshDash()
       announce(ctx, event && event.payload)
     })

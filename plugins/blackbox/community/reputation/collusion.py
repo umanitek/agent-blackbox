@@ -22,7 +22,7 @@ Usage::
 
 from __future__ import annotations
 
-from typing import AbstractSet, Dict, FrozenSet, List, Mapping, Optional
+from typing import AbstractSet, Mapping, Optional
 
 OVERLAP_WINDOW_DAYS = 90
 OVERLAP_JACCARD = 0.8

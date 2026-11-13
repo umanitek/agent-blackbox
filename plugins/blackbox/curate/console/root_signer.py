@@ -37,9 +37,10 @@ import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Callable, Iterator, Optional, Protocol, Tuple
+from typing import Callable, Iterator, Optional, Protocol
 
 from ...kernel import signing
+from ...kernel.bounded_files import atomic_write, file_lock
 from ...kernel.signing import KeyManifest
 from .. import keys
 from ..context import CurateContext, ManifestDraft
@@ -114,17 +115,13 @@ class TotpSecondFactor:
 
     @contextmanager
     def _exclusive(self) -> Iterator[None]:
-        """Hold this object's thread lock and the cross-process file lock."""
-        import fcntl  # POSIX-only: the curator key console runs on Linux/macOS (on Windows this raises, failing closed)
-
-        with self._lock:
-            self._path.parent.mkdir(parents=True, exist_ok=True)
-            fd = os.open(self._path.with_name(self._path.name + ".lock"), os.O_RDWR | os.O_CREAT, _FILE_MODE)
-            try:
-                fcntl.flock(fd, fcntl.LOCK_EX)
-                yield
-            finally:
-                os.close(fd)        # closing the descriptor releases the flock
+        """Hold this object's thread lock and the cross-process lock (kernel ``file_lock`` on the
+        same ``.lock`` file as before — the same flock, so mixed versions still exclude each
+        other). A lock that cannot be had raises: a code check never runs unlocked."""
+        with self._lock, file_lock(self._path.with_name(self._path.name + ".lock")) as held:
+            if not held:
+                raise OSError("the authenticator state is locked by another process")
+            yield
 
     def _read(self) -> Optional[tuple[bytes, int]]:
         """(secret bytes, last step), or None when not enrolled or damaged (fail closed)."""
@@ -135,13 +132,8 @@ class TotpSecondFactor:
             return None
 
     def _write(self, secret: bytes, last_step: int) -> None:
-        tmp = self._path.with_name(f"{self._path.name}.tmp.{os.getpid()}.{secrets.token_hex(8)}")
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, _FILE_MODE)
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump({"secret": base64.b32encode(secret).decode("ascii"), "last_step": last_step}, handle)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(tmp, self._path)
+        state = {"secret": base64.b32encode(secret).decode("ascii"), "last_step": last_step}
+        atomic_write(self._path, json.dumps(state), mode=_FILE_MODE, durable=True)
 
 
 def totp_code(secret: bytes, step: int) -> str:

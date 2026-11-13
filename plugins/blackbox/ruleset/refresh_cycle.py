@@ -15,9 +15,9 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from typing import Any, List, Optional
+from typing import Any, Optional
 from ..kernel import constants
-from ..kernel.config import BlackboxConfig, load_blackbox_config
+from ..kernel.config import BlackboxConfig, load_blackbox_config, reads_graph_directly
 from ..kernel.dkg_client import DkgClient
 from . import compiler
 from . import disk_cache
@@ -81,6 +81,18 @@ def _latest_cached_ruleset(context_graph_id: str = "") -> Optional[compiler.Rule
     return cached
 
 
+def _current_or_empty(config: BlackboxConfig) -> compiler.Ruleset:
+    """The generation for *config*'s graph — memory, else the disk copy written for this graph,
+    else an empty ruleset — stored as the current one (what :func:`get` and :func:`peek` serve)."""
+    cached = _latest_cached_ruleset(config.context_graph_id)
+    if cached is None:
+        disk = disk_cache._read_cache()
+        cached = (disk if _matches_context_graph(disk, config.context_graph_id)
+                  else compiler.Ruleset(context_graph_id=config.context_graph_id))
+        _memory.store(cached)
+    return cached
+
+
 _EMPTY_RULESET_RETRY_S = 30.0
 #: While the verified graph is only partly compiled, refresh again this soon so
 #: the rules reach the whole graph in minutes, not hours (KI-288); long enough
@@ -108,7 +120,7 @@ def refresh(
     generation started before that barrier.
     """
     config = config or load_blackbox_config()
-    if getattr(config, 'detection_backend', 'legacy-cache') == "dkg":
+    if reads_graph_directly(config):
         result = GraphView(config)
         result.counts()  # live capability/readiness check; no rule extraction
         return result
@@ -133,6 +145,34 @@ def refresh(
         return _refresh_unlocked(config, client, require_complete=force_query)
 
 
+class _StatusOnce:
+    """The node client for ONE refresh, asking the node for its status once (Proxy).
+
+    The store lanes, the scope's store address, the manifest environment, the migration
+    environment and the promoted copies each asked ``client.status(timeout=5.0)`` — up to five
+    calls of up to 5 s against a busy node, whose answers could disagree within one generation.
+    The first answer (or failure, re-raised) is what every reader of this refresh gets; every
+    other attribute is the wrapped client's."""
+
+    def __init__(self, client: Any) -> None:
+        self._client = client
+        self._answer: Optional[tuple[bool, Any]] = None   # (answered, the status or the error)
+
+    def status(self, timeout: Optional[float] = None) -> Any:
+        if self._answer is None:
+            try:
+                self._answer = (True, self._client.status(timeout=timeout) if timeout is not None else self._client.status())
+            except Exception as exc:   # health: allow BLE001 -- remembered and re-raised to every caller, as the node answered
+                self._answer = (False, exc)
+        answered, value = self._answer
+        if not answered:
+            raise value
+        return value
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._client, name)
+
+
 def _refresh_unlocked(
     config: Optional[BlackboxConfig] = None,
     client: Optional[DkgClient] = None,
@@ -141,20 +181,19 @@ def _refresh_unlocked(
 ) -> compiler.Ruleset:
     """Refresh while the caller holds :func:`_ruleset_refresh_lock`."""
     config = config or load_blackbox_config()
-    if getattr(config, 'detection_backend', 'legacy-cache') == "dkg":
+    if reads_graph_directly(config):
         return refresh(config)  # internal/background callers also cannot export
     context_graph_id = config.context_graph_id
-    client = client or DkgClient(url=config.dkg_url, dkg_home=config.dkg_home, config=config)
+    client = _StatusOnce(client or DkgClient.for_config(config))   # one node status per refresh
     listing = _partition_listing(client, context_graph_id)   # ONE _meta read, shared with the scope
-    fetched = {"public": fetching.fetch_tier(client, context_graph_id, constants.VIEW_VERIFIABLE_MEMORY, listing=listing)}
+    # The verified (public) tier is the only one read; None = the read failed.
+    public_rows = fetching.fetch_tier(client, context_graph_id, constants.VIEW_VERIFIABLE_MEMORY, listing=listing)
 
     # An entirely empty store gets an early cache-expiry below. Subscription,
     # admission, and catch-up are DKG daemon responsibilities; a cache read must
     # never restart network recovery.
-    empty_success = all(rows == [] for rows in fetched.values())
-    failed_tiers = [tier for tier, rows in fetched.items() if rows is None]
-
-    errors.require_complete(require_complete, failed_tiers, empty_success)
+    empty_success = public_rows == []
+    errors.require_complete(require_complete, ["public"] if public_rows is None else [], empty_success)
 
     if empty_success:
         # Snapshot replacement is atomic from the user's perspective. A
@@ -170,28 +209,16 @@ def _refresh_unlocked(
         if prior is not None and prior.source_count("public") > 0:
             return _reuse_generation(prior, context_graph_id, client, config, listing)
 
-    if all(rows is None for rows in fetched.values()):
-        # Every tier failed — keep the last-good ruleset instead of emptying.
+    if public_rows is None:
+        # The read failed — keep the last-good ruleset instead of emptying (none: an empty one).
         existing = _latest_cached_ruleset(context_graph_id)
         if existing is not None:
             return _reuse_generation(existing, context_graph_id, client, config, listing)
 
-    rows: list[Any] = []
-    for tier, view_rows in fetched.items():
-        if view_rows is None:  # a failed tier (fail-open handled below)
-            continue
-        rows.extend((row, tier) for row in view_rows)
-    rs = compiler.build_from_rows(rows)
+    rs = compiler.build_from_rows([(row, "public") for row in public_rows or []])
     rs.context_graph_id = context_graph_id
     _apply_overlays(rs, client, config, listing=listing)
     _schedule_next_refresh(rs, config, empty_success)
-
-    errored = failed_tiers
-    if errored:
-        prior = _latest_cached_ruleset(context_graph_id)
-        if prior is not None:
-            _restore_tiers(rs, prior, errored)
-
     disk_cache._write_cache(rs)
     _memory.store(rs)
     return rs
@@ -210,9 +237,11 @@ def _partition_listing(client: DkgClient, context_graph_id: str) -> Optional[fet
 
 def _reuse_generation(rs: compiler.Ruleset, context_graph_id: str, client: Optional[DkgClient],
                       config: BlackboxConfig, listing: Optional[fetching.PartitionListing] = None) -> compiler.Ruleset:
-    """Keep *rs* (last-good verified tier) as the new generation: re-stamp it,
-    refresh its community tier (it must refresh on every path — R0 tri-state),
-    write it to disk and memory."""
+    """Keep *rs* (last-good verified tier) as the new generation: a copy of it,
+    re-stamped, with its community tier refreshed (it must refresh on every path —
+    R0 tri-state), written to disk and memory. *rs* itself may be the generation
+    hooks are reading, so it is not edited."""
+    rs = rs.derive()
     rs.context_graph_id = context_graph_id
     rs.synced_at = time.time()
     _schedule_next_refresh(rs, config, False)   # a deferred read while catching up retries soon
@@ -276,36 +305,6 @@ def _retry_shares(client: DkgClient, config: BlackboxConfig) -> None:
         logger.debug("blackbox: share retry skipped this beat: %s", exc)
 
 
-def _restore_tiers(rs: compiler.Ruleset, prior: compiler.Ruleset, tiers: list[str]) -> None:
-    """Re-add *prior* rules from the given (errored) *tiers* into *rs*.
-
-    Only fills gaps: a rule already present from a freshly-fetched tier wins,
-    and public still beats community for a shared dependency key — mirroring
-    :func:`build_from_rows` precedence.
-    """
-    keep = set(tiers)
-    graph_seen = {(item.get("source"), item.get("identifier")) for item in rs.graph_threats}
-    for item in prior.graph_threats:
-        key = (item.get("source"), item.get("identifier"))
-        if item.get("source") in keep and key not in graph_seen:
-            graph_seen.add(key)
-            rs.graph_threats.append(item)
-    for attr in ("injection", "escalation", "fileaccess", "skill"):
-        seen = {r.get("identifier") for r in getattr(rs, attr)}
-        for rule in getattr(prior, attr):
-            if rule.get("source") in keep and rule.get("identifier") not in seen:
-                getattr(rs, attr).append(rule)
-    for attr in ("dependency", "ioc"):
-        target = getattr(rs, attr)
-        for key, rule in getattr(prior, attr).items():
-            if rule.get("source") not in keep:
-                continue
-            existing = target.get(key)
-            if existing is None or (existing.get("source") == "community" and rule.get("source") == "public"):
-                target[key] = rule
-    rs._graph_entries_cache.clear()
-
-
 def _background_refresh(config: BlackboxConfig) -> None:
     global _refreshing
     try:
@@ -344,17 +343,9 @@ def get(config: Optional[BlackboxConfig] = None) -> compiler.Ruleset:
     """
     global _refreshing
     config = config or load_blackbox_config()
-    if getattr(config, 'detection_backend', 'legacy-cache') == "dkg":
+    if reads_graph_directly(config):
         return GraphView(config)
-    cached = _latest_cached_ruleset(config.context_graph_id)
-    if cached is None:
-        disk = disk_cache._read_cache()
-        cached = (
-            disk
-            if _matches_context_graph(disk, config.context_graph_id)
-            else compiler.Ruleset(context_graph_id=config.context_graph_id)
-        )
-        _memory.store(cached)
+    cached = _current_or_empty(config)
     refresh_after = max(1.0, float(config.sync_interval or 1))
     if cached.source_count("public") > 0:
         refresh_after = max(refresh_after, _NONEMPTY_REFRESH_MIN_S)
@@ -384,15 +375,7 @@ def peek(config: Optional[BlackboxConfig] = None) -> compiler.Ruleset:
     Request handlers read without starting extra background transfers.
     """
     config = config or load_blackbox_config()
-    if getattr(config, 'detection_backend', 'legacy-cache') == "dkg":
+    if reads_graph_directly(config):
         return GraphView(config)
-    cached = _latest_cached_ruleset(config.context_graph_id)
-    if cached is None:
-        disk = disk_cache._read_cache()
-        cached = (
-            disk
-            if _matches_context_graph(disk, config.context_graph_id)
-            else compiler.Ruleset(context_graph_id=config.context_graph_id)
-        )
-        _memory.store(cached)
+    cached = _current_or_empty(config)
     return cached

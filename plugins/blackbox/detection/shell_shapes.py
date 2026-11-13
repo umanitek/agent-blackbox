@@ -95,23 +95,41 @@ ESCALATION_SHAPES = frozenset(shape for shape, _rule in _SHELL_SHAPE_RULES)
 SHELL_TOOLS = {"terminal", "shell", "bash", "run_command", "exec", "command"}
 _COMMAND_KEYS = ("command", "cmd", "shell", "script", "input")
 
-_MAX_SHAPE_SCAN = 8000
+#: A command is read whole up to twice this many characters; a longer one by its first and
+#: its last this-many (the secret scanners' rule, KI-376): harmless text before or after an
+#: action never moves it out of the checks, and the cost stays bounded on any input. An
+#: action in the middle of a command longer than twice this is a known gap.
+COMMAND_SCAN_WINDOW = 50_000
 
 
-def command_from_args(tool_name: str, args: Any) -> str:
-    """Best-effort extraction of a shell command string from tool args."""
+def _bounded(command: str) -> str:
+    """*command* as the checks read it (see :data:`COMMAND_SCAN_WINDOW`); the two halves of a
+    long one are joined by a newline, which ends a shell command."""
+    if len(command) <= 2 * COMMAND_SCAN_WINDOW:
+        return command
+    return command[:COMMAND_SCAN_WINDOW] + "\n" + command[-COMMAND_SCAN_WINDOW:]
+
+
+def command_from_args(tool_name: str, args: Any, *, any_tool: bool = False) -> str:
+    """The shell command a tool call carries, as the checks read it (bounded, see
+    :data:`COMMAND_SCAN_WINDOW`): its ``command``-like argument, else its string arguments
+    joined — for shell tools only, or for every tool when *any_tool* (install checks: a
+    package can be installed through any tool that runs text); "" for anything else.
+
+    The ONE reader of "the command of this call" — every check asks it, so no two checks can
+    read different commands from the same call."""
     if isinstance(args, str):
-        return args[:_MAX_SHAPE_SCAN]
+        return _bounded(args)
     if not isinstance(args, dict):
         return ""
     for key in _COMMAND_KEYS:
         val = args.get(key)
         if isinstance(val, str) and val:
-            return val[:_MAX_SHAPE_SCAN]
+            return _bounded(val)
     # Fall back to concatenating string values for shell-like tools only.
-    if (tool_name or "").lower() in SHELL_TOOLS:
+    if any_tool or (tool_name or "").lower() in SHELL_TOOLS:
         parts = [v for v in args.values() if isinstance(v, str)]
-        return " ".join(parts)[:_MAX_SHAPE_SCAN]
+        return _bounded(" ".join(parts))
     return ""
 
 

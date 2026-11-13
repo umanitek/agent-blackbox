@@ -26,7 +26,6 @@ Public surface:
   (mode 0600), never in the repo or in logs.
 """
 
-from typing import Tuple
 
 from .budget import LookupBudget, LookupItem, QueueMetrics, TokenBucket, queue_metrics, select_for_lookup
 from .cache import NotListedCache

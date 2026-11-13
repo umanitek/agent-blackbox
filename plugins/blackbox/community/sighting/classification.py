@@ -16,7 +16,7 @@ Usage::
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Mapping
+from typing import Any, Callable, Mapping
 
 
 @dataclass(frozen=True)

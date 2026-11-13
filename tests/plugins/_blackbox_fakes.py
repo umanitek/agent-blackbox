@@ -40,3 +40,29 @@ class FakeNodeClient:
 
     def reachable(self) -> bool:
         return True
+
+
+def dkg_client_fake(factory: Any) -> type:
+    """A stand-in for the ``DkgClient`` CLASS built from a test's own *factory* — a fake class
+    or a plain function / lambda returning the client to use.
+
+    Blackbox code builds its client with ``DkgClient.for_config(cfg)`` (and a few places with
+    ``DkgClient(...)``); the returned class answers both by calling *factory* with the keyword
+    arguments the real constructor gets, so a fake keeps receiving ``url=`` / ``dkg_home=`` /
+    ``config=`` as before.
+
+    Usage::
+
+        monkeypatch.setattr(module, "DkgClient", dkg_client_fake(FakeClient))
+        monkeypatch.setattr(module, "DkgClient", dkg_client_fake(lambda **kw: client))
+    """
+
+    class FakeDkgClient:
+        def __new__(cls, *args: Any, **kwargs: Any) -> Any:
+            return factory(*args, **kwargs)
+
+        @classmethod
+        def for_config(cls, cfg: Any) -> Any:
+            return factory(url=cfg.dkg_url, dkg_home=cfg.dkg_home, config=cfg)
+
+    return FakeDkgClient

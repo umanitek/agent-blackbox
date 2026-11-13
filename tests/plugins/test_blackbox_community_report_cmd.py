@@ -20,6 +20,7 @@ from plugins.blackbox.community.report_cli import report_command
 from plugins.blackbox.kernel import constants
 from plugins.blackbox.kernel import identity as kernel_identity
 from plugins.blackbox.kernel.config import BlackboxConfig
+from _blackbox_fakes import dkg_client_fake
 
 
 DEV_GRAPH = "0x51E5dE758A45c8b64048E29918421F0bdD6D5d5C/agent-blackbox-community-dev"
@@ -63,7 +64,7 @@ def wired(monkeypatch, bb_home):
     """Community on, identity resolved, fake client captured."""
     client = FakeClient()
     monkeypatch.setattr(report_command, "load_blackbox_config", lambda: CFG_ON)
-    monkeypatch.setattr(report_command, "DkgClient", lambda **kw: client)
+    monkeypatch.setattr(report_command, "DkgClient", dkg_client_fake(lambda **kw: client))
     monkeypatch.setattr(kernel_identity, "reporter_address", lambda c: REPORTER)
     return client
 
@@ -128,13 +129,16 @@ def test_manual_report_lands_via_shared_pipeline(wired, capsys):
 def test_share_failure_exits_nonzero_and_ledgers(monkeypatch, bb_home, capsys):
     client = FakeClient(fail=True)
     monkeypatch.setattr(report_command, "load_blackbox_config", lambda: CFG_ON)
-    monkeypatch.setattr(report_command, "DkgClient", lambda **kw: client)
+    monkeypatch.setattr(report_command, "DkgClient", dkg_client_fake(lambda **kw: client))
     monkeypatch.setattr(kernel_identity, "reporter_address", lambda c: REPORTER)
     rc = report_command.cmd_report(_args(type="ioc", ioc_type="domain", value="evil.example", context="fetched-by-tool"))
     assert rc == 1
     assert "refused for now" in capsys.readouterr().out
+    # queued for retry, like an automatic report: ONE ledger row, "retrying" (it used to add a second, "failed")
+    from plugins.blackbox.community import share_retry
+    assert [share.identifier for share in share_retry.default_queue().pending()] == ["ioc:domain:evil.example"]
     rows = audit.read_share_ledger()
-    assert rows and rows[0]["ok"] is False
+    assert len(rows) == 1 and rows[0]["ok"] is False and rows[0]["outcome"] == share_retry.OUTCOME_RETRYING
 
 
 def test_cooldown_short_circuits_resubmission(wired, capsys):
@@ -165,7 +169,7 @@ def test_gate_off_is_loud_not_silent(monkeypatch, bb_home, capsys):
 def test_ghost_identity_refused(monkeypatch, bb_home, capsys):
     """No resolvable identity -> refuse; there is no placeholder to report under."""
     monkeypatch.setattr(report_command, "load_blackbox_config", lambda: CFG_ON)
-    monkeypatch.setattr(report_command, "DkgClient", lambda **kw: FakeClient())
+    monkeypatch.setattr(report_command, "DkgClient", dkg_client_fake(lambda **kw: FakeClient()))
     monkeypatch.setattr(kernel_identity, "reporter_address", lambda c: None)
     rc = report_command.cmd_report(_args(type="ioc", ioc_type="domain", value="evil.example", context="fetched-by-tool"))
     assert rc == 1
@@ -317,8 +321,69 @@ def test_a_failed_dispute_is_recorded_in_the_ledger(monkeypatch, bb_home, capsys
     """KI-015: every share attempt, success or failure, lands in the local
     ledger — a failed dispute used to leave no trace (found building R1c)."""
     monkeypatch.setattr(report_command, "load_blackbox_config", lambda: CFG_ON)
-    monkeypatch.setattr(report_command, "DkgClient", lambda **kw: FakeClient(fail=True))
+    monkeypatch.setattr(report_command, "DkgClient", dkg_client_fake(lambda **kw: FakeClient(fail=True)))
     monkeypatch.setattr(kernel_identity, "reporter_address", lambda c: REPORTER)
     assert report_command.cmd_report(_args(false_positive="dep:npm:innocent@2.0.0", reason="wrong")) == 1
     rows = audit.read_share_ledger()
     assert rows and rows[0]["category"] == "false-positive" and rows[0]["ok"] is False
+
+
+# ---------------------------------------------------------------------------
+# Sandbox mode: a manual report is a test too, like an automatic one
+# ---------------------------------------------------------------------------
+
+CFG_SANDBOX = BlackboxConfig(report=True, context_graph_id=DEV_GRAPH, daily_report_limit=50, community_sandbox=True)
+SANDBOX_REPORT = dict(type="ioc", ioc_type="domain", value="sandbox-test.example", context="fetched-by-tool")
+
+
+class _LaneClient(FakeClient):
+    """Also records which sub-graph (lane) each share was sent to."""
+
+    def __init__(self, fail=False):
+        super().__init__(fail)
+        self.lanes = []
+
+    def share_knowledge_asset(self, cg_id, name, quads, **kw):
+        self.lanes.append(kw.get("sub_graph"))
+        return super().share_knowledge_asset(cg_id, name, quads, **kw)
+
+
+def _sandbox_node(monkeypatch, fail=False):
+    from plugins.blackbox.community import sharing
+
+    client, kept, queued = _LaneClient(fail), [], []
+    monkeypatch.setattr(report_command, "load_blackbox_config", lambda: CFG_SANDBOX)
+    monkeypatch.setattr(report_command, "DkgClient", dkg_client_fake(lambda **kw: client))
+    monkeypatch.setattr(kernel_identity, "reporter_address", lambda c: REPORTER)
+    monkeypatch.setattr(sharing.keep_alive, "remember_accepted_share", lambda *a, **k: kept.append(k))
+    monkeypatch.setattr(sharing.share_retry, "queue_failed_share", lambda **k: queued.append(k))
+    return client, kept, queued
+
+
+def test_in_sandbox_mode_a_manual_report_goes_to_the_sandbox_lane_only(monkeypatch, bb_home, capsys):
+    client, kept, queued = _sandbox_node(monkeypatch)
+    assert report_command.cmd_report(_args(**SANDBOX_REPORT)) == 0
+    out = capsys.readouterr().out
+    assert client.lanes == [constants.SANDBOX_SUB_GRAPH] and client.shares[0][1].startswith("sandbox-")
+    assert "sandbox" in out.lower()
+    assert kept == [] and queued == []                           # a test is never re-published or retried
+    assert audit.read_share_ledger() == []                       # the real ledger and cooldown are untouched
+    assert audit.recently_reported("ioc:domain:sandbox-test.example") is False
+    with audit.sandbox_run():
+        rows = audit.read_share_ledger()
+    assert rows and rows[0]["ok"] is True and rows[0]["asset_name"].startswith("sandbox-")
+
+
+def test_in_sandbox_mode_a_refused_manual_report_is_not_queued_for_retry(monkeypatch, bb_home, capsys):
+    _client, kept, queued = _sandbox_node(monkeypatch, fail=True)
+    assert report_command.cmd_report(_args(**SANDBOX_REPORT)) == 1
+    assert queued == [] and kept == [] and audit.read_share_ledger() == []
+    assert "sandbox" in capsys.readouterr().out.lower()
+
+
+def test_outside_sandbox_mode_a_manual_report_still_uses_the_reports_lane_and_is_kept_alive(monkeypatch, bb_home):
+    client, kept, _queued = _sandbox_node(monkeypatch)
+    monkeypatch.setattr(report_command, "load_blackbox_config", lambda: CFG_ON)
+    assert report_command.cmd_report(_args(**SANDBOX_REPORT)) == 0
+    assert client.lanes == [constants.COMMUNITY_SUB_GRAPH] and client.shares[0][1].startswith("report-")
+    assert len(kept) == 1 and audit.read_share_ledger()[0]["ok"] is True

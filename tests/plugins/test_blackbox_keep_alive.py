@@ -222,11 +222,12 @@ def test_the_retry_drain_remembers_a_report_accepted_on_retry(tmp_path):
 
 def test_blackbox_report_remembers_and_a_dispute_never_does():
     reporter = Reporter("0xmanual")
-    statement_verbs.send_and_record(_Node(), CFG, identifier=THREAT, category="ioc", severity="high",
-                                    subject="s", name="report-m", quads=_quads(reporter), keep_alive=True)
+    finding = {"identifier": THREAT, "category": "ioc", "severity": "high",
+               "fields": {"ioc_type": "domain", "ioc_context": "fetched-by-tool"}}
+    shared = sharing.share_report(_Node(), CFG, finding, reporter.address, _signer(reporter))   # what `blackbox report` sends
     statement_verbs.send_and_record(_Node(), CFG, identifier=THREAT, category="false-positive", severity="info",
-                                    subject="s:fp", name="fp-m", quads=[])
-    assert [r.name for r in LiveReportStore().all()] == ["report-m"]
+                                    subject="s:fp", name="fp-m", quads=[], reduces=True)
+    assert [r.name for r in LiveReportStore().all()] == [shared.name]
 
 
 def test_a_retraction_ends_keep_alive_for_the_identifier(capsys):

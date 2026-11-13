@@ -29,6 +29,7 @@ from plugins.blackbox.kernel import config as config_mod
 from plugins.blackbox.kernel.crypto_secrets import seed_phrase
 from plugins.blackbox.shields.trader import mode as trader_mode
 from plugins.blackbox.ruleset import Ruleset
+from _blackbox_fakes import dkg_client_fake
 
 WORDS = seed_phrase.WORDLIST_FILE.read_text(encoding="ascii").split()
 BASE58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
@@ -71,7 +72,7 @@ def home(tmp_path, monkeypatch):
     monkeypatch.setattr(hooks, "_config", lambda: config_mod.BlackboxConfig(mode="block", report=False))
     monkeypatch.setattr(ruleset_mod, "get", lambda cfg=None: Ruleset())
     monkeypatch.setattr(guard_background, "_spawn_llm_review", lambda *a, **k: None)
-    monkeypatch.setattr(guard_reporting, "DkgClient", lambda **k: (_ for _ in ()).throw(OSError("no node in tests")))
+    monkeypatch.setattr(guard_reporting, "DkgClient", dkg_client_fake(lambda **k: (_ for _ in ()).throw(OSError("no node in tests"))))
     monkeypatch.setattr(trader_mode, "current", lambda: trader_mode.build(enabled=True))
     api_request._seen_api_findings.clear()
     return tmp_path / "bb"

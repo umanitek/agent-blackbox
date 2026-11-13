@@ -49,7 +49,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass, replace
-from typing import Any, Dict, FrozenSet, Mapping, Optional, Tuple
+from typing import Any, Mapping, Optional
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
@@ -109,7 +109,16 @@ class SignedEnvelope:
         """The envelope as compact JSON — the form stored in the graph."""
         document = _domain_document(self)
         document["sigs"] = [{"signer": s.signer, "sig": s.value} for s in self.signatures]
-        return json.dumps(document, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+        return canonical_json(document)
+
+
+def canonical_json(value: Any) -> str:
+    """*value* as THE text that is hashed or signed: keys sorted, no spaces, ASCII only (anything
+    else escaped). The same value is the same bytes on every node — so this spelling is
+    written once; a digest or a signature made from another spelling would not verify.
+
+    Usage: ``hashlib.sha256(canonical_json(payload).encode("ascii"))``."""
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
 
 
 def _domain_document(envelope: SignedEnvelope) -> dict[str, Any]:
@@ -128,8 +137,7 @@ def _domain_document(envelope: SignedEnvelope) -> dict[str, Any]:
 
 def _signed_message(envelope: SignedEnvelope) -> bytes:
     """The exact bytes every signature covers: domain tag + canonical JSON."""
-    body = json.dumps(_domain_document(envelope), sort_keys=True, separators=(",", ":"), ensure_ascii=True)
-    return _DOMAIN_TAG + body.encode("ascii")
+    return _DOMAIN_TAG + canonical_json(_domain_document(envelope)).encode("ascii")
 
 
 def content_id(envelope: SignedEnvelope) -> str:
@@ -152,6 +160,15 @@ def canonical_text(envelope: SignedEnvelope) -> str:
     for signature in envelope.signatures:
         first.setdefault(signature.signer.lower(), Signature(signature.signer.lower(), signature.value.lower()))
     return replace(envelope, signatures=tuple(first[signer] for signer in sorted(first))).to_text()
+
+
+def copy_rank(text: str) -> tuple[int, str]:
+    """Which of several copies of ONE signed statement to keep — the lower rank wins: fewest
+    signatures first (anyone may add a signature of their own to a genuine statement), then
+    the smallest text (KI-266). Signatures are counted from the parsed envelope, never from
+    the text's spelling; a text that does not parse ranks with none."""
+    envelope = from_text(text)
+    return (len(envelope.signatures) if envelope is not None else 0), text
 
 
 def is_canonical(text: str) -> bool:

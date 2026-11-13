@@ -27,27 +27,32 @@ Usage::
 """
 
 # No ``from __future__ import annotations``: FastAPI resolves the route annotations below.
+import logging
 import threading
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone, UTC
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Optional
 
+from ...kernel.health import utc_day
+from ...kernel import threat_ids
 from ...kernel.signing import key_manifest, trust_anchors
 from ...kernel.signing import Authority
 from .. import publishing
 from ..proposals import consent
 from ..context import CurateContext
 from ..proposals import Proposal, ProposalState, ProposalStore
+from ..proposals.proposal import ProposalError
 from .metrics import MetricsSources, collect_metrics
 from .root_signer import RootSigner, RootSignerError, TotpSecondFactor
 from .root_store import EncryptedRootStore
 from .roster import (ConsoleState, JoinRequest, JoinState, RosterError, SelfTestReport, SignedList, diff,
                      renewal_status, renewed, with_curator, without_curator)
 
-MAX_PASSPHRASE_LENGTH = 1024
+from .app import MAX_PASSPHRASE_LENGTH   # one limit for the login and the signing forms
+
+logger = logging.getLogger(__name__)
 _SECOND_FACTOR_PATTERN = r"^[0-9]{6}$"
-_KEY_PATTERN = r"^[0-9a-f]{64}$"
+_KEY_PATTERN = rf"^{threat_ids.HEX64_PATTERN}$"
 
 
 def _default_signer(ctx: CurateContext) -> RootSigner:
@@ -75,7 +80,7 @@ class ConsoleServices:
     metrics: MetricsSources = field(default_factory=MetricsSources)
 
     def today(self) -> str:
-        return datetime.fromtimestamp(self.clock(), UTC).date().isoformat()
+        return utc_day(self.clock())
 
 
 class _Refused(Exception):
@@ -154,8 +159,7 @@ class ConsoleActions:
             raise _Refused(404, "no staged key list with that id")
         _proposal, outcome = publishing.publish(self._context(), store, proposal_id, typed_code=confirmation_code,
                                                 yes=False)
-        # publish() promises: the text starts with "published" only after the read-back.
-        return {"published": outcome.startswith("published"), "outcome": outcome}
+        return {"published": outcome.published, "outcome": str(outcome)}
 
     # -- the steps ---------------------------------------------------------------------
 
@@ -234,6 +238,11 @@ def _answer(work: Callable[[], dict[str, object]], status: int = 200) -> Any:
         return JSONResponse({"error": str(exc)}, status_code=400)
     except RootSignerError:
         return JSONResponse({"error": "the root signature was refused"}, status_code=403)
+    except ProposalError as exc:   # a state the proposal cannot move to (e.g. already published)
+        return JSONResponse({"error": str(exc)}, status_code=409)
+    except OSError:   # a save failed: no path or detail in the answer
+        logger.warning("blackbox: the curator console could not save its state", exc_info=True)
+        return JSONResponse({"error": "the console could not save its state"}, status_code=500)
 
 
 def add_console_routes(app: Any, services: ConsoleServices) -> None:

@@ -14,7 +14,7 @@ Public surface: :func:`clamp_to_monitor` (the tier applies it),
 
 from __future__ import annotations
 
-from typing import Any, Dict, Mapping
+from typing import Any, Mapping
 
 from .metrics import MAX_SNAPSHOTS, Snapshot, build_snapshot, calibration_gap, latest, read_all, write_snapshot
 

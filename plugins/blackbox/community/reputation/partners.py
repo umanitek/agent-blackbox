@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, timedelta
-from typing import Dict, Iterable, Tuple
+from typing import Iterable
 
 from .bands import SPONSOR_WEIGHT_CAP
 

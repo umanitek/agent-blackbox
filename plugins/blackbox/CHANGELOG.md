@@ -38,6 +38,124 @@ that the two version fields agree.
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-11-13
+
+### Fixed
+
+- **One check that fails no longer ends the others.** If a single detector hits an error on a
+  call (for example on a number thousands of digits long), the rest of the checks still run and
+  can still block; the failure is logged. Arguments nested too deep to read are checked as text
+  instead of raising an error to Hermes.
+- **A typo in `snapshot_sync` no longer switches protection off.** A saved `snapshot_sync` block
+  that cannot be used is reported (`blackbox status` says so, sync refuses to start) while every
+  check keeps running. Saving such a block is refused.
+- **A long command is checked like a short one.** The protected-path, keychain, guard-settings
+  and dangerous-command checks read a command whole up to 100,000 characters, and a longer one
+  by its first and last 50,000. They used to read only its first 8,000.
+- **The guard-settings rule follows `cd`.** A command that reaches Blackbox's own settings through
+  several `cd` steps is recognised like one that names the file directly.
+- **A `config.yaml` that cannot be read is never written over.** Attach, the assistant's profile
+  setup, settings saves and uninstall leave an unreadable file alone and say so, instead of
+  replacing it with a nearly empty one. Blackbox's own changes to a `config.yaml` also wait for
+  each other, so a settings save and an automatic attach in the dashboard cannot undo one another.
+- **`blackbox dashboard` honours `auto_attach`.** Starting the dashboard no longer attaches every
+  agent on the machine when automatic attach is off.
+- **The agent's action no longer waits for the node after a finding.** The finding is recorded
+  and the block is returned at once; the private audit record and the community share follow in
+  the background. A slow or stopped node could hold a blocked action for minutes.
+- **Community rules stay in force while they are refreshed.** Between full syncs the community
+  rules were briefly missing each time they were re-read from the node. They are now replaced in
+  one step.
+- **Large file writes are checked quickly.** Writing a large file with few spaces (a minified
+  file, an encoded blob) could hold the agent for several seconds per call.
+- **Blackbox talks to its own node and dashboard directly.** Requests to the local node and the
+  local dashboard no longer go through a proxy set in the environment, and do not follow
+  redirects.
+- **Uninstall also removes Blackbox from its own chat profile.** The plugin copy that
+  `blackbox chat` puts in `~/.hermes/profiles/agent-blackbox` was left behind. Uninstall also no
+  longer crashes on a config.yaml whose `plugins:` section is not a mapping, and `blackbox detach`
+  exits with an error when a target could not be detached.
+- **Uninstall stops only Blackbox's node.** The process number saved by the node is checked to be
+  the Blackbox node before it is stopped. Uninstall and the dashboard's assistant also use the
+  Hermes they are running in, not another `hermes` found on the PATH.
+- **The audit logs lose no record under load.** When several agents write while one trims a full
+  log, every record is kept.
+- **A dashboard page left open keeps working after the dashboard restarts** (it used to answer
+  "403" until reloaded), and the first page after a start is no longer slow because the start-up
+  reads did not run.
+- **Nothing is shared while sharing is off, whichever part of Blackbox sends it.** The check that
+  sharing is switched on and your consent is in force now sits at the one place reports leave
+  the machine, not only in each feature that sends. Disputes and retractions still go through,
+  because they only withdraw.
+- **A refused manual report is recorded once.** `blackbox report` wrote two "reports" rows for a
+  report the node refused for now (one "failed", one "retrying"); it now writes the one
+  "retrying" row, as automatic reports do.
+- **The dashboard no longer calls a graph "open" while the node is still waiting to learn
+  its policy.** When the graph's on-chain record had arrived empty, the community card could
+  say "open graph: no approval needed" while Blackbox itself was still waiting to decide; both
+  now say it could not check yet.
+- **A manual report made in sandbox mode stays in the sandbox.** `blackbox report` with Sandbox
+  mode on now goes to the sandbox lane only, like automatic reports, and is not re-published.
+- **Curator consent codes expire and are single-use, as documented.** `curate publish` restarted
+  a code's 10-minute life on every attempt, and two publishes of one code at the same moment could
+  both go through. A code now expires 10 minutes after it was shown and is used once.
+- **A curator's second publish to Verified Memory does not pay again.** When the first attempt
+  could not read its statement back yet, the next attempt published (and paid) again instead of
+  looking first. A publish that timed out now says it could not tell whether it was published,
+  not that nothing was.
+- **`blackbox curate watch` raises the same alarms as the curator service.** It left out the
+  self-test's alarm, so a curator suspended by a failing self-test was silent through it.
+- **Curator commands.** `blackbox curate approve` exits with an error when nothing was published;
+  `curate inbox` admits only proposals a curator signed; a sighting digest dated in a week that
+  does not exist is ignored instead of emptying the heat map.
+- **Advisories OSV labels "moderate" are shown.** Dependency discovery dropped them without a
+  word; they now appear as medium. A package looked up while offline is checked again later
+  instead of being remembered as clean.
+- **The site that carried a prompt injection is named for OpenAI-direct and Codex agents too.**
+  The injection itself was already found for them; the site finding was missing.
+- **`blackbox status` lists every attached OpenClaw agent.** One whose config has comments, or
+  is named by `OPENCLAW_CONFIG_PATH`, was attached but missing from the list.
+- **Secrets in logged settings.** The words that mark a setting as secret are now one list for
+  every place Blackbox redacts, so a name redacted in one log is redacted in all of them.
+- **Trader Shield names the right browser.** A wallet is shown under the browser whose folder it
+  is in; a user folder such as "marc" or "operator" no longer makes a Chrome wallet read Arc or Opera.
+- **An approval to a spender Blackbox cannot check is told like any other approval.** Its event
+  in Trader Shield's report now says what the agent reached for and why it matters.
+- **An empty `APPDATA` no longer points Trader Shield at the top of the disk.** Like an empty
+  `XDG_CONFIG_HOME`, it now counts as unset when Trader Shield works out where a wallet app keeps its files.
+- **A crash while recording a report can no longer reset the report limits.** The file that holds the
+  per-threat cooldowns and the daily cap is replaced whole, never rewritten in place.
+- **Detaching an OpenClaw agent keeps a copy of its config.** `blackbox detach` saves
+  `openclaw.json.before-blackbox-detach.bak` before it rewrites the file, as attach does. Both now
+  say when a config's comments could not be kept, and name the copy that still has them.
+- **Switching an agent off through a link to its folder sticks.** An agent switched off (or back on)
+  through a symlink or another spelling of its folder is the same agent to the automatic re-attach.
+- **`blackbox uninstall` asks at your terminal when it is run from a pipe.** Like `blackbox attach`, it
+  asks the terminal itself instead of refusing outright; with no terminal it still needs `--yes`.
+- **`blackbox uninstall` finishes on a hand-edited Hermes config.** A `plugins:` written as text or a
+  list no longer stops the removal half-way, after the services were already stopped.
+- **One damaged line in a log no longer empties the dashboard's findings.** A findings line that is
+  not a JSON object is skipped like any other damaged line; the activity total counts only rows it shows.
+- **The Playground's sandbox lane shows other members' tests safely.** Their text is cleaned and
+  defanged like the Community graph's, a threat's category comes from its identifier, and a test can no
+  longer break the threat window by filling its sources with text.
+- **Desktop's status bar counts every action of the day.** On a day with more than 100 findings the
+  count stopped at the newest 100; it now counts everything from the last 24 hours.
+- **An older finding shows the same trust everywhere.** A recorded finding that does not say whether it
+  came from a verified rule now reads the same in the findings list and the Local activity view.
+- **The dashboard links a threat's references only when they are web addresses.** Anything else is
+  shown as plain text, as Desktop already did.
+- **Desktop says the first sync is done only when verified rules have arrived.** Community reports that
+  Blackbox can match against were counted as verified rules, so the setup page could call the first sync
+  finished too early.
+- **A sync failure is no longer hidden by an older catch-up job.** The dashboard's sync activity read a
+  job time written in milliseconds as newer than the failure and dropped the failure's reason.
+
+### Changed
+
+- A mode or severity written with stray spaces or capitals in `config.yaml` (`mode: " Block "`)
+  is read as that value. It used to fall back to the default.
+
 ## [1.4.0] - 2026-11-08
 
 ### Added
@@ -248,7 +366,8 @@ The first version in the Hermes plugin catalog (commit `7d697683`, added by Herm
 in NousResearch/hermes-agent#140529). Its `plugin.yaml` said 1.0.0 while Blackbox's own code and
 dashboard reported 1.1.0; 1.1.0 is therefore skipped, so no two different builds share a number.
 
-[Unreleased]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.4.0...main
+[Unreleased]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.4.1...main
+[1.4.1]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.4.0...blackbox-v1.4.1
 [1.4.0]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.3.0...blackbox-v1.4.0
 [1.3.0]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.2.0...blackbox-v1.3.0
 [1.2.0]: https://github.com/umanitek/agent-blackbox/compare/7d697683e0d56608cfe3fee374d6a6866702058a...blackbox-v1.2.0

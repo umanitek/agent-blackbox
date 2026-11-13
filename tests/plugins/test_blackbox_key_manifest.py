@@ -335,3 +335,41 @@ def test_a_malformed_payload_is_a_clear_parse_error_and_never_a_trusted_manifest
                             payload=payload, chain=CHAIN, root_epoch=1, sequence=1)
     roots = RootPins.unbound([signing.public_key_hex(root)])
     assert km.verify_manifest(envelope, environment=MAINNET, graph=VM_GRAPH, roots=roots) is None
+
+
+# --- the freeze / ceiling / sticky rules, shared by key manifests and graph migrations ----------
+
+def _items(*rows):
+    from plugins.blackbox.community.trust.ordered_policy import Ordered
+
+    return [Ordered(order, content, freeze_only) for order, content, freeze_only in rows]
+
+
+def test_a_conflict_is_two_contents_at_one_order_or_a_freeze_only_statement():
+    from plugins.blackbox.community.trust import ordered_policy as policy
+
+    items = _items(((1, 1), "a", False), ((1, 2), "b", False), ((1, 2), "c", False), ((1, 4), "d", True))
+    assert policy.conflict_orders(items) == {(1, 2), (1, 4)}
+
+
+def test_a_conflict_above_the_sticky_order_freezes_it_and_everything_above():
+    from plugins.blackbox.community.trust import ordered_policy as policy
+
+    items = _items(((1, 1), "a", False), ((1, 2), "b", False), ((1, 2), "c", False), ((1, 3), "d", False))
+    conflicts = policy.conflict_orders(items)
+    allowed = [item.order for item in items if policy.usable(item, conflicts=conflicts, sticky_order=(1, 1), sticky_hash="a")]
+    assert allowed == [(1, 1)] and policy.freeze_order(items, (1, 1)) == (1, 2)
+    assert policy.ignored_conflict(items, (1, 1)) is False
+
+
+def test_a_conflict_at_or_below_the_sticky_order_never_moves_the_reader_but_is_reported():
+    from plugins.blackbox.community.trust import ordered_policy as policy
+
+    items = _items(((1, 2), "kept", False), ((1, 2), "forged", False), ((1, 3), "next", False))
+    conflicts = policy.conflict_orders(items)
+    allowed = [item.content for item in items
+               if policy.usable(item, conflicts=conflicts, sticky_order=(1, 2), sticky_hash="kept")]
+    assert allowed == ["kept", "next"] and policy.freeze_order(items, (1, 2)) is None
+    assert policy.ignored_conflict(items, (1, 2)) is True
+    # without the sticky content's hash an ambiguous sticky order is skipped, never guessed
+    assert [i.content for i in items if policy.usable(i, conflicts=conflicts, sticky_order=(1, 2), sticky_hash="")] == ["next"]

@@ -31,6 +31,7 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 from ...kernel import node_routes, yaml_files
+from ...kernel.bounded_files import read_json_object
 from ...kernel.dkg_client import DkgClient
 from ...kernel.health import HealthClass, HealthItem
 from .. import keys
@@ -132,11 +133,8 @@ class DeliveryLedger:
         self._path = path or (keys.curate_home() / _DELIVERY_FILE)
 
     def _read(self) -> dict[str, dict[str, float]]:
-        try:
-            data = json.loads(self._path.read_text(encoding="utf-8-sig"))
-        except (OSError, ValueError):
-            return {}
-        return {str(key): value for key, value in data.items() if isinstance(value, dict)} if isinstance(data, dict) else {}
+        data = read_json_object(self._path) or {}
+        return {str(key): value for key, value in data.items() if isinstance(value, dict)}
 
     def failed(self, proposal_id: str, *, now: float) -> Undelivered:
         """Record one more beat in which *proposal_id* reached no other curator."""

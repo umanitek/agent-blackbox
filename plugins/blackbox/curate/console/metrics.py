@@ -35,15 +35,14 @@ import logging
 import time
 from collections import Counter
 from dataclasses import dataclass, fields
-from datetime import datetime, UTC
 from decimal import Decimal
 from typing import Callable, Mapping, Optional, Sequence, TypeVar
 
-from ...kernel.health import key_fingerprint
+from ...kernel.health import key_fingerprint, utc_day, utc_day_or
 from ...kernel.signing import CuratorStatement
 from .. import queue
 from ..context import CurateContext, verified_identifiers
-from ..lab.jobs import LabJobState, LabJobStore
+from ..lab.jobs import WAITING_STATES, LabJobStore
 from ..publishing.ledger import PublishLedger
 from ..sources import LookupItem, queue_metrics
 from ..proposals import DeliveryLedger
@@ -59,7 +58,6 @@ NEVER = "never"
 FLOOR_BATCHES = 2
 #: Reader update uptake is the share of installs on the newest release this long after it ships.
 UPTAKE_AFTER_SECONDS = 7 * 86_400
-_WAITING_LAB_STATES = (LabJobState.QUEUED, LabJobState.RUNNING)
 
 #: A reading of an age that may be "never" (a readable store that has no such event yet).
 Age = int | str
@@ -158,7 +156,7 @@ def collect_metrics(sources: MetricsSources, context: Optional[Callable[[], Cura
     unavailable."""
     ctx = _read("context", context)
     ledger = _read("publish ledger", sources.publish_ledger)
-    today = datetime.fromtimestamp(now, UTC).date().isoformat()
+    today = utc_day(now)
     values: dict[str, object] = {}
     if ledger is not None:
         _merge(values, "publish ledger", lambda: _publish_values(ledger, now))
@@ -188,7 +186,7 @@ def open_queue_items(ctx: CurateContext, today: str) -> Sequence[LookupItem]:
         raise LookupError("no compiled ruleset: the queue is not known")
     rules = compiled.community
     view = queue.delta_view(rules, verified_identifiers(compiled, rules))
-    return [LookupItem(item.identifier, item.lane, first_seen=_day(rules[item.identifier].get("firstSeen"), today))
+    return [LookupItem(item.identifier, item.lane, first_seen=utc_day_or(rules[item.identifier].get("firstSeen"), today))
             for item in view.new]
 
 
@@ -250,7 +248,7 @@ def _key_list_values(ctx: CurateContext, today: str) -> dict[str, object]:
 
 
 def _lab_values(store: LabJobStore, now: float) -> dict[str, object]:
-    waiting = [record for record in store.records() if record.state in _WAITING_LAB_STATES]
+    waiting = [record for record in store.records() if record.state in WAITING_STATES]
     oldest = min((record.job.requested_at for record in waiting), default=now)
     return {"lab_queue_depth": len(waiting), "lab_oldest_job_age_seconds": int(max(0.0, now - oldest))}
 
@@ -287,12 +285,6 @@ def _merge(values: dict[str, object], what: str, reader: Callable[[], dict[str, 
     values.update(_read(what, reader) or {})
 
 
-def _day(first_seen: object, today: str) -> str:
-    """The UTC day of a ``firstSeen`` epoch; *today* when it is absent or unreadable."""
-    try:
-        return datetime.fromtimestamp(float(first_seen), UTC).date().isoformat() if first_seen else today
-    except (TypeError, ValueError, OverflowError, OSError):
-        return today
 
 
 

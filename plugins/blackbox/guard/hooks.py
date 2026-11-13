@@ -13,7 +13,7 @@ import functools
 import json
 import logging
 from typing import Any, Callable, Optional
-from .. import audit, detection, killlist, overrides, ruleset, shields
+from .. import audit, detection, killlist, overrides, shields
 from ..kernel import config as config_mod, constants
 from ..kernel.config import BlackboxConfig
 from . import api_request, background, graph_rules
@@ -109,10 +109,15 @@ def _would_block(cfg: BlackboxConfig, findings: list[detection.Finding]) -> list
 def _raw_findings(cfg: BlackboxConfig, rs: Any, tool_name: str, args: Any,
                   active: shields.ShieldsSnapshot) -> list[detection.Finding]:
     """All raw findings for one call, gathered here so new detectors join without growing the hook body."""
+    isolated = detection.run_isolated   # each check on its own: one that raises costs only its findings
     raw = detection.detect_all(tool_name, args, rs, discover=cfg.discover)
-    raw += detection.detect_custom_fileaccess(tool_name, args, cfg.protected_paths) + shields.check(tool_name, args, active)
-    raw += detection.detect_guard_tamper(tool_name, args)   # KI-473: an agent never switches its guard off
-    raw += _kill_list_findings(rs, tool_name, args)   # R14: curator-signed DISABLE / WARN, last-good list
+    raw += isolated("detect_custom_fileaccess",
+                    lambda: detection.detect_custom_fileaccess(tool_name, args, cfg.protected_paths))
+    raw += shields.check(tool_name, args, active)
+    # KI-473: an agent never switches its guard off.
+    raw += isolated("detect_guard_tamper", lambda: detection.detect_guard_tamper(tool_name, args))
+    # R14: curator-signed DISABLE / WARN, last-good list.
+    raw += isolated("kill_list", lambda: _kill_list_findings(rs, tool_name, args))
     return raw
 
 
@@ -124,7 +129,7 @@ def _normalised_call(tool_name: Any, args: Any) -> tuple[str, Any]:
     if isinstance(args, str) and args.lstrip().startswith("{"):
         try:
             parsed = json.loads(args)
-        except ValueError:
+        except (ValueError, RecursionError):   # not JSON, or nested too deep to parse: checked as text
             return name, args
         return name, parsed if isinstance(parsed, dict) else args
     return name, args

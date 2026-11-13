@@ -10,8 +10,6 @@ through ``term_safe``.
 
 from __future__ import annotations
 
-import os
-import secrets
 from pathlib import Path
 from typing import Optional
 
@@ -70,7 +68,7 @@ def _network(given: str) -> str:
         return given
     try:
         cfg = load_blackbox_config()
-        return community.network_environment(DkgClient(url=cfg.dkg_url, dkg_home=cfg.dkg_home, config=cfg).status())
+        return community.network_environment(DkgClient.for_config(cfg).status())
     except Exception:   # offline is the normal case for a verifier; the caller then asks for --network
         return ""
 

@@ -113,3 +113,56 @@ def test_a_due_generation_is_refreshed_although_it_was_compiled_moments_ago(cloc
     refresh_cycle.get(_Config())
 
     assert started == ["blackbox-ruleset"]
+
+
+def test_a_rules_cache_that_cannot_be_saved_is_said_out_loud(tmp_path, monkeypatch, caplog):
+    """A failed ruleset.json write was logged at DEBUG: on a full disk the node kept serving a
+    generation that never persisted and nothing visible said so (fail-open ≠ fail-silent)."""
+    import logging
+    from plugins.blackbox.ruleset import compiler, disk_cache
+
+    def disk_full(path, text, **_kw):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(disk_cache, "atomic_write", disk_full)
+    with caplog.at_level(logging.WARNING):
+        disk_cache._write_cache(compiler.Ruleset())
+    assert any("could not save the rules" in record.getMessage() for record in caplog.records)
+
+
+def test_a_refresh_asks_the_node_for_its_status_once(monkeypatch):
+    """Five readers of one refresh (store lanes, the scope's store address, the manifest and
+    migration environments, the promoted copies) each asked client.status(timeout=5.0): up to
+    five 5-second calls against a busy node, answers that could disagree. The refresh's client
+    asks once; a failure is the same failure for every reader."""
+    from plugins.blackbox.ruleset import refresh_cycle
+
+    class Node:
+        calls = 0
+
+        def status(self, timeout=None):
+            Node.calls += 1
+            return {"store": {"url": "http://127.0.0.1:7878"}}
+
+        def other(self):
+            return "delegated"
+
+    once = refresh_cycle._StatusOnce(Node())
+    answers = [once.status(timeout=5.0) for _ in range(5)]
+    assert all(answer == {"store": {"url": "http://127.0.0.1:7878"}} for answer in answers)
+    assert Node.calls == 1 and once.other() == "delegated"
+
+    class Down:
+        calls = 0
+
+        def status(self, timeout=None):
+            Down.calls += 1
+            raise OSError("node busy")
+
+    down = refresh_cycle._StatusOnce(Down())
+    for _ in range(3):
+        try:
+            down.status(timeout=5.0)
+        except OSError:
+            pass
+    assert Down.calls == 1

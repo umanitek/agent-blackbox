@@ -35,7 +35,7 @@ import secrets
 import threading
 import time
 from dataclasses import dataclass
-from typing import Callable, Dict, Optional, Tuple
+from typing import Callable, Optional
 
 IDLE_SECONDS = 15 * 60
 #: Live sessions (pending + authenticated) kept at once; the oldest pending one is

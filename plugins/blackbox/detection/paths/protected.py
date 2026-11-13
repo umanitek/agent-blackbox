@@ -29,7 +29,7 @@ from __future__ import annotations
 import fnmatch
 import glob
 import os
-from typing import Any, Iterable, List, Tuple
+from typing import Any, Iterable
 
 from .. import action_parsing, shell_shapes
 from ..finding import Finding

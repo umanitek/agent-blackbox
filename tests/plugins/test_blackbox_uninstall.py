@@ -14,6 +14,7 @@ import dataclasses
 import json
 import os
 import stat
+import sys
 from pathlib import Path
 
 import pytest
@@ -98,7 +99,8 @@ def test_uninstall_removes_blackbox_and_keeps_the_keys(machine):
     assert not (machine / ".local" / "bin" / "blackbox").exists()
     assert not list((machine / "Library" / "LaunchAgents").glob("ai.umanitek.*"))
     assert [c[:2] for c in calls[:2]] == [["launchctl", "bootout"]] * 2
-    assert calls[-1][-3:] == ["plugins", "remove", "blackbox"]                # the running code goes last
+    # the running code goes last, removed by the Hermes that is running (never another one on PATH)
+    assert calls[-1][-6:] == [sys.executable, "-m", "hermes_cli.main", "plugins", "remove", "blackbox"]
     config = (hermes / "config.yaml").read_text(encoding="utf-8")
     assert "blackbox" not in config and "# the model" in config and "browser" in config
     # kept, private, and explained
@@ -171,7 +173,7 @@ def test_windows_tasks_are_ended_and_deleted(machine):
 
 
 def test_without_a_terminal_nothing_is_removed_without_yes(machine, monkeypatch, capsys):
-    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    monkeypatch.setattr(uninstall.terminal_question, "ask", lambda prompt: None)   # no terminal to ask
     args = argparse.Namespace(purge=False, keep_logs=False, dry_run=False, yes=False)
     assert uninstall.cmd_uninstall(args) == 1
     assert (machine / ".hermes" / "blackbox").exists()
@@ -199,3 +201,119 @@ def test_only_a_blackbox_dashboard_on_the_port_is_stopped(monkeypatch):
     monkeypatch.setattr(command, "_stop", lambda pids: stopped.append(set(pids)))
     assert command.stop_running_dashboard(9700) == [11]
     assert stopped == [{11}]                                       # 22 is someone else's: left alone
+
+
+# --- KI-496: daemon.pid is a hint; only this installation's node is ever signalled ---
+
+@pytest.fixture()
+def node_pid_file(machine, monkeypatch):
+    """The machine's plan with daemon.pid = 4242, and os.kill recorded instead of run."""
+    plan = _plan(machine)
+    (plan.dkg_home / "daemon.pid").write_text("4242\n", encoding="utf-8")
+    signalled: list[int] = []
+    monkeypatch.setattr(uninstall.os, "kill", lambda pid, sig: signalled.append(pid))
+    return plan, signalled
+
+
+def test_a_pid_that_is_not_our_node_is_never_signalled(node_pid_file, monkeypatch):
+    from plugins.blackbox import sync
+    plan, signalled = node_pid_file
+    monkeypatch.setattr(sync, "is_node_process", lambda cfg, pid: False)
+    report: list[str] = []
+
+    uninstall._stop_unsupervised_node(plan, report)
+
+    assert signalled == [] and report == []
+
+
+def test_our_own_node_is_stopped(node_pid_file, monkeypatch):
+    from plugins.blackbox import sync
+    plan, signalled = node_pid_file
+    monkeypatch.setattr(sync, "is_node_process", lambda cfg, pid: pid == 4242)
+    report: list[str] = []
+
+    uninstall._stop_unsupervised_node(plan, report)
+
+    assert signalled == [4242] and report == ["stopped Blackbox's DKG node (pid 4242)"]
+
+
+def test_the_real_check_refuses_a_live_process_that_is_not_a_dkg_node(node_pid_file):
+    plan, signalled = node_pid_file
+    (plan.dkg_home / "daemon.pid").write_text(str(os.getpid()), encoding="utf-8")   # this test run itself
+
+    uninstall._stop_unsupervised_node(plan, [])
+
+    assert signalled == []
+
+
+def test_uninstall_and_the_node_service_name_the_same_services():
+    """The names were typed in both modules: renaming one in the installer meant two edits."""
+    from plugins.blackbox import sync
+    from plugins.blackbox.sync import node_service
+
+    assert uninstall.LAUNCHD_LABELS is sync.LAUNCHD_LABELS and uninstall.SYSTEMD_UNITS is sync.SYSTEMD_UNITS
+    assert node_service.LAUNCHD_LABEL in uninstall.LAUNCHD_LABELS
+    assert f"{node_service.SYSTEMD_UNIT}.service" in uninstall.SYSTEMD_UNITS
+    # The values the installers register (scripts/blackbox-install.sh): changing one here is a change there.
+    assert uninstall.LAUNCHD_LABELS == ("ai.umanitek.blackbox-dashboard", "ai.umanitek.blackbox-dkg")
+    assert uninstall.SYSTEMD_UNITS == ("blackbox-dashboard.service", "blackbox-dkg.service")
+    assert uninstall.WINDOWS_TASKS == ("Agent Blackbox dashboard", "Agent Blackbox DKG node")
+
+
+@pytest.mark.parametrize("plugins", ["blackbox", ["blackbox"], 7])
+def test_a_config_whose_plugins_is_not_a_mapping_does_not_crash_the_plan(tmp_path, plugins):
+    """`blackbox uninstall` built its plan by reading `plugins.enabled`; a `plugins` that is a
+    string or list (a hand-edited config) raised AttributeError and the command crashed."""
+    from plugins.blackbox.kernel import yaml_files
+
+    home = tmp_path / "hermes"
+    home.mkdir()
+    yaml_files.dump_yaml(home / "config.yaml", {"plugins": plugins})
+    assert uninstall._names_blackbox(home) is False
+
+
+@pytest.mark.parametrize("plugins", ["blackbox", ["blackbox"]])
+def test_a_config_whose_plugins_is_not_a_mapping_does_not_crash_the_removal(machine, plugins):
+    """The plan survived such a config, but the removal step walked plugins.entries by hand and
+    raised AttributeError half-way through — after the services were already stopped."""
+    from plugins.blackbox.kernel import yaml_files
+
+    yaml_files.dump_yaml(machine / ".hermes" / "config.yaml", {"plugins": plugins})
+    _execute(_plan(machine))   # the plugin folder still names this home as Blackbox's
+    assert yaml_files.load_yaml(machine / ".hermes" / "config.yaml") == {"plugins": plugins}   # nothing to remove: untouched
+
+
+def test_uninstall_also_removes_blackbox_from_its_own_chat_profile(machine):
+    """`blackbox chat` attaches Blackbox to its managed profile (~/.hermes/profiles/agent-blackbox).
+    Discovery hides that profile from the dashboard, and uninstall found homes only through
+    discovery, so the plugin copy and its `plugins.enabled` entry survived an uninstall."""
+    from plugins.blackbox.kernel import constants, yaml_files
+
+    chat = machine / ".hermes" / "profiles" / constants.BLACKBOX_CHAT_PROFILE
+    (chat / "plugins" / "blackbox").mkdir(parents=True)
+    (chat / "config.yaml").write_text("plugins:\n  enabled:\n    - blackbox\n", encoding="utf-8")
+    (chat / "SOUL.md").write_text(constants.BLACKBOX_CHAT_SOUL_MARKER + "\n", encoding="utf-8")   # as `blackbox chat` writes it
+    plan = dataclasses.replace(uninstall.build_plan(purge=False, keep_logs=False), system="Darwin")
+    assert chat in plan.hermes_homes
+    _execute(plan)
+    assert not (chat / "plugins" / "blackbox").exists()
+    assert "blackbox" not in (yaml_files.load_yaml(chat / "config.yaml").get("plugins") or {}).get("enabled", [])
+
+
+@pytest.mark.parametrize("answer, removed", [("y\n", True), ("n\n", False)])
+def test_under_a_pipe_the_question_goes_to_the_terminal(machine, monkeypatch, answer, removed):
+    """Under `curl … | bash` stdin is the pipe; uninstall refused outright although a terminal
+    was there. It now asks the terminal the way `blackbox attach` does (kernel.terminal_question)."""
+    import io
+    monkeypatch.setattr("sys.stdin", io.StringIO("y\n"))   # the pipe: never read as the answer
+
+    class Terminal(io.StringIO):   # what the operator types; what is written to it is the prompt
+        def write(self, text):
+            return len(text)
+
+    monkeypatch.setattr(uninstall.terminal_question, "open", lambda *a, **k: Terminal(answer), raising=False)
+    executed = []
+    monkeypatch.setattr(uninstall, "execute", lambda plan: executed.append(plan) or [])   # only the decision is tested
+    args = argparse.Namespace(purge=False, keep_logs=False, dry_run=False, yes=False)
+    assert uninstall.cmd_uninstall(args) == 0
+    assert bool(executed) is removed

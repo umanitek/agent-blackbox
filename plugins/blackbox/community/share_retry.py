@@ -28,21 +28,18 @@ Usage::
 
 from __future__ import annotations
 
-import json
 import logging
-import os
-import secrets
 import threading
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Optional
 
 from .. import audit
 from ..kernel import constants
 from ..kernel.dkg_client import DkgClient
 from . import keep_alive
-from ..kernel.bounded_files import atomic_write
+from ..kernel.bounded_files import read_json_object, write_json_object
 
 logger = logging.getLogger(__name__)
 
@@ -192,8 +189,8 @@ class ShareRetryQueue:
     # -- storage -------------------------------------------------------------
 
     def _load(self) -> tuple[list[PendingShare], list[dict[str, Any]]]:
+        data = read_json_object(self._path) or {}
         try:
-            data = json.loads(self._path.read_text(encoding="utf-8-sig"))
             pending = [PendingShare.from_json(item) for item in data.get("pending", [])]
             given_up = [dict(item) for item in data.get("given_up", [])]
             return pending, given_up
@@ -201,11 +198,9 @@ class ShareRetryQueue:
             return [], []   # missing or unreadable: an empty queue
 
     def _save(self, pending: list[PendingShare], given_up: list[dict[str, Any]]) -> None:
-        try:
-            self._path.parent.mkdir(parents=True, exist_ok=True)
-            atomic_write(self._path, json.dumps({"pending": [s.as_json() for s in pending], "given_up": given_up}))
-        except OSError as exc:   # fail-open: an unwritable home only loses the retry memory
-            logger.warning("blackbox: could not save the share retry queue (%s)", exc)
+        # fail-open: an unwritable home only loses the retry memory
+        write_json_object(self._path, {"pending": [s.as_json() for s in pending], "given_up": given_up},
+                          what="the share retry queue")
 
 
 def default_queue() -> ShareRetryQueue:
@@ -238,12 +233,14 @@ def retry_due_shares(client: DkgClient, cfg: Any, queue: Optional[ShareRetryQueu
     """
     from . import consent, sharing   # the drain uses the one send path; sharing queues through this module
 
-    if not getattr(cfg, "community_enabled", False) or not consent.in_force():   # round 4: consent gates retries
+    if not consent.sharing_on(cfg):   # round 4: consent gates retries (send_report enforces it too)
         return 0
     store = queue or default_queue()
     accepted = 0
     for share in store.due():
-        outcome, detail = sharing.send_report(client, share.graph, share.name, list(share.quads))
+        outcome, detail = sharing.send_report(client, share.graph, share.name, list(share.quads), cfg=cfg)
+        if outcome is sharing.ShareOutcome.NOT_ALLOWED:   # switched off meanwhile: the queue is kept as it is
+            break
         if outcome is sharing.ShareOutcome.FAILED:
             if store.reschedule(share, detail) is None:
                 audit.record_share_outcome(identifier=share.identifier, category=share.category, severity=share.severity,

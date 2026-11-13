@@ -42,11 +42,10 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone, UTC
-from typing import Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Callable, Optional, Sequence
 
 from ... import community
-from ...kernel.health import HealthItem
+from ...kernel.health import HealthItem, utc_day_or
 from ...kernel.signing import CuratorStatement
 from .. import console, intake, verbs, watch
 from ..context import CurateContext
@@ -120,7 +119,7 @@ class ServiceSteps:
             return
         view = run.queue_view()
         rules = compiled.community
-        items = [LookupItem(item.identifier, item.lane, first_seen=_day(rules[item.identifier].get("firstSeen"), run.today))
+        items = [LookupItem(item.identifier, item.lane, first_seen=utc_day_or(rules[item.identifier].get("firstSeen"), run.today))
                  for item in view.new if not _settled(run, item.identifier)]
         run.looked_up = self._sources.lookup(items, self._lookup_budget, today=run.today)
         run.checks.update({result.item.identifier: own_check_from(result.verdicts) for result in run.looked_up})
@@ -185,13 +184,23 @@ class ServiceSteps:
         if self._alarms is None or self._sink is None:
             return
         sink, now = self._sink(), self._clock()
-        items = verbs.curator_alarms(run.ctx, run.ctx.compiled, today=run.today, now=now)
-        items += watch.manifest_items(run.ctx.manifest, now) + self_test.health_items(self_test.SelfTestStore().read())
-        for check in self._ledger_checks:
-            items += check(run.ctx, now)
+        items = alarm_items(run.ctx, today=run.today, now=now, ledger_checks=self._ledger_checks)
         run.alarms = len(self._alarms.poll(items, sink, now=now))
         metrics = self._metrics or console.MetricsSources(publish_ledger=None)
         self._alarms.post_metrics(lambda: console.collect_metrics(metrics, lambda: run.ctx, now), sink, now)
+
+
+def alarm_items(ctx: CurateContext, *, today: str, now: float,
+                ledger_checks: Sequence[LedgerCheck] = ()) -> list[HealthItem]:
+    """Every alarm this curator node raises right now: its own facts (queue, ledger, velocity,
+    retries, expiries — ``verbs.curator_alarms``), the key manifest's clock, the self-test (a
+    suspended curator) and any publish-ledger checks. The ONE assembly for the service's watch
+    step and `curate watch` — the CLI's own copy left out the self-test."""
+    items = verbs.curator_alarms(ctx, ctx.compiled, today=today, now=now)
+    items += watch.manifest_items(ctx.manifest, now) + self_test.health_items(self_test.SelfTestStore().read())
+    for check in ledger_checks:
+        items += check(ctx, now)
+    return items
 
 
 def own_check_from(verdicts: Sequence[OwnCheck]) -> OwnCheck:
@@ -223,13 +232,7 @@ def _authors_by_identifier(ctx: CurateContext) -> dict[str, tuple[str, ...]]:
     return {identifier: tuple(keys) for identifier, keys in authors.items()}
 
 
-def _day(first_seen: object, today: str) -> str:
-    """The UTC day of a ``firstSeen`` epoch; *today* when it is absent or unreadable."""
-    try:
-        return datetime.fromtimestamp(float(first_seen), UTC).date().isoformat() if first_seen else today
-    except (TypeError, ValueError, OverflowError, OSError):
-        return today
 
 
-__all__ = ["ADVISORY_SOURCE", "LabWiring", "LedgerCheck", "ServiceSteps",
+__all__ = ["ADVISORY_SOURCE", "LabWiring", "LedgerCheck", "ServiceSteps", "alarm_items",
            "cited_confirmations", "own_check_from"]

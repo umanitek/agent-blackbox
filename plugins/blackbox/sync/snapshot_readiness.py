@@ -1,7 +1,7 @@
 """Read-only admission for a new snapshot default; never remove a protection tier."""
 from ..kernel import constants
-from ..kernel.config import load_blackbox_config
-from ..kernel.snapshot_config import DKG_CORE_CHAIN_CACHE
+from ..kernel.config import load_blackbox_config, reads_graph_directly
+from ..kernel.snapshot_config import DKG_CORE_CHAIN_CACHE, snapshot_config
 from ..ruleset import validate_config, local_graph_url
 from .core_snapshot import PATH, SnapshotSyncClient
 
@@ -11,7 +11,9 @@ def requested_profile(graph_id="14"):
 
 
 def candidate_config(entry, requested):
-    return load_blackbox_config(entry={**entry, **requested})
+    candidate = {**entry, **requested}
+    snapshot_config(candidate)   # a block being proposed must be valid: raises ValueError
+    return load_blackbox_config(entry=candidate)
 
 
 def defaults(entry, network="mainnet-base"):
@@ -48,7 +50,7 @@ def validate_requested_profile(entry, requested):
     try:
         cfg = candidate_config(entry, requested)
         local_graph_url(cfg.dkg_url)
-        if cfg.detection_backend == "dkg":
+        if reads_graph_directly(cfg):
             validate_config(cfg)
     except RuntimeError as exc:
         raise ValueError(f"Snapshot profile unavailable: {exc}. Existing community and sync settings were not changed.") from exc

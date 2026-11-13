@@ -200,3 +200,19 @@ def test_the_curate_verbs_record_outcomes_and_propose_the_listing_without_publis
     assert rep.ReputationLedger().standing(KEY).band is rep.ReputationBand.PROBATION        # KI-255: a proposal moves nothing
     with pytest.raises(verbs.VerbError, match="already waiting"):
         verbs.propose_graduation(_ctx(node, curators["manifest"]), ProposalStore(), key=KEY, address="0x" + "1" * 40, today=TODAY)
+
+
+def test_retention_is_counted_from_the_utc_day_like_every_day_it_is_compared_with(tmp_path, monkeypatch):
+    """The cutoff used the machine's LOCAL date while every `last_day` is a UTC day, so for part
+    of each day an entry was dropped a day early or kept a day late."""
+    from plugins.blackbox.community import reputation
+    from plugins.blackbox.community.reputation import ledger as ledger_module
+    monkeypatch.setattr(ledger_module, "today_utc", lambda: "2022-01-01")
+    book = reputation.ReputationLedger(tmp_path / "rep.json")
+    on_the_cutoff, one_day_older = "a" * 64, "b" * 64
+
+    book.record(on_the_cutoff, reputation.Outcome("2020-01-02", confirmed=True))    # exactly RETENTION_DAYS (730) ago
+    book.record(one_day_older, reputation.Outcome("2020-01-01", confirmed=True))
+
+    kept = book._load()
+    assert len(kept["entries"]) == 1 and set(kept["salts"]) == {on_the_cutoff}

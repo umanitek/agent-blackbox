@@ -1219,3 +1219,106 @@ def test_the_registry_sources_all_get_a_recheck_and_osv_goes_by_id():
     rechecks = withdrawal.rechecks_for(sources.SOURCES, client=FakeOsv({}))
     assert set(rechecks) == {source.name for source in sources.SOURCES}
     assert rechecks["osv"](WITHDRAWN_DEP) is Lookup.UNAVAILABLE   # by id: the fake knows no advisory
+
+
+# --- a source that does not apply spends nothing --------------------------------------------------
+
+class UrlOnlySource(FakeSource):
+    """Applies to `ioc:url:` identifiers only, with ONE request per period."""
+
+    def __init__(self) -> None:
+        super().__init__(Lookup.CLEAN, name="url-only",
+                         terms=SourceTerms(citable=True, reuse_state=REUSE_CLEARED, limit_requests=1, limit_seconds=3600))
+
+    def applies(self, identifier: str) -> bool:
+        return identifier.startswith("ioc:url:")
+
+    def check(self, identifier: str) -> SourceVerdict:
+        if not self.applies(identifier):
+            return SourceVerdict(Lookup.NOT_APPLICABLE, source=self.name)
+        return super().check(identifier)
+
+
+def test_items_a_source_does_not_apply_to_leave_its_rate_limit_untouched(tmp_path):
+    """A source that does not apply used to take a token first: unrelated items drained it and the
+    item it does apply to read UNAVAILABLE ("could not tell"), blocking the lab and the policy."""
+    source = UrlOnlySource()
+    items = [_item("dep:npm:a@1.0.0", age=3), _item("dep:npm:b@1.0.0", age=2), _item("ioc:url:https://x.example/", age=1)]
+    results = _registry(tmp_path, source).lookup(items, LookupBudget(), today=TODAY)
+    statuses = {result.item.identifier: result.verdicts[0].status for result in results}
+    assert statuses["dep:npm:a@1.0.0"] is Lookup.NOT_APPLICABLE
+    assert statuses["ioc:url:https://x.example/"] is Lookup.CLEAN
+    assert source.asked == ["ioc:url:https://x.example/"]
+
+
+@pytest.mark.parametrize("identifier", ["dep:npm:a@1.0.0", "dep:npm:a@*", "ioc:domain:x.example", "ioc:url:https://x.example/",
+                                        "ioc:ip:203.0.113.7", "ioc:hash:" + "a" * 64, "ioc:hash:" + "b" * 32,
+                                        "ioc:wallet:0x" + "c" * 40, "skill:x@1", "injection:" + "d" * 16])
+def test_every_real_source_says_not_applicable_exactly_where_it_does_not_apply(identifier):
+    """`applies()` is the same rule `check()` uses, for every source (so skipping the token on it
+    never changes an answer). Checked without the network: a fake transport fails if asked."""
+    from plugins.blackbox.curate.sources import abusech, osv, phishtank, scamsniffer, urlscan
+
+    class NoNetwork:
+        def __getattr__(self, name):
+            raise AssertionError("no network")
+
+    for source in (abusech.UrlhausSource(NoNetwork()), abusech.ThreatFoxSource(NoNetwork()),
+                   abusech.MalwareBazaarSource(NoNetwork()), phishtank.PhishTankSource(NoNetwork(), key=lambda: None),
+                   scamsniffer.ScamSnifferSource(NoNetwork()), urlscan.UrlscanSource(NoNetwork(), key=lambda: None),
+                   osv.OsvSource(status=lambda *a: ("unavailable", None))):
+        if not source.applies(identifier):
+            assert source.check(identifier).status is Lookup.NOT_APPLICABLE, (source.name, identifier)
+
+
+def test_a_source_that_trickles_its_answer_is_given_up_at_the_deadline(monkeypatch):
+    """Each read waited at most the socket timeout, but a source sending a little before every
+    timeout could hold the curator beat for as long as it liked. The body has a deadline now."""
+    clock = Clock(0.0)
+
+    class Trickle:
+        def read(self, size):
+            clock.now += 4.0                      # each read just inside the 5-second socket timeout
+            return b"x"
+
+    monkeypatch.setattr(source_client.time, "monotonic", clock)
+    assert source_client._read_until(Trickle(), max_bytes=10_000, deadline=60.0) is None
+    assert clock.now <= 64.0                       # gave up within the deadline plus one read
+
+
+def test_an_answer_arriving_in_time_is_read_whole():
+    class Body:
+        def __init__(self, data):
+            self.data = data
+
+        def read(self, size):
+            part, self.data = self.data[:size], self.data[size:]
+            return part
+
+    data = b'{"query_status": "ok"}' * 10_000
+    assert source_client._read_until(Body(data), max_bytes=len(data), deadline=float("inf")) == data
+    assert len(source_client._read_until(Body(data), max_bytes=10, deadline=float("inf"))) == 11   # over the cap: caller drops it
+
+
+def test_a_beat_reads_the_not_listed_cache_once_and_writes_it_once(tmp_path, monkeypatch):
+    """Each source × item lookup re-read the whole cache file and each CLEAN answer rewrote it —
+    up to 700 parses per beat. A beat now reads it once and writes it once, merged into the file
+    as it is then (another process's entries written meanwhile are kept)."""
+    from plugins.blackbox.curate.sources import cache as cache_module
+    path = tmp_path / "nl.json"
+    cache = NotListedCache(path)
+    reads, writes = [], []
+    real_read, real_write = NotListedCache._read, NotListedCache._write
+    monkeypatch.setattr(NotListedCache, "_read", lambda self: reads.append(1) or real_read(self))
+    monkeypatch.setattr(NotListedCache, "_write", lambda self, entries: writes.append(1) or real_write(self, entries))
+    with cache.session():
+        for number in range(20):
+            assert not cache.is_not_listed("osv", f"dep:npm:p{number}@1")
+            cache.remember_not_listed("osv", f"dep:npm:p{number}@1")
+        NotListedCache(path).remember_not_listed("urlscan", "ioc:url:elsewhere")   # another writer, mid-beat
+        cache.forget("osv", "dep:npm:p3@1")
+    assert len(writes) == 2   # the other writer's one, and this session's one
+    after = NotListedCache(path)
+    assert after.is_not_listed("osv", "dep:npm:p0@1") and not after.is_not_listed("osv", "dep:npm:p3@1")
+    assert after.is_not_listed("urlscan", "ioc:url:elsewhere")
+    assert cache_module.NOT_LISTED_TTL_SECONDS == 24 * 60 * 60

@@ -48,6 +48,7 @@ from plugins.blackbox.kernel import constants, signing, threat_ids
 from plugins.blackbox.kernel.dkg_client import DkgError
 from plugins.blackbox.kernel.signing import key_manifest as km
 from plugins.blackbox.kernel.signing import promotion_statement as statement
+from plugins.blackbox.ruleset.live import LiveAnswering
 
 # The package re-exports the precheck FUNCTION under the submodule's name, so the module is
 # taken from the import system, never by attribute.
@@ -353,7 +354,7 @@ class _Answer:
         self.rules, self.known, self.reason = rules or {}, known, reason
 
 
-class _Compiled:
+class _Compiled(LiveAnswering):   # the real scan (Ruleset's mixin) over fake rules and a fake lookup
     def __init__(self, public=(), live=None):
         self._public, self._live = public, live
 
@@ -822,7 +823,7 @@ def test_a_community_curator_cannot_correct_verified_rows(monkeypatch, tmp_path,
 
 def test_the_cli_prints_a_refusal_and_exits_2(monkeypatch, capsys):
     monkeypatch.setattr(correction_verbs, "build_context", lambda *a, **k: pytest.fail("refused before reading the node"))
-    run = correction_verbs._guarded(correction_verbs.cmd_correct)
+    run = correction_verbs.guarded(correction_verbs.cmd_correct)
     assert run(_args(identifier="dep:npm:left-pad@1.3.0")) == 2
     assert capsys.readouterr().out.startswith("Refused: a correction suppresses an ADDRESS")
 
@@ -975,7 +976,7 @@ def test_a_revocation_is_followed_by_its_advisory_twin(monkeypatch, tmp_path, cu
 def test_the_twin_waits_for_the_read_back_and_other_statements_have_none(monkeypatch, tmp_path, capsys, curators):
     class UnreadableNode(FakeNode):
         def query(self, sparql, cg_id=None, view=None, on_error=None, **kw):
-            return on_error
+            return []   # answers, but the statement is not there yet (a FAILED read pays nothing at all)
 
     node = UnreadableNode()
     proposal, _ = _propose_correction(monkeypatch, tmp_path, capsys, curators, node)

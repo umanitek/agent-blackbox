@@ -46,11 +46,11 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import replace
-from datetime import datetime, timezone, UTC
-from typing import TYPE_CHECKING, Callable, List, Mapping, Optional, Sequence
+from typing import TYPE_CHECKING, Callable, Mapping, Optional, Sequence
 
 from ... import community
 from ...community import reputation
+from ...kernel.health import utc_day
 from ...kernel import signing
 from ...kernel.signing import CuratorStatement
 from .. import keys, publishing, queue, verbs
@@ -132,7 +132,7 @@ class Beat:
                   *(f"author:{key}" for key in ledger.keys())]
         ctx = self._context(wanted)
         my_key = keys.curator_key_store().public_key_hex()
-        today = datetime.fromtimestamp(self._clock(), UTC).date().isoformat()
+        today = utc_day(self._clock())
         suspended = self_test.why_suspended(self._tester.check(today))   # a failed self-test signs nothing
         why_not = ""
         if ctx.manifest is None or my_key not in ctx.manifest.curator_keys:
@@ -160,17 +160,15 @@ class Beat:
             _, outcome = publishing.publish(run.ctx, run.store, waiting[-1].id, typed_code=None, yes=False, standing=standing(decision))
         else:
             _, outcome = heartbeat.publish_heartbeat(run.ctx, run.store, standing=standing(decision))
-        run.heartbeat = "published" if outcome.startswith("published") else outcome
+        run.heartbeat = "published" if outcome.published else str(outcome)
 
     # -- 2 read --------------------------------------------------------------
 
     def _read(self, run: Run) -> None:
-        for proposal in transport.receive_proposals(run.ctx.client, transport.InboxCursor()):
-            if not inbox.from_a_curator(run.ctx.manifest, proposal):
-                run.dropped += 1
-            elif run.store.get(proposal.id) is None:   # never reset a proposal this node already acted on
-                run.store.save(proposal)
-                run.received += 1
+        saved, dropped = inbox.admit(run.ctx.manifest, run.store,
+                                     transport.receive_proposals(run.ctx.client, transport.InboxCursor()))
+        run.received += len(saved)
+        run.dropped += dropped
 
     # -- 3 co-sign -----------------------------------------------------------
 
@@ -253,10 +251,10 @@ class Beat:
         return True
 
     @staticmethod
-    def _record(run: Run, decision: PolicyDecision, done: list[str], what: str, outcome: str, identifier: str) -> None:
+    def _record(run: Run, decision: PolicyDecision, done: list[str], what: str, outcome: publishing.PublishResult, identifier: str) -> None:
         """A publish that was read back counts (and spends the daily limit); anything else is an error to retry."""
         run.settled.add(identifier)
-        if not outcome.startswith("published"):
+        if not outcome.published:
             run.errors.append(f"{what}: {outcome}")
             return
         done.append(what)

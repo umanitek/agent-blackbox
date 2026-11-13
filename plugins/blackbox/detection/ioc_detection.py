@@ -6,9 +6,10 @@ Split out of :mod:`.detectors` (which runs it inside ``detect_all``).
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from . import action_parsing
+from . import shell_shapes
 from . import content_scanners
 from .finding import Finding, _rule_source, mark_answered_by, rule_subject
 from .injection_detection import injection_scan_text
@@ -25,7 +26,7 @@ def ioc_context(tool_name: str, args: Any) -> Optional[str]:
     """
     if action_parsing.skill_install_arg(tool_name, args):
         return "in-skill"
-    if action_parsing.parse_dependency_installs(action_parsing.command_text(args)):
+    if action_parsing.parse_dependency_installs(shell_shapes.command_from_args(tool_name, args, any_tool=True)):
         return "in-dependency"
     if (tool_name or "").strip().lower().startswith(action_parsing.FETCH_TOOL_PREFIXES):
         return "fetched-by-tool"

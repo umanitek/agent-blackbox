@@ -35,7 +35,6 @@ import json
 import logging
 import re
 import subprocess
-import sys
 import threading
 import time
 from dataclasses import dataclass
@@ -43,9 +42,10 @@ from pathlib import Path
 from typing import Any, Callable, Optional, TypedDict
 
 from ..kernel import constants, health
-from ..kernel.bounded_files import atomic_write
+from ..kernel.bounded_files import atomic_write, read_json_object
 from ..kernel.config import load_blackbox_config
 from ..kernel.dkg_client import DkgClient
+from ..kernel.host_command import hermes_argv
 
 logger = logging.getLogger(__name__)
 
@@ -167,11 +167,7 @@ class SetupRun:
         return self._folder() / "run.json"
 
     def _read_record(self) -> dict[str, Any]:
-        try:
-            data = json.loads(self._record_path().read_text(encoding="utf-8-sig"))
-            return data if isinstance(data, dict) else {}
-        except (OSError, ValueError):
-            return {}
+        return read_json_object(self._record_path()) or {}
 
     def _write_record(self, record: dict[str, Any]) -> None:
         atomic_write(self._record_path(), json.dumps(record))
@@ -248,7 +244,7 @@ def _spawn_detached(command: list[str], log: Any, cwd: Path) -> subprocess.Popen
 
 def setup_command() -> list[str]:
     """``hermes blackbox setup`` in the Hermes this process runs in (the same Python, so the same profile)."""
-    return [sys.executable, "-m", "hermes_cli.main", "blackbox", "setup"]
+    return hermes_argv("blackbox", "setup")
 
 
 RUN = SetupRun(folder=lambda: constants.blackbox_home() / "desktop_setup")
@@ -256,7 +252,7 @@ RUN = SetupRun(folder=lambda: constants.blackbox_home() / "desktop_setup")
 
 def _node_reachable(cfg: Any) -> Optional[bool]:
     try:
-        return DkgClient(url=cfg.dkg_url, dkg_home=cfg.dkg_home, config=cfg).reachable(timeout=NODE_PROBE_SECONDS)
+        return DkgClient.for_config(cfg).reachable(timeout=NODE_PROBE_SECONDS)
     except Exception as exc:   # health: allow BLE001 -- a probe that cannot run is "could not tell" (LES-011)
         logger.debug("blackbox: node probe for Desktop could not run: %s", exc)
         return None
@@ -289,17 +285,20 @@ def _sync_reading(link: Any) -> tuple[bool, Optional[dict[str, Any]]]:
 
 
 class _Cache:
-    """One shared reading for :data:`CACHE_SECONDS` (several Desktop windows poll at once)."""
+    """One shared reading for :data:`CACHE_SECONDS` (several Desktop windows poll at once), kept
+    per *key* — what the reading was built FOR (the setup run and the link): a caller asking
+    about another run never gets this one's answer."""
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._at = -1e9
+        self._key: Any = None
         self._body: Optional[dict[str, Any]] = None
 
-    def get(self, build: Callable[[], dict[str, Any]]) -> dict[str, Any]:
+    def get(self, key: Any, build: Callable[[], dict[str, Any]]) -> dict[str, Any]:
         with self._lock:
-            if self._body is None or time.monotonic() - self._at >= CACHE_SECONDS:
-                self._body, self._at = build(), time.monotonic()
+            if self._body is None or key != self._key or time.monotonic() - self._at >= CACHE_SECONDS:
+                self._body, self._at, self._key = build(), time.monotonic(), key
             return dict(self._body)
 
     def clear(self) -> None:
@@ -310,7 +309,8 @@ class _Cache:
 _cache = _Cache()
 
 
-def _build(rules: Optional[int], link: Any, run: SetupRun) -> dict[str, Any]:
+def _build(rules: RuleCount, link: Any, run: SetupRun) -> dict[str, Any]:
+    rules = rules() if callable(rules) else rules   # counted only when a reading is actually built
     cfg = load_blackbox_config()
     run_state = run.state()
     reachable = _node_reachable(cfg)
@@ -331,10 +331,15 @@ def _build(rules: Optional[int], link: Any, run: SetupRun) -> dict[str, Any]:
     }
 
 
-def readiness_payload(rules: Optional[int], link: Any, run: SetupRun = RUN) -> dict[str, Any]:
-    """Where this machine is (see the module doc); *rules* is the compiled verified-rule count
-    (None = unreadable) and *link* the :class:`~.dashboard_link.DashboardLink` to read the sync meter through."""
-    return _cache.get(lambda: _build(rules, link, run))
+#: The compiled verified-rule count (None = unreadable), or a function that counts it. The page
+#: polls every 2 s: pass the function, so the ruleset is loaded once per cached reading, not per poll.
+RuleCount = Optional[int] | Callable[[], Optional[int]]
+
+
+def readiness_payload(rules: RuleCount, link: Any, run: SetupRun = RUN) -> dict[str, Any]:
+    """Where this machine is (see the module doc); *rules* is a :data:`RuleCount` and *link* the
+    :class:`~.dashboard_link.DashboardLink` to read the sync meter through."""
+    return _cache.get((id(run), id(link)), lambda: _build(rules, link, run))
 
 
 def start_setup(run: SetupRun = RUN) -> dict[str, Any]:

@@ -43,7 +43,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 from enum import Enum
-from typing import AbstractSet, Dict, FrozenSet, Optional, Tuple
+from typing import AbstractSet, Optional
 
 from ..lab import Check, Evidence
 from . import never_promote

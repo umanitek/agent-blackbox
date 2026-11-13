@@ -18,6 +18,7 @@ import pytest
 from _trader_attack_table import ATTACKS
 from plugins.blackbox.shields.contract import Pack
 from plugins.blackbox.shields.trader import detectors
+from plugins.blackbox.shields.trader import TRADER
 from plugins.blackbox.shields.trader import mode as trader_mode
 from plugins.blackbox.shields.trader.detectors import browser_extension
 from plugins.blackbox.shields.trader.detectors.browser_extension import BrowserExtensionMatcher, Owner
@@ -158,8 +159,8 @@ def test_a_firefox_vault_read_is_pack_less_and_counts_while_trader_shield_is_on(
     assert "pack" not in finding.fields and finding.fields["wallet"] == trader_mode.ANY_EXTENSION_WALLET
     assert detectors.detect("read_file", {"path": path}, trader_mode.build(enabled=True, wallets=())) == [finding]
     as_dict = {"identifier": finding.identifier, "fields": finding.fields}
-    assert trader_mode.allows_finding(as_dict, trader_mode.build(enabled=True))
-    assert not trader_mode.allows_finding(as_dict, trader_mode.build(enabled=False))
+    assert TRADER.allows(as_dict, trader_mode.build(enabled=True))
+    assert not TRADER.allows(as_dict, trader_mode.build(enabled=False))
 
 
 def test_only_chosen_packs_are_returned():
@@ -359,3 +360,17 @@ def test_every_vault_and_firefox_row_gives_the_recorded_findings(attack_home, ro
     assert all(finding.identifier == f"fileaccess:{row['tool']}:crypto-wallet" for finding in found)
     if row["outcome"] == "blocked":
         assert found, row["id"]
+
+
+@pytest.mark.parametrize("variable", ["XDG_CONFIG_HOME", "APPDATA", "LOCALAPPDATA"])
+def test_an_empty_folder_variable_means_its_default_never_the_current_folder(monkeypatch, variable):
+    """An empty XDG_CONFIG_HOME (set but blank) made the browser-root glob relative to whatever
+    folder the agent was in; an empty value now means the variable's default, like unset."""
+    import os
+
+    from plugins.blackbox.shields.trader.detectors import expand_template
+
+    monkeypatch.setenv(variable, "")
+    template = {"XDG_CONFIG_HOME": "$XDG_CONFIG_HOME/google-chrome*", "APPDATA": "%APPDATA%/Mozilla",
+                "LOCALAPPDATA": "%LOCALAPPDATA%/Google"}[variable]
+    assert os.path.isabs(expand_template(template))

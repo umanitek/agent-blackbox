@@ -34,7 +34,7 @@ from typing import Callable
 
 from .. import community, ruleset
 from ..kernel import constants
-from ..kernel.config import BlackboxConfig, load_blackbox_config
+from ..kernel.config import BlackboxConfig, load_blackbox_config, reads_graph_directly
 from ..kernel.dkg_client import DkgClient, DkgError
 from . import state as sync_state
 
@@ -74,7 +74,7 @@ def route(cfg: BlackboxConfig, older_route: SyncRoute) -> SyncRoute:
 def sync(args: argparse.Namespace) -> int:
     """``blackbox sync`` for the default graph: observe the node's own recovery."""
     cfg = load_blackbox_config()
-    return run(DkgClient(url=cfg.dkg_url, dkg_home=cfg.dkg_home, config=cfg), cfg, args)
+    return run(DkgClient.for_config(cfg), cfg, args)
 
 
 @dataclass
@@ -99,7 +99,7 @@ class _Observation:
             graph_peer_id=cfg.graph_peer_id,
             phase=phase,
             public_entries=self.verified_rules,
-            count_kind="sampled-usable-rules" if getattr(cfg, 'detection_backend', 'legacy-cache') == "dkg" else "compiled-rules",
+            count_kind=sync_state.count_kind(reads_graph_directly(cfg)),
             community_entries=0,
             detection_ready=self.verified_rules > 0,
             graph_complete=False,
@@ -151,7 +151,7 @@ def _subscribe(client: DkgClient, cfg: BlackboxConfig, seen: _Observation) -> No
 def _compile_what_the_node_holds(client: DkgClient, cfg: BlackboxConfig, seen: _Observation) -> None:
     """Compile the verified rules the node already holds into the ruleset."""
     try:
-        if getattr(cfg, 'detection_backend', 'legacy-cache') == "dkg":
+        if reads_graph_directly(cfg):
             from ..ruleset import ready_sample
             seen.verified_rules = ready_sample(cfg, cursor=seen.readiness_cursor)
             seen.error = ""
@@ -195,7 +195,7 @@ def run(client: DkgClient, cfg: BlackboxConfig, args: argparse.Namespace) -> int
             if seen.verified_rules > 0:
                 seen.record("partial", "verified-rules-available", cfg)
                 print(
-                    f"{'Validated a sample of' if getattr(cfg, 'detection_backend', 'legacy-cache') == 'dkg' else 'Loaded'} {seen.verified_rules:,} verified detection rules. The node keeps "
+                    f"{'Validated a sample of' if reads_graph_directly(cfg) else 'Loaded'} {seen.verified_rules:,} verified detection rules. The node keeps "
                     "fetching the rest of the graph in the background; `blackbox status` shows "
                     "the count as it grows."
                 )
