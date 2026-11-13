@@ -38,6 +38,8 @@ that the two version fields agree.
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-11-13
+
 ### Fixed
 
 - **One check that fails no longer ends the others.** If a single detector hits an error on a
@@ -364,7 +366,8 @@ The first version in the Hermes plugin catalog (commit `7d697683`, added by Herm
 in NousResearch/hermes-agent#140529). Its `plugin.yaml` said 1.0.0 while Blackbox's own code and
 dashboard reported 1.1.0; 1.1.0 is therefore skipped, so no two different builds share a number.
 
-[Unreleased]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.4.0...main
+[Unreleased]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.4.1...main
+[1.4.1]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.4.0...blackbox-v1.4.1
 [1.4.0]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.3.0...blackbox-v1.4.0
 [1.3.0]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.2.0...blackbox-v1.3.0
 [1.2.0]: https://github.com/umanitek/agent-blackbox/compare/7d697683e0d56608cfe3fee374d6a6866702058a...blackbox-v1.2.0
