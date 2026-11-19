@@ -55,7 +55,8 @@ that the two version fields agree.
   and whether the provider refused it recently. Manage it there: switch to the model recommended
   for your account (a free Nous account gets a free model), pick another model, or switch
   account / sign out to connect differently. The card says "Checking with Hermes…" until it
-  knows, and every change says what it did.
+  knows, and every change says what it did. While you sign in, the panel shows a small spinner — waiting for your
+  approval on Nous's page, then connecting the account — and a short note says when it is done.
 
 ### Fixed
 

@@ -37,6 +37,9 @@
     ".mc-code{font:700 22px var(--mono,ui-monospace,monospace);letter-spacing:.12em}" +
     ".mc-error{color:var(--signal);font-weight:600}.mc-ok{border-color:var(--secure,#3FB950);background:transparent}" +
     ".mc-panel a{color:var(--signal);font-weight:600;overflow-wrap:anywhere}" +
+    ".mc-busy{display:flex;gap:8px;align-items:center}.mc-spin{flex:none;width:12px;height:12px;border:2px solid currentColor;" +
+    "border-right-color:transparent;border-radius:50%;animation:mc-spin .7s linear infinite}@keyframes mc-spin{to{transform:rotate(360deg)}}" +
+    "@media (prefers-reduced-motion:reduce){.mc-spin{animation-duration:2.4s}}" +
     ".mc-card{border:1px solid var(--border);border-radius:var(--radius,4px);padding:14px 20px;margin-top:28px;background:var(--panel,var(--bg));color:var(--text)}" +
     ".mc-card.mc-warn{border-color:var(--caution,#E3B341)}.mc-line{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center}" +
     ".mc-line strong{font-size:14px}.mc-what{color:var(--muted);font-size:13px;overflow-wrap:anywhere;min-width:0}" +
@@ -78,7 +81,7 @@
 
   function signingIn(data) {
     var status = data && data.nous && data.nous.status;
-    return status === "starting" || status === "waiting";
+    return status === "starting" || status === "waiting" || status === "finishing";
   }
 
   function schedule() {
@@ -92,12 +95,34 @@
 
   function refresh() {
     return fetch("/api/agent-model", { cache: "no-store" }).then(function (r) { return r.json(); }).then(function (data) {
-      var wasMissing = last && last.state === "missing";
+      var wasMissing = last && (last.state === "missing" || signingIn(last));
       last = data || {};
-      if (wasMissing && last.state === "ready") justConnected = true;
+      if (wasMissing && last.state === "ready") {
+        justConnected = true;
+        toast("Your agent is connected to an AI model.");
+      }
       draw();
       notify();
     }).catch(function () { /* the dashboard's own banner reports a down service */ }).then(schedule);
+  }
+
+  // A line with a small spinner: work is going on (2026-11-19: the panel looked frozen while the
+  // person approved on Nous's page and while Hermes finished).
+  function busy(text) {
+    var line = el("p", "mc-busy");
+    line.appendChild(el("span", "mc-spin"));
+    line.appendChild(el("span", "", text));
+    line.setAttribute("role", "status");
+    return line;
+  }
+
+  // The dashboard's own corner note (#toast), not a banner: said once when the agent connects.
+  function toast(text) {
+    var note = document.getElementById("toast");
+    if (!note) return;
+    note.textContent = text;
+    note.className = "toast ok show";
+    window.setTimeout(function () { note.className = "toast ok"; }, 4500);
   }
 
   function drawNous(box) {
@@ -113,14 +138,16 @@
       box.appendChild(step);
       box.appendChild(el("p", "", "2. Enter this code if asked:"));
       box.appendChild(el("div", "mc-code", nous.code));
-      box.appendChild(el("p", "mc-hint", "3. Approve. This panel finishes by itself."));
+      box.appendChild(el("p", "", "3. Approve. This panel finishes by itself."));
+      box.appendChild(busy("Waiting for you to approve on Nous's page\u2026"));
       var cancel = el("button", "mc-quiet", "Cancel sign-in");
       cancel.type = "button";
       cancel.addEventListener("click", function () { act(post("/api/agent-model/nous/cancel")); });
       box.appendChild(cancel);
       return;
     }
-    if (nous.status === "starting") { box.appendChild(el("p", "", "Asking Nous for a sign-in code…")); return; }
+    if (nous.status === "starting") { box.appendChild(busy("Asking Nous for a sign-in code\u2026")); return; }
+    if (nous.status === "finishing") { box.appendChild(busy("Approved. Connecting your Nous account to your agent\u2026")); return; }
     if (nous.status === "failed" && nous.reason) box.appendChild(el("p", "mc-error", nous.reason));
     var start = el("button", "", "Sign in with Nous (free)");
     start.type = "button"; start.disabled = busy;

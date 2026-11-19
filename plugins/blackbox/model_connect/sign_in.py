@@ -7,15 +7,16 @@ reads the link and the code from its output so the dashboard can show them, and 
 *after_sign_in* (the package makes Nous the agent's provider on the model Hermes recommends for
 the account — a free account lands on a free model). Blackbox never sees or stores a token.
 
-Pattern: a small State machine owned by one object with one lock — idle → waiting (link + code
-shown) → connected | failed | cancelled. Only one sign-in runs at a time; a second start returns
+Pattern: a small State machine owned by one object with one lock — idle → starting → waiting
+(link + code shown) → finishing (approved; provider and model being set) → connected | failed |
+cancelled. Only one sign-in runs at a time; a second start returns
 the one already running. The child is Blackbox's own and is stopped on cancel or after
 :data:`SIGN_IN_LIMIT_SECONDS`.
 
 Usage::
 
-    sign_in = NousSignIn()
-    view = sign_in.start()   # {"status": "starting" | "waiting", "link": ..., "code": ...}
+    sign_in = NousSignIn(after_sign_in)
+    view = sign_in.start()   # {"status": "starting" | "waiting" | "finishing", "link": ..., "code": ...}
     sign_in.view()           # poll until "connected" or "failed"
 """
 
@@ -35,6 +36,10 @@ from ..kernel.redaction import redact_secret_values
 SIGN_IN_LIMIT_SECONDS = 17 * 60
 _LINK = re.compile(r"Open:\s*(https://\S+)")
 _CODE = re.compile(r"enter code:\s*([A-Za-z0-9-]{4,32})")
+#: The states while a sign-in is running: asking for a code, waiting for the person to approve,
+#: then making Nous the agent's provider on its recommended model (``finishing``, not cancellable —
+#: the account is already stored).
+_IN_PROGRESS = ("starting", "waiting", "finishing")
 #: How long Hermes may take to exit once its output has ended.
 _EXIT_WAIT_SECONDS = 30
 #: The last line of the child's output kept for a failure message (redacted, shortened).
@@ -66,7 +71,7 @@ class NousSignIn:
     def view(self) -> dict[str, Any]:
         """What the dashboard shows: status, and the link and code while waiting."""
         with self._lock:
-            if self._state.get("status") in ("starting", "waiting") and \
+            if self._state.get("status") in _IN_PROGRESS and \
                     self._clock() - self._started > SIGN_IN_LIMIT_SECONDS:
                 self._stop_locked("failed", "The sign-in was not approved in time. Start it again.")
             return dict(self._state)
@@ -74,7 +79,7 @@ class NousSignIn:
     def start(self) -> dict[str, Any]:
         """Start the sign-in (or return the one already running)."""
         with self._lock:
-            if self._state.get("status") in ("starting", "waiting"):
+            if self._state.get("status") in _IN_PROGRESS:
                 return dict(self._state)
             try:
                 proc = self._popen(hermes_argv("auth", "add", "nous", "--no-browser"),
@@ -125,6 +130,13 @@ class NousSignIn:
             proc.kill()
             proc.wait(timeout=_EXIT_WAIT_SECONDS)
             code = -9
+        if code == 0:
+            with self._lock:
+                if self._proc is not proc:
+                    return
+                # Approved: Hermes has the account; the provider and model are set next (a few
+                # seconds) — said, so the panel never looks frozen between approval and done.
+                self._state = {"status": "finishing"}
         provider_set = code == 0 and self._after_sign_in()
         with self._lock:
             if self._proc is not proc:

@@ -208,7 +208,7 @@ _HERMES_OUTPUT = [
 def _settle(flow: sign_in.NousSignIn) -> dict:
     for _ in range(200):
         view = flow.view()
-        if view["status"] not in ("starting", "waiting"):
+        if view["status"] not in ("starting", "waiting", "finishing"):
             return view
         time.sleep(0.01)
     return flow.view()
@@ -221,6 +221,22 @@ def test_nous_sign_in_runs_hermes_then_chooses_the_account_model():
     assert _settle(flow) == {"status": "connected"}
     assert calls[0][-4:] == ["auth", "add", "nous", "--no-browser"]
     assert chosen == [True]
+
+
+def test_after_approval_the_panel_says_it_is_connecting_and_it_cannot_be_cancelled():
+    """2026-11-19 (Amos): the panel looked frozen between approval and done — it now says "finishing"."""
+    seen = {}
+    flow = None
+
+    def after_sign_in():
+        seen["status"] = flow.view()["status"]
+        seen["cancel"] = flow.cancel()["status"]   # the account is stored already: nothing to cancel
+        return True
+
+    flow = sign_in.NousSignIn(after_sign_in, popen=lambda argv, **kw: _FakeChild(_HERMES_OUTPUT))
+    flow.start()
+    assert _settle(flow) == {"status": "connected"}
+    assert seen == {"status": "finishing", "cancel": "finishing"}
 
 
 def test_a_nous_sign_in_lands_on_the_recommended_model(monkeypatch):
