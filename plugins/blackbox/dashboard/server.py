@@ -32,7 +32,7 @@ from ..kernel.host_command import NO_MODEL_EXIT, hermes_argv
 from .. import attach, shields
 from ..sync import read_durable_progress
 from . import community_routes, direct_reads, docs_routes, graph_pages, lifecycle, model_connect_routes, playground_routes, shields_routes, sync_meter, sync_timing
-from .assistant import answer_payload, clean_chat_output, parse_chat_session_id
+from .assistant import answer_payload, clean_chat_output, parse_chat_session_id, with_state_brief
 from .graph_pages import _balanced_graph_entries, _graph_entries
 from .network_sync import network_sync_argv as _network_sync_argv
 from .node_probe import NodeLiveness, NodeReadCache, RepeatGate, node_sync_probe
@@ -1069,7 +1069,7 @@ def create_app(*, manage_blackbox: bool = False):
             return JSONResponse({"ok": False, "error": "Message is too long."}, status_code=400)
         session_id = str((payload or {}).get("session_id") or "").strip()
         # WHY "--opt=value": a question or id starting with "-" would otherwise be read as an option.
-        argv = hermes_argv("blackbox", "chat", f"--query={message}", "--quiet", "--pass-session-id")
+        argv = hermes_argv("blackbox", "chat", f"--query={with_state_brief(message)}", "--quiet", "--pass-session-id")
         if session_id and len(session_id) <= 128 and all(c.isalnum() or c in "_.:-" for c in session_id):
             argv.append(f"--resume={session_id}")
         try:

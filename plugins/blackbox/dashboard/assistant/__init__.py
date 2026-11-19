@@ -20,6 +20,8 @@ from __future__ import annotations
 import re
 from typing import Any, Optional
 
+from .state_brief import state_brief, with_state_brief   # the snapshot each question carries
+
 #: How Hermes begins the text it returns instead of an answer when the provider refused for
 #: credits (``_billing_terminal_label`` in agent/conversation_loop.py) — matched exactly (LES-015).
 MODEL_PROBLEM_PREFIXES = ("Billing or credits exhausted:", "Provider reported usage/credit exhaustion")

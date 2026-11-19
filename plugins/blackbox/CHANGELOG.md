@@ -77,6 +77,11 @@ that the two version fields agree.
   if it were its answer: it says the model gave no answer and offers to fix the connection.
 - The assistant starts a new conversation by itself when the one it remembered is gone (after a
   reinstall), instead of answering "Session not found".
+- The assistant gets a short, current summary of Blackbox's state with every question (mode, rules,
+  last refresh, protected agents, newest findings), so it answers common questions straight away
+  instead of searching — and a finding's flagged text is never in it, so asking about a finding no
+  longer gets the assistant's own question flagged. With a free model the AI model card says it is
+  a small model and how to get sharper answers.
 - The Playground's four send-a-threat tests no longer show as buttons that never respond while
   Community sharing is off: it says why and opens the setting.
 

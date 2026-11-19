@@ -210,6 +210,10 @@
       expanded = !expanded; confirmingSignOut = false; draw();
     }));
     card.appendChild(line);
+    // A free model is small: say so where people look, so a weak answer is not read as a broken product.
+    if (/:free$/.test(c.model || "")) card.appendChild(el("p", "mc-hint", "This is a free model: fine for chatting and " +
+      "everyday work, but the Blackbox assistant may misread broad questions. For sharper answers, connect an API key " +
+      "or a paid model (Manage \u2192 Switch account or sign out)."));
     if (justConnected) card.appendChild(el("p", "", "Connected. Open a chat with your agent (run hermes in a terminal) and try the test prompt below — Blackbox should flag it."));
     // Hermes' "exhausted" mark is a pause of up to an hour after a provider refused a request — it
     // can outlive the cause (seen 2026-11-19: still set while the free model answered), so the card

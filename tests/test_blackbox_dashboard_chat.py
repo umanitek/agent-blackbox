@@ -601,6 +601,7 @@ def test_blackbox_dashboard_chat_starts_session(monkeypatch):
 
     monkeypatch.setattr(server.subprocess, "run", fake_run)
     monkeypatch.setattr(attach_plugin_copy, "repo_root", lambda: Path("/tmp/repo"))
+    monkeypatch.setattr(server, "with_state_brief", lambda message: message)   # the snapshot has its own tests
 
     client = TestClient(server.create_app(), base_url="http://127.0.0.1")
     token = client.get("/api/session").json()["token"]
@@ -620,6 +621,7 @@ def test_blackbox_dashboard_chat_resumes_session(monkeypatch):
 
     monkeypatch.setattr(server.subprocess, "run", fake_run)
     monkeypatch.setattr(attach_plugin_copy, "repo_root", lambda: Path("/tmp/repo"))
+    monkeypatch.setattr(server, "with_state_brief", lambda message: message)   # the snapshot has its own tests
 
     client = TestClient(server.create_app(), base_url="http://127.0.0.1")
     token = client.get("/api/session").json()["token"]
@@ -643,6 +645,7 @@ def test_blackbox_dashboard_chat_resumes_session(monkeypatch):
 def _chat(monkeypatch, fake_run, body):
     monkeypatch.setattr(server.subprocess, "run", fake_run)
     monkeypatch.setattr(attach_plugin_copy, "repo_root", lambda: Path("/tmp/repo"))
+    monkeypatch.setattr(server, "with_state_brief", lambda message: message)   # the snapshot has its own tests
     client = TestClient(server.create_app(), base_url="http://127.0.0.1")
     token = client.get("/api/session").json()["token"]
     return client.post("/api/blackbox-chat", json=body, headers={"X-Blackbox-Token": token})
