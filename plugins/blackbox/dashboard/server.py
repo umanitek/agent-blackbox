@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import logging
 import os
-import re
 import secrets
 import socket
 import subprocess
@@ -33,6 +32,7 @@ from ..kernel.host_command import NO_MODEL_EXIT, hermes_argv
 from .. import attach, shields
 from ..sync import read_durable_progress
 from . import community_routes, direct_reads, docs_routes, graph_pages, lifecycle, model_connect_routes, playground_routes, shields_routes, sync_meter, sync_timing
+from .assistant import clean_chat_output, parse_chat_session_id
 from .graph_pages import _balanced_graph_entries, _graph_entries
 from .network_sync import network_sync_argv as _network_sync_argv
 from .node_probe import NodeLiveness, NodeReadCache, RepeatGate, node_sync_probe
@@ -1059,19 +1059,6 @@ def create_app(*, manage_blackbox: bool = False):
             logger.debug("blackbox dashboard: write settings failed: %s", exc)
             return JSONResponse({"ok": False, "errors": ["internal error"]}, status_code=500)
 
-    def _clean_chat_output(text: str) -> str:
-        # Blank lines are kept (one at most in a row): they are the answer's paragraph breaks.
-        lines = [line.rstrip() for line in (text or "").splitlines()
-                 if not line.strip().startswith("session_id:") and "Context file AGENTS.md TRUNCATED" not in line]
-        return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
-
-    def _parse_chat_session_id(text: str) -> str | None:
-        for line in (text or "").splitlines():
-            stripped = line.strip()
-            if stripped.startswith("session_id:"):
-                return stripped.split(":", 1)[1].strip() or None
-        return None
-
     @app.post("/api/blackbox-chat")
     def blackbox_chat(payload: dict[str, Any] = Body(...)) -> Any:
         """Run one scoped Blackbox assistant turn through the managed profile."""
@@ -1098,9 +1085,9 @@ def create_app(*, manage_blackbox: bool = False):
         except (OSError, ValueError) as exc:   # the browser gets a plain message, never the system error
             logger.warning("blackbox dashboard: could not start the assistant: %s", exc)
             return JSONResponse({"ok": False, "error": "Blackbox could not start the assistant."}, status_code=500)
-        next_session_id = _parse_chat_session_id(proc.stderr) or _parse_chat_session_id(proc.stdout) or session_id
-        answer = _clean_chat_output(proc.stdout)
-        err = _clean_chat_output(proc.stderr)
+        next_session_id = parse_chat_session_id(proc.stderr) or parse_chat_session_id(proc.stdout) or session_id
+        answer = clean_chat_output(proc.stdout)
+        err = clean_chat_output(proc.stderr)
         if proc.returncode != 0:   # NO_MODEL_EXIT: no AI model yet — 409 + needs_model, the page shows the fix
             no_model = proc.returncode == NO_MODEL_EXIT
             return JSONResponse({"ok": False, "error": err or answer or "Blackbox chat failed.", "needs_model": no_model,
