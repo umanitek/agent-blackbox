@@ -1,57 +1,68 @@
 /*
- * "Connect your agent to an AI model" (2026-11-19) — drawn into #model-connect-root while the
- * protected agent has no model (GET /api/agent-model says "missing"); once it has one, the panel
- * becomes the one-line "Your agent's AI model" card (provider · model · account, Hermes' own
- * "exhausted" mark) whose Manage opens the recommended model, another model and signing out.
+ * The agent's AI model, at a glance (2026-11-19) — a status dot in the top bar and one menu.
  *
  * WHY: Blackbox checks each prompt as the agent sends it to its model; with no model nothing is
- * sent, so a fresh install's first test "does nothing". The panel offers the two ways Hermes
- * itself supports — a free Nous account (Hermes' own device sign-in: a link and a code) and an
- * API key (handed to Hermes, stored in the agent's own settings, never kept by Blackbox).
+ * sent, so a fresh install's first test "does nothing". The two ways Hermes itself supports are
+ * offered here: a free Nous account (Hermes' own device sign-in: a link and a code) and an API key
+ * (handed to Hermes, stored in the agent's own settings, never kept by Blackbox).
  *
- * Other parts of the page read the same answer: window.blackboxAgentModel.state() and
- * .onChange(fn) (the first-detection card and the assistant chat).
+ * Shape (Amos, 2026-11-19: the full-width panel was ugly and took a ton of space):
+ *  - #model-status, a dot in the top bar: green = connected, amber = the provider refused recently
+ *    (Hermes' "exhausted" pause), red = no model, grey = still asking Hermes. Its tooltip says
+ *    which; clicking it opens the menu.
+ *  - #model-popover, the menu: when there is no model, the free Nous sign-in (with a spinner while
+ *    waiting for the approval and while connecting) and the API key; when there is one, the
+ *    account and model, "Use the recommended model", another model, "Switch account or sign out".
+ *  - #model-connect-root holds ONE slim line only while there is no model ("…no AI model
+ *    connected … Connect"), so the gap is never missed; it is empty once connected, and the
+ *    dashboard's own corner note (#toast) says when the agent connects.
+ *
+ * Other parts of the page read the same answer: window.blackboxAgentModel.state(), .onChange(fn)
+ * and .open() (the first-detection card and the assistant chat).
  * Every POST carries the session token (X-Blackbox-Token from /api/session). All text is set
  * with textContent; the sign-in link is an https Nous address checked by the server.
  */
 (function () {
   "use strict";
   var FAST_MS = 4000, SLOW_MS = 60000;
-  var root = null, timer = null, last = null, busy = false, error = "", justConnected = false, drawn = "";
-  var expanded = false, confirmingSignOut = false, notice = "";
+  var root = null, dot = null, menu = null, timer = null, last = null, working = false, error = "", notice = "";
+  var menuOpen = false, confirmingSignOut = false, drawnBar = "", drawnMenu = "";
   var listeners = [];
 
-  var CSS = ".mc-panel{border:1px solid color-mix(in srgb,var(--signal,#FF4F00) 55%,transparent);border-radius:var(--radius,4px);padding:20px 22px;margin-top:28px;" +
-    "background:var(--panel,var(--bg));color:var(--text)}" +
-    ".mc-panel h2{margin:0 0 6px;font-size:20px}.mc-panel p{margin:6px 0;line-height:1.5;max-width:75ch}" +
-    ".mc-eyebrow{font:700 11px var(--mono,ui-monospace,monospace);letter-spacing:.12em;text-transform:uppercase;color:var(--signal)}" +
-    ".mc-ways{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;margin-top:14px}" +
-    ".mc-way{border:1px solid var(--border);border-radius:var(--radius,4px);padding:14px 16px;background:var(--bg)}" +
-    ".mc-way h3{margin:0 0 4px;font-size:15px}.mc-hint{font-size:12.5px;color:var(--muted)}" +
-    ".mc-panel button{border:1px solid var(--text);background:var(--text);color:var(--bg);border-radius:var(--radius,4px);padding:9px 15px;" +
-    "font:700 13.5px var(--body-font,inherit);cursor:pointer;margin-top:8px}.mc-panel button.mc-quiet{background:transparent;color:var(--text)}" +
-    ".mc-panel button:disabled{opacity:.55;cursor:wait}" +
-    ".mc-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:8px}" +
-    ".mc-panel select,.mc-panel input{border:1px solid var(--border);border-radius:var(--radius,4px);padding:8px 10px;background:var(--bg);" +
-    "color:var(--text);font:inherit;min-width:0;flex:1 1 180px}" +
-    ".mc-code{font:700 22px var(--mono,ui-monospace,monospace);letter-spacing:.12em}" +
-    ".mc-error{color:var(--signal);font-weight:600}.mc-ok{border-color:var(--secure,#3FB950);background:transparent}" +
-    ".mc-panel a{color:var(--signal);font-weight:600;overflow-wrap:anywhere}" +
-    ".mc-busy{display:flex;gap:8px;align-items:center}.mc-spin{flex:none;width:12px;height:12px;border:2px solid currentColor;" +
-    "border-right-color:transparent;border-radius:50%;animation:mc-spin .7s linear infinite}@keyframes mc-spin{to{transform:rotate(360deg)}}" +
-    "@media (prefers-reduced-motion:reduce){.mc-spin{animation-duration:2.4s}}" +
-    ".mc-card{border:1px solid var(--border);border-radius:var(--radius,4px);padding:14px 20px;margin-top:28px;background:var(--panel,var(--bg));color:var(--text)}" +
-    ".mc-card.mc-warn{border-color:var(--caution,#E3B341)}.mc-line{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center}" +
-    ".mc-line strong{font-size:14px}.mc-what{color:var(--muted);font-size:13px;overflow-wrap:anywhere;min-width:0}" +
+  var CSS =
+    ".mc-dot-btn{position:relative}.mc-dot{display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--muted)}" +
+    ".mc-dot.ok{background:var(--secure,#3FB950)}.mc-dot.warn{background:var(--caution,#E3B341)}" +
+    ".mc-dot.bad{background:var(--signal,#FF4F00);animation:mc-pulse 1.6s ease-in-out infinite}" +
+    "@keyframes mc-pulse{50%{box-shadow:0 0 0 5px color-mix(in srgb,var(--signal,#FF4F00) 25%,transparent)}}" +
+    "@media (prefers-reduced-motion:reduce){.mc-dot.bad{animation:none}}" +
+    ".mc-bar{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;margin-top:28px;padding:10px 14px;" +
+    "border:1px solid color-mix(in srgb,var(--signal,#FF4F00) 55%,transparent);border-radius:var(--radius,4px);" +
+    "background:var(--panel,var(--bg));color:var(--text);font-size:13.5px}" +
+    ".mc-bar .mc-text{flex:1 1 280px;min-width:0}" +
+    ".mc-pop{position:fixed;z-index:1100;width:min(420px,calc(100vw - 32px));max-height:min(80vh,640px);overflow:auto;" +
+    "background:var(--panel,var(--bg));color:var(--text);border:1px solid var(--border-strong,var(--border));" +
+    "border-radius:var(--radius,4px);box-shadow:0 12px 36px rgba(0,0,0,.28);padding:16px 18px}" +
+    ".mc-pop h3{margin:0 0 4px;font-size:15px}.mc-pop p{margin:6px 0;line-height:1.5}" +
+    ".mc-sec{border-top:1px solid var(--border);margin-top:12px;padding-top:12px}" +
+    ".mc-hint{font-size:12.5px;color:var(--muted)}.mc-error{color:var(--signal);font-weight:600}" +
+    ".mc-what{font:600 13px var(--mono,ui-monospace,monospace);overflow-wrap:anywhere}" +
     ".mc-badge{font:700 11px var(--mono,ui-monospace,monospace);letter-spacing:.08em;text-transform:uppercase;padding:3px 8px;border-radius:999px}" +
     ".mc-badge.ok{color:var(--secure,#3FB950);background:var(--secure-soft,rgba(63,185,80,.12))}" +
     ".mc-badge.warn{color:var(--caution,#E3B341);background:var(--caution-soft,rgba(227,179,65,.14))}" +
+    ".mc-badge.bad{color:var(--signal,#FF4F00);background:var(--signal-soft,rgba(255,79,0,.1))}" +
     ".mc-badge.unknown{color:var(--muted);border:1px solid var(--border)}" +
-    ".mc-card button{border:1px solid var(--border-strong,var(--border));background:transparent;color:var(--text);border-radius:var(--radius,4px);padding:7px 13px;font:700 13px var(--body-font,inherit);cursor:pointer}" +
-    ".mc-card button.mc-main{background:var(--text);color:var(--bg);border-color:var(--text)}.mc-card button:disabled{opacity:.55;cursor:wait}" +
-    ".mc-card .mc-manage{margin-left:auto}.mc-actions{display:grid;gap:12px;margin-top:12px;border-top:1px solid var(--border);padding-top:12px}" +
-    ".mc-card input{border:1px solid var(--border);border-radius:var(--radius,4px);padding:6px 10px;background:var(--bg);color:var(--text);font:inherit;flex:1 1 220px;min-width:0}" +
-    ".mc-card p{margin:4px 0;line-height:1.5;max-width:80ch}";
+    ".mc-pop button,.mc-bar button{border:1px solid var(--border-strong,var(--border));background:transparent;color:var(--text);" +
+    "border-radius:var(--radius,4px);padding:7px 13px;font:700 13px var(--body-font,inherit);cursor:pointer}" +
+    ".mc-pop button.mc-main,.mc-bar button.mc-main{background:var(--text);color:var(--bg);border-color:var(--text)}" +
+    ".mc-pop button:disabled{opacity:.55;cursor:wait}" +
+    ".mc-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:8px}" +
+    ".mc-pop select,.mc-pop input{border:1px solid var(--border);border-radius:var(--radius,4px);padding:7px 10px;background:var(--bg);" +
+    "color:var(--text);font:inherit;min-width:0;flex:1 1 160px}" +
+    ".mc-code{font:700 22px var(--mono,ui-monospace,monospace);letter-spacing:.12em}" +
+    ".mc-pop a{color:var(--signal);font-weight:600;overflow-wrap:anywhere}" +
+    ".mc-busy{display:flex;gap:8px;align-items:center}.mc-spin{flex:none;width:12px;height:12px;border:2px solid currentColor;" +
+    "border-right-color:transparent;border-radius:50%;animation:mc-spin .7s linear infinite}@keyframes mc-spin{to{transform:rotate(360deg)}}" +
+    "@media (prefers-reduced-motion:reduce){.mc-spin{animation-duration:2.4s}}";
 
   function el(tag, cls, text) {
     var node = document.createElement(tag);
@@ -76,7 +87,7 @@
   }
 
   function notify() {
-    listeners.forEach(function (fn) { try { fn(last); } catch (_) { /* a listener never breaks the panel */ } });
+    listeners.forEach(function (fn) { try { fn(last); } catch (_) { /* a listener never breaks the dot */ } });
   }
 
   function signingIn(data) {
@@ -84,31 +95,34 @@
     return status === "starting" || status === "waiting" || status === "finishing";
   }
 
+  function missing() { return !!last && (last.state === "missing" || signingIn(last)); }
+  function connection() { return (last && last.connection) || {}; }
+
   function schedule() {
     if (timer) window.clearTimeout(timer);
-    // "unknown" is the first answer while Hermes is still being asked: ask again soon, so the panel
-    // settles right after load instead of appearing (and moving the page) a minute later.
+    // "unknown" is the first answer while Hermes is still being asked: ask again soon, so the dot
+    // settles right after load; likewise while signing in and while the details load.
     var fast = !last || last.state === "missing" || last.state === "unknown" || signingIn(last) ||
-      (last.state === "ready" && !(last.connection && last.connection.provider));   // card details still loading
+      (last.state === "ready" && !connection().provider);
     timer = window.setTimeout(refresh, fast ? FAST_MS : SLOW_MS);
   }
 
   function refresh() {
     return fetch("/api/agent-model", { cache: "no-store" }).then(function (r) { return r.json(); }).then(function (data) {
-      var wasMissing = last && (last.state === "missing" || signingIn(last));
+      var wasMissing = missing();
       last = data || {};
       if (wasMissing && last.state === "ready") {
-        justConnected = true;
         toast("Your agent is connected to an AI model.");
+        notice = "Connected. Open a chat with your agent (run hermes in a terminal) and try the test prompt — Blackbox should flag it.";
       }
       draw();
       notify();
     }).catch(function () { /* the dashboard's own banner reports a down service */ }).then(schedule);
   }
 
-  // A line with a small spinner: work is going on (2026-11-19: the panel looked frozen while the
+  // A line with a small spinner: work is going on (2026-11-19: the sign-in looked frozen while the
   // person approved on Nous's page and while Hermes finished).
-  function busy(text) {
+  function spinnerLine(text) {
     var line = el("p", "mc-busy");
     line.appendChild(el("span", "mc-spin"));
     line.appendChild(el("span", "", text));
@@ -116,7 +130,7 @@
     return line;
   }
 
-  // The dashboard's own corner note (#toast), not a banner: said once when the agent connects.
+  // The dashboard's own corner note (#toast), not a banner.
   function toast(text) {
     var note = document.getElementById("toast");
     if (!note) return;
@@ -125,6 +139,69 @@
     window.setTimeout(function () { note.className = "toast ok"; }, 4500);
   }
 
+  function providerName(id) {
+    if (id === "nous") return "Nous Portal";
+    var match = ((last && last.providers) || []).filter(function (p) { return p.id === id; })[0];
+    return match ? match.name : id;
+  }
+
+  function button(label, cls, onClick) {
+    var b = el("button", cls || "", label);
+    b.type = "button"; b.disabled = working;
+    b.addEventListener("click", onClick);
+    return b;
+  }
+
+  // *done* (optional) turns a successful answer into the line the menu shows next, so every change
+  // says what it did ("Use the recommended model" on the model already in use read as broken).
+  function act(request, done) {
+    working = true; error = ""; notice = ""; draw();
+    request.then(function (res) {
+      if (!res.ok || res.body.ok === false) error = res.body.error || res.body.reason || "That did not work.";
+      else if (done) notice = done(res.body);
+    }, function (err) { error = (err && err.message) || "That did not work."; })
+      .then(function () { working = false; return refresh(); });
+  }
+
+  // ---------------------------------------------------------------- the dot and its tooltip
+  function status() {
+    if (!last || last.state === "unknown") return ["unknown", "AI model: checking with Hermes…"];
+    if (missing()) return ["bad", "No AI model connected — your agent cannot chat, so Blackbox has nothing to check. Click to connect."];
+    var c = connection();
+    if (!c.provider) return ["unknown", "AI model: checking with Hermes…"];
+    var what = providerName(c.provider) + " · " + (c.model || "Hermes' default model");
+    if (c.status === "exhausted") return ["warn", "AI model: " + what + " — refused recently. Click to fix."];
+    return ["ok", "AI model: " + what + " — connected. Click to manage."];
+  }
+
+  function drawDot() {
+    if (!dot) return;
+    var s = status();
+    dot.querySelector(".mc-dot").className = "mc-dot " + s[0];
+    dot.title = s[1];
+    dot.setAttribute("aria-label", s[1]);
+  }
+
+  // ---------------------------------------------------------------- the slim line (no model only)
+  function drawBar() {
+    if (!root) return;
+    var sig = JSON.stringify([missing(), last && last.nous && last.nous.status]);
+    if (sig === drawnBar) return;
+    drawnBar = sig;
+    root.innerHTML = "";
+    root.hidden = !missing();
+    if (!missing()) return;
+    var bar = el("div", "mc-bar");
+    bar.setAttribute("role", "status");
+    bar.appendChild(el("span", "mc-dot bad"));
+    var text = signingIn(last) ? "Connecting your agent to an AI model…" :
+      "Your agent has no AI model connected — it cannot chat, so Blackbox has nothing to check yet.";
+    bar.appendChild(el("span", "mc-text", text));
+    bar.appendChild(button(signingIn(last) ? "Show" : "Connect", "mc-main", function (e) { e.stopPropagation(); openMenu(true); }));
+    root.appendChild(bar);
+  }
+
+  // ---------------------------------------------------------------- the menu
   function drawNous(box) {
     var nous = (last && last.nous) || {};
     box.appendChild(el("h3", "", "Free Nous account"));
@@ -138,21 +215,15 @@
       box.appendChild(step);
       box.appendChild(el("p", "", "2. Enter this code if asked:"));
       box.appendChild(el("div", "mc-code", nous.code));
-      box.appendChild(el("p", "", "3. Approve. This panel finishes by itself."));
-      box.appendChild(busy("Waiting for you to approve on Nous's page\u2026"));
-      var cancel = el("button", "mc-quiet", "Cancel sign-in");
-      cancel.type = "button";
-      cancel.addEventListener("click", function () { act(post("/api/agent-model/nous/cancel")); });
-      box.appendChild(cancel);
+      box.appendChild(el("p", "", "3. Approve. This finishes by itself."));
+      box.appendChild(spinnerLine("Waiting for you to approve on Nous's page…"));
+      box.appendChild(button("Cancel sign-in", "", function () { act(post("/api/agent-model/nous/cancel")); }));
       return;
     }
-    if (nous.status === "starting") { box.appendChild(busy("Asking Nous for a sign-in code\u2026")); return; }
-    if (nous.status === "finishing") { box.appendChild(busy("Approved. Connecting your Nous account to your agent\u2026")); return; }
+    if (nous.status === "starting") { box.appendChild(spinnerLine("Asking Nous for a sign-in code…")); return; }
+    if (nous.status === "finishing") { box.appendChild(spinnerLine("Approved. Connecting your Nous account to your agent…")); return; }
     if (nous.status === "failed" && nous.reason) box.appendChild(el("p", "mc-error", nous.reason));
-    var start = el("button", "", "Sign in with Nous (free)");
-    start.type = "button"; start.disabled = busy;
-    start.addEventListener("click", function () { act(post("/api/agent-model/nous")); });
-    box.appendChild(start);
+    box.appendChild(button("Sign in with Nous (free)", "mc-main", function () { act(post("/api/agent-model/nous")); }));
   }
 
   function drawKey(box) {
@@ -169,104 +240,40 @@
     input.placeholder = "Paste your API key"; input.setAttribute("aria-label", "API key");
     row.appendChild(select); row.appendChild(input);
     box.appendChild(row);
-    var save = el("button", "", busy ? "Saving…" : "Save key");
-    save.type = "button"; save.disabled = busy;
-    save.addEventListener("click", function () {
+    var save = button(working ? "Saving…" : "Save key", "", function () {
       var key = input.value; input.value = "";
       act(post("/api/agent-model/key", { provider: select.value, key: key }));
     });
+    save.style.marginTop = "8px";
     box.appendChild(save);
   }
 
-  // *done* (optional) turns a successful answer into the line the card shows next, so every
-  // change says what it did (2026-11-19: "Use the recommended model" on the model already in use
-  // changed nothing visible and read as broken).
-  function act(request, done) {
-    busy = true; error = ""; notice = ""; draw();
-    request.then(function (res) {
-      if (!res.ok || res.body.ok === false) error = res.body.error || res.body.reason || "That did not work.";
-      else if (done) notice = done(res.body);
-    }, function (err) { error = (err && err.message) || "That did not work."; })
-      .then(function () { busy = false; return refresh(); });
-  }
-
-  // WHY a signature: the panel polls every few seconds while it is shown; rebuilding it each time
-  // would wipe a key someone is typing. It redraws only when something it shows has changed.
-  function signature() {
-    var nous = (last && last.nous) || {};
-    var c = (last && last.connection) || {};
-    return JSON.stringify([last && last.state, nous.status, nous.link, nous.code, nous.reason, error, busy, justConnected,
-      c.provider, c.model, c.account, c.status, expanded, confirmingSignOut, notice]);
-  }
-
-  function providerName(id) {
-    if (id === "nous") return "Nous Portal";
-    var match = ((last && last.providers) || []).filter(function (p) { return p.id === id; })[0];
-    return match ? match.name : id;
-  }
-
-  function button(label, cls, onClick) {
-    var b = el("button", cls || "", label);
-    b.type = "button"; b.disabled = busy;
-    b.addEventListener("click", onClick);
-    return b;
-  }
-
-  // The agent HAS a model: one line always (provider · model · account, Hermes' own status), and
-  // Manage opens what can change — the recommended model, another model, signing out to switch.
-  function drawCard() {
-    var c = (last && last.connection) || {};
-    if (!c.provider) {   // Hermes is still being asked: never show placeholder values as the answer
-      var waiting = el("section", "mc-card");
-      var row = el("div", "mc-line");
-      row.appendChild(el("strong", "", "Your agent's AI model"));
-      row.appendChild(el("span", "mc-what", "Checking with Hermes\u2026"));
-      waiting.appendChild(row);
-      return waiting;
-    }
-    var exhausted = c.status === "exhausted";
-    var card = el("section", "mc-card" + (exhausted ? " mc-warn" : ""));
-    card.setAttribute("aria-label", "Your agent's AI model");
-    var line = el("div", "mc-line");
-    line.appendChild(el("strong", "", "Your agent's AI model"));
-    var what = [providerName(c.provider || ""), c.model || "Hermes' default model", c.account].filter(Boolean).join(" · ");
-    line.appendChild(el("span", "mc-what", what));
-    var badge = exhausted ? ["warn", "Refused recently"] : c.status === "working" ? ["ok", "Connected"] : ["unknown", "Status unknown"];
-    line.appendChild(el("span", "mc-badge " + badge[0], badge[1]));
-    line.appendChild(button(expanded ? "Close" : "Manage", "mc-manage", function () {
-      expanded = !expanded; confirmingSignOut = false; draw();
-    }));
-    card.appendChild(line);
-    // A free model is small: say so where people look, so a weak answer is not read as a broken product.
-    if (/:free$/.test(c.model || "")) card.appendChild(el("p", "mc-hint", "This is a free model: fine for chatting and " +
-      "everyday work, but the Blackbox assistant may misread broad questions. For sharper answers, connect an API key " +
-      "or a paid model (Manage \u2192 Switch account or sign out)."));
-    if (justConnected) card.appendChild(el("p", "", "Connected. Open a chat with your agent (run hermes in a terminal) and try the test prompt below — Blackbox should flag it."));
+  function drawConnected(box) {
+    var c = connection();
+    var head = el("div", "mc-row");
+    head.appendChild(el("h3", "", "Your agent's AI model"));
+    var s = status();
+    var badge = { ok: ["ok", "Connected"], warn: ["warn", "Refused recently"], unknown: ["unknown", "Checking"] }[s[0]] || ["unknown", ""];
+    head.appendChild(el("span", "mc-badge " + badge[0], badge[1]));
+    box.appendChild(head);
+    if (!c.provider) { box.appendChild(spinnerLine("Checking with Hermes…")); return; }
+    box.appendChild(el("p", "mc-what", [providerName(c.provider), c.model || "Hermes' default model", c.account].filter(Boolean).join(" · ")));
     // Hermes' "exhausted" mark is a pause of up to an hour after a provider refused a request — it
-    // can outlive the cause (seen 2026-11-19: still set while the free model answered), so the card
-    // names it as recent and offers the step that both fixes the usual cause and clears the pause.
-    if (exhausted) card.appendChild(el("p", "", "The provider refused this account recently, so Hermes paused it for up to an hour " +
-      "(usually: no credits for the model it asked for). A free account can use a free model: \u201cUse the recommended model\u201d " +
-      "also clears the pause. Or add credits with the provider, or switch to an API key."));
-    if (notice) card.appendChild(el("p", "", notice));
-    if (error) card.appendChild(el("p", "mc-error", error));
-    if (expanded || exhausted) card.appendChild(drawActions(c));
-    return card;
-  }
-
-  function drawActions(c) {
-    var box = el("div", "mc-actions");
-    var rec = el("div");
-    rec.appendChild(el("p", "", c.provider === "nous"
-      ? "Use the model Nous recommends for your account (a free account gets a free model)."
-      : "Use the model Hermes recommends for " + providerName(c.provider || "") + "."));
-    rec.appendChild(button(busy ? "Working…" : "Use the recommended model", "mc-main", function () {
+    // can outlive the cause, so it is named as recent with the step that fixes the usual cause.
+    if (c.status === "exhausted") box.appendChild(el("p", "", "The provider refused this account recently, so Hermes paused it for up to an hour " +
+      "(usually: no credits for the model it asked for). “Use the recommended model” picks one your account can use and clears the pause."));
+    // A free model is small: said here, so a weak answer is not read as a broken product.
+    if (/:free$/.test(c.model || "")) box.appendChild(el("p", "mc-hint", "A free model: fine for chatting and everyday work, but the " +
+      "Blackbox assistant may misread broad questions. For sharper answers, connect an API key or a paid model."));
+    var rec = el("div", "mc-sec");
+    rec.appendChild(button(working ? "Working…" : "Use the recommended model", "mc-main", function () {
       act(post("/api/agent-model/recommended"), function (body) {
-        return "Now using " + (body.model || "the recommended model") + " \u2014 the model recommended for this account.";
+        return "Now using " + (body.model || "the recommended model") + " — the model recommended for this account.";
       });
     }));
-    box.appendChild(rec);
-    var pick = el("div", "mc-line");
+    rec.appendChild(el("p", "mc-hint", c.provider === "nous" ? "The model Nous recommends for your account (a free account gets a free model)."
+      : "The model Hermes recommends for " + providerName(c.provider) + "."));
+    var pick = el("div", "mc-row");
     var input = el("input");
     input.placeholder = "Another model, e.g. vendor/model:free"; input.setAttribute("aria-label", "Model name");
     input.spellcheck = false; input.autocomplete = "off";
@@ -275,43 +282,68 @@
       var chosen = input.value.trim();
       act(post("/api/agent-model/model", { model: chosen }), function () { return "Now using " + chosen + "."; });
     }));
-    box.appendChild(pick);
-    var out = el("div");
+    rec.appendChild(pick);
+    box.appendChild(rec);
+    var out = el("div", "mc-sec");
     if (confirmingSignOut) {
-      out.appendChild(el("p", "", "Sign your agent out of " + providerName(c.provider || "") + "? It cannot chat until you connect again — " +
+      out.appendChild(el("p", "", "Sign your agent out of " + providerName(c.provider) + "? It cannot chat until you connect again — " +
         "a different Nous account, the free tier or an API key."));
-      out.appendChild(button("Sign out", "mc-main", function () { confirmingSignOut = false; expanded = false; act(post("/api/agent-model/disconnect")); }));
-      out.appendChild(button("Keep it", "", function () { confirmingSignOut = false; draw(); }));
+      var row = el("div", "mc-row");
+      row.appendChild(button("Sign out", "mc-main", function () { confirmingSignOut = false; act(post("/api/agent-model/disconnect")); }));
+      row.appendChild(button("Keep it", "", function () { confirmingSignOut = false; draw(); }));
+      out.appendChild(row);
     } else {
       out.appendChild(button("Switch account or sign out", "", function () { confirmingSignOut = true; draw(); }));
     }
     box.appendChild(out);
-    return box;
+  }
+
+  function placeMenu() {
+    if (!menu || !dot) return;
+    var r = dot.getBoundingClientRect();
+    var width = menu.offsetWidth || 420;
+    menu.style.top = Math.round(r.bottom + 8) + "px";
+    menu.style.left = Math.round(Math.max(16, Math.min(window.innerWidth - width - 16, r.right - width))) + "px";
+  }
+
+  // WHY a signature: the menu polls while open; rebuilding it each time would wipe a key or a model
+  // name someone is typing. It redraws only when something it shows has changed.
+  function drawMenu() {
+    if (!menu) return;
+    menu.hidden = !menuOpen;
+    if (!menuOpen) { drawnMenu = ""; return; }
+    var nous = (last && last.nous) || {};
+    var c = connection();
+    var sig = JSON.stringify([last && last.state, nous.status, nous.link, nous.code, nous.reason, error, notice, working,
+      c.provider, c.model, c.account, c.status, confirmingSignOut]);
+    if (sig === drawnMenu) { placeMenu(); return; }
+    drawnMenu = sig;
+    menu.innerHTML = "";
+    if (notice) menu.appendChild(el("p", "", notice));
+    if (error) menu.appendChild(el("p", "mc-error", error));
+    if (missing()) {
+      menu.appendChild(el("p", "", "Blackbox checks every prompt your agent sends to its AI model. Connect one so your agent can chat:"));
+      var nousBox = el("div", "mc-sec"); drawNous(nousBox); menu.appendChild(nousBox);
+      var keyBox = el("div", "mc-sec"); drawKey(keyBox); menu.appendChild(keyBox);
+      menu.appendChild(el("p", "mc-hint", "Prefer a terminal? Run: " + ((last && last.fix) || "hermes setup") + "  (or hermes setup for any provider)."));
+    } else {
+      drawConnected(menu);
+    }
+    placeMenu();
   }
 
   function draw() {
-    if (!root) return;
-    var sig = signature();
-    if (sig === drawn) return;
-    drawn = sig;
-    root.innerHTML = "";
-    var missing = last && (last.state === "missing" || signingIn(last));
-    if (!missing && !(last && last.state === "ready")) { root.hidden = true; return; }   // unknown: say nothing
-    root.hidden = false;
-    if (!missing) { root.appendChild(drawCard()); return; }
-    var panel = el("section", "mc-panel");
-    panel.setAttribute("aria-label", "Connect your agent to an AI model");
-    panel.appendChild(el("div", "mc-eyebrow", "One step left"));
-    panel.appendChild(el("h2", "", "Connect your agent to an AI model"));
-    panel.appendChild(el("p", "", "Blackbox checks every prompt your agent sends to its AI model. Your agent has no model connected yet, " +
-      "so it cannot chat — and nothing reaches Blackbox to check. Threat-graph sync, local rules and this dashboard keep working meanwhile."));
-    if (error) panel.appendChild(el("p", "mc-error", error));
-    var ways = el("div", "mc-ways");
-    var nous = el("div", "mc-way"); drawNous(nous); ways.appendChild(nous);
-    var key = el("div", "mc-way"); drawKey(key); ways.appendChild(key);
-    panel.appendChild(ways);
-    panel.appendChild(el("p", "mc-hint", "Prefer a terminal? Run: " + ((last && last.fix) || "hermes setup") + "  (or hermes setup for any provider)."));
-    root.appendChild(panel);
+    drawDot();
+    drawBar();
+    drawMenu();
+  }
+
+  function openMenu(force) {
+    menuOpen = force === undefined ? !menuOpen : !!force;
+    if (menuOpen) refresh();
+    else { confirmingSignOut = false; notice = ""; error = ""; }
+    if (dot) dot.setAttribute("aria-expanded", menuOpen ? "true" : "false");
+    draw();
   }
 
   window.blackboxAgentModel = {
@@ -319,15 +351,34 @@
     fix: function () { return (last && last.fix) || "hermes setup"; },
     refresh: refresh,
     onChange: function (fn) { listeners.push(fn); if (last) fn(last); },
-    open: function (manage) {
-      if (manage) { expanded = true; draw(); }
-      if (root) root.scrollIntoView({ behavior: "smooth", block: "start" });
-    }
+    // Deferred: the click that asked (a link elsewhere on the page) must not reach the page's
+    // close-on-outside-click handler after the menu opened.
+    open: function () { window.setTimeout(function () { openMenu(true); }, 0); }
   };
 
   function start() {
     root = document.getElementById("model-connect-root");
     var style = el("style"); style.textContent = CSS; document.head.appendChild(style);
+    var actions = document.getElementById("header-action-menu");
+    if (actions) {
+      dot = el("button", "gear-btn mc-dot-btn");
+      dot.type = "button"; dot.id = "model-status";
+      dot.setAttribute("aria-haspopup", "dialog"); dot.setAttribute("aria-expanded", "false");
+      dot.appendChild(el("span", "mc-dot"));
+      dot.appendChild(el("span", "header-action-label", "AI model"));
+      dot.addEventListener("click", function (e) { e.stopPropagation(); openMenu(); });
+      actions.insertBefore(dot, actions.firstChild);
+    }
+    menu = el("div", "mc-pop");
+    menu.id = "model-popover"; menu.hidden = true;
+    menu.setAttribute("role", "dialog"); menu.setAttribute("aria-label", "Your agent's AI model");
+    menu.addEventListener("click", function (e) { e.stopPropagation(); });
+    document.body.appendChild(menu);
+    document.addEventListener("click", function () { if (menuOpen) openMenu(false); });
+    document.addEventListener("keydown", function (e) { if (e.key === "Escape" && menuOpen) openMenu(false); });
+    window.addEventListener("resize", placeMenu);
+    window.addEventListener("scroll", placeMenu, { passive: true });
+    draw();
     refresh();
   }
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start); else start();
