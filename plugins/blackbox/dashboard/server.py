@@ -29,10 +29,10 @@ from typing import Any
 
 from ..kernel import constants, sparql_text, threat_ids
 from ..kernel.browser_boundary import LOOPBACK_HOSTS, BrowserBoundary
-from ..kernel.host_command import hermes_argv
+from ..kernel.host_command import NO_MODEL_EXIT, hermes_argv
 from .. import attach, shields
 from ..sync import read_durable_progress
-from . import community_routes, direct_reads, docs_routes, graph_pages, lifecycle, playground_routes, shields_routes, sync_meter, sync_timing
+from . import community_routes, direct_reads, docs_routes, graph_pages, lifecycle, model_connect_routes, playground_routes, shields_routes, sync_meter, sync_timing
 from .graph_pages import _balanced_graph_entries, _graph_entries
 from .network_sync import network_sync_argv as _network_sync_argv
 from .node_probe import NodeLiveness, NodeReadCache, RepeatGate, node_sync_probe
@@ -73,7 +73,7 @@ _FONT_FILES = frozenset({
     "ibm-plex-mono-600-latin.woff2", "ibm-plex-mono-600-latin-ext.woff2",
 })
 #: The sub-packages that add their own routes and pages, each through ``register(app, swr)``.
-_ROUTE_PACKAGES = (shields_routes, docs_routes, playground_routes)
+_ROUTE_PACKAGES = (shields_routes, docs_routes, playground_routes, model_connect_routes)
 def _dkg_durable_progress(dkg_home: str, context_graph_id: str) -> dict[str, Any]:
     """Read the latest resumable VM offset reported by the managed DKG."""
     return read_durable_progress(dkg_home, context_graph_id)
@@ -1101,11 +1101,10 @@ def create_app(*, manage_blackbox: bool = False):
         next_session_id = _parse_chat_session_id(proc.stderr) or _parse_chat_session_id(proc.stdout) or session_id
         answer = _clean_chat_output(proc.stdout)
         err = _clean_chat_output(proc.stderr)
-        if proc.returncode != 0:
-            return JSONResponse(
-                {"ok": False, "error": err or answer or "Blackbox chat failed.", "session_id": next_session_id},
-                status_code=500,
-            )
+        if proc.returncode != 0:   # NO_MODEL_EXIT: no AI model yet — 409 + needs_model, the page shows the fix
+            no_model = proc.returncode == NO_MODEL_EXIT
+            return JSONResponse({"ok": False, "error": err or answer or "Blackbox chat failed.", "needs_model": no_model,
+                                 "session_id": next_session_id}, status_code=409 if no_model else 500)
         return {"ok": True, "answer": answer or "(no response)", "session_id": next_session_id}
 
     @app.get("/api/findings")

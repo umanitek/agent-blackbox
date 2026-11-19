@@ -1713,6 +1713,8 @@
     line-height: 1.06;
     letter-spacing: -0.035em;
   }
+  .first-model-note { color: var(--text); margin-top: 10px; }
+  .first-model-link { border: 0; background: none; padding: 0; color: var(--signal); font: inherit; font-weight: 600; text-decoration: underline; cursor: pointer; }
   .first-detection-lede {
     max-width: 500px;
     margin: 0;
@@ -3047,6 +3049,9 @@
     <!-- Each shield's "New" banner, drawn by static/shields.js from /api/shields -->
     <div id="shield-banners"></div>
 
+    <!-- "Connect your agent to an AI model", drawn by model-connect.js from /api/agent-model (only while the agent has none) -->
+    <div id="model-connect-root" hidden></div>
+
     <!-- Sandbox mode's Playground, drawn by playground.js from /api/playground (shown only in sandbox mode) -->
     <div id="playground-root" hidden></div>
 
@@ -3264,6 +3269,7 @@
             <div class="first-eyebrow">Your first detection</div>
             <h3>Test Blackbox.</h3>
             <p class="first-detection-lede">Copy this into a protected chat. Blackbox should flag it as prompt injection.</p>
+            <p class="first-detection-lede first-model-note" id="first-detection-model-note" hidden>First connect your agent to an AI model: Blackbox checks each prompt as your agent sends it to its model, and with no model connected nothing is sent. <button type="button" class="first-model-link" id="first-detection-model-open">Connect a model</button></p>
           </div>
           <div class="first-detection-action">
             <div class="first-action-head">
@@ -3361,6 +3367,7 @@
 <!-- Vendored (same-origin) force-graph UMD bundle — defines window.ForceGraph. -->
 <script src="./vendor/force-graph.min.js"></script>
 <script src="./shields.js"></script>
+<script src="./model-connect.js"></script>
 <script src="./playground.js"></script>
 <script>
 (function () {
@@ -7382,6 +7389,11 @@
     var tag = $("first-detection-tag");
     if (label && !$("first-detection-copy").classList.contains("copied")) label.textContent = "Copy prompt";
     if (tag) tag.textContent = firstDetectionReady ? "Graph-backed" : "Syncing graph";
+    // No AI model connected (model-connect.js): the test cannot run yet, so the card says what to do first.
+    var noModel = !!(window.blackboxAgentModel && window.blackboxAgentModel.state() === "missing");
+    var note = $("first-detection-model-note");
+    if (note) note.hidden = !noModel;
+    if (tag && noModel) tag.textContent = "Needs a model";
   }
 
   function checkFirstDetectionReadiness() {
@@ -7432,6 +7444,11 @@
     done();
   }
 
+  if (window.blackboxAgentModel) window.blackboxAgentModel.onChange(renderFirstDetectionReadiness);
+  var firstDetectionModelOpen = $("first-detection-model-open");
+  if (firstDetectionModelOpen) firstDetectionModelOpen.addEventListener("click", function () {
+    if (window.blackboxAgentModel) window.blackboxAgentModel.open();
+  });
   var firstDetectionCopy = $("first-detection-copy");
   if (firstDetectionCopy) firstDetectionCopy.addEventListener("click", copyFirstDetectionPrompt);
 
@@ -8361,6 +8378,22 @@
       toast.className = "toast " + (kind || "ok");
     }, durationMs || 3200);
   }
+  // The assistant answered "no AI model yet" (POST /api/blackbox-chat → needs_model): one button
+  // takes the person to the connect panel at the top of the page (model-connect.js).
+  function chatOfferModelConnect() {
+    var log = $("chat-log");
+    if (!log || !window.blackboxAgentModel) return;
+    var button = document.createElement("button");
+    button.type = "button";
+    button.className = "chat-prompt";
+    button.textContent = "Connect a model now";
+    button.addEventListener("click", function () {
+      closeChat();
+      window.blackboxAgentModel.refresh().then(window.blackboxAgentModel.open);
+    });
+    log.appendChild(button);
+    log.scrollTop = log.scrollHeight;
+  }
   function setChatBusy(busy) {
     chatBusy = !!busy;
     var send = $("chat-send");
@@ -8391,6 +8424,8 @@
       if (pending && pending.parentNode) pending.parentNode.removeChild(pending);
       if (res.ok && body.ok) {
         return chatType("blackbox", body.answer || "(no response)");
+      } else if (body.needs_model) {
+        return chatType("blackbox", body.error).then(chatOfferModelConnect);
       } else {
         return chatType("blackbox", body.error || ("Blackbox chat failed (HTTP " + res.status + ")."));
       }

@@ -10,11 +10,14 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import shutil
+import sys
 from pathlib import Path
 from typing import Optional
 from .. import attach
 from ..kernel import constants, yaml_files
 from ..kernel.bounded_files import atomic_write
+from ..kernel.host_command import MISSING, NO_MODEL_EXIT, NO_MODEL_MESSAGE, READY, agent_model_state
 
 logger = logging.getLogger(__name__)
 
@@ -132,6 +135,9 @@ def add_blackbox_chat_args(parser: argparse.ArgumentParser) -> None:
 
 def cmd_chat(args: argparse.Namespace) -> int:
     profile = _ensure_blackbox_chat_profile()
+    if not _chat_profile_has_model(profile):
+        print(NO_MODEL_MESSAGE, file=sys.stderr)
+        return NO_MODEL_EXIT
     argv = _blackbox_chat_argv(_blackbox_chat_args(args), profile=profile)
     cwd = _blackbox_chat_cwd()
     if cwd is not None:
@@ -158,6 +164,52 @@ def _ensure_blackbox_chat_profile(profile: str = _BLACKBOX_CHAT_PROFILE) -> str:
     _ensure_blackbox_context_cap(profile_dir)
     attach.attach_hermes(profile_dir)
     return profile
+
+
+#: What carries an agent's model connection: Hermes' credential files, and the config keys naming
+#: the provider (Hermes picks its own default model when ``model.default`` is empty).
+_MODEL_FILES = (".env", "auth.json")
+_MODEL_CONFIG_KEYS = ("model", "custom_providers")
+
+
+def _chat_profile_has_model(profile: str) -> bool:
+    """False only when Hermes says the assistant's profile has NO model it can use (2026-11-19).
+
+    The profile copies the main agent's settings once, when it is first made; someone who opens
+    the assistant before connecting a model would otherwise keep a model-less assistant for ever.
+    So when the profile has none and the main agent has one, the agent's model connection is
+    carried over first. "Could not tell" lets the chat start (LES-011) — Hermes says what is wrong.
+    """
+    from hermes_cli.profiles import get_profile_dir
+
+    profile_dir = get_profile_dir(profile)
+    if agent_model_state(profile_dir) != MISSING:
+        return True
+    default_dir = get_profile_dir("default")
+    if agent_model_state(default_dir) != READY:
+        return False
+    _carry_model_connection(default_dir, profile_dir)
+    return agent_model_state(profile_dir) != MISSING
+
+
+@yaml_files.edits_config
+def _carry_model_connection(source: Path, profile_dir: Path) -> None:
+    """Copy the main agent's model connection into the assistant's profile (files owner-only)."""
+    for name in _MODEL_FILES:
+        if (source / name).is_file():
+            target = profile_dir / name
+            shutil.copyfile(source / name, target)
+            os.chmod(target, 0o600)
+    try:
+        config = yaml_files.load_for_edit(source / "config.yaml")
+        mine = yaml_files.load_for_edit(profile_dir / "config.yaml")
+    except yaml_files.UnreadableYaml as exc:
+        logger.warning("blackbox chat: %s", exc)   # the files above may already be enough
+        return
+    for key in _MODEL_CONFIG_KEYS:
+        if key in config:
+            mine[key] = config[key]
+    yaml_files.dump_yaml(profile_dir / "config.yaml", mine)
 
 
 def _blackbox_chat_args(args: argparse.Namespace) -> list[str]:

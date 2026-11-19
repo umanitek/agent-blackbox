@@ -1783,6 +1783,7 @@ run_hermes_setup() {
             else
                 step "No existing Hermes API key found; skipping Hermes setup wizard."
                 step "Threat-graph sync does not require a Nous subscription or model key."
+                step "Your agent needs an AI model to chat; the end of this install shows how to connect one."
             fi
             return 0
             ;;
@@ -1795,6 +1796,7 @@ run_hermes_setup() {
             else
                 step "No existing Hermes API key found; skipping Hermes setup wizard."
                 step "Threat-graph sync does not require a Nous subscription or model key."
+                step "Your agent needs an AI model to chat; the end of this install shows how to connect one."
             fi
             return 0
             ;;
@@ -2630,6 +2632,62 @@ ${graph_note}
 EOF
     print_sharing_notice
     echo ""
+}
+
+# ── The agent's AI model (2026-11-19) ───────────────────────────────────────
+# A fresh Hermes has no AI model: the agent cannot chat, so no prompt ever reaches Blackbox to
+# check — a new user's "the test does nothing". The dashboard asks Hermes (GET /api/agent-model,
+# the one answer every surface uses) and connects one in its "Connect your agent to an AI model"
+# panel; the install ends by pointing there. Nothing here changes the install: it is already
+# committed, and an unclear answer says nothing (LES-011).
+BLACKBOX_MODEL_STATE_WAIT_SECONDS="${BLACKBOX_MODEL_STATE_WAIT_SECONDS:-40}"
+BLACKBOX_MODEL_PROMPT_SECONDS="${BLACKBOX_MODEL_PROMPT_SECONDS:-60}"
+agent_model_state_from_dashboard() {   # prints ready | missing | unknown
+    local url="http://127.0.0.1:${BLACKBOX_DASHBOARD_PORT:-9700}/api/agent-model" body="" waited=0
+    while [ "$waited" -lt "$BLACKBOX_MODEL_STATE_WAIT_SECONDS" ]; do
+        body="$(curl -fsS --max-time 5 "$url" 2>/dev/null || true)"
+        case "$body" in
+            *'"state":"ready"'*) echo ready; return 0 ;;
+            *'"state":"missing"'*) echo missing; return 0 ;;
+        esac
+        sleep 2
+        waited=$((waited + 2))
+    done
+    echo unknown
+}
+
+open_in_browser() {   # a desktop's browser only; a server or SSH session has none to open
+    case "$(uname -s)" in
+        Darwin) open "$1" >/dev/null 2>&1 ;;
+        *) [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] && command -v xdg-open >/dev/null 2>&1 && xdg-open "$1" >/dev/null 2>&1 ;;
+    esac
+}
+
+offer_model_connect() {
+    local url="http://127.0.0.1:${BLACKBOX_DASHBOARD_PORT:-9700}/" answer=""
+    [ "$BLACKBOX_INSTALL_INCOMPLETE" = true ] && return 0
+    [ "$(agent_model_state_from_dashboard)" = missing ] || return 0
+    heading "One step left: connect your agent to an AI model"
+    cat <<MODELNOTE
+  Blackbox checks every prompt your agent sends to its AI model. Your agent has no
+  model connected yet, so it cannot chat and nothing reaches Blackbox to check.
+  Threat-graph sync, local rules and the dashboard already work.
+
+  Connect one in the dashboard (a free Nous account, or your own API key):
+      $url
+  Or in a terminal:  hermes setup --portal   (free, no API key)   or   hermes setup
+MODELNOTE
+    if ! { exec 9<>/dev/tty; } 2>/dev/null; then
+        return 0
+    fi
+    printf "Open the dashboard now? [Y/n] " >&9
+    IFS= read -r -t "$BLACKBOX_MODEL_PROMPT_SECONDS" answer <&9 || answer=""
+    printf '\n' >&9
+    exec 9>&-
+    case "$answer" in
+        n|N|no|NO|No) : ;;
+        *) open_in_browser "$url" || step "Open $url in your browser." ;;
+    esac
 }
 
 # ── Pre-flight: everything that can be known before the first change ────────
@@ -3913,6 +3971,7 @@ main() {
     verify_install
     install_record_commit
     next_steps
+    offer_model_connect
 }
 
 main "$@"

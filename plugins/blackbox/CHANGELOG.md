@@ -38,6 +38,25 @@ that the two version fields agree.
 
 ## [Unreleased]
 
+### Added
+
+- The dashboard now says when your agent has no AI model connected (a fresh install has none:
+  the agent cannot chat, so no prompt reaches Blackbox to check) and connects one right there —
+  a free Nous account (you approve on Nous's site; the dashboard shows the link and code) or your
+  own API key (OpenRouter, Anthropic, OpenAI, Google AI Studio), handed straight to Hermes and
+  never kept or logged by Blackbox. The panel goes away once the agent has a model.
+- The installer ends with that same step when the agent has no model, and offers to open the
+  dashboard.
+
+### Fixed
+
+- The "Test Blackbox" card no longer asks you to paste the test prompt into a chat that cannot
+  run: with no model connected it says to connect one first.
+- The Blackbox assistant answers "connect a model first" (with a button to the panel) instead of
+  Hermes' raw setup text, and catches up with a model connected after it was first opened.
+- The Playground's four send-a-threat tests no longer show as buttons that never respond while
+  Community sharing is off: it says why and opens the setting.
+
 ## [1.4.1] - 2026-11-13
 
 ### Fixed

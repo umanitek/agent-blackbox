@@ -402,6 +402,30 @@
       .then(function () { walletBusy = ""; return refresh(); });
   }
 
+  // Sharing off: say why the four tests are not here and open the one setting that brings them.
+  function sharingOffNotice() {
+    var box = el("div", "pg-error");
+    box.appendChild(el("p", "", "These four tests send a listed threat to the sandbox lane, so they need Community sharing on. " +
+      "In sandbox mode every share stays in the sandbox lane, which no rule or flag on any machine reads. " +
+      "The wallet tests below run without it."));
+    var open = el("button", "", "Turn on Community sharing");
+    open.type = "button";
+    open.addEventListener("click", function () {
+      var gear = document.getElementById("settings-open");
+      if (gear) gear.click();
+      window.setTimeout(function () {
+        var toggle = document.getElementById("set-report");
+        var row = toggle && toggle.closest(".set-row");
+        if (row) row.scrollIntoView({ block: "center" });
+        if (toggle) toggle.focus();
+      }, 150);
+    });
+    var row = el("div", "pg-kinds");   // the Playground's own button style
+    row.appendChild(open);
+    box.appendChild(row);
+    return box;
+  }
+
   function draw(state) {
     root.innerHTML = "";
     var panel = el("section", "pg-panel");
@@ -410,9 +434,10 @@
     panel.appendChild(el("p", "", "Send a threat already listed in this node's verified rules through the real check. " +
       "The finding and its share stay in the sandbox: the share goes to the graph's sandbox lane, which no rule or flag on any " +
       "machine reads, and nothing lands in your real findings. Members who joined the same graph see it below within seconds."));
-    if (!state.sharing) panel.appendChild(el("p", "pg-error", "Community sharing is off. Turn it on in Settings to run tests (they stay in the sandbox lane)."));
+    if (!state.sharing) panel.appendChild(sharingOffNotice());
     var kinds = el("div", "pg-kinds");
-    (state.kinds || []).forEach(function (kind) {
+    // With sharing off these tests cannot run, so no dead buttons are drawn (they read as "loading").
+    (state.sharing ? (state.kinds || []) : []).forEach(function (kind) {
       var button = el("button");
       setLabel(button, busy === kind ? "Asking Blackbox… (up to 90 s)" : "Send: " + (KIND_LABELS[kind] || kind), busy === kind);
       button.type = "button";
