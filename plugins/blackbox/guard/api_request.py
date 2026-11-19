@@ -13,6 +13,7 @@ turn would otherwise raise. Split out of ``hooks.py`` on 2026-10-22 (it stood at
 
 from __future__ import annotations
 
+import re
 import time
 from typing import Any, Optional
 
@@ -39,6 +40,77 @@ def _dedupe_api_findings(findings: list[detection.Finding], detail: dict[str, An
             continue
         _seen_api_findings[key] = now
         out.append(finding)
+    return out
+
+
+#: Blackbox's OWN records read back over its local dashboard — the findings and the activity log.
+#: Read back (the assistant answering "what was flagged?") an old finding's text is a record, not a
+#: new attack, yet scanning it re-flagged that finding on every such question (2026-11-19). The
+#: output is still scanned in full; drop_record_echoes() removes only exact echoes. Only these two
+#: endpoints count: other dashboard data can carry text outsiders wrote (community threat names).
+_OWN_RECORDS = re.compile(r"^https?://(?:127\.0\.0\.1|localhost):(\d+)/api/(?:findings|audit)(?:[?#]\S*)?$")
+_ADDRESS = re.compile(r"https?://[^\s'\"\\)>]+")
+
+
+def _own_record_reads(messages: list[Any], dashboard_port: int) -> set[str]:
+    """Call ids of the tool calls whose every web address is Blackbox's own findings or activity
+    on this machine's dashboard port. A call that names any other address — or no address — is
+    not one: its output is scanned as before."""
+    own: set[str] = set()
+    if not dashboard_port:
+        return own
+    for call_id, arguments in _call_arguments(messages):
+        addresses = _ADDRESS.findall(arguments)
+        matches = [_OWN_RECORDS.match(address) for address in addresses]
+        if addresses and all(m and int(m.group(1)) == dashboard_port for m in matches):
+            own.add(call_id)
+    return own
+
+
+def own_record_texts(request_messages: Any, dashboard_port: int) -> list[str]:
+    """The text of this turn's tool results that read Blackbox's own records (see _own_record_reads)."""
+    messages = request_messages if isinstance(request_messages, list) else []
+    own = _own_record_reads(messages, dashboard_port)
+    texts = []
+    for msg in messages:
+        result = _tool_result(msg)
+        if result is not None and result[0] in own:
+            text = session_context._message_text(result[1]).strip()
+            if text:
+                texts.append(text)
+    return texts
+
+
+def drop_record_echoes(findings: list[Any], sources: list[tuple[str, str]], own_texts: list[str],
+                       recorded: set[tuple[str, str]]) -> list[Any]:
+    """*findings* without the echoes of old ones. A finding is an echo only when ALL hold: its
+    evidence appears in Blackbox's own records read back (*own_texts*), nowhere else in this
+    request, and the same rule already recorded that same text (*recorded*: identifier, evidence).
+    Anything new in the same output — another rule, other text — is kept."""
+    # The user's own words always count as "elsewhere" — even when they repeat the record word for
+    # word (the sources hold each text once, so that text would otherwise look like the record).
+    others = [text for context, text in sources if context == "in-user-prompt" or text not in own_texts]
+    kept = []
+    for finding in findings:
+        evidence = str(getattr(finding, "evidence", "") or "")
+        echo = (bool(evidence) and (str(getattr(finding, "identifier", "")), evidence) in recorded
+                and any(evidence in text for text in own_texts) and not any(evidence in text for text in others))
+        if not echo:
+            kept.append(finding)
+    return kept
+
+
+def _call_arguments(messages: list[Any]) -> list[tuple[str, str]]:
+    """``(call id, arguments text)`` for every tool call, in both wire shapes (see _tool_result)."""
+    out: list[tuple[str, str]] = []
+    for msg in messages:
+        if isinstance(msg, dict) and msg.get("type") == "function_call" and msg.get("call_id"):
+            out.append((str(msg["call_id"]), str(msg.get("arguments") or "")))
+        calls = msg.get("tool_calls") if isinstance(msg, dict) else None
+        for call in calls if isinstance(calls, list) else []:
+            function = call.get("function") if isinstance(call, dict) else None
+            if isinstance(function, dict) and call.get("id"):
+                out.append((str(call["id"]), str(function.get("arguments") or "")))
     return out
 
 

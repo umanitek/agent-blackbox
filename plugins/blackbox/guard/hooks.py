@@ -191,6 +191,12 @@ def on_pre_tool_call(
         return None
 
 
+def _recorded_findings() -> set[tuple[str, str]]:
+    """``(identifier, evidence)`` of the findings already in Blackbox's log (the log's own cache)."""
+    rows = audit.read_findings(limit=1000)
+    return {(str(row.get("identifier") or ""), str(row.get("evidence") or "")) for row in rows}
+
+
 def _record_activity(tool_name: str, args: Any) -> None:
     """Log what the agent touched to the visibility trail (fail-open).
 
@@ -261,6 +267,9 @@ def on_pre_api_request(**kwargs: Any) -> None:
         text = "\n".join(part for _, part in sources)   # the LLM reviewer's input
         findings = api_request._injection_by_source(sources, rs, cfg.discover) + detection.detect_model_request_secrets(sources)   # KI-381
         findings += injection_sites.injection_site_findings(findings, kwargs.get("request_messages"), rs)   # D8
+        own_records = api_request.own_record_texts(kwargs.get("request_messages"), cfg.dashboard_port)
+        if own_records:   # Blackbox's own findings read back: an old finding is not a new attack
+            findings = api_request.drop_record_echoes(findings, sources, own_records, _recorded_findings())
         findings = reporting._flag_worthy(cfg, findings, shields.snapshot())
         detail = {
             "graph_read": graph_evidence,
