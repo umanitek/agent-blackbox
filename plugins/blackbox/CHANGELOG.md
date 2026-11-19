@@ -47,13 +47,22 @@ that the two version fields agree.
   never kept or logged by Blackbox. The panel goes away once the agent has a model.
 - The installer ends with that same step when the agent has no model, and offers to open the
   dashboard.
+- Once connected, a one-line "Your agent's AI model" card shows the provider, model and account,
+  and whether Hermes marked it out of credits. Manage it there: switch to the model recommended
+  for your account (a free Nous account gets a free model), pick another model, or switch
+  account / sign out to connect differently.
 
 ### Fixed
 
 - The "Test Blackbox" card no longer asks you to paste the test prompt into a chat that cannot
   run: with no model connected it says to connect one first.
 - The Blackbox assistant answers "connect a model first" (with a button to the panel) instead of
-  Hermes' raw setup text, and catches up with a model connected after it was first opened.
+  Hermes' raw setup text, and always uses the same model as your agent (it used to keep the
+  settings it was first made with).
+- After a free Nous sign-in the agent now lands on a free model; it used to land on a paid one
+  and every chat was refused for credits.
+- The assistant no longer shows Hermes' "Resumed session" notice or an out-of-credits message as
+  if it were its answer: it says the model gave no answer and offers to fix the connection.
 - The Playground's four send-a-threat tests no longer show as buttons that never respond while
   Community sharing is off: it says why and opens the setting.
 

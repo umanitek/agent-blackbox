@@ -3,9 +3,9 @@
 Hermes' own ``hermes auth add nous --no-browser`` does the whole device sign-in: it asks the Nous
 Portal for a link and a short code, prints them, waits while the person approves in their
 browser, and stores the result in the agent's own Hermes files. This class starts that command,
-reads the link and the code from its output so the dashboard can show them, and on success sets
-the agent's provider to Nous (Hermes then picks its own cost-safe default model). Blackbox never
-sees or stores a token.
+reads the link and the code from its output so the dashboard can show them, and on success runs
+*after_sign_in* (the package makes Nous the agent's provider on the model Hermes recommends for
+the account — a free account lands on a free model). Blackbox never sees or stores a token.
 
 Pattern: a small State machine owned by one object with one lock — idle → waiting (link + code
 shown) → connected | failed | cancelled. Only one sign-in runs at a time; a second start returns
@@ -39,7 +39,6 @@ _CODE = re.compile(r"enter code:\s*([A-Za-z0-9-]{4,32})")
 _REASON_CHARS = 240
 
 Popen = Callable[..., "subprocess.Popen[str]"]
-Run = Callable[..., "subprocess.CompletedProcess[str]"]
 
 
 def _safe_link(raw: str) -> str:
@@ -54,9 +53,9 @@ def _safe_link(raw: str) -> str:
 class NousSignIn:
     """One Hermes Nous sign-in at a time; see the module doc."""
 
-    def __init__(self, *, popen: Popen = subprocess.Popen, run: Run = subprocess.run,
+    def __init__(self, after_sign_in: Callable[[], bool], *, popen: Popen = subprocess.Popen,
                  clock: Callable[[], float] = time.monotonic) -> None:
-        self._popen, self._run, self._clock = popen, run, clock
+        self._after_sign_in, self._popen, self._clock = after_sign_in, popen, clock
         self._lock = threading.Lock()
         self._proc: Optional[subprocess.Popen[str]] = None
         self._state: dict[str, Any] = {"status": "idle"}
@@ -119,7 +118,7 @@ class NousSignIn:
                 if self._state.get("link") and self._state.get("code"):
                     self._state["status"] = "waiting"
         code = proc.wait()
-        provider_set = code == 0 and self._set_provider()
+        provider_set = code == 0 and self._after_sign_in()
         with self._lock:
             if self._proc is not proc:
                 return
@@ -130,11 +129,3 @@ class NousSignIn:
                 reason = redact_secret_values(last_line)[:_REASON_CHARS] if code != 0 else \
                     "Signed in, but Blackbox could not select Nous as the agent's provider."
                 self._state = {"status": "failed", "reason": reason or "Hermes' sign-in did not finish."}
-
-    def _set_provider(self) -> bool:
-        try:
-            done = self._run(hermes_argv("config", "set", "model.provider", "nous"), stdin=subprocess.DEVNULL,
-                             capture_output=True, text=True, timeout=60, check=False)
-        except (OSError, subprocess.SubprocessError, ValueError):
-            return False
-        return done.returncode == 0

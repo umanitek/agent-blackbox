@@ -10,8 +10,11 @@ in the agent's own files, Blackbox never stores or logs one:
   and hands the dashboard the sign-in link and code;
 * an API key: :func:`save_api_key` runs ``hermes auth add <provider> --type api-key`` with the
   key on the child's stdin (never on a command line another process could read), then
-  ``hermes config set model.provider <provider>``; Hermes then picks its own cost-safe default
-  model for that provider.
+  ``hermes config set model.provider <provider>`` on the model Hermes recommends for it.
+
+``settings.py`` reads and changes the choice afterwards — the "Your agent's AI model" card:
+the account, the model, Hermes' "exhausted" mark, the recommended (for a free Nous account: free)
+model, another model, signing out.
 
 Either way the dashboard re-asks Hermes (``kernel.host_command.agent_model``) and the panel goes
 away once the answer is "ready".
@@ -21,15 +24,15 @@ Pattern: Facade over Hermes' command line. Usage::
     model_connect.state()                       # "ready" | "missing" | "unknown"
     model_connect.save_api_key("openrouter", key)
     model_connect.nous().start(); model_connect.nous().view()
+    model_connect.connection(model_connect.HermesRun())   # the card
 """
 
 from __future__ import annotations
 
-import subprocess
-from typing import Any, Callable
+from typing import Any
 
-from ..kernel.host_command import agent_model_state, hermes_argv
-from ..kernel.redaction import redact_secret_values
+from ..kernel.host_command import agent_model_state
+from .settings import HermesRun, choose_provider, connection, disconnect, set_model, use_recommended_model
 from .sign_in import NousSignIn
 
 #: Providers the panel offers for an API key: Hermes' provider id → the name people know.
@@ -40,13 +43,11 @@ KEY_PROVIDERS: dict[str, str] = {
     "gemini": "Google AI Studio (Gemini)",
 }
 _KEY_MIN, _KEY_MAX = 8, 512
-_CHILD_TIMEOUT_SECONDS = 60
 
-Run = Callable[..., "subprocess.CompletedProcess[str]"]
+__all__ = ["KEY_PROVIDERS", "HermesRun", "NousSignIn", "connection", "disconnect", "nous", "save_api_key",
+           "set_model", "state", "use_recommended_model"]
 
-__all__ = ["KEY_PROVIDERS", "NousSignIn", "nous", "save_api_key", "state"]
-
-_NOUS = NousSignIn()
+_NOUS = NousSignIn(lambda: choose_provider("nous", HermesRun()))
 
 
 def nous() -> NousSignIn:
@@ -67,29 +68,19 @@ def _key_problem(provider: str, key: str) -> str:
     return ""
 
 
-def save_api_key(provider: str, key: str, *, run: Run = subprocess.run) -> dict[str, Any]:
-    """Store *key* for *provider* through Hermes and make it the agent's provider.
-
-    Returns ``{"ok": True}`` or ``{"ok": False, "error": <plain reason>}``; the key never appears
-    in either (any child output is redacted first).
-    """
+def save_api_key(provider: str, key: str, run: HermesRun | None = None) -> dict[str, Any]:
+    """Store *key* for *provider* through Hermes and make it the agent's provider (on the model
+    Hermes recommends for it). Returns ``{"ok": True}`` or ``{"ok": False, "error": <plain reason>}``;
+    the key never appears in either (any child output is redacted first)."""
+    run = run or HermesRun()
     key = (key or "").strip()
     problem = _key_problem(provider, key)
     if problem:
         return {"ok": False, "error": problem}
-    steps = (
-        (hermes_argv("auth", "add", provider, "--type", "api-key"), key + "\n"),
-        (hermes_argv("config", "set", "model.provider", provider), None),
-    )
-    for argv, stdin_text in steps:
-        try:
-            done = run(argv, input=stdin_text, stdin=None if stdin_text else subprocess.DEVNULL,
-                       capture_output=True, text=True, timeout=_CHILD_TIMEOUT_SECONDS, check=False)
-        except (OSError, subprocess.SubprocessError, ValueError):
-            return {"ok": False, "error": "Blackbox could not run Hermes to save the key."}
-        if done.returncode != 0:
-            lines = [line for line in (done.stdout or "").splitlines() + (done.stderr or "").splitlines()
-                     if line.strip()]
-            detail = redact_secret_values(lines[-1].strip()).replace(key, "[key]")[:240] if lines else ""
-            return {"ok": False, "error": "Hermes did not save the key" + (f": {detail}" if detail else ".")}
+    ok, detail = run("auth", "add", provider, "--type", "api-key", stdin_text=key + "\n")
+    if not ok:
+        detail = detail.replace(key, "[key]")
+        return {"ok": False, "error": "Hermes did not save the key" + (f": {detail}" if detail else ".")}
+    if not choose_provider(provider, run):
+        return {"ok": False, "error": "The key is saved, but Hermes did not make it the agent's provider."}
     return {"ok": True}

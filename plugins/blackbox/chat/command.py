@@ -11,13 +11,14 @@ import argparse
 import logging
 import os
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 from typing import Optional
 from .. import attach
 from ..kernel import constants, yaml_files
 from ..kernel.bounded_files import atomic_write
-from ..kernel.host_command import MISSING, NO_MODEL_EXIT, NO_MODEL_MESSAGE, READY, agent_model_state
+from ..kernel.host_command import MISSING, NO_MODEL_EXIT, NO_MODEL_MESSAGE, READY, agent_model_state, hermes_argv
 
 logger = logging.getLogger(__name__)
 
@@ -175,17 +176,19 @@ _MODEL_CONFIG_KEYS = ("model", "custom_providers")
 def _chat_profile_has_model(profile: str) -> bool:
     """False only when Hermes says the assistant's profile has NO model it can use (2026-11-19).
 
-    The profile copies the main agent's settings once, when it is first made; someone who opens
-    the assistant before connecting a model would otherwise keep a model-less assistant for ever.
-    So when the profile has none and the main agent has one, the agent's model connection is
-    carried over first. "Could not tell" lets the chat start (LES-011) — Hermes says what is wrong.
+    The assistant is the agent's companion, so it uses the agent's AI model: before every turn
+    the agent's provider and model choice are copied into the assistant's profile (the profile
+    copied settings only once, when it was made — an assistant opened before a model was
+    connected, or before the model was changed, kept the old one and failed). When the profile
+    has no credentials but the agent does, they are carried over too. "Could not tell" lets the
+    chat start (LES-011) — Hermes says what is wrong.
     """
     from hermes_cli.profiles import get_profile_dir
 
-    profile_dir = get_profile_dir(profile)
+    profile_dir, default_dir = get_profile_dir(profile), get_profile_dir("default")
+    _follow_agent_model_choice(default_dir, profile_dir)
     if agent_model_state(profile_dir) != MISSING:
         return True
-    default_dir = get_profile_dir("default")
     if agent_model_state(default_dir) != READY:
         return False
     _carry_model_connection(default_dir, profile_dir)
@@ -193,23 +196,49 @@ def _chat_profile_has_model(profile: str) -> bool:
 
 
 @yaml_files.edits_config
+def _copy_model_config(source: Path, profile_dir: Path) -> Optional[str]:
+    """Copy the agent's model config keys into the profile; the provider when anything changed."""
+    try:
+        config = yaml_files.load_for_edit(source / "config.yaml")
+        mine = yaml_files.load_for_edit(profile_dir / "config.yaml")
+    except yaml_files.UnreadableYaml as exc:
+        logger.warning("blackbox chat: %s", exc)   # the profile keeps what it has
+        return None
+    changed = False
+    for key in _MODEL_CONFIG_KEYS:
+        if key in config and mine.get(key) != config[key]:
+            mine[key] = config[key]
+            changed = True
+    if not changed:
+        return None
+    yaml_files.dump_yaml(profile_dir / "config.yaml", mine)
+    model = config.get("model")
+    return str(model.get("provider") or "") if isinstance(model, dict) else ""
+
+
+def _follow_agent_model_choice(source: Path, profile_dir: Path) -> None:
+    """The agent's provider and model, in the assistant's profile. After a change Hermes' own
+    ``auth reset`` clears the profile's "exhausted" marks, which would otherwise keep the old
+    model's refusal for up to an hour."""
+    provider = _copy_model_config(source, profile_dir)
+    if not provider:
+        return
+    env = dict(os.environ, HERMES_HOME=str(profile_dir))
+    try:
+        subprocess.run(hermes_argv("auth", "reset", provider), env=env, stdin=subprocess.DEVNULL,
+                       capture_output=True, text=True, timeout=60, check=False)
+    except (OSError, subprocess.SubprocessError) as exc:
+        logger.warning("blackbox chat: could not clear the assistant's credential marks: %s", exc)
+
+
 def _carry_model_connection(source: Path, profile_dir: Path) -> None:
-    """Copy the main agent's model connection into the assistant's profile (files owner-only)."""
+    """Copy the agent's credential files into the assistant's profile (owner-only)."""
     for name in _MODEL_FILES:
         if (source / name).is_file():
             target = profile_dir / name
             shutil.copyfile(source / name, target)
             os.chmod(target, 0o600)
-    try:
-        config = yaml_files.load_for_edit(source / "config.yaml")
-        mine = yaml_files.load_for_edit(profile_dir / "config.yaml")
-    except yaml_files.UnreadableYaml as exc:
-        logger.warning("blackbox chat: %s", exc)   # the files above may already be enough
-        return
-    for key in _MODEL_CONFIG_KEYS:
-        if key in config:
-            mine[key] = config[key]
-    yaml_files.dump_yaml(profile_dir / "config.yaml", mine)
+    _copy_model_config(source, profile_dir)
 
 
 def _blackbox_chat_args(args: argparse.Namespace) -> list[str]:

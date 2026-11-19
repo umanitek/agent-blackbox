@@ -5,7 +5,9 @@
 * ``GET /api/agent-model`` — ``{state: ready|missing|unknown, providers, nous, fix}``: Hermes' own
   answer for this agent (cached :data:`STATE_TTL_SECONDS`; Hermes imports its CLI to answer);
 * ``POST /api/agent-model/key`` ``{provider, key}`` — store an API key through Hermes;
-* ``POST /api/agent-model/nous`` / ``POST /api/agent-model/nous/cancel`` — the free Nous sign-in.
+* ``POST /api/agent-model/nous`` / ``POST /api/agent-model/nous/cancel`` — the free Nous sign-in;
+* ``POST /api/agent-model/recommended`` / ``/model`` ``{model}`` / ``/disconnect`` — the card's changes
+  (``connection`` in the GET says provider, model, account and Hermes' "exhausted" mark).
 
 The POSTs are state changes, so the app-wide browser boundary already demands the session token
 (KI-028 / LES-006). A key is never echoed back, logged or kept by Blackbox (``model_connect``).
@@ -26,29 +28,50 @@ STATE_TTL_SECONDS = 20.0
 Cache = Callable[..., Any]
 
 
+class _AgentModelView:
+    """What GET /api/agent-model returns: Hermes' answer and the card, cached per *generation*.
+
+    A change (a key saved, a model chosen, a sign-in that finished, a sign-out) starts a new
+    generation, so the next read asks Hermes again instead of showing the old answer."""
+
+    def __init__(self, swr: Cache) -> None:
+        self._swr = swr
+        self._generation = itertools.count(1)
+        self._current = next(self._generation)
+        self._nous_status: Any = "idle"
+
+    def changed(self) -> None:
+        self._current = next(self._generation)
+
+    def payload(self) -> dict[str, Any]:
+        from ...kernel.host_command import FIX_COMMAND
+        from ... import model_connect
+
+        nous = model_connect.nous().view()
+        if nous.get("status") != self._nous_status:
+            self._nous_status = nous.get("status")
+            if self._nous_status == "connected":
+                self.changed()   # once per sign-in that finished, not once per poll
+        key = f"agent-model:{self._current}"
+        state = self._swr(key, model_connect.state, "unknown", STATE_TTL_SECONDS)
+        card = self._swr(key + ":connection", lambda: model_connect.connection(model_connect.HermesRun()), {},
+                         STATE_TTL_SECONDS) if state == "ready" else {}
+        return {"state": state, "fix": FIX_COMMAND, "nous": nous, "connection": card,
+                "providers": [{"id": pid, "name": name} for pid, name in model_connect.KEY_PROVIDERS.items()]}
+
+
 def register(app: Any, swr: Cache) -> None:
     """Add the panel script and the agent-model routes to *app*."""
     from fastapi import Body
     from fastapi.responses import FileResponse, JSONResponse
-    from ...kernel.host_command import FIX_COMMAND
     from ... import model_connect
 
-    generation = itertools.count(1)
-    current: dict[str, Any] = {"generation": next(generation), "nous_status": "idle"}
+    view = _AgentModelView(swr)
 
-    def fresh_after_change() -> None:
-        current["generation"] = next(generation)   # a new cache key: the next read asks Hermes again
-
-    def payload() -> dict[str, Any]:
-        nous = model_connect.nous().view()
-        if nous.get("status") != current["nous_status"]:
-            current["nous_status"] = nous.get("status")
-            if nous.get("status") == "connected":
-                fresh_after_change()   # once per sign-in that finished, not once per poll
-        key = f"agent-model:{current['generation']}"
-        state = swr(key, model_connect.state, "unknown", STATE_TTL_SECONDS)
-        return {"state": state, "fix": FIX_COMMAND, "nous": nous,
-                "providers": [{"id": pid, "name": name} for pid, name in model_connect.KEY_PROVIDERS.items()]}
+    def changed(result: dict[str, Any]) -> Any:
+        if result.get("ok"):
+            view.changed()
+        return JSONResponse(result, status_code=200 if result.get("ok") else 400, headers=NO_CACHE)
 
     @app.get("/model-connect.js")
     def model_connect_script() -> Any:
@@ -56,15 +79,12 @@ def register(app: Any, swr: Cache) -> None:
 
     @app.get("/api/agent-model")
     def agent_model() -> Any:
-        return JSONResponse(payload(), headers=NO_CACHE)
+        return JSONResponse(view.payload(), headers=NO_CACHE)
 
     @app.post("/api/agent-model/key")
     def agent_model_key(body: dict[str, Any] = Body(...)) -> Any:
         body = body if isinstance(body, dict) else {}
-        result = model_connect.save_api_key(str(body.get("provider") or ""), str(body.get("key") or ""))
-        if result.get("ok"):
-            fresh_after_change()
-        return JSONResponse(result, status_code=200 if result.get("ok") else 400, headers=NO_CACHE)
+        return changed(model_connect.save_api_key(str(body.get("provider") or ""), str(body.get("key") or "")))
 
     @app.post("/api/agent-model/nous")
     def agent_model_nous() -> Any:
@@ -73,3 +93,16 @@ def register(app: Any, swr: Cache) -> None:
     @app.post("/api/agent-model/nous/cancel")
     def agent_model_nous_cancel() -> Any:
         return JSONResponse(model_connect.nous().cancel(), headers=NO_CACHE)
+
+    @app.post("/api/agent-model/recommended")
+    def agent_model_recommended() -> Any:
+        return changed(model_connect.use_recommended_model(model_connect.HermesRun()))
+
+    @app.post("/api/agent-model/model")
+    def agent_model_set(body: dict[str, Any] = Body(...)) -> Any:
+        model = str(body.get("model") or "") if isinstance(body, dict) else ""
+        return changed(model_connect.set_model(model, model_connect.HermesRun()))
+
+    @app.post("/api/agent-model/disconnect")
+    def agent_model_disconnect() -> Any:
+        return changed(model_connect.disconnect(model_connect.HermesRun()))

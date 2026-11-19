@@ -8380,16 +8380,18 @@
   }
   // The assistant answered "no AI model yet" (POST /api/blackbox-chat → needs_model): one button
   // takes the person to the connect panel at the top of the page (model-connect.js).
-  function chatOfferModelConnect() {
+  // A model that answered nothing or was refused for credits (model_problem) opens the card's
+  // actions instead: the recommended model, another model, switching account.
+  function chatOfferModelConnect(problem) {
     var log = $("chat-log");
     if (!log || !window.blackboxAgentModel) return;
     var button = document.createElement("button");
     button.type = "button";
     button.className = "chat-prompt";
-    button.textContent = "Connect a model now";
+    button.textContent = problem ? "Fix the AI model connection" : "Connect a model now";
     button.addEventListener("click", function () {
       closeChat();
-      window.blackboxAgentModel.refresh().then(window.blackboxAgentModel.open);
+      window.blackboxAgentModel.refresh().then(function () { window.blackboxAgentModel.open(problem); });
     });
     log.appendChild(button);
     log.scrollTop = log.scrollHeight;
@@ -8424,8 +8426,8 @@
       if (pending && pending.parentNode) pending.parentNode.removeChild(pending);
       if (res.ok && body.ok) {
         return chatType("blackbox", body.answer || "(no response)");
-      } else if (body.needs_model) {
-        return chatType("blackbox", body.error).then(chatOfferModelConnect);
+      } else if (body.needs_model || body.model_problem) {
+        return chatType("blackbox", body.error).then(function () { chatOfferModelConnect(!!body.model_problem); });
       } else {
         return chatType("blackbox", body.error || ("Blackbox chat failed (HTTP " + res.status + ")."));
       }

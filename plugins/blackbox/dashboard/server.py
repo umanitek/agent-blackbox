@@ -32,7 +32,7 @@ from ..kernel.host_command import NO_MODEL_EXIT, hermes_argv
 from .. import attach, shields
 from ..sync import read_durable_progress
 from . import community_routes, direct_reads, docs_routes, graph_pages, lifecycle, model_connect_routes, playground_routes, shields_routes, sync_meter, sync_timing
-from .assistant import clean_chat_output, parse_chat_session_id
+from .assistant import answer_payload, clean_chat_output, parse_chat_session_id
 from .graph_pages import _balanced_graph_entries, _graph_entries
 from .network_sync import network_sync_argv as _network_sync_argv
 from .node_probe import NodeLiveness, NodeReadCache, RepeatGate, node_sync_probe
@@ -1092,7 +1092,7 @@ def create_app(*, manage_blackbox: bool = False):
             no_model = proc.returncode == NO_MODEL_EXIT
             return JSONResponse({"ok": False, "error": err or answer or "Blackbox chat failed.", "needs_model": no_model,
                                  "session_id": next_session_id}, status_code=409 if no_model else 500)
-        return {"ok": True, "answer": answer or "(no response)", "session_id": next_session_id}
+        return JSONResponse(*answer_payload(answer, err, next_session_id))   # 409 model_problem: no real answer
 
     @app.get("/api/findings")
     def findings(limit: int = Query(50, ge=1, le=500), offset: int = Query(0, ge=0)) -> Any:
