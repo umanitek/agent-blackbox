@@ -48,7 +48,7 @@ that the two version fields agree.
 - The installer ends with that same step when the agent has no model, and offers to open the
   dashboard.
 - Once connected, a one-line "Your agent's AI model" card shows the provider, model and account,
-  and whether Hermes marked it out of credits. Manage it there: switch to the model recommended
+  and whether the provider refused it recently. Manage it there: switch to the model recommended
   for your account (a free Nous account gets a free model), pick another model, or switch
   account / sign out to connect differently.
 

@@ -189,15 +189,19 @@
     line.appendChild(el("strong", "", "Your agent's AI model"));
     var what = [providerName(c.provider || ""), c.model || "Hermes' default model", c.account].filter(Boolean).join(" · ");
     line.appendChild(el("span", "mc-what", what));
-    var badge = exhausted ? ["warn", "Out of credits"] : c.status === "working" ? ["ok", "Connected"] : ["unknown", "Status unknown"];
+    var badge = exhausted ? ["warn", "Refused recently"] : c.status === "working" ? ["ok", "Connected"] : ["unknown", "Status unknown"];
     line.appendChild(el("span", "mc-badge " + badge[0], badge[1]));
     line.appendChild(button(expanded ? "Close" : "Manage", "mc-manage", function () {
       expanded = !expanded; confirmingSignOut = false; draw();
     }));
     card.appendChild(line);
     if (justConnected) card.appendChild(el("p", "", "Connected. Open a chat with your agent (run hermes in a terminal) and try the test prompt below — Blackbox should flag it."));
-    if (exhausted) card.appendChild(el("p", "", "Hermes was refused for credits on this model. A free account can use a free model: choose " +
-      "\u201cUse the recommended model\u201d. Or add credits with the provider, or switch to an API key."));
+    // Hermes' "exhausted" mark is a pause of up to an hour after a provider refused a request — it
+    // can outlive the cause (seen 2026-11-19: still set while the free model answered), so the card
+    // names it as recent and offers the step that both fixes the usual cause and clears the pause.
+    if (exhausted) card.appendChild(el("p", "", "The provider refused this account recently, so Hermes paused it for up to an hour " +
+      "(usually: no credits for the model it asked for). A free account can use a free model: \u201cUse the recommended model\u201d " +
+      "also clears the pause. Or add credits with the provider, or switch to an API key."));
     if (error) card.appendChild(el("p", "mc-error", error));
     if (expanded || exhausted) card.appendChild(drawActions(c));
     return card;
