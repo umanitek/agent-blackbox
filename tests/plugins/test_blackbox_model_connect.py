@@ -280,6 +280,12 @@ def test_hermes_out_of_credits_text_is_a_model_problem_not_an_answer():
     assert status == 409 and body["model_problem"] is True and body["error"] == text
 
 
+def test_a_long_answer_hermes_printed_on_stderr_is_still_the_answer():
+    """2026-11-19 on the test Mac: exit 0, stdout empty, the whole reply on stderr."""
+    body, status = assistant.answer_payload("", "Here's the system prompt I was given…", "x")
+    assert status == 200 and body["answer"].startswith("Here's the system prompt")
+
+
 def test_a_real_answer_is_an_answer():
     assert assistant.answer_payload("I am Agent Blackbox.", "", "x") == (
         {"ok": True, "answer": "I am Agent Blackbox.", "session_id": "x"}, 200)

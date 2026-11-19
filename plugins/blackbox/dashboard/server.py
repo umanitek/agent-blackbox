@@ -1078,7 +1078,7 @@ def create_app(*, manage_blackbox: bool = False):
                 cwd=str(attach.repo_root()),
                 text=True,
                 stdin=subprocess.DEVNULL, capture_output=True,
-                timeout=120, check=False
+                timeout=240, check=False   # a small free model answering with tool lookups is slow
             )
         except subprocess.TimeoutExpired:
             return JSONResponse({"ok": False, "error": "Blackbox took too long to answer."}, status_code=504)

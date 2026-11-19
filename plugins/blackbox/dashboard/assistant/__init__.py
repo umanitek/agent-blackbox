@@ -49,9 +49,13 @@ def parse_chat_session_id(text: str) -> str | None:
 def answer_payload(answer: str, err: str, session_id: Optional[str]) -> tuple[dict[str, Any], int]:
     """(body, HTTP status) for one finished assistant turn (exit status 0).
 
-    A real answer is 200. No answer, or Hermes' own out-of-credits text, is 409 with
+    A real answer — on stdout, or on stderr when stdout is empty — is 200. No answer, or Hermes'
+    own out-of-credits text, is 409 with
     ``model_problem: true`` and the reason in plain words, so the page offers the AI model card.
     """
-    if answer and not answer.startswith(MODEL_PROBLEM_PREFIXES):
-        return {"ok": True, "answer": answer, "session_id": session_id}, 200
-    return {"ok": False, "error": answer or err or NO_ANSWER, "model_problem": True, "session_id": session_id}, 409
+    # Hermes prints a long reply on stderr with exit status 0 (seen 2026-11-19: stdout empty, the
+    # whole answer on stderr), so a finished turn's text is whichever stream carries it.
+    text = answer or err
+    if text and not text.startswith(MODEL_PROBLEM_PREFIXES):
+        return {"ok": True, "answer": text, "session_id": session_id}, 200
+    return {"ok": False, "error": text or NO_ANSWER, "model_problem": True, "session_id": session_id}, 409
