@@ -17,6 +17,7 @@ and falls back to a plain YAML read-modify-write for standalone installs.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any, Callable, Iterable, NamedTuple
 
 from . import constants
@@ -267,6 +268,10 @@ def _persist(updates: dict[str, Any]) -> bool:
 
 @yaml_files.edits_config   # also for a direct caller; the lock is re-entrant
 def _persist_locked(updates: dict[str, Any]) -> bool:
+    # Blackbox's settings live in the machine's MAIN Hermes config for every profile
+    # (constants.hermes_root, 2026-11-19); a save made while a named profile runs goes there too.
+    if constants.hermes_root() != constants.hermes_home():
+        return _persist_yaml(constants.hermes_root() / "config.yaml", updates)
     try:
         from hermes_cli import config as hconfig
 
@@ -280,9 +285,13 @@ def _persist_locked(updates: dict[str, Any]) -> bool:
     except Exception as exc:
         logger.debug("blackbox.settings: hermes config write failed (%s); trying YAML", exc)
 
-    # Standalone fallback: plain YAML read-modify-write of the active home.
+    # Standalone fallback: plain YAML read-modify-write of the main home.
+    return _persist_yaml(constants.hermes_root() / "config.yaml", updates)
+
+
+def _persist_yaml(path: Path, updates: dict[str, Any]) -> bool:
+    """Plain YAML read-modify-write of *path*'s Blackbox entry; False when it could not be saved."""
     try:
-        path = constants.hermes_home() / "config.yaml"
         data = yaml_files.load_for_edit(path)   # unreadable: the save fails, the file stays
         entry = _dig(data, _GEAR_KEYS)
         _apply(entry, updates)

@@ -2371,6 +2371,28 @@ print(blackbox["mode"])
 PYEOF
 }
 
+# Audit is the default (it records, never stops anything). With a terminal, the operator is asked
+# once, plainly, whether to block instead (2026-11-19, Amos: keep audit, ask at setup). No answer,
+# no terminal, or anything but yes keeps audit. BLACKBOX_MODE set by a script is never asked over.
+BLACKBOX_MODE_PROMPT_SECONDS="${BLACKBOX_MODE_PROMPT_SECONDS:-30}"
+ask_block_mode() {
+    local answer=""
+    if ! { exec 9<>/dev/tty; } 2>/dev/null; then
+        return 1
+    fi
+    step "Audit mode records what your agents do and flags threats, but never stops them."
+    step "Block mode stops the dangerous ones: protected files (~/.ssh, .env, keys), malicious packages,"
+    step "and secrets leaving this machine. Change it any time in the dashboard's settings."
+    printf "Turn on Block mode now? [y/N] (no in %ss) " "$BLACKBOX_MODE_PROMPT_SECONDS" >&9
+    IFS= read -r -t "$BLACKBOX_MODE_PROMPT_SECONDS" answer <&9 || answer=""
+    printf '\n' >&9
+    exec 9>&-
+    case "$answer" in
+        y|Y|yes|YES|Yes) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 configure_blackbox_mode() {
     heading "Blackbox mode"
     # An explicit BLACKBOX_MODE wins. Otherwise a re-run keeps the mode the operator
@@ -2380,6 +2402,9 @@ configure_blackbox_mode() {
     requested="$(printf '%s' "${BLACKBOX_MODE:-}" | tr '[:upper:]' '[:lower:]')"
     case "$requested" in audit|block) ;; *) requested="" ;; esac
     BLACKBOX_SELECTED_MODE="$(write_blackbox_mode "$requested")"
+    if [ -z "$requested" ] && [ "$BLACKBOX_SELECTED_MODE" = audit ] && ask_block_mode; then
+        BLACKBOX_SELECTED_MODE="$(write_blackbox_mode block)"
+    fi
     if [ -n "$BLACKBOX_SELECTED_MODE" ]; then
         ok "Blackbox runs in $BLACKBOX_SELECTED_MODE mode"
     else

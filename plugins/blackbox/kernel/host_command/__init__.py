@@ -17,7 +17,9 @@ Hermes' interactive chat and uses Hermes' own relaunch resolver for that.
 
 ``agent_model.py`` asks this same Hermes whether an agent has an AI model it can use
 (``agent_model_state``: ready / missing / unknown) and holds the one message and fix
-every surface shows when it has none.
+every surface shows when it has none. ``hermes_root.py`` asks Hermes for the machine's main home,
+where the one Blackbox for every profile keeps its rules, logs and settings (re-exported as
+``constants.hermes_root``).
 """
 
 from __future__ import annotations

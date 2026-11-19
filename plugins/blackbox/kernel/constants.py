@@ -16,6 +16,8 @@ import os
 from pathlib import Path
 from typing import Mapping
 
+from .host_command.hermes_root import hermes_root  # noqa: F401  — one Blackbox for every profile
+
 # The release number. plugin.yaml `version` and CHANGELOG.md match it (test_blackbox_versioning.py);
 # keep it a plain literal on one line: attach/plugin_copy.py reads it from installed copies as text.
 __version__ = "1.4.1"
@@ -354,15 +356,11 @@ def hermes_home() -> Path:
 
 
 def blackbox_home() -> Path:
-    """Return ``$BLACKBOX_HOME`` — defaults to ``$HERMES_HOME/blackbox``.
-
-    Created on demand by the callers that write into it (ruleset cache, audit
-    logs). An explicit ``BLACKBOX_HOME`` env var overrides the default.
-    """
+    """``$BLACKBOX_HOME``, else ``<main Hermes home>/blackbox`` — one folder for every profile."""
     env = os.environ.get("BLACKBOX_HOME")
     if env and env.strip():
         return Path(env).expanduser()
-    return hermes_home() / "blackbox"
+    return hermes_root() / "blackbox"
 
 
 def blackbox_dkg_home() -> Path:

@@ -82,8 +82,11 @@ _STOPS_SERVICE = re.compile(
 
 
 def _guarded_places() -> tuple[str, ...]:
-    """Absolute places an agent may not write: Hermes's config files, Blackbox's plugin and data folders."""
-    home = str(constants.hermes_home())
+    """Absolute places an agent may not write: Hermes's config files, Blackbox's plugin and data folders.
+
+    Anchored at the machine's MAIN Hermes home (2026-11-19): an agent in a named profile must not
+    write the main config either — it holds the one set of Blackbox settings every profile uses."""
+    home = str(constants.hermes_root())
     return (os.path.join(home, "config.yaml"), os.path.join(home, "profiles", "*", "config.yaml"),
             os.path.join(home, "plugins", "blackbox"), os.path.join(home, "profiles", "*", "plugins", "blackbox"),
             os.path.join(home, "desktop-plugins", "blackbox"), str(constants.blackbox_home()))

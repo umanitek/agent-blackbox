@@ -34,6 +34,7 @@ from .findings import (
     record_file_access,
 )
 from .private_ka import node_is_local, write_private_audit_ka
+from .profile_logs import fold_profile_logs
 from .local_graph import local_audit_graph
 from .log_store import in_sandbox_run, sandbox_run
 from .redaction import redact, sanitize_text
@@ -53,6 +54,7 @@ __all__ = [
     "count_audit",
     "count_findings",
     "erase_share_records",
+    "fold_profile_logs",
     "in_sandbox_run",
     "local_active_frameworks",
     "local_audit_graph",

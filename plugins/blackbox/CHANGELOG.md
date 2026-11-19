@@ -47,6 +47,8 @@ that the two version fields agree.
   never kept or logged by Blackbox. The panel goes away once the agent has a model.
 - The installer ends with that same step when the agent has no model, and offers to open the
   dashboard.
+- The installer asks once whether to turn on Block mode (Audit stays the default; no terminal or
+  no answer keeps Audit).
 - Once connected, a one-line "Your agent's AI model" card shows the provider, model and account,
   and whether the provider refused it recently. Manage it there: switch to the model recommended
   for your account (a free Nous account gets a free model), pick another model, or switch
@@ -54,6 +56,13 @@ that the two version fields agree.
 
 ### Fixed
 
+- Every Hermes profile is protected the same way. A profile other than the main one — Blackbox's
+  own assistant included — used to keep its own Blackbox folder: no verified threat rules (only
+  the general patterns), its own copy of the settings (dashboard changes and Block mode never
+  reached it), and logs the dashboard never showed. Now one Blackbox serves every profile: the
+  same rules, the same settings, one log, and each finding is labelled with its profile
+  ("Blackbox assistant" for the assistant). Old per-profile logs join the shared log when the
+  dashboard starts, and an agent in any profile can no longer edit the main Hermes config.
 - The "Test Blackbox" card no longer asks you to paste the test prompt into a chat that cannot
   run: with no model connected it says to connect one first.
 - The Blackbox assistant answers "connect a model first" (with a button to the panel) instead of

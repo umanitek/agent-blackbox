@@ -3983,6 +3983,18 @@
     if (FW_LOGO[k]) return '<img class="fw-logo" src="' + FW_LOGO[k] + '" alt="" aria-hidden="true" />';
     return FW_ICONS[k]; }
   function fwColor(fw) { return FW_COLOR[fwKey(fw)]; }
+  // One Blackbox serves every Hermes profile on the machine (2026-11-19), so a row says which
+  // one: a named profile's workspace is ~/.hermes/profiles/<name>; Blackbox's own assistant runs
+  // in the "agent-blackbox" profile. The main profile keeps the plain framework name.
+  function profileOf(workspace) {
+    var m = /[\\/]profiles[\\/]([^\\/]+)[\\/]?$/.exec(String(workspace || ""));
+    return m ? m[1] : "";
+  }
+  function agentName(fw, workspace) {
+    var profile = profileOf(workspace);
+    if (profile === "agent-blackbox") return "Blackbox assistant";
+    return profile ? fwLabel(fw) + " \u00b7 " + profile : fwLabel(fw);
+  }
   function fwLabel(fw) {
     fw = String(fw || "").toLowerCase();
     if (fw === "hermes") return "Hermes";
@@ -5919,7 +5931,7 @@
     var rows = [];
     function add(k, v, mono) { if (v !== undefined && v !== null && String(v) !== "") rows.push([k, String(v), !!mono]); }
     add("Detected", fmtDateFull(f.time || f.ts || f.timestamp));
-    add("Agent", fwLabel(f.framework));
+    add("Agent", agentName(f.framework, f.workspace));
     add("Tool", f.tool_name || f.tool, true);
     add("Trigger", EVENT_LABEL[String(f.event || "")] || f.event);
     // Every time this machine recorded the threat (each is a separate detection), with when.
@@ -6852,9 +6864,9 @@
   }
 
   // Shared row renderer — Time · Agent · Severity · Type · Reasoning.
-  function agentTag(fw) {
+  function agentTag(fw, workspace) {
     return '<span class="agent-tag" style="--fw:' + fwColor(fw) + '">' +
-      '<span class="agent-tag-ico">' + fwIcon(fw) + '</span>' + esc(fwLabel(fw)) + '</span>';
+      '<span class="agent-tag-ico">' + fwIcon(fw) + '</span>' + esc(agentName(fw, workspace)) + '</span>';
   }
   function typeTag(cat) {
     var ck = catKey(cat);
@@ -6879,7 +6891,7 @@
     return '<tr class="row-link' + (f.sandbox ? ' is-sandbox' : '') + '" data-idx="' + i + '" tabindex="0" role="button" ' +
       'aria-label="' + esc("View details: " + (f.title || f.evidence || "finding")) + '">' +
       '<td class="col-time">' + fmtTime(f.time || f.ts || f.timestamp) + '</td>' +
-      '<td>' + agentTag(f.framework) + '</td>' +
+      '<td>' + agentTag(f.framework, f.workspace) + '</td>' +
       '<td><span class="pill ' + sev + '">' + esc(sev) + '</span></td>' +
       '<td>' + shieldsUI.findingMark(f) + typeTag(f.category || f.type) + (f.sandbox ? ' <span class="sb-tag">SANDBOX</span>' : '') + '</td>' +
       '<td>' + reasonCell(f) + '</td>' +
@@ -7082,7 +7094,7 @@
     var fw = entry.framework || (entry.finding && entry.finding.framework) || "hermes";
     var agentCell = '<span class="au-agent">' +
       fwIcon(fw) +
-      '<span>' + esc(fwLabel(fw)) + '</span>' +
+      '<span>' + esc(agentName(fw, entry.workspace)) + '</span>' +
       '</span>';
     var eventCell = '<span class="au-event ev-' + grp + '">' + esc(evtLabel(entry.event)) + '</span>' +
       (entry.sandbox ? ' <span class="sb-tag">SANDBOX</span>' : '');

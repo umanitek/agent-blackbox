@@ -180,7 +180,15 @@ class BlackboxConfig:
 
 
 def _blackbox_entry() -> dict[str, Any]:
-    """Return the ``plugins.entries.blackbox`` mapping, or ``{}`` on any error."""
+    """Return the ``plugins.entries.blackbox`` mapping, or ``{}`` on any error.
+
+    Read from the machine's MAIN Hermes config (:func:`constants.hermes_root`) even while a named
+    profile runs: one set of Blackbox settings protects every profile, and what the dashboard
+    saves reaches them all (a profile used to keep the copy made when it was created).
+    """
+    root = constants.hermes_root()
+    if root != constants.hermes_home():
+        return yaml_files.blackbox_entry(yaml_files.load_yaml(root / "config.yaml"))
     try:
         from hermes_cli.config import load_config
 
