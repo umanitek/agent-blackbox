@@ -43,11 +43,11 @@ READ_ROUTES = re.compile(
     r"|shields/[a-z0-9_-]{1,40}/(?:content|attacks|graph)\.json")
 #: Dashboard routes the Desktop page may change through (POST).
 WRITE_ROUTES = re.compile(r"api/(?:settings|agents/protection|agents/rescan|sync|playground/run|playground/wallets/run|blackbox-chat)")
-#: Changes that do real work before they answer: an assistant turn (up to 120 s on the dashboard) and a
+#: Changes that do real work before they answer: an assistant turn (up to 240 s on the dashboard) and a
 #: Playground test (up to ~90 s waiting for its share). Everything else answers within _TIMEOUT_S.
 LONG_ROUTES = re.compile(r"api/(?:blackbox-chat|playground/run|playground/wallets/run)")
 _TIMEOUT_S = 15.0
-_LONG_TIMEOUT_S = 130.0
+_LONG_TIMEOUT_S = 250.0
 _MAX_BODY_BYTES = 4_000_000
 
 

@@ -1713,6 +1713,8 @@
     line-height: 1.06;
     letter-spacing: -0.035em;
   }
+  .first-model-note { color: var(--text); margin-top: 10px; }
+  .first-model-link { border: 0; background: none; padding: 0; color: var(--signal); font: inherit; font-weight: 600; text-decoration: underline; cursor: pointer; }
   .first-detection-lede {
     max-width: 500px;
     margin: 0;
@@ -3047,6 +3049,9 @@
     <!-- Each shield's "New" banner, drawn by static/shields.js from /api/shields -->
     <div id="shield-banners"></div>
 
+    <!-- "Connect your agent to an AI model", drawn by model-connect.js from /api/agent-model (only while the agent has none) -->
+    <div id="model-connect-root" hidden></div>
+
     <!-- Sandbox mode's Playground, drawn by playground.js from /api/playground (shown only in sandbox mode) -->
     <div id="playground-root" hidden></div>
 
@@ -3264,6 +3269,7 @@
             <div class="first-eyebrow">Your first detection</div>
             <h3>Test Blackbox.</h3>
             <p class="first-detection-lede">Copy this into a protected chat. Blackbox should flag it as prompt injection.</p>
+            <p class="first-detection-lede first-model-note" id="first-detection-model-note" hidden>First connect your agent to an AI model: Blackbox checks each prompt as your agent sends it to its model, and with no model connected nothing is sent. <button type="button" class="first-model-link" id="first-detection-model-open">Connect a model</button></p>
           </div>
           <div class="first-detection-action">
             <div class="first-action-head">
@@ -3361,6 +3367,7 @@
 <!-- Vendored (same-origin) force-graph UMD bundle — defines window.ForceGraph. -->
 <script src="./vendor/force-graph.min.js"></script>
 <script src="./shields.js"></script>
+<script src="./model-connect.js"></script>
 <script src="./playground.js"></script>
 <script>
 (function () {
@@ -3976,6 +3983,18 @@
     if (FW_LOGO[k]) return '<img class="fw-logo" src="' + FW_LOGO[k] + '" alt="" aria-hidden="true" />';
     return FW_ICONS[k]; }
   function fwColor(fw) { return FW_COLOR[fwKey(fw)]; }
+  // One Blackbox serves every Hermes profile on the machine (2026-11-19), so a row says which
+  // one: a named profile's workspace is ~/.hermes/profiles/<name>; Blackbox's own assistant runs
+  // in the "agent-blackbox" profile. The main profile keeps the plain framework name.
+  function profileOf(workspace) {
+    var m = /[\\/]profiles[\\/]([^\\/]+)[\\/]?$/.exec(String(workspace || ""));
+    return m ? m[1] : "";
+  }
+  function agentName(fw, workspace) {
+    var profile = profileOf(workspace);
+    if (profile === "agent-blackbox") return "Blackbox assistant";
+    return profile ? fwLabel(fw) + " \u00b7 " + profile : fwLabel(fw);
+  }
   function fwLabel(fw) {
     fw = String(fw || "").toLowerCase();
     if (fw === "hermes") return "Hermes";
@@ -5912,7 +5931,7 @@
     var rows = [];
     function add(k, v, mono) { if (v !== undefined && v !== null && String(v) !== "") rows.push([k, String(v), !!mono]); }
     add("Detected", fmtDateFull(f.time || f.ts || f.timestamp));
-    add("Agent", fwLabel(f.framework));
+    add("Agent", agentName(f.framework, f.workspace));
     add("Tool", f.tool_name || f.tool, true);
     add("Trigger", EVENT_LABEL[String(f.event || "")] || f.event);
     // Every time this machine recorded the threat (each is a separate detection), with when.
@@ -6845,9 +6864,9 @@
   }
 
   // Shared row renderer — Time · Agent · Severity · Type · Reasoning.
-  function agentTag(fw) {
+  function agentTag(fw, workspace) {
     return '<span class="agent-tag" style="--fw:' + fwColor(fw) + '">' +
-      '<span class="agent-tag-ico">' + fwIcon(fw) + '</span>' + esc(fwLabel(fw)) + '</span>';
+      '<span class="agent-tag-ico">' + fwIcon(fw) + '</span>' + esc(agentName(fw, workspace)) + '</span>';
   }
   function typeTag(cat) {
     var ck = catKey(cat);
@@ -6872,7 +6891,7 @@
     return '<tr class="row-link' + (f.sandbox ? ' is-sandbox' : '') + '" data-idx="' + i + '" tabindex="0" role="button" ' +
       'aria-label="' + esc("View details: " + (f.title || f.evidence || "finding")) + '">' +
       '<td class="col-time">' + fmtTime(f.time || f.ts || f.timestamp) + '</td>' +
-      '<td>' + agentTag(f.framework) + '</td>' +
+      '<td>' + agentTag(f.framework, f.workspace) + '</td>' +
       '<td><span class="pill ' + sev + '">' + esc(sev) + '</span></td>' +
       '<td>' + shieldsUI.findingMark(f) + typeTag(f.category || f.type) + (f.sandbox ? ' <span class="sb-tag">SANDBOX</span>' : '') + '</td>' +
       '<td>' + reasonCell(f) + '</td>' +
@@ -7075,7 +7094,7 @@
     var fw = entry.framework || (entry.finding && entry.finding.framework) || "hermes";
     var agentCell = '<span class="au-agent">' +
       fwIcon(fw) +
-      '<span>' + esc(fwLabel(fw)) + '</span>' +
+      '<span>' + esc(agentName(fw, entry.workspace)) + '</span>' +
       '</span>';
     var eventCell = '<span class="au-event ev-' + grp + '">' + esc(evtLabel(entry.event)) + '</span>' +
       (entry.sandbox ? ' <span class="sb-tag">SANDBOX</span>' : '');
@@ -7382,6 +7401,11 @@
     var tag = $("first-detection-tag");
     if (label && !$("first-detection-copy").classList.contains("copied")) label.textContent = "Copy prompt";
     if (tag) tag.textContent = firstDetectionReady ? "Graph-backed" : "Syncing graph";
+    // No AI model connected (model-connect.js): the test cannot run yet, so the card says what to do first.
+    var noModel = !!(window.blackboxAgentModel && window.blackboxAgentModel.state() === "missing");
+    var note = $("first-detection-model-note");
+    if (note) note.hidden = !noModel;
+    if (tag && noModel) tag.textContent = "Needs a model";
   }
 
   function checkFirstDetectionReadiness() {
@@ -7432,6 +7456,11 @@
     done();
   }
 
+  if (window.blackboxAgentModel) window.blackboxAgentModel.onChange(renderFirstDetectionReadiness);
+  var firstDetectionModelOpen = $("first-detection-model-open");
+  if (firstDetectionModelOpen) firstDetectionModelOpen.addEventListener("click", function () {
+    if (window.blackboxAgentModel) window.blackboxAgentModel.open();
+  });
   var firstDetectionCopy = $("first-detection-copy");
   if (firstDetectionCopy) firstDetectionCopy.addEventListener("click", copyFirstDetectionPrompt);
 
@@ -8361,6 +8390,36 @@
       toast.className = "toast " + (kind || "ok");
     }, durationMs || 3200);
   }
+  // The assistant answered "no AI model yet" (POST /api/blackbox-chat → needs_model): one button
+  // takes the person to the connect panel at the top of the page (model-connect.js).
+  // A model that answered nothing or was refused for credits (model_problem) opens the card's
+  // actions instead: the recommended model, another model, switching account.
+  function chatOfferModelConnect(problem) {
+    var log = $("chat-log");
+    if (!log || !window.blackboxAgentModel) return;
+    var button = document.createElement("button");
+    button.type = "button";
+    button.className = "chat-prompt";
+    button.textContent = problem ? "Fix the AI model connection" : "Connect a model now";
+    button.addEventListener("click", function () {
+      closeChat();
+      window.blackboxAgentModel.refresh().then(function () { window.blackboxAgentModel.open(problem); });
+    });
+    log.appendChild(button);
+    log.scrollTop = log.scrollHeight;
+  }
+  // One assistant turn. A remembered conversation this machine no longer has (Hermes answers
+  // "Session not found" — after a reinstall, or a browser that remembers another machine on the
+  // same address, seen 2026-11-19) is forgotten and the question asked again in a new one.
+  function askAssistant(text) {
+    var remembered = chatSessionId();
+    return postJSON("/api/blackbox-chat", { message: text, session_id: remembered }).then(function (res) {
+      var error = String((res.body && res.body.error) || "");
+      if (!remembered || res.ok || error.indexOf("Session not found") === -1) return res;
+      try { localStorage.removeItem(CHAT_SESSION_KEY); } catch (_) {}
+      return postJSON("/api/blackbox-chat", { message: text, session_id: "" });
+    });
+  }
   function setChatBusy(busy) {
     chatBusy = !!busy;
     var send = $("chat-send");
@@ -8384,13 +8443,15 @@
       pending.textContent = CHAT_WAIT_MESSAGES[waitIndex];
     }, 2600);
     setChatBusy(true);
-    postJSON("/api/blackbox-chat", { message: text, session_id: chatSessionId() }).then(function (res) {
+    askAssistant(text).then(function (res) {
       var body = res.body || {};
       clearInterval(waitTimer);
       if (body.session_id) saveChatSessionId(body.session_id);
       if (pending && pending.parentNode) pending.parentNode.removeChild(pending);
       if (res.ok && body.ok) {
         return chatType("blackbox", body.answer || "(no response)");
+      } else if (body.needs_model || body.model_problem) {
+        return chatType("blackbox", body.error).then(function () { chatOfferModelConnect(!!body.model_problem); });
       } else {
         return chatType("blackbox", body.error || ("Blackbox chat failed (HTTP " + res.status + ")."));
       }

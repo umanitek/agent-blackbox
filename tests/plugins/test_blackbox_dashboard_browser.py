@@ -118,6 +118,12 @@ def fixture_app(monkeypatch, tmp_path):
     rs.ioc = {"ioc:ip:198.51.100.9": {"identifier": "ioc:ip:198.51.100.9", "source": "public", "severity": "high",
                                        "name": "known C2 endpoint", "category": "ioc"}}
     monkeypatch.setattr(community_tier.community, "ensure_community_subscription", lambda client, cfg: None)
+    # The agent's AI model, as Hermes would answer it — fixed, so the page does not wait on a real
+    # Hermes probe (and the model card does not appear part-way through a browser sweep).
+    from plugins.blackbox import model_connect
+    monkeypatch.setattr(model_connect, "state", lambda: "ready")
+    monkeypatch.setattr(model_connect, "connection", lambda run: {"provider": "nous", "model": "fixture/free-model",
+                                                                    "account": "fixture", "status": "working"})
     community_tier.apply_community_tier(rs, node(), cfg, prior)
     rs.synced_at = time.time() - 120
     assert rs.community

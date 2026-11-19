@@ -65,7 +65,7 @@ def setup_cli(parser: argparse.ArgumentParser) -> None:
     add_curate_parser(sub, compiled_ruleset=lambda cfg: ruleset.peek(cfg))
     dash = sub.add_parser("dashboard", help="Start the local Blackbox dashboard")
     dash.add_argument("--port", type=int, help="Override dashboard port")
-    dash.set_defaults(func=cmd_dashboard)
+    dash.set_defaults(func=_cmd_dashboard)
 
     setup_llm = sub.add_parser("setup-llm", help="Configure the optional LLM reviewer (provider/model/key)")
     setup_llm.add_argument("--provider", choices=["openai", "anthropic"], help="Skip the prompt: set provider")
@@ -83,6 +83,13 @@ def setup_cli(parser: argparse.ArgumentParser) -> None:
     )
     setup_llm.add_argument("--disable", action="store_true", help="Turn the LLM reviewer off and exit")
     setup_llm.set_defaults(func=cmd_setup_llm)
+
+
+def _cmd_dashboard(args: argparse.Namespace) -> int:
+    """Start the dashboard — first folding logs a Hermes profile kept in its own folder (before one
+    Blackbox served every profile, 2026-11-19) into the shared ones, so the page shows them."""
+    audit.fold_profile_logs()
+    return cmd_dashboard(args)
 
 
 def _add_sync_parser(sub) -> None:

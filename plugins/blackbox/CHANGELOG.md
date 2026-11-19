@@ -38,6 +38,55 @@ that the two version fields agree.
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-11-19
+
+### Added
+
+- The dashboard now says when your agent has no AI model connected (a fresh install has none:
+  the agent cannot chat, so no prompt reaches Blackbox to check) and connects one right there —
+  a free Nous account (you approve on Nous's site; the dashboard shows the link and code) or your
+  own API key (OpenRouter, Anthropic, OpenAI, Google AI Studio), handed straight to Hermes and
+  never kept or logged by Blackbox. The panel goes away once the agent has a model.
+- The installer ends with that same step when the agent has no model, and offers to open the
+  dashboard.
+- The installer asks once whether to turn on Block mode (Audit stays the default; no terminal or
+  no answer keeps Audit).
+- A status dot in the top bar shows the agent's AI model at a glance: green connected, amber
+  refused recently, red none — with one slim line on the page until it is connected. Click it for
+  the account and model, the model recommended for your account (a free Nous account gets a free
+  model), another model, or to switch account / sign out; every change says what it did. While
+  you sign in it shows a small spinner — waiting for your approval on Nous's page, then connecting
+  the account — and a short note says when it is done.
+
+### Fixed
+
+- Every Hermes profile is protected the same way. A profile other than the main one — Blackbox's
+  own assistant included — used to keep its own Blackbox folder: no verified threat rules (only
+  the general patterns), its own copy of the settings (dashboard changes and Block mode never
+  reached it), and logs the dashboard never showed. Now one Blackbox serves every profile: the
+  same rules, the same settings, one log, and each finding is labelled with its profile
+  ("Blackbox assistant" for the assistant). Old per-profile logs join the shared log when the
+  dashboard starts, and an agent in any profile can no longer edit the main Hermes config.
+- The "Test Blackbox" card no longer asks you to paste the test prompt into a chat that cannot
+  run: with no model connected it says to connect one first.
+- The Blackbox assistant answers "connect a model first" (with a button to the panel) instead of
+  Hermes' raw setup text, and always uses the same model as your agent (it used to keep the
+  settings it was first made with).
+- After a free Nous sign-in the agent now lands on a free model; it used to land on a paid one
+  and every chat was refused for credits.
+- The assistant no longer shows Hermes' "Resumed session" notice or an out-of-credits message as
+  if it were its answer: it says the model gave no answer and offers to fix the connection.
+- The assistant starts a new conversation by itself when the one it remembered is gone (after a
+  reinstall), instead of answering "Session not found".
+- The assistant gets a short, current summary of Blackbox's state with every question (mode, rules,
+  last refresh, protected agents, newest findings), so it answers common questions straight away
+  instead of searching — and a finding's flagged text is never in it. When the assistant reads
+  Blackbox's own findings back, an old finding is no longer flagged a second time; anything new in
+  what it read, or in what you type, still is, and your own agents still flag every repeat. With a free model the AI model card says it is
+  a small model and how to get sharper answers.
+- The Playground's four send-a-threat tests no longer show as buttons that never respond while
+  Community sharing is off: it says why and opens the setting.
+
 ## [1.4.1] - 2026-11-13
 
 ### Fixed
@@ -366,7 +415,8 @@ The first version in the Hermes plugin catalog (commit `7d697683`, added by Herm
 in NousResearch/hermes-agent#140529). Its `plugin.yaml` said 1.0.0 while Blackbox's own code and
 dashboard reported 1.1.0; 1.1.0 is therefore skipped, so no two different builds share a number.
 
-[Unreleased]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.4.1...main
+[Unreleased]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.5.0...main
+[1.5.0]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.4.1...blackbox-v1.5.0
 [1.4.1]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.4.0...blackbox-v1.4.1
 [1.4.0]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.3.0...blackbox-v1.4.0
 [1.3.0]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.2.0...blackbox-v1.3.0

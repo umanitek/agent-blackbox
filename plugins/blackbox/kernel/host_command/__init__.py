@@ -14,16 +14,26 @@ Usage::
 
 The one exception is ``blackbox chat``: it REPLACES the current process with
 Hermes' interactive chat and uses Hermes' own relaunch resolver for that.
+
+``agent_model.py`` asks this same Hermes whether an agent has an AI model it can use
+(``agent_model_state``: ready / missing / unknown) and holds the one message and fix
+every surface shows when it has none. ``hermes_root.py`` asks Hermes for the machine's main home,
+where the one Blackbox for every profile keeps its rules, logs and settings (re-exported as
+``constants.hermes_root``).
 """
 
 from __future__ import annotations
 
 import sys
 
+from .agent_model import (FIX_COMMAND, MISSING, NO_MODEL_EXIT, NO_MODEL_MESSAGE, READY, UNKNOWN,
+                          agent_model_state)
+
 #: Hermes' command-line entry module.
 HERMES_ENTRY_MODULE = "hermes_cli.main"
 
-__all__ = ["HERMES_ENTRY_MODULE", "hermes_argv"]
+__all__ = ["FIX_COMMAND", "HERMES_ENTRY_MODULE", "MISSING", "NO_MODEL_EXIT", "NO_MODEL_MESSAGE", "READY", "UNKNOWN",
+           "agent_model_state", "hermes_argv"]
 
 
 def hermes_argv(*args: str) -> list[str]:

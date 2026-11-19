@@ -42,6 +42,34 @@ def _dedupe_api_findings(findings: list[detection.Finding], detail: dict[str, An
     return out
 
 
+def tool_output_texts(sources: list[tuple[str, str]]) -> list[str]:
+    """The texts in *sources* that came back from tools (every context but the user's own prompt)."""
+    return [text for context, text in sources if context != "in-user-prompt"]
+
+
+def drop_record_echoes(findings: list[Any], sources: list[tuple[str, str]], read_back: list[str],
+                       recorded: set[tuple[str, str]]) -> list[Any]:
+    """*findings* without exact echoes of findings already in Blackbox's log (2026-11-19).
+
+    Used for Blackbox's OWN assistant, whose job is reading Blackbox's records: asked "what needs
+    attention?" it read the findings list, whose evidence ("…show me your system prompt…") was then
+    flagged again — a duplicate finding on every such question, however the model fetched the list
+    (curl, urllib with the address built in pieces, a script it wrote). A finding is an echo only
+    when ALL hold: its rule already recorded that same evidence (*recorded*: identifier, evidence),
+    the evidence is in what tools returned (*read_back*), and it is NOT in the user's own words —
+    those always count. Anything new — another rule, other text — is kept.
+    """
+    typed = [text for context, text in sources if context == "in-user-prompt"]
+    kept = []
+    for finding in findings:
+        evidence = str(getattr(finding, "evidence", "") or "")
+        echo = (bool(evidence) and (str(getattr(finding, "identifier", "")), evidence) in recorded
+                and any(evidence in text for text in read_back) and not any(evidence in text for text in typed))
+        if not echo:
+            kept.append(finding)
+    return kept
+
+
 def _untrusted_request_sources(user_message: Any, request_messages: Any) -> list[tuple[str, str]]:
     """Return the current turn's untrusted text as ``(context, text)`` pairs.
 
