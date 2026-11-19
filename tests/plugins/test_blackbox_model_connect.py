@@ -190,7 +190,7 @@ class _FakeChild:
     def poll(self):
         return None if not self.terminated else -15
 
-    def wait(self):
+    def wait(self, timeout=None):   # the real Popen.wait signature: the code passes a timeout
         return self.returncode
 
     def terminate(self):
@@ -233,7 +233,7 @@ def test_a_nous_sign_in_lands_on_the_recommended_model(monkeypatch):
 def test_nous_sign_in_waits_with_the_link_and_code():
     gate = threading.Event()
     child = _FakeChild(_HERMES_OUTPUT)
-    child.wait = lambda: (gate.wait(5), 0)[1]
+    child.wait = lambda timeout=None: (gate.wait(5), 0)[1]
     flow = sign_in.NousSignIn(lambda: True, popen=lambda argv, **kw: child)
     flow.start()
     for _ in range(200):
