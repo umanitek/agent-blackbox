@@ -54,7 +54,8 @@ that the two version fields agree.
 - Once connected, a one-line "Your agent's AI model" card shows the provider, model and account,
   and whether the provider refused it recently. Manage it there: switch to the model recommended
   for your account (a free Nous account gets a free model), pick another model, or switch
-  account / sign out to connect differently.
+  account / sign out to connect differently. The card says "Checking with Hermes…" until it
+  knows, and every change says what it did.
 
 ### Fixed
 
@@ -74,6 +75,8 @@ that the two version fields agree.
   and every chat was refused for credits.
 - The assistant no longer shows Hermes' "Resumed session" notice or an out-of-credits message as
   if it were its answer: it says the model gave no answer and offers to fix the connection.
+- The assistant starts a new conversation by itself when the one it remembered is gone (after a
+  reinstall), instead of answering "Session not found".
 - The Playground's four send-a-threat tests no longer show as buttons that never respond while
   Community sharing is off: it says why and opens the setting.
 

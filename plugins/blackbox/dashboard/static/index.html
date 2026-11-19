@@ -8408,6 +8408,18 @@
     log.appendChild(button);
     log.scrollTop = log.scrollHeight;
   }
+  // One assistant turn. A remembered conversation this machine no longer has (Hermes answers
+  // "Session not found" — after a reinstall, or a browser that remembers another machine on the
+  // same address, seen 2026-11-19) is forgotten and the question asked again in a new one.
+  function askAssistant(text) {
+    var remembered = chatSessionId();
+    return postJSON("/api/blackbox-chat", { message: text, session_id: remembered }).then(function (res) {
+      var error = String((res.body && res.body.error) || "");
+      if (!remembered || res.ok || error.indexOf("Session not found") === -1) return res;
+      try { localStorage.removeItem(CHAT_SESSION_KEY); } catch (_) {}
+      return postJSON("/api/blackbox-chat", { message: text, session_id: "" });
+    });
+  }
   function setChatBusy(busy) {
     chatBusy = !!busy;
     var send = $("chat-send");
@@ -8431,7 +8443,7 @@
       pending.textContent = CHAT_WAIT_MESSAGES[waitIndex];
     }, 2600);
     setChatBusy(true);
-    postJSON("/api/blackbox-chat", { message: text, session_id: chatSessionId() }).then(function (res) {
+    askAssistant(text).then(function (res) {
       var body = res.body || {};
       clearInterval(waitTimer);
       if (body.session_id) saveChatSessionId(body.session_id);

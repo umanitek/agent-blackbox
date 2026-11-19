@@ -18,7 +18,7 @@
   "use strict";
   var FAST_MS = 4000, SLOW_MS = 60000;
   var root = null, timer = null, last = null, busy = false, error = "", justConnected = false, drawn = "";
-  var expanded = false, confirmingSignOut = false;
+  var expanded = false, confirmingSignOut = false, notice = "";
   var listeners = [];
 
   var CSS = ".mc-panel{border:1px solid color-mix(in srgb,var(--signal,#FF4F00) 55%,transparent);border-radius:var(--radius,4px);padding:20px 22px;margin-top:28px;" +
@@ -85,7 +85,8 @@
     if (timer) window.clearTimeout(timer);
     // "unknown" is the first answer while Hermes is still being asked: ask again soon, so the panel
     // settles right after load instead of appearing (and moving the page) a minute later.
-    var fast = !last || last.state === "missing" || last.state === "unknown" || signingIn(last);
+    var fast = !last || last.state === "missing" || last.state === "unknown" || signingIn(last) ||
+      (last.state === "ready" && !(last.connection && last.connection.provider));   // card details still loading
     timer = window.setTimeout(refresh, fast ? FAST_MS : SLOW_MS);
   }
 
@@ -150,10 +151,14 @@
     box.appendChild(save);
   }
 
-  function act(request) {
-    busy = true; error = ""; draw();
+  // *done* (optional) turns a successful answer into the line the card shows next, so every
+  // change says what it did (2026-11-19: "Use the recommended model" on the model already in use
+  // changed nothing visible and read as broken).
+  function act(request, done) {
+    busy = true; error = ""; notice = ""; draw();
     request.then(function (res) {
       if (!res.ok || res.body.ok === false) error = res.body.error || res.body.reason || "That did not work.";
+      else if (done) notice = done(res.body);
     }, function (err) { error = (err && err.message) || "That did not work."; })
       .then(function () { busy = false; return refresh(); });
   }
@@ -164,7 +169,7 @@
     var nous = (last && last.nous) || {};
     var c = (last && last.connection) || {};
     return JSON.stringify([last && last.state, nous.status, nous.link, nous.code, nous.reason, error, busy, justConnected,
-      c.provider, c.model, c.account, c.status, expanded, confirmingSignOut]);
+      c.provider, c.model, c.account, c.status, expanded, confirmingSignOut, notice]);
   }
 
   function providerName(id) {
@@ -184,6 +189,14 @@
   // Manage opens what can change — the recommended model, another model, signing out to switch.
   function drawCard() {
     var c = (last && last.connection) || {};
+    if (!c.provider) {   // Hermes is still being asked: never show placeholder values as the answer
+      var waiting = el("section", "mc-card");
+      var row = el("div", "mc-line");
+      row.appendChild(el("strong", "", "Your agent's AI model"));
+      row.appendChild(el("span", "mc-what", "Checking with Hermes\u2026"));
+      waiting.appendChild(row);
+      return waiting;
+    }
     var exhausted = c.status === "exhausted";
     var card = el("section", "mc-card" + (exhausted ? " mc-warn" : ""));
     card.setAttribute("aria-label", "Your agent's AI model");
@@ -204,6 +217,7 @@
     if (exhausted) card.appendChild(el("p", "", "The provider refused this account recently, so Hermes paused it for up to an hour " +
       "(usually: no credits for the model it asked for). A free account can use a free model: \u201cUse the recommended model\u201d " +
       "also clears the pause. Or add credits with the provider, or switch to an API key."));
+    if (notice) card.appendChild(el("p", "", notice));
     if (error) card.appendChild(el("p", "mc-error", error));
     if (expanded || exhausted) card.appendChild(drawActions(c));
     return card;
@@ -216,7 +230,9 @@
       ? "Use the model Nous recommends for your account (a free account gets a free model)."
       : "Use the model Hermes recommends for " + providerName(c.provider || "") + "."));
     rec.appendChild(button(busy ? "Working…" : "Use the recommended model", "mc-main", function () {
-      act(post("/api/agent-model/recommended"));
+      act(post("/api/agent-model/recommended"), function (body) {
+        return "Now using " + (body.model || "the recommended model") + " \u2014 the model recommended for this account.";
+      });
     }));
     box.appendChild(rec);
     var pick = el("div", "mc-line");
@@ -224,7 +240,10 @@
     input.placeholder = "Another model, e.g. vendor/model:free"; input.setAttribute("aria-label", "Model name");
     input.spellcheck = false; input.autocomplete = "off";
     pick.appendChild(input);
-    pick.appendChild(button("Use this model", "", function () { act(post("/api/agent-model/model", { model: input.value })); }));
+    pick.appendChild(button("Use this model", "", function () {
+      var chosen = input.value.trim();
+      act(post("/api/agent-model/model", { model: chosen }), function () { return "Now using " + chosen + "."; });
+    }));
     box.appendChild(pick);
     var out = el("div");
     if (confirmingSignOut) {
