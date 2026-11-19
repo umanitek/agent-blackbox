@@ -16,7 +16,7 @@ import os
 from pathlib import Path
 from typing import Mapping
 
-from .host_command.hermes_root import hermes_root  # noqa: F401  — one Blackbox for every profile
+from .host_command.hermes_root import hermes_root  # re-exported: one Blackbox for every profile
 
 # The release number. plugin.yaml `version` and CHANGELOG.md match it (test_blackbox_versioning.py);
 # keep it a plain literal on one line: attach/plugin_copy.py reads it from installed copies as text.
