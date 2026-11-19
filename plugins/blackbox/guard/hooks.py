@@ -191,6 +191,12 @@ def on_pre_tool_call(
         return None
 
 
+def _is_blackbox_assistant() -> bool:
+    """True inside Blackbox's own assistant (its Hermes profile, ``constants.BLACKBOX_CHAT_PROFILE``)."""
+    home = constants.hermes_home()
+    return home.name == constants.BLACKBOX_CHAT_PROFILE and home.parent.name == "profiles"
+
+
 def _recorded_findings() -> set[tuple[str, str]]:
     """``(identifier, evidence)`` of the findings already in Blackbox's log (the log's own cache)."""
     rows = audit.read_findings(limit=1000)
@@ -267,9 +273,9 @@ def on_pre_api_request(**kwargs: Any) -> None:
         text = "\n".join(part for _, part in sources)   # the LLM reviewer's input
         findings = api_request._injection_by_source(sources, rs, cfg.discover) + detection.detect_model_request_secrets(sources)   # KI-381
         findings += injection_sites.injection_site_findings(findings, kwargs.get("request_messages"), rs)   # D8
-        own_records = api_request.own_record_texts(kwargs.get("request_messages"), cfg.dashboard_port)
-        if own_records:   # Blackbox's own findings read back: an old finding is not a new attack
-            findings = api_request.drop_record_echoes(findings, sources, own_records, _recorded_findings())
+        if _is_blackbox_assistant():   # it reads Blackbox's own findings back: an old one is not a new attack
+            findings = api_request.drop_record_echoes(findings, sources, api_request.tool_output_texts(sources),
+                                                      _recorded_findings())
         findings = reporting._flag_worthy(cfg, findings, shields.snapshot())
         detail = {
             "graph_read": graph_evidence,

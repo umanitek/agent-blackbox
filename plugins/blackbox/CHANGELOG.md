@@ -79,9 +79,9 @@ that the two version fields agree.
   reinstall), instead of answering "Session not found".
 - The assistant gets a short, current summary of Blackbox's state with every question (mode, rules,
   last refresh, protected agents, newest findings), so it answers common questions straight away
-  instead of searching — and a finding's flagged text is never in it. When the assistant (or any
-  agent) reads Blackbox's own findings or activity back, an old finding is no longer flagged a second
-  time; anything new in what it read, or in what you type, still is. With a free model the AI model card says it is
+  instead of searching — and a finding's flagged text is never in it. When the assistant reads
+  Blackbox's own findings back, an old finding is no longer flagged a second time; anything new in
+  what it read, or in what you type, still is, and your own agents still flag every repeat. With a free model the AI model card says it is
   a small model and how to get sharper answers.
 - The Playground's four send-a-threat tests no longer show as buttons that never respond while
   Community sharing is off: it says why and opens the setting.
