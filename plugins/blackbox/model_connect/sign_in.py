@@ -35,6 +35,8 @@ from ..kernel.redaction import redact_secret_values
 SIGN_IN_LIMIT_SECONDS = 17 * 60
 _LINK = re.compile(r"Open:\s*(https://\S+)")
 _CODE = re.compile(r"enter code:\s*([A-Za-z0-9-]{4,32})")
+#: How long Hermes may take to exit once its output has ended.
+_EXIT_WAIT_SECONDS = 30
 #: The last line of the child's output kept for a failure message (redacted, shortened).
 _REASON_CHARS = 240
 
@@ -117,7 +119,12 @@ class NousSignIn:
                     self._state["code"] = code.group(1)
                 if self._state.get("link") and self._state.get("code"):
                     self._state["status"] = "waiting"
-        code = proc.wait()
+        try:
+            code = proc.wait(timeout=_EXIT_WAIT_SECONDS)   # its output has ended: it is exiting
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=_EXIT_WAIT_SECONDS)
+            code = -9
         provider_set = code == 0 and self._after_sign_in()
         with self._lock:
             if self._proc is not proc:

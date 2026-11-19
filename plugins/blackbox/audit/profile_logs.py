@@ -39,12 +39,12 @@ def _time_of(line: str) -> float:
 
 def _merge(old: Path, shared: Path) -> int:
     """Merge *old* into *shared* by record time under the logs lock; how many records joined."""
-    joining = [line for line in old.read_text(encoding="utf-8", errors="replace").splitlines() if line.strip()]
+    joining = [line for line in old.read_text(encoding="utf-8-sig", errors="replace").splitlines() if line.strip()]
     if not joining:
         return 0
     shared.parent.mkdir(parents=True, exist_ok=True)
     with log_store._logs_lock(shared):
-        current = shared.read_text(encoding="utf-8", errors="replace").splitlines() if shared.exists() else []
+        current = shared.read_text(encoding="utf-8-sig", errors="replace").splitlines() if shared.exists() else []
         merged = sorted([line for line in current if line.strip()] + joining, key=_time_of)   # stable: equal times keep order
         atomic_write(shared, "\n".join(merged) + "\n")
     return len(joining)

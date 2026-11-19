@@ -29,5 +29,5 @@ def hermes_root() -> Path:
         from hermes_constants import get_default_hermes_root
 
         return Path(get_default_hermes_root(home=home))
-    except Exception:
+    except (ImportError, AttributeError, OSError, ValueError, TypeError):   # an older Hermes, or a home it cannot read
         return home

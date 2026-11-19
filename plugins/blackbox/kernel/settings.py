@@ -298,8 +298,8 @@ def _persist_yaml(path: Path, updates: dict[str, Any]) -> bool:
         _apply(entry, updates)
         yaml_files.dump_yaml(path, data)
         return True
-    except Exception as exc:  # pragma: no cover - fail open
-        logger.debug("blackbox.settings: YAML config write failed: %s", exc)
+    except Exception:  # pragma: no cover - fail open: a settings save never breaks its caller
+        logger.debug("blackbox.settings: YAML config write failed", exc_info=True)
         return False
 
 
