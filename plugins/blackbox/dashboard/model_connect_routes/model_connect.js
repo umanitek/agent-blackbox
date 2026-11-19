@@ -83,7 +83,9 @@
 
   function schedule() {
     if (timer) window.clearTimeout(timer);
-    var fast = last && (last.state === "missing" || signingIn(last));
+    // "unknown" is the first answer while Hermes is still being asked: ask again soon, so the panel
+    // settles right after load instead of appearing (and moving the page) a minute later.
+    var fast = !last || last.state === "missing" || last.state === "unknown" || signingIn(last);
     timer = window.setTimeout(refresh, fast ? FAST_MS : SLOW_MS);
   }
 

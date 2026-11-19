@@ -289,6 +289,7 @@ def _persist_locked(updates: dict[str, Any]) -> bool:
     return _persist_yaml(constants.hermes_root() / "config.yaml", updates)
 
 
+@yaml_files.edits_config   # re-entrant: _persist_locked already holds it
 def _persist_yaml(path: Path, updates: dict[str, Any]) -> bool:
     """Plain YAML read-modify-write of *path*'s Blackbox entry; False when it could not be saved."""
     try:
