@@ -11,7 +11,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { codeFileArgs, shellFileArgs, splitWords } from "../src/shellFiles.ts";
+import { codeFileArgs, shellFileArgs, splitWords, withNestedCommands } from "../src/shellFiles.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixture = JSON.parse(readFileSync(join(here, "..", "..", "..", "tests", "parity", "shell_files_fixtures.json"), "utf8"));
@@ -27,9 +27,13 @@ for (const { code, args } of fixture.code) {
   const got = codeFileArgs(code);
   if (!same(got, args)) failures.push({ code, expected: args, got });
 }
+for (const { command, read } of fixture.nested) {
+  const got = withNestedCommands(command);
+  if (got !== read) failures.push({ command, expectedRead: read, got });
+}
 if (failures.length) {
   console.error(JSON.stringify(failures, null, 1));
   console.error(`FAIL ${failures.length} mismatches`);
   process.exit(1);
 }
-console.log(`PASS ${fixture.commands.length + fixture.code.length} cases`);
+console.log(`PASS ${fixture.commands.length + fixture.code.length + fixture.nested.length} cases`);

@@ -10,8 +10,9 @@ match curated rules only.
 from __future__ import annotations
 
 import re
-import shlex
 from typing import Any, Optional
+
+from .paths.shell_words import _words as _command_words   # ONE way of splitting a command line
 
 # ---------------------------------------------------------------------------
 # Arg-shape normalization
@@ -120,11 +121,8 @@ _COMMAND_ENDS = frozenset({";", "&&", "||", "|", "&"})
 
 def _nested_code(command: str) -> list[str]:
     """The commands *command* hands to another shell: the word after a shell's ``-c``, and what
-    follows ``eval`` up to the end of that command. Empty when the line cannot be split."""
-    try:
-        words = shlex.split(command, posix=True)
-    except ValueError:
-        return []
+    follows ``eval`` up to the end of that command (split as every path check splits it)."""
+    words = _command_words(command)
     found: list[str] = []
     for position, word in enumerate(words):
         name = word.rsplit("/", 1)[-1].lower()

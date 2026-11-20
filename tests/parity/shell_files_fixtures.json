@@ -2104,6 +2104,52 @@
       "args": []
     }
   ],
+  "nested": [
+    {
+      "command": "sh -c 'cat ~/.ssh/id_rsa'",
+      "read": "sh -c 'cat ~/.ssh/id_rsa'\ncat ~/.ssh/id_rsa"
+    },
+    {
+      "command": "bash -lc \"cat ~/.ssh/id_rsa\"",
+      "read": "bash -lc \"cat ~/.ssh/id_rsa\"\ncat ~/.ssh/id_rsa"
+    },
+    {
+      "command": "/bin/zsh -c 'echo hi' && ls",
+      "read": "/bin/zsh -c 'echo hi' && ls\necho hi"
+    },
+    {
+      "command": "eval \"cat ~/.ssh/id_rsa\"; ls",
+      "read": "eval \"cat ~/.ssh/id_rsa\"; ls\ncat ~/.ssh/id_rsa"
+    },
+    {
+      "command": "bash -c \"sh -c 'cat ~/.ssh/id_rsa'\"",
+      "read": "bash -c \"sh -c 'cat ~/.ssh/id_rsa'\"\nsh -c 'cat ~/.ssh/id_rsa'\ncat ~/.ssh/id_rsa"
+    },
+    {
+      "command": "sh -c \"bash -c \\\"zsh -c 'dash -c ls'\\\"\"",
+      "read": "sh -c \"bash -c \\\"zsh -c 'dash -c ls'\\\"\"\nbash -c \"zsh -c 'dash -c ls'\"\nzsh -c 'dash -c ls'\ndash -c ls"
+    },
+    {
+      "command": "sh script.sh",
+      "read": "sh script.sh"
+    },
+    {
+      "command": "sh -x -c 'npm install some-package'",
+      "read": "sh -x -c 'npm install some-package'\nnpm install some-package"
+    },
+    {
+      "command": "echo eval is a word",
+      "read": "echo eval is a word\nis a word"
+    },
+    {
+      "command": "cat 'unbalanced",
+      "read": "cat 'unbalanced"
+    },
+    {
+      "command": "echo plain",
+      "read": "echo plain"
+    }
+  ],
   "protectedPaths": [
     "~/.ssh/*",
     ".env",
@@ -2436,6 +2482,42 @@
     {
       "tool": "exec",
       "args": {
+        "command": "sh -c 'cat ~/.ssh/id_rsa'"
+      },
+      "findings": [
+        {
+          "identifier": "fileaccess:exec:user-protected",
+          "evidence": "read path matching protected pattern ~/.ssh/*"
+        }
+      ]
+    },
+    {
+      "tool": "exec",
+      "args": {
+        "command": "bash -c \"sh -c 'cd ~/.ssh; cat id_rsa'\""
+      },
+      "findings": [
+        {
+          "identifier": "fileaccess:exec:user-protected",
+          "evidence": "read path matching protected pattern ~/.ssh/*"
+        }
+      ]
+    },
+    {
+      "tool": "exec",
+      "args": {
+        "command": "eval \"cat $HOME/.ssh/id_rsa\""
+      },
+      "findings": [
+        {
+          "identifier": "fileaccess:exec:user-protected",
+          "evidence": "read path matching protected pattern ~/.ssh/*"
+        }
+      ]
+    },
+    {
+      "tool": "exec",
+      "args": {
         "command": "cat .env.example"
       },
       "findings": []
@@ -2514,6 +2596,13 @@
       "tool": "exec",
       "args": {
         "command": "FOO=bar cat ./notes.txt"
+      },
+      "findings": []
+    },
+    {
+      "tool": "exec",
+      "args": {
+        "command": "sh -c 'echo hi'"
       },
       "findings": []
     }

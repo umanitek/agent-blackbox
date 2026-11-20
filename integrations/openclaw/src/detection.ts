@@ -25,7 +25,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { codeFileArgs, shellFileArgs } from "./shellFiles.js";
+import { codeFileArgs, shellFileArgs, withNestedCommands } from "./shellFiles.js";
 import {
   BlackboxSeverity,
   escalationIdentifier,
@@ -454,6 +454,11 @@ const MAX_SHAPE_SCAN = 8000;
  *   - anything else            → ""
  */
 export function commandFromArgs(toolName: string, args: unknown): string {
+  return withNestedCommands(rawCommandFromArgs(toolName, args));
+}
+
+/** The command as written, before the commands it hands to another shell are appended. */
+function rawCommandFromArgs(toolName: string, args: unknown): string {
   if (typeof args === "string") return args.slice(0, MAX_SHAPE_SCAN);
   if (args == null || typeof args !== "object" || Array.isArray(args)) return "";
   const obj = args as Record<string, unknown>;

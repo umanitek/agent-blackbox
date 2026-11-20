@@ -498,6 +498,42 @@ export function shellFileArgs(command: string): ShellFileArg[] {
   return out;
 }
 
+const NESTED_SHELLS = new Set(["sh", "bash", "zsh", "dash", "ksh", "fish"]);
+const NESTING_DEPTH = 3;
+const COMMAND_ENDS = new Set([";", "&&", "||", "|", "&"]);
+
+/** The commands `command` hands to another shell: the word after a shell's `-c`, and what follows `eval`. */
+function nestedCode(command: string): string[] {
+  const words = splitWords(command);
+  const found: string[] = [];
+  words.forEach((word, position) => {
+    const name = baseName(word);
+    if (NESTED_SHELLS.has(name)) {
+      for (let offset = position + 1; offset < words.length - 1; offset += 1) {
+        const option = words[offset]!;
+        if (!option.startsWith("-")) break;
+        if (!option.startsWith("--") && option.endsWith("c")) { found.push(words[offset + 1]!); break; }
+      }
+    } else if (name === "eval") {
+      const rest = words.slice(position + 1);
+      const end = rest.findIndex((each) => COMMAND_ENDS.has(each));
+      found.push(rest.slice(0, end === -1 ? rest.length : end).join(" "));
+    }
+  });
+  return found.filter((code) => code.trim());
+}
+
+/**
+ * `command` followed, one per line, by every command it hands to another shell (`sh -c '…'`,
+ * `bash -c`, `eval`), three shells deep — so every check sees a wrapped command as it sees any
+ * other. Port of Python `detection/shell_shapes.py::with_nested_commands`.
+ */
+export function withNestedCommands(command: string, depth = NESTING_DEPTH): string {
+  if (depth <= 0 || ![" -c", "c ", "eval"].some((marker) => command.includes(marker))) return command;
+  const inner = nestedCode(command).map((code) => withNestedCommands(code, depth - 1));
+  return inner.length ? [command, ...inner].join("\n") : command;
+}
+
 /** The paths a piece of `code` reads, for tools that run code directly (as `python3 -c CODE`). */
 export function codeFileArgs(code: string, language = "python"): ShellFileArg[] {
   return pathsInCode(language, code || "").map((arg) => fromFolder(arg, ""));

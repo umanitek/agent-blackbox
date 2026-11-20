@@ -1,4 +1,4 @@
-/* @umanitek/blackbox-openclaw — built from src/ by `npm run build`; do not edit. source sha256:f04a6ebcc0bb67f3f4d1ada3f2161ba062be422f582affd92b3000e2a1c4d43f */
+/* @umanitek/blackbox-openclaw — built from src/ by `npm run build`; do not edit. source sha256:410e2224404419ba49b832940a7641c93d3b47787ee0a7ced3f79b1867beb1e2 */
 
 // src/consent.ts
 import { readFileSync } from "node:fs";
@@ -626,6 +626,36 @@ function shellFileArgs(command) {
   for (const match of command.matchAll(HEREDOC)) keep(pathsInCode(match[1], match[4]));
   return out;
 }
+var NESTED_SHELLS = /* @__PURE__ */ new Set(["sh", "bash", "zsh", "dash", "ksh", "fish"]);
+var NESTING_DEPTH = 3;
+var COMMAND_ENDS = /* @__PURE__ */ new Set([";", "&&", "||", "|", "&"]);
+function nestedCode(command) {
+  const words = splitWords(command);
+  const found = [];
+  words.forEach((word, position) => {
+    const name = baseName(word);
+    if (NESTED_SHELLS.has(name)) {
+      for (let offset = position + 1; offset < words.length - 1; offset += 1) {
+        const option = words[offset];
+        if (!option.startsWith("-")) break;
+        if (!option.startsWith("--") && option.endsWith("c")) {
+          found.push(words[offset + 1]);
+          break;
+        }
+      }
+    } else if (name === "eval") {
+      const rest = words.slice(position + 1);
+      const end = rest.findIndex((each) => COMMAND_ENDS.has(each));
+      found.push(rest.slice(0, end === -1 ? rest.length : end).join(" "));
+    }
+  });
+  return found.filter((code) => code.trim());
+}
+function withNestedCommands(command, depth = NESTING_DEPTH) {
+  if (depth <= 0 || ![" -c", "c ", "eval"].some((marker2) => command.includes(marker2))) return command;
+  const inner = nestedCode(command).map((code) => withNestedCommands(code, depth - 1));
+  return inner.length ? [command, ...inner].join("\n") : command;
+}
 function codeFileArgs(code, language = "python") {
   return pathsInCode(language, code || "").map((arg) => fromFolder(arg, ""));
 }
@@ -1177,6 +1207,9 @@ var ESCALATION_SHAPES = new Set(SHELL_SHAPE_RULES.map(([shape]) => shape));
 var COMMAND_KEYS = ["command", "cmd", "shell", "script", "input"];
 var MAX_SHAPE_SCAN = 8e3;
 function commandFromArgs(toolName, args) {
+  return withNestedCommands(rawCommandFromArgs(toolName, args));
+}
+function rawCommandFromArgs(toolName, args) {
   if (typeof args === "string") return args.slice(0, MAX_SHAPE_SCAN);
   if (args == null || typeof args !== "object" || Array.isArray(args)) return "";
   const obj = args;
