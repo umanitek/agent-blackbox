@@ -53,6 +53,7 @@ import {
 import { DkgClient, DkgError } from "./dkgClient.js";
 import { recordEvent, recordFinding, type ConvTurn, type FindingContext, type FindingOutcome } from "./audit.js";
 import { VerdictClient, type RemoteFinding } from "./verdictClient.js";
+import { OUTAGE_MESSAGE, OWN_RULE, ownCoreTouched } from "./selfProtection.js";
 import { BlackboxConfig, categoryAllows, resolveConfig } from "./config.js";
 import { RulesetCache } from "./ruleset.js";
 import {
@@ -525,7 +526,7 @@ interface Judged {
  * Judge one tool call. Blackbox's own service is asked first — the same judgement a Hermes agent
  * gets (verified threat graph, shields, local overrides). When it cannot answer in time, the
  * plugin's built-in checks decide: detectAll + the protected paths, then policy (flagWorthy) and
- * the block rule (meetsBlock), as before.
+ * the block rule (meetsBlock), as before — plus the stand-in that keeps Blackbox's own core shut.
  */
 async function judgeToolCall(rt: BlackboxRuntime, toolName: string, params: Record<string, unknown>, ruleset: Ruleset): Promise<Judged> {
   const remote = await rt.verdicts.ask(toolName, params);
@@ -538,7 +539,27 @@ async function judgeToolCall(rt: BlackboxRuntime, toolName: string, params: Reco
   raw.push(...detectCustomFileAccess(toolName, params, rt.cfg.protectedPaths));
   const findings = flagWorthy(rt.cfg, raw);
   const blocking = rt.cfg.mode === "block" ? findings.filter((f) => meetsBlock(f, rt.cfg)) : [];
-  return { findings, blocking, message: "" };
+  // Blackbox's own core is refused in every mode. The full rule is the service's; while it is
+  // not answering, the stricter stand-in applies so an outage is not a window (selfProtection.ts).
+  const touched = ownCoreTouched(toolName, params, rt.cfg.dashboardUrl);
+  if (!touched) return { findings, blocking, message: "" };
+  const own = ownCoreFinding(toolName, touched);
+  return { findings: [...findings, own], blocking: [...blocking, own], message: OUTAGE_MESSAGE };
+}
+
+function ownCoreFinding(toolName: string, evidence: string): Finding {
+  return {
+    identifier: `fileaccess:${(toolName || "tool").trim().toLowerCase()}:${OWN_RULE}`,
+    category: "fileaccess",
+    severity: "critical",
+    title: "Change to Blackbox's own settings",
+    toolName,
+    matched: OWN_RULE,
+    evidence,
+    confirmed: false,
+    source: "custom",
+    fields: {},
+  };
 }
 
 // --- Hook handlers ---------------------------------------------------------

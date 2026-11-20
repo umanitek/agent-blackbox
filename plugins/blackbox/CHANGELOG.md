@@ -87,6 +87,23 @@ that the two version fields agree.
   a saved wallet list keeps the wallets you left unticked off, and guards every wallet it was
   never offered (before, those stayed off until you saved Settings again).
 
+
+### Security
+
+- **An agent cannot switch Blackbox off, in any mode.** An action that would change Blackbox's
+  settings, rules, logs or program files, stop its services, use its control page, or start an
+  agent with Blackbox's own variables changed is now refused in Audit mode too (before, Audit mode
+  only flagged it, so an agent could turn the guard off and carry on). Everything else in Audit
+  mode is still only flagged. You change Blackbox as before: the dashboard, the `blackbox`
+  commands you type, or your own editor.
+- The rule that protects Blackbox itself was rebuilt after an attack pass of 240 attempts: it now
+  covers OpenClaw's config and plugin files, the service definitions, the `blackbox` command,
+  wildcards, parent folders, other tools that run commands, scripts written first and run later,
+  base64-wrapped commands, and a change hidden in the middle of a very long command. Reading
+  Blackbox's files and status stays allowed.
+- While Blackbox's service is not answering, an OpenClaw agent is refused anything that touches
+  Blackbox itself until the service is back.
+
 ## [1.5.0] - 2026-11-19
 
 ### Added

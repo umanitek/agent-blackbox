@@ -30,6 +30,7 @@ from .content_scanners import SKILL_DANGER_SHAPES
 from .osv import DEPENDENCY_ECOSYSTEMS, advisory_kind
 from .reviewer_setup import cmd_setup_llm
 from .finding import FIELD_WALLET_SECRET_SENT, KIND_FLAG_ONLY
+from .paths.guard_settings import MATCHED as GUARD_TAMPER
 from .paths.guard_settings import detect_guard_tamper
 from .detectors import (
     ANSWERED_BY_FALLBACK,
@@ -61,6 +62,7 @@ __all__ = [
                              'ESCALATION_SHAPES',
                              'FETCH_TOOL_PREFIXES',
                              'FIELD_WALLET_SECRET_SENT',
+                             'GUARD_TAMPER',
                              'HOST_FILE_AND_SKILL_TOOLS',
                              'KIND_FLAG_ONLY',
                              'SENSITIVE_PATH_CATEGORIES',

@@ -155,27 +155,33 @@ def with_nested_commands(command: str, depth: int = _NESTING_DEPTH) -> str:
     return "\n".join([command, *inner]) if inner else command
 
 
-def command_from_args(tool_name: str, args: Any, *, any_tool: bool = False) -> str:
-    """The shell command a tool call carries, as the checks read it (bounded, see
-    :data:`COMMAND_SCAN_WINDOW`): its ``command``-like argument, else its string arguments
-    joined — for shell tools only, or for every tool when *any_tool* (install checks: a
-    package can be installed through any tool that runs text); "" for anything else.
-
-    The ONE reader of "the command of this call" — every check asks it, so no two checks can
-    read different commands from the same call."""
+def whole_command_from_args(tool_name: str, args: Any, *, any_tool: bool = False) -> str:
+    """The shell command a tool call carries, every character of it (no window): its
+    ``command``-like argument, else its string arguments joined — for shell tools only, or for
+    every tool when *any_tool*; "" for anything else. For the one check that must read a long
+    command whole (Blackbox's own protection); every other check asks :func:`command_from_args`."""
     if isinstance(args, str):
-        return with_nested_commands(_bounded(args))
+        return args
     if not isinstance(args, dict):
         return ""
     for key in _COMMAND_KEYS:
         val = args.get(key)
         if isinstance(val, str) and val:
-            return with_nested_commands(_bounded(val))
+            return val
     # Fall back to concatenating string values for shell-like tools only.
     if any_tool or (tool_name or "").lower() in SHELL_TOOLS:
-        parts = [v for v in args.values() if isinstance(v, str)]
-        return with_nested_commands(_bounded(" ".join(parts)))
+        return " ".join(v for v in args.values() if isinstance(v, str))
     return ""
+
+
+def command_from_args(tool_name: str, args: Any, *, any_tool: bool = False) -> str:
+    """The shell command a tool call carries, as the checks read it (bounded, see
+    :data:`COMMAND_SCAN_WINDOW`, with the commands it hands to other shells added): see
+    :func:`whole_command_from_args` for which argument that is.
+
+    The ONE reader of "the command of this call" — every check asks it, so no two checks can
+    read different commands from the same call."""
+    return with_nested_commands(_bounded(whole_command_from_args(tool_name, args, any_tool=any_tool)))
 
 
 def normalize_arg_shape(tool_name: str, args: Any) -> Optional[str]:

@@ -3,8 +3,9 @@
 A text-only probe of the hook in block mode found every way an agent could set Blackbox to audit
 mode or remove it unchecked: ``sed -i`` on Hermes's ``config.yaml``, the patch tool changing
 ``mode: block`` to ``mode: audit`` inside Blackbox's section, an overwrite, ``hermes plugins disable
-blackbox``. ``detect_guard_tamper`` is a built-in rule (source ``custom``: flags in audit, blocks in
-block mode, never shared); reading, backing up and editing unrelated settings stay allowed.
+blackbox``. ``detect_guard_tamper`` is a built-in rule (source ``custom``, never shared; since
+2026-11-20 it blocks in every mode — test_blackbox_self_protection.py); reading, backing up and
+editing unrelated settings stay allowed.
 """
 
 from __future__ import annotations

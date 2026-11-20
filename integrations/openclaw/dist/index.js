@@ -1,4 +1,4 @@
-/* @umanitek/blackbox-openclaw — built from src/ by `npm run build`; do not edit. source sha256:410e2224404419ba49b832940a7641c93d3b47787ee0a7ced3f79b1867beb1e2 */
+/* @umanitek/blackbox-openclaw — built from src/ by `npm run build`; do not edit. source sha256:90ef92ad82c3d6f9f2497e7d75cac5973fed6ef75525680fb639c6bc6c35e0e5 */
 
 // src/consent.ts
 import { readFileSync } from "node:fs";
@@ -3042,6 +3042,52 @@ var VerdictClient = class {
   }
 };
 
+// src/selfProtection.ts
+var OWN_RULE = "blackbox-settings";
+var OUTAGE_MESSAGE = "Blackbox blocked this action: Blackbox's own service is not answering, and until it is back nothing that touches Blackbox itself (its settings, files, services or control page) is allowed. Ask the person to check Blackbox.";
+var OWN_THINGS = new RegExp(
+  [
+    String.raw`\.hermes\b`,
+    // Hermes' home: its config, its plugins, Blackbox's data
+    String.raw`\.openclaw[\w-]*[\\/]+(?:openclaw\.json|extensions|plugins)|openclaw\.json`,
+    String.raw`plugins[\\/]+blackbox|integrations[\\/]+openclaw|bin[\\/]+blackbox\b`,
+    String.raw`ai\.umanitek|blackbox-(?:dashboard|dkg)`,
+    String.raw`\bblackbox\s+(?:detach|uninstall|settings|rules|attach|setup)\b`,
+    String.raw`\b(?:pkill|killall|kill|taskkill)\b[^\n]*(?:blackbox|hermes|\bdkg\b|oxigraph)`,
+    String.raw`\b(?:HERMES_HOME|OPENCLAW_(?:CONFIG_PATH|STATE_DIR|HOME))\s*=`,
+    String.raw`\bplugins?\s+(?:disable|remove|uninstall|rm|delete)\b`,
+    String.raw`\bconfig\s+(?:set|unset|edit|delete|remove)\b[^|;&\n]*plugins`
+  ].join("|"),
+  "i"
+);
+var OWN_VARIABLE = /\bBLACKBOX_[A-Z0-9_]+/;
+var PLAIN_READ = /^\s*(?:cat|less|more|head|tail|ls|stat|file|wc|grep|rg|diff|jq|du|tree|pwd)\b[^|;&<>`$\n]*$/;
+var PLAIN_FETCH = /^\s*(?:curl|wget)\b(?![^\n]*(?:\s-(?:X|d|F|T)\b|--(?:request|data|form|json|upload|post|method|body)|\/api\/session))[^|;&<>`$\n]*$/;
+var READ_TOOL = /^(?:read|view|list|ls|glob|grep|search|find)/i;
+var MAX_DEPTH2 = 4;
+function texts(value, out = [], depth = 0) {
+  if (typeof value === "string") out.push(value);
+  else if (depth < MAX_DEPTH2 && Array.isArray(value)) for (const item of value.slice(0, 200)) texts(item, out, depth + 1);
+  else if (depth < MAX_DEPTH2 && value && typeof value === "object") for (const item of Object.values(value)) texts(item, out, depth + 1);
+  return out;
+}
+function portOf(dashboardUrl2) {
+  return /:(\d{2,5})(?:\/|$)/.exec(dashboardUrl2 || "")?.[1] ?? "";
+}
+function ownCoreTouched(toolName, params, dashboardUrl2) {
+  const text = texts(params).join("\n");
+  if (!text) return null;
+  const port = portOf(dashboardUrl2);
+  const namesPage = port !== "" && new RegExp(`(?<![\\w.])${port}(?![\\w.])`).test(text);
+  const namesOwn = OWN_THINGS.test(text) || OWN_VARIABLE.test(text);
+  if (!namesPage && !namesOwn) return null;
+  const tool = (toolName || "").trim();
+  const strings = texts(params);
+  if (READ_TOOL.test(tool) && strings.length <= 3 && !/\n/.test(text)) return null;
+  if (strings.length === 1 && (PLAIN_READ.test(text) || namesPage && !namesOwn && PLAIN_FETCH.test(text))) return null;
+  return namesPage ? "uses Blackbox's own control page" : "names Blackbox's own files or commands";
+}
+
 // src/config.ts
 import { homedir as homedir3 } from "node:os";
 import { join as join5 } from "node:path";
@@ -4036,7 +4082,24 @@ async function judgeToolCall(rt, toolName, params, ruleset) {
   raw.push(...detectCustomFileAccess(toolName, params, rt.cfg.protectedPaths));
   const findings = flagWorthy(rt.cfg, raw);
   const blocking = rt.cfg.mode === "block" ? findings.filter((f) => meetsBlock(f, rt.cfg)) : [];
-  return { findings, blocking, message: "" };
+  const touched = ownCoreTouched(toolName, params, rt.cfg.dashboardUrl);
+  if (!touched) return { findings, blocking, message: "" };
+  const own = ownCoreFinding(toolName, touched);
+  return { findings: [...findings, own], blocking: [...blocking, own], message: OUTAGE_MESSAGE };
+}
+function ownCoreFinding(toolName, evidence) {
+  return {
+    identifier: `fileaccess:${(toolName || "tool").trim().toLowerCase()}:${OWN_RULE}`,
+    category: "fileaccess",
+    severity: "critical",
+    title: "Change to Blackbox's own settings",
+    toolName,
+    matched: OWN_RULE,
+    evidence,
+    confirmed: false,
+    source: "custom",
+    fields: {}
+  };
 }
 function makeBeforeToolCall(rt) {
   return async (event, hookCtx = {}) => {

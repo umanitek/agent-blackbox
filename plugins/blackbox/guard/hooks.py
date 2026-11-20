@@ -96,14 +96,17 @@ def _would_block(cfg: BlackboxConfig, findings: list[detection.Finding]) -> list
     are higher-churn / higher-FP than pinned package versions, so they are
     validated in audit mode first.
     """
+    # Blackbox's own core is refused in EVERY mode (2026-11-20): in Audit mode an agent could switch
+    # the guard off and was merely flagged for it. Nothing else blocks unless Block mode is on.
+    always = [f for f in findings if f.matched == detection.GUARD_TAMPER]
     if not cfg.block_enabled:
-        return []
-    return [
+        return always
+    return always + [
         f for f in findings
         if (f.confirmed or f.source in ("custom", "secret"))
         and getattr(f, "kind", None) not in (constants.KIND_VULNERABILITY, "historical", detection.KIND_FLAG_ONLY)
         and f.category != "ioc"
-        and cfg.meets_block_threshold(f.severity)
+        and cfg.meets_block_threshold(f.severity) and f not in always
     ]
 
 
