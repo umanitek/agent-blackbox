@@ -61,7 +61,7 @@ from .shell_scripts import _HEREDOC, _INTERPRETERS, _paths_in_code, _script_args
 from .shell_words import (ShellFileArg, _SEPARATORS, _home_as_tilde, _is_anchored, _looks_like_path,
                           _segment_end, _split, _with_variables, _words)
 
-__all__ = ["ShellFileArg", "code_file_args", "shell_file_args", "_HEREDOC", "_INTERPRETERS", "_SEPARATORS", "_split", "_words"]
+__all__ = ["_HEREDOC", "_INTERPRETERS", "_SEPARATORS", "ShellFileArg", "_split", "_words", "code_file_args", "shell_file_args"]
 
 #: Commands that read a file's contents.
 _READ_COMMANDS = frozenset({

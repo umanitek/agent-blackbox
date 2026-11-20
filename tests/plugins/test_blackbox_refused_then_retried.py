@@ -48,7 +48,7 @@ REACHES_THE_FILE = [
     f'bash -lc "cat {KEY}"',
     f'eval "cat {KEY}"',
     f"bash -c \"sh -c 'cat {KEY}'\"",
-    f"sh -c 'cd ~/.ssh; cat id_rsa'",
+    "sh -c 'cd ~/.ssh; cat id_rsa'",
 ]
 
 STAYS_ALLOWED = [
