@@ -46,10 +46,16 @@ LEGACY = {"wallet_protection": True, "protected_wallets": ["metamask", "phantom"
 # ------------------------------------------------------------------ the six legacy-key cases
 
 
+def _added_later() -> tuple[str, ...]:
+    """Supported wallets a save that recorded no "offered" list was never offered: everything
+    after the first five. Since 2026-11-19 they are guarded without a new save (KI-411)."""
+    return tuple(w for w in trader_mode.supported_wallets() if w not in trader_mode.OFFERED_BEFORE_RECORDING)
+
+
 def test_a_legacy_only_entry_reads_enabled_with_its_wallets_and_addresses():
     mode = trader_mode.from_entry(LEGACY)
     assert mode.enabled is True
-    assert trader_mode.wallets(mode) == ("metamask", "phantom") and trader_mode.addresses(mode) == (OWN,)
+    assert trader_mode.wallets(mode) == ("metamask", "phantom", *_added_later()) and trader_mode.addresses(mode) == (OWN,)
 
 
 def test_one_save_writes_shields_trader_and_retires_every_legacy_key():
@@ -59,8 +65,9 @@ def test_one_save_writes_shields_trader_and_retires_every_legacy_key():
     assert result["ok"] is True
     entry = _entry()
     assert not set(trader_mode.LEGACY_KEYS) & set(entry)
-    # The Engage-style save sent only the switch: the earlier wallets and addresses carried over.
-    assert entry["shields"]["trader"] == {"enabled": True, "wallets": ["metamask", "phantom"], "addresses": [OWN],
+    # The Engage-style save sent only the switch: the earlier wallets and addresses carried over,
+    # with the wallets added since that legacy save (guarded already) now written in the list.
+    assert entry["shields"]["trader"] == {"enabled": True, "wallets": ["metamask", "phantom", *_added_later()], "addresses": [OWN],
                                           "offered": list(trader_mode.supported_wallets())}
     assert entry["mode"] == "block"
 
@@ -119,18 +126,21 @@ def test_the_mode_is_off_by_default_and_governs_only_wallet_findings():
     assert not TRADER.allows(vault, mode) and not TRADER.allows({"identifier": "secret:seed-phrase"}, mode)
     assert TRADER.allows({"identifier": "dep:npm:evil@1.0.0"}, mode)   # not a wallet finding: untouched
     chosen = trader_mode.from_entry({"shields": {"trader": {"enabled": True, "wallets": ["MetaMask", "not-a-wallet"]}}})
-    assert trader_mode.wallets(chosen) == ("metamask",) and TRADER.allows(vault, chosen)   # unsupported names are dropped
+    assert trader_mode.wallets(chosen) == ("metamask", *_added_later()) and TRADER.allows(vault, chosen)   # unsupported names dropped
 
 
 def test_engaging_protects_every_supported_wallet_unless_wallets_were_already_chosen():
     """Engage sends only the switch: a first engage protects every supported wallet; an
-    earlier choice (e.g. MetaMask only) is kept, so engaging never widens it silently."""
+    earlier choice (e.g. MetaMask only) is kept — plus the wallets that choice was never offered
+    (added in later versions), never one it left unticked."""
     engage = {"shields": {"trader": {"enabled": True}}}
     assert settings.write_settings(engage, validators=SHIELDS)["ok"] is True
     assert trader_mode.wallets(trader_mode.current()) == tuple(trader_mode.supported_wallets())
     _write_entry({"wallet_protection": False, "protected_wallets": ["metamask"]})
     assert settings.write_settings(engage, validators=SHIELDS)["ok"] is True
-    assert trader_mode.wallets(trader_mode.current()) == ("metamask",)
+    assert trader_mode.wallets(trader_mode.current()) == ("metamask", *_added_later())
+    _write_entry({"shields": {"trader": {"enabled": True, "wallets": ["metamask"], "offered": list(trader_mode.supported_wallets())}}})
+    assert trader_mode.wallets(trader_mode.current()) == ("metamask",)   # every other wallet was offered: a choice
 
 
 def test_settings_accept_the_mode_and_refuse_a_non_boolean():

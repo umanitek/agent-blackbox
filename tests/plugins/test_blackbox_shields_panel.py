@@ -231,7 +231,7 @@ def test_the_captured_payload_replays_clean_at_desktop_and_phone_widths(served, 
         assert not [check for check in view["checks"] if check["horizontalOverflow"]], (width, view["checks"])
         card, text = found["card"], found["card"]["text"].lower()   # headings are upper-cased by CSS (LES-039)
         assert not card["hidden"] and "found on this machine" in text and "recent events" in text, (width, card)
-        assert "blocking" in text and "new since you last saved" in text and found["cardLogos"] >= 1
+        assert "blocking" in text and "chosen but unavailable" in text and found["cardLogos"] >= 1
         assert found["banner"]["present"] and found["banner"]["hidden"], (width, found["banner"])     # engaged: no banner
         story = found["windowStory"]["text"]   # <b> kept; any other tag shown as inert text, never run
         assert not found["window"]["hidden"] and story.startswith("ok<img src=x"), (width, story)

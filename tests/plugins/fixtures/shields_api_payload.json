@@ -88,13 +88,6 @@
             "text": "ghost: chosen but unavailable — no such pack",
             "sub": "",
             "logo": ""
-          },
-          {
-            "icon": "!",
-            "state": "warn",
-            "text": "new since you last saved: Solana CLI, Rabby, Coinbase Wallet, Trust Wallet, OKX Wallet, Keplr, Solflare",
-            "sub": "",
-            "logo": ""
           }
         ]
       }
