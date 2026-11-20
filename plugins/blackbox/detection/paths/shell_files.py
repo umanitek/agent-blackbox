@@ -52,10 +52,16 @@ Pure and deterministic; reads no files.
 from __future__ import annotations
 
 import functools
-import re
-import shlex
-from dataclasses import dataclass, replace
 import itertools
+from dataclasses import replace
+
+# The words of a command (shell_words) and the paths in script code (shell_scripts) live in their
+# own files since 2026-11-20; their names stay reachable here for the callers that already use them.
+from .shell_scripts import _HEREDOC, _INTERPRETERS, _paths_in_code, _script_args
+from .shell_words import (ShellFileArg, _SEPARATORS, _home_as_tilde, _is_anchored, _looks_like_path,
+                          _segment_end, _split, _with_variables, _words)
+
+__all__ = ["ShellFileArg", "code_file_args", "shell_file_args", "_HEREDOC", "_INTERPRETERS", "_SEPARATORS", "_split", "_words"]
 
 #: Commands that read a file's contents.
 _READ_COMMANDS = frozenset({
@@ -71,8 +77,6 @@ _READ_COMMANDS = frozenset({
 _UPLOAD_COMMANDS = frozenset({"curl", "wget", "http", "https"})
 #: Options whose next word is a file to send as it is.
 _UPLOAD_FILE_OPTIONS = frozenset({"-T", "--upload-file", "--post-file", "--body-file"})
-#: ``NAME=VALUE`` at the start of a word: a variable set on the command line.
-_ASSIGNMENT = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", re.DOTALL)
 #: Commands whose words name things rather than read them; what they print may be piped to ``xargs``.
 _NAMING_COMMANDS = frozenset({"echo", "printf"})
 #: Commands that copy, move or pack whole folders: an argument that is a
@@ -84,81 +88,14 @@ _RECURSIVE_COMMANDS = frozenset({
 })
 #: Commands that read whole folders only with a recursive flag.
 _RECURSIVE_WITH_FLAG = {"grep": ("-r", "-R", "--recursive"), "egrep": ("-r", "-R"), "fgrep": ("-r", "-R")}
-_SEPARATORS = frozenset({";", "&&", "||", "|", "&", ">", ">>", "<", "|&"})
 #: Copy and move commands whose LAST path argument is where things go, not what is read
 #: (unless ``-t``/``--target-directory`` names the destination up front).
 _COPY_COMMANDS = frozenset({"cp", "scp", "rsync", "mv", "ditto", "copy", "xcopy", "robocopy", "copy-item", "cpi", "move-item",
                             "ln", "link"})
 #: Archivers whose FIRST path argument is the archive being written (tar names it after ``f``).
 _ARCHIVE_FIRST = frozenset({"zip", "7z", "7za", "rar"})
-#: Interpreters and the option that hands them code on the command line.
-_INTERPRETERS = {"python": ("-c",), "python3": ("-c",), "python2": ("-c",), "py": ("-c",),
-                 "node": ("-e", "--eval", "-p", "--print"), "nodejs": ("-e", "--eval", "-p", "--print"),
-                 "bun": ("-e", "--eval"), "deno": ("eval",), "ruby": ("-e",), "perl": ("-e", "-E"),
-                 "php": ("-r",), "osascript": ("-e",)}
-#: A quoted string in script code (single, double or JS backtick quotes).
-_LITERAL = re.compile(r"""(['"`])((?:\\.|(?!\1).){1,1024}?)\1""")
-#: Script code that walks or packs whole folders: its paths are folders handed over whole.
-_WHOLE_FOLDER_CODE = re.compile(r"copytree|make_archive|tarfile|zipfile|os\.walk|\bwalk\(|rglob|glob\(|readdirSync|readdir\(|cpSync|archiver|ZipFile|Dir\.glob|File\.find")
-#: Script code that joins a literal onto the home folder.
-_HOME_CODE = re.compile(r"homedir\(|expanduser|Path\.home|environ\[.HOME.\]|getenv\(.HOME.\)|env\.HOME|ENV\[.HOME.\]|Dir\.home")
-#: A heredoc fed to an interpreter: ``python3 - <<'EOF'`` … ``EOF``.
-_HEREDOC = re.compile(r"(?m)^[^\n]*?\b(?P<interpreter>python[23]?|node|ruby|perl|php|bun)\b[^\n]*<<-?\s*(?P<quote>['\"]?)(?P<tag>\w+)(?P=quote)[^\n]*\n(?P<body>.*?)\n\s*(?P=tag)\s*$", re.DOTALL)
 #: Commands that read what ``find`` hands them (``-exec cat {}``, ``| xargs tar …``).
 _FIND_EXEC = ("-exec", "-execdir", "-ok", "-okdir")
-
-
-@dataclass(frozen=True)
-class ShellFileArg:
-    """One path a shell command touches. ``path`` is the word as written with the home
-    folder spelled ``~`` (``$HOME`` and ``${HOME}`` are rewritten to it; ``~`` itself is NOT
-    expanded — matching code expands); ``recursive`` is True when the command takes a folder
-    argument as everything inside it."""
-
-    path: str
-    command: str
-    recursive: bool
-    #: True for where a copy or archive WRITES (``cp src DEST``, ``tar czf OUT.tgz``) —
-    #: nothing is read from it. Rules about what leaves a file skip these.
-    destination: bool = False
-
-
-#: The home folder named by a variable at the start of a path: ``$HOME``, ``${HOME}``, ``%USERPROFILE%``.
-_HOME_VARIABLE = re.compile(r"^(?:\$HOME(?![A-Za-z0-9_])|\$\{HOME\}|%USERPROFILE%)")
-
-
-def _home_as_tilde(path: str) -> str:
-    """*path* with a leading home-folder variable written as ``~`` (see the module doc)."""
-    return _HOME_VARIABLE.sub("~", path, count=1)
-
-
-#: A Windows path (``C:\\Users``, ``%APPDATA%\\``): backslash is a separator there,
-#: not an escape, so such a line is split without POSIX escaping.
-_WINDOWS_PATH = re.compile(r"[A-Za-z]:\\|%[A-Za-z_]+%\\")
-
-
-def _words(command: str) -> list[str]:
-    """The shell words of *command* (a fresh list). Several checks split the same command of
-    one call, so the last few splits are remembered (:func:`_split`)."""
-    return list(_split(command))
-
-
-@functools.lru_cache(maxsize=4)
-def _split(command: str) -> tuple[str, ...]:
-    try:
-        if _WINDOWS_PATH.search(command):
-            lexer = shlex.shlex(command, posix=False, punctuation_chars=";&|<>")
-            lexer.whitespace_split = True
-            return tuple(word.strip("\"'") for word in lexer)
-        lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|<>")
-        lexer.whitespace_split = True
-        return tuple(lexer)
-    except ValueError:  # an unbalanced quote: still find the paths
-        return tuple(command.split())
-
-
-def _looks_like_path(word: str) -> bool:
-    return "/" in word or "\\" in word or word.startswith(("~", ".", "$HOME", "%")) or "." in word
 
 
 def shell_file_args(command: str) -> list[ShellFileArg]:
@@ -212,33 +149,6 @@ def _file_args(command: str) -> tuple[ShellFileArg, ...]:
     for match in _HEREDOC.finditer(command):
         keep(_paths_in_code(match.group("interpreter"), match.group("body")))
     return tuple(out)
-
-
-def _segment_end(words: list[str], start: int) -> int:
-    """Index of the first separator at or after *start* (or the end)."""
-    end = start
-    while end < len(words) and words[end] not in _SEPARATORS:
-        end += 1
-    return end
-
-
-def _with_variables(words: list[str]) -> list[str]:
-    """*words* with the variables set earlier on the same line put in where they are used:
-    after ``H=$HOME``, ``$H/.ssh/key`` reads as ``$HOME/.ssh/key``. Only names assigned on this
-    line are replaced; an assignment word itself is kept as written."""
-    values: dict[str, str] = {}
-    out: list[str] = []
-    for word in words:
-        assignment = _ASSIGNMENT.match(word)
-        if assignment and "/" not in assignment.group(1):
-            values[assignment.group(1)] = assignment.group(2)
-            out.append(word)
-            continue
-        if values and "$" in word:
-            word = re.sub(r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))",
-                          lambda found: values.get(found.group(1) or found.group(2), found.group(0)), word)
-        out.append(word)
-    return out
 
 
 def _redirected_in(words: list[str], index: int) -> tuple[list[ShellFileArg], int]:
@@ -374,17 +284,6 @@ def _find_args(words: list[str], index: int) -> tuple[list[ShellFileArg], int]:
     return [ShellFileArg(path=root, command="find", recursive=True) for root in roots], position
 
 
-def _script_args(name: str, words: list[str], index: int) -> tuple[list[ShellFileArg], int]:
-    """The paths in the code an interpreter is handed on its command line."""
-    end = _segment_end(words, index + 1)
-    options = _INTERPRETERS[name]
-    found: list[ShellFileArg] = []
-    for position in range(index + 1, end - 1):
-        if words[position] in options:
-            found.extend(_paths_in_code(name, words[position + 1]))
-    return found, end
-
-
 def code_file_args(code: str, language: str = "python") -> list[ShellFileArg]:
     """The paths a piece of *code* reads, for tools that run code directly rather than through a
     shell (Hermes's ``execute_code`` runs Python): the same reading as ``python3 -c CODE`` (KI-470).
@@ -392,23 +291,6 @@ def code_file_args(code: str, language: str = "python") -> list[ShellFileArg]:
         code_file_args("print(open('/home/me/.ssh/id_rsa').read())")   # -> [ShellFileArg(path='/home/me/.ssh/id_rsa', ...)]
     """
     return [_from_folder(arg, "") for arg in _paths_in_code(language, code or "")]
-
-
-def _paths_in_code(interpreter: str, code: str) -> list[ShellFileArg]:
-    """Every quoted path in *code*: whole folders when the code walks or packs folders;
-    a relative literal is also taken under the home folder when the code joins onto it."""
-    recursive = bool(_WHOLE_FOLDER_CODE.search(code))
-    joins_home = bool(_HOME_CODE.search(code))
-    found: list[ShellFileArg] = []
-    for match in _LITERAL.finditer(code):
-        literal = match.group(2)
-        if "://" in literal or not ("/" in literal or "\\" in literal or literal.startswith("~")):
-            continue
-        found.append(ShellFileArg(path=literal, command=interpreter, recursive=recursive))
-        if joins_home and not literal.startswith(("/", "~", "$", "%")) and not re.match(r"[A-Za-z]:", literal):
-            relative = literal.removeprefix("./")   # keep ".config"'s own dot
-            found.append(ShellFileArg(path="~/" + relative, command=interpreter, recursive=recursive))
-    return found
 
 
 def _cd(words: list[str], index: int, folder: str) -> tuple[str, int]:
@@ -423,11 +305,6 @@ def _cd(words: list[str], index: int, folder: str) -> tuple[str, int]:
     if _is_anchored(target):
         return target.rstrip("/") or "/", end
     return (folder.rstrip("/") + "/" + target) if folder else "", end
-
-
-def _is_anchored(path: str) -> bool:
-    """True for a path that does not depend on the current folder."""
-    return path.startswith(("/", "~", "$HOME", "%")) or bool(re.match(r"[A-Za-z]:[\\/]", path))
 
 
 def _from_folder(arg: ShellFileArg, folder: str) -> ShellFileArg:
