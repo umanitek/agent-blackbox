@@ -119,6 +119,13 @@ export function recordEvent(
   }
 }
 
+/** What happened with a finding, recorded beside it: the decision, the agent and the chat. */
+export interface FindingOutcome {
+  decision?: string;
+  agent?: string;
+  sessionId?: string;
+}
+
 /** Append one finding to `<home>/findings.openclaw.jsonl`. Fail-open. */
 export function recordFinding(
   home: string,
@@ -126,6 +133,7 @@ export function recordFinding(
   finding: Finding,
   toolName?: string,
   context?: FindingContext,
+  outcome: FindingOutcome = {},
 ): void {
   try {
     if (!home) return;
@@ -134,6 +142,11 @@ export function recordFinding(
     const tool = toolName ?? finding.toolName ?? "";
     // Local-only conversation snapshot rides in detail.context (redacted + bounded).
     const detail: Record<string, unknown> = { tool_name: tool };
+    // What was DONE about it ("block" / "flag") and which agent of this profile it was — the
+    // dashboard reads both from detail, as it does for a Hermes row.
+    if (outcome.decision) detail.decision = outcome.decision.slice(0, 40);
+    if (outcome.agent) detail.agent = sanitizeText(outcome.agent, 120);
+    if (outcome.sessionId) detail.session_id = sanitizeText(outcome.sessionId, 160);
     const ctx = boundedContext(context);
     if (ctx) detail.context = ctx;
     const line = {

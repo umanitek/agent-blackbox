@@ -1,4 +1,4 @@
-/* @umanitek/blackbox-openclaw — built from src/ by `npm run build`; do not edit. source sha256:2ba11fd487bf67392ccf5430d7e17ab96b7daed03fec9a644a0ab09bc8b3a198 */
+/* @umanitek/blackbox-openclaw — built from src/ by `npm run build`; do not edit. source sha256:b9d28408990a26c1d84ee92e8d58d7461cf89992d67dc724599074a1874990bf */
 
 // src/consent.ts
 import { readFileSync } from "node:fs";
@@ -2775,13 +2775,16 @@ function recordEvent(home, event, detail = {}) {
   } catch {
   }
 }
-function recordFinding(home, event, finding, toolName, context) {
+function recordFinding(home, event, finding, toolName, context, outcome = {}) {
   try {
     if (!home) return;
     mkdirSync2(home, { recursive: true });
     const now = Date.now() / 1e3;
     const tool = toolName ?? finding.toolName ?? "";
     const detail = { tool_name: tool };
+    if (outcome.decision) detail.decision = outcome.decision.slice(0, 40);
+    if (outcome.agent) detail.agent = sanitizeText(outcome.agent, 120);
+    if (outcome.sessionId) detail.session_id = sanitizeText(outcome.sessionId, 160);
     const ctx = boundedContext(context);
     if (ctx) detail.context = ctx;
     const line = {
@@ -2823,6 +2826,82 @@ function trimIfNeeded(path2) {
   } catch {
   }
 }
+
+// src/verdictClient.ts
+var VERDICT_TIMEOUT_MS = 1500;
+var RETRY_AFTER_MS = 15e3;
+var REFUSED = 403;
+function isRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function readVerdict(body) {
+  if (!isRecord(body) || !Array.isArray(body.findings) || !Array.isArray(body.blocked)) return null;
+  const findings = [];
+  for (const row of body.findings) {
+    if (!isRecord(row)) return null;
+    const { identifier, category, severity: severity2, title } = row;
+    if (typeof identifier !== "string" || typeof category !== "string" || typeof severity2 !== "string" || typeof title !== "string") return null;
+    findings.push(row);
+  }
+  const known = new Set(findings.map((finding) => finding.identifier));
+  const blocked = body.blocked.filter((id) => typeof id === "string" && known.has(id));
+  if (blocked.length !== body.blocked.length) return null;
+  return {
+    findings,
+    blocked,
+    decision: typeof body.decision === "string" ? body.decision : "",
+    message: typeof body.message === "string" ? body.message : ""
+  };
+}
+var VerdictClient = class {
+  baseUrl;
+  fetchImpl;
+  now;
+  token = "";
+  silentUntil = 0;
+  /** `fetchImpl` and `now` are seams for tests; an empty `baseUrl` means "never ask". */
+  constructor(baseUrl, fetchImpl, now) {
+    this.baseUrl = (baseUrl || "").replace(/\/+$/, "");
+    this.fetchImpl = fetchImpl ?? globalThis.fetch;
+    this.now = now ?? Date.now;
+  }
+  /** Blackbox's verdict for this call, or null when it could not be had in time. */
+  async ask(toolName, args) {
+    if (!this.baseUrl || typeof this.fetchImpl !== "function" || this.now() < this.silentUntil) return null;
+    try {
+      const verdict = await this.askOnce(toolName, args, AbortSignal.timeout(VERDICT_TIMEOUT_MS));
+      if (verdict === null) this.silentUntil = this.now() + RETRY_AFTER_MS;
+      return verdict;
+    } catch {
+      this.silentUntil = this.now() + RETRY_AFTER_MS;
+      return null;
+    }
+  }
+  async askOnce(toolName, args, signal) {
+    for (const attempt of [1, 2]) {
+      if (!this.token) this.token = await this.fetchToken(signal);
+      if (!this.token) return null;
+      const response = await this.fetchImpl(`${this.baseUrl}/api/guard/verdict`, {
+        method: "POST",
+        signal,
+        headers: { "content-type": "application/json", accept: "application/json", "x-blackbox-token": this.token },
+        body: JSON.stringify({ tool_name: toolName, args })
+      });
+      if (response.status === REFUSED && attempt === 1) {
+        this.token = "";
+        continue;
+      }
+      return response.ok ? readVerdict(await response.json()) : null;
+    }
+    return null;
+  }
+  async fetchToken(signal) {
+    const response = await this.fetchImpl(`${this.baseUrl}/api/session`, { signal, headers: { accept: "application/json" } });
+    if (!response.ok) return "";
+    const body = await response.json();
+    return isRecord(body) && typeof body.token === "string" ? body.token : "";
+  }
+};
 
 // src/config.ts
 import { homedir as homedir3 } from "node:os";
@@ -2869,6 +2948,7 @@ var DEFAULTS = {
   mode: "audit",
   contextGraphId: "0x37b1Fdfd134e2b17583bCBdD3034F91504cD9C70/agent-blackbox-vm",
   dkgUrl: DEFAULT_DKG_URL,
+  dashboardUrl: "http://127.0.0.1:9700",
   dkgHome: "",
   syncInterval: 300,
   report: false,
@@ -2900,6 +2980,11 @@ function bool(value) {
     if (["false", "0", "no", "off"].includes(v)) return false;
   }
   return void 0;
+}
+function dashboardUrl(pluginConfig) {
+  const configured = pluginConfig.dashboardUrl ?? pluginConfig.dashboard_url;
+  const chosen = str(process.env.BLACKBOX_DASHBOARD_URL) ?? (typeof configured === "string" ? configured.trim() : DEFAULTS.dashboardUrl);
+  return chosen.replace(/\/+$/, "");
 }
 function envDkgUrl() {
   const explicit = str(process.env.BLACKBOX_DKG_DAEMON_URL) ?? str(process.env.BLACKBOX_DKG_URL);
@@ -2960,6 +3045,7 @@ function resolveConfig(pluginConfig = {}) {
     mode: mode(env.BLACKBOX_MODE) ?? mode(pluginConfig.mode) ?? DEFAULTS.mode,
     contextGraphId: str(env.BLACKBOX_CONTEXT_GRAPH_ID) ?? str(pluginConfig.contextGraphId) ?? str(pluginConfig.context_graph_id) ?? DEFAULTS.contextGraphId,
     dkgUrl: envDkgUrl() ?? str(pluginConfig.dkgUrl)?.replace(/\/+$/, "") ?? str(pluginConfig.dkg_url)?.replace(/\/+$/, "") ?? str(pluginConfig.daemonUrl)?.replace(/\/+$/, "") ?? DEFAULTS.dkgUrl,
+    dashboardUrl: dashboardUrl(pluginConfig),
     dkgHome: str(env.BLACKBOX_DKG_HOME) ?? str(pluginConfig.dkgHome) ?? str(pluginConfig.dkg_home) ?? defaultBlackboxDkgHome(),
     syncInterval: num(env.BLACKBOX_SYNC_INTERVAL) ?? num(pluginConfig.syncInterval) ?? num(pluginConfig.sync_interval) ?? DEFAULTS.syncInterval,
     // KI-182 port: the bridge builds R1-schema, signed reports for the community (the shared
@@ -3540,6 +3626,14 @@ function sessionIdOf(event) {
   const sid = event?.sessionId;
   return typeof sid === "string" ? sid : "";
 }
+function agentOf(event, ctx = {}) {
+  const fromEvent = event ?? {};
+  if (typeof ctx.agentId === "string" && ctx.agentId) return ctx.agentId;
+  if (typeof fromEvent.agentId === "string" && fromEvent.agentId) return fromEvent.agentId;
+  const key = typeof fromEvent.sessionKey === "string" ? fromEvent.sessionKey : ctx.sessionKey ?? "";
+  const parts = key.split(":");
+  return parts[0] === "agent" && parts[1] ? parts[1] : "";
+}
 function sessionRefOf(event, ctx = {}) {
   const eventSessionKey = event?.sessionKey;
   return sessionIdOf(event) || ctx.sessionId || (typeof eventSessionKey === "string" ? eventSessionKey : "") || ctx.sessionKey || "";
@@ -3767,12 +3861,43 @@ function blockMessage(findings) {
   const titles = [...new Set(findings.map((f) => f.title))].slice(0, 3).join("; ");
   return `Blackbox blocked this action (${worst}): ${titles}`;
 }
-function observe(rt, event, finding, toolName, context) {
+function observe(rt, event, finding, toolName, context, outcome = {}) {
   try {
-    recordFinding(rt.cfg.blackboxHome, event, finding, toolName, context);
+    recordFinding(rt.cfg.blackboxHome, event, finding, toolName, context, outcome);
   } catch {
   }
   void reportSighting(rt, finding, event, toolName);
+}
+var REMOTE_SOURCES = /* @__PURE__ */ new Set(["public", "community", "heuristic", "custom"]);
+var SEVERITIES = new Set(Object.keys(SEVERITY_RANK));
+function findingFromRemote(remote, toolName) {
+  const source = REMOTE_SOURCES.has(remote.source ?? "") ? remote.source : "custom";
+  return {
+    identifier: remote.identifier,
+    category: remote.category,
+    severity: SEVERITIES.has(remote.severity) ? remote.severity : "high",
+    title: remote.title,
+    toolName: remote.tool_name ?? toolName,
+    matched: String(remote.matched ?? ""),
+    evidence: String(remote.evidence ?? ""),
+    confirmed: remote.confirmed === true,
+    source,
+    ...remote.kind ? { kind: remote.kind } : {},
+    fields: remote.fields ?? {}
+  };
+}
+async function judgeToolCall(rt, toolName, params, ruleset) {
+  const remote = await rt.verdicts.ask(toolName, params);
+  if (remote) {
+    const findings2 = remote.findings.map((row) => findingFromRemote(row, toolName));
+    const blocked = new Set(remote.blocked);
+    return { findings: findings2, blocking: findings2.filter((f) => blocked.has(f.identifier)), message: remote.message };
+  }
+  const raw = detectAll(toolName, params, ruleset, rt.cfg.discover);
+  raw.push(...detectCustomFileAccess(toolName, params, rt.cfg.protectedPaths));
+  const findings = flagWorthy(rt.cfg, raw);
+  const blocking = rt.cfg.mode === "block" ? findings.filter((f) => meetsBlock(f, rt.cfg)) : [];
+  return { findings, blocking, message: "" };
 }
 function makeBeforeToolCall(rt) {
   return async (event, hookCtx = {}) => {
@@ -3780,6 +3905,7 @@ function makeBeforeToolCall(rt) {
       const ruleset = rt.ruleset.get();
       const params = event.params ?? {};
       recordEvent(rt.cfg.blackboxHome, "pre_tool_call", {
+        agent: agentOf(event, hookCtx),
         session_id: sessionRefOf(event, hookCtx),
         run_id: event.runId ?? hookCtx.runId,
         tool_call_id: event.toolCallId,
@@ -3787,9 +3913,8 @@ function makeBeforeToolCall(rt) {
         args: params
       });
       recordToolActivity(rt, event, hookCtx, params);
-      const raw = detectAll(event.toolName, params, ruleset, rt.cfg.discover);
-      raw.push(...detectCustomFileAccess(event.toolName, params, rt.cfg.protectedPaths));
-      const findings = flagWorthy(rt.cfg, raw);
+      const judged = await judgeToolCall(rt, event.toolName, params, ruleset);
+      const findings = judged.findings;
       if (rt.cfg.discover && rt.cfg.osvLookup) {
         void discoverDependencyCandidates(event.toolName, params, ruleset, lookup).then((candidates2) => {
           for (const f of flagWorthy(rt.cfg, candidates2)) observe(rt, "osv_discovery", f, event.toolName);
@@ -3803,12 +3928,14 @@ function makeBeforeToolCall(rt) {
       const inputText = collectText(params).join("\n");
       if (inputText.trim()) ctx.input = inputText;
       const context = ctx.turns || ctx.input ? ctx : void 0;
-      for (const f of findings) observe(rt, "before_tool_call", f, event.toolName, context);
-      if (rt.cfg.mode === "block") {
-        const blocking = findings.filter((f) => meetsBlock(f, rt.cfg));
-        if (blocking.length > 0) {
-          return { block: true, blockReason: blockMessage(blocking) };
-        }
+      const agent = agentOf(event, hookCtx);
+      const sessionId = sessionRefOf(event, hookCtx);
+      for (const f of findings) {
+        const decision = judged.blocking.includes(f) ? "block" : "flag";
+        observe(rt, "before_tool_call", f, event.toolName, context, { decision, agent, sessionId });
+      }
+      if (judged.blocking.length > 0) {
+        return { block: true, blockReason: judged.message || blockMessage(judged.blocking) };
       }
       return;
     } catch (err) {
@@ -3952,6 +4079,7 @@ function buildRuntime(api) {
   return {
     cfg,
     client,
+    verdicts: new VerdictClient(cfg.dashboardUrl),
     ruleset,
     log,
     dailyReports: { date: today(), count: 0 },

@@ -64,6 +64,13 @@ that the two version fields agree.
   built-in protected paths (`~/.ssh/*`, `.env`, `*.pem`, …) were switched off by an empty default,
   and the list and block level you set in the dashboard never reached OpenClaw agents. Both now
   follow your Blackbox settings.
+- **OpenClaw agents are now judged by the same checks as Hermes agents.** Before each tool call
+  the OpenClaw plugin asks the Blackbox on your machine for its verdict, so packages and addresses
+  from the verified threat graph, Trader Shield's wallet key stores and your local overrides apply
+  to OpenClaw too (a verified malicious package installed through OpenClaw used to go through).
+  If Blackbox's service is not running, the plugin's own built-in checks still decide.
+- OpenClaw findings on the dashboard say whether the action was blocked or flagged, and which
+  OpenClaw profile and agent it came from ("OpenClaw · work / research").
 
 ### Changed
 

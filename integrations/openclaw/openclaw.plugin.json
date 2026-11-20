@@ -36,6 +36,11 @@
         "default": "http://127.0.0.1:9320",
         "description": "Blackbox-managed local DKG node HTTP URL (override with $BLACKBOX_DKG_DAEMON_URL). Uses a non-default port so it does not collide with a user's own DKG node."
       },
+      "dashboardUrl": {
+        "type": "string",
+        "default": "http://127.0.0.1:9700",
+        "description": "Blackbox's local service (its dashboard, loopback only; override with $BLACKBOX_DASHBOARD_URL). Before each tool call the plugin asks it for Blackbox's verdict — the same checks a Hermes agent gets: the verified threat graph, the protected paths, Trader Shield, local overrides. If it does not answer within 1.5 s the plugin's built-in checks decide. Set to an empty string to never ask."
+      },
       "dkgHome": {
         "type": "string",
         "default": "~/.hermes/blackbox/dkg",

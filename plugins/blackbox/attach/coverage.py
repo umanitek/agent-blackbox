@@ -56,10 +56,12 @@ class RecentAgent(Agent):
 
 
 def agent_label(kind: str, target: str | Path) -> str:
-    """"Hermes · coder", "Hermes (main)", "Blackbox assistant" or "OpenClaw · <folder>"."""
+    """"Hermes · coder", "Hermes (main)", "Blackbox assistant", "OpenClaw" (its default
+    profile, ``~/.openclaw``) or "OpenClaw · work" (``~/.openclaw-work``)."""
     path = Path(str(target))
     if kind == "openclaw":
-        return f"OpenClaw · {path.name}"
+        profile = path.name.removeprefix(".openclaw").lstrip("-")
+        return f"OpenClaw · {profile}" if profile else "OpenClaw"
     if path.parent.name == "profiles":
         return "Blackbox assistant" if path.name == ASSISTANT_PROFILE else f"Hermes · {path.name}"
     return "Hermes (main)"

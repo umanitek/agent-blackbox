@@ -31,7 +31,7 @@ from ..kernel.browser_boundary import LOOPBACK_HOSTS, BrowserBoundary
 from ..kernel.host_command import NO_MODEL_EXIT, hermes_argv
 from .. import attach, shields
 from ..sync import read_durable_progress
-from . import (agent_coverage_routes, community_routes, direct_reads, docs_routes, graph_pages, lifecycle, model_connect_routes,
+from . import (agent_coverage_routes, community_routes, direct_reads, docs_routes, graph_pages, guard_routes, lifecycle, model_connect_routes,
                playground_routes, shields_routes, sync_meter, sync_timing)
 from .assistant import answer_payload, clean_chat_output, parse_chat_session_id, with_state_brief
 from .graph_pages import _balanced_graph_entries, _graph_entries
@@ -74,7 +74,7 @@ _FONT_FILES = frozenset({
     "ibm-plex-mono-600-latin.woff2", "ibm-plex-mono-600-latin-ext.woff2",
 })
 #: The sub-packages that add their own routes and pages, each through ``register(app, swr)``.
-_ROUTE_PACKAGES = (shields_routes, docs_routes, playground_routes, model_connect_routes, agent_coverage_routes)
+_ROUTE_PACKAGES = (shields_routes, docs_routes, playground_routes, model_connect_routes, agent_coverage_routes, guard_routes)
 def _dkg_durable_progress(dkg_home: str, context_graph_id: str) -> dict[str, Any]:
     """Read the latest resumable VM offset reported by the managed DKG."""
     return read_durable_progress(dkg_home, context_graph_id)

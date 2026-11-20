@@ -207,6 +207,9 @@ def _desired_entry(cfg: dict[str, Any]) -> dict[str, Any]:
             # used to run on its own defaults, and OpenClaw handed it the manifest's empty
             # protected-path default — so under OpenClaw nothing was protected at all.
             "blockSeverity": cfg.get("block_severity", "critical"),
+            # Where the plugin asks Blackbox itself for each tool call's verdict (the dashboard's
+            # loopback address): one judgement for Hermes and OpenClaw agents.
+            **({"dashboardUrl": cfg["dashboard_url"]} if cfg.get("dashboard_url") else {}),
             **({"protectedPaths": list(cfg["protected_paths"])} if cfg.get("protected_paths") is not None else {}),
         },
         "hooks": {"allowConversationAccess": True},
@@ -348,6 +351,7 @@ def load_blackbox_config_snapshot() -> dict[str, Any]:
             "report_min_severity": cfg.report_min_severity,
             "block_severity": cfg.block_severity,
             "protected_paths": list(cfg.protected_paths),
+            "dashboard_url": f"http://127.0.0.1:{int(cfg.dashboard_port)}",
         }
     except Exception:
         return {

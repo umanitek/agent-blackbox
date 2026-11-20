@@ -30,6 +30,8 @@ from .hooks import (
     on_pre_tool_call,
     on_session_end,
     on_session_start,
+    tool_call_verdict,
+    ToolCallVerdict,
 )
 from . import report_queue
 from .reporting import collecting_shares
@@ -42,6 +44,7 @@ def reports_settled(timeout_s: float) -> bool:
 
 
 __all__ = [
+    "ToolCallVerdict",
     "blackbox_block_message",
     "collecting_shares",
     "on_post_tool_call",
@@ -50,4 +53,5 @@ __all__ = [
     "on_session_end",
     "on_session_start",
     "reports_settled",
+    "tool_call_verdict",
 ]

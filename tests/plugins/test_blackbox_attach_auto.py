@@ -123,7 +123,8 @@ coverage = load_blackbox("attach.coverage")
     ("hermes", "/u/.hermes", "Hermes (main)"),
     ("hermes", "/u/.hermes/profiles/coder", "Hermes · coder"),
     ("hermes", "/u/.hermes/profiles/agent-blackbox", "Blackbox assistant"),
-    ("openclaw", "/u/.openclaw", "OpenClaw · .openclaw"),
+    ("openclaw", "/u/.openclaw", "OpenClaw"),
+    ("openclaw", "/u/.openclaw-work", "OpenClaw · work"),
 ])
 def test_every_agent_is_named_the_way_the_dashboard_labels_its_findings(kind, target, label):
     assert coverage.agent_label(kind, target) == label

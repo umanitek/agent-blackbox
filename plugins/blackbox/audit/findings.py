@@ -100,6 +100,8 @@ def _flatten_finding_row(rec: dict[str, Any], default_fw: str) -> dict[str, Any]
         "source": finding.get("source") or ("public" if is_confirmed(finding) else "heuristic"),
         # What the hook did with it: "block" | "flag" ("" for rows older than KI-189).
         "decision": str(detail.get("decision") or ""),
+        # Which agent of an OpenClaw profile acted ("" for Hermes rows: the workspace is the agent).
+        "agent": str(detail.get("agent") or "")[:120],
         # Local-only conversation snapshot (redacted upstream).
         "context": _bounded_context(detail.get("context") or finding.get("context")),
         "found_in": finding.get("found_in") or "",

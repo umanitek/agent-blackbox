@@ -12,7 +12,8 @@ from __future__ import annotations
 import functools
 import json
 import logging
-from typing import Any, Callable, Optional
+from dataclasses import dataclass
+from typing import Any, Callable, Optional, TypedDict
 from .. import audit, detection, killlist, overrides, shields
 from ..kernel import config as config_mod, constants
 from ..kernel.config import BlackboxConfig
@@ -145,6 +146,59 @@ def _with_normalised_call(hook: Callable[..., Any]) -> Callable[..., Any]:
     return wrapper
 
 
+@dataclass(frozen=True)
+class _Judgement:
+    """What the checks make of one tool call: the rules they ran on (and how they were read),
+    the findings worth flagging, and the ones that block. Built once by :func:`_judge` for both
+    the Hermes hook and :func:`tool_call_verdict`, so the two can never disagree."""
+
+    cfg: BlackboxConfig
+    rules: Any
+    graph_evidence: Any
+    findings: list[detection.Finding]
+    blocking: list[detection.Finding]
+
+
+def _judge(tool_name: str, args: Any) -> _Judgement:
+    cfg = _config()
+    rs, graph_evidence = graph_rules.detection_rules(cfg, tool_name, args)
+    active = shields.snapshot()   # every shield's mode, read once for this call
+    findings = reporting._flag_worthy(cfg, _raw_findings(cfg, rs, tool_name, args, active), active)
+    return _Judgement(cfg, rs, graph_evidence, findings, _blocking(cfg, findings))
+
+
+class ToolCallVerdict(TypedDict):
+    """:func:`tool_call_verdict`'s answer. ``findings`` are ``Finding.to_dict()`` rows;
+    ``blocked`` the identifiers that block; ``decision`` is "", "flag", "flag (local override)"
+    or "block"; ``message`` what the agent is told when blocked ("" otherwise)."""
+
+    findings: list[dict[str, Any]]
+    blocked: list[str]
+    decision: str
+    message: str
+
+
+@_with_normalised_call
+def tool_call_verdict(tool_name: str = "", args: Any = None, **_: Any) -> ToolCallVerdict:
+    """What Blackbox makes of one tool call, for a runtime that is not Hermes (2026-11-20).
+
+    The OpenClaw plugin asks this through the dashboard (``POST /api/guard/verdict``) before
+    each tool call, so an OpenClaw agent is judged by the SAME checks as a Hermes agent — the
+    verified threat graph, the protected paths, every shield, the kill list, local overrides —
+    instead of by a second copy of them. Nothing is recorded or reported here: the asking
+    runtime records the finding under its own agent's name. Raises on failure (the caller then
+    falls back to its own built-in checks).
+
+        verdict = guard.tool_call_verdict("exec", {"command": "npm install left-pad"})
+        verdict["decision"], verdict["blocked"], verdict["message"]
+    """
+    judged = _judge(tool_name, args)
+    decision = _decision(judged.cfg, judged.findings, judged.blocking) if judged.findings else ""
+    return ToolCallVerdict(findings=[finding.to_dict() for finding in judged.findings],
+                           blocked=[finding.identifier for finding in judged.blocking], decision=decision,
+                           message=blackbox_block_message(judged.blocking) if judged.blocking else "")
+
+
 @_with_normalised_call
 def on_pre_tool_call(
     tool_name: str = "",
@@ -159,21 +213,16 @@ def on_pre_tool_call(
     Only CONFIRMED graph findings can block; discovery candidates only alert.
     """
     try:
-        cfg = _config()
-        rs, graph_evidence = graph_rules.detection_rules(cfg, tool_name, args)
+        judged = _judge(tool_name, args)
+        cfg, findings, blocking = judged.cfg, judged.findings, judged.blocking
         _record_activity(tool_name, args)   # visibility: log every file-access tool call (best-effort)
-        active = shields.snapshot()   # every shield's mode, read once for this call
-        raw = _raw_findings(cfg, rs, tool_name, args, active)
-        findings = reporting._flag_worthy(cfg, raw, active)
         detail = {"tool_name": tool_name, "session_id": session_id, "task_id": task_id,
-                  "tool_call_id": tool_call_id, "args": audit.redact(args), "graph_read": graph_evidence}
+                  "tool_call_id": tool_call_id, "args": audit.redact(args), "graph_read": judged.graph_evidence}
         # Build conversation context only when a finding needs it.
         if findings:
             ctx = session_context._tool_context(session_id, args)
             if ctx:
                 detail["context"] = ctx
-        blocking = _blocking(cfg, findings)
-        if findings:
             # KI-189: the audit row says what the hook DID, not only what it saw —
             # R10's "a revoked threat blocked N actions here" counts these.
             detail.update(_decision_detail(cfg, findings, blocking))
@@ -182,7 +231,7 @@ def on_pre_tool_call(
         # OSV auto-discovery runs off the blocking path so a network lookup
         # never delays or breaks the tool call.
         if cfg.discover and cfg.osv_lookup:
-            background._spawn_osv_discovery(cfg, rs, tool_name, args)
+            background._spawn_osv_discovery(cfg, judged.rules, tool_name, args)
         if blocking:
             return {"action": "block", "message": blackbox_block_message(blocking)}
         return None
