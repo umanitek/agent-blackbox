@@ -60,6 +60,10 @@ that the two version fields agree.
   or archived through OpenClaw's `exec` tool (`cat ~/.ssh/id_rsa`, `cp -r ~/.ssh …`, `tar … ~`,
   a one-line script, `find … -exec cat`) is now flagged, and blocked in Block mode, as it is in
   Hermes. Before, only OpenClaw's file tools were checked.
+- **OpenClaw: your protected-path list and block level now apply there.** Under OpenClaw the
+  built-in protected paths (`~/.ssh/*`, `.env`, `*.pem`, …) were switched off by an empty default,
+  and the list and block level you set in the dashboard never reached OpenClaw agents. Both now
+  follow your Blackbox settings.
 
 ### Changed
 

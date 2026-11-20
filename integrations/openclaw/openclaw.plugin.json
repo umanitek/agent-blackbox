@@ -94,8 +94,7 @@
       "protectedPaths": {
         "type": "array",
         "items": { "type": "string" },
-        "default": [],
-        "description": "User-defined protected path patterns (globs / directory prefixes; '~' expands to home). Access to a matching path by a file tool is flagged locally as a critical 'custom' finding — it always flags, blocks in block mode, and is NEVER shared to the community graph. Also accepted under the snake_case key 'protected_paths'. Capped at 100 patterns."
+                "description": "Protected path patterns (globs / directory prefixes; '~' expands to home). Reading, copying or archiving a matching path — through a file tool, a code tool or a shell command — is flagged locally as a critical 'custom' finding: it always flags, blocks in block mode, and is NEVER shared to the community graph. Left out, the built-in list applies (~/.ssh/*, .env, .env.*, *.pem, *.key, *.p12, ~/.aws/credentials); an empty list protects nothing. No default is declared here on purpose: a declared empty default is handed to the plugin as the operator's choice and switched the built-in list off. Also accepted under the snake_case key 'protected_paths'. Capped at 100 patterns."
       }
     },
     "$defs": {

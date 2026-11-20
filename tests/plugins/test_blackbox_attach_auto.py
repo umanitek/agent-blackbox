@@ -164,3 +164,20 @@ def test_the_dashboard_announces_a_new_agent_and_protect_all_saves_the_yes(machi
         assert answer.status_code == 200 and answer.json()["ok"] is True
     assert config_mod.load_blackbox_config().auto_attach is True and _protected(machine / "profiles" / "work")
     assert attach.coverage()["unprotected"] == []
+
+
+# ------------------------------------------------------------------ one list of settings for both runtimes
+
+
+def test_openclaw_is_handed_the_operators_protected_paths_and_block_level(machine, tmp_path):
+    # 2026-11-20: under OpenClaw the bridge ran on its own defaults (and an empty protected-path
+    # list), so what the operator set in the dashboard did not reach OpenClaw agents.
+    import json
+
+    workspace = machine.parent / ".openclaw"
+    workspace.mkdir()
+    (workspace / "openclaw.json").write_text(json.dumps({"plugins": {}}), encoding="utf-8")
+    assert settings.write_settings({"mode": "block", "block_severity": "high", "protected_paths": ["~/secrets", "*.pem"]})["ok"]
+    attach.attach_openclaw(workspace)
+    config = json.loads((workspace / "openclaw.json").read_text(encoding="utf-8"))["plugins"]["entries"]["blackbox"]["config"]
+    assert (config["mode"], config["blockSeverity"], config["protectedPaths"]) == ("block", "high", ["~/secrets", "*.pem"])

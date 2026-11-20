@@ -162,3 +162,61 @@ def test_the_shipped_bundle_judges_shell_and_code_calls_as_hermes_does(node, tmp
     assert not differing, differing[:3]
     caught = [case for case in expected if case["findings"]]
     assert len(caught) >= 14 and len(expected) - len(caught) >= 6   # both kinds are really exercised
+
+
+AS_OPENCLAW_RUNS_IT = """
+import { readFileSync } from "node:fs";
+const entry = (await import(process.env.BLACKBOX_TEST_BUNDLE)).default;
+const manifest = JSON.parse(readFileSync(process.env.BLACKBOX_TEST_MANIFEST, "utf8"));
+// What OpenClaw hands a plugin: every default the manifest declares, then the operator's entries.
+const pluginConfig = Object.fromEntries(Object.entries(manifest.configSchema.properties)
+  .filter(([, schema]) => "default" in schema).map(([key, schema]) => [key, schema.default]));
+Object.assign(pluginConfig, JSON.parse(process.env.BLACKBOX_TEST_ENTRY), { blackboxHome: process.env.BLACKBOX_TEST_HOME, dkgUrl: "http://127.0.0.1:9" });
+const handlers = {};
+entry.register({ on: (name, handler) => { handlers[name] = handler; }, pluginConfig,
+                 logger: { debug() {}, info() {}, warn() {}, error() {} } });
+const verdicts = {};
+for (const command of JSON.parse(process.env.BLACKBOX_TEST_COMMANDS)) {
+  const answer = await handlers.before_tool_call({ toolName: "exec", params: { command }, toolCallId: "t", runId: "r" }, {});
+  verdicts[command] = Boolean(answer && answer.block);
+}
+console.log(JSON.stringify(verdicts));
+process.exit(0);
+"""
+
+CANARY_READS = ["cat ~/.ssh/blackbox_canary", "cp -r ~/.ssh /tmp/ssh-copy",
+                "python3 -c \"import os; print(open(os.path.expanduser('~/.ssh/blackbox_canary')).read())\""]
+HARMLESS = ["echo hello from openclaw", "cat ~/.ssh/blackbox_canary.example", "ls -la ~/.ssh/"]
+
+
+def _blocked(node, tmp_path, entry: dict) -> dict:
+    (tmp_path / "loader.mjs").write_text(LOADER, encoding="utf-8")
+    (tmp_path / "hook.mjs").write_text(AS_OPENCLAW_RUNS_IT, encoding="utf-8")
+    env = {"PATH": str(Path(node).parent), "HOME": str(tmp_path), "BLACKBOX_TEST_BUNDLE": BUNDLE.as_uri(),
+           "BLACKBOX_TEST_MANIFEST": str(BRIDGE / "openclaw.plugin.json"), "BLACKBOX_TEST_HOME": str(tmp_path / "blackbox"),
+           "BLACKBOX_TEST_ENTRY": json.dumps(entry), "BLACKBOX_TEST_COMMANDS": json.dumps(CANARY_READS + HARMLESS)}
+    result = subprocess.run([node, "--import", (tmp_path / "loader.mjs").as_uri(), str(tmp_path / "hook.mjs")],
+                            capture_output=True, text=True, timeout=60, check=False, env=env, cwd=str(tmp_path))
+    assert result.returncode == 0, result.stderr[-1200:]
+    return json.loads(result.stdout.strip().splitlines()[-1])
+
+
+def test_with_only_the_manifests_defaults_the_hook_still_blocks_a_protected_read(node, tmp_path):
+    # Seen on real OpenClaw 2026.11.6: the hook ran and blocked nothing. OpenClaw fills in every
+    # default the manifest declares, and `protectedPaths: []` was one — handed to the plugin as
+    # "the operator protects nothing", which switched the built-in list off. The detectors passed
+    # every test that called them directly; only the config OpenClaw really builds showed it.
+    verdicts = _blocked(node, tmp_path, {"mode": "block"})
+    assert {command: verdicts[command] for command in CANARY_READS} == dict.fromkeys(CANARY_READS, True)
+    assert {command: verdicts[command] for command in HARMLESS} == dict.fromkeys(HARMLESS, False)
+
+
+def test_the_operators_own_list_is_the_one_applied_and_audit_mode_blocks_nothing(node, tmp_path):
+    only_secrets = _blocked(node, tmp_path, {"mode": "block", "protectedPaths": ["~/secrets"]})
+    assert not any(only_secrets.values())            # ~/.ssh is not on THIS operator's list
+    assert not any(_blocked(node, tmp_path, {"mode": "audit"}).values())
+
+
+def test_the_manifest_declares_no_default_for_the_protected_path_list():
+    schema = json.loads((BRIDGE / "openclaw.plugin.json").read_text(encoding="utf-8"))["configSchema"]["properties"]
+    assert "default" not in schema["protectedPaths"]

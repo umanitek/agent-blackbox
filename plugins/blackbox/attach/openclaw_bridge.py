@@ -203,6 +203,11 @@ def _desired_entry(cfg: dict[str, Any]) -> dict[str, Any]:
             "report": bool(cfg.get("report", False)),   # opt-in (2026-10-16); the consent record still gates sends
             "dailyReportLimit": int(cfg.get("daily_report_limit") or constants.DEFAULT_DAILY_REPORT_LIMIT),
             "reportMinSeverity": cfg.get("report_min_severity", "high"),
+            # The operator's own protection settings rule BOTH runtimes (2026-11-20): the bridge
+            # used to run on its own defaults, and OpenClaw handed it the manifest's empty
+            # protected-path default — so under OpenClaw nothing was protected at all.
+            "blockSeverity": cfg.get("block_severity", "critical"),
+            **({"protectedPaths": list(cfg["protected_paths"])} if cfg.get("protected_paths") is not None else {}),
         },
         "hooks": {"allowConversationAccess": True},
     }
@@ -341,6 +346,8 @@ def load_blackbox_config_snapshot() -> dict[str, Any]:
             "report": cfg.report,
             "daily_report_limit": cfg.daily_report_limit,
             "report_min_severity": cfg.report_min_severity,
+            "block_severity": cfg.block_severity,
+            "protected_paths": list(cfg.protected_paths),
         }
     except Exception:
         return {
@@ -352,4 +359,6 @@ def load_blackbox_config_snapshot() -> dict[str, Any]:
             "report": False,   # the config could not be read: send nothing rather than guess
             "daily_report_limit": constants.DEFAULT_DAILY_REPORT_LIMIT,
             "report_min_severity": "high",
+            "block_severity": "critical",
+            # protected_paths left out: the bridge then applies its built-in list
         }
