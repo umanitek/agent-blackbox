@@ -3068,6 +3068,8 @@
           </button>
         </div>
       </div>
+      <!-- Agents on this machine Blackbox does not protect yet, drawn by agent-coverage.js (empty when every one is) -->
+      <div id="agent-coverage-root" hidden></div>
       <div class="panel">
         <div class="agents-strip" id="agents-strip">
           <div class="empty" style="padding:28px 20px; width:100%;">Loading agents&hellip;</div>
@@ -3368,6 +3370,7 @@
 <script src="./vendor/force-graph.min.js"></script>
 <script src="./shields.js"></script>
 <script src="./model-connect.js"></script>
+<script src="./agent-coverage.js"></script>
 <script src="./playground.js"></script>
 <script>
 (function () {
@@ -7825,6 +7828,8 @@
       mode: "audit", block_severity: "critical",
       report: false, report_min_severity: "high", community_sandbox: false,
       discover: true, osv_lookup: true,
+      // Not a default to reset: whether new agents are protected was the operator's own choice.
+      auto_attach: !!(setState && setState.auto_attach),
       categories: cats, protected_paths: [],
       category_labels: {}
     };
@@ -7959,6 +7964,7 @@
     if (!setState) return;
     $("set-discover").checked = !!setState.discover;
     $("set-osv").checked = !!setState.osv_lookup;
+    if ($("set-auto-attach")) $("set-auto-attach").checked = !!setState.auto_attach;
     if ($("set-report")) $("set-report").checked = !!setState.report;
     if ($("set-sandbox")) $("set-sandbox").checked = !!setState.community_sandbox;
   }
@@ -7999,6 +8005,7 @@
       report_min_severity: sevOk(setState.report_min_severity),
       discover: !!setState.discover,
       osv_lookup: !!setState.osv_lookup,
+      auto_attach: !!setState.auto_attach,
       report: !!setState.report,
       community_sandbox: !!setState.community_sandbox,
       categories: cats,
@@ -8215,6 +8222,9 @@
     });
     $("set-osv").addEventListener("change", function () {
       if (!setState) return; setState.osv_lookup = this.checked; markDirty();
+    });
+    if ($("set-auto-attach")) $("set-auto-attach").addEventListener("change", function () {
+      if (!setState) return; setState.auto_attach = this.checked; markDirty();
     });
     if ($("set-report")) $("set-report").addEventListener("change", function () {
       if (!setState) return; setState.report = this.checked; markDirty();
@@ -8692,6 +8702,20 @@
 
       <!-- One group per shield, drawn by static/shields.js from the settings view's shields -->
       <div id="set-shields"></div>
+
+      <!-- Agents: protect every new one (auto_attach — opted into at install, switch here) -->
+      <div class="set-group">
+        <div class="set-glabel">Agents</div>
+        <div class="set-row">
+          <div class="set-rl">
+            <div class="set-rt">Protect new agents automatically</div>
+            <div class="set-rh">Every Hermes profile and OpenClaw workspace added on this machine is protected within a minute, with these same settings, and its findings show here labelled with its name. An agent you switch off under Connected agents stays off. Off: a new agent is listed under Connected agents, unprotected, until you switch it on.</div>
+          </div>
+          <div class="set-rc">
+            <label class="set-toggle"><input type="checkbox" id="set-auto-attach" /><span class="set-track"></span></label>
+          </div>
+        </div>
+      </div>
 
       <!-- Advanced -->
       <div class="set-group">

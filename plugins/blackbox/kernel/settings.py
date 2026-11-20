@@ -69,6 +69,7 @@ def read_settings() -> dict[str, Any]:
         "report_min_severity": cfg.report_min_severity,
         "discover": cfg.discover,
         "osv_lookup": cfg.osv_lookup,
+        "auto_attach": cfg.auto_attach,
         "categories": categories,
         "protected_paths": list(cfg.protected_paths),
         "llm": {
@@ -116,7 +117,7 @@ def _validate(payload: dict[str, Any], *, sharing_consent: bool = False) -> tupl
             else:
                 errors.append(f"invalid {key}: {payload[key]!r}")
 
-    for key in ("discover", "osv_lookup", "report", "community_sandbox"):
+    for key in ("discover", "osv_lookup", "auto_attach", "report", "community_sandbox"):
         # `report` (KI-005): the community-sharing switch is a real settings
         # key now — validate-then-persist like every other boolean.
         if key in payload:

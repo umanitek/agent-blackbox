@@ -31,7 +31,8 @@ from ..kernel.browser_boundary import LOOPBACK_HOSTS, BrowserBoundary
 from ..kernel.host_command import NO_MODEL_EXIT, hermes_argv
 from .. import attach, shields
 from ..sync import read_durable_progress
-from . import community_routes, direct_reads, docs_routes, graph_pages, lifecycle, model_connect_routes, playground_routes, shields_routes, sync_meter, sync_timing
+from . import (agent_coverage_routes, community_routes, direct_reads, docs_routes, graph_pages, lifecycle, model_connect_routes,
+               playground_routes, shields_routes, sync_meter, sync_timing)
 from .assistant import answer_payload, clean_chat_output, parse_chat_session_id, with_state_brief
 from .graph_pages import _balanced_graph_entries, _graph_entries
 from .network_sync import network_sync_argv as _network_sync_argv
@@ -73,7 +74,7 @@ _FONT_FILES = frozenset({
     "ibm-plex-mono-600-latin.woff2", "ibm-plex-mono-600-latin-ext.woff2",
 })
 #: The sub-packages that add their own routes and pages, each through ``register(app, swr)``.
-_ROUTE_PACKAGES = (shields_routes, docs_routes, playground_routes, model_connect_routes)
+_ROUTE_PACKAGES = (shields_routes, docs_routes, playground_routes, model_connect_routes, agent_coverage_routes)
 def _dkg_durable_progress(dkg_home: str, context_graph_id: str) -> dict[str, Any]:
     """Read the latest resumable VM offset reported by the managed DKG."""
     return read_durable_progress(dkg_home, context_graph_id)
@@ -836,22 +837,12 @@ def create_app(*, manage_blackbox: bool = False):
                 current.add(("openclaw", str(w)))
             known: set[tuple[str, str]] = _rescan_state["known"]
             removed = known - current
-            touched: list[dict[str, Any]] = []
             now = time.monotonic()
             reconcile = force or now - float(_rescan_state["last_reconcile"] or 0.0) >= _RECONCILE_INTERVAL_SEC
             targets = attach.automatic_targets(current, known, reconcile=reconcile, auto_attach=load_blackbox_config().auto_attach)
             if reconcile:
                 _rescan_state["last_reconcile"] = now
-            for kind, target in sorted(targets):
-                try:
-                    row = attach.set_protection(kind, target, True) or {}
-                    touched.append(row)
-                    if row.get("error"):
-                        logger.warning("blackbox rescan: attach %s %s failed: %s", kind, target, row["error"])
-                    elif not row.get("already"):
-                        logger.info("blackbox rescan: auto-attached %s at %s", kind, target)
-                except Exception as exc:  # pragma: no cover - fail open
-                    logger.debug("blackbox rescan: attach %s %s raised: %s", kind, target, exc)
+            touched = attach.protect_automatically(targets)   # notes each newly protected agent
             for kind, target in removed:
                 logger.info("blackbox rescan: %s workspace vanished at %s", kind, target)
             _rescan_state["known"] = current

@@ -44,6 +44,27 @@ def test_the_environment_selects_setup_only_mode_in_this_hermes_with_the_pinned_
     assert env["BLACKBOX_INSTALL_DIR"].endswith("node") and env["HERMES_HOME"] == str(tmp_path / "home")
 
 
+@pytest.mark.parametrize("protect, expected", [(True, "1"), (False, "0")])
+def test_setup_answers_the_installers_protect_every_agent_question(tmp_path, monkeypatch, protect, expected):
+    # Setup runs the installer with no terminal: its one question ("protect every agent, now and
+    # later?") is answered by --protect-new-agents / --no-… (Desktop's switch) as BLACKBOX_AUTO_ATTACH.
+    monkeypatch.delenv("BLACKBOX_AUTO_ATTACH", raising=False)
+    assert setup.setup_environment(protect_new_agents=protect)["BLACKBOX_AUTO_ATTACH"] == expected
+    assert "BLACKBOX_AUTO_ATTACH" not in setup.setup_environment()   # not given: not asked, only this home
+
+
+def test_setup_parses_the_protect_every_agent_flags():
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    setup.add_setup_parser(parser.add_subparsers())
+    assert parser.parse_args(["setup", "--protect-new-agents"]).setup_protect_new_agents is True
+    assert parser.parse_args(["setup", "--no-protect-new-agents"]).setup_protect_new_agents is False
+    assert parser.parse_args(["setup"]).setup_protect_new_agents is None
+    with pytest.raises(SystemExit):
+        parser.parse_args(["setup", "--protect-new-agents", "--no-protect-new-agents"])
+
+
 @pytest.mark.parametrize("encoding", ["utf-8", "utf-8-sig"])
 def test_the_revision_is_the_catalogs_pinned_commit(tmp_path, monkeypatch, encoding):
     plugin = tmp_path / "blackbox"

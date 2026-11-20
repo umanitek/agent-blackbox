@@ -12,6 +12,9 @@ target. Callers use this surface:
 * :func:`automatic_targets` — which targets an automatic sweep may attach (``auto_attach`` off by
   default: none new); :func:`is_attached` — whether a target has Blackbox switched on now.
 * :func:`attach_named` — attach exactly the targets the operator named (``blackbox attach <home>``).
+* :func:`protect_automatically` — the sweep's attach step (remembers what it protected by itself);
+  :func:`coverage` — the switch, the unprotected agents and those recent protections;
+  :func:`agent_label` — "Hermes · coder" / "OpenClaw · <folder>".
 * :func:`discover_hermes_homes`, :func:`discover_openclaw_workspaces`,
   :func:`is_managed_blackbox_chat_profile`, :func:`enabled_list_has`.
 * :func:`add_attach_parsers`, :func:`cmd_attach` / :func:`cmd_detach` — the CLI commands, and the
@@ -20,7 +23,7 @@ target. Callers use this surface:
   checkout root (used by the dev sync script and the dashboard).
 
 Internals: :mod:`.plugin_copy` · :mod:`.hermes_homes` · :mod:`.openclaw_discovery`
-· :mod:`.openclaw_bridge` · :mod:`.openclaw_json5` · :mod:`.sweep`.
+· :mod:`.openclaw_bridge` · :mod:`.openclaw_json5` · :mod:`.sweep` · :mod:`.coverage`.
 
 Usage::
 
@@ -31,9 +34,9 @@ Usage::
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any, Mapping, Optional
+from typing import Any, Mapping
 
+from .coverage import agent_label, coverage, protect_automatically
 from .command import add_attach_parsers, cmd_attach, cmd_detach, print_hermes_attach_row, print_openclaw_attach_row
 from .hermes_homes import (
     attach_hermes,
@@ -47,15 +50,7 @@ from .openclaw_discovery import discover_openclaw_workspaces
 from .plugin_copy import copy_plugin_tree, repo_root
 from .declined import is_declined
 from .report import AttachReport
-from .sweep import attach_all, attach_named, automatic_targets, detach_all, is_attached
-
-def set_protection(kind: str, target: str, enabled: bool) -> Optional[AttachReport]:
-    """Switch protection of one agent on or off — THE dispatch by agent kind ("hermes" /
-    "openclaw") the dashboard's rescan and its protection route share; None for a kind
-    Blackbox does not know."""
-    switch = {"hermes": (detach_hermes, attach_hermes), "openclaw": (detach_openclaw, attach_openclaw)}.get(str(kind).lower())
-    return switch[bool(enabled)](Path(target)) if switch else None
-
+from .sweep import attach_all, attach_named, automatic_targets, detach_all, is_attached, set_protection
 
 def is_protected(row: Mapping[str, Any]) -> bool:
     """Whether an attach row says Blackbox loads there: ``protected``, or for rows that do not
@@ -66,6 +61,7 @@ def is_protected(row: Mapping[str, Any]) -> bool:
 __all__ = [
     "AttachReport",
     "add_attach_parsers",
+    "agent_label",
     "attach_all",
     "attach_hermes",
     "attach_named",
@@ -74,6 +70,7 @@ __all__ = [
     "cmd_attach",
     "cmd_detach",
     "copy_plugin_tree",
+    "coverage",
     "detach_all",
     "detach_hermes",
     "detach_openclaw",
@@ -86,6 +83,7 @@ __all__ = [
     "is_protected",
     "print_hermes_attach_row",
     "print_openclaw_attach_row",
+    "protect_automatically",
     "repo_root",
     "set_protection",
 ]

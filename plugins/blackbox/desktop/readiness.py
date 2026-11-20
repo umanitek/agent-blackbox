@@ -242,9 +242,11 @@ def _spawn_detached(command: list[str], log: Any, cwd: Path) -> subprocess.Popen
                             cwd=str(cwd), start_new_session=True)
 
 
-def setup_command() -> list[str]:
-    """``hermes blackbox setup`` in the Hermes this process runs in (the same Python, so the same profile)."""
-    return hermes_argv("blackbox", "setup")
+def setup_command(protect_new_agents: Optional[bool] = None) -> list[str]:
+    """``hermes blackbox setup`` in the Hermes this process runs in (the same Python, so the same
+    profile), with the page's answer to "protect every agent, now and later?" when it gave one."""
+    flag = {True: ["--protect-new-agents"], False: ["--no-protect-new-agents"]}.get(protect_new_agents, [])
+    return hermes_argv("blackbox", "setup", *flag)
 
 
 RUN = SetupRun(folder=lambda: constants.blackbox_home() / "desktop_setup")
@@ -342,8 +344,8 @@ def readiness_payload(rules: RuleCount, link: Any, run: SetupRun = RUN) -> dict[
     return _cache.get((id(run), id(link)), lambda: _build(rules, link, run))
 
 
-def start_setup(run: SetupRun = RUN) -> dict[str, Any]:
+def start_setup(run: SetupRun = RUN, *, protect_new_agents: Optional[bool] = None) -> dict[str, Any]:
     """Start ``hermes blackbox setup`` from Desktop (see :class:`SetupRun`); refuses a second run."""
-    answer = run.start(setup_command())
+    answer = run.start(setup_command(protect_new_agents))
     _cache.clear()
     return answer

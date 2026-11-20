@@ -1741,11 +1741,44 @@ function Configure-BlackboxMode {
 }
 
 # ── Protect agents (best-effort, non-fatal) ─────────────────────────────────
-# Blackbox protects the Hermes home this installer set up ($HermesHome). Every
-# other Hermes profile or OpenClaw workspace is its own trust and credential
-# boundary, so it is attached only when the operator says so: `blackbox attach`
-# lists the ones not yet protected and asks [y/N] on the console; with no console
-# it attaches none of them. Scripted installs set BLACKBOX_ATTACH_ALL=1.
+# Blackbox protects the Hermes home this installer set up ($HermesHome). Every other
+# Hermes profile or OpenClaw workspace is its own trust and credential boundary, so
+# Blackbox joins them only with the operator's yes (Hermes catalog review, KI-429 /
+# LES-067). That yes is asked ONCE (2026-11-19): protect every agent here now AND every
+# one added later — `blackbox attach --all --auto`, the one writer the bash installer
+# and `blackbox setup` share. Enter is yes; no console asks nothing and protects only
+# $HermesHome. BLACKBOX_AUTO_ATTACH=1/0 answers it for scripts and for Desktop's setup
+# switch; an earlier yes is kept on a re-run. BLACKBOX_ATTACH_ALL=1 still protects
+# every agent here now, once.
+function Get-AutoAttachAnswer {
+    $flag = "$env:BLACKBOX_AUTO_ATTACH".ToLower()
+    if (@('1', 'true', 'yes', 'on') -contains $flag) { return "true" }
+    if (@('0', 'false', 'no', 'off') -contains $flag) { return "false" }
+    $reader = @"
+import sys
+try:
+    try:
+        import hermes_yaml as yaml
+    except ImportError:
+        import yaml
+    with open(sys.argv[1], encoding="utf-8-sig") as f:
+        data = yaml.safe_load(f) or {}
+except Exception:
+    data = {}
+entry = ((data.get("plugins") or {}).get("entries") or {}).get("blackbox") or {}
+print("true" if entry.get("auto_attach") is True else "false")
+"@
+    $readerFile = Join-Path $env:TEMP ("bb-auto-attach-" + [guid]::NewGuid().ToString("N") + ".py")
+    Set-Content -Path $readerFile -Value $reader -Encoding UTF8
+    try {
+        $saved = (& $VenvPython $readerFile "$HermesHome\config.yaml" 2>$null | Select-Object -Last 1)
+    } finally {
+        Remove-Item $readerFile -Force -ErrorAction SilentlyContinue
+    }
+    if ("$saved".Trim() -eq "true") { return "true" }
+    return ""
+}
+
 function Protect-AllAgents {
     Write-Heading "Protecting your agents"
     Write-Step "Protecting the Hermes home at $HermesHome (blackbox attach) ..."
@@ -1757,15 +1790,36 @@ function Protect-AllAgents {
         Write-Warn2 "Could not protect $HermesHome (this is non-fatal)."
         Write-Step "Re-run anytime with:  blackbox attach $HermesHome"
     }
+    $every = Get-AutoAttachAnswer
+    if (-not $every) {
+        $every = "false"
+        if (-not [Console]::IsInputRedirected) {
+            Write-Host "  Each Hermes profile and OpenClaw workspace is a separate agent. Blackbox can protect"
+            Write-Host "  all of them - the ones on this machine now and every one you add later - with the"
+            Write-Host "  same rules and settings, each one's findings labelled on the dashboard."
+            $ans = Read-Host "  Protect every agent, now and later, automatically? [Y/n]"
+            if ($ans -notmatch '^(n|no)$') { $every = "true" }
+        }
+    }
+    if ($every -eq "true") {
+        Write-Step "Protecting every Hermes profile and OpenClaw workspace, now and later ..."
+        & $HermesBin blackbox attach --all --auto
+        if ($LASTEXITCODE -eq 0) {
+            Write-Ok "Every agent you add later is protected automatically (switch: dashboard Settings -> Agents)"
+        } else {
+            Write-Warn2 "Could not protect every agent (this is non-fatal). Turn it on in the dashboard: Settings -> Agents."
+        }
+        return
+    }
     if (@('1', 'true', 'yes') -contains "$env:BLACKBOX_ATTACH_ALL".ToLower()) {
         Write-Step "BLACKBOX_ATTACH_ALL is set: protecting every Hermes home + OpenClaw workspace found ..."
         & $HermesBin blackbox attach --all
         if ($LASTEXITCODE -ne 0) { Write-Warn2 "Could not protect every agent (this is non-fatal)." }
         return
     }
-    Write-Step "Looking for other agents on this machine (Hermes profiles, OpenClaw workspaces) ..."
-    & $HermesBin blackbox attach
-    if ($LASTEXITCODE -ne 0) { Write-Step "Protect others later with:  blackbox attach <home>   (or --all)" }
+    # Answered no (or no console): change nothing more - the question is asked once only.
+    Write-Step "Other agents stay unprotected until you switch them on (dashboard: Connected agents)."
+    Write-Step "Protect every agent, now and later:  blackbox attach --all --auto   (or dashboard: Settings -> Agents)"
 }
 
 # ── Guided next steps (single source of truth) ──────────────────────────────

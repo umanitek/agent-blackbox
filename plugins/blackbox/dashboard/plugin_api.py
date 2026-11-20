@@ -96,9 +96,13 @@ def readiness() -> Any:
 
 
 @router.post("/setup")
-def setup() -> Any:
+def setup(body: dict[str, Any] = Body(default={})) -> Any:
+    # protectNewAgents: the page's "protect every agent, now and later" switch (on by default
+    # there — the operator sees it before clicking Set up: their yes, KI-429). Only a real
+    # boolean counts; anything else is "not asked" and setup protects only this Hermes home.
+    protect = body.get("protectNewAgents") if isinstance(body, dict) else None
     try:
-        return {"available": True, **_desktop_module().start_setup()}
+        return {"available": True, **_desktop_module().start_setup(protect if isinstance(protect, bool) else None)}
     except Exception as exc:   # health: allow BLE001 -- the Desktop page shows "unavailable", never an HTML 500
         return _unavailable(exc)
 

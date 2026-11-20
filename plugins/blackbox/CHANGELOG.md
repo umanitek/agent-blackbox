@@ -38,6 +38,25 @@ that the two version fields agree.
 
 ## [Unreleased]
 
+### Added
+
+- **Every agent protected, now and later, on one yes.** The installer asks once (Enter is yes):
+  "Protect every agent, now and later, automatically?" — every Hermes profile and OpenClaw
+  workspace on the machine is protected, and so is each one added later, within a minute, with the
+  same rules and settings and its findings labelled with its name on the dashboard. Hermes Desktop's
+  setup page has the same switch (on), `blackbox setup --protect-new-agents` / `--no-…` answer it
+  for scripts, and `blackbox attach --all --auto` / `--no-auto` is the command behind all of them.
+  An agent you switch off stays off. Change it any time: Settings → Agents.
+- The dashboard says "New agent protected: Hermes · coder" when one is protected by itself, and
+  shows one slim line naming any agent on the machine that is not protected, with Protect and
+  "Protect every agent, now and later".
+
+### Changed
+
+- Trader Shield protects a wallet type added in a later Blackbox version without a new save:
+  a saved wallet list keeps the wallets you left unticked off, and guards every wallet it was
+  never offered (before, those stayed off until you saved Settings again).
+
 ## [1.5.0] - 2026-11-19
 
 ### Added

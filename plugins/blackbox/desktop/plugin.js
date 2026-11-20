@@ -927,6 +927,8 @@ button.bbx-stat:hover { border-color: color-mix(in srgb, ${SIGNAL} 45%, var(--bb
 .bbx-col { padding: 22px 24px; display: flex; flex-direction: column; gap: 16px; border-right: 1px solid var(--bbx-line); }
 .bbx-col:last-child { border-right: 0; }
 .bbx-check { display: flex; gap: 12px; align-items: flex-start; }
+.bbx-optin { display: flex; gap: 10px; align-items: flex-start; flex-basis: 100%; font-size: 13.5px; line-height: 1.45; cursor: pointer; }
+.bbx-optin input { margin-top: 3px; flex: none; }
 .bbx-mark { width: 22px; height: 22px; border-radius: 50%; border: 1.6px solid; display: inline-flex; align-items: center; justify-content: center; flex: none;
   font-size: 12px; font-weight: 700; margin-top: 1px; }
 .bbx-mark.ok { color: #3FA568; } .bbx-mark.warn { color: #E5A00D; } .bbx-mark.none { color: var(--bbx-faint); } .bbx-mark.bad { color: #E5484D; }
@@ -3405,9 +3407,11 @@ function SetupSteps({ r }) {
   })
 }
 
-async function startSetup() {
+// protectNewAgents: the page's "protect every agent, now and later" switch (on until the person
+// unticks it — they see it before clicking Set up, so it is their yes: KI-429 / LES-067).
+async function startSetup(protectNewAgents) {
   try {
-    const answer = await rest('/setup', { method: 'POST', body: {} })
+    const answer = await rest('/setup', { method: 'POST', body: { protectNewAgents: protectNewAgents === true } })
     if (!answer || answer.started !== true) host.notify({ kind: 'warning', message: `Setup did not start: ${(answer && (answer.reason || answer.error)) || 'unknown reason'}` })
   } catch (error) {
     host.notify({ kind: 'error', message: `Setup did not start: ${String((error && error.message) || error)}` })
@@ -3440,12 +3444,13 @@ const SETUP_COPY = {
 
 function GettingReady({ r }) {
   const [starting, setStarting] = useState(false)
+  const [protectNew, setProtectNew] = useState(true)
   const copy = SETUP_COPY[r.stage] || SETUP_COPY['setup-needed']
   const offerSetup = r.stage === 'setup-needed' || r.stage === 'setup-failed'
   const error = asObject(r.setup).error
   const run = async () => {
     setStarting(true)
-    await startSetup()
+    await startSetup(protectNew)
     setStarting(false)
   }
   return jsxs('div', {
@@ -3466,6 +3471,16 @@ function GettingReady({ r }) {
             ? jsxs('div', {
                 className: 'bbx-ready-actions',
                 children: [
+                  jsxs('label', {
+                    className: 'bbx-optin',
+                    children: [
+                      jsx('input', { type: 'checkbox', checked: protectNew, disabled: starting, onChange: event => setProtectNew(event.target.checked) }),
+                      jsxs('span', { children: [
+                        jsx('b', { children: 'Protect every agent, now and later' }),
+                        jsx('span', { className: 'bbx-small', children: ' — every Hermes profile and OpenClaw workspace on this computer, and each one you add later, with the same rules. Change it any time in the dashboard: Settings → Agents.' })
+                      ] })
+                    ]
+                  }),
                   jsx('button', { type: 'button', className: 'bbx-cta', disabled: starting, onClick: run, children: starting ? 'Starting…' : r.stage === 'setup-failed' ? 'Run setup again' : 'Set up Blackbox' }),
                   jsx('div', { className: 'bbx-small', children: 'Prefer a terminal? Run this instead:' }),
                   jsx(CopyCommand, { text: SETUP_COMMAND })

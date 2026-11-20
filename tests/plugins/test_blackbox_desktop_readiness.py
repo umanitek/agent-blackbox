@@ -199,15 +199,26 @@ def test_the_setup_command_is_this_hermes(monkeypatch):
 def test_setup_is_refused_once_it_is_running_or_done(monkeypatch, stage):
     started = []
     monkeypatch.setattr(desktop, "readiness_status", lambda: {"stage": stage})
-    monkeypatch.setattr(desktop.readiness_mod, "start_setup", lambda: started.append(1) or {"started": True})
+    monkeypatch.setattr(desktop.readiness_mod, "start_setup", lambda **kw: started.append(1) or {"started": True})
     assert desktop.start_setup()["started"] is False and started == []
 
 
 @pytest.mark.parametrize("stage", ["setup-needed", "setup-failed", "starting"])
 def test_setup_starts_when_the_page_offers_it(monkeypatch, stage):
     monkeypatch.setattr(desktop, "readiness_status", lambda: {"stage": stage})
-    monkeypatch.setattr(desktop.readiness_mod, "start_setup", lambda: {"started": True})
+    monkeypatch.setattr(desktop.readiness_mod, "start_setup", lambda **kw: {"started": True})
     assert desktop.start_setup() == {"started": True}
+
+
+@pytest.mark.parametrize("answer, flag", [(True, ["--protect-new-agents"]), (False, ["--no-protect-new-agents"]), (None, [])])
+def test_the_pages_protect_every_agent_switch_reaches_the_setup_command(monkeypatch, answer, flag):
+    # 2026-11-19: the setup page's "Protect every agent, now and later" (on by default, seen
+    # before Set up — the person's yes, KI-429) becomes setup's flag, then BLACKBOX_AUTO_ATTACH.
+    commands = []
+    monkeypatch.setattr(desktop, "readiness_status", lambda: {"stage": "setup-needed"})
+    monkeypatch.setattr(readiness.RUN, "start", lambda command: commands.append(command) or {"started": True})
+    assert desktop.start_setup(answer) == {"started": True}
+    assert commands == [[sys.executable, "-m", "hermes_cli.main", "blackbox", "setup", *flag]]
 
 
 class _Answer:
@@ -267,9 +278,13 @@ def _load_plugin_api() -> types.ModuleType:
 def test_the_desktop_routes_reach_readiness_and_setup(monkeypatch):
     api = _load_plugin_api()
     monkeypatch.setattr(desktop, "readiness_status", lambda: {"stage": "setup-needed"})
-    monkeypatch.setattr(desktop, "start_setup", lambda: {"started": True})
+    asked = []
+    monkeypatch.setattr(desktop, "start_setup", lambda protect=None: asked.append(protect) or {"started": True})
     assert api.readiness() == {"available": True, "stage": "setup-needed"}
     assert api.setup() == {"available": True, "started": True}
+    assert api.setup({"protectNewAgents": True}) == {"available": True, "started": True}
+    assert api.setup({"protectNewAgents": "yes"}) == {"available": True, "started": True}   # only a real boolean counts
+    assert asked == [None, True, None]
 
 
 def test_an_agent_aimed_at_the_setup_route_is_flagged():

@@ -4,6 +4,11 @@
 command line, or every discovered agent after ``--all`` or a "yes" at the terminal. Run
 bare with no terminal (a script, a pipe), it lists what it found and attaches nothing —
 every Hermes profile is its own trust and credential boundary.
+
+``--auto`` / ``--no-auto`` save the operator's answer to "protect every agent added later?"
+(``auto_attach``, kept by the dashboard's sweep). It is the ONE writer every installer and
+``blackbox setup`` uses, so the Mac/Linux and Windows installers never each write the
+config themselves: ``blackbox attach --all --auto`` protects every agent now and later.
 """
 
 from __future__ import annotations
@@ -11,6 +16,7 @@ from __future__ import annotations
 import argparse
 from typing import Any
 from .. import attach
+from ..kernel import settings
 from ..kernel.terminal_question import ask as _ask_terminal
 
 #: What a bare ``blackbox attach`` tells an operator it could not ask.
@@ -35,6 +41,11 @@ def add_attach_parsers(sub: argparse._SubParsersAction) -> None:
     attach_p.add_argument("--dry-run", action="store_true", help="Show what would change; write nothing")
     attach_p.add_argument("--hermes-only", action="store_true", help="Only attach to Hermes homes")
     attach_p.add_argument("--openclaw-only", action="store_true", help="Only attach to OpenClaw workspaces")
+    new_agents = attach_p.add_mutually_exclusive_group()
+    new_agents.add_argument("--auto", dest="attach_new_agents", action="store_const", const=True, default=None,
+                            help="Also protect every Hermes profile and OpenClaw workspace added later (saved)")
+    new_agents.add_argument("--no-auto", dest="attach_new_agents", action="store_const", const=False,
+                            help="Stop protecting agents added later automatically (saved; protected ones stay)")
     attach_p.set_defaults(func=cmd_attach)
 
     detach_p = sub.add_parser("detach", help="Disable Blackbox in every local agent")
@@ -54,6 +65,11 @@ def cmd_attach(args: argparse.Namespace) -> int:
     if named and args.attach_every_agent:
         print("Name agents OR use --all, not both.")
         return 2
+    new_agents = getattr(args, "attach_new_agents", None)
+    if new_agents is not None and not args.dry_run and not _save_new_agents(new_agents):
+        return 1
+    if new_agents is not None and not (named or args.attach_every_agent):
+        return 0   # only the setting was asked for
     if named:
         report = attach.attach_named(named, dry_run=args.dry_run, **kinds)
     elif args.attach_every_agent or args.dry_run:
@@ -64,6 +80,16 @@ def cmd_attach(args: argparse.Namespace) -> int:
             return 1 if choice == "no-terminal" else 0
         report = attach.attach_all(explicit=True, **kinds)
     return _print_attach_report(report, dry_run=args.dry_run)
+
+
+def _save_new_agents(protect: bool) -> bool:
+    """Save ``auto_attach`` = *protect* (through the settings writer, under the config lock)."""
+    result = settings.write_settings({"auto_attach": protect})
+    if not result.get("ok"):
+        print("Could not save the setting: " + "; ".join(result.get("errors") or ["unknown error"]))
+        return False
+    print("Agents added later are " + ("protected automatically." if protect else "not protected automatically."))
+    return True
 
 
 def _confirm_every_agent(kinds: dict[str, bool]) -> str:

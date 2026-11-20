@@ -2416,10 +2416,66 @@ configure_blackbox_mode() {
 # ── Protect agents (best-effort, non-fatal) ─────────────────────────────────
 # Blackbox protects the Hermes home this installer set up ($HERMES_HOME). Every
 # other Hermes profile or OpenClaw workspace is its own trust and credential
-# boundary, so it is attached only when the operator says so: `blackbox attach`
-# lists the ones not yet protected and asks [y/N] on the terminal (/dev/tty, so
-# it works under `curl | bash`); with no terminal it attaches none of them.
-# Scripted installs that want every agent protected set BLACKBOX_ATTACH_ALL=1.
+# boundary, so Blackbox joins them only with the operator's yes (Hermes catalog
+# review, KI-429 / LES-067: never a silent default). That yes is asked ONCE
+# (Amos, 2026-11-19: "every new profile and every new instance, automatically"):
+# protect every agent here now AND every one added later (`auto_attach: true`, kept
+# by the dashboard's sweep within a minute of a new agent appearing). Enter, or no
+# answer in time, is yes — the question is on screen; no terminal at all (a script)
+# asks nothing and protects only $HERMES_HOME. BLACKBOX_AUTO_ATTACH=1/0 answers it
+# for scripts and for `blackbox setup` (Desktop's switch); an earlier yes is kept on
+# a re-run. BLACKBOX_ATTACH_ALL=1 still protects every agent here now, once.
+BLACKBOX_AUTO_ATTACH_PROMPT_SECONDS="${BLACKBOX_AUTO_ATTACH_PROMPT_SECONDS:-30}"
+
+# Prints the saved plugins.entries.blackbox.auto_attach ("true"/"false"). Read only:
+# the one writer is `blackbox attach --auto / --no-auto` (shared with Windows and setup).
+saved_auto_attach() {
+    "$VENV_DIR/bin/python" - "$HERMES_HOME/config.yaml" <<'PYEOF'
+import sys, os
+try:
+    try:
+        import hermes_yaml as yaml  # Hermes 0.21.7+
+    except ImportError:
+        import yaml
+    with open(sys.argv[1], encoding="utf-8-sig") as f:
+        data = yaml.safe_load(f) or {}
+except Exception:
+    data = {}
+entry = ((data.get("plugins") or {}).get("entries") or {}).get("blackbox") or {}
+print("true" if entry.get("auto_attach") is True else "false")
+PYEOF
+}
+
+# 0 = protect every agent, now and later; 1 = not asked or declined.
+ask_protect_every_agent() {
+    local answer=""
+    if ! { exec 9<>/dev/tty; } 2>/dev/null; then
+        return 1
+    fi
+    step "Each Hermes profile and OpenClaw workspace is a separate agent. Blackbox can protect"
+    step "all of them — the ones on this machine now and every one you add later — with the"
+    step "same rules and settings, each one's findings labelled on the dashboard."
+    printf "Protect every agent, now and later, automatically? [Y/n] (yes in %ss) " "$BLACKBOX_AUTO_ATTACH_PROMPT_SECONDS" >&9
+    IFS= read -r -t "$BLACKBOX_AUTO_ATTACH_PROMPT_SECONDS" answer <&9 || answer=""
+    printf '\n' >&9
+    exec 9>&-
+    case "$answer" in
+        n|N|no|NO|No) return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
+# "true", "false" or "" (ask): the answer BLACKBOX_AUTO_ATTACH or an earlier yes gives.
+auto_attach_answer() {
+    case "$(printf '%s' "${BLACKBOX_AUTO_ATTACH:-}" | tr '[:upper:]' '[:lower:]')" in
+        1|true|yes|on) echo true; return 0 ;;
+        0|false|no|off) echo false; return 0 ;;
+    esac
+    if [ "$(saved_auto_attach 2>/dev/null)" = true ]; then
+        echo true
+    fi
+}
+
 attach_all_agents() {
     heading "Protecting your agents"
     step "Protecting the Hermes home at $HERMES_HOME (blackbox attach) ..."
@@ -2429,14 +2485,29 @@ attach_all_agents() {
         warn "Could not protect $HERMES_HOME (this is non-fatal)."
         step "Re-run anytime with:  blackbox attach $HERMES_HOME"
     fi
+    local every
+    every="$(auto_attach_answer)"
+    if [ -z "$every" ]; then
+        if ask_protect_every_agent; then every=true; else every=false; fi
+    fi
+    if [ "$every" = true ]; then
+        step "Protecting every Hermes profile and OpenClaw workspace, now and later ..."
+        if "$HERMES_BIN" blackbox attach --all --auto; then
+            ok "Every agent you add later is protected automatically (switch: dashboard Settings → Agents)"
+        else
+            warn "Could not protect every agent (this is non-fatal). Turn it on in the dashboard: Settings → Agents."
+        fi
+        return 0
+    fi
     case "$(printf '%s' "${BLACKBOX_ATTACH_ALL:-}" | tr '[:upper:]' '[:lower:]')" in
         1|true|yes)
             step "BLACKBOX_ATTACH_ALL is set: protecting every Hermes home + OpenClaw workspace found ..."
             "$HERMES_BIN" blackbox attach --all || warn "Could not protect every agent (this is non-fatal)."
             return 0 ;;
     esac
-    step "Looking for other agents on this machine (Hermes profiles, OpenClaw workspaces) ..."
-    "$HERMES_BIN" blackbox attach || step "Protect others later with:  blackbox attach <home>   (or --all)"
+    # Answered no (or no terminal): change nothing more — the question is asked once only.
+    step "Other agents stay unprotected until you switch them on (dashboard: Connected agents)."
+    step "Protect every agent, now and later:  blackbox attach --all --auto   (or dashboard: Settings → Agents)"
 }
 
 # ── Optional: configure the LLM prompt-injection reviewer ───────────────────

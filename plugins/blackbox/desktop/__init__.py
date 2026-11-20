@@ -245,13 +245,15 @@ def readiness_status() -> dict[str, Any]:
     return readiness_mod.readiness_payload(lambda: _verified_rules(load_blackbox_config()), dashboard_link())
 
 
-def start_setup() -> dict[str, Any]:
+def start_setup(protect_new_agents: Optional[bool] = None) -> dict[str, Any]:
     """Start ``hermes blackbox setup`` for the person at the Desktop page. Refused while a run is
-    going or once setup is done (``{"started": False, "reason": ...}``)."""
+    going or once setup is done (``{"started": False, "reason": ...}``). *protect_new_agents* is
+    the page's switch: True protects every agent now and later, False only this Hermes home,
+    None (not asked) the same as False."""
     stage = readiness_status().get("stage")
     if stage not in _SETUP_STAGES:
         return {"started": False, "reason": f"nothing to set up (Blackbox is {stage})"}
-    return readiness_mod.start_setup()
+    return readiness_mod.start_setup(protect_new_agents=protect_new_agents)
 
 
 __all__ = ["FINDING_EVENT", "MODES", "PLUGIN_ID", "FindingAlert", "announce_findings", "findings_payload", "long_calls", "readiness_status",
