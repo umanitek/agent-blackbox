@@ -51,6 +51,16 @@ that the two version fields agree.
   shows one slim line naming any agent on the machine that is not protected, with Protect and
   "Protect every agent, now and later".
 
+### Fixed
+
+- **OpenClaw 2026.11.6 and later load Blackbox again.** That OpenClaw release could fail to load
+  the Blackbox plugin on a busy machine ("Plugin preparation callback timed out") and then refused
+  to run the agent at all. The OpenClaw plugin now ships as one bundled file, which loads.
+- **OpenClaw: protected files are protected in shell commands too.** A protected file read, copied
+  or archived through OpenClaw's `exec` tool (`cat ~/.ssh/id_rsa`, `cp -r ~/.ssh …`, `tar … ~`,
+  a one-line script, `find … -exec cat`) is now flagged, and blocked in Block mode, as it is in
+  Hermes. Before, only OpenClaw's file tools were checked.
+
 ### Changed
 
 - Trader Shield protects a wallet type added in a later Blackbox version without a new save:

@@ -752,4 +752,6 @@ export default definePluginEntry({
 });
 
 export { resolveConfig } from "./config.js";
+// For the parity test that runs through the shipped bundle (tests/plugins/test_blackbox_openclaw_bundle.py).
+export { detectCustomFileAccess } from "./detection.js";
 export type { BlackboxConfig } from "./config.js";

@@ -9,6 +9,7 @@ copy is stale (version change or any newer shipped file).
 
 from __future__ import annotations
 
+import json
 import logging
 import shutil
 from pathlib import Path
@@ -188,8 +189,9 @@ def _bundle_openclaw_plugin(src: Path, dest: Path) -> None:
 
 
 def _openclaw_ignore(_dir: str, names: list[str]) -> list[str]:
-    """Exclude deps/build/test dirs from the bundled OpenClaw plugin."""
-    skip = {"node_modules", "dist", ".turbo", "test", "tests", "__pycache__"}
+    """Exclude deps/test dirs from the bundled OpenClaw plugin. ``dist`` is KEPT: since
+    2026-11-20 it holds the one file OpenClaw loads (``dist/index.js``, built from ``src/``)."""
+    skip = {"node_modules", ".turbo", "test", "tests", "__pycache__"}
     return [n for n in names if n in skip or n.endswith((".pyc", ".log", ".tsbuildinfo"))]
 
 
@@ -209,8 +211,17 @@ def _bundled_openclaw_dir() -> Path:
 
 
 def _is_openclaw_plugin_dir(path: Path) -> bool:
-    """True when *path* is the OpenClaw plugin (identified by its manifest)."""
+    """True when *path* is the OpenClaw plugin (identified by its manifest) AND every entry
+    file its ``package.json`` names is there — a copy without its entry (one made before
+    ``dist`` was shipped) would be wired into OpenClaw only to fail there, and OpenClaw then
+    refuses to run the agent; better reported as "OpenClaw not protected"."""
     try:
-        return (path / "openclaw.plugin.json").is_file()
+        if not (path / "openclaw.plugin.json").is_file():
+            return False
+        package = path / "package.json"
+        if not package.is_file():
+            return True
+        entries = (json.loads(package.read_text(encoding="utf-8-sig")).get("openclaw") or {}).get("extensions") or []
+        return all((path / str(entry)).is_file() for entry in entries)
     except Exception:
         return False
