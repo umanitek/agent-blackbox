@@ -34,8 +34,21 @@ export interface ShellFileArg {
 
 const READ_COMMANDS = new Set([
   "cat", "less", "more", "head", "tail", "bat", "xxd", "hexdump", "strings", "od", "nl",
-  "base64", "base32", "sqlite3", "jq", "type", "get-content", "gc",
+  "base64", "base32", "sqlite3", "jq",
+  "awk", "gawk", "sed", "sort", "uniq", "wc", "cut", "paste", "rev", "tac", "column", "fold", "iconv",
+  "diff", "cmp", "md5", "md5sum", "shasum", "sha1sum", "sha256sum", "file",
+  "zcat", "gzcat", "bzcat", "xzcat", "zless",
+  "vim", "vi", "view", "nano", "emacs", "open", "xdg-open", "code", "pbcopy",
+  "type", "get-content", "gc",
 ]);
+/** Commands that send a file somewhere: `-d @FILE`, `-F name=@FILE`, `-T FILE`, `file://`. */
+const UPLOAD_COMMANDS = new Set(["curl", "wget", "http", "https"]);
+const UPLOAD_FILE_OPTIONS = new Set(["-T", "--upload-file", "--post-file", "--body-file"]);
+/** `NAME=VALUE` at the start of a word: a variable set on the command line. */
+const ASSIGNMENT = /^([A-Za-z_][A-Za-z0-9_]*)=([\s\S]*)$/;
+const VARIABLE_USE = /\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))/g;
+/** Commands whose words name things rather than read them; what they print may be piped to `xargs`. */
+const NAMING_COMMANDS = new Set(["echo", "printf"]);
 const RECURSIVE_COMMANDS = new Set([
   "cp", "scp", "rsync", "tar", "zip", "7z", "7za", "rar", "ditto", "mv", "gzip", "rg", "ln", "link",
   "copy", "xcopy", "robocopy", "copy-item", "cpi", "compress-archive", "move-item",
@@ -288,7 +301,57 @@ function destinations(name: string, args: string[], paths: string[]): Set<string
   return new Set();
 }
 
-function commandArgs(name: string, words: string[], index: number): [ShellFileArg[], number] {
+/** `words` with the variables set earlier on the same line put in where they are used (`H=$HOME; cat $H/x`). */
+function withVariables(words: string[]): string[] {
+  const values = new Map<string, string>();
+  return words.map((word) => {
+    const assignment = ASSIGNMENT.exec(word);
+    if (assignment) {
+      values.set(assignment[1]!, assignment[2]!);
+      return word;
+    }
+    if (values.size === 0 || !word.includes("$")) return word;
+    return word.replace(VARIABLE_USE, (whole, braced: string | undefined, bare: string | undefined) => values.get(braced ?? bare ?? "") ?? whole);
+  });
+}
+
+/** `< FILE`: the file a command is fed, whatever the command is. */
+function redirectedIn(words: string[], index: number): [ShellFileArg[], number] {
+  if (index + 1 >= words.length || SEPARATORS.has(words[index + 1]!)) return [[], index + 1];
+  return [[{ path: words[index + 1]!, command: "<", recursive: false, destination: false }], index + 2];
+}
+
+/** `echo FILE … | xargs READER`: the names the echo printed are what the reader reads. */
+function xargsArgs(words: string[], index: number, named: string[]): [ShellFileArg[], number] {
+  const end = segmentEnd(words, index + 1);
+  const command = words.slice(index + 1, end).find((word) => !word.startsWith("-") && word !== "{}") ?? "";
+  const reader = baseName(command);
+  if (!readsFiles(reader)) return [[], end];
+  const recursive = RECURSIVE_COMMANDS.has(reader);
+  return [named.filter(looksLikePath).map((word) => ({ path: word, command: reader, recursive, destination: false })), end];
+}
+
+/** The files an upload command sends: `file://PATH`, `@PATH` and the word after `-T` and its kin. */
+function uploadArgs(name: string, args: string[]): ShellFileArg[] {
+  const paths: string[] = [];
+  args.forEach((word, position) => {
+    if (word.startsWith("file://")) paths.push(word.slice("file://".length));
+    else if (word.includes("@") && !word.startsWith("-") && (word.startsWith("@") || word.includes("=@"))) paths.push(word.slice(word.indexOf("@") + 1));
+    else if (UPLOAD_FILE_OPTIONS.has(word) && position + 1 < args.length) paths.push(args[position + 1]!);
+  });
+  return paths.filter(Boolean).map((path) => ({ path, command: name, recursive: false, destination: false }));
+}
+
+function commandArgs(name: string, words: string[], index: number, inKnownFolder = false): [ShellFileArg[], number] {
+  if (UPLOAD_COMMANDS.has(name)) {
+    const stop = segmentEnd(words, index + 1);
+    return [uploadArgs(name, words.slice(index + 1, stop)), stop];
+  }
+  if (name === "dd") {
+    const stop = segmentEnd(words, index + 1);
+    const inputs = words.slice(index + 1, stop).filter((word) => word.startsWith("if=") && word.length > 3);
+    return [inputs.map((word) => ({ path: word.slice(3), command: "dd", recursive: false, destination: false })), stop];
+  }
   const reads = READ_COMMANDS.has(name);
   let recursive = RECURSIVE_COMMANDS.has(name);
   const flags = RECURSIVE_WITH_FLAG[name];
@@ -301,7 +364,7 @@ function commandArgs(name: string, words: string[], index: number): [ShellFileAr
   const oldStyleTarFlags = name === "tar" && args.length > 0 && isAlpha(args[0]!);
   const paths = args.filter((word, position) =>
     !word.startsWith("-") && !(oldStyleTarFlags && position === 0) &&
-    (looksLikePath(word) || (RECURSIVE_COMMANDS.has(name) && word !== "{}")));
+    (looksLikePath(word) || ((RECURSIVE_COMMANDS.has(name) || inKnownFolder) && word !== "{}")));
   const written = destinations(name, args, paths);
   return [paths.map((word) => ({ path: word, command: name, recursive, destination: written.has(word) })), end];
 }
@@ -400,10 +463,11 @@ function fromFolder(arg: ShellFileArg, folder: string): ShellFileArg {
  */
 export function shellFileArgs(command: string): ShellFileArg[] {
   if (!command) return [];
-  const words = splitWords(command);
+  const words = withVariables(splitWords(command));
   const out: ShellFileArg[] = [];
   const seen = new Set<string>();
   let folder = "";
+  let named: string[] = [];   // the words of the last echo / printf, in case they are piped to xargs
   const keep = (found: ShellFileArg[]): void => {
     for (const each of found) {
       const arg = fromFolder(each, folder);
@@ -420,7 +484,14 @@ export function shellFileArgs(command: string): ShellFileArg[] {
     }
     if (name === "find") [found, index] = findArgs(words, index);
     else if (name in INTERPRETERS) [found, index] = scriptArgs(name, words, index);
-    else [found, index] = commandArgs(name, words, index);
+    else if (name === "<") [found, index] = redirectedIn(words, index);
+    else if (NAMING_COMMANDS.has(name)) {
+      const end = segmentEnd(words, index + 1);
+      named = words.slice(index + 1, end);
+      found = [];
+      index = end;
+    } else if (name === "xargs") [found, index] = xargsArgs(words, index, named);
+    else [found, index] = commandArgs(name, words, index, Boolean(folder));
     keep(found);
   }
   for (const match of command.matchAll(HEREDOC)) keep(pathsInCode(match[1]!, match[4]!));

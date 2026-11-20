@@ -22,6 +22,15 @@ The home folder is written ONE way in what comes back: ``$HOME/x``, ``${HOME}/x`
 paths expands ``~`` and none expanded ``$HOME`` — a blocked ``cat ~/.ssh/key`` was simply retried as
 ``cat $HOME/.ssh/key`` by a real agent and went through (2026-11-20).
 
+More ways a command reads a file without handing its name to ``cat`` (each found by asking
+"how would an agent that was just refused try again?", 2026-11-20):
+
+* input redirection — ``cat < FILE``, ``pbcopy < FILE``: whatever follows ``<`` is read;
+* a name piped to ``xargs`` — ``echo FILE | xargs cat``;
+* a variable set earlier on the line — ``H=$HOME; cat $H/.ssh/key`` (:func:`_with_variables`);
+* ``dd if=FILE``, a ``file://`` address, and an upload — ``curl -d @FILE``, ``-F name=@FILE``, ``-T FILE``;
+* after a ``cd`` into a known folder, a read command's bare operand — ``cd ~/.ssh; cat id_rsa``.
+
 A ``cd`` earlier in the same command line is followed (``cd ~ && zip -r x .config/Exodus``
 reads ``~/.config/Exodus``); the agent's starting folder is not known, so a relative path
 with no ``cd`` before it stays relative.
@@ -52,8 +61,20 @@ import itertools
 _READ_COMMANDS = frozenset({
     "cat", "less", "more", "head", "tail", "bat", "xxd", "hexdump", "strings", "od", "nl",
     "base64", "base32", "sqlite3", "jq",
+    "awk", "gawk", "sed", "sort", "uniq", "wc", "cut", "paste", "rev", "tac", "column", "fold", "iconv",
+    "diff", "cmp", "md5", "md5sum", "shasum", "sha1sum", "sha256sum", "file",
+    "zcat", "gzcat", "bzcat", "xzcat", "zless",
+    "vim", "vi", "view", "nano", "emacs", "open", "xdg-open", "code", "pbcopy",
     "type", "get-content", "gc",                       # Windows cmd / PowerShell
 })
+#: Commands that send a file somewhere: ``-d @FILE``, ``-F name=@FILE``, ``-T FILE``, ``file://``.
+_UPLOAD_COMMANDS = frozenset({"curl", "wget", "http", "https"})
+#: Options whose next word is a file to send as it is.
+_UPLOAD_FILE_OPTIONS = frozenset({"-T", "--upload-file", "--post-file", "--body-file"})
+#: ``NAME=VALUE`` at the start of a word: a variable set on the command line.
+_ASSIGNMENT = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", re.DOTALL)
+#: Commands whose words name things rather than read them; what they print may be piped to ``xargs``.
+_NAMING_COMMANDS = frozenset({"echo", "printf"})
 #: Commands that copy, move or pack whole folders: an argument that is a
 #: folder hands over everything inside it.
 _RECURSIVE_COMMANDS = frozenset({
@@ -154,11 +175,12 @@ def shell_file_args(command: str) -> list[ShellFileArg]:
 
 @functools.lru_cache(maxsize=4)
 def _file_args(command: str) -> tuple[ShellFileArg, ...]:
-    words = _words(command)
+    words = _with_variables(_words(command))
     out: list[ShellFileArg] = []
     seen: set = set()
 
     folder = ""   # where an earlier ``cd`` in this command line moved to ("" = unknown)
+    named: list[str] = []   # the words of the last ``echo`` / ``printf``, in case they are piped to ``xargs``
 
     def keep(found: list[ShellFileArg]) -> None:
         for arg in found:
@@ -177,8 +199,15 @@ def _file_args(command: str) -> tuple[ShellFileArg, ...]:
             found, index = _find_args(words, index)
         elif name in _INTERPRETERS:
             found, index = _script_args(name, words, index)
+        elif name == "<":
+            found, index = _redirected_in(words, index)
+        elif name in _NAMING_COMMANDS:
+            end = _segment_end(words, index + 1)
+            named, found, index = words[index + 1:end], [], end
+        elif name == "xargs":
+            found, index = _xargs_args(words, index, named)
         else:
-            found, index = _command_args(name, words, index)
+            found, index = _command_args(name, words, index, in_known_folder=bool(folder))
         keep(found)
     for match in _HEREDOC.finditer(command):
         keep(_paths_in_code(match.group("interpreter"), match.group("body")))
@@ -193,9 +222,69 @@ def _segment_end(words: list[str], start: int) -> int:
     return end
 
 
-def _command_args(name: str, words: list[str], index: int) -> tuple[list[ShellFileArg], int]:
+def _with_variables(words: list[str]) -> list[str]:
+    """*words* with the variables set earlier on the same line put in where they are used:
+    after ``H=$HOME``, ``$H/.ssh/key`` reads as ``$HOME/.ssh/key``. Only names assigned on this
+    line are replaced; an assignment word itself is kept as written."""
+    values: dict[str, str] = {}
+    out: list[str] = []
+    for word in words:
+        assignment = _ASSIGNMENT.match(word)
+        if assignment and "/" not in assignment.group(1):
+            values[assignment.group(1)] = assignment.group(2)
+            out.append(word)
+            continue
+        if values and "$" in word:
+            word = re.sub(r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))",
+                          lambda found: values.get(found.group(1) or found.group(2), found.group(0)), word)
+        out.append(word)
+    return out
+
+
+def _redirected_in(words: list[str], index: int) -> tuple[list[ShellFileArg], int]:
+    """``< FILE``: the file a command is fed, whatever the command is."""
+    if index + 1 >= len(words) or words[index + 1] in _SEPARATORS:
+        return [], index + 1
+    return [ShellFileArg(path=words[index + 1], command="<", recursive=False)], index + 2
+
+
+def _xargs_args(words: list[str], index: int, named: list[str]) -> tuple[list[ShellFileArg], int]:
+    """``echo FILE … | xargs READER``: the names the echo printed are what the reader reads."""
+    end = _segment_end(words, index + 1)
+    command = next((word for word in words[index + 1:end] if not word.startswith("-") and word != "{}"), "")
+    reader = command.rsplit("/", 1)[-1].lower()
+    if not _reads_files(reader):
+        return [], end
+    recursive = reader in _RECURSIVE_COMMANDS
+    return [ShellFileArg(path=word, command=reader, recursive=recursive) for word in named if _looks_like_path(word)], end
+
+
+def _upload_args(name: str, arguments: list[str]) -> list[ShellFileArg]:
+    """The files an upload command sends: ``file://PATH``, ``@PATH`` (``-d @f``, ``-F a=@f``)
+    and the word after ``-T`` / ``--upload-file`` / ``--post-file``."""
+    paths: list[str] = []
+    for position, word in enumerate(arguments):
+        if word.startswith("file://"):
+            paths.append(word[len("file://"):])
+        elif "@" in word and not word.startswith("-") and (word.startswith("@") or "=@" in word):
+            paths.append(word.split("@", 1)[1])
+        elif word in _UPLOAD_FILE_OPTIONS and position + 1 < len(arguments):
+            paths.append(arguments[position + 1])
+    return [ShellFileArg(path=path, command=name, recursive=False) for path in paths if path]
+
+
+def _command_args(name: str, words: list[str], index: int, *, in_known_folder: bool = False) -> tuple[list[ShellFileArg], int]:
     """The path arguments of one read, copy or archive command at *index*, and where
-    the next command starts. A word that is not such a command yields nothing."""
+    the next command starts. A word that is not such a command yields nothing.
+    *in_known_folder*: an earlier ``cd`` named the folder, so a read command's bare operand
+    (``cd ~/.ssh; cat id_rsa``) is a file there."""
+    if name in _UPLOAD_COMMANDS:
+        end = _segment_end(words, index + 1)
+        return _upload_args(name, words[index + 1:end]), end
+    if name == "dd":
+        end = _segment_end(words, index + 1)
+        return [ShellFileArg(path=word[3:], command="dd", recursive=False)
+                for word in words[index + 1:end] if word.startswith("if=") and len(word) > 3], end
     reads = name in _READ_COMMANDS
     recursive = name in _RECURSIVE_COMMANDS
     flags = _RECURSIVE_WITH_FLAG.get(name)
@@ -211,7 +300,7 @@ def _command_args(name: str, words: list[str], index: int) -> tuple[list[ShellFi
     old_style_tar_flags = name == "tar" and bool(arguments) and arguments[0].isalpha()   # ``tar czf …``
     paths = [word for position, word in enumerate(arguments) if not word.startswith("-")
              and not (old_style_tar_flags and position == 0)
-             and (_looks_like_path(word) or (name in _RECURSIVE_COMMANDS and word != "{}"))]
+             and (_looks_like_path(word) or ((name in _RECURSIVE_COMMANDS or in_known_folder) and word != "{}"))]
     written = _destinations(name, arguments, paths)
     return [ShellFileArg(path=word, command=name, recursive=recursive, destination=word in written)
             for word in paths], end

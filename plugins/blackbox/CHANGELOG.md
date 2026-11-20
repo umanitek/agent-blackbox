@@ -72,6 +72,12 @@ that the two version fields agree.
 - **A protected file reached as `$HOME/…` is protected like `~/…`.** `cat $HOME/.ssh/id_rsa`
   (also `${HOME}` and `%USERPROFILE%`) went through where `cat ~/.ssh/id_rsa` was blocked — in
   Hermes and OpenClaw alike. The home folder is now read the same however a command spells it.
+- **A refused action retried another way is still caught.** After a protected file was refused,
+  an agent could reach it by a bare name after `cd`, with `dd`, `awk`, `sed`, `sort`, `vim` or
+  `open`, through `< file`, `echo file | xargs cat`, a variable holding the folder, an upload
+  (`curl -d @file`, `-F`, `-T`), `file://`, or by wrapping the command in `sh -c '…'`, `bash -c`
+  or `eval`. A package fetched with `npx`, `bunx`, `pnpm dlx`, `yarn dlx` or `pipx run`, or
+  installed inside `sh -c`, is now checked like any install.
 - OpenClaw findings on the dashboard say whether the action was blocked or flagged, and which
   OpenClaw profile and agent it came from ("OpenClaw · work / research").
 

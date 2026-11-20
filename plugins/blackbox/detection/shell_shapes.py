@@ -10,6 +10,7 @@ match curated rules only.
 from __future__ import annotations
 
 import re
+import shlex
 from typing import Any, Optional
 
 # ---------------------------------------------------------------------------
@@ -110,6 +111,52 @@ def _bounded(command: str) -> str:
     return command[:COMMAND_SCAN_WINDOW] + "\n" + command[-COMMAND_SCAN_WINDOW:]
 
 
+#: Shells that run the code handed to them after ``-c`` (``sh -c 'cat x'``, ``bash -lc "…"``).
+_NESTED_SHELLS = frozenset({"sh", "bash", "zsh", "dash", "ksh", "fish"})
+#: How many shells deep a wrapped command is followed.
+_NESTING_DEPTH = 3
+_COMMAND_ENDS = frozenset({";", "&&", "||", "|", "&"})
+
+
+def _nested_code(command: str) -> list[str]:
+    """The commands *command* hands to another shell: the word after a shell's ``-c``, and what
+    follows ``eval`` up to the end of that command. Empty when the line cannot be split."""
+    try:
+        words = shlex.split(command, posix=True)
+    except ValueError:
+        return []
+    found: list[str] = []
+    for position, word in enumerate(words):
+        name = word.rsplit("/", 1)[-1].lower()
+        if name in _NESTED_SHELLS:
+            for offset in range(position + 1, len(words) - 1):
+                option = words[offset]
+                if not option.startswith("-"):
+                    break
+                if not option.startswith("--") and option.endswith("c"):
+                    found.append(words[offset + 1])
+                    break
+        elif name == "eval":
+            rest = words[position + 1:]
+            end = next((index for index, each in enumerate(rest) if each in _COMMAND_ENDS), len(rest))
+            found.append(" ".join(rest[:end]))
+    return [code for code in found if code.strip()]
+
+
+def with_nested_commands(command: str, depth: int = _NESTING_DEPTH) -> str:
+    """*command* followed, one per line, by every command it hands to another shell
+    (``sh -c '…'``, ``bash -c``, ``eval``), :data:`_NESTING_DEPTH` shells deep.
+
+    WHY (2026-11-20): every check reads the command's own words, so wrapping a refused command
+    in ``sh -c '…'`` hid it — a protected file was read and a verified-malware package installed
+    that way. Appending the inner commands lets each check see them as it sees any command;
+    a newline ends a shell command, so the two never run together."""
+    if depth <= 0 or not any(marker in command for marker in (" -c", "c ", "eval")):
+        return command
+    inner = [with_nested_commands(code, depth - 1) for code in _nested_code(command)]
+    return "\n".join([command, *inner]) if inner else command
+
+
 def command_from_args(tool_name: str, args: Any, *, any_tool: bool = False) -> str:
     """The shell command a tool call carries, as the checks read it (bounded, see
     :data:`COMMAND_SCAN_WINDOW`): its ``command``-like argument, else its string arguments
@@ -119,17 +166,17 @@ def command_from_args(tool_name: str, args: Any, *, any_tool: bool = False) -> s
     The ONE reader of "the command of this call" — every check asks it, so no two checks can
     read different commands from the same call."""
     if isinstance(args, str):
-        return _bounded(args)
+        return with_nested_commands(_bounded(args))
     if not isinstance(args, dict):
         return ""
     for key in _COMMAND_KEYS:
         val = args.get(key)
         if isinstance(val, str) and val:
-            return _bounded(val)
+            return with_nested_commands(_bounded(val))
     # Fall back to concatenating string values for shell-like tools only.
     if any_tool or (tool_name or "").lower() in SHELL_TOOLS:
         parts = [v for v in args.values() if isinstance(v, str)]
-        return _bounded(" ".join(parts))
+        return with_nested_commands(_bounded(" ".join(parts)))
     return ""
 
 

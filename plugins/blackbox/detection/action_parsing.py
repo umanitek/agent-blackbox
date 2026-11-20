@@ -195,6 +195,9 @@ _SHELL_INSTALL_PATTERNS = (
     re.compile(r"\bpnpm\s+add\b", re.IGNORECASE),
     re.compile(r"\byarn\s+add\b", re.IGNORECASE),
     re.compile(r"\bbun\s+add\b", re.IGNORECASE),
+    re.compile(r"\b(?:npx|bunx)\b", re.IGNORECASE),              # download a package and run it
+    re.compile(r"\b(?:pnpm|yarn)\s+dlx\b", re.IGNORECASE),
+    re.compile(r"\bpipx\s+(?:run|install)\b", re.IGNORECASE),
     re.compile(r"\bcargo\s+add\b", re.IGNORECASE),
     re.compile(r"\bgem\s+install\b", re.IGNORECASE),
     re.compile(r"\bbrew\s+install\b", re.IGNORECASE),
@@ -250,10 +253,20 @@ _MANAGER_SPECS = {
     ("pnpm", "add"): ("npm", 2),
     ("yarn", "add"): ("npm", 2),
     ("bun", "add"): ("npm", 2),
+    ("npx",): ("npm", 1),            # these fetch a package and run it: an install by another name
+    ("bunx",): ("npm", 1),
+    ("pnpm", "dlx"): ("npm", 2),
+    ("yarn", "dlx"): ("npm", 2),
+    ("pipx", "run"): ("pypi", 2),
+    ("pipx", "install"): ("pypi", 2),
     ("cargo", "add"): ("cargo", 2),
     ("gem", "install"): ("rubygems", 2),
     ("brew", "install"): ("homebrew", 2),
 }
+
+
+#: Runners whose first word is the package and every later word that package's own argument.
+_RUNS_ITS_FIRST_WORD = frozenset({"npx", "bunx"})
 
 
 #: cat-family commands whose following path args are file reads.
@@ -320,6 +333,8 @@ def parse_dependency_installs(command: str) -> list[dict[str, str]]:
                 if key not in seen:
                     seen.add(key)
                     out.append({"ecosystem": ecosystem, **parsed})
+                if tok in _RUNS_ITS_FIRST_WORD or nxt in ("dlx", "run"):
+                    break   # `npx pkg arg…`: only the first word is a package, the rest are its arguments
             j += 1
         i = j
     return out

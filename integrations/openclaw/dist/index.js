@@ -1,4 +1,4 @@
-/* @umanitek/blackbox-openclaw — built from src/ by `npm run build`; do not edit. source sha256:e8c4bacc492ae20bd009bca6a938c29a2c86410aaa8ea678d86b3523f923986b */
+/* @umanitek/blackbox-openclaw — built from src/ by `npm run build`; do not edit. source sha256:f04a6ebcc0bb67f3f4d1ada3f2161ba062be422f582affd92b3000e2a1c4d43f */
 
 // src/consent.ts
 import { readFileSync } from "node:fs";
@@ -115,10 +115,50 @@ var READ_COMMANDS = /* @__PURE__ */ new Set([
   "base32",
   "sqlite3",
   "jq",
+  "awk",
+  "gawk",
+  "sed",
+  "sort",
+  "uniq",
+  "wc",
+  "cut",
+  "paste",
+  "rev",
+  "tac",
+  "column",
+  "fold",
+  "iconv",
+  "diff",
+  "cmp",
+  "md5",
+  "md5sum",
+  "shasum",
+  "sha1sum",
+  "sha256sum",
+  "file",
+  "zcat",
+  "gzcat",
+  "bzcat",
+  "xzcat",
+  "zless",
+  "vim",
+  "vi",
+  "view",
+  "nano",
+  "emacs",
+  "open",
+  "xdg-open",
+  "code",
+  "pbcopy",
   "type",
   "get-content",
   "gc"
 ]);
+var UPLOAD_COMMANDS = /* @__PURE__ */ new Set(["curl", "wget", "http", "https"]);
+var UPLOAD_FILE_OPTIONS = /* @__PURE__ */ new Set(["-T", "--upload-file", "--post-file", "--body-file"]);
+var ASSIGNMENT = /^([A-Za-z_][A-Za-z0-9_]*)=([\s\S]*)$/;
+var VARIABLE_USE = /\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))/g;
+var NAMING_COMMANDS = /* @__PURE__ */ new Set(["echo", "printf"]);
 var RECURSIVE_COMMANDS = /* @__PURE__ */ new Set([
   "cp",
   "scp",
@@ -418,7 +458,49 @@ function destinations(name, args, paths) {
   }
   return /* @__PURE__ */ new Set();
 }
-function commandArgs(name, words, index) {
+function withVariables(words) {
+  const values = /* @__PURE__ */ new Map();
+  return words.map((word) => {
+    const assignment = ASSIGNMENT.exec(word);
+    if (assignment) {
+      values.set(assignment[1], assignment[2]);
+      return word;
+    }
+    if (values.size === 0 || !word.includes("$")) return word;
+    return word.replace(VARIABLE_USE, (whole, braced, bare) => values.get(braced ?? bare ?? "") ?? whole);
+  });
+}
+function redirectedIn(words, index) {
+  if (index + 1 >= words.length || SEPARATORS.has(words[index + 1])) return [[], index + 1];
+  return [[{ path: words[index + 1], command: "<", recursive: false, destination: false }], index + 2];
+}
+function xargsArgs(words, index, named) {
+  const end = segmentEnd(words, index + 1);
+  const command = words.slice(index + 1, end).find((word) => !word.startsWith("-") && word !== "{}") ?? "";
+  const reader = baseName(command);
+  if (!readsFiles(reader)) return [[], end];
+  const recursive = RECURSIVE_COMMANDS.has(reader);
+  return [named.filter(looksLikePath).map((word) => ({ path: word, command: reader, recursive, destination: false })), end];
+}
+function uploadArgs(name, args) {
+  const paths = [];
+  args.forEach((word, position) => {
+    if (word.startsWith("file://")) paths.push(word.slice("file://".length));
+    else if (word.includes("@") && !word.startsWith("-") && (word.startsWith("@") || word.includes("=@"))) paths.push(word.slice(word.indexOf("@") + 1));
+    else if (UPLOAD_FILE_OPTIONS.has(word) && position + 1 < args.length) paths.push(args[position + 1]);
+  });
+  return paths.filter(Boolean).map((path2) => ({ path: path2, command: name, recursive: false, destination: false }));
+}
+function commandArgs(name, words, index, inKnownFolder = false) {
+  if (UPLOAD_COMMANDS.has(name)) {
+    const stop = segmentEnd(words, index + 1);
+    return [uploadArgs(name, words.slice(index + 1, stop)), stop];
+  }
+  if (name === "dd") {
+    const stop = segmentEnd(words, index + 1);
+    const inputs = words.slice(index + 1, stop).filter((word) => word.startsWith("if=") && word.length > 3);
+    return [inputs.map((word) => ({ path: word.slice(3), command: "dd", recursive: false, destination: false })), stop];
+  }
   const reads = READ_COMMANDS.has(name);
   let recursive = RECURSIVE_COMMANDS.has(name);
   const flags = RECURSIVE_WITH_FLAG[name];
@@ -429,7 +511,7 @@ function commandArgs(name, words, index) {
     recursive = args.some((word) => flags.includes(word) || word.startsWith("-") && !word.startsWith("--") && /[rR]/.test(word));
   }
   const oldStyleTarFlags = name === "tar" && args.length > 0 && isAlpha(args[0]);
-  const paths = args.filter((word, position) => !word.startsWith("-") && !(oldStyleTarFlags && position === 0) && (looksLikePath(word) || RECURSIVE_COMMANDS.has(name) && word !== "{}"));
+  const paths = args.filter((word, position) => !word.startsWith("-") && !(oldStyleTarFlags && position === 0) && (looksLikePath(word) || (RECURSIVE_COMMANDS.has(name) || inKnownFolder) && word !== "{}"));
   const written = destinations(name, args, paths);
   return [paths.map((word) => ({ path: word, command: name, recursive, destination: written.has(word) })), end];
 }
@@ -507,10 +589,11 @@ function fromFolder(arg, folder) {
 }
 function shellFileArgs(command) {
   if (!command) return [];
-  const words = splitWords(command);
+  const words = withVariables(splitWords(command));
   const out = [];
   const seen = /* @__PURE__ */ new Set();
   let folder = "";
+  let named = [];
   const keep = (found) => {
     for (const each of found) {
       const arg = fromFolder(each, folder);
@@ -530,7 +613,14 @@ function shellFileArgs(command) {
     }
     if (name === "find") [found, index] = findArgs(words, index);
     else if (name in INTERPRETERS) [found, index] = scriptArgs(name, words, index);
-    else [found, index] = commandArgs(name, words, index);
+    else if (name === "<") [found, index] = redirectedIn(words, index);
+    else if (NAMING_COMMANDS.has(name)) {
+      const end = segmentEnd(words, index + 1);
+      named = words.slice(index + 1, end);
+      found = [];
+      index = end;
+    } else if (name === "xargs") [found, index] = xargsArgs(words, index, named);
+    else [found, index] = commandArgs(name, words, index, Boolean(folder));
     keep(found);
   }
   for (const match of command.matchAll(HEREDOC)) keep(pathsInCode(match[1], match[4]));
