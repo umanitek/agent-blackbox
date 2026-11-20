@@ -17,6 +17,11 @@ Two more ways a command reads files without naming them to ``cat``:
   quoted paths in its code are read (:func:`_script_args`). A path the code builds
   piece by piece is not seen, except the common ``home + '.config/…'`` join.
 
+The home folder is written ONE way in what comes back: ``$HOME/x``, ``${HOME}/x`` and
+``%USERPROFILE%\\x`` become ``~/x`` (:func:`_home_as_tilde`), because every rule that reads these
+paths expands ``~`` and none expanded ``$HOME`` — a blocked ``cat ~/.ssh/key`` was simply retried as
+``cat $HOME/.ssh/key`` by a real agent and went through (2026-11-20).
+
 A ``cd`` earlier in the same command line is followed (``cd ~ && zip -r x .config/Exodus``
 reads ``~/.config/Exodus``); the agent's starting folder is not known, so a relative path
 with no ``cd`` before it stays relative.
@@ -40,7 +45,7 @@ from __future__ import annotations
 import functools
 import re
 import shlex
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import itertools
 
 #: Commands that read a file's contents.
@@ -84,9 +89,10 @@ _FIND_EXEC = ("-exec", "-execdir", "-ok", "-okdir")
 
 @dataclass(frozen=True)
 class ShellFileArg:
-    """One path a shell command touches. ``path`` is the word as written (``~``
-    and ``$HOME`` NOT expanded — matching code expands); ``recursive`` is True
-    when the command takes a folder argument as everything inside it."""
+    """One path a shell command touches. ``path`` is the word as written with the home
+    folder spelled ``~`` (``$HOME`` and ``${HOME}`` are rewritten to it; ``~`` itself is NOT
+    expanded — matching code expands); ``recursive`` is True when the command takes a folder
+    argument as everything inside it."""
 
     path: str
     command: str
@@ -94,6 +100,15 @@ class ShellFileArg:
     #: True for where a copy or archive WRITES (``cp src DEST``, ``tar czf OUT.tgz``) —
     #: nothing is read from it. Rules about what leaves a file skip these.
     destination: bool = False
+
+
+#: The home folder named by a variable at the start of a path: ``$HOME``, ``${HOME}``, ``%USERPROFILE%``.
+_HOME_VARIABLE = re.compile(r"^(?:\$HOME(?![A-Za-z0-9_])|\$\{HOME\}|%USERPROFILE%)")
+
+
+def _home_as_tilde(path: str) -> str:
+    """*path* with a leading home-folder variable written as ``~`` (see the module doc)."""
+    return _HOME_VARIABLE.sub("~", path, count=1)
 
 
 #: A Windows path (``C:\\Users``, ``%APPDATA%\\``): backslash is a separator there,
@@ -287,7 +302,7 @@ def code_file_args(code: str, language: str = "python") -> list[ShellFileArg]:
 
         code_file_args("print(open('/home/me/.ssh/id_rsa').read())")   # -> [ShellFileArg(path='/home/me/.ssh/id_rsa', ...)]
     """
-    return _paths_in_code(language, code or "")
+    return [_from_folder(arg, "") for arg in _paths_in_code(language, code or "")]
 
 
 def _paths_in_code(interpreter: str, code: str) -> list[ShellFileArg]:
@@ -327,9 +342,11 @@ def _is_anchored(path: str) -> bool:
 
 
 def _from_folder(arg: ShellFileArg, folder: str) -> ShellFileArg:
-    """*arg* with a relative path placed under the folder an earlier ``cd`` moved to."""
-    if not folder or _is_anchored(arg.path):
-        return arg
-    relative = arg.path.removeprefix("./")
-    joined = folder if relative in (".", "") else folder.rstrip("/") + "/" + relative
-    return ShellFileArg(path=joined, command=arg.command, recursive=arg.recursive, destination=arg.destination)
+    """*arg* with a relative path placed under the folder an earlier ``cd`` moved to, and the
+    home folder written as ``~`` (:func:`_home_as_tilde`)."""
+    path = arg.path
+    if folder and not _is_anchored(path):
+        relative = path.removeprefix("./")
+        path = folder if relative in (".", "") else folder.rstrip("/") + "/" + relative
+    path = _home_as_tilde(path)
+    return arg if path == arg.path else replace(arg, path=path)

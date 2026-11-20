@@ -185,7 +185,7 @@
       ],
       "args": [
         {
-          "path": "$HOME/.gnupg/secring.gpg",
+          "path": "~/.gnupg/secring.gpg",
           "command": "xxd",
           "recursive": false,
           "destination": false
@@ -1325,6 +1325,138 @@
       ]
     },
     {
+      "command": "cat $HOME/.ssh/id_rsa",
+      "words": [
+        "cat",
+        "$HOME/.ssh/id_rsa"
+      ],
+      "args": [
+        {
+          "path": "~/.ssh/id_rsa",
+          "command": "cat",
+          "recursive": false,
+          "destination": false
+        }
+      ]
+    },
+    {
+      "command": "cat ${HOME}/.ssh/id_rsa",
+      "words": [
+        "cat",
+        "${HOME}/.ssh/id_rsa"
+      ],
+      "args": [
+        {
+          "path": "~/.ssh/id_rsa",
+          "command": "cat",
+          "recursive": false,
+          "destination": false
+        }
+      ]
+    },
+    {
+      "command": "cat \"$HOME\"/.ssh/id_rsa",
+      "words": [
+        "cat",
+        "$HOME/.ssh/id_rsa"
+      ],
+      "args": [
+        {
+          "path": "~/.ssh/id_rsa",
+          "command": "cat",
+          "recursive": false,
+          "destination": false
+        }
+      ]
+    },
+    {
+      "command": "cat $HOME//.ssh/id_rsa $HOMEWORK/notes.txt",
+      "words": [
+        "cat",
+        "$HOME//.ssh/id_rsa",
+        "$HOMEWORK/notes.txt"
+      ],
+      "args": [
+        {
+          "path": "~//.ssh/id_rsa",
+          "command": "cat",
+          "recursive": false,
+          "destination": false
+        },
+        {
+          "path": "$HOMEWORK/notes.txt",
+          "command": "cat",
+          "recursive": false,
+          "destination": false
+        }
+      ]
+    },
+    {
+      "command": "cd $HOME/.ssh && cat id_ed25519",
+      "words": [
+        "cd",
+        "$HOME/.ssh",
+        "&&",
+        "cat",
+        "id_ed25519"
+      ],
+      "args": []
+    },
+    {
+      "command": "cp -r ${HOME}/.aws /tmp/a",
+      "words": [
+        "cp",
+        "-r",
+        "${HOME}/.aws",
+        "/tmp/a"
+      ],
+      "args": [
+        {
+          "path": "~/.aws",
+          "command": "cp",
+          "recursive": true,
+          "destination": false
+        },
+        {
+          "path": "/tmp/a",
+          "command": "cp",
+          "recursive": true,
+          "destination": true
+        }
+      ]
+    },
+    {
+      "command": "type %USERPROFILE%\\.ssh\\id_rsa",
+      "words": [
+        "type",
+        "%USERPROFILE%\\.ssh\\id_rsa"
+      ],
+      "args": [
+        {
+          "path": "~\\.ssh\\id_rsa",
+          "command": "type",
+          "recursive": false,
+          "destination": false
+        }
+      ]
+    },
+    {
+      "command": "python3 -c \"print(open('$HOME/.aws/credentials').read())\"",
+      "words": [
+        "python3",
+        "-c",
+        "print(open('$HOME/.aws/credentials').read())"
+      ],
+      "args": [
+        {
+          "path": "~/.aws/credentials",
+          "command": "python3",
+          "recursive": false,
+          "destination": false
+        }
+      ]
+    },
+    {
       "command": "cat 'unbalanced ~/.ssh/id_rsa",
       "words": [
         "cat",
@@ -1699,6 +1831,61 @@
         {
           "identifier": "fileaccess:read:user-protected",
           "evidence": "read path matching protected pattern ~/.ssh/*"
+        }
+      ]
+    },
+    {
+      "tool": "exec",
+      "args": {
+        "command": "cat $HOME/.ssh/id_rsa"
+      },
+      "findings": [
+        {
+          "identifier": "fileaccess:exec:user-protected",
+          "evidence": "read path matching protected pattern ~/.ssh/*"
+        }
+      ]
+    },
+    {
+      "tool": "exec",
+      "args": {
+        "command": "cat ${HOME}/.ssh/id_rsa"
+      },
+      "findings": [
+        {
+          "identifier": "fileaccess:exec:user-protected",
+          "evidence": "read path matching protected pattern ~/.ssh/*"
+        }
+      ]
+    },
+    {
+      "tool": "exec",
+      "args": {
+        "command": "cat \"$HOME\"/.ssh/id_rsa"
+      },
+      "findings": [
+        {
+          "identifier": "fileaccess:exec:user-protected",
+          "evidence": "read path matching protected pattern ~/.ssh/*"
+        }
+      ]
+    },
+    {
+      "tool": "exec",
+      "args": {
+        "command": "cd $HOME/.ssh && cat id_ed25519"
+      },
+      "findings": []
+    },
+    {
+      "tool": "exec",
+      "args": {
+        "command": "tar czf /tmp/h.tgz $HOME"
+      },
+      "findings": [
+        {
+          "identifier": "fileaccess:exec:user-protected",
+          "evidence": "copy path matching protected pattern ~/.ssh/*"
         }
       ]
     },

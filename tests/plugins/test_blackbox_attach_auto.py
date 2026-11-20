@@ -182,3 +182,22 @@ def test_openclaw_is_handed_the_operators_protected_paths_and_block_level(machin
     attach.attach_openclaw(workspace)
     config = json.loads((workspace / "openclaw.json").read_text(encoding="utf-8"))["plugins"]["entries"]["blackbox"]["config"]
     assert (config["mode"], config["blockSeverity"], config["protectedPaths"]) == ("block", "high", ["~/secrets", "*.pem"])
+
+
+def test_an_agent_whose_entry_is_only_refreshed_is_not_announced_again(machine, tmp_path):
+    # Seen on the test Mac, 2026-11-20: every time OpenClaw rewrote its own config Blackbox put
+    # its entry back, and the dashboard said "New agent protected: OpenClaw" each time.
+    import json
+
+    workspace = machine.parent / ".openclaw"
+    workspace.mkdir()
+    (workspace / "openclaw.json").write_text(json.dumps({"plugins": {}}), encoding="utf-8")
+    target = ("openclaw", str(workspace))
+    attach.protect_automatically({target})
+    announced = len(coverage.RECENT.recent())
+    config = json.loads((workspace / "openclaw.json").read_text(encoding="utf-8"))
+    config["plugins"]["entries"]["blackbox"]["config"]["mode"] = "something-else"   # the entry drifts; still attached
+    (workspace / "openclaw.json").write_text(json.dumps(config), encoding="utf-8")
+    rows = attach.protect_automatically({target})
+    assert rows and not rows[0].get("error")
+    assert len(coverage.RECENT.recent()) == announced

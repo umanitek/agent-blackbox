@@ -1,4 +1,4 @@
-/* @umanitek/blackbox-openclaw — built from src/ by `npm run build`; do not edit. source sha256:b9d28408990a26c1d84ee92e8d58d7461cf89992d67dc724599074a1874990bf */
+/* @umanitek/blackbox-openclaw — built from src/ by `npm run build`; do not edit. source sha256:e8c4bacc492ae20bd009bca6a938c29a2c86410aaa8ea678d86b3523f923986b */
 
 // src/consent.ts
 import { readFileSync } from "node:fs";
@@ -492,11 +492,18 @@ function cd(words, index, folder) {
   if (isAnchored(target)) return [trimTrailingSlashes(target) || "/", end];
   return [folder ? trimTrailingSlashes(folder) + "/" + target : "", end];
 }
+var HOME_VARIABLE = /^(?:\$HOME(?![A-Za-z0-9_])|\$\{HOME\}|%USERPROFILE%)/;
+function homeAsTilde(path2) {
+  return path2.replace(HOME_VARIABLE, "~");
+}
 function fromFolder(arg, folder) {
-  if (!folder || isAnchored(arg.path)) return arg;
-  const relative = withoutDotSlash(arg.path);
-  const joined = relative === "." || relative === "" ? folder : trimTrailingSlashes(folder) + "/" + relative;
-  return { ...arg, path: joined };
+  let path2 = arg.path;
+  if (folder && !isAnchored(path2)) {
+    const relative = withoutDotSlash(path2);
+    path2 = relative === "." || relative === "" ? folder : trimTrailingSlashes(folder) + "/" + relative;
+  }
+  path2 = homeAsTilde(path2);
+  return path2 === arg.path ? arg : { ...arg, path: path2 };
 }
 function shellFileArgs(command) {
   if (!command) return [];
@@ -530,7 +537,7 @@ function shellFileArgs(command) {
   return out;
 }
 function codeFileArgs(code, language = "python") {
-  return pathsInCode(language, code || "");
+  return pathsInCode(language, code || "").map((arg) => fromFolder(arg, ""));
 }
 
 // src/signing.ts
@@ -1765,7 +1772,16 @@ async function discoverDependencyCandidates(toolName, args, ruleset, osvLookup) 
 function expandUser(p) {
   if (p === "~") return os.homedir();
   if (p.startsWith("~/") || p.startsWith("~\\")) return path.join(os.homedir(), p.slice(2));
+  const named = /^~([^/\\]+)(?:[/\\](.*))?$/.exec(p);
+  if (named && named[1] === currentUserName()) return path.join(os.homedir(), named[2] ?? "");
   return p;
+}
+function currentUserName() {
+  try {
+    return os.userInfo().username;
+  } catch {
+    return "";
+  }
 }
 function fnmatchToRegExp(pattern) {
   let re = "";

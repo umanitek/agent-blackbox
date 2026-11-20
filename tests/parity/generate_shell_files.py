@@ -105,6 +105,15 @@ COMMANDS = [
     "copy \"C:\\Users\\me\\AppData\\Roaming\\Exodus\" D:\\out",
     "Get-Content %APPDATA%\\Electrum\\wallets\\default_wallet",
     "Compress-Archive -Path C:\\Users\\me\\.aws -DestinationPath C:\\tmp\\a.zip",
+    # the home folder by its variable (a real agent retried a blocked read this way)
+    "cat $HOME/.ssh/id_rsa",
+    "cat ${HOME}/.ssh/id_rsa",
+    "cat \"$HOME\"/.ssh/id_rsa",
+    "cat $HOME//.ssh/id_rsa $HOMEWORK/notes.txt",
+    "cd $HOME/.ssh && cat id_ed25519",
+    "cp -r ${HOME}/.aws /tmp/a",
+    "type %USERPROFILE%\\.ssh\\id_rsa",
+    "python3 -c \"print(open('$HOME/.aws/credentials').read())\"",
     # odd input
     "cat 'unbalanced ~/.ssh/id_rsa",
     "cat ~/a\\ b/c\\\"d e",
@@ -146,6 +155,11 @@ CALLS = [
     ("exec", {"cmd": "head -3 ~/secrets/token.txt"}),
     ("execute_code", {"code": "import pathlib\nprint((pathlib.Path.home() / '.aws/credentials').read_text())"}),
     ("read", {"path": "~/.ssh/id_rsa"}),
+    ("exec", {"command": "cat $HOME/.ssh/id_rsa"}),
+    ("exec", {"command": "cat ${HOME}/.ssh/id_rsa"}),
+    ("exec", {"command": "cat \"$HOME\"/.ssh/id_rsa"}),
+    ("exec", {"command": "cd $HOME/.ssh && cat id_ed25519"}),
+    ("exec", {"command": "tar czf /tmp/h.tgz $HOME"}),
     # must stay allowed
     ("exec", {"command": "cat .env.example"}),
     ("exec", {"command": "ls -la ~/.ssh/"}),

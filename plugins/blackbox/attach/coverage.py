@@ -97,6 +97,10 @@ def protect_automatically(targets: Iterable[Target]) -> list[dict[str, Any]]:
     never stops the others. Returns each target's attach row."""
     rows: list[dict[str, Any]] = []
     for kind, target in sorted(targets):
+        # Asked BEFORE attaching: "not already" in the attach row also means "its entry was
+        # rewritten" (OpenClaw rewrites its own config; the entry is then put back), and an
+        # agent that was protected all along must not be announced as newly protected.
+        was_protected = is_attached(kind, target)
         try:
             row = dict(set_protection(kind, target, True) or {})
         except Exception as exc:   # health: allow BLE001 -- one agent's broken config never stops the sweep
@@ -106,8 +110,9 @@ def protect_automatically(targets: Iterable[Target]) -> list[dict[str, Any]]:
         if row.get("error"):
             logger.warning("blackbox rescan: attach %s %s failed: %s", kind, target, row["error"])
         elif not row.get("already"):
-            logger.info("blackbox rescan: auto-attached %s at %s", kind, target)
-            RECENT.note(kind, target)
+            logger.info("blackbox rescan: %s %s at %s", "refreshed" if was_protected else "auto-attached", kind, target)
+            if not was_protected:
+                RECENT.note(kind, target)
     return rows
 
 

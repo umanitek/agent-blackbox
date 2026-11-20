@@ -69,6 +69,9 @@ that the two version fields agree.
   from the verified threat graph, Trader Shield's wallet key stores and your local overrides apply
   to OpenClaw too (a verified malicious package installed through OpenClaw used to go through).
   If Blackbox's service is not running, the plugin's own built-in checks still decide.
+- **A protected file reached as `$HOME/…` is protected like `~/…`.** `cat $HOME/.ssh/id_rsa`
+  (also `${HOME}` and `%USERPROFILE%`) went through where `cat ~/.ssh/id_rsa` was blocked — in
+  Hermes and OpenClaw alike. The home folder is now read the same however a command spells it.
 - OpenClaw findings on the dashboard say whether the action was blocked or flagged, and which
   OpenClaw profile and agent it came from ("OpenClaw · work / research").
 

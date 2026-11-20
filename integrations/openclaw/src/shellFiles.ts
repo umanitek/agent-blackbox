@@ -371,11 +371,27 @@ function cd(words: string[], index: number, folder: string): [string, number] {
   return [folder ? trimTrailingSlashes(folder) + "/" + target : "", end];
 }
 
+/** The home folder named by a variable at the start of a path: `$HOME`, `${HOME}`, `%USERPROFILE%`. */
+const HOME_VARIABLE = /^(?:\$HOME(?![A-Za-z0-9_])|\$\{HOME\}|%USERPROFILE%)/;
+
+/**
+ * `path` with a leading home-folder variable written as `~`: every rule that reads these paths
+ * expands `~` and none expanded `$HOME` — a blocked `cat ~/.ssh/key` was retried as
+ * `cat $HOME/.ssh/key` by a real agent and went through (2026-11-20).
+ */
+function homeAsTilde(path: string): string {
+  return path.replace(HOME_VARIABLE, "~");
+}
+
+/** `arg` with a relative path placed under the folder an earlier `cd` moved to, and the home folder written `~`. */
 function fromFolder(arg: ShellFileArg, folder: string): ShellFileArg {
-  if (!folder || isAnchored(arg.path)) return arg;
-  const relative = withoutDotSlash(arg.path);
-  const joined = relative === "." || relative === "" ? folder : trimTrailingSlashes(folder) + "/" + relative;
-  return { ...arg, path: joined };
+  let path = arg.path;
+  if (folder && !isAnchored(path)) {
+    const relative = withoutDotSlash(path);
+    path = relative === "." || relative === "" ? folder : trimTrailingSlashes(folder) + "/" + relative;
+  }
+  path = homeAsTilde(path);
+  return path === arg.path ? arg : { ...arg, path };
 }
 
 /**
@@ -413,5 +429,5 @@ export function shellFileArgs(command: string): ShellFileArg[] {
 
 /** The paths a piece of `code` reads, for tools that run code directly (as `python3 -c CODE`). */
 export function codeFileArgs(code: string, language = "python"): ShellFileArg[] {
-  return pathsInCode(language, code || "");
+  return pathsInCode(language, code || "").map((arg) => fromFolder(arg, ""));
 }

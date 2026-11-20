@@ -25,9 +25,20 @@ def test_escaped_space_keeps_a_macos_path_whole():
 
 def test_quoted_path_with_spaces_is_one_argument():
     assert _paths('cp -r "$HOME/Library/Application Support/BraveSoftware" /tmp/out') == [
-        ("$HOME/Library/Application Support/BraveSoftware", "cp", True),
+        ("~/Library/Application Support/BraveSoftware", "cp", True),   # the home folder is written ~ (below)
         ("/tmp/out", "cp", True),
     ]
+
+
+@pytest.mark.parametrize("spelling", ["$HOME", "${HOME}", '"$HOME"', "$HOME/"])
+def test_the_home_folder_by_its_variable_is_read_as_the_home_folder(spelling):
+    # 2026-11-20, a real agent on a real machine: `cat ~/.ssh/<key>` was blocked, the model retried
+    # `cat $HOME/.ssh/<key>` by itself and the file came back — every rule expands ~, none expanded $HOME.
+    assert _paths(f"cat {spelling}/.ssh/id_rsa")[0][0].replace("//", "/") == "~/.ssh/id_rsa"
+
+
+def test_a_variable_that_only_starts_like_home_is_left_alone():
+    assert _paths("cat $HOMEWORK/notes.txt") == [("$HOMEWORK/notes.txt", "cat", False)]
 
 
 def test_archive_commands_take_folders_whole():

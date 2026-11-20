@@ -1409,7 +1409,18 @@ export async function discoverDependencyCandidates(
 function expandUser(p: string): string {
   if (p === "~") return os.homedir();
   if (p.startsWith("~/") || p.startsWith("~\\")) return path.join(os.homedir(), p.slice(2));
+  // `~name/…` for the user running the agent is the same home folder (Python's expanduser).
+  const named = /^~([^/\\]+)(?:[/\\](.*))?$/.exec(p);
+  if (named && named[1] === currentUserName()) return path.join(os.homedir(), named[2] ?? "");
   return p;
+}
+
+function currentUserName(): string {
+  try {
+    return os.userInfo().username;
+  } catch {
+    return "";   // no passwd entry (some containers): only `~/` is expanded
+  }
 }
 
 /**
