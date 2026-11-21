@@ -100,7 +100,15 @@ pub struct Resolver {
     pub blocked: std::sync::atomic::AtomicU64,
     /// Bounded: at most [`MAX_PENDING`] distinct names wait for the next report.
     pending: Mutex<PendingBlocks>,
+    /// True once the resolver is bound and serving; false if it stopped. The Mac's DNS is pointed
+    /// here only while this is true AND a [`self_test`] answers (security finding: DNS used to be
+    /// switched even when binding :53 had failed, taking the Mac offline).
+    pub alive: std::sync::atomic::AtomicBool,
 }
+
+/// A name the resolver answers itself (NXDOMAIN, never forwarded): `.invalid` can never resolve
+/// on the internet (RFC 6761), so answering it proves only that this resolver is up.
+pub const SELF_TEST_NAME: &str = "blackbox-self-test.invalid";
 
 /// Distinct refused names kept for one report (the plugin accepts 500 per report).
 pub const MAX_PENDING: usize = 500;
@@ -114,6 +122,7 @@ impl Resolver {
             queries: Default::default(),
             blocked: Default::default(),
             pending: Mutex::new(PendingBlocks::new()),
+            alive: Default::default(),
         })
     }
 
@@ -122,6 +131,9 @@ impl Resolver {
         use std::sync::atomic::Ordering::Relaxed;
         self.queries.fetch_add(1, Relaxed);
         let name = question_name(query)?;
+        if name == SELF_TEST_NAME {
+            return refusal(query, RCODE_NXDOMAIN);
+        }
         let verdict = self.lists.read().ok()?.verdict(&name);
         if let Some(list) = verdict {
             self.blocked.fetch_add(1, Relaxed);
@@ -158,8 +170,21 @@ impl Resolver {
 
 /// Serves UDP and TCP on [`LISTEN`] until the process ends.
 pub fn serve(resolver: Arc<Resolver>) -> std::io::Result<()> {
-    let udp = UdpSocket::bind(LISTEN)?;
-    let tcp = TcpListener::bind(LISTEN)?;
+    serve_on(resolver, LISTEN)
+}
+
+/// [`serve`] on *address* (tests use a free port). Marks the resolver alive once bound and not
+/// alive when it stops.
+pub fn serve_on(resolver: Arc<Resolver>, address: &str) -> std::io::Result<()> {
+    let result = serve_bound(resolver.clone(), address);
+    resolver.alive.store(false, std::sync::atomic::Ordering::SeqCst);
+    result
+}
+
+fn serve_bound(resolver: Arc<Resolver>, address: &str) -> std::io::Result<()> {
+    let udp = UdpSocket::bind(address)?;
+    let tcp = TcpListener::bind(address)?;
+    resolver.alive.store(true, std::sync::atomic::Ordering::SeqCst);
     let tcp_resolver = resolver.clone();
     thread::Builder::new().name("blackbox-netd-dns-tcp".into()).spawn(move || {
         for stream in tcp.incoming().flatten() {
@@ -268,6 +293,31 @@ fn question_end(packet: &[u8]) -> Option<usize> {
 }
 
 /// An answer with no records and `rcode`, echoing the query's id, opcode, RD bit and question.
+/// Whether a resolver on *address* answers the self-test query within *timeout*.
+pub fn self_test(address: &str, timeout: Duration) -> bool {
+    let mut id = [0u8; 2];
+    if getrandom::getrandom(&mut id).is_err() {
+        return false;
+    }
+    let Ok(socket) = UdpSocket::bind("127.0.0.1:0") else { return false };
+    if socket.set_read_timeout(Some(timeout)).is_err() || socket.send_to(&query_packet(id, SELF_TEST_NAME), address).is_err() {
+        return false;
+    }
+    let mut buffer = [0u8; MAX_PACKET];
+    matches!(socket.recv_from(&mut buffer), Ok((size, _)) if size >= 12 && buffer[..2] == id && buffer[2] & 0x80 != 0)
+}
+
+/// A minimal standard query (one question, type A, class IN) for *name* with *id*.
+pub fn query_packet(id: [u8; 2], name: &str) -> Vec<u8> {
+    let mut packet = vec![id[0], id[1], 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0];
+    for label in name.trim_end_matches('.').split('.') {
+        packet.push(label.len() as u8);
+        packet.extend_from_slice(label.as_bytes());
+    }
+    packet.extend_from_slice(&[0, 0, 1, 0, 1]);
+    packet
+}
+
 pub fn refusal(query: &[u8], rcode: u8) -> Option<Vec<u8>> {
     let end = question_end(query)?;
     let mut answer = query[..end].to_vec();
@@ -304,6 +354,21 @@ mod tests {
         let mut response = query("a.com");
         response[2] |= 0x80;
         assert_eq!(question_name(&response), None, "answers are not queries");
+    }
+
+    #[test]
+    fn the_self_test_answers_only_while_the_resolver_serves() {
+        let port = std::net::UdpSocket::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        let address = format!("127.0.0.1:{port}");
+        assert!(!self_test(&address, Duration::from_millis(300)), "nothing serves yet");
+        let resolver = Resolver::new(vec![]);   // no upstream at all: the self-test is answered locally
+        let (serving, at) = (resolver.clone(), address.clone());
+        thread::spawn(move || serve_on(serving, &at));
+        for _ in 0..50 {
+            if resolver.alive.load(std::sync::atomic::Ordering::SeqCst) { break; }
+            thread::sleep(Duration::from_millis(20));
+        }
+        assert!(self_test(&address, Duration::from_secs(1)));
     }
 
     #[test]

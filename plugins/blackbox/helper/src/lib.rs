@@ -168,6 +168,23 @@ fn named<F: FnOnce() + Send + 'static>(name: &str, work: F) {
 }
 
 /// The helper's entry point (launchd runs it as root).
+/// How long the resolver has to answer its self-test.
+const DNS_SELF_TEST_TIMEOUT: Duration = Duration::from_secs(1);
+
+/// The upstreams to forward to, in order of trust: what the person set (*saved*, after a
+/// restart), else what the Mac resolves with now, else what this network handed out by DHCP.
+/// Empty when none is known — never a public resolver nobody chose.
+fn known_upstreams(saved: &[std::net::SocketAddr]) -> Vec<std::net::SocketAddr> {
+    pick_upstreams(saved.to_vec(), system::current_upstreams, system::dhcp_upstreams)
+}
+
+fn pick_upstreams(saved: Vec<std::net::SocketAddr>, current: impl FnOnce() -> Vec<std::net::SocketAddr>,
+                  dhcp: impl FnOnce() -> Vec<std::net::SocketAddr>) -> Vec<std::net::SocketAddr> {
+    if !saved.is_empty() { return saved; }
+    let now = current();
+    if !now.is_empty() { now } else { dhcp() }
+}
+
 pub fn run() -> Result<(), String> {
     fs::create_dir_all(HOME).map_err(|error| format!("{HOME}: {error}"))?;
     let mut state = State::load();
@@ -179,7 +196,8 @@ pub fn run() -> Result<(), String> {
         state.boot = boot;
         state.save();
     }
-    let upstreams = if state.dns_active { system::upstreams_from_saved(&state.saved_dns) } else { system::current_upstreams() };
+    let saved = if state.dns_active { system::upstreams_from_saved(&state.saved_dns) } else { vec![] };
+    let upstreams = known_upstreams(&saved);
     let helper = Arc::new(Helper {
         resolver: dns::Resolver::new(upstreams),
         state: Mutex::new(state),
@@ -237,6 +255,7 @@ pub fn run() -> Result<(), String> {
             return Ok(());
         }
         helper.follow_plan();
+        helper.keep_dns_safe();
         let every = if helper.watching.load(Ordering::SeqCst) { PLAN_EVERY_WATCHING } else { PLAN_EVERY };
         for _ in 0..(every.as_millis() / 200) {
             if STOPPING.load(Ordering::SeqCst) {
@@ -285,7 +304,17 @@ impl Helper {
             return None;
         }
         let result = if enabled {
-            *self.resolver.upstreams.write().unwrap() = system::current_upstreams();
+            // Switch the Mac's DNS only to a resolver that is up and answering, with a real
+            // upstream to forward to (security finding: a failed bind or an empty upstream list
+            // used to take the Mac offline, or send its queries to public resolvers nobody chose).
+            let upstreams = known_upstreams(&[]);
+            if upstreams.is_empty() {
+                return Some("DNS Shield stays off: no DNS server of this network is known to forward to".into());
+            }
+            if !self.resolver_answers() {
+                return Some("DNS Shield stays off: Blackbox's resolver is not answering on 127.0.0.1:53".into());
+            }
+            *self.resolver.upstreams.write().unwrap() = upstreams;
             system::point_dns_at_shield().map(|saved| {
                 for (service, servers) in saved {
                     state.saved_dns.entry(service).or_insert(servers);
@@ -300,6 +329,32 @@ impl Helper {
         }
         state.save();
         result.err()
+    }
+
+    /// Whether the resolver is serving and answers a test query now.
+    fn resolver_answers(&self) -> bool {
+        self.resolver.alive.load(Ordering::SeqCst) && dns::self_test(dns::LISTEN, DNS_SELF_TEST_TIMEOUT)
+    }
+
+    /// Every plan cycle while DNS Shield is on: follow the network the Mac is on now (its DHCP
+    /// servers), and if the resolver died, put the Mac's own DNS back at once and say so — the
+    /// next plan turns it on again only when the resolver answers.
+    fn keep_dns_safe(&self) {
+        if !self.state.lock().map(|state| state.dns_active).unwrap_or(false) {
+            return;
+        }
+        if !self.resolver_answers() {
+            let error = self.set_dns(false).unwrap_or_default();
+            *self.applied.lock().unwrap() = String::new();   // re-apply the plan in full next time
+            *self.last_error.lock().unwrap() = Some(format!("DNS Shield's resolver stopped answering; the Mac's own DNS was put back {error}").trim().to_string());
+            return;
+        }
+        let now = system::dhcp_upstreams();
+        if !now.is_empty() {
+            if let Ok(mut upstreams) = self.resolver.upstreams.write() {
+                if *upstreams != now { *upstreams = now; }
+            }
+        }
     }
 
     /// Makes pf enforce the plan's firewall, cut and SSH lockdown; kills the open connections to
@@ -433,6 +488,7 @@ impl Helper {
             // last thing that failed (null when everything applied).
             "auth": self.link.lock().map(|link| link.mode()).unwrap_or("legacy"),
             "last_error": self.last_error.lock().ok().and_then(|e| e.clone()),
+            "resolver_ok": self.resolver.alive.load(Ordering::SeqCst),
             "firewall_dropped": if pf_on { pf::dropped() } else { 0 },
             // What is really enforced, not what was asked: pf must be seen Enabled.
             "pf_enabled": if pf_on { pf::enabled() } else { None },
@@ -475,6 +531,17 @@ impl Helper {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn upstreams_come_from_the_person_then_the_mac_then_dhcp_never_a_public_resolver() {
+        let a: std::net::SocketAddr = "192.168.1.1:53".parse().unwrap();
+        let b: std::net::SocketAddr = "10.0.0.1:53".parse().unwrap();
+        assert_eq!(pick_upstreams(vec![a], || vec![b], Vec::new), [a]);
+        assert_eq!(pick_upstreams(vec![], || vec![b], || vec![a]), [b]);
+        assert_eq!(pick_upstreams(vec![], Vec::new, || vec![a]), [a]);
+        assert!(pick_upstreams(vec![], Vec::new, Vec::new).is_empty(), "nothing known: DNS Shield stays off");
+    }
+
     use super::*;
 
     #[test]

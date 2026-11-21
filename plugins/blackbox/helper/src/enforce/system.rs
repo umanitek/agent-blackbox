@@ -11,7 +11,6 @@ use std::process::Command;
 const NETWORKSETUP: &str = "/usr/sbin/networksetup";
 const SCUTIL: &str = "/usr/sbin/scutil";
 /// Used when the Mac had no upstream DNS of its own to forward to.
-const FALLBACK_UPSTREAMS: [&str; 2] = ["1.1.1.1:53", "9.9.9.9:53"];
 
 fn run(program: &str, args: &[&str]) -> Result<String, String> {
     let output = crate::command::output(Command::new(program).args(args), crate::command::TIMEOUT).map_err(|error| format!("{program}: {error}"))?;
@@ -67,10 +66,19 @@ pub fn restore_dns(saved: &BTreeMap<String, Vec<String>>) -> Vec<String> {
 }
 
 /// The upstreams to forward to: the servers the Mac resolves with (from `scutil --dns`, which
-/// includes DHCP-given ones) minus the Shield itself; public resolvers when there are none.
+/// includes DHCP-given ones) minus the Shield itself. NEVER a public resolver nobody chose
+/// (security finding: queries used to go silently to Cloudflare / Quad9): when none is known the
+/// answer is empty and DNS Shield stays off, saying why.
+///
+/// Scoped resolvers (a block with `domain :` — a VPN's company domains, `.local`) are NOT
+/// upstreams: macOS keeps sending those domains straight to their own servers whatever the
+/// service's DNS is, so they keep working, and the rest of the internet's names never leak to them.
 pub fn upstreams_from_scutil(text: &str) -> Vec<SocketAddr> {
     let mut seen = std::collections::BTreeSet::new();
-    let mut upstreams: Vec<SocketAddr> = text
+    let general: String = text.split("resolver #")
+        .filter(|block| !block.lines().any(|line| line.trim_start().starts_with("domain ") || line.trim_start().starts_with("domain:")))
+        .collect::<Vec<_>>().join("\n");
+    let upstreams: Vec<SocketAddr> = general
         .lines()
         .filter_map(|line| line.trim().strip_prefix("nameserver[").and_then(|rest| rest.split_once(':')).map(|(_, ip)| ip.trim()))
         .filter_map(|ip| ip.parse::<IpAddr>().ok())
@@ -78,10 +86,29 @@ pub fn upstreams_from_scutil(text: &str) -> Vec<SocketAddr> {
         .filter(|ip| seen.insert(*ip))
         .map(|ip| SocketAddr::new(ip, 53))
         .collect();
-    if upstreams.is_empty() {
-        upstreams = FALLBACK_UPSTREAMS.iter().filter_map(|text| text.parse().ok()).collect();
-    }
     upstreams
+}
+
+/// The DNS servers this network handed out (DHCP) on the default route's interface. Used while
+/// DNS Shield is on (the Mac's own settings then show only 127.0.0.1), so moving to another
+/// network follows that network's servers instead of the last one's.
+pub fn dhcp_upstreams() -> Vec<SocketAddr> {
+    let route = run("/sbin/route", &["-n", "get", "default"]).unwrap_or_default();
+    let Some(interface) = parse_default_interface(&route) else { return vec![] };
+    parse_dhcp_dns(&run("/usr/sbin/ipconfig", &["getpacket", &interface]).unwrap_or_default())
+}
+
+/// `interface: en0` from `route -n get default`.
+pub fn parse_default_interface(text: &str) -> Option<String> {
+    text.lines().find_map(|line| line.trim().strip_prefix("interface:").map(|i| i.trim().to_string())).filter(|i| !i.is_empty())
+}
+
+/// `domain_name_server (ip_mult): {192.168.1.1, 192.168.1.2}` from `ipconfig getpacket`.
+pub fn parse_dhcp_dns(text: &str) -> Vec<SocketAddr> {
+    let Some(line) = text.lines().find(|line| line.trim_start().starts_with("domain_name_server")) else { return vec![] };
+    let inside = line.split_once('{').and_then(|(_, rest)| rest.split_once('}')).map(|(list, _)| list).unwrap_or("");
+    inside.split(',').filter_map(|ip| ip.trim().parse::<IpAddr>().ok()).filter(|ip| !ip.is_loopback())
+        .map(|ip| SocketAddr::new(ip, 53)).collect()
 }
 
 /// Reads the Mac's current resolvers. Call before pointing DNS at the Shield.
@@ -113,9 +140,24 @@ mod tests {
     }
 
     #[test]
-    fn upstreams_skip_the_shield_and_fall_back_to_public_resolvers() {
+    fn upstreams_skip_the_shield_and_never_fall_back_to_public_resolvers() {
         let text = "resolver #1\n  nameserver[0] : 127.0.0.1\n  nameserver[1] : 192.168.64.1\nresolver #2\n  nameserver[0] : 192.168.64.1\n";
         assert_eq!(upstreams_from_scutil(text), ["192.168.64.1:53".parse::<SocketAddr>().unwrap()]);
-        assert_eq!(upstreams_from_scutil("  nameserver[0] : 127.0.0.1\n").len(), 2);
+        assert!(upstreams_from_scutil("  nameserver[0] : 127.0.0.1\n").is_empty(), "no silent Cloudflare / Quad9");
+        assert!(upstreams_from_saved(&BTreeMap::new()).is_empty());
+    }
+
+    #[test]
+    fn a_vpns_scoped_resolver_is_kept_out_of_the_general_upstreams() {
+        let text = "resolver #1\n  nameserver[0] : 192.168.1.1\nresolver #2\n  domain   : corp.example\n  nameserver[0] : 10.8.0.1\n";
+        assert_eq!(upstreams_from_scutil(text), ["192.168.1.1:53".parse::<SocketAddr>().unwrap()]);
+    }
+
+    #[test]
+    fn the_networks_own_dns_servers_are_read_from_dhcp() {
+        assert_eq!(parse_default_interface("   route to: default\ndestination: default\n  interface: en0\n"), Some("en0".into()));
+        let packet = "op = BOOTREPLY\nOptions count is 9\ndomain_name_server (ip_mult): {192.168.1.1, 192.168.1.2}\nend (none):\n";
+        assert_eq!(parse_dhcp_dns(packet), ["192.168.1.1:53".parse::<SocketAddr>().unwrap(), "192.168.1.2:53".parse().unwrap()]);
+        assert!(parse_dhcp_dns("op = BOOTREPLY\n").is_empty());
     }
 }
