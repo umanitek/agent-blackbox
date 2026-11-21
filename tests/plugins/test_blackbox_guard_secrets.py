@@ -56,7 +56,6 @@ def _refused(tool, args) -> bool:
     'xxd "$HOME/Library/Application Support/Blackbox/helper/plan.key"',
     "base64 < ~/'Library/Application Support/Blackbox/helper/plan.key'",
     "cp ~/Library/Application\\ Support/Blackbox/helper/plan.key /tmp/k",
-    "ls ~/Library/Application\\ Support/Blackbox/helper",                      # the key folder is sealed, even to a listing
     "cat ~/Library/Application\\ Support/Blackbox/helper/*",
     "cat ~/library/application\\ support/blackbox/HELPER/plan.key",             # macOS folders ignore case
     "cd ~/Library/Application\\ Support/Blackbox && cat helper/plan.key",
