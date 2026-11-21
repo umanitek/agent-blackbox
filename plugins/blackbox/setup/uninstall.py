@@ -44,6 +44,7 @@ from typing import Callable, Optional, Sequence
 from .. import sync   # sync's public entry: the service names, which process is our node
 from ..kernel import constants, system_helper, terminal_question, yaml_files
 from ..kernel.host_command import hermes_argv
+from .uninstall_outside import Runner, _remove_from_agents, _remove_system_helper, _run_at_terminal
 
 #: Files a node needs to keep its identity and wallet (DKG home), and Blackbox's own reporter
 #: identity and sharing consent ($BLACKBOX_HOME). Moved to the backup unless --purge.
@@ -55,7 +56,6 @@ SHIM_MARKER = "managed-by: agent-blackbox-installer"
 # The services to remove: the names the installers register, owned by sync (one place to rename).
 LAUNCHD_LABELS, SYSTEMD_UNITS, WINDOWS_TASKS = sync.LAUNCHD_LABELS, sync.SYSTEMD_UNITS, sync.WINDOWS_TASKS
 
-Runner = Callable[[Sequence[str]], int]
 
 
 def _run(command: Sequence[str]) -> int:
@@ -169,32 +169,6 @@ def describe(plan: UninstallPlan) -> list[str]:
     return lines + [f"Note: {n}" for n in plan.notes]
 
 
-def _run_at_terminal(command: Sequence[str]) -> int:
-    """Run *command* with the person's terminal attached (sudo asks for the password there)."""
-    try:
-        return subprocess.run(list(command), check=False, timeout=300).returncode
-    except (OSError, subprocess.TimeoutExpired):
-        return 127
-
-
-def _remove_system_helper(plan: UninstallPlan, run_as_admin: Runner, report: list[str]) -> None:
-    """The helper puts DNS and the firewall back from its own saved state, then removes itself
-    (its own `uninstall`, as the installer's --remove-system-protection does). Posture hardening
-    it applied stays (the helper's rule: removing it never re-opens the Mac)."""
-    # WHY no check that the program is there: its folder is root-only, so the person cannot see it
-    # (E2E 2026-11-21 read a running helper as "gone" and left DNS and the firewall changed). The
-    # plan found it by its LaunchDaemon; sudo can run what the person cannot see.
-    if not plan.system_helper:
-        return
-    if run_as_admin(["sudo", str(plan.system_helper), "uninstall"]) == 0:
-        report.append("removed the system protection helper; DNS and the firewall are as they were")
-        return
-    # Only the helper's own uninstall puts DNS back: stopping it by hand (bootout + rm) would leave
-    # the Mac asking a resolver that no longer answers — no internet.
-    report.append(f"needs root: sudo '{plan.system_helper}' uninstall   (puts DNS and the firewall back; "
-                  f"if that program is missing, reinstall system protection first, then run it)")
-
-
 def _stop_services(plan: UninstallPlan, run: Runner, report: list[str]) -> None:
     if plan.system == "Darwin":
         # Only reached on macOS; getattr keeps the module importable where os has no getuid (Windows).
@@ -290,31 +264,6 @@ copy keys/node-<name> back into its DKG home (dropping the "node-" prefix), copy
 reporter_key.pem and sharing_consent.json into ~/.hermes/blackbox, then start the node.
 These files are secrets: keep this folder private.
 """
-
-
-@yaml_files.edits_config
-def _remove_from_agents(plan: UninstallPlan, report: list[str]) -> list[Path]:
-    """Detach every agent; returns the Hermes homes where Hermes itself installed the plugin."""
-    from ..attach import detach_all, detach_hermes, is_managed_blackbox_chat_profile   # attach's public entry
-    detach_all(hermes=True, openclaw=True, remove_files=False, dry_run=False)
-    hermes_installed: list[Path] = []
-    for home in plan.hermes_homes:
-        if is_managed_blackbox_chat_profile(home):   # the sweep leaves Blackbox's own chat profile alone
-            detach_hermes(home)
-        config = home / "config.yaml"
-        data = yaml_files.load_yaml(config)   # an unreadable config has no entry to remove: never written
-        plugins = data.get("plugins")
-        entries = plugins.get("entries") if isinstance(plugins, dict) else None   # hand-edited: nothing to remove
-        if isinstance(entries, dict) and "blackbox" in entries:
-            del entries["blackbox"]
-            yaml_files.dump_yaml(config, data)
-        metadata = home / "plugins" / ".install-metadata.json"
-        if metadata.is_file() and '"blackbox"' in metadata.read_text(encoding="utf-8-sig", errors="ignore"):
-            hermes_installed.append(home)
-        elif (home / "plugins" / "blackbox").is_dir():
-            shutil.rmtree(home / "plugins" / "blackbox", ignore_errors=True)
-        report.append(f"removed Blackbox from the Hermes in {home}")
-    return hermes_installed
 
 
 def _delete_data(plan: UninstallPlan, report: list[str]) -> None:
