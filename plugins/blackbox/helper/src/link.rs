@@ -189,6 +189,16 @@ mod tests {
 
     const KEY: [u8; 32] = [7u8; 32];
 
+    /// The vector the plugin checks too (tests/plugins/test_blackbox_shields_network_helper_link.py):
+    /// one key, nonce and body → the same hex on both sides of the contract.
+    #[test]
+    fn a_shared_vector_matches_the_plugin() {
+        assert_eq!(sign(&KEY, &[b"abc", b"\n", br#"{"version":"v1"}"#]),
+                   "556ad530e22f4180c7080a144eb88187e9e5c5668311aa23dc2fd484f285eafa");
+        assert!(verify_plan(&KEY, "abc", br#"{"version":"v1"}"#, "556ad530e22f4180c7080a144eb88187e9e5c5668311aa23dc2fd484f285eafa"));
+        assert_eq!(sign(&KEY, &[br#"{"running":true}"#]), "ed7cae0659cb0798e3f55b0bb6586ee82d23ca413253a304832605c7bf4dd449");
+    }
+
     #[test]
     fn a_plan_signed_for_this_nonce_with_this_key_verifies() {
         let body = br#"{"version":"v1"}"#;

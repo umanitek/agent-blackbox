@@ -16,6 +16,7 @@ from types import SimpleNamespace
 import pytest
 
 from plugins.blackbox.shields.network import api, helper, mode as network_mode, status
+from plugins.blackbox.shields.network import helper_link
 from plugins.blackbox.shields.network.protect import blocklists, enforcement
 from plugins.blackbox.shields.network.respond import events
 from plugins.blackbox.shields.shield_api import AssistantAnswer, ShieldApiError, ShieldContext
@@ -132,6 +133,7 @@ def test_the_card_never_says_active_without_the_helpers_report(tmp_path, monkeyp
     installed = tmp_path / "ai.umanitek.blackbox.netd.plist"
     installed.write_text("<plist/>", encoding="utf-8")
     monkeypatch.setattr(helper, "LAUNCH_DAEMON", installed)
+    monkeypatch.setattr(helper_link, "pairing", lambda: helper_link.PAIRED)   # paired, but not reporting yet
     quiet = {"running": False, "dns_active": False, "firewall_active": False, "cut_active": False,
              "ssh_lockdown_active": False, "cut_total": 0, "blocked_total": 0, "firewall_dropped": 0}
     monkeypatch.setattr(enforcement, "summary", lambda: quiet)

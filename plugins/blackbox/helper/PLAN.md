@@ -22,7 +22,12 @@ installed. Another account on the Mac has no key and cannot drive it (by design)
 * **Reports.** The helper POSTs a report only to a server that proved the key within the last
   120 s, with `X-Blackbox-Token` (the dashboard's session token, as before) AND
   `X-Blackbox-Helper-Signature: hex(HMAC-SHA256(key, <the exact request body bytes>))`. The
-  plugin should refuse an unsigned or wrongly signed report once it has a key.
+  plugin refuses (401) an unsigned or wrongly signed report once it has a key.
+* **Plugin side:** `plugins/blackbox/shields/network/helper_link.py` reads the key, signs the
+  `enforcement` and `system-plan` answers (exact bytes, sent through `shields.RawAnswer`) and
+  checks reports; the card says "not paired" when the helper is installed but this person has
+  no key. Both sides check one shared vector (key 32×0x07, nonce `abc`, body
+  `{"version":"v1"}` → `556ad530…85eafa`).
 * **Legacy.** A helper installed before keys existed has no key file: it accepts unsigned plans
   and says `"auth": "legacy"` in every report, so the plugin can ask the person to reinstall it.
   A key file of the wrong size is `"auth": "broken"`: every plan is refused (fail closed).

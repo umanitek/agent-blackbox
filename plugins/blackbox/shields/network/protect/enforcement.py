@@ -174,6 +174,29 @@ def _protection_results(raw: Any) -> dict[str, dict[str, Any]]:
     return results
 
 
+#: How the helper authenticated (helper/PLAN.md): signed plans, a pre-key helper, or a bad key.
+AUTH_STATES = ("signed", "legacy", "broken")
+MAX_ERROR_TEXT = 300
+
+
+def _health(body: Mapping[str, Any]) -> dict[str, Any]:
+    """The helper's wave-2 health fields, validated (all optional: older helpers send none)."""
+    auth = body.get("auth")
+    if auth is not None and auth not in AUTH_STATES:
+        raise ShieldApiError(400, f"auth must be one of {', '.join(AUTH_STATES)}")
+    health: dict[str, Any] = {"auth": auth}
+    for flag in ("pf_enabled", "resolver_ok"):
+        value = body.get(flag)
+        if value is not None and not isinstance(value, bool):
+            raise ShieldApiError(400, f"{flag} must be true or false")
+        health[flag] = value
+    error = body.get("last_error")
+    if error is not None and not isinstance(error, str):
+        raise ShieldApiError(400, "last_error must be text")
+    health["last_error"] = error[:MAX_ERROR_TEXT] if error else None
+    return health
+
+
 def record_report(body: Mapping[str, Any], now: Optional[float] = None) -> dict[str, Any]:
     """Validates and stores one enforcer report; answers the stored summary."""
     now = time.time() if now is None else now
@@ -184,6 +207,7 @@ def record_report(body: Mapping[str, Any], now: Optional[float] = None) -> dict[
         if not isinstance(body.get(flag, False), bool):
             raise ShieldApiError(400, f"{flag} must be true or false")
     results = _protection_results(body.get("protections"))
+    health = _health(body)
     snapshot, watched = watch.validate(body, now)
     remote = remote_access.validate(body.get("remote"), now)   # before anything is stored: one bad part refuses all
     raw_blocks = body.get("blocks", [])
@@ -209,7 +233,7 @@ def record_report(body: Mapping[str, Any], now: Optional[float] = None) -> dict[
             "enforcer": {"running": body["running"], "dns_active": body["dns_active"],
                          "firewall_active": body["firewall_active"], "cut_active": body.get("cut_active", False),
                          "ssh_lockdown_active": body.get("ssh_lockdown_active", False), "version": str(body.get("version") or "")[:64],
-                         "protections": results, "reported_at": now},
+                         "protections": results, **health, "reported_at": now},
             "queries": _int(body.get("queries", 0), "queries"),
             "firewall_dropped": _int(body.get("firewall_dropped", 0), "firewall_dropped"),
             "blocked_total": state.get("blocked_total", 0) + sum(block["count"] for block in blocks),
@@ -245,6 +269,12 @@ def summary(state: Optional[Mapping[str, Any]] = None, now: Optional[float] = No
         # Why a protection is not applied, as the helper said (fresh reports only; helper/PLAN.md).
         "errors": {name: result["error"] for name, result in (enforcer.get("protections") or {}).items()
                    if fresh and not result.get("applied") and result.get("error")},
+        # The helper's own health (fresh reports only): how it authenticated, its last error,
+        # whether pf is really enabled and its resolver answers (None = it did not say).
+        "auth": enforcer.get("auth") if fresh else None,
+        "last_error": enforcer.get("last_error") if fresh else None,
+        "pf_enabled": enforcer.get("pf_enabled") if fresh else None,
+        "resolver_ok": enforcer.get("resolver_ok") if fresh else None,
         "cut_total": watch.cut_total(),
         "reported_at": enforcer.get("reported_at"),
         "queries": state.get("queries", 0),

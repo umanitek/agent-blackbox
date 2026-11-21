@@ -47,9 +47,11 @@ def lookup_hashes(hashes: list) -> tuple:
     return frozenset(asked[identifier] for identifier in found if identifier in asked), not why
 
 
-def context() -> shields.ShieldContext:
-    """The context one shield endpoint call receives."""
+def context(body: bytes = b"", headers: Any = None) -> shields.ShieldContext:
+    """The context one shield endpoint call receives (*body* / *headers*: the request's own)."""
     return shields.ShieldContext(
+        request_body=body,
+        request_headers={str(name).lower(): str(value) for name, value in dict(headers or {}).items()},
         network_indicators=ruleset.network_indicators,
         network_indicators_now=lambda: ruleset.network_indicators(wait=False),
         ask_assistant=ask_assistant,
@@ -65,20 +67,23 @@ def _valid(shield_id: str, name: str) -> bool:
 def register(app: Any) -> None:
     """Adds the two routes to *app*."""
     from fastapi import Request
-    from fastapi.responses import JSONResponse
+    from fastapi.responses import JSONResponse, Response
     from starlette.concurrency import run_in_threadpool
 
-    def answer(shield_id: str, method: str, name: str, data: Any) -> Any:
+    def answer(shield_id: str, method: str, name: str, data: Any, raw: bytes = b"", headers: Any = None) -> Any:
         if not _valid(shield_id, name):
             return JSONResponse({"error": "unknown shield endpoint"}, status_code=404, headers=NO_CACHE)
         try:
-            return JSONResponse(shields.call_api(shield_id, method, name, context(), data), headers=NO_CACHE)
+            result = shields.call_api(shield_id, method, name, context(raw, headers), data)
+            if isinstance(result, shields.RawAnswer):   # signed bytes: sent exactly as built
+                return Response(content=result.body, media_type="application/json", headers={**NO_CACHE, **dict(result.headers)})
+            return JSONResponse(result, headers=NO_CACHE)
         except shields.ShieldApiError as refusal:
             return JSONResponse({"error": refusal.message}, status_code=refusal.status, headers=NO_CACHE)
 
     @app.get("/api/shields/{shield_id}/api/{name}")
     def shield_api_read(shield_id: str, name: str, request: Request) -> Any:
-        return answer(shield_id, "GET", name, dict(request.query_params))
+        return answer(shield_id, "GET", name, dict(request.query_params), headers=request.headers)
 
     @app.post("/api/shields/{shield_id}/api/{name}")
     async def shield_api_write(shield_id: str, name: str, request: Request) -> Any:
@@ -93,4 +98,4 @@ def register(app: Any) -> None:
             return JSONResponse({"error": "body must be a JSON object"}, status_code=400, headers=NO_CACHE)
         # WHY the thread pool: an endpoint may take minutes (an assistant answer); run in
         # this async route directly it would stall every other request of the dashboard.
-        return await run_in_threadpool(answer, shield_id, "POST", name, body)
+        return await run_in_threadpool(answer, shield_id, "POST", name, body, raw, request.headers)

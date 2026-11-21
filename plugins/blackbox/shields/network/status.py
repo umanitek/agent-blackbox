@@ -18,7 +18,7 @@ from typing import Any, Mapping
 from ...kernel.config import load_blackbox_config
 from .. import extensions
 from ..contract import OfferDownload, ShieldMode, ShieldOffer, ShieldStatus, StatusRow, StatusSection
-from . import helper, mode as mode_module
+from . import helper, helper_link, mode as mode_module
 from .protect import enforcement
 
 #: What Blackbox Desktop adds on top of this shield, as the offer dialog lists it.
@@ -86,10 +86,38 @@ def _row(protection: str, mode: ShieldMode, applied: Mapping[str, Any]) -> Statu
     return StatusRow(icon="●", state="active", text=f"{name} is active", sub=WHAT[protection])
 
 
+#: What to do when the helper and this Blackbox do not share a key (helper/PLAN.md).
+PAIR_HOW = ("Reinstall it to pair them: run Blackbox's installer with --system-protection, or use "
+            "Install the helper in Blackbox Desktop. macOS asks for your admin password once.")
+
+
+def _helper_rows(applied: Mapping[str, Any]) -> tuple[StatusRow, ...]:
+    """The helper's health beyond running: pairing, pf, its resolver, its last error."""
+    rows = []
+    if applied.get("auth") == "legacy":
+        rows.append(StatusRow(icon="!", state="warn", text="System protection helper is an older version",
+                              sub="It accepts plans without a signature. " + PAIR_HOW))
+    if applied.get("pf_enabled") is False:
+        rows.append(StatusRow(icon="!", state="warn", text="The macOS packet filter is off",
+                              sub="The Threat Firewall, cutting and SSH lockdown cannot work until the helper turns it back on."))
+    if applied.get("resolver_ok") is False:
+        rows.append(StatusRow(icon="!", state="warn", text="DNS Shield's resolver is not answering",
+                              sub="The helper keeps your previous DNS servers until it answers again."))
+    if applied.get("last_error"):
+        rows.append(StatusRow(icon="!", state="warn", text="The helper reported a problem", sub=str(applied["last_error"])))
+    return tuple(rows)
+
+
 def _helper_section(applied: Mapping[str, Any]) -> StatusSection:
+    pairing = helper_link.pairing()
     if not helper.installed():
         row = StatusRow(icon="↓", state=mode_module.NEEDS_HELPER, text="System protection helper not installed",
                         sub=HELPER_HOW)
+    elif pairing != helper_link.PAIRED and applied.get("auth") != "legacy":
+        # A keyed helper refuses every plan this Blackbox cannot sign: say so, with the fix.
+        text = ("System protection helper not paired" if pairing == helper_link.NOT_PAIRED
+                else "System protection helper's key file is damaged")
+        row = StatusRow(icon="!", state="warn", text=text, sub=PAIR_HOW)
     elif applied.get("running"):
         row = StatusRow(icon="●", state="active", text="System protection helper running",
                         sub=f"{applied.get('blocked_total', 0):,} lookups refused · {applied.get('firewall_dropped', 0):,} "
@@ -98,7 +126,7 @@ def _helper_section(applied: Mapping[str, Any]) -> StatusSection:
         row = StatusRow(icon="!", state="waiting", text="System protection helper installed but not reporting",
                         sub="It may be starting. If this stays, repair it from the installer or Blackbox Desktop.")
     return StatusSection("System protection helper", "The small root helper that applies DNS Shield, the Threat "
-                         "Firewall, cutting and SSH lockdown.", (row,))
+                         "Firewall, cutting and SSH lockdown.", (row, *_helper_rows(applied)))
 
 
 def build(mode: ShieldMode) -> ShieldStatus:

@@ -58,7 +58,7 @@ from .self_test import SELF_TESTS, SelfTest
 from .json_records import JsonValue
 from .shield_api import MAX_WRITE_BYTES as API_MAX_WRITE_BYTES
 from .shield_api import NAME_PATTERN as API_NAME_PATTERN
-from .shield_api import AssistantAnswer, ShieldApi, ShieldApiError, ShieldContext
+from .shield_api import AssistantAnswer, RawAnswer, ShieldApi, ShieldApiError, ShieldContext
 from . import extensions, network, trader
 from .extensions import Registrar, ShieldExtension
 
@@ -72,6 +72,7 @@ __all__ = [
     "Capability",
     "OfferDownload",
     "Pack",
+    "RawAnswer",
     "Registrar",
     "SelfTest",
     "Shield",

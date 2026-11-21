@@ -33,7 +33,7 @@ from typing import Any, Callable, Mapping
 
 from .. import extensions
 from ..shield_api import ShieldApi, ShieldApiError, ShieldContext
-from . import helper, mode as mode_module, monitor, system, system_api
+from . import helper, helper_link, mode as mode_module, monitor, system, system_api
 from .addresses import public_only
 from .monitor import remote_access, watch
 from .protect import enforcement, remote_lock

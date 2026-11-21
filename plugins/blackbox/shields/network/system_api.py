@@ -22,6 +22,7 @@ from typing import Any, Mapping
 
 from ...shields.network import mode as mode_module
 from ...shields.shield_api import ShieldApiError, ShieldContext
+from . import helper_link
 from .monitor import exposure, posture, system_report
 from .protect import enforcement, posture_fix, tamper_guard
 
@@ -38,12 +39,13 @@ def _require_on() -> None:
         raise ShieldApiError(409, OFF)
 
 
-def system_plan(_context: ShieldContext, _params: Mapping[str, str]) -> dict[str, Any]:
+def system_plan(_context: ShieldContext, params: Mapping[str, str]) -> Any:
     on = _shield_on()
-    return {"watch": on, **posture_fix.plan_part(on), **tamper_guard.plan_part(on)}
+    return helper_link.signed({"watch": on, **posture_fix.plan_part(on), **tamper_guard.plan_part(on)}, params)
 
 
-def system_report_write(_context: ShieldContext, body: Mapping[str, Any]) -> dict[str, Any]:
+def system_report_write(context: ShieldContext, body: Mapping[str, Any]) -> dict[str, Any]:
+    helper_link.require_signed_report(context)
     return system_report.record(system_report.validate(body, time.time()))
 
 

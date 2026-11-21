@@ -63,7 +63,9 @@ class ShieldContext:
     * ``ask_assistant(message)`` — one turn of Blackbox's assistant (the one runner,
       ``dashboard/assistant/runner.py``);
     * ``lookup_hashes(sha256s)`` — which file fingerprints (SHA-256) the verified graph lists;
-    * ``blocking`` — True when Blackbox is in Block mode.
+    * ``blocking`` — True when Blackbox is in Block mode;
+    * ``request_body`` / ``request_headers`` — a write's exact body bytes and the request's
+      headers (lower-case names), for an endpoint that checks a signature over the bytes.
     """
 
     network_indicators: Callable[[], Optional[Any]]
@@ -73,10 +75,22 @@ class ShieldContext:
     #: ``lookup_hashes(sha256s) -> (the ones the verified graph lists, every one could be asked)``
     #: — a shield's file verdicts; None where the graph cannot be asked.
     lookup_hashes: Optional[Callable[[Sequence[str]], tuple[frozenset[str], bool]]] = None
+    request_body: bytes = b""
+    request_headers: Mapping[str, str] = field(default_factory=dict)
 
     def indicators_now(self) -> Optional[Any]:
         """The verified network lists known now, never waiting for a build."""
         return (self.network_indicators_now or self.network_indicators)()
+
+
+@dataclass(frozen=True)
+class RawAnswer:
+    """An endpoint's answer sent byte-for-byte, with extra headers — for an answer whose exact
+    bytes are signed (the system protection helper's plan: ``X-Blackbox-Signature``). The
+    dashboard sends *body* as ``application/json`` unchanged."""
+
+    body: bytes
+    headers: Mapping[str, str] = field(default_factory=dict)
 
 
 ReadHandler = Callable[[ShieldContext, Mapping[str, str]], JsonValue]
