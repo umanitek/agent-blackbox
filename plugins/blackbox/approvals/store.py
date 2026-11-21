@@ -8,7 +8,8 @@ its own request. An approved request is applied when the same body is sent again
 route, once, within :data:`USE_WINDOW_SECONDS`.
 
 The key is paired once per dashboard run: the first ``pair`` is accepted; a later one (the app
-relaunched with a fresh per-launch key) only with a proof made with the key held now. The app
+relaunched with a fresh per-launch key) only with a proof made with the key held now — and the
+requests already waiting keep waiting for the new app to show them. The app
 keeps its current key in the macOS Keychain, readable without a prompt by the app alone.
 
 Pattern: **State** — each held request is ``pending`` → ``approved`` → used (gone), or denied /
@@ -96,7 +97,12 @@ class Approvals:
 
     def pair(self, key_hex: str, proof: str = "") -> bool:
         """Accept *key_hex* as the app's key: the first one, or a new one signed with the current
-        key (``sign(current, pair_message(key_hex))``). A new key drops every held request."""
+        key (``sign(current, pair_message(key_hex))``). Held requests KEEP waiting across a new key:
+        the app relaunched (a fresh per-launch key, proven by the old one) shows them again and its
+        answers are checked against the new key. WHY: dropping them (until 2026-11-21) silently
+        cancelled a weakening request the person had not yet answered whenever Desktop restarted
+        while the dashboard kept running — the requester was never told. An APPROVED request also
+        stays usable within its window: the person's answer was already given."""
         try:
             key = bytes.fromhex(key_hex)
         except (TypeError, ValueError):
@@ -107,7 +113,7 @@ class Approvals:
             if self._key is not None and not hmac.compare_digest(str(proof), sign(self._key, pair_message(key_hex))):
                 return False
             self._key = key
-            self._held.clear()
+            self._prompted.clear()   # the new app may raise each request's prompt again
             return True
 
     # ------------------------------------------------------------------ requests

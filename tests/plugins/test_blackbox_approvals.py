@@ -242,3 +242,26 @@ def test_an_invalid_change_is_refused_by_its_route_not_held_for_confirmation():
     (tests/plugins/test_blackbox_settings.py expects its 400)."""
     assert weakening.reasons("/api/settings", {"mode": "audit", "block_severity": "not-a-severity"}, CURRENT) == []
     assert weakening.reasons("/api/settings", {"mode": "audit"}, CURRENT)
+
+
+
+def test_a_held_request_survives_desktop_relaunching_with_a_new_key():
+    """E2E 2026-11-21: Desktop restarted while the dashboard kept running; its re-pair dropped the
+    waiting request silently. It keeps waiting, and the new key answers it."""
+    store = Approvals()
+    old_key, new_key = bytes([1] * 32), bytes([2] * 32)
+    assert store.pair(old_key.hex())
+    held = store.hold("/api/settings", b'{"mode":"audit"}', ["Switch from Block to Audit mode"])
+    assert store.pair(new_key.hex(), sign(old_key, pair_message(new_key.hex())))
+    assert [waiting.id for waiting in store.waiting()] == [held.id]
+    assert not store.answer(held.id, True, sign(old_key, answer_message("approve", held)))   # the old key is gone
+    assert store.answer(held.id, True, sign(new_key, answer_message("approve", held)))
+    assert store.consume("/api/settings", b'{"mode":"audit"}')
+
+
+def test_a_stranger_cannot_re_pair_to_answer_the_waiting_requests():
+    store = Approvals()
+    store.pair(bytes([1] * 32).hex())
+    held = store.hold("/api/settings", b"{}", ["x"])
+    assert not store.pair(bytes([9] * 32).hex(), "00")
+    assert [waiting.id for waiting in store.waiting()] == [held.id]
