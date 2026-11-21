@@ -8,8 +8,11 @@ does not know is ignored.
 ## Authentication (security wave 2, finding 1)
 
 `blackbox-netd install` creates a per-install key: 32 random bytes in
-`/Library/Application Support/Blackbox/netd/plan.key` (root, 0600) and a copy handed to the
-plugin's own state folder at `<BLACKBOX_HOME>/helper/plan.key` (owner: the person, 0600).
+`/Library/Application Support/Blackbox/netd/plan.key` (root, 0600) and a copy for the person
+who installed it at `~/Library/Application Support/Blackbox/helper/plan.key` (owner: that
+person, 0600, written as them). ONE place per person, not per `BLACKBOX_HOME`: the installer's
+Blackbox and Blackbox Desktop's engine both read it, so either can drive a helper the other
+installed. Another account on the Mac has no key and cannot drive it (by design).
 
 * **Plans.** Every plan request carries a fresh `nonce` (32 hex characters) as a query parameter.
   The plugin answers with the header

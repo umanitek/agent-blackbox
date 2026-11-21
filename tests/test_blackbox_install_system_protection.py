@@ -61,7 +61,7 @@ def _run(tmp_path: Path, *, choice: str, helper: bytes | None = None, sha: str =
         'ok() { printf "OK %s\\n" "$1"; }', 'warn() { printf "WARN %s\\n" "$1"; }', 'err() { printf "ERR %s\\n" "$1"; }',
         f'OS="{os_name}"', f'BLACKBOX_SYSTEM_PROTECTION="{choice}"', "BLACKBOX_SYSTEM_PROTECTION_PROMPT_SECONDS=1",
         f'BLACKBOX_HELPER_PATH="{helper_path}"', f'BLACKBOX_HELPER_SHA256="{sha}"',
-        f'BLACKBOX_HELPER_DAEMON="{tmp_path}/no-such.plist"', f'BLACKBOX_HOME="{tmp_path}/bbhome"',
+        f'BLACKBOX_HELPER_DAEMON="{tmp_path}/no-such.plist"', f'BLACKBOX_HELPER_KEY_DIR="{tmp_path}/keys"',
         f'REPO_DIR="{repo}"', f'HERMES_HOME="{tmp_path}/hermes"', f'TMPDIR="{tmp_path}"',
         *(_function(name) for name in FUNCTIONS),
         'offer_system_protection', 'printf "STATE=%s\\n" "$BLACKBOX_SYSTEM_PROTECTION_STATE"',
@@ -97,7 +97,7 @@ def test_a_matching_binary_goes_to_the_helpers_own_verified_install(tmp_path):
     assert len(ran) == 1
     command = ran[0]
     assert re.search(rf"blackbox-netd install --from \S+/blackbox-netd --sha256 {sha} ", command)
-    assert f"--key-for {tmp_path}/bbhome/helper --owner {os.getuid()}" in command
+    assert f"--key-for {tmp_path}/keys --owner {os.getuid()}" in command
     assert command.startswith("-n "), "no terminal: only an already-cached sudo, never a hanging prompt"
 
 

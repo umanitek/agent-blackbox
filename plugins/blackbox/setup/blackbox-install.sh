@@ -4051,6 +4051,9 @@ BLACKBOX_HELPER_SHA256="${BLACKBOX_HELPER_SHA256:-}"
 BLACKBOX_HELPER_HOME="/Library/Application Support/Blackbox/netd"
 BLACKBOX_HELPER_DAEMON="/Library/LaunchDaemons/ai.umanitek.blackbox.netd.plist"
 BLACKBOX_SYSTEM_PROTECTION_STATE=""   # installed | declined | failed | unsupported (for next_steps)
+# The plugin's copy of the helper's plan key — ONE place per person, whichever Blackbox (this
+# install or Blackbox Desktop's engine) serves the dashboard (helper/PLAN.md).
+BLACKBOX_HELPER_KEY_DIR="$HOME/Library/Application Support/Blackbox/helper"
 
 helper_manifest_file() {
     local candidate
@@ -4163,7 +4166,7 @@ install_system_protection() {
     # The binary runs as root only after its checksum matched above; `install` checks it again on
     # a root-only copy before anything on the Mac changes.
     if sudo_with_tty "$folder/blackbox-netd" install --from "$folder/blackbox-netd" --sha256 "$sha" \
-        --key-for "$BLACKBOX_HOME/helper" --owner "$owner"; then
+        --key-for "$BLACKBOX_HELPER_KEY_DIR" --owner "$owner"; then
         rm -rf "$folder"
         ok "System protection is installed. Turn on DNS Shield and the Threat Firewall in the dashboard's Network Shield."
         return 0
@@ -4218,7 +4221,7 @@ remove_system_protection() {
     [ "$BLACKBOX_UNDO_HARDENING" = true ] && args+=(--undo-hardening)
     step "Removing the system protection helper (macOS asks for your admin password)"
     if sudo_with_tty "$helper" "${args[@]}"; then
-        rm -f "$BLACKBOX_HOME/helper/plan.key"
+        rm -f "$BLACKBOX_HELPER_KEY_DIR/plan.key"
         ok "System protection removed; DNS and the firewall are as they were before it."
         return 0
     fi
