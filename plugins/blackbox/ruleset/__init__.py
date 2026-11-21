@@ -36,6 +36,8 @@ from __future__ import annotations
 from .compiler import Ruleset, build_from_rows
 from .errors import RulesetRefreshIncomplete, RulesetRefreshLockUnavailable, RulesetRefreshUnavailable
 from .fetching import fetch_local_records, fetch_tier
+from typing import Optional
+
 from . import live
 from .partitions import DownloadTotals, GrowthWatch, verified_download_totals
 from .partitions import progress as verified_progress
@@ -68,6 +70,7 @@ __all__ = [
     "graph_page",
     "live",
     "local_graph_url",
+    "network_indicators",
     "peek",
     "pulse",
     "read_for_action",
@@ -81,3 +84,10 @@ __all__ = [
     "verified_download_totals",
     "verified_progress",
 ]
+
+
+def network_indicators(config=None) -> Optional[live.NetworkIndicators]:
+    """Every verified malicious domain and IP (Network Shield's lists), read with the live
+    lookup's own scope from the current generation; None until the graph is synced.
+    See :mod:`.live.network_lists`."""
+    return live.network_indicators(peek(config).verified_scope)
