@@ -79,12 +79,43 @@ def _runner() -> Path:
     return target
 
 
+#: The launcher every hook names instead of a Python path (:func:`_python`).
+LAUNCHER_NAME = "python"
+
+
+def _python() -> Path:
+    """A launcher in Blackbox's data folder that runs the runner with a Python that exists.
+
+    WHY: hooks named ``sys.executable`` — Hermes's VERSIONED environment
+    (``~/.hermes/installs/<id>/environments/<id>/venv/bin/python3``). An update that prunes that
+    environment would leave every agent's hook pointing at a missing Python (fail-open: the agents
+    run unprotected) until the next sweep (E2E 2026-11-21). The runner needs only the standard
+    library, so ANY Python of this Hermes will do: the launcher tries the current one, then the
+    newest Hermes environment still there, and lets the agent go on (exit 0) when none is."""
+    target = constants.blackbox_home() / "agent-hooks" / LAUNCHER_NAME
+    hermes_envs = shlex.quote(str(constants.hermes_root())) + "/installs/*/environments/*/venv/bin/python3"
+    text = (
+        "#!/bin/sh\n"
+        "# Blackbox: the Python that runs coding agents' hooks. Rewritten by Blackbox; safe to delete.\n"
+        f"for py in {shlex.quote(sys.executable)} $(ls -t {hermes_envs} 2>/dev/null); do\n"
+        '    [ -x "$py" ] && exec "$py" "$@"\n'
+        "done\n"
+        "exit 0   # no Python left: the agent goes on (fail-open)\n"
+    )
+    if not target.exists() or target.read_text(encoding="utf-8") != text:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text, encoding="utf-8")
+        target.chmod(0o755)
+    return target
+
+
 def _invocations(host: Host) -> dict[str, tuple[list[str], str]]:
     url = f"http://127.0.0.1:{load_blackbox_config().dashboard_port}"
     runner = str(_runner())
+    python = str(_python())
     out = {}
     for agent_event, kind in host.events.items():
-        argv = [sys.executable, runner, host.id, kind, url]
+        argv = [python, runner, host.id, kind, url]
         out[agent_event] = (argv, " ".join(shlex.quote(part) for part in argv))
     return out
 

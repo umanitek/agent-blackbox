@@ -264,3 +264,34 @@ def test_an_agent_installed_outside_the_services_path_is_found(tmp_path, monkeyp
     tool.write_text("#!/bin/sh\n", encoding="utf-8")
     tool.chmod(0o755)
     assert {row.id: row.state for row in agent_hooks.rows()}.get("claude-code") == "available"
+
+
+# ---------------------------------------------------------------- the Python a hook runs (E2E 2026-11-21)
+
+def test_a_hook_names_blackboxs_launcher_never_a_versioned_hermes_environment(monkeypatch, tmp_path):
+    """Hooks named Hermes's versioned environment Python; an update that pruned it would leave every
+    agent's hook pointing at nothing. They now name a launcher in Blackbox's data folder."""
+    import sys
+    versioned = tmp_path / "installs" / "a1" / "environments" / "e1" / "venv" / "bin" / "python3"
+    monkeypatch.setattr(sys, "executable", str(versioned))
+    argv, _command = next(iter(agent_hooks._invocations(CLAUDE).values()))
+    assert argv[0] != str(versioned) and argv[0].endswith("agent-hooks/python")
+
+
+def test_the_launcher_runs_with_any_surviving_hermes_python_when_the_recorded_one_is_gone(monkeypatch, tmp_path):
+    import os
+    import subprocess
+    import sys
+    hermes = tmp_path / "hermes-home"
+    monkeypatch.setenv("HERMES_HOME", str(hermes))
+    real = sys.executable
+    survivor = hermes / "installs" / "a1" / "environments" / "e2" / "venv" / "bin" / "python3"
+    survivor.parent.mkdir(parents=True)
+    os.symlink(real, survivor)
+    monkeypatch.setattr(sys, "executable", str(tmp_path / "pruned" / "python3"))   # the one recorded is gone
+    launcher = agent_hooks._python()
+    done = subprocess.run([str(launcher), "-c", "print('ran')"], capture_output=True, text=True, timeout=30, check=False)
+    assert done.returncode == 0 and done.stdout.strip() == "ran"
+    no_path = subprocess.run([str(launcher), "-c", "print(1)"], capture_output=True, text=True, timeout=30, check=False,
+                                    env={**os.environ, "PATH": "/nonexistent"})
+    assert no_path.returncode == 0
