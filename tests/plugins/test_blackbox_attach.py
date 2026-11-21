@@ -715,10 +715,18 @@ def test_the_dashboard_rescan_keeps_an_agent_the_operator_switched_off(fake_env,
     server = load_blackbox("dashboard.server")
     profile = fake_env["profile"]
     attach.attach_hermes(profile)
+    # Switching an agent off turns protection down: it waits for the person (approvals gate), who
+    # confirms it at the system's password prompt — stood in for here.
+    system_prompt = load_blackbox("approvals.system_prompt")
+    monkeypatch.setattr(system_prompt, "_prompter", lambda: lambda _text: True)
+    switch_off = {"targets": [{"kind": "hermes", "target": str(profile), "enabled": False}]}
     with TestClient(server.create_app(), base_url="http://127.0.0.1:9700") as client:
         token = {"X-Blackbox-Token": client.get("/api/session").json()["token"]}
-        off = client.post("/api/agents/protection", json={"targets": [{"kind": "hermes", "target": str(profile), "enabled": False}]},
-                          headers=token)
+        held = client.post("/api/agents/protection", json=switch_off, headers=token)
+        assert held.status_code == 428
+        confirmed = client.post("/api/approvals/confirm", json={"id": held.json()["approval"]["id"]}, headers=token)
+        assert confirmed.status_code == 200
+        off = client.post("/api/agents/protection", json=switch_off, headers=token)
         assert off.status_code == 200
         client.post("/api/agents/rescan", headers=token)   # ↻ — a forced reconcile of every agent
 

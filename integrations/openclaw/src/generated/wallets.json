@@ -3,7 +3,34 @@
   "shields": {
     "network-shield": {
       "browser_roots": [],
-      "packs": []
+      "packs": [
+        {
+          "id": "hagezi-multi",
+          "kind": "dns-blocklist",
+          "list": {
+            "covers": [
+              "ads",
+              "tracking",
+              "malware",
+              "phishing",
+              "scam"
+            ],
+            "format": "domains",
+            "licence": "GPL-3.0 (downloaded at run time, never bundled)",
+            "url": "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/domains/multi.txt"
+          },
+          "name": "Ads, trackers & malware (HaGeZi Multi)",
+          "order": 10,
+          "status": "supported"
+        },
+        {
+          "id": "oisd-small",
+          "kind": "dns-blocklist",
+          "name": "OISD small",
+          "order": 20,
+          "status": "planned"
+        }
+      ]
     },
     "trader": {
       "browser_roots": [
