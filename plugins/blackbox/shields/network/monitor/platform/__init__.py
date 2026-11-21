@@ -7,7 +7,8 @@ program's raw text, or ``None`` / ``""`` when this machine cannot be read that w
 tool degrades to "nothing seen", never to an error.
 
 ``macos.py`` implements them today; ``unsupported.py`` answers "nothing here" for an operating
-system without a port yet. Only this machine's module is imported. Porting = add ``windows.py``
+system without a port yet. Only this machine's module is imported, and a copy of the plugin carries only this machine's
+(``kernel.os_layout``). Porting = add ``windows.py``
 or ``linux.py`` with the same functions and pick it below.
 
 Pattern: **Strategy** (one module per OS) behind a **Facade** (this module).

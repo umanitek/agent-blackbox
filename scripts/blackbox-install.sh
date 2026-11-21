@@ -1688,6 +1688,7 @@ refresh_blackbox_plugin_copy() {
     heading "Installing Blackbox plugin copy"
     step "Refreshing $HERMES_HOME/plugins/blackbox from this checkout..."
     if "$VENV_DIR/bin/python" - "$REPO_DIR" "$HERMES_HOME" <<'PYEOF'
+import importlib.util
 import os
 import shutil
 import sys
@@ -1703,9 +1704,16 @@ openclaw_dest = dest / "_openclaw"
 if not src.is_dir():
     raise SystemExit(f"missing Blackbox plugin source: {src}")
 
-def ignore_runtime(_dir, names):
+# Another operating system's platform/ modules stay out of the copy: the plugin's one rule
+# (kernel/os_layout), loaded by path because the plugin is not importable here.
+layout_spec = importlib.util.spec_from_file_location("blackbox_os_layout", src / "kernel" / "os_layout" / "__init__.py")
+os_layout = importlib.util.module_from_spec(layout_spec)
+layout_spec.loader.exec_module(os_layout)
+
+def ignore_runtime(folder, names):
     skip_dirs = {"__pycache__", "tests", ".pytest_cache", "node_modules"}
-    return [n for n in names if n in skip_dirs or n.endswith((".pyc", ".pyo"))]
+    skipped = [n for n in names if n in skip_dirs or n.endswith((".pyc", ".pyo"))]
+    return skipped + [n for n in os_layout.other_os_entries(folder, names) if n not in skipped]
 
 def ignore_openclaw(_dir, names):
     skip_dirs = {"node_modules", "dist", ".turbo", "test", "tests", "__pycache__"}

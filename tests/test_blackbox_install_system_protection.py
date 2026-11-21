@@ -111,6 +111,18 @@ def test_the_download_is_checked_against_the_manifest_committed_in_the_checkout(
     assert done.stdout.splitlines() == ["0.1.0", "b" * 64]
 
 
+def test_the_helper_download_names_only_this_macs_own_architecture():
+    """Per-OS structure (2026-11-21): the installer fetches the one binary built for this Mac's
+    chip — never another OS's or architecture's — and none for a chip it has no build for."""
+    def asset(machine: str) -> subprocess.CompletedProcess[str]:
+        script = f"uname() {{ printf '%s\\n' {machine}; }}\n{_function('helper_asset_name')}\nhelper_asset_name"
+        return subprocess.run(["/bin/bash", "-c", script], capture_output=True, text=True, timeout=30, check=False)
+    assert asset("arm64").stdout.strip() == "blackbox-netd-darwin-arm64"
+    assert asset("x86_64").stdout.strip() == "blackbox-netd-darwin-x86_64"
+    unknown = asset("riscv64")
+    assert unknown.returncode != 0 and unknown.stdout == ""
+
+
 def test_linux_is_never_offered_it(tmp_path):
     out, ran = _run(tmp_path, choice="yes", os_name="linux")
     assert ran == [] and "STATE=unsupported" in out and "System protection" not in out.replace("STATE", "")

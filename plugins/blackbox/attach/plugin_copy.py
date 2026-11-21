@@ -14,7 +14,7 @@ import logging
 import shutil
 from pathlib import Path
 from typing import Optional
-from ..kernel import constants
+from ..kernel import constants, os_layout
 
 logger = logging.getLogger(__name__)
 
@@ -125,12 +125,16 @@ def _needs_copy(dest: Path) -> bool:
         return False
 
 
-def _copy_ignore(_dir: str, names: list[str]) -> list[str]:
-    return [n for n in names if n in _COPY_EXCLUDE_DIRS or n.endswith(_COPY_EXCLUDE_SUFFIXES)]
+def _copy_ignore(folder: str, names: list[str]) -> list[str]:
+    # Another operating system's platform/ modules are left out too (kernel.os_layout): a Mac's
+    # copy holds no Windows or Linux files.
+    skipped = [n for n in names if n in _COPY_EXCLUDE_DIRS or n.endswith(_COPY_EXCLUDE_SUFFIXES)]
+    return skipped + [n for n in os_layout.other_os_entries(folder, names) if n not in skipped]
 
 
 def copy_plugin_tree(src: Path, dest: Path) -> None:
-    """Copy the plugin tree from *src* to *dest*, excluding pycache/tests.
+    """Copy the plugin tree from *src* to *dest*, excluding pycache/tests and other operating
+    systems' platform modules.
 
     Replaces any existing copy so a version bump fully refreshes the files, and
     bundles the OpenClaw JS plugin so an installed copy can still point OpenClaw
