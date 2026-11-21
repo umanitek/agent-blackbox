@@ -237,6 +237,8 @@ def register(app: Any, swr: Cache) -> None:
     from fastapi.responses import FileResponse, JSONResponse
 
     register_pages(app)
+    from . import api_routes
+    api_routes.register(app)   # each shield's own endpoints: /api/shields/{id}/api/{name}
 
     @app.get("/shields.js")
     def shields_script() -> Any:

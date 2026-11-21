@@ -47,15 +47,25 @@ from .contract import (
 )
 from .packs import TABLE_MAX_BYTES, ShieldData, load_shield_data, read_json_file
 from .self_test import SELF_TESTS, SelfTest
+from .json_records import JsonValue
+from .shield_api import MAX_WRITE_BYTES as API_MAX_WRITE_BYTES
+from .shield_api import NAME_PATTERN as API_NAME_PATTERN
+from .shield_api import AssistantAnswer, ShieldApi, ShieldApiError, ShieldContext
 from . import trader
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "API_MAX_WRITE_BYTES",
+    "API_NAME_PATTERN",
+    "AssistantAnswer",
     "BrowserRoot",
     "Pack",
     "SelfTest",
     "Shield",
+    "ShieldApi",
+    "ShieldApiError",
+    "ShieldContext",
     "ShieldEvent",
     "ShieldMode",
     "ShieldStatus",
@@ -64,6 +74,7 @@ __all__ = [
     "allows",
     "attack_table",
     "browser_roots",
+    "call_api",
     "check",
     "events",
     "get",
@@ -252,3 +263,26 @@ def _spoken_list(names: list[str]) -> str:
     if len(names) < 2:
         return "".join(names) or "no pack"
     return ", ".join(names[:-1]) + " and " + names[-1]
+
+
+def call_api(shield_id: str, method: str, name: str, context: ShieldContext, data: Any) -> JsonValue:
+    """Runs endpoint *name* of shield *shield_id*'s own API (:mod:`.shield_api`): a ``GET``
+    read with *data* as its query parameters, or a ``POST`` write with *data* as its body.
+
+    Raises :class:`ShieldApiError` 404 for an unknown shield or endpoint (or the wrong method),
+    and passes on the refusals the endpoint raises itself. Anything else an endpoint raises is
+    a 500 here: a shield never takes the dashboard down.
+    """
+    shield = get(shield_id)
+    api = shield.api if shield else None
+    handlers = (api.reads if method == "GET" else api.writes if method == "POST" else {}) if api else {}
+    handler = handlers.get(name)
+    if handler is None:
+        raise ShieldApiError(404, "unknown shield endpoint")
+    try:
+        return handler(context, data)
+    except ShieldApiError:
+        raise
+    except Exception:   # health: allow BLE001 -- a broken shield endpoint answers 500, never breaks the dashboard
+        logger.warning("blackbox shields: %s %s/%s failed", method, shield_id, name, exc_info=True)
+        raise ShieldApiError(500, "the shield could not answer") from None

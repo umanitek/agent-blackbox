@@ -33,6 +33,7 @@ from ..kernel.settings import ShieldSettings
 
 from .json_records import JsonValue, _plain, _record_json
 from .event_records import EventFact, SessionSummary, ShieldEvent, TimelineStep
+from .shield_api import ShieldApi
 
 __all__ = ["EventFact", "JsonValue", "SessionSummary", "ShieldEvent", "TimelineStep"]
 
@@ -286,6 +287,8 @@ class Shield:
     detectors: tuple[PackDetector, ...] = ()
     browser_roots: Optional[Path] = None
     use_data: Optional[Callable[[tuple[Pack, ...], tuple[BrowserRoot, ...]], None]] = None
+    #: Named endpoints beyond the card and the events (:mod:`.shield_api`); None = none.
+    api: Optional[ShieldApi] = None
 
     @property
     def folder(self) -> Path:

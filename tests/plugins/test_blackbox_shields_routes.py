@@ -25,7 +25,7 @@ FOREIGN = "https://attacker.example"
 #: The route prefixes a shield owns (its API, its pages, the campaign aliases).
 PREFIXES = ("/api/shields", "/shields", "/trader-shield")
 #: A registered value for each path parameter, so every walked route is a real request.
-PARAMETERS = {"shield_id": "trader", "pack_id": "metamask"}
+PARAMETERS = {"shield_id": "trader", "pack_id": "metamask", "name": "status"}
 ALIASES = {"/trader-shield": "/shields/trader",
            "/trader-shield/attacks.json": "/shields/trader/attacks.json",
            "/trader-shield/graph.json": "/shields/trader/graph.json"}

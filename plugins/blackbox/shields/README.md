@@ -20,6 +20,7 @@ shields/
 ├── contract.py        what a shield IS: the Shield record and the typed records it answers with
 ├── event_records.py   the records of a shield's events report (re-exported by contract.py)
 ├── json_records.py    how every record becomes plain JSON (JsonValue, as_json helpers)
+├── shield_api.py      a shield's own endpoints (ShieldApi) and what the dashboard injects (ShieldContext)
 ├── packs.py           one loader for any shield's packs and browsers.json (validate, then use)
 └── trader/            Trader Shield
     ├── __init__.py    TRADER = Shield(...): wires its parts together
@@ -51,6 +52,7 @@ A `Shield` is a **record of plain functions**, not a class to subclass (the Stra
 | `finding_kinds` · `capabilities` | What it can find, and what it covers beyond packs |
 | `packs` · `page` · `attacks` · `browser_roots` | Where its data lives |
 | `detectors` | The detectors that serve its pack kinds |
+| `api` | Optional named endpoints beyond the card and events, served at `GET`/`POST /api/shields/<id>/api/<name>` with a `ShieldContext` (the verified network lists, the assistant, the mode) the dashboard injects |
 
 ## How one action is checked
 
