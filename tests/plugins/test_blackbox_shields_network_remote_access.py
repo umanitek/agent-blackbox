@@ -126,6 +126,28 @@ def test_an_unblocked_address_is_blocked_again_only_for_new_failures():
     assert [b["ip"] for b in remote_lock.settings(later)["blocked"]] == ["203.0.113.9"], "five new failures block it again"
 
 
+def test_the_gateway_is_never_auto_blocked_and_the_person_is_told(monkeypatch):
+    """E2E S4 (bb-e2e-1121): behind NAT every failed login comes from the router's address;
+    auto-blocking it would cut off every remote connection. It is reported, never blocked."""
+    from plugins.blackbox.shields.network.monitor import gateways
+    monkeypatch.setattr(gateways, "addresses", lambda now=None: frozenset({"192.168.64.1"}))
+    remote_lock.update({"brute_force": {"enabled": True, "failures": 3}})
+    enforcement.record_report(_report(_remote(events=[_failed("192.168.64.1", NOW - i) for i in range(6)])), now=NOW)
+    assert remote_lock.check_failures(NOW) == [] and remote_lock.settings(NOW)["blocked"] == []
+    assert any(alert["kind"] == "remote-gateway-not-blocked" for alert in remote_access.alerts())
+
+
+def test_the_gateway_is_read_from_the_routing_table():
+    from plugins.blackbox.shields.network.monitor import gateways
+    table = ("Destination        Gateway            Flags  Netif\n"
+             "default            192.168.1.1        UGScg  en0\n"
+             "default            fe80::1%en0        UGcIg  en0\n"
+             "default            link#14            UCSIg  bridge100\n"
+             "127.0.0.1          127.0.0.1          UH     lo0\n")
+    assert gateways.parse(table) == {"192.168.1.1", "fe80::1"}
+    assert gateways.parse("") == frozenset()
+
+
 def test_an_always_allowed_address_is_never_auto_blocked(monkeypatch):
     monkeypatch.setattr(network_mode, "current", lambda: network_mode.build(enabled=True, allow=("203.0.113.9",)))
     enforcement.record_report(_report(_remote(events=[_failed("203.0.113.9", NOW - i) for i in range(6)])), now=NOW)

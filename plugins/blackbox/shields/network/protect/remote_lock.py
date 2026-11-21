@@ -35,7 +35,7 @@ from ....kernel import constants
 from ....kernel.bounded_files import read_json_object, write_json_object
 from ....shields.network import mode as mode_module
 from ....shields.shield_api import ShieldApiError
-from ..monitor import remote_access
+from ..monitor import gateways, remote_access
 
 DEFAULT_BRUTE_FORCE = {"enabled": False, "failures": 5, "window_minutes": 10, "block_minutes": 60}
 LIMITS = {"failures": (3, 50), "window_minutes": (1, 120), "block_minutes": (5, 10080)}
@@ -50,6 +50,8 @@ FORGIVEN_SECONDS = LIMITS["window_minutes"][1] * 60
 ENDABLE = ("ssh", "screen-sharing", "remote-desktop")
 
 _lock = threading.Lock()
+#: Gateways already reported as not auto-blocked (one alert per gateway per run, not per report).
+_noted_gateways: set[str] = set()
 
 
 def _path() -> Any:
@@ -155,6 +157,8 @@ def check_failures(now: Optional[float] = None) -> list[str]:
     if not rules["enabled"]:
         return []
     allowed = set(mode_module.option(mode_module.current(), mode_module.OPT_ALLOW))
+    # Behind NAT every attempt comes from the gateway: blocking it would refuse everyone (E2E S4).
+    routers = gateways.addresses()
     counts: dict[str, int] = {}
     for failure in remote_access.failures_since(now - rules["window_minutes"] * 60):
         address = str(failure["ip"])
@@ -163,6 +167,12 @@ def check_failures(now: Optional[float] = None) -> list[str]:
     already = {b["ip"] for b in settings(now)["blocked"]}
     newly = []
     for address, count in counts.items():
+        if count >= rules["failures"] and address in routers:
+            if address not in _noted_gateways:
+                _noted_gateways.add(address)
+                remote_access.note({"kind": "remote-gateway-not-blocked", "ts": now, "remote_ip": address, "how": "ssh",
+                                    "method": "", "user": ""})
+            continue
         if count >= rules["failures"] and address not in already and address not in allowed:
             try:
                 block(address, rules["block_minutes"], f"{count} failed logins", now)

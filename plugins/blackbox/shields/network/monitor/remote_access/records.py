@@ -210,7 +210,8 @@ LABELS = {"ssh": "SSH", "tailscale-ssh": "Tailscale SSH", "screen-sharing": "Scr
 SERVICE_LABELS = {"remote_login": "Remote Login (SSH)", "screen_sharing": "Screen Sharing", "remote_management": "Remote Management",
                   "file_sharing": "File Sharing", "remote_apple_events": "Remote Apple Events"}
 SEVERITY = {"remote-session-new": "high", "remote-session-ended": "info", "remote-auth-failed": "medium",
-            "remote-service-changed": "medium", "remote-end-refused": "medium", "remote-auto-blocked": "high"}
+            "remote-service-changed": "medium", "remote-end-refused": "medium", "remote-auto-blocked": "high",
+            "remote-gateway-not-blocked": "high"}
 
 
 def text_of(event: Mapping[str, Any]) -> str:
@@ -229,6 +230,9 @@ def text_of(event: Mapping[str, Any]) -> str:
         return f"{SERVICE_LABELS.get(str(event.get('service')), 'A remote-access service')} was switched {'on' if event.get('on') else 'off'}."
     if kind == "remote-auto-blocked":
         return f"Blocked {event.get('remote_ip')} after repeated failed logins."
+    if kind == "remote-gateway-not-blocked":   # made on this side only (protect/remote_lock), never by the helper
+        return (f"Repeated failed logins came through your router ({event.get('remote_ip')}). It was not blocked — that "
+                "would cut off every remote connection. Turn off the port forward or lock remote access.")
     return f"Could not end that session: {event.get('reason') or 'it changed'}."
 
 
