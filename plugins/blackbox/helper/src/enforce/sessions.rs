@@ -17,14 +17,12 @@ use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 
-use crate::observe::remote::Session;
+use crate::observe::remote::{Session, SERVING_PROGRAMS};
 
 /// How long a session's process has to end after SIGTERM.
 pub const GRACE: Duration = Duration::from_secs(2);
 /// Kinds of session that have a process of their own to end.
 const ENDABLE: [&str; 3] = ["ssh", "screen-sharing", "remote-desktop"];
-/// The programs that serve one remote session.
-const SERVERS: [&str; 5] = ["sshd", "sshd-session", "sshd-auth", "screensharingd", "ARDAgent"];
 
 /// One end request from the plan.
 #[derive(Debug, Clone, Default, Deserialize, PartialEq)]
@@ -47,7 +45,7 @@ pub fn verify(request: &EndRequest, live: Option<&Session>, process: Option<(&st
         return Err(format!("a {} session has no process of its own to end", session.how));
     }
     let (name, start) = process.ok_or("the session's process has already ended")?;
-    if start != session.proc_start || !SERVERS.contains(&name) {
+    if start != session.proc_start || !SERVING_PROGRAMS.contains(&name) {
         return Err("the process is no longer the session's".into());
     }
     Ok(())

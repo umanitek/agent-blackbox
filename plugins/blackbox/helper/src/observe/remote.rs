@@ -27,6 +27,9 @@ pub const REMOTE_PORTS: [(u16, &str); 5] =
 /// The service each port belongs to, in the report's `services`.
 const SERVICES: [(u16, &str); 5] =
     [(22, "remote_login"), (5900, "screen_sharing"), (3283, "remote_management"), (445, "file_sharing"), (3031, "remote_apple_events")];
+/// The programs that serve one remote session — the process a session is named after, and the
+/// only ones End session may end.
+pub const SERVING_PROGRAMS: [&str; 5] = ["sshd", "sshd-session", "sshd-auth", "screensharingd", "ARDAgent"];
 const MAX_PENDING: usize = 200;
 const MAX_SESSIONS: usize = 100;
 const MAX_PROCESSES: usize = 20;
@@ -130,12 +133,19 @@ impl Remote {
     }
 
     fn sessions_now(&self, sockets: &[Inbound], procs: &Procs, now: u64) -> BTreeMap<String, Session> {
-        // One connection is often held by a parent and a child: keep the lowest pid per connection.
+        // One connection is often held by several processes: launchd (pid 1) accepts SSH
+        // inetd-style and keeps the socket, then the serving parent and its child hold it too.
+        // The session belongs to the serving program (E2E B4: "lowest pid" named launchd, so
+        // End session could never end it); among equals, the lowest pid (the parent).
+        let rank = |socket: &Inbound| {
+            let serving = procs.get(&socket.pid).is_some_and(|p| SERVING_PROGRAMS.contains(&p.name.as_str()));
+            (!serving, socket.pid <= 1, socket.pid)
+        };
         let mut by_connection: HashMap<(u16, IpAddr, u16), &Inbound> = HashMap::new();
         for socket in sockets.iter().filter(|s| s.established && !s.remote_ip.is_loopback()
             && REMOTE_PORTS.iter().any(|(port, _)| *port == s.local_port)) {
             let key = (socket.local_port, socket.remote_ip, socket.remote_port);
-            let keep = by_connection.get(&key).is_none_or(|kept| socket.pid < kept.pid);
+            let keep = by_connection.get(&key).is_none_or(|kept| rank(socket) < rank(kept));
             if keep {
                 by_connection.insert(key, socket);
             }
@@ -259,6 +269,19 @@ mod tests {
         assert_eq!(events[0]["kind"], "remote-session-new");
         assert!(remote.tick(&[listening(22)], &procs(), vec![], 105));
         assert_eq!(remote.drain()[0]["kind"], "remote-session-ended");
+    }
+
+    #[test]
+    fn launchd_holding_the_accepted_socket_never_names_the_session() {
+        // macOS launchd (pid 1) accepts SSH inetd-style and keeps the socket open (E2E B4).
+        let mut remote = Remote::default();
+        let socket = inbound(800, 22, "192.168.64.1", 52344);
+        remote.tick(&[listening(22)], &procs(), vec![], 100);
+        remote.tick(&[listening(22), Inbound { pid: 1, ..socket.clone() }, socket.clone(), Inbound { pid: 801, ..socket.clone() }],
+                    &procs(), vec![], 101);
+        let snap = remote.snapshot().unwrap();
+        assert_eq!(snap["sessions"].as_array().unwrap().len(), 1);
+        assert_eq!(snap["sessions"][0]["pid"], 800, "the serving sshd-session, not launchd");
     }
 
     #[test]

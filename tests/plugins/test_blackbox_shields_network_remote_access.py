@@ -176,6 +176,16 @@ def test_only_a_live_session_with_its_own_process_can_be_ended_once():
     assert remote_lock.plan_part(True, NOW + remote_lock.END_EXPIRES_SECONDS + 1)["end"] == [], "a request expires"
 
 
+def test_a_session_named_after_launchd_is_refused_before_it_is_queued():
+    """E2E B5 (bb-e2e-1121): an SSH session attributed to launchd (pid 1) answered "requested", and
+    the helper — which never ends pid 1 — silently refused. It is refused in the window now."""
+    for pid in (0, 1):
+        with pytest.raises(ShieldApiError) as refused:
+            remote_lock.request_end({**SESSION, "pid": pid}, now=NOW)
+        assert refused.value.status == 409
+    assert remote_lock.plan_part(True, NOW)["end"] == []
+
+
 # ------------------------------------------------------------------ apps and tunnels
 
 

@@ -166,6 +166,10 @@ def request_end(session: Mapping[str, Any], now: Optional[float] = None) -> None
     now = time.time() if now is None else now
     if session.get("how") not in ENDABLE:
         raise ShieldApiError(409, "This kind of session has no process of its own to end.")
+    # The helper never ends pid 0/1 (launchd); queuing it would answer "requested" for an end
+    # that cannot happen (E2E B5). Said now, in the window, instead.
+    if not isinstance(session.get("pid"), int) or session["pid"] <= 1:
+        raise ShieldApiError(409, "Blackbox cannot tell which process serves this session, so it cannot end it.")
     with _lock:
         state = _prune(_read(), now)
         state["end"] = [e for e in state["end"] if e["session_id"] != session["id"]]
