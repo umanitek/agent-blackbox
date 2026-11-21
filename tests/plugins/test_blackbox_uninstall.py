@@ -344,3 +344,20 @@ def test_a_failed_helper_removal_says_how_to_finish_it(machine, tmp_path):
 def test_no_helper_no_admin_step(machine):
     calls, _ = _execute(dataclasses.replace(_plan(machine), system_helper=None))
     assert not any(call and call[0] == "ADMIN" for call in calls)
+
+
+def test_a_helper_the_person_cannot_see_is_still_removed_by_its_own_uninstall(machine, tmp_path):
+    """E2E 2026-11-21: the helper's folder is root-only, so its program looks missing to the person.
+    Uninstall must still run the helper's own uninstall (which puts DNS and the firewall back)."""
+    unseen = tmp_path / "root-only" / "blackbox-netd"          # does not exist as the person sees it
+    calls, report = _execute(dataclasses.replace(_plan(machine), system_helper=unseen))
+    assert calls[0] == ["ADMIN", "sudo", str(unseen), "uninstall"]
+    assert report[0].startswith("removed the system protection helper")
+
+
+def test_the_manual_fallback_is_the_helpers_own_uninstall_never_a_bootout(machine, tmp_path):
+    unseen = tmp_path / "root-only" / "blackbox-netd"
+    _calls, report = _execute(dataclasses.replace(_plan(machine), system_helper=unseen), admin_code=1)
+    text = "\n".join(report)
+    assert f"sudo '{unseen}' uninstall" in text
+    assert "bootout" not in text and "rm /Library/LaunchDaemons" not in text

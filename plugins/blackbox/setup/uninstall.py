@@ -181,16 +181,18 @@ def _remove_system_helper(plan: UninstallPlan, run_as_admin: Runner, report: lis
     """The helper puts DNS and the firewall back from its own saved state, then removes itself
     (its own `uninstall`, as the installer's --remove-system-protection does). Posture hardening
     it applied stays (the helper's rule: removing it never re-opens the Mac)."""
+    # WHY no check that the program is there: its folder is root-only, so the person cannot see it
+    # (E2E 2026-11-21 read a running helper as "gone" and left DNS and the firewall changed). The
+    # plan found it by its LaunchDaemon; sudo can run what the person cannot see.
     if not plan.system_helper:
-        return
-    if not plan.system_helper.exists():
-        report.append(f"needs root: the helper's LaunchDaemon is left but its program is gone — "
-                      f"sudo launchctl bootout system/{system_helper.LABEL} && sudo rm {system_helper.LAUNCH_DAEMON}")
         return
     if run_as_admin(["sudo", str(plan.system_helper), "uninstall"]) == 0:
         report.append("removed the system protection helper; DNS and the firewall are as they were")
-    else:
-        report.append(f"needs root: sudo '{plan.system_helper}' uninstall   (puts DNS and the firewall back)")
+        return
+    # Only the helper's own uninstall puts DNS back: stopping it by hand (bootout + rm) would leave
+    # the Mac asking a resolver that no longer answers — no internet.
+    report.append(f"needs root: sudo '{plan.system_helper}' uninstall   (puts DNS and the firewall back; "
+                  f"if that program is missing, reinstall system protection first, then run it)")
 
 
 def _stop_services(plan: UninstallPlan, run: Runner, report: list[str]) -> None:
