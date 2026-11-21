@@ -185,7 +185,8 @@ pub fn run() {
 }
 
 /// The helper stops: every applied posture fix is reversed.
-pub fn stop() {
+/// Reverses every posture fix — only on the person's explicit choice ([`crate::undo_for`]).
+pub fn undo_hardening() {
     if let Ok(mut f) = fixes().lock() {
         let _ = f.undo_all();
     }
