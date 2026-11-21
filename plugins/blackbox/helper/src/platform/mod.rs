@@ -28,6 +28,8 @@ use std::time::Duration;
 use serde::Deserialize;
 use serde_json::Value;
 
+pub mod sockets;
+
 #[cfg(target_os = "macos")]
 pub mod macos;
 #[cfg(target_os = "macos")]

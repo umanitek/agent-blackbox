@@ -37,6 +37,17 @@ mod undo;
 // The system is reached only through the platform's two traits (platform/mod.rs).
 pub use platform::{Enforcer, Observer, SystemEnforcer, SystemObserver, HOME};
 
+/// The socket and interface records, and on macOS the native reader — Blackbox Desktop's live
+/// traffic collector reads it as the person (fast tier). Elsewhere only the records exist.
+pub mod sockets {
+    pub use crate::platform::sockets::{Iface, Socket};
+    #[cfg(target_os = "macos")]
+    pub use crate::platform::macos::sockets::{layouts_match, tcp_state_name, Reader};
+}
+/// The helper's LaunchDaemon label (Blackbox Desktop installs and checks the same service).
+#[cfg(target_os = "macos")]
+pub use platform::macos::LABEL;
+
 use std::collections::HashSet;
 use std::fs;
 use std::net::IpAddr;

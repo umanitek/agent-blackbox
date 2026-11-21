@@ -8,6 +8,9 @@
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
+// The records are OS-neutral (platform/sockets.rs); this file is macOS's reader of them.
+pub use crate::platform::sockets::{Iface, Socket};
+
 /// The most sockets read per pass, and descriptors looked at per process (bounded work).
 const MAX_SOCKETS: usize = 8192;
 const MAX_FDS_PER_PROCESS: i32 = 4096;
@@ -42,42 +45,6 @@ extern "C" {
     fn bb_list_ifaces(out: *mut RawIface, cap: i32) -> i32;
     fn bb_socket_size() -> usize;
     fn bb_iface_size() -> usize;
-}
-
-/// One socket of a process.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Socket {
-    pub pid: u32,
-    /// `tcp4`, `tcp6`, `udp4` or `udp6` (nettop's spelling).
-    pub protocol: String,
-    pub local_ip: IpAddr,
-    pub local_port: u16,
-    pub remote_ip: IpAddr,
-    pub remote_port: u16,
-    /// nettop's spelling of the TCP state (`Established`, `Listen` …); empty for UDP.
-    pub state: &'static str,
-}
-
-impl Socket {
-    /// A TCP socket waiting for connections (its local port is served by this Mac).
-    pub fn listening(&self) -> bool {
-        self.state == "Listen"
-    }
-
-    /// A socket talking to a peer (not listening, not an unconnected UDP socket).
-    pub fn connected(&self) -> bool {
-        self.remote_port != 0 && !self.remote_ip.is_unspecified() && !self.listening()
-    }
-}
-
-/// One interface's byte counters (cumulative, 32-bit: they wrap at 4 GiB).
-#[derive(Debug, Clone, PartialEq)]
-pub struct Iface {
-    pub name: String,
-    pub loopback: bool,
-    pub up: bool,
-    pub bytes_in: u32,
-    pub bytes_out: u32,
 }
 
 /// nettop's names for the TCP states (sys/proc_info.h TSI_S_*), so both tiers read alike.
