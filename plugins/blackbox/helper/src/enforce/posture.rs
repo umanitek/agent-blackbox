@@ -94,8 +94,7 @@ impl Fixes {
 
     fn save(&self) {
         if let Ok(text) = serde_json::to_string(&self.applied) {
-            let temporary = self.path.with_extension("tmp");
-            if fs::write(&temporary, text).is_ok() { let _ = fs::rename(&temporary, &self.path); }
+            let _ = crate::private_files::write(&self.path, text.as_bytes());
         }
     }
 

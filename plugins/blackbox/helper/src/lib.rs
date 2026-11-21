@@ -28,6 +28,7 @@ pub mod command;
 pub mod link;
 pub mod pf_status;
 pub mod plan;
+pub mod private_files;
 pub mod safe_read;
 pub mod sockets;
 mod system_guard;
@@ -100,12 +101,8 @@ impl State {
     }
 
     fn save(&self) {
-        let path = state_path();
-        let temporary = path.with_extension("tmp");
         if let Ok(text) = serde_json::to_string_pretty(self) {
-            if fs::write(&temporary, text).is_ok() {
-                let _ = fs::rename(&temporary, &path);
-            }
+            let _ = private_files::write(&state_path(), text.as_bytes());
         }
     }
 }
@@ -209,7 +206,7 @@ fn pick_upstreams(saved: Vec<std::net::SocketAddr>, current: impl FnOnce() -> Ve
 }
 
 pub fn run() -> Result<(), String> {
-    fs::create_dir_all(HOME).map_err(|error| format!("{HOME}: {error}"))?;
+    private_files::ensure_dir(Path::new(HOME)).map_err(|error| format!("{HOME}: {error}"))?;
     let mut state = State::load();
     // After a reboot the saved pf token is meaningless: drop it, so the first plan enables pf and
     // verifies it (pf::apply) instead of trusting a token from another boot.
