@@ -1,5 +1,5 @@
 """The root helper's system report — exposure, persistence, tampering and posture — validated and
-kept (``POST …/api/system-report``, sent by the helper's system loop, ``netd/system_guard.rs``).
+kept (``POST …/api/system-report``, sent by the helper's system loop, ``helper/src/platform/macos/system_guard.rs``).
 
 Validated strictly, like the enforcer's report: one bad item refuses the whole report, so nothing
 unexpected is ever stored or shown. Kept in ``<BLACKBOX_HOME>/network-shield/system.json``: the

@@ -22,23 +22,22 @@
 //! Modules: [`dns`] (the resolver), [`system`] (DNS settings), [`pf`] (the packet filter),
 //! [`plan`] (the plan), [`watch`] (SSH and login files).
 
-pub mod enforce;
-pub mod observe;
+pub mod platform;
 pub mod command;
-pub mod install;
+pub mod dns;
 pub mod link;
-pub mod pf_status;
 pub mod plan;
 pub mod private_files;
 pub mod safe_read;
-pub mod sockets;
-mod system_guard;
 mod daemon;
 mod state;
 mod undo;
 
+// The macOS parts under their former names (platform/macos/ holds them).
+pub use platform::macos::{enforce, install, observe, pf_status, sockets};
+use platform::macos::system_guard;
 // The orchestration below names each part directly; observe and enforce stay separate modules.
-pub use enforce::{dns, pf, sessions, system};
+pub use enforce::{pf, sessions, system};
 pub use observe::{logstream, remote, remote_procs, watch};
 
 use std::collections::{BTreeMap, HashSet};
