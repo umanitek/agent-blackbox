@@ -126,3 +126,27 @@ def test_a_report_with_a_bad_health_field_is_refused(home):
         enforcement.record_report({"running": True, "dns_active": False, "firewall_active": False, "auth": "root"})
     with pytest.raises(ShieldApiError):
         enforcement.record_report({"running": True, "dns_active": False, "firewall_active": False, "pf_enabled": "yes"})
+
+
+def test_the_enforcement_plan_route_is_signed_and_its_report_route_checks_the_signature(home, monkeypatch):
+    """E2E 2026-11-21: the DNS / firewall plan went out unsigned, so the keyed helper applied nothing."""
+    pytest.importorskip("fastapi")
+    from fastapi.testclient import TestClient
+    from _blackbox_loader import load_blackbox
+
+    _pair(home)
+    server = load_blackbox("dashboard.server")
+    nonce = "fedcba9876543210fedcba9876543210"
+    report = json.dumps({"running": True, "dns_active": False, "firewall_active": False}).encode()
+    with TestClient(server.create_app(), base_url="http://127.0.0.1:9700") as client:
+        plan = client.get(f"/api/shields/network-shield/api/enforcement?nonce={nonce}")
+        token = client.get("/api/session").json()["token"]   # the helper sends the session token too
+        unsigned = client.post("/api/shields/network-shield/api/enforcer-report", content=report,
+                               headers={"content-type": "application/json", "X-Blackbox-Token": token})
+        signed = client.post("/api/shields/network-shield/api/enforcer-report", content=report,
+                             headers={"content-type": "application/json", "X-Blackbox-Token": token,
+                                      helper_link.HELPER_SIGNATURE_HEADER: helper_link.sign_report(KEY, report)})
+    assert plan.status_code == 200
+    assert plan.headers[helper_link.SIGNATURE_HEADER] == helper_link.sign_plan(KEY, nonce, plan.content)
+    assert unsigned.status_code == 401
+    assert signed.status_code == 200, signed.text

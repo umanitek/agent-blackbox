@@ -101,10 +101,13 @@ def _connected_threats(context: ShieldContext, current: Any) -> frozenset[str]:
     return frozenset(c.remote_ip for process in reading.processes for c in process.connections if c.threat)
 
 
-def enforcement_plan(context: ShieldContext, params: Mapping[str, str]) -> dict[str, Any]:
+def enforcement_plan(context: ShieldContext, params: Mapping[str, str]) -> Any:
+    """The helper's DNS / firewall / cut / SSH plan, signed for the helper's nonce (helper_link):
+    a keyed helper obeys only a plan signed with its key, so an unsigned answer applies nothing."""
     current = mode_module.current()
-    return enforcement.plan(current, context.network_indicators(), have=str(params.get("have") or "")[:64],
+    plan = enforcement.plan(current, context.network_indicators(), have=str(params.get("have") or "")[:64],
                             cut_ips=_connected_threats(context, current))
+    return helper_link.signed(plan, params)
 
 
 def blocks(_context: ShieldContext, params: Mapping[str, str]) -> dict[str, Any]:
@@ -117,7 +120,8 @@ def ssh(_context: ShieldContext, _params: Mapping[str, str]) -> dict[str, Any]:
     return watch.ssh_view()
 
 
-def enforcer_report(_context: ShieldContext, body: Mapping[str, Any]) -> dict[str, Any]:
+def enforcer_report(context: ShieldContext, body: Mapping[str, Any]) -> dict[str, Any]:
+    helper_link.require_signed_report(context)   # once paired, only this Mac's helper may report
     return enforcement.record_report(body)
 
 
