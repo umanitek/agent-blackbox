@@ -28,12 +28,12 @@ from typing import Any
 
 from ..kernel import constants, sparql_text, threat_ids
 from ..kernel.browser_boundary import LOOPBACK_HOSTS, BrowserBoundary
-from ..kernel.host_command import NO_MODEL_EXIT, hermes_argv
+from ..kernel.host_command import hermes_argv
 from .. import attach, shields
 from ..sync import read_durable_progress
 from . import (agent_coverage_routes, community_routes, direct_reads, docs_routes, graph_pages, guard_routes, lifecycle, model_connect_routes,
                playground_routes, shields_routes, sync_meter, sync_timing)
-from .assistant import answer_payload, clean_chat_output, parse_chat_session_id, with_state_brief
+from .assistant import runner as assistant_runner
 from .graph_pages import _balanced_graph_entries, _graph_entries
 from .network_sync import network_sync_argv as _network_sync_argv
 from .node_probe import NodeLiveness, NodeReadCache, RepeatGate, node_sync_probe
@@ -1052,38 +1052,9 @@ def create_app(*, manage_blackbox: bool = False):
 
     @app.post("/api/blackbox-chat")
     def blackbox_chat(payload: dict[str, Any] = Body(...)) -> Any:
-        """Run one scoped Blackbox assistant turn through the managed profile."""
-        message = str((payload or {}).get("message") or "").strip()
-        if not message:
-            return JSONResponse({"ok": False, "error": "Message is required."}, status_code=400)
-        if len(message) > 4000:
-            return JSONResponse({"ok": False, "error": "Message is too long."}, status_code=400)
-        session_id = str((payload or {}).get("session_id") or "").strip()
-        # WHY "--opt=value": a question or id starting with "-" would otherwise be read as an option.
-        argv = hermes_argv("blackbox", "chat", f"--query={with_state_brief(message)}", "--quiet", "--pass-session-id")
-        if session_id and len(session_id) <= 128 and all(c.isalnum() or c in "_.:-" for c in session_id):
-            argv.append(f"--resume={session_id}")
-        try:
-            proc = subprocess.run(
-                argv,
-                cwd=str(attach.repo_root()),
-                text=True,
-                stdin=subprocess.DEVNULL, capture_output=True,
-                timeout=240, check=False   # a small free model answering with tool lookups is slow
-            )
-        except subprocess.TimeoutExpired:
-            return JSONResponse({"ok": False, "error": "Blackbox took too long to answer."}, status_code=504)
-        except (OSError, ValueError) as exc:   # the browser gets a plain message, never the system error
-            logger.warning("blackbox dashboard: could not start the assistant: %s", exc)
-            return JSONResponse({"ok": False, "error": "Blackbox could not start the assistant."}, status_code=500)
-        next_session_id = parse_chat_session_id(proc.stderr) or parse_chat_session_id(proc.stdout) or session_id
-        answer = clean_chat_output(proc.stdout)
-        err = clean_chat_output(proc.stderr)
-        if proc.returncode != 0:   # NO_MODEL_EXIT: no AI model yet — 409 + needs_model, the page shows the fix
-            no_model = proc.returncode == NO_MODEL_EXIT
-            return JSONResponse({"ok": False, "error": err or answer or "Blackbox chat failed.", "needs_model": no_model,
-                                 "session_id": next_session_id}, status_code=409 if no_model else 500)
-        return JSONResponse(*answer_payload(answer, err, next_session_id))   # 409 model_problem: no real answer
+        """Run one scoped Blackbox assistant turn through the managed profile (:mod:`.assistant.runner`)."""
+        payload = payload or {}
+        return JSONResponse(*assistant_runner.ask(payload.get("message") or "", payload.get("session_id") or ""))
 
     @app.get("/api/findings")
     def findings(limit: int = Query(50, ge=1, le=500), offset: int = Query(0, ge=0)) -> Any:

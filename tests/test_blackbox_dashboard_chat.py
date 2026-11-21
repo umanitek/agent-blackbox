@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from plugins.blackbox import attach
 from plugins.blackbox.attach import plugin_copy as attach_plugin_copy
 from plugins.blackbox.dashboard import server
+from plugins.blackbox.dashboard.assistant import runner as assistant_runner
 
 #: A child `hermes` is the Hermes that is running: this Python, never whichever `hermes` is on PATH.
 THIS_HERMES = [sys.executable, "-m", "hermes_cli.main"]
@@ -601,7 +602,7 @@ def test_blackbox_dashboard_chat_starts_session(monkeypatch):
 
     monkeypatch.setattr(server.subprocess, "run", fake_run)
     monkeypatch.setattr(attach_plugin_copy, "repo_root", lambda: Path("/tmp/repo"))
-    monkeypatch.setattr(server, "with_state_brief", lambda message: message)   # the snapshot has its own tests
+    monkeypatch.setattr(assistant_runner, "with_state_brief", lambda message: message)   # the snapshot has its own tests
 
     client = TestClient(server.create_app(), base_url="http://127.0.0.1")
     token = client.get("/api/session").json()["token"]
@@ -621,7 +622,7 @@ def test_blackbox_dashboard_chat_resumes_session(monkeypatch):
 
     monkeypatch.setattr(server.subprocess, "run", fake_run)
     monkeypatch.setattr(attach_plugin_copy, "repo_root", lambda: Path("/tmp/repo"))
-    monkeypatch.setattr(server, "with_state_brief", lambda message: message)   # the snapshot has its own tests
+    monkeypatch.setattr(assistant_runner, "with_state_brief", lambda message: message)   # the snapshot has its own tests
 
     client = TestClient(server.create_app(), base_url="http://127.0.0.1")
     token = client.get("/api/session").json()["token"]
@@ -645,7 +646,7 @@ def test_blackbox_dashboard_chat_resumes_session(monkeypatch):
 def _chat(monkeypatch, fake_run, body):
     monkeypatch.setattr(server.subprocess, "run", fake_run)
     monkeypatch.setattr(attach_plugin_copy, "repo_root", lambda: Path("/tmp/repo"))
-    monkeypatch.setattr(server, "with_state_brief", lambda message: message)   # the snapshot has its own tests
+    monkeypatch.setattr(assistant_runner, "with_state_brief", lambda message: message)   # the snapshot has its own tests
     client = TestClient(server.create_app(), base_url="http://127.0.0.1")
     token = client.get("/api/session").json()["token"]
     return client.post("/api/blackbox-chat", json=body, headers={"X-Blackbox-Token": token})
