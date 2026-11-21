@@ -30,7 +30,7 @@ import time
 from pathlib import Path
 from typing import Callable, Generic, Hashable, TypeVar
 
-from ...kernel import addons as guarded_extra, agent_hosts, constants
+from ...kernel import addons as guarded_extra, agent_hosts, constants, system_helper
 from .shell_words import _home_as_tilde
 
 #: The plugin folder this code runs from: an installed copy, or a source checkout.
@@ -136,6 +136,7 @@ def _all_places() -> tuple[str, ...]:
         os.path.join(home, "Library", "LaunchAgents", "ai.umanitek.blackbox*"),
         os.path.join(home, ".config", "systemd", "user", "blackbox-*"),
         os.path.join(home, ".local", "bin", "blackbox"),
+        str(system_helper.user_key_folder()),   # the helper's key: moved or deleted, the helper stops obeying
     ]
     # Each coding agent's hook config: removing Blackbox's hook there switches that agent's protection
     # off. A shared settings file stays editable except for Blackbox's part (guard_settings).

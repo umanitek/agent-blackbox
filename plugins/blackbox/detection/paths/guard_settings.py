@@ -50,7 +50,7 @@ from ..finding import Finding
 from ...kernel import addons as guarded_extra, agent_hosts, threat_ids
 from ...kernel.bounded_files import read_small_text
 from ...kernel.config import BlackboxConfig, load_blackbox_config
-from . import guard_commands, guard_paths, guard_places, protected, shell_files
+from . import guard_commands, guard_paths, guard_places, guard_secrets, protected, shell_files
 
 MATCHED = "blackbox-settings"
 _TITLE = "Change to Blackbox's own settings"
@@ -309,6 +309,9 @@ def detect_guard_tamper(tool_name: str, args: Any, cfg: Optional[BlackboxConfig]
         _PORTS.put(guard_places._machine(), _ports_of(cfg))
     tool = (tool_name or "").strip().lower()
     try:
+        secret = guard_secrets.reads_a_secret(tool_name, args)   # a read is the harm for Blackbox's keys
+        if secret:
+            return [_finding(tool, secret)]
         access = action_parsing.file_access_arg(tool_name, args)
         if access is not None:
             return [_finding(access["tool"], "write to Blackbox's settings")] if _file_tool_tampers(access, args) else []
