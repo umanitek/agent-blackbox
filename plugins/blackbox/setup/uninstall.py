@@ -42,7 +42,7 @@ from pathlib import Path
 from typing import Callable, Optional, Sequence
 
 from .. import sync   # sync's public entry: the service names, which process is our node
-from ..kernel import constants, terminal_question, yaml_files
+from ..kernel import constants, system_helper, terminal_question, yaml_files
 from ..kernel.host_command import hermes_argv
 
 #: Files a node needs to keep its identity and wallet (DKG home), and Blackbox's own reporter
@@ -86,6 +86,7 @@ class UninstallPlan:
     system_units: tuple[Path, ...]     # Linux /etc/systemd/system units (need root)
     dashboard_port: int = constants.DEFAULT_DASHBOARD_PORT   # where a directly started dashboard would be listening
     notes: tuple[str, ...] = field(default_factory=tuple)
+    system_helper: Optional[Path] = None   # the system protection helper (macOS), when installed
 
 
 def _configured_dkg_home(home: Path) -> Optional[Path]:
@@ -133,8 +134,12 @@ def build_plan(*, purge: bool, keep_logs: bool, now: Optional[_dt.datetime] = No
     shim = next((p for p in (shim_dir / "blackbox", shim_dir / "blackbox.cmd")
                  if p.is_file() and SHIM_MARKER in p.read_text(encoding="utf-8-sig", errors="ignore")), None)
     system_units = tuple(p for p in (sync.SYSTEM_UNIT_DIR / u for u in SYSTEMD_UNITS) if p.exists())
+    system = platform.system()
+    helper = system_helper.BINARY if system == "Darwin" and (
+        system_helper.BINARY.exists() or system_helper.LAUNCH_DAEMON.exists()) else None
     return UninstallPlan(
-        system=platform.system(), hermes_homes=hermes_homes, blackbox_home=blackbox_home, dkg_home=dkg_home,
+        system_helper=helper,
+        system=system, hermes_homes=hermes_homes, blackbox_home=blackbox_home, dkg_home=dkg_home,
         key_files=tuple(p for p in keys if p.is_file()),
         backup_dir=None if purge else Path.home() / f"blackbox-backup-{stamp}",
         keep_logs=keep_logs, shim=shim, system_units=system_units, dashboard_port=dashboard_port,
@@ -143,8 +148,11 @@ def build_plan(*, purge: bool, keep_logs: bool, now: Optional[_dt.datetime] = No
 
 def describe(plan: UninstallPlan) -> list[str]:
     """The lines shown before anything changes."""
-    lines = ["Blackbox uninstall will:",
-             "  - stop and remove Blackbox's login services (node, dashboard)"]
+    lines = ["Blackbox uninstall will:"]
+    if plan.system_helper:
+        lines.append("  - remove the system protection helper and put DNS and the firewall back "
+                     "(macOS asks for your admin password)")
+    lines.append("  - stop and remove Blackbox's login services (node, dashboard)")
     for home in plan.hermes_homes:
         lines.append(f"  - remove Blackbox from the Hermes in {home} (its other settings and comments stay)")
     if plan.dkg_home:
@@ -159,6 +167,30 @@ def describe(plan: UninstallPlan) -> list[str]:
         lines.append(f"  - keep the {what} in {plan.backup_dir}")
     lines.append("Your Hermes itself, other DKG nodes and Docker are not touched.")
     return lines + [f"Note: {n}" for n in plan.notes]
+
+
+def _run_at_terminal(command: Sequence[str]) -> int:
+    """Run *command* with the person's terminal attached (sudo asks for the password there)."""
+    try:
+        return subprocess.run(list(command), check=False, timeout=300).returncode
+    except (OSError, subprocess.TimeoutExpired):
+        return 127
+
+
+def _remove_system_helper(plan: UninstallPlan, run_as_admin: Runner, report: list[str]) -> None:
+    """The helper puts DNS and the firewall back from its own saved state, then removes itself
+    (its own `uninstall`, as the installer's --remove-system-protection does). Posture hardening
+    it applied stays (the helper's rule: removing it never re-opens the Mac)."""
+    if not plan.system_helper:
+        return
+    if not plan.system_helper.exists():
+        report.append(f"needs root: the helper's LaunchDaemon is left but its program is gone — "
+                      f"sudo launchctl bootout system/{system_helper.LABEL} && sudo rm {system_helper.LAUNCH_DAEMON}")
+        return
+    if run_as_admin(["sudo", str(plan.system_helper), "uninstall"]) == 0:
+        report.append("removed the system protection helper; DNS and the firewall are as they were")
+    else:
+        report.append(f"needs root: sudo '{plan.system_helper}' uninstall   (puts DNS and the firewall back)")
 
 
 def _stop_services(plan: UninstallPlan, run: Runner, report: list[str]) -> None:
@@ -297,11 +329,14 @@ def _delete_data(plan: UninstallPlan, report: list[str]) -> None:
 
 
 def execute(plan: UninstallPlan, *, run: Runner = _run,
-            stop_dashboard: Callable[[int], list[int]] = _stop_dashboard_on) -> list[str]:
-    """Carry out *plan*; returns what was done (and what needs root), in order. *run* and
-    *stop_dashboard* are the two ways it reaches running processes (tests pass fakes)."""
+            stop_dashboard: Callable[[int], list[int]] = _stop_dashboard_on,
+            run_as_admin: Runner = _run_at_terminal) -> list[str]:
+    """Carry out *plan*; returns what was done (and what needs root), in order. *run*,
+    *stop_dashboard* and *run_as_admin* (sudo, at the terminal) are the ways it reaches running
+    processes (tests pass fakes)."""
     remove_plugin = hermes_argv("plugins", "remove", "blackbox")   # the Hermes running this, never another on PATH
     report: list[str] = []
+    _remove_system_helper(plan, run_as_admin, report)   # first: DNS back before anything else stops
     _stop_services(plan, run, report)
     _stop_running_dashboard(plan, stop_dashboard, report)
     _stop_unsupervised_node(plan, report)

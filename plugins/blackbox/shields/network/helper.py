@@ -15,11 +15,11 @@ Usage::
 
 from __future__ import annotations
 
-from pathlib import Path
+from ...kernel import system_helper
 
 #: The helper's launchd label and its LaunchDaemon file (root-owned, system domain).
-LABEL = "ai.umanitek.blackbox.netd"
-LAUNCH_DAEMON = Path("/Library/LaunchDaemons") / f"{LABEL}.plist"
+LABEL = system_helper.LABEL
+LAUNCH_DAEMON = system_helper.LAUNCH_DAEMON
 
 
 def installed() -> bool:

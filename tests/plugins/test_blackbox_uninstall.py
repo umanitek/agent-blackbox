@@ -72,14 +72,16 @@ def _plan(machine: Path, *, system: str = "Darwin", **kw) -> uninstall.Uninstall
     return dataclasses.replace(plan, system=system)
 
 
-def _execute(plan: uninstall.UninstallPlan, *, dashboard_pids: tuple[int, ...] = ()):
+def _execute(plan: uninstall.UninstallPlan, *, dashboard_pids: tuple[int, ...] = (), admin_code: int = 0):
     calls: list[list[str]] = []
 
     def stop_dashboard(port: int) -> list[int]:
         calls.append(["stop-dashboard", str(port), str(plan.blackbox_home.exists())])
         return list(dashboard_pids)
 
-    report = uninstall.execute(plan, run=lambda cmd: calls.append(list(cmd)) or 0, stop_dashboard=stop_dashboard)
+    # run_as_admin is ALWAYS a fake here: a test must never reach a real sudo.
+    report = uninstall.execute(plan, run=lambda cmd: calls.append(list(cmd)) or 0, stop_dashboard=stop_dashboard,
+                               run_as_admin=lambda cmd: calls.append(["ADMIN", *cmd]) or admin_code)
     return calls, report
 
 
@@ -317,3 +319,28 @@ def test_under_a_pipe_the_question_goes_to_the_terminal(machine, monkeypatch, an
     args = argparse.Namespace(purge=False, keep_logs=False, dry_run=False, yes=False)
     assert uninstall.cmd_uninstall(args) == 0
     assert bool(executed) is removed
+
+
+# ------------------------------------------------------------------ the system protection helper
+
+
+def test_uninstall_removes_the_system_protection_helper_first(machine, tmp_path):
+    helper = tmp_path / "blackbox-netd"
+    helper.write_text("#!/bin/sh\n", encoding="utf-8")
+    plan = dataclasses.replace(_plan(machine), system_helper=helper)
+    assert "remove the system protection helper" in "\n".join(uninstall.describe(plan))
+    calls, report = _execute(plan)
+    assert calls[0] == ["ADMIN", "sudo", str(helper), "uninstall"], "DNS goes back before anything else stops"
+    assert report[0].startswith("removed the system protection helper")
+
+
+def test_a_failed_helper_removal_says_how_to_finish_it(machine, tmp_path):
+    helper = tmp_path / "blackbox-netd"
+    helper.write_text("#!/bin/sh\n", encoding="utf-8")
+    _calls, report = _execute(dataclasses.replace(_plan(machine), system_helper=helper), admin_code=1)
+    assert any(line.startswith("needs root:") and "uninstall" in line for line in report)
+
+
+def test_no_helper_no_admin_step(machine):
+    calls, _ = _execute(dataclasses.replace(_plan(machine), system_helper=None))
+    assert not any(call and call[0] == "ADMIN" for call in calls)
