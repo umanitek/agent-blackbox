@@ -1,0 +1,5 @@
+# blackbox-netd release binaries — the installer checks each download against these SHA-256 values.
+# Release tag: blackbox-helper-v0.1.0 (assets named as below). Regenerate this file with every new build.
+version 0.1.0
+82fc8d2bbf3429ebb74202abd9c39065b2d894d01da42f5faaa68f02c511651c  blackbox-netd-darwin-arm64
+7e9c9ddec0b63bd778cba2379fa166a2bc38ad3353531cdac99279741894b74c  blackbox-netd-darwin-x86_64
