@@ -44,6 +44,7 @@ from plugins.blackbox.kernel import crypto_secrets, threat_ids
 from plugins.blackbox.kernel.crypto_secrets import seed_phrase
 from plugins.blackbox.ruleset import Ruleset
 from plugins.blackbox.shields.network import mode as network_mode
+from plugins.blackbox.shields.network.protect import blocklists as network_blocklists
 from plugins.blackbox.shields.trader import detectors, mode as trader_mode
 
 #: blocked / flagged / missed (a gap); allowed = a harmless look-alike that must raise nothing.
@@ -103,6 +104,8 @@ def _posix_place(templates, home: Path) -> Path:
 
 def _materialise(pack, home: Path, key_file_text: str) -> Path:
     """Lay one store of *pack* out under *home*, from its manifest; answers the store."""
+    if pack.kind == "dns-blocklist":
+        return home   # a public block list keeps nothing in the home folder (its copy: the shield's setup)
     if pack.kind == "browser-extension":
         extension = pack.data["stores"]["chromium"][0]
         profile = home.joinpath(*CHROME_PROFILE)
@@ -136,12 +139,19 @@ def _trader_setup(monkeypatch, chosen: tuple[str, ...], values: dict[str, str]) 
     monkeypatch.setattr(trader_mode, "current", lambda: own)
 
 
-def _network_setup(monkeypatch, _chosen: tuple[str, ...], _values: dict[str, str]) -> None:
-    """Network Shield on, one host on the block list. Agent lockdown is off here: a row turns it
+def _network_setup(monkeypatch, chosen: tuple[str, ...], _values: dict[str, str]) -> None:
+    """Network Shield on with DNS Shield, one host on the block list, and every supported public list chosen and
+    already downloaded (holding one tracker domain). Agent lockdown is off here: a row turns it
     on for itself (``"lockdown": true``, :func:`_scenario_setting`), so the other shields' rows,
     which name real hosts, are judged without it."""
-    on = network_mode.build(enabled=True, protections=(), block=("blocked-by-you-blackbox-test.com",))
+    on = network_mode.build(enabled=True, protections=(network_mode.DNS,), lists=chosen, block=("blocked-by-you-blackbox-test.com",))
     monkeypatch.setattr(network_mode, "current", lambda: on)
+    monkeypatch.setattr(network_blocklists, "_memory", {})
+    for pack in network_mode.list_packs():
+        if pack.id in chosen:
+            cached = network_blocklists._cache_path(pack)
+            cached.parent.mkdir(parents=True, exist_ok=True)
+            cached.write_text("# test copy\nlisted-tracker-blackbox-test.com\n", encoding="utf-8")
 
 
 SETUPS = {"trader": _trader_setup, "network-shield": _network_setup}

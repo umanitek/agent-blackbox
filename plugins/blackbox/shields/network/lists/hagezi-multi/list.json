@@ -1,0 +1,15 @@
+{
+  "id": "hagezi-multi",
+  "name": "Ads, trackers & malware (HaGeZi Multi)",
+  "kind": "dns-blocklist",
+  "status": "supported",
+  "order": 10,
+  "verified": "2026-11-20",
+  "source": "https://github.com/hagezi/dns-blocklists (Multi NORMAL, domains format)",
+  "list": {
+    "url": "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/domains/multi.txt",
+    "format": "domains",
+    "licence": "GPL-3.0 (downloaded at run time, never bundled)",
+    "covers": ["ads", "tracking", "malware", "phishing", "scam"]
+  }
+}

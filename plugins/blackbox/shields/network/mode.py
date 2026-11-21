@@ -5,10 +5,11 @@ Founder direction (Amos, 2026-11-20): Network Shield is the second shield, switc
 app like Trader Shield. Off (the default) it watches nothing and blocks nothing.
 
 What runs where (Amos, 2026-11-21): agent network lockdown and the block list run in Blackbox's
-own guard, so they work with this plugin alone. DNS Shield, the Threat Firewall, cutting
-connections, SSH lockdown and the watching need Blackbox Desktop, which installs the native
-helper with the system access they take; its add-on unlocks them (:func:`needs_desktop`). The
-setting is ONE shape either way, so switching to Desktop keeps every choice.
+own guard, so they always work. DNS Shield, the Threat Firewall, cutting connections and SSH
+lockdown are decided here too, and applied by the system protection helper (:mod:`.helper`) — a
+small root daemon Blackbox's installer offers (or Blackbox Desktop installs); without it they say
+so (:func:`needs_helper`). Blackbox Desktop adds richer views on top. The setting is ONE shape
+either way, so installing the helper keeps every choice.
 
 Config, under ``plugins.entries.blackbox``::
 
@@ -83,19 +84,22 @@ DESKTOP_DOWNLOADS = {"macos": "https://blackboxcommand.com/desktop/download/maco
 DESKTOP_OPEN_URL = "blackbox-desktop://open"
 #: The add-on package Blackbox Desktop installs beside the plugin (its presence = Desktop is here).
 DESKTOP_ADDON = "blackbox_desktop"
-#: The option status Settings shows for a protection that needs Blackbox Desktop.
-NEEDS_DESKTOP = "needs-desktop"
+#: The option status Settings shows for a protection that needs the system protection helper.
+NEEDS_HELPER = "needs-helper"
 
 
-def needs_desktop(protection: str) -> bool:
-    """True for a protection that runs only with Blackbox Desktop's add-on, while it is absent."""
-    return protection not in IN_GUARD and protection not in extensions.unlocked(SHIELD_ID)
+def needs_helper(protection: str) -> bool:
+    """True for a protection the system protection helper applies, while it is not installed (an
+    extension may also unlock one — :func:`..extensions.unlocked`)."""
+    from . import helper   # lazy: mode is imported by everything in the shield
+    return (protection not in IN_GUARD and protection not in extensions.unlocked(SHIELD_ID)
+            and not helper.installed())
 
 
 def default_protections() -> tuple[str, ...]:
-    """What a first switch-on runs: DNS Shield where Blackbox Desktop can run it, else agent
-    lockdown — the part that works without Desktop (the shield is never on doing nothing)."""
-    return (DNS,) if not needs_desktop(DNS) else (LOCKDOWN,)
+    """What a first switch-on runs: DNS Shield where the helper can apply it, else agent lockdown
+    — the part that needs nothing more (the shield is never on doing nothing)."""
+    return (DNS,) if not needs_helper(DNS) else (LOCKDOWN,)
 #: Most entries each list the operator keeps may hold.
 MAX_ENTRIES = {OPT_ALLOW: 500, OPT_BLOCK: 500, OPT_AGENT_HOSTS: 200}
 #: What an AI agent may reach under lockdown until the operator edits the list: the code hosts,
@@ -286,9 +290,8 @@ def validate(payload: Mapping[str, Any]) -> tuple[str, dict[str, Any], list[str]
 #: The engage switch's help, as Trader Shield's (Settings draws a shield's first field as its switch;
 #: every other field is greyed out while it is off).
 ENGAGE_HELP = ("Keep AI agents to the hosts you allow and away from the ones you block, in Blackbox's own "
-               "guard. With Blackbox Desktop it also refuses the verified threat graph's malicious domains and "
-               "addresses for every app, cuts malicious connections, locks SSH and shows what everything talks "
-               "to. Off stops all of it.")
+               "guard. With the system protection helper it also refuses the verified threat graph's malicious "
+               "domains and addresses for every app, cuts malicious connections and locks SSH. Off stops all of it.")
 
 
 def fields() -> list[SettingField]:
@@ -297,8 +300,8 @@ def fields() -> list[SettingField]:
         SettingField("enabled", "toggle", "Engage Network Shield", ENGAGE_HELP),
         SettingField(OPT_PROTECTIONS, "multi-pick", "Protections",
                      "Agent lockdown keeps AI agents to the hosts you allow. DNS Shield, the Threat Firewall, "
-                     "cutting connections and SSH lockdown run in Blackbox Desktop.",
-                     options=tuple(SettingOption(p, PROTECTION_NAMES[p], NEEDS_DESKTOP if needs_desktop(p) else "supported")
+                     "cutting connections and SSH lockdown need the system protection helper.",
+                     options=tuple(SettingOption(p, PROTECTION_NAMES[p], NEEDS_HELPER if needs_helper(p) else "supported")
                                    for p in PROTECTIONS)),
         SettingField(OPT_LISTS, "multi-pick", "Also block (public lists)",
                      "Ads, trackers and malware from public lists, on top of the verified threat graph.",

@@ -1,26 +1,26 @@
 {
- "about": "Network Shield page prose: what works with Blackbox alone, what it cannot do without Blackbox Desktop, and what Desktop adds. The page loads this file and renders it as given.",
+ "about": "Network Shield page prose: what works with Blackbox alone, what the system protection helper applies, and what Blackbox Desktop shows on top. The page loads this file and renders it as given.",
  "version": "Beta · 2026-11-21",
  "desktop": [
   [
-   "DNS Shield",
-   "refuses the verified threat graph's malicious domains, and the public lists you choose, for every app"
+   "Live traffic map",
+   "every app and AI agent and who it talks to, updated several times a second"
   ],
   [
-   "Threat Firewall",
-   "drops traffic to and from the verified graph's malicious IP addresses, system-wide"
+   "Every process explained",
+   "who signed it, what it is and what it does"
   ],
   [
-   "Cut malicious connections",
-   "ends connections already open to listed addresses"
+   "Who is in this Mac",
+   "SSH, Screen Sharing and remote-control sessions, live, with End session and Block address"
   ],
   [
-   "SSH lockdown and SSH watch",
-   "only the sources you allow may SSH in; new sessions and login-file changes alerted at once"
+   "Exposure, startup items and a posture check",
+   "with one-click fixes you can undo"
   ],
   [
-   "Live traffic, every process explained, history, system status and a security review",
-   "what every app and AI agent talks to, in the Blackbox Desktop app"
+   "Notifications, history and a security review",
+   "Mac notifications within a second, the connection history, and the assistant's review"
   ]
  ],
  "can": [
@@ -44,14 +44,32 @@
  "cannot": [
   [
    "Refuse malicious domains for every app",
-   "DNS Shield needs Blackbox Desktop's helper, which answers this machine's lookups"
+   "DNS Shield needs the system protection helper, which answers this machine's lookups"
   ],
   [
    "Drop traffic to malicious addresses",
-   "the Threat Firewall, cutting connections and SSH lockdown need Blackbox Desktop's helper"
+   "the Threat Firewall, cutting connections and SSH lockdown need the system protection helper"
   ]
  ],
  "coming": [
-  "Blackbox Desktop for Windows and Linux"
+  "The system protection helper and Blackbox Desktop for Windows and Linux"
+ ],
+ "helper": [
+  [
+   "DNS Shield",
+   "refuses the verified threat graph's malicious domains, and the public lists you choose, for every app"
+  ],
+  [
+   "Threat Firewall",
+   "drops traffic to and from the verified graph's malicious IP addresses, system-wide"
+  ],
+  [
+   "Cut malicious connections",
+   "ends connections already open to listed addresses"
+  ],
+  [
+   "SSH lockdown and Lock remote access",
+   "only the sources you allow may SSH in; remote access can be locked in one switch, and password guessing blocked"
+  ]
  ]
 }

@@ -12,6 +12,11 @@
    "id": "lockdown",
    "title": "AI agents reaching out",
    "intro": "An agent sending data, or fetching instructions, from a server it has no business with."
+  },
+  {
+   "id": "lists",
+   "title": "Ads, trackers and malware",
+   "intro": "Domains on the public block lists you chose, reached by an AI agent."
   }
  ],
  "attacks": [
@@ -59,7 +64,24 @@
    "title": "Agent clones from GitHub",
    "how": "A host on the allowed list is never stopped.",
    "bench_pending": true
+  },
+  {
+   "id": "agent-listed-tracker",
+   "group": "lists",
+   "proof": "test",
+   "outcome": "blocked",
+   "targets": [
+    "hagezi-multi",
+    "public-lists"
+   ],
+   "evidence": [
+    "tests"
+   ],
+   "title": "Agent loads a tracker from a list you chose",
+   "how": "The agent's tool call reaches a domain on the HaGeZi list, with DNS Shield on.",
+   "bench_pending": true
   }
  ],
- "bench_run": "not yet run on a bench node — every row is driven through Blackbox's real hook by the test suite"
+ "bench_run": "not yet run on a bench node — every row is driven through Blackbox's real hook by the test suite",
+ "pack_group": "lists"
 }

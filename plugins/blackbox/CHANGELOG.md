@@ -47,10 +47,12 @@ that the two version fields agree.
   this machine's system status (CPU on every core, memory, disks, each network interface) and
   what talks to the internet right now (download and upload — this machine's own local traffic
   kept apart — the apps online and their connections, each checked against the verified threat
-  graph). The rest of Network Shield — DNS Shield, the Threat Firewall, cutting malicious
-  connections, SSH lockdown and watch, and more — runs in **Blackbox Desktop**: switching the
-  shield on offers it (Download for macOS; Windows and Linux coming), and once Desktop is
-  installed the card opens it instead.
+  graph). With the **system protection helper** (a small root helper the installer offers, or
+  Blackbox Desktop installs) it also runs DNS Shield, the Threat Firewall, cutting malicious
+  connections, SSH lockdown and watch, Lock remote access, the exposure and posture checks — each
+  shown active only while the helper reports it; without the helper they say "needs the system
+  protection helper". **Blackbox Desktop** adds the live views on top (Download for macOS;
+  Windows and Linux coming); once installed the card opens it instead.
 - Add-ons: an app installed beside Blackbox (Blackbox Desktop) can add shields and more to a
   shield through one documented extension point; a broken add-on never stops Blackbox.
 

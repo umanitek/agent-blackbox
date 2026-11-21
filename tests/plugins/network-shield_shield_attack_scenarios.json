@@ -22,6 +22,12 @@
    "args": {
     "command": "git clone https://github.com/example/project.git"
    }
+  },
+  "agent-listed-tracker": {
+   "tool": "terminal",
+   "args": {
+    "command": "curl -s https://pixel.listed-tracker-blackbox-test.com/collect.gif"
+   }
   }
  }
 }

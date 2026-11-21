@@ -17,7 +17,7 @@ import pytest
 
 from plugins.blackbox import shields
 from plugins.blackbox.shields import extensions
-from plugins.blackbox.shields.network import api, events, lockdown, mode as network_mode, monitor, status
+from plugins.blackbox.shields.network import helper, api, events, lockdown, mode as network_mode, monitor, status
 from plugins.blackbox.shields.network.addresses import public_only
 from plugins.blackbox.shields.network.monitor import nettop
 from plugins.blackbox.shields.network.monitor.processes import ProcessTree, classify
@@ -40,17 +40,23 @@ def _on(**options):
 # ------------------------------------------------------------------ the setting
 
 
-def test_without_blackbox_desktop_a_first_switch_on_runs_agent_lockdown():
+def test_without_the_helper_a_first_switch_on_runs_agent_lockdown():
     assert NETWORK is not None and NETWORK.mode().enabled is False
     assert network_mode.protections(network_mode.build(enabled=True)) == (network_mode.LOCKDOWN,)
     assert network_mode.protections(network_mode.build(enabled=False, protections=(network_mode.DNS,))) == ()
 
 
-def test_settings_say_which_protections_need_blackbox_desktop():
-    protections = next(field for field in NETWORK.settings_fields() if field.key == network_mode.OPT_PROTECTIONS)
-    states = {option.id: option.status for option in protections.options}
-    assert states == {"dns": "needs-desktop", "firewall": "needs-desktop", "lockdown": "supported",
-                      "cut": "needs-desktop", "ssh-lockdown": "needs-desktop"}
+def test_settings_say_which_protections_need_the_system_protection_helper(tmp_path, monkeypatch):
+    def states():
+        protections = next(field for field in NETWORK.settings_fields() if field.key == network_mode.OPT_PROTECTIONS)
+        return {option.id: option.status for option in protections.options}
+    assert states() == {"dns": "needs-helper", "firewall": "needs-helper", "lockdown": "supported",
+                        "cut": "needs-helper", "ssh-lockdown": "needs-helper"}
+    installed = tmp_path / "ai.umanitek.blackbox.netd.plist"
+    installed.write_text("<plist/>", encoding="utf-8")
+    monkeypatch.setattr(helper, "LAUNCH_DAEMON", installed)   # the core installer (or Desktop) put it there
+    assert set(states().values()) == {"supported"}
+    assert network_mode.default_protections() == (network_mode.DNS,)
 
 
 @pytest.mark.parametrize("section, error", [
@@ -107,10 +113,16 @@ def test_findings_are_claimed_and_count_only_while_on():
 # ------------------------------------------------------------------ the card and the events
 
 
-def test_the_card_offers_blackbox_desktop_and_never_says_it_is_active():
+def test_the_card_needs_the_helper_and_never_says_active_on_the_setting_alone(tmp_path, monkeypatch):
+    card = status.build(_on(protections=(network_mode.DNS, network_mode.LOCKDOWN)))
+    assert [row.state for row in card.sections[0].rows] == ["needs-helper", "needs-helper", "active", "needs-helper", "needs-helper"]
+    assert card.offer.kind == "get" and card.offer.title == "See everything with Blackbox Desktop"
+    installed = tmp_path / "ai.umanitek.blackbox.netd.plist"
+    installed.write_text("<plist/>", encoding="utf-8")
+    monkeypatch.setattr(helper, "LAUNCH_DAEMON", installed)
     rows = status.build(_on(protections=(network_mode.DNS, network_mode.LOCKDOWN))).sections[0].rows
-    assert [row.state for row in rows] == ["needs-desktop", "needs-desktop", "active", "needs-desktop", "needs-desktop"]
-    assert all(network_mode.DESKTOP_URL in row.sub for row in rows if row.state == "needs-desktop")
+    assert rows[0].state == "waiting", "installed but not reporting: never active on the setting alone"
+    assert rows[1].state == "off" and rows[2].state == "active"
 
 
 def test_stories_escape_outside_values(monkeypatch):

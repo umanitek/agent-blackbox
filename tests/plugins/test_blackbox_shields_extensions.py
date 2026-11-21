@@ -55,12 +55,12 @@ def test_an_extension_unlocks_options_merges_its_api_and_adds_claimed_findings()
     assert shields.unlocked(network_mode.SHIELD_ID) == {"dns", "firewall"}
     assert network_mode.default_protections() == (network_mode.DNS,)
     options = {option.id: option.status for field in network.settings_fields() for option in field.options}
-    assert options["dns"] == "supported" and options["cut"] == "needs-desktop"
+    assert options["dns"] == "supported" and options["cut"] == "needs-helper"
     assert shields.call_api(network_mode.SHIELD_ID, "GET", "overview", None, {}) == {"ok": True}
     found = network.detect("terminal", {"command": "curl https://ads.tracker.example/p"}, LOCKED)
     assert {f.identifier for f in found} == {"network:listed-host", lockdown.LOCKDOWN_ID}
     assert network.claims({"identifier": "network:listed-host"}) and network.claims({"identifier": lockdown.LOCKDOWN_ID})
-    assert [section.title for section in network.status(LOCKED).sections] == ["Protections", "Helper"]
+    assert [section.title for section in network.status(LOCKED).sections] == ["Protections", "System protection helper", "Helper"]
 
 
 def test_an_add_on_shield_joins_the_registry_after_the_plugins_own():

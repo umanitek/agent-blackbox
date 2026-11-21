@@ -15,6 +15,16 @@ _REAL_IN_FORCE = _consent_module.in_force
 
 
 @pytest.fixture(autouse=True)
+def _no_system_protection_helper(monkeypatch, tmp_path):
+    """Network Shield asks whether the system protection helper's LaunchDaemon is installed
+    (/Library/LaunchDaemons/…). Tests never read the real machine: the helper is absent unless a
+    test installs its own (``helper.LAUNCH_DAEMON`` pointed at a file it creates)."""
+    from plugins.blackbox.shields.network import helper
+    monkeypatch.setattr(helper, "LAUNCH_DAEMON", tmp_path / "no-helper" / "ai.umanitek.blackbox.netd.plist")
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _fresh_community_membership(monkeypatch):
     """Blackbox keeps per-process subscribe/join state (community/membership/);
     each test starts from a fresh one so retry windows never leak between tests.

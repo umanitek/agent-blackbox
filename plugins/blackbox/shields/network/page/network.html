@@ -60,8 +60,8 @@
 <body>
 <main>
   <div><div class="mono muted" id="version">Network Shield</div><h1>Network Shield</h1>
-    <p class="muted">Keep AI agents to the hosts you allow, in Blackbox's own guard — and, with Blackbox Desktop,
-      see what every app talks to and stop the malicious ones.</p></div>
+    <p class="muted">See what every app and AI agent talks to, stop the malicious ones, and keep AI agents to
+      the hosts you allow.</p></div>
   <section class="card">
     <h2>System status</h2>
     <div id="system" class="muted">Switch Network Shield on to see this machine's system status.</div>
@@ -78,9 +78,15 @@
       <li><b>Your block list</b> — names and addresses you never want an agent to reach.</li>
     </ul>
   </section>
+  <section class="card">
+    <h2>With the system protection helper</h2>
+    <p class="muted">A small root helper applies these for every app on this machine. Install it with Blackbox's
+      installer (system protection), or from Blackbox Desktop:</p>
+    <ul id="helper-list"></ul>
+  </section>
   <section class="card cta">
-    <h2>The rest runs in Blackbox Desktop</h2>
-    <p class="muted">Blackbox Desktop installs a small native helper with the system access these need:</p>
+    <h2>See everything with Blackbox Desktop</h2>
+    <p class="muted">The Blackbox Desktop app shows what Network Shield sees, live:</p>
     <ul id="desktop-list"></ul>
     <a id="desktop-cta" href="https://blackboxcommand.com/desktop" rel="noopener noreferrer" target="_blank">Get Blackbox Desktop</a>
   </section>
@@ -96,9 +102,11 @@
   function getJSON(name) { return fetch(name, { cache: "no-store" }).then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); }); }
   getJSON("content.json").then(function (content) {
     document.getElementById("version").textContent = String(content.version || "Network Shield");
-    var list = document.getElementById("desktop-list");
-    (content.desktop || []).forEach(function (item) {
-      var li = el("li"); li.appendChild(el("b", null, String(item[0]))); li.appendChild(document.createTextNode(" — " + String(item[1]))); list.appendChild(li);
+    [["helper-list", content.helper], ["desktop-list", content.desktop]].forEach(function (pair) {
+      var list = document.getElementById(pair[0]);
+      (pair[1] || []).forEach(function (item) {
+        var li = el("li"); li.appendChild(el("b", null, String(item[0]))); li.appendChild(document.createTextNode(" — " + String(item[1]))); list.appendChild(li);
+      });
     });
   }).catch(function () {});
   // The table as served: its rows, and what they were tested on (composed from the registry).
