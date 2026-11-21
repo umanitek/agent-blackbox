@@ -379,3 +379,22 @@ def test_the_browser_comes_from_the_browser_folder_not_from_words_in_the_users_n
     assert found["browser"] == "Chrome"
     assert trader_status.browser_of(str(home / ".config" / "google-chrome" / "Default")) == "Chrome"
     detectors.EXISTING_STORES.reset()
+
+
+# --- E2E B1 (bb-e2e-1121, 2026-11-21): the offer's links reach the page as links -----------------
+
+def test_a_shield_offer_keeps_its_download_and_open_links_undefanged():
+    from plugins.blackbox.dashboard.shields_routes import sanitised
+    card = {"offer": {"kind": "get", "text": "Get it at https://evil.example/x", "open_url": "blackbox-desktop://open",
+                      "downloads": [{"os": "macos", "url": "https://blackboxcommand.com/desktop/download/macos"}]}}
+    served = sanitised(card)["offer"]
+    assert served["downloads"][0]["url"] == "https://blackboxcommand.com/desktop/download/macos"
+    assert served["open_url"] == "blackbox-desktop://open"
+    assert "hxxp" in served["text"]   # free text is still defanged
+
+
+def test_an_offer_link_in_any_other_shape_is_dropped_not_served():
+    from plugins.blackbox.dashboard.shields_routes import sanitised
+    for bad in ("http://plain.example", "javascript:alert(1)", "https://x.example/\"onload", "file:///etc/passwd"):
+        assert sanitised({"offer": {"downloads": [{"url": bad}], "open_url": bad}})["offer"] == {
+            "downloads": [{"url": ""}], "open_url": ""}

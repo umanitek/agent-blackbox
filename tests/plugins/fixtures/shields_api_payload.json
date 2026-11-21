@@ -214,7 +214,7 @@
         {
           "os": "macos",
           "label": "Download for macOS",
-          "url": "hxxps://blackboxcommand[.]com/desktop/download/macos",
+          "url": "https://blackboxcommand.com/desktop/download/macos",
           "available": true
         },
         {
