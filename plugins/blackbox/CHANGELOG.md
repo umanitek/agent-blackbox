@@ -121,6 +121,16 @@ that the two version fields agree.
   Blackbox's files and status stays allowed.
 - While Blackbox's service is not answering, an OpenClaw agent is refused anything that touches
   Blackbox itself until the service is back.
+- **The system protection helper is hardened and lives in the core** (`plugins/blackbox/helper`,
+  one helper for Blackbox and Blackbox Desktop). It obeys only plans signed with its own install
+  key (another program on port 9700 cannot drive it) and reports only to Blackbox; the firewall is
+  checked really on after every change and after a restart; DNS Shield switches only to a resolver
+  that answers, puts your DNS back if it stops, follows the network you are on and never sends your
+  lookups to a public resolver you did not choose; it never follows links or hangs on special
+  files in your folders; it installs only a binary whose checksum was verified first; its records
+  are private to the system; and stopping, repairing or removing it never turns your Mac's own
+  hardening back off unless you choose that. The installer offers it at the end (`--system-protection`,
+  `--no-system-protection`, `--remove-system-protection [--undo-hardening]`); no means nothing is installed.
 
 ## [1.5.0] - 2026-11-19
 
