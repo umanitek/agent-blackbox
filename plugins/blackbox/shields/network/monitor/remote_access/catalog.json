@@ -1,0 +1,25 @@
+{
+  "about": "Remote-control apps and tunnel tools Blackbox Desktop recognises, by executable name (lower case) or app folder. relay_domains are the vendors' own service domains, refused by DNS Shield while 'Lock remote access' is on. Blackbox's own list.",
+  "apps": [
+    {"id": "teamviewer", "name": "TeamViewer", "executables": ["teamviewer", "teamviewer_service", "teamviewer_desktop"], "apps": ["TeamViewer.app", "TeamViewerHost.app", "TeamViewerQS.app"], "relay_domains": ["teamviewer.com"]},
+    {"id": "anydesk", "name": "AnyDesk", "executables": ["anydesk"], "apps": ["AnyDesk.app"], "relay_domains": ["anydesk.com", "net.anydesk.com"]},
+    {"id": "chrome-remote-desktop", "name": "Chrome Remote Desktop", "executables": ["remoting_me2me_host", "chromeremotedesktophost", "remoting_host"], "apps": ["ChromeRemoteDesktopHost.app"], "relay_domains": ["remotedesktop.google.com", "remotedesktop-pa.googleapis.com"]},
+    {"id": "rustdesk", "name": "RustDesk", "executables": ["rustdesk"], "apps": ["RustDesk.app"], "relay_domains": ["rustdesk.com"]},
+    {"id": "splashtop", "name": "Splashtop", "executables": ["splashtop streamer", "srstreamer", "srfeature", "srservice"], "apps": ["Splashtop Streamer.app", "Splashtop Business.app"], "relay_domains": ["splashtop.com"]},
+    {"id": "screenconnect", "name": "ScreenConnect (ConnectWise)", "executables": ["screenconnect.clientservice", "connectwisecontrol.client", "screenconnect.windowsclient"], "apps": ["ConnectWiseControl.app", "ScreenConnect.app"], "relay_domains": ["screenconnect.com"]},
+    {"id": "logmein", "name": "LogMeIn / GoTo Resolve", "executables": ["logmein", "lmiguiagent", "gotoresolve", "logmeinrescue"], "apps": ["LogMeIn.app", "GoTo Resolve.app", "LogMeIn Rescue.app"], "relay_domains": ["logmein.com", "logmeininc.com"]},
+    {"id": "parsec", "name": "Parsec", "executables": ["parsecd", "parsec"], "apps": ["Parsec.app"], "relay_domains": ["parsec.app", "parsecgaming.com"]},
+    {"id": "jump-desktop", "name": "Jump Desktop Connect", "executables": ["jump desktop connect", "jumpconnect"], "apps": ["Jump Desktop Connect.app"], "relay_domains": ["jumpdesktop.com"]},
+    {"id": "nomachine", "name": "NoMachine", "executables": ["nxserver.bin", "nxnode.bin", "nxd", "nxplayer.bin"], "apps": ["NoMachine.app"], "relay_domains": []},
+    {"id": "vnc-server", "name": "VNC server", "executables": ["vncserver", "vncserver-x11", "x11vnc", "xvnc", "vncagent"], "apps": ["VNC Server.app", "RealVNC Server.app"], "relay_domains": ["realvnc.com"]}
+  ],
+  "tunnels": [
+    {"id": "ngrok", "name": "ngrok", "executables": ["ngrok"]},
+    {"id": "cloudflared", "name": "Cloudflare Tunnel", "executables": ["cloudflared"]},
+    {"id": "frp", "name": "frp", "executables": ["frpc", "frps"]},
+    {"id": "chisel", "name": "chisel", "executables": ["chisel"]},
+    {"id": "localtunnel", "name": "localtunnel", "executables": ["lt", "localtunnel"]},
+    {"id": "bore", "name": "bore", "executables": ["bore"]},
+    {"id": "zrok", "name": "zrok", "executables": ["zrok"]}
+  ]
+}

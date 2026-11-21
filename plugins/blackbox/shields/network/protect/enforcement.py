@@ -1,0 +1,239 @@
+"""The contract between Network Shield (the policy) and its enforcer (the native root helper).
+
+The enforcer decides nothing. It pulls :func:`plan` — what DNS must refuse, which IPs the
+firewall must drop, what is always allowed — and applies it; it pushes back
+:func:`record_report` — whether it is running, its counters and the names it refused. All
+policy lives here, in the plugin, so every surface (dashboard, Hermes Desktop, Blackbox
+Desktop) shows the same shield.
+
+**The plan** (``GET /api/shields/network-shield/api/enforcement``)::
+
+    {"version": "<sha256 of the content>", "unchanged": false, "graph_ready": true,
+     "dns": {"enabled": true, "verified": [...], "lists": [...], "block": [...]},
+     "firewall": {"enabled": false, "ips": [...]},
+     "cut": {"enabled": true, "ips": [...]},          # malicious IPs connected right now: cut them
+     "ssh": {"lockdown": false, "allow": ["192.168.1.0/24"]},
+     "watch": true,                                    # watch SSH and the login files (shield on)
+     "allow": [...]}
+
+``?have=<version>`` answers ``{"version": ..., "unchanged": true}`` when nothing changed, so
+the enforcer's minute-by-minute poll costs nothing. The verified graph's lists are applied only
+while the shield is on; with the shield off the plan switches everything off.
+
+**The report** (``POST /api/shields/network-shield/api/enforcer-report``)::
+
+    {"running": true, "dns_active": true, "firewall_active": false, "version": "<plan version>",
+     "cut_active": true, "ssh_lockdown_active": false,            # optional (older helpers)
+     "queries": 1200, "firewall_dropped": 3,
+     "blocks": [{"domain": "evil.example", "list": "verified", "count": 2, "ts": 1795219000}],
+     "watch": {...}, "events": [...]}                             # optional — see :mod:`.watch`
+
+Stored bounded in Blackbox's own folder (``network-shield/state.json``): per-name counts (the
+busiest :data:`MAX_COUNTED` names) and the latest :data:`MAX_RECENT` blocks.
+
+**Undo:** switched off (the shield, or one protection), :func:`plan` answers every protection
+off (DNS, firewall, cut, SSH lockdown, watch) and the root helper restores the saved DNS servers
+and removes its pf anchor — exactly what it changed, nothing else.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import ipaddress
+import json
+import threading
+import time
+from pathlib import Path
+from typing import Any, Iterable, Mapping, Optional
+
+from ....kernel import constants
+from ....kernel.bounded_files import read_json_object, write_json_object
+from ....shields.contract import ShieldMode
+from ....shields.shield_api import ShieldApiError
+from ....shields.network import mode as mode_module
+from ....shields.network.addresses import public_only
+from . import blocklists, never_block, remote_lock
+from ..monitor import remote_access, watch
+
+LISTS = ("verified", "lists", "block")
+MAX_RECENT = 300
+MAX_COUNTED = 2000
+MAX_BLOCKS_PER_REPORT = 500
+#: A report older than this means the enforcer is not running any more.
+STALE_AFTER_SECONDS = 180
+_lock = threading.Lock()
+
+
+def _state_path() -> Path:
+    return constants.blackbox_home() / "network-shield" / "state.json"
+
+
+def _is_ip(entry: str) -> bool:
+    """True for an IP address (``normalise_entry`` stores IPs in canonical form)."""
+    return ":" in entry or entry.replace(".", "").isdigit()
+
+
+def _ips(entries: Iterable[str]) -> list[str]:
+    return [entry for entry in entries if _is_ip(entry)]
+
+
+def _names(entries: Iterable[str]) -> list[str]:
+    return [entry for entry in entries if not _is_ip(entry)]
+
+
+#: The last plan built, by what it was built from (a plan over ~1.2M names costs seconds to sort
+#: and hash; the enforcer asks every 15 s, so it is built once per change, not once per ask).
+_plan_cache: dict[str, Any] = {"key": None, "plan": None}
+#: How many spared verified names a plan reports (the count is what matters; names are a sample).
+MAX_SPARED = 200
+
+
+def plan(mode: ShieldMode, indicators: Optional[Any], have: str = "", cut_ips: Iterable[str] = ()) -> dict[str, Any]:
+    """What the enforcer must apply now under *mode*, given the verified graph's *indicators*
+    (``ruleset.network_indicators()``; None before the graph is synced) and *cut_ips* (the listed
+    addresses this machine is connected to right now — the API reads them from the monitor only
+    while ``cut`` is on). Built once per change (:data:`_plan_cache`); ``have`` equal to its
+    version answers ``unchanged``."""
+    chosen_lists = tuple(sorted(mode_module.option(mode, mode_module.OPT_LISTS)))
+    cut = tuple(sorted(set(cut_ips)))
+    key = (json.dumps(mode.as_json(include_personal=True), sort_keys=True), id(indicators),
+           getattr(indicators, "built_at", None), tuple((pack_id, blocklists.version(pack_id)) for pack_id in chosen_lists), cut,
+           remote_lock.version(mode.enabled))
+    with _lock:
+        cached = _plan_cache["plan"] if _plan_cache["key"] == key else None
+    if cached is None:
+        cached = _build_plan(mode, indicators, cut)
+        with _lock:
+            _plan_cache["key"], _plan_cache["plan"] = key, cached
+    if have and have == cached["version"]:
+        return {"version": cached["version"], "unchanged": True}
+    return cached
+
+
+def _build_plan(mode: ShieldMode, indicators: Optional[Any], cut_ips: tuple[str, ...] = ()) -> dict[str, Any]:
+    protections = mode_module.protections(mode)
+    dns_on, firewall_on = mode_module.DNS in protections, mode_module.FIREWALL in protections
+    cut_on, ssh_on = mode_module.CUT in protections, mode_module.SSH_LOCKDOWN in protections
+    allowed = set(mode_module.option(mode, mode_module.OPT_ALLOW))
+    block = mode_module.option(mode, mode_module.OPT_BLOCK)
+    chosen = set(mode_module.option(mode, mode_module.OPT_LISTS))
+    list_names: set[str] = set()
+    if dns_on:
+        for pack in mode_module.list_packs():
+            if pack.id in chosen and pack.status == "supported":
+                list_names |= blocklists.domains(pack)
+    # Never refused, whatever a list or the graph says (never_block; finding 13). Spared VERIFIED
+    # entries are reported in the plan, so the person sees them.
+    verified, spared_verified = never_block.split(indicators.domains if dns_on and indicators else (), allowed)
+    listed, _spared_lists = never_block.split(list_names, allowed)
+    content = {
+        "graph_ready": indicators is not None,
+        "graph_complete": bool(indicators is not None and getattr(indicators, "complete", False)),
+        "dns": {"enabled": dns_on,
+                "verified": verified,
+                "lists": listed,
+                "spared": spared_verified[:MAX_SPARED],
+                # Lock remote access: remote-control apps' relay domains refused too (remote_lock).
+                "block": sorted(set(_names(block)) | set(remote_lock.relay_domains(mode.enabled))) if dns_on else []},
+        "firewall": {"enabled": firewall_on,
+                     "ips": sorted(public_only(indicators.ips if firewall_on and indicators else ()) | set(_ips(block) if firewall_on else ()))},
+        "cut": {"enabled": cut_on, "ips": sorted(public_only(cut_ips) - allowed) if cut_on else []},
+        "ssh": {"lockdown": ssh_on, "allow": sorted(mode_module.option(mode, mode_module.OPT_SSH_ALLOW)) if ssh_on else []},
+        "watch": mode.enabled,
+        "remote": remote_lock.plan_part(mode.enabled),
+        "allow": sorted(allowed),
+    }
+    version = hashlib.sha256(json.dumps(content, sort_keys=True).encode("utf-8")).hexdigest()
+    return {"version": version, "unchanged": False, **content}
+
+
+def _int(value: Any, field: str) -> int:
+    if type(value) is not int or value < 0:
+        raise ShieldApiError(400, f"{field} must be a whole number")
+    return value
+
+
+def record_report(body: Mapping[str, Any], now: Optional[float] = None) -> dict[str, Any]:
+    """Validates and stores one enforcer report; answers the stored summary."""
+    now = time.time() if now is None else now
+    for flag in ("running", "dns_active", "firewall_active"):
+        if not isinstance(body.get(flag), bool):
+            raise ShieldApiError(400, f"{flag} must be true or false")
+    for flag in ("cut_active", "ssh_lockdown_active"):   # optional: helpers before these protections
+        if not isinstance(body.get(flag, False), bool):
+            raise ShieldApiError(400, f"{flag} must be true or false")
+    snapshot, watched = watch.validate(body, now)
+    remote = remote_access.validate(body.get("remote"), now)   # before anything is stored: one bad part refuses all
+    raw_blocks = body.get("blocks", [])
+    if not isinstance(raw_blocks, list) or len(raw_blocks) > MAX_BLOCKS_PER_REPORT:
+        raise ShieldApiError(400, f"blocks must be a list of at most {MAX_BLOCKS_PER_REPORT}")
+    blocks = []
+    for item in raw_blocks:
+        name = mode_module.normalise_entry(item.get("domain")) if isinstance(item, dict) else None
+        if name is None or item.get("list") not in LISTS:
+            raise ShieldApiError(400, "each block names a domain and its list (verified, lists or block)")
+        blocks.append({"domain": name, "list": item["list"], "count": max(1, min(_int(item.get("count", 1), "count"), 1_000_000)),
+                       "ts": float(min(now, _int(item.get("ts", int(now)), "ts")))})
+    with _lock:
+        state = read_state()
+        counts: dict[str, dict[str, Any]] = state.get("counts", {})
+        for block in blocks:
+            entry = counts.setdefault(block["domain"], {"list": block["list"], "count": 0, "last": 0.0})
+            entry["count"] += block["count"]
+            entry["last"] = max(entry["last"], block["ts"])
+        busiest = sorted(counts.items(), key=lambda item: -item[1]["count"])[:MAX_COUNTED]
+        recent = (blocks[::-1] + state.get("recent", []))[:MAX_RECENT]
+        state = {
+            "enforcer": {"running": body["running"], "dns_active": body["dns_active"],
+                         "firewall_active": body["firewall_active"], "cut_active": body.get("cut_active", False),
+                         "ssh_lockdown_active": body.get("ssh_lockdown_active", False), "version": str(body.get("version") or "")[:64],
+                         "reported_at": now},
+            "queries": _int(body.get("queries", 0), "queries"),
+            "firewall_dropped": _int(body.get("firewall_dropped", 0), "firewall_dropped"),
+            "blocked_total": state.get("blocked_total", 0) + sum(block["count"] for block in blocks),
+            "counts": dict(busiest), "recent": recent,
+        }
+        write_json_object(_state_path(), state, what="Network Shield's enforcer state")
+    watch.record(snapshot, watched)
+    remote_access.record(remote, now)
+    remote_lock.check_failures(now)   # brute-force auto-block (opt-in) reads the failed logins just kept
+    return summary(state, now)
+
+
+def read_state() -> dict[str, Any]:
+    """The stored state (empty when the enforcer never reported)."""
+    return read_json_object(_state_path()) or {}
+
+
+def summary(state: Optional[Mapping[str, Any]] = None, now: Optional[float] = None) -> dict[str, Any]:
+    """The enforcer's status for the card and the app: is it running, and what it blocked."""
+    state = read_state() if state is None else state
+    now = time.time() if now is None else now
+    enforcer = state.get("enforcer") or {}
+    fresh = bool(enforcer) and now - float(enforcer.get("reported_at", 0)) < STALE_AFTER_SECONDS
+    return {
+        "installed": bool(enforcer),
+        "running": fresh and bool(enforcer.get("running")),
+        "dns_active": fresh and bool(enforcer.get("dns_active")),
+        "firewall_active": fresh and bool(enforcer.get("firewall_active")),
+        "cut_active": fresh and bool(enforcer.get("cut_active")),
+        "ssh_lockdown_active": fresh and bool(enforcer.get("ssh_lockdown_active")),
+        # Lock remote access is reported in the helper's remote-watch part (its own freshness).
+        "remote_lock_active": remote_access.lock_active(now),
+        "cut_total": watch.cut_total(),
+        "reported_at": enforcer.get("reported_at"),
+        "queries": state.get("queries", 0),
+        "firewall_dropped": state.get("firewall_dropped", 0),
+        "blocked_total": state.get("blocked_total", 0),
+    }
+
+
+def recent_blocks(limit: int = 100) -> list[dict[str, Any]]:
+    """The latest refused names, newest first."""
+    return list(read_state().get("recent", []))[:max(0, limit)]
+
+
+def top_blocked(limit: int = 20) -> list[dict[str, Any]]:
+    """The most often refused names, busiest first."""
+    counts = read_state().get("counts", {})
+    return [{"domain": name, **entry} for name, entry in list(counts.items())[:max(0, limit)]]
