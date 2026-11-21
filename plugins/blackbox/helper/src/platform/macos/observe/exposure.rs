@@ -11,7 +11,7 @@ use std::net::IpAddr;
 
 use serde_json::{json, Value};
 
-use crate::sockets::Socket;
+use crate::platform::macos::sockets::Socket;
 
 /// UDP ports from here up are the OS's ephemeral client ports, not services.
 const EPHEMERAL_FROM: u16 = 49152;

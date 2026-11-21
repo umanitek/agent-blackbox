@@ -28,18 +28,18 @@ pub fn undo_for(how: Stopping) -> Undo {
     Undo { dns: true, filter: true, hardening: matches!(how, Stopping::Uninstall { undo_hardening: true }) }
 }
 
-/// Puts the Mac back from the saved state alone — for `uninstall`, which runs while the
-/// service is stopped (or dead). Answers what failed (nothing → empty).
-pub fn put_back(undo: Undo) -> Vec<String> {
+/// Puts the system back from the saved state alone — for `uninstall`, which runs while the
+/// service is stopped (or dead), through this OS's *enforcer*. Answers what failed (nothing → empty).
+pub fn put_back(enforcer: &impl Enforcer, undo: Undo) -> Vec<String> {
     let mut errors = vec![];
     let mut state = State::load();
     if undo.dns && !state.saved_dns.is_empty() {
-        let failed = system::restore_dns(&state.saved_dns);
+        let failed = enforcer.restore_dns(&state.saved_dns);
         if failed.is_empty() { state.saved_dns.clear(); state.dns_active = false; }
         errors.extend(failed);
     }
     if undo.filter {
-        match pf::apply(&pf::Filter::default(), state.pf_token.take()) {
+        match enforcer.apply_filter(&platform::Filter::default(), state.pf_token.take()) {
             Ok(_) => {
                 state.firewall_active = false;
                 state.cut_active = false;
@@ -50,7 +50,7 @@ pub fn put_back(undo: Undo) -> Vec<String> {
         }
     }
     if undo.hardening {
-        system_guard::undo_hardening();
+        enforcer.undo_hardening();
     }
     state.save();
     errors

@@ -26,7 +26,7 @@ use serde_json::{json, Value};
 
 use super::enforce::{posture::Fixes, restore};
 use super::observe::{exposure, persistence, posture, tamper};
-use crate::sockets::Reader;
+use crate::platform::macos::sockets::Reader;
 
 const PLAN_PATH: &str = "/api/shields/network-shield/api/system-plan";
 const REPORT_PATH: &str = "/api/shields/network-shield/api/system-report";
@@ -50,7 +50,7 @@ pub struct SystemPlan {
 static FIXES: OnceLock<Mutex<Fixes>> = OnceLock::new();
 
 fn fixes() -> &'static Mutex<Fixes> {
-    FIXES.get_or_init(|| Mutex::new(Fixes::load(std::path::Path::new(crate::HOME).join("posture-fixes.json"))))
+    FIXES.get_or_init(|| Mutex::new(Fixes::load(std::path::Path::new(super::HOME).join("posture-fixes.json"))))
 }
 
 fn now() -> u64 {
@@ -59,7 +59,7 @@ fn now() -> u64 {
 
 /// Whether DNS Shield is applied now (the plan / report loop's saved state).
 fn dns_active() -> bool {
-    std::fs::read_to_string(std::path::Path::new(crate::HOME).join("state.json")).ok()
+    std::fs::read_to_string(std::path::Path::new(super::HOME).join("state.json")).ok()
         .and_then(|t| serde_json::from_str::<Value>(&t).ok()).and_then(|v| v["dns_active"].as_bool()).unwrap_or(false)
 }
 
@@ -153,7 +153,7 @@ impl Watchers {
 
 /// The loop (started by the helper; runs until the process ends).
 pub fn run() {
-    let Ok(link) = crate::link::Link::new(std::path::Path::new(crate::HOME)) else { return };
+    let Ok(link) = crate::link::Link::new(std::path::Path::new(super::HOME)) else { return };
     let mut client = Client { link };
     let mut reader = Reader::default();
     let mut watchers = Watchers::default();

@@ -317,7 +317,7 @@ mod stack_tests {
     #[test]
     fn one_look_fits_a_default_thread_stack() {
         std::thread::spawn(|| {
-            let mut reader = crate::sockets::Reader::default();
+            let mut reader = crate::platform::macos::sockets::Reader::default();
             let sockets: Vec<Inbound> = reader.sockets().into_iter().map(|s| Inbound {
                 pid: s.pid, local_ip: s.local_ip, local_port: s.local_port, remote_ip: s.remote_ip, remote_port: s.remote_port,
                 listening: s.listening(), established: s.state == "Established" }).collect();

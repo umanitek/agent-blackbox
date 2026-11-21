@@ -47,12 +47,9 @@ struct Helper {
     /// `unchanged` and leave DNS Shield refusing nothing).
     applied: Mutex<String>,
     watching: AtomicBool,
-    watch: Mutex<watch::Watch>,
-    /// Who is in this Mac (remote sessions), the login-log child, and what it needs to look.
-    remote: Mutex<remote::Remote>,
-    logs: Mutex<logstream::Stream>,
-    sockets: Mutex<crate::sockets::Reader>,
-    procs: Mutex<remote_procs::ProcReader>,
+    /// What the helper changes on this system, and what it watches ([`crate::platform`]).
+    enforcer: SystemEnforcer,
+    observer: SystemObserver,
     /// End requests already acted on (each is carried out once).
     ended: Mutex<HashSet<String>>,
     wake: Wake,
@@ -99,10 +96,10 @@ fn protections(state: &State, failures: &Failures) -> Value {
 const DNS_SELF_TEST_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// The upstreams to forward to, in order of trust: what the person set (*saved*, after a
-/// restart), else what the Mac resolves with now, else what this network handed out by DHCP.
+/// restart), else what the system resolves with now, else what this network handed out by DHCP.
 /// Empty when none is known — never a public resolver nobody chose.
-fn known_upstreams(saved: &[std::net::SocketAddr]) -> Vec<std::net::SocketAddr> {
-    pick_upstreams(saved.to_vec(), system::current_upstreams, system::dhcp_upstreams)
+fn known_upstreams(enforcer: &impl Enforcer, saved: &[std::net::SocketAddr]) -> Vec<std::net::SocketAddr> {
+    pick_upstreams(saved.to_vec(), || enforcer.current_upstreams(), || enforcer.dhcp_upstreams())
 }
 
 fn pick_upstreams(saved: Vec<std::net::SocketAddr>, current: impl FnOnce() -> Vec<std::net::SocketAddr>,
@@ -114,18 +111,22 @@ fn pick_upstreams(saved: Vec<std::net::SocketAddr>, current: impl FnOnce() -> Ve
 
 
 pub fn run() -> Result<(), String> {
+    if !platform::SUPPORTED {
+        return Err("Blackbox's system protection helper does not support this operating system yet".into());
+    }
     private_files::ensure_dir(Path::new(HOME)).map_err(|error| format!("{HOME}: {error}"))?;
     let mut state = State::load();
     // After a reboot the saved pf token is meaningless: drop it, so the first plan enables pf and
-    // verifies it (pf::apply) instead of trusting a token from another boot.
-    let boot = pf::boot_time();
+    // verifies it (Enforcer::apply_filter) instead of trusting a token from another boot.
+    let enforcer = SystemEnforcer::default();
+    let boot = enforcer.boot_time();
     if state.boot != boot {
         state.pf_token = None;
         state.boot = boot;
         state.save();
     }
-    let saved = if state.dns_active { system::upstreams_from_saved(&state.saved_dns) } else { vec![] };
-    let upstreams = known_upstreams(&saved);
+    let saved = if state.dns_active { enforcer.upstreams_from_saved(&state.saved_dns) } else { vec![] };
+    let upstreams = known_upstreams(&enforcer, &saved);
     let helper = Arc::new(Helper {
         resolver: dns::Resolver::new(upstreams),
         state: Mutex::new(state),
@@ -134,11 +135,8 @@ pub fn run() -> Result<(), String> {
         failures: Mutex::new(Failures::default()),
         applied: Mutex::new(String::new()),
         watching: AtomicBool::new(false),
-        watch: Mutex::new(watch::Watch::default()),
-        remote: Mutex::new(remote::Remote::default()),
-        logs: Mutex::new(logstream::Stream::default()),
-        sockets: Mutex::new(crate::sockets::Reader::default()),
-        procs: Mutex::new(remote_procs::ProcReader::default()),
+        enforcer,
+        observer: SystemObserver::default(),
         ended: Mutex::new(HashSet::new()),
         wake: Wake::default(),
     });
@@ -164,18 +162,20 @@ pub fn run() -> Result<(), String> {
     let watcher = helper.clone();
     named("blackbox-netd-watch", move || loop {
         watcher.look();
-        thread::sleep(watch::WATCH_EVERY);
+        thread::sleep(<SystemObserver as Observer>::WATCH_EVERY);
     });
     // Exposure, persistence, tampering and posture (+ posture fixes, the DNS tamper guard): its own
     // small plan and report (system_guard), so neither loop waits on the other.
     // Every helper thread is named (`named`), so a crash log says which one it was. The stack
-    // overflow first seen on a test VM was NOT stack size: it was logstream::Stream's stop/Drop
-    // recursion (fixed there, with a regression test). The larger stack stays as headroom.
-    let _ = thread::Builder::new().name("blackbox-system-guard".into()).stack_size(system_guard::STACK_BYTES).spawn(system_guard::run);
+    // overflow first seen on a test VM was NOT stack size: it was the macOS log reader's
+    // stop/Drop recursion (fixed there, with a regression test). The larger stack stays as headroom.
+    let guard = helper.clone();
+    let _ = thread::Builder::new().name("blackbox-system-guard".into()).stack_size(<SystemObserver as Observer>::SYSTEM_WATCH_STACK)
+        .spawn(move || guard.observer.run_system_watch());
     let remoter = helper.clone();
     named("blackbox-netd-remote", move || loop {
         remoter.look_remote();
-        thread::sleep(remote::REMOTE_EVERY);
+        thread::sleep(<SystemObserver as Observer>::REMOTE_EVERY);
     });
 
     loop {

@@ -31,7 +31,8 @@ use std::time::{Duration, Instant};
 
 use sha2::{Digest, Sha256};
 
-use crate::{command, link, private_files, HOME, LABEL};
+use super::{LABEL, HOME};
+use crate::{command, link, private_files};
 
 pub const BINARY: &str = "blackbox-netd";
 /// A helper bigger than this is not ours.
@@ -212,7 +213,7 @@ fn install_from_staging(args: &InstallArgs, staging: &Path) -> Result<(), String
 
 pub fn uninstall(undo_hardening: bool) -> Result<(), String> {
     let _ = launchctl(&["bootout", &format!("system/{LABEL}")]);
-    let errors = crate::put_back(crate::undo_for(crate::Stopping::Uninstall { undo_hardening }));
+    let errors = crate::put_back(&super::SystemEnforcer::default(), crate::undo_for(crate::Stopping::Uninstall { undo_hardening }));
     let _ = fs::remove_file(plist_path());
     if errors.is_empty() {
         let _ = fs::remove_dir_all(HOME);

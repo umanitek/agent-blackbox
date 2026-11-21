@@ -1,13 +1,14 @@
 //! The plan as the plugin sends it (`plugins/blackbox/shields/network/enforcement.py::plan`), and
 //! what each part of the helper takes from it. Every address goes through `IpAddr` or
-//! [`super::pf::source`] here, so nothing unchecked reaches pf.
+//! [`crate::platform::source`] here, so nothing unchecked reaches the firewall.
 
 use std::collections::HashSet;
 use std::net::IpAddr;
 
 use serde::Deserialize;
 
-use super::{dns, pf};
+use crate::dns;
+use crate::platform::{source, EndRequest};
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
@@ -65,7 +66,7 @@ pub struct RemotePlan {
     /// Addresses refused inbound entirely (blocked by the user, or for repeated failed logins).
     pub block: Vec<String>,
     /// Sessions the user confirmed ending (each checked against the watch before acting).
-    pub end: Vec<super::enforce::sessions::EndRequest>,
+    pub end: Vec<EndRequest>,
 }
 
 impl Plan {
@@ -99,7 +100,7 @@ impl Plan {
 
     /// The valid SSH sources (anything else is dropped, never passed to pf).
     pub fn ssh_sources(&self) -> Vec<String> {
-        self.ssh.allow.iter().filter_map(|item| pf::source(item)).collect()
+        self.ssh.allow.iter().filter_map(|item| source(item)).collect()
     }
 
     /// The addresses to refuse inbound (valid ones only), or None when there are none.

@@ -47,7 +47,7 @@ impl Helper {
             // Switch the Mac's DNS only to a resolver that is up and answering, with a real
             // upstream to forward to (security finding: a failed bind or an empty upstream list
             // used to take the Mac offline, or send its queries to public resolvers nobody chose).
-            let upstreams = known_upstreams(&[]);
+            let upstreams = known_upstreams(&self.enforcer, &[]);
             if upstreams.is_empty() {
                 return Some("DNS Shield stays off: no DNS server of this network is known to forward to".into());
             }
@@ -55,13 +55,13 @@ impl Helper {
                 return Some("DNS Shield stays off: Blackbox's resolver is not answering on 127.0.0.1:53".into());
             }
             *self.resolver.upstreams.write().unwrap() = upstreams;
-            system::point_dns_at_shield().map(|saved| {
+            self.enforcer.point_dns_at_shield().map(|saved| {
                 for (service, servers) in saved {
                     state.saved_dns.entry(service).or_insert(servers);
                 }
             })
         } else {
-            let errors = system::restore_dns(&state.saved_dns);
+            let errors = self.enforcer.restore_dns(&state.saved_dns);
             if errors.is_empty() { state.saved_dns.clear(); Ok(()) } else { Err(errors.join("; ")) }
         };
         if result.is_ok() {
@@ -89,7 +89,7 @@ impl Helper {
             *self.last_error.lock().unwrap() = Some(format!("DNS Shield's resolver stopped answering; the Mac's own DNS was put back {error}").trim().to_string());
             return;
         }
-        let now = system::dhcp_upstreams();
+        let now = self.enforcer.dhcp_upstreams();
         if !now.is_empty() {
             if let Ok(mut upstreams) = self.resolver.upstreams.write() {
                 if *upstreams != now { *upstreams = now; }
@@ -97,7 +97,7 @@ impl Helper {
         }
     }
 
-    /// Makes pf enforce the plan's firewall, cut and SSH lockdown; kills the open connections to
+    /// Makes the firewall enforce the plan's threats, cut and SSH lockdown; kills the open connections to
     /// newly cut addresses and queues an event for each.
     pub(super) fn set_filter(&self, plan: &Plan) -> Option<String> {
         let mut state = self.state.lock().unwrap();
@@ -116,14 +116,14 @@ impl Helper {
             state.cut_ips.clear();
         }
         let threats = plan.firewall.enabled.then(|| plan.firewall_ips());
-        let filter = pf::Filter {
+        let filter = platform::Filter {
             threats: threats.clone(),
             cut: plan.cut.enabled.then(|| state.cut_ips.iter().filter_map(|ip| ip.parse().ok()).collect()),
             ssh_allow: plan.ssh.lockdown.then(|| plan.ssh_sources()),
             remote_lock: plan.remote.lock,
             remote_block: plan.remote_block(),
         };
-        let result = pf::apply(&filter, state.pf_token.clone());
+        let result = self.enforcer.apply_filter(&filter, state.pf_token.clone());
         if let Ok(token) = &result {
             state.pf_token = token.clone();
             state.firewall_active = threats.map(|ips| !ips.is_empty()).unwrap_or(false);
@@ -135,12 +135,10 @@ impl Helper {
         drop(state);
         self.end_sessions(plan);
         if result.is_ok() && !newly.is_empty() {
-            let mut watch = self.watch.lock().unwrap();
             for ip in &newly {
-                let _ = pf::kill_states(ip);   // the anchor's rule already drops it; this ends open states too
-                watch.push(json!({"kind": "connection-cut", "ts": now(), "remote_ip": ip.to_string()}));
+                let _ = self.enforcer.kill_states(ip);   // the filter already drops it; this ends open states too
+                self.observer.record(json!({"kind": "connection-cut", "ts": now(), "remote_ip": ip.to_string()}));
             }
-            drop(watch);
             self.wake.now();
         }
         result.err()

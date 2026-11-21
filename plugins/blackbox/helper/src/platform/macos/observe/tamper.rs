@@ -97,7 +97,7 @@ pub fn look() -> Look {
         vpn_count: parse_vpns(&output("/usr/sbin/scutil", &["--nc", "list"])),
         firewall: parse_firewall(&output(FIREWALL, &["--getglobalstate"])),
         helper: HELPER_FILES.iter().map(|path| fingerprint(path)).collect(),
-        pf: match crate::pf_status::read() {
+        pf: match crate::platform::macos::pf_status::read() {
             Some(true) => "enabled", Some(false) => "disabled", None => "unknown",
         }.into(),
     }

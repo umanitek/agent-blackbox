@@ -15,24 +15,13 @@
 
 use std::time::{Duration, Instant};
 
-use serde::Deserialize;
-
-use crate::observe::remote::{Session, SERVING_PROGRAMS};
+use crate::platform::macos::observe::remote::{Session, SERVING_PROGRAMS};
+use crate::platform::EndRequest;
 
 /// How long a session's process has to end after SIGTERM.
 pub const GRACE: Duration = Duration::from_secs(2);
 /// Kinds of session that have a process of their own to end.
 const ENDABLE: [&str; 3] = ["ssh", "screen-sharing", "remote-desktop"];
-
-/// One end request from the plan.
-#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
-#[serde(default)]
-pub struct EndRequest {
-    pub session_id: String,
-    pub pid: u32,
-    /// When the watch first saw the session (unix seconds), as it reported it.
-    pub started: u64,
-}
 
 /// Why a request was refused, or Ok when the process may be ended. *live*: the watch's session
 /// with that id; *process*: (name, start) of the pid now.

@@ -19,8 +19,9 @@
 //! protection, or by Blackbox Desktop). When the plugin cannot be reached it
 //! keeps enforcing the last plan; when it is stopped it puts the Mac's DNS settings and pf back.
 //!
-//! Modules: [`dns`] (the resolver), [`system`] (DNS settings), [`pf`] (the packet filter),
-//! [`plan`] (the plan), [`watch`] (SSH and login files).
+//! Modules: [`dns`] (the resolver), [`plan`] (the plan), [`link`] (the signed link to the
+//! plugin), [`platform`] (everything that changes or reads the system: one folder per OS, behind
+//! the [`Enforcer`] and [`Observer`] traits).
 
 pub mod platform;
 pub mod command;
@@ -33,14 +34,10 @@ mod daemon;
 mod state;
 mod undo;
 
-// The macOS parts under their former names (platform/macos/ holds them).
-pub use platform::macos::{enforce, install, observe, pf_status, sockets};
-use platform::macos::system_guard;
-// The orchestration below names each part directly; observe and enforce stay separate modules.
-pub use enforce::{pf, sessions, system};
-pub use observe::{logstream, remote, remote_procs, watch};
+// The system is reached only through the platform's two traits (platform/mod.rs).
+pub use platform::{Enforcer, Observer, SystemEnforcer, SystemObserver, HOME};
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 use std::fs;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
@@ -57,10 +54,6 @@ pub use daemon::run;
 pub use state::State;
 pub use undo::{put_back, undo_for, Stopping, Undo};
 
-/// The LaunchDaemon label.
-pub const LABEL: &str = "ai.umanitek.blackbox.netd";
-/// The helper's root-owned folder.
-pub const HOME: &str = "/Library/Application Support/Blackbox/netd";
 const PLAN_PATH: &str = "/api/shields/network-shield/api/enforcement";
 const REPORT_PATH: &str = "/api/shields/network-shield/api/enforcer-report";
 pub const PLAN_EVERY: Duration = Duration::from_secs(15);

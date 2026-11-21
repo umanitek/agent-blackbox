@@ -3,7 +3,7 @@
 //! plugin's Network Shield publishes. See the `blackbox_helper` crate.
 //!
 //! `blackbox-netd install …` / `blackbox-netd uninstall [--undo-hardening]` put it on the Mac
-//! and take it off (`blackbox_helper::install`).
+//! and take it off (`blackbox_helper::platform::subcommand`).
 
 fn main() {
     // SAFETY: getuid has no preconditions.
@@ -12,7 +12,7 @@ fn main() {
         std::process::exit(2);
     }
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if let Some(result) = blackbox_helper::install::subcommand(&args) {
+    if let Some(result) = blackbox_helper::platform::subcommand(&args) {
         match result {
             Ok(()) => return,
             Err(error) => {

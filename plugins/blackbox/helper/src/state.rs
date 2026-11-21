@@ -16,7 +16,7 @@ pub(crate) fn now() -> u64 {
 #[serde(default)]
 pub struct State {
     /// What each network service's DNS was before DNS Shield took over (restored exactly).
-    pub saved_dns: BTreeMap<String, Vec<String>>,
+    pub saved_dns: platform::SavedDns,
     pub dns_active: bool,
     pub firewall_active: bool,
     pub cut_active: bool,

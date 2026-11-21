@@ -23,6 +23,8 @@
 use std::net::IpAddr;
 use std::process::Command;
 
+use crate::platform::Filter;
+
 const PFCTL: &str = "/sbin/pfctl";
 pub const ANCHOR: &str = "com.apple/250.BlackboxFirewall";
 const THREATS: &str = "bb_threats";
@@ -31,43 +33,6 @@ const SSH_ALLOW: &str = "bb_ssh_allow";
 const REMOTE_BLOCK: &str = "bb_remote_block";
 /// The ports Lock remote access closes: SSH, Screen Sharing, Remote Management, SMB, Remote Apple Events.
 pub const REMOTE_PORTS: &str = "{ 22 5900 3283 445 3031 }";
-
-/// What the anchor must enforce; `None` = that protection is off.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct Filter {
-    pub threats: Option<Vec<IpAddr>>,
-    pub cut: Option<Vec<IpAddr>>,
-    /// Allowed SSH sources: addresses or networks, already checked by [`source`].
-    pub ssh_allow: Option<Vec<String>>,
-    /// Lock remote access: the remote-access ports closed to everyone but this Mac.
-    pub remote_lock: bool,
-    /// Addresses refused inbound entirely (blocked by the user or for repeated failed logins).
-    pub remote_block: Option<Vec<IpAddr>>,
-}
-
-impl Filter {
-    pub fn is_off(&self) -> bool {
-        self.threats.is_none() && self.cut.is_none() && self.ssh_allow.is_none() && !self.remote_lock && self.remote_block.is_none()
-    }
-}
-
-/// An SSH source in canonical form (`192.168.1.0/24`, `10.0.0.5`, `fd00::/8`); None when invalid.
-/// Everything that goes into a pf table passes through this or `IpAddr`.
-pub fn source(text: &str) -> Option<String> {
-    let (address, prefix) = match text.split_once('/') {
-        Some((address, prefix)) => (address, Some(prefix)),
-        None => (text, None),
-    };
-    let ip: IpAddr = address.trim().parse().ok()?;
-    match prefix {
-        None => Some(ip.to_string()),
-        Some(prefix) => {
-            let bits: u8 = prefix.trim().parse().ok()?;
-            let most = if ip.is_ipv4() { 32 } else { 128 };
-            (bits <= most).then(|| format!("{ip}/{bits}"))
-        }
-    }
-}
 
 /// The anchor's rules for *filter*: the tables always, the rules of each protection that is on.
 pub fn rules(filter: &Filter) -> String {
@@ -153,7 +118,7 @@ pub fn needs_enable(token: Option<&str>, status: Option<bool>) -> bool {
 
 /// pf's status now (`pfctl -s info`): Some(true) Enabled, Some(false) Disabled, None unreadable.
 pub fn enabled() -> Option<bool> {
-    crate::pf_status::read()
+    crate::platform::macos::pf_status::read()
 }
 
 /// When this Mac last started (kern.boottime, unix seconds; 0 if unreadable). A pf token saved
@@ -243,16 +208,6 @@ mod tests {
         assert!(text.contains("pass in quick on lo0 proto tcp to any port { 22 5900 3283 445 3031 }"), "this Mac itself still reaches them");
         assert!(!Filter { remote_lock: true, ..Default::default() }.is_off());
         assert!(!rules(&Filter::default()).contains("port { 22"), "off: no lock rules");
-    }
-
-    #[test]
-    fn ssh_sources_are_addresses_or_networks_only() {
-        assert_eq!(source("192.168.1.0/24").as_deref(), Some("192.168.1.0/24"));
-        assert_eq!(source("10.0.0.5").as_deref(), Some("10.0.0.5"));
-        assert_eq!(source("fd00::/8").as_deref(), Some("fd00::/8"));
-        for bad in ["10.0.0.0/33", "example.com", "1.2.3.4/x", "1.2.3.4\nblock all", ""] {
-            assert_eq!(source(bad), None, "{bad:?}");
-        }
     }
 
     #[test]
