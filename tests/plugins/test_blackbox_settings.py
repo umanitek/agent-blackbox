@@ -600,3 +600,14 @@ def test_setup_llm_still_saves_through_the_writer():
     result = settings.write_settings({"llm": {"enabled": True, "provider": "openai", "model": "gpt-4o-mini",
                                               "api_key_env": "OPENAI_API_KEY"}})
     assert result["ok"] is True and result["settings"]["llm"]["provider"] == "openai"
+
+
+def test_settings_carry_the_protected_files_a_reset_restores(monkeypatch):
+    """Found building Blackbox Desktop's Settings (2026-11-21): "Reset to defaults" sent
+    protected_paths [], which is kept as given, so a reset stripped ~/.ssh/*, .env, *.pem … The
+    settings now carry the plugin's own default list, and a reset sends it back."""
+    monkeypatch.setattr(config_mod, "_blackbox_entry", lambda: {"protected_paths": []})   # the person cleared it
+    read = settings.read_settings()
+    assert read["protected_paths"] == []
+    assert read["default_protected_paths"] == list(config_mod.DEFAULT_PROTECTED_PATHS)
+    assert "~/.ssh/*" in read["default_protected_paths"]

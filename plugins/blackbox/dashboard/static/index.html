@@ -7837,7 +7837,11 @@
       discover: true, osv_lookup: true,
       // Not a default to reset: whether new agents are protected was the operator's own choice.
       auto_attach: !!(setState && setState.auto_attach),
-      categories: cats, protected_paths: [],
+      // The plugin's own default list (served as default_protected_paths): a reset that sent []
+      // would be kept as given and strip ~/.ssh/*, .env, *.pem … from the protected files.
+      categories: cats,
+      protected_paths: (setState && Array.isArray(setState.default_protected_paths)) ? setState.default_protected_paths.slice() : [],
+      default_protected_paths: (setState && Array.isArray(setState.default_protected_paths)) ? setState.default_protected_paths.slice() : [],
       category_labels: {}
     };
   }
@@ -7865,6 +7869,9 @@
       ? data.protected_paths.map(function (p) { return String(p == null ? "" : p); })
                             .filter(function (p) { return p.trim() !== ""; })
       : [];
+    out.default_protected_paths = Array.isArray(data.default_protected_paths)
+      ? data.default_protected_paths.map(function (p) { return String(p == null ? "" : p); })
+      : out.default_protected_paths;
     out.category_labels = (data.category_labels && typeof data.category_labels === "object")
       ? data.category_labels : {};
     return out;

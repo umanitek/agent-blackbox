@@ -22,7 +22,7 @@ from typing import Any, Callable, Iterable, NamedTuple
 
 from . import constants
 from . import yaml_files
-from .config import load_blackbox_config
+from .config import DEFAULT_PROTECTED_PATHS, load_blackbox_config
 from .config_values import schema
 from .config_values.schema import DETECTION_CATEGORIES, MAX_PROTECTED_PATHS
 
@@ -72,6 +72,10 @@ def read_settings() -> dict[str, Any]:
         "auto_attach": cfg.auto_attach,
         "categories": categories,
         "protected_paths": list(cfg.protected_paths),
+        # What "Reset to defaults" restores. WHY it is served: an explicit empty list is kept as
+        # given (a person who clears the list keeps it cleared), so a reset that sent [] would
+        # strip ~/.ssh/*, .env, *.pem … — a reset must never leave the machine less protected.
+        "default_protected_paths": list(DEFAULT_PROTECTED_PATHS),
         "llm": {
             "enabled": cfg.llm_enabled,
             "provider": cfg.llm_provider,
