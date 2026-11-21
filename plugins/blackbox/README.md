@@ -531,6 +531,10 @@ block mode.
 The reporter terms, the data-protection impact assessment and the controller
 map ship in `plugins/blackbox/docs/`.
 
+How Blackbox hooks each coding agent (Claude Code, Codex, Cursor, Gemini CLI, Copilot CLI,
+Windsurf/Devin, Cline, OpenCode), against which official docs and with which test results, is in
+[`docs/agent-compat/`](docs/agent-compat/README.md).
+
 | Right | Command | What actually happens |
 |---|---|---|
 | Object | `blackbox report --disable-sharing` | automatic sharing, manual reports, keep-alive, retries and digests stop on the next action |
