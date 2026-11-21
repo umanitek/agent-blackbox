@@ -188,14 +188,17 @@ def test_the_settings_routes_compose_shields_trader_and_a_save_retires_the_legac
     with TestClient(server.create_app(), base_url="http://127.0.0.1:9700") as client:
         read = client.get("/api/settings").json()
         token = client.get("/api/session").json()["token"]
-        saved = client.post("/api/settings", json={"shields": {"trader": {"enabled": True, "wallets": ["metamask"]}}},
+        # Every wallet: a save that ADDS protection applies at once (removing one waits for the
+        # person's approval — tests/plugins/test_blackbox_approvals.py covers that path).
+        everything = list(trader_mode.supported_wallets())
+        saved = client.post("/api/settings", json={"shields": {"trader": {"enabled": True, "wallets": everything}}},
                             headers={"X-Blackbox-Token": token})
 
     assert read["shields"]["trader"]["mode"]["enabled"] is True   # read from the legacy keys
     assert "wallet_protection" not in read
-    assert saved.status_code == 200 and saved.json()["settings"]["shields"]["trader"]["mode"]["wallets"] == ["metamask"]
+    assert saved.status_code == 200 and saved.json()["settings"]["shields"]["trader"]["mode"]["wallets"] == everything
     entry = _entry()
-    assert entry["shields"]["trader"] == {"enabled": True, "wallets": ["metamask"], "addresses": [OWN],
+    assert entry["shields"]["trader"] == {"enabled": True, "wallets": everything, "addresses": [OWN],
                                           "offered": list(trader_mode.supported_wallets())}
     assert not set(trader_mode.LEGACY_KEYS) & set(entry)
 
@@ -223,14 +226,16 @@ def _trader_card(client, wait_s=5.0):
 def test_the_card_read_right_after_a_save_shows_the_saved_wallets(monkeypatch, tmp_path):
     # The trader bench, 2026-10-15: after Save the page re-read GET /api/shields and got the
     # card cached BEFORE the save (stale-while-revalidate), so it kept showing the old wallets.
-    _write_entry({"shields": {"trader": {"enabled": True, "wallets": list(trader_mode.supported_wallets())}}})
+    # "offered" pins the list: an entry without it also gains wallets added in later releases.
+    _write_entry({"shields": {"trader": {"enabled": True, "wallets": ["metamask"], "offered": list(trader_mode.supported_wallets())}}})
     with _dashboard(monkeypatch, tmp_path) as client:
-        assert _trader_card(client)["mode"]["wallets"] == list(trader_mode.supported_wallets())
+        assert _trader_card(client)["mode"]["wallets"] == ["metamask"]
         token = client.get("/api/session").json()["token"]
-        saved = client.post("/api/settings", json={"shields": {"trader": {"wallets": ["metamask"]}}},
+        # Adding wallets strengthens protection, so it applies at once (removing waits for approval).
+        saved = client.post("/api/settings", json={"shields": {"trader": {"wallets": list(trader_mode.supported_wallets())}}},
                             headers={"X-Blackbox-Token": token})
         assert saved.status_code == 200
-        assert _trader_card(client)["mode"]["wallets"] == ["metamask"]   # the very next read, no wait
+        assert _trader_card(client)["mode"]["wallets"] == list(trader_mode.supported_wallets())   # the very next read, no wait
 
 
 def test_a_refresh_that_began_before_the_save_cannot_put_the_old_card_back(monkeypatch, tmp_path):
@@ -248,7 +253,8 @@ def test_a_refresh_that_began_before_the_save_cannot_put_the_old_card_back(monke
 
     monkeypatch.setattr(shields_routes, "statuses_payload", payload)
     monkeypatch.setattr(shields_routes, "STATUS_TTL_SECONDS", 0.0)   # every read starts a background refresh
-    _write_entry({"shields": {"trader": {"enabled": True, "wallets": list(trader_mode.supported_wallets())}}})
+    # "offered" pins the list: an entry without it also gains wallets added in later releases.
+    _write_entry({"shields": {"trader": {"enabled": True, "wallets": ["metamask"], "offered": list(trader_mode.supported_wallets())}}})
     with _dashboard(monkeypatch, tmp_path) as client:
         _trader_card(client)
         slow["on"] = True
@@ -258,13 +264,13 @@ def test_a_refresh_that_began_before_the_save_cannot_put_the_old_card_back(monke
             entered.wait(0.02)
         assert entered.is_set()
         token = client.get("/api/session").json()["token"]
-        client.post("/api/settings", json={"shields": {"trader": {"wallets": ["metamask"]}}},
+        client.post("/api/settings", json={"shields": {"trader": {"wallets": list(trader_mode.supported_wallets())}}},   # adds: applies at once
                     headers={"X-Blackbox-Token": token})
         release.set()                                   # the old refresh now finishes, after the save
         wait_until(lambda: not any(t.name == "blackbox-swr" and t.is_alive() for t in threading.enumerate()),
                    timeout=5, what="the slow refresh to finish")
         for _ in range(5):
-            assert _trader_card(client)["mode"]["wallets"] == ["metamask"]
+            assert _trader_card(client)["mode"]["wallets"] == list(trader_mode.supported_wallets())
 
 
 # ------------------------------------------------------------------ saves that must retire nothing
