@@ -24,7 +24,10 @@
 
 pub mod enforce;
 pub mod observe;
+pub mod command;
+pub mod link;
 pub mod plan;
+pub mod safe_read;
 pub mod sockets;
 mod system_guard;
 
@@ -50,8 +53,6 @@ pub use plan::Plan;
 pub const LABEL: &str = "ai.umanitek.blackbox.netd";
 /// The helper's root-owned folder.
 pub const HOME: &str = "/Library/Application Support/Blackbox/netd";
-/// The plugin's dashboard (loopback only).
-const PLUGIN: &str = "http://127.0.0.1:9700";
 const PLAN_PATH: &str = "/api/shields/network-shield/api/enforcement";
 const REPORT_PATH: &str = "/api/shields/network-shield/api/enforcer-report";
 pub const PLAN_EVERY: Duration = Duration::from_secs(15);
@@ -131,8 +132,8 @@ impl Wake {
 struct Helper {
     state: Mutex<State>,
     resolver: Arc<dns::Resolver>,
-    http: reqwest::blocking::Client,
-    token: Mutex<Option<String>>,
+    /// The one authenticated link to the plugin (plans verified, reports signed): [`link`].
+    link: Mutex<link::Link>,
     last_error: Mutex<Option<String>>,
     /// The plan version applied in THIS process. Not the saved one: after a restart the resolver
     /// is empty, so the first plan must come in full (asking `have=<saved>` would answer
@@ -171,8 +172,7 @@ pub fn run() -> Result<(), String> {
     let helper = Arc::new(Helper {
         resolver: dns::Resolver::new(upstreams),
         state: Mutex::new(state),
-        http: reqwest::blocking::Client::builder().build().map_err(|error| error.to_string())?,
-        token: Mutex::new(None),
+        link: Mutex::new(link::Link::new(Path::new(HOME))?),
         last_error: Mutex::new(None),
         applied: Mutex::new(String::new()),
         watching: AtomicBool::new(false),
@@ -237,14 +237,16 @@ pub fn run() -> Result<(), String> {
 }
 
 impl Helper {
-    /// Pulls the plan and applies it when it changed. Keeps the last plan when the plugin is away.
+    /// Pulls the plan and applies it when it changed. Keeps the last plan when the plugin is away
+    /// or cannot prove it is Blackbox's plugin ([`link`]): nothing is ever undone for that.
     fn follow_plan(&self) {
-        let have = self.applied.lock().map(|applied| applied.clone()).unwrap_or_default();
-        let url = format!("{PLUGIN}{PLAN_PATH}?have={have}");
-        let plan: Plan = match self.http.get(url).timeout(PLAN_TIMEOUT).send().and_then(|r| r.error_for_status()).and_then(|r| r.json()) {
-            Ok(plan) => plan,
-            Err(error) => {
-                *self.last_error.lock().unwrap() = Some(format!("the plan could not be read: {error}"));
+        let have: String = self.applied.lock().map(|applied| applied.clone()).unwrap_or_default()
+            .chars().filter(char::is_ascii_alphanumeric).collect();
+        let fetched = self.link.lock().unwrap().plan::<Plan>(PLAN_PATH, &format!("have={have}"), PLAN_TIMEOUT);
+        let plan = match fetched {
+            link::Fetched::Plan(plan) => plan,
+            link::Fetched::Refused(why) => {
+                *self.last_error.lock().unwrap() = Some(why);
                 return;
             }
         };
@@ -416,6 +418,10 @@ impl Helper {
             "running": true, "dns_active": state.dns_active, "firewall_active": state.firewall_active,
             "cut_active": state.cut_active, "ssh_lockdown_active": state.ssh_lockdown_active,
             "version": state.version, "queries": self.resolver.queries.load(std::sync::atomic::Ordering::Relaxed),
+            // What the person needs to trust the screen: whether the link is authenticated and the
+            // last thing that failed (null when everything applied).
+            "auth": self.link.lock().map(|link| link.mode()).unwrap_or("legacy"),
+            "last_error": self.last_error.lock().ok().and_then(|e| e.clone()),
             "firewall_dropped": if pf_on { pf::dropped() } else { 0 },
             "blocks": blocks, "watch": snapshot, "events": events,
             // Under its own key, so a plugin that predates it ignores it instead of refusing the report.
@@ -431,41 +437,17 @@ impl Helper {
             .collect();
         let remote_events = self.remote.lock().map(|mut remote| remote.drain()).unwrap_or_default();
         let body = self.report_body(events.clone(), remote_events.clone());
-        let send = |token: &str| {
-            self.http.post(format!("{PLUGIN}{REPORT_PATH}")).timeout(REPORT_TIMEOUT)
-                .header("X-Blackbox-Token", token).json(&body).send()
-        };
-        for attempt in 0..2 {
-            let Some(token) = self.session_token(attempt > 0) else { break };
-            match send(&token) {
-                Ok(response) if response.status().as_u16() == 401 || response.status().as_u16() == 403 => continue,
-                // Delivered, or refused on purpose (a 400 names a bad report: resending it would
-                // block every later report, the running status included).
-                Ok(_) => return,
-                Err(_) => break,
-            }
+        // Only to a server that proved it is Blackbox's plugin; signed ([`link`]).
+        if self.link.lock().unwrap().post(REPORT_PATH, &body, REPORT_TIMEOUT) {
+            return;
         }
-        // Not delivered (the plugin away): keep the events for the next report.
+        // Not delivered (the plugin away, or not proven): keep the events for the next report.
         if !events.is_empty() {
             self.watch.lock().unwrap().requeue(events);
         }
         if !remote_events.is_empty() {
             self.remote.lock().unwrap().requeue(remote_events);
         }
-    }
-
-    /// The dashboard's write token (`GET /api/session`), cached until it is refused.
-    fn session_token(&self, refresh: bool) -> Option<String> {
-        let mut cached = self.token.lock().ok()?;
-        if !refresh {
-            if let Some(token) = cached.as_ref() {
-                return Some(token.clone());
-            }
-        }
-        let session: Value = self.http.get(format!("{PLUGIN}/api/session")).timeout(REPORT_TIMEOUT).send().ok()?.json().ok()?;
-        let token = session.get("token")?.as_str()?.to_string();
-        *cached = Some(token.clone());
-        Some(token)
     }
 
     /// Puts the Mac back: DNS settings restored, the pf anchor emptied and pf released.

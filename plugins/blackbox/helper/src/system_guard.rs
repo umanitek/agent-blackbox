@@ -13,8 +13,8 @@
 //! Off (the plugin says so; an unreachable plugin keeps the last plan): nothing is watched and every applied fix is
 //! undone; the next watch starts from a fresh baseline. On helper stop: [`stop`] undoes the fixes.
 //!
-//! WHY its own token fetch: the plan / report loop's client lives inside its private state; this
-//! loop needs the same two calls (session token, JSON POST) and keeps them here.
+//! It talks to the plugin through its own [`crate::link::Link`] (the same authenticated link:
+//! plans verified, reports signed and sent only to a server that proved the key).
 
 use std::collections::BTreeSet;
 use std::sync::{Mutex, OnceLock};
@@ -28,7 +28,6 @@ use super::enforce::{posture::Fixes, restore};
 use super::observe::{exposure, persistence, posture, tamper};
 use crate::sockets::Reader;
 
-const PLUGIN: &str = "http://127.0.0.1:9700";
 const PLAN_PATH: &str = "/api/shields/network-shield/api/system-plan";
 const REPORT_PATH: &str = "/api/shields/network-shield/api/system-report";
 pub const TICK: Duration = Duration::from_secs(1);
@@ -65,27 +64,20 @@ fn dns_active() -> bool {
 }
 
 struct Client {
-    http: reqwest::blocking::Client,
-    token: Option<String>,
+    link: crate::link::Link,
 }
 
 impl Client {
-    fn plan(&self) -> Option<SystemPlan> {
-        self.http.get(format!("{PLUGIN}{PLAN_PATH}")).timeout(TIMEOUT).send().ok()?.error_for_status().ok()?.json().ok()
+    /// The plan when the verified plugin answers; None keeps the last one (never undone for it).
+    fn plan(&mut self) -> Option<SystemPlan> {
+        match self.link.plan::<SystemPlan>(PLAN_PATH, "", TIMEOUT) {
+            crate::link::Fetched::Plan(plan) => Some(plan),
+            crate::link::Fetched::Refused(_) => None,
+        }
     }
 
     fn post(&mut self, body: &Value) {
-        for attempt in 0..2 {
-            if self.token.is_none() || attempt > 0 {
-                self.token = self.http.get(format!("{PLUGIN}/api/session")).timeout(TIMEOUT).send().ok()
-                    .and_then(|r| r.json::<Value>().ok()).and_then(|v| v["token"].as_str().map(str::to_string));
-            }
-            let Some(token) = self.token.clone() else { return };
-            match self.http.post(format!("{PLUGIN}{REPORT_PATH}")).timeout(TIMEOUT).header("X-Blackbox-Token", token).json(body).send() {
-                Ok(r) if matches!(r.status().as_u16(), 401 | 403) => continue,
-                _ => return,
-            }
-        }
+        let _ = self.link.post(REPORT_PATH, body, TIMEOUT);
     }
 }
 
@@ -161,8 +153,8 @@ impl Watchers {
 
 /// The loop (started by the helper; runs until the process ends).
 pub fn run() {
-    let Ok(http) = reqwest::blocking::Client::builder().build() else { return };
-    let mut client = Client { http, token: None };
+    let Ok(link) = crate::link::Link::new(std::path::Path::new(super::HOME)) else { return };
+    let mut client = Client { link };
     let mut reader = Reader::default();
     let mut watchers = Watchers::default();
     let mut plan = SystemPlan::default();
