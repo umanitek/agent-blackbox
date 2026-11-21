@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from ...kernel.bounded_files import atomic_write
-from ..hosts import Host
+from ...kernel.agent_hosts import Host
 
 #: In every command Blackbox writes, and in nothing a user writes.
 MARK = "agent-hooks/runner.py"

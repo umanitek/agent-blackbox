@@ -21,7 +21,7 @@ from pathlib import Path
 
 from ...kernel.bounded_files import atomic_write
 from .config_edit import HOOK_TIMEOUT, MARK, EditResult
-from ..hosts import Host
+from ...kernel.agent_hosts import Host
 
 Invocations = dict[str, tuple[list[str], str]]
 

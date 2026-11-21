@@ -108,3 +108,6 @@ BY_ID = {host.id: host for host in HOSTS}
 
 def host(agent_id: str) -> Optional[Host]:
     return BY_ID.get(agent_id)
+
+
+__all__ = ["BY_ID", "EVENTS", "HOSTS", "Host", "host"]

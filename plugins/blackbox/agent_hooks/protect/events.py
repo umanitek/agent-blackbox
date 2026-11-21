@@ -32,7 +32,7 @@ from typing import Any, Mapping
 from ... import audit, guard
 from ...kernel import constants
 from ...kernel.bounded_files import read_json_object, write_json_object
-from ..hosts import BY_ID, EVENTS
+from ...kernel.agent_hosts import BY_ID, EVENTS
 from .runner import patch_files
 
 #: The most text one event carries for the injection check (the runner bounds it the same).

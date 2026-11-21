@@ -21,7 +21,7 @@ import pytest
 from plugins.blackbox import audit
 from plugins.blackbox import agent_hooks
 from plugins.blackbox.agent_hooks.protect import config_edit, events, own_files, runner
-from plugins.blackbox.agent_hooks import hosts
+from plugins.blackbox.kernel import agent_hosts as hosts
 
 CLAUDE = hosts.BY_ID["claude-code"]
 

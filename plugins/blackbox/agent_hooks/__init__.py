@@ -36,7 +36,7 @@ from ..kernel import constants
 from ..kernel.config import load_blackbox_config
 from .protect import config_edit, own_files
 from .protect.events import note_error, read_state, record_event, write_state
-from .hosts import BY_ID, HOSTS, Host
+from ..kernel.agent_hosts import BY_ID, HOSTS, Host
 
 __all__ = ["KINDS", "AgentRow", "note_error", "record_event", "rows", "set_protection", "sweep"]
 
