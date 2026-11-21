@@ -88,6 +88,16 @@ def test_listeners_and_startup_items_are_judged_by_their_signer(monkeypatch):
     assert view["startup"][0]["risk"] == "critical", "worst first"
 
 
+def test_a_program_with_no_signature_to_read_is_answered_never_left_checking(tmp_path):
+    """E2E B8 (bb-e2e-1121): startup items whose program is a bare name (``dkg``) or a missing file
+    stayed "checking" forever — there is nothing to stat, so the check never cached an answer."""
+    present = tmp_path / "tool"
+    present.write_text("#!/bin/sh\n", encoding="utf-8")
+    assert exposure.judge("dkg", startup=True)[0] == "medium"
+    assert exposure.judge(str(tmp_path / "gone"), startup=True)[0] == "medium"
+    assert exposure.judge(str(present), startup=True)[0] == "checking", "a real file is still read in the background"
+
+
 def test_first_seen_survives_later_reports_and_a_stale_look_is_not_shown():
     system_report.record(system_report.validate(_report(exposure=[WEB]), NOW))
     system_report.record(system_report.validate(_report(exposure=[{**WEB, "since": 5}]), NOW + 30))

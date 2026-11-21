@@ -13,6 +13,7 @@ developer — check you know it; configuration profiles, kernel extensions, sche
 
 from __future__ import annotations
 
+import os
 import re
 import threading
 from typing import Any, Mapping, Optional
@@ -59,6 +60,12 @@ def judge(program: str, startup: bool = False) -> tuple[str, str, Optional[dict[
         return ("critical" if startup else "high"), "Runs from a temporary or Downloads folder.", None
     found = signature.lookup(program)
     if found is None:
+        # A program named without a folder, or one that is not there, has no signature to read
+        # and is never cached: answer it now, never "checking" forever (E2E B8).
+        if not os.path.isabs(program):
+            return "medium", f"Started by name ({program[:64]}) — Blackbox cannot tell which file that runs. Check you know it.", None
+        if not os.path.isfile(program):
+            return "medium", "Its program is not on this Mac, or Blackbox cannot read it.", None
         return "checking", "Reading who signed it…", None
     sig = found.as_json()
     if found.kind == "apple":
