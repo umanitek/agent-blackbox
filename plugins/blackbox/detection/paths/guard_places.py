@@ -30,7 +30,7 @@ import time
 from pathlib import Path
 from typing import Callable, Generic, Hashable, TypeVar
 
-from ...kernel import constants
+from ...kernel import addons as guarded_extra, constants
 from .shell_words import _home_as_tilde
 
 #: The plugin folder this code runs from: an installed copy, or a source checkout.
@@ -89,9 +89,11 @@ def _source_roots() -> list[Path]:
     return roots
 
 
-def _machine() -> tuple[str, ...]:
-    """What the guarded places depend on: when one of these changes, they are worked out again."""
-    return tuple(os.environ.get(name, "") for name in ("HOME", "HERMES_HOME", "BLACKBOX_HOME", "OPENCLAW_CONFIG_PATH"))
+def _machine() -> tuple[object, ...]:
+    """What the guarded places depend on: when one of these changes, they are worked out again
+    (including a place an add-on declares, :mod:`...kernel.addons`)."""
+    return (*(os.environ.get(name, "") for name in ("HOME", "HERMES_HOME", "BLACKBOX_HOME", "OPENCLAW_CONFIG_PATH")),
+            guarded_extra.version())
 
 
 def guarded_places() -> tuple[str, ...]:
@@ -113,7 +115,8 @@ def _all_places() -> tuple[str, ...]:
     Hermes' config and ``.env`` (the main home and every profile), Blackbox's plugin and data
     folders, OpenClaw's config in every profile, the plugin files a running install loads (this
     plugin folder, its OpenClaw plugin, the checkout they are copied from), the node's folder,
-    the service definitions and the ``blackbox`` command."""
+    the service definitions, the ``blackbox`` command, every add-on's folder
+    (``kernel.addons.ADDON_PACKAGES``) and the places an installed add-on declared."""
     hermes = str(constants.hermes_root())
     home = os.path.expanduser("~")
     places = [
@@ -127,6 +130,11 @@ def _all_places() -> tuple[str, ...]:
         os.path.join(home, ".config", "systemd", "user", "blackbox-*"),
         os.path.join(home, ".local", "bin", "blackbox"),
     ]
+    # Each add-on's folder beside the plugin, in every Hermes home: deleting it removes protection.
+    for addon in guarded_extra.ADDON_PACKAGES:
+        places += [os.path.join(hermes, "plugins", addon), os.path.join(hermes, "profiles", "*", "plugins", addon),
+                   os.path.join(hermes, "desktop-plugins", addon), str(_PLUGIN_DIR.parent / addon)]
+    places += list(guarded_extra.places())   # places an installed add-on declared for itself
     for root in _source_roots():
         places += [str(root / "plugins" / "blackbox"), str(root / "integrations" / "openclaw"), str(root / ".dkg")]
     custom_openclaw = os.environ.get("OPENCLAW_CONFIG_PATH", "").strip()

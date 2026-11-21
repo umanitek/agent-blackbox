@@ -47,7 +47,7 @@ from typing import Any
 
 from .. import action_parsing, shell_shapes
 from ..finding import Finding
-from ...kernel import threat_ids
+from ...kernel import addons as guarded_extra, threat_ids
 from ...kernel.bounded_files import read_small_text
 from ...kernel.config import load_blackbox_config
 from . import guard_commands, guard_paths, guard_places, protected, shell_files
@@ -257,7 +257,8 @@ def _file_tool_tampers(access: dict[str, str], args: Any) -> bool:
             return True                    # a startup file given one of Blackbox's variables
         return bool(text) and bool(_SCRIPT.search(str(path)) or _SCRIPT.search(text)) and (
             _text_tampers(text) or _code_tampers(text))   # a script that would itself be refused
-    if os.path.basename(os.path.expanduser(str(path))) not in _HOST_CONFIGS or not isinstance(args, dict):
+    host_configs = (*_HOST_CONFIGS, *guarded_extra.editable_configs())   # another program's file: Blackbox's part only
+    if os.path.basename(os.path.expanduser(str(path))) not in host_configs or not isinstance(args, dict):
         return True                        # Blackbox's own folders and files: any write
     edits = [args.get(key) for key in ("old_string", "new_string", "old_str", "new_str", "patch", "diff", "edits")]
     if not any(isinstance(edit, str) and edit for edit in edits):

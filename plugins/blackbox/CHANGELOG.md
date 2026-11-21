@@ -64,6 +64,7 @@ that the two version fields agree.
   "Protect every agent, now and later".
 
 ### Fixed
+- Self-protection covers add-ons: each add-on folder beside the plugin (`kernel.addons.ADDON_PACKAGES`) is guarded in every Hermes home like the plugin's own, and an add-on can declare its other places (`Registrar.protect_places`) — before, an agent could delete an add-on and silently remove the protection it brings.
 
 - **OpenClaw 2026.11.6 and later load Blackbox again.** That OpenClaw release could fail to load
   the Blackbox plugin on a busy machine ("Plugin preparation callback timed out") and then refused

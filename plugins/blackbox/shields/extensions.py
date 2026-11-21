@@ -40,13 +40,15 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Optional
 
 from ..detection import Finding
+from ..kernel import addons
 from .contract import Capability, FindingKind, Shield, ShieldEvent, ShieldMode, ShieldStatus
 from .shield_api import ShieldApi
 
 logger = logging.getLogger(__name__)
 
-#: The add-on folders looked for next to the plugin's own folder, in load order.
-ADDON_PACKAGES = ("blackbox_desktop",)
+#: The add-on folders looked for next to the plugin's own folder, in load order (one list, in the
+#: kernel: the guard protects each one's folder as it protects the plugin's own).
+ADDON_PACKAGES = addons.ADDON_PACKAGES
 
 Detector = Callable[[str, Any, ShieldMode], list[Finding]]
 
@@ -106,6 +108,13 @@ class Registrar:
     def add_routes(self, register_routes: Callable[[Any], None]) -> None:
         """A function the dashboard calls with its FastAPI app to add the add-on's routes."""
         self.routes.append(register_routes)
+
+    def protect_places(self, places: Iterable[str], editable_configs: Iterable[str] = ()) -> None:
+        """Places of the add-on's own that agents may not change (its data, a helper's folder, the
+        hook configs it writes into other programs) — guarded by the plugin's self-protection like
+        Blackbox's own (:mod:`..kernel.addons`). *editable_configs* are file names among them
+        that belong to another program: there only an edit touching Blackbox's part is refused."""
+        addons.declare(places, editable_configs)
 
 
 _lock = threading.Lock()
