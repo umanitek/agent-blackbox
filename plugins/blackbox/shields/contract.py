@@ -325,6 +325,10 @@ class Shield:
     use_data: Optional[Callable[[tuple[Pack, ...], tuple[BrowserRoot, ...]], None]] = None
     #: Named endpoints beyond the card and the events (:mod:`.shield_api`); None = none.
     api: Optional[ShieldApi] = None
+    #: The list options that are ALLOW-lists: adding an entry turns protection down (who may
+    #: SSH in, hosts an agent may reach, names never blocked). Every other list option is a
+    #: protecting list, where REMOVING an entry turns protection down. Read by ``approvals``.
+    allow_lists: frozenset[str] = frozenset()
 
     @property
     def folder(self) -> Path:

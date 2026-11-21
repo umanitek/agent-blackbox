@@ -204,10 +204,12 @@ def _merged_api(base: Optional[ShieldApi], extensions: list[ShieldExtension]) ->
         return None
     reads: dict[str, Any] = {}
     writes: dict[str, Any] = {}
+    weakening: dict[str, Any] = {}
     for api in apis:
         reads.update(api.reads)
         writes.update(api.writes)
-    return ShieldApi(reads=reads, writes=writes)
+        weakening.update(api.weakening)
+    return ShieldApi(reads=reads, writes=writes, weakening=weakening)
 
 
 def _safe(call: Callable[..., Any], fallback: Any, what: str) -> Callable[..., Any]:

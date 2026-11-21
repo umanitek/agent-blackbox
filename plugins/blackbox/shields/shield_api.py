@@ -95,11 +95,18 @@ class RawAnswer:
 
 ReadHandler = Callable[[ShieldContext, Mapping[str, str]], JsonValue]
 WriteHandler = Callable[[ShieldContext, Mapping[str, Any]], JsonValue]
+#: ``judge(body) -> [reasons]``: why a write would turn protection DOWN (empty: it would not).
+#: The shield judges its own writes against its own current state; a non-empty answer holds
+#: the write for the person's approval (the core's ``approvals`` gate).
+WeakeningJudge = Callable[[Mapping[str, Any]], list[str]]
 
 
 @dataclass(frozen=True)
 class ShieldApi:
-    """A shield's named endpoints: *reads* answer GET, *writes* answer POST."""
+    """A shield's named endpoints: *reads* answer GET, *writes* answer POST. *weakening* names
+    the writes that can turn protection down and how to tell (:data:`WeakeningJudge`); a write
+    without a judge never weakens anything."""
 
     reads: Mapping[str, ReadHandler] = field(default_factory=dict)
     writes: Mapping[str, WriteHandler] = field(default_factory=dict)
+    weakening: Mapping[str, WeakeningJudge] = field(default_factory=dict)

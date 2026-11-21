@@ -6,7 +6,13 @@ mode, a new protected path, a change of an unrelated option) applies at once. Wh
 value cannot be read, a change that COULD weaken is treated as weakening (fails toward asking).
 
 Each gated route has one judge in :data:`JUDGES` — ``judge(body, current) -> [reasons]``, each
-reason a short sentence for the dialog. *current* is :class:`Current`, read lazily.
+reason a short sentence for the dialog. *current* is :class:`Current`, read lazily. A shield's own
+writes (``/api/shields/<id>/api/<name>``) are judged by that shield (``ShieldApi.weakening``:
+it knows its own state), so the core names no shield here.
+
+Lists have a DIRECTION: on a shield's allow-lists (``Shield.allow_lists`` — who may SSH in, hosts
+an agent may reach, names never blocked) ADDING an entry turns protection down; on every other
+list (block lists, protected paths, chosen protections, wallets) REMOVING one does.
 
 Usage::
 
@@ -15,8 +21,9 @@ Usage::
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, Optional
 
 #: Stronger modes rank higher.
 MODE_RANK = {"audit": 0, "block": 1}
@@ -33,6 +40,8 @@ class Current:
 
     settings: Mapping[str, Any] = field(default_factory=dict)
     shields: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
+    #: ``{shield id: allow-list option names}`` (adding to these weakens).
+    allow_lists: Mapping[str, frozenset[str]] = field(default_factory=dict)
 
     @staticmethod
     def read() -> Current:
@@ -46,7 +55,11 @@ class Current:
             modes = {shield_id: entry.get("mode") or {} for shield_id, entry in shields.settings_view().items()}
         except Exception:   # health: allow BLE001 -- as above
             modes = {}
-        return Current(view, modes)
+        try:
+            allow = shields.allow_lists()
+        except Exception:   # health: allow BLE001 -- unknown direction: every list change is judged both ways
+            allow = {}
+        return Current(view, modes, allow)
 
 
 def _settings(body: Mapping[str, Any], current: Current) -> list[str]:
@@ -105,9 +118,22 @@ def _shields(sections: Any, current: Current) -> list[str]:
         now = current.shields.get(shield_id) or {}
         if section.get("enabled") is False and now.get("enabled", True) is not False:
             out.append(f"Turn off {shield_id}")
+        allow = current.allow_lists.get(shield_id)
         for option, chosen in section.items():
-            if isinstance(chosen, list) and isinstance(now.get(option), list):
-                dropped = [value for value in now[option] if value not in chosen]
+            if not isinstance(chosen, list):
+                continue
+            was = now.get(option) if isinstance(now.get(option), list) else None
+            if was is None and not now:
+                was = []   # current state unknown: judge against nothing (an allow-list addition asks)
+            if was is None:
+                continue
+            # Unknown direction (allow-lists not readable) judges both ways: fails toward asking.
+            if allow is None or option in allow:
+                added = [value for value in chosen if value not in was]
+                if added:
+                    out.append(f"Allow {', '.join(map(str, added[:4]))} ({option} in {shield_id})")
+            if allow is None or option not in allow:
+                dropped = [value for value in was if value not in chosen]
                 if dropped:
                     out.append(f"Turn off {', '.join(map(str, dropped[:4]))} in {shield_id}")
     return out
@@ -123,39 +149,40 @@ def _agent_hooks(body: Mapping[str, Any], _current: Current) -> list[str]:
     return [f"Stop protecting {body.get('kind')}"] if body.get("enabled") is False else []
 
 
-def _tamper_guard(body: Mapping[str, Any], _current: Current) -> list[str]:
-    return ["Turn off the DNS tamper guard"] if body.get("on") is False else []
-
-
-def _unblock(body: Mapping[str, Any], _current: Current) -> list[str]:
-    return [f"Unblock {body.get('address') or 'a blocked address'}"]
-
-
-def _remote(body: Mapping[str, Any], _current: Current) -> list[str]:
-    out = ["Unlock remote access"] if body.get("lock") is False else []
-    brute = body.get("brute_force")
-    if isinstance(brute, Mapping) and brute.get("enabled") is False:
-        out.append("Stop blocking password-guessing attempts")
-    return out
-
-
 Judge = Callable[[Mapping[str, Any], Current], list[str]]
-NETWORK_API = "/api/shields/network-shield/api/"
 JUDGES: dict[str, Judge] = {
     "/api/settings": _settings,
     "/api/agents/protection": _agents,
     "/api/agent-hooks/protection": _agent_hooks,
-    NETWORK_API + "tamper-guard": _tamper_guard,
-    NETWORK_API + "unblock-address": _unblock,
-    NETWORK_API + "remote-settings": _remote,
 }
+SHIELD_API = re.compile(r"/api/shields/([a-z0-9-]{1,48})/api/([a-z][a-z0-9-]{0,47})")
+
+
+def _shield_write(route: str) -> Optional[tuple[str, str]]:
+    match = SHIELD_API.fullmatch(route)
+    return (match.group(1), match.group(2)) if match else None
 
 
 def gated(route: str) -> bool:
-    return route in JUDGES
+    """True when a POST to *route* may turn protection down (it is then judged)."""
+    if route in JUDGES:
+        return True
+    write = _shield_write(route)
+    if write is None:
+        return False
+    from .. import shields
+    return shields.write_weakening(write[0], write[1], {}) is not None
 
 
 def reasons(route: str, body: Any, current: Current) -> list[str]:
     """Why the change on *route* weakens protection (empty: it does not, apply it)."""
+    if not isinstance(body, Mapping):
+        return []
     judge = JUDGES.get(route)
-    return judge(body, current) if judge is not None and isinstance(body, Mapping) else []
+    if judge is not None:
+        return judge(body, current)
+    write = _shield_write(route)
+    if write is None:
+        return []
+    from .. import shields
+    return shields.write_weakening(write[0], write[1], body) or []

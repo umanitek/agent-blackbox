@@ -36,7 +36,7 @@ from ..shield_api import ShieldApi, ShieldApiError, ShieldContext
 from . import helper, helper_link, mode as mode_module, monitor, system, system_api
 from .addresses import public_only
 from .monitor import remote_access, watch
-from .protect import enforcement, remote_lock
+from .protect import enforcement, remote_lock, weakening
 from .respond import sessions, system_alerts
 
 OFF = "Switch Network Shield on to see this machine's network."
@@ -140,4 +140,5 @@ API = ShieldApi(
             "end-session": _remote_write(sessions.end_session), "block-address": _remote_write(sessions.block_address),
             "unblock-address": _remote_write(sessions.unblock_address),
             "remote-settings": _remote_write(sessions.remote_settings), **system_api.WRITES},
+    weakening=weakening.JUDGES,   # the writes that turn protection down wait for the person
 )

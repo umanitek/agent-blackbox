@@ -144,10 +144,9 @@ def test_an_unanswered_request_expires():
     ("/api/settings", {"shields": {"network-shield": {"protections": ["dns"]}}}),
     ("/api/agents/protection", {"targets": [{"kind": "hermes", "target": "default", "enabled": False}]}),
     ("/api/agent-hooks/protection", {"kind": "claude-code", "enabled": False}),
-    ("/api/shields/network-shield/api/tamper-guard", {"on": False}),
     ("/api/shields/network-shield/api/unblock-address", {"address": "203.0.113.9"}),
-    ("/api/shields/network-shield/api/remote-settings", {"lock": False}),
-    ("/api/shields/network-shield/api/remote-settings", {"brute_force": {"enabled": False}}),
+    # The shield's state-dependent writes (unlock, brute force, tamper guard) are judged by the
+    # shield against its live state: test_blackbox_approvals_direction.py.
 ])
 def test_each_way_of_turning_protection_down_is_recognised(route, body):
     assert weakening.reasons(route, body, CURRENT)

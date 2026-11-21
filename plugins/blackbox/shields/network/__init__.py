@@ -104,4 +104,6 @@ NETWORK = Shield(
     claims=claims, allows=allows, status=status.build, events=report, settings_fields=mode.fields,
     finding_kinds=FINDING_KINDS, capabilities=CAPABILITIES, packs=HERE / "lists", detectors=(blocklists,),
     page=HERE / "page" / "network.html", attacks=HERE / "attacks.json", use_data=_use_data, api=api.API,
+    # Adding to these turns protection down: names never blocked, hosts agents may reach, who may SSH in.
+    allow_lists=frozenset({mode.OPT_ALLOW, mode.OPT_AGENT_HOSTS, mode.OPT_SSH_ALLOW}),
 )

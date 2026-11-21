@@ -87,6 +87,7 @@ __all__ = [
     "ShieldsSnapshot",
     "addon_routes",
     "all_shields",
+    "allow_lists",
     "allows",
     "attack_table",
     "browser_roots",
@@ -103,6 +104,7 @@ __all__ = [
     "snapshot",
     "statuses",
     "unlocked",
+    "write_weakening",
 ]
 
 #: The plugin's own shields, in registration order. Registering one is one line here; an add-on's
@@ -255,6 +257,27 @@ def self_tests() -> list[tuple[Shield, SelfTest]]:
 def settings_validators() -> tuple[SettingsValidator, ...]:
     """One settings validator per shield, for ``kernel.settings.write_settings(validators=...)``."""
     return tuple(shield.validate for shield in all_shields())
+
+
+def allow_lists() -> dict[str, frozenset[str]]:
+    """``{shield id: its allow-list options}`` — adding to one of these turns protection down;
+    on every other list option, removing an entry does (``approvals`` judges by this)."""
+    return {shield.id: shield.allow_lists for shield in all_shields()}
+
+
+def write_weakening(shield_id: str, name: str, body: Mapping[str, Any]) -> Optional[list[str]]:
+    """Why ``POST /api/shields/<shield_id>/api/<name>`` with *body* would turn protection down
+    (empty: it would not). None when that write has no judge — it never weakens anything. A
+    judge that fails answers that the change could not be checked: it asks rather than applies."""
+    shield = get(shield_id)
+    judge = shield.api.weakening.get(name) if shield is not None and shield.api is not None else None
+    if judge is None:
+        return None
+    try:
+        return list(judge(body))
+    except Exception:   # health: allow BLE001 -- an unreadable current state asks the person
+        logger.warning("blackbox shields: weakening judge %s/%s failed", shield_id, name, exc_info=True)
+        return [f"Change {shield.name} (Blackbox could not check whether it turns protection down)"]
 
 
 def settings_view() -> dict[str, Any]:
