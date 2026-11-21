@@ -39,6 +39,7 @@ that the two version fields agree.
 ## [Unreleased]
 
 ### Added
+- `guard.text_verdict`: a prompt or a tool's output checked for prompt injection with the same rules as a tool call (only a verified pattern blocks, in Block mode) — for runtimes that are not Hermes, such as a coding agent's own hooks.
 
 - **Network Shield, the second shield.** Switch it on (Settings → Shields) and Blackbox keeps AI
   agents to the hosts you allow (agent network lockdown) and away from the ones you block, shows
