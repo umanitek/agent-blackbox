@@ -43,6 +43,9 @@ MAX_BLOCKED = 1000
 DEFAULT_BLOCK_MINUTES = 24 * 60
 #: An end request the helper has not acted on within this is dropped (the session changed).
 END_EXPIRES_SECONDS = 120
+#: An unblocked address's earlier failures stop counting: ``forgiven`` {ip: when} is kept this long
+#: (the longest window failures are counted over), then dropped.
+FORGIVEN_SECONDS = LIMITS["window_minutes"][1] * 60
 #: Kinds of session that have a process of their own to end.
 ENDABLE = ("ssh", "screen-sharing", "remote-desktop")
 
@@ -56,7 +59,8 @@ def _path() -> Any:
 def _read() -> dict[str, Any]:
     state = read_json_object(_path()) or {}
     return {"lock": bool(state.get("lock", False)), "brute_force": {**DEFAULT_BRUTE_FORCE, **(state.get("brute_force") or {})},
-            "blocked": list(state.get("blocked", [])), "end": list(state.get("end", []))}
+            "blocked": list(state.get("blocked", [])), "end": list(state.get("end", [])),
+            "forgiven": dict(state.get("forgiven") or {})}
 
 
 def _write(state: dict[str, Any]) -> None:
@@ -66,6 +70,7 @@ def _write(state: dict[str, Any]) -> None:
 def _prune(state: dict[str, Any], now: float) -> dict[str, Any]:
     state["blocked"] = [b for b in state["blocked"] if float(b.get("until") or 0) > now][-MAX_BLOCKED:]
     state["end"] = [e for e in state["end"] if now - float(e.get("at") or 0) < END_EXPIRES_SECONDS]
+    state["forgiven"] = {ip: at for ip, at in state["forgiven"].items() if now - float(at or 0) < FORGIVEN_SECONDS}
     return state
 
 
@@ -128,26 +133,33 @@ def block(value: Any, minutes: int = DEFAULT_BLOCK_MINUTES, reason: str = "block
     return settings(now)
 
 
-def unblock(value: Any) -> dict[str, Any]:
+def unblock(value: Any, now: Optional[float] = None) -> dict[str, Any]:
+    """Lets *value* in again, and forgives its failed logins so far: only failures AFTER the
+    unblock count toward blocking it again (E2E B6: its old failures re-blocked it at once)."""
+    now = time.time() if now is None else now
     address = _address(value)
     with _lock:
-        state = _read()
+        state = _prune(_read(), now)
         state["blocked"] = [b for b in state["blocked"] if b["ip"] != address]
+        state["forgiven"][address] = now
         _write(state)
-    return settings()
+    return settings(now)
 
 
 def check_failures(now: Optional[float] = None) -> list[str]:
     """Brute-force auto-block: addresses with too many failed logins inside the window (never one
     the user always allows) are blocked for the cooling period. Answers the newly blocked."""
     now = time.time() if now is None else now
-    rules = _read()["brute_force"]
+    state = _read()
+    rules, forgiven = state["brute_force"], state["forgiven"]
     if not rules["enabled"]:
         return []
     allowed = set(mode_module.option(mode_module.current(), mode_module.OPT_ALLOW))
     counts: dict[str, int] = {}
     for failure in remote_access.failures_since(now - rules["window_minutes"] * 60):
-        counts[str(failure["ip"])] = counts.get(str(failure["ip"]), 0) + 1
+        address = str(failure["ip"])
+        if float(failure["ts"]) > float(forgiven.get(address) or 0):
+            counts[address] = counts.get(address, 0) + 1
     already = {b["ip"] for b in settings(now)["blocked"]}
     newly = []
     for address, count in counts.items():

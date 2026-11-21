@@ -112,6 +112,20 @@ def test_failed_logins_count_per_source_and_auto_block_only_when_switched_on():
     assert any(alert["kind"] == "remote-auto-blocked" for alert in remote_access.alerts())
 
 
+def test_an_unblocked_address_is_blocked_again_only_for_new_failures():
+    """E2E B6 (bb-e2e-1121): unblocking kept the address's failure history, so the next check
+    blocked it again at once. Failures before the unblock are forgiven; new ones still count."""
+    enforcement.record_report(_report(_remote(events=[_failed("203.0.113.9", NOW - i) for i in range(5)])), now=NOW)
+    remote_lock.update({"brute_force": {"enabled": True, "failures": 5, "window_minutes": 10}})
+    assert remote_lock.check_failures(NOW) == ["203.0.113.9"]
+    remote_lock.unblock("203.0.113.9", now=NOW + 1)
+    assert remote_lock.check_failures(NOW + 2) == [], "the old failures no longer count"
+    later = NOW + 60
+    enforcement.record_report(_report(_remote(events=[_failed("203.0.113.9", later - i) for i in range(5)])), now=later)
+    # Storing the report runs the auto-block check itself.
+    assert [b["ip"] for b in remote_lock.settings(later)["blocked"]] == ["203.0.113.9"], "five new failures block it again"
+
+
 def test_an_always_allowed_address_is_never_auto_blocked(monkeypatch):
     monkeypatch.setattr(network_mode, "current", lambda: network_mode.build(enabled=True, allow=("203.0.113.9",)))
     enforcement.record_report(_report(_remote(events=[_failed("203.0.113.9", NOW - i) for i in range(6)])), now=NOW)
