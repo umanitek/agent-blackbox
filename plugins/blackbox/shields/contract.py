@@ -24,33 +24,17 @@ Usage::
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional, Protocol
 
 from ..detection import Finding
 from ..kernel.settings import ShieldSettings
 
-#: The JSON values a record's ``as_json()`` answers with.
-JsonValue = None | bool | int | float | str | list["JsonValue"] | dict[str, "JsonValue"]
+from .json_records import JsonValue, _plain, _record_json
+from .event_records import EventFact, SessionSummary, ShieldEvent, TimelineStep
 
-
-def _plain(value: Any) -> JsonValue:
-    """*value* as plain JSON: records by their ``as_json()``, paths as text, tuples as lists."""
-    if hasattr(value, "as_json"):
-        return value.as_json()
-    if isinstance(value, Path):
-        return value.as_posix()
-    if isinstance(value, Mapping):
-        return {str(key): _plain(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple, frozenset, set)):
-        return [_plain(item) for item in value]
-    return value
-
-
-def _record_json(record: Any) -> dict[str, JsonValue]:
-    """Every field of the dataclass *record*, as plain JSON."""
-    return {item.name: _plain(getattr(record, item.name)) for item in fields(record)}
+__all__ = ["EventFact", "JsonValue", "SessionSummary", "ShieldEvent", "TimelineStep"]
 
 
 class PackDetector(Protocol):
@@ -123,78 +107,6 @@ class ShieldStatus:
 
     def as_json(self) -> dict[str, JsonValue]:
         return _record_json(self)   # mode.as_json() without personal options
-
-
-@dataclass(frozen=True)
-class TimelineStep:
-    """One step of the session around an event (model call, tool call, file read …)."""
-
-    type: str
-    ts: float
-    tool: str
-    label: str
-    result: str = ""
-    threats: tuple[str, ...] = ()
-    threat_titles: tuple[str, ...] = ()
-    this: bool = False
-
-    def as_json(self) -> dict[str, JsonValue]:
-        return _record_json(self)
-
-
-@dataclass(frozen=True)
-class SessionSummary:
-    """The agent session an event happened in."""
-
-    id: str
-    agent: str
-    model: str
-    start: str
-    end: str
-    status: str
-    steps: int
-
-    def as_json(self) -> dict[str, JsonValue]:
-        return _record_json(self)
-
-
-@dataclass(frozen=True)
-class EventFact:
-    """One labelled fact of an event; *mono* shows the value in a fixed-width font."""
-
-    label: str
-    value: str
-    mono: bool = False
-
-    def as_json(self) -> dict[str, JsonValue]:
-        return _record_json(self)
-
-
-@dataclass(frozen=True)
-class ShieldEvent:
-    """One event of a shield's local report: the story, what to do, the facts and the timeline.
-
-    *story* is HTML-safe text with a few bold spans; the shield writes it, the page
-    renders it as given (no shield prose in JavaScript).
-    """
-
-    ts: float
-    identifier: str
-    title: str
-    severity: str
-    outcome: str
-    tool: str
-    command: str
-    asked: str
-    logo: str
-    story: str
-    session: SessionSummary
-    what_to_do: tuple[str, ...] = ()
-    facts: tuple[EventFact, ...] = ()
-    timeline: tuple[TimelineStep, ...] = ()
-
-    def as_json(self) -> dict[str, JsonValue]:
-        return _record_json(self)
 
 
 @dataclass(frozen=True)

@@ -18,6 +18,8 @@ the code.
 shields/
 ├── __init__.py        the registry: snapshot · check · allows · statuses · events · settings_validators
 ├── contract.py        what a shield IS: the Shield record and the typed records it answers with
+├── event_records.py   the records of a shield's events report (re-exported by contract.py)
+├── json_records.py    how every record becomes plain JSON (JsonValue, as_json helpers)
 ├── packs.py           one loader for any shield's packs and browsers.json (validate, then use)
 └── trader/            Trader Shield
     ├── __init__.py    TRADER = Shield(...): wires its parts together
