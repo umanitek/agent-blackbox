@@ -4,7 +4,8 @@ Moved from Blackbox Desktop's add-on into the core (Amos, 2026-11-21): a public 
 checked, a list is parsed safely and the hot path never downloads; the helper's plan follows the
 mode, carries the verified lists only while the shield is on, never firewalls a non-public
 address (FIX-0222) and is versioned; a helper report is validated and stored bounded; the card
-never says a protection is active on the setting alone; the live endpoints refuse while the
+never says a protection is active on the setting alone; switched off, each protection is undone
+(the plan turns exactly that part off; with the shield off everything is off); the live endpoints refuse while the
 shield is off, and the plan always answers.
 """
 
@@ -191,3 +192,30 @@ def test_an_older_report_without_results_is_accepted_and_a_bad_one_refused():
         with pytest.raises(ShieldApiError) as refused:
             enforcement.record_report({**_REPORT, "protections": bad})
         assert refused.value.status == 400
+
+
+# ------------------------------------------------------------------ switched off = undone
+
+FOUND = SimpleNamespace(domains=frozenset({"evil.example.com"}), ips=frozenset({"45.130.148.102"}), built_at=1.0, complete=True)
+#: protection id → (plan section, the key that says it is on)
+PLAN_PARTS = {network_mode.DNS: ("dns", "enabled"), network_mode.FIREWALL: ("firewall", "enabled"),
+              network_mode.CUT: ("cut", "enabled"), network_mode.SSH_LOCKDOWN: ("ssh", "lockdown")}
+
+
+def test_with_the_shield_off_the_plan_turns_everything_off(monkeypatch):
+    monkeypatch.setattr(enforcement, "_plan_cache", {"key": None, "plan": None})
+    plan = enforcement.plan(network_mode.build(enabled=False, protections=tuple(PLAN_PARTS)), FOUND, cut_ips=("45.130.148.102",))
+    assert all(plan[section][key] is False for section, key in PLAN_PARTS.values())
+    assert plan["watch"] is False
+
+
+@pytest.mark.parametrize("protection", list(PLAN_PARTS))
+def test_switching_one_protection_off_turns_exactly_that_part_off(protection, monkeypatch):
+    monkeypatch.setattr(enforcement, "_plan_cache", {"key": None, "plan": None})
+    others = tuple(p for p in PLAN_PARTS if p != protection)
+    plan = enforcement.plan(network_mode.build(enabled=True, protections=others), FOUND, cut_ips=("45.130.148.102",))
+    section, key = PLAN_PARTS[protection]
+    assert plan[section][key] is False
+    assert all(plan[s][k] is True for p, (s, k) in PLAN_PARTS.items() if p != protection)
+
+
