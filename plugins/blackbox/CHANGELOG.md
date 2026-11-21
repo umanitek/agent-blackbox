@@ -69,6 +69,8 @@ that the two version fields agree.
   "Protect every agent, now and later".
 
 ### Fixed
+- `blackbox uninstall` also removes the system protection helper, first — your DNS and firewall
+  go back to how they were before it (macOS asks for your admin password once).
 - Self-protection covers add-ons: each add-on folder beside the plugin (`kernel.addons.ADDON_PACKAGES`) is guarded in every Hermes home like the plugin's own, and an add-on can declare its other places (`Registrar.protect_places`) — before, an agent could delete an add-on and silently remove the protection it brings.
 
 - **OpenClaw 2026.11.6 and later load Blackbox again.** That OpenClaw release could fail to load
@@ -131,6 +133,11 @@ that the two version fields agree.
   are private to the system; and stopping, repairing or removing it never turns your Mac's own
   hardening back off unless you choose that. The installer offers it at the end (`--system-protection`,
   `--no-system-protection`, `--remove-system-protection [--undo-hardening]`); no means nothing is installed.
+- **Blackbox signs the helper's plans and checks its reports.** With the key the helper gives
+  the person who installed it, Network Shield signs every plan for that one request and refuses a
+  report that the helper did not sign. Network Shield's card shows the helper's health: whether
+  it is paired (and how to fix it if not), an older helper, the macOS packet filter off, DNS
+  Shield's resolver not answering, and the last problem it reported.
 
 ## [1.5.0] - 2026-11-19
 
