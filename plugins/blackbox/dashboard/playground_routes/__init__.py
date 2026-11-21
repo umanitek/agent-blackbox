@@ -27,8 +27,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Callable
 
-HERE = Path(__file__).resolve().parent
-SCRIPT = HERE / "playground.js"
+#: The panel script, kept with the dashboard's other static files (``dashboard/static/``).
+SCRIPT = Path(__file__).resolve().parents[1] / "static" / "playground.js"
 NO_CACHE = {"Cache-Control": "no-store"}
 
 Cache = Callable[..., Any]

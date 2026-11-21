@@ -38,8 +38,8 @@ MAX_BODY_BYTES = 256 * 1024
 HELD_STATUS = 428
 NOT_PAIRED = "Turning protection down needs your confirmation: confirm it with your password, or in Blackbox Desktop."
 ASK = "Waiting for your confirmation in Blackbox Desktop (or confirm it with your password)."
-#: The page script (served at ``/approvals.js``).
-SCRIPT = Path(__file__).resolve().parent / "approvals.js"
+#: The page script (served at ``/approvals.js``; it lives with the dashboard's other static files).
+SCRIPT = Path(__file__).resolve().parents[1] / "static" / "approvals.js"
 
 Scope = dict[str, Any]
 Receive = Callable[[], Awaitable[dict[str, Any]]]

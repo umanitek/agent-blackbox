@@ -19,8 +19,8 @@ import itertools
 from pathlib import Path
 from typing import Any, Callable
 
-HERE = Path(__file__).resolve().parent
-SCRIPT = HERE / "model_connect.js"
+#: The panel script, kept with the dashboard's other static files (``dashboard/static/``).
+SCRIPT = Path(__file__).resolve().parents[1] / "static" / "model_connect.js"
 NO_CACHE = {"Cache-Control": "no-store"}
 #: How long Hermes' answer is reused across polls (the panel polls every few seconds).
 STATE_TTL_SECONDS = 20.0

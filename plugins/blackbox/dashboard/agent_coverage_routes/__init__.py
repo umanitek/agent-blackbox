@@ -20,8 +20,8 @@ import itertools
 from pathlib import Path
 from typing import Any, Callable
 
-HERE = Path(__file__).resolve().parent
-SCRIPT = HERE / "agent_coverage.js"
+#: The panel script, kept with the dashboard's other static files (``dashboard/static/``).
+SCRIPT = Path(__file__).resolve().parents[1] / "static" / "agent_coverage.js"
 NO_CACHE = {"Cache-Control": "no-store"}
 #: How long one discovery pass is reused across polls (discovery reads every agent's config).
 TTL_SECONDS = 5.0
