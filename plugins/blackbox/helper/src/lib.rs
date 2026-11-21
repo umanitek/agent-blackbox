@@ -27,6 +27,7 @@ pub mod platform;
 pub mod command;
 pub mod dns;
 pub mod link;
+pub mod last_plan;
 pub mod plan;
 pub mod private_files;
 pub mod safe_read;

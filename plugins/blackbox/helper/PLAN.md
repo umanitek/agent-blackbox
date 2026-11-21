@@ -68,3 +68,10 @@ address before pf sees it (`plan.rs`).
 
 `POST /api/shields/network-shield/api/system-report` — `watching`, `at`, `exposure`,
 `persistence`, `tamper` (wave 2 adds `pf_enabled`), `posture`, `fixes`, `events`.
+
+## After a restart
+
+The helper saves the exact bytes of each new plan it applies (verified first when paired) in its
+root-only folder as `last-plan.json`, and applies that plan again the moment it starts — before
+the first poll — so a restart or an upgrade leaves no gap without DNS Shield or the firewall.
+End requests (`remote.end`) are never carried over a restart.

@@ -92,6 +92,9 @@ pub struct Link {
     broken_key: bool,
     token: Option<String>,
     verified_at: Option<Instant>,
+    /// The exact bytes of the last plan this link accepted (verified when a key is installed):
+    /// what the helper saves to re-apply at its next start ([`Link::take_body`]).
+    last_body: Option<Vec<u8>>,
 }
 
 impl Link {
@@ -104,7 +107,7 @@ impl Link {
         let http = reqwest::blocking::Client::builder()
             .redirect(reqwest::redirect::Policy::none())   // a loopback plugin never redirects
             .build().map_err(|error| error.to_string())?;
-        Ok(Link { http, key, broken_key, token: None, verified_at: None })
+        Ok(Link { http, key, broken_key, token: None, verified_at: None, last_body: None })
     }
 
     /// "signed" (a key is installed), "legacy" (none) or "broken" — for reports.
@@ -141,9 +144,17 @@ impl Link {
             }
         }
         match serde_json::from_slice(&body) {
-            Ok(plan) => Fetched::Plan(plan),
+            Ok(plan) => {
+                self.last_body = Some(body.to_vec());
+                Fetched::Plan(plan)
+            }
             Err(error) => Fetched::Refused(format!("the plan could not be read: {error}")),
         }
+    }
+
+    /// The bytes of the last plan accepted, once (None after it was taken).
+    pub fn take_body(&mut self) -> Option<Vec<u8>> {
+        self.last_body.take()
     }
 
     /// Whether reports may go out now: legacy, or the server proved the key recently.

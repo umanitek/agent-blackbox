@@ -9,7 +9,11 @@ impl Helper {
     pub(super) fn follow_plan(&self) {
         let have: String = self.applied.lock().map(|applied| applied.clone()).unwrap_or_default()
             .chars().filter(char::is_ascii_alphanumeric).collect();
-        let fetched = self.link.lock().unwrap().plan::<Plan>(PLAN_PATH, &format!("have={have}"), PLAN_TIMEOUT);
+        let (fetched, body) = {
+            let mut link = self.link.lock().unwrap();
+            let fetched = link.plan::<Plan>(PLAN_PATH, &format!("have={have}"), PLAN_TIMEOUT);
+            (fetched, link.take_body())
+        };
         let plan = match fetched {
             link::Fetched::Plan(plan) => plan,
             link::Fetched::Refused(why) => {
@@ -20,12 +24,31 @@ impl Helper {
         if plan.unchanged {
             return;
         }
+        self.apply_plan(&plan);
+        if let Some(body) = body {
+            last_plan::save(Path::new(HOME), &body);
+        }
+    }
+
+    /// At start, before the first plan arrives: the last plan this helper applied, again — so a
+    /// restart or an upgrade leaves no gap in which DNS Shield refuses nothing and the firewall's
+    /// table is empty (E2E 2026-11-21: ~60 s). End requests are NOT carried over: a session the
+    /// person ended before the restart is not ended again by an old plan.
+    pub(super) fn apply_saved_plan(&self) {
+        if let Some(mut plan) = last_plan::load(Path::new(HOME)) {
+            plan.remote.end.clear();
+            self.apply_plan(&plan);
+        }
+    }
+
+    /// Applies *plan*: the resolver's lists, DNS, the filter, watching; records the version.
+    fn apply_plan(&self, plan: &Plan) {
         let mut errors = vec![];
         if let Ok(mut lists) = self.resolver.lists.write() {
             *lists = plan.blocklists();
         }
         let dns_error = self.set_dns(plan.dns.enabled);
-        let filter_error = self.set_filter(&plan);
+        let filter_error = self.set_filter(plan);
         *self.failures.lock().unwrap() = Failures { dns: dns_error.clone(), filter: filter_error.clone() };
         errors.extend(dns_error);
         errors.extend(filter_error);

@@ -178,6 +178,7 @@ pub fn run() -> Result<(), String> {
         thread::sleep(<SystemObserver as Observer>::REMOTE_EVERY);
     });
 
+    helper.apply_saved_plan();   // no gap after a restart or an upgrade (last_plan)
     loop {
         if STOPPING.load(Ordering::SeqCst) {
             helper.stop();
