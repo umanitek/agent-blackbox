@@ -30,12 +30,14 @@ pub struct Look {
     /// on | off | block-all | unknown
     pub firewall: String,
     pub helper: Vec<String>,
+    /// pf (the packet filter Blackbox's firewall uses): enabled | disabled | unknown.
+    pub pf: String,
 }
 
 impl Look {
     pub fn json(&self) -> Value {
         json!({"dns_servers": self.dns_servers, "proxy": self.proxy, "vpn_count": self.vpn_count, "firewall": self.firewall,
-               "helper_files": self.helper.len()})
+               "helper_files": self.helper.len(), "pf": self.pf})
     }
 }
 
@@ -95,6 +97,9 @@ pub fn look() -> Look {
         vpn_count: parse_vpns(&output("/usr/sbin/scutil", &["--nc", "list"])),
         firewall: parse_firewall(&output(FIREWALL, &["--getglobalstate"])),
         helper: HELPER_FILES.iter().map(|path| fingerprint(path)).collect(),
+        pf: match crate::pf_status::read() {
+            Some(true) => "enabled", Some(false) => "disabled", None => "unknown",
+        }.into(),
     }
 }
 
@@ -121,6 +126,11 @@ impl Tamper {
             }
             if last.firewall != now_look.firewall && now_look.firewall != "unknown" {
                 self.push(json!({"kind": "firewall-changed", "ts": now, "state": now_look.firewall, "was": last.firewall}));
+            }
+            // pf switched off under Blackbox (by another root process): the firewall, cut
+            // and lockdowns stop enforcing — the person must hear it (security finding).
+            if last.pf == "enabled" && now_look.pf == "disabled" {
+                self.push(json!({"kind": "pf-disabled", "ts": now}));
             }
             if last.helper != now_look.helper {
                 self.push(json!({"kind": "helper-modified", "ts": now}));
@@ -155,6 +165,16 @@ impl Tamper {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pf_switched_off_under_blackbox_is_an_event() {
+        let on = Look { pf: "enabled".into(), ..Default::default() };
+        let off = Look { pf: "disabled".into(), ..Default::default() };
+        let mut tamper = Tamper::default();
+        assert!(!tamper.tick(on.clone(), 1), "the first look is a baseline");
+        assert!(tamper.tick(off, 2));
+        assert_eq!(tamper.take_events()[0]["kind"], "pf-disabled");
+    }
 
     #[test]
     fn the_settings_parse() {

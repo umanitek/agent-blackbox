@@ -26,6 +26,7 @@ pub mod enforce;
 pub mod observe;
 pub mod command;
 pub mod link;
+pub mod pf_status;
 pub mod plan;
 pub mod safe_read;
 pub mod sockets;
@@ -89,6 +90,8 @@ pub struct State {
     pub cut_ips: Vec<String>,
     /// The plan version last applied (for the record; the next start re-applies the plan in full).
     pub version: String,
+    /// The boot the pf token belongs to (kern.boottime): a token from another boot is stale.
+    pub boot: u64,
 }
 
 impl State {
@@ -167,7 +170,15 @@ fn named<F: FnOnce() + Send + 'static>(name: &str, work: F) {
 /// The helper's entry point (launchd runs it as root).
 pub fn run() -> Result<(), String> {
     fs::create_dir_all(HOME).map_err(|error| format!("{HOME}: {error}"))?;
-    let state = State::load();
+    let mut state = State::load();
+    // After a reboot the saved pf token is meaningless: drop it, so the first plan enables pf and
+    // verifies it (pf::apply) instead of trusting a token from another boot.
+    let boot = pf::boot_time();
+    if state.boot != boot {
+        state.pf_token = None;
+        state.boot = boot;
+        state.save();
+    }
     let upstreams = if state.dns_active { system::upstreams_from_saved(&state.saved_dns) } else { system::current_upstreams() };
     let helper = Arc::new(Helper {
         resolver: dns::Resolver::new(upstreams),
@@ -423,6 +434,8 @@ impl Helper {
             "auth": self.link.lock().map(|link| link.mode()).unwrap_or("legacy"),
             "last_error": self.last_error.lock().ok().and_then(|e| e.clone()),
             "firewall_dropped": if pf_on { pf::dropped() } else { 0 },
+            // What is really enforced, not what was asked: pf must be seen Enabled.
+            "pf_enabled": if pf_on { pf::enabled() } else { None },
             "blocks": blocks, "watch": snapshot, "events": events,
             // Under its own key, so a plugin that predates it ignores it instead of refusing the report.
             "remote": remote.map(|snapshot| json!({"snapshot": snapshot, "events": remote_events, "lock_active": state.remote_lock_active})),

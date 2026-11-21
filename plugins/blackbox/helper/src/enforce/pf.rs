@@ -131,11 +131,40 @@ pub fn apply(filter: &Filter, token: Option<String>) -> Result<Option<String>, S
     replace_table(CUT, &ips(&filter.cut))?;
     replace_table(SSH_ALLOW, filter.ssh_allow.as_deref().unwrap_or(&[]))?;
     replace_table(REMOTE_BLOCK, &ips(&filter.remote_block))?;
-    if token.is_some() {
-        return Ok(token);
+    // WHY verify and not trust the token: after a reboot (or `pfctl -d` by another root process) a
+    // saved token no longer means pf is on — the anchor loads but nothing is enforced while the app
+    // says "active" (security finding). pf must be seen Enabled after every apply.
+    let mut token = token;
+    if needs_enable(token.as_deref(), enabled()) {
+        let output = run(&["-E"], None)?;
+        token = Some(parse_token(&output).ok_or_else(|| format!("pfctl -E gave no token: {}", output.trim()))?);
     }
-    let output = run(&["-E"], None)?;
-    parse_token(&output).map(Some).ok_or_else(|| format!("pfctl -E gave no token: {}", output.trim()))
+    match enabled() {
+        Some(true) => Ok(token),
+        Some(false) => Err("pf did not stay enabled: the firewall rules are loaded but not enforced".into()),
+        None => Err("pf's status could not be read".into()),
+    }
+}
+
+/// Whether pf must be (re-)enabled: no token of ours, or pf seen disabled despite one.
+pub fn needs_enable(token: Option<&str>, status: Option<bool>) -> bool {
+    token.is_none() || status == Some(false)
+}
+
+/// pf's status now (`pfctl -s info`): Some(true) Enabled, Some(false) Disabled, None unreadable.
+pub fn enabled() -> Option<bool> {
+    crate::pf_status::read()
+}
+
+/// When this Mac last started (kern.boottime, unix seconds; 0 if unreadable). A pf token saved
+/// under another boot is stale.
+pub fn boot_time() -> u64 {
+    let mut boot = libc::timeval { tv_sec: 0, tv_usec: 0 };
+    let mut size = std::mem::size_of::<libc::timeval>();
+    let name = std::ffi::CString::new("kern.boottime").expect("a static name");
+    // SAFETY: sysctlbyname writes at most `size` bytes into `boot`, a valid timeval.
+    let rc = unsafe { libc::sysctlbyname(name.as_ptr(), (&mut boot as *mut libc::timeval).cast(), &mut size, std::ptr::null_mut(), 0) };
+    if rc == 0 { boot.tv_sec.max(0) as u64 } else { 0 }
 }
 
 /// Ends every pf state to or from *ip* (both directions); answers how many were killed.
@@ -182,6 +211,14 @@ pub fn parse_killed(text: &str) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_saved_token_does_not_count_when_pf_is_seen_disabled() {
+        assert!(needs_enable(None, Some(true)), "no token of ours: enable");
+        assert!(needs_enable(Some("123"), Some(false)), "a stale token (reboot, pfctl -d): enable again");
+        assert!(!needs_enable(Some("123"), Some(true)));
+                assert!(boot_time() > 1_600_000_000, "this Mac's boot time reads");
+    }
 
     #[test]
     fn only_the_protections_that_are_on_have_rules() {
