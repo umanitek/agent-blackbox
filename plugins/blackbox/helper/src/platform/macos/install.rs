@@ -12,11 +12,18 @@
 //! unverified): the binary is copied — without following links, regular file only — into a
 //! root-only staging folder; the SHA-256 of THAT copy (and, with `--team-id`, its Developer ID
 //! signature) is checked BEFORE anything is installed or started, so the file that runs is
-//! exactly the file that was checked. Then the old service stops, the copy moves into place, the
+//! exactly the file that was checked. Then the old service stops — and the install waits until
+//! launchd has let go of it ([`super::launchd`], LES-086) — the copy moves into place, the
 //! LaunchDaemon is written and bootstrapped, and the install waits until launchd reports it
-//! running. The per-install plan key is created once ([`crate::link`]); `--key-for` hands a copy
-//! to the plugin's state folder, written AS that user (never root writing into a folder the user
-//! controls).
+//! running. The per-install plan key is created once ([`crate::link`]) and kept by every later
+//! install; `--key-for` hands a copy to the plugin's state folder, written AS that user (never root
+//! writing into a folder the user controls).
+//!
+//! An install over a working helper (an upgrade) is all-or-nothing: the helper that was there is
+//! set aside first, and if anything after that fails, it is put back and started again — an
+//! upgrade never ends with less protection than the person had (E2E 2026-11-21). A successful
+//! install writes the public [receipt](Layout::receipt) (the installed program's SHA-256), which
+//! lets the installer tell an up-to-date helper from one to upgrade without root.
 //!
 //! Uninstall: stops the service (which puts DNS and its pf rules back), then puts them back again
 //! from `state.json` alone — so a dead helper cannot leave the Mac pointed at a resolver that is
@@ -27,20 +34,42 @@ use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::{Duration, Instant};
 
 use sha2::{Digest, Sha256};
 
+use super::launchd::{self, Launchd, SystemLaunchd};
 use super::{LABEL, HOME};
 use crate::{command, link, private_files};
 
 pub const BINARY: &str = "blackbox-netd";
 /// A helper bigger than this is not ours.
 const MAX_BINARY: u64 = 64 * 1024 * 1024;
-const RUNNING_WAIT: Duration = Duration::from_secs(10);
+/// The public receipt's name, beside the helper's (root-only) folder.
+pub const RECEIPT: &str = "netd-installed";
+/// Where an upgrade sets the helper that was there aside, inside the staging folder.
+const PREVIOUS: &str = "previous-blackbox-netd";
 
 pub fn plist_path() -> PathBuf {
     PathBuf::from(format!("/Library/LaunchDaemons/{LABEL}.plist"))
+}
+
+/// Where the helper lives: its root-only folder, its LaunchDaemon, the public receipt and the
+/// launchd target. [`Layout::system`] is the Mac's; tests use a temporary one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Layout {
+    pub home: PathBuf,
+    pub plist: PathBuf,
+    /// `sha256 <hex>` of the installed program, 0644, beside `home` — readable without root.
+    pub receipt: PathBuf,
+    pub target: String,
+}
+
+impl Layout {
+    pub fn system() -> Layout {
+        let home = PathBuf::from(HOME);
+        let receipt = home.parent().map(|parent| parent.join(RECEIPT)).unwrap_or_else(|| home.join(RECEIPT));
+        Layout { home, plist: plist_path(), receipt, target: format!("system/{LABEL}") }
+    }
 }
 
 /// The parsed command line of `install`.
@@ -122,32 +151,29 @@ fn check_signature(copy: &Path, team: &str) -> Result<(), String> {
 
 /// The LaunchDaemon. Logs go inside the helper's own 0700 folder.
 pub fn plist() -> String {
+    plist_for(Path::new(HOME))
+}
+
+/// The LaunchDaemon for a helper in *home*.
+pub fn plist_for(home: &Path) -> String {
+    let home = home.display();
     format!(r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
   <key>Label</key><string>{LABEL}</string>
   <key>ProgramArguments</key>
-  <array><string>{HOME}/{BINARY}</string></array>
+  <array><string>{home}/{BINARY}</string></array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
-  <key>StandardOutPath</key><string>{HOME}/netd.log</string>
-  <key>StandardErrorPath</key><string>{HOME}/netd.log</string>
+  <key>StandardOutPath</key><string>{home}/netd.log</string>
+  <key>StandardErrorPath</key><string>{home}/netd.log</string>
 </dict>
 </plist>
 "#)
 }
 
-/// Whether `launchctl print system/<label>` shows the job running.
-pub fn parse_running(text: &str) -> bool {
-    text.lines().any(|line| line.trim() == "state = running")
-}
-
-fn launchctl(args: &[&str]) -> Result<String, String> {
-    let out = command::output(Command::new("/bin/launchctl").args(args), command::TIMEOUT).map_err(|error| error.to_string())?;
-    let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
-    if out.status.success() { Ok(text) } else { Err(format!("launchctl {}: {}", args.join(" "), text.trim())) }
-}
+pub use super::launchd::parse_running;
 
 /// Hands the plugin its copy of the key, written as *owner* (umask 077) in *folder*.
 fn hand_key_to(folder: &Path, owner: u32, key: &[u8]) -> Result<(), String> {
@@ -172,51 +198,114 @@ fn ensure_key(home: &Path) -> Result<Vec<u8>, String> {
 }
 
 pub fn install(args: &InstallArgs) -> Result<(), String> {
-    let parent = Path::new(HOME).parent().ok_or("the helper's folder has no parent")?;
+    install_into(args, &Layout::system(), &SystemLaunchd)
+}
+
+/// [`install`] into *layout* through *launchd* — what the tests drive with a temporary layout and
+/// a fake launchd.
+pub fn install_into(args: &InstallArgs, layout: &Layout, launchd: &dyn Launchd) -> Result<(), String> {
+    let parent = layout.home.parent().ok_or("the helper's folder has no parent")?;
     fs::create_dir_all(parent).map_err(|error| format!("{}: {error}", parent.display()))?;
     let staging = parent.join(format!(".netd-staging-{}", std::process::id()));
     let _ = fs::remove_dir_all(&staging);
     private_files::ensure_dir(&staging).map_err(|error| format!("{}: {error}", staging.display()))?;
-    let result = install_from_staging(args, &staging);
+    let result = install_from_staging(args, &staging, layout, launchd);
     let _ = fs::remove_dir_all(&staging);
     result
 }
 
-fn install_from_staging(args: &InstallArgs, staging: &Path) -> Result<(), String> {
+/// The helper that was installed before this one, set aside so a failed upgrade can put it back.
+struct Previous {
+    binary: PathBuf,
+    plist: Option<String>,
+}
+
+impl Previous {
+    /// Moves an installed program aside into *staging* (the same volume: a rename) and keeps its
+    /// LaunchDaemon's text. None on a first install.
+    fn set_aside(layout: &Layout, staging: &Path) -> Result<Option<Previous>, String> {
+        let installed = layout.home.join(BINARY);
+        if !installed.is_file() {
+            return Ok(None);
+        }
+        let binary = staging.join(PREVIOUS);
+        fs::rename(&installed, &binary).map_err(|error| format!("{}: {error}", installed.display()))?;
+        Ok(Some(Previous { binary, plist: fs::read_to_string(&layout.plist).ok() }))
+    }
+
+    /// Puts this helper back and starts it again. Answers what could not be done, if anything.
+    fn restore(self, layout: &Layout, launchd: &dyn Launchd) -> Result<(), String> {
+        launchd::stop(launchd, &layout.target);
+        let installed = layout.home.join(BINARY);
+        fs::rename(&self.binary, &installed).map_err(|error| format!("{}: {error}", installed.display()))?;
+        write_plist(&layout.plist, &self.plist.unwrap_or_else(|| plist_for(&layout.home)))?;
+        launchd::start(launchd, &layout.target, &layout.plist)
+    }
+}
+
+fn install_from_staging(args: &InstallArgs, staging: &Path, layout: &Layout, launchd: &dyn Launchd) -> Result<(), String> {
     let copy = stage(&args.from, &args.sha256, staging)?;
     if let Some(team) = &args.team_id {
         check_signature(&copy, team)?;
     }
-    // Verified. Only now does anything on the Mac change.
-    let _ = launchctl(&["bootout", &format!("system/{LABEL}")]);   // not loaded on a first install
-    let home = Path::new(HOME);
-    private_files::ensure_dir(home).map_err(|error| format!("{HOME}: {error}"))?;
-    let target = home.join(BINARY);
-    fs::rename(&copy, &target).map_err(|error| format!("{}: {error}", target.display()))?;
-    let key = ensure_key(home)?;
+    // Verified. Only now does anything on the Mac change — and from here, a failure puts back
+    // whatever helper was running before.
+    launchd::stop(launchd, &layout.target);
+    private_files::ensure_dir(&layout.home).map_err(|error| format!("{}: {error}", layout.home.display()))?;
+    let previous = Previous::set_aside(layout, staging)?;
+    match put_in_place(args, &copy, layout, launchd) {
+        Ok(()) => write_receipt(&layout.receipt, &args.sha256),
+        Err(error) => Err(match previous {
+            Some(previous) => match previous.restore(layout, launchd) {
+                Ok(()) => format!("{error} — the helper you had is back in place and running"),
+                Err(restore) => format!("{error}; putting the previous helper back also failed: {restore}"),
+            },
+            None => {
+                // A first install that failed leaves nothing half-installed.
+                let _ = fs::remove_file(layout.home.join(BINARY));
+                let _ = fs::remove_file(&layout.plist);
+                error
+            }
+        }),
+    }
+}
+
+/// Moves the verified *copy* into place, keeps (or creates) the plan key, hands it over, writes
+/// the LaunchDaemon and starts it.
+fn put_in_place(args: &InstallArgs, copy: &Path, layout: &Layout, launchd: &dyn Launchd) -> Result<(), String> {
+    let target = layout.home.join(BINARY);
+    fs::rename(copy, &target).map_err(|error| format!("{}: {error}", target.display()))?;
+    let key = ensure_key(&layout.home)?;
     if let (Some(folder), Some(owner)) = (&args.key_for, args.owner) {
         hand_key_to(folder, owner, &key)?;
     }
-    let plist_file = plist_path();
-    fs::write(&plist_file, plist()).map_err(|error| format!("{}: {error}", plist_file.display()))?;
-    fs::set_permissions(&plist_file, fs::Permissions::from_mode(0o644)).map_err(|error| error.to_string())?;
-    launchctl(&["bootstrap", "system", &plist_file.to_string_lossy()])?;
-    let started = Instant::now();
-    while started.elapsed() < RUNNING_WAIT {
-        if launchctl(&["print", &format!("system/{LABEL}")]).map(|text| parse_running(&text)).unwrap_or(false) {
-            return Ok(());
-        }
-        std::thread::sleep(Duration::from_millis(250));
-    }
-    Err(format!("the helper was installed but launchd does not show it running (see {HOME}/netd.log)"))
+    write_plist(&layout.plist, &plist_for(&layout.home))?;
+    launchd::start(launchd, &layout.target, &layout.plist)
+        .map_err(|error| format!("the helper did not start: {error} (see {}/netd.log)", layout.home.display()))
+}
+
+fn write_plist(path: &Path, text: &str) -> Result<(), String> {
+    fs::write(path, text).map_err(|error| format!("{}: {error}", path.display()))?;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o644)).map_err(|error| error.to_string())
+}
+
+/// The public receipt: `sha256 <hex>`, 0644 — the installer compares it with the helper this
+/// release carries, without root (the helper's folder is root-only).
+fn write_receipt(path: &Path, sha256: &str) -> Result<(), String> {
+    let temporary = path.with_extension("tmp");
+    fs::write(&temporary, format!("sha256 {}\n", sha256.to_ascii_lowercase())).map_err(|error| format!("{}: {error}", path.display()))?;
+    fs::set_permissions(&temporary, fs::Permissions::from_mode(0o644)).map_err(|error| error.to_string())?;
+    fs::rename(&temporary, path).map_err(|error| format!("{}: {error}", path.display()))
 }
 
 pub fn uninstall(undo_hardening: bool) -> Result<(), String> {
-    let _ = launchctl(&["bootout", &format!("system/{LABEL}")]);
+    let layout = Layout::system();
+    launchd::stop(&SystemLaunchd, &layout.target);
     let errors = crate::put_back(&super::SystemEnforcer::default(), crate::undo_for(crate::Stopping::Uninstall { undo_hardening }));
-    let _ = fs::remove_file(plist_path());
+    let _ = fs::remove_file(&layout.plist);
+    let _ = fs::remove_file(&layout.receipt);
     if errors.is_empty() {
-        let _ = fs::remove_dir_all(HOME);
+        let _ = fs::remove_dir_all(&layout.home);
         Ok(())
     } else {
         // The state stays, so a second uninstall can try again.
@@ -287,6 +376,76 @@ mod tests {
         assert!(InstallArgs::parse(&words(&format!("--from /tmp/h --sha256 {sha} --team-id A;B"))).is_err());
         assert!(subcommand(&words("uninstall --everything")).unwrap().is_err());
         assert!(subcommand(&[]).is_none(), "no subcommand: run the service");
+    }
+
+    /// A temporary layout holding an installed helper (*old* bytes, its plan key, a receipt).
+    fn installed(name: &str, old: &[u8]) -> (PathBuf, Layout) {
+        let dir = temp(name);
+        let layout = Layout {
+            home: dir.join("netd"),
+            plist: dir.join("netd.plist"),
+            receipt: dir.join(RECEIPT),
+            target: "system/test".into(),
+        };
+        private_files::ensure_dir(&layout.home).unwrap();
+        fs::write(layout.home.join(BINARY), old).unwrap();
+        fs::write(&layout.plist, plist_for(&layout.home)).unwrap();
+        ensure_key(&layout.home).unwrap();
+        write_receipt(&layout.receipt, &hex::encode(Sha256::digest(old))).unwrap();
+        (dir, layout)
+    }
+
+    fn args_for(dir: &Path, new: &[u8]) -> InstallArgs {
+        let from = dir.join("downloaded");
+        fs::write(&from, new).unwrap();
+        InstallArgs { from, sha256: hex::encode(Sha256::digest(new)), ..Default::default() }
+    }
+
+    #[test]
+    fn an_upgrade_launchd_refuses_puts_the_helper_that_was_there_back_and_running() {
+        // E2E 2026-11-21: "Bootstrap failed: 5: Input/output error" during an upgrade ended with
+        // no helper at all. Now the previous one is restored and started again.
+        let (dir, layout) = installed("refused", b"old helper");
+        let key = link::load_key(&layout.home).unwrap();
+        let launchd = launchd::fake::FakeLaunchd {
+            linger: 2,
+            refuse: Some((layout.home.join(BINARY), b"new helper".to_vec())),
+            ..Default::default()
+        };
+        launchd.state.borrow_mut().loaded = true;
+        let error = install_into(&args_for(&dir, b"new helper"), &layout, &launchd).unwrap_err();
+        assert!(error.contains("back in place and running"), "{error}");
+        assert_eq!(fs::read(layout.home.join(BINARY)).unwrap(), b"old helper");
+        assert!(launchd.state.borrow().loaded, "the old helper runs again");
+        assert_eq!(fs::read_to_string(&layout.plist).unwrap(), plist_for(&layout.home));
+        assert_eq!(link::load_key(&layout.home).unwrap(), key, "pairing kept");
+        assert!(fs::read_to_string(&layout.receipt).unwrap().contains(&hex::encode(Sha256::digest(b"old helper"))));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_upgrade_waits_for_launchd_to_let_go_keeps_the_key_and_records_the_new_helper() {
+        let (dir, layout) = installed("upgrade", b"old helper");
+        let key = link::load_key(&layout.home).unwrap();
+        let launchd = launchd::fake::FakeLaunchd { linger: 3, ..Default::default() };
+        launchd.state.borrow_mut().loaded = true;
+        install_into(&args_for(&dir, b"new helper"), &layout, &launchd).unwrap();
+        assert_eq!(fs::read(layout.home.join(BINARY)).unwrap(), b"new helper");
+        assert_eq!(launchd.state.borrow().bootstraps, 1, "it waited for the old job instead of failing a bootstrap");
+        assert_eq!(link::load_key(&layout.home).unwrap(), key, "an upgrade never replaces the plan key");
+        assert_eq!(fs::read_to_string(&layout.receipt).unwrap(), format!("sha256 {}\n", hex::encode(Sha256::digest(b"new helper"))));
+        assert_eq!(fs::metadata(&layout.receipt).unwrap().permissions().mode() & 0o777, 0o644, "readable without root");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_first_install_that_fails_leaves_nothing_half_installed() {
+        let dir = temp("first");
+        let layout = Layout { home: dir.join("netd"), plist: dir.join("netd.plist"), receipt: dir.join(RECEIPT), target: "system/test".into() };
+        let launchd = launchd::fake::FakeLaunchd { refuse: Some((layout.home.join(BINARY), b"new helper".to_vec())), ..Default::default() };
+        assert!(install_into(&args_for(&dir, b"new helper"), &layout, &launchd).is_err());
+        assert!(!layout.home.join(BINARY).exists() && !layout.plist.exists() && !layout.receipt.exists());
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

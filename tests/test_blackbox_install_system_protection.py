@@ -5,6 +5,10 @@ records what it was asked to run — so the contract is checked without root: a 
 unattended install runs nothing as root, a binary whose checksum does not match is never run as
 root, and a matching one is handed to the helper's own verified ``install`` with the plan-key
 hand-off. Detached from any terminal so nothing can prompt.
+
+Upgrades (E2E 2026-11-21, KI-PENDING-11e14b): re-running the installer over an installed helper
+upgrades it only when it differs from the one this install carries (the helper's public receipt),
+and a failed upgrade never removes the helper the person already had.
 """
 
 from __future__ import annotations
@@ -21,7 +25,8 @@ PLUGIN_COPY = REPO_ROOT / "plugins" / "blackbox" / "setup" / "blackbox-install.s
 FUNCTIONS = (
     "helper_manifest_file", "helper_asset_name", "helper_manifest_version", "helper_manifest_sha256",
     "sha256_of", "want_system_protection", "fetch_helper_binary", "sudo_with_tty",
-    "install_system_protection", "offer_system_protection",
+    "install_system_protection", "offer_system_protection", "helper_installed_sha", "helper_expected_sha",
+    "upgrade_system_protection",
 )
 
 
@@ -36,12 +41,15 @@ def _function(name: str) -> str:
 
 
 def _run(tmp_path: Path, *, choice: str, helper: bytes | None = None, sha: str = "", os_name: str = "macos",
-         manifest: str | None = None) -> tuple[str, list[str]]:
+         manifest: str | None = None, installed_sha: str | None = None, root_fails: bool = False,
+         ) -> tuple[str, list[str]]:
+    """*installed_sha*: a helper is installed (its LaunchDaemon exists) with this receipt ("" = an
+    installed helper from before receipts). *root_fails*: every command run as root fails."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     calls = tmp_path / "sudo-calls"
     sudo = bin_dir / "sudo"
-    sudo.write_text(f'#!/bin/sh\nprintf "%s\\n" "$*" >> "{calls}"\nexit 0\n', encoding="utf-8")
+    sudo.write_text(f'#!/bin/sh\nprintf "%s\\n" "$*" >> "{calls}"\nexit {1 if root_fails else 0}\n', encoding="utf-8")
     sudo.chmod(0o755)
     for tool in ("awk", "cat", "chmod", "cp", "grep", "id", "mktemp", "rm", "shasum", "tr", "uname"):
         for folder in ("/bin", "/usr/bin"):
@@ -52,6 +60,13 @@ def _run(tmp_path: Path, *, choice: str, helper: bytes | None = None, sha: str =
     if helper is not None:
         helper_path = str(tmp_path / "downloaded-netd")
         Path(helper_path).write_bytes(helper)
+    daemon = tmp_path / "no-such.plist"
+    receipt = tmp_path / "netd-installed"
+    if installed_sha is not None:
+        daemon = tmp_path / "netd.plist"
+        daemon.write_text("<plist/>", encoding="utf-8")
+        if installed_sha:
+            receipt.write_text(f"sha256 {installed_sha}\n", encoding="utf-8")
     repo = tmp_path / "repo"
     if manifest is not None:
         (repo / "plugins" / "blackbox" / "helper").mkdir(parents=True)
@@ -61,7 +76,8 @@ def _run(tmp_path: Path, *, choice: str, helper: bytes | None = None, sha: str =
         'ok() { printf "OK %s\\n" "$1"; }', 'warn() { printf "WARN %s\\n" "$1"; }', 'err() { printf "ERR %s\\n" "$1"; }',
         f'OS="{os_name}"', f'BLACKBOX_SYSTEM_PROTECTION="{choice}"', "BLACKBOX_SYSTEM_PROTECTION_PROMPT_SECONDS=1",
         f'BLACKBOX_HELPER_PATH="{helper_path}"', f'BLACKBOX_HELPER_SHA256="{sha}"',
-        f'BLACKBOX_HELPER_DAEMON="{tmp_path}/no-such.plist"', f'BLACKBOX_HELPER_KEY_DIR="{tmp_path}/keys"',
+        f'BLACKBOX_HELPER_DAEMON="{daemon}"', f'BLACKBOX_HELPER_RECEIPT="{receipt}"',
+        f'BLACKBOX_HELPER_KEY_DIR="{tmp_path}/keys"',
         f'REPO_DIR="{repo}"', f'HERMES_HOME="{tmp_path}/hermes"', f'TMPDIR="{tmp_path}"',
         *(_function(name) for name in FUNCTIONS),
         'offer_system_protection', 'printf "STATE=%s\\n" "$BLACKBOX_SYSTEM_PROTECTION_STATE"',
@@ -130,3 +146,44 @@ def test_linux_is_never_offered_it(tmp_path):
 
 def test_the_plugin_copy_matches_the_installer():
     assert PLUGIN_COPY.read_text(encoding="utf-8") == INSTALL_SH.read_text(encoding="utf-8")
+
+
+def test_an_installed_helper_that_is_the_one_this_install_carries_is_left_alone(tmp_path):
+    binary = b"the helper"
+    sha = hashlib.sha256(binary).hexdigest()
+    out, ran = _run(tmp_path, choice="ask", helper=binary, sha=sha, installed_sha=sha)
+    assert ran == [] and "up to date" in out and "STATE=installed" in out, out
+
+
+def test_an_installed_helper_that_differs_is_upgraded_without_asking_again(tmp_path):
+    """The release path used to skip any installed helper, so an old binary was never replaced."""
+    manifest = "version 0.2.0\n" + "".join(f"{'c' * 64}  blackbox-netd-darwin-{arch}\n" for arch in ("arm64", "x86_64"))
+    for name, installed in (("older", "a" * 64), ("before-receipts", "")):
+        folder = tmp_path / name
+        folder.mkdir()
+        out, ran = _run(folder, choice="ask", manifest=manifest, installed_sha=installed)
+        # The download is the step that runs before root (there is no network here): reaching it
+        # means the upgrade was started; nothing installed is touched when it fails.
+        assert "newer system protection helper" in out and "Downloading the system protection helper" in out, out
+        assert ran == [] and "STATE=kept" in out, out
+
+
+def test_a_failed_upgrade_never_removes_the_helper_the_person_already_had(tmp_path):
+    """E2E 2026-11-21: launchd refused the new helper and the rollback uninstalled the old one."""
+    binary = b"the new helper"
+    sha = hashlib.sha256(binary).hexdigest()
+    out, ran = _run(tmp_path, choice="ask", helper=binary, sha=sha, installed_sha="a" * 64, root_fails=True)
+    assert any(" install --from " in command for command in ran), ran
+    assert not any(command.rstrip().endswith(" uninstall") for command in ran), f"the old helper was removed: {ran}"
+    assert "still installed and running" in out and "STATE=kept" in out, out
+
+
+def test_a_first_install_that_fails_is_cleaned_up(tmp_path):
+    binary = b"the helper"
+    out, ran = _run(tmp_path, choice="yes", helper=binary, sha=hashlib.sha256(binary).hexdigest(), root_fails=True)
+    assert ran[-1].rstrip().endswith(" uninstall") and "STATE=failed" in out, ran
+
+
+def test_saying_no_leaves_an_installed_helper_as_it_is(tmp_path):
+    out, ran = _run(tmp_path, choice="no", helper=b"x", sha=hashlib.sha256(b"x").hexdigest(), installed_sha="a" * 64)
+    assert ran == [] and "STATE=installed" in out, out

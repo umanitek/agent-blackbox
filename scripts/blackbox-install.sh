@@ -2767,6 +2767,7 @@ ${graph_note}
 EOF
     case "$BLACKBOX_SYSTEM_PROTECTION_STATE" in
         installed) echo "  System protection: helper installed — switch on DNS Shield and the Threat Firewall in Network Shield" ;;
+        kept) echo "  System protection: the helper you had is still installed and running (its upgrade did not finish)" ;;
         declined|failed) echo "  System protection: not installed — the dashboard's Network Shield offers it" ;;
     esac
     print_sharing_notice
@@ -4082,7 +4083,10 @@ BLACKBOX_HELPER_PATH="${BLACKBOX_HELPER_PATH:-}"
 BLACKBOX_HELPER_SHA256="${BLACKBOX_HELPER_SHA256:-}"
 BLACKBOX_HELPER_HOME="/Library/Application Support/Blackbox/netd"
 BLACKBOX_HELPER_DAEMON="/Library/LaunchDaemons/ai.umanitek.blackbox.netd.plist"
-BLACKBOX_SYSTEM_PROTECTION_STATE=""   # installed | declined | failed | unsupported (for next_steps)
+# The helper's public receipt ("sha256 <hex>" of the installed program), written by its own
+# install: the helper's folder is root-only, so this is how an up-to-date helper is told apart.
+BLACKBOX_HELPER_RECEIPT="/Library/Application Support/Blackbox/netd-installed"
+BLACKBOX_SYSTEM_PROTECTION_STATE=""   # installed | kept | declined | failed | unsupported (for next_steps)
 # The plugin's copy of the helper's plan key — ONE place per person, whichever Blackbox (this
 # install or Blackbox Desktop's engine) serves the dashboard (helper/PLAN.md).
 BLACKBOX_HELPER_KEY_DIR="$HOME/Library/Application Support/Blackbox/helper"
@@ -4112,6 +4116,22 @@ helper_manifest_sha256() {
 }
 
 sha256_of() { shasum -a 256 "$1" | awk '{ print $1 }'; }
+
+# The SHA-256 of the helper installed on this Mac (empty when there is none, or it predates receipts).
+helper_installed_sha() {
+    awk '$1 == "sha256" { print tolower($2); exit }' "$BLACKBOX_HELPER_RECEIPT" 2>/dev/null || true
+}
+
+# The SHA-256 of the helper this install carries: the local binary's, else the manifest's for this Mac.
+helper_expected_sha() {
+    local manifest asset
+    if [ -n "$BLACKBOX_HELPER_PATH" ]; then
+        printf '%s\n' "$BLACKBOX_HELPER_SHA256" | tr '[:upper:]' '[:lower:]'
+        return 0
+    fi
+    manifest="$(helper_manifest_file)" && asset="$(helper_asset_name)" && helper_manifest_sha256 "$manifest" "$asset"
+    return 0
+}
 
 # Answers yes (0) or no (1) for system protection: the flag / env first, else a prompt on a real
 # terminal (no terminal, or no answer in time: no — a root install never happens unattended).
@@ -4185,8 +4205,10 @@ sudo_with_tty() {
     fi
 }
 
+# `install_system_protection [upgrade]` — with "upgrade", a helper is already installed: a failure
+# leaves it in place (the helper's own install puts it back and starts it again), never removes it.
 install_system_protection() {
-    local folder sha owner
+    local mode="${1:-}" folder sha owner
     folder="$(mktemp -d "${TMPDIR:-/tmp}/blackbox-helper.XXXXXX")" || return 1
     chmod 700 "$folder"
     if ! sha="$(fetch_helper_binary "$folder")"; then
@@ -4203,8 +4225,11 @@ install_system_protection() {
         ok "System protection is installed. Turn on DNS Shield and the Threat Firewall in the dashboard's Network Shield."
         return 0
     fi
-    # A failure after the checks (e.g. launchd refused it) must not leave a half-installed helper.
-    sudo_with_tty "$folder/blackbox-netd" uninstall >/dev/null 2>&1 || true
+    # A first install that failed must not leave a half-installed helper. An upgrade that failed
+    # must not take away the protection the person already had (E2E 2026-11-21).
+    if [ "$mode" != upgrade ]; then
+        sudo_with_tty "$folder/blackbox-netd" uninstall >/dev/null 2>&1 || true
+    fi
     rm -rf "$folder"
     return 1
 }
@@ -4215,10 +4240,8 @@ offer_system_protection() {
         return 0
     fi
     heading "System protection (optional)"
-    if [ -f "$BLACKBOX_HELPER_DAEMON" ] && [ -z "$BLACKBOX_HELPER_PATH" ] &&
-        [ "$(printf '%s' "$BLACKBOX_SYSTEM_PROTECTION" | tr '[:upper:]' '[:lower:]')" != "yes" ]; then
-        ok "The system protection helper is already installed."
-        BLACKBOX_SYSTEM_PROTECTION_STATE="installed"
+    if [ -f "$BLACKBOX_HELPER_DAEMON" ]; then
+        upgrade_system_protection
         return 0
     fi
     if ! want_system_protection; then
@@ -4234,6 +4257,30 @@ offer_system_protection() {
         BLACKBOX_SYSTEM_PROTECTION_STATE="failed"
     fi
     return 0
+}
+
+# A helper is installed: keep it when it is the one this install carries (or the person said no
+# this time), else upgrade it in place. The person chose system protection when it was installed,
+# so an upgrade asks only for the admin password.
+upgrade_system_protection() {
+    local expected installed
+    expected="$(helper_expected_sha)"
+    installed="$(helper_installed_sha)"
+    BLACKBOX_SYSTEM_PROTECTION_STATE="installed"
+    case "$(printf '%s' "$BLACKBOX_SYSTEM_PROTECTION" | tr '[:upper:]' '[:lower:]')" in
+        no|n|0|false|off) ok "The system protection helper is installed (left as it is)."; return 0 ;;
+    esac
+    if [ -z "$expected" ] || [ "$expected" = "$installed" ]; then
+        ok "The system protection helper is installed and up to date."
+        return 0
+    fi
+    step "This Blackbox carries a newer system protection helper; upgrading it (macOS asks for your admin password)."
+    if install_system_protection upgrade; then
+        ok "The system protection helper is upgraded."
+    else
+        warn "The system protection helper could not be upgraded; the one you had is still installed and running."
+        BLACKBOX_SYSTEM_PROTECTION_STATE="kept"
+    fi
 }
 
 # --remove-system-protection [--undo-hardening]: the helper puts the Mac's DNS and firewall back

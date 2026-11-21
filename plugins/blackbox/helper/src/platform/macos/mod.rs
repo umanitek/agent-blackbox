@@ -7,6 +7,7 @@
 pub mod enforce;
 mod enforcer;
 pub mod install;
+mod launchd;
 pub mod observe;
 mod observer;
 pub mod pf_status;
