@@ -153,6 +153,27 @@ def _int(value: Any, field: str) -> int:
     return value
 
 
+#: The helper's per-protection results (``protections`` in its report, helper/PLAN.md — optional,
+#: additive): which it reports, and the most an error message may hold.
+PROTECTION_RESULTS = ("dns", "firewall", "cut", "ssh_lockdown", "remote_lock")
+MAX_ERROR = 200
+
+
+def _protection_results(raw: Any) -> dict[str, dict[str, Any]]:
+    """``{"dns": {"applied": bool, "error": str|None}, …}`` checked; absent → {} (older helpers)."""
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict) or not set(raw) <= set(PROTECTION_RESULTS):
+        raise ShieldApiError(400, f"protections must map {', '.join(PROTECTION_RESULTS)} to their result")
+    results = {}
+    for name, result in raw.items():
+        error = result.get("error") if isinstance(result, dict) else None
+        if not isinstance(result, dict) or not isinstance(result.get("applied"), bool) or not (error is None or isinstance(error, str)):
+            raise ShieldApiError(400, f"protections.{name} must be {{applied: true/false, error: text or null}}")
+        results[name] = {"applied": result["applied"], "error": " ".join(error.split())[:MAX_ERROR] if error else None}
+    return results
+
+
 def record_report(body: Mapping[str, Any], now: Optional[float] = None) -> dict[str, Any]:
     """Validates and stores one enforcer report; answers the stored summary."""
     now = time.time() if now is None else now
@@ -162,6 +183,7 @@ def record_report(body: Mapping[str, Any], now: Optional[float] = None) -> dict[
     for flag in ("cut_active", "ssh_lockdown_active"):   # optional: helpers before these protections
         if not isinstance(body.get(flag, False), bool):
             raise ShieldApiError(400, f"{flag} must be true or false")
+    results = _protection_results(body.get("protections"))
     snapshot, watched = watch.validate(body, now)
     remote = remote_access.validate(body.get("remote"), now)   # before anything is stored: one bad part refuses all
     raw_blocks = body.get("blocks", [])
@@ -187,7 +209,7 @@ def record_report(body: Mapping[str, Any], now: Optional[float] = None) -> dict[
             "enforcer": {"running": body["running"], "dns_active": body["dns_active"],
                          "firewall_active": body["firewall_active"], "cut_active": body.get("cut_active", False),
                          "ssh_lockdown_active": body.get("ssh_lockdown_active", False), "version": str(body.get("version") or "")[:64],
-                         "reported_at": now},
+                         "protections": results, "reported_at": now},
             "queries": _int(body.get("queries", 0), "queries"),
             "firewall_dropped": _int(body.get("firewall_dropped", 0), "firewall_dropped"),
             "blocked_total": state.get("blocked_total", 0) + sum(block["count"] for block in blocks),
@@ -220,6 +242,9 @@ def summary(state: Optional[Mapping[str, Any]] = None, now: Optional[float] = No
         "ssh_lockdown_active": fresh and bool(enforcer.get("ssh_lockdown_active")),
         # Lock remote access is reported in the helper's remote-watch part (its own freshness).
         "remote_lock_active": remote_access.lock_active(now),
+        # Why a protection is not applied, as the helper said (fresh reports only; helper/PLAN.md).
+        "errors": {name: result["error"] for name, result in (enforcer.get("protections") or {}).items()
+                   if fresh and not result.get("applied") and result.get("error")},
         "cut_total": watch.cut_total(),
         "reported_at": enforcer.get("reported_at"),
         "queries": state.get("queries", 0),

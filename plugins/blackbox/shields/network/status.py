@@ -78,6 +78,9 @@ def _row(protection: str, mode: ShieldMode, applied: Mapping[str, Any]) -> Statu
     if not on:
         return StatusRow(icon="○", state="off", text=f"{name} is off", sub=WHAT[protection])
     if not applied.get(ACTIVE_KEY[protection]):
+        error = (applied.get("errors") or {}).get(protection.replace("-", "_"))
+        if error:
+            return StatusRow(icon="!", state="warn", text=f"{name} could not be applied", sub=f"The helper says: {error}")
         return StatusRow(icon="!", state="waiting", text=f"{name} is on, waiting for the system protection helper",
                          sub="The helper has not reported it applied yet. If this stays, start or repair the helper.")
     return StatusRow(icon="●", state="active", text=f"{name} is active", sub=WHAT[protection])

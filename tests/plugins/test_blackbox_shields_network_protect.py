@@ -166,3 +166,28 @@ def test_every_endpoint_desktop_uses_is_served_by_the_core():
             "system-plan", "exposure", "posture"} <= set(api.API.reads)
     assert {"enforcer-report", "end-session", "block-address", "unblock-address", "remote-settings",
             "system-report", "posture-fix", "posture-refresh", "tamper-guard"} <= set(api.API.writes)
+
+
+# ------------------------------------------------------------------ the helper's per-protection results (helper/PLAN.md)
+
+_REPORT = {"running": True, "dns_active": False, "firewall_active": True}
+
+
+def test_a_protection_the_helper_could_not_apply_says_why_on_the_card(tmp_path, monkeypatch):
+    installed = tmp_path / "ai.umanitek.blackbox.netd.plist"
+    installed.write_text("<plist/>", encoding="utf-8")
+    monkeypatch.setattr(helper, "LAUNCH_DAEMON", installed)
+    enforcement.record_report({**_REPORT, "protections": {"dns": {"applied": False, "error": "port 53\nin use"},
+                                                          "firewall": {"applied": True, "error": None}}})
+    assert enforcement.summary()["errors"] == {"dns": "port 53 in use"}
+    rows = status.build(_on(protections=(network_mode.DNS, network_mode.FIREWALL))).sections[0].rows
+    assert (rows[0].state, rows[0].sub) == ("warn", "The helper says: port 53 in use")
+    assert rows[1].state == "active"
+
+
+def test_an_older_report_without_results_is_accepted_and_a_bad_one_refused():
+    assert enforcement.record_report(_REPORT)["errors"] == {}
+    for bad in ({"teleport": {"applied": True}}, {"dns": {"applied": "yes"}}, {"dns": {"applied": False, "error": 3}}, ["dns"]):
+        with pytest.raises(ShieldApiError) as refused:
+            enforcement.record_report({**_REPORT, "protections": bad})
+        assert refused.value.status == 400
