@@ -24,7 +24,7 @@ _INSTALL_STAMP_MARKER = ".blackbox-install-stamp"
 
 # Files/dirs never copied into a target home's plugins/blackbox/ — build
 # artifacts and the plugin's own tests have no business in a runtime home.
-_COPY_EXCLUDE_DIRS = {"__pycache__", "tests", ".pytest_cache", "node_modules"}
+_COPY_EXCLUDE_DIRS = {"__pycache__", "tests", ".pytest_cache", "node_modules", "target"}   # target: the helper crate's build output
 _COPY_EXCLUDE_SUFFIXES = (".pyc", ".pyo")
 
 # The OpenClaw JS plugin is bundled inside an installed copy under this name so

@@ -50,6 +50,15 @@ way, and every package used only through its public entry (`__init__.py`).
 | `playground` | sandbox mode's test bench (2026-10-21): run a listed threat through the real hooks inside `audit.sandbox_run()` (its finding, cooldown and share ledger stay in `$BLACKBOX_HOME/sandbox/`), and read the verified graph's `sandbox` lane — the one reader of that lane; nothing that builds rules or flags reads it; and the wallet tests (`wallets.py`, 2026-10-27): every shield's self-tests for this machine (`shields.self_tests()`), run through the same hook, local only — they need sandbox mode, never sharing | `playground/__init__.py` | `kernel`, `audit`, `ruleset`, `guard`, `shields` |
 | `model_connect` | connecting the protected agent to an AI model from the dashboard (2026-11-19): a fresh install leaves Hermes with no model, so the agent cannot chat and no prompt reaches Blackbox — the free Nous account sign-in (`sign_in.NousSignIn`: Hermes' own `hermes auth add nous --no-browser` in a child, its link and code handed to the panel, the provider set on success) and an API key handed to Hermes on the child's stdin (`save_api_key`), never kept or logged by Blackbox; whether an agent has a model is Hermes' own answer (`kernel/host_command/agent_model.py`) | `model_connect/__init__.py` | `kernel` |
 
+
+## Native components
+
+Not Python packages, so not rows in the Modules table above (the architecture guard maps packages).
+
+| Component | What it owns | Entry | Talks to |
+|---|---|---|---|
+| `helper/` (Rust crate `blackbox-helper`, binary `blackbox-netd`) | Blackbox's ROOT helper: applies Network Shield's plan — DNS Shield's resolver and the Mac's DNS settings, the pf anchor (Threat Firewall, cut connections, SSH / remote lockdown, address blocks), posture fixes — and observes what needs root (SSH and remote sessions via the login log, login files, listening ports, startup items, tampering). It decides nothing: every policy is the plugin's (`shields/network`). `observe/` never calls `enforce/` (a structural test). Installed only with the person's yes (the installer's "Turn on system protection?" step, the dashboard, or Blackbox Desktop); `PLAN.md` documents the plan and report JSON contract. | `helper/src/lib.rs` (`run`), `helper/src/bin/blackbox-netd.rs` | the dashboard's Network Shield endpoints on 127.0.0.1 |
+
 ## Root (the composition layer — Hermes' plugin layout, kept thin)
 
 | File | Role |

@@ -1,0 +1,496 @@
+//! `blackbox-netd`: Network Shield's enforcer — the small root helper that applies the plan.
+//!
+//! **It decides nothing.** All policy lives in the Blackbox plugin's Network Shield
+//! (`plugins/blackbox/shields/network`): what DNS must refuse, which IPs the firewall drops,
+//! which connections to cut, who may SSH in, whether to watch. This process only:
+//!
+//! 1. pulls the plan every [`PLAN_EVERY`] from the plugin
+//!    (`GET /api/shields/network-shield/api/enforcement?have=<version>`; an unchanged plan costs
+//!    nothing) and applies it — the resolver's sets, the Mac's DNS settings, the pf anchor
+//!    ([`pf`]: threats, cut connections, SSH lockdown);
+//! 2. while the plan says `watch`, looks every [`watch::WATCH_EVERY`] at SSH into this Mac and
+//!    the login files ([`watch`]) — observing only, never a file's contents;
+//! 3. reports back every [`REPORT_EVERY`], and **at once** when something happened (a new SSH
+//!    session, a changed file, a cut connection): `POST …/api/enforcer-report`.
+//!
+//! It opens no port of its own besides DNS on 127.0.0.1:53, and takes no commands from the app:
+//! there is no control API to attack. Runs as a LaunchDaemon (`ai.umanitek.blackbox.netd`),
+//! installed with one admin approval (by Blackbox's installer when the person turns on system
+//! protection, or by Blackbox Desktop). When the plugin cannot be reached it
+//! keeps enforcing the last plan; when it is stopped it puts the Mac's DNS settings and pf back.
+//!
+//! Modules: [`dns`] (the resolver), [`system`] (DNS settings), [`pf`] (the packet filter),
+//! [`plan`] (the plan), [`watch`] (SSH and login files).
+
+pub mod enforce;
+pub mod observe;
+pub mod plan;
+pub mod sockets;
+mod system_guard;
+
+// The orchestration below names each part directly; observe and enforce stay separate modules.
+pub use enforce::{dns, pf, sessions, system};
+pub use observe::{logstream, remote, remote_procs, watch};
+
+use std::collections::{BTreeMap, HashSet};
+use std::fs;
+use std::net::IpAddr;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
+use std::thread;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+
+pub use plan::Plan;
+
+/// The LaunchDaemon label.
+pub const LABEL: &str = "ai.umanitek.blackbox.netd";
+/// The helper's root-owned folder.
+pub const HOME: &str = "/Library/Application Support/Blackbox/netd";
+/// The plugin's dashboard (loopback only).
+const PLUGIN: &str = "http://127.0.0.1:9700";
+const PLAN_PATH: &str = "/api/shields/network-shield/api/enforcement";
+const REPORT_PATH: &str = "/api/shields/network-shield/api/enforcer-report";
+pub const PLAN_EVERY: Duration = Duration::from_secs(15);
+/// The plan is asked for this often while watching (an unchanged plan costs one tiny answer), so a
+/// session the user chose to end, a lock or a block takes effect within seconds.
+pub const PLAN_EVERY_WATCHING: Duration = Duration::from_secs(3);
+pub const REPORT_EVERY: Duration = Duration::from_secs(30);
+const PLAN_TIMEOUT: Duration = Duration::from_secs(120);
+const REPORT_TIMEOUT: Duration = Duration::from_secs(15);
+/// The most addresses kept cut at once (the oldest are released first).
+const MAX_CUT: usize = 5000;
+
+fn state_path() -> PathBuf {
+    Path::new(HOME).join("state.json")
+}
+
+fn now() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+}
+
+/// What survives a restart: what the helper changed on the Mac, so it can always put it back.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct State {
+    /// What each network service's DNS was before DNS Shield took over (restored exactly).
+    pub saved_dns: BTreeMap<String, Vec<String>>,
+    pub dns_active: bool,
+    pub firewall_active: bool,
+    pub cut_active: bool,
+    pub ssh_lockdown_active: bool,
+    pub remote_lock_active: bool,
+    pub pf_token: Option<String>,
+    /// The addresses cut so far (kept blocked while cutting is on).
+    pub cut_ips: Vec<String>,
+    /// The plan version last applied (for the record; the next start re-applies the plan in full).
+    pub version: String,
+}
+
+impl State {
+    fn load() -> State {
+        fs::read_to_string(state_path()).ok().and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default()
+    }
+
+    fn save(&self) {
+        let path = state_path();
+        let temporary = path.with_extension("tmp");
+        if let Ok(text) = serde_json::to_string_pretty(self) {
+            if fs::write(&temporary, text).is_ok() {
+                let _ = fs::rename(&temporary, &path);
+            }
+        }
+    }
+}
+
+/// Wakes the reporter early (something happened that the plugin should hear about now).
+#[derive(Default)]
+struct Wake {
+    due: Mutex<bool>,
+    signal: Condvar,
+}
+
+impl Wake {
+    fn now(&self) {
+        *self.due.lock().unwrap() = true;
+        self.signal.notify_one();
+    }
+
+    /// Waits for a wake or the timeout, whichever is first.
+    fn wait(&self, timeout: Duration) {
+        let due = self.due.lock().unwrap();
+        let (mut due, _) = self.signal.wait_timeout_while(due, timeout, |due| !*due).unwrap();
+        *due = false;
+    }
+}
+
+/// The running helper.
+struct Helper {
+    state: Mutex<State>,
+    resolver: Arc<dns::Resolver>,
+    http: reqwest::blocking::Client,
+    token: Mutex<Option<String>>,
+    last_error: Mutex<Option<String>>,
+    /// The plan version applied in THIS process. Not the saved one: after a restart the resolver
+    /// is empty, so the first plan must come in full (asking `have=<saved>` would answer
+    /// `unchanged` and leave DNS Shield refusing nothing).
+    applied: Mutex<String>,
+    watching: AtomicBool,
+    watch: Mutex<watch::Watch>,
+    /// Who is in this Mac (remote sessions), the login-log child, and what it needs to look.
+    remote: Mutex<remote::Remote>,
+    logs: Mutex<logstream::Stream>,
+    sockets: Mutex<crate::sockets::Reader>,
+    procs: Mutex<remote_procs::ProcReader>,
+    /// End requests already acted on (each is carried out once).
+    ended: Mutex<HashSet<String>>,
+    wake: Wake,
+}
+
+static STOPPING: AtomicBool = AtomicBool::new(false);
+
+extern "C" fn on_terminate(_: libc::c_int) {
+    STOPPING.store(true, Ordering::SeqCst);
+}
+
+/// Starts a named helper thread (a crash then names it instead of "<unknown>").
+fn named<F: FnOnce() + Send + 'static>(name: &str, work: F) {
+    if let Err(error) = thread::Builder::new().name(name.into()).spawn(work) {
+        eprintln!("blackbox-netd: could not start {name}: {error}");
+    }
+}
+
+/// The helper's entry point (launchd runs it as root).
+pub fn run() -> Result<(), String> {
+    fs::create_dir_all(HOME).map_err(|error| format!("{HOME}: {error}"))?;
+    let state = State::load();
+    let upstreams = if state.dns_active { system::upstreams_from_saved(&state.saved_dns) } else { system::current_upstreams() };
+    let helper = Arc::new(Helper {
+        resolver: dns::Resolver::new(upstreams),
+        state: Mutex::new(state),
+        http: reqwest::blocking::Client::builder().build().map_err(|error| error.to_string())?,
+        token: Mutex::new(None),
+        last_error: Mutex::new(None),
+        applied: Mutex::new(String::new()),
+        watching: AtomicBool::new(false),
+        watch: Mutex::new(watch::Watch::default()),
+        remote: Mutex::new(remote::Remote::default()),
+        logs: Mutex::new(logstream::Stream::default()),
+        sockets: Mutex::new(crate::sockets::Reader::default()),
+        procs: Mutex::new(remote_procs::ProcReader::default()),
+        ended: Mutex::new(HashSet::new()),
+        wake: Wake::default(),
+    });
+
+    let resolver = helper.resolver.clone();
+    named("blackbox-netd-dns", move || {
+        if let Err(error) = dns::serve(resolver) {
+            eprintln!("blackbox-netd: the DNS resolver stopped: {error}");
+        }
+    });
+
+    // SAFETY: the handler only stores to an atomic.
+    unsafe {
+        libc::signal(libc::SIGTERM, on_terminate as extern "C" fn(libc::c_int) as libc::sighandler_t);
+        libc::signal(libc::SIGINT, on_terminate as extern "C" fn(libc::c_int) as libc::sighandler_t);
+    }
+
+    let reporter = helper.clone();
+    named("blackbox-netd-report", move || loop {
+        reporter.wake.wait(REPORT_EVERY);
+        reporter.report();
+    });
+    let watcher = helper.clone();
+    named("blackbox-netd-watch", move || loop {
+        watcher.look();
+        thread::sleep(watch::WATCH_EVERY);
+    });
+    // Exposure, persistence, tampering and posture (+ posture fixes, the DNS tamper guard): its own
+    // small plan and report (system_guard), so neither loop waits on the other.
+    // Every helper thread is named (`named`), so a crash log says which one it was. The stack
+    // overflow first seen on a test VM was NOT stack size: it was logstream::Stream's stop/Drop
+    // recursion (fixed there, with a regression test). The larger stack stays as headroom.
+    let _ = thread::Builder::new().name("blackbox-system-guard".into()).stack_size(system_guard::STACK_BYTES).spawn(system_guard::run);
+    let remoter = helper.clone();
+    named("blackbox-netd-remote", move || loop {
+        remoter.look_remote();
+        thread::sleep(remote::REMOTE_EVERY);
+    });
+
+    loop {
+        if STOPPING.load(Ordering::SeqCst) {
+            helper.stop();
+            return Ok(());
+        }
+        helper.follow_plan();
+        let every = if helper.watching.load(Ordering::SeqCst) { PLAN_EVERY_WATCHING } else { PLAN_EVERY };
+        for _ in 0..(every.as_millis() / 200) {
+            if STOPPING.load(Ordering::SeqCst) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(200));
+        }
+    }
+}
+
+impl Helper {
+    /// Pulls the plan and applies it when it changed. Keeps the last plan when the plugin is away.
+    fn follow_plan(&self) {
+        let have = self.applied.lock().map(|applied| applied.clone()).unwrap_or_default();
+        let url = format!("{PLUGIN}{PLAN_PATH}?have={have}");
+        let plan: Plan = match self.http.get(url).timeout(PLAN_TIMEOUT).send().and_then(|r| r.error_for_status()).and_then(|r| r.json()) {
+            Ok(plan) => plan,
+            Err(error) => {
+                *self.last_error.lock().unwrap() = Some(format!("the plan could not be read: {error}"));
+                return;
+            }
+        };
+        if plan.unchanged {
+            return;
+        }
+        let mut errors = vec![];
+        if let Ok(mut lists) = self.resolver.lists.write() {
+            *lists = plan.blocklists();
+        }
+        errors.extend(self.set_dns(plan.dns.enabled));
+        errors.extend(self.set_filter(&plan));
+        self.watching.store(plan.watch, Ordering::SeqCst);
+        if let Ok(mut state) = self.state.lock() {
+            state.version = plan.version.clone();
+            state.save();
+        }
+        *self.applied.lock().unwrap() = plan.version.clone();
+        *self.last_error.lock().unwrap() = (!errors.is_empty()).then(|| errors.join("; "));
+    }
+
+    fn set_dns(&self, enabled: bool) -> Option<String> {
+        let mut state = self.state.lock().unwrap();
+        if enabled == state.dns_active {
+            return None;
+        }
+        let result = if enabled {
+            *self.resolver.upstreams.write().unwrap() = system::current_upstreams();
+            system::point_dns_at_shield().map(|saved| {
+                for (service, servers) in saved {
+                    state.saved_dns.entry(service).or_insert(servers);
+                }
+            })
+        } else {
+            let errors = system::restore_dns(&state.saved_dns);
+            if errors.is_empty() { state.saved_dns.clear(); Ok(()) } else { Err(errors.join("; ")) }
+        };
+        if result.is_ok() {
+            state.dns_active = enabled;
+        }
+        state.save();
+        result.err()
+    }
+
+    /// Makes pf enforce the plan's firewall, cut and SSH lockdown; kills the open connections to
+    /// newly cut addresses and queues an event for each.
+    fn set_filter(&self, plan: &Plan) -> Option<String> {
+        let mut state = self.state.lock().unwrap();
+        let mut newly: Vec<IpAddr> = vec![];
+        if plan.cut.enabled {
+            state.cut_ips.retain(|ip| ip.parse::<IpAddr>().map(|ip| !plan.is_allowed(&ip)).unwrap_or(false));
+            for ip in plan.cut_ips() {
+                if !state.cut_ips.contains(&ip.to_string()) {
+                    state.cut_ips.push(ip.to_string());
+                    newly.push(ip);
+                }
+            }
+            let extra = state.cut_ips.len().saturating_sub(MAX_CUT);
+            state.cut_ips.drain(..extra);
+        } else {
+            state.cut_ips.clear();
+        }
+        let threats = plan.firewall.enabled.then(|| plan.firewall_ips());
+        let filter = pf::Filter {
+            threats: threats.clone(),
+            cut: plan.cut.enabled.then(|| state.cut_ips.iter().filter_map(|ip| ip.parse().ok()).collect()),
+            ssh_allow: plan.ssh.lockdown.then(|| plan.ssh_sources()),
+            remote_lock: plan.remote.lock,
+            remote_block: plan.remote_block(),
+        };
+        let result = pf::apply(&filter, state.pf_token.clone());
+        if let Ok(token) = &result {
+            state.pf_token = token.clone();
+            state.firewall_active = threats.map(|ips| !ips.is_empty()).unwrap_or(false);
+            state.cut_active = plan.cut.enabled;
+            state.ssh_lockdown_active = plan.ssh.lockdown;
+            state.remote_lock_active = plan.remote.lock;
+        }
+        state.save();
+        drop(state);
+        self.end_sessions(plan);
+        if result.is_ok() && !newly.is_empty() {
+            let mut watch = self.watch.lock().unwrap();
+            for ip in &newly {
+                let _ = pf::kill_states(ip);   // the anchor's rule already drops it; this ends open states too
+                watch.push(json!({"kind": "connection-cut", "ts": now(), "remote_ip": ip.to_string()}));
+            }
+            drop(watch);
+            self.wake.now();
+        }
+        result.err()
+    }
+
+    /// One look at SSH and the login files, while the plan says watch; nothing while it does not.
+    fn look(&self) {
+        if !self.watching.load(Ordering::SeqCst) {
+            self.watch.lock().unwrap().reset();
+            return;
+        }
+        let (netstat, files) = watch::look();
+        let news = self.watch.lock().unwrap().tick(&netstat, files, now());
+        if news {
+            self.wake.now();
+        }
+    }
+
+    /// One look at who is in this Mac, while the plan says watch: the login log (its child started
+    /// on first use, stopped when watching stops), the inbound sessions and their processes.
+    fn look_remote(&self) {
+        if !self.watching.load(Ordering::SeqCst) {
+            self.logs.lock().unwrap().stop();
+            self.remote.lock().unwrap().reset();
+            return;
+        }
+        let logins = {
+            let mut logs = self.logs.lock().unwrap();
+            logs.ensure_running();
+            logs.drain()
+        };
+        let inbound: Vec<remote::Inbound> = self.sockets.lock().unwrap().sockets().into_iter()
+            .filter(|s| remote::REMOTE_PORTS.iter().any(|(port, _)| *port == s.local_port))
+            .map(|s| remote::Inbound { pid: s.pid, local_ip: s.local_ip, local_port: s.local_port, remote_ip: s.remote_ip,
+                                       remote_port: s.remote_port, listening: s.listening(), established: s.state == "Established" })
+            .collect();
+        // The process table only when someone is in or a login just happened (it costs more).
+        let procs = if inbound.iter().any(|s| s.established) || !logins.is_empty() {
+            self.procs.lock().unwrap().read()
+        } else {
+            remote_procs::Procs::new()
+        };
+        if self.remote.lock().unwrap().tick(&inbound, &procs, logins, now()) {
+            self.wake.now();
+        }
+    }
+
+    /// Carries out the plan's end requests the user confirmed — each once, each only after
+    /// [`sessions::verify`] says it is still exactly that session — and reports what happened.
+    fn end_sessions(&self, plan: &Plan) {
+        let mut ended = self.ended.lock().unwrap();
+        ended.retain(|id| plan.remote.end.iter().any(|request| &request.session_id == id));
+        for request in &plan.remote.end {
+            if !ended.insert(request.session_id.clone()) {
+                continue;
+            }
+            let live = self.remote.lock().unwrap().session(&request.session_id).cloned();
+            let process = self.procs.lock().unwrap().read().get(&request.pid).map(|p| (p.name.clone(), p.start));
+            let checked = sessions::verify(request, live.as_ref(), process.as_ref().map(|(name, start)| (name.as_str(), *start)));
+            let event = match (checked.and_then(|_| sessions::end(request.pid)), live) {
+                (Ok(()), Some(session)) => remote::session_event("remote-session-ended", &session, now(), "ended"),
+                (result, _) => json!({"kind": "remote-end-refused", "ts": now(), "session_id": request.session_id,
+                                      "reason": result.err().unwrap_or_default()}),
+            };
+            self.remote.lock().unwrap().push(event);
+            self.wake.now();
+        }
+    }
+
+    /// The report body: running, what is active, counters, the names refused since last time, and
+    /// (while watching) the watch snapshot and the events not yet reported.
+    fn report_body(&self, events: Vec<Value>, remote_events: Vec<Value>) -> Value {
+        let state = self.state.lock().map(|state| state.clone()).unwrap_or_default();
+        let blocks: Vec<Value> = self.resolver.drain_pending().into_iter()
+            .map(|((domain, list), (count, ts))| json!({"domain": domain, "list": list, "count": count, "ts": ts}))
+            .collect();
+        let snapshot = if self.watching.load(Ordering::SeqCst) { self.watch.lock().unwrap().snapshot() } else { None };
+        let pf_on = state.firewall_active || state.cut_active || state.ssh_lockdown_active || state.remote_lock_active;
+        let remote = if self.watching.load(Ordering::SeqCst) { self.remote.lock().unwrap().snapshot() } else { None };
+        json!({
+            "running": true, "dns_active": state.dns_active, "firewall_active": state.firewall_active,
+            "cut_active": state.cut_active, "ssh_lockdown_active": state.ssh_lockdown_active,
+            "version": state.version, "queries": self.resolver.queries.load(std::sync::atomic::Ordering::Relaxed),
+            "firewall_dropped": if pf_on { pf::dropped() } else { 0 },
+            "blocks": blocks, "watch": snapshot, "events": events,
+            // Under its own key, so a plugin that predates it ignores it instead of refusing the report.
+            "remote": remote.map(|snapshot| json!({"snapshot": snapshot, "events": remote_events, "lock_active": state.remote_lock_active})),
+        })
+    }
+
+    fn report(&self) {
+        let remote_on = self.remote.lock().map(|remote| remote.snapshot().is_some()).unwrap_or(false);
+        // While the remote watch runs it reports SSH sessions in full; the older SSH events would repeat them.
+        let events: Vec<Value> = self.watch.lock().map(|mut watch| watch.drain()).unwrap_or_default().into_iter()
+            .filter(|event| !(remote_on && event["kind"].as_str().is_some_and(|kind| kind.starts_with("ssh-session"))))
+            .collect();
+        let remote_events = self.remote.lock().map(|mut remote| remote.drain()).unwrap_or_default();
+        let body = self.report_body(events.clone(), remote_events.clone());
+        let send = |token: &str| {
+            self.http.post(format!("{PLUGIN}{REPORT_PATH}")).timeout(REPORT_TIMEOUT)
+                .header("X-Blackbox-Token", token).json(&body).send()
+        };
+        for attempt in 0..2 {
+            let Some(token) = self.session_token(attempt > 0) else { break };
+            match send(&token) {
+                Ok(response) if response.status().as_u16() == 401 || response.status().as_u16() == 403 => continue,
+                // Delivered, or refused on purpose (a 400 names a bad report: resending it would
+                // block every later report, the running status included).
+                Ok(_) => return,
+                Err(_) => break,
+            }
+        }
+        // Not delivered (the plugin away): keep the events for the next report.
+        if !events.is_empty() {
+            self.watch.lock().unwrap().requeue(events);
+        }
+        if !remote_events.is_empty() {
+            self.remote.lock().unwrap().requeue(remote_events);
+        }
+    }
+
+    /// The dashboard's write token (`GET /api/session`), cached until it is refused.
+    fn session_token(&self, refresh: bool) -> Option<String> {
+        let mut cached = self.token.lock().ok()?;
+        if !refresh {
+            if let Some(token) = cached.as_ref() {
+                return Some(token.clone());
+            }
+        }
+        let session: Value = self.http.get(format!("{PLUGIN}/api/session")).timeout(REPORT_TIMEOUT).send().ok()?.json().ok()?;
+        let token = session.get("token")?.as_str()?.to_string();
+        *cached = Some(token.clone());
+        Some(token)
+    }
+
+    /// Puts the Mac back: DNS settings restored, the pf anchor emptied and pf released.
+    fn stop(&self) {
+        let _ = self.set_dns(false);
+        let _ = self.set_filter(&Plan::default());
+        self.watching.store(false, Ordering::SeqCst);
+        self.logs.lock().unwrap().stop();
+        system_guard::stop();   // reverse every posture fix
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_wake_ends_the_wait_early() {
+        let wake = Arc::new(Wake::default());
+        let other = wake.clone();
+        let started = std::time::Instant::now();
+        let waiter = thread::Builder::new().name("blackbox-netd-wait".into()).spawn(move || other.wait(Duration::from_secs(30)))
+            .expect("a thread for the wait");
+        wake.now();
+        waiter.join().unwrap();
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+}
