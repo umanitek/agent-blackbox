@@ -156,7 +156,7 @@ def read_text(agent: str, payload: dict) -> str:
         try:
             info = os.stat(path)
             if stat.S_ISREG(info.st_mode):
-                with open(path, encoding="utf-8", errors="replace") as handle:
+                with open(path, encoding="utf-8-sig", errors="replace") as handle:
                     return handle.read(MAX_TEXT_CHARS)
         except OSError:
             return ""

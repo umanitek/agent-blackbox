@@ -47,7 +47,7 @@ from typing import Any
 
 from .. import action_parsing, shell_shapes
 from ..finding import Finding
-from ...kernel import addons as guarded_extra, threat_ids
+from ...kernel import addons as guarded_extra, agent_hosts, threat_ids
 from ...kernel.bounded_files import read_small_text
 from ...kernel.config import load_blackbox_config
 from . import guard_commands, guard_paths, guard_places, protected, shell_files
@@ -69,7 +69,11 @@ _CODE_ACTS = re.compile(
 _BLACKBOX_TEXT = re.compile(r"blackbox|plugins|\benabled\b|\bdisabled\b|\ballow\b|\bentries\b|\bload\b", re.IGNORECASE)
 _BLACKBOX_KEYS = re.compile(r"\b(?:mode|block_severity|protected_paths|shields|report|detection|auto_attach)\s*:")
 _MAX_CONFIG_BYTES = 1_000_000
-_HOST_CONFIGS = ("config.yaml", "openclaw.json")
+#: Coding agents' hook styles whose file is the AGENT's own settings (Blackbox adds one entry there).
+_SHARED_HOOK_STYLES = frozenset({"nested", "flat"})
+#: Another program's file among the guarded places: only an edit that reaches Blackbox's part is refused.
+_HOST_CONFIGS = ("config.yaml", "openclaw.json",
+                 *sorted({os.path.basename(host.config) for host in agent_hosts.HOSTS if host.style in _SHARED_HOOK_STYLES}))
 #: Startup files: a ``BLACKBOX_…`` variable written there lowers the guard of every later session.
 _STARTUP_FILES = frozenset({".zshrc", ".zshenv", ".zprofile", ".bashrc", ".bash_profile", ".profile", ".env", "config.fish"})
 #: A file whose text is run: a script that would itself be refused may not be written.

@@ -39,6 +39,7 @@ that the two version fields agree.
 ## [Unreleased]
 
 ### Added
+- Coding-agent protection is in the core: Claude Code, Codex, Cursor, Gemini CLI, GitHub Copilot CLI, Windsurf (Devin), Cline and OpenCode are protected through their own hooks (`agent_hooks`; `/api/agent-hooks`), with prompt-injection checks on prompts and tool outputs and self-protection of each agent's hook config — without Blackbox Desktop.
 - `guard.text_verdict`: a prompt or a tool's output checked for prompt injection with the same rules as a tool call (only a verified pattern blocks, in Block mode) — for runtimes that are not Hermes, such as a coding agent's own hooks.
 
 - **Network Shield, the second shield.** Switch it on (Settings → Shields) and Blackbox keeps AI
