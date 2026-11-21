@@ -2,7 +2,9 @@
 
 A **shield** is a named, opt-in protection pack: one kind of user (a crypto trader, say) switches
 it on and gets a set of extra rules made for them. **Trader Shield** is the first. It keeps an AI
-agent away from crypto wallets, seed phrases and keys.
+agent away from crypto wallets, seed phrases and keys. **Network Shield** is the second: it keeps
+AI agents to the hosts the user allows and shows the machine's system status and what talks to the
+internet; the rest of it runs in Blackbox Desktop, whose add-on extends it (see Add-ons below).
 
 This folder holds everything a shield is. Blackbox's core (the hooks, the dashboard and the
 settings) never names a shield or a wallet; it asks the **registry** in `__init__.py`. Adding a
@@ -22,6 +24,17 @@ shields/
 ├── json_records.py    how every record becomes plain JSON (JsonValue, as_json helpers)
 ├── shield_api.py      a shield's own endpoints (ShieldApi) and what the dashboard injects (ShieldContext)
 ├── packs.py           one loader for any shield's packs and browsers.json (validate, then use)
+├── extensions.py      the extension point: an add-on beside the plugin adds shields and more of a shield
+├── network/           Network Shield (the part that works without Blackbox Desktop)
+│   ├── __init__.py    NETWORK = Shield(...)
+│   ├── mode.py        its setting (shields.network-shield); Desktop's links in one place
+│   ├── lockdown.py    agent network lockdown and the block list, in the guard
+│   ├── monitor/       who talks to whom, live (nettop + ps, no special rights)
+│   ├── system.py      CPU, memory, disks, network interfaces (psutil)
+│   ├── addresses.py   which graph addresses may be acted on (public ones only)
+│   ├── api.py         overview · connections · system
+│   ├── status.py      the card, with its Blackbox Desktop offer ("get" / "open")
+│   ├── events.py · attacks.json · page/
 └── trader/            Trader Shield
     ├── __init__.py    TRADER = Shield(...): wires its parts together
     ├── mode.py        its setting (shields.trader), and the old keys it still reads
@@ -198,3 +211,21 @@ agent's call is read with `kernel.bounded_files.read_small_text(..., nofollow=Tr
 
 Run the whole Blackbox suite before a commit:
 `uv run pytest tests/plugins/test_blackbox_*.py tests/test_blackbox_*.py`.
+
+
+## Add-ons
+
+An add-on installed beside the plugin — Blackbox Desktop's, in `<Hermes plugins>/blackbox_desktop/`
+— is found by **folder** on the registry's first use (`extensions.py`) and calls
+`register(registrar)`. It reaches the plugin only through its package entries
+(`from ..blackbox import shields`) and may:
+
+* `registrar.register_shield(shield)` — a whole shield of its own;
+* `registrar.extend(ShieldExtension(shield_id=..., ...))` — more of a plugin shield: endpoints
+  merged into its API, options it unlocks (`unlocks`), detectors (with the identifier patterns
+  they claim), events, a card decorator, and its own packs + page + attack table together;
+* `registrar.add_routes(register_routes)` — dashboard routes (`register_routes(app)`).
+
+An add-on that fails to load contributes nothing (`extensions.problems()` says why); an extension's
+detector, card or events that raise add nothing for that call. Network Shield's card offers
+Blackbox Desktop ("get") until the add-on is registered, then opens it ("open").

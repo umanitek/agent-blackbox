@@ -161,8 +161,9 @@ def test_claimed_findings_are_the_shields_own():
     for identifier in ("fileaccess:terminal:macos-keychain", "secret:token-approval-drainer", "secret:exchange-api-key"):
         assert TRADER.claims({"identifier": identifier}), identifier
     assert not TRADER.claims({"identifier": "fileaccess:terminal:user-protected"})
-    [card] = json.loads(FIXTURE.read_text(encoding="utf-8"))
-    assert card["claims"] == [kind.identifier for kind in TRADER.finding_kinds if kind.identifier]
+    cards = {card["shield_id"]: card for card in json.loads(FIXTURE.read_text(encoding="utf-8"))}
+    for record in shields.all_shields():
+        assert cards[record.id]["claims"] == [kind.identifier for kind in record.finding_kinds if kind.identifier]
 
 
 @pytest.mark.parametrize("finding, goal", [

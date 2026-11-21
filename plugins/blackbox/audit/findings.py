@@ -229,16 +229,34 @@ def record(
     *findings* are Finding dicts (evidence already redacted). *detail* is extra
     context (tool name, ids, args) and is redacted again here before writing.
     """
+    # Profile-level identity is local-only and lets the dashboard keep
+    # separate Hermes homes from inheriting each other's activity.
+    _record(event, findings, detail, framework="", workspace=str(constants.hermes_home()))
+
+
+def record_for(framework: str, *, event: str, workspace: str = "",
+               findings: Optional[list[dict[str, Any]]] = None, detail: Optional[dict[str, Any]] = None) -> None:
+    """:func:`record` for another local agent: written to ``audit.<framework>.jsonl`` and
+    ``findings.<framework>.jsonl`` (the files every reader already merges), labelled with the
+    *framework* and its *workspace*. *framework* must be a plain id without dots (``claude-code``)."""
+    if not framework or "." in framework or "/" in framework:
+        raise ValueError(f"not a framework id: {framework!r}")
+    _record(event, [{**f, "framework": framework} for f in findings or []] or None, detail,
+            framework=framework, workspace=workspace)
+
+
+def _record(event: str, findings: Optional[list[dict[str, Any]]], detail: Optional[dict[str, Any]],
+            *, framework: str, workspace: str) -> None:
     try:
         now = time.time()
         base = {
             "ts": now,
             "iso": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
             "event": event,
-            # Profile-level identity is local-only and lets the dashboard keep
-            # separate Hermes homes from inheriting each other's activity.
-            "workspace": str(constants.hermes_home()),
+            "workspace": workspace,
         }
+        if framework:
+            base["framework"] = framework
         if detail:
             # Redact the detail normally, but rebuild ``detail.context`` via
             # ``_bounded_context``: a plain ``redact`` would re-clamp the
@@ -253,10 +271,11 @@ def record(
         if findings:
             base["findingCount"] = len(findings)
             base["findings"] = [_finding_summary(f) for f in findings]
-        log_store._append_jsonl(log_store._home() / "audit.jsonl", base)
+        suffix = f".{framework}" if framework else ""
+        log_store._append_jsonl(log_store._home() / f"audit{suffix}.jsonl", base)
         for finding in findings or []:
-            log_store._append_jsonl(log_store._home() / "findings.jsonl", {**base, "finding": _finding_summary(finding)})
-    except Exception as exc:  # pragma: no cover - fail open
+            log_store._append_jsonl(log_store._home() / f"findings{suffix}.jsonl", {**base, "finding": _finding_summary(finding)})
+    except Exception as exc:  # pragma: no cover - fail open  # health: allow BLE001 -- recording never stops the hook (moved from record)
         logger.debug("blackbox: audit record failed: %s", exc)
 
 

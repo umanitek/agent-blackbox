@@ -1,7 +1,7 @@
 """A shield's own API: named endpoints beyond the card and the events report.
 
 Most shields need only ``status`` and ``events``. A shield that has live data of its own
-(Network Shield: the connections on this machine right now, the enforcer's plan) publishes it
+(Network Shield: the connections on this machine right now, its system status) publishes it
 as a :class:`ShieldApi` — named **reads** and **writes** — served by the dashboard at
 ``GET`` / ``POST /api/shields/<shield id>/api/<name>``. The core still never names a shield:
 it looks the endpoint up through the registry.
@@ -13,7 +13,7 @@ the dashboard builds it from its own modules.
 Usage::
 
     API = ShieldApi(reads={"connections": monitor.read_connections},
-                    writes={"enforcer-report": enforcement.record_report})
+                    writes={"report": reports.record})
     # a read:  handler(context, params)  -> JsonValue
     # a write: handler(context, body)    -> JsonValue
     # either may raise ShieldApiError(status, "message") for a refusal the caller should see
@@ -22,7 +22,7 @@ Usage::
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Callable, Mapping, Optional
+from typing import Any, Callable, Mapping, Optional, Sequence
 
 from .json_records import JsonValue
 
@@ -58,15 +58,25 @@ class ShieldContext:
     """What the dashboard hands a shield endpoint for one call.
 
     * ``network_indicators()`` — the verified graph's malicious domains and IPs
-      (``ruleset.network_indicators``), or None before the graph is synced;
+      (``ruleset.network_indicators``), or None before any could be read — it may wait for a
+      build (an endpoint that must have the whole list); ``network_indicators_now()`` never waits (a page);
     * ``ask_assistant(message)`` — one turn of Blackbox's assistant (the one runner,
       ``dashboard/assistant/runner.py``);
+    * ``lookup_hashes(sha256s)`` — which file fingerprints (SHA-256) the verified graph lists;
     * ``blocking`` — True when Blackbox is in Block mode.
     """
 
     network_indicators: Callable[[], Optional[Any]]
     ask_assistant: Callable[[str], AssistantAnswer]
     blocking: bool = False
+    network_indicators_now: Optional[Callable[[], Optional[Any]]] = None
+    #: ``lookup_hashes(sha256s) -> (the ones the verified graph lists, every one could be asked)``
+    #: — a shield's file verdicts; None where the graph cannot be asked.
+    lookup_hashes: Optional[Callable[[Sequence[str]], tuple[frozenset[str], bool]]] = None
+
+    def indicators_now(self) -> Optional[Any]:
+        """The verified network lists known now, never waiting for a build."""
+        return (self.network_indicators_now or self.network_indicators)()
 
 
 ReadHandler = Callable[[ShieldContext, Mapping[str, str]], JsonValue]

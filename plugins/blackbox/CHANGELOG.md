@@ -40,6 +40,18 @@ that the two version fields agree.
 
 ### Added
 
+- **Network Shield, the second shield.** Switch it on (Settings → Shields) and Blackbox keeps AI
+  agents to the hosts you allow (agent network lockdown) and away from the ones you block, shows
+  this machine's system status (CPU on every core, memory, disks, each network interface) and
+  what talks to the internet right now (download and upload — this machine's own local traffic
+  kept apart — the apps online and their connections, each checked against the verified threat
+  graph). The rest of Network Shield — DNS Shield, the Threat Firewall, cutting malicious
+  connections, SSH lockdown and watch, and more — runs in **Blackbox Desktop**: switching the
+  shield on offers it (Download for macOS; Windows and Linux coming), and once Desktop is
+  installed the card opens it instead.
+- Add-ons: an app installed beside Blackbox (Blackbox Desktop) can add shields and more to a
+  shield through one documented extension point; a broken add-on never stops Blackbox.
+
 - **Every agent protected, now and later, on one yes.** The installer asks once (Enter is yes):
   "Protect every agent, now and later, automatically?" — every Hermes profile and OpenClaw
   workspace on the machine is protected, and so is each one added later, within a minute, with the

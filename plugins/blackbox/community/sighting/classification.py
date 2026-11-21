@@ -129,6 +129,10 @@ def _skill(finding: Mapping[str, Any]) -> Classification:
     return _SKILL.get(shape, UNKNOWN) if shape else _NAMED_SKILL
 
 
+#: An AI agent reaching a host it should not (Network Shield): exfiltration over a network channel.
+_NETWORK = Classification("data-exfil", "host-system", "T1041")
+
+
 _BY_CATEGORY: dict[str, Callable[[Mapping[str, Any]], Classification]] = {
     "injection": lambda finding: _INJECTION,
     "dependency": lambda finding: _PACKAGE,
@@ -136,6 +140,8 @@ _BY_CATEGORY: dict[str, Callable[[Mapping[str, Any]], Classification]] = {
     "escalation": lambda finding: _COMMAND.get(str(_fields(finding).get("arg_shape") or ""), UNKNOWN),
     "skill": _skill,
     "ioc": _indicator,
+    # Network Shield (agent lockdown, block list): data leaving through the network.
+    "network": lambda finding: _NETWORK,
     "secret": lambda finding: _SECRET.get(str(finding.get("identifier") or "").split(":", 1)[-1],
                                           Classification("credential-theft", "api-keys", "T1552")),
 }

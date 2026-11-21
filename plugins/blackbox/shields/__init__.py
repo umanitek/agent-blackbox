@@ -17,8 +17,11 @@ every shield and apply the rules no shield may opt out of:
   ``claims`` or ``allows`` raises is read as "claims and refuses" — opt-in
   protection fails toward OFF.
 
-Packs and browser roots are loaded at import (never on the hot path) and loading
-never raises: a broken pack is ``unavailable`` with its reason, the rest load.
+Packs and browser roots are loaded once — the plugin's own shields' at import, an add-on's
+changes on the registry's first use — never on the hot path, and loading never raises: a broken pack is ``unavailable`` with its reason, the rest
+load. That first use also finds any add-on installed beside the plugin (:mod:`.extensions`, the
+extension point Blackbox Desktop's add-on registers through): its own shields join the registry
+and its extensions are applied to the shields they extend.
 
 Usage::
 
@@ -31,13 +34,18 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+import threading
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional
 
 from ..detection import Finding
+from ..kernel.config import one_entry_read
 from ..kernel.settings import SettingsValidator
 from .contract import (
     BrowserRoot,
+    Capability,
+    OfferDownload,
+    ShieldOffer,
     Pack,
     Shield,
     ShieldEvent,
@@ -51,7 +59,8 @@ from .json_records import JsonValue
 from .shield_api import MAX_WRITE_BYTES as API_MAX_WRITE_BYTES
 from .shield_api import NAME_PATTERN as API_NAME_PATTERN
 from .shield_api import AssistantAnswer, ShieldApi, ShieldApiError, ShieldContext
-from . import trader
+from . import extensions, network, trader
+from .extensions import Registrar, ShieldExtension
 
 logger = logging.getLogger(__name__)
 
@@ -60,16 +69,22 @@ __all__ = [
     "API_NAME_PATTERN",
     "AssistantAnswer",
     "BrowserRoot",
+    "Capability",
+    "OfferDownload",
     "Pack",
+    "Registrar",
     "SelfTest",
     "Shield",
     "ShieldApi",
     "ShieldApiError",
     "ShieldContext",
     "ShieldEvent",
+    "ShieldExtension",
     "ShieldMode",
+    "ShieldOffer",
     "ShieldStatus",
     "ShieldsSnapshot",
+    "addon_routes",
     "all_shields",
     "allows",
     "attack_table",
@@ -80,15 +95,21 @@ __all__ = [
     "get",
     "loaded_packs",
     "pack_logo",
+    "reload_registry",
     "self_tests",
     "settings_validators",
     "settings_view",
     "snapshot",
     "statuses",
+    "unlocked",
 ]
 
-#: Every registered shield, in registration order. Registering one is one line here.
-_SHIELDS: tuple[Shield, ...] = (trader.TRADER,)
+#: The plugin's own shields, in registration order. Registering one is one line here; an add-on's
+#: shields and extensions join them on first use (:func:`_registry`).
+_BASE: tuple[Shield, ...] = (trader.TRADER, network.NETWORK)
+#: The plugin's own folder and package: where add-ons are looked for, and under which parent.
+_PLUGIN_DIR = Path(__file__).resolve().parent.parent
+_PLUGIN_PACKAGE = __name__.rpartition(".")[0]
 
 #: The block threshold an attack table is tested at when it names none (Blackbox's default).
 DEFAULT_TESTED_SEVERITY = "critical"
@@ -111,20 +132,58 @@ def _load_all(shields: Iterable[Shield]) -> dict[str, ShieldData]:
     return loaded
 
 
-_DATA: dict[str, ShieldData] = _load_all(_SHIELDS)
-#: Every pack id each shield loaded: a finding's ``fields["pack"]`` must be one of its shield's.
-_PACK_IDS: dict[str, frozenset[str]] = {shield_id: frozenset(pack.id for pack in data.packs)
-                                        for shield_id, data in _DATA.items()}
+#: The plugin's own shields' data, loaded at import as always (their code relies on it from then
+#: on: a shield's ``use_data`` hands it its packs); an add-on's changes load on first use.
+_BASE_DATA: dict[str, ShieldData] = _load_all(_BASE)
+_registry_lock = threading.Lock()
+#: The assembled registry: shields, each one's data, and each one's pack ids (built once).
+_built: dict[str, Any] = {}
+
+
+def _registry() -> dict[str, Any]:
+    """The registry, built on first use: add-ons found, shields assembled, their data loaded."""
+    if _built:
+        return _built
+    with _registry_lock:
+        if not _built:
+            extensions.load(_PLUGIN_PACKAGE, _PLUGIN_DIR)
+            shields = extensions.assemble(_BASE)
+            unchanged = {id(shield) for shield in _BASE}
+            data = {**{shield.id: _BASE_DATA[shield.id] for shield in shields if id(shield) in unchanged},
+                    **_load_all(shield for shield in shields if id(shield) not in unchanged)}
+            _built.update(shields=shields, data=data,
+                          pack_ids={shield_id: frozenset(pack.id for pack in item.packs) for shield_id, item in data.items()})
+    return _built
+
+
+def reload_registry() -> None:
+    """Forgets the assembled registry and the add-ons (tests; a changed add-on)."""
+    with _registry_lock:
+        _built.clear()
+        extensions.reset()
+        _BASE_DATA.update(_load_all(_BASE))   # each base shield's own data handed back to it
 
 
 def all_shields() -> tuple[Shield, ...]:
-    """Every registered shield, in registration order."""
-    return _SHIELDS
+    """Every registered shield, in registration order (the plugin's, then each add-on's)."""
+    return _registry()["shields"]
 
 
 def get(shield_id: str) -> Optional[Shield]:
     """The shield registered as *shield_id*, or None."""
-    return next((shield for shield in _SHIELDS if shield.id == shield_id), None)
+    return next((shield for shield in all_shields() if shield.id == shield_id), None)
+
+
+def addon_routes() -> list[Any]:
+    """Each add-on's route registrar (``register_routes(app)``), for the dashboard."""
+    _registry()
+    return extensions.route_registrars()
+
+
+def unlocked(shield_id: str) -> frozenset[str]:
+    """The options of *shield_id* an installed add-on makes available."""
+    _registry()
+    return extensions.unlocked(shield_id)
 
 
 def _mode_of(shield: Shield) -> ShieldMode:
@@ -136,8 +195,10 @@ def _mode_of(shield: Shield) -> ShieldMode:
 
 
 def snapshot() -> ShieldsSnapshot:
-    """Every shield paired with its mode, each read once — take one per hook call."""
-    return ShieldsSnapshot(entries=tuple((shield, _mode_of(shield)) for shield in _SHIELDS))
+    """Every shield paired with its mode, each read once — take one per hook call. The config is
+    read once for all of them (``kernel.config.one_entry_read``), however many shields there are."""
+    with one_entry_read():
+        return ShieldsSnapshot(entries=tuple((shield, _mode_of(shield)) for shield in all_shields()))
 
 
 def check(tool_name: str, args: Any, active: ShieldsSnapshot) -> list[Finding]:
@@ -154,7 +215,7 @@ def check(tool_name: str, args: Any, active: ShieldsSnapshot) -> list[Finding]:
             continue
         for finding in raised:
             pack = finding.fields.get("pack")
-            if pack is not None and pack not in _PACK_IDS.get(shield.id, frozenset()):
+            if pack is not None and pack not in _registry()["pack_ids"].get(shield.id, frozenset()):
                 logger.warning("blackbox: shield %s finding %s names unknown pack %r; dropped",
                                shield.id, finding.identifier, pack)
                 continue
@@ -192,14 +253,14 @@ def self_tests() -> list[tuple[Shield, SelfTest]]:
 
 def settings_validators() -> tuple[SettingsValidator, ...]:
     """One settings validator per shield, for ``kernel.settings.write_settings(validators=...)``."""
-    return tuple(shield.validate for shield in _SHIELDS)
+    return tuple(shield.validate for shield in all_shields())
 
 
 def settings_view() -> dict[str, Any]:
     """``{shield id: {mode, fields}}`` for the Settings page (the one view that shows personal options)."""
     return {shield.id: {"mode": _mode_of(shield).as_json(include_personal=True),
                         "fields": [item.as_json() for item in shield.settings_fields()]}
-            for shield in _SHIELDS}
+            for shield in all_shields()}
 
 
 def statuses() -> list[ShieldStatus]:
@@ -215,7 +276,7 @@ def events(shield_id: str) -> list[ShieldEvent]:
 
 def pack_logo(shield_id: str, pack_id: str) -> Optional[Path]:
     """The logo file of a usable pack, resolved through the registry only; None when it has none."""
-    data = _DATA.get(shield_id)
+    data = _registry()["data"].get(shield_id)
     pack = next((item for item in data.packs if item.id == pack_id), None) if data else None
     if pack is None or pack.status == "unavailable" or pack.logo is None:
         return None
@@ -225,14 +286,14 @@ def pack_logo(shield_id: str, pack_id: str) -> Optional[Path]:
 def loaded_packs(shield_id: str) -> tuple[Pack, ...]:
     """Every pack *shield_id* loaded, in display order (unavailable ones included, with their
     reason); empty for an unknown id."""
-    data = _DATA.get(shield_id)
+    data = _registry()["data"].get(shield_id)
     return data.packs if data else ()
 
 
 def browser_roots(shield_id: str) -> tuple[BrowserRoot, ...]:
     """Every browser folder rule *shield_id* loaded from its ``browsers.json``, in file order
     (a bad entry was dropped with a health reason); empty for an unknown id or a shield with none."""
-    data = _DATA.get(shield_id)
+    data = _registry()["data"].get(shield_id)
     return data.roots if data else ()
 
 

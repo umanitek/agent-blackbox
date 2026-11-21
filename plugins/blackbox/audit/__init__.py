@@ -31,6 +31,7 @@ from .findings import (
     read_findings,
     record,
     record_dependency,
+    record_for,
     record_file_access,
 )
 from .private_ka import node_is_local, write_private_audit_ka
@@ -71,6 +72,7 @@ __all__ = [
     "record",
     "record_dependency",
     "record_file_access",
+    "record_for",
     "record_share_outcome",
     "redact",
     "sandbox_run",

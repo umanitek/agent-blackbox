@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Network Shield · Agent Blackbox</title>
+<meta name="theme-color" content="#0B0B0D" id="theme-color" />
+<script>
+  // Same appearance as the dashboard (its saved preference), applied before paint.
+  (function () {
+    var preference = "system";
+    try {
+      var saved = localStorage.getItem("blackbox.dashboard.theme.v1");
+      if (saved === "light" || saved === "dark" || saved === "system") preference = saved;
+    } catch (_) {}
+    var resolved = preference === "system"
+      ? (window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark")
+      : preference;
+    document.documentElement.setAttribute("data-theme", resolved);
+    document.documentElement.style.colorScheme = resolved;
+  })();
+</script>
+<style>
+  @font-face { font-family: "Archivo"; font-style: normal; font-weight: 400 900; font-stretch: 75% 125%; font-display: swap;
+    src: url("/fonts/archivo-latin.woff2") format("woff2"); }
+  @font-face { font-family: "IBM Plex Mono"; font-style: normal; font-weight: 400; font-display: swap;
+    src: url("/fonts/ibm-plex-mono-400-latin.woff2") format("woff2"); }
+  :root, [data-theme="dark"] {
+    --bg: #0B0B0D; --panel: #131316; --elevated: #18181C; --border: #232329; --text: #F1EFE9; --muted: #99979A;
+    --signal: #FF4F00; --signal-soft: rgba(255,79,0,0.11); --ok: #80CA9C; --warn: #E3B341; --agent: #A78BFA;
+    --body: "Archivo", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --mono: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace; --radius: 4px;
+  }
+  [data-theme="light"] {
+    --bg: #F5F3EE; --panel: #FFFFFF; --elevated: #ECE9E2; --border: #D7D2C9; --text: #171719; --muted: #6D6963;
+    --signal: #C63C00; --signal-soft: rgba(198,60,0,0.10); --ok: #2E7D4F; --warn: #9A6512; --agent: #6D4FD8;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--body); }
+  main { max-width: 980px; margin: 0 auto; padding: 32px 24px 64px; display: flex; flex-direction: column; gap: 20px; }
+  h1 { font-size: 30px; margin: 0; letter-spacing: -0.02em; } h2 { font-size: 17px; margin: 0 0 12px; }
+  .muted { color: var(--muted); } .mono { font-family: var(--mono); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 22px 24px; }
+  .cta { border-color: var(--signal); background: linear-gradient(180deg, var(--signal-soft), transparent); }
+  .cta a { display: inline-block; margin-top: 12px; padding: 10px 18px; border-radius: 10px; background: var(--signal);
+    color: #fff; font-weight: 600; text-decoration: none; }
+  ul { margin: 0; padding-left: 18px; line-height: 1.6; } li b { font-weight: 600; }
+  .row { display: flex; justify-content: space-between; gap: 12px; padding: 10px 0; border-top: 1px solid var(--border); }
+  .row:first-child { border-top: 0; } .tag { font-family: var(--mono); font-size: 11px; color: var(--ok); }
+  .tag.blocked { color: var(--signal); }
+  .gauges { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+  .gauge { background: var(--elevated); border-radius: 10px; padding: 12px 14px; }
+  .gauge b { display: block; font-family: var(--mono); font-size: 22px; margin-top: 4px; }
+  .bar { height: 4px; border-radius: 4px; background: var(--border); margin-top: 8px; overflow: hidden; }
+  .bar i { display: block; height: 100%; background: var(--ok); transition: width .6s ease; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; } td, th { text-align: left; padding: 6px 4px; border-top: 1px solid var(--border); }
+  td.threat { color: var(--signal); font-weight: 600; }
+</style>
+</head>
+<body>
+<main>
+  <div><div class="mono muted" id="version">Network Shield</div><h1>Network Shield</h1>
+    <p class="muted">Keep AI agents to the hosts you allow, in Blackbox's own guard — and, with Blackbox Desktop,
+      see what every app talks to and stop the malicious ones.</p></div>
+  <section class="card">
+    <h2>System status</h2>
+    <div id="system" class="muted">Switch Network Shield on to see this machine's system status.</div>
+  </section>
+  <section class="card">
+    <h2>Talking to the internet now</h2>
+    <div id="rates" class="muted"></div>
+    <div id="connections" class="muted">Switch Network Shield on to see what talks to the internet.</div>
+  </section>
+  <section class="card">
+    <h2>Works here, with Blackbox alone</h2>
+    <ul>
+      <li><b>Agent network lockdown</b> — an AI agent's tool call that would reach a host you have not allowed is refused.</li>
+      <li><b>Your block list</b> — names and addresses you never want an agent to reach.</li>
+    </ul>
+  </section>
+  <section class="card cta">
+    <h2>The rest runs in Blackbox Desktop</h2>
+    <p class="muted">Blackbox Desktop installs a small native helper with the system access these need:</p>
+    <ul id="desktop-list"></ul>
+    <a id="desktop-cta" href="https://blackboxcommand.com/desktop" rel="noopener noreferrer" target="_blank">Get Blackbox Desktop</a>
+  </section>
+  <section class="card">
+    <h2>Tested</h2>
+    <p class="muted" id="systems"></p>
+    <div id="tested" class="muted">Reading the attack table…</div>
+  </section>
+</main>
+<script>
+  // Every value from a file is put on the page as text, never as markup.
+  function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+  function getJSON(name) { return fetch(name, { cache: "no-store" }).then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); }); }
+  getJSON("content.json").then(function (content) {
+    document.getElementById("version").textContent = String(content.version || "Network Shield");
+    var list = document.getElementById("desktop-list");
+    (content.desktop || []).forEach(function (item) {
+      var li = el("li"); li.appendChild(el("b", null, String(item[0]))); li.appendChild(document.createTextNode(" — " + String(item[1]))); list.appendChild(li);
+    });
+  }).catch(function () {});
+  // The table as served: its rows, and what they were tested on (composed from the registry).
+  function renderProven(t) {
+    document.getElementById("systems").textContent = "Tested on: " + (t.systems || []).map(function (s) { return String(s.name); }).join(", ");
+    var host = document.getElementById("tested"); host.textContent = ""; host.className = "";
+    (t.attacks || []).forEach(function (row) {
+      var line = el("div", "row"); line.appendChild(el("span", null, String(row.title || row.id)));
+      line.appendChild(el("span", "tag " + (row.outcome === "blocked" ? "blocked" : ""), String(row.outcome || "")));
+      host.appendChild(line);
+    });
+  }
+  // Live reads: the shield's own endpoints (409 while it is off: the note stays).
+  var API = "../../api/shields/network-shield/api/";   // relative: the page never assumes where it is mounted
+  function size(n) { n = Number(n) || 0; var u = ["B", "KB", "MB", "GB", "TB"], i = 0; while (n >= 1024 && i < 4) { n /= 1024; i++; } return n.toFixed(i ? 1 : 0) + " " + u[i]; }
+  function gauge(label, value, percent) {
+    var g = el("div", "gauge"); g.appendChild(el("span", "mono muted", label)); g.appendChild(el("b", null, value));
+    if (percent != null) { var bar = el("div", "bar"), fill = el("i"); fill.style.width = Math.max(0, Math.min(100, percent)) + "%"; bar.appendChild(fill); g.appendChild(bar); }
+    return g;
+  }
+  function readSystem() {
+    getJSON(API + "system").then(function (s) {
+      var host = document.getElementById("system"); host.textContent = ""; host.className = "gauges";
+      var cpu = s.cpu || {}, mem = s.memory || {};
+      host.appendChild(gauge("CPU", Math.round(cpu.percent || 0) + "%", cpu.percent));
+      host.appendChild(gauge("Memory", Math.round(mem.percent || 0) + "%", mem.percent));
+      (s.disks || []).slice(0, 2).forEach(function (d) { host.appendChild(gauge("Disk " + String(d.mount || ""), Math.round(d.percent || 0) + "%", d.percent)); });
+      host.appendChild(gauge("Uptime", Math.round((s.uptime_seconds || 0) / 3600) + " h", null));
+    }).catch(function () {});
+  }
+  function readConnections() {
+    getJSON(API + "connections").then(function (r) {
+      document.getElementById("rates").textContent = "Download " + size(r.rate_in) + "/s · Upload " + size(r.rate_out) + "/s · This machine only " +
+        size((r.local_rate_in || 0) + (r.local_rate_out || 0)) + "/s · " + (r.processes || []).length + " apps online";
+      var host = document.getElementById("connections"); host.textContent = ""; host.className = "";
+      var table = el("table"), head = el("tr");
+      ["App", "Address", "Direction", ""].forEach(function (h) { head.appendChild(el("th", "mono muted", h)); });
+      table.appendChild(head);
+      (r.processes || []).forEach(function (p) {
+        (p.connections || []).filter(function (c) { return !c.local; }).slice(0, 4).forEach(function (c) {
+          var row = el("tr");
+          row.appendChild(el("td", null, String(p.agent ? p.name + " · " + p.agent : p.name)));
+          row.appendChild(el("td", null, String(c.remote_ip) + (c.remote_port ? ":" + c.remote_port : "")));
+          row.appendChild(el("td", null, c.direction === "in" ? "in" : "out"));
+          row.appendChild(el("td", c.threat ? "threat" : null, c.threat ? "Listed in the verified threat graph" : ""));
+          table.appendChild(row);
+        });
+      });
+      host.appendChild(table);
+    }).catch(function () {});
+  }
+  function readOffer() {
+    getJSON("../../api/shields").then(function (cards) {
+      var card = (cards || []).filter(function (c) { return c.shield_id === "network-shield"; })[0] || {};
+      var offer = card.offer || {}, cta = document.getElementById("desktop-cta");
+      if (offer.kind === "open" && /^blackbox-desktop:\/\//.test(String(offer.open_url))) {
+        cta.textContent = "Open Blackbox Desktop"; cta.href = String(offer.open_url); cta.removeAttribute("target");
+      }
+    }).catch(function () {});
+  }
+  readSystem(); readConnections(); readOffer();
+  setInterval(readSystem, 3000); setInterval(readConnections, 4000);
+  getJSON("attacks.json").then(function (t) { renderProven(t); })
+    .catch(function () { document.getElementById("tested").textContent = "The attack table could not be read."; });
+</script>
+</body>
+</html>

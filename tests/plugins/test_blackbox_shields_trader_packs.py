@@ -228,6 +228,6 @@ def test_the_shield_uses_the_registrys_one_read_of_its_packs_and_browser_roots()
     than once. The registry reads them once and hands the same objects to the shield."""
     from plugins.blackbox import shields
     from plugins.blackbox.shields.trader import detectors, mode as trader_mode
-    loaded = shields._DATA["trader"]
+    loaded = shields._registry()["data"]["trader"]
     assert trader_mode.wallet_packs() is loaded.packs and loaded.packs
     assert detectors.browser_roots() is loaded.roots and loaded.roots

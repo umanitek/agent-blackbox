@@ -11,10 +11,12 @@ from __future__ import annotations
 
 import logging
 import os
+from contextlib import contextmanager
+from contextvars import ContextVar
 from .snapshot_config import SnapshotSyncConfig, snapshot_fields
 
 from dataclasses import dataclass, field
-from typing import Any, Mapping
+from typing import Any, Iterator, Mapping, Optional
 
 from . import constants, yaml_files
 from .config_values import schema
@@ -310,3 +312,29 @@ def _normalize_protected_paths(raw: Any) -> tuple[str, ...]:
     if not isinstance(raw, (list, tuple)):
         return ()
     return tuple(schema.path_list(raw)[:schema.MAX_PROTECTED_PATHS])
+
+
+#: The ``blackbox`` entry read once for the duration of :func:`one_entry_read` (None outside it).
+_ENTRY_MEMO: ContextVar[Optional[dict[str, Any]]] = ContextVar("blackbox_entry_memo", default=None)
+
+
+@contextmanager
+def one_entry_read() -> Iterator[None]:
+    """Within this block, :func:`shield_entry` reads the config ONCE and reuses it — the shields
+    snapshot every tool call takes reads it once for all shields, however many there are."""
+    token = _ENTRY_MEMO.set({})
+    try:
+        yield
+    finally:
+        _ENTRY_MEMO.reset(token)
+
+
+def shield_entry() -> dict[str, Any]:
+    """The ``plugins.entries.blackbox`` mapping a shield's mode reads (:func:`_blackbox_entry`,
+    looked up at call time); one read per :func:`one_entry_read` block."""
+    memo = _ENTRY_MEMO.get()
+    if memo is None:
+        return _blackbox_entry()
+    if "entry" not in memo:
+        memo["entry"] = _blackbox_entry()
+    return memo["entry"]

@@ -92,6 +92,7 @@
         ]
       }
     ],
+    "offer": null,
     "name": "Trader Shield",
     "tagline": "Keeps your AI agent away from your crypto wallets, seed phrases and keys.",
     "beta": true,
@@ -107,6 +108,124 @@
       "secret:token-approval-unchecked-spender",
       "*:crypto-wallet",
       "*:macos-keychain"
+    ]
+  },
+  {
+    "shield_id": "network-shield",
+    "mode": {
+      "enabled": false,
+      "protections": [
+        "lockdown"
+      ],
+      "lists": [],
+      "allow": [],
+      "block": [],
+      "agent_hosts": [
+        "github[.]com",
+        "githubusercontent[.]com",
+        "gitlab[.]com",
+        "bitbucket[.]org",
+        "npmjs[.]org",
+        "npmjs[.]com",
+        "yarnpkg[.]com",
+        "pypi[.]org",
+        "pythonhosted[.]org",
+        "crates[.]io",
+        "rubygems[.]org",
+        "golang[.]org",
+        "proxy[.]golang[.]org",
+        "anthropic[.]com",
+        "openai[.]com",
+        "googleapis[.]com",
+        "openrouter[.]ai"
+      ],
+      "ssh_allow": []
+    },
+    "blocking": false,
+    "sections": [
+      {
+        "title": "Protections",
+        "help": "What Network Shield runs on this machine.",
+        "rows": [
+          {
+            "icon": "↓",
+            "state": "needs-desktop",
+            "text": "DNS Shield runs in Blackbox Desktop",
+            "sub": "Refuses the verified threat graph's malicious domains for every app. Get Blackbox Desktop: hxxps://blackboxcommand[.]com/desktop",
+            "logo": ""
+          },
+          {
+            "icon": "↓",
+            "state": "needs-desktop",
+            "text": "Threat Firewall runs in Blackbox Desktop",
+            "sub": "Drops traffic to and from the verified threat graph's malicious IP addresses. Get Blackbox Desktop: hxxps://blackboxcommand[.]com/desktop",
+            "logo": ""
+          },
+          {
+            "icon": "○",
+            "state": "off",
+            "text": "Agent network lockdown is off",
+            "sub": "AI agents may reach any host.",
+            "logo": ""
+          },
+          {
+            "icon": "↓",
+            "state": "needs-desktop",
+            "text": "Cut malicious connections runs in Blackbox Desktop",
+            "sub": "Ends connections already open to listed addresses. Get Blackbox Desktop: hxxps://blackboxcommand[.]com/desktop",
+            "logo": ""
+          },
+          {
+            "icon": "↓",
+            "state": "needs-desktop",
+            "text": "SSH lockdown runs in Blackbox Desktop",
+            "sub": "Only the addresses or networks you allow may SSH in. Get Blackbox Desktop: hxxps://blackboxcommand[.]com/desktop",
+            "logo": ""
+          }
+        ]
+      }
+    ],
+    "offer": {
+      "kind": "get",
+      "title": "Network Shield runs in Blackbox Desktop",
+      "text": "Agent network lockdown is on now. The rest of Network Shield needs Blackbox Desktop, which installs a small helper with the system access it takes:",
+      "items": [
+        "DNS Shield — malicious domains refused for every app",
+        "Threat Firewall — traffic to malicious addresses dropped, open connections cut",
+        "Live traffic map and every process explained by Blackbox's assistant",
+        "SSH watch and SSH lockdown, with instant alerts",
+        "File Shield — your downloads fingerprinted and checked",
+        "Protection for Claude Code, Codex, Cursor and other coding agents"
+      ],
+      "downloads": [
+        {
+          "os": "macos",
+          "label": "Download for macOS",
+          "url": "hxxps://blackboxcommand[.]com/desktop/download/macos",
+          "available": true
+        },
+        {
+          "os": "windows",
+          "label": "Windows",
+          "url": "",
+          "available": false
+        },
+        {
+          "os": "linux",
+          "label": "Linux",
+          "url": "",
+          "available": false
+        }
+      ],
+      "open_url": ""
+    },
+    "name": "Network Shield",
+    "tagline": "Keep AI agents to the hosts you allow — and, with Blackbox Desktop, see and stop the malicious ones.",
+    "beta": true,
+    "page": "/shields/network-shield",
+    "claims": [
+      "network:agent-lockdown",
+      "network:blocked-host"
     ]
   }
 ]

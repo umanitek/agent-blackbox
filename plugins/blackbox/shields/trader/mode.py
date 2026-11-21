@@ -187,9 +187,9 @@ def added_since_saved(section: Mapping[str, Any]) -> tuple[str, ...]:
 
 def current() -> ShieldMode:
     """The mode in force now, read from the Hermes config like every other setting."""
-    from ...kernel.config import _blackbox_entry   # the one reader of plugins.entries.blackbox
+    from ...kernel.config import shield_entry   # plugins.entries.blackbox, once per shields snapshot
 
-    return from_entry(_blackbox_entry())
+    return from_entry(shield_entry())
 
 
 def validate(payload: Mapping[str, Any]) -> tuple[str, dict[str, Any], list[str], tuple[str, ...]]:

@@ -98,13 +98,49 @@ class StatusSection:
 
 
 @dataclass(frozen=True)
+class OfferDownload:
+    """One download of an offered app: for *os* (``macos`` / ``windows`` / ``linux``), at *url*
+    (https only), or not out yet (*available* False: shown as coming soon)."""
+
+    os: str
+    label: str
+    url: str
+    available: bool
+
+    def as_json(self) -> dict[str, JsonValue]:
+        return _record_json(self)
+
+
+@dataclass(frozen=True)
+class ShieldOffer:
+    """What a shield offers beyond itself — an app that runs the rest of it.
+
+    *kind* ``get``: the dashboard opens a dialog (*title*, *text*, *items* — what the app adds,
+    *downloads*) the moment the shield is switched on, and keeps a "Get" button on the card;
+    ``open``: the app is installed and the card's button opens it (*open_url*, its own scheme).
+    """
+
+    kind: str
+    title: str
+    text: str
+    items: tuple[str, ...] = ()
+    downloads: tuple[OfferDownload, ...] = ()
+    open_url: str = ""
+
+    def as_json(self) -> dict[str, JsonValue]:
+        return _record_json(self)
+
+
+@dataclass(frozen=True)
 class ShieldStatus:
-    """What a shield's dashboard card shows; *blocking* is Blackbox's audit/block mode."""
+    """What a shield's dashboard card shows; *blocking* is Blackbox's audit/block mode, and
+    *offer* — when the shield runs more with an app — what the card offers (:class:`ShieldOffer`)."""
 
     shield_id: str
     mode: ShieldMode
     blocking: bool
     sections: tuple[StatusSection, ...] = ()
+    offer: Optional[ShieldOffer] = None
 
     def as_json(self) -> dict[str, JsonValue]:
         return _record_json(self)   # mode.as_json() without personal options

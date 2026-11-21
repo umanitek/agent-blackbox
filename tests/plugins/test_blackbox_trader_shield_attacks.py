@@ -43,6 +43,7 @@ from plugins.blackbox.kernel import config as config_mod
 from plugins.blackbox.kernel import crypto_secrets, threat_ids
 from plugins.blackbox.kernel.crypto_secrets import seed_phrase
 from plugins.blackbox.ruleset import Ruleset
+from plugins.blackbox.shields.network import mode as network_mode
 from plugins.blackbox.shields.trader import detectors, mode as trader_mode
 
 #: blocked / flagged / missed (a gap); allowed = a harmless look-alike that must raise nothing.
@@ -135,8 +136,15 @@ def _trader_setup(monkeypatch, chosen: tuple[str, ...], values: dict[str, str]) 
     monkeypatch.setattr(trader_mode, "current", lambda: own)
 
 
-#: How each shield is switched on for its table (its option names are its own).
-SETUPS = {"trader": _trader_setup}
+def _network_setup(monkeypatch, _chosen: tuple[str, ...], _values: dict[str, str]) -> None:
+    """Network Shield on, one host on the block list. Agent lockdown is off here: a row turns it
+    on for itself (``"lockdown": true``, :func:`_scenario_setting`), so the other shields' rows,
+    which name real hosts, are judged without it."""
+    on = network_mode.build(enabled=True, protections=(), block=("blocked-by-you-blackbox-test.com",))
+    monkeypatch.setattr(network_mode, "current", lambda: on)
+
+
+SETUPS = {"trader": _trader_setup, "network-shield": _network_setup}
 
 
 def _shell_path(path: Path, home: Path) -> str:
@@ -222,6 +230,12 @@ def _scenario_setting(attack, monkeypatch):
     if listed:
         rules = {threat_ids.ioc_identifier("wallet", listed["wallet"]): {"source": listed["source"], "severity": "critical"}}
         monkeypatch.setattr(ruleset_mod, "get", lambda cfg=None: Ruleset(ioc=rules))
+    if attack.get("lockdown"):   # Network Shield's agent lockdown, for this row only
+        current = network_mode.current()
+        locked = network_mode.build(enabled=True, protections=(*network_mode.protections(current), network_mode.LOCKDOWN),
+                                    lists=network_mode.option(current, network_mode.OPT_LISTS),
+                                    block=network_mode.option(current, network_mode.OPT_BLOCK))
+        monkeypatch.setattr(network_mode, "current", lambda: locked)
     severity = attack.get("block_severity") or TABLES[attack.get("shield", "trader")].table["tested_severity"]
     config = _block_config(severity)
     monkeypatch.setattr(hooks, "_config", lambda: config)
@@ -320,7 +334,8 @@ def _blocked_targets(shield_id: str, group: str = "") -> set[str]:
 @pytest.mark.parametrize("shield_id", SHIELD_IDS)
 def test_every_supported_pack_has_earned_it_with_a_blocked_vault_row(shield_id):
     supported = {pack.id for pack in _supported(shield_id)}
-    assert supported <= _blocked_targets(shield_id, "vault"), sorted(supported - _blocked_targets(shield_id, "vault"))
+    group = TABLES[shield_id].table.get("pack_group", "vault")   # the group whose rows prove a pack (Trader: vault)
+    assert supported <= _blocked_targets(shield_id, group), sorted(supported - _blocked_targets(shield_id, group))
 
 
 @pytest.mark.parametrize("shield_id", SHIELD_IDS)

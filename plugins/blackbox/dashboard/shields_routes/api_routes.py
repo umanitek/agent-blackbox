@@ -2,7 +2,8 @@
 
 The routes never name a shield: they look the endpoint up through ``shields.call_api`` and hand
 it a :class:`~....shields.ShieldContext` built here from what only the dashboard may use — the
-verified graph's network lists (``ruleset.network_indicators``), Blackbox's assistant (the one
+verified graph's network lists (``ruleset.network_indicators``) and its file fingerprints
+(``lookup_hashes``), Blackbox's assistant (the one
 runner, ``dashboard/assistant/runner.py``) and the current Block/Audit mode.
 
 A write is a POST, so the app-wide browser boundary already demands the session token
@@ -17,6 +18,7 @@ import re
 from typing import Any
 
 from ... import ruleset, shields
+from ...kernel import threat_ids
 from ...kernel.config import load_blackbox_config
 from ..assistant import runner as assistant_runner
 
@@ -34,11 +36,24 @@ def ask_assistant(message: str) -> shields.AssistantAnswer:
                                    needs_model=bool(payload.get("needs_model") or payload.get("model_problem")))
 
 
+def lookup_hashes(hashes: list) -> tuple:
+    """Which of these SHA-256 fingerprints the verified graph lists (a feed may store a hash
+    bare or as ``sha256:<hex>``), and whether every one could be asked."""
+    asked: dict[str, str] = {}
+    for sha in hashes:
+        for spelling in (sha, f"sha256:{sha}"):
+            asked[threat_ids.ioc_identifier("hash", spelling)] = sha
+    found, why = ruleset.peek().verified_subset_answer(asked)
+    return frozenset(asked[identifier] for identifier in found if identifier in asked), not why
+
+
 def context() -> shields.ShieldContext:
     """The context one shield endpoint call receives."""
     return shields.ShieldContext(
         network_indicators=ruleset.network_indicators,
+        network_indicators_now=lambda: ruleset.network_indicators(wait=False),
         ask_assistant=ask_assistant,
+        lookup_hashes=lookup_hashes,
         blocking=load_blackbox_config().mode == "block",
     )
 

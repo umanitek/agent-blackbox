@@ -86,8 +86,9 @@ __all__ = [
 ]
 
 
-def network_indicators(config=None) -> Optional[live.NetworkIndicators]:
+def network_indicators(config=None, wait: bool = True) -> Optional[live.NetworkIndicators]:
     """Every verified malicious domain and IP (Network Shield's lists), read with the live
-    lookup's own scope from the current generation; None until the graph is synced.
+    lookup's own scope from the current generation; None until any could be read. *wait* False
+    never blocks (a page); True waits for a running build (the enforcer's plan).
     See :mod:`.live.network_lists`."""
-    return live.network_indicators(peek(config).verified_scope)
+    return live.network_indicators(peek(config).verified_scope, wait=wait)

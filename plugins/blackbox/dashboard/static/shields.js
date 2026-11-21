@@ -59,10 +59,22 @@
     var id = str(raw.shield_id);
     return { id: id, name: str(raw.name) || id, tagline: str(raw.tagline), beta: raw.beta === true,
              page: str(raw.page), claims: list(raw.claims).map(str).filter(Boolean),
-             enabled: obj(raw.mode).enabled === true, blocking: raw.blocking === true,
+             enabled: obj(raw.mode).enabled === true, blocking: raw.blocking === true, offer: asOffer(raw.offer),
              sections: list(raw.sections).map(function (section) {
                section = obj(section);
                return { title: str(section.title), help: str(section.help), rows: list(section.rows).map(obj) };
+             }) };
+  }
+  // A shield's offer of the app that runs the rest of it (ShieldOffer); links are https or the
+  // app's own blackbox-desktop: scheme, anything else is dropped.
+  function safeLink(url) { url = str(url); return /^(https:\/\/|blackbox-desktop:\/\/)[^\s"'<>]*$/.test(url) ? url : ""; }
+  function asOffer(raw) {
+    raw = obj(raw);
+    var kind = str(raw.kind);
+    if (kind !== "get" && kind !== "open") return null;
+    return { kind: kind, title: str(raw.title), text: str(raw.text), items: list(raw.items).map(str), openUrl: safeLink(raw.open_url),
+             downloads: list(raw.downloads).map(obj).map(function (d) {
+               return { os: str(d.os), label: str(d.label), url: safeLink(d.url), available: d.available === true && !!safeLink(d.url) };
              }) };
   }
   // "*:crypto-wallet" -> /^.*:crypto\-wallet$/ (the server's own fnmatch patterns).
@@ -156,13 +168,37 @@
       });
     }
 
+    // ---------- the offer dialog ----------
+    function platformOs() {
+      var ua = (navigator.userAgent || "") + " " + (navigator.platform || "");
+      return /Mac/i.test(ua) ? "macos" : /Win/i.test(ua) ? "windows" : /Linux/i.test(ua) ? "linux" : "";
+    }
+    // The dialog is appended to <body> when offered and found by its data attribute (no host id).
+    function closeOffer() { var dialog = document.querySelector("[data-shield-offer-dialog]"); if (dialog) dialog.remove(); }
+    function openOffer(card) {
+      closeOffer();
+      var offer = card.offer, mine = platformOs();
+      var downloads = offer.downloads.slice().sort(function (a, b) { return (b.os === mine) - (a.os === mine); });
+      var buttons = downloads.map(function (d, i) {
+        return d.available
+          ? '<a class="ts-btn' + (i === 0 ? " primary" : "") + '" href="' + esc(d.url) + '" target="_blank" rel="noopener noreferrer">' + esc(d.label) + "</a>"
+          : '<span class="ts-btn" aria-disabled="true">' + esc(d.label) + " — coming soon</span>";
+      }).join(" ");
+      document.body.insertAdjacentHTML("beforeend",
+        '<div class="modal-overlay open" data-shield-offer-dialog role="dialog" aria-modal="true" aria-labelledby="shield-offer-title">' +
+        '<div class="modal" style="max-width:560px;"><div class="set-head"><div class="set-htext"><div class="set-title" id="shield-offer-title">' + esc(offer.title) + "</div></div>" +
+        '<button type="button" class="ts-close" data-shield-offer-close aria-label="Close">&#10005;</button></div>' +
+        '<div class="set-body"><p>' + esc(offer.text) + "</p><ul>" + offer.items.map(function (item) { return "<li>" + esc(item) + "</li>"; }).join("") +
+        '</ul><div class="ts-actions" style="margin-top:16px;">' + buttons + "</div></div></div></div>");
+    }
+
     // ---------- cards ----------
     function cardShellHTML(card) {
       return '<section class="section" data-shield-card="' + esc(card.id) + '" aria-label="' + esc(card.name) + '" hidden>' +
         '<div class="section-head"><div class="section-htext"><h2>' + esc(card.name) + (card.beta ? ' <span class="ts-beta">Beta</span>' : "") + "</h2>" +
         '<div class="section-note">What Blackbox found on this machine, and how it keeps your agent away from it.' +
         (card.page ? ' <a href="' + esc(card.page) + '" class="ts-link">Learn more</a>' : "") + "</div></div>" +
-        '<div class="head-right"><span class="wp-mode" data-shield-mode>…</span>' +
+        '<div class="head-right"><span class="wp-mode" data-shield-mode>…</span><span data-shield-offer></span>' +
         '<button type="button" class="ts-btn" data-shield-edit="' + esc(card.id) + '">Edit settings</button></div></div>' +
         '<div class="panel"><div class="wp-grid" data-shield-body><div class="empty" style="padding:24px 20px;">Checking this machine&hellip;</div></div></div></section>';
     }
@@ -200,6 +236,11 @@
       mode.className = "wp-mode " + (card.blocking ? "block" : "audit");
       mode.textContent = card.blocking ? "● Blocking" : "Watching only · audit mode";
       mode.title = card.blocking ? "Threats are stopped before the action runs." : "Threats are recorded and shown, but not stopped. Turn on Block in Settings to stop them.";
+      var offerSlot = section.querySelector("[data-shield-offer]");
+      if (offerSlot) offerSlot.innerHTML = !card.offer ? ""
+        : card.offer.kind === "open" && card.offer.openUrl
+          ? '<a class="ts-btn primary" href="' + esc(card.offer.openUrl) + '">' + esc(card.offer.title) + "</a>"
+          : card.offer.kind === "get" ? '<button type="button" class="ts-btn primary" data-shield-offer-open="' + esc(card.id) + '">Get Blackbox Desktop</button>' : "";
       body.style.setProperty("--wp-cols", String(card.sections.length + 1));   // + the events column
       body.innerHTML = card.sections.map(function (part) {
         return '<div class="wp-col"><div class="wp-h">' + esc(part.title) + help(part.help) + "</div>" + part.rows.map(rowHTML).join("") + "</div>";
@@ -217,9 +258,15 @@
     }
     function refresh() {
       return deps.getJSON("/api/shields").then(function (payload) {
+        var before = {};
+        state.cards.forEach(function (card) { before[card.id] = card.enabled; });
         state.cards = list(payload).map(asCard).filter(function (card) { return card.id; });
         state.failed = false;
         renderAll();
+        // Switched on just now (not on the first load) with an app to get: offer it at once.
+        state.cards.forEach(function (card) {
+          if (card.enabled && before[card.id] === false && card.offer && card.offer.kind === "get") openOffer(card);
+        });
         state.cards.forEach(function (card) { if (card.enabled) loadEvents(card.id); });
       }).catch(function () {
         state.failed = true;
@@ -356,6 +403,9 @@
       hit = target.closest("[data-event-index]");
       if (hit) { select(Number(hit.getAttribute("data-event-index"))); return; }
       if (target.closest("[data-window-close]")) { closeWindow(); return; }
+      hit = target.closest("[data-shield-offer-open]");
+      if (hit) { var offered = cardOf(hit.getAttribute("data-shield-offer-open")); if (offered && offered.offer) openOffer(offered); return; }
+      if (target.closest("[data-shield-offer-close]") || target.hasAttribute("data-shield-offer-dialog")) { closeOffer(); return; }
       hit = target.closest("[data-shield-engage]");
       if (hit) { engage(hit.getAttribute("data-shield-engage"), hit); return; }
       hit = target.closest("[data-shield-dismiss]");
@@ -430,7 +480,8 @@
       }
       if (field.kind === "multi-pick") {
         var picks = list(field.options).map(obj).map(function (option) {
-          if (option.status !== "supported") return '<label class="wallet-pick soon"><input type="checkbox" disabled /> ' + esc(option.name) + " <span>coming soon</span></label>";
+          if (option.status !== "supported") return '<label class="wallet-pick soon"><input type="checkbox" disabled /> ' + esc(option.name) +
+            " <span>" + (option.status === "needs-desktop" ? "in Blackbox Desktop" : "coming soon") + "</span></label>";
           return '<label class="wallet-pick"><input type="checkbox"' + attrs + ' data-option="' + esc(option.id) + '"' +
             (draft[field.key].indexOf(str(option.id)) >= 0 ? " checked" : "") + (on ? "" : " disabled") + " /> " + esc(option.name) + "</label>";
         });
