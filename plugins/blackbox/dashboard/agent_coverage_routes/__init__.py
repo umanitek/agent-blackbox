@@ -32,10 +32,6 @@ Cache = Callable[..., Any]
 def register(app: Any, swr: Cache) -> None:
     """Add the coverage script and routes to *app* (called once by the dashboard)."""
     from fastapi.responses import FileResponse, JSONResponse
-    # Coding agents protected through their own hooks: the same "every agent protected" promise.
-    # WHY registered from here: server.py is at its size baseline and may only shrink.
-    from .. import agent_hooks_routes
-    agent_hooks_routes.register(app, swr)
 
     from ... import attach
     from ...kernel import settings

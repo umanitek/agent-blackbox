@@ -16,7 +16,7 @@ from fastapi import Body, FastAPI
 from fastapi.testclient import TestClient
 
 from plugins.blackbox.kernel.browser_boundary import LOOPBACK_HOSTS, BrowserBoundary
-from plugins.blackbox.approvals import store as store_mod, weakening
+from plugins.blackbox.approvals import store as store_mod, system_prompt, weakening
 from plugins.blackbox.approvals.store import Approvals, answer_message, pair_message, sign
 from plugins.blackbox.dashboard import approval_routes as gate
 
@@ -40,7 +40,7 @@ def dashboard():
         applied.append(payload)
         return {"ok": True}
 
-    gate.register(app, approvals)
+    gate.register(app, store=approvals)
     # The judge reads what is on now from a fixed view (the real one reads the plugin's settings).
     for layer in app.user_middleware:
         if layer.cls is gate.Gate:
@@ -166,3 +166,80 @@ def test_turning_protection_on_is_not_held(route, body):
 def test_when_the_current_mode_cannot_be_read_audit_still_asks():
     assert weakening.reasons("/api/settings", {"mode": "audit"}, weakening.Current())
 
+
+
+#: HMAC-SHA256(bytes 0..32, "approve:abc:/api/settings:00"): the same vector Blackbox Desktop's
+#: Rust test checks (blackbox-desktop src-tauri/tests/approval_vector.txt), so both sign alike.
+SHARED_VECTOR = "e0cb2d098d504d505c5e61db1396cc288edaf379bdbdbeb41f0c1ec88b64dc7a"
+
+
+def test_the_desktop_app_and_the_core_sign_alike():
+    held = store_mod.Held("abc", "/api/settings", "00", (), 0)
+    assert sign(bytes(range(32)), answer_message("approve", held)) == SHARED_VECTOR
+    assert pair_message("ff") == "pair:ff"
+
+
+def test_the_real_dashboard_holds_block_to_audit_with_its_gate_inside_the_token_check():
+    from plugins.blackbox.dashboard import server
+
+    app = server.create_app()
+    gates = [layer for layer in app.user_middleware if layer.cls is gate.Gate]
+    assert len(gates) == 1 and app.user_middleware[-1].cls is gate.Gate   # one gate, innermost
+    client = TestClient(app, base_url="http://127.0.0.1")
+    client.headers["X-Blackbox-Token"] = client.get("/api/session").json()["token"]
+    assert client.post("/api/settings", json={"mode": "block"}).status_code == 200      # stronger: at once
+    held = client.post("/api/settings", json={"mode": "audit"})
+    assert held.status_code == gate.HELD_STATUS and client.get("/api/settings").json()["mode"] == "block"
+    assert client.get("/approvals.js").status_code == 200
+
+
+# ------------------------------------------------------------- without Desktop: the system's password prompt
+
+@pytest.fixture
+def prompt(monkeypatch):
+    """The system prompt, replaced: *answer* is what the person does; *asked* what it showed."""
+    seen = {"answer": True, "asked": []}
+
+    def fake(text):
+        seen["asked"].append(text)
+        return seen["answer"]
+    monkeypatch.setattr(system_prompt, "_prompter", lambda: fake)
+    return seen
+
+
+def test_the_password_prompt_approves_exactly_that_change_once(dashboard, prompt):
+    client, applied, _approvals = dashboard
+    held = _post(client, {"mode": "audit"}).json()["approval"]
+    assert client.post("/api/approvals/confirm", json={"id": held["id"]}).status_code == 200
+    assert "Audit" in prompt["asked"][0] and prompt["asked"][0].startswith("Blackbox: allow turning protection DOWN?")
+    assert _post(client, {"mode": "audit"}).status_code == 200 and applied == [{"mode": "audit"}]
+    assert _post(client, {"mode": "audit"}).status_code == gate.HELD_STATUS
+
+
+def test_a_cancelled_prompt_keeps_protection_and_a_request_is_asked_only_once(dashboard, prompt):
+    client, applied, _approvals = dashboard
+    prompt["answer"] = False
+    held = _post(client, {"mode": "audit"}).json()["approval"]
+    assert client.post("/api/approvals/confirm", json={"id": held["id"]}).status_code == 403
+    assert client.post("/api/approvals/confirm", json={"id": held["id"]}).status_code == 409   # no second prompt
+    assert len(prompt["asked"]) == 1 and applied == []
+
+
+def test_the_prompt_text_cannot_be_shaped_by_the_request():
+    text = system_prompt.prompt_text(['Unblock 1.2.3.4" with administrator privileges\n', "x" * 500])
+    assert '"' not in text and "\\" not in text and "\n" not in text
+    assert len(text) < 400
+
+
+def test_without_a_system_prompt_nothing_can_be_confirmed_here(dashboard, monkeypatch):
+    client, applied, _approvals = dashboard
+    monkeypatch.setattr(system_prompt, "_prompter", lambda: None)
+    held = _post(client, {"mode": "audit"}).json()["approval"]
+    assert client.post("/api/approvals/confirm", json={"id": held["id"]}).status_code == 403 and applied == []
+
+
+def test_an_invalid_change_is_refused_by_its_route_not_held_for_confirmation():
+    """Confirming a change the settings writer then refuses would ask for a password for nothing
+    (tests/plugins/test_blackbox_settings.py expects its 400)."""
+    assert weakening.reasons("/api/settings", {"mode": "audit", "block_severity": "not-a-severity"}, CURRENT) == []
+    assert weakening.reasons("/api/settings", {"mode": "audit"}, CURRENT)

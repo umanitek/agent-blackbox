@@ -189,6 +189,13 @@ def _validate_llm(raw: Any, errors: list[str]) -> dict[str, Any]:
     return llm
 
 
+def settings_problems(payload: dict[str, Any], validators: Iterable[SettingsValidator] = ()) -> list[str]:
+    """What :func:`write_settings` would refuse in *payload* (empty: it is valid), writing nothing.
+    Sharing consent is not judged here: that is the caller's (``write_settings(sharing_consent=)``)."""
+    errors = _validate(payload, sharing_consent=True)[1]
+    return errors + _shield_updates(payload, validators)[1]
+
+
 def write_settings(payload: dict[str, Any], *, sharing_consent: bool = False,
                    validators: Iterable[SettingsValidator] = ()) -> dict[str, Any]:
     """Validate *payload* and persist it under ``plugins.entries.blackbox``.

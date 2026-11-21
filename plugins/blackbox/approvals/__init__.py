@@ -4,7 +4,8 @@
 A change that weakens protection (:mod:`.weakening`) — Audit instead of Block, a shield or a
 detection off, an agent no longer protected, a protected path removed, remote access unlocked —
 is held (:mod:`.store`) until the person answers a native dialog in the Desktop app, which proves
-the answer with its own key; the dashboard's gate is ``dashboard/approval_routes``. Strengthening
+the answer with its own key — or, without Desktop, until the person passes the system's password
+prompt from the dashboard page (:mod:`.system_prompt`); the gate is ``dashboard/approval_routes``. Strengthening
 changes apply at once. Blackbox Desktop's docs/security/approvals.md has the threat model.
 
 Usage::
@@ -15,6 +16,7 @@ Usage::
 
 from __future__ import annotations
 
+from . import system_prompt
 from .store import Approvals, Held, answer_message, pair_message, sign
 from .weakening import Current, gated, reasons
 
@@ -22,4 +24,4 @@ from .weakening import Current, gated, reasons
 STORE = Approvals()
 
 
-__all__ = ["STORE", "Approvals", "Current", "Held", "answer_message", "gated", "pair_message", "reasons", "sign"]
+__all__ = ["STORE", "Approvals", "Current", "Held", "answer_message", "gated", "pair_message", "reasons", "sign", "system_prompt"]

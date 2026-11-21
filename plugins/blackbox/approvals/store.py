@@ -87,6 +87,7 @@ class Approvals:
         self._lock = threading.Lock()
         self._key: Optional[bytes] = None
         self._held: OrderedDict[str, Held] = OrderedDict()
+        self._prompted: set[str] = set()   # requests that already raised the system prompt
 
     # ------------------------------------------------------------------ pairing
 
@@ -148,6 +149,27 @@ class Approvals:
                 del self._held[held.id]
             return True
 
+    def approve_confirmed(self, request_id: str) -> bool:
+        """Approve *request_id* after the system's password prompt was passed (:mod:`.system_prompt`;
+        claim the prompt first with :meth:`mark_prompted`). False for an unknown, expired or
+        already-approved request."""
+        with self._lock:
+            self._expire()
+            held = self._held.get(str(request_id))
+            if held is None or held.approved_at is not None:
+                return False
+            held.approved_at = self._clock()
+            return True
+
+    def mark_prompted(self, request_id: str) -> bool:
+        """Claim the one system prompt *request_id* may raise (False: already asked, or unknown)."""
+        with self._lock:
+            self._expire()
+            if str(request_id) not in self._held or str(request_id) in self._prompted:
+                return False
+            self._prompted.add(str(request_id))
+            return True
+
     def consume(self, route: str, body: bytes) -> bool:
         """True ONCE for an approved request with this route and exact body (then it is gone)."""
         digest = body_digest(body)
@@ -165,3 +187,4 @@ class Approvals:
             limit = held.approved_at + USE_WINDOW_SECONDS if held.approved_at is not None else held.created + APPROVAL_TTL_SECONDS
             if now > limit:
                 del self._held[held.id]
+        self._prompted &= set(self._held)

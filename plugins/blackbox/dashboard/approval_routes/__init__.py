@@ -9,10 +9,14 @@ refused by the boundary and raises no dialog). For a gated route (``approvals.ga
 * weakening otherwise → held, answered **428** ``{"ok": false, "approval": {...}, "errors": [why]}``.
   The Desktop app sees it, asks the person in a native dialog and answers with its key.
 
-Routes (all behind the boundary's token):
-``GET  /api/desktop/approvals``           ``{"paired": bool, "waiting": [held …]}``
-``POST /api/desktop/approvals/pair``      ``{"key": hex, "proof": hex?}``
-``POST /api/desktop/approvals/answer``    ``{"id", "approve": bool, "proof": hex}``
+Routes (the POSTs behind the boundary's token):
+``GET  /api/desktop/approvals``           ``{"paired": bool, "confirm_here": bool, "waiting": [held …]}``
+``POST /api/desktop/approvals/pair``      ``{"key": hex, "proof": hex?}`` — Blackbox Desktop's key
+``POST /api/desktop/approvals/answer``    ``{"id", "approve": bool, "proof": hex}`` — Desktop's native dialog
+``POST /api/approvals/confirm``           ``{"id"}`` — the dashboard page's path: the system's password
+                                          prompt (``approvals.system_prompt``), at most once per request
+``GET  /approvals.js``                    the page script: a held answer shows "Confirm with your
+                                          password", then the same request is sent again
 
 Pattern: **Proxy** (protection proxy) around the dashboard's own routes.
 
@@ -22,6 +26,7 @@ annotations at runtime, and ``Request`` is imported inside :func:`register`.
 
 
 import json
+from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from ... import approvals
@@ -31,8 +36,10 @@ from ...approvals import Approvals
 MAX_BODY_BYTES = 256 * 1024
 #: The answer to a change that waits for the person's approval.
 HELD_STATUS = 428
-NOT_PAIRED = "Open Blackbox Desktop to approve this: turning protection down needs your confirmation there."
-ASK = "Waiting for your confirmation in Blackbox Desktop."
+NOT_PAIRED = "Turning protection down needs your confirmation: confirm it with your password, or in Blackbox Desktop."
+ASK = "Waiting for your confirmation in Blackbox Desktop (or confirm it with your password)."
+#: The page script (served at ``/approvals.js``).
+SCRIPT = Path(__file__).resolve().parent / "approvals.js"
 
 Scope = dict[str, Any]
 Receive = Callable[[], Awaitable[dict[str, Any]]]
@@ -101,10 +108,14 @@ async def _json(send: Send, status: int, content: dict[str, Any]) -> None:
     await send({"type": "http.response.body", "body": raw})
 
 
-def register(app: Any, store: Approvals) -> None:
-    """Add the approval routes and place :class:`Gate` innermost on *app* (before it starts)."""
+def register(app: Any, _swr: Any = None, store: Approvals | None = None) -> None:
+    """Add the approval routes and place :class:`Gate` innermost on *app* (before it starts).
+    *store* defaults to ``approvals.STORE`` (the dashboard's one store; tests pass their own)."""
     from fastapi import Request
-    from fastapi.responses import JSONResponse
+    from fastapi.responses import FileResponse, JSONResponse
+    from starlette.concurrency import run_in_threadpool
+
+    store = store if store is not None else approvals.STORE
     from starlette.middleware import Middleware
 
     # WHY append to user_middleware instead of add_middleware: add_middleware puts a layer
@@ -115,8 +126,23 @@ def register(app: Any, store: Approvals) -> None:
 
     @app.get("/api/desktop/approvals")
     def approvals_waiting() -> Any:
-        return JSONResponse({"paired": store.paired(), "waiting": [held.as_json() for held in store.waiting()]},
-                            headers={"Cache-Control": "no-store"})
+        return JSONResponse({"paired": store.paired(), "confirm_here": approvals.system_prompt.available(),
+                             "waiting": [held.as_json() for held in store.waiting()]}, headers={"Cache-Control": "no-store"})
+
+    @app.get("/approvals.js")
+    def approvals_script() -> Any:
+        return FileResponse(str(SCRIPT), media_type="application/javascript", headers={"Cache-Control": "no-store"})
+
+    @app.post("/api/approvals/confirm")
+    async def approvals_confirm(request: Request) -> Any:
+        """The page's "Confirm with your password": the system prompt, once per held request."""
+        body = await _small_json(request)
+        held = next((item for item in store.waiting() if item.id == str(body.get("id") or "")), None)
+        if held is None or not store.mark_prompted(held.id):
+            return JSONResponse({"ok": False, "error": "nothing to confirm (unknown, expired or already asked)"}, status_code=409)
+        if not await run_in_threadpool(approvals.system_prompt.confirm, held.reasons):
+            return JSONResponse({"ok": False, "error": "not confirmed: protection stays on"}, status_code=403)
+        return JSONResponse({"ok": store.approve_confirmed(held.id)})
 
     @app.post("/api/desktop/approvals/pair")
     async def approvals_pair(request: Request) -> Any:

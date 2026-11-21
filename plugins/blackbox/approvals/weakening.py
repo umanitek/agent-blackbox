@@ -50,6 +50,8 @@ class Current:
 
 
 def _settings(body: Mapping[str, Any], current: Current) -> list[str]:
+    if _invalid(body):
+        return []   # refused by the route with its 400: nothing to confirm
     now = current.settings
     out: list[str] = []
     mode = body.get("mode")
@@ -81,6 +83,16 @@ def _settings(body: Mapping[str, Any], current: Current) -> list[str]:
             out.append(f"Stop protecting {len(dropped)} file path{'s' if len(dropped) != 1 else ''} ({', '.join(map(str, dropped[:3]))})")
     out.extend(_shields(body.get("shields"), current))
     return out
+
+
+def _invalid(body: Mapping[str, Any]) -> bool:
+    """True when the settings writer would refuse *body* (so it would change nothing)."""
+    from .. import shields
+    from ..kernel import settings
+    try:
+        return bool(settings.settings_problems(dict(body), shields.settings_validators()))
+    except Exception:   # health: allow BLE001 -- cannot tell: judge it (a possibly weakening change asks)
+        return False
 
 
 def _shields(sections: Any, current: Current) -> list[str]:
