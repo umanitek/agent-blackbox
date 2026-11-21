@@ -33,7 +33,7 @@ pub const PLUGIN: &str = "http://127.0.0.1:9700";
 pub const VERIFIED_FOR: Duration = Duration::from_secs(120);
 pub const SIGNATURE_HEADER: &str = "X-Blackbox-Signature";
 pub const HELPER_SIGNATURE_HEADER: &str = "X-Blackbox-Helper-Signature";
-const KEY_BYTES: usize = 32;
+pub const KEY_BYTES: usize = 32;
 
 type HmacSha256 = Hmac<Sha256>;
 

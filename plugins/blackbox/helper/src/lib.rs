@@ -25,6 +25,7 @@
 pub mod enforce;
 pub mod observe;
 pub mod command;
+pub mod install;
 pub mod link;
 pub mod pf_status;
 pub mod plan;
