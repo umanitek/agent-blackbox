@@ -104,7 +104,7 @@ def test_the_rule_runs_in_the_tool_call_hook():
     """guard/hooks.py gathers it with every call's findings, beside the protected-path rule."""
     from pathlib import Path
     hooks = (Path(__file__).resolve().parents[2] / "plugins" / "blackbox" / "guard" / "hooks.py").read_text(encoding="utf-8")
-    assert "detection.detect_guard_tamper(tool_name, args)" in hooks
+    assert "detection.detect_guard_tamper(tool_name, args, cfg)" in hooks
 
 
 # 2026-11-08, fresh Mac (bb-test-4): an agent could stop Blackbox's own services. The guard runs in

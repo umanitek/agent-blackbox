@@ -73,6 +73,12 @@ class Kept(Generic[Value]):
                 self._value, self._key, self._until = self._read(), key, now + _KEEP_SECONDS
             return self._value
 
+    def put(self, key: Hashable, value: Value) -> None:
+        """Keep *value* for *key* now — a caller that already holds a fresh reading (the hook's
+        own config) saves the read :meth:`get` would make."""
+        with self._lock:
+            self._value, self._key, self._until = value, key, time.monotonic() + _KEEP_SECONDS
+
 
 def _source_roots() -> list[Path]:
     """The checkouts whose files an install loads or copies from: the one this plugin folder sits

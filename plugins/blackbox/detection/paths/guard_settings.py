@@ -43,13 +43,13 @@ import base64
 import binascii
 import os
 import re
-from typing import Any
+from typing import Any, Optional
 
 from .. import action_parsing, shell_shapes
 from ..finding import Finding
 from ...kernel import addons as guarded_extra, agent_hosts, threat_ids
 from ...kernel.bounded_files import read_small_text
-from ...kernel.config import load_blackbox_config
+from ...kernel.config import BlackboxConfig, load_blackbox_config
 from . import guard_commands, guard_paths, guard_places, protected, shell_files
 
 MATCHED = "blackbox-settings"
@@ -104,10 +104,13 @@ _guarded_places = guard_places.guarded_places
 READ_ONLY = guard_paths.READ_ONLY
 
 
-def _read_ports() -> tuple[int, ...]:
-    cfg = load_blackbox_config()
+def _ports_of(cfg: BlackboxConfig) -> tuple[int, ...]:
     node = re.search(r":(\d+)", str(cfg.dkg_url or ""))
     return (int(cfg.dashboard_port), *([int(node.group(1))] if node else []))
+
+
+def _read_ports() -> tuple[int, ...]:
+    return _ports_of(load_blackbox_config())
 
 
 _PORTS = guard_places.Kept(_read_ports)
@@ -299,8 +302,11 @@ def _finding(tool: str, evidence: str) -> Finding:
     )
 
 
-def detect_guard_tamper(tool_name: str, args: Any) -> list[Finding]:
-    """A finding when an agent's call would change Blackbox, switch it off or go round it, else []."""
+def detect_guard_tamper(tool_name: str, args: Any, cfg: Optional[BlackboxConfig] = None) -> list[Finding]:
+    """A finding when an agent's call would change Blackbox, switch it off or go round it, else [].
+    *cfg*: the config the caller already loaded for this call (its ports are used, not re-read)."""
+    if cfg is not None:
+        _PORTS.put(guard_places._machine(), _ports_of(cfg))
     tool = (tool_name or "").strip().lower()
     try:
         access = action_parsing.file_access_arg(tool_name, args)
