@@ -8,12 +8,11 @@ never by a window title or a guess.
 
 from __future__ import annotations
 
-import subprocess
 from dataclasses import dataclass, field
 from typing import Optional, Sequence
 
-PS = "/bin/ps"
-TIMEOUT_SECONDS = 5.0
+from . import platform
+
 #: Program names (lower case) and the agent each one is.
 AGENTS: dict[str, str] = {
     "claude": "Claude Code", "codex": "Codex", "cursor": "Cursor", "cursor-agent": "Cursor",
@@ -61,12 +60,8 @@ class ProcessTree:
     @classmethod
     def read(cls) -> ProcessTree:
         """Reads the process table; an empty tree when ``ps`` cannot run (nothing attributed)."""
-        try:
-            done = subprocess.run([PS, "-axo", "pid=,ppid=,%cpu=,rss=,args="], capture_output=True, text=True, encoding="utf-8", errors="replace",
-                                  timeout=TIMEOUT_SECONDS, stdin=subprocess.DEVNULL, check=False)
-        except (OSError, subprocess.TimeoutExpired):
-            return cls()
-        return cls.parse(done.stdout) if done.returncode == 0 else cls()
+        text = platform.process_table()
+        return cls.parse(text) if text is not None else cls()
 
     @classmethod
     def parse(cls, text: str) -> ProcessTree:

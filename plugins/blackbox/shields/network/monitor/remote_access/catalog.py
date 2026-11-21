@@ -19,7 +19,6 @@ listening-socket reader. Usage::
 from __future__ import annotations
 
 import json
-import subprocess
 import threading
 import time
 from dataclasses import dataclass
@@ -27,7 +26,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from .....shields.network import monitor
-from .. import listening
+from .. import listening, platform
 
 #: How long one machine-wide look is reused (the page asks every second; nettop costs ~0.3 s).
 CATALOG_TTL = 5.0
@@ -74,11 +73,7 @@ def relay_domains() -> list[str]:
 
 
 def _executables() -> dict[int, str]:
-    try:
-        text = subprocess.run(["/bin/ps", "-axo", "pid=,comm="], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=PS_TIMEOUT,
-                              check=False).stdout
-    except (OSError, subprocess.TimeoutExpired):
-        return {}
+    text = platform.process_paths(PS_TIMEOUT)
     out = {}
     for line in text.splitlines():
         pid, _, path = line.strip().partition(" ")

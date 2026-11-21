@@ -41,11 +41,10 @@ import threading
 from dataclasses import dataclass
 from typing import Optional
 
+from . import platform
 from ...json_records import JsonValue, _record_json
 from ....kernel import code_signing as signing
 
-CODESIGN = "/usr/bin/codesign"
-TIMEOUT_SECONDS = 5.0
 MAX_CACHED = 4000
 MAX_PLIST_BYTES = 1024 * 1024
 APPLE_AUTHORITIES = frozenset({"Software Signing", "macOS Software Signing", "Apple iPhone OS Application Signing"})
@@ -159,10 +158,9 @@ def check(path: str) -> Signature:
     with _lock:
         if key in _cache:
             return _cache[key]
+    displayed = platform.code_signature(path)
     try:
-        done = subprocess.run([CODESIGN, "-dv", "--verbose=2", path], capture_output=True, text=True, encoding="utf-8",
-                              errors="replace", timeout=TIMEOUT_SECONDS, stdin=subprocess.DEVNULL, check=False)
-        found = verified(path, parse(done.stderr + done.stdout))
+        found = Signature(kind="unknown") if displayed is None else verified(path, parse(displayed))
     except (OSError, subprocess.TimeoutExpired):
         found = Signature(kind="unknown")
     bundle_id, app_name, version = bundle_of(path)

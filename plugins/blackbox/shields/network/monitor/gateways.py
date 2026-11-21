@@ -18,16 +18,15 @@ Usage::
 from __future__ import annotations
 
 import ipaddress
-import subprocess
 import threading
 import time
 from dataclasses import dataclass
 from typing import Optional
 
-NETSTAT = "/usr/sbin/netstat"
+from . import platform
+
 #: Seconds the answer is reused (gateways change with the network, not per login attempt).
 TTL_SECONDS = 60.0
-TIMEOUT_SECONDS = 2.0
 
 
 @dataclass
@@ -56,12 +55,7 @@ def parse(table: str) -> frozenset[str]:
 
 
 def _read() -> frozenset[str]:
-    try:
-        answer = subprocess.run([NETSTAT, "-rn"], capture_output=True, text=True, encoding="utf-8", errors="replace",
-                                timeout=TIMEOUT_SECONDS, check=False)
-    except (OSError, subprocess.TimeoutExpired):
-        return frozenset()
-    return parse(answer.stdout)
+    return parse(platform.routing_table())
 
 
 def addresses(now: Optional[float] = None) -> frozenset[str]:

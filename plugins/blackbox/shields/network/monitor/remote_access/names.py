@@ -12,16 +12,13 @@ from __future__ import annotations
 import json
 import queue
 import socket
-import subprocess
 import threading
 import time
-from pathlib import Path
 from typing import Any
 
+from .. import platform
+
 TAILSCALE_TTL = 60.0
-TAILSCALE_TIMEOUT = 3.0
-#: Where the Tailscale command lives (the Mac app's, Homebrew's, the standalone install's).
-TAILSCALE_COMMANDS = ("/Applications/Tailscale.app/Contents/MacOS/Tailscale", "/opt/homebrew/bin/tailscale", "/usr/local/bin/tailscale")
 MAX_NAMES = 2000
 
 _tailscale: dict[str, Any] = {"at": 0.0, "names": {}}
@@ -54,15 +51,8 @@ def tailscale_name(address: str) -> str:
         fresh = time.time() - _tailscale["at"] < TAILSCALE_TTL
         if fresh:
             return _tailscale["names"].get(address, "")
-    command = next((path for path in TAILSCALE_COMMANDS if Path(path).exists()), None)
-    names: dict[str, str] = {}
-    if command:
-        try:
-            done = subprocess.run([command, "status", "--json"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=TAILSCALE_TIMEOUT,
-                                  check=False)
-            names = parse_tailscale(done.stdout) if done.returncode == 0 else {}
-        except (OSError, subprocess.TimeoutExpired):
-            names = {}
+    text = platform.tailscale_status()
+    names = parse_tailscale(text) if text is not None else {}
     with _lock:
         _tailscale.update(at=time.time(), names=names)
     return names.get(address, "")

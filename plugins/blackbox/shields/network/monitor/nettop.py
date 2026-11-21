@@ -14,34 +14,24 @@ a port this machine serves, so a connection on that local port was opened by the
 from __future__ import annotations
 
 import ipaddress
-import subprocess
-import sys
 from typing import Optional
 
+from . import platform
 from .records import Connection, ProcessTraffic
 
-NETTOP = "/usr/bin/nettop"
-ARGS = ("-L", "1", "-x", "-n", "-J", "state,bytes_in,bytes_out")
-#: nettop answers in ~15 ms; a stuck one must not hold a dashboard request.
-TIMEOUT_SECONDS = 5.0
 _PROTOCOLS = ("tcp4", "tcp6", "udp4", "udp6")
 
 
 def available() -> Optional[str]:
     """None when this machine can be read, else why not (one sentence for a person)."""
-    if sys.platform != "darwin":
-        return "The network monitor reads macOS for now; Windows and Linux are coming."
-    return None
+    return platform.traffic_unavailable()
 
 
 def read() -> list[ProcessTraffic]:
-    """Runs ``nettop`` once and parses it; empty when it cannot run."""
-    try:
-        done = subprocess.run([NETTOP, *ARGS], capture_output=True, text=True, encoding="utf-8", errors="replace",
-                              timeout=TIMEOUT_SECONDS, stdin=subprocess.DEVNULL, check=False)
-    except (OSError, subprocess.TimeoutExpired):
-        return []
-    return parse(done.stdout) if done.returncode == 0 else []
+    """Reads the connection table once (:func:`platform.connection_table`) and parses it; empty
+    when it cannot be read."""
+    text = platform.connection_table()
+    return parse(text) if text is not None else []
 
 
 def parse(text: str) -> list[ProcessTraffic]:

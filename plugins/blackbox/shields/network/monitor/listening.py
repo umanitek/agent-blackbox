@@ -12,14 +12,11 @@ Usage::
 
 from __future__ import annotations
 
-import subprocess
 from dataclasses import dataclass
 
+from . import platform
 from ...json_records import JsonValue, _record_json
 
-LSOF = "/usr/sbin/lsof"
-ARGS = ("-nP", "-iTCP", "-sTCP:LISTEN", "-F", "pcn")
-TIMEOUT_SECONDS = 5.0
 MAX_PER_PROCESS = 32
 _EVERY_INTERFACE = frozenset({"*", "0.0.0.0", "[::]", "::"})
 
@@ -41,13 +38,8 @@ class Listener:
 
 
 def read() -> dict[int, list[Listener]]:
-    """Runs ``lsof`` once; empty when it cannot run."""
-    try:
-        done = subprocess.run([LSOF, *ARGS], capture_output=True, text=True, encoding="utf-8", errors="replace",
-                              timeout=TIMEOUT_SECONDS, stdin=subprocess.DEVNULL, check=False)
-    except (OSError, subprocess.TimeoutExpired):
-        return {}
-    return parse(done.stdout)   # lsof exits 1 when nothing matched: the text is still right
+    """Reads the listening sockets once (:func:`platform.listening_table`); empty when they cannot be read."""
+    return parse(platform.listening_table())
 
 
 def parse(text: str) -> dict[int, list[Listener]]:
