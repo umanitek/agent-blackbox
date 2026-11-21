@@ -80,11 +80,11 @@ pub fn parse_firewall(text: &str) -> String {
 }
 
 fn output(program: &str, args: &[&str]) -> String {
-    Command::new(program).args(args).output().map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default()
+    crate::command::output(Command::new(program).args(args), crate::command::TIMEOUT).map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default()
 }
 
 fn fingerprint(path: &str) -> String {
-    std::fs::read(path).map(|bytes| Sha256::digest(&bytes).iter().take(8).map(|b| format!("{b:02x}")).collect()).unwrap_or_else(|_| "missing".into())
+    crate::safe_read::read_regular(std::path::Path::new(path), 64 * 1024 * 1024).ok_or(()).map(|bytes| Sha256::digest(&bytes).iter().take(8).map(|b| format!("{b:02x}")).collect()).unwrap_or_else(|_| "missing".into())
 }
 
 /// Looks at everything now.

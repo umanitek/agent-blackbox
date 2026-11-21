@@ -14,7 +14,6 @@
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::Read;
 use std::path::Path;
 use std::process::Command;
 use std::time::{Duration, UNIX_EPOCH};
@@ -200,13 +199,13 @@ pub fn watched_paths() -> Vec<String> {
 
 /// A file's fingerprint; None when it does not exist (or is not a regular file).
 pub fn fingerprint(path: &Path) -> Option<Mark> {
-    let meta = fs::metadata(path).ok().filter(|meta| meta.is_file())?;
+    // As root in folders the person can write: the link itself, never what it points to (safe_read).
+    let meta = fs::symlink_metadata(path).ok().filter(|meta| meta.file_type().is_file())?;
     let mtime = meta.modified().ok().and_then(|time| time.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_secs()).unwrap_or(0);
     let mut hasher = Sha256::new();
     let mut lines = 0;
     if meta.len() <= MAX_READ {
-        let mut bytes = Vec::with_capacity(meta.len() as usize);
-        fs::File::open(path).ok()?.take(MAX_READ).read_to_end(&mut bytes).ok()?;
+        let bytes = crate::safe_read::read_regular(path, MAX_READ)?;
         lines = bytes.iter().filter(|byte| **byte == b'\n').count();
         hasher.update(&bytes);
     } else {
@@ -217,7 +216,7 @@ pub fn fingerprint(path: &Path) -> Option<Mark> {
 
 /// One look: `netstat`'s text and every watched file's fingerprint.
 pub fn look() -> (String, Vec<(String, Option<Mark>)>) {
-    let netstat = Command::new(NETSTAT).args(["-an", "-p", "tcp"]).output()
+    let netstat = crate::command::output(Command::new(NETSTAT).args(["-an", "-p", "tcp"]), crate::command::TIMEOUT)
         .map(|output| String::from_utf8_lossy(&output.stdout).into_owned()).unwrap_or_default();
     let files = watched_paths().into_iter().map(|path| { let mark = fingerprint(Path::new(&path)); (path, mark) }).collect();
     (netstat, files)

@@ -21,7 +21,7 @@ pub const POSTURE_EVERY: Duration = Duration::from_secs(60);
 const FIREWALL: &str = "/usr/libexec/ApplicationFirewall/socketfilterfw";
 
 fn both(program: &str, args: &[&str]) -> String {
-    Command::new(program).args(args).output()
+    crate::command::output(Command::new(program).args(args), crate::command::TIMEOUT)
         .map(|o| format!("{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr))).unwrap_or_default()
 }
 
@@ -35,7 +35,7 @@ pub fn on_off(text: &str, on: &[&str], off: &[&str]) -> &'static str {
 
 /// A `defaults read` value ("" when the key is not set).
 fn default_value(domain: &str, key: &str) -> String {
-    let out = Command::new("/usr/bin/defaults").args(["read", domain, key]).output();
+    let out = crate::command::output(Command::new("/usr/bin/defaults").args(["read", domain, key]), crate::command::TIMEOUT);
     match out {
         Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim().to_string(),
         _ => String::new(),
@@ -61,7 +61,7 @@ pub fn parse_screen_lock(text: &str) -> String {
 
 /// The facts now. *listening* is the set of TCP ports reachable from the network (exposure).
 pub fn look(listening: &BTreeSet<u16>) -> Value {
-    let ard_running = Command::new("/usr/bin/pgrep").args(["-x", "ARDAgent"]).output().map(|o| o.status.success()).unwrap_or(false);
+    let ard_running = crate::command::output(Command::new("/usr/bin/pgrep").args(["-x", "ARDAgent"]), crate::command::TIMEOUT).map(|o| o.status.success()).unwrap_or(false);
     json!({
         "filevault": on_off(&both("/usr/bin/fdesetup", &["status"]), &["filevault is on"], &["filevault is off"]),
         "firewall": parse_firewall(&both(FIREWALL, &["--getglobalstate"])),

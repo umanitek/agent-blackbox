@@ -14,7 +14,7 @@ const SCUTIL: &str = "/usr/sbin/scutil";
 const FALLBACK_UPSTREAMS: [&str; 2] = ["1.1.1.1:53", "9.9.9.9:53"];
 
 fn run(program: &str, args: &[&str]) -> Result<String, String> {
-    let output = Command::new(program).args(args).output().map_err(|error| format!("{program}: {error}"))?;
+    let output = crate::command::output(Command::new(program).args(args), crate::command::TIMEOUT).map_err(|error| format!("{program}: {error}"))?;
     let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
     text.push_str(&String::from_utf8_lossy(&output.stderr));
     if output.status.success() { Ok(text) } else { Err(format!("{program} {}: {}", args.join(" "), text.trim())) }

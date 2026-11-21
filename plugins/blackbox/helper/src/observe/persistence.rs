@@ -14,7 +14,6 @@
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::Read;
 use std::path::Path;
 use std::process::Command;
 use std::time::{Duration, UNIX_EPOCH};
@@ -69,12 +68,12 @@ pub fn job_folders() -> Vec<(&'static str, String)> {
 }
 
 fn mark_of(path: &Path) -> Option<String> {
-    let meta = fs::metadata(path).ok()?;
+    // As root in folders the person can write: the link itself, never what it points to (safe_read).
+    let meta = fs::symlink_metadata(path).ok().filter(|m| m.file_type().is_file())?;
     let mtime = meta.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_secs()).unwrap_or(0);
     let mut hasher = Sha256::new();
     if meta.len() <= MAX_READ {
-        let mut bytes = Vec::new();
-        fs::File::open(path).ok()?.take(MAX_READ).read_to_end(&mut bytes).ok()?;
+        let bytes = crate::safe_read::read_regular(path, MAX_READ)?;
         hasher.update(&bytes);
     }
     let sha: String = hasher.finalize().iter().take(4).map(|b| format!("{b:02x}")).collect();
@@ -83,7 +82,10 @@ fn mark_of(path: &Path) -> Option<String> {
 
 /// A launchd plist's label and program (`plutil -convert json`), read only when it is new or changed.
 pub fn job_of(path: &Path) -> (String, String) {
-    let output = Command::new("/usr/bin/plutil").args(["-convert", "json", "-o", "-"]).arg(path).output();
+    // Read safely as root (no links, no FIFOs, capped), then parsed from stdin: plutil never
+    // opens a path the person controls.
+    let Some(bytes) = crate::safe_read::read_regular(path, MAX_READ) else { return (String::new(), String::new()) };
+    let output = crate::command::output_with_input(Command::new("/usr/bin/plutil").args(["-convert", "json", "-o", "-", "--", "-"]), Some(&bytes), crate::command::TIMEOUT);
     let parsed: Value = output.ok().and_then(|out| serde_json::from_slice(&out.stdout).ok()).unwrap_or(Value::Null);
     let label = parsed["Label"].as_str().unwrap_or_default().to_string();
     let program = parsed["Program"].as_str().or_else(|| parsed["ProgramArguments"][0].as_str()).unwrap_or_default().to_string();
@@ -187,7 +189,7 @@ pub fn parse_kexts(text: &str) -> Vec<Item> {
 }
 
 fn run(program: &str, args: &[&str]) -> Option<String> {
-    let out = Command::new(program).args(args).output().ok()?;
+    let out = crate::command::output(Command::new(program).args(args), crate::command::TIMEOUT).ok()?;
     Some(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
@@ -272,6 +274,35 @@ impl Persistence {
 
 #[cfg(test)]
 mod tests {
+
+    fn fifo_dir() -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("bb-persist-{}-{}", std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn a_fifo_or_a_link_in_a_launch_agents_folder_never_blocks_or_is_followed() {
+        let dir = fifo_dir();
+        let fifo = dir.join("x.plist");
+        let name = std::ffi::CString::new(fifo.to_str().unwrap()).unwrap();
+        // SAFETY: a valid C string path.
+        assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+        let started = std::time::Instant::now();
+        assert!(mark_of(&fifo).is_none());
+        assert_eq!(job_of(&fifo), (String::new(), String::new()));
+        assert!(started.elapsed() < std::time::Duration::from_secs(2), "a FIFO must never block the system guard");
+        let secret = dir.join("root-only.plist");
+        std::fs::write(&secret, br#"<?xml version="1.0"?><plist version="1.0"><dict><key>Label</key><string>secret.label</string></dict></plist>"#).unwrap();
+        let link = dir.join("link.plist");
+        std::os::unix::fs::symlink(&secret, &link).unwrap();
+        assert!(mark_of(&link).is_none(), "a link is not followed");
+        assert_eq!(job_of(&link).0, "", "a link's target is never read");
+        assert_eq!(job_of(&secret).0, "secret.label", "a regular plist is read (from stdin)");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     use super::*;
 
     #[test]

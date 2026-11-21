@@ -25,7 +25,19 @@ fn collect<R: Read + Send + 'static>(stream: Option<R>) -> thread::JoinHandle<Ve
 /// Runs *command* to completion within *timeout* (stdin closed), like `Command::output`. On a
 /// timeout the child — the helper's own — is killed and reaped, and an error is returned.
 pub fn output(command: &mut Command, timeout: Duration) -> std::io::Result<Output> {
-    let mut child = command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
+    output_with_input(command, None, timeout)
+}
+
+/// [`output`] with *input* written to the child's stdin (then closed).
+pub fn output_with_input(command: &mut Command, input: Option<&[u8]>, timeout: Duration) -> std::io::Result<Output> {
+    let stdin = if input.is_some() { Stdio::piped() } else { Stdio::null() };
+    let mut child = command.stdin(stdin).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
+    if let (Some(input), Some(mut pipe)) = (input.map(<[u8]>::to_vec), child.stdin.take()) {
+        thread::Builder::new().name("blackbox-netd-cmd-in".into()).spawn(move || {
+            use std::io::Write;
+            let _ = pipe.write_all(&input);
+        })?;
+    }
     let out = collect(child.stdout.take());
     let err = collect(child.stderr.take());
     let started = Instant::now();
@@ -52,6 +64,12 @@ mod tests {
         let started = Instant::now();
         let result = output(Command::new("/bin/sleep").arg("5"), Duration::from_millis(300));
         assert!(result.is_err() && started.elapsed() < Duration::from_secs(2), "{result:?}");
+    }
+
+    #[test]
+    fn input_reaches_the_child() {
+        let result = output_with_input(&mut Command::new("/bin/cat"), Some(b"abc"), TIMEOUT).unwrap();
+        assert_eq!(result.stdout, b"abc");
     }
 
     #[test]

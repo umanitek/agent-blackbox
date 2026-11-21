@@ -25,7 +25,7 @@ const SERVICES: [(&str, &str, &str); 3] = [
 ];
 
 fn run(program: &str, args: &[&str]) -> Result<String, String> {
-    let out = Command::new(program).args(args).output().map_err(|e| format!("{program}: {e}"))?;
+    let out = crate::command::output(Command::new(program).args(args), crate::command::TIMEOUT).map_err(|e| format!("{program}: {e}"))?;
     let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
     if out.status.success() { Ok(text) } else { Err(format!("{program} {}: {}", args.join(" "), text.trim())) }
 }
@@ -42,7 +42,7 @@ fn already_safe(id: &str) -> bool {
         "firewall-on" => { let t = text(FIREWALL, &["--getglobalstate"]); t.contains("enabled") || t.contains("state = 1") || t.contains("state = 2") }
         "stealth-on" => { let t = text(FIREWALL, &["--getstealthmode"]); t.contains("is on") || (t.contains("enabled") && !t.contains("disabled")) }
         "guest-off" => text("/usr/bin/defaults", &["read", "/Library/Preferences/com.apple.loginwindow", "GuestEnabled"]).trim() != "1",
-        "remote-management-off" => !Command::new("/usr/bin/pgrep").args(["-x", "ARDAgent"]).output().map(|o| o.status.success()).unwrap_or(false),
+        "remote-management-off" => !crate::command::output(Command::new("/usr/bin/pgrep").args(["-x", "ARDAgent"]), crate::command::TIMEOUT).map(|o| o.status.success()).unwrap_or(false),
         _ => SERVICES.iter().find(|(fix, _, _)| *fix == id)
             .map(|(_, label, _)| service_disabled(&run("/bin/launchctl", &["print-disabled", "system"]).unwrap_or_default(), label))
             .unwrap_or(true),

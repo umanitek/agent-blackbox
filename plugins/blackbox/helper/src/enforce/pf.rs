@@ -20,9 +20,8 @@
 //! so another program's use of pf is never switched off. Nothing here decides what is malicious:
 //! the lists come from the plan.
 
-use std::io::Write;
 use std::net::IpAddr;
-use std::process::{Command, Stdio};
+use std::process::Command;
 
 const PFCTL: &str = "/sbin/pfctl";
 pub const ANCHOR: &str = "com.apple/250.BlackboxFirewall";
@@ -96,15 +95,12 @@ pub fn rules(filter: &Filter) -> String {
     text
 }
 
+/// pfctl loading a large table can take a moment; still bounded.
+const PFCTL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
 fn run(args: &[&str], input: Option<&str>) -> Result<String, String> {
-    let mut child = Command::new(PFCTL).args(args).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped())
-        .spawn().map_err(|error| format!("{PFCTL}: {error}"))?;
-    let mut stdin = child.stdin.take().ok_or("no stdin")?;
-    if let Some(input) = input {
-        stdin.write_all(input.as_bytes()).map_err(|error| error.to_string())?;
-    }
-    drop(stdin);
-    let output = child.wait_with_output().map_err(|error| error.to_string())?;
+    let output = crate::command::output_with_input(Command::new(PFCTL).args(args), input.map(str::as_bytes), PFCTL_TIMEOUT)
+        .map_err(|error| format!("{PFCTL}: {error}"))?;
     let text = format!("{}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
     if output.status.success() { Ok(text) } else { Err(format!("pfctl {}: {}", args.join(" "), text.trim())) }
 }
