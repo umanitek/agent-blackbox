@@ -51,6 +51,8 @@ address before pf sees it (`plan.rs`).
 `cut_active`, `ssh_lockdown_active`, `version`, `queries`, `firewall_dropped`, `blocks`, `watch`,
 `events`, `remote`, plus (wave 2) `auth` ("signed" | "legacy" | "broken"), `last_error`,
 `pf_enabled`, `resolver_ok`, `dns_error`, `filter_error`.
+`protections` = `{"dns"|"firewall"|"cut"|"ssh_lockdown"|"remote_lock": {"applied": bool,
+"error": string|null}}` — the screen shows a protection "on" only when `applied` is true.
 
 `POST /api/shields/network-shield/api/system-report` — `watching`, `at`, `exposure`,
 `persistence`, `tamper` (wave 2 adds `pf_enabled`), `posture`, `fixes`, `events`.

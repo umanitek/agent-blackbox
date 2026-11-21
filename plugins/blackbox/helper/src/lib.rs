@@ -138,6 +138,8 @@ struct Helper {
     /// The one authenticated link to the plugin (plans verified, reports signed): [`link`].
     link: Mutex<link::Link>,
     last_error: Mutex<Option<String>>,
+    /// Each protection's own last failure (None when it applied): the report says which one failed.
+    failures: Mutex<Failures>,
     /// The plan version applied in THIS process. Not the saved one: after a restart the resolver
     /// is empty, so the first plan must come in full (asking `have=<saved>` would answer
     /// `unchanged` and leave DNS Shield refusing nothing).
@@ -168,6 +170,27 @@ fn named<F: FnOnce() + Send + 'static>(name: &str, work: F) {
 }
 
 /// The helper's entry point (launchd runs it as root).
+/// The last failure of each part of a plan: DNS (switching the Mac's DNS) and the filter (pf:
+/// Threat Firewall, cut connections, SSH lockdown, Lock remote access share one apply).
+#[derive(Debug, Clone, Default)]
+struct Failures {
+    dns: Option<String>,
+    filter: Option<String>,
+}
+
+/// Per protection: whether it is applied now and, if its last apply failed, why — so the screen
+/// never shows "on" for a protection that did not take (security finding).
+fn protections(state: &State, failures: &Failures) -> Value {
+    let one = |applied: bool, error: &Option<String>| json!({"applied": applied, "error": error});
+    json!({
+        "dns": one(state.dns_active, &failures.dns),
+        "firewall": one(state.firewall_active, &failures.filter),
+        "cut": one(state.cut_active, &failures.filter),
+        "ssh_lockdown": one(state.ssh_lockdown_active, &failures.filter),
+        "remote_lock": one(state.remote_lock_active, &failures.filter),
+    })
+}
+
 /// How long the resolver has to answer its self-test.
 const DNS_SELF_TEST_TIMEOUT: Duration = Duration::from_secs(1);
 
@@ -203,6 +226,7 @@ pub fn run() -> Result<(), String> {
         state: Mutex::new(state),
         link: Mutex::new(link::Link::new(Path::new(HOME))?),
         last_error: Mutex::new(None),
+        failures: Mutex::new(Failures::default()),
         applied: Mutex::new(String::new()),
         watching: AtomicBool::new(false),
         watch: Mutex::new(watch::Watch::default()),
@@ -287,8 +311,11 @@ impl Helper {
         if let Ok(mut lists) = self.resolver.lists.write() {
             *lists = plan.blocklists();
         }
-        errors.extend(self.set_dns(plan.dns.enabled));
-        errors.extend(self.set_filter(&plan));
+        let dns_error = self.set_dns(plan.dns.enabled);
+        let filter_error = self.set_filter(&plan);
+        *self.failures.lock().unwrap() = Failures { dns: dns_error.clone(), filter: filter_error.clone() };
+        errors.extend(dns_error);
+        errors.extend(filter_error);
         self.watching.store(plan.watch, Ordering::SeqCst);
         if let Ok(mut state) = self.state.lock() {
             state.version = plan.version.clone();
@@ -489,6 +516,9 @@ impl Helper {
             "auth": self.link.lock().map(|link| link.mode()).unwrap_or("legacy"),
             "last_error": self.last_error.lock().ok().and_then(|e| e.clone()),
             "resolver_ok": self.resolver.alive.load(Ordering::SeqCst),
+            "dns_error": self.failures.lock().ok().and_then(|f| f.dns.clone()),
+            "filter_error": self.failures.lock().ok().and_then(|f| f.filter.clone()),
+            "protections": protections(&state, &self.failures.lock().map(|f| f.clone()).unwrap_or_default()),
             "firewall_dropped": if pf_on { pf::dropped() } else { 0 },
             // What is really enforced, not what was asked: pf must be seen Enabled.
             "pf_enabled": if pf_on { pf::enabled() } else { None },
@@ -531,6 +561,18 @@ impl Helper {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn each_protection_reports_whether_it_applied_and_why_not() {
+        let state = State { dns_active: false, firewall_active: true, ..Default::default() };
+        let failures = Failures { dns: Some("no DNS server known".into()), filter: None };
+        let report = protections(&state, &failures);
+        assert_eq!(report["dns"]["applied"], false);
+        assert_eq!(report["dns"]["error"], "no DNS server known");
+        assert_eq!(report["firewall"]["applied"], true);
+        assert!(report["firewall"]["error"].is_null());
+    }
+
 
     #[test]
     fn upstreams_come_from_the_person_then_the_mac_then_dhcp_never_a_public_resolver() {
