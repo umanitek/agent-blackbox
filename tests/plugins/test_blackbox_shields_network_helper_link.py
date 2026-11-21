@@ -20,6 +20,9 @@ from plugins.blackbox.shields.shield_api import RawAnswer, ShieldApiError, Shiel
 KEY = bytes([7] * 32)
 #: The vector the helper crate checks too (helper/src/link.rs, a_shared_vector_…): one key,
 #: nonce and body → the same hex on both sides of the contract.
+# A made-up nonce for the tests — not a secret (the secret scanner's generic "api key" rule
+# matches any long hex next to KEY).
+NONCE = "0123456789abcdef0123456789abcdef"  # gitleaks:allow
 PLAN_VECTOR = "556ad530e22f4180c7080a144eb88187e9e5c5668311aa23dc2fd484f285eafa"
 REPORT_VECTOR = "ed7cae0659cb0798e3f55b0bb6586ee82d23ca413253a304832605c7bf4dd449"
 
@@ -49,10 +52,10 @@ def test_the_shared_vector_matches_the_helper_crate():
 
 def test_a_plan_is_signed_for_the_helpers_nonce_over_the_exact_bytes(home):
     _pair(home)
-    answer = helper_link.signed({"version": "v1", "unchanged": True}, {"nonce": "0123456789abcdef0123456789abcdef"})
+    answer = helper_link.signed({"version": "v1", "unchanged": True}, {"nonce": NONCE})
     assert isinstance(answer, RawAnswer)
     signature = answer.headers[helper_link.SIGNATURE_HEADER]
-    assert signature == helper_link.sign_plan(KEY, "0123456789abcdef0123456789abcdef", answer.body)
+    assert signature == helper_link.sign_plan(KEY, NONCE, answer.body)
     assert json.loads(answer.body) == {"version": "v1", "unchanged": True}
 
 
