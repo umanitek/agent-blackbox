@@ -26,10 +26,14 @@ hex = "0.4"
 # random nonce each plan request carries.
 hmac = "=0.12.1"
 getrandom = "=0.2.17"
-sysinfo = { version = "=0.40.1", default-features = false, features = ["system", "user"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+# The process table the macOS observer reads (platform/macos/observe/remote_procs.rs): only the
+# macOS build pulls it in.
+[target.'cfg(target_os = "macos")'.dependencies]
+sysinfo = { version = "=0.40.1", default-features = false, features = ["system", "user"] }
 
 [build-dependencies]
 cc = "=1.11.3"
