@@ -3257,7 +3257,7 @@ rollback_restart_previous() {
 rollback_restart_dashboard() {
     local supervisor
     supervisor="$(blackbox_dashboard_supervisor)"
-    # An update stops the dashboard (bootout) before it replaces the code, so a run that fails
+    # An upgrade stops the dashboard (bootout) before it replaces the code, so a run that fails
     # after that finds the LaunchAgent unloaded: still the person's service — its file is back
     # (rollback_files) — so it is loaded again, never left off (KI-513).
     if [ -z "$supervisor" ] && [ "$(uname -s 2>/dev/null)" = Darwin ] && command -v launchctl >/dev/null 2>&1 &&
