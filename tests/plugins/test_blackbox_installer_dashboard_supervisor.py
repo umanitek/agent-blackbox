@@ -103,7 +103,8 @@ class Machine:
             _constant("BLACKBOX_DASHBOARD_LAUNCHD_LABEL"),
             _constant("BLACKBOX_DASHBOARD_ANSWER_WAIT_SECONDS"),
             _constant("BLACKBOX_DASHBOARD_RESTART_PENDING"),
-            *(_function(name) for name in ("blackbox_dashboard_supervisor", "blackbox_dashboard_control",
+            _constant("BLACKBOX_LAUNCHD_GONE_TRIES"),
+            *(_function(name) for name in ("blackbox_launchd_wait_gone", "blackbox_dashboard_supervisor", "blackbox_dashboard_control",
                                            "blackbox_dashboard_answers_within", "start_dashboard",
                                            "register_dashboard_service", "rollback_restart_dashboard")),
             *lines,
@@ -208,6 +209,29 @@ def test_a_launch_agent_that_will_not_load_says_so_and_keeps_the_running_dashboa
     assert result.returncode == 0, result.stderr
     assert machine.launched.exists()
     assert "next login" in result.stdout and "launchctl bootstrap" in result.stdout
+
+
+def test_a_rollback_loads_again_a_launch_agent_the_update_had_stopped(tmp_path):
+    """KI-513 (E2E B7, bb-e2e-1121): the update booted the dashboard's LaunchAgent out, then failed;
+    the rollback restarted only a LOADED service, so the dashboard stayed off."""
+    machine = Machine(tmp_path, system="Darwin", loaded=False)
+    agent = tmp_path / "Library" / "LaunchAgents" / "ai.umanitek.blackbox-dashboard.plist"
+    agent.parent.mkdir(parents=True)
+    agent.write_text("<plist/>\n")
+    result = machine.run("rollback_restart_dashboard")
+    assert result.returncode == 0, result.stderr
+    assert any(call.startswith("launchctl bootstrap gui/1000 ") and call.endswith(agent.name) for call in machine.recorded())
+
+
+def test_a_reload_waits_for_launchd_to_let_go_before_loading_again(tmp_path):
+    """LES-086: bootstrap straight after bootout fails while the old service is still going."""
+    machine = Machine(tmp_path, system="Darwin", loaded=True)
+    result = machine.run("blackbox_dashboard_control reload launchd")
+    assert result.returncode == 0, result.stderr
+    calls = machine.recorded()
+    bootout = next(i for i, call in enumerate(calls) if call.split()[1] == "bootout")
+    bootstrap = next(i for i, call in enumerate(calls) if call.split()[1] == "bootstrap")
+    assert any(call.split()[1] == "print" for call in calls[bootout:bootstrap]), calls
 
 
 def test_the_rollback_restarts_the_dashboard_after_the_files_are_back():

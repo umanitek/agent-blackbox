@@ -2600,6 +2600,17 @@ blackbox_dashboard_supervisor() {
     return 0
 }
 
+# Waits (at most BLACKBOX_LAUNCHD_GONE_TRIES seconds) until launchd no longer knows TARGET.
+BLACKBOX_LAUNCHD_GONE_TRIES=10
+blackbox_launchd_wait_gone() {
+    local target="$1" tries=0
+    while launchctl print "$target" >/dev/null 2>&1 && [ "$tries" -lt "$BLACKBOX_LAUNCHD_GONE_TRIES" ]; do
+        sleep 1
+        tries=$((tries + 1))
+    done
+    return 0
+}
+
 # `blackbox_dashboard_control restart|reload <supervisor>` — restart the dashboard through its
 # service; `reload` first makes the service re-read its (rewritten or restored) definition.
 blackbox_dashboard_control() {
@@ -2615,7 +2626,13 @@ blackbox_dashboard_control() {
             target="gui/$(id -u)/$BLACKBOX_DASHBOARD_LAUNCHD_LABEL"
             if [ "$action" = reload ]; then
                 launchctl bootout "$target" 2>/dev/null || true
-                launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/$BLACKBOX_DASHBOARD_LAUNCHD_LABEL.plist"
+                # bootout returns before the service has gone; a bootstrap then fails ("5:
+                # Input/output error") and leaves it unloaded (LES-086, KI-513). Wait, bounded.
+                blackbox_launchd_wait_gone "$target"
+                launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/$BLACKBOX_DASHBOARD_LAUNCHD_LABEL.plist" || {
+                    sleep 1
+                    launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/$BLACKBOX_DASHBOARD_LAUNCHD_LABEL.plist"
+                }
             else
                 launchctl kickstart -k "$target"
             fi
@@ -3240,6 +3257,13 @@ rollback_restart_previous() {
 rollback_restart_dashboard() {
     local supervisor
     supervisor="$(blackbox_dashboard_supervisor)"
+    # An update stops the dashboard (bootout) before it replaces the code, so a run that fails
+    # after that finds the LaunchAgent unloaded: still the person's service — its file is back
+    # (rollback_files) — so it is loaded again, never left off (KI-513).
+    if [ -z "$supervisor" ] && [ "$(uname -s 2>/dev/null)" = Darwin ] && command -v launchctl >/dev/null 2>&1 &&
+        [ -f "$HOME/Library/LaunchAgents/$BLACKBOX_DASHBOARD_LAUNCHD_LABEL.plist" ]; then
+        supervisor=launchd
+    fi
     [ -n "$supervisor" ] || return 0
     blackbox_dashboard_control reload "$supervisor" >/dev/null 2>&1 ||
         warn "Could not restart the Blackbox dashboard; restart its $supervisor service."
