@@ -42,9 +42,9 @@ from pathlib import Path
 from typing import Callable, Optional, Sequence
 
 from .. import sync   # sync's public entry: the service names, which process is our node
-from ..kernel import constants, system_helper, terminal_question, yaml_files
+from ..kernel import addons, constants, system_helper, terminal_question, yaml_files
 from ..kernel.host_command import hermes_argv
-from .uninstall_outside import Runner, _remove_from_agents, _remove_system_helper, _run_at_terminal
+from .uninstall_outside import Runner, _remove_agent_hooks, _remove_from_agents, _remove_system_helper, _run_at_terminal
 
 #: Files a node needs to keep its identity and wallet (DKG home), and Blackbox's own reporter
 #: identity and sharing consent ($BLACKBOX_HOME). Moved to the backup unless --purge.
@@ -87,6 +87,8 @@ class UninstallPlan:
     dashboard_port: int = constants.DEFAULT_DASHBOARD_PORT   # where a directly started dashboard would be listening
     notes: tuple[str, ...] = field(default_factory=tuple)
     system_helper: Optional[Path] = None   # the system protection helper (macOS), when installed
+    agent_hooks: tuple[str, ...] = ()      # coding agents whose config holds Blackbox's hooks
+    addons: tuple[Path, ...] = ()          # add-on folders beside the plugin (kernel.addons)
 
 
 def _configured_dkg_home(home: Path) -> Optional[Path]:
@@ -137,8 +139,11 @@ def build_plan(*, purge: bool, keep_logs: bool, now: Optional[_dt.datetime] = No
     system = platform.system()
     helper = system_helper.BINARY if system == "Darwin" and (
         system_helper.BINARY.exists() or system_helper.LAUNCH_DAEMON.exists()) else None
+    from .. import agent_hooks   # agent_hooks' public entry
+    addon_folders = tuple(home / "plugins" / name for home in hermes_homes for name in addons.ADDON_PACKAGES
+                          if (home / "plugins" / name).is_dir())
     return UninstallPlan(
-        system_helper=helper,
+        system_helper=helper, agent_hooks=tuple(agent_hooks.hooked_agents()), addons=addon_folders,
         system=system, hermes_homes=hermes_homes, blackbox_home=blackbox_home, dkg_home=dkg_home,
         key_files=tuple(p for p in keys if p.is_file()),
         backup_dir=None if purge else Path.home() / f"blackbox-backup-{stamp}",
@@ -153,6 +158,10 @@ def describe(plan: UninstallPlan) -> list[str]:
         lines.append("  - remove the system protection helper and put DNS and the firewall back "
                      "(macOS asks for your admin password)")
     lines.append("  - stop and remove Blackbox's login services (node, dashboard)")
+    if plan.agent_hooks:
+        lines.append(f"  - take Blackbox's hooks out of {', '.join(plan.agent_hooks)} (their other settings stay)")
+    for folder in plan.addons:
+        lines.append(f"  - remove the add-on {folder}")
     for home in plan.hermes_homes:
         lines.append(f"  - remove Blackbox from the Hermes in {home} (its other settings and comments stay)")
     if plan.dkg_home:
@@ -293,6 +302,7 @@ def execute(plan: UninstallPlan, *, run: Runner = _run,
     _stop_unsupervised_node(plan, report)
     _back_up(plan, report)
     hermes_installed = _remove_from_agents(plan, report)
+    _remove_agent_hooks(plan, report)
     _delete_data(plan, report)
     for home in hermes_installed:   # last: this removes the code that is running
         env_home = str(home)

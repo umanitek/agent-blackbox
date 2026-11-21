@@ -1,6 +1,7 @@
 """What ``blackbox uninstall`` removes OUTSIDE Blackbox's own folders: the system protection helper
-(macOS, through its own uninstall, which puts DNS and the firewall back) and Blackbox's place in
-each agent (Hermes homes' config entries and plugin folders, through ``attach``).
+(macOS, through its own uninstall, which puts DNS and the firewall back), Blackbox's place in
+each agent (Hermes homes' config entries and plugin folders, through ``attach``), its hooks in
+coding agents' configs (through ``agent_hooks``) and the add-on folders beside the plugin.
 
 Split out of :mod:`.uninstall` (size guard); :func:`.uninstall.execute` calls these in order.
 """
@@ -69,3 +70,17 @@ def _remove_from_agents(plan: UninstallPlan, report: list[str]) -> list[Path]:
             shutil.rmtree(home / "plugins" / "blackbox", ignore_errors=True)
         report.append(f"removed Blackbox from the Hermes in {home}")
     return hermes_installed
+
+
+def _remove_agent_hooks(plan: UninstallPlan, report: list[str]) -> None:
+    """Coding agents' hooks and the add-on folders: left behind, every agent would run a hook whose
+    runner is about to be deleted (E2E 2026-11-21), and the add-on would load into a Hermes
+    without Blackbox."""
+    if plan.agent_hooks:
+        from .. import agent_hooks   # agent_hooks' public entry
+        for row in agent_hooks.remove_all():
+            report.append(f"took Blackbox's hooks out of {row['name']} ({row['target']})" if row["ok"]
+                          else f"could not edit {row['target']}: {row['note']} — remove Blackbox's hooks there by hand")
+    for folder in plan.addons:
+        shutil.rmtree(folder, ignore_errors=True)
+        report.append(f"removed the add-on {folder}")

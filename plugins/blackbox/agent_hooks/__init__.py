@@ -38,7 +38,8 @@ from .protect import config_edit, own_files
 from .protect.events import note_error, read_state, record_event, write_state
 from ..kernel.agent_hosts import BY_ID, HOSTS, Host
 
-__all__ = ["KINDS", "AgentRow", "note_error", "record_event", "rows", "set_protection", "sweep"]
+__all__ = ["KINDS", "AgentRow", "hooked_agents", "note_error", "record_event", "remove_all", "rows", "set_protection",
+           "sweep"]
 
 #: The agent ids this module answers for (``/api/agent-hooks/protection`` accepts these).
 KINDS = tuple(BY_ID)
@@ -167,4 +168,22 @@ def sweep() -> list[dict[str, Any]]:
         wanted = [command for _argv, command in _invocations(host).values()]
         if host.style in _OWN_FILE_STYLES or sorted(current) != sorted(wanted):
             done.append(asdict(install(host)) | {"kind": host.id})
+    return done
+
+
+def hooked_agents() -> list[str]:
+    """The names of the coding agents whose config holds Blackbox's hooks now."""
+    return [host.name for host in HOSTS if _editor(host).installed_commands(host, _home())]
+
+
+def remove_all() -> list[dict[str, Any]]:
+    """Take Blackbox's hooks out of every coding agent's config (the person's own hooks stay) —
+    what ``blackbox uninstall`` does, so no agent is left running a hook whose runner is deleted.
+    Returns one ``{kind, ok, target, note}`` per agent that had Blackbox's hooks."""
+    done = []
+    for host in HOSTS:
+        if not _editor(host).installed_commands(host, _home()):
+            continue
+        result = _editor(host).uninstall(host, _home())
+        done.append({"kind": host.id, "name": host.name, "ok": result.ok, "target": result.path, "note": result.error})
     return done

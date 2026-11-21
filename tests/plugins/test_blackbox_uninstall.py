@@ -361,3 +361,41 @@ def test_the_manual_fallback_is_the_helpers_own_uninstall_never_a_bootout(machin
     text = "\n".join(report)
     assert f"sudo '{unseen}' uninstall" in text
     assert "bootout" not in text and "rm /Library/LaunchDaemons" not in text
+
+
+# ------------------------------------------------------------------ coding agents' hooks and add-ons
+
+
+def _claude_settings(machine: Path, blackbox_command: str) -> Path:
+    settings = machine / ".claude" / "settings.json"
+    settings.parent.mkdir(parents=True, exist_ok=True)
+    mine = {"type": "command", "command": "echo my own hook"}
+    ours = {"type": "command", "command": blackbox_command}
+    settings.write_text(json.dumps({"theme": "dark", "hooks": {"PreToolUse": [
+        {"matcher": "*", "hooks": [mine]}, {"matcher": "*", "hooks": [ours]}]}}), encoding="utf-8")
+    return settings
+
+
+def test_uninstall_takes_blackboxs_hooks_out_of_coding_agents_and_keeps_the_persons(machine):
+    """E2E 2026-11-21: after uninstall every agent still ran ~/.hermes/blackbox/agent-hooks/runner.py,
+    which uninstall had deleted. Only Blackbox's entries go; the person's own hook and settings stay."""
+    from plugins.blackbox.agent_hooks.protect import config_edit
+    runner = machine / ".hermes" / "blackbox" / "agent-hooks" / "runner.py"
+    settings = _claude_settings(machine, f"/usr/bin/python3 {runner} claude-code pre_tool {config_edit.MARK}")
+    plan = _plan(machine)
+    assert "Claude Code" in "\n".join(uninstall.describe(plan))
+    _calls, report = _execute(plan)
+    data = json.loads(settings.read_text(encoding="utf-8"))
+    commands = [hook["command"] for group in data.get("hooks", {}).get("PreToolUse", []) for hook in group["hooks"]]
+    assert commands == ["echo my own hook"] and data["theme"] == "dark"
+    assert any("took Blackbox's hooks out of Claude Code" in line for line in report)
+
+
+def test_uninstall_removes_the_add_on_beside_the_plugin(machine):
+    addon = machine / ".hermes" / "plugins" / "blackbox_desktop"
+    addon.mkdir(parents=True)
+    (addon / "__init__.py").write_text("", encoding="utf-8")
+    plan = _plan(machine)
+    assert f"remove the add-on {addon}" in "\n".join(uninstall.describe(plan))
+    _execute(plan)
+    assert not addon.exists()
