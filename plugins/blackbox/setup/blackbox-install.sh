@@ -3382,7 +3382,7 @@ UNIT
 <plist version="1.0"><dict>
   <key>Label</key><string>$BLACKBOX_DKG_LAUNCHD_LABEL</string>
   <key>ProgramArguments</key><array>
-    <string>$BLACKBOX_DKG_BIN</string><string>start</string><string>--foreground</string>
+    <string>$(xml_escape "$(write_service_launcher "Blackbox Node" "$BLACKBOX_DKG_BIN")")</string><string>start</string><string>--foreground</string>
   </array>
   <key>EnvironmentVariables</key><dict>
     <key>PATH</key><string>$(xml_escape "$node_bin_dir:$BLACKBOX_SERVICE_SYSTEM_PATH")</string>
@@ -3420,6 +3420,30 @@ PLIST
 # Disable anytime:
 #   Linux:  systemctl disable --now blackbox-dashboard
 #   macOS:  launchctl unload ~/Library/LaunchAgents/ai.umanitek.blackbox-dashboard.plist
+
+# A launcher in Blackbox's data folder that a LaunchAgent names instead of a program inside
+# Hermes's VERSIONED environment (E2E 2026-11-21): macOS lists a login item by the program it
+# runs, so the services show as "Blackbox" and "Blackbox Node" rather than "hermes" and "dkg";
+# and an update that prunes an old environment never leaves a service pointing at nothing —
+# the launcher runs the program recorded now, else Hermes's own launcher.
+# Usage: write_service_launcher "Blackbox" "$HERMES_BIN" "$HOME/.local/bin/hermes"  → prints its path
+write_service_launcher() {
+    local name="$1" dir="$BLACKBOX_HOME/bin" launcher program
+    shift
+    mkdir -p "$dir"
+    launcher="$dir/$name"
+    {
+        printf '#!/bin/sh\n# %s: started by launchd for Agent Blackbox. Rewritten by the installer.\n' "$name"
+        printf 'for program in'
+        for program in "$@"; do printf " '%s'" "$(printf '%s' "$program" | sed "s/'/'\\\\''/g")"; done
+        printf '; do\n    [ -x "$program" ] && exec "$program" "$@"\ndone\n'
+        printf 'echo "%s: no program to start was found" >&2\nexit 1\n' "$name"
+    } > "$launcher.tmp"
+    chmod 755 "$launcher.tmp"
+    mv -f "$launcher.tmp" "$launcher"
+    printf '%s\n' "$launcher"
+}
+
 register_dashboard_service() {
     case "$BLACKBOX_AUTO_DASHBOARD" in
         0|false|never|no) return 0 ;;
@@ -3488,7 +3512,7 @@ DASHUNIT
 <plist version="1.0"><dict>
   <key>Label</key><string>ai.umanitek.blackbox-dashboard</string>
   <key>ProgramArguments</key><array>
-    <string>$HERMES_BIN</string><string>blackbox</string><string>dashboard</string>
+    <string>$(xml_escape "$(write_service_launcher "Blackbox" "$HERMES_BIN" "$HOME/.local/bin/hermes")")</string><string>blackbox</string><string>dashboard</string>
   </array>
   <key>EnvironmentVariables</key><dict>
     <key>PATH</key><string>$(xml_escape "$HOME/.local/bin:$node_bin_dir:$BLACKBOX_SERVICE_SYSTEM_PATH")</string>

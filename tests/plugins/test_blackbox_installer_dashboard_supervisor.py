@@ -97,14 +97,14 @@ class Machine:
             "sleep() { :; }", "id() { echo 1000; }", "xml_escape() { printf '%s' \"$1\"; }",
             f'run_detached() {{ echo launched >> "{self.launched}"; }}',
             f"HOME={self.home}", f"HERMES_HOME={self.home}/.hermes", f"HERMES_BIN={self.stubs}/hermes",
-            f"REPO_DIR={self.repo}", f"BLACKBOX_SYSTEMD_DIR={self.home}/etc-systemd",
+            f"REPO_DIR={self.repo}", f"BLACKBOX_SYSTEMD_DIR={self.home}/etc-systemd", f"BLACKBOX_HOME={self.home}/.hermes/blackbox",
             "BLACKBOX_AUTO_DASHBOARD=1",
             _constant("BLACKBOX_SERVICE_SYSTEM_PATH"),
             _constant("BLACKBOX_DASHBOARD_LAUNCHD_LABEL"),
             _constant("BLACKBOX_DASHBOARD_ANSWER_WAIT_SECONDS"),
             _constant("BLACKBOX_DASHBOARD_RESTART_PENDING"),
             _constant("BLACKBOX_LAUNCHD_GONE_TRIES"),
-            *(_function(name) for name in ("blackbox_launchd_wait_gone", "blackbox_dashboard_supervisor", "blackbox_dashboard_control",
+            *(_function(name) for name in ("write_service_launcher", "blackbox_launchd_wait_gone", "blackbox_dashboard_supervisor", "blackbox_dashboard_control",
                                            "blackbox_dashboard_answers_within", "start_dashboard",
                                            "register_dashboard_service", "rollback_restart_dashboard")),
             *lines,
@@ -237,3 +237,22 @@ def test_a_reload_waits_for_launchd_to_let_go_before_loading_again(tmp_path):
 def test_the_rollback_restarts_the_dashboard_after_the_files_are_back():
     body = _function("rollback_install")
     assert body.index("rollback_files") < body.index("rollback_restart_dashboard")
+
+
+def test_the_launch_agent_runs_a_blackbox_named_launcher_that_survives_a_pruned_environment(tmp_path):
+    """E2E 2026-11-21: macOS listed the dashboard as "hermes" (the program it ran, inside Hermes's
+    versioned environment). It now runs <BLACKBOX_HOME>/bin/Blackbox, which starts the Hermes
+    recorded at install, else Hermes's own launcher when that environment is gone."""
+    machine = Machine(tmp_path, system="Darwin", answers=None)
+    result = machine.run("start_dashboard", "register_dashboard_service")
+    assert result.returncode == 0, result.stderr
+    plist = (tmp_path / "Library" / "LaunchAgents" / "ai.umanitek.blackbox-dashboard.plist").read_text()
+    launcher = tmp_path / ".hermes" / "blackbox" / "bin" / "Blackbox"
+    assert f"<string>{launcher}</string><string>blackbox</string>" in plist
+    fallback = tmp_path / ".local" / "bin" / "hermes"
+    fallback.parent.mkdir(parents=True)
+    fallback.write_text("#!/bin/sh\necho fallback \"$@\"\n")
+    fallback.chmod(0o755)
+    (machine.stubs / "hermes").unlink()                      # the recorded environment was pruned
+    ran = subprocess.run([str(launcher), "blackbox", "dashboard"], capture_output=True, text=True, check=False)
+    assert ran.stdout.strip() == "fallback blackbox dashboard"
