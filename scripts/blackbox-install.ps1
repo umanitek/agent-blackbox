@@ -73,6 +73,13 @@ $DkgStoreUrl = if ($env:BLACKBOX_DKG_STORE_URL) { $env:BLACKBOX_DKG_STORE_URL } 
 # How long a restarted DKG node may take to answer again: a node holding the whole verified graph
 # spends ~100 s reopening its store, so a fixed 90 s failed every update of a synced install (KI-457).
 $DkgRuntimeWaitSeconds = if ($env:BLACKBOX_DKG_RUNTIME_WAIT_SECONDS) { [int]$env:BLACKBOX_DKG_RUNTIME_WAIT_SECONDS } else { 300 }
+# Past that budget the wait follows the node's REAL progress, as the macOS/Linux installer does
+# (FIX-0268, KI-520/521): it keeps waiting while the same node process runs and its daemon.log grows,
+# and fails when the log has been silent this long, or at the overall ceiling; one wait slice is
+# how long each "is it answering yet?" question waits.
+$DkgStallSeconds = if ($env:BLACKBOX_DKG_STALL_SECONDS) { [int]$env:BLACKBOX_DKG_STALL_SECONDS } else { 180 }
+$DkgLoadCeilingSeconds = if ($env:BLACKBOX_DKG_LOAD_CEILING_SECONDS) { [int]$env:BLACKBOX_DKG_LOAD_CEILING_SECONDS } else { 1800 }
+$DkgWaitSliceSeconds = if ($env:BLACKBOX_DKG_WAIT_SLICE_SECONDS) { [int]$env:BLACKBOX_DKG_WAIT_SLICE_SECONDS } else { 15 }
 $DkgStoreManagedByDkg = $false
 $script:DkgStoreNamespace = "agent-blackbox"
 $script:DkgSelectedStoreBackend = ""
@@ -479,15 +486,55 @@ function Wait-BlackboxDkgRuntime {
         Write-Warn2 "Could not resolve the published DKG build commit."
         return $false
     }
-    Write-Step "Waiting for the DKG node to answer (up to $($DkgRuntimeWaitSeconds)s; a synced node takes about 2 minutes) ..."
-    $null = & $script:VenvPython $verifier wait $DkgDaemonUrl $expectedCommit $DkgRuntimeWaitSeconds
-    if ($LASTEXITCODE -ne 0) {
-        $script:InstallIncomplete = $true
-        Write-Warn2 "The DKG daemon did not activate npm build $($expectedCommit.Substring(0, 12)) within $($DkgRuntimeWaitSeconds)s."
-        return $false
+    Write-Step "Waiting for the DKG node to answer (a synced node reopens its threat graph in a few minutes) ..."
+    $started = Get-Date; $progress = $started; $lastSize = Get-BlackboxDkgLogSize; $firstPid = $null; $why = ""
+    while ($true) {
+        $null = & $script:VenvPython $verifier wait $DkgDaemonUrl $expectedCommit $DkgWaitSliceSeconds
+        if ($LASTEXITCODE -eq 0) { break }
+        $now = Get-Date
+        $nodePid = Get-BlackboxDkgLivePid
+        $size = Get-BlackboxDkgLogSize
+        if ($size -ne $lastSize) { $progress = $now; $lastSize = $size }
+        if ($nodePid -and -not $firstPid) {
+            $firstPid = $nodePid
+        } elseif ($firstPid -and $nodePid -ne $firstPid) {
+            $why = if ($nodePid) { "the node stopped and was started again (pid $firstPid -> $nodePid)" } else { "the node stopped" }
+        }
+        $elapsed = [int]($now - $started).TotalSeconds
+        if (-not $why -and $elapsed -ge $DkgRuntimeWaitSeconds) {
+            $silent = [int]($now - $progress).TotalSeconds
+            if (-not $nodePid) { $why = "the node is not running" }
+            elseif ($silent -ge $DkgStallSeconds) { $why = "the node has written nothing for $($silent)s" }
+            elseif ($elapsed -ge $DkgLoadCeilingSeconds) { $why = "it was still starting after $($elapsed)s" }
+            else { Write-Step "  ... the node is still loading its threat graph ($($elapsed)s, pid $nodePid); Network Shield keeps its last lists meanwhile" }
+        }
+        if ($why) {
+            $script:InstallIncomplete = $true
+            Write-Warn2 "The DKG daemon did not activate npm build $($expectedCommit.Substring(0, 12)): $why."
+            $log = Join-Path $DkgHome "daemon.log"
+            if (Test-Path $log) { Get-Content -Path $log -Tail 15 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "    $_" } }
+            return $false
+        }
     }
     Write-Ok "DKG daemon is ready on npm build $($expectedCommit.Substring(0, 12))"
     return $true
+}
+
+# The DKG node's pid when that process is running, else $null (daemon.pid in Blackbox's node home).
+function Get-BlackboxDkgLivePid {
+    $pidPath = Join-Path $DkgHome "daemon.pid"
+    if (-not (Test-Path $pidPath)) { return $null }
+    $text = (Get-Content -Path $pidPath -Raw -ErrorAction SilentlyContinue) -replace '[^0-9]', ''
+    if (-not $text) { return $null }
+    if (Get-Process -Id ([int]$text) -ErrorAction SilentlyContinue) { return [int]$text }
+    return $null
+}
+
+# The size of the node's daemon.log (0 when there is none): it grows while the node is working.
+function Get-BlackboxDkgLogSize {
+    $log = Join-Path $DkgHome "daemon.log"
+    if (Test-Path $log) { return (Get-Item -Path $log).Length }
+    return 0
 }
 
 function Move-LegacyBlackboxDkgHome {

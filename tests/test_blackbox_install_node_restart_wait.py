@@ -163,7 +163,26 @@ def test_the_installer_has_no_fixed_runtime_wait_left():
         assert not re.search(r"\$expected_?[cC]ommit\"? 90\b", text), path
     ps1 = INSTALL_PS1.read_text(encoding="utf-8")
     assert "$env:BLACKBOX_DKG_RUNTIME_WAIT_SECONDS" in ps1 and "else { 300 }" in ps1
-    assert "$expectedCommit $DkgRuntimeWaitSeconds" in ps1
+
+
+def test_the_windows_installer_follows_the_nodes_progress_like_the_mac_one():
+    """KI-520/521 on Windows (recheck 2026-11-21): the .ps1 still made ONE fixed 300 s wait, so a
+    synced install's update rolled back there too. No PowerShell runs in this suite's macOS lane
+    (the parse test runs it on CI's Linux runner), so this pins the contract the shell harness
+    above proves for the .sh: slice-by-slice waits, the same stall / ceiling / slice settings and
+    defaults, a pid-change and not-running check, and no single fixed wait left."""
+    ps1 = INSTALL_PS1.read_text(encoding="utf-8")
+    assert "$expectedCommit $DkgRuntimeWaitSeconds" not in ps1, "the one fixed wait is gone"
+    assert "$expectedCommit $DkgWaitSliceSeconds" in ps1
+    sh = INSTALL_SH.read_text(encoding="utf-8")
+    for setting, variable, default in (("BLACKBOX_DKG_STALL_SECONDS", "$DkgStallSeconds", "180"),
+                                       ("BLACKBOX_DKG_LOAD_CEILING_SECONDS", "$DkgLoadCeilingSeconds", "1800"),
+                                       ("BLACKBOX_DKG_WAIT_SLICE_SECONDS", "$DkgWaitSliceSeconds", "15")):
+        assert f'{setting}:-{default}' in sh, setting
+        assert f"$env:{setting}" in ps1 and f"{variable} = " in ps1 and f"else {{ {default} }}" in ps1, setting
+    for clue in ("the node is not running", "the node has written nothing for", "was started again",
+                 "still loading its threat graph", "Get-BlackboxDkgLivePid", "Get-BlackboxDkgLogSize"):
+        assert clue in ps1, clue
 
 
 def test_the_plugin_ships_the_same_installers():
