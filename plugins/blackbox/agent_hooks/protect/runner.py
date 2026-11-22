@@ -195,8 +195,13 @@ def _session(payload: dict) -> str:
     return str(value or "")[:200]
 
 
-#: File Shield's sandbox canary (``shields/files/sandbox``): beside this runner's folder in Blackbox's home.
-CANARY = Path(__file__).resolve().parent.parent / "sandbox" / "canary"
+#: Blackbox's home at run time. WHY: this runner is a COPY installed at
+#: ``$BLACKBOX_HOME/agent-hooks/runner.py``, so its grandparent folder is that home — not the plugin
+#: source tree. Files below it are created at run time, never shipped as package data.
+INSTALLED_HOME = Path(__file__).resolve().parent.parent
+
+#: File Shield's sandbox canary (``shields/files/sandbox``), written into Blackbox's home at run time.
+CANARY = INSTALLED_HOME / "sandbox" / "canary"
 
 
 def sandboxed() -> bool:
