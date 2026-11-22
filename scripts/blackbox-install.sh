@@ -31,14 +31,33 @@ REPO_BRANCH="${BLACKBOX_REPO_BRANCH:-main}"
 BLACKBOX_SETUP_ONLY="${BLACKBOX_SETUP_ONLY:-false}"
 REPO_DIR=""   # set by resolve_repo; setup-only mode has no checkout
 HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
+# The Hermes this installer put here earlier (an Agent Blackbox checkout behind ~/.local/bin/hermes).
+our_installed_hermes_dir() {
+    local launcher="$HOME/.local/bin/hermes" dir=""
+    [ -x "$launcher" ] || return 1
+    dir="$("$launcher" --version 2>/dev/null | sed -n 's/^Install directory: *//p' | head -n 1)"
+    [ -n "$dir" ] && [ -f "$dir/plugins/blackbox/plugin.yaml" ] || return 1
+    printf '%s\n' "$dir"
+}
+
+# The checkout an earlier run of this installer installed ("" = none): a re-run installs THERE.
+BLACKBOX_INSTALLED_CHECKOUT=""
+if [ "$BLACKBOX_SETUP_ONLY" != true ]; then
+    BLACKBOX_INSTALLED_CHECKOUT="$(our_installed_hermes_dir || true)"
+fi
 # Keep the managed npm DKG package and node state inside the Agent Blackbox
-# checkout. For a local script this is the current repository; for curl | bash
-# the default is ./agent-blackbox beneath the directory where the user invoked
-# the installer. BLACKBOX_INSTALL_DIR remains the explicit override.
+# checkout. For a local script this is the current repository; when Blackbox is
+# already installed it is that install's checkout, wherever this script runs
+# from (KI-577: run from another folder, it cloned a second copy there and then
+# failed in Hermes's launcher step); for a first curl | bash install the default
+# is ./agent-blackbox beneath the directory where the user invoked the
+# installer. BLACKBOX_INSTALL_DIR remains the explicit override.
 if [ -n "${BLACKBOX_INSTALL_DIR:-}" ]; then
     BLACKBOX_INSTALL_ROOT="$BLACKBOX_INSTALL_DIR"
 elif [ -f "$PWD/pyproject.toml" ] && [ -d "$PWD/plugins/blackbox" ]; then
     BLACKBOX_INSTALL_ROOT="$PWD"
+elif [ -n "$BLACKBOX_INSTALLED_CHECKOUT" ]; then
+    BLACKBOX_INSTALL_ROOT="$BLACKBOX_INSTALLED_CHECKOUT"
 else
     BLACKBOX_INSTALL_ROOT="$PWD/agent-blackbox"
 fi
@@ -3058,10 +3077,27 @@ BLACKBOX_NPM_REGISTRY_PING="https://registry.npmjs.org/-/ping"
 
 preflight_install() {
     heading "Checking this machine can take the whole install"
+    preflight_one_checkout
     preflight_disk
     preflight_network
     preflight_store_choice
     ok "Pre-flight passed; installing"
+}
+
+# One Blackbox checkout per machine. The hermes command an earlier install published runs that
+# checkout, and Hermes's own setup will not hand it to a second copy ("launcher publication
+# failed"), so an install that would make a second copy stops HERE with the real reason (KI-577)
+# — before anything is cloned or changed. Setup-only mode has no checkout of its own.
+preflight_one_checkout() {
+    [ "$BLACKBOX_SETUP_ONLY" != true ] && [ -n "$BLACKBOX_INSTALLED_CHECKOUT" ] || return 0
+    local installed target
+    installed="$(cd "$BLACKBOX_INSTALLED_CHECKOUT" 2>/dev/null && pwd -P)"
+    target="$(cd "$BLACKBOX_INSTALL_ROOT" 2>/dev/null && pwd -P || true)"
+    [ -n "$installed" ] && [ "$installed" = "$target" ] && return 0
+    err "Blackbox is already installed from $BLACKBOX_INSTALLED_CHECKOUT; this run would install a second copy at $BLACKBOX_INSTALL_ROOT."
+    step "To install into it again, run: $BLACKBOX_INSTALLED_CHECKOUT/scripts/blackbox-install.sh (or the one-line installer without BLACKBOX_INSTALL_DIR)."
+    step "To install somewhere else, remove the existing install first: blackbox uninstall"
+    exit 1
 }
 
 # Free kilobytes on the filesystem that holds PATH (or its nearest existing parent).
@@ -4230,15 +4266,6 @@ other_hermes_in_home() {
     [ -x "$dir/.hermes/bin/hermes" ] || return 1
     [ -f "$dir/plugins/blackbox/plugin.yaml" ] && return 1
     printf '%s\n' "$dir/.hermes/bin/hermes"
-}
-
-# The Hermes this installer put here earlier (an Agent Blackbox checkout behind ~/.local/bin/hermes).
-our_installed_hermes_dir() {
-    local launcher="$HOME/.local/bin/hermes" dir=""
-    [ -x "$launcher" ] || return 1
-    dir="$("$launcher" --version 2>/dev/null | sed -n 's/^Install directory: *//p' | head -n 1)"
-    [ -n "$dir" ] && [ -f "$dir/plugins/blackbox/plugin.yaml" ] || return 1
-    printf '%s\n' "$dir"
 }
 
 # Stops Blackbox's dashboard: through its supervisor, then one setup started directly on its port —
