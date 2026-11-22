@@ -33,7 +33,6 @@ Usage::
 
 from __future__ import annotations
 
-import glob
 import hashlib
 import json
 import logging
@@ -50,7 +49,7 @@ from ....kernel.bounded_files import atomic_write
 from ...contract import OPTION_NOT_INSTALLED, OPTION_SUPPORTED, OPTION_UNAVAILABLE, ShieldMode
 from .. import mode as mode_module
 from ..protect import is_folder
-from . import platform
+from . import addon_places, platform
 from .places import Places, build
 
 __all__ = ["CLI_AGENTS", "HERMES_LAUNCHER_ENV", "HERMES_SHELLS", "HermesCover", "Places", "enter_hermes_process", "enter_hermes_session", "hermes_shell_dir", "launcher_dir", "offer",
@@ -132,27 +131,10 @@ def chosen(mode: ShieldMode) -> tuple[str, ...]:
     return tuple(mode.options.get(mode_module.OPT_SANDBOXED, ())) if mode.enabled else ()
 
 
-#: The most places an add-on's declared pattern expands to in the profile.
-MAX_ADDON_PLACES = 200
-
-
-def _addon_places() -> list[str]:
-    """Every add-on folder beside the plugin and every place the loaded add-ons declare
-    (``kernel.addons``; a ``*`` pattern expanded to what exists now). WHY (private security
-    finding, security round 3): the hook guarded these, the kernel profile did not — a sandboxed
-    agent's script the static judge could not read changed and removed a file inside an add-on's
-    folder. Asked on every :func:`sync` (the helper's watch plan polls it about every 2 s), so an
-    add-on installed after the profile was written is covered within seconds."""
-    places = list(addons.folders(str(_PLUGIN.parent)))
-    for place in addons.places():
-        places += sorted(glob.glob(place))[:MAX_ADDON_PLACES] if any(mark in place for mark in "*?[") else [place]
-    return places[:MAX_ADDON_PLACES]
-
-
 def policy(mode: ShieldMode) -> Places:
     """The sandbox's policy for *mode*: the person's items, Blackbox's keys and own places (the
-    add-ons' among them, and every add-on manifest — see :func:`_addon_places`)."""
-    own = (str(constants.blackbox_home()), str(_PLUGIN), *_addon_places())
+    add-ons' among them, and every add-on manifest — see :mod:`.addon_places`)."""
+    own = (str(constants.blackbox_home()), str(_PLUGIN), *addon_places.of(_PLUGIN.parent))
     hooks = _hook_configs()
     startup = [str(Path.home() / name) for name in shell_path.STARTUP_FILES] + hooks
     holders = sorted({os.path.dirname(path) for path in hooks} - {str(Path.home())})
