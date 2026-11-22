@@ -439,3 +439,30 @@ def test_a_watched_folder_notice_has_its_own_switch_on_by_default_and_turning_it
 def test_a_shield_alert_with_an_unknown_category_is_a_security_notice():
     alert = shields.ShieldAlert(key="k", kind="x", ts=NOW, severity="high", title="t", text="x", category="made-up")
     assert sources._shield_notice(alert).category == "security"
+
+
+def test_a_kernel_sandbox_refusal_names_the_agent_instance_it_was_attributed_to():
+    """KI-586, FIX-0366 (round 3, s3-cc8b): the OS sandbox refused a sandboxed Claude Code's script changing
+    ~/.claude/settings.json; its instance row named the Claude Code session, but the notice said
+    "Blackbox stopped agent-sandbox — agent-sandbox tried to change, remove or switch off Blackbox"."""
+    from plugins.blackbox import audit
+    from plugins.blackbox.agent_hooks import owners
+    from plugins.blackbox.kernel import threat_ids
+
+    refusal = _finding(threat_ids.fileaccess_identifier("sandbox", threat_ids.SELF_PROTECTION), ts=NOW + 5,
+                       framework=audit.SANDBOX_RECORDER, tool_call_id="sandbox-self:1", category="fileaccess", workspace="",
+                       title="Blackbox's sandbox stopped Python changing /Users/admin/.claude/settings.json, which keeps Blackbox's hook")
+    session = "claude-code:00112233aabbccdd"
+    for owner, name in ((owners.Owner("claude-code", session, "", "s3-cc8b", 812), "Claude Code"), (None, None)):
+        findings = []
+        collector = sources.Collector(read_alerts=list, read_findings=lambda: list(findings), read_live=_tree,
+                                      read_owners=lambda: (lambda row, found=owner: found))
+        collector.collect(NOW)
+        findings.append(refusal)
+        [notice] = collector.collect(NOW + 5)
+        assert "agent-sandbox" not in notice.title + notice.body + notice.agent_name
+        if name:
+            assert notice.title == "Blackbox stopped Claude Code" and notice.agent == "claude-code"
+            assert notice.instance == session and notice.project == "s3-cc8b" and notice.body.startswith("Claude Code in s3-cc8b ")
+        else:   # no instance was live and sandboxed then: said honestly, never guessed
+            assert notice.body.startswith("A program in Blackbox's agent sandbox ")

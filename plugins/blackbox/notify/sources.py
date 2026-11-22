@@ -21,7 +21,7 @@ import time
 from typing import Any, Callable, Iterable, Mapping, Optional
 
 from .. import audit, shields
-from ..agent_hooks import tracking
+from ..agent_hooks import owners, tracking
 from . import wording
 from .model import CATEGORIES, Notice
 
@@ -39,6 +39,18 @@ def _shield_notice(alert: shields.ShieldAlert) -> Notice:
                   agent=alert.agent, agent_name=wording.agent_name(alert.agent) if alert.agent else "")
 
 
+def _attributed(row: Mapping[str, Any], owner_of: Optional[Callable[[Mapping[str, Any]], Optional[owners.Owner]]]) -> Mapping[str, Any]:
+    """An OS-sandbox refusal (recorded as ``agent-sandbox``: the kernel's log names a program, not
+    an agent) as the agent instance it was attributed to — KI-586: the notice said "Blackbox
+    stopped agent-sandbox" while the instance row named the Claude Code session."""
+    if owner_of is None or row.get("framework") != audit.SANDBOX_RECORDER:
+        return row
+    owner = owner_of(row)
+    if owner is None:
+        return row
+    return {**row, "framework": owner.agent, "session_id": owner.instance, "workspace": owner.folder}
+
+
 class Collector:
     """Reads the three sources and answers the notices not seen before.
 
@@ -47,10 +59,12 @@ class Collector:
 
     def __init__(self, read_alerts: Optional[Callable[[], Iterable[shields.ShieldAlert]]] = None,
                  read_findings: Optional[Callable[[], Iterable[Mapping[str, Any]]]] = None,
-                 read_live: Optional[Callable[[], Mapping[str, Any]]] = None) -> None:
+                 read_live: Optional[Callable[[], Mapping[str, Any]]] = None,
+                 read_owners: Optional[Callable[[], Callable[[Mapping[str, Any]], Optional[owners.Owner]]]] = None) -> None:
         self._read_alerts = read_alerts or (lambda: shields.alerts(limit=100))
         self._read_findings = read_findings or (lambda: audit.read_findings(limit=FINDINGS_READ))
         self._read_live = read_live or tracking.live
+        self._read_owners = read_owners or owners.finding_owners
         self._primed = False
         self._seen: dict[str, float] = {}                    # notice id → when first seen
         self._covered: set[str] = set()                      # finding identifiers a shield alert speaks for
@@ -76,7 +90,8 @@ class Collector:
 
     def _from_findings(self) -> list[Notice]:
         rows = [row for row in self._read_findings() if str(row.get("identifier") or "") not in self._covered]
-        return self._new(wording.finding(row) for row in rows)
+        owner_of = self._read_owners() if any(row.get("framework") == audit.SANDBOX_RECORDER for row in rows) else None
+        return self._new(wording.finding(_attributed(row, owner_of)) for row in rows)
 
     def _from_instances(self, now: float, digest_minutes: int) -> list[Notice]:
         tree = self._read_live()

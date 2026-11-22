@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 from typing import Any, Mapping, Optional
 
+from ..audit import SANDBOX_RECORDER
 from ..kernel import threat_ids
 from ..kernel.agent_hosts import BY_ID, DECISION_TOO_LATE
 from .model import Notice
@@ -40,10 +41,16 @@ WHY = {"public": "it matches the verified threat graph", "community": "the commu
 _LEVEL = {"critical": "critical", "high": "warning", "medium": "warning"}
 
 
+#: Who a sandbox refusal no agent instance could be found for is said to be (never "agent-sandbox").
+SANDBOX_PROGRAM = "a program in Blackbox's agent sandbox"
+
+
 def agent_name(agent: str) -> str:
     """The product's name for an agent id (the Hermes agent for Blackbox's own host)."""
     if agent in BY_ID:
         return BY_ID[agent].name
+    if agent == SANDBOX_RECORDER:
+        return SANDBOX_PROGRAM
     return "Your Hermes agent" if agent in ("", "hermes") else agent
 
 
@@ -62,6 +69,7 @@ def finding(row: Mapping[str, Any]) -> Optional[Notice]:
         return None
     agent = str(row.get("framework") or "hermes")
     name, project = agent_name(agent), project_of(row.get("workspace"))
+    subject = name[:1].upper() + name[1:]   # a sentence that starts with the name
     ts = float(row.get("ts") or 0)
     stopped = str(row.get("decision") or "") in ("block", "blocked")
     severity = str(row.get("severity") or "")
@@ -75,7 +83,7 @@ def finding(row: Mapping[str, Any]) -> Optional[Notice]:
                            "Open Blackbox to see which.", **common)
     if identifier == ELEVATION_ID:
         return Notice(id=key, kind="elevation-request", level="warning", title=f"{name} asked for administrator rights",
-                      body=f"{name}{_where(project)} ran a command that asks for root (sudo). Blackbox let it run and recorded it.",
+                      body=f"{subject}{_where(project)} ran a command that asks for root (sudo). Blackbox let it run and recorded it.",
                       **common)
     what = WHAT.get(str(row.get("category") or ""), "did something Blackbox watches for")
     why = WHY.get(str(row.get("source") or ""), "a Blackbox rule covers it")
@@ -85,13 +93,13 @@ def finding(row: Mapping[str, Any]) -> Optional[Notice]:
     if str(row.get("decision") or "") == DECISION_TOO_LATE:
         # Decided to stop, but the agent's hook had stopped waiting: the action RAN (KI-PENDING-f5765e).
         return Notice(id=key, kind="too-late", level="critical", title=f"Blackbox could not stop {name} in time",
-                      body=f"{name}{_where(project)} {what}. Blackbox decided to stop it, but its answer came after the agent's "
+                      body=f"{subject}{_where(project)} {what}. Blackbox decided to stop it, but its answer came after the agent's "
                            f"limit, so the action ran: {why}.", **common)
     if stopped:
         return Notice(id=key, kind="stopped", level="critical" if severity == "critical" else "warning",
-                      title=f"Blackbox stopped {name}", body=f"{name}{_where(project)} {what}. Stopped by Blackbox: {why}.", **common)
+                      title=f"Blackbox stopped {name}", body=f"{subject}{_where(project)} {what}. Stopped by Blackbox: {why}.", **common)
     return Notice(id=key, kind="flagged", level=_LEVEL.get(severity, "info"), title=f"Blackbox flagged {name}",
-                  body=f"{name}{_where(project)} {what}. Flagged, not stopped: {why}.", **common)
+                  body=f"{subject}{_where(project)} {what}. Flagged, not stopped: {why}.", **common)
 
 
 def _instance_common(row: Mapping[str, Any]) -> dict[str, Any]:
