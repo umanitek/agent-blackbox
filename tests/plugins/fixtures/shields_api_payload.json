@@ -250,7 +250,8 @@
     "claims": [
       "files:file-hit",
       "files:folder-hit",
-      "files:protected-mention"
+      "files:protected-mention",
+      "files:unseen-route"
     ]
   }
 ]

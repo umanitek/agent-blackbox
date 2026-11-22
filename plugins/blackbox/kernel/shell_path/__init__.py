@@ -9,8 +9,9 @@ to stay last and the person's file is never rewritten to move it (KI-540, E2E fu
 Adding twice changes nothing; removing takes out exactly the fenced lines and leaves the person's
 own lines as they were.
 
-Files: ``~/.zshrc`` (created when missing: macOS's default shell) and, when they exist,
-``~/.bashrc`` and ``~/.bash_profile``.
+Files: ``~/.zshrc`` and ``~/.zshenv`` (created when missing: macOS's default shell; ``.zshenv`` is
+read by every zsh, interactive or not) and, when they exist, ``~/.bashrc`` and ``~/.bash_profile``.
+What each way of starting an agent gets is :func:`coverage`.
 
 Guarding the block (KI-535, E2E full4 2026-11-22: a sandboxed agent appended to ``~/.zshrc`` and so
 could have deleted the block, sending every later agent outside the sandbox): every file a shell
@@ -35,7 +36,10 @@ from .. import agent_hosts
 
 BEGIN = "# >>> Blackbox agent sandbox >>> (managed by Blackbox — `blackbox uninstall` removes it)"
 END = "# <<< Blackbox agent sandbox <<<"
-ALWAYS = (".zshrc",)
+#: ``.zshrc`` for interactive zsh; ``.zshenv`` for EVERY zsh — ``zsh -c``, a zsh script, an SSH
+#: command (``ssh mac 'claude -p …'``), cron with zsh — which reads no ``.zshrc``. WHY: real headless
+#: runs started that way got the agent's real program and hooks only (test VM, 2026-11-22).
+ALWAYS = (".zshrc", ".zshenv")
 IF_PRESENT = (".bashrc", ".bash_profile")
 #: Every file zsh or bash reads when it starts: one written into could undo the block (a PATH line
 #: after it, or ``ZDOTDIR`` pointing zsh at other files), so the agent sandbox may write none of them.
@@ -178,6 +182,35 @@ def upgradable(folder: Path, home: Optional[Path] = None) -> bool:
     """True when every file holding a block holds an OLDER whole block for *folder* (Blackbox's own
     earlier text): writing the current one is an upgrade, not a restoration."""
     home = home or Path.home()
-    old = _legacy_block(folder)
-    found = [path for path in _files(home) if path.is_file()]
-    return bool(found) and all(_holds_exactly(path.read_text(encoding="utf-8-sig"), old) for path in found)
+    old, current = _legacy_block(folder), block(folder)
+    texts = [path.read_text(encoding="utf-8-sig") for path in _files(home) if path.is_file()]
+    # A file already holding the current block (``.zshenv``, added later) is not a removal.
+    stale = [text for text in texts if not _holds_exactly(text, current)]
+    return bool(stale) and all(_holds_exactly(text, old) for text in stale)
+
+
+#: How each way of starting an agent reaches the launcher folder (see :func:`coverage`).
+LAUNCH_MODES = (
+    ("interactive zsh or bash (a terminal window)", (".zshrc", ".bashrc", ".bash_profile")),
+    ("zsh run without a terminal (zsh -c, a zsh script, an SSH command, cron with zsh)", (".zshenv",)),
+    ("a program started by one of those (an IDE's terminal, a script run from a terminal)", (".zshrc", ".zshenv")),
+)
+#: Ways Blackbox can not reach without changing the system: they never read a startup file.
+UNCOVERED_MODES = ("/bin/sh or bash scripts started outside a terminal, launchd jobs, and apps that start an agent "
+                   "with their own PATH: they run the agent's real program, with Blackbox's hooks only",)
+
+
+def coverage(folder: Path, home: Optional[Path] = None) -> list[dict[str, object]]:
+    """For each way of starting an agent: whether the launcher folder is first on PATH for it now.
+    ``[{"launch": words, "covered": bool, "how": the startup file that does it, or why not}]``."""
+    home = home or Path.home()
+    wanted = block(folder)
+    whole = {name for name in ALWAYS + IF_PRESENT
+             if (home / name).is_file() and _holds_exactly((home / name).read_text(encoding="utf-8-sig"), wanted)}
+    rows: list[dict[str, object]] = []
+    for launch, files in LAUNCH_MODES:
+        found = [name for name in files if name in whole]
+        rows.append({"launch": launch, "covered": bool(found),
+                     "how": f"~/{found[0]} puts the launchers first" if found else f"no Blackbox block in {', '.join('~/' + n for n in files)}"})
+    rows += [{"launch": launch, "covered": False, "how": "never reads a startup file"} for launch in UNCOVERED_MODES]
+    return rows

@@ -175,7 +175,7 @@ def test_the_path_block_is_written_last_once_and_leaves_the_persons_lines(home):
     text = (home / ".zshrc").read_text(encoding="utf-8")
     assert text.count(shell_path.BEGIN) == 1 and text.startswith("export PATH=/opt/mine:$PATH\n")
     assert text.rstrip().endswith(shell_path.END)
-    assert shell_path.remove(home) == [home / ".zshrc", home / ".bashrc"]
+    assert shell_path.remove(home) == [home / ".zshrc", home / ".zshenv", home / ".bashrc"]   # .zshenv: every zsh
     assert (home / ".zshrc").read_text(encoding="utf-8") == "export PATH=/opt/mine:$PATH\n"
     assert (home / ".bashrc").read_text(encoding="utf-8") == "alias ll='ls -l'\n"
 

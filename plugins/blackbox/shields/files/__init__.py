@@ -34,12 +34,12 @@ from typing import Any, Mapping
 
 from ...kernel import agent_hosts
 from ..contract import Capability, Shield, ShieldMode
-from . import alerts, api, changes, events, mode, protect, status, watched
+from . import alerts, api, changes, events, mode, protect, sandbox, status, watched
 
 #: What another package (Blackbox Desktop's add-on) may use: the shield, its mode (watched folders,
 #: protected items), its real-time changes, its events and :mod:`.watched` (where a watched
 #: folder's scan reports what it found — File Shield words the notification).
-__all__ = ["CAPABILITIES", "FILES", "FINDING_KINDS", "changes", "events", "mode", "protect", "watched"]
+__all__ = ["CAPABILITIES", "FILES", "FINDING_KINDS", "changes", "events", "mode", "protect", "sandbox", "watched"]
 
 HERE = Path(__file__).resolve().parent
 FINDING_KINDS = protect.FINDING_KINDS

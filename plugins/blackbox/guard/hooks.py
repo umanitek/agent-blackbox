@@ -360,6 +360,8 @@ def on_pre_api_request(**kwargs: Any) -> None:
 def on_session_start(session_id: str = "", **kwargs: Any) -> None:
     try:
         audit.record(event="session_start", detail={"session_id": session_id})
+        # The Hermes agent picked for File Shield's sandbox: its terminal tool's shells start inside it.
+        shields.enter_hermes_process()
         cfg = _config()
         background._spawn_auto_attach(cfg)
         from . import semantic_review

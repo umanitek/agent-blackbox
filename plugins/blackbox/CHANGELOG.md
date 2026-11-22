@@ -120,6 +120,13 @@ that the two version fields agree.
 
 ### Security
 
+- **The agent sandbox reaches more launches and cannot be turned against Blackbox.** The sandbox
+  launchers are now first on PATH for zsh started without a terminal too (`zsh -c`, a zsh script,
+  an SSH command); File Shield's page lists which ways of starting an agent are covered and says
+  for each agent whether it is "sandboxed (kernel-enforced)" or "hooks only". Inside the sandbox an
+  agent can no longer change any agent's hook config or signal a process outside it. The Hermes
+  agent can be picked: its terminal tool's shells then run inside the sandbox. A refusal the
+  sandbox made now shows on the agent's session as refused.
 - **A script an agent writes is judged by what it says.** File Shield now reads a script an agent
   writes (through a file tool, a heredoc or `echo … >`) and refuses it when it names a protected
   item — also when its path is joined from pieces such as `Path.home().joinpath(…)` — and reads it

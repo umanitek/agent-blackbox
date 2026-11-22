@@ -60,6 +60,12 @@ def product_name(agent: str) -> str:
     return host.name if host is not None else HERMES_NAME if agent == HERMES_ID else agent
 
 
+#: The two protection levels an agent runs at, in the words every screen shows: inside File
+#: Shield's OS sandbox (the kernel refuses a protected file to anything it starts), or on its hooks
+#: alone (a tool call is judged; a program it writes and runs is not seen).
+PROTECTION_SANDBOXED = "sandboxed (kernel-enforced)"
+PROTECTION_HOOKS = "hooks only — a script it writes can still reach protected files"
+
 #: The decision recorded when Blackbox decided to stop an agent's action but its answer reached
 #: the agent's hook only after the hook's limit — the agent was NOT stopped (fail-open), so it is
 #: never counted or announced as "stopped" (KI-PENDING-f5765e, 2026-11-22).
@@ -251,5 +257,5 @@ def host(agent_id: str) -> Optional[Host]:
     return BY_ID.get(agent_id)
 
 
-__all__ = ["BY_ID", "DECISION_TOO_LATE", "EVENTS", "HERMES_ID", "HERMES_NAME", "HOOK_WAIT_FLOOR_SECONDS", "HOOK_WAIT_SECONDS", "HOSTS",
+__all__ = ["BY_ID", "DECISION_TOO_LATE", "EVENTS", "HERMES_ID", "HERMES_NAME", "HOOK_WAIT_FLOOR_SECONDS", "HOOK_WAIT_SECONDS", "HOSTS", "PROTECTION_HOOKS", "PROTECTION_SANDBOXED",
            "TOOL_KINDS", "USER_BIN_DIRS", "HookTimeout", "Host", "host", "product_name"]

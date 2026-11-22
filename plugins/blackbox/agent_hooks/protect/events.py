@@ -300,6 +300,8 @@ def bookkeep(judged: Judged) -> None:
                    reason=reason_of(verdict, judged.findings),
                    text=event["text"] if event["event"] == "prompt" else "",   # kept only if the person turned that on
                    process=judged.process)
+    if event["event"] == "post_tool" and event["sandboxed"]:   # a refusal the kernel made during that call (KI-568)
+        tracking.attribute_kernel_refusals()
 
 
 #: The most finding titles a flagged row names as its reason.

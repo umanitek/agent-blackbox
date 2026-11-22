@@ -69,10 +69,12 @@ def _unique(values: Iterable[str]) -> tuple[str, ...]:
 
 
 def build(items: Iterable[str], key_patterns: Iterable[str], own: Iterable[str], canary: str,
-          is_folder=os.path.isdir, startup_files: Iterable[str] = ()) -> Places:
+          is_folder=os.path.isdir, startup_files: Iterable[str] = (), keep_in_place: Iterable[str] = ()) -> Places:
     """The policy for the person's *items* (as File Shield stores them), Blackbox's *key_patterns*
     (folders, or ``folder/glob``), Blackbox's *own* places, the *canary* file and the shell
-    *startup_files* (absolute; they need not exist). *is_folder* decides an item's kind (File
+    *startup_files* (absolute; they need not exist — every agent's hook config is passed here too:
+    closed to writes the same way), and *keep_in_place* (folders never renamed or removed: the
+    folders holding those configs, so ``mv ~/.claude …`` can not take the hook away). *is_folder* decides an item's kind (File
     Shield's own rule, so a not-yet-existing folder is a folder)."""
     folders: list[str] = []
     files: list[str] = []
@@ -89,5 +91,7 @@ def build(items: Iterable[str], key_patterns: Iterable[str], own: Iterable[str],
     above = [parent for place in refused for parent in _ancestors(place)]
     startup = [form for path in startup_files for form in (os.path.normpath(os.path.expanduser(path)), canonical(path))]
     return Places(denied_folders=_unique(folders), denied_files=_unique(files + [canary_path]), denied_globs=_unique(globs),
-                  no_write=_unique(canonical(place) for place in own), no_rename=_unique(above), canary=canary_path,
+                  no_write=_unique(canonical(place) for place in own),
+                  no_rename=_unique(above + [form for path in keep_in_place for form in (os.path.normpath(os.path.expanduser(path)),
+                                                                                         canonical(path))]), canary=canary_path,
                   no_write_files=_unique(startup))

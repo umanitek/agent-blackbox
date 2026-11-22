@@ -158,10 +158,11 @@ def _folders(raw: Any) -> Optional[tuple[str, ...]]:
 
 def _sandboxed(raw: Any) -> Optional[tuple[str, ...]]:
     """Agent ids from the catalogue that have a command-line launcher; None for anything else."""
-    from ...kernel.agent_hosts import BY_ID
-    if not isinstance(raw, list) or len(raw) > len(BY_ID):
+    from ...kernel.agent_hosts import BY_ID, HERMES_ID
+    if not isinstance(raw, list) or len(raw) > len(BY_ID) + 1:
         return None
-    if any(not isinstance(item, str) or item not in BY_ID or not BY_ID[item].commands or item == "windsurf" for item in raw):
+    if any(not isinstance(item, str) or (item != HERMES_ID and (item not in BY_ID or not BY_ID[item].commands or item == "windsurf"))
+           for item in raw):
         return None
     return tuple(dict.fromkeys(raw))
 
@@ -247,6 +248,6 @@ def fields() -> list[SettingField]:
 
 
 def _agent_options() -> tuple[SettingOption, ...]:
-    from ...kernel.agent_hosts import HOSTS
+    from ...kernel.agent_hosts import HERMES_ID, HERMES_NAME, HOSTS
     return tuple(SettingOption(id=host.id, name=host.name, status="") for host in HOSTS
-                 if host.commands and host.id != "windsurf")
+                 if host.commands and host.id != "windsurf") + (SettingOption(id=HERMES_ID, name=HERMES_NAME, status=""),)

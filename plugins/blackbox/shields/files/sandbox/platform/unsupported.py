@@ -36,3 +36,7 @@ def launcher_script(_command: str, _here: str, _profile: str) -> str:
 
 def open_app(app: str, _profile: str, **_options: object) -> str:
     raise ValueError(f"unknown app {app!r}")
+
+
+def shell_shim(_shell: str, _here: str, _profile: str) -> str:
+    return ""

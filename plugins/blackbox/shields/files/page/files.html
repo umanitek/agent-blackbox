@@ -76,7 +76,7 @@
   </section>
   <section class="card">
     <h2>Agents inside the sandbox</h2>
-    <p class="muted">Pick agents in Settings → File Shield. A picked agent you start from a terminal runs inside your Mac's own sandbox: nothing it runs can reach a protected item. It can not use sudo there.</p>
+    <p class="muted">Pick agents in Settings → File Shield. A picked agent you start from a terminal, a zsh script or an SSH command runs inside your Mac's own sandbox: nothing it runs can reach a protected item. Every other agent is on hooks only, which a script it writes can get past. It can not use sudo there.</p>
     <div id="sandbox" class="muted">Reading the sandbox…</div>
     <div id="apps"></div>
     <p class="muted note" id="sandbox-note" aria-live="polite"></p>
@@ -165,10 +165,18 @@
       (view.agents || []).forEach(function (agent) {
         var line = el("div", "row");
         line.appendChild(el("span", null, agent.name + " (" + agent.commands.join(", ") + ")"));
-        line.appendChild(el("span", "tag " + (agent.sandboxed && agent.launcher ? "blocked" : ""),
-          agent.sandboxed ? (agent.launcher && view.on_path ? "sandboxed" : "setting up…") : "hooks only"));
+        var ready = agent.sandboxed && agent.launcher && (view.on_path || agent.id === "hermes");
+        line.appendChild(el("span", "tag " + (ready ? "blocked" : ""),
+          agent.sandboxed && !ready ? "setting up…" : String(agent.protection || "hooks only")));
+        if (agent.protection_note) line.appendChild(el("span", "muted", agent.protection_note));
         host.appendChild(line);
       });
+      if ((view.coverage || []).length) {
+        host.appendChild(el("p", "muted", "Which ways of starting an agent reach the sandbox:"));
+        view.coverage.forEach(function (row) {
+          host.appendChild(el("div", "row muted", (row.covered ? "✓ " : "✗ ") + row.launch + " — " + row.how));
+        });
+      }
       host.appendChild(el("p", "muted", view.restart_note || ""));
       var apps = document.getElementById("apps"); apps.textContent = "";
       (view.apps || []).filter(function (app) { return app.installed; }).forEach(function (app) {

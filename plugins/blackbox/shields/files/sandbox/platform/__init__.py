@@ -16,8 +16,8 @@ from __future__ import annotations
 import sys
 
 if sys.platform == "darwin":
-    from .macos import APPS, PROFILE_SUFFIX, launcher_script, open_app, render, unavailable
+    from .macos import APPS, PROFILE_SUFFIX, launcher_script, open_app, render, shell_shim, unavailable
 else:
-    from .unsupported import APPS, PROFILE_SUFFIX, launcher_script, open_app, render, unavailable
+    from .unsupported import APPS, PROFILE_SUFFIX, launcher_script, open_app, render, shell_shim, unavailable
 
-__all__ = ["APPS", "PROFILE_SUFFIX", "launcher_script", "open_app", "render", "unavailable"]
+__all__ = ["APPS", "PROFILE_SUFFIX", "launcher_script", "open_app", "render", "shell_shim", "unavailable"]

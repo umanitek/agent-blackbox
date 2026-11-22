@@ -12,7 +12,7 @@ import time
 from dataclasses import asdict
 from typing import Any, Iterable, Mapping, Optional
 
-from ...kernel.agent_hosts import BY_ID, product_name
+from ...kernel.agent_hosts import BY_ID, PROTECTION_HOOKS, PROTECTION_SANDBOXED, product_name
 from . import store
 from .model import Instance, Running
 
@@ -75,6 +75,7 @@ def _row(item: Instance, subs: Mapping[str, list[Instance]]) -> dict[str, Any]:
     if row.get("last_action"):
         row["last_action"].pop("text", None)   # the live tree never carries a prompt's text
     row["protection"] = "sandboxed" if item.sandboxed else "hooks"
+    row["protection_label"] = PROTECTION_SANDBOXED if item.sandboxed else PROTECTION_HOOKS   # said plainly, every screen
     row["sub_agents"] = [_row(sub, subs) for sub in sorted(subs.get(item.key, []), key=lambda sub: sub.started)]
     return row
 

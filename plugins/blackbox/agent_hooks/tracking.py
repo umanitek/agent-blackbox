@@ -15,6 +15,7 @@ Usage::
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from dataclasses import asdict, dataclass
@@ -23,10 +24,12 @@ from typing import Any, Mapping, Optional
 
 from ..kernel.agent_hosts import BY_ID, HOSTS
 from . import hermes_sessions, observe, profiles, prompt_text, root_watch
-from .instances import links, record, store, sub_key, views
+from .instances import kernel_refusals, links, record, store, sub_key, views
 from .instances.model import Profile, Running
 from .protect import config_edit, own_files
 from .protect.events import session_key as key_of_session
+
+logger = logging.getLogger(__name__)
 
 __all__ = ["Captured", "capture", "detail", "export", "history", "live", "new_profiles", "observe_now", "profile", "profile_rows", "prompt_text", "track", "wait"]
 
@@ -209,10 +212,26 @@ def profile_rows(home: Optional[Path] = None) -> list[Profile]:
     return rows
 
 
+#: How many of the newest findings are read for sandbox refusals not yet on an instance.
+KERNEL_REFUSALS_SCANNED = 200
+
+
+def attribute_kernel_refusals() -> int:
+    """Each new OS-sandbox refusal File Shield recorded, given to the sandboxed instance it belongs
+    to (``instances.kernel_refusals``, KI-568). Fail-open: 0 on any error."""
+    from .. import audit   # late: only the live view and post-tool events ask
+    try:
+        return kernel_refusals.attribute(audit.read_findings(limit=KERNEL_REFUSALS_SCANNED))
+    except Exception:   # the view is shown without them; the reason is logged
+        logger.debug("blackbox: sandbox refusals not attributed", exc_info=True)
+        return 0
+
+
 def live() -> dict[str, Any]:
     """The live tree (see :func:`.instances.views.live`), with stale instances closed first."""
     table, running = _snapshot()
     hermes_sessions.catch_up()
+    attribute_kernel_refusals()
     views.close_stale(table.keys() if table else None)
     prompt_text.expire()
     tree = views.live(running, [asdict(row) for row in profile_rows()])

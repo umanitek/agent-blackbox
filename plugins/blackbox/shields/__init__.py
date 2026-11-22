@@ -103,7 +103,7 @@ __all__ = [
     "browser_roots",
     "call_api",
     "check",
-    "describe_change",
+    "describe_change", "enter_hermes_process",
     "events",
     "get",
     "loaded_packs",
@@ -119,6 +119,9 @@ __all__ = [
     "unlocked",
     "write_weakening",
 ]
+
+#: File Shield's sandbox for the Hermes agent's own shells, at each Hermes session start (fail-open).
+enter_hermes_process = files.sandbox.enter_hermes_session
 
 #: The plugin's own shields, in registration order. Registering one is one line here; an add-on's
 #: shields and extensions join them on first use (:func:`_registry`).

@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import stat
 import time
@@ -50,8 +51,8 @@ from ..protect import is_folder
 from . import platform
 from .places import Places, build
 
-__all__ = ["CLI_AGENTS", "Places", "launcher_dir", "open_app", "policy", "profile_path", "proven", "restorations",
-           "status", "sync"]
+__all__ = ["CLI_AGENTS", "HERMES_SHELLS", "Places", "enter_hermes_process", "enter_hermes_session", "hermes_shell_dir", "launcher_dir", "open_app",
+           "policy", "profile_path", "protection", "proven", "restorations", "status", "sync"]
 
 #: GUI agents are relaunched, not given a command-line launcher.
 _GUI_ONLY = frozenset({"windsurf"})
@@ -66,6 +67,7 @@ APP_NOTE = ("Quit the editor first. Inside Blackbox's sandbox the editor runs wi
 #: How many PATH-block restorations are kept for File Shield's alerts.
 MAX_RESTORATIONS = 20
 _PLUGIN = Path(__file__).resolve().parents[3]
+logger = logging.getLogger(__name__)
 
 
 def home() -> Path:
@@ -82,6 +84,29 @@ def canary_path() -> Path:
 
 def launcher_dir() -> Path:
     return constants.blackbox_home() / "agent-bin"
+
+
+#: The shells the Hermes agent's terminal tool may start (it looks ``bash`` up on its own PATH).
+HERMES_SHELLS = ("bash", "sh", "zsh")
+
+
+def hermes_shell_dir() -> Path:
+    """Where the Hermes agent's sandboxed shells live — put first on the Hermes process's OWN PATH
+    (:func:`enter_hermes_process`), never on the person's."""
+    return home() / "hermes-shell"
+
+
+def _hook_configs() -> list[str]:
+    """Every coding agent's hook config and Blackbox's own hook files in the default home: closed
+    to writes inside the sandbox, so a program an agent starts can not take Blackbox's hook out of
+    its own agent's config (hook-layer refusals stop the agent's own tools; this stops a script)."""
+    user = Path.home()
+    out = []
+    for host in agent_hosts.HOSTS:
+        target = host.config_path(user)
+        out += [str(target / event) for event in host.events] if host.style == "scripts" else [str(target)]
+        out += [str(path) for path in host.companion_paths(user)]
+    return out
 
 
 def _on_path_marker() -> Path:
@@ -101,9 +126,11 @@ def chosen(mode: ShieldMode) -> tuple[str, ...]:
 def policy(mode: ShieldMode) -> Places:
     """The sandbox's policy for *mode*: the person's items, Blackbox's keys and own places."""
     own = (str(constants.blackbox_home()), str(_PLUGIN))
-    startup = [str(Path.home() / name) for name in shell_path.STARTUP_FILES]
+    hooks = _hook_configs()
+    startup = [str(Path.home() / name) for name in shell_path.STARTUP_FILES] + hooks
+    holders = sorted({os.path.dirname(path) for path in hooks} - {str(Path.home())})
     return build(mode_module.protected(mode), blackbox_key_patterns(), own, str(canary_path()), is_folder=is_folder,
-                 startup_files=startup)
+                 startup_files=startup, keep_in_place=holders)
 
 
 def _write_if_changed(path: Path, text: str, mode: int) -> bool:
@@ -172,9 +199,36 @@ def sync(mode: Optional[ShieldMode] = None) -> dict[str, Any]:
         _write_if_changed(profile_path(), platform.render(rules, f"sha256:{_digest(text)}"), 0o644)
         _write_if_changed(canary_path(), CANARY_TEXT, 0o644)
         _sync_launchers({command for agent in chosen(mode) for command in CLI_AGENTS.get(agent, ())})
+        _sync_hermes_shells(agent_hosts.HERMES_ID in chosen(mode))
     else:
         _sync_launchers(set())
+        _sync_hermes_shells(False)
     return status(mode)
+
+
+def _sync_hermes_shells(wanted: bool) -> None:
+    folder = hermes_shell_dir()
+    for shell in HERMES_SHELLS:
+        if wanted:
+            _write_if_changed(folder / shell, platform.shell_shim(shell, str(folder), str(profile_path())), 0o755)
+        else:
+            (folder / shell).unlink(missing_ok=True)
+
+
+def enter_hermes_process(mode: Optional[ShieldMode] = None, environ: Optional[dict[str, str]] = None) -> bool:
+    """Puts the sandboxed shells first on THIS (the Hermes agent's) process PATH when the person
+    sandboxes the Hermes agent, and takes them off when not — so every shell its terminal tool
+    starts runs inside the sandbox, while Hermes itself and Blackbox inside it do not. No Hermes
+    file is changed: the terminal tool looks ``bash`` up on PATH. Answers whether it is on.
+    Limit: Hermes's ``execute_code`` starts its Python by full path, so it stays on Layer 1."""
+    mode = mode or mode_module.current()
+    env = os.environ if environ is None else environ
+    folder = str(hermes_shell_dir())
+    parts = [part for part in env.get("PATH", "").split(os.pathsep) if part and part != folder]
+    wanted = (agent_hosts.HERMES_ID in chosen(mode) and platform.unavailable() is None
+              and all((hermes_shell_dir() / shell).is_file() for shell in HERMES_SHELLS))
+    env["PATH"] = os.pathsep.join(([folder] if wanted else []) + parts)
+    return wanted
 
 
 def _digest(text: str) -> str:
@@ -182,8 +236,9 @@ def _digest(text: str) -> str:
 
 
 def status(mode: ShieldMode) -> dict[str, Any]:
-    """What the shield's card and Blackbox Desktop show: whether agents can be sandboxed here, which
-    agents are, whether their launcher is first on PATH, and the GUI editors on offer."""
+    """What the shield's card and a companion app show: whether agents can be sandboxed here, which
+    agents are (each with its protection level, :func:`protection`), whether their launcher is first
+    on PATH, which ways of starting an agent reach it (``coverage``), and the GUI editors on offer."""
     picked = set(chosen(mode))
     folder = launcher_dir()
     return {
@@ -193,11 +248,43 @@ def status(mode: ShieldMode) -> dict[str, Any]:
         "restart_note": "An agent that is already running keeps the protection it started with — restart it after a change.",
         "agents": [{"id": agent, "name": agent_hosts.BY_ID[agent].name, "commands": list(commands),
                     "sandboxed": agent in picked,
-                    "launcher": all((folder / command).is_file() for command in commands) if agent in picked else False}
-                   for agent, commands in CLI_AGENTS.items()],
+                    "launcher": all((folder / command).is_file() for command in commands) if agent in picked else False,
+                    **protection(agent, agent in picked)}
+                   for agent, commands in CLI_AGENTS.items()]
+                  + [{"id": agent_hosts.HERMES_ID, "name": agent_hosts.HERMES_NAME, "commands": ["hermes"],
+                      "sandboxed": agent_hosts.HERMES_ID in picked,
+                      "launcher": all((hermes_shell_dir() / shell).is_file() for shell in HERMES_SHELLS),
+                      **protection(agent_hosts.HERMES_ID, agent_hosts.HERMES_ID in picked)}],
+        "coverage": shell_path.coverage(folder),
         "apps": [{"id": app, "name": name, "installed": os.path.isdir(bundle), "note": APP_NOTE}
                  for app, (name, bundle) in platform.APPS.items()],
     }
+
+
+def enter_hermes_session() -> bool:
+    """At a Hermes session start: the profile and shells made current (:func:`sync`), then the
+    Hermes process's PATH set (:func:`enter_hermes_process`). Fail-open: False on any error, logged."""
+    try:
+        sync()
+        return enter_hermes_process()
+    except Exception:   # the agent always runs; the reason is logged
+        logger.warning("blackbox: could not put the Hermes agent's shells in the sandbox", exc_info=True)
+        return False
+
+
+#: What each protection level means, in the words the dashboard shows.
+SANDBOXED = agent_hosts.PROTECTION_SANDBOXED
+HOOKS_ONLY = agent_hosts.PROTECTION_HOOKS
+_HERMES_NOTE = "its terminal tool's shells run inside the sandbox; its execute_code tool and file tools stay on hooks"
+_LAUNCH_NOTE = "when started from a shell that has Blackbox's launchers first on PATH (see coverage)"
+
+
+def protection(agent: str, picked: bool) -> dict[str, str]:
+    """``{"protection", "protection_note"}`` for *agent*: kernel-enforced only when it is picked
+    and this OS can sandbox it; otherwise hooks only, said plainly."""
+    if not picked or platform.unavailable() is not None:
+        return {"protection": HOOKS_ONLY, "protection_note": platform.unavailable() or "not picked for the sandbox"}
+    return {"protection": SANDBOXED, "protection_note": _HERMES_NOTE if agent == agent_hosts.HERMES_ID else _LAUNCH_NOTE}
 
 
 def open_app(app: str) -> str:
