@@ -9,10 +9,18 @@ each event in the SAME instance model the coding agents' hooks feed (``instances
 Hermes-owned file is touched, no new hook is added, and ``guard`` gains no dependency on
 ``agent_hooks`` (it would be a cycle).
 
-Sub-agents: Hermes runs a delegated task (``delegate_task``) as a child agent with a session of
-its own. A session that first appears in the same Hermes home within :data:`DELEGATE_SECONDS` of
-a ``delegate_task`` call is that call's sub-agent: its tool calls and its end are recorded under
-the delegating session.
+What each row gives (KI-572, the real trail of the Hermes agent on the test VM, 2026-11-22):
+``session_start`` names the project folder, the process, how it was started and the model
+(``guard.host_process``: ``cwd``, ``pid``, ``launch``, ``model``); ``pre_api_request`` — one per
+model call — names the model and the ``turn_id``: the first call of each turn is that session's
+PROMPT (counted once per turn, never its text). The Hermes home is the PROFILE, never the project.
+
+Sub-agents: Hermes runs a delegated task (``delegate_task``) as child agents with sessions of
+their own, in the delegating session's process. Every session that first appears in the same
+Hermes home within :data:`DELEGATE_SECONDS` of a ``delegate_task`` call — and that is in the same
+process, or names none (a child's first event may be a tool call) — is that call's sub-agent:
+one call may start several (H3: the second child was shown as a session of its own). A session
+started in ANOTHER process is never a child.
 
 Read incrementally (:func:`catch_up`, from the observer's look every few seconds and from the live
 view): a byte cursor kept in ``agent-hooks/hermes-cursor.json`` survives restarts, so no event is
@@ -46,7 +54,8 @@ from .protect.events import session_key
 logger = logging.getLogger(__name__)
 
 #: The audit trail's Hermes events → the instance model's events.
-EVENTS = {"session_start": "session_start", "pre_tool_call": "pre_tool", "post_tool_call": "post_tool", "session_end": "stop"}
+EVENTS = {"session_start": "session_start", "pre_tool_call": "pre_tool", "post_tool_call": "post_tool", "session_end": "stop",
+          "pre_api_request": "prompt"}
 #: Hermes' tool that runs a task as a child agent.
 DELEGATE_TOOL = "delegate_task"
 #: How soon after a ``delegate_task`` call a new session in the same Hermes home is its child.
@@ -54,10 +63,13 @@ DELEGATE_SECONDS = 120.0
 MAX_READ_BYTES = 1024 * 1024
 MAX_CHILDREN = 1024
 MAX_PENDING = 32
+MAX_SESSIONS = 1024
 
 _lock = threading.Lock()
 _children: OrderedDict[str, str] = OrderedDict()            # child session id → parent session id
 _pending: dict[str, deque[tuple[str, float]]] = {}           # Hermes home → (delegating session id, when)
+_facts: OrderedDict[str, dict[str, Any]] = OrderedDict()     # session id → {cwd, pid, launch, model}
+_turns: OrderedDict[str, str] = OrderedDict()                # session id → the turn already counted as a prompt
 
 
 def log_path() -> Path:
@@ -73,10 +85,21 @@ def reset() -> None:
     with _lock:
         _children.clear()
         _pending.clear()
+        _facts.clear()
+        _turns.clear()
 
 
-def _parent_of(raw: str, home: str, kind: str, now: float, known: bool) -> str:
-    """The delegating session *raw* belongs to ("" for a session of its own)."""
+def _bounded_put(table: OrderedDict, key: str, value: Any) -> None:
+    table.pop(key, None)
+    table[key] = value
+    while len(table) > MAX_SESSIONS:
+        table.popitem(last=False)
+
+
+def _parent_of(raw: str, home: str, now: float, known: bool) -> str:
+    """The delegating session *raw* belongs to ("" for a session of its own): the newest
+    ``delegate_task`` in its Hermes home within :data:`DELEGATE_SECONDS`, from the same process
+    (or *raw* names no process yet). The delegation is NOT used up: one call starts many children."""
     if raw in _children:
         return _children[raw]
     queue = _pending.get(home)
@@ -84,18 +107,40 @@ def _parent_of(raw: str, home: str, kind: str, now: float, known: bool) -> str:
         return ""
     while queue and now - queue[0][1] > DELEGATE_SECONDS:
         queue.popleft()
-    if not queue or queue[0][0] == raw:
-        return ""
-    parent, _at = queue.popleft()
-    _children[raw] = parent
-    while len(_children) > MAX_CHILDREN:
-        _children.popitem(last=False)
-    return parent
+    mine = _facts.get(raw, {}).get("pid")
+    for parent, _at in reversed(queue):
+        theirs = _facts.get(parent, {}).get("pid")
+        if parent != raw and (not mine or not theirs or mine == theirs):
+            _bounded_put(_children, raw, parent)
+            return parent
+    return ""
+
+
+def _session_facts(raw: str, kind: str, detail: Mapping[str, Any]) -> dict[str, Any]:
+    """What this row adds to the session's facts (remembered for its later rows)."""
+    known = dict(_facts.get(raw, {}))
+    if kind == "session_start":
+        pid = detail.get("pid")
+        known.update(cwd=str(detail.get("cwd") or "")[:500], launch=str(detail.get("launch") or ""),
+                     pid=pid if isinstance(pid, int) and not isinstance(pid, bool) and pid > 1 else 0)
+    if detail.get("model"):
+        known["model"] = str(detail["model"])[:80]
+    _bounded_put(_facts, raw, known)
+    return known
+
+
+def _new_turn(raw: str, detail: Mapping[str, Any]) -> bool:
+    """True for the first model call of a turn this session has not counted yet."""
+    turn = str(detail.get("turn_id") or detail.get("task_id") or "")
+    if not turn or _turns.get(raw) == turn:
+        return False
+    _bounded_put(_turns, raw, turn)
+    return True
 
 
 def apply(row: Mapping[str, Any]) -> bool:
     """Record one audit row of the Hermes agent; False when it is not one (another agent's,
-    an event the instance model does not follow, no session)."""
+    an event the instance model does not follow, no session, a model call of a turn already counted)."""
     kind = EVENTS.get(str(row.get("event") or ""))
     detail = row.get("detail") if isinstance(row.get("detail"), dict) else {}
     raw = str(detail.get("session_id") or "")[:200]
@@ -105,12 +150,16 @@ def apply(row: Mapping[str, Any]) -> bool:
     tool = str(detail.get("tool_name") or "")[:120]
     now = float(row.get("ts") or time.time())
     with _lock:
+        facts = _session_facts(raw, str(row.get("event")), detail)
+        if kind == "prompt" and not _new_turn(raw, detail):
+            return False
         if kind == "pre_tool" and tool == DELEGATE_TOOL:
             queue = _pending.setdefault(home, deque(maxlen=MAX_PENDING))
             queue.append((raw, now))
-        parent = _parent_of(raw, home, kind, now, store.get(session_key(HERMES_ID, raw, "")) is not None)
-    fields: dict[str, Any] = {"agent": HERMES_ID, "event": kind, "session": raw, "cwd": home, "profile": home, "tool_name": tool,
-                              "args": detail.get("args"), "tool_call_id": str(detail.get("tool_call_id") or "")[:200]}
+        parent = _parent_of(raw, home, now, store.get(session_key(HERMES_ID, raw, "")) is not None)
+    fields: dict[str, Any] = {"agent": HERMES_ID, "event": kind, "session": raw, "cwd": facts.get("cwd", ""), "profile": home,
+                              "tool_name": tool, "args": detail.get("args"), "tool_call_id": str(detail.get("tool_call_id") or "")[:200],
+                              "model": facts.get("model", ""), "launch": facts.get("launch", ""), "agent_pid": facts.get("pid") or None}
     key = session_key(HERMES_ID, raw, "")
     if parent:
         fields.update(sub=raw, sub_type="delegated task", event={"session_start": "subagent_start", "stop": "subagent_stop"}.get(kind, kind))

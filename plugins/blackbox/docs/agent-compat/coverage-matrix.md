@@ -483,9 +483,9 @@ One Hermes process per run (CLI, gateway or a profile's service). A task it dele
 | pre_tool_call | pre_tool | yes |  |
 | post_tool_call | post_tool | yes |  |
 | on_session_end | stop | yes |  |
-| pre_api_request |  | no | checked for prompt injection by the guard; not an instance event |
+| pre_api_request | prompt | yes | checked for prompt injection by the guard; the first model call of each turn is the session's prompt (counted, never kept) and names the model |
 
-**Sub-agents:** Tracked from the existing hook data: a session that first appears in the same Hermes home within two minutes of a delegate_task call is recorded as that call's sub-agent (its tool calls and its end).
+**Sub-agents:** Tracked from the existing hook data: every session that first appears in the same Hermes home within two minutes of a delegate_task call, in the same process, is recorded as that call's sub-agent (its tool calls and its end); one call may start several.
 
 | OS | Launch mode | Layer | Status | Detail |
 |---|---|---|---|---|

@@ -1538,11 +1538,12 @@
     },
     {
      "event": "pre_api_request",
-     "hooked": false,
-     "why": "checked for prompt injection by the guard; not an instance event"
+     "kind": "prompt",
+     "hooked": true,
+     "why": "checked for prompt injection by the guard; the first model call of each turn is the session's prompt (counted, never kept) and names the model"
     }
    ],
-   "sub_agents": "Tracked from the existing hook data: a session that first appears in the same Hermes home within two minutes of a delegate_task call is recorded as that call's sub-agent (its tool calls and its end).",
+   "sub_agents": "Tracked from the existing hook data: every session that first appears in the same Hermes home within two minutes of a delegate_task call, in the same process, is recorded as that call's sub-agent (its tool calls and its end); one call may start several.",
    "not_covered": [
     "A plugin that is not loaded (Blackbox removed from a profile) sees nothing of that profile.",
     "Hermes sessions that run on another machine never touch this machine's plugin."

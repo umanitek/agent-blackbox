@@ -22,7 +22,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
-from ..kernel.agent_hosts import BY_ID, HOSTS
+from ..kernel.agent_hosts import BY_ID, HERMES_ID, HOSTS
 from . import hermes_sessions, observe, profiles, prompt_text, root_watch
 from .instances import kernel_refusals, links, record, store, sub_key, views
 from .instances.model import Profile, Running
@@ -278,4 +278,5 @@ def profile(agent: str, home: str, project: str = "") -> Optional[dict[str, Any]
 
 
 def known(agent: str) -> bool:
-    return agent in BY_ID
+    """True for an agent id the instance tree holds: a coding agent or the Hermes agent (KI-572)."""
+    return agent in BY_ID or agent == HERMES_ID

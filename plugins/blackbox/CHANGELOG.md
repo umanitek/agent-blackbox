@@ -192,6 +192,10 @@ that the two version fields agree.
 
 ### Fixed
 
+- **The Hermes agent's sessions show where they run.** Each session now shows its project folder
+  (not the Hermes home), its process, whether it was started headless, its model and how many
+  prompts it was given; two projects are two lanes, every child of one delegated task is that
+  session's sub-agent, and the history can be filtered to the Hermes agent.
 - Every Hermes profile is protected the same way. A profile other than the main one — Blackbox's
   own assistant included — used to keep its own Blackbox folder: no verified threat rules (only
   the general patterns), its own copy of the settings (dashboard changes and Block mode never

@@ -21,7 +21,7 @@ from . import api_request, background, graph_rules
 from . import injection_sites
 from . import reporting
 from .reporting import blackbox_block_message
-from . import session_context
+from . import host_process, session_context
 
 logger = logging.getLogger(__name__)
 
@@ -359,7 +359,9 @@ def on_pre_api_request(**kwargs: Any) -> None:
 
 def on_session_start(session_id: str = "", **kwargs: Any) -> None:
     try:
-        audit.record(event="session_start", detail={"session_id": session_id})
+        # Where it works, its process, how it started and its model: the instance tree's facts (KI-572).
+        audit.record(event="session_start", detail={"session_id": session_id, "model": str(kwargs.get("model") or "")[:80],
+                                                     **host_process.facts(str(kwargs.get("platform") or ""))})
         # The Hermes agent picked for File Shield's sandbox: its terminal tool's shells start inside it.
         shields.enter_hermes_process()
         cfg = _config()
