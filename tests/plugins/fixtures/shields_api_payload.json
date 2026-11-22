@@ -237,7 +237,8 @@
       "protected": [],
       "folders": [
         "~/Downloads"
-      ]
+      ],
+      "sandboxed": []
     },
     "blocking": false,
     "sections": [],
