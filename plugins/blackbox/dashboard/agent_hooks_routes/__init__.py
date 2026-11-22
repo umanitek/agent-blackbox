@@ -10,7 +10,8 @@
 
 Both POSTs pass the app-wide browser boundary (the session token from ``GET /api/session``), so a
 web page cannot reach them. While "Protect new agents automatically" is on, a background sweep
-hooks newly installed agents every :data:`SWEEP_SECONDS` (``agent_hooks.sweep``).
+hooks a newly installed agent within :data:`NOTICE_SECONDS` and repairs every hook every
+:data:`SWEEP_SECONDS` (``agent_hooks.sweep``).
 """
 
 # No ``from __future__ import annotations`` here: FastAPI must see the handlers' ``Request``
@@ -26,19 +27,39 @@ logger = logging.getLogger(__name__)
 NO_CACHE = {"Cache-Control": "no-store"}
 #: The largest event read (a write tool's whole file can be in its arguments).
 MAX_BODY_BYTES = 1024 * 1024
+#: A full sweep (hooks repaired, every agent re-checked) at least this often.
 SWEEP_SECONDS = 300.0
+#: How often the cheap look asks which agents are on this machine (a few file checks and PATH
+#: lookups); a NEW agent is hooked at once rather than at the next full sweep.
+NOTICE_SECONDS = 10.0
+_FIRST_LOOK_SECONDS = 20.0
 
 Cache = Callable[..., Any]
 _sweeper: dict[str, Any] = {"thread": None}
 
 
+def should_sweep(present: frozenset[str], seen: frozenset[str] | None, since_last: float) -> bool:
+    """True when the agents on this machine changed since the last sweep (one was installed or
+    removed), or the last sweep is :data:`SWEEP_SECONDS` old. WHY (E2E 2026-11-21): a coding agent
+    installed after Blackbox stayed unhooked — unprotected — for up to five minutes."""
+    return present != seen or since_last >= SWEEP_SECONDS
+
+
 def _sweep_forever() -> None:
+    import time
+
     from ... import agent_hooks
     stop = threading.Event()
-    while not stop.wait(SWEEP_SECONDS if _sweeper.get("ran") else 20.0):
-        _sweeper["ran"] = True
+    seen: frozenset[str] | None = None
+    last = float("-inf")
+    wait = _FIRST_LOOK_SECONDS
+    while not stop.wait(wait):
+        wait = NOTICE_SECONDS
         try:
-            agent_hooks.sweep()
+            present = agent_hooks.present()
+            if should_sweep(present, seen, time.monotonic() - last):
+                agent_hooks.sweep()
+                seen, last = present, time.monotonic()
         except Exception:   # health: allow BLE001 -- a sweep that fails tries again next round
             logger.warning("blackbox dashboard: the agent hooks sweep failed", exc_info=True)
 

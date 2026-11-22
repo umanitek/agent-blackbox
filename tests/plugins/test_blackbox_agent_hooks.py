@@ -295,3 +295,19 @@ def test_the_launcher_runs_with_any_surviving_hermes_python_when_the_recorded_on
     no_path = subprocess.run([str(launcher), "-c", "print(1)"], capture_output=True, text=True, timeout=30, check=False,
                                     env={**os.environ, "PATH": "/nonexistent"})
     assert no_path.returncode == 0
+
+
+# ---------------------------------------------------------------- a new agent is hooked at once (E2E 2026-11-21)
+
+def test_a_newly_installed_agent_is_noticed_within_seconds_not_at_the_next_five_minute_sweep(monkeypatch, tmp_path):
+    from plugins.blackbox.dashboard import agent_hooks_routes as routes
+    monkeypatch.setattr(agent_hooks, "_home", lambda: tmp_path)
+    monkeypatch.setenv("PATH", str(tmp_path / "no-bin"))
+    before = agent_hooks.present()
+    (tmp_path / ".claude").mkdir()                         # Claude Code arrives
+    after = agent_hooks.present()
+    assert "claude-code" in after and "claude-code" not in before
+    assert routes.should_sweep(after, before, since_last=routes.NOTICE_SECONDS)       # sweep now
+    assert not routes.should_sweep(after, after, since_last=routes.NOTICE_SECONDS)    # nothing new: wait
+    assert routes.should_sweep(after, after, since_last=routes.SWEEP_SECONDS)         # the full sweep still comes
+    assert routes.NOTICE_SECONDS <= 15

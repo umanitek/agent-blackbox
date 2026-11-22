@@ -38,8 +38,8 @@ from .protect import config_edit, own_files
 from .protect.events import note_error, read_state, record_event, write_state
 from ..kernel.agent_hosts import BY_ID, HOSTS, Host
 
-__all__ = ["KINDS", "AgentRow", "hooked_agents", "note_error", "record_event", "remove_all", "rows", "set_protection",
-           "sweep"]
+__all__ = ["KINDS", "AgentRow", "hooked_agents", "note_error", "present", "record_event", "remove_all", "rows",
+           "set_protection", "sweep"]
 
 #: The agent ids this module answers for (``/api/agent-hooks/protection`` accepts these).
 KINDS = tuple(BY_ID)
@@ -183,6 +183,12 @@ def set_protection(agent_id: str, enabled: bool) -> dict[str, Any]:
         state["agents"].setdefault(agent_id, {})["disabled"] = not enabled
         write_state(state)
     return {"ok": result.ok, "kind": agent_id, "target": result.path, "enabled": enabled, "note": result.error}
+
+
+def present() -> frozenset[str]:
+    """The ids of the coding agents on this machine now (cheap: a few file checks and PATH
+    lookups) — what tells the dashboard's sweep that a new agent appeared."""
+    return frozenset(host.id for host in HOSTS if host.installed(_home()))
 
 
 def sweep() -> list[dict[str, Any]]:
