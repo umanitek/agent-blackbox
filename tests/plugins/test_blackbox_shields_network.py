@@ -236,6 +236,30 @@ def test_a_socket_row_of_an_unknown_kind_is_never_a_process():
     assert [(p.name, p.pid, len(p.connections)) for p in processes] == [("node", 42, 1)]
 
 
+def test_each_connection_says_whether_the_threat_firewall_drops_it_or_it_was_cut(monkeypatch):
+    """KI-588 (d): a companion saw only firewall_active and cut_total, never what happened to ONE
+    connection."""
+    from plugins.blackbox.shields.network.monitor import watch
+    from plugins.blackbox.shields.network.protect import connection_state, enforcement
+
+    monkeypatch.setattr(nettop, "available", lambda: None)
+    monkeypatch.setattr(nettop, "read", lambda: nettop.parse(NETTOP + "tcp4 192.168.1.5:5001<->203.0.113.9:443,100,900,\n"))
+    monkeypatch.setattr(ProcessTree, "read", classmethod(lambda cls: ProcessTree.parse("")))
+    monkeypatch.setattr(monitor, "_previous", {"at": 0.0, "bytes": {}})
+    reading = monitor.read(frozenset({"45.130.148.102"}))
+    mode = network_mode.build(enabled=True, protections=(network_mode.FIREWALL,), block=("203.0.113.9",))
+    now = 1_800_000_000.0
+    monkeypatch.setattr(enforcement, "summary", lambda: {"firewall_active": True})
+    monkeypatch.setattr(watch, "events", lambda limit: [{"kind": "connection-cut", "ts": now - 60, "remote_ip": "2001:db8::1"},
+                                                        {"kind": "connection-cut", "ts": now - 4000, "remote_ip": "45.130.148.102"}])
+    marked = connection_state.with_enforcement(reading, mode, frozenset({"45.130.148.102"}), now=now).as_json()
+    found = {c["remote_ip"]: (c["dropped"], c["cut"]) for p in marked["processes"] for c in p["connections"]}
+    assert found == {"45.130.148.102": (True, False), "203.0.113.9": (True, False), "2001:db8::1": (False, True)}
+    monkeypatch.setattr(enforcement, "summary", lambda: {"firewall_active": False})
+    off = connection_state.with_enforcement(reading, mode, frozenset({"45.130.148.102"}), now=now).as_json()
+    assert {c["remote_ip"]: c["dropped"] for p in off["processes"] for c in p["connections"]}["45.130.148.102"] is False
+
+
 def test_children_of_an_agent_are_the_agents_and_blackbox_is_labelled():
     tree = ProcessTree.parse(" 10 1 0.0 100 /Users/me/.local/bin/claude\n 42 10 12,5 2048 node /usr/local/bin/npm i x\n"
                              " 30 1 0.0 1 node /Users/me/Library/Application Support/Blackbox/hermes/x/dkg start\n"

@@ -9,7 +9,8 @@ Reads (``GET``):
   ``overview``     the mode, its protections, the helper's status, list sizes, the busiest refused
                    names, the latest alerts, whether the helper is installed and an add-on registered
   ``connections``  one network monitor reading (apps, connections in and out, internet rates with
-                   this machine's own local traffic kept apart, threats — public addresses only)
+                   this machine's own local traffic kept apart, threats — public addresses only;
+                   each connection's ``dropped`` / ``cut``: what the Threat Firewall did to it)
   ``system``       system status: CPU, memory, disks, interfaces, uptime (:mod:`.system`)
   ``enforcement``  the helper's plan (``?have=<version>`` answers ``unchanged``)
   ``blocks``       the latest refused names
@@ -41,7 +42,7 @@ from . import helper, mode as mode_module, monitor, system, system_api
 from .. import helper_link
 from .addresses import public_only
 from .monitor import remote_access, watch
-from .protect import enforcement, remote_lock, weakening
+from .protect import connection_state, enforcement, remote_lock, weakening
 from .respond import sessions, system_alerts
 
 OFF = "Switch Network Shield on to see this machine's network."
@@ -106,8 +107,11 @@ def overview(context: ShieldContext, _params: Mapping[str, str]) -> dict[str, An
 
 
 def connections(context: ShieldContext, _params: Mapping[str, str]) -> Any:
-    require_on()
-    return monitor.read(malicious_ips(context)).as_json()
+    """One monitor reading; each connection says whether the Threat Firewall drops it or it was
+    cut (``dropped`` / ``cut``, :mod:`.protect.connection_state`)."""
+    current = require_on()
+    listed = malicious_ips(context)
+    return connection_state.with_enforcement(monitor.read(listed), current, listed).as_json()
 
 
 def system_status(_context: ShieldContext, _params: Mapping[str, str]) -> dict[str, Any]:

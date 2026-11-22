@@ -21,6 +21,8 @@ class Connection:
     listens on), else ``out``; *state* is TCP's (``Established``, ``SynSent``, …; "" for UDP).
     *local* is True for a loopback connection (127.0.0.0/8, ::1): this machine talking to itself,
     never internet traffic. *rate_in* / *rate_out* are its bytes per second since the last reading.
+    *dropped*: the Threat Firewall is applied and drops this remote address; *cut*: the helper cut
+    a connection to it lately (``protect.connection_state``, KI-588) — both False otherwise.
     """
 
     protocol: str
@@ -35,6 +37,8 @@ class Connection:
     local: bool = False
     rate_in: int = 0
     rate_out: int = 0
+    dropped: bool = False
+    cut: bool = False
 
     def as_json(self) -> dict[str, JsonValue]:
         return _record_json(self)

@@ -115,6 +115,12 @@ def plan(mode: ShieldMode, indicators: Optional[Any], have: str = "", cut_ips: I
     return cached
 
 
+def firewall_ips(mode: ShieldMode, listed_ips: Iterable[str]) -> frozenset[str]:
+    """What the Threat Firewall drops under *mode*: the public addresses of *listed_ips* (the
+    verified graph's) and every address on the person's own block list."""
+    return public_only(listed_ips) | frozenset(_ips(mode_module.option(mode, mode_module.OPT_BLOCK)))
+
+
 def _build_plan(mode: ShieldMode, indicators: Optional[Any], cut_ips: tuple[str, ...] = ()) -> dict[str, Any]:
     protections = mode_module.protections(mode)
     dns_on, firewall_on = mode_module.DNS in protections, mode_module.FIREWALL in protections
@@ -145,8 +151,7 @@ def _build_plan(mode: ShieldMode, indicators: Optional[Any], cut_ips: tuple[str,
                 "spared": spared_verified[:MAX_SPARED],
                 # Lock remote access: remote-control apps' relay domains refused too (remote_lock).
                 "block": sorted(set(_names(block)) | set(remote_lock.relay_domains(mode.enabled))) if dns_on else []},
-        "firewall": {"enabled": firewall_on,
-                     "ips": sorted(public_only(indicators.ips if firewall_on and indicators else ()) | set(_ips(block) if firewall_on else ()))},
+        "firewall": {"enabled": firewall_on, "ips": sorted(firewall_ips(mode, indicators.ips if indicators else ())) if firewall_on else []},
         "cut": {"enabled": cut_on, "ips": sorted(public_only(cut_ips) - allowed) if cut_on else []},
         "ssh": {"lockdown": ssh_on, "allow": sorted(mode_module.option(mode, mode_module.OPT_SSH_ALLOW)) if ssh_on else []},
         "watch": mode.enabled,
