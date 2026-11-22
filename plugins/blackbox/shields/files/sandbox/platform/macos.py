@@ -77,10 +77,10 @@ def _quote(path: str) -> str:
 
 
 def _glob_regex(glob: str) -> str:
-    """``/dir/*.pem`` as a Seatbelt regex matching files directly in that folder."""
-    folder, name = os.path.split(glob)
-    body = "".join("[^/]*" if char == "*" else "[^/]" if char == "?" else re.escape(char) for char in name)
-    return "#\"^" + re.escape(folder).replace('"', '\\"') + "/" + body + "$\""
+    """``/dir/*.pem`` (or ``/plugins/*/blackbox-addon.json``: a wildcard in any part) as a Seatbelt
+    regex; ``*`` and ``?`` never cross a ``/``."""
+    body = "".join("[^/]*" if char == "*" else "[^/]" if char == "?" else re.escape(char) for char in glob)
+    return "#\"^" + body.replace('"', '\\"') + "$\""
 
 
 def render(places: Places, digest_line: str = "") -> str:
@@ -94,6 +94,8 @@ def render(places: Places, digest_line: str = "") -> str:
         lines.append("(deny file-read* file-write* file-link\n  " + "\n  ".join(refused) + ")")
     if places.no_write:
         lines.append("(deny file-write*\n  " + "\n  ".join(f"(subpath {_quote(p)})" for p in places.no_write) + ")")
+    if places.no_write_globs:   # every add-on's manifest, existing or not: no add-on is planted or removed
+        lines.append("(deny file-write*\n  " + "\n  ".join(f"(regex {_glob_regex(g)})" for g in places.no_write_globs) + ")")
     if places.no_write_files:   # the shell startup files: the PATH block that keeps later agents inside (KI-535)
         lines.append("(deny file-write*\n  " + "\n  ".join(f"(literal {_quote(p)})" for p in places.no_write_files) + ")")
     if places.no_rename:

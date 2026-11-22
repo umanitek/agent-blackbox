@@ -7,8 +7,10 @@ resolved, ``..`` folded), because a kernel sandbox matches the path the kernel s
 * the person's File Shield items — no read, no change, no link (a folder: everything inside);
 * Blackbox's keys (``detection.blackbox_key_patterns``: the helper's key folder, key files in
   Blackbox's data folders) — the same;
-* Blackbox's own places (its data folder and the plugin) — readable, never changed, so an agent in
-  the sandbox can not rewrite its own sandbox or switch Blackbox off;
+* Blackbox's own places (its data folder, the plugin, every add-on folder beside it and the places
+  add-ons declare) — readable, never changed, so an agent in the sandbox can not rewrite its own
+  sandbox, switch Blackbox off or change an add-on; and every add-on MANIFEST, existing or not
+  (``<plugins>/*/blackbox-addon.json``) — never written, so none is planted or removed;
 * every folder ABOVE a protected item — never renamed or removed (``mv ~/Documents ~/D2`` would
   otherwise walk the item out from under its rule; files inside those folders stay writable);
 * the shell startup files (``~/.zshrc`` …) — never written: the block that puts Blackbox's agent
@@ -43,6 +45,8 @@ class Places:
     canary: str
     #: Files never written, created, renamed or removed (the shell startup files).
     no_write_files: tuple[str, ...] = ()
+    #: ``*`` patterns never written, created, renamed or removed (every add-on's manifest).
+    no_write_globs: tuple[str, ...] = ()
 
     def watched(self) -> tuple[str, ...]:
         """Every refused place (a denial naming one of these is a File Shield hit)."""
@@ -68,13 +72,23 @@ def _unique(values: Iterable[str]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(values))
 
 
+def _canonical_glob(pattern: str) -> str:
+    """*pattern* with the part before its first wildcard made canonical (the kernel matches real paths)."""
+    parts = pattern.split(os.sep)
+    fixed = next((index for index, part in enumerate(parts) if any(mark in part for mark in "*?[")), len(parts))
+    head = os.sep.join(parts[:fixed]) or os.sep
+    return os.path.join(canonical(head), *parts[fixed:])
+
+
 def build(items: Iterable[str], key_patterns: Iterable[str], own: Iterable[str], canary: str,
-          is_folder=os.path.isdir, startup_files: Iterable[str] = (), keep_in_place: Iterable[str] = ()) -> Places:
+          is_folder=os.path.isdir, startup_files: Iterable[str] = (), keep_in_place: Iterable[str] = (),
+          no_write_globs: Iterable[str] = ()) -> Places:
     """The policy for the person's *items* (as File Shield stores them), Blackbox's *key_patterns*
     (folders, or ``folder/glob``), Blackbox's *own* places, the *canary* file and the shell
     *startup_files* (absolute; they need not exist — every agent's hook config is passed here too:
     closed to writes the same way), and *keep_in_place* (folders never renamed or removed: the
-    folders holding those configs, so ``mv ~/.claude …`` can not take the hook away). *is_folder* decides an item's kind (File
+    folders holding those configs, so ``mv ~/.claude …`` can not take the hook away), and
+    *no_write_globs* (absolute ``*`` patterns never written: every add-on's manifest). *is_folder* decides an item's kind (File
     Shield's own rule, so a not-yet-existing folder is a folder)."""
     folders: list[str] = []
     files: list[str] = []
@@ -94,4 +108,4 @@ def build(items: Iterable[str], key_patterns: Iterable[str], own: Iterable[str],
                   no_write=_unique(canonical(place) for place in own),
                   no_rename=_unique(above + [form for path in keep_in_place for form in (os.path.normpath(os.path.expanduser(path)),
                                                                                          canonical(path))]), canary=canary_path,
-                  no_write_files=_unique(startup))
+                  no_write_files=_unique(startup), no_write_globs=_unique(_canonical_glob(os.path.expanduser(g)) for g in no_write_globs))

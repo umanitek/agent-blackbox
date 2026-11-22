@@ -33,6 +33,7 @@ Usage::
 
 from __future__ import annotations
 
+import glob
 import hashlib
 import json
 import logging
@@ -44,7 +45,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from ....detection import blackbox_key_patterns
-from ....kernel import agent_hosts, constants, shell_path
+from ....kernel import addons, agent_hosts, constants, shell_path
 from ....kernel.bounded_files import atomic_write
 from ...contract import OPTION_NOT_INSTALLED, OPTION_SUPPORTED, OPTION_UNAVAILABLE, ShieldMode
 from .. import mode as mode_module
@@ -131,14 +132,32 @@ def chosen(mode: ShieldMode) -> tuple[str, ...]:
     return tuple(mode.options.get(mode_module.OPT_SANDBOXED, ())) if mode.enabled else ()
 
 
+#: The most places an add-on's declared pattern expands to in the profile.
+MAX_ADDON_PLACES = 200
+
+
+def _addon_places() -> list[str]:
+    """Every add-on folder beside the plugin and every place the loaded add-ons declare
+    (``kernel.addons``; a ``*`` pattern expanded to what exists now). WHY (private security
+    finding, security round 3): the hook guarded these, the kernel profile did not — a sandboxed
+    agent's script the static judge could not read changed and removed a file inside an add-on's
+    folder. Asked on every :func:`sync` (the helper's watch plan polls it about every 2 s), so an
+    add-on installed after the profile was written is covered within seconds."""
+    places = list(addons.folders(str(_PLUGIN.parent)))
+    for place in addons.places():
+        places += sorted(glob.glob(place))[:MAX_ADDON_PLACES] if any(mark in place for mark in "*?[") else [place]
+    return places[:MAX_ADDON_PLACES]
+
+
 def policy(mode: ShieldMode) -> Places:
-    """The sandbox's policy for *mode*: the person's items, Blackbox's keys and own places."""
-    own = (str(constants.blackbox_home()), str(_PLUGIN))
+    """The sandbox's policy for *mode*: the person's items, Blackbox's keys and own places (the
+    add-ons' among them, and every add-on manifest — see :func:`_addon_places`)."""
+    own = (str(constants.blackbox_home()), str(_PLUGIN), *_addon_places())
     hooks = _hook_configs()
     startup = [str(Path.home() / name) for name in shell_path.STARTUP_FILES] + hooks
     holders = sorted({os.path.dirname(path) for path in hooks} - {str(Path.home())})
     return build(mode_module.protected(mode), blackbox_key_patterns(), own, str(canary_path()), is_folder=is_folder,
-                 startup_files=startup, keep_in_place=holders)
+                 startup_files=startup, keep_in_place=holders, no_write_globs=[addons.manifest_pattern(str(_PLUGIN.parent))])
 
 
 def self_protected_files(mode: ShieldMode) -> tuple[str, ...]:
