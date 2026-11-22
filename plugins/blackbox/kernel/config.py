@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from typing import Any, Iterator, Mapping, Optional
 
 from . import constants, yaml_files
-from .config_values import schema
+from .config_values import saved_entry, schema
 from .config_values.semantic import SemanticConfig, semantic_config
 from .host_secrets import read_host_secret
 
@@ -183,23 +183,8 @@ class BlackboxConfig:
 
 
 def _blackbox_entry() -> dict[str, Any]:
-    """Return the ``plugins.entries.blackbox`` mapping, or ``{}`` on any error.
-
-    Read from the machine's MAIN Hermes config (:func:`constants.hermes_root`) even while a named
-    profile runs: one set of Blackbox settings protects every profile, and what the dashboard
-    saves reaches them all (a profile used to keep the copy made when it was created).
-    """
-    root = constants.hermes_root()
-    if root != constants.hermes_home():
-        return yaml_files.blackbox_entry(yaml_files.load_yaml(root / "config.yaml"))
-    try:
-        from hermes_cli.config import load_config
-
-        cfg = load_config()
-    except Exception as exc:  # pragma: no cover - defensive
-        logger.debug("blackbox: config load failed (%s); using defaults", exc)
-        return {}
-    return yaml_files.blackbox_entry(cfg)
+    """Return the ``plugins.entries.blackbox`` mapping, or ``{}`` on any error (:mod:`.config_values.saved_entry`)."""
+    return saved_entry.read()
 
 
 #: The separate community graph's settings (2026-10-12 to 2026-10-16), config keys and environment
