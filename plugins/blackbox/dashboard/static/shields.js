@@ -40,6 +40,10 @@
   // every existing dashboard the banner again, so those keys are kept for that shield.
   var KEPT_BANNER_KEYS = { trader: { first: "blackbox.trader-shield.first-seen.v1", dismissed: "blackbox.trader-shield.dismissed.v1" } };
   var STATES = { ok: 1, watch: 1, none: 1, warn: 1 };
+  // The only option statuses drawn greyed out, with the words shown (true: the option's own
+  // note). Any other status — supported, "not installed", or none at all — stays pickable; the
+  // shield's validator is the authority on a save (BB-SHIELDS-001).
+  var UNPICKABLE = { unavailable: true, "needs-helper": "needs the system protection helper", planned: "not available" };
   var OUTCOMES = { blocked: 1, flagged: 1 };
   var STEP_KIND = { api: "model", tool: "tool", file: "file", dependency: "install", threat: "threat", session: "session" };
   var GLYPH = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
@@ -430,10 +434,12 @@
       }
       if (field.kind === "multi-pick") {
         var picks = list(field.options).map(obj).map(function (option) {
-          if (option.status !== "supported") return '<label class="wallet-pick soon"><input type="checkbox" disabled /> ' + esc(option.name) +
-            " <span>" + (option.status === "needs-helper" ? "needs the system protection helper" : "not available") + "</span></label>";
-          return '<label class="wallet-pick"><input type="checkbox"' + attrs + ' data-option="' + esc(option.id) + '"' +
-            (draft[field.key].indexOf(str(option.id)) >= 0 ? " checked" : "") + (on ? "" : " disabled") + " /> " + esc(option.name) + "</label>";
+          var status = str(option.status), note = str(option.note);
+          if (UNPICKABLE[status]) return '<label class="wallet-pick soon"' + (note ? ' title="' + esc(note) + '"' : "") + '><input type="checkbox" disabled /> ' +
+            esc(option.name) + " <span>" + esc(UNPICKABLE[status] === true ? note || "not available" : UNPICKABLE[status]) + "</span></label>";
+          return '<label class="wallet-pick"' + (note ? ' title="' + esc(note) + '"' : "") + '><input type="checkbox"' + attrs + ' data-option="' + esc(option.id) + '"' +
+            (draft[field.key].indexOf(str(option.id)) >= 0 ? " checked" : "") + (on ? "" : " disabled") + " /> " + esc(option.name) +
+            (status === "not installed" ? ' <span class="pick-note">not installed</span>' : "") + "</label>";
         });
         return '<div class="set-row"><div class="set-rl">' + label + helpText + '<div class="wallet-picks">' + picks.join("") + "</div></div></div>";
       }
@@ -498,7 +504,7 @@
         var card = cardOf(id) || asCard({ shield_id: id });
         if (state.drafts[id].enabled !== true) return "";
         var rows = [];
-        fieldsOf(id).filter(function (field) { return field.kind === "multi-pick"; }).forEach(function (field) {
+        fieldsOf(id).filter(function (field) { return field.kind === "multi-pick" && field.guards_key_places === true; }).forEach(function (field) {
           list(field.options).map(obj).forEach(function (option) {
             if (option.status === "supported" && state.drafts[id][field.key].indexOf(str(option.id)) >= 0) {
               rows.push('<div class="path-row shield" title="' + esc("Protected by " + card.name + ". Untick it or turn " + card.name + " off to stop.") + '"><code>' +

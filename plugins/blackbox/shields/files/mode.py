@@ -248,6 +248,11 @@ def fields() -> list[SettingField]:
 
 
 def _agent_options() -> tuple[SettingOption, ...]:
+    """One option per agent the sandbox can start, each with its REAL status on this machine
+    (``sandbox.offer``: supported, not installed, or unavailable with the reason) — never an
+    empty one (BB-SHIELDS-001)."""
     from ...kernel.agent_hosts import HERMES_ID, HERMES_NAME, HOSTS
-    return tuple(SettingOption(id=host.id, name=host.name, status="") for host in HOSTS
-                 if host.commands and host.id != "windsurf") + (SettingOption(id=HERMES_ID, name=HERMES_NAME, status=""),)
+    from .sandbox import offer   # lazy: the sandbox package imports this module
+    agents = [(host.id, host.name) for host in HOSTS if host.commands and host.id != "windsurf"] + [(HERMES_ID, HERMES_NAME)]
+    return tuple(SettingOption(id=agent, name=name, status=status, note=note)
+                 for agent, name in agents for status, note in (offer(agent),))

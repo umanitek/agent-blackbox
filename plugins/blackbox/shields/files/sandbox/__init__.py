@@ -45,14 +45,14 @@ from typing import Any, Optional
 from ....detection import blackbox_key_patterns
 from ....kernel import agent_hosts, constants, shell_path
 from ....kernel.bounded_files import atomic_write
-from ...contract import ShieldMode
+from ...contract import OPTION_NOT_INSTALLED, OPTION_SUPPORTED, OPTION_UNAVAILABLE, ShieldMode
 from .. import mode as mode_module
 from ..protect import is_folder
 from . import platform
 from .places import Places, build
 
-__all__ = ["CLI_AGENTS", "HERMES_SHELLS", "Places", "enter_hermes_process", "enter_hermes_session", "hermes_shell_dir", "launcher_dir", "open_app",
-           "policy", "profile_path", "protection", "proven", "restorations", "status", "sync"]
+__all__ = ["CLI_AGENTS", "HERMES_SHELLS", "Places", "enter_hermes_process", "enter_hermes_session", "hermes_shell_dir", "launcher_dir", "offer",
+           "open_app", "policy", "profile_path", "protection", "proven", "restorations", "status", "sync"]
 
 #: GUI agents are relaunched, not given a command-line launcher.
 _GUI_ONLY = frozenset({"windsurf"})
@@ -277,6 +277,23 @@ SANDBOXED = agent_hosts.PROTECTION_SANDBOXED
 HOOKS_ONLY = agent_hosts.PROTECTION_HOOKS
 _HERMES_NOTE = "its terminal tool's shells run inside the sandbox; its execute_code tool and file tools stay on hooks"
 _LAUNCH_NOTE = "when started from a shell that has Blackbox's launchers first on PATH (see coverage)"
+
+
+NOT_INSTALLED_NOTE = "not installed on this machine yet — pick it now and it starts sandboxed once installed"
+
+
+def offer(agent: str) -> tuple[str, str]:
+    """``(status, note)`` of *agent* as a sandbox choice on this machine: ``unavailable`` with
+    the reason when this OS can not sandbox agents, ``not installed`` when its program is not
+    here (still pickable), otherwise ``supported``. The Hermes agent is the program Blackbox
+    runs in, so it is always installed."""
+    reason = platform.unavailable()
+    if reason:
+        return OPTION_UNAVAILABLE, reason
+    host = agent_hosts.BY_ID.get(agent)
+    if host is not None and not host.installed(Path.home()):
+        return OPTION_NOT_INSTALLED, NOT_INSTALLED_NOTE
+    return OPTION_SUPPORTED, ""
 
 
 def protection(agent: str, picked: bool) -> dict[str, str]:

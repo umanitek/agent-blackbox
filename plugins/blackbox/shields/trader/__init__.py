@@ -112,7 +112,7 @@ def settings_fields() -> list[SettingField]:
                     for pack in mode.wallet_packs() if pack.status == "supported")
     return [SettingField(key="enabled", kind="toggle", label="Engage Trader Shield", help=ENGAGE_HELP),
             SettingField(key=mode.WALLETS, kind="multi-pick", label="Wallets to protect",
-                         help="Choose the wallets installed on this machine.", options=options),
+                         help="Choose the wallets installed on this machine.", options=options, guards_key_places=True),
             SettingField(key=mode.ADDRESSES, kind="lines", label="Your wallet addresses", help=ADDRESSES_HELP,
                          pattern=mode.ADDRESS_PATTERN)]
 

@@ -480,3 +480,26 @@ def test_sandbox_refusals_are_counted_each_and_the_recorder_is_not_listed_as_an_
     assert len(hits) == 3
     assert audit.SANDBOX_RECORDER not in audit.local_frameworks()
     assert audit.SANDBOX_RECORDER not in audit.local_active_frameworks()
+
+
+# -- the picker's choices (BB-SHIELDS-001) ----------------------------------------------------
+
+def _sandbox_options():
+    field = next(field for field in files_mode.fields() if field.key == files_mode.OPT_SANDBOXED)
+    return {option.id: option for option in field.options}
+
+
+def test_every_sandbox_choice_carries_its_real_status_never_an_empty_one(home, monkeypatch):
+    """BB-SHIELDS-001: each choice arrived with status "" and was drawn "not available"."""
+    monkeypatch.setattr(sandbox.platform, "unavailable", lambda: None)
+    bin_dir = home / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    (bin_dir / "claude").write_text("#!/bin/sh\n", encoding="utf-8")
+    (bin_dir / "claude").chmod(0o755)
+    monkeypatch.setenv("PATH", "/nonexistent")
+    options = _sandbox_options()
+    assert all(option.status for option in options.values())
+    assert options["claude-code"].status == "supported" and options["hermes"].status == "supported"
+    assert options["codex"].status == "not installed" and options["codex"].note
+    monkeypatch.setattr(sandbox.platform, "unavailable", lambda: "No sandbox here.")
+    assert {(option.status, option.note) for option in _sandbox_options().values()} == {("unavailable", "No sandbox here.")}

@@ -165,14 +165,29 @@ class FindingKind:
         return _record_json(self)
 
 
+#: A multi-pick option's statuses. Only the UNPICKABLE ones are drawn greyed out; a
+#: ``not installed`` choice stays pickable (the person may choose an agent before installing it)
+#: and is drawn with that note (BB-SHIELDS-001: an empty status was drawn as "not available").
+OPTION_SUPPORTED = "supported"
+OPTION_NOT_INSTALLED = "not installed"
+OPTION_UNAVAILABLE = "unavailable"
+OPTION_NEEDS_HELPER = "needs-helper"
+OPTION_PLANNED = "planned"
+UNPICKABLE_OPTION_STATUSES = frozenset({OPTION_UNAVAILABLE, OPTION_NEEDS_HELPER, OPTION_PLANNED})
+
+
 @dataclass(frozen=True)
 class SettingOption:
-    """One choice of a multi-pick setting: a pack id, its name, status and logo URL."""
+    """One choice of a multi-pick setting: an id, its name, its status (one of the
+    ``OPTION_*`` constants above), a logo URL, and *note* — the sentence that says why, shown
+    beside a choice that is not plainly ``supported`` (for example the reason this machine can
+    not sandbox an agent)."""
 
     id: str
     name: str
     status: str
     logo: str = ""
+    note: str = ""
 
     def as_json(self) -> dict[str, JsonValue]:
         return _record_json(self)
@@ -194,6 +209,9 @@ class SettingField:
     help: str = ""
     options: tuple[SettingOption, ...] = ()
     pattern: str = ""
+    #: True when each picked option guards that choice's own key places (Trader's wallets):
+    #: the Protected files list then shows "<name> · everywhere it keeps its keys" for it.
+    guards_key_places: bool = False
 
     def as_json(self) -> dict[str, JsonValue]:
         return _record_json(self)
