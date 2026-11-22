@@ -256,10 +256,16 @@ HOSTS: tuple[Host, ...] = (
           "SessionShutdown": "stop"},
          signs=("Documents/Cline", ".cline"), commands=("cline",), programs=("cline",), packages=("cline",),
          # Cline 3.0.75 (@cline/shared; real headless runs on the test VM, 2026-11-22): the person's
-         # words in its mode tag (KI-573), and the nudge every headless run appends (KI-579).
+         # words in its mode tag (KI-573), and the nudge every headless run appends (KI-579). The
+         # nudge's every form, word for word (KI-585): @cline/agents 3.0.75
+         # getCompletionToolReminderMessage() — the only [SYSTEM] text Cline writes — ends with "If
+         # the task is complete, call the appropriate terminal completion tool now." (security round
+         # 3: every run's real second user message); the form without that sentence is the one round 2
+         # quoted. Tool names joined by ", " (sorted). Nothing else is set aside.
          prompt_wrapper=r"<user_input\b[^>]*>(.*)</user_input>",
          prompt_additions=(r"\[SYSTEM\] This run is not complete until you call one of these terminal completion tools: "
-                           r"[A-Za-z0-9_]+(?:, [A-Za-z0-9_]+)*\. Continue working if requirements are not met\.",),
+                           r"[A-Za-z0-9_]+(?:, [A-Za-z0-9_]+)*\. Continue working if requirements are not met\."
+                           r"(?: If the task is complete, call the appropriate terminal completion tool now\.)?",),
          companions=(("Documents/Cline/Plugins/blackbox.js", "cline-plugin"),)),
     # OpenCode: version 1 loads plugin/blackbox.js (a function returning hooks by name); version 2
     # runs NO V1 plugin and loads plugins/<name>/index.js (a default export with id + setup that
