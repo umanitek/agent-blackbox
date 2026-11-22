@@ -59,6 +59,23 @@ pub fn parse_screen_lock(text: &str) -> String {
     else { "unknown".into() }
 }
 
+/// True when *text* (a sudoers file) lets someone run commands as root without a password:
+/// a line that is not a comment and carries `NOPASSWD`.
+pub fn sudoers_skips_password(text: &str) -> bool {
+    text.lines().map(str::trim).any(|line| !line.starts_with('#') && line.to_ascii_uppercase().contains("NOPASSWD"))
+}
+
+/// Whether sudo needs no password on this Mac: "yes" | "no" | "unknown" (the rules could not be
+/// read). Only root can read them, which is why the helper answers this and not the plugin.
+fn passwordless_sudo() -> &'static str {
+    let Ok(main) = std::fs::read_to_string("/etc/sudoers") else { return "unknown" };
+    let mut texts = vec![main];
+    if let Ok(entries) = std::fs::read_dir("/etc/sudoers.d") {
+        texts.extend(entries.flatten().take(200).filter_map(|entry| std::fs::read_to_string(entry.path()).ok()));
+    }
+    if texts.iter().any(|text| sudoers_skips_password(text)) { "yes" } else { "no" }
+}
+
 /// The facts now. *listening* is the set of TCP ports reachable from the network (exposure).
 pub fn look(listening: &BTreeSet<u16>) -> Value {
     let ard_running = crate::command::output(Command::new("/usr/bin/pgrep").args(["-x", "ARDAgent"]), crate::command::TIMEOUT).map(|o| o.status.success()).unwrap_or(false);
@@ -80,6 +97,7 @@ pub fn look(listening: &BTreeSet<u16>) -> Value {
         "airdrop": airdrop(),
         "screen_lock": parse_screen_lock(&both("/usr/sbin/sysadminctl", &["-screenLock", "status"])),
         "guest": default_value("/Library/Preferences/com.apple.loginwindow", "GuestEnabled"),
+        "passwordless_sudo": passwordless_sudo(),
     })
 }
 
@@ -100,9 +118,17 @@ mod tests {
     }
 
     #[test]
+    fn a_sudoers_line_without_a_password_is_seen_and_a_comment_is_not() {
+        assert!(sudoers_skips_password("root ALL=(ALL) ALL\nadmin ALL=(ALL) NOPASSWD: ALL\n"));
+        assert!(sudoers_skips_password("%admin ALL = (ALL) nopasswd: /usr/bin/true"));
+        assert!(!sudoers_skips_password("# admin ALL=(ALL) NOPASSWD: ALL\n%admin ALL=(ALL) ALL\n"));
+        assert!(!sudoers_skips_password(""));
+    }
+
+    #[test]
     fn a_look_has_every_fact() {
         let facts = look(&BTreeSet::from([22]));
-        for key in ["filevault", "firewall", "stealth", "gatekeeper", "sip", "updates", "remote_login", "screen_sharing", "remote_management", "file_sharing", "airdrop", "screen_lock", "guest"] {
+        for key in ["filevault", "firewall", "stealth", "gatekeeper", "sip", "updates", "remote_login", "screen_sharing", "remote_management", "file_sharing", "airdrop", "screen_lock", "guest", "passwordless_sudo"] {
             assert!(facts.get(key).is_some(), "{key}");
         }
         assert_eq!(facts["remote_login"], true);

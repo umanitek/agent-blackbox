@@ -16,6 +16,7 @@ import hashlib
 
 from ..contract import ShieldAlert
 from . import api
+from .monitor import system_report
 
 TITLE = "Network Shield"
 SEE = "Open Blackbox to see the details."
@@ -46,9 +47,20 @@ WORDS: dict[str, tuple[str, str]] = {
 }
 
 
+def _standing() -> list[ShieldAlert]:
+    """What is true NOW and worth one notice (its key never changes, so it is told once)."""
+    snapshot = system_report.snapshot()
+    if not snapshot or (snapshot.get("posture") or {}).get("passwordless_sudo") != "yes":
+        return []
+    return [ShieldAlert(key="network:passwordless-sudo", kind="passwordless-sudo", ts=float(snapshot.get("at") or 0), severity="high",
+                        title=f"{TITLE} · sudo needs no password",
+                        text="Any program on this Mac — an AI agent included — can become root without asking you. " + SEE,
+                        detail="A sudo rule says NOPASSWD (in /etc/sudoers or /etc/sudoers.d).")]
+
+
 def shield_alerts() -> list[ShieldAlert]:
     """Network Shield's latest alerts, each with its lock-screen-safe title and text."""
-    found = []
+    found = _standing()
     for row in api.alerts():
         kind, full = str(row.get("kind") or ""), str(row.get("text") or "")
         what, then = WORDS.get(kind, ("Network Shield alert", SEE))

@@ -138,6 +138,8 @@ def _posture(raw: Any) -> Optional[dict[str, Any]]:
     facts["airdrop"] = airdrop
     facts["screen_lock"] = _text(raw.get("screen_lock", "unknown"), "screen_lock", 32)
     facts["guest"] = _text(raw.get("guest", ""), "guest", 8)
+    # Whether sudo needs no password (only root reads the rules; a helper from before this says nothing).
+    facts["passwordless_sudo"] = _choice(raw.get("passwordless_sudo", "unknown"), "passwordless_sudo", ("yes", "no", "unknown"))
     return facts
 
 

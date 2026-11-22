@@ -24,7 +24,7 @@ PANES = {
 }
 WEIGHTS = {"filevault": 15, "firewall": 12, "stealth": 4, "gatekeeper": 10, "sip": 10, "updates": 8, "remote-login": 8,
            "screen-sharing": 8, "remote-management": 6, "file-sharing": 5, "airdrop": 5, "screen-lock": 6, "guest": 3,
-           "blackbox": 10}
+           "passwordless-sudo": 8, "blackbox": 10}
 
 
 def _check(check_id: str, title: str, status: str, why: str, fix: str = "", settings: str = "", detail: str = "") -> dict[str, Any]:
@@ -82,6 +82,11 @@ def checks(facts: Mapping[str, Any], blackbox: Mapping[str, Any]) -> list[dict[s
                detail="" if lock in ("unknown", "immediate") else f"Now: {lock}."),
         _check("guest", "Guest account off", "bad" if guest == "1" else "ok",
                "A guest account lets anyone log in without a password.", fix="guest-off", settings=PANES["users"]),
+        _check("passwordless-sudo", "A password is needed to become root", {"yes": "bad", "no": "ok"}.get(str(facts.get("passwordless_sudo")), "unknown"),
+               "Without a password, any program on this Mac — an AI agent included — becomes root without asking you.",
+               settings=PANES["users"],
+               detail="A rule in /etc/sudoers or /etc/sudoers.d says NOPASSWD. Remove it to be asked again."
+               if facts.get("passwordless_sudo") == "yes" else ""),
         _check("blackbox", "Blackbox protections on", "ok" if protections else "warn",
                "DNS Shield and the Threat Firewall stop known malicious sites and addresses for every app."),
     ]

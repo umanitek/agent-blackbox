@@ -22,7 +22,7 @@ from plugins.blackbox.shields.network.monitor import posture, system_report
 from plugins.blackbox.shields.network.protect import enforcement, posture_fix, tamper_guard
 
 NOW = 1_795_300_000.0
-SAFE = {"filevault": "on", "firewall": "on", "stealth": "on", "gatekeeper": "on", "sip": "on",
+SAFE = {"filevault": "on", "firewall": "on", "stealth": "on", "gatekeeper": "on", "sip": "on", "passwordless_sudo": "no",
         "updates": {"check": "", "download": "", "security": ""}, "remote_login": False, "screen_sharing": False,
         "remote_management": False, "file_sharing": False, "airdrop": [{"user": "me", "mode": "Contacts Only"}],
         "screen_lock": "immediate", "guest": "0"}
@@ -49,7 +49,7 @@ def test_a_safe_mac_scores_100_and_every_check_explains_itself():
 
 
 def test_risky_settings_fail_with_their_fix():
-    risky = {**SAFE, "firewall": "off", "filevault": "off", "remote_login": True, "screen_sharing": True, "guest": "1",
+    risky = {**SAFE, "firewall": "off", "filevault": "off", "remote_login": True, "screen_sharing": True, "guest": "1", "passwordless_sudo": "yes",
              "airdrop": [{"user": "me", "mode": "Everyone"}], "updates": {"check": "0", "download": "", "security": "0"}, "screen_lock": "300 seconds"}
     checks = _by_id(risky)
     assert checks["firewall"]["status"] == "bad" and checks["firewall"]["fix"] == "firewall-on"
@@ -100,3 +100,23 @@ def test_the_posture_read_scores_the_helpers_facts(monkeypatch):
     assert answer["checked"] and 0 < answer["score"] < 100
     assert answer["applied"] == ["stealth-on"]
     assert next(c for c in answer["checks"] if c["id"] == "firewall")["status"] == "bad"
+
+
+def test_sudo_without_a_password_fails_its_check_and_is_told_once(home):
+    """Amos 2026-11-22: an agent that can become root without a password is a standing risk.
+    Only the root helper can read the sudo rules; an older helper says nothing ("unknown")."""
+    from plugins.blackbox.shields.network import notices
+    from plugins.blackbox.shields.network.monitor import system_report
+    assert _by_id({**SAFE, "passwordless_sudo": "yes"})["passwordless-sudo"]["status"] == "bad"
+    assert _by_id(SAFE)["passwordless-sudo"]["status"] == "ok"
+    assert _by_id({key: value for key, value in SAFE.items() if key != "passwordless_sudo"})["passwordless-sudo"]["status"] == "unknown"
+    assert system_report._posture({**SAFE, "passwordless_sudo": "yes"})["passwordless_sudo"] == "yes"
+    assert system_report._posture({key: value for key, value in SAFE.items() if key != "passwordless_sudo"})["passwordless_sudo"] == "unknown"
+    with_rule = {"at": 1_795_000_000.0, "posture": {"passwordless_sudo": "yes"}}
+    alerts = [alert for alert in notices._standing()]
+    assert alerts == []                                    # no fresh look from the helper: nothing is claimed
+    import unittest.mock
+    with unittest.mock.patch.object(system_report, "snapshot", lambda now=None: with_rule):
+        first, again = notices._standing(), notices._standing()
+    assert [alert.key for alert in first] == ["network:passwordless-sudo"] == [alert.key for alert in again]
+    assert "/etc" not in first[0].title + first[0].text    # lock-screen safe
