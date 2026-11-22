@@ -60,7 +60,7 @@ def _app_sandbox(path: str) -> Optional[bool]:
     with _lock:
         if key in _entitled:
             return _entitled[key]
-    text = platform.program_entitlements(path)
+    text = code_signing.entitlements(path)
     if text is None:
         return None   # not kept: a timeout is asked again next time
     try:

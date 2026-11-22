@@ -32,7 +32,7 @@ def clean(monkeypatch):
 
 @MACOS
 def test_the_kernel_says_which_process_runs_in_a_sandbox_and_which_program_it_is(monkeypatch):
-    monkeypatch.setattr(platform, "program_entitlements", lambda path: "")
+    monkeypatch.setattr(code_signing, "entitlements", lambda path: "")
     child = subprocess.Popen(["/usr/bin/sandbox-exec", "-p", "(version 1)(allow default)", "/bin/sleep", "30"])
     try:
         def started():
@@ -54,11 +54,11 @@ def test_the_app_sandbox_entitlement_is_read_once_per_program_version_and_unknow
     asked = []
     xml = ('<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict>'
            '<key>com.apple.security.app-sandbox</key><true/></dict></plist>')
-    monkeypatch.setattr(platform, "program_entitlements", lambda path: asked.append(path) or xml)
+    monkeypatch.setattr(code_signing, "entitlements", lambda path: asked.append(path) or xml)
     assert process_facts._app_sandbox(str(program)) is True and process_facts._app_sandbox(str(program)) is True
     assert asked == [str(program)]
     process_facts.forget()
-    monkeypatch.setattr(platform, "program_entitlements", lambda path: None)
+    monkeypatch.setattr(code_signing, "entitlements", lambda path: None)
     assert process_facts._app_sandbox(str(program)) is None   # codesign could not say: unknown, asked again next time
 
 

@@ -165,7 +165,6 @@ def process_cwd(pid: int) -> str:
 
 
 PROC_PIDPATHINFO_MAXSIZE = 4096
-CODESIGN = "/usr/bin/codesign"
 
 
 def process_path(pid: int) -> str:
@@ -190,14 +189,3 @@ def process_sandboxed(pid: int) -> bool | None:
     except (OSError, ValueError, AttributeError, TypeError):
         return None
     return None if answer < 0 else answer > 0
-
-
-def program_entitlements(path: str) -> str | None:
-    """The entitlements *path* is signed with, as plist XML ("" when it has none); None when
-    ``codesign`` cannot say (unsigned, gone, timed out)."""
-    try:
-        done = subprocess.run([CODESIGN, "-d", "--entitlements", "-", "--xml", path], capture_output=True, encoding="utf-8",
-                              errors="replace", timeout=TIMEOUT_SECONDS, check=False)
-    except (OSError, subprocess.SubprocessError):
-        return None
-    return done.stdout[:MAX_OUTPUT_CHARS] if done.returncode == 0 else None

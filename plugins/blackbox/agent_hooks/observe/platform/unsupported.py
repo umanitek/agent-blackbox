@@ -37,7 +37,3 @@ def process_path(pid: int) -> str:
 
 def process_sandboxed(pid: int) -> bool | None:
     return None
-
-
-def program_entitlements(path: str) -> str | None:
-    return None

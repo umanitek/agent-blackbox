@@ -209,31 +209,51 @@ def described(path: str) -> Optional[Signer]:
     return found[0] if found else None
 
 
-_checking: set[str] = set()
+_checking: dict[str, tuple[threading.Thread, list[Signer]]] = {}
+#: How long :func:`describe_soon` waits for a check before it answers "not yet" (most finish in
+#: well under this; Gatekeeper on a loaded Mac takes seconds).
+SOON_SECONDS = 0.5
 
 
-def describe_soon(path: str, run: Runner = _run) -> Optional[Signer]:
-    """The kept answer for *path* (:func:`described`), or None after starting :func:`describe` in
-    a background thread (one per path at a time) — for a page that must not wait for Gatekeeper
-    (KI-584: an agent's profile was blank for the whole check). Ask again later for the answer."""
+def describe_soon(path: str, run: Runner = _run, wait: float = SOON_SECONDS) -> Optional[Signer]:
+    """The answer for *path* when it is kept or comes within *wait* seconds; else None, with
+    :func:`describe` left running in a background thread (one per path at a time; its answer is
+    kept by :func:`describe`) — for a page that must not wait for Gatekeeper (KI-584: an agent's
+    profile was blank for the whole check). Ask again later for the answer."""
     found = described(path)
     if found is not None:
         return found
     real = os.path.realpath(path)
     with _lock:
-        if real in _checking:
-            return None
-        _checking.add(real)
+        running = _checking.get(real)
+        if running is None:
+            answer: list[Signer] = []
 
-    def check() -> None:
-        try:
-            describe(real, run)
-        finally:
-            with _lock:
-                _checking.discard(real)
+            def check() -> None:
+                try:
+                    answer.append(describe(real) if run is _run else describe(real, run))
+                finally:
+                    with _lock:
+                        _checking.pop(real, None)
 
-    threading.Thread(target=check, name="blackbox-code-signing", daemon=True).start()
-    return None
+            running = _checking[real] = (threading.Thread(target=check, name="blackbox-code-signing", daemon=True), answer)
+            running[0].start()
+    worker, answer = running
+    worker.join(max(0.0, wait))
+    return answer[0] if answer else described(path)
+
+
+def entitlements(path: str, run: Runner = _run) -> Optional[str]:
+    """The entitlements *path* is signed with, as plist XML ("" when it has none); None when
+    ``codesign`` cannot say (unsigned, gone, timed out)."""
+    shown = run([CODESIGN, "-d", "--entitlements", "-", "--xml", path])
+    return None if shown is None or shown[0] != 0 else _xml_part(shown[1])
+
+
+def _xml_part(text: str) -> str:
+    """The plist in ``codesign``'s answer (it writes the XML; a note may come with it)."""
+    start = text.find("<?xml")
+    return text[start:] if start >= 0 else ""
 
 
 def describe(path: str, run: Runner = _run) -> Signer:

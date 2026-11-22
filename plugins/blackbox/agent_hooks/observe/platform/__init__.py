@@ -18,7 +18,6 @@ Usage::
     platform.process_ancestry(1234, 12)  # [(pid, ppid, started, command)] up its parents; [] gone, None unreadable
     platform.process_path(1234)     # the executable it runs ("" when unreadable)
     platform.process_sandboxed(1234)   # the kernel runs it in a sandbox: True / False, None when unknown
-    platform.program_entitlements("/Applications/X.app/Contents/MacOS/X")   # plist XML, None when unknown
 """
 
 from __future__ import annotations
@@ -27,10 +26,10 @@ import sys
 
 if sys.platform == "darwin":
     from .macos import (process_ancestry, process_argv, process_cwd, process_environment, process_path, process_sandboxed,
-                        process_table, process_users, process_variable, program_entitlements)
+                        process_table, process_users, process_variable)
 else:
     from .unsupported import (process_ancestry, process_argv, process_cwd, process_environment, process_path, process_sandboxed,
-                              process_table, process_users, process_variable, program_entitlements)
+                              process_table, process_users, process_variable)
 
 __all__ = ["process_ancestry", "process_argv", "process_cwd", "process_environment", "process_path", "process_sandboxed",
-           "process_table", "process_users", "process_variable", "program_entitlements"]
+           "process_table", "process_users", "process_variable"]
