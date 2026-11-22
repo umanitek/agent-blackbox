@@ -29,6 +29,7 @@ from plugins.blackbox.agent_hooks.instances import store, views
 from plugins.blackbox.guard import hooks
 from plugins.blackbox.kernel import agent_hosts
 from plugins.blackbox.shields.files import changes, mode as files_mode
+from plugins.blackbox.shields.files.sandbox import HermesCover
 
 ARGV = ["hermes", "chat", "-Q", "-q", "run ls", "--provider", "openrouter", "-m", "nvidia/nemotron-3.5-lightning:free", "--yolo"]
 MODEL = "nvidia/nemotron-3.5-lightning:free"
@@ -104,10 +105,12 @@ def test_the_history_answers_for_the_hermes_agent():
 
 # -- KI-580: the Hermes agent picked for the sandbox ---------------------------------------------------
 
-@pytest.mark.parametrize(("entered", "level", "label"), [(True, "shells", "terminal tool sandboxed; execute_code hooks only"),
-                                                         (False, "hooks", agent_hosts.PROTECTION_HOOKS)])
-def test_a_hermes_session_says_whether_its_shells_are_sandboxed(_fresh, monkeypatch, entered, level, label):
-    monkeypatch.setattr(hooks.shields, "enter_hermes_process", lambda: entered)
+@pytest.mark.parametrize(("cover", "level", "label"), [
+    (HermesCover(shells=True, execute_code=True), "sandboxed", agent_hosts.PROTECTION_SANDBOXED),
+    (HermesCover(shells=True, note="launcher missing"), "shells", "terminal tool sandboxed; execute_code hooks only"),
+    (HermesCover(), "hooks", agent_hosts.PROTECTION_HOOKS)])
+def test_a_hermes_session_says_what_of_it_is_sandboxed(_fresh, monkeypatch, cover, level, label):
+    monkeypatch.setattr(hooks.shields, "enter_hermes_process", lambda: cover)
     hooks.on_session_start(session_id="s2-hm1", model=MODEL, platform="cli")
     [session] = _hermes().values()
     row = views.detail(session.key)["instance"]
@@ -115,7 +118,7 @@ def test_a_hermes_session_says_whether_its_shells_are_sandboxed(_fresh, monkeypa
 
 
 def test_the_kernels_refusal_in_a_sandboxed_hermes_shell_is_on_its_session_with_its_reason(_fresh, monkeypatch, tmp_path):
-    monkeypatch.setattr(hooks.shields, "enter_hermes_process", lambda: True)
+    monkeypatch.setattr(hooks.shields, "enter_hermes_process", lambda: HermesCover(shells=True))
     hooks.on_session_start(session_id="s2-hm5", model=MODEL, platform="cli")
     hooks.on_pre_tool_call(tool_name="terminal", args={"command": "python3 r.py Doc Sec"}, session_id="s2-hm5", tool_call_id="c1")
     _hermes()

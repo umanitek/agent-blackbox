@@ -39,6 +39,7 @@ import logging
 import os
 import stat
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
@@ -51,7 +52,7 @@ from ..protect import is_folder
 from . import platform
 from .places import Places, build
 
-__all__ = ["CLI_AGENTS", "HERMES_SHELLS", "Places", "enter_hermes_process", "enter_hermes_session", "hermes_shell_dir", "launcher_dir", "offer",
+__all__ = ["CLI_AGENTS", "HERMES_LAUNCHER_ENV", "HERMES_SHELLS", "HermesCover", "Places", "enter_hermes_process", "enter_hermes_session", "hermes_shell_dir", "launcher_dir", "offer",
            "open_app", "policy", "profile_path", "protection", "proven", "restorations", "self_protected_files", "status", "sync"]
 
 #: GUI agents are relaunched, not given a command-line launcher.
@@ -88,6 +89,13 @@ def launcher_dir() -> Path:
 
 #: The shells the Hermes agent's terminal tool may start (it looks ``bash`` up on its own PATH).
 HERMES_SHELLS = ("bash", "sh", "zsh")
+
+
+#: Hermes's interpreter-launcher hook point (carried patch in ``tools/code_kernel.py``): a JSON
+#: argv array put before the Python its ``execute_code`` tool starts, read from Hermes's own process.
+HERMES_LAUNCHER_ENV = "HERMES_EXECUTE_CODE_LAUNCHER"
+#: The launcher Blackbox writes beside the Hermes shells for ``execute_code``'s interpreter.
+HERMES_CODE_LAUNCHER = "execute-code"
 
 
 def hermes_shell_dir() -> Path:
@@ -223,14 +231,42 @@ def _sync_hermes_shells(wanted: bool) -> None:
             _write_if_changed(folder / shell, platform.shell_shim(shell, str(folder), str(profile_path())), 0o755)
         else:
             (folder / shell).unlink(missing_ok=True)
+    if wanted:
+        _write_if_changed(_hermes_code_launcher(), platform.command_shim(str(profile_path())), 0o755)
+    else:
+        _hermes_code_launcher().unlink(missing_ok=True)
 
 
-def enter_hermes_process(mode: Optional[ShieldMode] = None, environ: Optional[dict[str, str]] = None) -> bool:
-    """Puts the sandboxed shells first on THIS (the Hermes agent's) process PATH when the person
-    sandboxes the Hermes agent, and takes them off when not — so every shell its terminal tool
-    starts runs inside the sandbox, while Hermes itself and Blackbox inside it do not. No Hermes
-    file is changed: the terminal tool looks ``bash`` up on PATH. Answers whether it is on.
-    Limit: Hermes's ``execute_code`` starts its Python by full path, so it stays on Layer 1."""
+def _hermes_code_launcher() -> Path:
+    return hermes_shell_dir() / HERMES_CODE_LAUNCHER
+
+
+def _hermes_has_launcher_hook() -> bool:
+    """True when the Hermes Blackbox runs in reads :data:`HERMES_LAUNCHER_ENV` (the carried patch);
+    a Hermes without it starts execute_code's Python directly, whatever the setting says."""
+    try:
+        from tools import code_kernel   # the Hermes host's module, not Blackbox's
+    except ImportError:
+        return False
+    return getattr(code_kernel, "INTERPRETER_LAUNCHER_ENV", None) == HERMES_LAUNCHER_ENV
+
+
+@dataclass(frozen=True)
+class HermesCover:
+    """What of the Hermes agent runs inside the sandbox: its terminal tool's ``shells``, its
+    ``execute_code`` interpreter, and ``note`` — why execute_code is not covered when it is not."""
+    shells: bool = False
+    execute_code: bool = False
+    note: str = ""
+
+
+def enter_hermes_process(mode: Optional[ShieldMode] = None, environ: Optional[dict[str, str]] = None) -> HermesCover:
+    """Puts the sandboxed shells first on THIS (the Hermes agent's) process PATH and sets Hermes's
+    interpreter-launcher hook point (:data:`HERMES_LAUNCHER_ENV`) to Blackbox's launcher when the
+    person sandboxes the Hermes agent; takes both away when not. So every shell its terminal tool
+    starts and every ``execute_code`` Python run inside the sandbox, while Hermes itself (and
+    Blackbox inside it) do not. A launcher value someone else set is left alone. Answers what is
+    covered (:class:`HermesCover`)."""
     mode = mode or mode_module.current()
     env = os.environ if environ is None else environ
     folder = str(hermes_shell_dir())
@@ -238,7 +274,24 @@ def enter_hermes_process(mode: Optional[ShieldMode] = None, environ: Optional[di
     wanted = (agent_hosts.HERMES_ID in chosen(mode) and platform.unavailable() is None
               and all((hermes_shell_dir() / shell).is_file() for shell in HERMES_SHELLS))
     env["PATH"] = os.pathsep.join(([folder] if wanted else []) + parts)
-    return wanted
+    ours = json.dumps([str(_hermes_code_launcher())])
+    code, note = wanted and _hermes_code_launcher().is_file(), _code_note(wanted)
+    if code:
+        env[HERMES_LAUNCHER_ENV] = ours
+    elif env.get(HERMES_LAUNCHER_ENV) == ours:
+        del env[HERMES_LAUNCHER_ENV]
+    return HermesCover(shells=wanted, execute_code=code and not note, note=note)
+
+
+def _code_note(shells: bool) -> str:
+    """Why the Hermes agent's execute_code stays on hooks, or "" when it is covered."""
+    if not shells:
+        return "not picked for the sandbox"
+    if not _hermes_code_launcher().is_file():
+        return f"Blackbox's execute_code launcher is missing ({_hermes_code_launcher()})"
+    if not _hermes_has_launcher_hook():
+        return f"this Hermes has no {HERMES_LAUNCHER_ENV} hook point, so it starts execute_code's Python directly"
+    return ""
 
 
 def _digest(text: str) -> str:
@@ -271,23 +324,25 @@ def status(mode: ShieldMode) -> dict[str, Any]:
     }
 
 
-def enter_hermes_session() -> bool:
-    """At a Hermes session start: the profile and shells made current (:func:`sync`), then the
-    Hermes process's PATH set (:func:`enter_hermes_process`). Fail-open: False on any error, logged."""
+def enter_hermes_session() -> HermesCover:
+    """At a Hermes session start: the profile, shells and launcher made current (:func:`sync`), then
+    the Hermes process's PATH and launcher set (:func:`enter_hermes_process`). Fail-open: nothing
+    covered on any error, logged."""
     try:
         sync()
         return enter_hermes_process()
     except Exception:   # the agent always runs; the reason is logged
         logger.warning("blackbox: could not put the Hermes agent's shells in the sandbox", exc_info=True)
-        return False
+        return HermesCover(note="Blackbox could not set up the sandbox for this session (see the log)")
 
 
 #: What each protection level means, in the words the dashboard shows.
 SANDBOXED = agent_hosts.PROTECTION_SANDBOXED
 HOOKS_ONLY = agent_hosts.PROTECTION_HOOKS
 SHELLS_ONLY = agent_hosts.PROTECTION_SHELLS
-_HERMES_NOTE = ("its terminal tool's shells run inside the sandbox; its execute_code tool (Hermes starts that Python by its "
-                "full path, outside the sandbox) and its file tools stay on hooks")
+_HERMES_NOTE = ("its terminal tool's shells and its execute_code Python run inside the sandbox; its file tools run in "
+                "Hermes itself and stay on hooks")
+_HERMES_SHELLS_NOTE = "its terminal tool's shells run inside the sandbox; its execute_code tool stays on hooks: "
 _LAUNCH_NOTE = "when started from a shell that has Blackbox's launchers first on PATH (see coverage)"
 
 
@@ -314,7 +369,9 @@ def protection(agent: str, picked: bool) -> dict[str, str]:
     if not picked or platform.unavailable() is not None:
         return {"protection": HOOKS_ONLY, "protection_note": platform.unavailable() or "not picked for the sandbox"}
     if agent == agent_hosts.HERMES_ID:
-        return {"protection": SHELLS_ONLY, "protection_note": _HERMES_NOTE}
+        note = _code_note(True)
+        return {"protection": SHELLS_ONLY, "protection_note": _HERMES_SHELLS_NOTE + note} if note else \
+            {"protection": SANDBOXED, "protection_note": _HERMES_NOTE}
     return {"protection": SANDBOXED, "protection_note": _LAUNCH_NOTE}
 
 

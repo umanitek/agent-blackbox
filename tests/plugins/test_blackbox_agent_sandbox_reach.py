@@ -10,11 +10,16 @@ hook config for writing and signal Blackbox's processes (finding
 2026-11-22-agent-sandbox-lets-the-agent-open-its-own); the Hermes agent had no sandbox at all; a
 kernel refusal never reached the instance (KI-568: ``python3 r.py allow``, refused 0). Round 2
 (KI-581): the kernel refused a sandboxed Claude Code's script writing its OWN hook config
-(~/.claude/settings.json), and nothing recorded it.
+(~/.claude/settings.json), and nothing recorded it. Round 3: the Hermes agent's execute_code read a
+protected file through a path built at run time — Hermes started that Python by full path, outside
+the sandbox (private finding 2026-11-22-hermes-execute-code-still-reads-a-protec…); Blackbox now sets
+Hermes's interpreter-launcher hook point (HERMES_EXECUTE_CODE_LAUNCHER, carried patch in
+tools/code_kernel.py) to its sandbox launcher.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -29,6 +34,7 @@ from plugins.blackbox.agent_hooks.protect import events as hook_events
 from plugins.blackbox.kernel import agent_hosts, shell_path
 from plugins.blackbox.shields.files import api as files_api, changes, mode as files_mode, sandbox
 from plugins.blackbox.shields.files.sandbox.platform import macos
+from tools import code_kernel
 
 VAULT = "~/Documents/Vault"
 REAL = pytest.mark.skipif(sys.platform != "darwin" or not os.access(macos.SANDBOX_EXEC, os.X_OK),
@@ -79,12 +85,12 @@ def test_zsh_c_like_an_ssh_command_finds_the_launcher_first(home):
 
 
 def test_each_agent_says_plainly_how_it_is_protected(home):
-    view = sandbox.status(_mode(("claude-code", "hermes")))
+    view = sandbox.sync(_mode(("claude-code", "hermes")))
     levels = {agent["id"]: agent["protection"] for agent in view["agents"]}
     if sandbox.platform.unavailable() is None:
         assert levels["claude-code"] == agent_hosts.PROTECTION_SANDBOXED
-        # The Hermes agent's shells are sandboxed; Hermes starts execute_code's Python by full path (KI-580).
-        assert levels["hermes"] == agent_hosts.PROTECTION_SHELLS == "terminal tool sandboxed; execute_code hooks only"
+        # The Hermes agent's shells and its execute_code Python both run inside (KI-580, round-3 finding).
+        assert levels["hermes"] == agent_hosts.PROTECTION_SANDBOXED
     assert levels["gemini-cli"] == levels["codex"] == agent_hosts.PROTECTION_HOOKS
 
 
@@ -130,14 +136,76 @@ kill -TERM {outside.pid} 2>/dev/null; echo outside=$?
 def test_the_hermes_agents_terminal_shell_runs_inside_the_sandbox(home):
     sandbox.sync(_mode(("hermes",)))
     env = {"PATH": "/usr/bin:/bin"}
-    assert sandbox.enter_hermes_process(_mode(("hermes",)), env) is True
+    assert sandbox.enter_hermes_process(_mode(("hermes",)), env).shells is True
     assert env["PATH"].split(os.pathsep)[0] == str(sandbox.hermes_shell_dir())
     bash = subprocess.run(["bash", "-c", f"cat '{home}/Documents/Vault/secret.txt' >/dev/null 2>&1; echo read=$?"],
                           capture_output=True, text=True, timeout=30, env=env, check=False)
     assert bash.stdout.strip() == "read=1", bash.stderr
     sandbox.sync(_mode(()))
-    assert sandbox.enter_hermes_process(_mode(()), env) is False
+    assert sandbox.enter_hermes_process(_mode(()), env).shells is False
     assert str(sandbox.hermes_shell_dir()) not in env["PATH"]
+
+
+# -- the Hermes agent's execute_code interpreter (round-3 finding) ----------------------------------
+
+def _hermes_launcher(env: dict[str, str]) -> list[str]:
+    """The argv prefix the Hermes this runs in would put before execute_code's Python."""
+    return code_kernel.interpreter_launcher(env)
+
+
+@pytest.mark.skipif(sandbox.platform.unavailable() is not None, reason="this system can not sandbox agents")
+def test_picking_the_hermes_agent_sets_its_execute_code_launcher_and_unpicking_clears_it(home):
+    env = {"PATH": "/usr/bin:/bin"}
+    sandbox.sync(_mode(("hermes",)))
+    cover = sandbox.enter_hermes_process(_mode(("hermes",)), env)
+    assert (cover.shells, cover.execute_code, cover.note) == (True, True, "")
+    assert _hermes_launcher(env) == [str(sandbox.hermes_shell_dir() / sandbox.HERMES_CODE_LAUNCHER)]
+    assert sandbox.protection("hermes", True)["protection"] == agent_hosts.PROTECTION_SANDBOXED
+    sandbox.sync(_mode(()))
+    cover = sandbox.enter_hermes_process(_mode(()), env)
+    assert (cover.shells, cover.execute_code) == (False, False)
+    assert sandbox.HERMES_LAUNCHER_ENV not in env and _hermes_launcher(env) == []
+    assert not (sandbox.hermes_shell_dir() / sandbox.HERMES_CODE_LAUNCHER).exists()
+
+
+def test_a_launcher_someone_else_set_is_left_alone(home):
+    theirs = json.dumps(["/usr/bin/nice"])
+    env = {"PATH": "/usr/bin:/bin", sandbox.HERMES_LAUNCHER_ENV: theirs}
+    sandbox.sync(_mode(()))
+    sandbox.enter_hermes_process(_mode(()), env)
+    assert env[sandbox.HERMES_LAUNCHER_ENV] == theirs
+
+
+@pytest.mark.skipif(sandbox.platform.unavailable() is not None, reason="this system can not sandbox agents")
+def test_a_missing_launcher_keeps_execute_code_running_and_says_hooks_only_with_the_reason(home):
+    env = {"PATH": "/usr/bin:/bin"}
+    sandbox.sync(_mode(("hermes",)))
+    (sandbox.hermes_shell_dir() / sandbox.HERMES_CODE_LAUNCHER).unlink()
+    cover = sandbox.enter_hermes_process(_mode(("hermes",)), env)
+    assert cover.shells is True and cover.execute_code is False and "launcher is missing" in cover.note
+    assert _hermes_launcher(env) == []   # Hermes starts its Python directly: execute_code still runs
+    view = sandbox.protection("hermes", True)
+    assert view["protection"] == agent_hosts.PROTECTION_SHELLS and "launcher is missing" in view["protection_note"]
+
+
+@REAL
+def test_execute_codes_interpreter_started_through_the_launcher_can_not_read_a_protected_file(home):
+    sandbox.sync(_mode(("hermes",)))
+    env = {"PATH": "/usr/bin:/bin"}
+    assert sandbox.enter_hermes_process(_mode(("hermes",)), env).execute_code is True
+    # The finding's form: the path is built at run time, so no hook can see it in the code.
+    code = ("import os; parts=['tluaV','stnemucoD']; p=os.path.join(os.environ['HOME'], *[x[::-1] for x in parts[::-1]], 'secret.txt')\n"
+            "try:\n print('read=' + open(p).read())\nexcept PermissionError:\n print('read=refused')\n"
+            "print('beside=' + str(len(os.listdir(os.environ['HOME']))))")
+    argv = [*_hermes_launcher(env), sys.executable, "-c", code]
+    done = subprocess.run(argv, capture_output=True, text=True, timeout=30, check=False,
+                          env={"HOME": str(home), "PATH": env["PATH"]})
+    lines = dict(line.split("=", 1) for line in done.stdout.split() if "=" in line)
+    assert lines.get("read") == "refused", (done.stdout, done.stderr)
+    assert int(lines["beside"]) > 0   # the rest of the home stays usable
+    plain = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=30, check=False,
+                           env={"HOME": str(home), "PATH": env["PATH"]})
+    assert "read=secret" in plain.stdout   # without the launcher the same code reads it: the test can tell
 
 
 # -- KI-568: the kernel's refusal on the instance ------------------------------------------------
@@ -199,3 +267,30 @@ def test_a_kernel_refusal_of_an_agent_writing_its_own_hook_config_is_recorded_as
     assert instance.refused == 1
     [row] = [action for action in store.actions(instance.key) if action.verdict == "block"]
     assert config in row.reason and "self-protection" in row.reason and "python3.14" in row.reason
+
+
+@REAL
+def test_the_hermes_execute_code_tool_itself_runs_inside_the_sandbox(home, monkeypatch):
+    """The real tool, end to end: Hermes's session kernel started through Blackbox's launcher still
+    answers (its RPC socket, its staging folder), and the kernel refuses the protected file."""
+    from unittest.mock import patch
+
+    from tools.code_execution_tool import execute_code
+    from tools.code_kernel import shutdown_all_kernels
+
+    monkeypatch.setenv("TERMINAL_ENV", "local")
+    # Both are changed in this process below; monkeypatch puts them back afterwards.
+    monkeypatch.setenv("PATH", os.environ.get("PATH", "/usr/bin:/bin"))
+    monkeypatch.setenv(sandbox.HERMES_LAUNCHER_ENV, "")
+    sandbox.sync(_mode(("hermes",)))
+    assert sandbox.enter_hermes_process(_mode(("hermes",)), os.environ).execute_code is True
+    code = ("import os\nparts=['tluaV','stnemucoD']\np=os.path.join(os.environ['HOME'], *[x[::-1] for x in parts[::-1]], 'secret.txt')\n"
+            "try:\n    print('read=' + open(p).read())\nexcept PermissionError:\n    print('read=refused')")
+    shutdown_all_kernels()
+    try:
+        with patch("tools.code_execution_tool._load_config", return_value={"mode": "strict", "timeout": 30}):
+            result = json.loads(execute_code(code, task_id="bb-sandbox-real"))
+    finally:
+        shutdown_all_kernels()
+    assert result["status"] == "success", result
+    assert "read=refused" in result["output"] and "secret" not in result["output"].replace("secret.txt", "")

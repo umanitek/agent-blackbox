@@ -123,7 +123,9 @@ def _session_facts(raw: str, kind: str, detail: Mapping[str, Any]) -> dict[str, 
         pid = detail.get("pid")
         known.update(cwd=str(detail.get("cwd") or "")[:500], launch=str(detail.get("launch") or ""),
                      pid=pid if isinstance(pid, int) and not isinstance(pid, bool) and pid > 1 else 0,
-                     shells_sandboxed=detail.get("shells_sandboxed") is True)
+                     shells_sandboxed=detail.get("shells_sandboxed") is True,
+                     # Shells AND execute_code inside: the whole agent's code runs kernel-enforced.
+                     sandboxed=detail.get("shells_sandboxed") is True and detail.get("code_sandboxed") is True)
     if detail.get("model"):
         known["model"] = str(detail["model"])[:80]
     _bounded_put(_facts, raw, known)
@@ -161,7 +163,7 @@ def apply(row: Mapping[str, Any]) -> bool:
     fields: dict[str, Any] = {"agent": HERMES_ID, "event": kind, "session": raw, "cwd": facts.get("cwd", ""), "profile": home,
                               "tool_name": tool, "args": detail.get("args"), "tool_call_id": str(detail.get("tool_call_id") or "")[:200],
                               "model": facts.get("model", ""), "launch": facts.get("launch", ""), "agent_pid": facts.get("pid") or None,
-                              "shells_sandboxed": facts.get("shells_sandboxed") is True}
+                              "shells_sandboxed": facts.get("shells_sandboxed") is True, "sandboxed": facts.get("sandboxed") is True}
     key = session_key(HERMES_ID, raw, "")
     if parent:
         fields.update(sub=raw, sub_type="delegated task", event={"session_start": "subagent_start", "stop": "subagent_stop"}.get(kind, kind))

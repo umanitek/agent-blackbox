@@ -365,12 +365,15 @@ def on_pre_api_request(**kwargs: Any) -> None:
 
 def on_session_start(session_id: str = "", **kwargs: Any) -> None:
     try:
-        # The Hermes agent picked for File Shield's sandbox: its terminal tool's shells start inside it.
-        shells_sandboxed = shields.enter_hermes_process() is True
-        # Where it works, its process, how it started, its model and whether its shells are
-        # sandboxed: the instance tree's facts (KI-572, KI-580).
+        # The Hermes agent picked for File Shield's sandbox: its terminal tool's shells and its
+        # execute_code Python start inside it.
+        cover = shields.enter_hermes_process()
+        # Where it works, its process, how it started, its model and what of it is sandboxed:
+        # the instance tree's facts (KI-572, KI-580).
         audit.record(event="session_start", detail={"session_id": session_id, "model": str(kwargs.get("model") or "")[:80],
-                                                     "shells_sandboxed": shells_sandboxed,
+                                                     "shells_sandboxed": cover.shells is True,
+                                                     "code_sandboxed": cover.execute_code is True,
+                                                     "sandbox_note": str(cover.note)[:200],
                                                      **host_process.facts(str(kwargs.get("platform") or ""))})
         cfg = _config()
         background._spawn_auto_attach(cfg)

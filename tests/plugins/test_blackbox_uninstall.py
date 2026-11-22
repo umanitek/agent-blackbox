@@ -428,3 +428,22 @@ def test_a_helper_that_could_not_be_removed_keeps_its_key_and_a_companion_apps_f
     assert (folder / "plan.key").exists(), "the still-installed helper needs its key"
     _execute(dataclasses.replace(_plan(machine), system_helper=helper))
     assert not folder.exists() and (folder.parent / "engine").exists(), "a non-empty folder is never removed"
+
+
+@pytest.mark.skipif(sys.platform != "darwin" or not os.access("/usr/bin/sandbox-exec", os.X_OK),
+                    reason="the agent sandbox runs on macOS")
+def test_uninstall_clears_the_hermes_agents_execute_code_launcher(machine):
+    """A Hermes process that still holds Blackbox's launcher setting after an uninstall starts
+    execute_code's Python directly again: the launcher goes with Blackbox's home, and Hermes's hook
+    point ignores a launcher that is not there (fail-open; round-3 execute_code finding)."""
+    from plugins.blackbox.shields.files import mode as files_mode, sandbox
+    from tools import code_kernel
+
+    picked = files_mode.build(enabled=True, protected=("~/Documents",), sandboxed=("hermes",))
+    sandbox.sync(picked)
+    env = {"PATH": "/usr/bin:/bin"}
+    assert sandbox.enter_hermes_process(picked, env).execute_code is True
+    assert code_kernel.interpreter_launcher(env) != []
+    _execute(_plan(machine))
+    assert not (sandbox.hermes_shell_dir() / sandbox.HERMES_CODE_LAUNCHER).exists()
+    assert code_kernel.interpreter_launcher(env) == []

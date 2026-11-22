@@ -45,9 +45,12 @@ What only the sandbox (Layer 2, below) stops, because no text says which file wi
   environment variables other than the home folder, values it computes;
 - a compiled program, or a script fetched and run in one go;
 - a script larger than 256 KiB (flagged, not judged);
-- Hermes's `execute_code` tool beyond what its code text says: Hermes starts that Python by its
-  full path, outside the sandboxed shells, so it stays on Layer 1 even when the Hermes agent is
-  picked for the sandbox (shown as "terminal tool sandboxed; execute_code hooks only").
+- Hermes's `execute_code` tool beyond what its code text says. When the Hermes agent is picked for
+  the sandbox, Blackbox sets Hermes's interpreter-launcher hook point
+  (`HERMES_EXECUTE_CODE_LAUNCHER`) to its sandbox launcher, so that Python runs inside the sandbox
+  too and the agent shows as "sandboxed (kernel-enforced)". When the launcher is missing, or the
+  Hermes has no such hook point, execute_code still runs, outside the sandbox, and the agent shows
+  as "terminal tool sandboxed; execute_code hooks only", with the reason.
 
 When a script that reads its paths at run time is run beside a protected item, or is too large to
 read, File Shield flags it and says why, rather than showing a plain "allowed".

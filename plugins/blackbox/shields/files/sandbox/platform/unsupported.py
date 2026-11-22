@@ -40,3 +40,7 @@ def open_app(app: str, _profile: str, **_options: object) -> str:
 
 def shell_shim(_shell: str, _here: str, _profile: str) -> str:
     return ""
+
+
+def command_shim(_profile: str) -> str:
+    return ""

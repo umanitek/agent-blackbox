@@ -62,9 +62,9 @@ def product_name(agent: str) -> str:
 
 #: The protection levels an agent runs at, in the words every screen shows: inside File Shield's
 #: OS sandbox (the kernel refuses a protected file to anything it starts); the Hermes agent picked
-#: for the sandbox, whose terminal tool's shells run inside it while its ``execute_code`` tool
-#: starts Python by full path outside it (KI-580); or on its hooks alone (a tool call is judged; a
-#: program it writes and runs is not seen).
+#: for the sandbox, whose terminal tool's shells run inside it while its ``execute_code`` Python
+#: does not (its launcher is missing, or the Hermes has no launcher hook point — KI-580); or on its
+#: hooks alone (a tool call is judged; a program it writes and runs is not seen).
 PROTECTION_SANDBOXED = "sandboxed (kernel-enforced)"
 PROTECTION_SHELLS = "terminal tool sandboxed; execute_code hooks only"
 PROTECTION_HOOKS = "hooks only — a script it writes can still reach protected files"
