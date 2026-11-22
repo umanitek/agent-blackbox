@@ -47,8 +47,6 @@ from ....kernel import code_signing as signing
 
 MAX_CACHED = 4000
 MAX_PLIST_BYTES = 1024 * 1024
-APPLE_AUTHORITIES = frozenset({"Software Signing", "macOS Software Signing", "Apple iPhone OS Application Signing"})
-APP_STORE_AUTHORITY = "Apple Mac OS Application Signing"
 
 
 @dataclass(frozen=True)
@@ -71,29 +69,10 @@ class Signature:
 
 
 def parse(text: str) -> Signature:
-    """The signature ``codesign -dv --verbose=2`` describes in *text*."""
-    if "code object is not signed at all" in text:
-        return Signature(kind="unsigned")
-    fields: dict[str, list[str]] = {}
-    for line in text.splitlines():
-        key, sep, value = line.partition("=")
-        if sep:
-            fields.setdefault(key.strip(), []).append(value.strip())
-    authorities = fields.get("Authority", [])
-    team = next((t for t in fields.get("TeamIdentifier", []) if t != "not set"), "")
-    notarised = "stapled" in fields.get("Notarization Ticket", [])
-    first = authorities[0] if authorities else ""
-    if "adhoc" in fields.get("Signature", []) or not authorities and "adhoc" in text:
-        return Signature(kind="adhoc")
-    if first in APPLE_AUTHORITIES:
-        return Signature(kind="apple", signer="Apple", team=team, notarised=True)
-    if first == APP_STORE_AUTHORITY:
-        return Signature(kind="app_store", signer="Mac App Store", team=team, notarised=True)
-    if first.startswith("Developer ID Application:"):
-        return Signature(kind="developer_id", signer=first.split(":", 1)[1].strip(), team=team, notarised=notarised)
-    if first.startswith("Apple Development:"):
-        return Signature(kind="development", signer=first.split(":", 1)[1].strip(), team=team)
-    return Signature(kind="unknown", signer=first, team=team)
+    """The signature ``codesign -dv --verbose=2`` describes in *text* (read by the kernel's
+    ``code_signing.parse_display``, which other packages share)."""
+    claim = signing.parse_display(text)
+    return Signature(kind=claim.kind, signer=claim.signer, team=claim.team, notarised=claim.notarised)
 
 
 def bundle_of(path: str) -> tuple[str, str, str]:

@@ -18,8 +18,12 @@ out — never safe either). Results are cached by path + modification time + siz
 Used by ``network.monitor.intel.signature`` (processes, listeners, startup items) and
 ``files.monitor.inspect`` (File Shield). Imports nothing else in the add-on.
 
+What a program CLAIMS is read by :func:`parse_display` (the text of ``codesign -dv
+--verbose=2``) into a :class:`Claim`.
+
 Usage::
 
+    claim = parse_display(displayed_text)      # Claim(kind="developer_id", signer="Brave Software, Inc.", …)
     found = verify("/Applications/Safari.app/Contents/MacOS/Safari", claimed="apple")
     found.valid, found.notarised
 """
@@ -59,6 +63,49 @@ class Verification:
 
     valid: Optional[bool]
     notarised: bool = False
+
+
+#: The signers ``codesign -dv`` names for Apple's own programs, and for Mac App Store apps.
+APPLE_AUTHORITIES = frozenset({"Software Signing", "macOS Software Signing", "Apple iPhone OS Application Signing"})
+APP_STORE_AUTHORITY = "Apple Mac OS Application Signing"
+
+
+@dataclass(frozen=True)
+class Claim:
+    """What a program SAYS about its signer (``codesign -dv`` only displays it — see the module
+    doc): *kind* is ``apple`` / ``app_store`` / ``developer_id`` / ``development`` / ``adhoc`` /
+    ``unsigned`` / ``unknown``; *notarised* is the stapled-ticket claim."""
+
+    kind: str
+    signer: str = ""
+    team: str = ""
+    notarised: bool = False
+
+
+def parse_display(text: str) -> Claim:
+    """The signer ``codesign -dv --verbose=2`` describes in *text*."""
+    if "code object is not signed at all" in text:
+        return Claim(kind="unsigned")
+    fields: dict[str, list[str]] = {}
+    for line in text.splitlines():
+        key, sep, value = line.partition("=")
+        if sep:
+            fields.setdefault(key.strip(), []).append(value.strip())
+    authorities = fields.get("Authority", [])
+    team = next((t for t in fields.get("TeamIdentifier", []) if t != "not set"), "")
+    notarised = "stapled" in fields.get("Notarization Ticket", [])
+    first = authorities[0] if authorities else ""
+    if "adhoc" in fields.get("Signature", []) or not authorities and "adhoc" in text:
+        return Claim(kind="adhoc")
+    if first in APPLE_AUTHORITIES:
+        return Claim(kind="apple", signer="Apple", team=team, notarised=True)
+    if first == APP_STORE_AUTHORITY:
+        return Claim(kind="app_store", signer="Mac App Store", team=team, notarised=True)
+    if first.startswith("Developer ID Application:"):
+        return Claim(kind="developer_id", signer=first.split(":", 1)[1].strip(), team=team, notarised=notarised)
+    if first.startswith("Apple Development:"):
+        return Claim(kind="development", signer=first.split(":", 1)[1].strip(), team=team)
+    return Claim(kind="unknown", signer=first, team=team)
 
 
 def _run(command: list[str]) -> Optional[tuple[int, str]]:
