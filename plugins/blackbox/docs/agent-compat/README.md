@@ -15,8 +15,8 @@ matched phrase as local evidence, exactly as for a Hermes agent.
 | [Gemini CLI](gemini-cli.md) | ✅ BeforeTool deny | ✅ BeforeAgent deny | ✅ **replaced** | — | ✅ |
 | [Copilot CLI](copilot-cli.md) | ✅ preToolUse deny | 📝 recorded (output ignored) | 📝 recorded | — | ✅ |
 | [Windsurf (Devin)](windsurf.md) | ✅ exit 2 | ✅ exit 2 | 📝 recorded | ✅ pre_read_code | ✅ |
-| [Cline](cline.md) | ✅ cancel | ✅ cancel | ⚠️ contextModification warning | — | ✅ |
-| [OpenCode](opencode.md) | ✅ throw | — (no prompt hook) | ✅ **replaced** | — | ✅ |
+| [Cline](cline.md) | ✅ cancel (scripts) · skip (SDK plugin) | ✅ cancel | ⚠️ warning (scripts) · ✅ **replaced** (SDK plugin: CLI, SDK) | — | ✅ |
+| [OpenCode](opencode.md) | ✅ throw (versions 1 and 2) | — (no prompt hook) | ✅ **replaced** | — | ✅ |
 
 ✅ enforced · ⚠️ the model is warned · 📝 recorded only (the agent's hook cannot block it) · — not available.
 

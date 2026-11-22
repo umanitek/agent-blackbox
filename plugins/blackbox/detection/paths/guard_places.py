@@ -142,6 +142,8 @@ def _all_places() -> tuple[str, ...]:
     # Each coding agent's hook config: removing Blackbox's hook there switches that agent's protection
     # off. A shared settings file stays editable except for Blackbox's part (guard_settings).
     places += [str(host.config_path(Path(home))) for host in agent_hosts.HOSTS]
+    # The second form some agents take hooks in (Cline's SDK plugin, OpenCode 2's plugin).
+    places += [str(path) for host in agent_hosts.HOSTS for path in host.companion_paths(Path(home))]
     # A shell startup file holding the agent sandbox's PATH block (kernel.shell_path): without the
     # block later agents start outside the sandbox. The person's own lines stay editable (guard_settings).
     places += [str(path) for path in shell_path.holding(Path(home))]

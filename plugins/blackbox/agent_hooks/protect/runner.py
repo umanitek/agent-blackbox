@@ -38,8 +38,10 @@ from pathlib import Path
 # imported as a module by the plugin and its tests.
 if __package__:
     from .identity import effective_agent, identity
+    from .tool_shapes import cline_tool
 else:
     from identity import effective_agent, identity
+    from tool_shapes import cline_tool
 
 #: The most of stdin read (a write tool's whole file can be in the payload).
 MAX_INPUT_BYTES = 1024 * 1024
@@ -212,7 +214,11 @@ def _tool(agent: str, payload: dict) -> tuple[str, object]:
             return _canonical("write_file" if "write" in action else "read_file", {"path": info.get("file_path")})
     if agent == "cline":
         call = payload.get("preToolUse") or payload.get("postToolUse") or {}
-        return _canonical(str(_first(call, "toolName", "tool") or ""), _first(call, "parameters", "params"))
+        name = str(_first(call, "toolName", "tool") or "")
+        # The CLI sends the call's real input beside ``parameters`` (which holds each value as text).
+        raw = payload["tool_call"].get("input") if isinstance(payload.get("tool_call"), dict) else None
+        args = raw if raw not in (None, "") else _first(call, "parameters", "params")
+        return cline_tool(name, args) or _canonical(name, args)
     if agent == "copilot-cli":
         return _canonical(str(payload.get("toolName") or ""), payload.get("toolArgs"))
     if agent == "opencode":
@@ -221,9 +227,19 @@ def _tool(agent: str, payload: dict) -> tuple[str, object]:
 
 
 def _roots(payload: dict) -> str:
-    """Cursor names the workspace as ``workspace_roots`` (a list) instead of ``cwd``."""
-    roots = payload.get("workspace_roots")
+    """Cursor names the workspace as ``workspace_roots`` (a list) instead of ``cwd``; Cline as
+    ``workspaceRoots``."""
+    roots = payload.get("workspace_roots") or payload.get("workspaceRoots")
     return str(roots[0]) if isinstance(roots, list) and roots else ""
+
+
+def _call_id(payload: dict) -> str:
+    """The agent's own id for this tool call (Cline nests it: ``tool_call.id``). WHY it matters:
+    an agent that reports one call through two hook forms is answered once, by this id."""
+    call = _first(payload, "tool_use_id", "toolCallId", "callID", "call_id", "execution_id")
+    if not call and isinstance(payload.get("tool_call"), dict):
+        call = payload["tool_call"].get("id")
+    return str(call or "")[:200]
 
 
 def _session(payload: dict) -> str:
@@ -261,8 +277,7 @@ def summary(agent: str, event: str, payload: dict) -> dict:
             "sandboxed": sandboxed(), **identity(agent, payload, _first)}
     if event in ("pre_tool", "post_tool"):
         body["tool_name"], body["args"] = _tool(agent, payload)
-        call = _first(payload, "tool_use_id", "toolCallId", "callID", "call_id", "execution_id")
-        body["tool_call_id"] = str(call or "")[:200]
+        body["tool_call_id"] = _call_id(payload)
     if event == "pre_tool":
         body["text"] = read_text(agent, payload)
     if event == "post_tool":

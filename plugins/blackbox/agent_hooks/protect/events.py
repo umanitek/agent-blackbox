@@ -51,6 +51,27 @@ AUDIT_EVENT = {"session_start": "session_start", "prompt": "user_prompt", "pre_t
 
 _lock = threading.Lock()
 
+#: How long an answered tool call is remembered, and how many are.
+ANSWERED_SECONDS = 120.0
+MAX_ANSWERED = 512
+#: ``(agent, session, the agent's tool-call id, event)`` → ``(when, the answer)``. WHY: an agent
+#: can report ONE call through two hook forms (Cline's hook script and its SDK plugin; OpenCode's
+#: two plugin files); the second report gets the first one's answer and is not recorded again.
+_answered: dict[tuple[str, str, str, str], tuple[float, dict[str, Any]]] = {}
+
+
+def _answered_before(key: tuple[str, str, str, str]) -> dict[str, Any] | None:
+    with _lock:
+        seen = _answered.get(key)
+        return dict(seen[1]) if seen and time.monotonic() - seen[0] < ANSWERED_SECONDS else None
+
+
+def _note_answer(key: tuple[str, str, str, str], answer: Mapping[str, Any]) -> None:
+    with _lock:
+        _answered[key] = (time.monotonic(), dict(answer))
+        for old in sorted(_answered, key=lambda item: _answered[item][0])[:-MAX_ANSWERED]:
+            _answered.pop(old)
+
 
 def state_path():
     return constants.blackbox_home() / "agent-hooks" / "state.json"
@@ -120,6 +141,9 @@ def _tool_verdicts(tool_name: str, args: Any) -> list[Mapping[str, Any]]:
     """The tool call itself — and, for Codex's ``apply_patch``, each file it touches as a write
     (a deletion as a whole-file write, an update or addition with the patch as its edit)."""
     verdicts = [guard.tool_call_verdict(tool_name=tool_name, args=args)]
+    if tool_name == "read_file" and isinstance(args, dict) and isinstance(args.get("paths"), list):
+        # One call that reads several files (Cline's read_files): each file is judged.
+        verdicts += [guard.tool_call_verdict(tool_name="read_file", args={"path": str(path)}) for path in args["paths"][1:50]]
     if tool_name == "apply_patch" and isinstance(args, dict):
         patch = str(args.get("patch") or "")
         for path in patch_files(patch):
@@ -183,6 +207,11 @@ def record_event(body: Any) -> dict[str, Any]:
     if state.get("disabled"):
         return {"decision": "allow", "message": "", "recorded": False}   # a stale hook after "Stop protecting"
     session = session_key(event["agent"], event["session"], event["cwd"])
+    call_key = (event["agent"], session, event["tool_call_id"], event["event"])
+    if event["tool_call_id"] and event["event"] in ("pre_tool", "post_tool"):
+        again = _answered_before(call_key)
+        if again is not None:
+            return {**again, "recorded": False}   # the same call, reported through a second hook form
     verdict = _verdict(event)
     detail: dict[str, Any] = {"session_id": session}
     if event["event"] in ("pre_tool", "post_tool"):
@@ -205,5 +234,8 @@ def record_event(body: Any) -> dict[str, Any]:
     from .. import tracking   # late: tracking imports this package's editors
     tracking.track(event, session, decision=str(verdict.get("decision") or ""), findings=len(findings))
     blocked = verdict.get("decision") == "block"
-    return {"decision": "block" if blocked else "allow", "message": verdict.get("message", "") if blocked else "",
-            "findings": len(findings), "recorded": True}
+    answer = {"decision": "block" if blocked else "allow", "message": verdict.get("message", "") if blocked else "",
+              "findings": len(findings), "recorded": True}
+    if event["tool_call_id"] and event["event"] in ("pre_tool", "post_tool"):
+        _note_answer(call_key, answer)
+    return answer

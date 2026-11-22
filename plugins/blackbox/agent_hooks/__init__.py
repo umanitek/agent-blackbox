@@ -68,8 +68,8 @@ def _home() -> Path:
     return Path.home()
 
 
-#: The runner and the module it imports, copied together.
-RUNNER_FILES = ("runner.py", "identity.py")
+#: The runner and the modules it imports, copied together.
+RUNNER_FILES = ("runner.py", "identity.py", "tool_shapes.py")
 
 
 def _runner() -> Path:

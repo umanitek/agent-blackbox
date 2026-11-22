@@ -13,7 +13,7 @@ from pathlib import Path
 #: The environment variable that moves each agent's config home — its PROFILE (the catalogue's
 #: ``Host.home_env``, repeated here because the runner imports nothing of the plugin).
 HOME_ENV = {"claude-code": "CLAUDE_CONFIG_DIR", "codex": "CODEX_HOME", "gemini-cli": "GEMINI_CLI_HOME",
-            "copilot-cli": "COPILOT_HOME"}
+            "copilot-cli": "COPILOT_HOME", "cline": "CLINE_DIR"}
 
 
 def identity(agent: str, payload: dict, _first) -> dict:
@@ -22,8 +22,11 @@ def identity(agent: str, payload: dict, _first) -> dict:
     type, the parent session a Cursor sub-agent names, the model, why a session started or ended,
     whether it is a background agent, the profile (a moved config home) and the process that ran
     this hook. Ids are hashed by the dashboard; nothing here is prompt text."""
+    sub = str(_first(payload, "agent_id", "agentId", "subagent_id") or "")[:200]
+    if agent == "cline" and not payload.get("parent_agent_id"):
+        sub = ""   # Cline names agent_id on EVERY event; only an agent with a parent was spawned
     return {
-        "sub": str(_first(payload, "agent_id", "agentId", "subagent_id") or "")[:200],
+        "sub": sub,
         "sub_type": str(_first(payload, "agent_type", "agentType", "subagent_type") or "")[:80],
         "parent": str(_first(payload, "parent_conversation_id", "parent_session_id") or "")[:200],
         "model": str(_first(payload, "model", "subagent_model", "model_id") or "")[:80],

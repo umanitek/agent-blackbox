@@ -23,8 +23,8 @@ Statuses:
 | GitHub Copilot CLI | Built, not yet run in the product | Not covered | Not covered |
 | Windsurf (Devin) | Built, not yet run in the product | Not covered | Not covered |
 | Devin | Built, not yet run in the product | Not covered | Not covered |
-| Cline | Built, not yet run in the product | Not covered | Not covered |
-| OpenCode | Built, not yet run in the product | Not covered | Not covered |
+| Cline | Tested | Not covered | Not covered |
+| OpenCode | Tested | Not covered | Not covered |
 
 ## Claude Code
 
@@ -362,42 +362,57 @@ Sources: <https://docs.devin.ai/cli/extensibility/hooks/overview.md> (read 2026-
 
 ## Cline
 
-The VS Code extension and the `cline` CLI; sub-agents run inside the session.
+The `cline` CLI (TUI, headless, and a background hub), the SDK (`ClineCore`), Kanban and the VS Code / JetBrains extensions. Agents a session spawns (`spawn_agent`, teams) run inside it and name their parent on every hook event. SDK plugins run in a worker thread of the host.
 
-**Profiles:** macOS `~/Documents/Cline/Hooks (script hooks, older releases); ~/.cline/plugins (plugins, current docs)` · Linux `~/Documents/Cline/Hooks; ~/.cline/plugins` · Windows `Documents\Cline\Hooks`
+**Profiles:** macOS `~/.cline (data/settings, hooks/, plugins/; moved by CLINE_DIR or --config) and ~/Documents/Cline (Hooks/, Plugins/ — read whatever CLINE_DIR says)` · Linux `~/.cline and ~/Documents/Cline` · Windows `%USERPROFILE%\.cline and Documents\Cline`
 
 | Scope | Where | Blackbox's hooks there | Note |
 |---|---|---|---|
-| user, script hooks | `~/Documents/Cline/Hooks/EVENT` | yes | the surface Blackbox was written against (2026-11-21) |
-| user, plugins | `~/.cline/plugins` | no | on 2026-11-22 Cline's Hooks page points to SDK plugins (beforeTool / afterTool / beforeRun / afterRun). Blackbox has no plugin for it yet |
+| user, hook scripts | `~/Documents/Cline/Hooks/EVENT` | yes | run by the IDE extensions and — checked in the SDK 3.0.75 itself — by the CLI and SDK too; a script of the person's own for an event is kept |
+| user, SDK plugin | `~/Documents/Cline/Plugins/blackbox.js` | yes | CLI, SDK and Kanban only (the docs say plugins do not apply to the IDE extensions yet); loaded for every profile |
+| another profile | `CLINE_DIR/hooks and CLINE_DIR/plugins` | no | not needed: ~/Documents/Cline is searched for every profile |
+| project | `PROJECT/.cline/hooks, PROJECT/.clinerules/hooks, PROJECT/.cline/plugins` | no | adds hooks and plugins; cannot remove the user-level ones |
 
 | Launch mode | How | Hooks run | Note |
 |---|---|---|---|
-| ide | `VS Code extension` | yes | script hooks, where the release still runs them |
-| interactive | `cline CLI` | no | plugins only |
+| ide | `VS Code / JetBrains extension` | yes | hook scripts, with Settings → Enable Hooks on |
+| interactive | `cline (TUI)` | yes | hook scripts and the SDK plugin |
+| headless | `cline "task" / cline --json` | yes | hook scripts and the SDK plugin |
+| sdk | `ClineCore / Agent with pluginPaths` | yes | a host that passes its own plugin policy can switch plugins off; the hook scripts still run |
+| cloud | `Cline Cloud Agents` | no | runs in the vendor's sandbox |
 
 | Hook event | Blackbox reads it as | Hooked | Why not |
 |---|---|---|---|
 | TaskStart | session_start | yes |  |
+| TaskResume | session_start | yes |  |
 | UserPromptSubmit | prompt | yes |  |
 | PreToolUse | pre_tool | yes |  |
 | PostToolUse | post_tool | yes |  |
-| TaskComplete | stop | yes |  |
+| TaskComplete | turn_end | yes |  |
+| TaskCancel | turn_end | yes |  |
+| SessionShutdown | stop | yes |  |
+| TaskError |  | no | carries nothing Blackbox judges |
+| PreCompact |  | no | carries nothing Blackbox judges |
+| plugin beforeTool / afterTool | pre_tool / post_tool | no | not a hook event of its own: Blackbox's SDK plugin reports the same calls as PreToolUse / PostToolUse, and one call is answered once |
 
-**Sub-agents:** Not tracked.
+**Sub-agents:** Tracked: every event names agent_id and parent_agent_id, so an agent a session spawned is its own instance under that session.
 
 | OS | Launch mode | Layer | Status | Detail |
 |---|---|---|---|---|
-| macos | ide | hooks | Built, not yet run in the product | script hooks written against the earlier reference; the vendor's docs have since moved to plugins |
-| macos | interactive | hooks | Not covered | the CLI loads plugins, and Blackbox has none for it yet |
-| macos | ide | os | Not covered | needs Apple's Endpoint Security entitlement (not requested yet) |
+| macos | sdk | hooks | Tested | 2026-11-22, Blackbox 1.5.0, agent 3.0.75, macOS 27.2.1: the Cline SDK's own loader (discoverPluginModulePaths, loadAgentPluginsFromPathsWithDiagnostics, listHookConfigFiles) on Blackbox's installed files: the plugin loaded with no failure, all 8 hook scripts were found, and beforeTool returned skip for a refused call. No model run. — partial |
+| macos | interactive | hooks | Built, not yet run in the product | built and loaded by the SDK; not run in a signed-in CLI session |
+| macos | ide | hooks | Built, not yet run in the product | hook scripts; not run in the extension |
+| macos | cloud | hooks | Not covered | local hooks never run in the vendor's cloud |
+| macos | interactive | os | Not covered | needs Apple's Endpoint Security entitlement (not requested yet) |
 
 **Not covered:**
-- Cline's current hook surface is SDK plugins; Blackbox's script hooks may not run in a current release. Needs a Blackbox plugin for Cline and a run in the real product.
+- Not run with a model yet: the CLI needs a sign-in. The SDK's own loader loaded Blackbox's plugin and found its hook scripts; a real session is still to be run.
+- The IDE extensions run the hook scripts only, and only with Enable Hooks on — Blackbox cannot see that switch.
+- A host built on the SDK can switch plugins off for a session; the hook scripts still report its tool calls.
 - A program the agent compiles and runs is seen by the sandbox layer, not by hooks.
 - Sessions that run in the vendor's cloud never touch this machine's hooks.
 
-Sources: <https://docs.cline.bot/customization/hooks.md> (read 2026-11-22), <https://docs.cline.bot/customization/plugins.md> (read 2026-11-22), <https://docs.cline.bot/sdk/guides/writing-plugins.md> (read 2026-11-22)
+Sources: <https://docs.cline.bot/customization/hooks.md> (read 2026-11-22), <https://docs.cline.bot/customization/plugins.md> (read 2026-11-22), <https://docs.cline.bot/sdk/plugins.md> (read 2026-11-22), <https://docs.cline.bot/sdk/guides/writing-plugins.md> (read 2026-11-22), <https://docs.cline.bot/getting-started/config.md> (read 2026-11-22)
 
 ## OpenCode
 
@@ -407,31 +422,36 @@ One `opencode` process (TUI) or `opencode serve`; agents and sub-agents run insi
 
 | Scope | Where | Blackbox's hooks there | Note |
 |---|---|---|---|
-| user | `~/.config/opencode/plugin/blackbox.js` | yes | a V1 plugin (tool.execute.before / after). V2 still discovers the plugin/ folder but, per the migration guide, V1 plugin code does not run in V2 |
+| user, version 1 | `~/.config/opencode/plugin/blackbox.js` | yes | a function returning tool.execute.before / after; OpenCode 1.19.6 lists it among its loaded plugins |
+| user, version 2 | `~/.config/opencode/plugins/blackbox/index.js` | yes | a default export with id and setup(ctx) registering ctx.tool.hook; version 2 runs no version-1 plugin |
 | project | `PROJECT/.opencode/plugins/` | no | adds plugins |
 
 | Launch mode | How | Hooks run | Note |
 |---|---|---|---|
-| interactive | `opencode` | yes | V1 releases only |
-| headless | `opencode run` | yes | V1 releases only |
-| sdk | `opencode serve` | yes | V1 releases only |
+| interactive | `opencode` | yes |  |
+| headless | `opencode run` | yes |  |
+| sdk | `opencode serve / acp` | yes |  |
+| headless, pure | `opencode --pure` | no | --pure runs without external plugins, Blackbox's included |
 
 | Hook event | Blackbox reads it as | Hooked | Why not |
 |---|---|---|---|
 | tool.execute.before | pre_tool | yes |  |
 | tool.execute.after | post_tool | yes |  |
 
-**Sub-agents:** Not tracked: the plugin reports tool calls only.
+**Sub-agents:** Not tracked as instances: the plugin reports tool calls, each with its session id.
 
 | OS | Launch mode | Layer | Status | Detail |
 |---|---|---|---|---|
-| macos | interactive | hooks | Built, not yet run in the product | V1 plugin; hooked on the test VM but not run in OpenCode with a model |
+| macos | interactive | hooks | Tested | 2026-11-22, Blackbox 1.5.0, agent 1.19.6, macOS 27.2.1: OpenCode 1.19.6 with both of Blackbox's plugin files in place: `opencode debug config` lists the version-1 plugin among its loaded plugins and reports no error for the version-2 folder. No model run. — partial |
+| macos | interactive, version 2 | hooks | Built, not yet run in the product | the version-2 plugin is run under Node with the documented events; OpenCode 2 itself is not released on npm's latest tag |
+| macos | headless, pure | hooks | Not covered | --pure loads no external plugin |
 | macos | interactive | os | Not covered | needs Apple's Endpoint Security entitlement (not requested yet) |
 
 **Not covered:**
-- OpenCode V2 does not run V1 plugins: Blackbox's plugin must be ported (default export with setup(ctx) and ctx.tool.hook) before V2 is protected.
+- `opencode --pure` runs without external plugins: nothing Blackbox installs is loaded.
+- OpenCode 2 is not on npm's `latest` yet (1.19.6 is): the version-2 plugin is built against @opencode/plugin 2.3.2 and run under Node with its documented events, not in OpenCode 2 itself.
 - No prompt or session events.
 - A program the agent compiles and runs is seen by the sandbox layer, not by hooks.
 - Sessions that run in the vendor's cloud never touch this machine's hooks.
 
-Sources: <https://opencode.ai/docs/plugins/> (read 2026-11-22), <https://opencode.ai/docs/build/plugins/migrate-v1/> (read 2026-11-22)
+Sources: <https://opencode.ai/docs/plugins/> (read 2026-11-22), <https://opencode.ai/docs/build/plugins/server/> (read 2026-11-22), <https://opencode.ai/docs/build/plugins/migrate-v1/> (read 2026-11-22)
