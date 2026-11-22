@@ -81,6 +81,10 @@ class Machine:
     def _fakes(self) -> None:
         state, calls, pid_file = (shlex.quote(str(p)) for p in (self.state, self.calls, self.dkg_home / "daemon.pid"))
         log = f'echo "$(basename "$0") $*" >> {calls}\n'
+        # A sync racing the handover (KI-529): the first start through the service finds a stray copy
+        # already started behind it, so the service's own copy cannot start that time.
+        stray = (f'if [ -f {state}/stray_once ]; then rm -f {state}/stray_once; echo {ORPHAN_NODE} > {pid_file}; '
+                 f'echo {ORPHAN_SUPERVISOR} > {state}/ppid_{ORPHAN_NODE}; echo 1 > {state}/answers; exit 0; fi\n')
         takeover = (f'[ "$(cat {state}/takeover 2>/dev/null)" = 1 ] && {{ echo {SERVICE_SUPERVISOR} > {state}/service_pid; '
                     f'echo {SERVICE_NODE} > {pid_file}; echo {SERVICE_SUPERVISOR} > {state}/ppid_{SERVICE_NODE}; '
                     f'echo 1 > {state}/answers; }}\n')
@@ -88,7 +92,7 @@ class Machine:
         _fake(self.bin, "uname", f'echo {"Darwin" if self.supervisor == "launchd" else "Linux"}\n')
         _fake(self.bin, "launchctl", f'case "$1" in\n'
               f'  print) echo "{LABEL} = {{"; echo "	pid = $({service_pid})"; exit 0;;\n'
-              f'  kickstart|bootstrap) {log}{takeover}exit 0;;\n'
+              f'  kickstart|bootstrap) {log}{stray}{takeover}exit 0;;\n'
               f'  bootout) {log}rm -f {state}/service_pid; exit 0;;\n'
               f'esac\nexit 0\n')
         _fake(self.bin, "systemctl", f'case "$*" in\n'
@@ -101,7 +105,11 @@ class Machine:
         _fake(self.bin, "curl", f'[ -f {state}/answers ]\n')
         _fake(self.bin, "sleep", "exit 0\n")
 
-    def run(self) -> tuple[list[str], str]:
+    def stray_on_first_start(self) -> None:
+        """Something starts the node behind the service just as the handover starts it (KI-529)."""
+        _set(self.state, stray_once="1")
+
+    def run(self, wait_seconds: int = 3) -> tuple[list[str], str]:
         """Run the handover; return (every recorded start/stop call in order, its output)."""
         text = INSTALL_SH.read_text(encoding="utf-8")
         state, calls, pid_file = (shlex.quote(str(p)) for p in (self.state, self.calls, self.dkg_home / "daemon.pid"))
@@ -118,7 +126,9 @@ BLACKBOX_SYSTEMD_DIR={shlex.quote(str(unit_dir))}
 BLACKBOX_DKG_LAUNCHD_LABEL={LABEL}
 BLACKBOX_DKG_HOME={shlex.quote(str(self.dkg_home))}
 BLACKBOX_DKG_DAEMON_URL=http://127.0.0.1:9320
-BLACKBOX_DKG_HANDOVER_WAIT_SECONDS=3
+BLACKBOX_DKG_HANDOVER_WAIT_SECONDS={wait_seconds}
+BLACKBOX_DKG_HANDOVER_STRAY_GRACE_SECONDS=2
+BLACKBOX_DKG_HANDOVER_STRAY_STOPS=3
 HOME={shlex.quote(str(self.home))}
 PATH={shlex.quote(str(self.bin))}:/usr/bin:/bin
 ok() {{ echo "OK $*"; }}
@@ -183,6 +193,23 @@ def test_a_service_running_some_other_copy_does_not_count_as_owning_the_node(tmp
     calls, _ = machine.run()
     assert calls[0] == "dkg stop"
     assert machine.node_pid() == SERVICE_NODE
+
+
+def test_a_stray_copy_started_behind_the_service_during_the_handover_is_stopped_and_the_service_takes_the_node(tmp_path):
+    """KI-529 (E2E recheck 2, 2026-11-22): the dashboard's first sync restarted the node behind the
+    LaunchAgent while the installer handed it over; launchd's copy then failed "Daemon already
+    running" until the 300 s wait ran out and the install rolled back. A node that answers but is not
+    the service's is this install's stray copy: it is stopped and the service starts the node."""
+    machine = Machine(tmp_path, "launchd")
+    machine.orphan_running()
+    machine.service_takes_over(True)
+    machine.stray_on_first_start()
+    calls, output = machine.run(wait_seconds=10)
+    kickstart = f"launchctl kickstart -k gui/{os.getuid()}/{LABEL}"
+    assert calls == ["dkg stop", kickstart, "dkg stop", kickstart]
+    assert machine.node_pid() == SERVICE_NODE
+    assert "OK The DKG node now runs under its launchd service" in output
+    assert "did not take over" not in output
 
 
 def test_when_the_service_does_not_take_the_node_it_is_started_directly_and_the_run_warns(tmp_path):

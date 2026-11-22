@@ -480,7 +480,7 @@ preflight_network; echo continued""", docker_works=True)
     assert "Cannot reach the npm registry" in result.stdout
 
 
-def _verify(tmp_path: Path, *, hermes_ok: bool, plugin_ok: bool) -> subprocess.CompletedProcess[str]:
+def _verify(tmp_path: Path, *, hermes_ok: bool, plugin_ok: bool, node: str = "") -> subprocess.CompletedProcess[str]:
     hermes = tmp_path / "hermes"
     hermes.write_text(f"""#!/bin/sh
 case "$1" in
@@ -493,11 +493,13 @@ esac
 set -euo pipefail
 ok() {{ echo "ok: $1"; }}
 err() {{ echo "err: $1"; }}
+warn() {{ echo "warn: $1"; }}
 heading() {{ :; }}
 {_function("verify_install")}
+{node}
 HERMES_BIN={shlex.quote(str(hermes))}
 BLACKBOX_INSTALL_INCOMPLETE=false
-SKIP_DKG=true
+SKIP_DKG=${{SKIP_DKG:-true}}
 BLACKBOX_AUTO_DASHBOARD=0
 verify_install
 echo committed
@@ -513,6 +515,29 @@ def test_the_install_is_kept_only_when_every_part_answers(tmp_path: Path) -> Non
     assert no_plugin.returncode == 1
     assert "Hermes loads the Blackbox plugin — NOT working" in no_plugin.stdout
     assert "committed" not in no_plugin.stdout
+
+
+# A node that answers and stores, under or outside its launchd service.
+_NODE_ANSWERING = """
+SKIP_DKG=false
+BLACKBOX_DKG_DAEMON_URL=http://127.0.0.1:9320
+blackbox_dkg_answers() {{ return 0; }}
+blackbox_store_answers() {{ return 0; }}
+blackbox_dkg_supervisor() {{ echo launchd; }}
+blackbox_dkg_owned_by() {{ return {owned}; }}
+"""
+
+
+def test_a_node_that_answers_outside_its_service_is_kept_with_a_warning_not_rolled_back(tmp_path: Path) -> None:
+    """KI-527 (E2E recheck 2026-11-22): the handover's own fallback started the node directly so
+    protection never drops, then the final check failed "runs under its launchd service" and rolled
+    the whole install back — stopping the answering node and leaving nothing running."""
+    outside = _verify(tmp_path, hermes_ok=True, plugin_ok=True, node=_NODE_ANSWERING.format(owned=1))
+    assert outside.returncode == 0 and "committed" in outside.stdout
+    assert "runs outside its launchd service" in outside.stdout
+    assert "NOT working" not in outside.stdout
+    under = _verify(tmp_path, hermes_ok=True, plugin_ok=True, node=_NODE_ANSWERING.format(owned=0))
+    assert under.returncode == 0 and "ok: DKG node runs under its launchd service" in under.stdout
 
 
 def test_main_commits_only_after_the_final_check() -> None:

@@ -27,8 +27,9 @@ def test_boot_service_function_exists_and_runs_in_main():
     assert "register_boot_service()" in src
     main_body = src.split("main() {", 1)[1]
     assert "register_boot_service" in main_body
-    # Runs after the dashboard is up, before the closing guidance.
-    assert main_body.index("start_dashboard") < main_body.index("register_boot_service")
+    # Runs BEFORE the dashboard starts (KI-529): the dashboard's first sync restarts the node, and
+    # only a node already held by its service is restarted through it instead of behind it.
+    assert main_body.index("register_boot_service") < main_body.index("start_dashboard")
     assert main_body.index("register_boot_service") < main_body.index("next_steps")
 
 

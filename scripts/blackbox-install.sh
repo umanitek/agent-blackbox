@@ -354,6 +354,10 @@ blackbox_dkg_control() {
 # installers and by Blackbox itself (sync/managed_node.py); the handover wait follows it.
 BLACKBOX_DKG_RUNTIME_WAIT_SECONDS="${BLACKBOX_DKG_RUNTIME_WAIT_SECONDS:-300}"
 BLACKBOX_DKG_HANDOVER_WAIT_SECONDS="${BLACKBOX_DKG_HANDOVER_WAIT_SECONDS:-$BLACKBOX_DKG_RUNTIME_WAIT_SECONDS}"
+# A node that answers but is not the service's is given this long to be the service's own starting
+# up, then stopped as a stray (at most this many times) during the handover (KI-529).
+BLACKBOX_DKG_HANDOVER_STRAY_GRACE_SECONDS="${BLACKBOX_DKG_HANDOVER_STRAY_GRACE_SECONDS:-10}"
+BLACKBOX_DKG_HANDOVER_STRAY_STOPS="${BLACKBOX_DKG_HANDOVER_STRAY_STOPS:-3}"
 
 # The pid of the process the node's service runs (`dkg start --foreground`, the DKG CLI's own
 # supervisor), or nothing when the service is not running it.
@@ -405,7 +409,7 @@ blackbox_dkg_answers() {
 # service's process is the one serving. If the service does not take it, the node is started
 # again directly so protection never drops, and the run says so.
 hand_dkg_node_to_service() {
-    local supervisor waited=0
+    local supervisor waited=0 since_restart=0 stray_stops=0
     supervisor="$(blackbox_dkg_supervisor)"
     [ -n "$supervisor" ] || return 0
     if blackbox_dkg_owned_by "$supervisor" && blackbox_dkg_answers; then
@@ -419,6 +423,20 @@ hand_dkg_node_to_service() {
         if blackbox_dkg_owned_by "$supervisor" && blackbox_dkg_answers; then
             ok "The DKG node now runs under its $supervisor service"
             return 0
+        fi
+        # A node that answers but is not the service's is a stray copy of THIS install's node —
+        # e.g. one something restarted behind the service while it was coming up (KI-529). The
+        # service's copy cannot start while it lives ("Daemon already running"), so stop it
+        # (`dkg stop` acts only on the daemon.pid in this install's DKG home, never another
+        # program) and start the node through the service again — a bounded number of times.
+        since_restart=$((since_restart + 1))
+        if [ "$since_restart" -ge "$BLACKBOX_DKG_HANDOVER_STRAY_GRACE_SECONDS" ] \
+            && [ "$stray_stops" -lt "$BLACKBOX_DKG_HANDOVER_STRAY_STOPS" ] && blackbox_dkg_answers; then
+            step "Another copy of the DKG node is running outside its $supervisor service; stopping it"
+            blackbox_dkg stop >/dev/null 2>&1 || true
+            blackbox_dkg_control restart >/dev/null 2>&1 || true
+            stray_stops=$((stray_stops + 1))
+            since_restart=0
         fi
         sleep 1
         waited=$((waited + 1))
@@ -3084,7 +3102,17 @@ verify_install() {
         verify_part "DKG node answers at $BLACKBOX_DKG_DAEMON_URL" blackbox_dkg_answers
         verify_part "DKG store answers" blackbox_store_answers
         supervisor="$(blackbox_dkg_supervisor)"
-        [ -z "$supervisor" ] || verify_part "DKG node runs under its $supervisor service" blackbox_dkg_owned_by "$supervisor"
+        # Supervision is checked but never undoes the install (KI-527): a node that answers is
+        # protecting the machine, and rolling back would stop it and leave nothing running. A
+        # node outside its service is said plainly; Blackbox's next node restart goes through
+        # the service and moves it there (sync/node_service, KI-529).
+        if [ -n "$supervisor" ]; then
+            if blackbox_dkg_owned_by "$supervisor"; then
+                ok "DKG node runs under its $supervisor service"
+            else
+                warn "The DKG node answers but runs outside its $supervisor service until its next restart."
+            fi
+        fi
     fi
     case "$BLACKBOX_AUTO_DASHBOARD" in
         0|false|never|no) ;;
@@ -4513,8 +4541,12 @@ main() {
     attach_all_agents
     setup_llm
     sync_ruleset
-    start_dashboard
+    # The node's service first, then the dashboard (KI-529). The dashboard's first sync restarts
+    # the node; launched before the LaunchAgent / unit existed, it could only restart it directly,
+    # behind the service, and the handover below then met a second copy it could not stop. With
+    # the service registered and holding the node, every restart goes through it.
     register_boot_service
+    start_dashboard
     register_dashboard_service
     register_curator_service
     register_curate_watch
