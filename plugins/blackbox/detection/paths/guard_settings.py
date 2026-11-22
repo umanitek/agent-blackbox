@@ -172,7 +172,7 @@ def _text_tampers(text: str) -> bool:
     ports = _ports()
     folder, closely = guard_paths.START_FOLDER, MAX_READ_CLOSELY
     for line in _lines(text):
-        if not line.strip():
+        if not line.strip() or guard_startup.plain_startup_append(line):
             continue
         if _says_it(line, ports):
             return True
@@ -272,7 +272,12 @@ def _file_tool_tampers(access: dict[str, str], args: Any) -> bool:
     host_configs = (*_HOST_CONFIGS, *guarded_extra.editable_configs())   # another program's file: Blackbox's part only
     if os.path.basename(os.path.expanduser(str(path))) not in host_configs or not isinstance(args, dict):
         return True                        # Blackbox's own folders and files: any write
-    edits = [args.get(key) for key in ("old_string", "new_string", "old_str", "new_str", "patch", "diff", "edits")]
+    if os.path.basename(os.path.expanduser(str(path))) in shell_path.STARTUP_FILES:
+        kept = guard_startup.edit_keeps_path_block(path, args)
+        if kept is not None:
+            return not kept                # the edit applied: is the block still whole and unguarded?
+    edits = [args.get(key) for key in (*guard_startup.OLD_KEYS, *guard_startup.NEW_KEYS, "patch", "diff")]
+    edits += [str(item) for item in (args.get("edits") if isinstance(args.get("edits"), list) else [])]
     if not any(isinstance(edit, str) and edit for edit in edits):
         return not guard_startup.keeps_path_block(path, args)   # a whole-file write or a delete can drop Blackbox
     return _edit_reaches_blackbox(path, [edit for edit in edits if isinstance(edit, str) and edit])

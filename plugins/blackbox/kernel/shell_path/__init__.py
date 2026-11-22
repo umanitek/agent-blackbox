@@ -24,8 +24,11 @@ Usage::
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Optional
+
+from .. import agent_hosts
 
 BEGIN = "# >>> Blackbox agent sandbox >>> (managed by Blackbox — `blackbox uninstall` removes it)"
 END = "# <<< Blackbox agent sandbox <<<"
@@ -58,6 +61,30 @@ def block(folder: Path) -> str:
     """The fenced lines that put *folder* first on PATH (once, however often the file is read)."""
     quoted = str(folder).replace('"', '\\"')
     return (f"{BEGIN}\ncase \":$PATH:\" in *\":{quoted}:\"*) ;; *) export PATH=\"{quoted}:$PATH\" ;; esac\n{END}\n")
+
+
+#: The shell function the block defines and hooks before every prompt.
+FUNCTION = "_blackbox_agent_path"
+
+
+#: A line that could take an agent command away from Blackbox's launcher or switch the block off:
+#: PATH itself, the prompt hooks, another startup folder, the shell's command cache, Blackbox's
+#: own words — and an alias, function or unset of an agent's command (built below).
+_UNDOES_ALWAYS = (r"\bPATH\b", r"\bpath\s*[+=(]", r"precmd", r"PROMPT_COMMAND", r"add-zsh-hook", r"ZDOTDIR",
+                  r"\bhash\b", r"\brehash\b", r"blackbox", r"agent-bin", FUNCTION)
+_AGENT_COMMANDS = sorted({command for host in agent_hosts.HOSTS for command in host.commands} | {"cursor", "windsurf"})
+_UNDOES = re.compile("|".join(_UNDOES_ALWAYS) + r"|\b(?:alias|unalias|unset|unfunction|function|builtin|command|disable)\b[^#\n]*\b(?:"
+                     + "|".join(map(re.escape, _AGENT_COMMANDS)) + r")\b|\b(?:" + "|".join(map(re.escape, _AGENT_COMMANDS))
+                     + r")\s*\(\s*\)", re.IGNORECASE)
+
+
+def undoing_lines(added: str, before: str = "") -> list[str]:
+    """The lines of *added* (a startup file's new text) that could undo the block, leaving out
+    comments and any line already in *before* (an edit that keeps the person's PATH line as it was
+    is not a new risk). Empty answer: the added text can not send an agent round the launcher."""
+    kept = {line.strip() for line in before.splitlines()}
+    return [line for line in added.splitlines()
+            if line.strip() and not line.lstrip().startswith("#") and line.strip() not in kept and _UNDOES.search(line)]
 
 
 def add(folder: Path, home: Optional[Path] = None) -> list[Path]:

@@ -95,8 +95,31 @@ def _canonical(tool_name: str, args: object) -> tuple[str, object]:
     if lowered in WRITE_NAMES:
         path = _first(args, *PATH_KEYS)
         content = _first(args, *CONTENT_KEYS)
-        return "write_file", {"path": str(path or ""), "content": str(content or "")[:200_000]}
+        canonical = {"path": str(path or ""), "content": str(content or "")[:200_000]}
+        return "write_file", {**canonical, **_edit_shape(args)}
     return name or "tool", args
+
+
+#: An edit tool's replaced text, under each agent's spelling (KI-539: an edit is judged on what the
+#: file becomes, so the guard must see the old text as well as the new — not a whole-file write).
+OLD_KEYS = ("old_string", "old_str", "oldString")
+
+
+def _edit_shape(args: object) -> dict:
+    """The replacements an edit tool asks for, kept as the guard reads them: ``old_string`` /
+    ``new_string`` / ``replace_all``, or ``edits`` for a multi-edit; {} for a whole-file write."""
+    if not isinstance(args, dict):
+        return {}
+    def pair(item: dict) -> dict:
+        old, new = _first(item, *OLD_KEYS), _first(item, "new_string", "new_str", "newString")
+        if not isinstance(old, str) or (new is not None and not isinstance(new, str)):
+            return {}
+        return {"old_string": old[:200_000], "new_string": str(new or "")[:200_000],
+                "replace_all": bool(item.get("replace_all") or item.get("replaceAll"))}
+    if isinstance(args.get("edits"), list):
+        edits = [pair(item) for item in args["edits"][:100] if isinstance(item, dict)]
+        return {"edits": edits} if edits and all(edits) else {}
+    return pair(args)
 
 
 def _patch_text(args: object) -> str:

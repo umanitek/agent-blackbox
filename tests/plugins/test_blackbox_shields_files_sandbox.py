@@ -318,6 +318,38 @@ def test_an_agent_may_edit_its_own_lines_of_a_startup_file_but_never_the_block(h
         assert not detect_guard_tamper(tool, args), (tool, args)
 
 
+def test_an_agents_edit_of_the_persons_own_lines_is_judged_on_the_file_it_leaves(home):
+    """KI-539 (E2E full5 2026-11-22): Claude Code's Edit of ``alias gs='git status'`` in a ~/.zshrc
+    holding the block was refused as "Change to Blackbox's own settings" — the hook runner had turned
+    the edit into a whole-file write of the new snippet. Through the runner, as a real hook sends it."""
+    from plugins.blackbox.agent_hooks.protect import runner
+    from plugins.blackbox.detection import detect_guard_tamper
+    (home / ".zshrc").write_text("alias gs='git status'\n# Hermes Agent — ensure ~/.local/bin is on PATH\n"
+                                 "export PATH=\"$HOME/.local/bin:$PATH\"\n", encoding="utf-8")
+    shell_path.add(home / "bb" / "agent-bin")
+    zshrc = str(home / ".zshrc")
+
+    def judged(tool_input: dict, tool: str = "Edit") -> bool:
+        name, args = runner._canonical(tool, tool_input)
+        return bool(detect_guard_tamper(name, args))
+
+    assert not judged({"file_path": zshrc, "old_string": "alias gs='git status'", "new_string": "alias gs='git status -sb'"})
+    assert not judged({"file_path": zshrc, "old_string": "# Hermes Agent — ensure ~/.local/bin is on PATH",
+                       "new_string": "# Hermes Agent — ensure ~/.local/bin is on PATH (edited)"})
+    assert not judged({"file_path": zshrc, "edits": [{"old_string": "alias gs='git status'", "new_string": "alias gs='git st'"}]},
+                      "MultiEdit")
+    assert not judged({"command": "echo \"alias gl='git log'\" >> ~/.zshrc"}, "Bash")
+    # …and never anything that leaves the block changed, or sends an agent round the launcher.
+    block = shell_path.section((home / ".zshrc").read_text(encoding="utf-8"))
+    assert judged({"file_path": zshrc, "old_string": block, "new_string": ""})
+    assert judged({"file_path": zshrc, "old_string": "alias gs='git status'", "new_string": "alias claude=/opt/real/claude"})
+    assert judged({"file_path": zshrc, "old_string": "alias gs='git status'", "new_string": "export PATH=/evil:$PATH"})
+    assert judged({"command": "echo 'alias codex=/opt/codex' >> ~/.zshrc"}, "Bash")
+    assert judged({"command": "echo hi > ~/.zshrc"}, "Bash")
+    assert judged({"command": "echo \"$(cat /tmp/x)\" >> ~/.zshrc"}, "Bash")
+    assert judged({"command": "echo hi >> ~/.zshrc; sed -i '' '/Blackbox/d' ~/.zshrc"}, "Bash")
+
+
 def test_without_the_block_a_startup_file_is_the_persons_own(home):
     from plugins.blackbox.detection import detect_guard_tamper
     (home / ".zshrc").write_text("export EDITOR=vim\n", encoding="utf-8")
