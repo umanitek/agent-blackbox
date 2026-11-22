@@ -1,7 +1,9 @@
 """One hook event from a coding agent: recorded, and — before a tool runs — judged.
 
-:func:`record_event` is what ``POST /api/agent-hooks/event`` calls with the runner's summary
-(:func:`.runner.summary`). It
+:func:`answer_event` is what ``POST /api/agent-hooks/event`` calls with the runner's summary
+(:func:`.runner.summary`): :func:`judge` answers, and :func:`bookkeep` records on the recorder
+thread after the agent has its answer (KI-552); :func:`record_event` does both before returning
+(tests, direct callers). Together they
 
 * judges a ``pre_tool`` call with the ONE guard (``guard.tool_call_verdict``, the same checks a
   Hermes agent's hook runs — threats AND self-protection) and answers ``{"decision": "block",
@@ -31,13 +33,18 @@ import hashlib
 import threading
 import time
 from collections import OrderedDict
-from typing import Any, Mapping
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Mapping, Optional
 
 from ... import audit, guard
 from ...kernel import constants
 from ...kernel.bounded_files import read_json_object, write_json_object
 from ...kernel.agent_hosts import BY_ID, EVENTS
+from . import recorder
 from .runner import patch_files
+
+if TYPE_CHECKING:
+    from ..tracking import Captured
 
 #: The most text one event carries for the injection check (the runner bounds it the same).
 MAX_CHECK_TEXT = 256 * 1024
@@ -214,19 +221,48 @@ def note_error(agent: str) -> None:
         write_state(state)
 
 
-def record_event(body: Any) -> dict[str, Any]:
-    """Record one hook event and answer it. Raises ValueError for a malformed event."""
+@dataclass(frozen=True)
+class Judged:
+    """One event after its verdict: what :func:`bookkeep` records (the audit row, the per-agent
+    state, the instance timeline). *process*: the agent process learned while the hook waited."""
+
+    event: dict[str, Any]
+    session: str
+    verdict: dict[str, Any]
+    findings: list[dict[str, Any]]
+    blocked: bool
+    process: Optional[Captured]
+
+
+def judge(body: Any) -> tuple[dict[str, Any], Optional[Judged]]:
+    """The answer to one hook event — and what is left to record (None: nothing). Only what the
+    answer needs runs here: the checks, the guard's verdict, and reading the hook's ancestry
+    while the hook still exists (``tracking.capture``, microseconds). Raises ValueError for a
+    malformed event."""
     event = validate(body)
     state = read_state()["agents"].get(event["agent"], {})
     if state.get("disabled"):
-        return {"decision": "allow", "message": "", "recorded": False}   # a stale hook after "Stop protecting"
+        return {"decision": "allow", "message": "", "recorded": False}, None   # a stale hook after "Stop protecting"
     session = session_key(event["agent"], event["session"], event["cwd"])
     call_key = (event["tool_call_id"], event["event"])
     if event["tool_call_id"] and event["event"] in ("pre_tool", "post_tool"):
         again = _answered_before(session, call_key)
         if again is not None:
-            return {**again, "recorded": False}   # the same call, reported through a second hook form
+            return {**again, "recorded": False}, None   # the same call, reported through a second hook form
     verdict = _verdict(event)
+    findings = [{**finding, "tool_name": event["tool_name"]} for finding in verdict.get("findings") or []]
+    blocked = verdict.get("decision") == "block"
+    answer = {"decision": "block" if blocked else "allow", "message": verdict.get("message", "") if blocked else "",
+              "findings": len(findings), "recorded": True}
+    if event["tool_call_id"] and event["event"] in ("pre_tool", "post_tool"):
+        _note_answer(session, call_key, answer)
+    from .. import tracking   # late: tracking imports this package's editors
+    return answer, Judged(event, session, verdict, findings, blocked, tracking.capture(event, session))
+
+
+def bookkeep(judged: Judged) -> None:
+    """Record a judged event: the agent's audit log, its per-agent state and its instance."""
+    event, session, verdict = judged.event, judged.session, judged.verdict
     detail: dict[str, Any] = {"session_id": session}
     if event["event"] in ("pre_tool", "post_tool"):
         detail.update(tool_name=event["tool_name"], tool_call_id=event["tool_call_id"] or f"{session}:{time.time()}")
@@ -241,17 +277,30 @@ def record_event(body: Any) -> dict[str, Any]:
     if event["sub"] or event["event"] in ("subagent_start", "subagent_stop"):
         detail["sub_agent"] = hashlib.sha256(event["sub"].encode("utf-8")).hexdigest()[:12] if event["sub"] else ""
         detail["sub_agent_type"] = event["sub_type"]
-    findings = [{**finding, "tool_name": event["tool_name"]} for finding in verdict.get("findings") or []]
     audit.record_for(event["agent"], event=AUDIT_EVENT[event["event"]], workspace=event["cwd"],
-                     findings=findings or None, detail=detail)
+                     findings=judged.findings or None, detail=detail)
     _remember(event, session, verdict)
     from .. import tracking   # late: tracking imports this package's editors
-    blocked = verdict.get("decision") == "block"
-    tracking.track(event, session, decision=str(verdict.get("decision") or ""), findings=len(findings),
-                   reason=str(verdict.get("message") or "") if blocked else "",
-                   text=event["text"] if event["event"] == "prompt" else "")   # kept only if the person turned that on
-    answer = {"decision": "block" if blocked else "allow", "message": verdict.get("message", "") if blocked else "",
-              "findings": len(findings), "recorded": True}
-    if event["tool_call_id"] and event["event"] in ("pre_tool", "post_tool"):
-        _note_answer(session, call_key, answer)
+    tracking.track(event, session, decision=str(verdict.get("decision") or ""), findings=len(judged.findings),
+                   reason=str(verdict.get("message") or "") if judged.blocked else "",
+                   text=event["text"] if event["event"] == "prompt" else "",   # kept only if the person turned that on
+                   process=judged.process)
+
+
+def record_event(body: Any) -> dict[str, Any]:
+    """Record one hook event and answer it, both before returning. Raises ValueError for a
+    malformed event."""
+    answer, judged = judge(body)
+    if judged is not None:
+        bookkeep(judged)
+    return answer
+
+
+def answer_event(body: Any) -> dict[str, Any]:
+    """Answer one hook event now and record it right after, on the recorder thread
+    (:mod:`.recorder`) — what ``POST /api/agent-hooks/event`` calls, so an agent waits only for
+    the verdict (KI-552). Raises ValueError for a malformed event."""
+    answer, judged = judge(body)
+    if judged is not None:
+        recorder.submit(lambda: bookkeep(judged))
     return answer

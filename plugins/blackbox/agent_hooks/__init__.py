@@ -19,7 +19,8 @@ Usage::
     agent_hooks.rows()                           # what /api/agent-hooks lists
     agent_hooks.set_protection("cursor", True)   # install (False: remove and keep it off)
     agent_hooks.sweep()                          # hook every agent found, unless switched off
-    agent_hooks.record_event(body)               # one event from the runner
+    agent_hooks.answer_event(body)               # one event from the runner: answered now, recorded after
+    agent_hooks.record_event(body)               # …or answered and recorded before returning
 """
 
 from __future__ import annotations
@@ -36,11 +37,17 @@ from ..kernel import constants
 from ..kernel.config import load_blackbox_config
 from . import profiles, prompt_text, tracking, versions
 from .protect import config_edit, own_files
-from .protect.events import note_error, read_state, record_event, write_state
+from .protect import recorder
+from .protect.events import answer_event, note_error, read_state, record_event, write_state
 from ..kernel.agent_hosts import BY_ID, HOSTS, Host
 
-__all__ = ["KINDS", "AgentRow", "hooked_agents", "note_error", "present", "prompt_text", "record_event", "remove_all",
-           "rows", "set_protection", "sweep", "tracking", "versions"]
+__all__ = ["KINDS", "AgentRow", "answer_event", "hooked_agents", "note_error", "present", "prompt_text", "record_event", "remove_all",
+           "rows", "set_protection", "settle", "sweep", "tracking", "versions"]
+
+def settle(timeout: float = 5.0) -> bool:
+    """Wait until every answered hook event is recorded (tests; the dashboard before it stops)."""
+    return recorder.settle(timeout)
+
 
 #: The agent ids this module answers for (``/api/agent-hooks/protection`` accepts these).
 KINDS = tuple(BY_ID)

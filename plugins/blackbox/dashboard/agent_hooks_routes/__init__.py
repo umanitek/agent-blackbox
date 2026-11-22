@@ -2,8 +2,9 @@
 
 * ``GET  /api/agent-hooks`` → ``{"agents": [AgentRow…], "kinds": [...]}`` — every coding agent
   found here or hooked, with its honest state and its recent sessions (hashed ids only).
-* ``POST /api/agent-hooks/event`` — one event from the hook runner: recorded, and a ``pre_tool``
-  answered with the guard's verdict ``{"decision": "allow" | "block", "message"}``. 400 for a
+* ``POST /api/agent-hooks/event`` — one event from the hook runner: a ``pre_tool`` answered with
+  the guard's verdict ``{"decision": "allow" | "block", "message"}`` first, on its own threads
+  (:data:`HOOK_THREADS`), and recorded right after on the recorder thread (KI-552). 400 for a
   malformed event; 503 when it could not be judged (the runner then lets the agent continue).
 * ``POST /api/agent-hooks/protection`` ``{"kind": <agent id>, "enabled": bool}`` — install or
   remove an agent's hooks (Protect / Stop protecting, on the dashboard or in Blackbox Desktop).
@@ -17,9 +18,11 @@ instance, profiles) are in :mod:`.instances`.
 
 # No ``from __future__ import annotations`` here: FastAPI must see the handlers' ``Request``
 # annotation as the class itself.
+import asyncio
 import json
 import logging
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from typing import Any, Callable
 
@@ -36,6 +39,13 @@ SWEEP_SECONDS = 300.0
 #: sweep.
 OBSERVE_SECONDS = 5.0
 _FIRST_LOOK_SECONDS = 20.0
+
+#: The threads that answer hook events — the agents' hot path — kept apart from the shared pool
+#: that serves pages, long-polls (the live view, the notifications feed hold a thread for up to
+#: 25 s each) and reads. WHY (KI-552): under 40 events a second the shared pool was full, and a
+#: hook waited for a free thread longer than for its verdict.
+HOOK_THREADS = 8
+_verdicts = ThreadPoolExecutor(max_workers=HOOK_THREADS, thread_name_prefix="blackbox-hook-verdict")
 
 Cache = Callable[..., Any]
 _sweeper: dict[str, Any] = {"thread": None}
@@ -120,8 +130,10 @@ def register(app: Any, swr: Cache) -> None:
         body: Any = None
         try:
             body = await _body(request)
-            # The guard reads rules and files: off the event loop, so other requests keep flowing.
-            return JSONResponse(await run_in_threadpool(agent_hooks.record_event, body), headers=NO_CACHE)
+            # The verdict on the hook threads (off the event loop and the shared pool); the
+            # bookkeeping follows on the recorder thread after the agent has its answer.
+            answer = await asyncio.get_running_loop().run_in_executor(_verdicts, agent_hooks.answer_event, body)
+            return JSONResponse(answer, headers=NO_CACHE)
         except (ValueError, RecursionError) as exc:
             return JSONResponse({"error": str(exc)[:200]}, status_code=400, headers=NO_CACHE)
         except Exception:   # health: allow BLE001 -- "could not judge": 503, the runner lets the agent continue

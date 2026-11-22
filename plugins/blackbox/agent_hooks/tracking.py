@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import threading
 import time
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
@@ -28,7 +28,7 @@ from .instances.model import Profile, Running
 from .protect import config_edit, own_files
 from .protect.events import session_key as key_of_session
 
-__all__ = ["detail", "export", "history", "live", "new_profiles", "observe_now", "profile", "profile_rows", "prompt_text", "track", "wait"]
+__all__ = ["Captured", "capture", "detail", "export", "history", "live", "new_profiles", "observe_now", "profile", "profile_rows", "prompt_text", "track", "wait"]
 
 #: How long one reading of the process list is reused.
 TABLE_SECONDS = 1.5
@@ -108,6 +108,34 @@ def agent_process(session_key: str, hook_parent: int, agent: str) -> int:
     return observe.agent_of(table, hook_parent, agent)
 
 
+@dataclass(frozen=True)
+class Captured:
+    """The agent process a hook was run by (*agent_pid*, 0 when none) and how it was started
+    (*launch*: :data:`.instances.model.LAUNCHES`, "" when unknown) — learned while the hook waits."""
+
+    agent_pid: int
+    launch: str
+
+
+def capture(event: Mapping[str, Any], session_key: str) -> Optional[Captured]:
+    """The agent process behind *event*'s hook, read NOW while the hook (and the short-lived shell
+    that ran it) still exist — or None when the session already has its process.
+
+    The hook's own ancestry is read from the kernel (``observe.ancestry``: microseconds, no
+    ``ps``, no lock), so this can run before the agent gets its answer (KI-552); a system that
+    cannot answer that way reads the whole process list as before (:func:`agent_process`)."""
+    pid = event.get("pid")
+    known = store.get(session_key)
+    if not isinstance(pid, int) or pid <= 1 or (known is not None and known.pid and known.ended is None):
+        return None
+    chain = observe.ancestry(pid)
+    if chain is not None:   # {} when the hook already left: no process is learned from it
+        found = observe.agent_of(chain, pid, str(event.get("agent") or ""))
+        return Captured(found, observe.launch_of(chain, found) if found else "")
+    found = agent_process(session_key, pid, str(event.get("agent") or ""))
+    return Captured(found, observe.launch_of(_snapshot()[0], found) if found else "")
+
+
 #: A child session's own start and end, as its parent's sub-agent sees them.
 _AS_SUB = {"session_start": "subagent_start", "stop": "subagent_stop"}
 
@@ -132,20 +160,21 @@ def _as_sub_agent(fields: dict[str, Any], session_key: str) -> str:
 
 
 def track(event: Mapping[str, Any], session_key: str, *, decision: str = "", findings: int = 0, reason: str = "",
-          text: str = "") -> None:
+          text: str = "", process: Optional[Captured] = None) -> None:
     """Record *event* against its instance; find the agent's process the first time a session is
     seen; link a child session to its parent (a sub-agent run as a session of its own); remember
     a config home the event names. *reason*: what the agent was told when Blackbox refused the
     action. *text*: a prompt's text — kept (redacted) only while the person has prompt-text
-    recording on, dropped here otherwise."""
+    recording on, dropped here otherwise. *process*: what :func:`capture` learned while the hook
+    waited (the hook's answer went first; this runs later) — looked up here when not given."""
     fields = dict(event)
-    known = store.get(session_key)
     # The process is looked up while it is unknown — and for an ended session, whose next event
     # may come from a new run of the same session id (instances._resumes compares them).
-    if (known is None or not known.pid or known.ended is not None) and isinstance(event.get("pid"), int) and event["pid"] > 1:
-        fields["agent_pid"] = agent_process(session_key, event["pid"], event["agent"]) or None
-        if fields["agent_pid"]:   # how it was started, from its command line (KI-549)
-            fields["launch"] = observe.launch_of(_snapshot()[0], fields["agent_pid"])
+    found = process if process is not None else capture(event, session_key)
+    if found is not None:
+        fields["agent_pid"] = found.agent_pid or None
+        if found.agent_pid and found.launch:   # how it was started, from its command line (KI-549)
+            fields["launch"] = found.launch
     session_key = _as_sub_agent(fields, session_key)
     links.note_spawn(session_key, fields)
     if event.get("profile") and profiles.remember(event["agent"], str(event["profile"])):

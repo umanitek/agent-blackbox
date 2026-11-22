@@ -10,6 +10,7 @@ Usage::
 
     from . import observe
     table = observe.read_table()            # {pid: Proc}
+    observe.ancestry(hook_parent_pid)       # {pid: Proc} of that process and its parents only (cheap)
     observe.running(table)                  # [Running] — one per agent process tree root
     observe.agent_of(table, hook_parent_pid)  # the agent process a hook was run by
     observe.launch_of(table, agent_pid)     # "headless" / "interactive" / "ide" / "sdk"
@@ -32,7 +33,7 @@ from .. import permission_risks
 from ..instances.model import Running
 from . import platform
 
-__all__ = ["Proc", "agent_of", "classify", "descendants", "launch_of", "read_table", "read_users", "running"]
+__all__ = ["Proc", "agent_of", "ancestry", "classify", "descendants", "launch_of", "read_table", "read_users", "running"]
 
 _LINE = re.compile(r"^\s*(\d+)\s+(\d+)\s+(\w{3} +\w{3} +\d+ +[\d:]+ +\d{4})\s+(.*)$")
 #: argv words that say an agent runs without a person at the keyboard, per agent.
@@ -71,6 +72,17 @@ def read_table() -> dict[int, Proc]:
             started = 0.0
         table[int(match.group(1))] = Proc(int(match.group(1)), int(match.group(2)), started, match.group(4)[:4000])
     return table
+
+
+def ancestry(pid: int) -> Optional[dict[int, Proc]]:
+    """*pid* and its parents (up to :data:`MAX_ANCESTORS`), by pid — the part of the process list
+    :func:`agent_of` and :func:`launch_of` walk, read from the kernel in microseconds instead of
+    listing every process. {} when *pid* is gone; None when this system cannot answer that way
+    (callers then read the whole list)."""
+    chain = platform.process_ancestry(pid, MAX_ANCESTORS)
+    if chain is None:
+        return None
+    return {pid_: Proc(pid_, ppid, started, command[:4000]) for pid_, ppid, started, command in chain}
 
 
 def _words(command: str) -> list[str]:

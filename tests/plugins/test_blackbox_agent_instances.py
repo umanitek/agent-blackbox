@@ -37,6 +37,7 @@ def _fresh(monkeypatch, tmp_path):
     monkeypatch.setattr(observe.platform, "process_table", lambda: "")
     monkeypatch.setattr(observe.platform, "process_environment", lambda pid: "")
     monkeypatch.setattr(observe.platform, "process_variable", lambda pid, name: "")
+    monkeypatch.setattr(observe.platform, "process_ancestry", lambda pid, limit: None)   # the faked list is the only one
     monkeypatch.setattr(agent_hooks, "_home", lambda: tmp_path)
     tracking._seen.update(at=0.0, table={}, running=[], pids=frozenset(), new_profiles=False)
     yield

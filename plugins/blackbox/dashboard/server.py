@@ -690,7 +690,7 @@ def create_app(*, manage_blackbox: bool = False):
     BrowserBoundary(LOOPBACK_HOSTS, lambda _request: _session_token).install(app)   # loopback Hosts only
 
     @app.get("/api/session")
-    def session():
+    async def session():   # async: every hook asks this first; it must never wait for a pool thread (KI-552)
         """Hand the UI its mutation token. Reachable only by genuine local
         origins (the middleware rejects rebound/foreign hosts first)."""
         return {"token": _session_token}

@@ -40,6 +40,7 @@ def _fresh(monkeypatch, tmp_path):
     monkeypatch.setattr(observe.platform, "process_table", lambda: "")
     monkeypatch.setattr(observe.platform, "process_environment", lambda pid: "")
     monkeypatch.setattr(observe.platform, "process_variable", lambda pid, name: "")
+    monkeypatch.setattr(observe.platform, "process_ancestry", lambda pid, limit: None)   # the stand-in below answers
     monkeypatch.setattr(agent_hooks, "_home", lambda: tmp_path)
     # Every hook here runs in agent process 4242 (the process walk has its own test file).
     monkeypatch.setattr(tracking, "agent_process", lambda key, parent, agent: parent)

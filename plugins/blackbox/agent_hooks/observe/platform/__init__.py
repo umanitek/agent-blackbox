@@ -14,6 +14,7 @@ Usage::
     platform.process_environment(1234)
     platform.process_users()        # "pid ruid euid" lines (who started each process, who it acts as)
     platform.process_variable(1234, "CLAUDE_CONFIG_DIR")   # one variable's value, spaces kept; "" when unreadable
+    platform.process_ancestry(1234, 12)  # [(pid, ppid, started, command)] up its parents; [] gone, None unreadable
 """
 
 from __future__ import annotations
@@ -21,8 +22,8 @@ from __future__ import annotations
 import sys
 
 if sys.platform == "darwin":
-    from .macos import process_environment, process_table, process_users, process_variable
+    from .macos import process_ancestry, process_environment, process_table, process_users, process_variable
 else:
-    from .unsupported import process_environment, process_table, process_users, process_variable
+    from .unsupported import process_ancestry, process_environment, process_table, process_users, process_variable
 
-__all__ = ["process_environment", "process_table", "process_users", "process_variable"]
+__all__ = ["process_ancestry", "process_environment", "process_table", "process_users", "process_variable"]
