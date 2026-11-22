@@ -10,8 +10,10 @@
   off is not a weakening change: a KNOWN-BAD file in a watched folder is a ``security`` notice.
 * ``muted_agents``: agent ids never shown. ``quiet_hours``: ``"22:00-07:00"`` (local time) — only
   CRITICAL security notices are shown then. ``details``: add the finding's own (redacted) title to
-  a notification; off = lock-screen-safe text only. ``per_minute``: the most shown in a minute;
-  the rest are counted into one summary.
+  a notification; off = lock-screen-safe text only. ``per_minute``: the most shown in a minute
+  from each source (an AI agent's security notices, the shields, lifecycle, digest — see
+  ``deliver.lane``), so one noisy source never holds back another; the rest are counted into one
+  summary.
 
 Turning ``enabled`` or ``security`` OFF, or muting an agent, means Blackbox tells the person less
 about a threat: :func:`weakening` names those changes and the approval gate holds them.

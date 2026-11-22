@@ -52,29 +52,47 @@ def holder() -> str:
         return str(_lease["holder"]) if time.monotonic() < float(_lease["until"]) else ""   # type: ignore[arg-type]
 
 
+def lane(notice: Notice) -> str:
+    """Which per-minute budget *notice* draws on. An AI agent's own security notices (stopped,
+    flagged, not stopped in time, root) have a budget of their own, apart from the shields' and
+    from lifecycle and digest notices. WHY (KI-PENDING-b3bd8e): 30 short SSH logins used up the
+    one shared budget and an agent's elevation notice was then held back."""
+    if notice.category == "security":
+        return "shields" if notice.kind.startswith("shield:") else "agents" if notice.agent else "security"
+    return notice.category
+
+
 class Limiter:
-    """At most *per_minute* notices shown in any minute; the rest are counted for one summary."""
+    """At most *per_minute* notices shown in any minute PER LANE (:func:`lane`); the rest are
+    counted for one summary, which waits for room in a lane that overflowed."""
 
     def __init__(self) -> None:
-        self._shown: list[float] = []
-        self.overflow = 0
+        self._shown: dict[str, list[float]] = {}
+        self._overflow: dict[str, int] = {}
 
-    def allow(self, now: float, per_minute: int) -> bool:
-        self._shown = [at for at in self._shown if now - at < 60.0]
-        if len(self._shown) < per_minute:
-            self._shown.append(now)
+    def _recent(self, lane_name: str, now: float) -> list[float]:
+        recent = [at for at in self._shown.get(lane_name, []) if now - at < 60.0]
+        self._shown[lane_name] = recent
+        return recent
+
+    def allow(self, now: float, per_minute: int, lane_name: str = "security") -> bool:
+        recent = self._recent(lane_name, now)
+        if len(recent) < per_minute:
+            recent.append(now)
             return True
-        self.overflow += 1
+        self._overflow[lane_name] = self._overflow.get(lane_name, 0) + 1
         return False
 
     def summary_due(self, now: float, per_minute: int) -> int:
-        """How many were held back, once there is room to say so (then the count starts again)."""
-        self._shown = [at for at in self._shown if now - at < 60.0]
-        if self.overflow and len(self._shown) < per_minute:
-            count, self.overflow = self.overflow, 0
-            self._shown.append(now)
-            return count
-        return 0
+        """How many were held back, once a lane that overflowed has room to say so (the summary
+        takes that room; then the count starts again)."""
+        roomy = [name for name in self._overflow if len(self._recent(name, now)) < per_minute]
+        if not roomy:
+            return 0
+        self._shown[roomy[0]].append(now)
+        count = sum(self._overflow.values())
+        self._overflow.clear()
+        return count
 
 
 def _native(notice: Notice, details: bool) -> Delivery:
@@ -109,7 +127,7 @@ class Pump:
             why = policy.held(current, notice, now)
             if why == "off":
                 continue
-            if not why and not self._limiter.allow(now, current.per_minute):
+            if not why and not self._limiter.allow(now, current.per_minute, lane(notice)):
                 why = "rate"
             kept = feed.publish(replace(notice, deliver=not why, held=why))
             if kept is not None:

@@ -49,6 +49,12 @@ WORDS: dict[str, tuple[str, str]] = {
 }
 
 
+#: The end of a remote session: kept in the history and the shield's page, but its notice is
+#: "lifecycle" (shown only when the person turned those on) — the start was the news. WHY
+#: (KI-PENDING-b3bd8e): every short SSH call raised "connected" + "ended" on the screen.
+_ENDS = frozenset({"ssh-session-ended", "remote-session-ended"})
+
+
 def _standing() -> list[ShieldAlert]:
     """What is true NOW and worth one notice (its key never changes, so it is told once)."""
     snapshot = system_report.snapshot()
@@ -69,5 +75,6 @@ def shield_alerts() -> list[ShieldAlert]:
         ts = float(row.get("ts") or 0)
         key = f"network:{kind}:{ts:.3f}:{hashlib.sha256(full.encode('utf-8')).hexdigest()[:10]}"
         found.append(ShieldAlert(key=key, kind=kind, ts=ts, severity=str(row.get("severity") or "info"),
-                                 title=f"{TITLE} · {what}", text=then, detail=full))
+                                 title=f"{TITLE} · {what}", text=then, detail=full,
+                                 category="lifecycle" if kind in _ENDS else "security"))
     return found

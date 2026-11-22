@@ -58,7 +58,7 @@
     <label class="nt-row"><input type="checkbox" id="nt-details" /><span><b>Show details in notifications</b><br /><small>Off: a notification never shows a path, a command or an address — safe on a locked screen. On: the finding's own short description is added.</small></span></label>
     <div class="nt-grid">
       <label>Quiet hours <input class="nt" id="nt-quiet" placeholder="22:00-07:00" inputmode="numeric" size="12" /><br /><small class="nt-muted">Only critical security notices are shown then. Empty = none.</small></label>
-      <label>At most per minute <input class="nt" id="nt-rate" type="number" min="1" max="60" size="4" /><br /><small class="nt-muted">More than this are counted into one summary.</small></label>
+      <label>At most per minute <input class="nt" id="nt-rate" type="number" min="1" max="60" size="4" /><br /><small class="nt-muted">For each source (your AI agents, the shields, agents starting and ending): more than this are counted into one summary.</small></label>
       <label>Summary every (minutes) <input class="nt" id="nt-digest-minutes" type="number" min="0" max="720" size="4" /><br /><small class="nt-muted">0 = only when a session ends.</small></label>
     </div>
     <div class="nt-actions"><button class="nt" id="nt-save" type="button">Save</button><span id="nt-save-result" class="nt-muted" aria-live="polite"></span></div>
