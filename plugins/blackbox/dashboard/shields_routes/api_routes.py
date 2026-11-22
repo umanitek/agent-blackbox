@@ -17,7 +17,7 @@ import json
 import re
 from typing import Any
 
-from ... import ruleset, shields
+from ... import agent_hooks, ruleset, shields
 from ...kernel import threat_ids
 from ...kernel.config import load_blackbox_config
 from .. import sync_meter
@@ -48,6 +48,17 @@ def lookup_hashes(hashes: list) -> tuple:
     return frozenset(asked[identifier] for identifier in found if identifier in asked), not why
 
 
+def finding_owners() -> Any:
+    """The agent tracker's resolver for findings rows, as the shields' own record (KI-588)."""
+    owner_of = agent_hooks.owners.finding_owners()
+
+    def resolve(row: Any) -> Any:
+        found = owner_of(row)
+        return shields.InstanceRef(found.agent, found.instance, found.sub_agent) if found is not None else None
+
+    return resolve
+
+
 def context(body: bytes = b"", headers: Any = None) -> shields.ShieldContext:
     """The context one shield endpoint call receives (*body* / *headers*: the request's own)."""
     return shields.ShieldContext(
@@ -60,6 +71,7 @@ def context(body: bytes = b"", headers: Any = None) -> shields.ShieldContext:
         ask_assistant=ask_assistant,
         lookup_hashes=lookup_hashes,
         blocking=load_blackbox_config().mode == "block",
+        finding_owners=finding_owners,
     )
 
 

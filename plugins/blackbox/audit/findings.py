@@ -86,6 +86,8 @@ def _flatten_finding_row(rec: dict[str, Any], default_fw: str) -> dict[str, Any]
         "ts": rec.get("ts") or 0,
         "event": rec.get("event"),
         "session_id": detail.get("session_id"),
+        # A coding agent's sub-agent inside that session (hashed id, "" when none) — KI-588.
+        "sub_agent": str(detail.get("sub_agent") or ""),
         "task_id": detail.get("task_id"),
         "turn_id": detail.get("turn_id"),
         # The one tool call (or sandbox refusal) this row is about: distinct calls stay distinct rows.

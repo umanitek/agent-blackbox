@@ -36,6 +36,10 @@ merely curls this dashboard cannot read it.
   files with their redacted text, settings per scope, hooks, MCP servers, definitions, where
   sessions are stored, the program and version, and risk notes derived from those facts);
   404 for a home or agent Blackbox does not know.
+* ``GET /api/agent-instances/by-pid?pid=<pid>`` → which live agent instance owns that process
+  (itself or an ancestor is the agent's process; ``agent_hooks.owners.of_pid``, bounded and
+  cached): ``{pid, found, agent, instance, sub_agent, folder, agent_pid}`` — "" / 0 each and
+  ``found: false`` when none does; 400 for a pid that is not a whole number above 1.
 """
 
 # No ``from __future__ import annotations`` here: FastAPI must see the handlers' annotations.
@@ -48,6 +52,8 @@ MAX_WAIT_SECONDS = 25.0
 #: The view scripts, served by name (never a path from the request): route → file in ``static/``.
 STATIC = Path(__file__).resolve().parents[1] / "static"
 SCRIPTS = {"/agent-instances.js": "agent_instances.js", "/agent-pages.js": "agent_pages.js", "/agent-profiles.js": "agent_profiles.js"}
+#: The highest process id a route accepts (macOS's own limit is 99999; Linux's 4194304).
+MAX_PID = 4_194_304
 #: A project folder name longer than this is cut before it is matched.
 MAX_PROJECT_CHARS = 200
 
@@ -66,6 +72,7 @@ def register(app: Any) -> None:
     from ...agent_hooks import tracking
 
     _register_scripts(app)
+    _register_by_pid(app)
 
     @app.get("/api/agent-instances/live")
     def agent_instances_live(cursor: str = "", wait: str = "") -> Any:   # sync: a long-poll waits in the thread pool
@@ -102,6 +109,22 @@ def register(app: Any) -> None:
     @app.get("/api/agent-instances/profiles")
     def agent_instances_profiles() -> Any:
         return JSONResponse({"profiles": [asdict(row) for row in tracking.profile_rows()]}, headers=NO_CACHE)
+
+
+def _register_by_pid(app: Any) -> None:
+    """``GET /api/agent-instances/by-pid`` (see the module doc)."""
+    from fastapi.responses import JSONResponse
+
+    from ...agent_hooks import owners
+
+    @app.get("/api/agent-instances/by-pid")
+    def agent_instances_by_pid(pid: str = "") -> Any:
+        if not pid.isdigit() or not 1 < int(pid) <= MAX_PID:
+            return JSONResponse({"error": "pid must be a process id"}, status_code=400, headers=NO_CACHE)
+        owner = owners.of_pid(int(pid))
+        return JSONResponse({"pid": int(pid), "found": owner is not None, "agent": owner.agent if owner else "",
+                             "instance": owner.instance if owner else "", "sub_agent": owner.sub_agent if owner else "",
+                             "folder": owner.folder if owner else "", "agent_pid": owner.pid if owner else 0}, headers=NO_CACHE)
 
 
 def _register_scripts(app: Any) -> None:

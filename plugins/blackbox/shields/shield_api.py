@@ -54,6 +54,20 @@ class AssistantAnswer:
 
 
 @dataclass(frozen=True)
+class InstanceRef:
+    """The agent instance a record belongs to: *agent* (an agent id), *instance* (its session's
+    key), *sub_agent* (the sub-agent's key under it, "" when not known)."""
+
+    agent: str
+    instance: str
+    sub_agent: str = ""
+
+
+#: ``finding_owners() -> owner_of(row) -> InstanceRef | None`` — built once per listing.
+FindingOwners = Callable[[], Callable[[Mapping[str, Any]], Optional[InstanceRef]]]
+
+
+@dataclass(frozen=True)
 class ShieldContext:
     """What the dashboard hands a shield endpoint for one call.
 
@@ -65,7 +79,8 @@ class ShieldContext:
     * ``lookup_hashes(sha256s)`` — which file fingerprints (SHA-256) the verified graph lists;
     * ``blocking`` — True when Blackbox is in Block mode;
     * ``request_body`` / ``request_headers`` — a write's exact body bytes and the request's
-      headers (lower-case names), for an endpoint that checks a signature over the bytes.
+      headers (lower-case names), for an endpoint that checks a signature over the bytes;
+    * ``finding_owners()`` — a resolver naming the agent instance of an audit finding row.
     """
 
     network_indicators: Callable[[], Optional[Any]]
@@ -83,6 +98,9 @@ class ShieldContext:
     graph_sync_state: Optional[Callable[[], str]] = None
     request_body: bytes = b""
     request_headers: Mapping[str, str] = field(default_factory=dict)
+    #: ``finding_owners()`` — which agent instance each audit finding row belongs to (the agent
+    #: tracker's answer, KI-588); None where it cannot be asked.
+    finding_owners: Optional[FindingOwners] = None
 
     def indicators_now(self) -> Optional[Any]:
         """The verified network lists known now, never waiting for a build."""

@@ -11,11 +11,13 @@ live when it happened. When exactly one sandboxed instance was live then, the re
 several were, the one whose latest tool call is closest before the refusal; a tie, or none, leaves
 it on File Shield's own list only (honest: never guessed). The instance counts it as refused and
 its timeline gets a ``block`` row whose reason says the kernel stopped it. Each refusal is given
-once (its record id is remembered, bounded).
+once (its record id is remembered, bounded, with the instance it was given to).
 
 Usage::
 
     attribute(audit.read_findings(limit=200))   # how many refusals were given to an instance
+    owners()                                    # {refusal id: instance key} — who each one was given to
+    refusal_id(row)                             # the id a findings row is remembered by
 """
 
 from __future__ import annotations
@@ -42,10 +44,24 @@ def _given_path():
     return store.folder() / "kernel-refusals.json"
 
 
-def _given() -> list[str]:
+def _read() -> tuple[list[str], dict[str, str]]:
+    """The refusal ids already given, oldest first, and the instance each went to (KI-586, KI-588:
+    a refusal's notice and File Shield's hit name that instance, not "agent-sandbox")."""
     data = read_json_object(_given_path()) or {}
     ids = data.get("ids")
-    return [str(each) for each in ids] if isinstance(ids, list) else []
+    owners = data.get("owners")
+    given = [str(each) for each in ids] if isinstance(ids, list) else []
+    return given, ({str(k): str(v) for k, v in owners.items()} if isinstance(owners, dict) else {})
+
+
+def owners() -> dict[str, str]:
+    """``{refusal id: instance key}`` for every refusal given to an instance (bounded)."""
+    return _read()[1]
+
+
+def refusal_id(row: Mapping[str, Any]) -> str:
+    """The id a sandbox refusal's findings row is remembered by (see :func:`owners`)."""
+    return _key(row)
 
 
 def _key(row: Mapping[str, Any]) -> str:
@@ -82,7 +98,7 @@ def attribute(rows: Iterable[Mapping[str, Any]]) -> int:
     """Give each sandbox refusal in *rows* (``audit.read_findings`` rows) to its instance; answers
     how many were given now. Fail-open: a row that does not fit is left alone."""
     with _lock:
-        given = _given()
+        given, owner_of = _read()
         known = set(given)
         added = 0
         for row in sorted(rows, key=lambda each: float(each.get("ts") or 0)):
@@ -103,11 +119,14 @@ def attribute(rows: Iterable[Mapping[str, Any]]) -> int:
             store.put(owner)
             known.add(_key(row))
             given.append(_key(row))
+            owner_of[_key(row)] = owner.key
             added += 1
         if added:
             _given_path().parent.mkdir(parents=True, exist_ok=True)
-            write_json_object(_given_path(), {"ids": given[-MAX_REMEMBERED:], "at": time.time()}, what="kernel refusals given")
+            kept = given[-MAX_REMEMBERED:]
+            write_json_object(_given_path(), {"ids": kept, "owners": {each: owner_of[each] for each in kept if each in owner_of},
+                                              "at": time.time()}, what="kernel refusals given")
         return added
 
 
-__all__ = ["LIVE_GRACE_SECONDS", "attribute"]
+__all__ = ["LIVE_GRACE_SECONDS", "attribute", "owners", "refusal_id"]

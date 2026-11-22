@@ -31,7 +31,7 @@ from .protect.events import session_key as key_of_session
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["HISTORY_OUTCOMES", "Captured", "capture", "detail", "export", "history", "live", "new_profiles", "observe_now", "profile", "profile_rows", "prompt_text", "track", "wait"]
+__all__ = ["HISTORY_OUTCOMES", "Captured", "capture", "detail", "export", "history", "live", "new_profiles", "observe_now", "process_table", "profile", "profile_rows", "prompt_text", "track", "wait"]
 
 #: How long one reading of the process list is reused.
 TABLE_SECONDS = 1.5
@@ -67,6 +67,11 @@ def _snapshot(*, max_age: float = TABLE_SECONDS) -> tuple[Mapping[int, observe.P
             if changed:
                 store.touch()
         return _seen["table"], _seen["running"]
+
+
+def process_table() -> Mapping[int, observe.Proc]:
+    """The process list the tracker reuses (read again when older than :data:`TABLE_SECONDS`)."""
+    return _snapshot()[0]
 
 
 def observe_now() -> None:

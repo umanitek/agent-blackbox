@@ -106,10 +106,12 @@ def unprotect_weakens(body: Mapping[str, Any]) -> list[str]:
     return [f"Stop protecting {item} from AI agents (File Shield)"]
 
 
-def hits(_context: ShieldContext, params: Mapping[str, str]) -> dict[str, Any]:
+def hits(context: ShieldContext, params: Mapping[str, str]) -> dict[str, Any]:
+    """``hits``: the newest refusals, each with the agent instance it belongs to (KI-588)."""
     raw = str(params.get("limit") or "")
     limit = min(int(raw), MAX_HITS) if raw.isdigit() else 50
-    return {"hits": events.hits(limit=limit)}
+    owner_of = context.finding_owners() if context.finding_owners is not None else None
+    return {"hits": events.hits(limit=limit, owner_of=owner_of)}
 
 
 def alerts_view(_context: ShieldContext, params: Mapping[str, str]) -> dict[str, Any]:

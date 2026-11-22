@@ -35,13 +35,13 @@ from typing import Any, Optional
 
 from ..kernel import constants
 from ..kernel.config import load_blackbox_config
-from . import profiles, prompt_text, tracking, versions
+from . import owners, profiles, prompt_text, tracking, versions
 from .protect import config_edit, own_files
 from .protect import recorder
 from .protect.events import answer_event, note_error, read_state, record_event, write_state
 from ..kernel.agent_hosts import BY_ID, HOSTS, Host
 
-__all__ = ["KINDS", "AgentRow", "answer_event", "hooked_agents", "note_error", "present", "prompt_text", "record_event", "remove_all",
+__all__ = ["KINDS", "AgentRow", "answer_event", "hooked_agents", "note_error", "owners", "present", "prompt_text", "record_event", "remove_all",
            "rows", "set_protection", "settle", "sweep", "tracking", "versions"]
 
 def settle(timeout: float = 5.0) -> bool:

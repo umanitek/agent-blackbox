@@ -64,6 +64,7 @@ from .shield_api import MAX_WRITE_BYTES as API_MAX_WRITE_BYTES
 from .shield_api import NAME_PATTERN as API_NAME_PATTERN
 from .shield_api import (
     AssistantAnswer,
+    InstanceRef,
     RawAnswer,
     ShieldApi,
     ShieldApiError,
@@ -78,6 +79,7 @@ __all__ = [
     "AssistantAnswer",
     "BrowserRoot",
     "Capability",
+    "InstanceRef",
     "Pack",
     "RawAnswer",
     "Registrar",

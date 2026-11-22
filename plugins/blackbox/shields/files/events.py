@@ -14,10 +14,11 @@ escaped first. An add-on may add its own events (``ShieldExtension.events``).
 from __future__ import annotations
 
 from html import escape
-from typing import Any
+from typing import Any, Callable, Mapping, Optional
 
 from ... import audit
 from ..contract import EventFact, SessionSummary, ShieldEvent
+from ..shield_api import InstanceRef
 from . import changes
 from .protect import FILE_HIT_ID, FOLDER_HIT_ID, MENTION_ID, ROUTES, SANDBOX_AGENT
 
@@ -96,8 +97,16 @@ def report() -> list[ShieldEvent]:
     return sorted(events, key=lambda event: -event.ts)[:MAX_EVENTS]
 
 
-def hits(limit: int = 50) -> list[dict[str, Any]]:
-    """The newest refusals as plain rows (the hits list on the page and in a companion app)."""
+OwnerOf = Callable[[Mapping[str, Any]], Optional[InstanceRef]]
+
+
+def hits(limit: int = 50, owner_of: Optional[OwnerOf] = None) -> list[dict[str, Any]]:
+    """The newest refusals as plain rows (the hits list on the page and in a companion app).
+
+    Each row: ``{ts, kind, item, path, route, agent, tool, decision, instance, sub_agent}``.
+    With *owner_of* (the agent tracker's resolver, ``ShieldContext.finding_owners``) a row names
+    the agent INSTANCE it belongs to (KI-588) — and an OS-sandbox refusal, recorded as
+    ``agent-sandbox``, the agent it was attributed to; "" each when not known (never guessed)."""
     try:
         findings = audit.read_findings(limit=FINDINGS_SCANNED)
     except Exception:   # health: allow BLE001 -- an unreadable log lists nothing
@@ -107,8 +116,12 @@ def hits(limit: int = 50) -> list[dict[str, Any]]:
         if row.get("identifier") not in HIT_IDS:
             continue
         fields = row.get("fields") or {}
+        owner = owner_of(row) if owner_of is not None else None
         rows.append({"ts": float(row.get("ts") or 0), "kind": str(row.get("identifier") or "").split(":", 1)[-1],
                      "item": str(fields.get("item") or ""), "path": str(fields.get("path") or ""),
-                     "route": str(fields.get("route") or ""), "agent": str(row.get("framework") or ""),
-                     "tool": str(row.get("tool_name") or ""), "decision": str(row.get("decision") or "")})
+                     "route": str(fields.get("route") or ""),
+                     "agent": owner.agent if owner is not None else str(row.get("framework") or ""),
+                     "tool": str(row.get("tool_name") or ""), "decision": str(row.get("decision") or ""),
+                     "instance": owner.instance if owner is not None else "",
+                     "sub_agent": owner.sub_agent if owner is not None else ""})
     return sorted(rows, key=lambda row: -row["ts"])[:limit]
