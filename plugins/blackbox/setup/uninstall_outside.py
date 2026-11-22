@@ -13,7 +13,7 @@ import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Sequence
 
-from ..kernel import yaml_files
+from ..kernel import system_helper, yaml_files
 
 if TYPE_CHECKING:   # the plan type, for the annotations only (uninstall imports this module)
     from .uninstall import UninstallPlan
@@ -37,14 +37,33 @@ def _remove_system_helper(plan: UninstallPlan, run_as_admin: Runner, report: lis
     # (E2E 2026-11-21 read a running helper as "gone" and left DNS and the firewall changed). The
     # plan found it by its LaunchDaemon; sudo can run what the person cannot see.
     if not plan.system_helper:
+        _remove_helper_key(report)   # no helper left to pair with: its key is a leftover secret
         return
     if run_as_admin(["sudo", str(plan.system_helper), "uninstall"]) == 0:
         report.append("removed the system protection helper; DNS and the firewall are as they were")
+        _remove_helper_key(report)
         return
     # Only the helper's own uninstall puts DNS back: stopping it by hand (bootout + rm) would leave
     # the Mac asking a resolver that no longer answers — no internet.
     report.append(f"needs root: sudo '{plan.system_helper}' uninstall   (puts DNS and the firewall back; "
                   f"if that program is missing, reinstall system protection first, then run it)")
+
+
+def _remove_helper_key(report: list[str]) -> None:
+    """Deletes the person's copy of the helper's pairing key, then its folder and the "Blackbox"
+    folder above it only when each is left EMPTY (``rmdir`` refuses anything else — Blackbox
+    Desktop's files there are never touched). Only once the helper is gone: a helper that could not
+    be removed still needs the key (E2E recheck 2026-11-21: empty folders were left behind)."""
+    folder = system_helper.user_key_folder()
+    key = folder / system_helper.KEY_FILE_NAME
+    if key.is_file() and not key.is_symlink():
+        key.unlink()
+        report.append("deleted the system protection helper's pairing key")
+    for empty in (folder, folder.parent):
+        try:
+            empty.rmdir()
+        except OSError:   # missing, or not empty: left as it is
+            return
 
 
 @yaml_files.edits_config

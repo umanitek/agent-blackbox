@@ -305,11 +305,21 @@ pub fn uninstall(undo_hardening: bool) -> Result<(), String> {
     let _ = fs::remove_file(&layout.plist);
     let _ = fs::remove_file(&layout.receipt);
     if errors.is_empty() {
-        let _ = fs::remove_dir_all(&layout.home);
+        remove_home(&layout);
         Ok(())
     } else {
         // The state stays, so a second uninstall can try again.
         Err(format!("the helper was stopped but not everything could be put back: {}", errors.join("; ")))
+    }
+}
+
+/// Removes the helper's folder, then its parent ("…/Application Support/Blackbox") only when that is
+/// left EMPTY — `remove_dir` refuses a folder with anything in it, so another Blackbox part's files
+/// are never touched (E2E recheck 2026-11-21: an empty root-owned folder stayed after uninstall).
+fn remove_home(layout: &Layout) {
+    let _ = fs::remove_dir_all(&layout.home);
+    if let Some(parent) = layout.home.parent() {
+        let _ = fs::remove_dir(parent);
     }
 }
 
@@ -455,5 +465,22 @@ mod tests {
         assert_eq!(parse_team_id("Executable=/x\nTeamIdentifier=ABCDE12345\n"), Some("ABCDE12345".into()));
         assert_eq!(parse_team_id("TeamIdentifier=not set\n"), None);
         assert!(plist().contains(&format!("{HOME}/netd.log")), "logs inside the 0700 folder");
+    }
+
+    #[test]
+    fn uninstall_removes_the_parent_folder_only_when_it_is_left_empty() {
+        let dir = std::env::temp_dir().join(format!("bb-netd-parent-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let parent = dir.join("Blackbox");
+        let layout = Layout { home: parent.join("netd"), plist: dir.join("netd.plist"), receipt: parent.join(RECEIPT), target: "system/test".into() };
+        fs::create_dir_all(&layout.home).unwrap();
+        fs::write(layout.home.join("state.json"), "{}").unwrap();
+        remove_home(&layout);
+        assert!(!parent.exists(), "an empty parent goes");
+        fs::create_dir_all(&layout.home).unwrap();
+        fs::write(parent.join("someone-elses.txt"), "keep").unwrap();
+        remove_home(&layout);
+        assert!(!layout.home.exists() && parent.join("someone-elses.txt").exists(), "a non-empty parent stays");
+        let _ = fs::remove_dir_all(&dir);
     }
 }

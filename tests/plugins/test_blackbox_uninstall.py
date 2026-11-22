@@ -399,3 +399,27 @@ def test_uninstall_removes_the_add_on_beside_the_plugin(machine):
     assert f"remove the add-on {addon}" in "\n".join(uninstall.describe(plan))
     _execute(plan)
     assert not addon.exists()
+
+
+def test_once_the_helper_is_gone_its_pairing_key_and_empty_folders_go_too(machine, tmp_path):
+    """E2E recheck 2026-11-21: after uninstall ~/Library/Application Support/Blackbox/helper was
+    left behind. The key goes once the helper is removed; a folder goes only when left empty."""
+    folder = machine / "Library" / "Application Support" / "Blackbox" / "helper"
+    folder.mkdir(parents=True)
+    (folder / "plan.key").write_bytes(b"\x07" * 32)
+    helper = tmp_path / "blackbox-netd"
+    _calls, report = _execute(dataclasses.replace(_plan(machine), system_helper=helper))
+    assert not folder.parent.exists(), "key, its folder and the empty Blackbox folder are gone"
+    assert any("pairing key" in line for line in report)
+
+
+def test_a_helper_that_could_not_be_removed_keeps_its_key_and_desktops_files_stay(machine, tmp_path):
+    folder = machine / "Library" / "Application Support" / "Blackbox" / "helper"
+    folder.mkdir(parents=True)
+    (folder / "plan.key").write_bytes(b"\x07" * 32)
+    (folder.parent / "engine").write_text("Desktop's", encoding="utf-8")
+    helper = tmp_path / "blackbox-netd"
+    _execute(dataclasses.replace(_plan(machine), system_helper=helper), admin_code=1)
+    assert (folder / "plan.key").exists(), "the still-installed helper needs its key"
+    _execute(dataclasses.replace(_plan(machine), system_helper=helper))
+    assert not folder.exists() and (folder.parent / "engine").exists(), "a non-empty folder is never removed"
