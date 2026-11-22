@@ -26,6 +26,7 @@ Usage::
     claim = parse_display(displayed_text)      # Claim(kind="developer_id", signer="Brave Software, Inc.", …)
     describe("/opt/homebrew/bin/claude")       # Signer(kind, signer, team, verified, notarised) — links followed
     described("/opt/homebrew/bin/claude")      # the kept answer, or None — never runs a tool
+    describe_soon("/opt/homebrew/bin/claude")  # the kept answer, or None while a background check runs
     found = verify("/Applications/Safari.app/Contents/MacOS/Safari", claimed="apple")
     found.valid, found.notarised
 """
@@ -206,6 +207,33 @@ def described(path: str) -> Optional[Signer]:
     with _lock:
         found = _described.get(key) if key else None
     return found[0] if found else None
+
+
+_checking: set[str] = set()
+
+
+def describe_soon(path: str, run: Runner = _run) -> Optional[Signer]:
+    """The kept answer for *path* (:func:`described`), or None after starting :func:`describe` in
+    a background thread (one per path at a time) — for a page that must not wait for Gatekeeper
+    (KI-584: an agent's profile was blank for the whole check). Ask again later for the answer."""
+    found = described(path)
+    if found is not None:
+        return found
+    real = os.path.realpath(path)
+    with _lock:
+        if real in _checking:
+            return None
+        _checking.add(real)
+
+    def check() -> None:
+        try:
+            describe(real, run)
+        finally:
+            with _lock:
+                _checking.discard(real)
+
+    threading.Thread(target=check, name="blackbox-code-signing", daemon=True).start()
+    return None
 
 
 def describe(path: str, run: Runner = _run) -> Signer:

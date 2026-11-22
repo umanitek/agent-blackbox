@@ -988,6 +988,9 @@
   .ai-chip.ai-unprotected { color: var(--signal); border-color: var(--signal); }
   .ai-page { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 8px 24px 40px; }
   .ai-table td { white-space: normal; overflow-wrap: anywhere; vertical-align: top; }
+  .ai-table th, .ai-table td.ai-nowrap { white-space: nowrap; overflow-wrap: normal; }   /* KI-584: Time, Kind, Tool, Verdict whole */
+  .ai-table td.ai-wrap { overflow-wrap: anywhere; min-width: 12ch; }
+  .ai-table td.ai-reason { min-width: 24ch; }
   .ai-late td { background: var(--caution-soft); }
   .ai-late-mark { color: var(--caution); font-weight: 700; }
   .ai-more { margin-top: 12px; border: 1px solid var(--border-strong); background: transparent; color: var(--text); border-radius: var(--radius); padding: 6px 12px; font: 600 12.5px var(--body-font); cursor: pointer; }

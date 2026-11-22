@@ -110,6 +110,7 @@
     return grid;
   }
 
+  var SIGNATURE_RECHECK_MS = 4000;
   V.pages.profile = function (params, target, setTitle) {
     var agent = str(params.get("agent")), home = str(params.get("home")), project = str(params.get("project"));
     V.getJSON("/api/agent-instances/profiles").then(function (answer) {
@@ -133,6 +134,14 @@
         add(defs, list(detail.definitions).length ? el("div", "ai-facts", names(detail.definitions)) : el("div", "ai-empty", "None."));
         target.replaceChildren(add(V.section("This profile"), programGrid(detail, row)), risks, hooksSection(detail.settings, row && row.problems),
                                settingsSection(detail.settings), instructionsSection(detail.instructions), mcp, defs);
+        // KI-584: the signature is checked in the background; read the page again once it is known.
+        if (detail.signature_pending && !params.get("rechecked")) {
+          setTimeout(function () {
+            var again = new URLSearchParams(params.toString());
+            again.set("rechecked", "1");
+            V.pages.profile(again, target, setTitle);
+          }, SIGNATURE_RECHECK_MS);
+        }
       });
     }).catch(function (error) { V.failed(target, error); });
   };

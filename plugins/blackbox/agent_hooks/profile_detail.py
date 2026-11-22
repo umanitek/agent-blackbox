@@ -117,6 +117,10 @@ class McpServer:
 NO_PROGRAM = "No program of this agent was found on this Mac, so there is no signature to check."
 
 
+#: What the signature says while its check runs in the background.
+SIGNATURE_PENDING = "Checking the signature…"
+
+
 @dataclass
 class ProfileDetail:
     agent: str
@@ -127,6 +131,7 @@ class ProfileDetail:
     version: str = ""
     signature: str = NO_PROGRAM         # the signer in a sentence (see ``signer`` for the fields)
     signer: Optional[code_signing.Signer] = None
+    signature_pending: bool = False     # the signature is being checked now: ask again for it (KI-584)
     sessions_path: str = ""             # where this home keeps its sessions (the path only)
     sessions_exist: bool = False        # whether that folder exists yet (a new home has none)
     running_flags: list[str] = field(default_factory=list)   # flags of its running processes that skip prompts
@@ -315,8 +320,11 @@ def read(agent: str, home: str, project: str = "", user_home: Optional[Path] = N
     program = versions.installed(user_home).get(agent)
     if program:
         detail.program, detail.version = program.path, program.version
-        detail.signer = code_signing.describe(program.path)
-        detail.signature = _signature_sentence(detail.signer)
+        # Never waits for Gatekeeper (seconds on a loaded Mac, KI-584): the kept answer, or a
+        # background check and "checking" until the page asks again.
+        detail.signer = code_signing.describe_soon(program.path)
+        detail.signature_pending = detail.signer is None
+        detail.signature = _signature_sentence(detail.signer) if detail.signer else SIGNATURE_PENDING
     # Read from THIS home (a moved one keeps its own), shown even before its first session.
     sessions = [folder / name for name in layout.get("sessions", ())]
     detail.sessions_path = str(sessions[0]) if sessions else ""

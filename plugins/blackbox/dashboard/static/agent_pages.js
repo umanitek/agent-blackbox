@@ -21,6 +21,7 @@
   if (!V) return;
   var el = V.el, add = V.add, str = V.str, list = V.list, obj = V.obj, link = V.link, when = V.when;
   var TIMELINE_PAGE = 100, HISTORY_PAGE = 50, DAY_SECONDS = 86400;
+  var PAGE_NAMES = { instance: "Session", history: "History", profiles: "Profiles", profile: "Profile" };
   var OUTCOMES = [["", "Any outcome"], ["stopped", "Had refusals or too-late"], ["refused", "Had refusals"], ["too-late", "Had too-late actions"]];
   var pages = V.pages = V.pages || {};
   var overlay = null, titleNode = null, body = null;
@@ -44,9 +45,11 @@
     action = obj(action);
     var verdict = str(action.verdict), late = verdict === "too-late";
     var row = el("tr", late ? "ai-late" : "");
-    [when(action.ts), str(action.kind), str(action.tool), str(action.what)].forEach(function (text) { add(row, el("td", "", text)); });
-    add(row, el("td", late ? "ai-late-mark" : "", (V.VERDICT_WORDS[verdict] || verdict) + (action.late ? " (arrived after the end)" : "")));
-    add(row, el("td", "", str(action.reason)));
+    // KI-584: the short columns keep their words whole; only What and Reason wrap.
+    [[when(action.ts), "ai-nowrap"], [str(action.kind), "ai-nowrap"], [str(action.tool), "ai-nowrap"], [str(action.what), "ai-wrap"]]
+      .forEach(function (cell) { add(row, el("td", cell[1], cell[0])); });
+    add(row, el("td", "ai-nowrap" + (late ? " ai-late-mark" : ""), (V.VERDICT_WORDS[verdict] || verdict) + (action.late ? " (arrived after the end)" : "")));
+    add(row, el("td", "ai-wrap ai-reason", str(action.reason)));
     return row;
   }
   function timeline(key, target) {
@@ -71,6 +74,7 @@
   pages.instance = function (params, target, setTitle) {
     V.getJSON("/api/agent-instances/detail?key=" + encodeURIComponent(str(params.get("key"))) + "&limit=1").then(function (found) {
       var row = obj(obj(found).instance), grid = el("div", "wev-facts");
+      target.replaceChildren();   // the loading note goes
       setTitle(row.kind === "sub-agent" ? "Sub-agent" : "Session", str(row.agent));
       fact(grid, "Status", [str(row.status), row.waiting_for ? "waiting for " + row.waiting_for : "", row.end_reason ? "ended: " + row.end_reason : ""].filter(Boolean).join(" · "));
       fact(grid, "Protection", str(row.protection_label));
@@ -194,8 +198,11 @@
       return;
     }
     if (!overlay) build();
-    body.replaceChildren(el("div", "ai-empty", "Loading…"));
-    var target = el("div");
+    // KI-584: the page says it is loading, under its own name, until its answer is drawn — it was
+    // blank (and kept the previous page's title) while the server read it.
+    var target = add(el("div"), el("div", "ai-empty", "Loading…"));
+    titleNode.textContent = PAGE_NAMES[match[1]] || "Agents";
+    overlay.kicker.textContent = "Agents";
     page(new URLSearchParams(match[2] || ""), target, function (heading, kicker) {
       titleNode.textContent = heading;
       overlay.kicker.textContent = kicker || "Agents";

@@ -23,8 +23,10 @@ from plugins.blackbox.kernel import agent_hosts as hosts, code_signing, settings
 @pytest.fixture(autouse=True)
 def _fresh(monkeypatch):
     store.reset()
-    monkeypatch.setattr(code_signing, "describe", lambda path, run=None: code_signing.Signer(kind="developer_id", signer="Vendor",
-                                                                                              team="T1", verified=True))
+    vendor = code_signing.Signer(kind="developer_id", signer="Vendor", team="T1", verified=True)
+    monkeypatch.setattr(code_signing, "describe", lambda path, run=None: vendor)
+    # The profile asks without waiting (KI-584); a check that has finished answers at once.
+    monkeypatch.setattr(code_signing, "describe_soon", lambda path, run=None: vendor)
     yield
     store.reset()
 

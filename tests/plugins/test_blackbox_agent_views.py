@@ -82,9 +82,10 @@ def _a_session_with_a_sub_agent_a_refusal_and_a_too_late(monkeypatch):
     return session
 
 
-def _draw(answers, hash_="", clicks=(), tmp_path=None):
+def _draw(answers, hash_="", clicks=(), tmp_path=None, hold=()):
     fixture = tmp_path / "fixture.json"
-    fixture.write_text(json.dumps({"scripts": SCRIPTS, "answers": answers, "hash": hash_, "clicks": list(clicks)}), encoding="utf-8")
+    fixture.write_text(json.dumps({"scripts": SCRIPTS, "answers": answers, "hash": hash_, "clicks": list(clicks), "hold": list(hold)}),
+                       encoding="utf-8")
     result = subprocess.run([NODE, str(RENDER), str(fixture)], capture_output=True, text=True, timeout=60, check=False)
     assert result.returncode == 0, result.stderr[-2000:]
     drawn = json.loads(result.stdout)
@@ -145,7 +146,7 @@ def test_an_instance_page_marks_too_late_rows_and_links_parent_and_sub_agents(cl
     body, = [line for line in drawn["page"][:late[0]] if line.strip() == "tbody"][-1:]
     late_row = drawn["page"][late[0]]
     assert len(late) == 1 and len(late_row) - len(late_row.lstrip()) == len(body) - len(body.lstrip()) + 2   # inside the table's body
-    assert "td.ai-late-mark too late — it ran" in page and "td refused" in page
+    assert "td.ai-nowrap.ai-late-mark too late — it ran" in page and "td.ai-nowrap refused" in page
     sub_detail = client.get("/api/agent-instances/detail", params={"key": sub.key}).json()
     drawn = _draw([["/api/agent-instances/detail", sub_detail]], hash_="#agents/instance?key=" + sub.key, tmp_path=tmp_path)
     assert "Started by" in _text(drawn["page"]) and "#agents/instance?" + urlencode({"key": session.key}) in _text(drawn["page"])
@@ -188,3 +189,50 @@ def test_a_profile_page_shows_the_cores_facts(client, tmp_path, monkeypatch):
     assert any(fetch.startswith("/api/agent-instances/profile?agent=claude-code&home=") for fetch in drawn["fetched"])
     listing = _text(_draw([["/api/agent-instances/profiles", rows]], hash_="#agents/profiles", tmp_path=tmp_path)["page"])
     assert "claude-code" in listing and "Hooks switched off" in listing and "#agents/profile?agent=claude-code" in listing
+
+
+# -- KI-584 (FIX-0370): the timeline keeps its short columns whole; a page says it is loading ---------
+
+def test_a_page_says_it_is_loading_under_its_own_name_while_the_server_reads_it(tmp_path):
+    """Round 3: a profile page stayed blank (title still "Profiles") for ~5 s on every open."""
+    for hash_, name in (("#agents/profile?agent=claude-code", "Profile"), ("#agents/instance?key=claude-code:00", "Session")):
+        page = _text(_draw([], hash_=hash_, tmp_path=tmp_path, hold=["/api/agent-instances/"])["page"])
+        assert "div.ai-empty Loading…" in page and f"h2 {name}" in page, page
+
+
+def test_the_timelines_short_columns_never_break_mid_word(client, monkeypatch, tmp_path):
+    session = _a_session_with_a_sub_agent_a_refusal_and_a_too_late(monkeypatch)
+    detail = client.get("/api/agent-instances/detail", params={"key": session.key}).json()
+    page = _draw([["/api/agent-instances/detail", detail]], hash_=f"#agents/instance?key={session.key}", tmp_path=tmp_path)["page"]
+    cells = [line.strip() for line in page if line.strip().startswith("td.")]
+    assert cells and all(cell.split(" ", 1)[0] in ("td.ai-nowrap", "td.ai-wrap", "td.ai-wrap.ai-reason", "td.ai-nowrap.ai-late-mark")
+                         for cell in cells), cells
+    assert "div.ai-empty Loading…" not in _text(page)
+
+
+def test_a_profile_never_waits_for_the_signature_check_and_has_it_on_the_next_read(monkeypatch, tmp_path):
+    import functools
+    import threading
+
+    from plugins.blackbox.agent_hooks import profile_detail, versions
+    from plugins.blackbox.kernel import code_signing
+    from tests.waiting import wait_until
+
+    code_signing.forget()
+    program = tmp_path / "claude"
+    program.write_bytes(b"\xcf\xfa\xed\xfe")
+    (tmp_path / ".claude").mkdir()
+    release = threading.Event()
+
+    def slow(command):   # Gatekeeper on a loaded Mac: answers only when the test lets it
+        release.wait(30)
+        return 0, "Executable=x\nAuthority=Software Signing\nTeamIdentifier=not set\n"
+
+    monkeypatch.setattr(code_signing, "describe_soon", functools.partial(code_signing.describe_soon, run=slow))
+    monkeypatch.setattr(versions, "installed", lambda home=None: {"claude-code": versions.Installed(str(program), "2.1.330")})
+    first = profile_detail.read("claude-code", str(tmp_path / ".claude"), user_home=tmp_path)
+    assert first is not None and first.signature_pending and first.signature == profile_detail.SIGNATURE_PENDING
+    release.set()
+    wait_until(lambda: code_signing.described(str(program)) is not None, what="the background check finished")
+    again = profile_detail.read("claude-code", str(tmp_path / ".claude"), user_home=tmp_path)
+    assert not again.signature_pending and again.signer.kind == "apple"

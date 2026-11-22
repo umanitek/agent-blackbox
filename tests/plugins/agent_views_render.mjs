@@ -2,7 +2,8 @@
 // DOM stand-in — no browser, no server: fetch answers from a fixture of REAL core API answers.
 //
 //   node tests/plugins/agent_views_render.mjs <fixture.json>
-//   fixture: {"scripts": [paths], "answers": [[path prefix, JSON answer], ...], "hash": "#agents/..."}
+//   fixture: {"scripts": [paths], "answers": [[path prefix, JSON answer], ...], "hash": "#agents/...",
+//             "hold": [path prefix, ...]}   — a held path's fetch never answers (the page while it waits)
 //   -> stdout: {"root": <outline of #agent-instances-root>, "page": <outline of the page window>,
 //               "fetched": [paths], "errors": [...]}
 // An outline line is "<indent>tag.class.class[href=…] text" — the text each element holds itself.
@@ -60,6 +61,7 @@ const context = {
   addEventListener: (type, handler) => { (windowListeners[type] = windowListeners[type] || []).push(handler); },
   fetch: (path) => {
     fetched.push(path);
+    if ((fixture.hold || []).some((prefix) => path.startsWith(prefix))) return new Promise(() => {});
     const hit = fixture.answers.find(([prefix]) => path.startsWith(prefix));
     if (!hit) return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({}) });
     return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(hit[1]) });
