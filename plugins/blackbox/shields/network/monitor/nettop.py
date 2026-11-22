@@ -3,7 +3,11 @@
 ``nettop -L 1 -x -n -J state,bytes_in,bytes_out`` prints CSV: a header naming the columns
 (``,state,bytes_in,bytes_out,``), then for each process a line ``name.pid,,bytes_in,bytes_out,``
 followed by its sockets ``tcp4 192.168.1.53:65515<->142.251.211.69:443,Established,2896,2942,``.
-IPv6 endpoints separate the port with a dot (``fe80::1%en0.5353``).
+IPv6 endpoints separate the port with a dot (``fe80::1%en0.5353``). QUIC (HTTP/3) sockets are
+their own rows, ``quic4 192.168.1.53:49158<->17.248.202.7:443,…`` / ``quic6 …``, kept with their
+protocol so HTTP/3 traffic reaches live traffic and the threat match (KI-587). A row whose label
+holds ``<->`` is always a socket, never a process, so a protocol this parser does not know yet is
+skipped instead of being read as a process named ``quic6 …`` with the remote port as its pid.
 
 A socket with a ``*`` remote is left out of the connections; a TCP one in state ``Listen`` names
 a port this machine serves, so a connection on that local port was opened by the other side
@@ -19,7 +23,9 @@ from typing import Optional
 from . import platform
 from .records import Connection, ProcessTraffic
 
-_PROTOCOLS = ("tcp4", "tcp6", "udp4", "udp6")
+#: Socket rows nettop prints. QUIC runs over UDP but nettop names it apart (KI-587).
+_PROTOCOLS = ("tcp4", "tcp6", "udp4", "udp6", "quic4", "quic6")
+_ENDPOINTS_ARROW = "<->"
 
 
 def available() -> Optional[str]:
@@ -50,6 +56,8 @@ def parse(text: str) -> list[ProcessTraffic]:
             connection = _connection(protocol, endpoints, values, listening)
             if connection and processes:
                 processes[-1][4].append(connection)
+            continue
+        if _ENDPOINTS_ARROW in label:   # a socket of a kind not listed above: never a process
             continue
         name, _, pid = label.rpartition(".")
         if name and pid.isdigit():
@@ -99,12 +107,12 @@ def _port_of(endpoint: str, protocol: str) -> tuple[str, str]:
 
 def _local_port(label: str) -> int:
     protocol, _, endpoints = label.partition(" ")
-    _address, port = _port_of(endpoints.partition("<->")[0], protocol)
+    _address, port = _port_of(endpoints.partition(_ENDPOINTS_ARROW)[0], protocol)
     return int(port) if port.isdigit() else -1
 
 
 def _connection(protocol: str, endpoints: str, values: dict[str, str], listening: set[int]) -> Optional[Connection]:
-    local, arrow, remote = endpoints.partition("<->")
+    local, arrow, remote = endpoints.partition(_ENDPOINTS_ARROW)
     if not arrow:
         return None
     ip, port = _port_of(remote, protocol)

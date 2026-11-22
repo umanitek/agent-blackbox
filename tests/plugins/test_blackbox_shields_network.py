@@ -203,6 +203,39 @@ def test_nettop_is_parsed_and_listening_sockets_are_left_out():
     assert processes[1].connections[0].remote_ip == "2001:db8::1" and processes[1].connections[0].remote_port == 443
 
 
+#: nettop -L 1 -x -n -J state,bytes_in,bytes_out as seen on a Mac 2026-11-22 (KI-587): syspolicyd's
+#: QUIC flow to Apple, and a browser's QUIC over IPv6 (port after a dot, like every IPv6 row).
+QUIC = """,state,bytes_in,bytes_out,
+syspolicyd.412,,8511,1024,
+quic4 192.168.1.53:49158<->17.248.202.7:443,,8511,1024,
+Brave Browser H.77,,300,200,
+quic6 2a02:8109::5.51000<->2606:4700::6810:84e5.443,,300,200,
+"""
+
+
+def test_quic_flows_are_connections_with_their_remote_address(monkeypatch):
+    """KI-587: a quic4/quic6 row was dropped (or, for quic6, read as a process whose pid was the
+    remote port), so HTTP/3 traffic was missing from live traffic and the threat match."""
+    processes = nettop.parse(QUIC)
+    assert [(p.name, p.pid) for p in processes] == [("syspolicyd", 412), ("Brave Browser H", 77)]
+    apple, browser = (p.connections[0] for p in processes)
+    assert (apple.protocol, apple.remote_ip, apple.remote_port, apple.bytes_in) == ("quic4", "17.248.202.7", 443, 8511)
+    assert (browser.protocol, browser.remote_ip, browser.remote_port) == ("quic6", "2606:4700::6810:84e5", 443)
+    assert processes[0].bytes_in == 8511 and not apple.local
+    monkeypatch.setattr(nettop, "available", lambda: None)
+    monkeypatch.setattr(nettop, "read", lambda: nettop.parse(QUIC))
+    monkeypatch.setattr(ProcessTree, "read", classmethod(lambda cls: ProcessTree.parse(" 412 1 0.0 10 /usr/libexec/syspolicyd\n")))
+    monkeypatch.setattr(monitor, "_previous", {"at": 0.0, "bytes": {}})
+    reading = monitor.read(frozenset({"17.248.202.7"}))
+    assert reading.threats == 1 and reading.connections_out == 2
+
+
+def test_a_socket_row_of_an_unknown_kind_is_never_a_process():
+    text = ",state,bytes_in,bytes_out,\nnode.42,,1,1,\nsctp6 ::2.5000<->2001:db8::9.443,,1,1,\ntcp4 10.0.0.2:1<->1.1.1.1:443,,1,1,\n"
+    processes = nettop.parse(text)
+    assert [(p.name, p.pid, len(p.connections)) for p in processes] == [("node", 42, 1)]
+
+
 def test_children_of_an_agent_are_the_agents_and_blackbox_is_labelled():
     tree = ProcessTree.parse(" 10 1 0.0 100 /Users/me/.local/bin/claude\n 42 10 12,5 2048 node /usr/local/bin/npm i x\n"
                              " 30 1 0.0 1 node /Users/me/Library/Application Support/Blackbox/hermes/x/dkg start\n"

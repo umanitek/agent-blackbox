@@ -13,7 +13,8 @@ from ...json_records import JsonValue, _record_json
 
 @dataclass(frozen=True)
 class Connection:
-    """One connection of a process: *protocol* is ``tcp4``/``tcp6``/``udp4``/``udp6``;
+    """One connection of a process: *protocol* is ``tcp4``/``tcp6``/``udp4``/``udp6``, or
+    ``quic4``/``quic6`` for QUIC (HTTP/3, carried over UDP);
     *threat* names the verified graph's listing of the remote address ("" when none).
 
     *direction* is ``in`` when the remote side opened it (its local port is one this machine
