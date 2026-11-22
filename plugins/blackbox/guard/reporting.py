@@ -165,7 +165,8 @@ BLOCKED_WHAT = {"tool": "this tool call", "in-user-prompt": "this prompt", "in-t
 #: Graph-backed finding sources: only these may be called "known threats in the threat graph".
 _GRAPH_SOURCES = frozenset({"public", "community"})
 #: What a LOCAL rule is, in the person's words (finding ``source`` / ``matched``).
-_LOCAL_RULE_NAMES = {"user-protected": "your protected-path rule", "secret": "Blackbox's built-in secret protection",
+_LOCAL_RULE_NAMES = {"user-protected": "your protected-path rule", detection.PERSON_PROTECTED: "your File Shield protection",
+                     "secret": "Blackbox's built-in secret protection",
                      "heuristic": "Blackbox's built-in checks", "llm": "Blackbox's AI review"}
 _SELF_PROTECTION = "Blackbox's self-protection"
 
@@ -173,7 +174,7 @@ _SELF_PROTECTION = "Blackbox's self-protection"
 def _rule_name(finding: detection.Finding) -> str:
     """The plain name of the local rule behind *finding* (never "the threat graph")."""
     if finding.source == "custom":
-        return _LOCAL_RULE_NAMES["user-protected"] if finding.matched == "user-protected" else _SELF_PROTECTION
+        return _LOCAL_RULE_NAMES.get(finding.matched, _SELF_PROTECTION)
     return _LOCAL_RULE_NAMES.get(finding.source, "a local Blackbox rule")
 
 

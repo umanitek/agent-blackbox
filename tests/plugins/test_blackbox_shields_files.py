@@ -178,7 +178,7 @@ def test_file_shield_findings_never_leave_the_machine(entry, monkeypatch):
     assert claimed
     for finding in claimed:
         allowed, why = policy.decide(finding, "0x" + "1" * 40)
-        assert not allowed and why.startswith("source secret")
+        assert not allowed and why.startswith(("source custom", "source secret"))   # never shared, whichever local source
 
 
 # -- real time ---------------------------------------------------------------------------------
@@ -243,3 +243,38 @@ def test_the_watch_plan_is_signed_for_the_helpers_nonce(home, monkeypatch):
     plan = json.loads(answer.body)
     assert plan["watch"] is True and str(home / "Documents" / "BlackboxVault") in plan["paths"]
     assert str(home / "Downloads") in plan["paths"]
+
+
+# -- KI-530: a refusal reaches the hits list WITH its item (hook → audit → hits) --------------
+
+
+@pytest.fixture
+def audited(monkeypatch):
+    """Like ``entry`` but the guard really writes its audit log (no recording stub)."""
+    state = {"mode": "block", "report": False,
+             "shields": {"file-shield": {"enabled": True, "protected": [VAULT], "folders": []}}}
+    monkeypatch.setattr(config_mod, "_blackbox_entry", lambda: state)
+    monkeypatch.setattr(ruleset_mod, "get", lambda cfg=None: Ruleset())
+    monkeypatch.setattr(guard_background, "_spawn_osv_discovery", lambda *a, **k: None)
+    monkeypatch.setattr(guard_background, "review_tool", lambda *a, **k: None)
+    return state
+
+
+def test_a_real_refusal_is_listed_with_its_item_path_and_route(audited, home):
+    """KI-530 (E2E full3, 2026-11-22): every hit row had an empty item, so each item showed 0 refusals."""
+    assert hooks.on_pre_tool_call(tool_name="terminal", args={"command": f"cat {VAULT}/notes.txt"},
+                                  session_id="ki530")["action"] == "block"
+    rows = events.hits()
+    assert rows, "the refusal is in the hits list"
+    assert rows[0]["item"] == VAULT
+    assert rows[0]["path"] and rows[0]["route"]
+    counted = {item["item"]: item.get("hits") for item in protect.listing()} if hasattr(protect, "listing") else None
+    if counted is not None:
+        assert counted.get(VAULT, 0) >= 1
+
+
+def test_a_file_shield_refusal_names_file_shield_not_secret_protection(audited):
+    """KI-533 (E2E full3): the header said "Blackbox's built-in secret protection" for a File Shield refusal."""
+    result = hooks.on_pre_tool_call(tool_name="terminal", args={"command": f"cat {VAULT}/notes.txt"})
+    assert "your File Shield protection" in result["message"]
+    assert "secret protection" not in result["message"]

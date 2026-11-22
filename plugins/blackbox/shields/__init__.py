@@ -53,6 +53,7 @@ from .contract import (
     ShieldsSnapshot,
     ShieldStatus,
 )
+from .local_only import LOCAL_ONLY_SOURCE, LOCAL_ONLY_SOURCES, local_only as _local_only
 from .packs import TABLE_MAX_BYTES, ShieldData, load_shield_data, read_json_file
 from .self_test import SELF_TESTS, SelfTest
 from .json_records import JsonValue
@@ -117,9 +118,6 @@ _PLUGIN_PACKAGE = __name__.rpartition(".")[0]
 
 #: The block threshold an attack table is tested at when it names none (Blackbox's default).
 DEFAULT_TESTED_SEVERITY = "critical"
-
-#: The finding source every shield finding carries: never shared (community.NEVER_SHARED_SOURCES).
-LOCAL_ONLY_SOURCE = "secret"
 
 
 def _load_all(shields: Iterable[Shield]) -> dict[str, ShieldData]:
@@ -223,10 +221,7 @@ def check(tool_name: str, args: Any, active: ShieldsSnapshot) -> list[Finding]:
                 logger.warning("blackbox: shield %s finding %s names unknown pack %r; dropped",
                                shield.id, finding.identifier, pack)
                 continue
-            if finding.source != LOCAL_ONLY_SOURCE:
-                logger.warning("blackbox: shield %s finding %s had source %r; made local-only",
-                               shield.id, finding.identifier, finding.source)
-            findings.append(dataclasses.replace(finding, source=LOCAL_ONLY_SOURCE))
+            findings.append(_local_only(shield.id, finding))
     return findings
 
 
@@ -243,7 +238,7 @@ def prompt_findings(texts: Iterable[str], active: ShieldsSnapshot) -> list[Findi
             except Exception:   # a broken check contributes nothing (fail-open); the traceback says why
                 logger.warning("blackbox: shield %s prompt check failed", shield.id, exc_info=True)
                 continue
-            findings.extend(dataclasses.replace(finding, source=LOCAL_ONLY_SOURCE) for finding in raised)
+            findings.extend(_local_only(shield.id, finding) for finding in raised)
     return findings
 
 
