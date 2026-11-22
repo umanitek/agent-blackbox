@@ -102,11 +102,14 @@ ADDRESSES_HELP = ("A raw private key is 64 characters that look exactly like a t
 
 
 def settings_fields() -> list[SettingField]:
-    """How Settings draws Trader's group: the switch, the wallet packs in display order
-    (supported, then coming soon; a pack that failed to load is left out), and the
-    operator's own addresses (one per line, each a ``0x`` address)."""
+    """How Settings draws Trader's group: the switch, the wallets it protects today in display
+    order, and the operator's own addresses (one per line, each a ``0x`` address).
+
+    Only ``supported`` packs are offered: a ``planned`` one is not shown at all (launch-first —
+    Blackbox never promises a wallet before it protects it; E2E 2026-11-21), nor is one that
+    failed to load."""
     options = tuple(SettingOption(id=pack.id, name=pack.name, status=pack.status, logo=mode.logo_url(pack.id))
-                    for pack in mode.wallet_packs() if pack.status != "unavailable")
+                    for pack in mode.wallet_packs() if pack.status == "supported")
     return [SettingField(key="enabled", kind="toggle", label="Engage Trader Shield", help=ENGAGE_HELP),
             SettingField(key=mode.WALLETS, kind="multi-pick", label="Wallets to protect",
                          help="Choose the wallets installed on this machine.", options=options),

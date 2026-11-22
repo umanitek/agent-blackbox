@@ -100,7 +100,7 @@ class StatusSection:
 @dataclass(frozen=True)
 class OfferDownload:
     """One download of an offered app: for *os* (``macos`` / ``windows`` / ``linux``), at *url*
-    (https only), or not out yet (*available* False: shown as coming soon)."""
+    (https only), or not out yet (*available* False: not shown — launch-first)."""
 
     os: str
     label: str

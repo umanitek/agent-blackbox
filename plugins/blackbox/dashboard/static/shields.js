@@ -481,7 +481,7 @@
       if (field.kind === "multi-pick") {
         var picks = list(field.options).map(obj).map(function (option) {
           if (option.status !== "supported") return '<label class="wallet-pick soon"><input type="checkbox" disabled /> ' + esc(option.name) +
-            " <span>" + (option.status === "needs-helper" ? "needs the system protection helper" : option.status === "needs-desktop" ? "in Blackbox Desktop" : "coming soon") + "</span></label>";
+            " <span>" + (option.status === "needs-helper" ? "needs the system protection helper" : option.status === "needs-desktop" ? "in Blackbox Desktop" : "not available") + "</span></label>";
           return '<label class="wallet-pick"><input type="checkbox"' + attrs + ' data-option="' + esc(option.id) + '"' +
             (draft[field.key].indexOf(str(option.id)) >= 0 ? " checked" : "") + (on ? "" : " disabled") + " /> " + esc(option.name) + "</label>";
         });

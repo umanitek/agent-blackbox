@@ -3110,7 +3110,7 @@ function ShieldSettings({ card, section, dashboardUrl }) {
                         className: 'bbx-btn',
                         disabled: !supported || !on,
                         'aria-pressed': picked ? 'true' : 'false',
-                        title: !supported ? 'Coming soon' : !on ? `Turn ${card.name} on to choose` : '',
+                        title: !supported ? 'Not available' : !on ? `Turn ${card.name} on to choose` : '',
                         style: picked && supported ? { borderColor: '#3F8F5F', color: '#3FA568' } : undefined,
                         onClick: () => {
                           const next = new Set(chosen)
@@ -3118,7 +3118,7 @@ function ShieldSettings({ card, section, dashboardUrl }) {
                           else next.add(String(option.id))
                           change(field.key, Array.from(next))
                         },
-                        children: supported ? `${picked ? '✓ ' : ''}${option.name}` : `${option.name} · coming soon`
+                        children: supported ? `${picked ? '✓ ' : ''}${option.name}` : `${option.name} · not available`
                       }, option.id)
                     })
                   })

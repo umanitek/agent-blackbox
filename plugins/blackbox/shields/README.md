@@ -144,8 +144,8 @@ writes `shields.trader` and removes them.
    { "id": "rabby", "name": "Rabby", "kind": "browser-extension", "status": "planned", "order": 110 }
    ```
 
-   A `planned` pack is enough to show the wallet as **coming soon** in Settings. To make it
-   `supported`, add `verified` (the date you checked it on the real software) and `source`
+   A `planned` pack is loaded but never shown (launch-first: Settings and the page list only
+   wallets Trader Shield protects today). To make it `supported`, add `verified` (the date you checked it on the real software) and `source`
    (where you checked it), plus the block for its kind:
 
    | `kind` | Block | Example |
@@ -168,9 +168,9 @@ writes `shields.trader` and removes them.
 5. **Regenerate the OpenClaw list**, which is generated from the packs:
    `uv run python scripts/gen_openclaw_wallets.py`, then commit
    `integrations/openclaw/src/generated/wallets.json` (it is git-ignored, so `git add -f`).
-6. **Run the tests** below. If you changed what Settings or the page lists as coming soon,
-   update `test_settings_coming_soon_is_unchanged` / `test_page_coming_next_is_unchanged`
-   in the same commit, on purpose.
+6. **Run the tests** below. Nothing is ever listed as coming soon: Settings and the page show
+   only supported wallets (`test_settings_offers_only_supported_wallets`,
+   `test_the_page_promises_nothing_that_is_not_out`).
 
 Users who saved their wallet list before the new wallet existed keep their saved list. The card
 shows the new wallet under **new since you last saved**, so it is not switched on behind their

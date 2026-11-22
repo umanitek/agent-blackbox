@@ -21,7 +21,7 @@ Config, under ``plugins.entries.blackbox``::
 
 Which wallets exist is data, not code: the shield's packs (``shields/trader/wallets/``),
 handed in once by :func:`use_packs`; ``supported`` ones may be chosen, ``planned`` ones
-are shown as coming soon.
+are loaded but never shown (launch-first: nothing is promised before it ships).
 
 An install saved before shields keeps the three legacy keys ``wallet_protection`` /
 ``protected_wallets`` / ``wallet_addresses``; :func:`from_entry` still reads them (so it
