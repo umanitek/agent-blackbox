@@ -174,21 +174,20 @@ _REAL_BLACKBOX = _REAL_HOME / ".hermes" / "blackbox"
 _BLACKBOX_EXISTED = {"before": _REAL_BLACKBOX.exists()}
 
 
-@pytest.fixture(autouse=True)
-def _never_the_real_home(request, monkeypatch, tmp_path_factory):
-    """HOME, and any Blackbox/Hermes home still inside the real one, point at a temporary folder
-    for every ``test_blackbox_*`` test (other plugins' tests are left as they are)."""
-    if not request.module.__name__.rsplit(".", 1)[-1].startswith("test_blackbox_"):
-        yield
+def pytest_configure(config):
+    """Before any test module is imported (several read ``~`` at import): a run of Blackbox test
+    files gets HOME — and any Hermes/Blackbox/DKG home still inside the real one — in a temporary
+    folder of its own. ``scripts/run_tests.sh`` runs one file per process, so this is per file."""
+    if not any(Path(str(arg).split("::")[0]).name.startswith("test_blackbox_") for arg in config.args):
         return
-    home = tmp_path_factory.mktemp("home")
-    monkeypatch.setenv("HOME", str(home))
+    import tempfile
+    home = Path(tempfile.mkdtemp(prefix="blackbox-test-home-"))
+    os.environ["HOME"] = str(home)
     for name in ("HERMES_HOME", "BLACKBOX_HOME", "BLACKBOX_DKG_HOME"):
         value = os.environ.get(name, "")
-        if not value or Path(value).expanduser().resolve().is_relative_to(_REAL_HOME.resolve()):
-            if name == "HERMES_HOME" or value:
-                monkeypatch.setenv(name, str(home / ".hermes" if name == "HERMES_HOME" else home / name.lower()))
-    yield
+        inside = bool(value) and Path(value).expanduser().resolve().is_relative_to(_REAL_HOME.resolve())
+        if inside or (name == "HERMES_HOME" and not value):
+            os.environ[name] = str(home / (".hermes" if name == "HERMES_HOME" else name.lower()))
 
 
 def pytest_sessionfinish(session, exitstatus):
