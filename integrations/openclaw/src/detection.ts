@@ -1612,7 +1612,17 @@ function candidates(file: string): string[] {
 
 /** True when `file` is a wildcard that could name a file a glob-free `pattern` protects (`cat .env*`). */
 function nameGlobHits(file: string, pattern: string): boolean {
-  const name = path.basename(path.normalize(expandUser(String(file ?? ""))));
+  const expanded = path.normalize(expandUser(String(file ?? "")));
+  const name = path.basename(expanded);
+  // Only where there is nothing on disk to look at (Python `_name_glob_hits`, 2026-11-21): an
+  // existing folder's real matches are what `candidates` checks.
+  if (path.isAbsolute(expanded)) {
+    try {
+      if (fs.statSync(path.dirname(expanded), { throwIfNoEntry: false })?.isDirectory()) return false;
+    } catch {
+      /* unreadable: judge by name */
+    }
+  }
   return GLOB_CHARS.test(name) && !GLOB_CHARS.test(pattern) && fnmatch(path.basename(pattern.replace(/\/+$/, "")), name);
 }
 

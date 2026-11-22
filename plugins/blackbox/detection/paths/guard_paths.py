@@ -23,7 +23,7 @@ from __future__ import annotations
 import os
 import re
 
-from . import guard_places, shell_files
+from . import guard_landing, guard_places, shell_files
 
 #: The folder a command is taken to start in when no ``cd`` has said otherwise.
 START_FOLDER = "~"
@@ -159,9 +159,14 @@ def _segment_changes_a_place(name: str, rest: list[str], segment: list[str], fol
         return False
     if not _named_places(segment, folder) and not (guard_places.inside(folder) and rest):
         return False
+    if name in guard_landing.LANDING_COPIES:
+        # Judged by what LANDS, not by the folder word: ``cp notes.md ~`` writes ``~/notes.md``.
+        return guard_landing.copy_writes_a_place(name, segment, folder)
     if name in _COPIES:
         written = [arg.path for arg in shell_files.shell_file_args(" ".join(segment)) if arg.destination]
         return any(guard_places.reaches(_place(path, folder)) for path in written)
+    if guard_landing.extracts(name, rest):
+        return guard_landing.unpack_writes_a_place(name, rest, folder)
     if name in ("echo", "printf"):
         return bool(re.search(r"[|>]", line))          # printed into a file or another program
     return not _only_reads(name, rest)

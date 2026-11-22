@@ -212,8 +212,36 @@ def _command_args(name: str, words: list[str], index: int, *, in_known_folder: b
              and not (old_style_tar_flags and position == 0)
              and (_looks_like_path(word) or ((name in _RECURSIVE_COMMANDS or in_known_folder) and word != "{}"))]
     written = _destinations(name, arguments, paths)
+    if name == "tar":
+        paths = _tar_operands(arguments, paths, written)
     return [ShellFileArg(path=word, command=name, recursive=recursive, destination=word in written)
             for word in paths], end
+
+
+def _tar_operands(arguments: list[str], paths: list[str], written: set) -> list[str]:
+    """tar's file operands as files on disk: ``-C DIR`` / ``--directory=DIR`` changes the folder
+    the operands are read in — it is not itself read — and an extraction or listing reads only its
+    archive (its other operands name MEMBERS inside it, not files here).
+
+    WHY: ``tar -C ~ -xf a.tar notes/todo.md`` was taken for a read of the whole home folder — and
+    so of Blackbox's keys — while ``tar -C ~ -czf out.tgz .hermes`` must still be read as
+    ``~/.hermes`` (2026-11-21)."""
+    folder, skip_values = "", set()
+    for flag, value in itertools.pairwise(arguments):
+        if flag in ("-C", "--directory"):
+            folder = value
+            skip_values.add(value)
+    folder = next((word.split("=", 1)[1] for word in arguments if word.startswith("--directory=")), folder)
+    operands = [path for path in paths if path not in skip_values]
+    clusters = [word.lstrip("-") for position, word in enumerate(arguments)
+                if (word.startswith("-") and not word.startswith("--")) or (position == 0 and word.isalpha())]
+    if any(set(cluster) & {"x", "t"} for cluster in clusters) or {"--extract", "--list", "--get"} & set(arguments):
+        archive = next((value for flag, value in itertools.pairwise(arguments)
+                        if not flag.startswith("--") and "f" in flag.lstrip("-") and flag.lstrip("-").isalpha()), "")
+        return [archive] if archive in operands else []
+    if not folder:
+        return operands
+    return [path if path in written or _is_anchored(path) else folder.rstrip("/") + "/" + path for path in operands]
 
 
 def _destinations(name: str, arguments: list[str], paths: list[str]) -> set:

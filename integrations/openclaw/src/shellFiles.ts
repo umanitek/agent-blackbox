@@ -366,7 +366,43 @@ function commandArgs(name: string, words: string[], index: number, inKnownFolder
     !word.startsWith("-") && !(oldStyleTarFlags && position === 0) &&
     (looksLikePath(word) || ((RECURSIVE_COMMANDS.has(name) || inKnownFolder) && word !== "{}")));
   const written = destinations(name, args, paths);
-  return [paths.map((word) => ({ path: word, command: name, recursive, destination: written.has(word) })), end];
+  const operands = name === "tar" ? tarOperands(args, paths, written) : paths;
+  return [operands.map((word) => ({ path: word, command: name, recursive, destination: written.has(word) })), end];
+}
+
+/**
+ * tar's file operands as files on disk (port of Python `_tar_operands`): `-C DIR` /
+ * `--directory=DIR` changes the folder operands are read in and is not itself read, and an
+ * extraction or listing reads only its archive (other operands are members inside it).
+ */
+function tarOperands(args: string[], paths: string[], written: Set<string>): string[] {
+  let folder = "";
+  const skip = new Set<string>();
+  for (let i = 0; i + 1 < args.length; i++) {
+    if (args[i] === "-C" || args[i] === "--directory") {
+      folder = args[i + 1]!;
+      skip.add(args[i + 1]!);
+    }
+  }
+  const long = args.find((word) => word.startsWith("--directory="));
+  if (long) folder = long.split("=", 2)[1] ?? folder;
+  const operands = paths.filter((word) => !skip.has(word));
+  const clusters = args
+    .filter((word, position) => (word.startsWith("-") && !word.startsWith("--")) || (position === 0 && isAlpha(word)))
+    .map((word) => word.replace(/^-+/, ""));
+  if (clusters.some((cluster) => /[xt]/.test(cluster)) || args.some((word) => ["--extract", "--list", "--get"].includes(word))) {
+    let archive = "";
+    for (let i = 0; i + 1 < args.length; i++) {
+      const flag = args[i]!.replace(/^-+/, "");
+      if (!args[i]!.startsWith("--") && flag.includes("f") && isAlpha(flag)) {
+        archive = args[i + 1]!;
+        break;
+      }
+    }
+    return operands.includes(archive) ? [archive] : [];
+  }
+  if (!folder) return operands;
+  return operands.map((word) => (written.has(word) || isAnchored(word) ? word : folder.replace(/\/+$/, "") + "/" + word));
 }
 
 /** Whether `find … | xargs COMMAND` at the pipe in `position` hands what it finds to a reader. */

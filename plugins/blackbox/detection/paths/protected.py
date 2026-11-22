@@ -203,7 +203,13 @@ def _candidates(path: str) -> list[str]:
 def _name_glob_hits(path: str, pattern: str) -> bool:
     """True when *path* is a wildcard that could name a file a glob-free *pattern* protects:
     ``cat .env*`` reaches ``.env`` wherever it is (KI-471), with no file on disk to look at."""
-    name = os.path.basename(os.path.normpath(os.path.expanduser(str(path or ""))))
+    expanded = os.path.normpath(os.path.expanduser(str(path or "")))
+    name = os.path.basename(expanded)
+    # WHY only where there is nothing on disk to look at (2026-11-21): ``cp ~/pkg/* ~`` names an
+    # existing folder, whose real matches :func:`_candidates` already checks; judging its ``*`` by
+    # name alone refused it for every protected file name anywhere (Blackbox's keystore, ``.env``).
+    if os.path.isabs(expanded) and os.path.isdir(os.path.dirname(expanded)):
+        return False
     return (any(ch in name for ch in _GLOB_CHARS) and not any(ch in pattern for ch in _GLOB_CHARS)
             and fnmatch.fnmatch(os.path.basename(pattern.rstrip("/")), name))
 

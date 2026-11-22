@@ -1,4 +1,4 @@
-/* @umanitek/blackbox-openclaw — built from src/ by `npm run build`; do not edit. source sha256:85aed362eeec3ad56da3fee8e898a38c1d722c6cafc82d06920a06f3362f1944 */
+/* @umanitek/blackbox-openclaw — built from src/ by `npm run build`; do not edit. source sha256:bb1f9ae6e52afe745133ff47f5300e70e1433583d88336576d2a2cc895333d6c */
 
 // src/consent.ts
 import { readFileSync } from "node:fs";
@@ -513,7 +513,35 @@ function commandArgs(name, words, index, inKnownFolder = false) {
   const oldStyleTarFlags = name === "tar" && args.length > 0 && isAlpha(args[0]);
   const paths = args.filter((word, position) => !word.startsWith("-") && !(oldStyleTarFlags && position === 0) && (looksLikePath(word) || (RECURSIVE_COMMANDS.has(name) || inKnownFolder) && word !== "{}"));
   const written = destinations(name, args, paths);
-  return [paths.map((word) => ({ path: word, command: name, recursive, destination: written.has(word) })), end];
+  const operands = name === "tar" ? tarOperands(args, paths, written) : paths;
+  return [operands.map((word) => ({ path: word, command: name, recursive, destination: written.has(word) })), end];
+}
+function tarOperands(args, paths, written) {
+  let folder = "";
+  const skip = /* @__PURE__ */ new Set();
+  for (let i = 0; i + 1 < args.length; i++) {
+    if (args[i] === "-C" || args[i] === "--directory") {
+      folder = args[i + 1];
+      skip.add(args[i + 1]);
+    }
+  }
+  const long = args.find((word) => word.startsWith("--directory="));
+  if (long) folder = long.split("=", 2)[1] ?? folder;
+  const operands = paths.filter((word) => !skip.has(word));
+  const clusters = args.filter((word, position) => word.startsWith("-") && !word.startsWith("--") || position === 0 && isAlpha(word)).map((word) => word.replace(/^-+/, ""));
+  if (clusters.some((cluster) => /[xt]/.test(cluster)) || args.some((word) => ["--extract", "--list", "--get"].includes(word))) {
+    let archive = "";
+    for (let i = 0; i + 1 < args.length; i++) {
+      const flag = args[i].replace(/^-+/, "");
+      if (!args[i].startsWith("--") && flag.includes("f") && isAlpha(flag)) {
+        archive = args[i + 1];
+        break;
+      }
+    }
+    return operands.includes(archive) ? [archive] : [];
+  }
+  if (!folder) return operands;
+  return operands.map((word) => written.has(word) || isAnchored(word) ? word : folder.replace(/\/+$/, "") + "/" + word);
 }
 function xargsFeedsAReader(words, position) {
   if (position >= words.length || words[position] !== "|") return false;
@@ -2021,7 +2049,14 @@ function candidates(file) {
   return found;
 }
 function nameGlobHits(file, pattern) {
-  const name = path.basename(path.normalize(expandUser(String(file ?? ""))));
+  const expanded = path.normalize(expandUser(String(file ?? "")));
+  const name = path.basename(expanded);
+  if (path.isAbsolute(expanded)) {
+    try {
+      if (fs.statSync(path.dirname(expanded), { throwIfNoEntry: false })?.isDirectory()) return false;
+    } catch {
+    }
+  }
   return GLOB_CHARS.test(name) && !GLOB_CHARS.test(pattern) && fnmatch(path.basename(pattern.replace(/\/+$/, "")), name);
 }
 function folderHolds(folder, pattern) {
