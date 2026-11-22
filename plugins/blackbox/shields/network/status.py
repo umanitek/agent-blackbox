@@ -30,7 +30,7 @@ DESKTOP_ADDS = (
     "File Shield — your downloads fingerprinted and checked",
     "Mac notifications, the connection history and a security review",
 )
-_OS_LABELS = {"macos": "Download for macOS", "windows": "Windows", "linux": "Linux"}
+_OS_LABELS = {"macos": "Download for macOS", "windows": "Download for Windows", "linux": "Download for Linux"}
 #: How a person installs the helper without Blackbox Desktop.
 HELPER_HOW = "Install it with Blackbox's installer (system protection), or from Blackbox Desktop."
 
@@ -46,8 +46,9 @@ def offer() -> ShieldOffer:
         return ShieldOffer(kind="open", title="Open Blackbox Desktop",
                            text="Blackbox Desktop shows everything Network Shield sees on this machine.",
                            open_url=mode_module.DESKTOP_OPEN_URL)
-    downloads = tuple(OfferDownload(os=name, label=_OS_LABELS[name], url=url, available=bool(url))
-                      for name, url in mode_module.DESKTOP_DOWNLOADS.items())
+    # Only what can be downloaded today (launch-first: no public "coming soon", E2E 2026-11-21).
+    downloads = tuple(OfferDownload(os=name, label=_OS_LABELS[name], url=url, available=True)
+                      for name, url in mode_module.DESKTOP_DOWNLOADS.items() if url)
     return ShieldOffer(kind="get", title="See everything with Blackbox Desktop",
                        text="Network Shield protects this machine from here. Blackbox Desktop adds the live views:",
                        items=DESKTOP_ADDS, downloads=downloads)

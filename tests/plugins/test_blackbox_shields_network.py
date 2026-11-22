@@ -141,7 +141,9 @@ def test_switched_on_without_blackbox_desktop_the_card_offers_it_for_this_os():
     assert offer.kind == "get" and "Blackbox Desktop" in offer.title and offer.items
     downloads = {d.os: d for d in offer.downloads}
     assert downloads["macos"].available and downloads["macos"].url.startswith("https://")
-    assert not downloads["windows"].available and not downloads["linux"].available   # coming soon
+    # Launch-first (E2E 2026-11-21): a download that does not exist yet is not offered at all —
+    # no "Windows — coming soon" button.
+    assert set(downloads) == {"macos"} and all(d.available for d in offer.downloads)
 
 
 def test_with_blackbox_desktops_add_on_the_card_opens_it_instead():

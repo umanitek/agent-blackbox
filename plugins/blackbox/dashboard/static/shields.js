@@ -178,11 +178,11 @@
     function openOffer(card) {
       closeOffer();
       var offer = card.offer, mine = platformOs();
-      var downloads = offer.downloads.slice().sort(function (a, b) { return (b.os === mine) - (a.os === mine); });
+      // Only downloads that exist are shown (launch-first: nothing announced before it ships).
+      var downloads = offer.downloads.filter(function (d) { return d.available; })
+        .sort(function (a, b) { return (b.os === mine) - (a.os === mine); });
       var buttons = downloads.map(function (d, i) {
-        return d.available
-          ? '<a class="ts-btn' + (i === 0 ? " primary" : "") + '" href="' + esc(d.url) + '" target="_blank" rel="noopener noreferrer">' + esc(d.label) + "</a>"
-          : '<span class="ts-btn" aria-disabled="true">' + esc(d.label) + " — coming soon</span>";
+        return '<a class="ts-btn' + (i === 0 ? " primary" : "") + '" href="' + esc(d.url) + '" target="_blank" rel="noopener noreferrer">' + esc(d.label) + "</a>";
       }).join(" ");
       document.body.insertAdjacentHTML("beforeend",
         '<div class="modal-overlay open" data-shield-offer-dialog role="dialog" aria-modal="true" aria-labelledby="shield-offer-title">' +
