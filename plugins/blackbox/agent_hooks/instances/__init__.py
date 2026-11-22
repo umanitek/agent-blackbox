@@ -164,7 +164,7 @@ def _timeline(target: Instance, event: Mapping[str, Any], decision: str, finding
     kind = event["event"]
     verdict = decision if decision in ("block", DECISION_TOO_LATE) else "flag" if findings else "allow" if kind == "pre_tool" else ""
     action = Action(time.time(), kind, str(event.get("tool_name") or "")[:120], _what(event) if kind == "pre_tool" else "", verdict,
-                    redact_secret_values(reason)[:MAX_REASON] if verdict in ("block", DECISION_TOO_LATE) else "",
+                    redact_secret_values(reason)[:MAX_REASON] if verdict in ("block", DECISION_TOO_LATE, "flag") else "",
                     prompt_text if kind == "prompt" else "", late)
     store.append_action(target.key, action, target.events)
     if not late:   # the live tree shows the newest entry — never a prompt's text
@@ -183,7 +183,7 @@ def record(event: Mapping[str, Any], session_key: str, *, decision: str = "", fi
            prompt_text: str = "") -> Instance:
     """Record one validated hook *event* against its instance; returns that instance.
 
-    *reason*: what the agent was told when the action was refused. *prompt_text*: a prompt's
+    *reason*: what the agent was told when the action was refused, or what flagged it. *prompt_text*: a prompt's
     text, already redacted — passed ONLY when the person turned prompt-text recording on.
 
     A session event updates the session; an event that names a sub-agent updates the sub-agent

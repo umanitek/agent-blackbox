@@ -120,6 +120,12 @@ that the two version fields agree.
 
 ### Security
 
+- **File Shield judges the command an interpreter is told to run.** A protected file read through
+  inline code (`python3 -c`, `node -e`, `ruby -e`, `perl -e`, `osascript -e`), a command
+  substitution, a decode spelled out on the command line, `eval`, or a wrapper such as `env`,
+  `nohup` or `timeout` is now refused like the plain read. A command beside a protected item that
+  builds what it opens while it runs is flagged and says why; every flagged action now shows its
+  reason.
 - **Gemini CLI's hooks now really run.** Blackbox wrote each hook's time limit in seconds, but
   Gemini CLI reads it in milliseconds, so every hook was cut off and Gemini ran without Blackbox.
   Each agent now gets its limit in its own unit, the sweep rewrites a config written the old way,

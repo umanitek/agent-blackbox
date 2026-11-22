@@ -297,9 +297,27 @@ def bookkeep(judged: Judged) -> None:
     _remember(event, session, decision)
     from .. import tracking   # late: tracking imports this package's editors
     tracking.track(event, session, decision=decision, findings=len(judged.findings),
-                   reason=str(verdict.get("message") or "") if judged.blocked else "",
+                   reason=reason_of(verdict, judged.findings),
                    text=event["text"] if event["event"] == "prompt" else "",   # kept only if the person turned that on
                    process=judged.process)
+
+
+#: The most finding titles a flagged row names as its reason.
+MAX_REASON_TITLES = 3
+
+
+def reason_of(verdict: Mapping[str, Any], findings: list[dict[str, Any]]) -> str:
+    """Why an event was refused OR flagged, in words: what the agent was told when it was refused,
+    else the titles of the findings that flagged it. WHY: a flagged row once carried no reason at
+    all — the person saw "flagged" and nothing else (KI-573, real Cline and OpenCode runs
+    2026-11-22). Empty only when nothing was found."""
+    message = str(verdict.get("message") or "")
+    if message:
+        return message
+    titles = list(dict.fromkeys(str(finding.get("title") or finding.get("identifier") or "") for finding in findings))
+    titles = [title for title in titles if title]
+    more = len(titles) - MAX_REASON_TITLES
+    return "; ".join(titles[:MAX_REASON_TITLES]) + (f" (and {more} more)" if more > 0 else "")
 
 
 def record_event(body: Any) -> dict[str, Any]:

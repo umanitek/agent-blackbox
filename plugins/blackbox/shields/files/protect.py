@@ -30,13 +30,16 @@ import os
 from typing import Any
 
 from ... import audit
-from ...detection import PERSON_PROTECTED, Finding, protected_path_mentions, protected_path_touches
+from ...detection import (KIND_FLAG_ONLY, PERSON_PROTECTED, SHELL_TOOLS, Finding, builds_hidden_command, command_from_args,
+                           protected_path_mentions, protected_path_touches)
 from ..contract import FindingKind, ShieldMode
 from . import mode as mode_module
 
 FILE_HIT_ID = "files:file-hit"
 FOLDER_HIT_ID = "files:folder-hit"
 MENTION_ID = "files:protected-mention"
+#: A command beside a protected item that builds what it opens at run time (flagged, with that reason).
+UNSEEN_ID = "files:unseen-route"
 #: File Shield's own category (the identifier's prefix), classified by the sighting layer.
 CATEGORY = "files"
 #: What ``matched`` says on a prompt that names a protected item (flags, never blocks).
@@ -45,10 +48,11 @@ FINDING_KINDS: tuple[FindingKind, ...] = (
     FindingKind("data-exfil", "host-system", "T1005", identifier=FILE_HIT_ID),
     FindingKind("data-exfil", "host-system", "T1005", identifier=FOLDER_HIT_ID),
     FindingKind("data-exfil", "host-system", "T1005", identifier=MENTION_ID),
+    FindingKind("data-exfil", "host-system", "T1005", identifier=UNSEEN_ID),
 )
 #: What each route is called in the finding, for a person.
 ROUTES = {"read": "open", "copy": "copy", "write": "change", "name": "use", "tree": "reach (through its folder)",
-          "mention": "ask for", "sandbox": "reach from inside the sandbox"}
+          "mention": "ask for", "sandbox": "reach from inside the sandbox", "unseen": "run a command it cannot read beside"}
 #: The agent named on a refusal the OS sandbox made (Layer 2): the log names the program, not the agent.
 SANDBOX_AGENT = audit.SANDBOX_RECORDER   # not an agent: any sandboxed program (KI-538)
 
@@ -77,6 +81,40 @@ def detect(tool_name: str, args: Any, mode: ShieldMode) -> list[Finding]:
             evidence=f"{touch.mode} {touch.path} — protected {what} {touch.pattern}"[:400],
             confirmed=False, source="custom",
             fields={"path": touch.path[:400], "item": touch.pattern, "route": touch.mode, "kind": what})]
+    return _unseen_route(tool_name, args, items)
+
+
+def _parents(items: list[str]) -> list[str]:
+    """The folder each protected item sits in (never the home folder or the disk itself)."""
+    home = os.path.expanduser("~").rstrip("/")
+    out = []
+    for item in items:
+        parent = os.path.dirname(os.path.expanduser(item).rstrip("/"))
+        if parent and parent not in ("/", home):
+            out.append(parent)
+    return list(dict.fromkeys(out))
+
+
+def _unseen_route(tool_name: str, args: Any, items: list[str]) -> list[Finding]:
+    """A FLAG (never a refusal) when a shell command names the folder a protected item sits in AND
+    builds part of what it runs or opens at run time in a way a hook cannot read (a substitution
+    whose output is not fixed, a decode of something that is not written on the line). WHY: those
+    forms are beyond Layer 1 (``detection.hidden_commands``); the person is told plainly instead of
+    seeing an unexplained "allowed" — the OS sandbox is what stops them."""
+    if (tool_name or "").strip().lower() not in SHELL_TOOLS:
+        return []
+    parents = _parents(items)
+    command = command_from_args(tool_name, args)
+    if not parents or not builds_hidden_command(command):
+        return []
+    for touch in protected_path_touches(tool_name, args, parents, whole=True, first_only=True, every_route=True):
+        return [Finding(
+            identifier=UNSEEN_ID, category=CATEGORY, severity="high", kind=KIND_FLAG_ONLY,
+            title=(f"File Shield: an AI agent ran a command beside your protected items in {touch.pattern} that builds what it "
+                   "opens while it runs, so a hook cannot see which file it reads"),
+            tool_name=touch.tool, matched="person-protected-unseen",
+            evidence=f"{touch.mode} {touch.path} — beside protected items in {touch.pattern}"[:400], confirmed=False, source="custom",
+            fields={"path": touch.path[:400], "item": touch.pattern, "route": "unseen", "kind": "folder"})]
     return []
 
 

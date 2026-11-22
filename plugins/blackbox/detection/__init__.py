@@ -60,6 +60,7 @@ from .detectors import (
 )
 from .paths.shell_files import shell_file_args
 from .shell_shapes import ESCALATION_SHAPES, SHELL_TOOLS, command_from_args
+from .hidden_commands import undecidable as builds_hidden_command
 
 from .content_scanners import iter_ioc_candidates
 
@@ -82,6 +83,7 @@ __all__ = [
                              'PathTouch',
                              'advisory_kind',
                              'blackbox_key_patterns',
+                             'builds_hidden_command',
                              'cmd_setup_llm',
                              'command_from_args',
                              'detect_all',
