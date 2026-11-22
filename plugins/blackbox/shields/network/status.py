@@ -18,7 +18,8 @@ from typing import Any, Mapping
 from ...kernel.config import load_blackbox_config
 from .. import extensions
 from ..contract import OfferDownload, ShieldMode, ShieldOffer, ShieldStatus, StatusRow, StatusSection
-from . import helper, helper_link, mode as mode_module
+from . import helper, mode as mode_module
+from .. import helper_link
 from .protect import enforcement
 
 #: What Blackbox Desktop adds on top of this shield, as the offer dialog lists it.

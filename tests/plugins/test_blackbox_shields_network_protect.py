@@ -16,7 +16,7 @@ from types import SimpleNamespace
 import pytest
 
 from plugins.blackbox.shields.network import api, helper, mode as network_mode, status
-from plugins.blackbox.shields.network import helper_link
+from plugins.blackbox.shields import helper_link
 from plugins.blackbox.shields.network.protect import blocklists, enforcement
 from plugins.blackbox.shields.network.respond import events
 from plugins.blackbox.shields.shield_api import AssistantAnswer, ShieldApiError, ShieldContext

@@ -22,7 +22,7 @@ from typing import Any, Mapping
 
 from ...shields.network import mode as mode_module
 from ...shields.shield_api import ShieldApiError, ShieldContext
-from . import helper_link
+from .. import helper_link
 from .monitor import exposure, posture, system_report
 from .protect import enforcement, posture_fix, tamper_guard
 

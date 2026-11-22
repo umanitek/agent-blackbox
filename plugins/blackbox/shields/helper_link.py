@@ -33,8 +33,8 @@ import stat
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
-from ...kernel import system_helper
-from ..shield_api import RawAnswer, ShieldApiError, ShieldContext
+from ..kernel import system_helper
+from .shield_api import RawAnswer, ShieldApiError, ShieldContext
 
 #: The plan's signature header (answers) and the helper's (reports).
 SIGNATURE_HEADER = "X-Blackbox-Signature"

@@ -12,7 +12,8 @@ import json
 
 import pytest
 
-from plugins.blackbox.shields.network import helper, helper_link, status
+from plugins.blackbox.shields import helper_link
+from plugins.blackbox.shields.network import helper, status
 from plugins.blackbox.shields.network import mode as network_mode
 from plugins.blackbox.shields.network.protect import enforcement
 from plugins.blackbox.shields.shield_api import RawAnswer, ShieldApiError, ShieldContext

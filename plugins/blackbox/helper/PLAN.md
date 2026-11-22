@@ -27,7 +27,7 @@ installer compares with the helper it carries to upgrade only one that differs.
   120 s, with `X-Blackbox-Token` (the dashboard's session token, as before) AND
   `X-Blackbox-Helper-Signature: hex(HMAC-SHA256(key, <the exact request body bytes>))`. The
   plugin refuses (401) an unsigned or wrongly signed report once it has a key.
-* **Plugin side:** `plugins/blackbox/shields/network/helper_link.py` reads the key, signs the
+* **Plugin side:** `plugins/blackbox/shields/helper_link.py` reads the key, signs the
   `enforcement` and `system-plan` answers (exact bytes, sent through `shields.RawAnswer`) and
   checks reports; the card says "not paired" when the helper is installed but this person has
   no key. Both sides check one shared vector (key 32×0x07, nonce `abc`, body
