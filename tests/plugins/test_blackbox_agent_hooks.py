@@ -307,7 +307,7 @@ def test_a_newly_installed_agent_is_noticed_within_seconds_not_at_the_next_five_
     (tmp_path / ".claude").mkdir()                         # Claude Code arrives
     after = agent_hooks.present()
     assert "claude-code" in after and "claude-code" not in before
-    assert routes.should_sweep(after, before, since_last=routes.NOTICE_SECONDS)       # sweep now
-    assert not routes.should_sweep(after, after, since_last=routes.NOTICE_SECONDS)    # nothing new: wait
+    assert routes.should_sweep(after, before, since_last=routes.OBSERVE_SECONDS)       # sweep now
+    assert not routes.should_sweep(after, after, since_last=routes.OBSERVE_SECONDS)    # nothing new: wait
     assert routes.should_sweep(after, after, since_last=routes.SWEEP_SECONDS)         # the full sweep still comes
-    assert routes.NOTICE_SECONDS <= 15
+    assert routes.OBSERVE_SECONDS <= 10

@@ -28,7 +28,7 @@ from .instances.model import Profile, Running
 from .protect import config_edit, own_files
 from .protect.events import session_key as key_of_session
 
-__all__ = ["detail", "export", "history", "live", "new_profiles", "profile", "profile_rows", "prompt_text", "track", "wait"]
+__all__ = ["detail", "export", "history", "live", "new_profiles", "observe_now", "profile", "profile_rows", "prompt_text", "track", "wait"]
 
 #: How long one reading of the process list is reused.
 TABLE_SECONDS = 1.5
@@ -44,13 +44,12 @@ _lock = threading.Lock()
 _seen: dict[str, Any] = {"at": 0.0, "table": {}, "running": [], "pids": frozenset(), "new_profiles": False}
 
 
-def _snapshot(*, fresh: bool = False) -> tuple[Mapping[int, observe.Proc], list[Running]]:
-    """The process list and the agent processes in it, read at most every :data:`TABLE_SECONDS`
-    (*fresh*: now, unless it was read in the last :data:`FRESH_MIN_SECONDS`). A change in which
-    agent processes exist moves the live view's cursor."""
+def _snapshot(*, max_age: float = TABLE_SECONDS) -> tuple[Mapping[int, observe.Proc], list[Running]]:
+    """The process list and the agent processes in it, read again when the one held is
+    *max_age* seconds old (by default :data:`TABLE_SECONDS`). A change in which agent processes
+    exist moves the live view's cursor."""
     with _lock:
-        age = time.monotonic() - _seen["at"]
-        if age >= TABLE_SECONDS or (fresh and age >= FRESH_MIN_SECONDS):
+        if time.monotonic() - _seen["at"] >= max_age:
             table = observe.read_table()
             running = observe.running(table)
             pids = frozenset(proc.pid for proc in running)
@@ -65,6 +64,15 @@ def _snapshot(*, fresh: bool = False) -> tuple[Mapping[int, observe.Proc], list[
             if changed:
                 store.touch()
         return _seen["table"], _seen["running"]
+
+
+def observe_now() -> None:
+    """One look of the process observer, whoever is watching: read the process list (a running
+    agent names a config home it uses — learned here, hooked by the sweep that asks
+    :func:`new_profiles`). WHY (KI-553): the list was read only when the live view was read or a
+    hook event came, so a moved home of an agent that sends no event was found only while
+    someone watched. The dashboard calls this every few seconds."""
+    _snapshot(max_age=0.0)
 
 
 def new_profiles() -> bool:
@@ -94,7 +102,7 @@ def agent_process(session_key: str, hook_parent: int, agent: str) -> int:
         _retried[session_key] = time.monotonic()
         for old in list(_retried)[:-MAX_RETRIES_KEPT]:
             _retried.pop(old)
-    table, _running = _snapshot(fresh=True)
+    table, _running = _snapshot(max_age=FRESH_MIN_SECONDS)
     return observe.agent_of(table, hook_parent, agent)
 
 

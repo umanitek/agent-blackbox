@@ -10,8 +10,8 @@
 
 Both POSTs pass the app-wide browser boundary (the session token from ``GET /api/session``), so a
 web page cannot reach them. While "Protect new agents automatically" is on, a background sweep
-hooks a newly installed agent within :data:`NOTICE_SECONDS` and repairs every hook every
-:data:`SWEEP_SECONDS` (``agent_hooks.sweep``). The instance views (live tree, history, one
+hooks a newly installed agent — or a config home a running agent uses — within
+:data:`OBSERVE_SECONDS` and repairs every hook every :data:`SWEEP_SECONDS` (``agent_hooks.sweep``). The instance views (live tree, history, one
 instance, profiles) are in :mod:`.instances`.
 """
 
@@ -30,9 +30,11 @@ NO_CACHE = {"Cache-Control": "no-store"}
 MAX_BODY_BYTES = 1024 * 1024
 #: A full sweep (hooks repaired, every agent re-checked) at least this often.
 SWEEP_SECONDS = 300.0
-#: How often the cheap look asks which agents are on this machine (a few file checks and PATH
-#: lookups); a NEW agent is hooked at once rather than at the next full sweep.
-NOTICE_SECONDS = 10.0
+#: How often the cheap look runs: the process observer (``agent_hooks.tracking.observe_now`` — a
+#: running agent that names a config home Blackbox has not hooked) and which agents are on this
+#: machine (a few file checks and PATH lookups). Either is hooked at once, not at the next full
+#: sweep.
+OBSERVE_SECONDS = 5.0
 _FIRST_LOOK_SECONDS = 20.0
 
 Cache = Callable[..., Any]
@@ -46,23 +48,41 @@ def should_sweep(present: frozenset[str], seen: frozenset[str] | None, since_las
     return present != seen or since_last >= SWEEP_SECONDS
 
 
-def _sweep_forever() -> None:
-    import time
+class _Sweeper:
+    """The background look, one :meth:`step` every :data:`OBSERVE_SECONDS`: the process observer
+    looks (a running agent's moved config home is learned), then the agents are hooked when a
+    home was learned, the agents on this machine changed, or the last full sweep is
+    :data:`SWEEP_SECONDS` old. Pattern: a small **State** holder for the loop, so one step can be
+    run and checked on its own."""
 
-    from ... import agent_hooks
+    def __init__(self) -> None:
+        self.seen: frozenset[str] | None = None
+        self.last = float("-inf")
+
+    def step(self) -> bool:
+        """One look; True when it swept."""
+        import time
+
+        from ... import agent_hooks
+        agent_hooks.tracking.observe_now()
+        present = agent_hooks.present()
+        # A config home learned since the last look (a hook event or a running agent named it)
+        # is hooked now, not at the next full sweep.
+        if agent_hooks.tracking.new_profiles() or should_sweep(present, self.seen, time.monotonic() - self.last):
+            agent_hooks.sweep()
+            self.seen, self.last = present, time.monotonic()
+            return True
+        return False
+
+
+def _sweep_forever() -> None:
     stop = threading.Event()
-    seen: frozenset[str] | None = None
-    last = float("-inf")
+    sweeper = _Sweeper()
     wait = _FIRST_LOOK_SECONDS
     while not stop.wait(wait):
-        wait = NOTICE_SECONDS
+        wait = OBSERVE_SECONDS
         try:
-            present = agent_hooks.present()
-            # A config home learned since the last look (a hook event or a running agent named
-            # it) is hooked now, not at the next full sweep.
-            if agent_hooks.tracking.new_profiles() or should_sweep(present, seen, time.monotonic() - last):
-                agent_hooks.sweep()
-                seen, last = present, time.monotonic()
+            sweeper.step()
         except Exception:   # health: allow BLE001 -- a sweep that fails tries again next round
             logger.warning("blackbox dashboard: the agent hooks sweep failed", exc_info=True)
 
