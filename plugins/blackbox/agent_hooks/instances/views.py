@@ -47,7 +47,21 @@ def close_stale(alive: Optional[Iterable[int]] = None, *, read_at: Optional[floa
             item.ended, item.end_reason = now, reason
             store.put(item)
             ended += 1
+            if item.kind == "session":
+                _end_sub_agents(item, now)
     return ended
+
+
+def _end_sub_agents(session: Instance, now: float) -> int:
+    """A session that ended this way takes its open sub-agents with it (KI-574: they stayed live
+    until the quiet limit after their session's process had gone)."""
+    count = 0
+    for item in store.all_instances():
+        if item.parent == session.key and item.ended is None:
+            item.ended, item.end_reason = now, "session-ended"
+            store.put(item)
+            count += 1
+    return count
 
 
 #: What a waiting instance waits for, in the person's words.

@@ -135,3 +135,24 @@ def process_variable(pid: int, name: str) -> str:
         if word.startswith(prefix):
             return word[len(prefix):].decode("utf-8", "replace")
     return ""
+
+
+#: ``proc_pidinfo``'s flavour for a process's working folder (``struct proc_vnodepathinfo``: the
+#: current folder's ``vnode_info`` (152 bytes) then its path (MAXPATHLEN), then the root's).
+_PROC_PIDVNODEPATHINFO = 9
+_VNODE_INFO_SIZE = 152
+_MAXPATHLEN = 1024
+_VNODEPATHINFO_SIZE = 2 * (_VNODE_INFO_SIZE + _MAXPATHLEN)
+
+
+def process_cwd(pid: int) -> str:
+    """The folder process *pid* works in (``proc_pidinfo``, read-only; this user's processes
+    only); "" when it is gone or may not be read."""
+    try:
+        buffer = ctypes.create_string_buffer(_VNODEPATHINFO_SIZE)
+        size = _libc().proc_pidinfo(int(pid), _PROC_PIDVNODEPATHINFO, ctypes.c_uint64(0), buffer, _VNODEPATHINFO_SIZE)
+    except (OSError, ValueError, AttributeError, TypeError):
+        return ""
+    if size != _VNODEPATHINFO_SIZE:
+        return ""
+    return buffer.raw[_VNODE_INFO_SIZE:_VNODE_INFO_SIZE + _MAXPATHLEN].split(b"\0")[0].decode("utf-8", "replace")

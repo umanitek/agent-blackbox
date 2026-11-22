@@ -22,7 +22,7 @@ import hashlib
 import time
 from typing import Any, Mapping
 
-from ...kernel.agent_hosts import DECISION_TOO_LATE
+from ...kernel.agent_hosts import BY_ID, DECISION_TOO_LATE
 from ...kernel.redaction import redact_secret_values
 from . import links, store
 from .model import LAUNCHES, Action, Instance
@@ -116,13 +116,37 @@ def _waiting(instance: Instance, kind: str, why: str) -> None:
         instance.waiting = _WAITING_AFTER[kind]
 
 
-def _count(instance: Instance, kind: str, decision: str, findings: int) -> None:
-    """Count one event. An ended instance's ``last`` stays where it ended (start ≤ last ≤ end)."""
+#: The prompt ids already counted per instance (newest kept), so one prompt is counted once.
+_PROMPT_IDS: dict[str, list[str]] = {}
+MAX_PROMPT_IDS = 32
+
+
+def _new_prompt(instance: Instance, event: Mapping[str, Any]) -> bool:
+    """True for a prompt of the PERSON not counted yet. WHY (KI-567, real Claude Code 2.1.330 with
+    five background sub-agents, 2026-11-22): each sub-agent's result reached the session as a new
+    turn that fired UserPromptSubmit — one prompt was counted six times."""
+    if event.get("agent_turn") is True:
+        return False
+    prompt_id = str(event.get("prompt_id") or "")
+    if not prompt_id:
+        return True
+    seen = _PROMPT_IDS.setdefault(instance.key, [])
+    if prompt_id in seen:
+        return False
+    seen.append(prompt_id)
+    del seen[:-MAX_PROMPT_IDS]
+    return True
+
+
+def _count(instance: Instance, kind: str, decision: str, findings: int, event: Mapping[str, Any], own: bool = True) -> None:
+    """Count one event. An ended instance's ``last`` stays where it ended (start ≤ last ≤ end).
+    *own*: the event is this instance's own, not one of its sub-agents' — a sub-agent's prompt
+    (the task its session gave it) is the sub-agent's, never another prompt of the session's person."""
     if instance.ended is None:
         instance.last = time.time()
     instance.events += 1
     instance.checked += kind == "pre_tool"
-    instance.prompts += kind == "prompt"
+    instance.prompts += kind == "prompt" and own and _new_prompt(instance, event)
     instance.refused += decision == "block"
     instance.too_late += decision == DECISION_TOO_LATE
     instance.flagged += decision not in ("block", DECISION_TOO_LATE) and findings > 0
@@ -171,6 +195,19 @@ def _timeline(target: Instance, event: Mapping[str, Any], decision: str, finding
         target.last_action = Action(action.ts, action.kind, action.tool, action.what, action.verdict, action.reason)
 
 
+def _end_spawned(session: Instance, event: Mapping[str, Any]) -> None:
+    """A spawn call returned in *session*: the sub-agent it started is finished — for an agent
+    whose hooks say no sub-agent stop of their own (OpenCode's ``task``). WHY (KI-574, real OpenCode
+    1.19.6, 2026-11-22): its sub-agents stayed live until the 30-minute quiet limit."""
+    host = BY_ID.get(session.agent)
+    if host is None or "subagent_stop" in host.events.values() or str(event.get("tool_name") or "").lower() not in links.SPAWN_TOOLS:
+        return
+    found = store.get(links.claimed_by(str(event.get("tool_call_id") or "")) or "")
+    if found is not None and found.ended is None:
+        _end(found, "finished")
+        store.put(found)
+
+
 def _close_session(session: Instance, why: str) -> None:
     _end(session, why or "ended")
     for item in store.all_instances():
@@ -198,13 +235,15 @@ def record(event: Mapping[str, Any], session_key: str, *, decision: str = "", fi
     for item in (session,) if target is session else (session, target):
         if not late:
             _describe(item, event)
-        _count(item, kind, decision, findings)
+        _count(item, kind, decision, findings, event, own=item is target)
     if not late:
         _waiting(target, kind, str(event.get("why") or ""))
         if kind == "subagent_stop" and target is not session:
             _end(target, str(event.get("why") or "finished"))
         if kind == "stop":
             _close_session(session, str(event.get("why") or ""))
+        if kind == "post_tool" and target is session:
+            _end_spawned(session, event)
     if kind in _TIMELINE or late:
         _timeline(target, event, decision, findings, reason, prompt_text, late)
     if target is not session:

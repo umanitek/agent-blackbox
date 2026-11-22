@@ -20,6 +20,7 @@ Usage::
 
 from __future__ import annotations
 
+import json
 import re
 import shlex
 import time
@@ -29,6 +30,7 @@ from pathlib import Path, PurePath
 from typing import Mapping, Optional
 
 from ...kernel.agent_hosts import HOSTS, Host
+from ...kernel.bounded_files import read_small_text
 from .. import permission_risks
 from ..instances.model import Running
 from . import platform
@@ -38,7 +40,15 @@ __all__ = ["Proc", "agent_of", "ancestry", "classify", "descendants", "launch_of
 _LINE = re.compile(r"^\s*(\d+)\s+(\d+)\s+(\w{3} +\w{3} +\d+ +[\d:]+ +\d{4})\s+(.*)$")
 #: argv words that say an agent runs without a person at the keyboard, per agent.
 _HEADLESS = {"claude-code": ("-p", "--print"), "gemini-cli": ("-p", "--prompt"), "codex": ("exec", "e"),
-             "copilot-cli": ("-p", "--prompt"), "cursor": ("-p", "--print"), "opencode": ("run",), "devin": ("-p",)}
+             "copilot-cli": ("-p", "--prompt"), "cursor": ("-p", "--print"), "opencode": ("run",), "devin": ("-p",),
+             # Cline CLI (docs.cline.bot/cli/cli-reference, 2026-11-22): --json is its headless output mode
+             # (KI-573: a real `cline -P gemini -m … --json` run was shown "interactive").
+             "cline": ("--json",)}
+#: The option each agent's command line names its model with (KI-566: Claude Code's and Gemini
+#: CLI's hook payloads name none; the command line the person gave does).
+_MODEL_OPTIONS = {"claude-code": ("--model",), "gemini-cli": ("-m", "--model"), "codex": ("-m", "--model"),
+                  "copilot-cli": ("--model",), "cursor": ("--model",), "opencode": ("-m", "--model"), "cline": ("-m", "--model"),
+                  "devin": ("--model",)}
 _SERVER = {"codex": ("app-server", "mcp-server", "mcp"), "opencode": ("serve",), "claude-code": ("mcp",)}
 #: Runs whose hooks the agent itself skips (documented): the reason shown to the person.
 _SKIPS = {("claude-code", "--bare"): "started with --bare, which skips every hook"}
@@ -150,6 +160,23 @@ def _launch(host: Host, words: list[str]) -> str:
     return "ide" if PurePath(program).name in ("Cursor", "Windsurf") else "interactive"
 
 
+def model_of(table: Mapping[int, Proc], pid: int) -> str:
+    """The model the agent process *pid* was started with (``--model X``, ``-m X``, ``--model=X``),
+    "" when its command line names none."""
+    proc = table.get(pid)
+    host = classify(proc.command) if proc is not None else None
+    if host is None or proc is None:
+        return ""
+    _program, rest = _split(_words(proc.command))
+    options = _MODEL_OPTIONS.get(host.id, ())
+    for position, word in enumerate(rest):
+        if word in options and position + 1 < len(rest):
+            return rest[position + 1][:80]
+        if word.startswith("--model="):
+            return word.split("=", 1)[1][:80]
+    return ""
+
+
 def launch_of(table: Mapping[int, Proc], pid: int) -> str:
     """How the agent process *pid* was started, read from its command line: ``headless``
     (``claude -p``, ``codex exec``, ``gemini -p``, ``opencode run``…), ``sdk`` (``codex
@@ -173,6 +200,54 @@ def _profile(host: Host, pid: int) -> str:
     return match.group(1)[:500] if match else ""
 
 
+#: The options that hand an agent extra settings on its command line: a JSON text or a file.
+_SETTINGS_OPTIONS = {"claude-code": ("--settings",)}
+MAX_SETTINGS_BYTES = 256 * 1024
+
+
+def _off_in(data: object, host: Host) -> str:
+    """The switch in settings *data* that turns *host*'s hooks off ("" = none)."""
+    for _name, key, off in host.switches:
+        value: object = data
+        for part in key.split("."):
+            value = value.get(part) if isinstance(value, dict) else None
+        if value == off:
+            return f"{key} = {json.dumps(off)}"
+    return ""
+
+
+def _settings_value(text: str) -> object:
+    try:
+        return json.loads(text)
+    except ValueError:
+        return None
+
+
+def hooks_switched_off(host: Host, args: list[str], pid: int) -> str:
+    """Why *host*'s hooks are off for this run, naming EXACTLY what did it (KI-569): a
+    ``--settings`` text or file on its command line, or its project's settings file (the process's
+    own working folder, ``Host.project_files``). "" when nothing this can read does."""
+    for position, word in enumerate(args[:-1]):
+        if word in _SETTINGS_OPTIONS.get(host.id, ()):
+            given = args[position + 1]
+            if given.lstrip().startswith("{"):
+                found = _off_in(_settings_value(given), host)
+                if found:
+                    return f"started with --settings that sets {found}, which switches every hook off"
+            else:
+                text = read_small_text(given, MAX_SETTINGS_BYTES) if given.startswith(("/", "~", ".")) or "/" in given else None
+                found = _off_in(_settings_value(text or ""), host) if text else ""
+                if found:
+                    return f"started with --settings {given}, which sets {found} and switches every hook off"
+    folder = platform.process_cwd(pid) if host.project_files else ""
+    for relative in host.project_files if folder else ():
+        text = read_small_text(str(Path(folder) / relative), MAX_SETTINGS_BYTES)
+        found = _off_in(_settings_value(text), host) if text else ""
+        if found:
+            return f"{Path(folder) / relative} sets {found}, which switches every hook off in that project"
+    return ""
+
+
 def running(table: Mapping[int, Proc]) -> list[Running]:
     """One :class:`Running` per agent process whose parent is not the same agent (an agent's own
     helper processes are part of it, not more instances)."""
@@ -186,6 +261,7 @@ def running(table: Mapping[int, Proc]) -> list[Running]:
             continue
         words = _words(proc.command)
         skipped = next((reason for (agent, flag), reason in _SKIPS.items() if agent == host.id and flag in words), "")
+        skipped = skipped or hooks_switched_off(host, _split(words)[1], proc.pid)
         out.append(Running(proc.pid, proc.ppid, host.id, _launch(host, words), _profile(host, proc.pid), skipped, proc.started,
                            tuple(permission_risks.from_command(host.id, _split(words)[1]))))
     return out

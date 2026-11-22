@@ -22,8 +22,8 @@ from __future__ import annotations
 import sys
 
 if sys.platform == "darwin":
-    from .macos import process_ancestry, process_environment, process_table, process_users, process_variable
+    from .macos import process_ancestry, process_cwd, process_environment, process_table, process_users, process_variable
 else:
-    from .unsupported import process_ancestry, process_environment, process_table, process_users, process_variable
+    from .unsupported import process_ancestry, process_cwd, process_environment, process_table, process_users, process_variable
 
-__all__ = ["process_ancestry", "process_environment", "process_table", "process_users", "process_variable"]
+__all__ = ["process_ancestry", "process_cwd", "process_environment", "process_table", "process_users", "process_variable"]

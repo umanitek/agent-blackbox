@@ -38,10 +38,10 @@ from pathlib import Path
 # The runner is run as a script from Blackbox's data folder (its sibling is beside it there) and
 # imported as a module by the plugin and its tests.
 if __package__:
-    from .identity import effective_agent, identity, workspace
+    from .identity import AGENT_TURN_MARKS, MODEL_EVENTS, effective_agent, identity, persons_words, transcript_model, workspace
     from .tool_shapes import cline_tool
 else:
-    from identity import effective_agent, identity, workspace
+    from identity import AGENT_TURN_MARKS, MODEL_EVENTS, effective_agent, identity, persons_words, transcript_model, workspace
     from tool_shapes import cline_tool
 
 #: The most of stdin read (a write tool's whole file can be in the payload).
@@ -162,9 +162,11 @@ def _text(value: object) -> str:
 
 
 def prompt_text(agent: str, payload: dict) -> str:
-    """The user's prompt in *agent*'s payload (Windsurf nests it in ``tool_info``, Cline in its event)."""
+    """The user's prompt in *agent*'s payload (Windsurf nests it in ``tool_info``, Cline in its
+    event, inside its mode tag)."""
     nested = payload.get("tool_info") if agent == "windsurf" else payload.get("userPromptSubmit") if agent == "cline" else None
-    return _text(_first(nested, "user_prompt", "prompt") if isinstance(nested, dict) else _first(payload, "prompt", "user_prompt", "message"))
+    return persons_words(agent, _text(_first(nested, "user_prompt", "prompt") if isinstance(nested, dict)
+                                      else _first(payload, "prompt", "user_prompt", "message")))
 
 
 def output_text(agent: str, payload: dict) -> str:
@@ -269,6 +271,8 @@ def summary(agent: str, event: str, payload: dict) -> dict:
     body = {"agent": agent, "event": event, "session": _session(payload),
             "cwd": workspace(payload, _first)[:500],
             "sandboxed": sandboxed(), **identity(agent, payload, _first)}
+    if not body["model"] and event in MODEL_EVENTS:   # the payload names none: its transcript does (KI-566)
+        body["model"] = transcript_model(payload)
     if event in ("pre_tool", "post_tool"):
         body["tool_name"], body["args"] = _tool(agent, payload)
         body["tool_call_id"] = _call_id(payload)
@@ -279,6 +283,10 @@ def summary(agent: str, event: str, payload: dict) -> dict:
     if event == "prompt":
         body["text"] = prompt_text(agent, payload)
         body["prompt_chars"] = len(body["text"])
+        # One person's prompt is counted once (KI-567): its id, and whether the agent itself sent
+        # this turn (Claude Code delivers a background sub-agent's result as a new turn).
+        body["prompt_id"] = str(payload.get("prompt_id") or "")[:80]
+        body["agent_turn"] = body["text"].lstrip().startswith(AGENT_TURN_MARKS)
     return body
 
 

@@ -40,7 +40,7 @@ from typing import Any, Callable, Iterable, Mapping, Optional
 from ...kernel.redaction import redact_secret_values
 from .model import Instance
 
-__all__ = ["SPAWN_TOOLS", "Link", "Spawn", "claim", "note_spawn", "reset", "resolve"]
+__all__ = ["SPAWN_TOOLS", "Link", "Spawn", "claim", "claimed_by", "note_claimed", "note_spawn", "reset", "resolve"]
 
 #: The tools that start a sub-agent, lower-cased: Claude Code's ``Task`` / ``Agent``, OpenCode's
 #: ``task``, Codex's ``spawn_agent``.
@@ -62,6 +62,7 @@ class Spawn:
     at: float
     task: str
     type: str
+    call_id: str = ""   # the spawn call's own id: its return ends the sub-agent (see :func:`claimed_by`)
 
 
 @dataclass(frozen=True)
@@ -76,6 +77,7 @@ class Link:
 _lock = threading.Lock()
 _pending: dict[str, deque[Spawn]] = {}
 _links: OrderedDict[str, Link] = OrderedDict()
+_claimed: OrderedDict[str, str] = OrderedDict()     # spawn call id → the sub-agent's key
 
 
 def reset() -> None:
@@ -83,6 +85,7 @@ def reset() -> None:
     with _lock:
         _pending.clear()
         _links.clear()
+        _claimed.clear()
 
 
 def _spawn_of(event: Mapping[str, Any]) -> Optional[Spawn]:
@@ -91,7 +94,7 @@ def _spawn_of(event: Mapping[str, Any]) -> Optional[Spawn]:
     args = event.get("args") if isinstance(event.get("args"), dict) else {}
     task = redact_secret_values(str(args.get("description") or "").replace("\n", " "))[:MAX_TASK]
     kind = str(args.get("subagent_type") or args.get("agent_type") or "")[:80]
-    return Spawn(time.time(), task, kind)
+    return Spawn(time.time(), task, kind, str(event.get("tool_call_id") or "")[:200])
 
 
 def note_spawn(session_key: str, event: Mapping[str, Any]) -> None:
@@ -115,6 +118,22 @@ def claim(session_key: str) -> Optional[Spawn]:
             if time.time() - spawn.at < SPAWN_SECONDS:
                 return spawn
         return None
+
+
+def note_claimed(call_id: str, sub_agent_key: str) -> None:
+    """Remembers that the spawn call *call_id* started the sub-agent *sub_agent_key*."""
+    if not call_id:
+        return
+    with _lock:
+        _claimed[call_id] = sub_agent_key
+        while len(_claimed) > MAX_LINKS:
+            _claimed.popitem(last=False)
+
+
+def claimed_by(call_id: str) -> Optional[str]:
+    """The sub-agent the spawn call *call_id* started (forgotten once asked), None when none."""
+    with _lock:
+        return _claimed.pop(call_id, None) if call_id else None
 
 
 def _has_pending(session_key: str) -> bool:

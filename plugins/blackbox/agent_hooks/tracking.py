@@ -119,6 +119,7 @@ class Captured:
 
     agent_pid: int
     launch: str
+    model: str = ""   # from its command line (--model / -m), "" when it names none
 
 
 def capture(event: Mapping[str, Any], session_key: str) -> Optional[Captured]:
@@ -135,9 +136,10 @@ def capture(event: Mapping[str, Any], session_key: str) -> Optional[Captured]:
     chain = observe.ancestry(pid)
     if chain is not None:   # {} when the hook already left: no process is learned from it
         found = observe.agent_of(chain, pid, str(event.get("agent") or ""))
-        return Captured(found, observe.launch_of(chain, found) if found else "")
+        return Captured(found, observe.launch_of(chain, found) if found else "", observe.model_of(chain, found) if found else "")
     found = agent_process(session_key, pid, str(event.get("agent") or ""))
-    return Captured(found, observe.launch_of(_snapshot()[0], found) if found else "")
+    table = _snapshot()[0]
+    return Captured(found, observe.launch_of(table, found) if found else "", observe.model_of(table, found) if found else "")
 
 
 #: A child session's own start and end, as its parent's sub-agent sees them.
@@ -160,6 +162,7 @@ def _as_sub_agent(fields: dict[str, Any], session_key: str) -> str:
         if spawn is not None:
             fields["task"] = fields.get("task") or spawn.task
             fields["sub_type"] = fields.get("sub_type") or spawn.type
+            links.note_claimed(spawn.call_id, sub_key(session_key, str(fields["sub"])))
     return session_key
 
 
@@ -179,6 +182,8 @@ def track(event: Mapping[str, Any], session_key: str, *, decision: str = "", fin
         fields["agent_pid"] = found.agent_pid or None
         if found.agent_pid and found.launch:   # how it was started, from its command line (KI-549)
             fields["launch"] = found.launch
+        if found.model and not fields.get("model"):   # the model it was started with (KI-566)
+            fields["model"] = found.model
     session_key = _as_sub_agent(fields, session_key)
     links.note_spawn(session_key, fields)
     if event.get("profile") and profiles.remember(event["agent"], str(event["profile"])):

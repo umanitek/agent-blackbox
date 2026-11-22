@@ -192,6 +192,12 @@ that the two version fields agree.
 
 ### Fixed
 
+- **Each agent session tells the truth about itself.** Claude Code and Gemini CLI sessions now show
+  their model (from the command line, then from the session's transcript — the model's name only);
+  one prompt is counted once even when sub-agents report back; a sub-agent's task no longer counts
+  as a prompt of its session; a headless Cline run shows as headless; a session whose hooks a
+  `--settings` flag or a project setting switched off says exactly which; OpenCode sub-agents end
+  when their task returns or their session's process leaves.
 - **The Hermes agent's sessions show where they run.** Each session now shows its project folder
   (not the Hermes home), its process, whether it was started headless, its model and how many
   prompts it was given; two projects are two lanes, every child of one delegated task is that

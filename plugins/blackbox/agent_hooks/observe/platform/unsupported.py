@@ -21,3 +21,7 @@ def process_variable(pid: int, name: str) -> str:
 
 def process_ancestry(pid: int, limit: int) -> list[tuple[int, int, float, str]] | None:
     return None   # cannot be asked this way: callers read the whole process list
+
+
+def process_cwd(pid: int) -> str:
+    return ""

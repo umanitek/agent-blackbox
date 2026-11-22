@@ -154,7 +154,8 @@ def _identity(body: Mapping[str, Any]) -> dict[str, Any]:
             "parents_named": body.get("parents_named") is True,
             "parent": _text(body.get("parent"), 200), "model": _text(body.get("model"), 80), "why": _text(body.get("why"), 40),
             "background": body.get("background") is True, "profile": _text(body.get("profile")),
-            "entry": _text(body.get("entry"), 40), "pid": pid if isinstance(pid, int) and not isinstance(pid, bool) and pid > 0 else 0}
+            "entry": _text(body.get("entry"), 40), "pid": pid if isinstance(pid, int) and not isinstance(pid, bool) and pid > 0 else 0,
+            "prompt_id": _text(body.get("prompt_id"), 80), "agent_turn": body.get("agent_turn") is True}
 
 
 def _merge(verdicts: list[Mapping[str, Any]]) -> dict[str, Any]:
