@@ -712,7 +712,15 @@ require_docker_for_blazegraph() {
     fi
     if ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
         BLACKBOX_DOCKER_REQUIRED=true
-        docker_setup_hint
+        # With the store left to Blackbox ("auto"), no Docker is not a failure: the caller offers
+        # the Oxigraph store, and shows how to get Docker only if the person declines it. A red
+        # "✗ Docker Desktop is not installed" on that default path read as a failed install
+        # (E2E 2026-11-21).
+        if [ "$BLACKBOX_DKG_STORE_BACKEND" = "auto" ]; then
+            step "Docker is not running here; Blackbox can use its Oxigraph store instead (no Docker needed)."
+        else
+            docker_setup_hint
+        fi
         return 1
     fi
     ok "Docker engine is ready for Blazegraph"
@@ -890,6 +898,7 @@ PYEOF
             use_blackbox_oxigraph
             return 0
         fi
+        [ "$BLACKBOX_DKG_STORE_BACKEND" = "auto" ] && docker_setup_hint   # declined Oxigraph: how to get Docker
         return 2
     fi
     if [ ! -f "$helper" ]; then
@@ -2915,6 +2924,7 @@ preflight_store_choice() {
         ok "Store: DKG-managed Oxigraph (no Docker needed)"
         return 0
     fi
+    [ "$BLACKBOX_DKG_STORE_BACKEND" = "auto" ] && docker_setup_hint   # declined Oxigraph: how to get Docker
     err "Stopped before installing anything: the Blazegraph store needs a working Docker."
     exit 1
 }

@@ -608,3 +608,39 @@ def test_the_sandbox_reaches_no_real_service_manager(tmp_path: Path) -> None:
     assert all(path.startswith(str(paths["bin"])) for path in resolved), resolved
     for path in resolved:
         assert not Path(path).is_symlink()
+
+
+def _no_docker(tmp_path: Path, backend: str) -> list[str]:
+    """require_docker_for_blazegraph on a machine with no Docker at all, for a *backend* choice."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    said = tmp_path / "said"
+    _isolated_bin(bin_dir, tmp_path / "service-calls")
+    script = f"""
+step() {{ echo "step $*" >>{shlex.quote(str(said))}; }}
+ok() {{ :; }}
+warn() {{ :; }}
+err() {{ echo "err $*" >>{shlex.quote(str(said))}; }}
+heading() {{ :; }}
+docker_setup_hint() {{ echo "hint" >>{shlex.quote(str(said))}; }}
+{_function("require_docker_for_blazegraph")}
+OS=macos
+HOME={shlex.quote(str(tmp_path))}
+PATH={shlex.quote(str(bin_dir))}
+BLACKBOX_DKG_STORE_BACKEND={backend}
+require_docker_for_blazegraph || true
+"""
+    subprocess.run(["bash", "-c", script], check=False, timeout=60)
+    return said.read_text(encoding="utf-8").splitlines() if said.exists() else []
+
+
+def test_no_docker_on_the_default_store_path_is_a_neutral_line_not_a_failure(tmp_path: Path) -> None:
+    """E2E 2026-11-21: the default install printed a red "✗ Docker Desktop is not installed" and
+    then went on fine with Oxigraph — it read as a failed install."""
+    said = _no_docker(tmp_path, "auto")
+    assert "hint" not in said and not any(line.startswith("err") for line in said)
+    assert any("Oxigraph" in line for line in said)
+
+
+def test_an_explicit_blazegraph_choice_without_docker_still_says_how_to_get_it(tmp_path: Path) -> None:
+    assert "hint" in _no_docker(tmp_path, "blazegraph")
