@@ -31,16 +31,25 @@ __all__ = ["detail", "export", "history", "live", "new_profiles", "profile", "pr
 
 #: How long one reading of the process list is reused.
 TABLE_SECONDS = 1.5
+#: A process list read on purpose (a hook's process is not in the reused one) is never read
+#: again sooner than this — many hooks at once share one reading.
+FRESH_MIN_SECONDS = 0.05
+#: How often one session whose agent process could not be found asks again for a fresh list.
+FRESH_RETRY_SECONDS = 10.0
+MAX_RETRIES_KEPT = 1024
+_retried: dict[str, float] = {}
 _OWN_FILE_STYLES = ("own-json", "scripts", "plugin")
 _lock = threading.Lock()
 _seen: dict[str, Any] = {"at": 0.0, "table": {}, "running": [], "pids": frozenset(), "new_profiles": False}
 
 
-def _snapshot() -> tuple[Mapping[int, observe.Proc], list[Running]]:
-    """The process list and the agent processes in it, read at most every :data:`TABLE_SECONDS`.
-    A change in which agent processes exist moves the live view's cursor."""
+def _snapshot(*, fresh: bool = False) -> tuple[Mapping[int, observe.Proc], list[Running]]:
+    """The process list and the agent processes in it, read at most every :data:`TABLE_SECONDS`
+    (*fresh*: now, unless it was read in the last :data:`FRESH_MIN_SECONDS`). A change in which
+    agent processes exist moves the live view's cursor."""
     with _lock:
-        if time.monotonic() - _seen["at"] >= TABLE_SECONDS:
+        age = time.monotonic() - _seen["at"]
+        if age >= TABLE_SECONDS or (fresh and age >= FRESH_MIN_SECONDS):
             table = observe.read_table()
             running = observe.running(table)
             pids = frozenset(proc.pid for proc in running)
@@ -64,6 +73,30 @@ def new_profiles() -> bool:
         return bool(found)
 
 
+def agent_process(session_key: str, hook_parent: int, agent: str) -> int:
+    """The pid of the *agent* process a hook was run by (*hook_parent*: the hook's parent), 0 when
+    none of its ancestors is that agent.
+
+    WHY (KI-548): the hook's parent is often a short-lived shell the agent started for this one
+    hook, younger than the reused process list — so it, and the path up to the agent, are not in
+    it. While the hook waits for its answer that whole ancestry is alive, so when the reused list
+    does not lead to the agent, the list is read again NOW and the ancestry walked in it
+    (``observe.agent_of``: the outermost ancestor whose program is that agent). A session whose
+    agent is still not found asks again at most every :data:`FRESH_RETRY_SECONDS`."""
+    table, _running = _snapshot()
+    found = observe.agent_of(table, hook_parent, agent)
+    if found:
+        return found
+    with _lock:
+        if hook_parent in table and time.monotonic() - _retried.get(session_key, float("-inf")) < FRESH_RETRY_SECONDS:
+            return 0
+        _retried[session_key] = time.monotonic()
+        for old in list(_retried)[:-MAX_RETRIES_KEPT]:
+            _retried.pop(old)
+    table, _running = _snapshot(fresh=True)
+    return observe.agent_of(table, hook_parent, agent)
+
+
 def track(event: Mapping[str, Any], session_key: str, *, decision: str = "", findings: int = 0, reason: str = "",
           text: str = "") -> None:
     """Record *event* against its instance; find the agent's process the first time a session is
@@ -75,8 +108,7 @@ def track(event: Mapping[str, Any], session_key: str, *, decision: str = "", fin
     # The process is looked up while it is unknown — and for an ended session, whose next event
     # may come from a new run of the same session id (instances._resumes compares them).
     if (known is None or not known.pid or known.ended is not None) and isinstance(event.get("pid"), int) and event["pid"] > 1:
-        table, _running = _snapshot()
-        fields["agent_pid"] = observe.agent_of(table, event["pid"], event["agent"]) or None
+        fields["agent_pid"] = agent_process(session_key, event["pid"], event["agent"]) or None
     if event.get("profile") and profiles.remember(event["agent"], str(event["profile"])):
         with _lock:
             _seen["new_profiles"] = True

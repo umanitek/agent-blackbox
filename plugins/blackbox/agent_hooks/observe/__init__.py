@@ -129,15 +129,23 @@ def running(table: Mapping[int, Proc]) -> list[Running]:
 
 
 def agent_of(table: Mapping[int, Proc], pid: int, agent: str) -> int:
-    """The pid of the *agent* process that *pid* (a hook's parent) belongs to: *pid* itself or the
-    nearest ancestor that is that agent; 0 when none is (the hook then has no process to follow)."""
+    """The pid of the *agent* process that *pid* (a hook's parent) belongs to: the nearest
+    ancestor (or *pid* itself) that is that agent, climbing on only while the parent is the same
+    agent too (an agent's launcher and its program are ONE instance, as in :func:`running`); 0
+    when none is (the hook then has no process to follow).
+
+    WHY the climb stops at the first other process: an agent started by another run of the same
+    agent (a ``claude -p`` that a Claude Code session runs as a tool) is its OWN instance — the
+    outermost one would give two sessions one process (found in the KI-548 process-tree test)."""
     current, top = table.get(pid), 0
     for _ in range(MAX_ANCESTORS):
         if current is None:
             break
         host = classify(current.command)
         if host is not None and host.id == agent:
-            top = current.pid   # keep climbing: the outermost process of this agent is the instance
+            top = current.pid
+        elif top:
+            break   # the chain of this agent's processes ended
         current = table.get(current.ppid)
     return top
 
