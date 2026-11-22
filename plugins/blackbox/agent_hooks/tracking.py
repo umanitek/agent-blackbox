@@ -22,12 +22,12 @@ from pathlib import Path
 from typing import Any, Mapping, Optional
 
 from ..kernel.agent_hosts import BY_ID, HOSTS
-from . import observe, profiles
+from . import observe, profiles, prompt_text
 from .instances import record, store, views
 from .instances.model import Profile, Running
 from .protect import config_edit, own_files
 
-__all__ = ["detail", "history", "live", "new_profiles", "profile", "profile_rows", "track", "wait"]
+__all__ = ["detail", "export", "history", "live", "new_profiles", "profile", "profile_rows", "prompt_text", "track", "wait"]
 
 #: How long one reading of the process list is reused.
 TABLE_SECONDS = 1.5
@@ -61,9 +61,12 @@ def new_profiles() -> bool:
         return bool(found)
 
 
-def track(event: Mapping[str, Any], session_key: str, *, decision: str = "", findings: int = 0) -> None:
+def track(event: Mapping[str, Any], session_key: str, *, decision: str = "", findings: int = 0, reason: str = "",
+          text: str = "") -> None:
     """Record *event* against its instance; find the agent's process the first time a session is
-    seen; remember a config home the event names."""
+    seen; remember a config home the event names. *reason*: what the agent was told when
+    Blackbox refused the action. *text*: a prompt's text — kept (redacted) only while the person
+    has prompt-text recording on, dropped here otherwise."""
     fields = dict(event)
     known = store.get(session_key)
     if (known is None or not known.pid) and isinstance(event.get("pid"), int) and event["pid"] > 1:
@@ -72,7 +75,8 @@ def track(event: Mapping[str, Any], session_key: str, *, decision: str = "", fin
     if event.get("profile") and profiles.remember(event["agent"], str(event["profile"])):
         with _lock:
             _seen["new_profiles"] = True
-    record(fields, session_key, decision=decision, findings=findings)
+    kept = prompt_text.keep(text) if event.get("event") == "prompt" else ""
+    record(fields, session_key, decision=decision, findings=findings, reason=reason, prompt_text=kept)
 
 
 def _hooked(host: Any, home: Path) -> bool:
@@ -103,7 +107,10 @@ def live() -> dict[str, Any]:
     """The live tree (see :func:`.instances.views.live`), with stale instances closed first."""
     table, running = _snapshot()
     views.close_stale(table.keys() if table else None)
-    return views.live(running, [asdict(row) for row in profile_rows()])
+    prompt_text.expire()
+    tree = views.live(running, [asdict(row) for row in profile_rows()])
+    tree["prompt_text"] = asdict(prompt_text.status())
+    return tree
 
 
 def wait(cursor: int, seconds: float) -> int:
@@ -121,8 +128,19 @@ def history(**filters: Any) -> dict[str, Any]:
     return views.history(**filters)
 
 
-def detail(key: str, **page: Any) -> Optional[dict[str, Any]]:
-    return views.detail(key, **page)
+def detail(key: str, *, with_text: bool = False, **page: Any) -> Optional[dict[str, Any]]:
+    """One instance and a page of its timeline. *with_text*: the caller may see prompt text (it
+    showed the session token); the text is there only while recording is on."""
+    return views.detail(key, with_text=with_text and prompt_text.recording(), **page)
+
+
+def export() -> dict[str, Any]:
+    """Everything the agent history holds, as JSON the person can keep (their own data): every
+    instance with its timeline, stored prompt text included."""
+    rows = []
+    for item in sorted(store.all_instances(), key=lambda item: item.started):
+        rows.append({"instance": asdict(item), "actions": [asdict(action) for action in store.actions(item.key, limit=500)]})
+    return {"exported_at": time.time(), "prompt_text": asdict(prompt_text.status()), "instances": rows}
 
 
 def profile(agent: str, home: str, project: str = "") -> Optional[dict[str, Any]]:

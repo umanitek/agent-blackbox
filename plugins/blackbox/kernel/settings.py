@@ -17,12 +17,13 @@ and falls back to a plain YAML read-modify-write for standalone installs.
 from __future__ import annotations
 
 import logging
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Callable, Iterable, NamedTuple
 
 from . import constants
 from . import yaml_files
-from .config import DEFAULT_PROTECTED_PATHS, load_blackbox_config
+from .config import DEFAULT_PROTECTED_PATHS, agent_activity, load_blackbox_config
 from .config_values import schema
 from .config_values.schema import DETECTION_CATEGORIES, MAX_PROTECTED_PATHS
 
@@ -70,6 +71,7 @@ def read_settings() -> dict[str, Any]:
         "discover": cfg.discover,
         "osv_lookup": cfg.osv_lookup,
         "auto_attach": cfg.auto_attach,
+        "agent_activity": asdict(agent_activity()),
         "categories": categories,
         "protected_paths": list(cfg.protected_paths),
         # What "Reset to defaults" restores. WHY it is served: an explicit empty list is kept as
@@ -144,12 +146,32 @@ def _validate(payload: dict[str, Any], *, sharing_consent: bool = False) -> tupl
         else:
             errors.append(f"protected_paths must be a list of up to {MAX_PROTECTED_PATHS} paths")
 
-    if "llm" in payload:
-        llm = _validate_llm(payload["llm"], errors)
-        if llm:
-            updates["llm"] = llm
+    for key, validate in (("llm", _validate_llm), ("agent_activity", _validate_activity)):
+        section = validate(payload[key], errors) if key in payload else {}
+        if section:
+            updates[key] = section
 
     return updates, errors
+
+
+def _validate_activity(raw: Any, errors: list[str]) -> dict[str, Any]:
+    """``agent_activity``: ``history_days`` (1–365) and ``record_prompt_text`` (a boolean)."""
+    if not isinstance(raw, dict):
+        errors.append("agent_activity must be an object")
+        return {}
+    out: dict[str, Any] = {}
+    days = raw.get("history_days")
+    if days is not None:
+        if isinstance(days, int) and not isinstance(days, bool) and 1 <= days <= 365:
+            out["history_days"] = days
+        else:
+            errors.append("agent_activity.history_days must be a number of days from 1 to 365")
+    if "record_prompt_text" in raw:
+        if isinstance(raw["record_prompt_text"], bool):
+            out["record_prompt_text"] = raw["record_prompt_text"]
+        else:
+            errors.append("agent_activity.record_prompt_text must be a boolean")
+    return out
 
 
 def _validate_llm(raw: Any, errors: list[str]) -> dict[str, Any]:
@@ -330,7 +352,7 @@ def _dig(root: dict[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:
 def _apply(entry: dict[str, Any], updates: dict[str, Any]) -> None:
     """Apply validated *updates* onto the blackbox config *entry* in place.
 
-    ``detection``, ``shields`` and ``llm`` are deep-merged (so setting the model never
+    ``detection``, ``shields``, ``llm`` and ``agent_activity`` are deep-merged (so setting the model never
     drops the key, tuning one category never drops another, and saving one shield never
     touches another's section); a key marked superseded is deleted; every other key is
     a straight overwrite.
@@ -340,11 +362,11 @@ def _apply(entry: dict[str, Any], updates: dict[str, Any]) -> None:
             entry.pop(key, None)
         elif key in ("detection", "shields") and isinstance(value, dict):
             _merge_per_id(entry, key, value)
-        elif key == "llm" and isinstance(value, dict):
-            existing = entry.get("llm")
+        elif key in ("llm", "agent_activity") and isinstance(value, dict):
+            existing = entry.get(key)
             if not isinstance(existing, dict):
                 existing = {}
-                entry["llm"] = existing
+                entry[key] = existing
             existing.update(value)
             for cleared in [name for name, setting in value.items() if setting is None]:
                 existing.pop(cleared, None)   # KI-371: a replaced key copy is removed, not left behind

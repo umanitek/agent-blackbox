@@ -9,8 +9,11 @@
 * checks TEXT for prompt injection with the same guard (``guard.text_verdict``: only a verified
   pattern blocks, in Block mode): the prompt before it is sent, a tool's output before the model
   reads it, a file before a pre-read hook lets the agent read it. The text is checked in this
-  process and never recorded — the records keep its length, and a finding only its matched phrase
-  as local evidence (≤200 chars, redacted — as for a Hermes agent);
+  process and not recorded — the records keep its length, and a finding only its matched phrase
+  as local evidence (≤200 chars, redacted — as for a Hermes agent). One exception, the person's
+  own choice: with ``agent_activity.record_prompt_text`` on (off by default), a PROMPT's redacted
+  text is handed to the instance timeline (``agent_hooks.prompt_text``) — never to the audit log,
+  a finding or a report;
 * writes the event to the agent's own audit log (``audit.record_for``) under the Hermes event names
   Agent activity already rebuilds sessions from — so each agent's sessions and tool calls show;
 * keeps a small per-agent record (:data:`STATE_FILE`): last event, events seen, sessions (hashed
@@ -47,7 +50,8 @@ MAX_TEXT = 500
 #: The audit event each hook event is written as (Agent activity's own vocabulary).
 AUDIT_EVENT = {"session_start": "session_start", "prompt": "user_prompt", "pre_tool": "pre_tool_call",
                "post_tool": "post_tool_call", "turn_end": "agent_turn_end", "stop": "session_end",
-               "subagent_start": "subagent_start", "subagent_stop": "subagent_stop", "config_change": "config_change"}
+               "subagent_start": "subagent_start", "subagent_stop": "subagent_stop", "config_change": "config_change",
+               "attention": "agent_attention"}
 
 _lock = threading.Lock()
 
@@ -232,8 +236,10 @@ def record_event(body: Any) -> dict[str, Any]:
                      findings=findings or None, detail=detail)
     _remember(event, session, verdict)
     from .. import tracking   # late: tracking imports this package's editors
-    tracking.track(event, session, decision=str(verdict.get("decision") or ""), findings=len(findings))
     blocked = verdict.get("decision") == "block"
+    tracking.track(event, session, decision=str(verdict.get("decision") or ""), findings=len(findings),
+                   reason=str(verdict.get("message") or "") if blocked else "",
+                   text=event["text"] if event["event"] == "prompt" else "")   # kept only if the person turned that on
     answer = {"decision": "block" if blocked else "allow", "message": verdict.get("message", "") if blocked else "",
               "findings": len(findings), "recorded": True}
     if event["tool_call_id"] and event["event"] in ("pre_tool", "post_tool"):

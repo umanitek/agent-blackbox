@@ -3,7 +3,8 @@
 ``product`` (Claude Code, Codex…) → ``profile`` (one config home) → ``session`` → ``sub-agent``
 (an instance the session spawned; ``parent`` is its session's key) → ``actions`` (tool calls with
 Blackbox's verdict). Every id is the hashed key Blackbox already uses for sessions — an agent's
-own session id, a prompt or a file's text is never part of a record.
+own session id or a file's text is never part of a record, and a prompt's text only while the
+person has turned prompt-text recording on (off by default; ``agent_hooks.prompt_text``).
 """
 
 from __future__ import annotations
@@ -13,9 +14,14 @@ from typing import Optional
 
 #: How an instance was started.
 LAUNCHES = ("interactive", "headless", "sdk", "ide", "background", "sub-agent", "unknown")
-#: ``live`` (events or its process seen lately), ``ended`` (it said so, its process left, or it
+#: ``live`` (events or its process seen lately), ``waiting`` (live, and the agent SAID it is
+#: waiting for its person — see :data:`WAITING`), ``ended`` (it said so, its process left, or it
 #: went quiet), ``unprotected`` (a running agent process Blackbox has no hook in).
-STATUSES = ("live", "ended", "unprotected")
+STATUSES = ("live", "waiting", "ended", "unprotected")
+#: What a waiting instance waits for: ``idle`` — its turn ended, the next message is the person's;
+#: ``permission`` — it asked the person to allow something; ``attention`` — it raised a notice.
+#: Only agents whose hooks say so can be waiting; the others stay ``live`` until they end.
+WAITING = ("idle", "permission", "attention")
 
 
 @dataclass
@@ -43,18 +49,25 @@ class Instance:
     refused: int = 0
     flagged: int = 0
     prompts: int = 0
+    waiting: str = ""              # one of WAITING while the agent waits for its person, else ""
+    last_action: Optional[Action] = None   # the newest timeline entry (the live tree shows it)
 
 
 @dataclass(frozen=True)
 class Action:
     """One thing an instance did, as its timeline shows it. ``what`` is a short redacted summary
-    (a command's start, a file's path) — the same text the audit log already keeps."""
+    (a command's start, a file's path) — the same text the audit log already keeps. ``reason`` is
+    what the agent was told when Blackbox refused the action (it names the rule's source; no
+    secret is in it)."""
 
     ts: float
     kind: str                      # an EVENTS kind
     tool: str = ""
     what: str = ""
     verdict: str = ""              # "", "allow", "flag", "block"
+    reason: str = ""               # only for verdict "block"
+    text: str = ""                 # a prompt's text, redacted — kept ONLY while the person has
+    #                                turned prompt-text recording on (agent_hooks.prompt_text)
 
 
 @dataclass(frozen=True)

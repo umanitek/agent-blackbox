@@ -109,9 +109,10 @@ def version_notice(agent: Mapping[str, Any], installed_version: str) -> str:
 
 def docs_section() -> dict[str, Any]:
     """The registry with, per agent, what is installed here and the version notice."""
-    from ...agent_hooks import versions
+    from ...agent_hooks import prompt_text, versions
 
     registry = load()
+    registry["prompt_text"] = prompt_text.status().statement   # "Prompt text: not recorded." unless the person turned it on
     found = versions.installed()
     for agent in registry["agents"]:
         here = found.get(agent["id"])

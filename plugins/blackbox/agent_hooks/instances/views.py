@@ -43,9 +43,17 @@ def close_stale(alive: Optional[Iterable[int]] = None) -> int:
     return ended
 
 
+#: What a waiting instance waits for, in the person's words.
+WAITING_FOR = {"idle": "your next message", "permission": "your answer to a permission question", "attention": "your attention"}
+
+
 def _row(item: Instance, subs: Mapping[str, list[Instance]]) -> dict[str, Any]:
     row = asdict(item)
-    row["status"] = "ended" if item.ended is not None else "live"
+    waiting = item.waiting if item.ended is None else ""
+    row["status"] = "ended" if item.ended is not None else "waiting" if waiting else "live"
+    row["waiting"], row["waiting_for"] = waiting, WAITING_FOR.get(waiting, "")
+    if row.get("last_action"):
+        row["last_action"].pop("text", None)   # the live tree never carries a prompt's text
     row["protection"] = "sandboxed" if item.sandboxed else "hooks"
     row["sub_agents"] = [_row(sub, subs) for sub in sorted(subs.get(item.key, []), key=lambda sub: sub.started)]
     return row
@@ -105,8 +113,9 @@ def history(*, agent: str = "", before: float = 0.0, limit: int = 50, kind: str 
             "next_before": page[-1].ended if page and len(rows) > limit else None}
 
 
-def detail(key: str, *, offset: int = 0, limit: int = 200) -> Optional[dict[str, Any]]:
-    """One instance with its sub-agents and a page of its timeline; None for an unknown key."""
+def detail(key: str, *, offset: int = 0, limit: int = 200, with_text: bool = False) -> Optional[dict[str, Any]]:
+    """One instance with its sub-agents and a page of its timeline; None for an unknown key.
+    *with_text*: prompt-text recording is on (see :func:`_action_row`)."""
     item = store.get(key)
     if item is None:
         return None
@@ -114,5 +123,14 @@ def detail(key: str, *, offset: int = 0, limit: int = 200) -> Optional[dict[str,
     for other in store.all_instances():
         if other.kind == "sub-agent":
             subs.setdefault(other.parent, []).append(other)
-    return {"instance": _row(item, subs), "actions": [asdict(action) for action in store.actions(key, offset=offset, limit=limit)],
+    return {"instance": _row(item, subs), "actions": [_action_row(action, with_text) for action in store.actions(key, offset=offset, limit=limit)],
             "offset": offset}
+
+
+def _action_row(action: Any, with_text: bool) -> dict[str, Any]:
+    """One timeline entry. ``text`` (a prompt's text) is THERE only while prompt-text recording
+    is on — absent otherwise, even when an older entry still holds some."""
+    row = asdict(action)
+    if not (with_text and action.text):
+        row.pop("text", None)
+    return row

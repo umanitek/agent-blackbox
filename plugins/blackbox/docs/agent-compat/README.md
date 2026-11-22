@@ -57,6 +57,12 @@ Every instance is tracked (2026-11-22): sessions, the sub-agents they spawn, eve
 and an agent process Blackbox has no hook in — see `agent_hooks/instances`, `profiles.py`,
 `observe/` and `GET /api/agent-instances/*`.
 
+## What Blackbox keeps about an agent's work
+
+Per instance (a session, or a sub-agent it spawned): when it started and ended, its project folder, model, how it was started, what it is waiting for when its agent says so, and a timeline of its actions — a tool's name, a short redacted summary (a command's start, a file's path), Blackbox's verdict and, for a refusal, the reason the agent was given. Ids are hashed. History is kept for `agent_activity.history_days` (30 unless you change it).
+
+**Prompt text is not kept.** A prompt is checked on this machine and only its length is recorded. You (or your organisation) can turn `agent_activity.record_prompt_text` on; Blackbox asks you to confirm, in plain words, before it does. Then each prompt's text is kept in the instance's timeline with secrets, seed phrases and keys removed, cut to 4,000 characters, on this machine only — never in the audit log, a finding or a community report — for the history's days. Turning it off stops recording at once; what was stored can be deleted at once or leaves with its retention. The dashboard serves kept text only to a request that carries its session token, and the whole history can be exported as JSON. The Docs page always says which state you are in.
+
 ## Recording a test run
 
 [coverage-matrix.md](coverage-matrix.md) is generated from `dashboard/docs_routes/agent_registry.json`.

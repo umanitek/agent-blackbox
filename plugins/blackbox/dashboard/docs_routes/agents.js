@@ -82,6 +82,8 @@
     var layers = el("ul");
     ["hooks", "sandbox", "os"].forEach(function (layer) { layers.appendChild(el("li", registry.layers[layer])); });
     root.appendChild(layers);
+    // What Blackbox keeps of a prompt: nothing but its length, unless the person turned recording on.
+    if (registry.prompt_text) root.appendChild(el("p", registry.prompt_text + " Blackbox checks every prompt on this Mac; it keeps a prompt's text only if you turn that on in Settings."));
     registry.agents.forEach(function (agent) { root.appendChild(card(agent)); });
     root.appendChild(el("p", "Last updated " + registry.updated + " for Blackbox " + registry.blackbox + ".", "muted"));
   }

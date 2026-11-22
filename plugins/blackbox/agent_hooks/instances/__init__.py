@@ -76,6 +76,19 @@ def _describe(instance: Instance, event: Mapping[str, Any]) -> None:
         instance.type = str(event.get("sub_type") or instance.type)[:80]
 
 
+#: What each kind of event says about waiting ("" = the agent is working again).
+_WAITING_AFTER = {"turn_end": "idle", "prompt": "", "pre_tool": "", "post_tool": "", "session_start": "", "subagent_start": ""}
+
+
+def _waiting(instance: Instance, kind: str, why: str) -> None:
+    """Set or clear what *instance* waits for, from what its agent just said."""
+    if kind == "attention":
+        lowered = why.lower()
+        instance.waiting = "permission" if "permission" in lowered else "idle" if "idle" in lowered else "attention"
+    elif kind in _WAITING_AFTER:
+        instance.waiting = _WAITING_AFTER[kind]
+
+
 def _count(instance: Instance, kind: str, decision: str, findings: int) -> None:
     instance.last = time.time()
     instance.events += 1
@@ -101,8 +114,16 @@ def _open_sub(session: Instance, event: Mapping[str, Any]) -> Instance:
     return _open(sub_key(session.key, raw or f"{event.get('sub_type')}|{time.time()}"), event, kind="sub-agent", parent=session.key)
 
 
-def record(event: Mapping[str, Any], session_key: str, *, decision: str = "", findings: int = 0) -> Instance:
+MAX_REASON = 400
+_TIMELINE = ("pre_tool", "prompt", "subagent_start", "subagent_stop", "session_start", "stop", "turn_end", "attention")
+
+
+def record(event: Mapping[str, Any], session_key: str, *, decision: str = "", findings: int = 0, reason: str = "",
+           prompt_text: str = "") -> Instance:
     """Record one validated hook *event* against its instance; returns that instance.
+
+    *reason*: what the agent was told when the action was refused. *prompt_text*: a prompt's
+    text, already redacted — passed ONLY when the person turned prompt-text recording on.
 
     A session event updates the session; an event that names a sub-agent updates the sub-agent
     AND counts in its session (the session's totals include its sub-agents'). ``stop`` ends the
@@ -118,16 +139,21 @@ def record(event: Mapping[str, Any], session_key: str, *, decision: str = "", fi
         if kind == "subagent_stop":
             _end(target, str(event.get("why") or "finished"))
     _count(session, kind, decision, findings)
+    _waiting(target, kind, str(event.get("why") or ""))
     if kind == "stop":
         _end(session, str(event.get("why") or "ended"))
         for item in store.all_instances():
             if item.parent == session.key and item.ended is None:
                 _end(item, "session-ended")
                 store.put(item)
-    if kind in ("pre_tool", "prompt", "subagent_start", "subagent_stop", "session_start", "stop", "turn_end"):
+    if kind in _TIMELINE:
         verdict = "block" if decision == "block" else "flag" if findings else "allow" if kind == "pre_tool" else ""
-        action = Action(time.time(), kind, str(event.get("tool_name") or "")[:120], _what(event) if kind == "pre_tool" else "", verdict)
+        action = Action(time.time(), kind, str(event.get("tool_name") or "")[:120], _what(event) if kind == "pre_tool" else "", verdict,
+                        redact_secret_values(reason)[:MAX_REASON] if verdict == "block" else "",
+                        prompt_text if kind == "prompt" else "")
         store.append_action(target.key, action, target.events)
+        # The live tree shows the newest entry — never a prompt's text.
+        target.last_action = Action(action.ts, action.kind, action.tool, action.what, action.verdict, action.reason)
     if target is not session:
         store.put(target)
     store.put(session, flush=kind in ("stop", "session_start"))

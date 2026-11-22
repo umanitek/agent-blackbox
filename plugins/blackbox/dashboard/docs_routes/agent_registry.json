@@ -161,7 +161,12 @@
      "hooked": true
     },
     {
-     "event": "PermissionRequest, PermissionDenied, PostToolUseFailure, PostToolBatch, Notification, TaskCreated, TaskCompleted, StopFailure, TeammateIdle, PreCompact, PostCompact, CwdChanged, DirectoryAdded, FileChanged, WorktreeCreate, WorktreeRemove, PreModelSwitch, PostModelSwitch, Setup, InstructionsLoaded, UserPromptExpansion, MessageDisplay, Elicitation, ElicitationResult",
+     "event": "Notification",
+     "kind": "attention",
+     "hooked": true
+    },
+    {
+     "event": "PermissionRequest, PermissionDenied, PostToolUseFailure, PostToolBatch, TaskCreated, TaskCompleted, StopFailure, TeammateIdle, PreCompact, PostCompact, CwdChanged, DirectoryAdded, FileChanged, WorktreeCreate, WorktreeRemove, PreModelSwitch, PostModelSwitch, Setup, InstructionsLoaded, UserPromptExpansion, MessageDisplay, Elicitation, ElicitationResult",
      "hooked": false,
      "why": "not needed to judge an action or follow an instance"
     }
@@ -694,7 +699,12 @@
      "hooked": true
     },
     {
-     "event": "BeforeModel, BeforeToolSelection, AfterModel, Notification, PreCompress",
+     "event": "Notification",
+     "kind": "attention",
+     "hooked": true
+    },
+    {
+     "event": "BeforeModel, BeforeToolSelection, AfterModel, PreCompress",
      "hooked": false,
      "why": "not needed to judge an action or follow an instance"
     }

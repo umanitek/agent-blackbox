@@ -30,7 +30,7 @@ def identity(agent: str, payload: dict, _first) -> dict:
         "sub_type": str(_first(payload, "agent_type", "agentType", "subagent_type") or "")[:80],
         "parent": str(_first(payload, "parent_conversation_id", "parent_session_id") or "")[:200],
         "model": str(_first(payload, "model", "subagent_model", "model_id") or "")[:80],
-        "why": str(_first(payload, "source", "reason", "status") or "")[:40],
+        "why": str(_first(payload, "source", "reason", "status", "notification_type") or "")[:40],
         "background": payload.get("is_background_agent") is True or payload.get("is_parallel_worker") is True,
         "profile": os.environ.get(HOME_ENV.get(agent, ""), "")[:500] if agent in HOME_ENV else "",
         "entry": os.environ.get("CLAUDE_CODE_ENTRYPOINT", "")[:40] if agent == "claude-code" else "",

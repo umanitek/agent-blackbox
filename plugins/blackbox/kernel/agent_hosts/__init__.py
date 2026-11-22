@@ -5,7 +5,8 @@ A :class:`Host` says where an agent keeps its user-level hook config, how that c
 (:attr:`Host.events`: the agent's event name → ``session_start`` / ``prompt`` / ``pre_tool`` /
 ``post_tool`` / ``turn_end`` (the agent finished answering) / ``stop`` (the session ended) /
 ``subagent_start`` / ``subagent_stop`` (an instance the agent spawned inside its session) /
-``config_change`` (the agent's own settings were edited)), whether the agent asks its user to
+``config_change`` (the agent's own settings were edited) / ``attention`` (the agent is waiting
+for its person: a permission question or an idle prompt)), whether the agent asks its user to
 trust new hooks first, and where ELSE the agent can keep a profile (:attr:`Host.home_env`: the
 environment variable that moves its config home; :attr:`Host.switches`: the settings that turn
 its hooks off — ``agent_hooks.profiles`` reads both).
@@ -47,7 +48,7 @@ USER_BIN_DIRS = (".npm-global/bin", ".local/bin", ".bun/bin", ".claude/local", "
 
 #: What every agent event is mapped to.
 EVENTS = ("session_start", "prompt", "pre_tool", "post_tool", "turn_end", "stop", "subagent_start", "subagent_stop",
-          "config_change")
+          "config_change", "attention")
 #: The kinds a ``nested`` group's tool matcher applies to. WHY: Gemini CLI compares a lifecycle
 #: event's matcher as an EXACT string ("startup"), so a tool regex there never matches — the
 #: lifecycle groups carry no matcher (every agent treats a missing matcher as "every occurrence").
@@ -109,7 +110,8 @@ _CLAUDE_EVENTS = {"SessionStart": "session_start", "UserPromptSubmit": "prompt",
                   "SubagentStart": "subagent_start", "SubagentStop": "subagent_stop"}
 
 HOSTS: tuple[Host, ...] = (
-    Host("claude-code", "Claude Code", "nested", ".claude/settings.json", {**_CLAUDE_EVENTS, "ConfigChange": "config_change"},
+    Host("claude-code", "Claude Code", "nested", ".claude/settings.json",
+         {**_CLAUDE_EVENTS, "ConfigChange": "config_change", "Notification": "attention"},
          signs=(".claude",), commands=("claude",), matcher="*",
          home_env="CLAUDE_CONFIG_DIR", home_config="settings.json", programs=("claude",),
          switches=(("settings.json", "disableAllHooks", True), ("settings.local.json", "disableAllHooks", True)),
@@ -130,7 +132,7 @@ HOSTS: tuple[Host, ...] = (
          programs=("cursor-agent", "Cursor"), project_files=(".cursor/hooks.json",)),
     Host("gemini-cli", "Gemini CLI", "nested", ".gemini/settings.json",
          {"SessionStart": "session_start", "BeforeAgent": "prompt", "BeforeTool": "pre_tool",
-          "AfterTool": "post_tool", "AfterAgent": "turn_end", "SessionEnd": "stop"},
+          "AfterTool": "post_tool", "AfterAgent": "turn_end", "SessionEnd": "stop", "Notification": "attention"},
          signs=(".gemini",), commands=("gemini",), matcher=".*",
          home_env="GEMINI_CLI_HOME", home_config=".gemini/settings.json", programs=("gemini",),
          switches=(("settings.json", "hooksConfig.enabled", False),), project_files=(".gemini/settings.json",)),

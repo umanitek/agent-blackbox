@@ -249,6 +249,25 @@ def dkg_home() -> Path:
     return Path(_resolve_dkg_home(_blackbox_entry())).expanduser()
 
 
+@dataclass(frozen=True)
+class AgentActivity:
+    """The agent history's two settings (``agent_activity.*`` in config.yaml): how many days an
+    ended agent instance stays in the history, and whether the TEXT of prompts is kept in it
+    (off by default — a privacy choice the person confirms)."""
+
+    history_days: int = 30
+    record_prompt_text: bool = False
+
+
+def agent_activity(entry: Mapping[str, Any] | None = None) -> AgentActivity:
+    """The saved (or a proposed *entry*'s) agent-activity settings. Cheap, like :func:`dkg_home`:
+    it reads only the Blackbox config entry."""
+    section = (_blackbox_entry() if entry is None else entry).get("agent_activity")
+    section = section if isinstance(section, dict) else {}
+    return AgentActivity(history_days=min(365, max(1, _as_int(section.get("history_days", 30), 30))),
+                         record_prompt_text=_as_bool(section.get("record_prompt_text", False), False))
+
+
 def load_blackbox_config(*, entry: dict[str, Any] | None = None) -> BlackboxConfig:
     """Resolve the saved or proposed entry with the same environment precedence."""
     entry = _blackbox_entry() if entry is None else entry

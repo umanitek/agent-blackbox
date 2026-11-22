@@ -1,7 +1,8 @@
 """Which changes turn protection DOWN — those wait for the person's approval in Blackbox Desktop.
 
 A change is judged by what it ASKS (its route and body) against what is on now. Anything that
-makes Blackbox see or stop less is weakening; anything else (turning a protection on, a stricter
+makes Blackbox see or stop less is weakening — and so is one privacy choice, starting to keep
+the text of prompts (``agent_activity.record_prompt_text``): it too waits for the person; anything else (turning a protection on, a stricter
 mode, a new protected path, a change of an unrelated option) applies at once. When the current
 value cannot be read, a change that COULD weaken is treated as weakening (fails toward asking).
 
@@ -89,6 +90,12 @@ def _settings(body: Mapping[str, Any], current: Current) -> list[str]:
             floor = policy.get("min_severity")
             if isinstance(floor, str) and SEVERITY_RANK.get(floor, 0) > SEVERITY_RANK.get(str(was.get("min_severity", "info")), 0):
                 out.append(f"Flag {name} only at {floor} and above")
+    activity = body.get("agent_activity")
+    if isinstance(activity, Mapping) and activity.get("record_prompt_text") is True:
+        was = now.get("agent_activity") if isinstance(now.get("agent_activity"), Mapping) else {}
+        if was.get("record_prompt_text") is not True:   # a privacy change: the person confirms it, in plain words
+            days = activity.get("history_days") or was.get("history_days") or 30
+            out.append(f"Start keeping the text of the prompts you send to AI agents — on this Mac only, with secrets removed, for {days} days")
     paths = body.get("protected_paths")
     if isinstance(paths, list):
         dropped = [p for p in now.get("protected_paths") or [] if p not in paths]
