@@ -11,7 +11,8 @@
 Both POSTs pass the app-wide browser boundary (the session token from ``GET /api/session``), so a
 web page cannot reach them. While "Protect new agents automatically" is on, a background sweep
 hooks a newly installed agent within :data:`NOTICE_SECONDS` and repairs every hook every
-:data:`SWEEP_SECONDS` (``agent_hooks.sweep``).
+:data:`SWEEP_SECONDS` (``agent_hooks.sweep``). The instance views (live tree, history, one
+instance, profiles) are in :mod:`.instances`.
 """
 
 # No ``from __future__ import annotations`` here: FastAPI must see the handlers' ``Request``
@@ -57,11 +58,22 @@ def _sweep_forever() -> None:
         wait = NOTICE_SECONDS
         try:
             present = agent_hooks.present()
-            if should_sweep(present, seen, time.monotonic() - last):
+            # A config home learned since the last look (a hook event or a running agent named
+            # it) is hooked now, not at the next full sweep.
+            if agent_hooks.tracking.new_profiles() or should_sweep(present, seen, time.monotonic() - last):
                 agent_hooks.sweep()
                 seen, last = present, time.monotonic()
         except Exception:   # health: allow BLE001 -- a sweep that fails tries again next round
             logger.warning("blackbox dashboard: the agent hooks sweep failed", exc_info=True)
+
+
+def _also(app: Any) -> None:
+    """The instance views' routes, and the sweep (once per process)."""
+    from .instances import register as register_instances
+    register_instances(app)
+    if _sweeper["thread"] is None:
+        _sweeper["thread"] = threading.Thread(target=_sweep_forever, name="blackbox-agent-hooks-sweep", daemon=True)
+        _sweeper["thread"].start()
 
 
 def register(app: Any, swr: Cache) -> None:
@@ -111,6 +123,4 @@ def register(app: Any, swr: Cache) -> None:
         result = await run_in_threadpool(agent_hooks.set_protection, kind, enabled)
         return JSONResponse(result, status_code=200 if result["ok"] else 400, headers=NO_CACHE)
 
-    if _sweeper["thread"] is None:
-        _sweeper["thread"] = threading.Thread(target=_sweep_forever, name="blackbox-agent-hooks-sweep", daemon=True)
-        _sweeper["thread"].start()
+    _also(app)

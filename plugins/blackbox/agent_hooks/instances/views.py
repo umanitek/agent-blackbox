@@ -1,0 +1,118 @@
+"""What the dashboard and Blackbox Desktop read: the live tree, the history and one instance.
+
+``live`` groups instances as product → profile → session → sub-agents and adds the agent
+processes Blackbox has no hook in (``unprotected``). An instance is LIVE while its agent process
+is still there (when Blackbox could find it) or, without a process to follow, while its events
+are recent; it is closed here — "process-exit" or "quiet" — when neither holds.
+"""
+
+from __future__ import annotations
+
+import time
+from dataclasses import asdict
+from typing import Any, Iterable, Mapping, Optional
+
+from ...kernel.agent_hosts import BY_ID
+from . import store
+from .model import Instance, Running
+
+#: Without a process to follow, an instance with no event for this long has ended.
+QUIET_SECONDS = 30 * 60
+#: A hook event this recent proves the process is hooked (a process younger than this may not
+#: have reported yet, so it is not called unprotected).
+GRACE_SECONDS = 20.0
+
+
+def close_stale(alive: Optional[Iterable[int]] = None) -> int:
+    """End the instances whose process left (*alive*: the pids running now; None = unknown) or
+    that went quiet. Returns how many were ended."""
+    pids = None if alive is None else set(alive)
+    now, ended = time.time(), 0
+    for item in store.all_instances():
+        if item.ended is not None:
+            continue
+        reason = ""
+        if item.kind == "session" and item.pid and pids is not None and item.pid not in pids:
+            reason = "process-exit"
+        elif now - item.last > QUIET_SECONDS and not (item.pid and pids is not None and item.pid in pids):
+            reason = "quiet"
+        if reason:
+            item.ended, item.end_reason = now, reason
+            store.put(item)
+            ended += 1
+    return ended
+
+
+def _row(item: Instance, subs: Mapping[str, list[Instance]]) -> dict[str, Any]:
+    row = asdict(item)
+    row["status"] = "ended" if item.ended is not None else "live"
+    row["protection"] = "sandboxed" if item.sandboxed else "hooks"
+    row["sub_agents"] = [_row(sub, subs) for sub in sorted(subs.get(item.key, []), key=lambda sub: sub.started)]
+    return row
+
+
+def _unprotected(running: Iterable[Running], sessions: Iterable[Instance]) -> list[dict[str, Any]]:
+    hooked = {item.pid for item in sessions if item.pid and item.ended is None}
+    now = time.time()
+    out = []
+    for proc in running:
+        if proc.pid in hooked or (not proc.hooks_skipped and now - proc.started < GRACE_SECONDS):
+            continue
+        host = BY_ID.get(proc.agent)
+        out.append({"pid": proc.pid, "agent": proc.agent, "name": host.name if host else proc.agent, "launch": proc.launch,
+                    "profile": proc.profile, "started": proc.started, "status": "unprotected",
+                    "reason": proc.hooks_skipped or "Blackbox has seen no hook event from this process."})
+    return out
+
+
+def live(running: Iterable[Running] = (), profiles: Iterable[Mapping[str, Any]] = ()) -> dict[str, Any]:
+    """The tree of instances that are live now (plus those ended in the last minute, so an
+    ending is seen), per product and profile; *running* adds the unhooked agent processes."""
+    everything = store.all_instances()
+    now = time.time()
+    shown = [item for item in everything if item.ended is None or now - item.ended < 60]
+    subs: dict[str, list[Instance]] = {}
+    for item in shown:
+        if item.kind == "sub-agent":
+            subs.setdefault(item.parent, []).append(item)
+    products: dict[str, dict[str, Any]] = {}
+    for item in sorted((item for item in shown if item.kind == "session"), key=lambda item: item.started):
+        host = BY_ID.get(item.agent)
+        product = products.setdefault(item.agent, {"id": item.agent, "name": host.name if host else item.agent, "profiles": {}})
+        product["profiles"].setdefault(item.profile, {"home": item.profile, "instances": []})["instances"].append(_row(item, subs))
+    for product in products.values():
+        product["profiles"] = list(product["profiles"].values())
+    sessions = [item for item in everything if item.kind == "session"]
+    return {"cursor": store.cursor(), "at": now, "products": list(products.values()),
+            "unprotected": _unprotected(running, sessions), "profiles": list(profiles),
+            "counts": {"live": sum(item.ended is None for item in shown if item.kind == "session"),
+                       "sub_agents": sum(item.ended is None for item in shown if item.kind == "sub-agent")}}
+
+
+def history(*, agent: str = "", before: float = 0.0, limit: int = 50, kind: str = "session") -> dict[str, Any]:
+    """Ended instances, newest first, a page at a time (``before``: the ``ended`` of the last row
+    of the previous page)."""
+    limit = max(1, min(limit, 200))
+    rows = sorted((item for item in store.all_instances()
+                   if item.ended is not None and item.kind == kind and (not agent or item.agent == agent)
+                   and (not before or item.ended < before)), key=lambda item: item.ended or 0, reverse=True)
+    page = rows[:limit]
+    subs: dict[str, list[Instance]] = {}
+    for item in store.all_instances():
+        if item.kind == "sub-agent":
+            subs.setdefault(item.parent, []).append(item)
+    return {"instances": [_row(item, subs) for item in page], "more": len(rows) > limit,
+            "next_before": page[-1].ended if page and len(rows) > limit else None}
+
+
+def detail(key: str, *, offset: int = 0, limit: int = 200) -> Optional[dict[str, Any]]:
+    """One instance with its sub-agents and a page of its timeline; None for an unknown key."""
+    item = store.get(key)
+    if item is None:
+        return None
+    subs: dict[str, list[Instance]] = {}
+    for other in store.all_instances():
+        if other.kind == "sub-agent":
+            subs.setdefault(other.parent, []).append(other)
+    return {"instance": _row(item, subs), "actions": [asdict(action) for action in store.actions(key, offset=offset, limit=limit)],
+            "offset": offset}

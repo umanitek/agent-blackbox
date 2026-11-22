@@ -1,0 +1,93 @@
+"""The records of the agent-instance view: what ran, inside what, and what it did.
+
+``product`` (Claude Code, Codex…) → ``profile`` (one config home) → ``session`` → ``sub-agent``
+(an instance the session spawned; ``parent`` is its session's key) → ``actions`` (tool calls with
+Blackbox's verdict). Every id is the hashed key Blackbox already uses for sessions — an agent's
+own session id, a prompt or a file's text is never part of a record.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Optional
+
+#: How an instance was started.
+LAUNCHES = ("interactive", "headless", "sdk", "ide", "background", "sub-agent", "unknown")
+#: ``live`` (events or its process seen lately), ``ended`` (it said so, its process left, or it
+#: went quiet), ``unprotected`` (a running agent process Blackbox has no hook in).
+STATUSES = ("live", "ended", "unprotected")
+
+
+@dataclass
+class Instance:
+    """One session or sub-agent. ``key`` is ``<agent>:<16 hex>`` (a sub-agent adds ``/<12 hex>``)."""
+
+    key: str
+    agent: str
+    kind: str                      # "session" | "sub-agent"
+    started: float
+    last: float
+    profile: str = ""              # the config home it ran with ("" = the default one)
+    parent: str = ""               # a sub-agent's session key
+    type: str = ""                 # a sub-agent's type (Explore, generalPurpose…), an agent's --agent name
+    folder: str = ""               # the project folder's name
+    cwd: str = ""
+    model: str = ""
+    launch: str = "unknown"
+    sandboxed: bool = False
+    pid: int = 0                   # the agent process, when it could be found
+    ended: Optional[float] = None
+    end_reason: str = ""           # the agent's own word, "process-exit" or "quiet"
+    events: int = 0
+    checked: int = 0               # tool calls Blackbox judged
+    refused: int = 0
+    flagged: int = 0
+    prompts: int = 0
+
+
+@dataclass(frozen=True)
+class Action:
+    """One thing an instance did, as its timeline shows it. ``what`` is a short redacted summary
+    (a command's start, a file's path) — the same text the audit log already keeps."""
+
+    ts: float
+    kind: str                      # an EVENTS kind
+    tool: str = ""
+    what: str = ""
+    verdict: str = ""              # "", "allow", "flag", "block"
+
+
+@dataclass(frozen=True)
+class Running:
+    """One agent process on this machine (read-only observation)."""
+
+    pid: int
+    ppid: int
+    agent: str
+    launch: str
+    profile: str = ""              # a moved config home found in its environment
+    hooks_skipped: str = ""        # why this run cannot be hooked (e.g. "--bare"), else ""
+    started: float = 0.0
+
+
+@dataclass(frozen=True)
+class Problem:
+    """Something that keeps Blackbox's hooks from running in one profile or project."""
+
+    agent: str
+    kind: str                      # "hooks-off" | "managed-only" | "hooks-missing" | "unreadable"
+    file: str
+    detail: str
+    fixable: bool = False
+
+
+@dataclass
+class Profile:
+    """One config home of one agent."""
+
+    agent: str
+    home: str                      # the folder the config lives in
+    config: str                    # the hook config file (or folder)
+    default: bool = True
+    hooked: bool = False
+    problems: list[Problem] = field(default_factory=list)

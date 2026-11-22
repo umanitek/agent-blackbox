@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from ...kernel.bounded_files import atomic_write
-from ...kernel.agent_hosts import Host
+from ...kernel.agent_hosts import TOOL_KINDS, Host
 
 #: In every command Blackbox writes, and in nothing a user writes.
 MARK = "agent-hooks/runner.py"
@@ -90,10 +90,10 @@ def _strip(hooks: dict[str, Any], style: str) -> dict[str, Any]:
     return out
 
 
-def _entry(host: Host, command: str) -> dict[str, Any]:
+def _entry(host: Host, command: str, kind: str = "pre_tool") -> dict[str, Any]:
     if host.style == "nested":
         group: dict[str, Any] = {"hooks": [{"type": "command", "command": command, "timeout": HOOK_TIMEOUT}]}
-        if host.matcher:
+        if host.matcher and kind in TOOL_KINDS:   # a lifecycle group carries no tool matcher
             group = {"matcher": host.matcher, **group}
         return group
     if host.id == "windsurf":
@@ -110,7 +110,7 @@ def install(host: Host, home: Path, commands: dict[str, str]) -> EditResult:
     hooks = data.get("hooks") if isinstance(data.get("hooks"), dict) else {}
     hooks = _strip(hooks, host.style)
     for event, command in commands.items():
-        hooks.setdefault(event, []).append(_entry(host, command))
+        hooks.setdefault(event, []).append(_entry(host, command, host.events.get(event, "")))
     data["hooks"] = hooks
     for key, value in host.extra.items():
         data.setdefault(key, value)

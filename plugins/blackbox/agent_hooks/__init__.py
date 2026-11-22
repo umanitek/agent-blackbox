@@ -34,12 +34,13 @@ from typing import Any, Optional
 
 from ..kernel import constants
 from ..kernel.config import load_blackbox_config
+from . import profiles, tracking
 from .protect import config_edit, own_files
 from .protect.events import note_error, read_state, record_event, write_state
 from ..kernel.agent_hosts import BY_ID, HOSTS, Host
 
 __all__ = ["KINDS", "AgentRow", "hooked_agents", "note_error", "present", "record_event", "remove_all", "rows",
-           "set_protection", "sweep"]
+           "set_protection", "sweep", "tracking"]
 
 #: The agent ids this module answers for (``/api/agent-hooks/protection`` accepts these).
 KINDS = tuple(BY_ID)
@@ -67,16 +68,21 @@ def _home() -> Path:
     return Path.home()
 
 
+#: The runner and the module it imports, copied together.
+RUNNER_FILES = ("runner.py", "identity.py")
+
+
 def _runner() -> Path:
-    """The runner every hook names: a copy in Blackbox's data folder, refreshed when it changes,
-    so a moved plugin folder never breaks an agent's hook."""
-    source = Path(__file__).with_name("protect") / "runner.py"
-    target = constants.blackbox_home() / "agent-hooks" / "runner.py"
-    text = source.read_text(encoding="utf-8-sig")
-    if not target.exists() or target.read_text(encoding="utf-8-sig") != text:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(source, target)
-    return target
+    """The runner every hook names: a copy in Blackbox's data folder (with its sibling module),
+    refreshed when it changes, so a moved plugin folder never breaks an agent's hook."""
+    for name in RUNNER_FILES:
+        source = Path(__file__).with_name("protect") / name
+        target = constants.blackbox_home() / "agent-hooks" / name
+        text = source.read_text(encoding="utf-8-sig")
+        if not target.exists() or target.read_text(encoding="utf-8-sig") != text:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, target)
+    return constants.blackbox_home() / "agent-hooks" / RUNNER_FILES[0]
 
 
 #: The launcher every hook names instead of a Python path (:func:`_python`).
@@ -122,6 +128,12 @@ def _invocations(host: Host) -> dict[str, tuple[list[str], str]]:
 
 def _editor(host: Host):
     return own_files if host.style in _OWN_FILE_STYLES else config_edit
+
+
+def _variants(host: Host) -> list[Host]:
+    """*host* once per config home it has on this machine: the default one first, then every
+    other PROFILE Blackbox learned of (``profiles.homes``) — each must carry the hooks."""
+    return [profiles.variant(host, folder, default=default) for folder, default in profiles.homes(host, _home())]
 
 
 def install(host: Host) -> config_edit.EditResult:
@@ -177,7 +189,8 @@ def set_protection(agent_id: str, enabled: bool) -> dict[str, Any]:
     host = BY_ID.get(agent_id)
     if host is None:
         return {"ok": False, "kind": agent_id, "error": "unknown agent"}
-    result = install(host) if enabled else _editor(host).uninstall(host, _home())
+    results = [install(variant) if enabled else _editor(variant).uninstall(variant, _home()) for variant in _variants(host)]
+    result = next((item for item in results if not item.ok), results[0])   # the default home's, or the first failure
     if result.ok:
         state = read_state()
         state["agents"].setdefault(agent_id, {})["disabled"] = not enabled
@@ -201,16 +214,17 @@ def sweep() -> list[dict[str, Any]]:
     for host in HOSTS:
         if state.get(host.id, {}).get("disabled") or not host.installed(_home()):
             continue
-        current = _editor(host).installed_commands(host, _home())
         wanted = [command for _argv, command in _invocations(host).values()]
-        if host.style in _OWN_FILE_STYLES or sorted(current) != sorted(wanted):
-            done.append(asdict(install(host)) | {"kind": host.id})
+        for variant in _variants(host):
+            current = _editor(variant).installed_commands(variant, _home())
+            if variant.style in _OWN_FILE_STYLES or sorted(current) != sorted(wanted):
+                done.append(asdict(install(variant)) | {"kind": host.id})
     return done
 
 
 def hooked_agents() -> list[str]:
     """The names of the coding agents whose config holds Blackbox's hooks now."""
-    return [host.name for host in HOSTS if _editor(host).installed_commands(host, _home())]
+    return [host.name for host in HOSTS if any(_editor(variant).installed_commands(variant, _home()) for variant in _variants(host))]
 
 
 def remove_all() -> list[dict[str, Any]]:
@@ -219,8 +233,9 @@ def remove_all() -> list[dict[str, Any]]:
     Returns one ``{kind, ok, target, note}`` per agent that had Blackbox's hooks."""
     done = []
     for host in HOSTS:
-        if not _editor(host).installed_commands(host, _home()):
-            continue
-        result = _editor(host).uninstall(host, _home())
-        done.append({"kind": host.id, "name": host.name, "ok": result.ok, "target": result.path, "note": result.error})
+        for variant in _variants(host):
+            if not _editor(variant).installed_commands(variant, _home()):
+                continue
+            result = _editor(variant).uninstall(variant, _home())
+            done.append({"kind": host.id, "name": host.name, "ok": result.ok, "target": result.path, "note": result.error})
     return done

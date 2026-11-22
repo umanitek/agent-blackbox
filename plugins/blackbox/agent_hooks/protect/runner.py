@@ -34,6 +34,13 @@ import sys
 import urllib.request
 from pathlib import Path
 
+# The runner is run as a script from Blackbox's data folder (its sibling is beside it there) and
+# imported as a module by the plugin and its tests.
+if __package__:
+    from .identity import effective_agent, identity
+else:
+    from identity import effective_agent, identity
+
 #: The most of stdin read (a write tool's whole file can be in the payload).
 MAX_INPUT_BYTES = 1024 * 1024
 #: The most text (a prompt, a tool's output, a file about to be read) sent for the injection check.
@@ -213,6 +220,12 @@ def _tool(agent: str, payload: dict) -> tuple[str, object]:
     return _canonical(str(_first(payload, "tool_name", "toolName") or ""), _first(payload, "tool_input", "tool_args", "input", "arguments"))
 
 
+def _roots(payload: dict) -> str:
+    """Cursor names the workspace as ``workspace_roots`` (a list) instead of ``cwd``."""
+    roots = payload.get("workspace_roots")
+    return str(roots[0]) if isinstance(roots, list) and roots else ""
+
+
 def _session(payload: dict) -> str:
     value = _first(payload, "session_id", "sessionId", "sessionID", "conversation_id", "trajectory_id", "taskId", "thread_id")
     return str(value or "")[:200]
@@ -244,7 +257,8 @@ def summary(agent: str, event: str, payload: dict) -> dict:
     """The one shape the dashboard checks: the tool call, and the TEXT to check for injection (a
     prompt, a tool's output, a file about to be read). The text is checked, never recorded."""
     body = {"agent": agent, "event": event, "session": _session(payload),
-            "cwd": str(_first(payload, "cwd", "workspace", "workspaceRoot") or "")[:500], "sandboxed": sandboxed()}
+            "cwd": str(_first(payload, "cwd", "workspace", "workspaceRoot") or _roots(payload))[:500],
+            "sandboxed": sandboxed(), **identity(agent, payload, _first)}
     if event in ("pre_tool", "post_tool"):
         body["tool_name"], body["args"] = _tool(agent, payload)
         call = _first(payload, "tool_use_id", "toolCallId", "callID", "call_id", "execution_id")
@@ -272,7 +286,7 @@ def ask(url: str, body: dict) -> dict:
 
 def deny_output(agent: str, reason: str) -> tuple[str, int]:
     """(stdout, exit code) that make *agent* refuse the tool call, in its documented format."""
-    if agent in ("claude-code", "codex"):
+    if agent in ("claude-code", "codex", "devin"):
         return json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
                                                   "permissionDecisionReason": reason}}), 0
     if agent == "cursor":
@@ -291,7 +305,7 @@ def deny_output(agent: str, reason: str) -> tuple[str, int]:
 def prompt_output(agent: str, reason: str) -> tuple[str, int]:
     """(stdout, exit code) that make *agent* refuse to send a prompt carrying a known injection —
     where its prompt hook can refuse (Copilot CLI's and OpenCode's cannot: recorded only)."""
-    if agent in ("claude-code", "codex"):
+    if agent in ("claude-code", "codex", "devin"):
         return json.dumps({"decision": "block", "reason": reason}), 0
     if agent == "cursor":
         return json.dumps({"continue": False, "user_message": reason}), 0
@@ -326,8 +340,8 @@ def post_output(agent: str, reason: str) -> tuple[str, int]:
 
 def allow_output(agent: str, event: str) -> str:
     """What an agent that expects an answer gets when the action may go ahead."""
-    if agent == "cursor" and event in ("pre_tool", "prompt"):
-        return json.dumps({"permission": "allow"} if event == "pre_tool" else {"continue": True})
+    if agent == "cursor" and event in ("pre_tool", "prompt", "subagent_start"):
+        return json.dumps({"continue": True} if event == "prompt" else {"permission": "allow"})
     if agent == "cline":
         return json.dumps({"cancel": False})
     return ""
@@ -336,7 +350,9 @@ def allow_output(agent: str, event: str) -> str:
 def main(argv: list) -> int:
     if len(argv) < 4:
         return 0
-    agent, event, url = argv[1], argv[2], argv[3].rstrip("/")
+    agent, event, url = effective_agent(argv[1]), argv[2], argv[3].rstrip("/")
+    if not agent:
+        return 0   # Devin's own hook reports this action
     try:
         raw = sys.stdin.buffer.read(MAX_INPUT_BYTES)
         payload = json.loads(raw.decode("utf-8", "replace") or "{}")

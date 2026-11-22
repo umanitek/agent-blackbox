@@ -46,7 +46,8 @@ MAX_SESSIONS = 40
 MAX_TEXT = 500
 #: The audit event each hook event is written as (Agent activity's own vocabulary).
 AUDIT_EVENT = {"session_start": "session_start", "prompt": "user_prompt", "pre_tool": "pre_tool_call",
-               "post_tool": "post_tool_call", "turn_end": "agent_turn_end", "stop": "session_end"}
+               "post_tool": "post_tool_call", "turn_end": "agent_turn_end", "stop": "session_end",
+               "subagent_start": "subagent_start", "subagent_stop": "subagent_stop", "config_change": "config_change"}
 
 _lock = threading.Lock()
 
@@ -93,7 +94,16 @@ def validate(body: Any) -> dict[str, Any]:
     return {"agent": agent, "event": event, "session": _text(body.get("session"), 200), "cwd": _text(body.get("cwd")),
             "tool_name": tool_name, "args": body.get("args"), "tool_call_id": _text(body.get("tool_call_id"), 200),
             "prompt_chars": chars if isinstance(chars, int) and chars >= 0 else 0, "text": text[:MAX_CHECK_TEXT],
-            "sandboxed": body.get("sandboxed") is True}
+            "sandboxed": body.get("sandboxed") is True, **_identity(body)}
+
+
+def _identity(body: Mapping[str, Any]) -> dict[str, Any]:
+    """Which instance the event belongs to (the runner's ``identity``), as bounded fields."""
+    pid = body.get("pid")
+    return {"sub": _text(body.get("sub"), 200), "sub_type": _text(body.get("sub_type"), 80),
+            "parent": _text(body.get("parent"), 200), "model": _text(body.get("model"), 80), "why": _text(body.get("why"), 40),
+            "background": body.get("background") is True, "profile": _text(body.get("profile")),
+            "entry": _text(body.get("entry"), 40), "pid": pid if isinstance(pid, int) and not isinstance(pid, bool) and pid > 0 else 0}
 
 
 def _merge(verdicts: list[Mapping[str, Any]]) -> dict[str, Any]:
@@ -148,7 +158,7 @@ def _remember(event: Mapping[str, Any], session: str, verdict: Mapping[str, Any]
         row["tools"] += event["event"] == "pre_tool"
         row["blocked"] += verdict.get("decision") == "block"
         row["folder"] = (event["cwd"].rstrip("/").rsplit("/", 1)[-1] or row["folder"])[:120]
-        row["ended"] = event["event"] == "stop" or (row.get("ended", False) and event["event"] == "turn_end")
+        row["ended"] = event["event"] == "stop" or (row.get("ended", False) and event["event"] in ("turn_end", "subagent_stop"))
         # Inside File Shield's OS sandbox (the runner proved it with the canary): once seen, the session is.
         row["sandboxed"] = bool(row.get("sandboxed")) or event.get("sandboxed") is True
         for old in sorted(sessions, key=lambda key: sessions[key].get("last", 0))[:-MAX_SESSIONS]:
@@ -185,10 +195,15 @@ def record_event(body: Any) -> dict[str, Any]:
         detail["checked_chars"] = len(event["text"])   # the text itself is never recorded
     if verdict.get("decision") and event["event"] != "pre_tool":
         detail["decision"] = verdict["decision"]
+    if event["sub"] or event["event"] in ("subagent_start", "subagent_stop"):
+        detail["sub_agent"] = hashlib.sha256(event["sub"].encode("utf-8")).hexdigest()[:12] if event["sub"] else ""
+        detail["sub_agent_type"] = event["sub_type"]
     findings = [{**finding, "tool_name": event["tool_name"]} for finding in verdict.get("findings") or []]
     audit.record_for(event["agent"], event=AUDIT_EVENT[event["event"]], workspace=event["cwd"],
                      findings=findings or None, detail=detail)
     _remember(event, session, verdict)
+    from .. import tracking   # late: tracking imports this package's editors
+    tracking.track(event, session, decision=str(verdict.get("decision") or ""), findings=len(findings))
     blocked = verdict.get("decision") == "block"
     return {"decision": "block" if blocked else "allow", "message": verdict.get("message", "") if blocked else "",
             "findings": len(findings), "recorded": True}

@@ -23,6 +23,7 @@ ROOT = Path(__file__).resolve().parents[2]
 NETWORK = ROOT / "plugins" / "blackbox" / "shields" / "network"
 HELPER_SRC = ROOT / "plugins" / "blackbox" / "helper" / "src"
 FILES_SANDBOX = ROOT / "plugins" / "blackbox" / "shields" / "files" / "sandbox"
+AGENT_OBSERVER = ROOT / "plugins" / "blackbox" / "agent_hooks" / "observe"
 PLATFORM = "platform"
 
 #: macOS tools only a platform/ module may name (matched on a command's program name).
@@ -117,6 +118,14 @@ def test_file_shields_agent_sandbox_runs_programs_only_from_its_platform_modules
     assert len(files) >= 2 and (FILES_SANDBOX / PLATFORM / "macos.py").is_file()
     problems = [f"{path.relative_to(ROOT)}:{problem}" for path in files for problem in python_problems(path.read_text(encoding="utf-8"))]
     assert not problems, "move these into shields/files/sandbox/platform/macos.py:\n" + "\n".join(problems)
+
+
+def test_the_agent_observer_runs_programs_only_from_its_platform_modules():
+    """The process observer (agent instances, 2026-11-22): its ``ps`` calls live in observe/platform."""
+    files = _outside_platform(AGENT_OBSERVER, "*.py")
+    assert files and (AGENT_OBSERVER / PLATFORM / "macos.py").is_file()
+    problems = [f"{path.relative_to(ROOT)}:{problem}" for path in files for problem in python_problems(path.read_text(encoding="utf-8"))]
+    assert not problems, "move these into agent_hooks/observe/platform/macos.py:\n" + "\n".join(problems)
 
 
 def test_the_helper_names_macos_tools_only_under_src_platform():
