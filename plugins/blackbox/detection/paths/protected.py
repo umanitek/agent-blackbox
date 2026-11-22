@@ -129,7 +129,7 @@ def _accesses(tool_name: str, args: Any, *, whole: bool = False) -> list[tuple[s
         return [(tool, arg.path, "copy" if arg.recursive else "read")
                 for arg in shell_files.code_file_args(args["code"])]   # KI-470
     if tool in shell_shapes.SHELL_TOOLS:
-        return _command_accesses(tool, _command(tool_name, args, whole))
+        return [found for command in _commands(tool_name, args, whole) for found in _command_accesses(tool, command)]
     if not isinstance(args, dict):
         return []
     found: list[tuple[str, str, str]] = []
@@ -148,10 +148,22 @@ def _accesses(tool_name: str, args: Any, *, whole: bool = False) -> list[tuple[s
 _MAX_ARG_CHARS = 200_000
 
 
-def _command(tool_name: str, args: Any, whole: bool) -> str:
+#: A sign that text can name a path: a home or variable sign, a wildcard, a slash, ``..`` or a ``cd``.
+_PATH_SIGN = re.compile(r"[~$*?\[/]|\.\.|\bcd\b|\bpushd\b")
+
+
+def _commands(tool_name: str, args: Any, whole: bool) -> list[str]:
+    """The command text(s) to read: the bounded command every check shares (parsed once, cached),
+    and — *whole* — the middle a long command's window leaves out, read only when it can name a
+    path at all. WHY: a protected path hidden in the middle of a padded command must not pass, and
+    harmless padding must not cost a second full parse (test_blackbox_long_commands)."""
+    bounded = shell_shapes.command_from_args(tool_name, args)
     if not whole:
-        return shell_shapes.command_from_args(tool_name, args)
-    return shell_shapes.with_nested_commands(shell_shapes.whole_command_from_args(tool_name, args))
+        return [bounded]
+    full = shell_shapes.whole_command_from_args(tool_name, args)
+    window = shell_shapes.COMMAND_SCAN_WINDOW
+    middle = full[window:-window] if len(full) > 2 * window else ""
+    return [bounded, shell_shapes.with_nested_commands(middle)] if middle and _PATH_SIGN.search(middle) else [bounded]
 
 
 def _command_accesses(tool: str, command: str) -> list[tuple[str, str, str]]:
@@ -267,7 +279,9 @@ def detect_custom_fileaccess(
     are NEVER reported to the community graph — the matched pattern is the
     user's own configuration, not shared threat intel. One finding per call.
     """
-    for touch in touches(tool_name, args, protected_paths, first_only=True):
+    # Read whole, like Blackbox's own keys: one parse of the command serves both rules, and padding
+    # a command past the bounded window no longer hides a protected path from the person's rule.
+    for touch in touches(tool_name, args, protected_paths, whole=True, first_only=True):
         return [
             Finding(
                 identifier=threat_ids.fileaccess_identifier(touch.tool, "user-protected"),
