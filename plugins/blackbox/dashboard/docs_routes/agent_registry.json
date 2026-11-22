@@ -402,7 +402,13 @@
      "os": "macos",
      "launch": "headless",
      "layer": "hooks",
-     "status": "covered-untested"
+     "status": "tested",
+     "agent_version": "0.171.0",
+     "os_version": "macOS 26.6.2",
+     "date": "2026-11-22",
+     "blackbox": "1.5.0",
+     "how": "test VM, real codex exec --oss with a local model (Ollama qwen2.5:7b): two sessions with model, a 12-call loop, a File Shield read refused; spawn_agent sub-agents are not tracked as sub-agents (KI-557)",
+     "result": "partial"
     },
     {
      "os": "macos",
@@ -1299,6 +1305,18 @@
      "layer": "os",
      "status": "not-covered",
      "why": "needs Apple's Endpoint Security entitlement (not requested yet)"
+    },
+    {
+     "os": "macos",
+     "launch": "headless",
+     "layer": "hooks",
+     "status": "tested",
+     "agent_version": "3.0.75",
+     "os_version": "macOS 26.6.2",
+     "date": "2026-11-22",
+     "blackbox": "1.5.0",
+     "how": "test VM, real cline -P ollama with a local model (qwen2.5:7b): two sessions, a 12-call loop, a File Shield read refused, sudo recorded; this mode has no sub-agents",
+     "result": "pass"
     }
    ]
   },
@@ -1422,6 +1440,18 @@
      "layer": "os",
      "status": "not-covered",
      "why": "needs Apple's Endpoint Security entitlement (not requested yet)"
+    },
+    {
+     "os": "macos",
+     "launch": "headless",
+     "layer": "hooks",
+     "status": "tested",
+     "agent_version": "1.19.6",
+     "os_version": "macOS 26.6.2",
+     "date": "2026-11-22",
+     "blackbox": "1.5.0",
+     "how": "test VM, real opencode run with a local model (Ollama qwen2.5:7b): two sessions, a 12-call loop, a File Shield read refused, sudo recorded; a task-tool sub-agent shows as a separate session with no parent (KI-555)",
+     "result": "partial"
     }
    ]
   }

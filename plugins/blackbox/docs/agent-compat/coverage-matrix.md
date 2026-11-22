@@ -123,7 +123,7 @@ One `codex` process per session (CLI or `codex exec`); the desktop app and IDE e
 | OS | Launch mode | Layer | Status | Detail |
 |---|---|---|---|---|
 | macos | interactive | hooks | Tested | 2026-11-22, Blackbox 1.5.0, agent 0.171.0, macOS 26.6.2: test VM (macOS 26, bb-recheck2): the agent's own configured hook command run with the payloads of its hook reference; refusals in Block and Audit mode — pass |
-| macos | headless | hooks | Built, not yet run in the product |  |
+| macos | headless | hooks | Tested | 2026-11-22, Blackbox 1.5.0, agent 0.171.0, macOS 26.6.2: test VM, real codex exec --oss with a local model (Ollama qwen2.5:7b): two sessions with model, a 12-call loop, a File Shield read refused; spawn_agent sub-agents are not tracked as sub-agents (KI-557) — partial |
 | macos | sdk | hooks | Built, not yet run in the product |  |
 | macos | sub-agent | hooks | Built, not yet run in the product |  |
 | macos | cloud | hooks | Not covered | runs off this machine |
@@ -406,6 +406,7 @@ The `cline` CLI (TUI, headless, and a background hub), the SDK (`ClineCore`), Ka
 | macos | ide | hooks | Built, not yet run in the product | hook scripts; not run in the extension |
 | macos | cloud | hooks | Not covered | local hooks never run in the vendor's cloud |
 | macos | interactive | os | Not covered | needs Apple's Endpoint Security entitlement (not requested yet) |
+| macos | headless | hooks | Tested | 2026-11-22, Blackbox 1.5.0, agent 3.0.75, macOS 26.6.2: test VM, real cline -P ollama with a local model (qwen2.5:7b): two sessions, a 12-call loop, a File Shield read refused, sudo recorded; this mode has no sub-agents — pass |
 
 **Not covered:**
 - Not run with a model yet: the CLI needs a sign-in. The SDK's own loader loaded Blackbox's plugin and found its hook scripts; a real session is still to be run.
@@ -448,6 +449,7 @@ One `opencode` process (TUI) or `opencode serve`; agents and sub-agents run insi
 | macos | interactive, version 2 | hooks | Built, not yet run in the product | the version-2 plugin is run under Node with the documented events; OpenCode 2 itself is not released on npm's latest tag |
 | macos | headless, pure | hooks | Not covered | --pure loads no external plugin |
 | macos | interactive | os | Not covered | needs Apple's Endpoint Security entitlement (not requested yet) |
+| macos | headless | hooks | Tested | 2026-11-22, Blackbox 1.5.0, agent 1.19.6, macOS 26.6.2: test VM, real opencode run with a local model (Ollama qwen2.5:7b): two sessions, a 12-call loop, a File Shield read refused, sudo recorded; a task-tool sub-agent shows as a separate session with no parent (KI-555) — partial |
 
 **Not covered:**
 - `opencode --pure` runs without external plugins: nothing Blackbox installs is loaded.
