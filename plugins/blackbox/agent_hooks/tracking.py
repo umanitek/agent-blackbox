@@ -31,7 +31,7 @@ from .protect.events import session_key as key_of_session
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["Captured", "capture", "detail", "export", "history", "live", "new_profiles", "observe_now", "profile", "profile_rows", "prompt_text", "track", "wait"]
+__all__ = ["HISTORY_OUTCOMES", "Captured", "capture", "detail", "export", "history", "live", "new_profiles", "observe_now", "profile", "profile_rows", "prompt_text", "track", "wait"]
 
 #: How long one reading of the process list is reused.
 TABLE_SECONDS = 1.5
@@ -256,7 +256,12 @@ def wait(cursor: int, seconds: float) -> int:
             return now
 
 
+#: The history's outcome filter values (see :func:`.instances.views.history`).
+HISTORY_OUTCOMES = views.HISTORY_OUTCOMES
+
+
 def history(**filters: Any) -> dict[str, Any]:
+    """Ended instances, a page at a time, filtered (see :func:`.instances.views.history`)."""
     return views.history(**filters)
 
 

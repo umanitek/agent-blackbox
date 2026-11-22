@@ -307,3 +307,30 @@ def test_devin_reading_claudes_hooks_is_devins_event_and_not_counted_twice(tmp_p
     assert runner.effective_agent("claude-code") == "devin" and runner.effective_agent("codex") == "codex"
     (tmp_path / "config.json").write_text('{"hooks": {"PreToolUse": [{"hooks": [{"command": "/x/agent-hooks/python"}]}]}}', encoding="utf-8")
     assert runner.effective_agent("claude-code") == ""
+
+
+def test_the_history_filters_by_project_date_and_outcome_and_names_its_choices():
+    """The core dashboard's history view filters on the server (agent, project, date, had
+    refusals or too-late) and offers the agents and projects it holds as choices."""
+    from plugins.blackbox.agent_hooks.instances.model import Instance
+    base = float(int(time.time()) - 7200)   # within the history's retention
+    rows = [("claude-code", "app", 1000, 0, 0), ("claude-code", "site", 2000, 2, 0), ("codex", "app", 3000, 0, 1)]
+    for number, (agent, folder, offset, refused, too_late) in enumerate(rows):
+        store.put(Instance(key=f"{agent}:{number:016x}", agent=agent, kind="session", started=base + offset - 10, last=base + offset,
+                           folder=folder, ended=base + offset, refused=refused, too_late=too_late))
+    client = _client()
+
+    def keys(**params):
+        answer = client.get("/api/agent-instances/history", params=params)
+        assert answer.status_code == 200, answer.text
+        return [row["folder"] + "@" + str(int(row["ended"] - base)) for row in answer.json()["instances"]]
+
+    assert keys() == ["app@3000", "site@2000", "app@1000"]
+    assert keys(project="app") == ["app@3000", "app@1000"]
+    assert keys(since=str(base + 1500), until=str(base + 2500)) == ["site@2000"]
+    assert keys(outcome="refused") == ["site@2000"] and keys(outcome="too-late") == ["app@3000"]
+    assert keys(outcome="stopped") == ["app@3000", "site@2000"]
+    assert keys(agent="claude-code", project="app") == ["app@1000"]
+    facets = client.get("/api/agent-instances/history").json()["facets"]
+    assert facets == {"agents": ["claude-code", "codex"], "projects": ["app", "site"]}
+    assert client.get("/api/agent-instances/history?outcome=maybe").status_code == 400

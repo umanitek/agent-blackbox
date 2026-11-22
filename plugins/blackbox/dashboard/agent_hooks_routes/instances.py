@@ -9,8 +9,11 @@ merely curls this dashboard cannot read it.
   [agent processes with no hook], profiles: [Profile + problems], counts}``. With ``cursor`` and
   ``wait`` (≤ :data:`MAX_WAIT_SECONDS`) the answer is held until something changed — a long-poll,
   so a view is current within about a second without polling fast.
-* ``GET /api/agent-instances/history[?agent=&kind=session|sub-agent&before=&limit=]`` → ended
-  instances, newest first: ``{instances, more, next_before}``.
+* ``GET /api/agent-instances/history[?agent=&kind=session|sub-agent&project=&since=&until=&outcome=&before=&limit=]``
+  → ended instances, newest first: ``{instances, more, next_before, facets: {agents, projects}}``.
+  ``project`` is a project folder's name, ``since`` / ``until`` bound when it ended (epoch
+  seconds), ``outcome`` is ``refused`` / ``too-late`` / ``stopped`` (either); 400 for an
+  unknown agent, kind or outcome.
 * ``GET /api/agent-instances/detail?key=<instance key>[&offset=&limit=]`` → one instance, its
   sub-agents and a page of its timeline ``{instance, actions: [{ts, kind, tool, what,
   verdict, reason}], offset}``; 404 for an unknown key. An instance row carries ``status``
@@ -38,6 +41,8 @@ from typing import Any
 
 NO_CACHE = {"Cache-Control": "no-store"}
 MAX_WAIT_SECONDS = 25.0
+#: A project folder name longer than this is cut before it is matched.
+MAX_PROJECT_CHARS = 200
 
 
 def _number(text: Any, default: float = 0.0) -> float:
@@ -61,11 +66,13 @@ def register(app: Any) -> None:
         return JSONResponse(tracking.live(), headers=NO_CACHE)
 
     @app.get("/api/agent-instances/history")
-    def agent_instances_history(agent: str = "", kind: str = "session", before: str = "", limit: str = "50") -> Any:
-        if kind not in ("session", "sub-agent") or (agent and not tracking.known(agent)):
-            return JSONResponse({"error": "unknown agent or kind"}, status_code=400, headers=NO_CACHE)
-        return JSONResponse(tracking.history(agent=agent, kind=kind, before=_number(before), limit=int(_number(limit, 50))),
-                            headers=NO_CACHE)
+    def agent_instances_history(agent: str = "", kind: str = "session", project: str = "", since: str = "", until: str = "",
+                                outcome: str = "", before: str = "", limit: str = "50") -> Any:
+        if kind not in ("session", "sub-agent") or (agent and not tracking.known(agent)) or outcome not in tracking.HISTORY_OUTCOMES:
+            return JSONResponse({"error": "unknown agent, kind or outcome"}, status_code=400, headers=NO_CACHE)
+        return JSONResponse(tracking.history(agent=agent, kind=kind, project=project[:MAX_PROJECT_CHARS], since=_number(since),
+                                             until=_number(until), outcome=outcome, before=_number(before),
+                                             limit=int(_number(limit, 50))), headers=NO_CACHE)
 
     @app.get("/api/agent-instances/detail")
     def agent_instances_detail(key: str = "", offset: str = "0", limit: str = "200") -> Any:

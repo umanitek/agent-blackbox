@@ -9,7 +9,7 @@ are recent; it is closed here — "process-exit" or "quiet" — when neither hol
 from __future__ import annotations
 
 import time
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from typing import Any, Iterable, Mapping, Optional
 
 from ...kernel.agent_hosts import BY_ID, PROTECTION_HOOKS, PROTECTION_SANDBOXED, product_name
@@ -139,20 +139,63 @@ def live(running: Iterable[Running] = (), profiles: Iterable[Mapping[str, Any]] 
                        "sub_agents": sum(item.ended is None for item in shown if item.kind == "sub-agent")}}
 
 
-def history(*, agent: str = "", before: float = 0.0, limit: int = 50, kind: str = "session") -> dict[str, Any]:
+#: The history's outcome filter: any, at least one refusal, at least one too-late action, either.
+HISTORY_OUTCOMES = ("", "refused", "too-late", "stopped")
+
+
+@dataclass(frozen=True)
+class HistoryFilter:
+    """Which ended instances a history page holds. Every field is optional ("" / 0 = any):
+    *agent* an agent id, *project* a project folder's name (``Instance.folder``), *since* /
+    *until* the ``ended`` time bounds in epoch seconds (inclusive), *outcome* one of
+    :data:`HISTORY_OUTCOMES`."""
+
+    agent: str = ""
+    kind: str = "session"
+    project: str = ""
+    since: float = 0.0
+    until: float = 0.0
+    outcome: str = ""
+
+    def holds(self, item: Instance) -> bool:
+        ended = item.ended or 0.0
+        return (item.ended is not None and item.kind == self.kind
+                and (not self.agent or item.agent == self.agent) and (not self.project or item.folder == self.project)
+                and (not self.since or ended >= self.since) and (not self.until or ended <= self.until)
+                and _outcome_holds(self.outcome, item))
+
+
+def _outcome_holds(outcome: str, item: Instance) -> bool:
+    if outcome == "refused":
+        return item.refused > 0
+    if outcome == "too-late":
+        return item.too_late > 0
+    if outcome == "stopped":
+        return item.refused > 0 or item.too_late > 0
+    return True
+
+
+def history(*, before: float = 0.0, limit: int = 50, **filters: Any) -> dict[str, Any]:
     """Ended instances, newest first, a page at a time (``before``: the ``ended`` of the last row
-    of the previous page)."""
+    of the previous page), narrowed by *filters* (the fields of :class:`HistoryFilter`).
+
+    Answers ``{instances, more, next_before, facets: {agents, projects}}`` — *facets* are the
+    agent ids and project names among every ended instance of the kind, so a view can offer them
+    as filter choices without reading the whole history."""
     limit = max(1, min(limit, 200))
-    rows = sorted((item for item in store.all_instances()
-                   if item.ended is not None and item.kind == kind and (not agent or item.agent == agent)
-                   and (not before or item.ended < before)), key=lambda item: item.ended or 0, reverse=True)
+    wanted = HistoryFilter(**filters)
+    everything = store.all_instances()
+    rows = sorted((item for item in everything if wanted.holds(item) and (not before or (item.ended or 0) < before)),
+                  key=lambda item: item.ended or 0, reverse=True)
     page = rows[:limit]
     subs: dict[str, list[Instance]] = {}
-    for item in store.all_instances():
+    for item in everything:
         if item.kind == "sub-agent":
             subs.setdefault(item.parent, []).append(item)
+    ended = [item for item in everything if item.ended is not None and item.kind == wanted.kind]
     return {"instances": [_row(item, subs) for item in page], "more": len(rows) > limit,
-            "next_before": page[-1].ended if page and len(rows) > limit else None}
+            "next_before": page[-1].ended if page and len(rows) > limit else None,
+            "facets": {"agents": sorted({item.agent for item in ended}), "projects": sorted({item.folder for item in ended if item.folder})}}
 
 
 def detail(key: str, *, offset: int = 0, limit: int = 200, with_text: bool = False) -> Optional[dict[str, Any]]:
