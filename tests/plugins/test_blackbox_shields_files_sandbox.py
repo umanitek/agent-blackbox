@@ -167,7 +167,7 @@ def test_sync_writes_launchers_and_the_path_block_and_takes_them_away(home):
     assert list(folder.iterdir()) == [] and not shell_path.present(home)
 
 
-def test_the_path_block_goes_last_once_and_leaves_the_persons_lines(home):
+def test_the_path_block_is_written_last_once_and_leaves_the_persons_lines(home):
     (home / ".zshrc").write_text("export PATH=/opt/mine:$PATH\n", encoding="utf-8")
     (home / ".bashrc").write_text("alias ll='ls -l'", encoding="utf-8")
     shell_path.add(home / "bin")
@@ -348,6 +348,47 @@ def test_an_agents_edit_of_the_persons_own_lines_is_judged_on_the_file_it_leaves
     assert judged({"command": "echo hi > ~/.zshrc"}, "Bash")
     assert judged({"command": "echo \"$(cat /tmp/x)\" >> ~/.zshrc"}, "Bash")
     assert judged({"command": "echo hi >> ~/.zshrc; sed -i '' '/Blackbox/d' ~/.zshrc"}, "Bash")
+
+
+def test_a_line_the_person_adds_after_the_block_is_theirs_never_an_alarm(home, entry):
+    """KI-540 (E2E full5 2026-11-22): appending ``alias gl='git log'`` below the block raised "Something
+    removed …" and rewrote the person's ~/.zshrc to move the block back to the end."""
+    from plugins.blackbox.shields.files import alerts
+    sandbox.sync(_mode())
+    zshrc = home / ".zshrc"
+    zshrc.write_text(zshrc.read_text(encoding="utf-8") + "alias gl='git log'\nexport PATH=/opt/mine:$PATH\n", encoding="utf-8")
+    mine = zshrc.read_text(encoding="utf-8")
+    sandbox.sync(_mode())
+    assert zshrc.read_text(encoding="utf-8") == mine
+    assert sandbox.restorations() == [] and alerts.alerts() == []
+    assert shell_path.intact(sandbox.launcher_dir(), home)
+
+
+def test_blackboxs_own_older_block_is_upgraded_quietly(home, entry):
+    from plugins.blackbox.shields.files import alerts
+    folder = sandbox.launcher_dir()
+    sandbox.sync(_mode())
+    zshrc = home / ".zshrc"
+    zshrc.write_text("export EDITOR=vim\n" + shell_path._legacy_block(folder), encoding="utf-8")
+    sandbox.sync(_mode())
+    assert shell_path.intact(folder, home) and zshrc.read_text(encoding="utf-8").startswith("export EDITOR=vim\n")
+    assert sandbox.restorations() == [] and alerts.alerts() == []
+
+
+@pytest.mark.skipif(not (shutil.which("zsh") and shutil.which("bash")), reason="needs zsh and bash")
+def test_the_block_puts_the_launcher_first_again_before_every_prompt_in_zsh_and_bash(home):
+    """A PATH line the person adds after the block can not put the real agent first (KI-540)."""
+    folder = home / "agent bin"
+    script = home / "rc"
+    script.write_text(shell_path.block(folder) + "PATH=/later:$PATH\n", encoding="utf-8")
+    zsh = subprocess.run(["zsh", "-fc", f"source '{script}'; source '{script}'; for f in $precmd_functions; do $f; done; "
+                          "print -r -- ${#precmd_functions}; print -r -- ${PATH%%:*}"],
+                         capture_output=True, text=True, timeout=30, check=True)
+    bash = subprocess.run(["bash", "--norc", "-c", f"source '{script}'; source '{script}'; eval \"$PROMPT_COMMAND\"; "
+                           "echo \"$PROMPT_COMMAND\"; echo \"${PATH%%:*}\""],
+                          capture_output=True, text=True, timeout=30, check=True)
+    assert zsh.stdout.splitlines() == ["1", str(folder)]
+    assert bash.stdout.splitlines() == [shell_path.FUNCTION, str(folder)]
 
 
 def test_without_the_block_a_startup_file_is_the_persons_own(home):

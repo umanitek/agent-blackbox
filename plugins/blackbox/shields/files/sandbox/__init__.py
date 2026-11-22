@@ -136,9 +136,11 @@ def _keep_on_path(folder: Path) -> None:
     """Puts the block on PATH; when Blackbox had put it there before and it is gone or changed, the
     restoration is recorded for File Shield's alerts (an agent or a program undid it)."""
     marker = _on_path_marker()
-    was_on, whole = marker.is_file(), shell_path.intact(folder)
+    # Only a block that is gone or changed is a restoration: lines the person adds around a whole
+    # block change nothing (add() leaves the file alone), and Blackbox's own older block is an upgrade.
+    was_on, whole, upgrade = marker.is_file(), shell_path.intact(folder), shell_path.upgradable(folder)
     changed = shell_path.add(folder)
-    if changed and was_on and not whole:
+    if changed and was_on and not whole and not upgrade:
         _record_restoration([str(path) for path in changed])
     if not was_on:
         marker.parent.mkdir(parents=True, exist_ok=True)

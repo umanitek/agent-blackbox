@@ -1,10 +1,13 @@
 """A folder Blackbox puts FIRST on the person's PATH, through one marked block in their shell
 startup files — and takes out again (File Shield's agent launchers; ``blackbox uninstall``).
 
-The block is Blackbox's only edit of a file it does not own, so it is fenced by two marker lines
-and written last in the file (a PATH line further down — nvm, Homebrew — would otherwise put the
-real agent program ahead of Blackbox's launcher). Adding twice changes nothing; removing takes out
-exactly the fenced lines and leaves the person's own lines as they were.
+The block is Blackbox's only edit of a file it does not own, so it is fenced by two marker lines.
+It is first written at the end of the file, and it puts the folder first AGAIN before every prompt
+(zsh ``precmd_functions``, bash ``PROMPT_COMMAND``): a PATH line the person adds further down — nvm,
+Homebrew — can not put the real agent program ahead of Blackbox's launcher, so the block never has
+to stay last and the person's file is never rewritten to move it (KI-540, E2E full5 2026-11-22).
+Adding twice changes nothing; removing takes out exactly the fenced lines and leaves the person's
+own lines as they were.
 
 Files: ``~/.zshrc`` (created when missing: macOS's default shell) and, when they exist,
 ``~/.bashrc`` and ``~/.bash_profile``.
@@ -57,14 +60,28 @@ def _without_block(text: str) -> str:
     return "".join(out)
 
 
-def block(folder: Path) -> str:
-    """The fenced lines that put *folder* first on PATH (once, however often the file is read)."""
-    quoted = str(folder).replace('"', '\\"')
-    return (f"{BEGIN}\ncase \":$PATH:\" in *\":{quoted}:\"*) ;; *) export PATH=\"{quoted}:$PATH\" ;; esac\n{END}\n")
-
-
 #: The shell function the block defines and hooks before every prompt.
 FUNCTION = "_blackbox_agent_path"
+
+
+def block(folder: Path) -> str:
+    """The fenced lines that put *folder* first on PATH now and again before every prompt, in zsh
+    and in bash alike (one text: the file may be read by either)."""
+    quoted = str(folder).replace('"', '\\"')
+    return (f"{BEGIN}\n"
+            f"{FUNCTION}() {{ case \":$PATH:\" in \":{quoted}:\"*) ;; *) PATH=\"{quoted}:$PATH\"; export PATH ;; esac; }}\n"
+            f"{FUNCTION}\n"
+            f"if [ -n \"$ZSH_VERSION\" ]; then precmd_functions=(${{precmd_functions:#{FUNCTION}}} {FUNCTION}); "
+            f"elif [ -n \"$BASH_VERSION\" ]; then case \";$PROMPT_COMMAND;\" in *\";{FUNCTION};\"*) ;; "
+            f"*) PROMPT_COMMAND=\"{FUNCTION}${{PROMPT_COMMAND:+;$PROMPT_COMMAND}}\" ;; esac; fi\n"
+            f"{END}\n")
+
+
+def _legacy_block(folder: Path) -> str:
+    """The block as Blackbox wrote it before it re-asserted itself (FIX-0297): replacing it is an
+    upgrade, never a restoration the person must be told about."""
+    quoted = str(folder).replace('"', '\\"')
+    return f"{BEGIN}\ncase \":$PATH:\" in *\":{quoted}:\"*) ;; *) export PATH=\"{quoted}:$PATH\" ;; esac\n{END}\n"
 
 
 #: A line that could take an agent command away from Blackbox's launcher or switch the block off:
@@ -91,10 +108,13 @@ def add(folder: Path, home: Optional[Path] = None) -> list[Path]:
     """Puts the block for *folder* at the END of each startup file; answers the files changed."""
     home = home or Path.home()
     changed = []
+    wanted_block = block(folder)
     for path in _files(home):
         text = path.read_text(encoding="utf-8-sig") if path.is_file() else ""
+        if _holds_exactly(text, wanted_block):
+            continue   # already whole, wherever it sits: the person's file is never rewritten
         base = _without_block(text)
-        wanted = base + ("" if not base or base.endswith("\n") else "\n") + block(folder)
+        wanted = base + ("" if not base or base.endswith("\n") else "\n") + wanted_block
         if wanted != text:
             path.write_text(wanted, encoding="utf-8")
             changed.append(path)
@@ -140,13 +160,24 @@ def section(text: str) -> str:
     return text[start:] if end < 0 else text[start:end + len(END)]
 
 
+def _holds_exactly(text: str, wanted: str) -> bool:
+    return text.count(BEGIN) == 1 and text.count(END) == 1 and section(text) + "\n" == wanted
+
+
 def intact(folder: Path, home: Optional[Path] = None) -> bool:
-    """True when every file :func:`add` writes holds exactly the block for *folder*, as its LAST
-    lines (a PATH line written after it would put the real agent program first again)."""
+    """True when every file :func:`add` writes holds the block for *folder* exactly once and byte
+    for byte as Blackbox wrote it — wherever it sits (the block re-asserts PATH before every prompt,
+    so lines the person adds after it are theirs, KI-540)."""
     home = home or Path.home()
     wanted = block(folder)
-    for path in _files(home):
-        text = path.read_text(encoding="utf-8-sig") if path.is_file() else ""
-        if not text.endswith(wanted) or text.count(BEGIN) != 1:
-            return False
-    return True
+    return all(_holds_exactly(path.read_text(encoding="utf-8-sig") if path.is_file() else "", wanted)
+               for path in _files(home))
+
+
+def upgradable(folder: Path, home: Optional[Path] = None) -> bool:
+    """True when every file holding a block holds an OLDER whole block for *folder* (Blackbox's own
+    earlier text): writing the current one is an upgrade, not a restoration."""
+    home = home or Path.home()
+    old = _legacy_block(folder)
+    found = [path for path in _files(home) if path.is_file()]
+    return bool(found) and all(_holds_exactly(path.read_text(encoding="utf-8-sig"), old) for path in found)
