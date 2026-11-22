@@ -15,8 +15,10 @@ contents, ever): ``files:file-hit`` for a protected file, ``files:folder-hit`` f
 folder (or a file inside it). A prompt that NAMES a protected item is ``files:protected-mention``
 (high, flagged, never blocking): naming is not touching, and no prompt text is kept.
 
-**Limits, said plainly:** this is Layer 1 (hooks). A program an agent wrote or downloaded and then
-runs reads files without telling a hook what it opens. Only the operating system sees that: an
+**Limits, said plainly:** this is Layer 1 (hooks). A script an agent writes is judged by its text
+when written and again when run (:mod:`.written`), but a program an agent compiled or downloaded,
+or a script that assembles a path from pieces that are not written in it, reads files without
+telling a hook what it opens. Only the operating system sees that: an
 agent the person puts in the sandbox (Layer 2, :mod:`.sandbox`) is stopped there by the kernel;
 any other agent keeps this layer only (docs/file-shield.md).
 
@@ -33,7 +35,7 @@ from ... import audit
 from ...detection import (KIND_FLAG_ONLY, PERSON_PROTECTED, SHELL_TOOLS, Finding, builds_hidden_command, command_from_args,
                            protected_path_mentions, protected_path_touches)
 from ..contract import FindingKind, ShieldMode
-from . import mode as mode_module
+from . import mode as mode_module, written
 
 FILE_HIT_ID = "files:file-hit"
 FOLDER_HIT_ID = "files:folder-hit"
@@ -52,7 +54,8 @@ FINDING_KINDS: tuple[FindingKind, ...] = (
 )
 #: What each route is called in the finding, for a person.
 ROUTES = {"read": "open", "copy": "copy", "write": "change", "name": "use", "tree": "reach (through its folder)",
-          "mention": "ask for", "sandbox": "reach from inside the sandbox", "unseen": "run a command it cannot read beside"}
+          "mention": "ask for", "sandbox": "reach from inside the sandbox", "unseen": "run a command it cannot read beside",
+          "script": "reach through a script it wrote"}
 #: The agent named on a refusal the OS sandbox made (Layer 2): the log names the program, not the agent.
 SANDBOX_AGENT = audit.SANDBOX_RECORDER   # not an agent: any sandboxed program (KI-538)
 
@@ -81,7 +84,38 @@ def detect(tool_name: str, args: Any, mode: ShieldMode) -> list[Finding]:
             evidence=f"{touch.mode} {touch.path} — protected {what} {touch.pattern}"[:400],
             confirmed=False, source="custom",
             fields={"path": touch.path[:400], "item": touch.pattern, "route": touch.mode, "kind": what})]
-    return _unseen_route(tool_name, args, items)
+    return _script_hit(tool_name, args, items) or _unseen_route(tool_name, args, items)
+
+
+def _script_hit(tool_name: str, args: Any, items: list[str]) -> list[Finding]:
+    """A refusal when this call WRITES a script that names a protected item, or RUNS a script an
+    agent wrote that does (:mod:`.written`); each script written is remembered for its run."""
+    shell = (tool_name or "").strip().lower() in SHELL_TOOLS
+    command = command_from_args(tool_name, args) if shell else ""
+    writes = written.script_writes(tool_name, args, command)
+    for path, content in writes:
+        if (found := _content_hit(content, path, items, "write a script that opens")):
+            return found
+    for path, _content in writes:
+        written.remember(os.path.normpath(os.path.expanduser(path)))
+    for path, content in written.scripts_run(command) if shell else ():
+        if (found := _content_hit(content, path, items, "run a script that opens")):
+            return found
+    return []
+
+
+def _content_hit(content: str, script: str, items: list[str], route: str) -> list[Finding]:
+    for touch in protected_path_touches("terminal", written.as_call(script, content), items, whole=True, first_only=True,
+                                        every_route=True):
+        folder = is_folder(touch.pattern)
+        what = "folder" if folder else "file"
+        return [Finding(
+            identifier=FOLDER_HIT_ID if folder else FILE_HIT_ID, category=CATEGORY, severity="critical",
+            title=f"File Shield: an AI agent tried to {route} your protected {what} {touch.pattern}",
+            tool_name="terminal", matched=PERSON_PROTECTED,
+            evidence=f"script {script} — {touch.path} — protected {what} {touch.pattern}"[:400], confirmed=False, source="custom",
+            fields={"path": touch.path[:400], "item": touch.pattern, "route": "script", "kind": what, "script": script[:400]})]
+    return []
 
 
 def _parents(items: list[str]) -> list[str]:

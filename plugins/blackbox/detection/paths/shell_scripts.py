@@ -51,14 +51,36 @@ def _script_args(name: str, words: list[str], index: int) -> tuple[list[ShellFil
     return found, end
 
 
+#: A call that joins its arguments into one path: ``joinpath(…)``, ``os.path.join(…)``,
+#: ``path.join(…)`` / ``path.resolve(…)``, ``File.join(…)``, ``Path(…)``.
+_JOIN_CALL = re.compile(r"""(?:\bjoinpath|\bos\.path\.join|\bpath\.join|\bpath\.resolve|\bFile\.join|\bPath)\s*\(([^()]{1,1024})\)""")
+#: The ``/`` operator on paths: ``home / "Documents" / "Secret"``.
+_SLASH_CHAIN = re.compile(r"""(?:\)|\w)\s*/\s*['"][^'"\n]{1,256}['"](?:\s*/\s*['"][^'"\n]{1,256}['"])*""")
+_JOIN_PART = re.compile(r"""['"`]([^'"`\n]{1,256})['"`]""")
+
+
+def _joined_paths(code: str) -> list[str]:
+    """Paths *code* builds by joining literals (``Path.home().joinpath("Documents", "Secret", "x")``
+    → ``Documents/Secret/x``). WHY: a real agent wrote exactly that into a script and ran it
+    (2026-11-22); no single literal held a slash."""
+    out = []
+    for match in list(_JOIN_CALL.finditer(code)) + list(_SLASH_CHAIN.finditer(code)):
+        raw = _JOIN_PART.findall(match.group(1) if match.re is _JOIN_CALL else match.group(0))
+        parts = [part.strip("/") for part in raw if part.strip("/")]
+        if len(parts) >= 2 and not any("://" in part for part in parts):
+            out.append(("/" if raw[0].startswith("/") else "") + "/".join(parts))
+    return out
+
+
 def _paths_in_code(interpreter: str, code: str) -> list[ShellFileArg]:
-    """Every quoted path in *code*: whole folders when the code walks or packs folders;
-    a relative literal is also taken under the home folder when the code joins onto it."""
+    """Every quoted path in *code*, and every path it joins from literals: whole folders when the
+    code walks or packs folders; a relative one is also taken under the home folder when the code
+    joins onto it."""
     recursive = bool(_WHOLE_FOLDER_CODE.search(code))
     joins_home = bool(_HOME_CODE.search(code))
     found: list[ShellFileArg] = []
-    for match in _LITERAL.finditer(code):
-        literal = match.group(2)
+    literals = [match.group(2) for match in _LITERAL.finditer(code)] + _joined_paths(code)
+    for literal in literals:
         if "://" in literal or not ("/" in literal or "\\" in literal or literal.startswith("~")):
             continue
         found.append(ShellFileArg(path=literal, command=interpreter, recursive=recursive))

@@ -120,6 +120,10 @@ that the two version fields agree.
 
 ### Security
 
+- **A script an agent writes is judged by what it says.** File Shield now reads a script an agent
+  writes (through a file tool, a heredoc or `echo … >`) and refuses it when it names a protected
+  item — also when its path is joined from pieces such as `Path.home().joinpath(…)` — and reads it
+  again when the agent runs it. A program that hides what it opens still needs the sandbox.
 - **File Shield judges the command an interpreter is told to run.** A protected file read through
   inline code (`python3 -c`, `node -e`, `ruby -e`, `perl -e`, `osascript -e`), a command
   substitution, a decode spelled out on the command line, `eval`, or a wrapper such as `env`,
