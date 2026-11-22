@@ -53,10 +53,13 @@ impl Helper {
 
     /// Puts the system back: DNS settings restored, the firewall's rules removed and it released.
     /// The service stops (launchd's SIGTERM: a repair, an update, a removal). DNS and the pf
-    /// rules need the running helper, so they are put back; posture hardening is NOT — it keeps
+    /// rules need the running helper, so they are put back — except in an upgrade's hand-over, when the
+    /// next helper takes them over at once; posture hardening is NOT — it keeps
     /// the Mac safe without the helper ([`undo_for`]).
     pub(super) fn stop(&self) {
-        let undo = undo_for(Stopping::Service);
+        // An upgrade hands over to the next helper: the Mac's protection stays in place (KI-537).
+        let how = if crate::handover::pending(Path::new(HOME), SystemTime::now()) { Stopping::Handover } else { Stopping::Service };
+        let undo = undo_for(how);
         if undo.dns { let _ = self.set_dns(false); }
         if undo.filter { let _ = self.set_filter(&Plan::default()); }
         self.watching.store(false, Ordering::SeqCst);

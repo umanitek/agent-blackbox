@@ -26,6 +26,7 @@
 pub mod platform;
 pub mod command;
 pub mod dns;
+pub mod handover;
 pub mod link;
 pub mod last_plan;
 pub mod plan;

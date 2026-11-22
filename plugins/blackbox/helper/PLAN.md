@@ -98,3 +98,9 @@ The helper saves the exact bytes of each new plan it applies (verified first whe
 root-only folder as `last-plan.json`, and applies that plan again the moment it starts — before
 the first poll — so a restart or an upgrade leaves no gap without DNS Shield or the firewall.
 End requests (`remote.end`) are never carried over a restart.
+
+An upgrade is a hand-over (`src/handover.rs`, KI-537): `blackbox-netd install` writes a short-lived
+`handover` mark in the root-only folder before it stops the old helper, and the old helper then
+leaves DNS and the pf rules in place instead of putting them back; the new helper clears the mark
+once it has applied its saved plan. An upgrade that ends with no helper running at all puts DNS and
+the firewall back, so the Mac is never left pointing at a resolver that is gone.

@@ -5,8 +5,11 @@ use crate::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Stopping {
-    /// launchd stopped the service (repair, update, removal through launchctl).
+    /// launchd stopped the service (a repair, a removal through launchctl).
     Service,
+    /// An upgrade stopped it and the next helper takes over from the saved plan at once
+    /// ([`crate::handover`]): nothing is put back, so there is no gap (KI-537).
+    Handover,
     /// `blackbox-netd uninstall`; *undo_hardening* only when the person explicitly chose it.
     Uninstall { undo_hardening: bool },
 }
@@ -25,6 +28,9 @@ pub struct Undo {
 /// The one rule (security finding: removing or repairing the helper silently re-opened the Mac by
 /// reversing every posture fix): hardening is undone only when the person explicitly asks.
 pub fn undo_for(how: Stopping) -> Undo {
+    if how == Stopping::Handover {
+        return Undo { dns: false, filter: false, hardening: false };
+    }
     Undo { dns: true, filter: true, hardening: matches!(how, Stopping::Uninstall { undo_hardening: true }) }
 }
 

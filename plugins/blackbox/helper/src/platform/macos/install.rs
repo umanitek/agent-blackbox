@@ -198,18 +198,21 @@ fn ensure_key(home: &Path) -> Result<Vec<u8>, String> {
 }
 
 pub fn install(args: &InstallArgs) -> Result<(), String> {
-    install_into(args, &Layout::system(), &SystemLaunchd)
+    install_into(args, &Layout::system(), &SystemLaunchd,
+                 &|| crate::put_back(&super::SystemEnforcer::default(), crate::undo_for(crate::Stopping::Service)))
 }
 
 /// [`install`] into *layout* through *launchd* — what the tests drive with a temporary layout and
-/// a fake launchd.
-pub fn install_into(args: &InstallArgs, layout: &Layout, launchd: &dyn Launchd) -> Result<(), String> {
+/// a fake launchd. *put_back* puts DNS and the firewall back when an upgrade ends with no helper
+/// running at all (the old one kept them in place for the hand-over, [`crate::handover`]).
+pub fn install_into(args: &InstallArgs, layout: &Layout, launchd: &dyn Launchd,
+                    put_back: &dyn Fn() -> Vec<String>) -> Result<(), String> {
     let parent = layout.home.parent().ok_or("the helper's folder has no parent")?;
     fs::create_dir_all(parent).map_err(|error| format!("{}: {error}", parent.display()))?;
     let staging = parent.join(format!(".netd-staging-{}", std::process::id()));
     let _ = fs::remove_dir_all(&staging);
     private_files::ensure_dir(&staging).map_err(|error| format!("{}: {error}", staging.display()))?;
-    let result = install_from_staging(args, &staging, layout, launchd);
+    let result = install_from_staging(args, &staging, layout, launchd, put_back);
     let _ = fs::remove_dir_all(&staging);
     result
 }
@@ -243,22 +246,35 @@ impl Previous {
     }
 }
 
-fn install_from_staging(args: &InstallArgs, staging: &Path, layout: &Layout, launchd: &dyn Launchd) -> Result<(), String> {
+fn install_from_staging(args: &InstallArgs, staging: &Path, layout: &Layout, launchd: &dyn Launchd,
+                        put_back: &dyn Fn() -> Vec<String>) -> Result<(), String> {
     let copy = stage(&args.from, &args.sha256, staging)?;
     if let Some(team) = &args.team_id {
         check_signature(&copy, team)?;
     }
     // Verified. Only now does anything on the Mac change — and from here, a failure puts back
     // whatever helper was running before.
+    if layout.home.join(BINARY).is_file() {
+        // An upgrade: the old helper keeps DNS and the firewall in place when it stops (KI-537).
+        crate::handover::begin(&layout.home)?;
+    }
     launchd::stop(launchd, &layout.target);
     private_files::ensure_dir(&layout.home).map_err(|error| format!("{}: {error}", layout.home.display()))?;
     let previous = Previous::set_aside(layout, staging)?;
-    match put_in_place(args, &copy, layout, launchd) {
+    let placed = put_in_place(args, &copy, layout, launchd);
+    crate::handover::clear(&layout.home);   // over either way: the next ordinary stop puts the Mac back
+    match placed {
         Ok(()) => write_receipt(&layout.receipt, &args.sha256),
         Err(error) => Err(match previous {
             Some(previous) => match previous.restore(layout, launchd) {
                 Ok(()) => format!("{error} — the helper you had is back in place and running"),
-                Err(restore) => format!("{error}; putting the previous helper back also failed: {restore}"),
+                Err(restore) => {
+                    // No helper runs at all: DNS must not point at a resolver that is gone.
+                    let failed = put_back();
+                    let back = if failed.is_empty() { "DNS and the firewall are back to how they were".to_string() }
+                               else { format!("putting DNS and the firewall back also failed: {}", failed.join("; ")) };
+                    format!("{error}; putting the previous helper back also failed: {restore}; {back}")
+                }
             },
             None => {
                 // A first install that failed leaves nothing half-installed.
@@ -423,7 +439,7 @@ mod tests {
             ..Default::default()
         };
         launchd.state.borrow_mut().loaded = true;
-        let error = install_into(&args_for(&dir, b"new helper"), &layout, &launchd).unwrap_err();
+        let error = install_into(&args_for(&dir, b"new helper"), &layout, &launchd, &no_put_back).unwrap_err();
         assert!(error.contains("back in place and running"), "{error}");
         assert_eq!(fs::read(layout.home.join(BINARY)).unwrap(), b"old helper");
         assert!(launchd.state.borrow().loaded, "the old helper runs again");
@@ -439,7 +455,7 @@ mod tests {
         let key = link::load_key(&layout.home).unwrap();
         let launchd = launchd::fake::FakeLaunchd { linger: 3, ..Default::default() };
         launchd.state.borrow_mut().loaded = true;
-        install_into(&args_for(&dir, b"new helper"), &layout, &launchd).unwrap();
+        install_into(&args_for(&dir, b"new helper"), &layout, &launchd, &no_put_back).unwrap();
         assert_eq!(fs::read(layout.home.join(BINARY)).unwrap(), b"new helper");
         assert_eq!(launchd.state.borrow().bootstraps, 1, "it waited for the old job instead of failing a bootstrap");
         assert_eq!(link::load_key(&layout.home).unwrap(), key, "an upgrade never replaces the plan key");
@@ -448,12 +464,67 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    fn no_put_back() -> Vec<String> {
+        panic!("put_back runs only when no helper is left running")
+    }
+
+    /// A launchd that answers like the fake, records whether a hand-over was marked when it was
+    /// asked to stop the old helper, and can refuse every start.
+    struct Watching<'a> {
+        inner: launchd::fake::FakeLaunchd,
+        home: &'a Path,
+        marked_at_stop: std::cell::Cell<Option<bool>>,
+        refuse_all: bool,
+    }
+
+    impl Launchd for Watching<'_> {
+        fn bootout(&self, target: &str) {
+            if self.marked_at_stop.get().is_none() {
+                self.marked_at_stop.set(Some(crate::handover::pending(self.home, std::time::SystemTime::now())));
+            }
+            self.inner.bootout(target)
+        }
+        fn bootstrap(&self, plist: &Path) -> Result<(), String> {
+            if self.refuse_all { Err("Bootstrap failed: 5: Input/output error".into()) } else { self.inner.bootstrap(plist) }
+        }
+        fn known(&self, target: &str) -> bool { self.inner.known(target) }
+        fn running(&self, target: &str) -> bool { self.inner.running(target) }
+        fn pause(&self, pause: std::time::Duration) { self.inner.pause(pause) }
+    }
+
+    #[test]
+    fn an_upgrade_marks_a_hand_over_so_the_old_helper_keeps_protection_and_clears_it_after() {
+        // KI-537 (E2E full4): the old helper put DNS back and emptied the firewall on every upgrade.
+        let (dir, layout) = installed("handover", b"old helper");
+        let watching = Watching { inner: Default::default(), home: &layout.home, marked_at_stop: Default::default(), refuse_all: false };
+        watching.inner.state.borrow_mut().loaded = true;
+        install_into(&args_for(&dir, b"new helper"), &layout, &watching, &no_put_back).unwrap();
+        assert_eq!(watching.marked_at_stop.get(), Some(true), "the old helper saw the hand-over when it was stopped");
+        assert!(!crate::handover::pending(&layout.home, std::time::SystemTime::now()), "cleared once over");
+        assert_eq!(crate::undo_for(crate::Stopping::Handover), crate::Undo { dns: false, filter: false, hardening: false });
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_upgrade_that_ends_with_no_helper_puts_dns_and_the_firewall_back() {
+        let (dir, layout) = installed("nohelper", b"old helper");
+        let watching = Watching { inner: Default::default(), home: &layout.home, marked_at_stop: Default::default(), refuse_all: true };
+        watching.inner.state.borrow_mut().loaded = true;
+        let called = std::cell::Cell::new(0);
+        let error = install_into(&args_for(&dir, b"new helper"), &layout, &watching, &|| { called.set(called.get() + 1); vec![] })
+            .unwrap_err();
+        assert_eq!(called.get(), 1, "{error}");
+        assert!(error.contains("DNS and the firewall are back"), "{error}");
+        assert!(!crate::handover::pending(&layout.home, std::time::SystemTime::now()));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn a_first_install_that_fails_leaves_nothing_half_installed() {
         let dir = temp("first");
         let layout = Layout { home: dir.join("netd"), plist: dir.join("netd.plist"), receipt: dir.join(RECEIPT), target: "system/test".into() };
         let launchd = launchd::fake::FakeLaunchd { refuse: Some((layout.home.join(BINARY), b"new helper".to_vec())), ..Default::default() };
-        assert!(install_into(&args_for(&dir, b"new helper"), &layout, &launchd).is_err());
+        assert!(install_into(&args_for(&dir, b"new helper"), &layout, &launchd, &no_put_back).is_err());
         assert!(!layout.home.join(BINARY).exists() && !layout.plist.exists() && !layout.receipt.exists());
         let _ = fs::remove_dir_all(&dir);
     }

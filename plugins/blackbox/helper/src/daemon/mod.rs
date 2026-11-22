@@ -186,6 +186,7 @@ pub fn run() -> Result<(), String> {
     });
 
     helper.apply_saved_plan();   // no gap after a restart or an upgrade (last_plan)
+    crate::handover::clear(Path::new(HOME));   // taken over: the next ordinary stop puts the Mac back
     loop {
         if STOPPING.load(Ordering::SeqCst) {
             helper.stop();
