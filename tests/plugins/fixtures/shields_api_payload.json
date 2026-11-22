@@ -216,18 +216,6 @@
           "label": "Download for macOS",
           "url": "https://blackboxcommand.com/desktop/download/macos",
           "available": true
-        },
-        {
-          "os": "windows",
-          "label": "Windows",
-          "url": "",
-          "available": false
-        },
-        {
-          "os": "linux",
-          "label": "Linux",
-          "url": "",
-          "available": false
         }
       ],
       "open_url": ""
