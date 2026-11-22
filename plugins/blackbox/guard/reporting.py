@@ -162,6 +162,32 @@ BLOCKED_WHAT = {"tool": "this tool call", "in-user-prompt": "this prompt", "in-t
                 "in-fetched-page": "this page", "in-skill": "this skill", "text": "this text"}
 
 
+#: Graph-backed finding sources: only these may be called "known threats in the threat graph".
+_GRAPH_SOURCES = frozenset({"public", "community"})
+#: What a LOCAL rule is, in the person's words (finding ``source`` / ``matched``).
+_LOCAL_RULE_NAMES = {"user-protected": "your protected-path rule", "secret": "Blackbox's built-in secret protection",
+                     "heuristic": "Blackbox's built-in checks", "llm": "Blackbox's AI review"}
+_SELF_PROTECTION = "Blackbox's self-protection"
+
+
+def _rule_name(finding: detection.Finding) -> str:
+    """The plain name of the local rule behind *finding* (never "the threat graph")."""
+    if finding.source == "custom":
+        return _LOCAL_RULE_NAMES["user-protected"] if finding.matched == "user-protected" else _SELF_PROTECTION
+    return _LOCAL_RULE_NAMES.get(finding.source, "a local Blackbox rule")
+
+
+def _why_blocked(findings: list[detection.Finding]) -> str:
+    """"it matched N known threat(s) in the threat graph" for graph matches; a local rule — the
+    person's protected path, self-protection, a built-in check — is named as what it is (E2E recheck
+    2026-11-21: the person's own rule was reported as a threat-graph match)."""
+    graph = [f for f in findings if f.source in _GRAPH_SOURCES]
+    parts = [f"it matched {len(graph)} known threat{'s' if len(graph) != 1 else ''} in the threat graph"] if graph else []
+    for name in dict.fromkeys(_rule_name(f) for f in findings if f.source not in _GRAPH_SOURCES):
+        parts.append(f"{'it was refused by ' if not parts else ''}{name}")
+    return " and ".join(parts) if parts else "it matched a Blackbox rule"
+
+
 def blackbox_block_message(findings: list[detection.Finding], what: str = "tool") -> str:
     """Human-readable block message summarizing the blocking findings. *what*: what was refused
     (:data:`BLOCKED_WHAT` key — a tool call by default, or the kind of text checked).
@@ -169,11 +195,7 @@ def blackbox_block_message(findings: list[detection.Finding], what: str = "tool"
     WHY the last line names the PERSON (E2E 2026-11-21): it used to say "switch Blackbox to audit
     mode", and the agent reads this text too — it invited the agent to ask for protection to be
     turned down. A false positive is for the person to review in Blackbox."""
-    lines = [
-        f"Blackbox blocked {BLOCKED_WHAT.get(what, BLOCKED_WHAT['tool'])} — it matched "
-        f"{len(findings)} known threat{'s' if len(findings) != 1 else ''} in the threat graph:",
-        "",
-    ]
+    lines = [f"Blackbox blocked {BLOCKED_WHAT.get(what, BLOCKED_WHAT['tool'])} — {_why_blocked(findings)}:", ""]
     for f in findings:
         lines.append(f"- [{f.severity.upper()}] {f.category}: {f.title} ({f.identifier})")
         if f.advice:
