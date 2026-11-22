@@ -294,6 +294,26 @@ class BrowserRoot:
 
 
 @dataclass(frozen=True)
+class ShieldAlert:
+    """One thing a shield wants the person told now (``Shield.alerts``; ``notify`` shows it).
+
+    *title* and *text* are LOCK-SCREEN SAFE (no path, address, user name or command); *detail* is
+    the full sentence for inside the app. *key* is stable for the thing reported. *finding*: the
+    identifier of the audit finding this alert already speaks for ("" = none), so that finding is
+    not announced a second time. *agent*: the agent id it is about ("" = none)."""
+
+    key: str
+    kind: str
+    ts: float
+    severity: str
+    title: str
+    text: str
+    detail: str = ""
+    agent: str = ""
+    finding: str = ""
+
+
+@dataclass(frozen=True)
 class Shield:
     """One shield: metadata plus the callables that make it work (Strategy; no base class).
 
@@ -336,6 +356,8 @@ class Shield:
     #: list change turns protection down (KI-538: never internal ids); None = a plain sentence
     #: built from the shield's name.
     describe_change: Optional[Callable[[str, list[str], bool], str]] = None
+    #: ``alerts() -> [ShieldAlert]``, newest first: what the notifier may tell the person. None = none.
+    alerts: Optional[Callable[[], list[ShieldAlert]]] = None
 
     @property
     def folder(self) -> Path:

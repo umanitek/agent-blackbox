@@ -34,6 +34,11 @@ PROTECTING_SWITCHES = {"auto_attach": "protecting new agents automatically", "di
                        "osv_lookup": "checking packages against the vulnerability database"}
 
 
+#: Settings sections another package owns: ``{key: judge(proposed) -> [reasons]}`` (its own state
+#: is read by the judge). ``notify`` registers ``notifications`` through the dashboard.
+SECTION_JUDGES: dict[str, Callable[[Any], list[str]]] = {}
+
+
 @dataclass(frozen=True)
 class Current:
     """What is on now: the settings view (``read_settings``) and each shield's mode
@@ -96,6 +101,9 @@ def _settings(body: Mapping[str, Any], current: Current) -> list[str]:
         if was.get("record_prompt_text") is not True:   # a privacy change: the person confirms it, in plain words
             days = activity.get("history_days") or was.get("history_days") or 30
             out.append(f"Start keeping the text of the prompts you send to AI agents — on this Mac only, with secrets removed, for {days} days")
+    for key, judge in SECTION_JUDGES.items():   # a section another package owns (notifications)
+        if key in body:
+            out.extend(judge(body[key]))
     paths = body.get("protected_paths")
     if isinstance(paths, list):
         dropped = [p for p in now.get("protected_paths") or [] if p not in paths]

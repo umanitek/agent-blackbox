@@ -48,7 +48,7 @@ from .contract import (
     Capability,
     OfferDownload,
     Pack,
-    Shield,
+    Shield, ShieldAlert,
     ShieldEvent,
     ShieldMode,
     ShieldOffer,
@@ -56,6 +56,7 @@ from .contract import (
     ShieldStatus,
 )
 from .extensions import Registrar, ShieldExtension
+from .alerting import alerts
 from .json_records import JsonValue
 from .local_only import LOCAL_ONLY_SOURCE, LOCAL_ONLY_SOURCES
 from .local_only import local_only as _local_only
@@ -84,7 +85,7 @@ __all__ = [
     "RawAnswer",
     "Registrar",
     "SelfTest",
-    "Shield",
+    "Shield", "ShieldAlert",
     "ShieldApi",
     "ShieldApiError",
     "ShieldContext",
@@ -94,7 +95,7 @@ __all__ = [
     "ShieldOffer",
     "ShieldStatus",
     "ShieldsSnapshot",
-    "addon_routes",
+    "addon_routes", "alerts",
     "all_shields",
     "allow_lists",
     "allows",

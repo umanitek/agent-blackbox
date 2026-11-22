@@ -54,6 +54,8 @@ SettingsValidator = Callable[[dict[str, Any]], tuple[Any, ...]]
 
 #: Marks a superseded key in the updates for :func:`_apply` to delete.
 _SUPERSEDED = object()
+#: Sections another package owns: ``{key: validate(raw, errors) -> section}``, deep-merged like ``llm``.
+SECTION_VALIDATORS: dict[str, Callable[[Any, list[str]], dict[str, Any]]] = {}
 
 
 def read_settings() -> dict[str, Any]:
@@ -146,7 +148,7 @@ def _validate(payload: dict[str, Any], *, sharing_consent: bool = False) -> tupl
         else:
             errors.append(f"protected_paths must be a list of up to {MAX_PROTECTED_PATHS} paths")
 
-    for key, validate in (("llm", _validate_llm), ("agent_activity", _validate_activity)):
+    for key, validate in (("llm", _validate_llm), ("agent_activity", _validate_activity), *SECTION_VALIDATORS.items()):
         section = validate(payload[key], errors) if key in payload else {}
         if section:
             updates[key] = section
@@ -362,7 +364,7 @@ def _apply(entry: dict[str, Any], updates: dict[str, Any]) -> None:
             entry.pop(key, None)
         elif key in ("detection", "shields") and isinstance(value, dict):
             _merge_per_id(entry, key, value)
-        elif key in ("llm", "agent_activity") and isinstance(value, dict):
+        elif (key in ("llm", "agent_activity") or key in SECTION_VALIDATORS) and isinstance(value, dict):
             existing = entry.get(key)
             if not isinstance(existing, dict):
                 existing = {}

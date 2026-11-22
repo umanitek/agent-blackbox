@@ -41,7 +41,7 @@ from typing import Any, Mapping
 
 from ...detection import Finding
 from ..contract import Capability, Pack, Shield, ShieldEvent, ShieldMode
-from . import api, events, helper, lockdown, mode, monitor, status
+from . import api, events, helper, lockdown, mode, monitor, notices, status
 from .monitor import listening, signature, watch
 from .protect import blocklists, enforcement, listed
 from .respond import events as watch_events
@@ -106,4 +106,5 @@ NETWORK = Shield(
     page=HERE / "page" / "network.html", attacks=HERE / "attacks.json", use_data=_use_data, api=api.API,
     # Adding to these turns protection down: names never blocked, hosts agents may reach, who may SSH in.
     allow_lists=frozenset({mode.OPT_ALLOW, mode.OPT_AGENT_HOSTS, mode.OPT_SSH_ALLOW}),
+    alerts=notices.shield_alerts,
 )

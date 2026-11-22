@@ -249,6 +249,13 @@ def dkg_home() -> Path:
     return Path(_resolve_dkg_home(_blackbox_entry())).expanduser()
 
 
+def raw_section(name: str) -> dict[str, Any]:
+    """The saved Blackbox config section *name* as written ({} when absent or not a mapping), for
+    a package that owns and parses its own section (``notify.policy``)."""
+    section = _blackbox_entry().get(name)
+    return dict(section) if isinstance(section, dict) else {}
+
+
 @dataclass(frozen=True)
 class AgentActivity:
     """The agent history's two settings (``agent_activity.*`` in config.yaml): how many days an

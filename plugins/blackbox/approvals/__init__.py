@@ -18,10 +18,10 @@ from __future__ import annotations
 
 from . import system_prompt
 from .store import Approvals, Held, answer_message, pair_message, sign
-from .weakening import Current, gated, reasons
+from .weakening import SECTION_JUDGES, Current, gated, reasons
 
 #: The one store for this dashboard run.
 STORE = Approvals()
 
 
-__all__ = ["STORE", "Approvals", "Current", "Held", "answer_message", "gated", "pair_message", "reasons", "sign", "system_prompt"]
+__all__ = ["SECTION_JUDGES", "STORE", "Approvals", "Current", "Held", "answer_message", "gated", "pair_message", "reasons", "sign", "system_prompt"]

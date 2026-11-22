@@ -31,6 +31,7 @@ import os
 from typing import Any
 
 from ... import audit
+from ..contract import ShieldAlert
 from . import changes, sandbox
 from .protect import FILE_HIT_ID, FOLDER_HIT_ID, SANDBOX_AGENT
 
@@ -88,6 +89,15 @@ def _restore_alerts() -> list[dict[str, Any]]:
     return [_alert(f"path-restored:{float(row.get('ts') or 0):.6f}", "path-restored", float(row.get("ts") or 0), "high",
                    "", "", "Something removed Blackbox's agent sandbox from your shell settings. File Shield put it back.")
             for row in sandbox.restorations()]
+
+
+def shield_alerts() -> list[ShieldAlert]:
+    """The same alerts as the framework's typed ``Shield.alerts`` (``notify`` reads these). A
+    refusal names the finding it speaks for, so that finding is not announced twice."""
+    return [ShieldAlert(key=row["key"], kind=row["kind"], ts=row["ts"], severity=row["severity"], title=row["title"],
+                        text=row["text"], detail=f"{row['text']} ({row['item']})" if row["item"] else "", agent=row["agent"],
+                        finding={"file-hit": FILE_HIT_ID, "folder-hit": FOLDER_HIT_ID}.get(row["kind"], ""))
+            for row in alerts()]
 
 
 def alerts(limit: int = MAX_ALERTS) -> list[dict[str, Any]]:

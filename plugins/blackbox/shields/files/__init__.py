@@ -32,7 +32,7 @@ from typing import Any, Mapping
 
 from ...kernel import agent_hosts
 from ..contract import Capability, Shield, ShieldMode
-from . import api, changes, events, mode, protect, status
+from . import alerts, api, changes, events, mode, protect, status
 
 #: What another package (Blackbox Desktop's add-on) may use: the shield, its mode (watched folders,
 #: protected items), its real-time changes and its events.
@@ -87,5 +87,5 @@ FILES = Shield(
     claims=claims, allows=allows, status=status.build, events=events.report, settings_fields=mode.fields,
     finding_kinds=FINDING_KINDS, capabilities=CAPABILITIES, packs=HERE / "packs",
     page=HERE / "page" / "files.html", attacks=HERE / "attacks.json", api=api.API,
-    prompt_check=protect.prompt_check, describe_change=describe_change,
+    prompt_check=protect.prompt_check, describe_change=describe_change, alerts=alerts.shield_alerts,
 )
