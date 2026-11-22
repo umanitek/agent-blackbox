@@ -222,7 +222,7 @@ def export() -> dict[str, Any]:
 def profile(agent: str, home: str, project: str = "") -> Optional[dict[str, Any]]:
     """One profile's detail from the real files (see :mod:`.profile_detail`); None when unknown."""
     from . import profile_detail
-    found = profile_detail.read(agent, home, project)
+    found = profile_detail.read(agent, home, project, running=_snapshot()[1])
     return asdict(found) if found is not None else None
 
 

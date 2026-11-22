@@ -30,8 +30,11 @@ from .model import Action, Instance
 #: How long an ended instance stays in the history when the setting cannot be read
 #: (``agent_activity.history_days`` in config.yaml; see :func:`history_days`).
 HISTORY_DAYS = 30
-#: How long one reading of that setting is reused (a flush happens every few seconds).
+#: How long one reading of those settings is reused (a flush happens every few seconds).
 DAYS_MEMO_SECONDS = 60.0
+#: Without a process to follow, an instance with no event for this long has ended, when
+#: ``agent_activity.quiet_minutes`` cannot be read.
+QUIET_SECONDS = 30 * 60.0
 MAX_INSTANCES = 4000
 #: The most actions kept per instance (later ones are counted, not listed).
 MAX_ACTIONS = 2000
@@ -42,7 +45,7 @@ MAX_ACTIONS_BYTES = 2 * 1024 * 1024
 _lock = threading.RLock()
 _changed = threading.Condition(_lock)
 _state: dict[str, object] = {"loaded": False, "instances": {}, "cursor": 0, "dirty": False, "flushed": 0.0}
-_days: dict[str, float] = {"at": 0.0, "days": float(HISTORY_DAYS)}
+_days: dict[str, float] = {"at": 0.0, "days": float(HISTORY_DAYS), "quiet": QUIET_SECONDS}
 _FIELDS = {item.name for item in fields(Instance)}
 
 
@@ -83,7 +86,7 @@ def reset() -> None:
     """Forget what is in memory (tests; a new ``BLACKBOX_HOME``)."""
     with _lock:
         _state.update(loaded=False, instances={}, cursor=0, dirty=False, flushed=0.0)
-        _days.update(at=0.0, days=float(HISTORY_DAYS))
+        _days.update(at=0.0, days=float(HISTORY_DAYS), quiet=QUIET_SECONDS)
 
 
 def get(key: str) -> Optional[Instance]:
@@ -130,15 +133,28 @@ def wait_for_change(since: int, seconds: float) -> int:
         return int(_state["cursor"])   # type: ignore[arg-type]
 
 
-def history_days() -> int:
-    """The person's retention for ended instances, read from the config at most once a minute."""
+def _setting(name: str, default: float) -> float:
+    """One ``agent_activity`` setting, read from the config at most once a minute (a flush and
+    the observer's look happen every few seconds); an unreadable config keeps the last value."""
     with _lock:
-        if time.monotonic() - _days["at"] >= DAYS_MEMO_SECONDS or not _days["at"]:
+        if time.monotonic() - _days.get("at", 0.0) >= DAYS_MEMO_SECONDS or not _days.get("at"):
             try:
-                _days.update(at=time.monotonic(), days=float(agent_activity().history_days))
-            except Exception:   # health: allow BLE001 -- an unreadable config keeps the last known retention
+                found = agent_activity()
+                _days.update(at=time.monotonic(), days=float(found.history_days), quiet=float(found.quiet_minutes) * 60)
+            except Exception:   # health: allow BLE001 -- an unreadable config keeps the last known values
                 _days["at"] = time.monotonic()
-        return int(_days["days"])
+        return float(_days.get(name, default))
+
+
+def history_days() -> int:
+    """The person's retention for ended instances (``agent_activity.history_days``; 30 unless set)."""
+    return int(_setting("days", HISTORY_DAYS))
+
+
+def quiet_seconds() -> float:
+    """After how long without an event an instance with no process to follow has ended
+    (``agent_activity.quiet_minutes``; 30 minutes unless set)."""
+    return _setting("quiet", QUIET_SECONDS)
 
 
 def _prune(instances: dict[str, Instance]) -> list[str]:

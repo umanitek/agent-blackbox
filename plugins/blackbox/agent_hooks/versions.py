@@ -12,6 +12,7 @@ Usage::
 
 from __future__ import annotations
 
+import plistlib
 import re
 import shutil
 import subprocess
@@ -61,8 +62,27 @@ def _ask(program: str) -> str:
     return parse(done.stdout or done.stderr)
 
 
+def _bundle(host: Host) -> Optional[Installed]:
+    """The agent's application bundle when it has no command on PATH (the Cursor and Windsurf
+    apps): the bundle's own program, named by its ``Contents/Info.plist``, and the version it
+    declares there — so the signer of every catalogued program can be checked."""
+    for sign in host.signs:
+        info = Path(sign) / "Contents" / "Info.plist"
+        if not sign.endswith(".app") or not info.is_file():
+            continue
+        try:
+            with open(info, "rb") as handle:
+                data = plistlib.load(handle)
+        except (OSError, plistlib.InvalidFileException, ValueError):
+            continue
+        program = Path(sign) / "Contents" / "MacOS" / str(data.get("CFBundleExecutable") or "")
+        if program.is_file():
+            return Installed(str(program), parse(str(data.get("CFBundleShortVersionString") or "")))
+    return None
+
+
 def installed(home: Optional[Path] = None) -> dict[str, Installed]:
-    """Each agent whose command is on this machine, with its version (cached)."""
+    """Each agent whose command (or application bundle) is on this machine, with its version (cached)."""
     with _lock:
         if time.monotonic() - float(_cache["at"]) < CACHE_SECONDS and _cache["found"]:   # type: ignore[arg-type]
             return dict(_cache["found"])   # type: ignore[call-overload]
@@ -71,5 +91,7 @@ def installed(home: Optional[Path] = None) -> dict[str, Installed]:
             program = _program(host, home or Path.home())
             if program:
                 found[host.id] = Installed(program, _ask(program))
+            elif (bundle := _bundle(host)) is not None:
+                found[host.id] = bundle
         _cache.update(at=time.monotonic(), found=found)
         return dict(found)

@@ -28,6 +28,7 @@ from pathlib import Path, PurePath
 from typing import Mapping, Optional
 
 from ...kernel.agent_hosts import HOSTS, Host
+from .. import permission_risks
 from ..instances.model import Running
 from . import platform
 
@@ -173,7 +174,8 @@ def running(table: Mapping[int, Proc]) -> list[Running]:
             continue
         words = _words(proc.command)
         skipped = next((reason for (agent, flag), reason in _SKIPS.items() if agent == host.id and flag in words), "")
-        out.append(Running(proc.pid, proc.ppid, host.id, _launch(host, words), _profile(host, proc.pid), skipped, proc.started))
+        out.append(Running(proc.pid, proc.ppid, host.id, _launch(host, words), _profile(host, proc.pid), skipped, proc.started,
+                           tuple(permission_risks.from_command(host.id, _split(words)[1]))))
     return out
 
 

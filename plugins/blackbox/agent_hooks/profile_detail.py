@@ -26,14 +26,15 @@ import json
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Iterable, Optional
 
 from ..kernel import code_signing
 from ..kernel.agent_hosts import BY_ID, Host
 from ..kernel.bounded_files import read_small_text
 from ..kernel.redaction import redact_secret_values
-from . import profiles, versions
+from . import permission_risks, profiles, versions
 from .instances import store
+from .instances.model import Running
 from .protect.config_edit import MARK
 
 __all__ = ["InstructionFile", "McpServer", "ProfileDetail", "ScopeSettings", "read"]
@@ -99,6 +100,7 @@ class ScopeSettings:
     blackbox_hooks: int = 0
     other_hooks: int = 0
     hooks_off: bool = False
+    skips_prompts: tuple[str, ...] = ()   # its settings that skip the person's permission prompts
 
 
 @dataclass(frozen=True)
@@ -106,6 +108,10 @@ class McpServer:
     name: str
     source: str           # the file that configures it
     launch: str           # its command line or URL, redacted
+
+
+#: What the signature says when no program of the agent was found to check.
+NO_PROGRAM = "No program of this agent was found on this Mac, so there is no signature to check."
 
 
 @dataclass
@@ -116,9 +122,11 @@ class ProfileDetail:
     project: str
     program: str = ""
     version: str = ""
-    signature: str = "not checked"      # the signer in a sentence (see ``signer`` for the fields)
+    signature: str = NO_PROGRAM         # the signer in a sentence (see ``signer`` for the fields)
     signer: Optional[code_signing.Signer] = None
-    sessions_path: str = ""
+    sessions_path: str = ""             # where this home keeps its sessions (the path only)
+    sessions_exist: bool = False        # whether that folder exists yet (a new home has none)
+    running_flags: list[str] = field(default_factory=list)   # flags of its running processes that skip prompts
     instructions: list[InstructionFile] = field(default_factory=list)
     settings: list[ScopeSettings] = field(default_factory=list)
     mcp_servers: list[McpServer] = field(default_factory=list)
@@ -198,7 +206,8 @@ def _settings(host: Host, path: Path, scope: str) -> Optional[ScopeSettings]:
     ours, others = _hook_counts(data)
     off = any(profiles.lookup(data, key) == value for _name, key, value in host.switches)
     return ScopeSettings(str(path), scope, mode, _names(permissions.get("allow")), _names(permissions.get("deny")),
-                         tuple(sorted(str(name)[:80] for name in env)[:MAX_LIST]), model[:80], ours, others, off)
+                         tuple(sorted(str(name)[:80] for name in env)[:MAX_LIST]), model[:80], ours, others, off,
+                         tuple(permission_risks.from_settings(host.id, data)))
 
 
 def _mcp(path: Path) -> list[McpServer]:
@@ -252,8 +261,8 @@ def _risks(detail: ProfileDetail) -> list[str]:
     if detail.signer is not None and detail.signer.kind in ("unsigned", "adhoc"):
         risks.append(f"The program {detail.program} is not signed by a known developer.")
     for scope in detail.settings:
-        if scope.permission_mode in ("bypassPermissions", "never", "danger-full-access"):
-            risks.append(f"Runs with permission prompts skipped ({scope.permission_mode} in {scope.path}).")
+        for setting in scope.skips_prompts:
+            risks.append(f"Runs with permission prompts skipped ({setting} in {scope.path}): it acts without asking you.")
         if scope.hooks_off:
             risks.append(f"Hooks are switched off in {scope.path}: Blackbox's hooks do not run there.")
         if scope.scope == "user" and not scope.blackbox_hooks and BY_ID[detail.agent].style in ("nested", "flat"):
@@ -262,6 +271,8 @@ def _risks(detail: ProfileDetail) -> list[str]:
         words = server.launch.split()
         if words and Path(words[0]).name in _SHELLS:
             risks.append(f"The MCP server \"{server.name}\" starts a shell ({Path(words[0]).name}).")
+    for flag in detail.running_flags:
+        risks.append(f"A running {detail.name} was started with {flag}, which skips permission prompts: it acts without asking you.")
     if any(doc.truncated for doc in detail.instructions):
         risks.append("An instruction file is larger than Blackbox reads for display; its text is not shown.")
     return risks
@@ -273,14 +284,24 @@ def _allowed_project(agent: str, project: str) -> Optional[Path]:
     return Path(project) if project and project in known else None
 
 
-def read(agent: str, home: str, project: str = "", user_home: Optional[Path] = None) -> Optional[ProfileDetail]:
+def _flags(agent: str, default: bool, folder: Path, running: Iterable[Running]) -> list[str]:
+    """The prompt-skipping flags of *agent*'s processes running in this home (the default home:
+    those that name no other)."""
+    mine = [proc for proc in running if proc.agent == agent and (proc.profile == str(folder) or (default and not proc.profile))]
+    return sorted({flag for proc in mine for flag in proc.skips_prompts})
+
+
+def read(agent: str, home: str, project: str = "", user_home: Optional[Path] = None,
+         running: Iterable[Running] = ()) -> Optional[ProfileDetail]:
     """The detail of *agent*'s profile in the config home *home* (one of ``profiles.homes``), with
-    *project*'s own files when a session ran there. None for an unknown agent or home."""
+    *project*'s own files when a session ran there; *running*: the agent processes now (the
+    observer's), whose prompt-skipping flags become risk notes. None for an unknown agent or home."""
     host = BY_ID.get(agent)
     user_home = user_home or Path.home()
-    folder = next((path for path, _default in profiles.homes(host, user_home) if str(path) == home), None) if host else None
-    if host is None or folder is None:
+    found = next(((path, default) for path, default in profiles.homes(host, user_home) if str(path) == home), None) if host else None
+    if host is None or found is None:
         return None
+    folder, default = found
     layout = LAYOUT.get(agent, {})
     where = _allowed_project(agent, project)
     detail = ProfileDetail(agent, host.name, str(folder), str(where or ""))
@@ -289,8 +310,11 @@ def read(agent: str, home: str, project: str = "", user_home: Optional[Path] = N
         detail.program, detail.version = program.path, program.version
         detail.signer = code_signing.describe(program.path)
         detail.signature = _signature_sentence(detail.signer)
-    sessions = [folder / name for name in layout.get("sessions", ()) if (folder / name).is_dir()]
+    # Read from THIS home (a moved one keeps its own), shown even before its first session.
+    sessions = [folder / name for name in layout.get("sessions", ())]
     detail.sessions_path = str(sessions[0]) if sessions else ""
+    detail.sessions_exist = bool(sessions) and sessions[0].is_dir()
+    detail.running_flags = _flags(agent, default, folder, running)
     detail.instructions = _instructions(layout, folder, where, user_home)
     scopes = [(folder / name, "user") for name in layout.get("home_settings", ())]
     scopes += [(where / name, "project") for name in layout.get("project_settings", ())] if where else []

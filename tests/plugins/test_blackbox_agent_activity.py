@@ -181,7 +181,7 @@ def test_turning_it_off_stops_serving_the_text_and_deleting_removes_it():
     key = _session().key
     _record(False)
     assert all("text" not in row for row in tracking.detail(key, with_text=True)["actions"])   # off: not served
-    assert prompt_text.status().stored == 1 and "still hold text until deleted" in prompt_text.status().statement
+    assert prompt_text.status().stored == 1 and "1 earlier entry still holds text until deleted" in prompt_text.status().statement
     _send("claude-code", "prompt", {"session_id": "p4", "cwd": "/w/app", "prompt": "second " + PROMPT})
     assert prompt_text.status().stored == 1                                                    # off: nothing new is kept
     assert prompt_text.delete_stored() == 1 and prompt_text.status().statement == "Prompt text: not recorded."

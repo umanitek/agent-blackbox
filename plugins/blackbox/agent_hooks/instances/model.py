@@ -86,6 +86,7 @@ class Running:
     profile: str = ""              # a moved config home found in its environment
     hooks_skipped: str = ""        # why this run cannot be hooked (e.g. "--bare"), else ""
     started: float = 0.0
+    skips_prompts: tuple[str, ...] = ()   # its flags that skip the person's permission prompts (permission_risks)
 
 
 @dataclass(frozen=True)

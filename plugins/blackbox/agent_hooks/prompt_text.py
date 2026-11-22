@@ -108,7 +108,7 @@ def status() -> Status:
     if on:
         statement = f"Prompt text: recorded on this Mac, kept {days} days."
     elif stored:
-        statement = f"Prompt text: not recorded. {stored} earlier entr{'y' if stored == 1 else 'ies'} still hold text until deleted."
+        statement = f"Prompt text: not recorded. {stored} earlier entr{'y' if stored == 1 else 'ies'} still hold{'s' if stored == 1 else ''} text until deleted."
     else:
         statement = "Prompt text: not recorded."
     return Status(on, days, stored, since, statement)

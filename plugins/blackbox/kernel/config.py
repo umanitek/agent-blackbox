@@ -256,14 +256,20 @@ def raw_section(name: str) -> dict[str, Any]:
     return dict(section) if isinstance(section, dict) else {}
 
 
+#: The longest quiet limit an agent instance may be given (a day).
+QUIET_MINUTES_MAX = 1440
+
+
 @dataclass(frozen=True)
 class AgentActivity:
-    """The agent history's two settings (``agent_activity.*`` in config.yaml): how many days an
-    ended agent instance stays in the history, and whether the TEXT of prompts is kept in it
-    (off by default — a privacy choice the person confirms)."""
+    """The agent history's settings (``agent_activity.*`` in config.yaml): how many days an
+    ended agent instance stays in the history, whether the TEXT of prompts is kept in it (off by
+    default — a privacy choice the person confirms), and after how many quiet minutes an
+    instance with no process to follow counts as ended."""
 
     history_days: int = 30
     record_prompt_text: bool = False
+    quiet_minutes: int = 30
 
 
 def agent_activity(entry: Mapping[str, Any] | None = None) -> AgentActivity:
@@ -272,7 +278,8 @@ def agent_activity(entry: Mapping[str, Any] | None = None) -> AgentActivity:
     section = (_blackbox_entry() if entry is None else entry).get("agent_activity")
     section = section if isinstance(section, dict) else {}
     return AgentActivity(history_days=min(365, max(1, _as_int(section.get("history_days", 30), 30))),
-                         record_prompt_text=_as_bool(section.get("record_prompt_text", False), False))
+                         record_prompt_text=_as_bool(section.get("record_prompt_text", False), False),
+                         quiet_minutes=min(QUIET_MINUTES_MAX, max(1, _as_int(section.get("quiet_minutes", 30), 30))))
 
 
 def load_blackbox_config(*, entry: dict[str, Any] | None = None) -> BlackboxConfig:

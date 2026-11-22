@@ -16,8 +16,8 @@ from ...kernel.agent_hosts import BY_ID
 from . import store
 from .model import Instance, Running
 
-#: Without a process to follow, an instance with no event for this long has ended.
-QUIET_SECONDS = 30 * 60
+#: The default quiet limit (the person's is ``agent_activity.quiet_minutes``: ``store.quiet_seconds``).
+QUIET_SECONDS = store.QUIET_SECONDS
 #: A hook event this recent proves the process is hooked (a process younger than this may not
 #: have reported yet, so it is not called unprotected).
 GRACE_SECONDS = 20.0
@@ -25,16 +25,16 @@ GRACE_SECONDS = 20.0
 
 def close_stale(alive: Optional[Iterable[int]] = None) -> int:
     """End the instances whose process left (*alive*: the pids running now; None = unknown) or
-    that went quiet. Returns how many were ended."""
+    that went quiet (no event for ``agent_activity.quiet_minutes``). Returns how many were ended."""
     pids = None if alive is None else set(alive)
-    now, ended = time.time(), 0
+    now, ended, quiet = time.time(), 0, store.quiet_seconds()
     for item in store.all_instances():
         if item.ended is not None:
             continue
         reason = ""
         if item.kind == "session" and item.pid and pids is not None and item.pid not in pids:
             reason = "process-exit"
-        elif now - item.last > QUIET_SECONDS and not (item.pid and pids is not None and item.pid in pids):
+        elif now - item.last > quiet and not (item.pid and pids is not None and item.pid in pids):
             reason = "quiet"
         if reason:
             item.ended, item.end_reason = now, reason

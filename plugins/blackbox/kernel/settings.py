@@ -157,17 +157,20 @@ def _validate(payload: dict[str, Any], *, sharing_consent: bool = False) -> tupl
 
 
 def _validate_activity(raw: Any, errors: list[str]) -> dict[str, Any]:
-    """``agent_activity``: ``history_days`` (1–365) and ``record_prompt_text`` (a boolean)."""
+    """``agent_activity``: ``history_days`` (1–365), ``record_prompt_text`` (a boolean) and
+    ``quiet_minutes`` (1–1440: when an instance with no process to follow counts as ended)."""
     if not isinstance(raw, dict):
         errors.append("agent_activity must be an object")
         return {}
     out: dict[str, Any] = {}
-    days = raw.get("history_days")
-    if days is not None:
-        if isinstance(days, int) and not isinstance(days, bool) and 1 <= days <= 365:
-            out["history_days"] = days
+    for key, unit, highest in (("history_days", "days", 365), ("quiet_minutes", "minutes", 1440)):
+        value = raw.get(key)
+        if value is None:
+            continue
+        if isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= highest:
+            out[key] = value
         else:
-            errors.append("agent_activity.history_days must be a number of days from 1 to 365")
+            errors.append(f"agent_activity.{key} must be a number of {unit} from 1 to {highest}")
     if "record_prompt_text" in raw:
         if isinstance(raw["record_prompt_text"], bool):
             out["record_prompt_text"] = raw["record_prompt_text"]
