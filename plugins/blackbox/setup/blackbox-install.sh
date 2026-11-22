@@ -2628,6 +2628,23 @@ blackbox_launchd_wait_gone() {
     return 0
 }
 
+# `blackbox_launchd_reload LABEL` — make launchd re-read the LaunchAgent LABEL from its plist
+# file (rewritten, or restored by a rollback) and start it: bootout, wait until launchd has let
+# go, bootstrap, once more after a second if launchd still refused. bootout returns before the
+# service has gone; a bootstrap then fails ("5: Input/output error") and leaves it unloaded
+# (LES-086, KI-513). One implementation for every Blackbox LaunchAgent.
+blackbox_launchd_reload() {
+    local label="$1" target plist
+    target="gui/$(id -u)/$label"
+    plist="$HOME/Library/LaunchAgents/$label.plist"
+    launchctl bootout "$target" 2>/dev/null || true
+    blackbox_launchd_wait_gone "$target"
+    launchctl bootstrap "gui/$(id -u)" "$plist" || {
+        sleep 1
+        launchctl bootstrap "gui/$(id -u)" "$plist"
+    }
+}
+
 # `blackbox_dashboard_control restart|reload <supervisor>` — restart the dashboard through its
 # service; `reload` first makes the service re-read its (rewritten or restored) definition.
 blackbox_dashboard_control() {
@@ -2642,14 +2659,7 @@ blackbox_dashboard_control() {
         launchd)
             target="gui/$(id -u)/$BLACKBOX_DASHBOARD_LAUNCHD_LABEL"
             if [ "$action" = reload ]; then
-                launchctl bootout "$target" 2>/dev/null || true
-                # bootout returns before the service has gone; a bootstrap then fails ("5:
-                # Input/output error") and leaves it unloaded (LES-086, KI-513). Wait, bounded.
-                blackbox_launchd_wait_gone "$target"
-                launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/$BLACKBOX_DASHBOARD_LAUNCHD_LABEL.plist" || {
-                    sleep 1
-                    launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/$BLACKBOX_DASHBOARD_LAUNCHD_LABEL.plist"
-                }
+                blackbox_launchd_reload "$BLACKBOX_DASHBOARD_LAUNCHD_LABEL"
             else
                 launchctl kickstart -k "$target"
             fi

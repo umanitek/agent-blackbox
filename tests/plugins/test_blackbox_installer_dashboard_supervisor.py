@@ -104,7 +104,7 @@ class Machine:
             _constant("BLACKBOX_DASHBOARD_ANSWER_WAIT_SECONDS"),
             _constant("BLACKBOX_DASHBOARD_RESTART_PENDING"),
             _constant("BLACKBOX_LAUNCHD_GONE_TRIES"),
-            *(_function(name) for name in ("write_service_launcher", "blackbox_launchd_wait_gone", "blackbox_dashboard_supervisor", "blackbox_dashboard_control",
+            *(_function(name) for name in ("write_service_launcher", "blackbox_launchd_wait_gone", "blackbox_launchd_reload", "blackbox_dashboard_supervisor", "blackbox_dashboard_control",
                                            "blackbox_dashboard_answers_within", "start_dashboard",
                                            "register_dashboard_service", "rollback_restart_dashboard")),
             *lines,
