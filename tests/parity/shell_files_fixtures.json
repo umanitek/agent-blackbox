@@ -1144,6 +1144,12 @@
           "command": "node",
           "recursive": false,
           "destination": false
+        },
+        {
+          "path": "~/.ssh/id_rsa",
+          "command": "node",
+          "recursive": false,
+          "destination": false
         }
       ]
     },
@@ -1157,6 +1163,12 @@
       "args": [
         {
           "path": "${process.env.HOME}/.config",
+          "command": "node",
+          "recursive": true,
+          "destination": false
+        },
+        {
+          "path": "~/.config",
           "command": "node",
           "recursive": true,
           "destination": false
@@ -2255,7 +2267,12 @@
       "args": {
         "command": "node -e \"require('fs').readFileSync(require('os').homedir() + '/.aws/credentials')\""
       },
-      "findings": []
+      "findings": [
+        {
+          "identifier": "fileaccess:exec:user-protected",
+          "evidence": "read path matching protected pattern ~/.aws/credentials"
+        }
+      ]
     },
     {
       "tool": "exec",

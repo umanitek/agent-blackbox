@@ -27,9 +27,30 @@ It is switched on in Settings (or from a companion app), like Trader Shield and 
 
 ## How far it reaches — plainly
 
-This is **Layer 1**: Blackbox's guard, which sees every tool call an agent makes. What it cannot
-see: a program an agent wrote or downloaded, and then runs, opens files without naming them in a
-tool call. Layer 1 cannot tell which files such a program opens.
+This is **Layer 1**: Blackbox's guard, which sees every tool call an agent makes. It reads text; it
+does not run anything. Within that, it judges:
+
+- every path a command or a code tool names, as the shell or the language would join it
+  (`'Doc''uments'`, `'Doc' + 'uments'`, the home folder asked for as `process.env.HOME`,
+  `os.homedir()`, `Dir.home`, `ENV['HOME']`, `Path.home()` or `os.path.expanduser('~')`);
+- a script an agent writes (through its file tool, a heredoc, `echo`/`printf … >` or `… | tee`), by
+  its text, when it is written;
+- any script file a command runs (`python3 r.py`, `node x.js`, `bash x.sh`, `./x`), read from disk
+  when it is run (up to 256 KiB) with the arguments the command hands it (`sys.argv`,
+  `process.argv`, `ARGV`, `$1`), in the folder the agent works in.
+
+What only the sandbox (Layer 2, below) stops, because no text says which file will be opened:
+
+- a path a program builds while it runs from anything else — input it reads, a file or the network,
+  environment variables other than the home folder, values it computes;
+- a compiled program, or a script fetched and run in one go;
+- a script larger than 256 KiB (flagged, not judged);
+- Hermes's `execute_code` tool beyond what its code text says: Hermes starts that Python by its
+  full path, outside the sandboxed shells, so it stays on Layer 1 even when the Hermes agent is
+  picked for the sandbox (shown as "terminal tool sandboxed; execute_code hooks only").
+
+When a script that reads its paths at run time is run beside a protected item, or is too large to
+read, File Shield flags it and says why, rather than showing a plain "allowed".
 
 Only the operating system can see every file a process opens. That is **Layer 2**, the agent
 sandbox, for the coding agents you pick (macOS today):

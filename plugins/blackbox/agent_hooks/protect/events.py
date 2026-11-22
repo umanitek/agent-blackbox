@@ -172,10 +172,11 @@ def _merge(verdicts: list[Mapping[str, Any]]) -> dict[str, Any]:
     return {"findings": findings, "blocked": blocked, "decision": decision, "message": message}
 
 
-def _tool_verdicts(tool_name: str, args: Any) -> list[Mapping[str, Any]]:
-    """The tool call itself — and, for Codex's ``apply_patch``, each file it touches as a write
-    (a deletion as a whole-file write, an update or addition with the patch as its edit)."""
-    verdicts = [guard.tool_call_verdict(tool_name=tool_name, args=args)]
+def _tool_verdicts(tool_name: str, args: Any, cwd: str = "") -> list[Mapping[str, Any]]:
+    """The tool call itself, run in the agent's folder *cwd* — and, for Codex's ``apply_patch``,
+    each file it touches as a write (a deletion as a whole-file write, an update or addition with
+    the patch as its edit)."""
+    verdicts = [guard.tool_call_verdict(tool_name=tool_name, args=args, cwd=cwd)]
     if tool_name == "read_file" and isinstance(args, dict) and isinstance(args.get("paths"), list):
         # One call that reads several files (Cline's read_files): each file is judged.
         verdicts += [guard.tool_call_verdict(tool_name="read_file", args={"path": str(path)}) for path in args["paths"][1:50]]
@@ -191,7 +192,7 @@ def _tool_verdicts(tool_name: str, args: Any) -> list[Mapping[str, Any]]:
 def _verdict(event: Mapping[str, Any]) -> dict[str, Any]:
     kind, text = event["event"], event["text"]
     if kind == "pre_tool" and event["tool_name"]:
-        verdicts = _tool_verdicts(event["tool_name"], event["args"])
+        verdicts = _tool_verdicts(event["tool_name"], event["args"], event["cwd"])
         if text:   # a file a pre-read hook is about to let the agent read
             verdicts.append(guard.text_verdict([("in-tool-output", text)]))
         return _merge(verdicts)

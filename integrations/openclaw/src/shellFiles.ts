@@ -436,19 +436,88 @@ function findArgs(words: string[], index: number): [ShellFileArg[], number] {
   return [roots.map((root) => ({ path: root, command: "find", recursive: true, destination: false })), position];
 }
 
-function pathsInCode(interpreter: string, code: string): ShellFileArg[] {
+/** How code asks for the person's home folder (shell_scripts._HOME_ASKED). */
+const HOME_ASKED_SOURCE = String.raw`\b(?:pathlib\.)?Path\.home\(\s*\)|\bos\.path\.expanduser\(\s*['"]~['"]\s*\)` +
+  String.raw`|\bos\.environ\s*\[\s*['"]HOME['"]\s*\]|\bos\.environ\.get\(\s*['"]HOME['"]\s*\)` +
+  String.raw`|\bos\.getenv\(\s*['"]HOME['"]\s*\)|\bprocess\.env\.HOME\b|\bprocess\.env\s*\[\s*['"]HOME['"]\s*\]` +
+  String.raw`|(?:\brequire\(\s*['"](?:node:)?os['"]\s*\)|\b\w+)\.homedir\(\s*\)|\bDir\.home\b(?:\(\s*\))?` +
+  String.raw`|\bENV\s*\[\s*['"]HOME['"]\s*\]|\$ENV\{\s*['"]?HOME['"]?\s*\}`;
+const HOME_ASKED = new RegExp(HOME_ASKED_SOURCE, "g");
+const TEMPLATE_HOME = new RegExp(String.raw`\$\{\s*(` + HOME_ASKED_SOURCE + String.raw`)\s*\}`, "g");
+/** Where each language keeps its command-line arguments, and the index of the first one. */
+const ARGV: Record<string, [RegExp, number]> = {
+  python: [/\bsys\.argv\s*\[\s*(\d{1,2})\s*\]/g, 1],
+  node: [/\bprocess\.argv\s*\[\s*(\d{1,2})\s*\]/g, 1],
+  ruby: [/(?<![$\w])ARGV\s*\[\s*(\d{1,2})\s*\]/g, 0],
+  perl: [/\$ARGV\s*\[\s*(\d{1,2})\s*\]/g, 0],
+};
+const LANGUAGE: Record<string, string> = {
+  python: "python", python3: "python", python2: "python", py: "python", node: "node", nodejs: "node",
+  bun: "node", deno: "node", ruby: "ruby", perl: "perl",
+};
+/** Two literals joined: `'a' + 'b'`, `'a' . 'b'` (Perl), `'a' / 'b'` (a path). */
+const JOINED = /(['"`])((?:\\.|(?!\1)[^\\\n]){0,1024})\1\s*([+./])\s*(['"`])((?:\\.|(?!\4)[^\\\n]){0,1024})\4/;
+const MAX_JOINS = 64;
+const JOIN_CALL = /(?:\bjoinpath|\bos\.path\.join|\bpath\.join|\bpath\.resolve|\bFile\.join|\bPath)\s*\(([^()]{1,1024})\)/g;
+const SLASH_CHAIN = /(?:\)|\w)\s*\/\s*['"][^'"\n]{1,256}['"](?:\s*\/\s*['"][^'"\n]{1,256}['"])*/g;
+const JOIN_PART = /['"`]([^'"`\n]{1,256})['"`]/g;
+
+/** `code` with what it builds statically written out: the home folder as `~`, its arguments, joined literals as one. */
+function resolved(interpreter: string, code: string, argv: readonly string[] = []): string {
+  let text = code.replace(TEMPLATE_HOME, "~").replace(HOME_ASKED, () => JSON.stringify("~"));
+  const language = LANGUAGE[interpreter];
+  if (language && ARGV[language] && argv.length) {
+    const [pattern, first] = ARGV[language]!;
+    text = text.replace(pattern, (whole, index: string) => {
+      const at = Number(index) - first;
+      return at >= 0 && at < argv.length ? JSON.stringify(argv[at]) : whole;
+    });
+  }
+  for (let round = 0; round < MAX_JOINS; round += 1) {
+    const joined = text.replace(JOINED, (_whole, _q1, left: string, operator: string, _q2, right: string) =>
+      JSON.stringify(operator === "/" ? left.replace(/\/+$/, "") + "/" + right.replace(/^\/+/, "") : left + right));
+    if (joined === text) break;
+    text = joined;
+  }
+  return text;
+}
+
+function trimSlashes(part: string): string {
+  return part.replace(/^\/+|\/+$/g, "");
+}
+
+/** Paths `code` builds by joining literals (shell_scripts._joined_paths). */
+function joinedPaths(code: string): string[] {
+  const out: string[] = [];
+  const matches = [...[...code.matchAll(JOIN_CALL)].map((m) => m[1]!), ...[...code.matchAll(SLASH_CHAIN)].map((m) => m[0])];
+  for (const piece of matches) {
+    const raw = [...piece.matchAll(JOIN_PART)].map((m) => m[1]!);
+    const parts = raw.map(trimSlashes).filter((part) => part);
+    if (parts.length >= 2 && !parts.some((part) => part.includes("://"))) out.push((raw[0]!.startsWith("/") ? "/" : "") + parts.join("/"));
+  }
+  return out;
+}
+
+function literalsOf(code: string): string[] {
+  return [...[...code.matchAll(LITERAL)].map((match) => match[2]!), ...joinedPaths(code)];
+}
+
+function pathsInCode(interpreter: string, code: string, argv: readonly string[] = []): ShellFileArg[] {
   const recursive = WHOLE_FOLDER_CODE.test(code);
   const joinsHome = HOME_CODE.test(code);
   const found: ShellFileArg[] = [];
-  for (const match of code.matchAll(LITERAL)) {
-    const literal = match[2]!;
+  const written = resolved(interpreter, code, argv);
+  const literals = [...new Set([...literalsOf(code), ...(written !== code ? literalsOf(written) : [])])];
+  for (const literal of literals) {
     if (literal.includes("://") || !(literal.includes("/") || literal.includes("\\") || literal.startsWith("~"))) continue;
     found.push({ path: literal, command: interpreter, recursive, destination: false });
     if (joinsHome && !/^[/~$%]/.test(literal) && !/^[A-Za-z]:/.test(literal)) {
       found.push({ path: "~/" + withoutDotSlash(literal), command: interpreter, recursive, destination: false });
     }
   }
-  return found;
+  const once = new Map<string, ShellFileArg>();
+  for (const arg of found) once.set(`${arg.path}\u0000${arg.recursive}`, once.get(`${arg.path}\u0000${arg.recursive}`) ?? arg);
+  return [...once.values()];
 }
 
 function scriptArgs(name: string, words: string[], index: number): [ShellFileArg[], number] {
@@ -456,7 +525,7 @@ function scriptArgs(name: string, words: string[], index: number): [ShellFileArg
   const options = INTERPRETERS[name]!;
   const found: ShellFileArg[] = [];
   for (let position = index + 1; position < end - 1; position += 1) {
-    if (options.includes(words[position]!)) found.push(...pathsInCode(name, words[position + 1]!));
+    if (options.includes(words[position]!)) found.push(...pathsInCode(name, words[position + 1]!, words.slice(position + 2, end)));
   }
   return [found, end];
 }

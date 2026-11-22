@@ -189,7 +189,7 @@ def test_opencodes_plugin_runs_the_runner_and_throws_on_a_block(tmp_path):
 
 def _verdict(decision):
     finding = {"identifier": "dep:npm:evil", "category": "dependency", "severity": "critical", "title": "evil"}
-    return lambda tool_name, args: {"findings": [finding] if decision else [], "blocked": [], "decision": decision,
+    return lambda tool_name, args, **_: {"findings": [finding] if decision else [], "blocked": [], "decision": decision,
                                     "message": "Blocked by Blackbox" if decision == "block" else ""}
 
 

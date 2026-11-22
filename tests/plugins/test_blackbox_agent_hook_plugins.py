@@ -201,7 +201,7 @@ def test_cline_reports_resumed_cancelled_and_shut_down_sessions():
 def test_a_call_reported_through_both_forms_is_judged_and_recorded_once(monkeypatch):
     calls = []
 
-    def verdict(tool_name, args):
+    def verdict(tool_name, args, **_):
         calls.append(tool_name)
         return {"findings": [], "blocked": [], "decision": "block", "message": "Blocked by Blackbox"}
 
@@ -247,7 +247,7 @@ def test_a_hook_scripts_text_parameters_are_read_back_when_the_call_itself_is_ab
 def test_every_file_of_a_several_file_read_is_judged(monkeypatch):
     seen = []
 
-    def verdict(tool_name, args):
+    def verdict(tool_name, args, **_):
         seen.append(args.get("path"))
         blocked = args.get("path") == "/b/id_rsa"
         return {"findings": [], "blocked": [], "decision": "block" if blocked else "", "message": "Blocked" if blocked else ""}

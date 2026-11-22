@@ -73,7 +73,7 @@ def _record(on: bool, days: int | None = None) -> None:
 # ---------------------------------------------------------------- last action, reason, waiting
 
 def test_a_live_row_shows_its_newest_action_and_a_refusal_says_why(monkeypatch):
-    monkeypatch.setattr(events.guard, "tool_call_verdict", lambda tool_name, args: {
+    monkeypatch.setattr(events.guard, "tool_call_verdict", lambda tool_name, args, **_: {
         "findings": [], "blocked": [], "decision": "block" if "evil" in str(args) else "",
         "message": "Blocked by your File Shield protection: ~/Documents/Secret" if "evil" in str(args) else ""})
     _send("claude-code", "pre_tool", {"session_id": "s1", "cwd": "/w/app", "tool_name": "Bash", "tool_input": {"command": "ls -la"}})

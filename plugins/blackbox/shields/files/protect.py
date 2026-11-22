@@ -29,6 +29,7 @@ deletes or changes a file.
 from __future__ import annotations
 
 import os
+import re
 from typing import Any
 
 from ... import audit
@@ -89,25 +90,67 @@ def detect(tool_name: str, args: Any, mode: ShieldMode) -> list[Finding]:
 
 
 def _script_hit(tool_name: str, args: Any, items: list[str]) -> list[Finding]:
-    """A refusal when this call WRITES a script that names a protected item, or RUNS a script an
-    agent wrote that does (:mod:`.written`); each script written is remembered for its run."""
+    """A refusal when this call WRITES a script that names a protected item, or RUNS a script file
+    that does (:mod:`.written`: any file the command runs, read now, with its arguments); each
+    script written is remembered for its run. A script that can not be judged — larger than
+    Blackbox reads, or building paths from what it is only given while it runs — run beside a
+    protected item is FLAGGED with that reason."""
     shell = (tool_name or "").strip().lower() in SHELL_TOOLS
     command = command_from_args(tool_name, args) if shell else ""
     writes = written.script_writes(tool_name, args, command)
     for path, content in writes:
-        if (found := _content_hit(content, path, items, "write a script that opens")):
+        if (found := _content_hit(written.as_call(path, content), path, items, "write a script that opens")):
             return found
     for path, _content in writes:
         written.remember(os.path.normpath(os.path.expanduser(path)))
-    for path, content in written.scripts_run(command) if shell else ():
-        if (found := _content_hit(content, path, items, "run a script that opens")):
-            return found
-    return []
+    runs = written.scripts_run(command) if shell else []
+    for run in runs:
+        if run.text is not None and not _inside(run.path, items):
+            call = written.as_call(run.path, run.text, run.argv, run.runner, limit=written.MAX_SCRIPT_BYTES)
+            if (found := _content_hit(call, run.path, items, "run a script that opens")):
+                return found
+    return next((flag for run in runs if (flag := _unjudged_script(run, items))), [])
 
 
-def _content_hit(content: str, script: str, items: list[str], route: str) -> list[Finding]:
-    for touch in protected_path_touches("terminal", written.as_call(script, content), items, whole=True, first_only=True,
-                                        every_route=True):
+def _inside(path: str, items: list[str]) -> bool:
+    """True when *path* (or where it links to) is a protected item: never read to be judged."""
+    return bool(protected_path_touches("read_file", {"path": os.path.realpath(path)}, items, first_only=True))
+
+
+#: Code that builds paths from what it is given only while it runs (beyond a static reading).
+_RUN_TIME_INPUT = re.compile(r"\binput\(|\bsys\.stdin\b|\breadline\b|\bgets\b|\bprocess\.stdin\b|<STDIN>|\$\{?\d\}?|\bread\s+-r?\s*\w"
+                             r"|\bsys\.argv\b|\bprocess\.argv\b|\bARGV\b|\bgetenv\(|\benviron\b|\bprocess\.env\b|\bENV\[")
+
+
+def _unjudged_script(run: Any, items: list[str]) -> list[Finding]:
+    """A FLAG for a script run beside a protected item that Layer 1 can not judge: larger than it
+    reads (and kept in the folder a protected item sits in), or reading its paths from input, its
+    arguments or the environment beyond the static reading while its text names that folder."""
+    parents = _parents(items)
+    if not parents:
+        return []
+    if run.text is None:
+        why = f"is larger than the {written.MAX_SCRIPT_BYTES // 1024} KiB Blackbox reads"
+        near = any(os.path.realpath(run.path).startswith(parent.rstrip("/") + "/") for parent in parents)
+    elif _RUN_TIME_INPUT.search(run.text):
+        why = "builds the paths it opens from what it is given while it runs"
+        call = written.as_call(run.path, run.text, run.argv, run.runner, limit=written.MAX_SCRIPT_BYTES)
+        near = bool(protected_path_touches("terminal", call, parents, whole=True, first_only=True, every_route=True))
+    else:
+        return []
+    if not near:
+        return []
+    return [Finding(
+        identifier=UNSEEN_ID, category=CATEGORY, severity="high", kind=KIND_FLAG_ONLY,
+        title=(f"File Shield: an AI agent ran the script {run.path} beside your protected items; it {why}, so a hook "
+               "cannot see which file it reads — only the OS sandbox stops that"),
+        tool_name="terminal", matched="person-protected-unseen",
+        evidence=f"script {run.path} — {why}"[:400], confirmed=False, source="custom",
+        fields={"path": run.path[:400], "item": parents[0], "route": "unseen", "kind": "folder", "script": run.path[:400]})]
+
+
+def _content_hit(call: dict[str, str], script: str, items: list[str], route: str) -> list[Finding]:
+    for touch in protected_path_touches("terminal", call, items, whole=True, first_only=True, every_route=True):
         folder = is_folder(touch.pattern)
         what = "folder" if folder else "file"
         return [Finding(

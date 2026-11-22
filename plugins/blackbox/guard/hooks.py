@@ -15,7 +15,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Callable, Optional, TypedDict
 from .. import audit, detection, killlist, overrides, shields
-from ..kernel import config as config_mod, constants
+from ..kernel import action_context, config as config_mod, constants
 from ..kernel.config import BlackboxConfig
 from . import api_request, background, graph_rules
 from . import injection_sites
@@ -165,11 +165,14 @@ class _Judgement:
     blocking: list[detection.Finding]
 
 
-def _judge(tool_name: str, args: Any) -> _Judgement:
+def _judge(tool_name: str, args: Any, cwd: str = "") -> _Judgement:
+    """The checks on one call run in the folder *cwd* (``kernel.action_context``: a script a
+    command names by a relative path is the one there)."""
     cfg = _config()
     rs, graph_evidence = graph_rules.detection_rules(cfg, tool_name, args)
     active = shields.snapshot()   # every shield's mode, read once for this call
-    findings = reporting._flag_worthy(cfg, _raw_findings(cfg, rs, tool_name, args, active), active)
+    with action_context.working_in(cwd):
+        findings = reporting._flag_worthy(cfg, _raw_findings(cfg, rs, tool_name, args, active), active)
     return _Judgement(cfg, rs, graph_evidence, findings, _blocking(cfg, findings))
 
 
@@ -185,7 +188,7 @@ class ToolCallVerdict(TypedDict):
 
 
 @_with_normalised_call
-def tool_call_verdict(tool_name: str = "", args: Any = None, **_: Any) -> ToolCallVerdict:
+def tool_call_verdict(tool_name: str = "", args: Any = None, cwd: str = "", **_: Any) -> ToolCallVerdict:
     """What Blackbox makes of one tool call, for a runtime that is not Hermes (2026-11-20).
 
     The OpenClaw plugin asks this through the dashboard (``POST /api/guard/verdict``) before
@@ -197,8 +200,11 @@ def tool_call_verdict(tool_name: str = "", args: Any = None, **_: Any) -> ToolCa
 
         verdict = guard.tool_call_verdict("exec", {"command": "npm install left-pad"})
         verdict["decision"], verdict["blocked"], verdict["message"]
+
+    *cwd*: the folder the agent runs the call in (its hook names it), so a script a command names
+    by a relative path is the right file (``kernel.action_context``).
     """
-    judged = _judge(tool_name, args)
+    judged = _judge(tool_name, args, cwd)
     decision = _decision(judged.cfg, judged.findings, judged.blocking) if judged.findings else ""
     return ToolCallVerdict(findings=[finding.to_dict() for finding in judged.findings],
                            blocked=[finding.identifier for finding in judged.blocking], decision=decision,
@@ -219,7 +225,7 @@ def on_pre_tool_call(
     Only CONFIRMED graph findings can block; discovery candidates only alert.
     """
     try:
-        judged = _judge(tool_name, args)
+        judged = _judge(tool_name, args, host_process.facts()["cwd"])   # in this Hermes process's working folder
         cfg, findings, blocking = judged.cfg, judged.findings, judged.blocking
         _record_activity(tool_name, args)   # visibility: log every file-access tool call (best-effort)
         detail = {"tool_name": tool_name, "session_id": session_id, "task_id": task_id,

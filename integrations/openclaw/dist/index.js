@@ -1,4 +1,4 @@
-/* @umanitek/blackbox-openclaw — built from src/ by `npm run build`; do not edit. source sha256:a98b95340f4b80985437d6b116454bd5b4f941edad3192e9a82318feccf6aaba */
+/* @umanitek/blackbox-openclaw — built from src/ by `npm run build`; do not edit. source sha256:29cee51cda2d2d52eccbd0ad11b2386f7d0db91780f0360cc4f7c2a10542d6e0 */
 
 // src/consent.ts
 import { readFileSync } from "node:fs";
@@ -571,26 +571,88 @@ function findArgs(words, index) {
   if (!feedsAReader) return [[], position];
   return [roots.map((root) => ({ path: root, command: "find", recursive: true, destination: false })), position];
 }
-function pathsInCode(interpreter, code) {
+var HOME_ASKED_SOURCE = String.raw`\b(?:pathlib\.)?Path\.home\(\s*\)|\bos\.path\.expanduser\(\s*['"]~['"]\s*\)` + String.raw`|\bos\.environ\s*\[\s*['"]HOME['"]\s*\]|\bos\.environ\.get\(\s*['"]HOME['"]\s*\)` + String.raw`|\bos\.getenv\(\s*['"]HOME['"]\s*\)|\bprocess\.env\.HOME\b|\bprocess\.env\s*\[\s*['"]HOME['"]\s*\]` + String.raw`|(?:\brequire\(\s*['"](?:node:)?os['"]\s*\)|\b\w+)\.homedir\(\s*\)|\bDir\.home\b(?:\(\s*\))?` + String.raw`|\bENV\s*\[\s*['"]HOME['"]\s*\]|\$ENV\{\s*['"]?HOME['"]?\s*\}`;
+var HOME_ASKED = new RegExp(HOME_ASKED_SOURCE, "g");
+var TEMPLATE_HOME = new RegExp(String.raw`\$\{\s*(` + HOME_ASKED_SOURCE + String.raw`)\s*\}`, "g");
+var ARGV = {
+  python: [/\bsys\.argv\s*\[\s*(\d{1,2})\s*\]/g, 1],
+  node: [/\bprocess\.argv\s*\[\s*(\d{1,2})\s*\]/g, 1],
+  ruby: [/(?<![$\w])ARGV\s*\[\s*(\d{1,2})\s*\]/g, 0],
+  perl: [/\$ARGV\s*\[\s*(\d{1,2})\s*\]/g, 0]
+};
+var LANGUAGE = {
+  python: "python",
+  python3: "python",
+  python2: "python",
+  py: "python",
+  node: "node",
+  nodejs: "node",
+  bun: "node",
+  deno: "node",
+  ruby: "ruby",
+  perl: "perl"
+};
+var JOINED = /(['"`])((?:\\.|(?!\1)[^\\\n]){0,1024})\1\s*([+./])\s*(['"`])((?:\\.|(?!\4)[^\\\n]){0,1024})\4/;
+var MAX_JOINS = 64;
+var JOIN_CALL = /(?:\bjoinpath|\bos\.path\.join|\bpath\.join|\bpath\.resolve|\bFile\.join|\bPath)\s*\(([^()]{1,1024})\)/g;
+var SLASH_CHAIN = /(?:\)|\w)\s*\/\s*['"][^'"\n]{1,256}['"](?:\s*\/\s*['"][^'"\n]{1,256}['"])*/g;
+var JOIN_PART = /['"`]([^'"`\n]{1,256})['"`]/g;
+function resolved(interpreter, code, argv = []) {
+  let text = code.replace(TEMPLATE_HOME, "~").replace(HOME_ASKED, () => JSON.stringify("~"));
+  const language = LANGUAGE[interpreter];
+  if (language && ARGV[language] && argv.length) {
+    const [pattern, first] = ARGV[language];
+    text = text.replace(pattern, (whole, index) => {
+      const at = Number(index) - first;
+      return at >= 0 && at < argv.length ? JSON.stringify(argv[at]) : whole;
+    });
+  }
+  for (let round = 0; round < MAX_JOINS; round += 1) {
+    const joined = text.replace(JOINED, (_whole, _q1, left, operator, _q2, right) => JSON.stringify(operator === "/" ? left.replace(/\/+$/, "") + "/" + right.replace(/^\/+/, "") : left + right));
+    if (joined === text) break;
+    text = joined;
+  }
+  return text;
+}
+function trimSlashes(part) {
+  return part.replace(/^\/+|\/+$/g, "");
+}
+function joinedPaths(code) {
+  const out = [];
+  const matches = [...[...code.matchAll(JOIN_CALL)].map((m) => m[1]), ...[...code.matchAll(SLASH_CHAIN)].map((m) => m[0])];
+  for (const piece of matches) {
+    const raw = [...piece.matchAll(JOIN_PART)].map((m) => m[1]);
+    const parts = raw.map(trimSlashes).filter((part) => part);
+    if (parts.length >= 2 && !parts.some((part) => part.includes("://"))) out.push((raw[0].startsWith("/") ? "/" : "") + parts.join("/"));
+  }
+  return out;
+}
+function literalsOf(code) {
+  return [...[...code.matchAll(LITERAL)].map((match) => match[2]), ...joinedPaths(code)];
+}
+function pathsInCode(interpreter, code, argv = []) {
   const recursive = WHOLE_FOLDER_CODE.test(code);
   const joinsHome = HOME_CODE.test(code);
   const found = [];
-  for (const match of code.matchAll(LITERAL)) {
-    const literal2 = match[2];
+  const written = resolved(interpreter, code, argv);
+  const literals = [.../* @__PURE__ */ new Set([...literalsOf(code), ...written !== code ? literalsOf(written) : []])];
+  for (const literal2 of literals) {
     if (literal2.includes("://") || !(literal2.includes("/") || literal2.includes("\\") || literal2.startsWith("~"))) continue;
     found.push({ path: literal2, command: interpreter, recursive, destination: false });
     if (joinsHome && !/^[/~$%]/.test(literal2) && !/^[A-Za-z]:/.test(literal2)) {
       found.push({ path: "~/" + withoutDotSlash(literal2), command: interpreter, recursive, destination: false });
     }
   }
-  return found;
+  const once = /* @__PURE__ */ new Map();
+  for (const arg of found) once.set(`${arg.path}\0${arg.recursive}`, once.get(`${arg.path}\0${arg.recursive}`) ?? arg);
+  return [...once.values()];
 }
 function scriptArgs(name, words, index) {
   const end = segmentEnd(words, index + 1);
   const options = INTERPRETERS[name];
   const found = [];
   for (let position = index + 1; position < end - 1; position += 1) {
-    if (options.includes(words[position])) found.push(...pathsInCode(name, words[position + 1]));
+    if (options.includes(words[position])) found.push(...pathsInCode(name, words[position + 1], words.slice(position + 2, end)));
   }
   return [found, end];
 }
