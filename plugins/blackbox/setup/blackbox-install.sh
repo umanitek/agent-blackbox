@@ -4510,6 +4510,43 @@ install_system_protection() {
     return 1
 }
 
+# Blackbox's own notifier (macOS): notifications appear under Blackbox's name. The archive is the
+# release's blackbox-notify-darwin.zip checked against the SHA-256 in this checkout's helper
+# manifest (the same trust anchor as the helper), or a locally built one a test or a developer
+# names with BLACKBOX_NOTIFIER_PATH + BLACKBOX_NOTIFIER_SHA256. Without one, notifications still
+# work through macOS's own script notifier. This step never fails an install.
+install_native_notifier() {
+    local folder archive expected manifest version url
+    [ "$OS" = "macos" ] || return 0
+    [ -n "${HERMES_BIN:-}" ] || return 0
+    if [ -n "${BLACKBOX_NOTIFIER_PATH:-}" ]; then
+        archive="$BLACKBOX_NOTIFIER_PATH"
+        expected="$(printf '%s' "${BLACKBOX_NOTIFIER_SHA256:-}" | tr '[:upper:]' '[:lower:]')"
+    elif manifest="$(helper_manifest_file)" && expected="$(helper_manifest_sha256 "$manifest" blackbox-notify-darwin.zip)" \
+        && [ -n "$expected" ]; then
+        version="$(helper_manifest_version "$manifest")"
+        folder="$(mktemp -d "${TMPDIR:-/tmp}/blackbox-notifier.XXXXXX")" || return 0
+        archive="$folder/blackbox-notify-darwin.zip"
+        url="${BLACKBOX_HELPER_RELEASE_URL:-${REPO_URL%.git}/releases/download/blackbox-helper-v$version}/blackbox-notify-darwin.zip"
+        if ! curl -fsSL --proto '=https' --tlsv1.2 --max-time 120 -o "$archive" "$url"; then
+            rm -rf "$folder"
+            step "Notifications will use macOS's own notifier (Blackbox's notifier could not be downloaded)."
+            return 0
+        fi
+    else
+        step "Notifications use macOS's own notifier (this release carries no Blackbox notifier yet)."
+        return 0
+    fi
+    step "Blackbox tells you when an AI agent is stopped, asks for root or needs you. macOS may ask once to allow it."
+    if "$HERMES_BIN" blackbox notifications setup --from "$archive" --sha256 "$expected"; then
+        ok "Blackbox's notifications are set up"
+    else
+        warn "Blackbox's own notifier was not installed; notifications use macOS's own notifier (this is non-fatal)."
+    fi
+    [ -n "${folder:-}" ] && rm -rf "$folder"
+    return 0
+}
+
 offer_system_protection() {
     if [ "$OS" != "macos" ]; then
         BLACKBOX_SYSTEM_PROTECTION_STATE="unsupported"
@@ -4640,6 +4677,7 @@ main() {
     verify_install
     install_record_commit
     offer_system_protection
+    install_native_notifier
     next_steps
     offer_model_connect
 }

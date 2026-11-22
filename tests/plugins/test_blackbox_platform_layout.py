@@ -7,6 +7,8 @@ per operating system — so a port adds its own and nothing else changes.
   code starts a program (``subprocess``, ``os.system`` and the like).
 * Python, ``plugins/blackbox/shields/files/sandbox`` (File Shield's agent sandbox, Layer 2): the
   same — ``sandbox-exec`` and every program it starts live in its ``platform/`` modules.
+* Python, ``plugins/blackbox/notify`` (native notifications): the same — the system notifier of each
+  operating system is reached only from ``notify/platform/``.
 * Rust, ``plugins/blackbox/helper/src``: outside ``platform/`` no code names a macOS tool. The
   crate's own ``tests/platform_guard.rs`` checks the same under ``cargo test``; this one runs in
   the Python suite, which is where CI's Blackbox lane runs.
@@ -24,6 +26,7 @@ NETWORK = ROOT / "plugins" / "blackbox" / "shields" / "network"
 HELPER_SRC = ROOT / "plugins" / "blackbox" / "helper" / "src"
 FILES_SANDBOX = ROOT / "plugins" / "blackbox" / "shields" / "files" / "sandbox"
 AGENT_OBSERVER = ROOT / "plugins" / "blackbox" / "agent_hooks" / "observe"
+NOTIFY = ROOT / "plugins" / "blackbox" / "notify"
 PLATFORM = "platform"
 
 #: macOS tools only a platform/ module may name (matched on a command's program name).
@@ -126,6 +129,15 @@ def test_the_agent_observer_runs_programs_only_from_its_platform_modules():
     assert files and (AGENT_OBSERVER / PLATFORM / "macos.py").is_file()
     problems = [f"{path.relative_to(ROOT)}:{problem}" for path in files for problem in python_problems(path.read_text(encoding="utf-8"))]
     assert not problems, "move these into agent_hooks/observe/platform/macos.py:\n" + "\n".join(problems)
+
+
+def test_the_notifier_runs_programs_only_from_its_platform_modules():
+    """The native notifier (``notify``): how a notice reaches each system's notification centre
+    — ``osascript``, Blackbox's notifier app, ``notify-send`` — lives in ``notify/platform/``."""
+    files = _outside_platform(NOTIFY, "*.py")
+    assert len(files) >= 5 and (NOTIFY / PLATFORM / "macos" / "__init__.py").is_file()
+    problems = [f"{path.relative_to(ROOT)}:{problem}" for path in files for problem in python_problems(path.read_text(encoding="utf-8"))]
+    assert not problems, "move these into notify/platform/:\n" + "\n".join(problems)
 
 
 def test_the_helper_names_macos_tools_only_under_src_platform():

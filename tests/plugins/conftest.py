@@ -142,3 +142,20 @@ def real_report_queue():
     """Keep the real background report queue for one test (undoes the autouse inline stub)."""
     from plugins.blackbox.guard import report_queue
     return report_queue.REPORTS
+
+
+@pytest.fixture(autouse=True)
+def _no_real_notifications(monkeypatch):
+    """A test that starts the dashboard app also starts the notification pump (``notify.PUMP``),
+    and a real tick would read this machine's processes and could show a real notification on
+    the developer's screen. The pump does not start and the system notifier shows nothing unless
+    a test injects its own."""
+    from plugins.blackbox import notify
+    monkeypatch.setattr(notify.Pump, "start", lambda self: None)
+    monkeypatch.setattr(notify.platform, "send", lambda *args, **kwargs: False)
+    for name in ("hermes_plugins.blackbox.notify",):
+        module = sys.modules.get(name)
+        if module is not None:
+            monkeypatch.setattr(module.Pump, "start", lambda self: None)
+            monkeypatch.setattr(module.platform, "send", lambda *args, **kwargs: False)
+    yield

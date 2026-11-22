@@ -39,6 +39,16 @@ that the two version fields agree.
 ## [Unreleased]
 
 ### Added
+
+- **Native notifications from Blackbox itself.** Blackbox now tells you through your system's own
+  notifications which AI agent did what and whether it was allowed, flagged or stopped — safe to
+  read on a locked screen. Security notices are on; agents starting and ending, and a one-line
+  session summary, are opt-in. Mute an agent, set quiet hours, cap how many a minute. On macOS
+  they appear under Blackbox's own name once its notifier is installed; Blackbox Desktop shows the
+  same feed while it runs. See `docs/notifications.md` and the dashboard's Notifications page.
+- **An agent asking for root, and a program it started running as root, are flagged and shown.**
+  `sudo` is not refused; it is made visible on the agent's instance, in the findings and in a
+  notification.
 - Turning protection down needs your confirmation: Audit instead of Block, a shield, detection or agent switched off, a protected path removed, an address unblocked or remote access unlocked waits until you confirm it, with your computer's password prompt on the dashboard or in Blackbox Desktop's dialog. Strengthening applies at once.
 - Coding-agent protection is in the core: Claude Code, Codex, Cursor, Gemini CLI, GitHub Copilot CLI, Windsurf (Devin), Cline and OpenCode are protected through their own hooks (`agent_hooks`; `/api/agent-hooks`), with prompt-injection checks on prompts and tool outputs and self-protection of each agent's hook config — without Blackbox Desktop.
 - `guard.text_verdict`: a prompt or a tool's output checked for prompt injection with the same rules as a tool call (only a verified pattern blocks, in Block mode) — for runtimes that are not Hermes, such as a coding agent's own hooks.
