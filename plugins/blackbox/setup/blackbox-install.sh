@@ -519,9 +519,37 @@ explain_dkg_not_ready() {
     return 0
 }
 
+# How the node's start is waited for (KI-520/521, E2E recheck 2026-11-21: an update of a synced
+# install failed on a fixed 300 s wait — the node needed ~6 min to reopen a store holding the
+# whole graph — and rolled back a working install). DECISION: the wait follows the node's real
+# progress, not a bigger number. Up to BLACKBOX_DKG_RUNTIME_WAIT_SECONDS it waits as before; past
+# that it keeps waiting only while the node is ALIVE under the same pid and its daemon.log keeps
+# advancing (a line within BLACKBOX_DKG_STALL_SECONDS), never past BLACKBOX_DKG_LOAD_CEILING_SECONDS.
+# A node that died, or was restarted by its service (a crash loop), fails at once — with its
+# cause (explain_dkg_not_ready). An update is NOT committed while the node is still loading: the
+# install is kept only once the new build is proven running; reopening the existing store is
+# local work, not the network sync "no sync wait" is about, and Network Shield keeps its last
+# lists meanwhile (keep_verified).
+BLACKBOX_DKG_STALL_SECONDS="${BLACKBOX_DKG_STALL_SECONDS:-180}"
+BLACKBOX_DKG_LOAD_CEILING_SECONDS="${BLACKBOX_DKG_LOAD_CEILING_SECONDS:-1800}"
+BLACKBOX_DKG_WAIT_SLICE_SECONDS="${BLACKBOX_DKG_WAIT_SLICE_SECONDS:-15}"
+
+# The pid in the node's daemon.pid when that process is alive, else nothing.
+blackbox_dkg_live_pid() {
+    local pid=""
+    [ -f "$BLACKBOX_DKG_HOME/daemon.pid" ] && pid="$(tr -dc '0-9' <"$BLACKBOX_DKG_HOME/daemon.pid")"
+    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && printf '%s' "$pid"
+    return 0
+}
+
+# The size of the node's daemon.log (0 when there is none): it grows while the node is working.
+blackbox_dkg_log_size() {
+    local log="$BLACKBOX_DKG_HOME/daemon.log"
+    [ -f "$log" ] && wc -c <"$log" | tr -dc '0-9' || printf '0'
+}
 wait_for_blackbox_dkg_runtime() {
     local verifier="$(blackbox_helper blackbox-dkg-runtime-fingerprint.py)"
-    local expected_commit
+    local expected_commit started now pid first_pid="" size last_size progress why=""
     if ! expected_commit="$("$VENV_DIR/bin/python" "$verifier" commit \
         "$BLACKBOX_DKG_CLI_DIR")"; then
         BLACKBOX_INSTALL_INCOMPLETE=true
@@ -529,16 +557,38 @@ wait_for_blackbox_dkg_runtime() {
         warn "Could not resolve the published DKG build commit."
         return 1
     fi
-    step "Waiting for the DKG node to answer (up to ${BLACKBOX_DKG_RUNTIME_WAIT_SECONDS}s; a synced node takes about 2 minutes) ..."
-    if ! "$VENV_DIR/bin/python" "$verifier" wait \
-        "$BLACKBOX_DKG_DAEMON_URL" "$expected_commit" "$BLACKBOX_DKG_RUNTIME_WAIT_SECONDS" >/dev/null; then
-        BLACKBOX_INSTALL_INCOMPLETE=true
-        BLACKBOX_THREAT_GRAPH_INCOMPLETE=true
-        warn "The DKG daemon did not activate npm build ${expected_commit:0:12} within ${BLACKBOX_DKG_RUNTIME_WAIT_SECONDS}s."
-        explain_dkg_not_ready
-        step "A node holding a large graph can need longer: re-run with BLACKBOX_DKG_RUNTIME_WAIT_SECONDS=600"
-        return 1
-    fi
+    step "Waiting for the DKG node to answer (a synced node reopens its threat graph in a few minutes) ..."
+    started="$(date +%s)"; progress="$started"; last_size="$(blackbox_dkg_log_size)"
+    while ! "$VENV_DIR/bin/python" "$verifier" wait \
+        "$BLACKBOX_DKG_DAEMON_URL" "$expected_commit" "$BLACKBOX_DKG_WAIT_SLICE_SECONDS" >/dev/null 2>&1; do
+        now="$(date +%s)"
+        pid="$(blackbox_dkg_live_pid)"
+        size="$(blackbox_dkg_log_size)"
+        [ "$size" != "$last_size" ] && { progress="$now"; last_size="$size"; }
+        if [ -n "$pid" ] && [ -z "$first_pid" ]; then
+            first_pid="$pid"
+        elif [ -n "$first_pid" ] && [ "$pid" != "$first_pid" ]; then
+            why="the node stopped${pid:+ and its service started it again (pid $first_pid → $pid)}"
+        fi
+        if [ -z "$why" ] && [ $((now - started)) -ge "$BLACKBOX_DKG_RUNTIME_WAIT_SECONDS" ]; then
+            if [ -z "$pid" ]; then
+                why="the node is not running"
+            elif [ $((now - progress)) -ge "$BLACKBOX_DKG_STALL_SECONDS" ]; then
+                why="the node has written nothing for $((now - progress))s"
+            elif [ $((now - started)) -ge "$BLACKBOX_DKG_LOAD_CEILING_SECONDS" ]; then
+                why="it was still starting after $((now - started))s"
+            else
+                step "  … the node is still loading its threat graph ($((now - started))s, pid $pid); Network Shield keeps its last lists meanwhile"
+            fi
+        fi
+        if [ -n "$why" ]; then
+            BLACKBOX_INSTALL_INCOMPLETE=true
+            BLACKBOX_THREAT_GRAPH_INCOMPLETE=true
+            warn "The DKG daemon did not activate npm build ${expected_commit:0:12}: $why."
+            explain_dkg_not_ready
+            return 1
+        fi
+    done
     ok "DKG daemon is ready on npm build ${expected_commit:0:12}"
 }
 
