@@ -42,7 +42,7 @@ def _out(argv: list[str]) -> tuple[int, str]:
 def console_is_ours() -> bool:
     """True when this user owns the Mac's desktop (is logged in at the screen)."""
     try:
-        return os.stat("/dev/console").st_uid == os.getuid()
+        return os.stat("/dev/console").st_uid == os.getuid()   # windows-footgun: ok (macOS-only module)
     except OSError:
         return False
 
