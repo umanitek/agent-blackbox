@@ -5,6 +5,8 @@ Reads (GET):
 * ``protected`` — the person's protected items, each with whether it is a file or a folder and
   whether it exists, and how many times an agent was refused on it;
 * ``hits`` — the newest refusals (``?limit=``, at most 200);
+* ``alerts`` — what a Mac notification may say: changes inside protected items and refusals,
+  lock-screen safe (:mod:`.alerts`; ``?limit=``, at most 50);
 * ``changes`` — the helper's real-time changes after ``?since=<seq>`` (Blackbox Desktop follows these);
 * ``watch-plan`` — what the system protection helper watches, SIGNED for its nonce (helper_link);
 * ``sandbox`` — Layer 2: which agents run inside the OS sandbox, whether their launchers are in
@@ -32,7 +34,7 @@ from typing import Any, Mapping
 from ...kernel.settings import write_settings
 from .. import helper_link
 from ..shield_api import ShieldApi, ShieldApiError, ShieldContext
-from . import changes, events, mode as mode_module, sandbox
+from . import alerts, changes, events, mode as mode_module, sandbox
 from .protect import is_folder
 
 MAX_HITS = 200
@@ -110,6 +112,12 @@ def hits(_context: ShieldContext, params: Mapping[str, str]) -> dict[str, Any]:
     return {"hits": events.hits(limit=limit)}
 
 
+def alerts_view(_context: ShieldContext, params: Mapping[str, str]) -> dict[str, Any]:
+    """``alerts``: what a Mac notification may say (lock-screen safe), newest first (:mod:`.alerts`)."""
+    limit = int(params["limit"]) if str(params.get("limit", "")).isdigit() else alerts.MAX_ALERTS
+    return {"alerts": alerts.alerts(min(limit, alerts.MAX_ALERTS))}
+
+
 def changes_view(_context: ShieldContext, params: Mapping[str, str]) -> dict[str, Any]:
     raw = str(params.get("since") or "0")
     seq, new = changes.since(int(raw) if raw.isdigit() else 0)
@@ -148,7 +156,7 @@ def file_report(context: ShieldContext, body: Mapping[str, Any]) -> dict[str, An
 
 
 API = ShieldApi(
-    reads={"protected": protected_view, "hits": hits, "changes": changes_view, "watch-plan": watch_plan,
+    reads={"protected": protected_view, "hits": hits, "alerts": alerts_view, "changes": changes_view, "watch-plan": watch_plan,
            "sandbox": sandbox_view},
     writes={"protect": protect, "unprotect": unprotect, "file-report": file_report, "open-protected": open_protected},
     weakening={"unprotect": unprotect_weakens},

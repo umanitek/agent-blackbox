@@ -278,3 +278,34 @@ def test_a_file_shield_refusal_names_file_shield_not_secret_protection(audited):
     result = hooks.on_pre_tool_call(tool_name="terminal", args={"command": f"cat {VAULT}/notes.txt"})
     assert "your File Shield protection" in result["message"]
     assert "secret protection" not in result["message"]
+
+
+# -- KI-532: alerts a notifier can show (lock-screen safe) -------------------------------------
+
+
+def test_a_change_inside_a_protected_item_and_a_refusal_are_alerts_naming_only_the_item(audited, home):
+    """KI-532 (E2E full3): a change inside a protected folder raised no notification, and a refusal
+    reached the person only as the generic "met a threat"."""
+    from plugins.blackbox.shields.files import alerts
+    mode = files_mode.from_entry(audited)
+    secret = str(home / "Documents" / "BlackboxVault" / "notes.txt")
+    changes.record([{"path": secret, "kind": "modified", "ts": 1}], mode, now=1.0)
+    hooks.on_pre_tool_call(tool_name="terminal", args={"command": f"cat {VAULT}/notes.txt"})
+    view = api.API.reads["alerts"](None, {})
+    rows = view["alerts"]
+    kinds = {row["kind"] for row in rows}
+    assert {"protected-change", "folder-hit"} <= kinds
+    for row in rows:
+        assert row["title"] == "File Shield" and row["item_name"] == "BlackboxVault"
+        assert "notes.txt" not in row["text"] and str(home) not in row["text"] and "~/" not in row["text"]
+        assert row["key"]
+    hit = next(row for row in rows if row["kind"] == "folder-hit")
+    assert hit["text"].startswith("File Shield stopped an AI agent reaching BlackboxVault")
+
+
+def test_a_new_file_in_a_watched_folder_is_not_a_file_shield_alert(audited, home):
+    from plugins.blackbox.shields.files import alerts
+    audited["shields"]["file-shield"]["folders"] = ["~/Downloads"]
+    mode = files_mode.from_entry(audited)
+    changes.record([{"path": str(home / "Downloads" / "x.dmg"), "kind": "created", "ts": 2}], mode, now=2.0)
+    assert alerts.alerts() == []
