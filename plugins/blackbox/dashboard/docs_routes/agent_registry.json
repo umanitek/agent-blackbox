@@ -206,7 +206,7 @@
      "os_version": "macOS 26.6.2",
      "date": "2026-11-22",
      "blackbox": "1.5.0",
-     "how": "test VM bb-recheck2, the real CLI without a sign-in (claude -p): its own SessionStart, UserPromptSubmit and SessionEnd hooks ran and Blackbox tracked the session as headless with its process; tool calls and sub-agents need a login and were not run",
+     "how": "test VM, REAL claude -p with a hosted model (haiku): sessions, two at once, 5 parallel sub-agents with their tasks and exact counts, nested and sequential sub-agents, a 12-call loop and --resume in one instance, --bare and disableAllHooks shown unprotected, File Shield and self-protection refusals on the right session or sub-agent, sudo flagged; the model is not shown (Claude Code's hooks carry none, KI-566) and background sub-agent results count as prompts (KI-567)",
      "result": "partial"
     },
     {
@@ -253,6 +253,18 @@
      "layer": "os",
      "status": "not-covered",
      "why": "needs Apple's Endpoint Security entitlement (not requested yet)"
+    },
+    {
+     "os": "macos",
+     "launch": "headless",
+     "layer": "sandbox",
+     "status": "tested",
+     "agent_version": "2.1.330",
+     "os_version": "macOS 26.6.2",
+     "date": "2026-11-22",
+     "blackbox": "1.5.0",
+     "how": "test VM, REAL claude -p (haiku) through the agent sandbox launcher: a script reading a protected file was refused by the kernel and the session is marked sandboxed; the kernel refusal is not yet recorded in Blackbox (KI-568)",
+     "result": "partial"
     }
    ]
   },

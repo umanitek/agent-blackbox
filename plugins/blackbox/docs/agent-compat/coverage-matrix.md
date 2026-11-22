@@ -71,13 +71,14 @@ One `claude` process per session (a native binary). Sub-agents (the Agent tool),
 |---|---|---|---|---|
 | macos | interactive | hooks | Tested | 2026-11-22, Blackbox 1.5.0, agent 2.1.330, macOS 26.6.2: test VM (macOS 26, bb-recheck2): the agent's own configured hook command run with the payloads of its hook reference; refusals in Block and Audit mode — pass |
 | macos | sub-agent | hooks | Built, not yet run in the product | covered by tests with the documented payloads; not yet run inside a signed-in session |
-| macos | headless | hooks | Tested | 2026-11-22, Blackbox 1.5.0, agent 2.1.330, macOS 26.6.2: test VM bb-recheck2, the real CLI without a sign-in (claude -p): its own SessionStart, UserPromptSubmit and SessionEnd hooks ran and Blackbox tracked the session as headless with its process; tool calls and sub-agents need a login and were not run — partial |
+| macos | headless | hooks | Tested | 2026-11-22, Blackbox 1.5.0, agent 2.1.330, macOS 26.6.2: test VM, REAL claude -p with a hosted model (haiku): sessions, two at once, 5 parallel sub-agents with their tasks and exact counts, nested and sequential sub-agents, a 12-call loop and --resume in one instance, --bare and disableAllHooks shown unprotected, File Shield and self-protection refusals on the right session or sub-agent, sudo flagged; the model is not shown (Claude Code's hooks carry none, KI-566) and background sub-agent results count as prompts (KI-567) — partial |
 | macos | sdk | hooks | Built, not yet run in the product |  |
 | macos | ide | hooks | Built, not yet run in the product |  |
 | macos | headless, bare | hooks | Not covered | the agent skips hooks |
 | macos | cloud | hooks | Not covered | runs off this machine |
 | macos | interactive | sandbox | Tested | 2026-11-22, Blackbox 1.5.0, agent 2.1.330, macOS 26.6.2: test VM: the launcher's Seatbelt sandbox; a script written then run, python, a grandchild, links, osascript and open -a all refused by the kernel — pass |
 | macos | interactive | os | Not covered | needs Apple's Endpoint Security entitlement (not requested yet) |
+| macos | headless | sandbox | Tested | 2026-11-22, Blackbox 1.5.0, agent 2.1.330, macOS 26.6.2: test VM, REAL claude -p (haiku) through the agent sandbox launcher: a script reading a protected file was refused by the kernel and the session is marked sandboxed; the kernel refusal is not yet recorded in Blackbox (KI-568) — partial |
 
 **Not covered:**
 - `claude --bare` and `--settings '{"disableAllHooks": true}'` run without hooks (shown as unprotected; the sandbox layer still applies when the launcher is used).
