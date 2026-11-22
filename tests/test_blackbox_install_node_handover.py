@@ -25,6 +25,7 @@ REPO = Path(__file__).resolve().parents[1]
 INSTALL_SH = REPO / "scripts" / "blackbox-install.sh"
 LABEL = "ai.umanitek.blackbox-dkg"
 FUNCTIONS = ("blackbox_dkg_supervisor", "blackbox_dkg_control", "blackbox_dkg_service_pid",
+             "blackbox_dkg_serving_pid", "blackbox_dkg_descends_from", "blackbox_dkg_node_pid", "blackbox_dkg_stray",
              "blackbox_dkg_owned_by", "blackbox_dkg_answers", "blackbox_dkg_launchd_error_log",
              "blackbox_dkg_stop_and_wait", "hand_dkg_node_to_service")
 
@@ -32,6 +33,7 @@ FUNCTIONS = ("blackbox_dkg_supervisor", "blackbox_dkg_control", "blackbox_dkg_se
 # (`dkg start --foreground` = the CLI's supervisor; the node daemon is its child).
 ORPHAN_SUPERVISOR, ORPHAN_NODE = "4500", "4527"
 SERVICE_SUPERVISOR, SERVICE_NODE = "7000", "7001"
+SERVICE_MIDDLE = "7002"
 
 
 def _body(text: str, name: str) -> str:
@@ -67,15 +69,20 @@ class Machine:
     def orphan_running(self) -> None:
         """The node the installer started itself: no service runs it."""
         (self.dkg_home / "daemon.pid").write_text(ORPHAN_NODE + "\n", encoding="utf-8")
-        _set(self.state, **{f"ppid_{ORPHAN_NODE}": ORPHAN_SUPERVISOR, "answers": "1"})
+        _set(self.state, **{f"ppid_{ORPHAN_NODE}": ORPHAN_SUPERVISOR, "answers": "1", "listener": ORPHAN_NODE})
 
     def service_running(self) -> None:
         (self.dkg_home / "daemon.pid").write_text(SERVICE_NODE + "\n", encoding="utf-8")
-        _set(self.state, **{"service_pid": SERVICE_SUPERVISOR, f"ppid_{SERVICE_NODE}": SERVICE_SUPERVISOR, "answers": "1"})
+        _set(self.state, **{"service_pid": SERVICE_SUPERVISOR, f"ppid_{SERVICE_NODE}": SERVICE_SUPERVISOR, "answers": "1",
+                            "listener": SERVICE_NODE})
 
     def service_takes_over(self, yes: bool) -> None:
         """Whether a (re)start through the service brings the node up under it."""
         _set(self.state, takeover="1" if yes else "0")
+
+    def service_takes_over_writing_its_pid_late(self) -> None:
+        """The service's node serves before it writes daemon.pid, as a grandchild (KI-533)."""
+        _set(self.state, takeover="late_pid")
 
     # ── fakes ────────────────────────────────────────────────────────────────
     def _fakes(self) -> None:
@@ -84,10 +91,16 @@ class Machine:
         # A sync racing the handover (KI-529): the first start through the service finds a stray copy
         # already started behind it, so the service's own copy cannot start that time.
         stray = (f'if [ -f {state}/stray_once ]; then rm -f {state}/stray_once; echo {ORPHAN_NODE} > {pid_file}; '
-                 f'echo {ORPHAN_SUPERVISOR} > {state}/ppid_{ORPHAN_NODE}; echo 1 > {state}/answers; exit 0; fi\n')
+                 f'echo {ORPHAN_SUPERVISOR} > {state}/ppid_{ORPHAN_NODE}; echo 1 > {state}/answers; echo {ORPHAN_NODE} > {state}/listener; exit 0; fi\n')
         takeover = (f'[ "$(cat {state}/takeover 2>/dev/null)" = 1 ] && {{ echo {SERVICE_SUPERVISOR} > {state}/service_pid; '
                     f'echo {SERVICE_NODE} > {pid_file}; echo {SERVICE_SUPERVISOR} > {state}/ppid_{SERVICE_NODE}; '
-                    f'echo 1 > {state}/answers; }}\n')
+                    f'echo 1 > {state}/answers; echo {SERVICE_NODE} > {state}/listener; }}\n'
+                    # KI-533 (E2E full4): the service's node serves BEFORE it writes daemon.pid, and runs
+                    # as a grandchild of the process launchd started (dkg start --foreground -> daemon).
+                    f'[ "$(cat {state}/takeover 2>/dev/null)" = late_pid ] && {{ echo {SERVICE_SUPERVISOR} > {state}/service_pid; '
+                    f'rm -f {pid_file}; echo {SERVICE_MIDDLE} > {state}/ppid_{SERVICE_NODE}; '
+                    f'echo {SERVICE_SUPERVISOR} > {state}/ppid_{SERVICE_MIDDLE}; echo 1 > {state}/answers; '
+                    f'echo {SERVICE_NODE} > {state}/listener; }}\n')
         service_pid = f'cat {state}/service_pid 2>/dev/null || echo 0'
         _fake(self.bin, "uname", f'echo {"Darwin" if self.supervisor == "launchd" else "Linux"}\n')
         _fake(self.bin, "launchctl", f'case "$1" in\n'
@@ -103,6 +116,7 @@ class Machine:
               f'esac\nexit 0\n')
         _fake(self.bin, "ps", f'pid=""; for a in "$@"; do pid="$a"; done\ncat {state}/ppid_$pid 2>/dev/null\n')
         _fake(self.bin, "curl", f'[ -f {state}/answers ]\n')
+        _fake(self.bin, "lsof", f'[ -f {state}/answers ] && cat {state}/listener 2>/dev/null\nexit 0\n')
         _fake(self.bin, "sleep", "exit 0\n")
 
     def orphan_lingers(self, checks: int) -> None:
@@ -141,8 +155,8 @@ step() {{ echo "STEP $*"; }}
 blackbox_dkg() {{
     echo "dkg $*" >> {calls}
     case "$1" in
-        stop) rm -f {pid_file} {state}/answers ;;
-        start) echo {ORPHAN_NODE} > {pid_file}; echo {ORPHAN_SUPERVISOR} > {state}/ppid_{ORPHAN_NODE}; echo 1 > {state}/answers ;;
+        stop) rm -f {pid_file} {state}/answers {state}/listener ;;
+        start) echo {ORPHAN_NODE} > {pid_file}; echo {ORPHAN_SUPERVISOR} > {state}/ppid_{ORPHAN_NODE}; echo 1 > {state}/answers; echo {ORPHAN_NODE} > {state}/listener ;;
     esac
 }}
 kill() {{
@@ -272,3 +286,16 @@ def test_the_service_starts_its_node_only_after_the_stopped_copy_is_gone(tmp_pat
     first_start = next(i for i, call in enumerate(calls) if call.startswith("launchctl kickstart"))
     assert calls.index(f"gone {ORPHAN_NODE}") < first_start, calls
     assert "OK The DKG node now runs under its launchd service" in output
+
+
+def test_the_services_own_node_is_never_stopped_as_a_stray_while_it_writes_its_pid_late(tmp_path):
+    """KI-533 (E2E full4, fresh install): the node answered before it wrote daemon.pid, so the
+    handover took the service's own copy for a stray and stopped it three times — launchd started
+    the node 4x in a minute. Ownership is now judged by the process serving the API port."""
+    machine = Machine(tmp_path, "launchd")
+    machine.orphan_running()
+    machine.service_takes_over_writing_its_pid_late()
+    calls, out = machine.run(wait_seconds=20)
+    assert "OK The DKG node now runs under its launchd service" in out, out
+    assert "Another copy of the DKG node" not in out, out
+    assert [call for call in calls if call.startswith("launchctl kickstart")].__len__() == 1, calls

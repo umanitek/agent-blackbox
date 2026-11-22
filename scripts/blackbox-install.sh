@@ -376,19 +376,58 @@ blackbox_dkg_service_pid() {
     printf '%s' "$pid"
 }
 
-# Whether the running node is the one the service *supervisor* runs. The node daemon writes its
-# own pid to daemon.pid; under `dkg start --foreground` it is a child of the process the service
-# started, so either that process or its parent is the service's.
+# The pid of the process serving the node's API port, or "" when that can not be read (no lsof,
+# or nothing listens). WHY (KI-533, E2E full4 2026-11-22): the node answers before it writes
+# daemon.pid, so judging by daemon.pid took the service's own, still-starting copy for a stray and
+# stopped it three times on a fresh install (launchd started the node 4x in a minute).
+blackbox_dkg_serving_pid() {
+    local port
+    port="$(printf '%s' "$BLACKBOX_DKG_DAEMON_URL" | sed -nE 's#^[a-z]+://[^/:]+:([0-9]+).*#\1#p')"
+    [ -n "$port" ] && command -v lsof >/dev/null 2>&1 || return 0
+    lsof -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null | head -n 1 | tr -dc '0-9'
+}
+
+# Whether process $1 is $2 or runs under it (its parent, grandparent … at most 6 levels): the node
+# daemon runs under the CLI the service started (`dkg start --foreground` -> daemon-foreground).
+blackbox_dkg_descends_from() {
+    local pid="$1" ancestor="$2" level=0
+    while [ -n "$pid" ] && [ "$pid" != 0 ] && [ "$pid" != 1 ] && [ "$level" -lt 6 ]; do
+        [ "$pid" = "$ancestor" ] && return 0
+        pid="$(ps -o ppid= -p "$pid" 2>/dev/null | tr -dc '0-9')"
+        level=$((level + 1))
+    done
+    return 1
+}
+
+# The pid serving the node: the API port's listener, else the pid the daemon wrote ("" = unknown).
+blackbox_dkg_node_pid() {
+    local pid
+    pid="$(blackbox_dkg_serving_pid)"
+    [ -n "$pid" ] || { [ -f "$BLACKBOX_DKG_HOME/daemon.pid" ] && pid="$(tr -dc '0-9' <"$BLACKBOX_DKG_HOME/daemon.pid")"; }
+    printf '%s' "$pid"
+}
+
+# Whether the running node is the one the service *supervisor* runs: the process serving it is the
+# service's own process or runs under it.
 blackbox_dkg_owned_by() {
-    local service_pid node_pid parent_pid
+    local service_pid node_pid
     service_pid="$(blackbox_dkg_service_pid "$1")"
     [ -n "$service_pid" ] || return 1
-    [ -f "$BLACKBOX_DKG_HOME/daemon.pid" ] || return 1
-    node_pid="$(tr -dc '0-9' <"$BLACKBOX_DKG_HOME/daemon.pid")"
+    node_pid="$(blackbox_dkg_node_pid)"
     [ -n "$node_pid" ] || return 1
-    [ "$node_pid" = "$service_pid" ] && return 0
-    parent_pid="$(ps -o ppid= -p "$node_pid" 2>/dev/null | tr -dc '0-9')"
-    [ "$parent_pid" = "$service_pid" ]
+    blackbox_dkg_descends_from "$node_pid" "$service_pid"
+}
+
+# Whether a copy of the node that is NOT the service's is serving: a known serving pid that does
+# not run under the service. Unknown (still starting, nothing readable) is never a stray.
+blackbox_dkg_stray() {
+    local service_pid node_pid
+    blackbox_dkg_answers || return 1
+    node_pid="$(blackbox_dkg_node_pid)"
+    [ -n "$node_pid" ] || return 1
+    service_pid="$(blackbox_dkg_service_pid "$1")"
+    [ -n "$service_pid" ] && blackbox_dkg_descends_from "$node_pid" "$service_pid" && return 1
+    return 0
 }
 
 # Where launchd keeps the node's error output: launchd has no journal, so without this a node
@@ -448,7 +487,7 @@ hand_dkg_node_to_service() {
         # program) and start the node through the service again — a bounded number of times.
         since_restart=$((since_restart + 1))
         if [ "$since_restart" -ge "$BLACKBOX_DKG_HANDOVER_STRAY_GRACE_SECONDS" ] \
-            && [ "$stray_stops" -lt "$BLACKBOX_DKG_HANDOVER_STRAY_STOPS" ] && blackbox_dkg_answers; then
+            && [ "$stray_stops" -lt "$BLACKBOX_DKG_HANDOVER_STRAY_STOPS" ] && blackbox_dkg_stray "$supervisor"; then
             step "Another copy of the DKG node is running outside its $supervisor service; stopping it"
             blackbox_dkg_stop_and_wait
             blackbox_dkg_control restart >/dev/null 2>&1 || true
