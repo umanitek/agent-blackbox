@@ -159,7 +159,7 @@ def test_live_endpoints_refuse_while_off_and_the_plan_always_answers(monkeypatch
         assert refused.value.status == 409
     assert api.enforcement_plan(_context(), {})["dns"]["enabled"] is False
     view = api.overview(_context(), {})
-    assert view["graph"] == {"ready": False, "reachable": None, "keeping_last_lists": False, "syncing": False,
+    assert view["graph"] == {"ready": False, "reachable": None, "loading": True, "keeping_last_lists": False, "syncing": False,
                              "complete": False, "domains": 0, "ips": 0}
     assert view["helper"] is False and view["enforcer"]["running"] is False
 

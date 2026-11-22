@@ -170,7 +170,7 @@ def test_the_live_reads_refuse_while_the_shield_is_off(monkeypatch):
         with pytest.raises(ShieldApiError) as refused:
             read(_context(), {})
         assert refused.value.status == 409
-    assert api.overview(_context(), {})["graph"] == {"ready": False, "reachable": None, "keeping_last_lists": False, "syncing": False,
+    assert api.overview(_context(), {})["graph"] == {"ready": False, "reachable": None, "loading": True, "keeping_last_lists": False, "syncing": False,
                                                        "complete": False, "domains": 0, "ips": 0}
 
 
@@ -184,7 +184,7 @@ def test_a_graph_that_is_down_is_not_reported_ready_and_the_kept_lists_are_said(
                          ask_assistant=lambda message: AssistantAnswer(ok=True, answer="fine"))
     graph = api.overview(down, {})["graph"]
     assert graph["ready"] is False and graph["reachable"] is False and graph["keeping_last_lists"] is True
-    assert graph["domains"] == 1
+    assert graph["domains"] == 1 and graph["loading"] is False   # lists in hand: never "loading" (KI-538)
     up = ShieldContext(network_indicators=lambda: lists, graph_reachable=lambda: True,
                        ask_assistant=lambda message: AssistantAnswer(ok=True, answer="fine"))
     assert api.overview(up, {})["graph"]["ready"] is True

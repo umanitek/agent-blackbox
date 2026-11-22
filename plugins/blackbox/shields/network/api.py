@@ -76,7 +76,9 @@ def _graph_state(context: ShieldContext, indicators: Any) -> dict[str, Any]:
     # longer downloading. WHY (KI-533, E2E full3): during a first sync it said complete with 8,820
     # of ~1.16 M domains, because every asset downloaded SO FAR had been read.
     syncing = (context.graph_sync_state() if context.graph_sync_state else "") == "syncing"
-    return {"ready": have and reachable is not False, "reachable": reachable,
+    # *loading*: no lists read yet (a dashboard restart reads them in the background) — a page says
+    # "loading", never "0 domains and 0 addresses" while protection is intact (KI-538).
+    return {"ready": have and reachable is not False, "reachable": reachable, "loading": not have,
             "keeping_last_lists": have and reachable is False, "syncing": syncing,
             "complete": bool(indicators and indicators.complete) and not syncing,
             "domains": len(indicators.domains) if indicators else 0,
