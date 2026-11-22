@@ -221,3 +221,21 @@ def test_switching_one_protection_off_turns_exactly_that_part_off(protection, mo
     assert all(plan[s][k] is True for p, (s, k) in PLAN_PARTS.items() if p != protection)
 
 
+
+
+@pytest.mark.parametrize("indicators", [
+    None,                                                                                  # store down / never read
+    SimpleNamespace(domains=frozenset(), ips=frozenset(), complete=False, built_at=2.0),   # read nothing after a restart
+    SimpleNamespace(domains=frozenset({"evil.example.com"}), ips=frozenset(), complete=False, built_at=3.0),   # partly read
+])
+def test_a_plan_without_the_whole_graph_tells_the_helper_to_keep_its_lists(indicators):
+    """E2E recheck 2026-11-21: with the graph node down the plan's lists were empty and the helper
+    emptied the firewall's table. An incomplete read must never be the whole truth (keep_verified)."""
+    plan = enforcement.plan(_on(protections=(network_mode.DNS, network_mode.FIREWALL)), indicators)
+    assert plan["keep_verified"] is True and plan["graph_complete"] is False
+
+
+def test_a_complete_graph_replaces_the_helpers_lists():
+    found = SimpleNamespace(domains=frozenset({"evil.example.com"}), ips=frozenset(), complete=True, built_at=4.0)
+    plan = enforcement.plan(_on(protections=(network_mode.DNS, network_mode.FIREWALL)), found)
+    assert plan["keep_verified"] is False and plan["graph_complete"] is True

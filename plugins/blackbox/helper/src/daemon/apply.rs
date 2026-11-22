@@ -24,8 +24,11 @@ impl Helper {
         if plan.unchanged {
             return;
         }
-        self.apply_plan(&plan);
-        if let Some(body) = body {
+        let complete = !plan.keep_verified;
+        self.apply_plan(plan);
+        // Only a complete plan replaces the saved one: after a restart an incomplete one (graph
+        // down) would come back without the lists it kept.
+        if let (true, Some(body)) = (complete, body) {
             last_plan::save(Path::new(HOME), &body);
         }
     }
@@ -37,12 +40,18 @@ impl Helper {
     pub(super) fn apply_saved_plan(&self) {
         if let Some(mut plan) = last_plan::load(Path::new(HOME)) {
             plan.remote.end.clear();
-            self.apply_plan(&plan);
+            self.apply_plan(plan);
         }
     }
 
     /// Applies *plan*: the resolver's lists, DNS, the filter, watching; records the version.
-    fn apply_plan(&self, plan: &Plan) {
+    /// An incomplete plan (`keep_verified`) keeps the verified lists last applied first.
+    fn apply_plan(&self, mut plan: Plan) {
+        if let Ok(mut kept) = self.kept.lock() {
+            plan.keep_from(&kept);
+            *kept = plan.kept();
+        }
+        let plan = &plan;
         let mut errors = vec![];
         if let Ok(mut lists) = self.resolver.lists.write() {
             *lists = plan.blocklists();

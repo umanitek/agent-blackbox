@@ -46,11 +46,17 @@ installer compares with the helper it carries to upgrade only one that differs.
  "cut": {"enabled": false, "ips": []},
  "ssh": {"lockdown": false, "allow": []},
  "remote": {"lock": false, "block": [], "end": [{"session_id": "...", "pid": 1, "started": 0, "how": "ssh"}]},
- "watch": true, "allow": ["example.org"]}
+ "watch": true, "allow": ["example.org"], "keep_verified": false}
 ```
 
 `{"version": "<sha>", "unchanged": true}` when `have` matches. The helper validates every
 address before pf sees it (`plan.rs`).
+
+`keep_verified: true` — the verified graph's lists in this plan are not the whole truth (its store
+is down, not read yet, or only partly read). The helper keeps the verified domains and firewall
+addresses it last applied and adds these (`plan.rs` `Kept`), and does not save the plan as its
+last one. A list is cleared only by switching its protection off, or by a complete plan
+(`keep_verified: false`). Absent (an older plugin) means false.
 
 ## System plan — `GET /api/shields/network-shield/api/system-plan?nonce=<hex>`
 

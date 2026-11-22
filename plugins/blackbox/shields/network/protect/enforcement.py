@@ -16,6 +16,11 @@ Desktop) shows the same shield.
      "watch": true,                                    # watch SSH and the login files (shield on)
      "allow": [...]}
 
+``"keep_verified": true`` (the graph's lists are unavailable or partial — the store is down, or
+not read yet after a restart) tells the helper to keep the verified domains and firewall addresses
+it last applied and add these: a source that is down never clears protection (E2E recheck
+2026-11-21: the node went down, the plan's lists were empty, the table was emptied).
+
 ``?have=<version>`` answers ``{"version": ..., "unchanged": true}`` when nothing changed, so
 the enforcer's minute-by-minute poll costs nothing. The verified graph's lists are applied only
 while the shield is on; with the shield off the plan switches everything off.
@@ -126,9 +131,14 @@ def _build_plan(mode: ShieldMode, indicators: Optional[Any], cut_ips: tuple[str,
     # entries are reported in the plan, so the person sees them.
     verified, spared_verified = never_block.split(indicators.domains if dns_on and indicators else (), allowed)
     listed, _spared_lists = never_block.split(list_names, allowed)
+    complete = bool(indicators is not None and getattr(indicators, "complete", False))
     content = {
         "graph_ready": indicators is not None,
-        "graph_complete": bool(indicators is not None and getattr(indicators, "complete", False)),
+        "graph_complete": complete,
+        # Fail-safe: lists read while the graph or its store is down, not read yet or only partly
+        # read are not the whole truth — the helper keeps the ones it last applied and adds these
+        # (helper plan.rs Kept). Only switching a protection off, or a COMPLETE list, clears.
+        "keep_verified": not complete,
         "dns": {"enabled": dns_on,
                 "verified": verified,
                 "lists": listed,

@@ -52,6 +52,9 @@ struct Helper {
     observer: SystemObserver,
     /// End requests already acted on (each is carried out once).
     ended: Mutex<HashSet<String>>,
+    /// The verified graph's lists last applied: what a `keep_verified` plan keeps (the graph's
+    /// store being down never clears protection — [`crate::plan::Kept`]).
+    kept: Mutex<crate::plan::Kept>,
     wake: Wake,
 }
 
@@ -138,6 +141,7 @@ pub fn run() -> Result<(), String> {
         enforcer,
         observer: SystemObserver::default(),
         ended: Mutex::new(HashSet::new()),
+        kept: Mutex::new(crate::plan::Kept::default()),
         wake: Wake::default(),
     });
 
