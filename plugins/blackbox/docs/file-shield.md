@@ -53,8 +53,11 @@ What Layer 2 can not do, plainly:
   Layer 1.
 - A sandboxed agent can not run `sudo` (no sandbox can run setuid programs) — that is why you pick
   agents one by one.
-- It does not stop an agent driving another app with AppleEvents (`osascript`): that app does the
-  work outside the sandbox.
+- Driving another app is refused inside: `osascript` (AppleScript and JavaScript), `automator`,
+  `shortcuts` and `open` (the other app would do the work outside the sandbox). Not covered: a
+  program the agent compiles itself that sends AppleEvents through macOS's own frameworks. The
+  only rule that stops that inside a sandbox makes every app launch from the agent hang (opening
+  a browser to log in, `open`), so it is not used; the OS's own file checks (Layer 3) close it.
 - A running agent keeps the protection it started with; restart it after you change the list.
 - Linux and Windows: not yet (Layer 1 only there).
 

@@ -9,8 +9,14 @@ a folder above one are all refused; a file next to it stays readable.
 
 What it can not do, said plainly (proposal §04):
 
-* AppleEvents (``osascript`` driving another app) are NOT refused by a profile run this way — the
-  other app does the work, outside the sandbox;
+* driving ANOTHER app, which would do the work outside the sandbox: ``osascript`` (AppleScript
+  and JavaScript), ``automator`` and ``shortcuts`` can not start inside (:data:`APP_DRIVERS`),
+  and ``open`` / LaunchServices launches are refused (``lsopen``). Probed 2026-11-22: Seatbelt's
+  ``appleevent-send`` rule does NOT stop a CLI's AppleEvents, and refusing the LaunchServices
+  database lookup (``com.apple.lsd.mapdb``) stops them only by making every LaunchServices caller
+  HANG (``open``, a browser login) — so it is not used. Left open: a program the agent compiles
+  itself that sends AppleEvents through the system's own frameworks (``NSAppleScript``) — the
+  OS's file checks (Layer 3) close that;
 * setuid programs (``sudo``, ``su``) can not run inside any Seatbelt sandbox — so Layer 2 is a
   per-agent choice of the person (D7: agents keep ``sudo`` unless the person sandboxes them);
 * ``sandbox-exec`` is marked deprecated by Apple but is what Apple's own tools still use; the
@@ -39,6 +45,10 @@ PGREP = "/usr/bin/pgrep"
 PROFILE_SUFFIX = ".sb"
 #: GUI agents Blackbox can relaunch inside the sandbox (D10): id -> (name, app bundle).
 APPS = {"cursor": ("Cursor", "/Applications/Cursor.app"), "windsurf": ("Windsurf", "/Applications/Windsurf.app")}
+#: Programs that drive other apps (AppleScript / JavaScript for Automation, Automator workflows,
+#: Shortcuts): refused inside — the app they drive would act outside the sandbox. A copy of one
+#: does not run either (macOS kills a copied platform binary).
+APP_DRIVERS = ("/usr/bin/osascript", "/usr/bin/automator", "/usr/bin/shortcuts")
 #: The SSH port on this Mac: an agent may not log back into the Mac outside its sandbox.
 LOCAL_SSH = ('"localhost:22"',)
 TIMEOUT_SECONDS = 5.0
@@ -74,6 +84,7 @@ def render(places: Places, digest_line: str = "") -> str:
     if places.no_rename:
         lines.append("(deny file-write-unlink\n  " + "\n  ".join(f"(literal {_quote(p)})" for p in places.no_rename) + ")")
     lines.append("(deny lsopen)")   # `open -a OtherApp file`: another app would read it outside the sandbox
+    lines.append("(deny process-exec " + " ".join(f"(literal {_quote(p)})" for p in APP_DRIVERS) + ")")
     lines.append(f"(deny network-outbound (remote ip {LOCAL_SSH[0]}))")   # ssh back into this Mac
     return "\n".join(lines) + "\n"
 

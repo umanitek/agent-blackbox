@@ -235,3 +235,30 @@ def test_uninstall_takes_the_launchers_off_path(home):
     report: list[str] = []
     uninstall_outside._remove_agent_hooks(SimpleNamespace(agent_hooks=(), addons=()), report)
     assert not shell_path.present(home) and any("off PATH" in line for line in report)
+
+
+@REAL
+def test_inside_the_sandbox_another_app_can_not_be_driven_and_agent_tools_still_run(home):
+    """Coordinator 2026-11-22: close osascript / AppleEvents and `open -a` where it does not break
+    the agent CLIs. Red on 8758124777 (osascript drove Finder from inside)."""
+    sandbox.sync(_mode())
+    secret = home / "Documents" / "Vault" / "secret.txt"
+    script = f"""
+osascript -e 'tell application "Finder" to get name' >/dev/null 2>&1; echo osascript=$?
+osascript -l JavaScript -e '1' >/dev/null 2>&1; echo jxa=$?
+automator -h >/dev/null 2>&1; echo automator=$?
+shortcuts list >/dev/null 2>&1; echo shortcuts=$?
+open -a TextEdit '{secret}' >/dev/null 2>&1; echo open=$?
+python3 -c 'print(1)' >/dev/null 2>&1; echo python=$?
+git --version >/dev/null 2>&1; echo git=$?
+/bin/zsh -c 'echo ok' >/dev/null 2>&1; echo zsh=$?
+"""
+    lines = dict(line.split("=", 1) for line in _run(sandbox.profile_path(), script).stdout.split())
+    assert all(lines[name] != "0" for name in ("osascript", "jxa", "automator", "shortcuts", "open")), lines
+    assert all(lines[name] == "0" for name in ("python", "git", "zsh")), lines
+    for agent in ("claude", "codex"):   # the real agent CLIs, when this Mac has them
+        found = shutil.which(agent)
+        if found:
+            done = subprocess.run([macos.SANDBOX_EXEC, "-f", str(sandbox.profile_path()), found, "--version"],
+                                  capture_output=True, text=True, timeout=60, check=False)
+            assert done.returncode == 0, (agent, done.stderr)

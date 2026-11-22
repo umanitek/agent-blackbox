@@ -26,7 +26,7 @@
   ],
   [
    "What the sandbox does not cover",
-   "an agent started another way (a full path, an editor that starts it itself), an agent driving another app with AppleEvents, and sudo (a sandboxed agent can not use it); Linux and Windows are not sandboxed yet"
+   "an agent started another way (a full path, an editor that starts it itself), a program the agent compiles that drives another app, and sudo (a sandboxed agent can not use it); Linux and Windows are not sandboxed yet"
   ]
  ],
  "coming": []
