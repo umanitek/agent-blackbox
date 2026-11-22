@@ -187,3 +187,35 @@ def test_every_tested_row_says_which_agent_version_ran():
         for row in agent["coverage"]:
             if row["status"] == "tested":
                 assert row.get("agent_version") and row.get("os_version"), (agent["id"], row["launch"], row["layer"])
+
+
+# ---------------------------------------------------------------- the program's signer, as a fact
+
+def test_a_profile_names_who_signed_the_agents_program(claude_home, monkeypatch):
+    from plugins.blackbox.kernel import code_signing
+
+    user_home, home, _project = claude_home
+    signer = code_signing.Signer(kind="developer_id", signer="Anthropic PBC (Q6L2SF6YDW)", team="Q6L2SF6YDW", verified=True)
+    monkeypatch.setattr(code_signing, "describe", lambda path: signer)
+    detail = profile_detail.read("claude-code", str(home), user_home=user_home)
+    assert detail.signer == signer
+    assert detail.signature == "Signed by Anthropic PBC (Q6L2SF6YDW) (Developer ID); verified."
+    assert not any("signer" in risk or "not signed" in risk for risk in detail.risks)
+
+
+@pytest.mark.parametrize("kind, sentence, risk", [
+    ("invalid", "does not verify", "claims a signer that does not verify"),
+    ("adhoc", "Signed by no one (ad hoc).", "is not signed by a known developer"),
+    ("unsigned", "Not signed.", "is not signed by a known developer"),
+    ("script", "A script run by an interpreter (not a signed program).", ""),
+    ("unknown", "Its signature could not be checked.", ""),
+])
+def test_a_program_that_is_not_verified_is_said_so_and_only_real_doubt_is_a_risk(claude_home, monkeypatch, kind, sentence, risk):
+    from plugins.blackbox.kernel import code_signing
+
+    user_home, home, _project = claude_home
+    monkeypatch.setattr(code_signing, "describe", lambda path: code_signing.Signer(kind=kind, signer="Someone", verified=False if kind == "invalid" else None))
+    detail = profile_detail.read("claude-code", str(home), user_home=user_home)
+    assert sentence in detail.signature
+    program_risks = [item for item in detail.risks if "/usr/local/bin/claude" in item]
+    assert ([risk in item for item in program_risks] == [True]) if risk else program_risks == []

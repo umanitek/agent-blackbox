@@ -24,6 +24,7 @@ What a program CLAIMS is read by :func:`parse_display` (the text of ``codesign -
 Usage::
 
     claim = parse_display(displayed_text)      # Claim(kind="developer_id", signer="Brave Software, Inc.", …)
+    describe("/opt/homebrew/bin/claude")       # Signer(kind, signer, team, verified, notarised) — links followed
     found = verify("/Applications/Safari.app/Contents/MacOS/Safari", claimed="apple")
     found.valid, found.notarised
 """
@@ -165,6 +166,45 @@ def verify(path: str, claimed: str, run: Runner = _run) -> Verification:
                 _cache.pop(next(iter(_cache)))
             _cache[key] = found
     return found
+
+
+@dataclass(frozen=True)
+class Signer:
+    """Who signed a program, HELD to what it claims: *kind* as in :class:`Claim`, plus
+    ``invalid`` (it names a signer that does not verify) and ``script`` (a text file an
+    interpreter runs — nothing to sign); *verified* True only when the claim verified, None when
+    it could not be checked or there is nothing to verify."""
+
+    kind: str
+    signer: str = ""
+    team: str = ""
+    verified: Optional[bool] = None
+    notarised: bool = False
+
+
+def describe(path: str, run: Runner = _run) -> Signer:
+    """The signer of the program at *path* (links followed), verified — for showing a person
+    what a program is. A file that starts with ``#!`` is a script."""
+    real = os.path.realpath(path)
+    try:
+        with open(real, "rb") as handle:
+            if handle.read(2) == b"#!":
+                return Signer(kind="script")
+    except OSError:
+        return Signer(kind="unknown")
+    shown = run([CODESIGN, "-dv", "--verbose=2", real])
+    if shown is None:
+        return Signer(kind="unknown")
+    claim = parse_display(shown[1])
+    if claim.kind not in REQUIREMENTS:
+        return Signer(kind=claim.kind, signer=claim.signer, team=claim.team)
+    held = verify(real, claim.kind, run)
+    if held.valid is None:
+        return Signer(kind="unknown", signer=claim.signer, team=claim.team)
+    if not held.valid:
+        return Signer(kind="invalid", signer=claim.signer, team=claim.team, verified=False)
+    return Signer(kind=claim.kind, signer=claim.signer, team=claim.team, verified=True,
+                  notarised=held.notarised if claim.kind == "developer_id" else claim.notarised)
 
 
 def forget() -> None:

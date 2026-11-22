@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
+from ..kernel import code_signing
 from ..kernel.agent_hosts import BY_ID, Host
 from ..kernel.bounded_files import read_small_text
 from ..kernel.redaction import redact_secret_values
@@ -115,7 +116,8 @@ class ProfileDetail:
     project: str
     program: str = ""
     version: str = ""
-    signature: str = "not checked"
+    signature: str = "not checked"      # the signer in a sentence (see ``signer`` for the fields)
+    signer: Optional[code_signing.Signer] = None
     sessions_path: str = ""
     instructions: list[InstructionFile] = field(default_factory=list)
     settings: list[ScopeSettings] = field(default_factory=list)
@@ -222,9 +224,33 @@ def _definitions(folders: list[Path]) -> list[str]:
     return out[:MAX_LIST * 2]
 
 
+_SIGNER_KINDS = {"apple": "Apple", "app_store": "the Mac App Store", "developer_id": "Developer ID", "development": "a development certificate"}
+
+
+def _signature_sentence(found: code_signing.Signer) -> str:
+    """*found* as one plain sentence."""
+    if found.kind == "script":
+        return "A script run by an interpreter (not a signed program)."
+    if found.kind == "unsigned":
+        return "Not signed."
+    if found.kind == "adhoc":
+        return "Signed by no one (ad hoc)."
+    if found.kind == "invalid":
+        return f"Claims to be signed by {found.signer or 'a developer'}, but the signature does not verify."
+    if found.verified:
+        who = found.signer or _SIGNER_KINDS.get(found.kind, found.kind)
+        team = f", team {found.team}" if found.team and found.team not in who else ""
+        return f"Signed by {who} ({_SIGNER_KINDS.get(found.kind, found.kind)}{team}); verified" + (", notarised by Apple." if found.notarised else ".")
+    return "Its signature could not be checked."
+
+
 def _risks(detail: ProfileDetail) -> list[str]:
     """Sentences that follow from the facts above — nothing else."""
     risks = []
+    if detail.signer is not None and detail.signer.kind == "invalid":
+        risks.append(f"The program {detail.program} claims a signer that does not verify.")
+    if detail.signer is not None and detail.signer.kind in ("unsigned", "adhoc"):
+        risks.append(f"The program {detail.program} is not signed by a known developer.")
     for scope in detail.settings:
         if scope.permission_mode in ("bypassPermissions", "never", "danger-full-access"):
             risks.append(f"Runs with permission prompts skipped ({scope.permission_mode} in {scope.path}).")
@@ -261,6 +287,8 @@ def read(agent: str, home: str, project: str = "", user_home: Optional[Path] = N
     program = versions.installed(user_home).get(agent)
     if program:
         detail.program, detail.version = program.path, program.version
+        detail.signer = code_signing.describe(program.path)
+        detail.signature = _signature_sentence(detail.signer)
     sessions = [folder / name for name in layout.get("sessions", ()) if (folder / name).is_dir()]
     detail.sessions_path = str(sessions[0]) if sessions else ""
     detail.instructions = _instructions(layout, folder, where, user_home)
