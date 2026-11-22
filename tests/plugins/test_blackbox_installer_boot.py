@@ -255,7 +255,7 @@ _NODE_SETTINGS = {
 def _installed_dkg_bin(tmp_path) -> str:
     """A stand-in node binary: register_boot_service registers nothing for a missing one."""
     dkg = tmp_path / "dkg" / "node_modules" / ".bin" / "dkg"
-    dkg.parent.mkdir(parents=True)
+    dkg.parent.mkdir(parents=True, exist_ok=True)
     dkg.write_text("#!/bin/sh\nexit 0\n")
     dkg.chmod(0o755)
     return str(dkg)
@@ -269,16 +269,17 @@ def _installer_constant(name: str) -> str:
     return match.group(0)
 
 
-def _register_boot_service(tmp_path, os_name: str):
-    """Run the real register_boot_service in a sandbox shaped like *os_name*."""
+def _register_boot_service(tmp_path, os_name: str, launchctl: str = "exit 0"):
+    """Run the real register_boot_service in a sandbox shaped like *os_name* (*launchctl*: the
+    stub's body)."""
     import shutil
     import subprocess
     if shutil.which("bash") is None:
         pytest.skip("needs bash")
     stubs = tmp_path / "bin"
-    stubs.mkdir()
+    stubs.mkdir(exist_ok=True)
     for name, body in (("uname", f"echo {os_name}"), ("node", "exit 0"), ("systemctl", "exit 0"),
-                       ("launchctl", "exit 0")):
+                       ("launchctl", launchctl), ("sleep", "exit 0")):
         (stubs / name).write_text(f"#!/bin/sh\n{body}\n")
         (stubs / name).chmod(0o755)
     script = "\n".join([
@@ -291,8 +292,10 @@ def _register_boot_service(tmp_path, os_name: str):
         f"BLACKBOX_DKG_BIN='{_installed_dkg_bin(tmp_path)}'",
         _installer_constant("BLACKBOX_DKG_LAUNCHD_LABEL"),   # the script's own top-level value
         _installer_constant("BLACKBOX_SERVICE_SYSTEM_PATH"),
+        _installer_constant("BLACKBOX_LAUNCHD_GONE_TRIES"),
         _top_level_function("xml_escape"),
         _top_level_function("blackbox_dkg_launchd_error_log"), _top_level_function("register_boot_service"),
+        _top_level_function("blackbox_launchd_wait_gone"), _top_level_function("blackbox_launchd_reload"),
         "register_boot_service",
     ])
     result = subprocess.run(["bash", "-c", script], capture_output=True, text=True,
@@ -367,3 +370,23 @@ def test_a_plist_value_is_escaped_as_xml_text(tmp_path):
 
     plist = plistlib.loads((tmp_path / "Library" / "LaunchAgents" / "ai.umanitek.blackbox-dkg.plist").read_bytes())
     assert plist["EnvironmentVariables"]["DKG_HOME"] == "/srv/a&b<c>/.dkg"
+
+
+def test_an_unchanged_login_item_is_left_running_and_a_changed_one_is_reloaded_once(tmp_path):
+    """KI-533 (E2E full3, 2026-11-22): every run did `launchctl unload` + `load` back to back — the new
+    job started while the old node still ran, exited "Daemon already running", and launchd
+    relaunched the node 4 times in 90 s. An unchanged definition launchd holds is left alone; a
+    changed one is reloaded once, through the reload that waits for the old job to go."""
+    calls = tmp_path / "launchctl-calls"
+    loaded = tmp_path / "loaded"   # whether launchd holds the job (the stub's state)
+    stub = (f'echo "$1" >> {calls}\n'
+            f'case "$1" in print) [ -f {loaded} ] || exit 113; exit 0;; '
+            f'bootout) rm -f {loaded}; exit 0;; bootstrap) : > {loaded}; exit 0;; esac\nexit 0')
+    _register_boot_service(tmp_path, "Darwin", launchctl=stub)
+    first = calls.read_text().split()
+    assert "unload" not in first and "load" not in first
+    assert first.index("bootout") < first.index("bootstrap")
+    calls.write_text("")
+    _register_boot_service(tmp_path, "Darwin", launchctl=stub)
+    again = calls.read_text().split()
+    assert "bootout" not in again and "bootstrap" not in again and "unload" not in again, again

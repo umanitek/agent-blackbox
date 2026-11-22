@@ -408,6 +408,23 @@ blackbox_dkg_answers() {
 # Hand it over: stop the installer's copy, start the node through its service, and confirm the
 # service's process is the one serving. If the service does not take it, the node is started
 # again directly so protection never drops, and the run says so.
+# Stops this install's own unsupervised node copy (`dkg stop` acts only on this DKG home's
+# daemon.pid) and waits until that process is gone, at most BLACKBOX_DKG_STOP_WAIT_SECONDS.
+# WHY (KI-533, E2E full3 2026-11-22): `dkg stop` returns before the daemon exits; a service copy
+# started in that window exits "Daemon already running" and launchd relaunches it.
+BLACKBOX_DKG_STOP_WAIT_SECONDS="${BLACKBOX_DKG_STOP_WAIT_SECONDS:-30}"
+blackbox_dkg_stop_and_wait() {
+    local pid waited=0
+    pid="$(tr -dc '0-9' <"$BLACKBOX_DKG_HOME/daemon.pid" 2>/dev/null || true)"
+    blackbox_dkg stop >/dev/null 2>&1 || true
+    [ -n "$pid" ] || return 0
+    while kill -0 "$pid" 2>/dev/null && [ "$waited" -lt "$BLACKBOX_DKG_STOP_WAIT_SECONDS" ]; do
+        sleep 1
+        waited=$((waited + 1))
+    done
+    return 0
+}
+
 hand_dkg_node_to_service() {
     local supervisor waited=0 since_restart=0 stray_stops=0
     supervisor="$(blackbox_dkg_supervisor)"
@@ -417,7 +434,7 @@ hand_dkg_node_to_service() {
         return 0
     fi
     step "Handing the DKG node to its $supervisor service ..."
-    blackbox_dkg stop >/dev/null 2>&1 || true   # the installer's own, unsupervised copy
+    blackbox_dkg_stop_and_wait   # the installer's own, unsupervised copy
     blackbox_dkg_control restart >/dev/null 2>&1 || true
     while [ "$waited" -lt "$BLACKBOX_DKG_HANDOVER_WAIT_SECONDS" ]; do
         if blackbox_dkg_owned_by "$supervisor" && blackbox_dkg_answers; then
@@ -433,7 +450,7 @@ hand_dkg_node_to_service() {
         if [ "$since_restart" -ge "$BLACKBOX_DKG_HANDOVER_STRAY_GRACE_SECONDS" ] \
             && [ "$stray_stops" -lt "$BLACKBOX_DKG_HANDOVER_STRAY_STOPS" ] && blackbox_dkg_answers; then
             step "Another copy of the DKG node is running outside its $supervisor service; stopping it"
-            blackbox_dkg stop >/dev/null 2>&1 || true
+            blackbox_dkg_stop_and_wait
             blackbox_dkg_control restart >/dev/null 2>&1 || true
             stray_stops=$((stray_stops + 1))
             since_restart=0
@@ -3542,8 +3559,9 @@ UNIT
             ;;
         Darwin)
             local plist="$HOME/Library/LaunchAgents/$BLACKBOX_DKG_LAUNCHD_LABEL.plist"
+            local written="$plist.new.$$"
             mkdir -p "$HOME/Library/LaunchAgents"
-            cat > "$plist" <<PLIST
+            cat > "$written" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
@@ -3565,11 +3583,22 @@ UNIT
   <key>StandardErrorPath</key><string>$(xml_escape "$(blackbox_dkg_launchd_error_log)")</string>
 </dict></plist>
 PLIST
-            : >"$(blackbox_dkg_launchd_error_log)" 2>/dev/null || true   # this registration's errors only
-            launchctl unload "$plist" >/dev/null 2>&1 || true
-            launchctl load "$plist" >/dev/null 2>&1 \
-                && ok "LaunchAgent registered — the node survives reboots" \
-                || warn "could not load the LaunchAgent; load manually: launchctl load $plist"
+            # One owner, one start (KI-533, E2E full3): an unchanged definition that launchd already
+            # holds is left alone — reloading it restarted the node for nothing — and a changed one is
+            # reloaded through blackbox_launchd_reload, which waits for launchd to let the old job go
+            # (LES-086). `unload` + `load` back to back started the new job while the old node still
+            # ran: it exited "Daemon already running" and launchd relaunched it again and again.
+            if [ -f "$plist" ] && cmp -s "$written" "$plist" \
+                && launchctl print "gui/$(id -u)/$BLACKBOX_DKG_LAUNCHD_LABEL" >/dev/null 2>&1; then
+                rm -f "$written"
+                ok "LaunchAgent already registered and unchanged — the node keeps running"
+            else
+                mv -f "$written" "$plist"
+                : >"$(blackbox_dkg_launchd_error_log)" 2>/dev/null || true   # this registration's errors only
+                blackbox_launchd_reload "$BLACKBOX_DKG_LAUNCHD_LABEL" >/dev/null 2>&1 \
+                    && ok "LaunchAgent registered — the node survives reboots" \
+                    || warn "could not load the LaunchAgent; load manually: launchctl bootstrap gui/$(id -u) $plist"
+            fi
             ;;
         *)
             warn "Unknown OS — boot persistence not configured; start the node manually after reboots."

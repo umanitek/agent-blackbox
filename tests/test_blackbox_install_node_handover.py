@@ -26,7 +26,7 @@ INSTALL_SH = REPO / "scripts" / "blackbox-install.sh"
 LABEL = "ai.umanitek.blackbox-dkg"
 FUNCTIONS = ("blackbox_dkg_supervisor", "blackbox_dkg_control", "blackbox_dkg_service_pid",
              "blackbox_dkg_owned_by", "blackbox_dkg_answers", "blackbox_dkg_launchd_error_log",
-             "hand_dkg_node_to_service")
+             "blackbox_dkg_stop_and_wait", "hand_dkg_node_to_service")
 
 # Pids of the simulated machine: the installer's unsupervised copy, and the copy a service starts
 # (`dkg start --foreground` = the CLI's supervisor; the node daemon is its child).
@@ -105,6 +105,10 @@ class Machine:
         _fake(self.bin, "curl", f'[ -f {state}/answers ]\n')
         _fake(self.bin, "sleep", "exit 0\n")
 
+    def orphan_lingers(self, checks: int) -> None:
+        """`dkg stop` returns while the stopped node still runs for *checks* more liveness checks."""
+        _set(self.state, **{f"alive_{ORPHAN_NODE}": str(checks)})
+
     def stray_on_first_start(self) -> None:
         """Something starts the node behind the service just as the handover starts it (KI-529)."""
         _set(self.state, stray_once="1")
@@ -141,6 +145,14 @@ blackbox_dkg() {{
         start) echo {ORPHAN_NODE} > {pid_file}; echo {ORPHAN_SUPERVISOR} > {state}/ppid_{ORPHAN_NODE}; echo 1 > {state}/answers ;;
     esac
 }}
+kill() {{
+    local pid="${{2:-$1}}" left
+    left="$(cat {state}/alive_$pid 2>/dev/null || echo 0)"
+    if [ "$left" -gt 0 ]; then echo $((left - 1)) > {state}/alive_$pid; return 0; fi
+    [ -f {state}/alive_$pid ] && {{ rm -f {state}/alive_$pid; echo "gone $pid" >> {calls}; }}
+    return 1
+}}
+BLACKBOX_DKG_STOP_WAIT_SECONDS=30
 {functions}
 hand_dkg_node_to_service
 """
@@ -246,3 +258,17 @@ def test_without_a_service_nothing_is_handed_over(tmp_path):
 def test_the_handover_runs_when_the_boot_service_is_registered():
     body = _body(INSTALL_SH.read_text(encoding="utf-8"), "register_boot_service")
     assert body.rstrip().endswith("hand_dkg_node_to_service")
+
+
+def test_the_service_starts_its_node_only_after_the_stopped_copy_is_gone(tmp_path):
+    """KI-533 (E2E full3, 2026-11-22): `dkg stop` returns before the daemon exits, so the service's
+    copy started in that window exited "Daemon already running" and launchd relaunched it."""
+    machine = Machine(tmp_path, "launchd")
+    machine.orphan_running()
+    machine.orphan_lingers(3)
+    machine.service_takes_over(True)
+    calls, output = machine.run()
+    assert f"gone {ORPHAN_NODE}" in calls, calls
+    first_start = next(i for i, call in enumerate(calls) if call.startswith("launchctl kickstart"))
+    assert calls.index(f"gone {ORPHAN_NODE}") < first_start, calls
+    assert "OK The DKG node now runs under its launchd service" in output
