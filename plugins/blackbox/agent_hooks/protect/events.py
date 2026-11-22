@@ -39,7 +39,7 @@ from typing import TYPE_CHECKING, Any, Mapping, Optional
 from ... import audit, guard
 from ...kernel import constants
 from ...kernel.bounded_files import read_json_object, write_json_object
-from ...kernel.agent_hosts import BY_ID, EVENTS
+from ...kernel.agent_hosts import BY_ID, DECISION_TOO_LATE, EVENTS
 from . import recorder
 from .runner import patch_files
 
@@ -51,6 +51,10 @@ MAX_CHECK_TEXT = 256 * 1024
 #: Tools whose output is a fetched web page (an injection there names its site).
 _FETCH_TOOLS = ("webfetch", "web_fetch", "fetch", "web_extract", "browse", "read_url", "url")
 _EMPTY = {"findings": [], "blocked": [], "decision": "", "message": ""}
+
+#: An answer this close to the hook's limit may arrive after it (the bytes still travel): it is
+#: recorded as too late rather than claimed as a stop — Blackbox under-claims, never over-claims.
+LATE_MARGIN_SECONDS = 0.25
 
 #: Sessions kept per agent (the oldest go first).
 MAX_SESSIONS = 40
@@ -135,7 +139,12 @@ def validate(body: Any) -> dict[str, Any]:
     return {"agent": agent, "event": event, "session": _text(body.get("session"), 200), "cwd": _text(body.get("cwd")),
             "tool_name": tool_name, "args": body.get("args"), "tool_call_id": _text(body.get("tool_call_id"), 200),
             "prompt_chars": chars if isinstance(chars, int) and chars >= 0 else 0, "text": text[:MAX_CHECK_TEXT],
-            "sandboxed": body.get("sandboxed") is True, **_identity(body)}
+            "sandboxed": body.get("sandboxed") is True, "answer_by": _answer_by(body.get("answer_by")), **_identity(body)}
+
+
+def _answer_by(value: Any) -> float:
+    """When the hook stops waiting (the runner's ``answer_by``, epoch seconds); 0 when not said."""
+    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0 else 0.0
 
 
 def _identity(body: Mapping[str, Any]) -> dict[str, Any]:
@@ -189,7 +198,7 @@ def _verdict(event: Mapping[str, Any]) -> dict[str, Any]:
     return dict(_EMPTY)
 
 
-def _remember(event: Mapping[str, Any], session: str, verdict: Mapping[str, Any]) -> None:
+def _remember(event: Mapping[str, Any], session: str, decision: str) -> None:
     now = time.time()
     with _lock:
         state = read_state()
@@ -197,11 +206,12 @@ def _remember(event: Mapping[str, Any], session: str, verdict: Mapping[str, Any]
         agent["last_event"] = now
         agent["events"] = int(agent.get("events", 0)) + 1
         sessions = agent.setdefault("sessions", {})
-        row = sessions.setdefault(session, {"first": now, "events": 0, "tools": 0, "blocked": 0, "folder": ""})
+        row = sessions.setdefault(session, {"first": now, "events": 0, "tools": 0, "blocked": 0, "too_late": 0, "folder": ""})
         row["last"] = now
         row["events"] += 1
         row["tools"] += event["event"] == "pre_tool"
-        row["blocked"] += verdict.get("decision") == "block"
+        row["blocked"] += decision == "block"
+        row["too_late"] = int(row.get("too_late", 0)) + (decision == DECISION_TOO_LATE)
         row["folder"] = (event["cwd"].rstrip("/").rsplit("/", 1)[-1] or row["folder"])[:120]
         row["ended"] = event["event"] == "stop" or (row.get("ended", False) and event["event"] in ("turn_end", "subagent_stop"))
         # Inside File Shield's OS sandbox (the runner proved it with the canary): once seen, the session is.
@@ -232,6 +242,7 @@ class Judged:
     findings: list[dict[str, Any]]
     blocked: bool
     process: Optional[Captured]
+    decision: str = ""   # what is RECORDED: the verdict's, or DECISION_TOO_LATE for a stop the agent never got
 
 
 def judge(body: Any) -> tuple[dict[str, Any], Optional[Judged]]:
@@ -257,31 +268,35 @@ def judge(body: Any) -> tuple[dict[str, Any], Optional[Judged]]:
     if event["tool_call_id"] and event["event"] in ("pre_tool", "post_tool"):
         _note_answer(session, call_key, answer)
     from .. import tracking   # late: tracking imports this package's editors
-    return answer, Judged(event, session, verdict, findings, blocked, tracking.capture(event, session))
+    process = tracking.capture(event, session)
+    decision = str(verdict.get("decision") or "")
+    if blocked and event["answer_by"] and time.time() > event["answer_by"] - LATE_MARGIN_SECONDS:
+        decision = DECISION_TOO_LATE   # the hook had stopped waiting: the action ran
+    return answer, Judged(event, session, verdict, findings, blocked, process, decision)
 
 
 def bookkeep(judged: Judged) -> None:
     """Record a judged event: the agent's audit log, its per-agent state and its instance."""
-    event, session, verdict = judged.event, judged.session, judged.verdict
+    event, session, verdict, decision = judged.event, judged.session, judged.verdict, judged.decision
     detail: dict[str, Any] = {"session_id": session}
     if event["event"] in ("pre_tool", "post_tool"):
         detail.update(tool_name=event["tool_name"], tool_call_id=event["tool_call_id"] or f"{session}:{time.time()}")
     if event["event"] == "pre_tool":
-        detail.update(args=event["args"], decision=verdict.get("decision") or "allow")
+        detail.update(args=event["args"], decision=decision or "allow")
     if event["event"] == "prompt":
         detail["prompt_chars"] = event["prompt_chars"]
     if event["text"]:
         detail["checked_chars"] = len(event["text"])   # the text itself is never recorded
-    if verdict.get("decision") and event["event"] != "pre_tool":
-        detail["decision"] = verdict["decision"]
+    if decision and event["event"] != "pre_tool":
+        detail["decision"] = decision
     if event["sub"] or event["event"] in ("subagent_start", "subagent_stop"):
         detail["sub_agent"] = hashlib.sha256(event["sub"].encode("utf-8")).hexdigest()[:12] if event["sub"] else ""
         detail["sub_agent_type"] = event["sub_type"]
     audit.record_for(event["agent"], event=AUDIT_EVENT[event["event"]], workspace=event["cwd"],
                      findings=judged.findings or None, detail=detail)
-    _remember(event, session, verdict)
+    _remember(event, session, decision)
     from .. import tracking   # late: tracking imports this package's editors
-    tracking.track(event, session, decision=str(verdict.get("decision") or ""), findings=len(judged.findings),
+    tracking.track(event, session, decision=decision, findings=len(judged.findings),
                    reason=str(verdict.get("message") or "") if judged.blocked else "",
                    text=event["text"] if event["event"] == "prompt" else "",   # kept only if the person turned that on
                    process=judged.process)

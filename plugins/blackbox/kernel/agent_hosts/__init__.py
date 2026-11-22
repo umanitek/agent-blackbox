@@ -47,6 +47,10 @@ USER_BIN_DIRS = (".npm-global/bin", ".local/bin", ".bun/bin", ".claude/local", "
                  "/opt/homebrew/bin", "/usr/local/bin")
 
 #: What every agent event is mapped to.
+#: The decision recorded when Blackbox decided to stop an agent's action but its answer reached
+#: the agent's hook only after the hook's limit — the agent was NOT stopped (fail-open), so it is
+#: never counted or announced as "stopped" (KI-PENDING-f5765e, 2026-11-22).
+DECISION_TOO_LATE = "too-late"
 EVENTS = ("session_start", "prompt", "pre_tool", "post_tool", "turn_end", "stop", "subagent_start", "subagent_stop",
           "config_change", "attention")
 #: The kinds a ``nested`` group's tool matcher applies to. WHY: Gemini CLI compares a lifecycle
@@ -189,4 +193,4 @@ def host(agent_id: str) -> Optional[Host]:
     return BY_ID.get(agent_id)
 
 
-__all__ = ["BY_ID", "EVENTS", "HOSTS", "TOOL_KINDS", "USER_BIN_DIRS", "Host", "host"]
+__all__ = ["BY_ID", "DECISION_TOO_LATE", "EVENTS", "HOSTS", "TOOL_KINDS", "USER_BIN_DIRS", "Host", "host"]

@@ -47,8 +47,9 @@ class Instance:
     end_reason: str = ""           # the agent's own word, "process-exit" or "quiet"
     events: int = 0
     checked: int = 0               # tool calls Blackbox judged
-    refused: int = 0
+    refused: int = 0               # actions Blackbox stopped (the agent got the refusal in time)
     flagged: int = 0
+    too_late: int = 0              # actions Blackbox decided to stop but whose answer came after the hook's limit: they ran
     prompts: int = 0
     waiting: str = ""              # one of WAITING while the agent waits for its person, else ""
     last_action: Optional[Action] = None   # the newest timeline entry (the live tree shows it)
@@ -68,8 +69,8 @@ class Action:
     kind: str                      # an EVENTS kind
     tool: str = ""
     what: str = ""
-    verdict: str = ""              # "", "allow", "flag", "block"
-    reason: str = ""               # only for verdict "block"
+    verdict: str = ""              # "", "allow", "flag", "block", "too-late" (decided to stop; the answer came too late: it ran)
+    reason: str = ""               # only for verdict "block" / "too-late"
     text: str = ""                 # a prompt's text, redacted — kept ONLY while the person has
     #                                turned prompt-text recording on (agent_hooks.prompt_text)
     late: bool = False             # it arrived after its instance had ended (KI-551): shown, never reopening it

@@ -22,6 +22,7 @@ import hashlib
 import time
 from typing import Any, Mapping
 
+from ...kernel.agent_hosts import DECISION_TOO_LATE
 from ...kernel.redaction import redact_secret_values
 from . import links, store
 from .model import LAUNCHES, Action, Instance
@@ -123,7 +124,8 @@ def _count(instance: Instance, kind: str, decision: str, findings: int) -> None:
     instance.checked += kind == "pre_tool"
     instance.prompts += kind == "prompt"
     instance.refused += decision == "block"
-    instance.flagged += decision != "block" and findings > 0
+    instance.too_late += decision == DECISION_TOO_LATE
+    instance.flagged += decision not in ("block", DECISION_TOO_LATE) and findings > 0
 
 
 def _end(instance: Instance, reason: str) -> None:
@@ -160,9 +162,9 @@ def _target(session: Instance, event: Mapping[str, Any]) -> Instance:
 def _timeline(target: Instance, event: Mapping[str, Any], decision: str, findings: int, reason: str, prompt_text: str,
               late: bool) -> None:
     kind = event["event"]
-    verdict = "block" if decision == "block" else "flag" if findings else "allow" if kind == "pre_tool" else ""
+    verdict = decision if decision in ("block", DECISION_TOO_LATE) else "flag" if findings else "allow" if kind == "pre_tool" else ""
     action = Action(time.time(), kind, str(event.get("tool_name") or "")[:120], _what(event) if kind == "pre_tool" else "", verdict,
-                    redact_secret_values(reason)[:MAX_REASON] if verdict == "block" else "",
+                    redact_secret_values(reason)[:MAX_REASON] if verdict in ("block", DECISION_TOO_LATE) else "",
                     prompt_text if kind == "prompt" else "", late)
     store.append_action(target.key, action, target.events)
     if not late:   # the live tree shows the newest entry — never a prompt's text

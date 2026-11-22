@@ -16,7 +16,7 @@ from __future__ import annotations
 import os
 from typing import Any, Mapping, Optional
 
-from ..kernel.agent_hosts import BY_ID
+from ..kernel.agent_hosts import BY_ID, DECISION_TOO_LATE
 from .model import Notice
 
 ELEVATION_ID = "agent:elevation-request"
@@ -74,6 +74,11 @@ def finding(row: Mapping[str, Any]) -> Optional[Notice]:
                       **common)
     what = WHAT.get(str(row.get("category") or ""), "did something Blackbox watches for")
     why = WHY.get(str(row.get("source") or ""), "a Blackbox rule covers it")
+    if str(row.get("decision") or "") == DECISION_TOO_LATE:
+        # Decided to stop, but the agent's hook had stopped waiting: the action RAN (KI-PENDING-f5765e).
+        return Notice(id=key, kind="too-late", level="critical", title=f"Blackbox could not stop {name} in time",
+                      body=f"{name}{_where(project)} {what}. Blackbox decided to stop it, but its answer came after the agent's "
+                           f"limit, so the action ran: {why}.", **common)
     if stopped:
         return Notice(id=key, kind="stopped", level="critical" if severity == "critical" else "warning",
                       title=f"Blackbox stopped {name}", body=f"{name}{_where(project)} {what}. Stopped by Blackbox: {why}.", **common)
@@ -113,13 +118,16 @@ def digest(row: Mapping[str, Any], now: float, *, final: bool) -> Notice:
     """What a session did, in one line (*final*: it just ended)."""
     common = _instance_common(row)
     checked, refused, flagged = int(row.get("checked") or 0), int(row.get("refused") or 0), int(row.get("flagged") or 0)
+    too_late = int(row.get("too_late") or 0)
     verdict = "none refused" if not refused else f"{refused} refused"
+    if too_late:
+        verdict += f", {too_late} not stopped in time"
     if flagged:
         verdict += f", {flagged} flagged"
     subs = len(row.get("sub_agents") or [])
     with_subs = f", {subs} sub-agent{'s' if subs != 1 else ''}" if subs else ""
     key = f"digest:{row.get('key')}:{'end' if final else int(now // 60)}"
-    return Notice(id=key, ts=now, category="digest", kind="digest", level="warning" if refused else "info",
+    return Notice(id=key, ts=now, category="digest", kind="digest", level="warning" if refused or too_late else "info",
                   title=f"{common['agent_name']}{_where(common['project'])}", body=f"{checked} actions checked{with_subs}: {verdict}.",
                   **common)
 

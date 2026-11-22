@@ -31,6 +31,7 @@ import os
 import re
 import stat
 import sys
+import time
 import urllib.request
 from pathlib import Path
 
@@ -285,6 +286,9 @@ def ask(url: str, body: dict) -> dict:
     """POST *body* to the dashboard with its session token; {} when it cannot answer."""
     with urllib.request.urlopen(f"{url}/api/session", timeout=TIMEOUT_SECONDS) as response:
         token = json.loads(response.read(65536)).get("token", "")
+    # When this hook stops waiting: an answer after it reaches nobody, and the dashboard records
+    # it as decided too late, never as stopped (KI-PENDING-f5765e).
+    body = {**body, "answer_by": round(time.time() + TIMEOUT_SECONDS, 3)}
     request = urllib.request.Request(f"{url}/api/agent-hooks/event", data=json.dumps(body).encode("utf-8"), method="POST",
                                      headers={"content-type": "application/json", "X-Blackbox-Token": token})
     with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:
