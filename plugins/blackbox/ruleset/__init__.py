@@ -92,3 +92,10 @@ def network_indicators(config=None, wait: bool = True) -> Optional[live.NetworkI
     never blocks (a page); True waits for a running build (the enforcer's plan).
     See :mod:`.live.network_lists`."""
     return live.network_indicators(peek(config).verified_scope, wait=wait)
+
+
+def graph_reachable(config=None) -> Optional[bool]:
+    """Whether the local store holding the verified graph answers now (None: none configured).
+    Cheap and cached — see :func:`.live.network_lists.graph_reachable`."""
+    return live.graph_reachable(peek(config).verified_scope)
+

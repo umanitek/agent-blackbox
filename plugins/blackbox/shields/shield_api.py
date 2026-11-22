@@ -75,6 +75,9 @@ class ShieldContext:
     #: ``lookup_hashes(sha256s) -> (the ones the verified graph lists, every one could be asked)``
     #: — a shield's file verdicts; None where the graph cannot be asked.
     lookup_hashes: Optional[Callable[[Sequence[str]], tuple[frozenset[str], bool]]] = None
+    #: ``graph_reachable() -> True/False/None`` — whether the threat graph can be read NOW (the lists
+    #: above may be kept from before it went down); None where it cannot be asked.
+    graph_reachable: Optional[Callable[[], Optional[bool]]] = None
     request_body: bytes = b""
     request_headers: Mapping[str, str] = field(default_factory=dict)
 

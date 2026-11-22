@@ -109,3 +109,25 @@ def test_assets_the_facts_count_no_indicators_in_are_not_read():
 def test_no_scope_is_none():
     assert nl.network_indicators(None) is None
     assert nl.network_indicators(_scope(graphs=())) is None
+
+
+def test_graph_reachable_asks_the_store_once_per_window_and_says_down_when_it_does_not_answer():
+    """E2E recheck 2026-11-21: "can the graph be read now?" is separate from the lists kept in memory."""
+    asked = []
+
+    class Store:
+        def __init__(self, url, answers):
+            self.answers = answers
+
+        def select(self, sparql):
+            asked.append(sparql)
+            return SimpleNamespace(known=self.answers)
+
+    nl._reachable.update(url=None, at=0.0, value=None)
+    scope = _scope()
+    assert nl.graph_reachable(scope, store_factory=lambda url: Store(url, False), now=100.0) is False
+    assert nl.graph_reachable(scope, store_factory=lambda url: Store(url, True), now=105.0) is False, "cached"
+    assert nl.graph_reachable(scope, store_factory=lambda url: Store(url, True), now=111.0) is True
+    assert len(asked) == 2 and "?s ?p ?o" not in asked[0]
+    assert nl.graph_reachable(None) is None
+

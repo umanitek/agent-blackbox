@@ -170,7 +170,24 @@ def test_the_live_reads_refuse_while_the_shield_is_off(monkeypatch):
         with pytest.raises(ShieldApiError) as refused:
             read(_context(), {})
         assert refused.value.status == 409
-    assert api.overview(_context(), {})["graph"] == {"ready": False, "complete": False, "domains": 0, "ips": 0}
+    assert api.overview(_context(), {})["graph"] == {"ready": False, "reachable": None, "keeping_last_lists": False,
+                                                       "complete": False, "domains": 0, "ips": 0}
+
+
+def test_a_graph_that_is_down_is_not_reported_ready_and_the_kept_lists_are_said(monkeypatch):
+    """E2E recheck 2026-11-21: with the DKG node stopped the overview still said ready:true. The
+    lists in hand are kept (DNS Shield and the firewall keep blocking) and the overview says so."""
+    from plugins.blackbox.ruleset.live.network_lists import NetworkIndicators
+    monkeypatch.setattr(network_mode, "current", lambda: network_mode.build(enabled=True))
+    lists = NetworkIndicators(domains=frozenset({"bad.example"}), ips=frozenset(), assets=1, read=1, complete=True, built_at=1.0)
+    down = ShieldContext(network_indicators=lambda: lists, graph_reachable=lambda: False,
+                         ask_assistant=lambda message: AssistantAnswer(ok=True, answer="fine"))
+    graph = api.overview(down, {})["graph"]
+    assert graph["ready"] is False and graph["reachable"] is False and graph["keeping_last_lists"] is True
+    assert graph["domains"] == 1
+    up = ShieldContext(network_indicators=lambda: lists, graph_reachable=lambda: True,
+                       ask_assistant=lambda message: AssistantAnswer(ok=True, answer="fine"))
+    assert api.overview(up, {})["graph"]["ready"] is True
 
 
 def test_only_public_addresses_from_the_graph_are_ever_marked():

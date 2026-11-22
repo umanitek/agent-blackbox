@@ -198,3 +198,34 @@ def forget() -> None:
     with _lock:
         _state.update(assets={}, key=None, value=None, building=False)
     _built.set()
+
+
+#: How long one "can the threat graph be asked now?" answer is reused (pages ask every second or two).
+REACHABLE_CACHE_SECONDS = 10.0
+#: How long the probe waits for the local store: it is on this Mac, so a slow answer is a down one.
+REACHABLE_TIMEOUT_SECONDS = 1.0
+#: The cheapest question a SPARQL store can answer: no graph pattern, one constant row.
+_PROBE_QUERY = "SELECT (1 AS ?ok) WHERE {}"
+_reachable: dict[str, Any] = {"url": None, "at": 0.0, "value": None}
+
+
+def graph_reachable(scope: Optional[VerifiedScope], store_factory: Optional[Callable[[str], Any]] = None,
+                    now: Optional[float] = None) -> Optional[bool]:
+    """True when the local store holding the threat graph answers now, False when it does not,
+    None when no store is configured yet. Cached for :data:`REACHABLE_CACHE_SECONDS`.
+
+    WHY (E2E recheck 2026-11-21): the lists above are kept in memory after the node goes down —
+    rightly, so DNS Shield and the firewall keep blocking — and the overview said the graph was
+    "ready" while the node was off. This answers the separate question "can it be read now?"."""
+    if scope is None or not scope.store_url:
+        return None
+    moment = time.time() if now is None else now
+    with _lock:
+        if _reachable["url"] == scope.store_url and moment - _reachable["at"] < REACHABLE_CACHE_SECONDS:
+            return _reachable["value"]
+    factory = store_factory or (lambda url: StoreClient(url, timeout=REACHABLE_TIMEOUT_SECONDS))
+    value = factory(scope.store_url).select(_PROBE_QUERY).known
+    with _lock:
+        _reachable.update(url=scope.store_url, at=moment, value=value)
+    return value
+

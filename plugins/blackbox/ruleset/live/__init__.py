@@ -46,7 +46,7 @@ from .fallback_index import FALLBACK_INDEX, FALLBACK_OFF, FallbackIndex
 from .fallback_index import maintain as maintain_fallback_index
 from .health import HEALTH, LookupHealth, LookupState
 from .lookup import CLEAN, COULD_NOT_TELL, HIT, LookupAnswer, VerifiedLookup
-from .network_lists import NetworkIndicators, network_indicators
+from .network_lists import NetworkIndicators, graph_reachable, network_indicators
 from .scope import VerifiedScope, refresh_scope, scope_for_generation
 
-__all__ = ["CLEAN", "COULD_NOT_TELL", "FALLBACK_INDEX", "FALLBACK_OFF", "HEALTH", "HIT", "NO_PIN", "CorrectionPin", "FallbackIndex", "LiveAnswering", "LivePage", "LookupAnswer", "LookupHealth", "LookupState", "NetworkIndicators", "VerifiedLookup", "VerifiedScope", "maintain_fallback_index", "network_indicators", "public_page", "refresh_scope", "scope_for_generation", "signed_suppressions"]
+__all__ = ["CLEAN", "COULD_NOT_TELL", "FALLBACK_INDEX", "FALLBACK_OFF", "HEALTH", "HIT", "NO_PIN", "CorrectionPin", "FallbackIndex", "LiveAnswering", "LivePage", "LookupAnswer", "LookupHealth", "LookupState", "NetworkIndicators", "VerifiedLookup", "VerifiedScope", "graph_reachable", "maintain_fallback_index", "network_indicators", "public_page", "refresh_scope", "scope_for_generation", "signed_suppressions"]

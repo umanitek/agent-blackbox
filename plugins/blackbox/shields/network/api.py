@@ -64,6 +64,20 @@ def alerts(limit: int = MAX_ALERTS) -> list[dict[str, Any]]:
     return sorted(merged, key=lambda alert: -float(alert["ts"]))[:limit]
 
 
+def _graph_state(context: ShieldContext, indicators: Any) -> dict[str, Any]:
+    """The threat graph as the overview reports it. *ready*: lists are in hand AND the graph can be
+    read now; *keeping_last_lists*: the graph is down, so DNS Shield and the firewall keep the lists
+    they last applied (the helper's keep rule) — said plainly, never shown as ready (E2E recheck
+    2026-11-21)."""
+    reachable = context.graph_reachable() if context.graph_reachable else None
+    have = indicators is not None
+    return {"ready": have and reachable is not False, "reachable": reachable,
+            "keeping_last_lists": have and reachable is False,
+            "complete": bool(indicators and indicators.complete),
+            "domains": len(indicators.domains) if indicators else 0,
+            "ips": len(indicators.ips) if indicators else 0}
+
+
 def overview(context: ShieldContext, _params: Mapping[str, str]) -> dict[str, Any]:
     current = mode_module.current()
     indicators = context.indicators_now()   # never waits: the first build runs in the background
@@ -74,10 +88,7 @@ def overview(context: ShieldContext, _params: Mapping[str, str]) -> dict[str, An
         "helper": helper.installed(),
         "desktop": bool(extensions.providers()),
         "enforcer": enforcement.summary(),
-        "graph": {"ready": indicators is not None,
-                  "complete": bool(indicators and indicators.complete),
-                  "domains": len(indicators.domains) if indicators else 0,
-                  "ips": len(indicators.ips) if indicators else 0},
+        "graph": _graph_state(context, indicators),
         "top_blocked": enforcement.top_blocked(),
         "alerts": alerts(),
     }

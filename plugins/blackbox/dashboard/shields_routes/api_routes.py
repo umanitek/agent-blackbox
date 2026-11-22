@@ -54,6 +54,7 @@ def context(body: bytes = b"", headers: Any = None) -> shields.ShieldContext:
         request_headers={str(name).lower(): str(value) for name, value in dict(headers or {}).items()},
         network_indicators=ruleset.network_indicators,
         network_indicators_now=lambda: ruleset.network_indicators(wait=False),
+        graph_reachable=ruleset.graph_reachable,
         ask_assistant=ask_assistant,
         lookup_hashes=lookup_hashes,
         blocking=load_blackbox_config().mode == "block",
