@@ -85,7 +85,12 @@ def _describe(instance: Instance, event: Mapping[str, Any]) -> None:
     cwd = str(event.get("cwd") or "")
     if cwd:
         instance.cwd, instance.folder = cwd[:500], (cwd.rstrip("/").rsplit("/", 1)[-1])[:120]
-    instance.model = str(event.get("model") or instance.model)[:80]
+    # The model the person named on the agent's command line wins over any the agent reports
+    # later (KI-575: a transcript can name a tool's model, never the person's choice).
+    if instance.kind == "session" and event.get("model_given") is True and event.get("model"):
+        instance.model, instance.model_given = str(event["model"])[:80], True
+    elif not instance.model_given:
+        instance.model = str(event.get("model") or instance.model)[:80]
     instance.profile = str(event.get("profile") or instance.profile)[:500]
     instance.sandboxed = instance.sandboxed or event.get("sandboxed") is True
     if instance.kind == "session":

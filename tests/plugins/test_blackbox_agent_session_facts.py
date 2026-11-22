@@ -79,6 +79,52 @@ def test_the_model_comes_from_the_transcript_once_it_has_answered(_fresh):
     assert session.model == "claude-haiku-5-5"
 
 
+def _claude_2_1_330_transcript(folder):
+    """A transcript shaped as real Claude Code 2.1.330 wrote it (KI-575, test VM 2026-11-22): an
+    early attachment line carries the tool list — the advisor tool's definition names ITS model at
+    byte ~79 000 — and the session's own request and answer name the session's model later."""
+    tools = [{"name": f"tool_{n}", "description": "x" * 600, "input_schema": {"type": "object"}} for n in range(128)]
+    tools.append({"type": "advisor_20260301", "name": "advisor", "model": "claude-opus-5-5"})
+    lines = [{"type": "queue-operation", "operation": "enqueue"} for _ in range(14)]
+    lines.append({"type": "attachment", "attachment": {"type": "deferred_tools_delta", "tools": tools}})
+    lines += [{"type": "user", "message": {"role": "user", "content": "list the files"}} for _ in range(3)]
+    lines.append({"type": "api-request", "params": {"model": "claude-haiku-5-5", "max_tokens": 32000}})
+    lines.append({"type": "assistant", "message": {"model": "claude-haiku-5-5", "role": "assistant", "content": []}})
+    transcript = folder / "s2-cc1.jsonl"
+    transcript.write_text("\n".join(json.dumps(line) for line in lines) + "\n", encoding="utf-8")
+    assert transcript.read_text(encoding="utf-8").index("claude-opus-5-5") > 64 * 1024
+    return transcript
+
+
+def test_the_sessions_model_is_its_own_turns_never_a_tools_definition(_fresh):
+    transcript = _claude_2_1_330_transcript(_fresh)
+    stop = {"cwd": str(_fresh), "hook_event_name": "Stop", "session_id": "s2-cc1", "transcript_path": str(transcript)}
+    assert runner.summary("claude-code", "turn_end", stop)["model"] == "claude-haiku-5-5"
+
+
+def test_a_sub_agents_sidechain_answer_is_not_the_sessions_model(_fresh):
+    transcript = _fresh / "side.jsonl"
+    transcript.write_text("\n".join(json.dumps(line) for line in (
+        {"type": "assistant", "isSidechain": True, "message": {"model": "claude-opus-5-5"}},
+        {"type": "assistant", "message": {"model": "claude-haiku-5-5"}})) + "\n", encoding="utf-8")
+    assert runner.summary("claude-code", "turn_end", {"session_id": "x", "transcript_path": str(transcript)})["model"] == "claude-haiku-5-5"
+
+
+def test_the_model_on_the_command_line_wins_under_the_sandbox_launcher(_fresh, monkeypatch):
+    # The real process chain under Blackbox's launcher (KI-575): sandbox-exec carries the person's words.
+    chain = {4242: observe.Proc(4242, 4241, 0.0, "/opt/homebrew/bin/claude -p hi"),
+             4241: observe.Proc(4241, 1, 0.0, "/usr/bin/sandbox-exec -f /Users/u/.hermes/blackbox/sandbox/agents.sb "
+                                               "/opt/homebrew/bin/claude -p hi --model haiku")}
+    assert observe.model_of(chain, 4242) == "haiku"
+    monkeypatch.setattr(observe, "ancestry", lambda pid: chain)
+    transcript = _claude_2_1_330_transcript(_fresh)
+    start = {"cwd": str(_fresh), "session_id": "s2-cc1", "source": "startup", "transcript_path": str(transcript)}
+    _send("claude-code", "session_start", start)
+    _send("claude-code", "turn_end", start)
+    [session] = store.all_instances()
+    assert session.model == "haiku"
+
+
 # -- KI-567: one prompt, counted once ----------------------------------------------------------------
 
 def test_one_prompt_is_counted_once_however_many_turns_it_causes(_fresh):

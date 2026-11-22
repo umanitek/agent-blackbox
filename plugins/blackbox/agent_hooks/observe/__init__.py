@@ -160,14 +160,26 @@ def _launch(host: Host, words: list[str]) -> str:
     return "ide" if PurePath(program).name in ("Cursor", "Windsurf") else "interactive"
 
 
-def model_of(table: Mapping[int, Proc], pid: int) -> str:
-    """The model the agent process *pid* was started with (``--model X``, ``-m X``, ``--model=X``),
-    "" when its command line names none."""
-    proc = table.get(pid)
-    host = classify(proc.command) if proc is not None else None
-    if host is None or proc is None:
-        return ""
-    _program, rest = _split(_words(proc.command))
+#: Programs that start another program with its arguments unchanged — Blackbox's own sandbox
+#: launcher runs ``sandbox-exec -f <profile> <agent> <its arguments>`` — and their options that
+#: take a value.
+_WRAPPERS = {"sandbox-exec": frozenset({"-f", "-p", "-n", "-D"})}
+
+
+def _unwrapped(words: list[str]) -> list[str]:
+    """*words* past a wrapper (:data:`_WRAPPERS`) and its options: the program it runs and that
+    program's arguments; *words* unchanged when argv[0] is no wrapper."""
+    valued = _WRAPPERS.get(PurePath(words[0]).name) if words else None
+    if valued is None:
+        return words
+    position = 1
+    while position < len(words) and words[position].startswith("-"):
+        position += 2 if words[position] in valued else 1
+    return words[position:]
+
+
+def _model_option(host: Host, words: list[str]) -> str:
+    _program, rest = _split(_unwrapped(words))
     options = _MODEL_OPTIONS.get(host.id, ())
     for position, word in enumerate(rest):
         if word in options and position + 1 < len(rest):
@@ -175,6 +187,25 @@ def model_of(table: Mapping[int, Proc], pid: int) -> str:
         if word.startswith("--model="):
             return word.split("=", 1)[1][:80]
     return ""
+
+
+def model_of(table: Mapping[int, Proc], pid: int) -> str:
+    """The model the agent process *pid* was started with (``--model X``, ``-m X``, ``--model=X``),
+    "" when its command line names none. A parent that is a wrapper running this same agent
+    (Blackbox's sandbox launcher: ``sandbox-exec -f … claude --model haiku``) is read too. WHY
+    (KI-575, real run 2026-11-22): under the launcher the agent's own process did not carry the
+    words the person typed; its ``sandbox-exec`` parent did."""
+    proc = table.get(pid)
+    host = classify(proc.command) if proc is not None else None
+    if host is None or proc is None:
+        return ""
+    found = _model_option(host, _words(proc.command))
+    parent = table.get(proc.ppid)
+    if not found and parent is not None:
+        words = _words(parent.command)
+        if words and PurePath(words[0]).name in _WRAPPERS and classify(" ".join(shlex.quote(w) for w in _unwrapped(words))) is host:
+            found = _model_option(host, words)
+    return found
 
 
 def launch_of(table: Mapping[int, Proc], pid: int) -> str:

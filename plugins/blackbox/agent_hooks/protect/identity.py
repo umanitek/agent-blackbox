@@ -7,6 +7,7 @@ library only; copied beside ``runner.py`` into Blackbox's data folder).
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from pathlib import Path
@@ -91,18 +92,59 @@ def effective_agent(agent: str) -> str:
 
 #: Events after which the agent's transcript holds a model answer (and so the model's name).
 MODEL_EVENTS = frozenset({"turn_end", "stop", "subagent_stop"})
-#: The most of a transcript read for its model's name (its first lines).
-MAX_TRANSCRIPT_BYTES = 128 * 1024
-#: A model field in a transcript line: ``"model":"claude-haiku-5-5"`` (Claude Code), ``"model":
-#: "gemini-3.5-flash-lite"`` (Gemini CLI). Placeholders (``<synthetic>``) are not names.
-_MODEL_FIELD = re.compile(r'"model"\s*:\s*"([A-Za-z0-9][A-Za-z0-9._:/@+-]{1,79})"')
+#: The most of a transcript read for its model's name (its first lines). WHY 512 KiB: Claude Code
+#: 2.1.330 writes its whole tool list as one early attachment line (~80 KiB on the test VM) before
+#: the session's first answer.
+MAX_TRANSCRIPT_BYTES = 512 * 1024
+#: A model name as agents spell it; placeholders (``<synthetic>``) are not names.
+_MODEL_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+-]{1,79}$")
+
+
+def _turn_model(record: object) -> str:
+    """The model of ONE transcript record when it is the session's OWN turn, else "".
+
+    Only these records name the session's model: Claude Code's ``assistant`` record
+    (``message.model``, not a sub-agent's sidechain), its ``system`` / ``init`` record
+    (``model``), its ``api-request`` record (``params.model``) and Gemini CLI's ``gemini`` message
+    (``model``). WHY (KI-575, real Claude Code 2.1.330, 2026-11-22): the transcript also holds the
+    tool list, and the advisor tool's definition names ITS model (``claude-opus-5-5``) before the
+    session's first answer — any other record's ``model`` is a tool's, an advisor's or a
+    sub-agent's, never the session's."""
+    if not isinstance(record, dict) or record.get("isSidechain") is True:
+        return ""
+    kind = record.get("type")
+    message = record.get("message") if isinstance(record.get("message"), dict) else {}
+    params = record.get("params") if isinstance(record.get("params"), dict) else {}
+    found = {"assistant": message.get("model"), "api-request": params.get("model"), "gemini": record.get("model"),
+             "system": record.get("model") if record.get("subtype") == "init" else None}.get(str(kind))
+    return found if isinstance(found, str) and _MODEL_NAME.match(found) else ""
+
+
+def _records(head: str) -> list:
+    """The whole JSON records in a transcript's first bytes: one per line (JSONL — Claude Code,
+    Gemini CLI's newer files) or the messages of one JSON document (Gemini CLI's older
+    ``{"messages": […]}``). A line cut off by the read bound is not a record."""
+    try:
+        document = json.loads(head)   # a JSONL file of two or more records is not one document
+    except ValueError:
+        document = None
+    if isinstance(document, dict) and isinstance(document.get("messages"), list):
+        return document["messages"]
+    records = []
+    for line in head.splitlines():
+        try:
+            records.append(json.loads(line))
+        except ValueError:
+            continue
+    return records
 
 
 def transcript_model(payload: dict) -> str:
-    """The model an agent's session ran on, from its transcript's first lines (``transcript_path``
-    in Claude Code's and Gemini CLI's payloads) — the MODEL FIELD only: nothing else read is kept
-    or sent. WHY (KI-566): neither agent's hook payload names the model (real Claude Code 2.1.330 and
-    Gemini CLI 0.70.0 payloads, 2026-11-22). "" when there is no transcript or no model in it yet."""
+    """The model an agent's session ran on, from its transcript's first records
+    (``transcript_path`` in Claude Code's and Gemini CLI's payloads) — the model of the session's
+    OWN turns only (:func:`_turn_model`); nothing else read is kept or sent. WHY (KI-566): neither
+    agent's hook payload names the model (real Claude Code 2.1.330 and Gemini CLI 0.70.0 payloads,
+    2026-11-22). "" when there is no transcript or no turn of the session in it yet."""
     path = payload.get("transcript_path")
     if not isinstance(path, str) or not path.startswith("/"):
         return ""
@@ -111,8 +153,7 @@ def transcript_model(payload: dict) -> str:
             head = handle.read(MAX_TRANSCRIPT_BYTES).decode("utf-8", "replace")
     except OSError:
         return ""
-    found = _MODEL_FIELD.search(head)
-    return found.group(1) if found else ""
+    return next((found for found in map(_turn_model, _records(head)) if found), "")
 
 
 #: How a turn the AGENT starts (not its person) begins: Claude Code's background-task result (KI-567).

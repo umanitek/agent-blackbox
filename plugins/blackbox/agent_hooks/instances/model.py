@@ -40,6 +40,7 @@ class Instance:
     folder: str = ""               # the project folder's name
     cwd: str = ""
     model: str = ""
+    model_given: bool = False      # *model* is the one its command line named (``--model``): it stays
     launch: str = "unknown"
     sandboxed: bool = False
     pid: int = 0                   # the agent process, when it could be found

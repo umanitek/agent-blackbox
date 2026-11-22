@@ -182,8 +182,8 @@ def track(event: Mapping[str, Any], session_key: str, *, decision: str = "", fin
         fields["agent_pid"] = found.agent_pid or None
         if found.agent_pid and found.launch:   # how it was started, from its command line (KI-549)
             fields["launch"] = found.launch
-        if found.model and not fields.get("model"):   # the model it was started with (KI-566)
-            fields["model"] = found.model
+        if found.model:   # the model it was started with wins over any the agent reports (KI-566, KI-575)
+            fields["model"], fields["model_given"] = found.model, True
     session_key = _as_sub_agent(fields, session_key)
     links.note_spawn(session_key, fields)
     if event.get("profile") and profiles.remember(event["agent"], str(event["profile"])):
