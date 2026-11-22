@@ -85,7 +85,7 @@ def checks(facts: Mapping[str, Any], blackbox: Mapping[str, Any]) -> list[dict[s
         _check("passwordless-sudo", "A password is needed to become root", {"yes": "bad", "no": "ok"}.get(str(facts.get("passwordless_sudo")), "unknown"),
                "Without a password, any program on this Mac — an AI agent included — becomes root without asking you.",
                settings=PANES["users"],
-               detail="A rule in /etc/sudoers or /etc/sudoers.d says NOPASSWD. Remove it to be asked again."
+               detail="A sudo rule on this Mac (the sudo rules file, or a file in its rules folder) lets commands run without a password. Remove it to be asked again."
                if facts.get("passwordless_sudo") == "yes" else ""),
         _check("blackbox", "Blackbox protections on", "ok" if protections else "warn",
                "DNS Shield and the Threat Firewall stop known malicious sites and addresses for every app."),

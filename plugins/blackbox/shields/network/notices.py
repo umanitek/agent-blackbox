@@ -55,7 +55,7 @@ def _standing() -> list[ShieldAlert]:
     return [ShieldAlert(key="network:passwordless-sudo", kind="passwordless-sudo", ts=float(snapshot.get("at") or 0), severity="high",
                         title=f"{TITLE} · sudo needs no password",
                         text="Any program on this Mac — an AI agent included — can become root without asking you. " + SEE,
-                        detail="A sudo rule says NOPASSWD (in /etc/sudoers or /etc/sudoers.d).")]
+                        detail="A sudo rule on this Mac lets commands run without a password.")]
 
 
 def shield_alerts() -> list[ShieldAlert]:

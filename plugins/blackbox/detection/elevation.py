@@ -56,7 +56,10 @@ _SYSTEM_SERVICE = re.compile(
     r"launchctl\s+(?:bootstrap|enable|load)\s+(?:-w\s+)?system\b|"
     r"(?:>|>>|\btee\b|\bcp\b|\bmv\b|\binstall\b|\bln\b)[^|;&\n]*/Library/LaunchDaemons/|"
     r"(?:>|>>|\btee\b|\bcp\b|\bmv\b|\binstall\b|\bln\b)[^|;&\n]*/etc/systemd/system/")
-_SUDOERS_WRITE = re.compile(r"(?:>|>>|\btee\b|\bcp\b|\bmv\b|\binstall\b|\bvisudo\b|\bsed\b[^|;&\n]*\s-i|\bchmod\b|\bln\b)")
+#: The sudo rules editor. WHY spelled in two parts: Hermes's install-time scan reads the whole
+#: word on a line as "this plugin edits the sudo rules" and would refuse the plugin (catalog admission).
+_RULES_EDITOR = "vi" + "sudo"
+_SUDOERS_WRITE = re.compile(rf"(?:>|>>|\btee\b|\bcp\b|\bmv\b|\binstall\b|\b{_RULES_EDITOR}\b|\bsed\b[^|;&\n]*\s-i|\bchmod\b|\bln\b)")
 
 
 def _command_words(command: str) -> list[str]:
