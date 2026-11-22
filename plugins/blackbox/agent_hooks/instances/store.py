@@ -56,7 +56,8 @@ def _action(row: object) -> Optional[Action]:
         return None
     try:
         return Action(float(row["ts"]), str(row["kind"]), str(row.get("tool", "")), str(row.get("what", "")),
-                      str(row.get("verdict", "")), str(row.get("reason", "")), str(row.get("text", "")))
+                      str(row.get("verdict", "")), str(row.get("reason", "")), str(row.get("text", "")),
+                      row.get("late") is True)
     except (KeyError, TypeError, ValueError):
         return None
 

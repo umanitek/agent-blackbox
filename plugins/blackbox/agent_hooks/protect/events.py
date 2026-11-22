@@ -30,6 +30,7 @@ from __future__ import annotations
 import hashlib
 import threading
 import time
+from collections import OrderedDict
 from typing import Any, Mapping
 
 from ... import audit, guard
@@ -55,26 +56,34 @@ AUDIT_EVENT = {"session_start": "session_start", "prompt": "user_prompt", "pre_t
 
 _lock = threading.Lock()
 
-#: How long an answered tool call is remembered, and how many are.
-ANSWERED_SECONDS = 120.0
-MAX_ANSWERED = 512
-#: ``(agent, session, the agent's tool-call id, event)`` → ``(when, the answer)``. WHY: an agent
-#: can report ONE call through two hook forms (Cline's hook script and its SDK plugin; OpenCode's
-#: two plugin files); the second report gets the first one's answer and is not recorded again.
-_answered: dict[tuple[str, str, str, str], tuple[float, dict[str, Any]]] = {}
+#: How many sessions' answered calls are remembered (the least recently active go first), and
+#: how many calls per session.
+MAX_ANSWERED_SESSIONS = 256
+MAX_ANSWERED_PER_SESSION = 256
+#: ``session`` → ``(the agent's tool-call id, event)`` → the answer. WHY: an agent can report ONE
+#: call through two hook forms (Cline's hook script and its SDK plugin; OpenCode's two plugin
+#: files) or send the same event twice; the repeat gets the first answer and is not recorded or
+#: counted again (KI-551). Keyed per session on the agent's OWN call id, with no time limit — the
+#: same id is the same call however late it comes — and bounded per session and in sessions, so
+#: a busy session cannot push another session's calls out.
+_answered: OrderedDict[str, OrderedDict[tuple[str, str], dict[str, Any]]] = OrderedDict()
 
 
-def _answered_before(key: tuple[str, str, str, str]) -> dict[str, Any] | None:
+def _answered_before(session: str, call: tuple[str, str]) -> dict[str, Any] | None:
     with _lock:
-        seen = _answered.get(key)
-        return dict(seen[1]) if seen and time.monotonic() - seen[0] < ANSWERED_SECONDS else None
+        calls = _answered.get(session)
+        return dict(calls[call]) if calls is not None and call in calls else None
 
 
-def _note_answer(key: tuple[str, str, str, str], answer: Mapping[str, Any]) -> None:
+def _note_answer(session: str, call: tuple[str, str], answer: Mapping[str, Any]) -> None:
     with _lock:
-        _answered[key] = (time.monotonic(), dict(answer))
-        for old in sorted(_answered, key=lambda item: _answered[item][0])[:-MAX_ANSWERED]:
-            _answered.pop(old)
+        calls = _answered.setdefault(session, OrderedDict())
+        _answered.move_to_end(session)
+        calls[call] = dict(answer)
+        while len(calls) > MAX_ANSWERED_PER_SESSION:
+            calls.popitem(last=False)
+        while len(_answered) > MAX_ANSWERED_SESSIONS:
+            _answered.popitem(last=False)
 
 
 def state_path():
@@ -211,9 +220,9 @@ def record_event(body: Any) -> dict[str, Any]:
     if state.get("disabled"):
         return {"decision": "allow", "message": "", "recorded": False}   # a stale hook after "Stop protecting"
     session = session_key(event["agent"], event["session"], event["cwd"])
-    call_key = (event["agent"], session, event["tool_call_id"], event["event"])
+    call_key = (event["tool_call_id"], event["event"])
     if event["tool_call_id"] and event["event"] in ("pre_tool", "post_tool"):
-        again = _answered_before(call_key)
+        again = _answered_before(session, call_key)
         if again is not None:
             return {**again, "recorded": False}   # the same call, reported through a second hook form
     verdict = _verdict(event)
@@ -243,5 +252,5 @@ def record_event(body: Any) -> dict[str, Any]:
     answer = {"decision": "block" if blocked else "allow", "message": verdict.get("message", "") if blocked else "",
               "findings": len(findings), "recorded": True}
     if event["tool_call_id"] and event["event"] in ("pre_tool", "post_tool"):
-        _note_answer(call_key, answer)
+        _note_answer(session, call_key, answer)
     return answer

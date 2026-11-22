@@ -46,15 +46,34 @@ def _what(event: Mapping[str, Any]) -> str:
     return redact_secret_values(text.replace("\n", " "))[:MAX_WHAT]
 
 
+#: Ends Blackbox INFERRED (the agent never said so): a later event from a different, live agent
+#: process means the same session id runs again (``opencode --session``, a resumed run).
+INFERRED_ENDS = ("process-exit", "quiet")
+#: The event that starts each kind of instance — the only one that reopens an ended instance.
+_STARTS = {"session": "session_start", "sub-agent": "subagent_start"}
+
+
+def _resumes(found: Instance, event: Mapping[str, Any]) -> bool:
+    """True when *event* starts *found* (ended) again. Ended means ended (KI-551): a late or
+    repeated event of an ended instance never reopens it; only the agent's own start event does
+    (a resume says so), or — when Blackbox only inferred the end — an event from another live
+    process of the agent."""
+    if event["event"] == _STARTS[found.kind]:
+        return True
+    pid = event.get("agent_pid")
+    return found.end_reason in INFERRED_ENDS and isinstance(pid, int) and pid > 0 and pid != found.pid
+
+
 def _open(key: str, event: Mapping[str, Any], *, kind: str, parent: str = "") -> Instance:
-    """The instance *key*, created now when this is its first event."""
+    """The instance *key*, created now when this is its first event, or reopened when *event*
+    starts it again (:func:`_resumes`). An ended instance it does not start stays ended."""
     found = store.get(key)
     now = time.time()
     if found is None:
         found = Instance(key=key, agent=event["agent"], kind=kind, started=now, last=now, parent=parent,
                          launch="sub-agent" if kind == "sub-agent" else "unknown")
-    elif found.ended is not None and event["event"] not in ("stop", "subagent_stop"):
-        found.ended, found.end_reason = None, ""   # a resumed session, or a sub-agent that goes on
+    elif found.ended is not None and _resumes(found, event):
+        found.ended, found.end_reason, found.pid = None, "", 0   # its process is learned again from this run
     return found
 
 
@@ -90,7 +109,9 @@ def _waiting(instance: Instance, kind: str, why: str) -> None:
 
 
 def _count(instance: Instance, kind: str, decision: str, findings: int) -> None:
-    instance.last = time.time()
+    """Count one event. An ended instance's ``last`` stays where it ended (start ≤ last ≤ end)."""
+    if instance.ended is None:
+        instance.last = time.time()
     instance.events += 1
     instance.checked += kind == "pre_tool"
     instance.prompts += kind == "prompt"
@@ -118,6 +139,37 @@ MAX_REASON = 400
 _TIMELINE = ("pre_tool", "prompt", "subagent_start", "subagent_stop", "session_start", "stop", "turn_end", "attention")
 
 
+def _target(session: Instance, event: Mapping[str, Any]) -> Instance:
+    """The instance *event* is about: its sub-agent when it names one, else the session. Under an
+    ENDED session no new sub-agent is created — a late event names a known one or the session."""
+    if not (event.get("sub") or event["event"] in ("subagent_start", "subagent_stop")):
+        return session
+    if session.ended is not None:
+        known = store.get(sub_key(session.key, str(event.get("sub") or "")))
+        return known if known is not None and event.get("sub") else session
+    return _open_sub(session, event)
+
+
+def _timeline(target: Instance, event: Mapping[str, Any], decision: str, findings: int, reason: str, prompt_text: str,
+              late: bool) -> None:
+    kind = event["event"]
+    verdict = "block" if decision == "block" else "flag" if findings else "allow" if kind == "pre_tool" else ""
+    action = Action(time.time(), kind, str(event.get("tool_name") or "")[:120], _what(event) if kind == "pre_tool" else "", verdict,
+                    redact_secret_values(reason)[:MAX_REASON] if verdict == "block" else "",
+                    prompt_text if kind == "prompt" else "", late)
+    store.append_action(target.key, action, target.events)
+    if not late:   # the live tree shows the newest entry — never a prompt's text
+        target.last_action = Action(action.ts, action.kind, action.tool, action.what, action.verdict, action.reason)
+
+
+def _close_session(session: Instance, why: str) -> None:
+    _end(session, why or "ended")
+    for item in store.all_instances():
+        if item.parent == session.key and item.ended is None:
+            _end(item, "session-ended")
+            store.put(item)
+
+
 def record(event: Mapping[str, Any], session_key: str, *, decision: str = "", findings: int = 0, reason: str = "",
            prompt_text: str = "") -> Instance:
     """Record one validated hook *event* against its instance; returns that instance.
@@ -127,33 +179,25 @@ def record(event: Mapping[str, Any], session_key: str, *, decision: str = "", fi
 
     A session event updates the session; an event that names a sub-agent updates the sub-agent
     AND counts in its session (the session's totals include its sub-agents'). ``stop`` ends the
-    session and every sub-agent still open in it."""
+    session and every sub-agent still open in it. An event for an instance that has ENDED (and
+    that it does not start again, see :func:`_resumes`) is LATE: counted and added to that
+    instance's timeline marked ``late``, and the instance stays ended (KI-551)."""
     kind = event["event"]
     session = _open(session_key, event, kind="session")
-    _describe(session, event)
-    target = session
-    if event.get("sub") or kind in ("subagent_start", "subagent_stop"):
-        target = _open_sub(session, event)
-        _describe(target, event)
-        _count(target, kind, decision, findings)
-        if kind == "subagent_stop":
+    target = _target(session, event)
+    late = target.ended is not None
+    for item in (session,) if target is session else (session, target):
+        if not late:
+            _describe(item, event)
+        _count(item, kind, decision, findings)
+    if not late:
+        _waiting(target, kind, str(event.get("why") or ""))
+        if kind == "subagent_stop" and target is not session:
             _end(target, str(event.get("why") or "finished"))
-    _count(session, kind, decision, findings)
-    _waiting(target, kind, str(event.get("why") or ""))
-    if kind == "stop":
-        _end(session, str(event.get("why") or "ended"))
-        for item in store.all_instances():
-            if item.parent == session.key and item.ended is None:
-                _end(item, "session-ended")
-                store.put(item)
-    if kind in _TIMELINE:
-        verdict = "block" if decision == "block" else "flag" if findings else "allow" if kind == "pre_tool" else ""
-        action = Action(time.time(), kind, str(event.get("tool_name") or "")[:120], _what(event) if kind == "pre_tool" else "", verdict,
-                        redact_secret_values(reason)[:MAX_REASON] if verdict == "block" else "",
-                        prompt_text if kind == "prompt" else "")
-        store.append_action(target.key, action, target.events)
-        # The live tree shows the newest entry — never a prompt's text.
-        target.last_action = Action(action.ts, action.kind, action.tool, action.what, action.verdict, action.reason)
+        if kind == "stop":
+            _close_session(session, str(event.get("why") or ""))
+    if kind in _TIMELINE or late:
+        _timeline(target, event, decision, findings, reason, prompt_text, late)
     if target is not session:
         store.put(target)
     store.put(session, flush=kind in ("stop", "session_start"))

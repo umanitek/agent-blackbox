@@ -71,6 +71,7 @@ class Action:
     reason: str = ""               # only for verdict "block"
     text: str = ""                 # a prompt's text, redacted — kept ONLY while the person has
     #                                turned prompt-text recording on (agent_hooks.prompt_text)
+    late: bool = False             # it arrived after its instance had ended (KI-551): shown, never reopening it
 
 
 @dataclass(frozen=True)

@@ -72,7 +72,9 @@ def track(event: Mapping[str, Any], session_key: str, *, decision: str = "", fin
     has prompt-text recording on, dropped here otherwise."""
     fields = dict(event)
     known = store.get(session_key)
-    if (known is None or not known.pid) and isinstance(event.get("pid"), int) and event["pid"] > 1:
+    # The process is looked up while it is unknown — and for an ended session, whose next event
+    # may come from a new run of the same session id (instances._resumes compares them).
+    if (known is None or not known.pid or known.ended is not None) and isinstance(event.get("pid"), int) and event["pid"] > 1:
         table, _running = _snapshot()
         fields["agent_pid"] = observe.agent_of(table, event["pid"], event["agent"]) or None
     if event.get("profile") and profiles.remember(event["agent"], str(event["profile"])):
