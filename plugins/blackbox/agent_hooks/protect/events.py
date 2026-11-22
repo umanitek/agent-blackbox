@@ -41,6 +41,7 @@ from ...kernel import constants
 from ...kernel.bounded_files import read_json_object, write_json_object
 from ...kernel.agent_hosts import BY_ID, DECISION_TOO_LATE, EVENTS
 from . import recorder
+from .own_prompt import persons_words
 from .runner import patch_files
 
 if TYPE_CHECKING:
@@ -136,6 +137,9 @@ def validate(body: Any) -> dict[str, Any]:
     text = body.get("text", "")
     if not isinstance(text, str):
         raise ValueError("text must be a string")
+    if event == "prompt":   # the person's words: the agent's own wrapper and boilerplate set aside (KI-573, KI-579)
+        text = persons_words(agent, text[:MAX_CHECK_TEXT])
+        chars = len(text)
     return {"agent": agent, "event": event, "session": _text(body.get("session"), 200), "cwd": _text(body.get("cwd")),
             "tool_name": tool_name, "args": body.get("args"), "tool_call_id": _text(body.get("tool_call_id"), 200),
             "prompt_chars": chars if isinstance(chars, int) and chars >= 0 else 0, "text": text[:MAX_CHECK_TEXT],

@@ -158,12 +158,3 @@ def transcript_model(payload: dict) -> str:
 
 #: How a turn the AGENT starts (not its person) begins: Claude Code's background-task result (KI-567).
 AGENT_TURN_MARKS = ("<task-notification", "<system-reminder")
-#: Cline wraps the person's words in its mode tag (``<user_input mode="act">…</user_input>``,
-#: @cline/shared 3.0.75): the check reads the person's words, not Cline's markup (KI-573).
-_CLINE_WRAPPER = re.compile(r"^\s*<user_input\b[^>]*>(.*)</user_input>\s*$", re.DOTALL)
-
-
-def persons_words(agent: str, text: str) -> str:
-    """*text* (a prompt from *agent*'s payload) without the agent's own wrapper around it."""
-    unwrapped = _CLINE_WRAPPER.match(text) if agent == "cline" else None
-    return unwrapped.group(1).strip() if unwrapped else text

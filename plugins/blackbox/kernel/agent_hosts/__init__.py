@@ -154,6 +154,12 @@ class Host:
     #: ``--settings``) or ``key=value`` (one config key, its value in TOML: Codex's ``-c`` /
     #: ``--config``); read by ``agent_hooks.observe``.
     run_settings: tuple[tuple[str, str], ...] = ()
+    #: The text the agent ITSELF puts around its person's prompt — documented here, matched
+    #: exactly (``re.fullmatch``), and set aside before the prompt-injection check so the check
+    #: judges the person's words: :attr:`prompt_wrapper` holds them in its one group;
+    #: :attr:`prompt_additions` are whole sentences the agent appends after them.
+    prompt_wrapper: str = ""
+    prompt_additions: tuple[str, ...] = ()
     #: More files of Blackbox's own this agent needs beside :attr:`config`: ``(path relative to
     #: the home folder, form)`` — the form names the template ``own_files`` writes
     #: (``cline-plugin``: Cline's SDK plugin; ``opencode-v2``: OpenCode 2's plugin).
@@ -246,6 +252,11 @@ HOSTS: tuple[Host, ...] = (
           "PreToolUse": "pre_tool", "PostToolUse": "post_tool", "TaskComplete": "turn_end", "TaskCancel": "turn_end",
           "SessionShutdown": "stop"},
          signs=("Documents/Cline", ".cline"), commands=("cline",), programs=("cline",), packages=("cline",),
+         # Cline 3.0.75 (@cline/shared; real headless runs on the test VM, 2026-11-22): the person's
+         # words in its mode tag (KI-573), and the nudge every headless run appends (KI-579).
+         prompt_wrapper=r"<user_input\b[^>]*>(.*)</user_input>",
+         prompt_additions=(r"\[SYSTEM\] This run is not complete until you call one of these terminal completion tools: "
+                           r"[A-Za-z0-9_]+(?:, [A-Za-z0-9_]+)*\. Continue working if requirements are not met\.",),
          companions=(("Documents/Cline/Plugins/blackbox.js", "cline-plugin"),)),
     # OpenCode: version 1 loads plugin/blackbox.js (a function returning hooks by name); version 2
     # runs NO V1 plugin and loads plugins/<name>/index.js (a default export with id + setup that

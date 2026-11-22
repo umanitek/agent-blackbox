@@ -38,10 +38,10 @@ from pathlib import Path
 # The runner is run as a script from Blackbox's data folder (its sibling is beside it there) and
 # imported as a module by the plugin and its tests.
 if __package__:
-    from .identity import AGENT_TURN_MARKS, MODEL_EVENTS, effective_agent, identity, persons_words, transcript_model, workspace
+    from .identity import AGENT_TURN_MARKS, MODEL_EVENTS, effective_agent, identity, transcript_model, workspace
     from .tool_shapes import cline_tool
 else:
-    from identity import AGENT_TURN_MARKS, MODEL_EVENTS, effective_agent, identity, persons_words, transcript_model, workspace
+    from identity import AGENT_TURN_MARKS, MODEL_EVENTS, effective_agent, identity, transcript_model, workspace
     from tool_shapes import cline_tool
 
 #: The most of stdin read (a write tool's whole file can be in the payload).
@@ -163,10 +163,11 @@ def _text(value: object) -> str:
 
 def prompt_text(agent: str, payload: dict) -> str:
     """The user's prompt in *agent*'s payload (Windsurf nests it in ``tool_info``, Cline in its
-    event, inside its mode tag)."""
+    event) — as the agent sent it: the dashboard sets the agent's own wrapper and boilerplate
+    aside (``protect.own_prompt``, from the agent catalogue)."""
     nested = payload.get("tool_info") if agent == "windsurf" else payload.get("userPromptSubmit") if agent == "cline" else None
-    return persons_words(agent, _text(_first(nested, "user_prompt", "prompt") if isinstance(nested, dict)
-                                      else _first(payload, "prompt", "user_prompt", "message")))
+    return _text(_first(nested, "user_prompt", "prompt") if isinstance(nested, dict)
+                 else _first(payload, "prompt", "user_prompt", "message"))
 
 
 def output_text(agent: str, payload: dict) -> str:
