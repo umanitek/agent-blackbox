@@ -161,3 +161,60 @@ def test_the_monitor_tells_inbound_from_outbound():
     sshd, curl = nettop.parse(NETTOP)
     assert (sshd.connections[0].direction, sshd.connections[0].local_port, sshd.connections[0].state) == ("in", 22, "Established")
     assert (curl.connections[0].direction, curl.connections[0].remote_port, curl.connections[0].state) == ("out", 443, "SynSent")
+
+
+# ------------------------------------------------------------------ a connection a live collector saw
+# Engine rule (Amos 2026-11-22): every notification comes from the core. Blackbox Desktop's live
+# collector used to word and send "talking to a listed address" itself; it now reports the facts
+# (POST observed-connection) and Network Shield decides, keeps and words it.
+
+LISTED = "45.130.148.102"
+
+
+def _listed_context():
+    return ShieldContext(network_indicators=lambda: SimpleNamespace(ips=frozenset({LISTED}), domains=frozenset(), built_at=1.0),
+                         ask_assistant=lambda message: AssistantAnswer(ok=True))
+
+
+def _seen(**more):
+    return {"pid": 4242, "program": "curl", "remote_ip": LISTED, "remote_port": 443, "ts": int(NOW), **more}
+
+
+def test_a_connection_to_a_listed_address_is_kept_once_and_worded_by_network_shield(monkeypatch):
+    from plugins.blackbox.shields.network import notices
+    monkeypatch.setattr(network_mode, "current", lambda: _on(network_mode.DNS))
+    write = api.API.writes["observed-connection"]
+    assert write(_listed_context(), _seen()) == {"recorded": True}
+    assert write(_listed_context(), _seen(ts=int(NOW) + 5)) == {"recorded": False}        # the same process again: once
+    assert write(_listed_context(), _seen(pid=99, ts=int(NOW) + 6)) == {"recorded": True}   # another process: news
+    kept = [event for event in watch.events() if event["kind"] == watch.SEEN]
+    assert len(kept) == 2 and kept[0]["program"] == "curl" and kept[0]["remote_port"] == 443
+    monkeypatch.setattr(notices.system_report, "snapshot", dict)
+    seen = [alert for alert in notices.shield_alerts() if alert.kind == "connection-seen"]
+    assert seen and seen[0].title == "Network Shield · Connection to a listed threat"
+    for alert in seen:   # lock-screen safe: neither the address nor the program's name
+        assert LISTED not in alert.text and "curl" not in alert.text and alert.category == "security"
+        assert LISTED in alert.detail and "curl" in alert.detail
+
+
+def test_an_address_the_list_does_not_hold_is_never_kept(monkeypatch):
+    monkeypatch.setattr(network_mode, "current", lambda: _on(network_mode.DNS))
+    assert api.API.writes["observed-connection"](_listed_context(), _seen(remote_ip="8.8.8.8")) == {"recorded": False}
+    assert watch.events() == []
+
+
+@pytest.mark.parametrize("bad", [
+    {"program": "/usr/bin/curl"}, {"program": ""}, {"pid": -1}, {"pid": "12"}, {"remote_ip": "evil"}, {"remote_port": 70000},
+])
+def test_a_bad_observation_is_refused(monkeypatch, bad):
+    monkeypatch.setattr(network_mode, "current", lambda: _on(network_mode.DNS))
+    with pytest.raises(ShieldApiError) as refused:
+        api.API.writes["observed-connection"](_listed_context(), _seen(**bad))
+    assert refused.value.status == 400 and watch.events() == []
+
+
+def test_an_observation_is_refused_while_the_shield_is_off(monkeypatch):
+    monkeypatch.setattr(network_mode, "current", lambda: network_mode.build())
+    with pytest.raises(ShieldApiError) as refused:
+        api.API.writes["observed-connection"](_listed_context(), _seen())
+    assert refused.value.status == 409

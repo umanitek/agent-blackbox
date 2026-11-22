@@ -6,7 +6,7 @@
 (function () {
   "use strict";
   const $ = (id) => document.getElementById(id);
-  const BOXES = ["enabled", "security", "lifecycle", "digest", "details"];
+  const BOXES = ["enabled", "security", "lifecycle", "digest", "watched", "details"];
   const HELD = { "quiet-hours": "held: quiet hours", muted: "held: this agent is muted", rate: "counted into a summary" };
 
   async function token() {

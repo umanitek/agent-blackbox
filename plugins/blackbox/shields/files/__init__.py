@@ -9,6 +9,8 @@ mode; every attempt is recorded and shown; protect on demand; unprotecting asks 
 * :mod:`.protect` — inside Blackbox's guard: the refusal (``files:file-hit`` / ``files:folder-hit``)
   and the prompt flag (``files:protected-mention``);
 * :mod:`.changes` — the system protection helper's real-time changes (FSEvents), signed;
+* :mod:`.watched` — what a watched folder's scan found (new and known-bad files), reported by
+  Blackbox Desktop's add-on and worded here as alerts;
 * :mod:`.sandbox` — Layer 2: the coding agents the person picks run inside the OS sandbox built
   from the list (launchers first on PATH; Cursor/Windsurf opened inside it on request);
 * :mod:`.events` / :mod:`.status` — the events report and the card;
@@ -32,11 +34,12 @@ from typing import Any, Mapping
 
 from ...kernel import agent_hosts
 from ..contract import Capability, Shield, ShieldMode
-from . import alerts, api, changes, events, mode, protect, status
+from . import alerts, api, changes, events, mode, protect, status, watched
 
 #: What another package (Blackbox Desktop's add-on) may use: the shield, its mode (watched folders,
-#: protected items), its real-time changes and its events.
-__all__ = ["CAPABILITIES", "FILES", "FINDING_KINDS", "changes", "events", "mode", "protect"]
+#: protected items), its real-time changes, its events and :mod:`.watched` (where a watched
+#: folder's scan reports what it found — File Shield words the notification).
+__all__ = ["CAPABILITIES", "FILES", "FINDING_KINDS", "changes", "events", "mode", "protect", "watched"]
 
 HERE = Path(__file__).resolve().parent
 FINDING_KINDS = protect.FINDING_KINDS

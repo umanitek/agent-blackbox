@@ -11,8 +11,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 #: ``security`` — something was stopped or needs a look (on by default); ``lifecycle`` — an agent
-#: or sub-agent started, ended or waits for the person; ``digest`` — what a session did, in one line.
-CATEGORIES = ("security", "lifecycle", "digest")
+#: or sub-agent started, ended or waits for the person; ``digest`` — what a session did, in one line;
+#: ``watched`` — a new file arrived in a folder the person watches (on by default: Blackbox Desktop
+#: told it before the core did, and an update keeps what the person saw).
+CATEGORIES = ("security", "lifecycle", "digest", "watched")
 LEVELS = ("info", "warning", "critical")
 
 

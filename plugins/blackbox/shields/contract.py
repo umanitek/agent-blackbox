@@ -300,7 +300,9 @@ class ShieldAlert:
     *title* and *text* are LOCK-SCREEN SAFE (no path, address, user name or command); *detail* is
     the full sentence for inside the app. *key* is stable for the thing reported. *finding*: the
     identifier of the audit finding this alert already speaks for ("" = none), so that finding is
-    not announced a second time. *agent*: the agent id it is about ("" = none)."""
+    not announced a second time. *agent*: the agent id it is about ("" = none). *category*: which
+    of the person's notification switches covers it (``notify.CATEGORIES``): ``security`` for
+    anything stopped, flagged or worth a look; ``watched`` for news from a watched folder."""
 
     key: str
     kind: str
@@ -311,6 +313,7 @@ class ShieldAlert:
     detail: str = ""
     agent: str = ""
     finding: str = ""
+    category: str = "security"
 
 
 @dataclass(frozen=True)

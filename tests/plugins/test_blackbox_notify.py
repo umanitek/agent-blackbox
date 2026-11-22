@@ -416,3 +416,23 @@ def test_the_real_sources_turn_a_recorded_refusal_and_a_root_run_into_notices(mo
     assert kinds["running-as-root"].instance == "codex:1111111111111111" and kinds["running-as-root"].level == "critical"
     store.reset()
     root_watch.reset()
+
+
+# ---- engine rule (2026-11-22): every notice comes from the core, each under its own switch ------
+
+def test_a_watched_folder_notice_has_its_own_switch_on_by_default_and_turning_it_off_is_not_weakening():
+    assert "watched" in notify.CATEGORIES and policy.parse({}).watched is True
+    alert = shields.ShieldAlert(key="file-new:1", kind="file-new", ts=NOW, severity="info", title="File Shield",
+                                text="A new file arrived in a watched folder.", category="watched")
+    collector = sources.Collector(read_alerts=lambda: [alert], read_findings=list, read_live=_tree)
+    notice = sources._shield_notice(alert)
+    assert notice.category == "watched" and notice.level == "info"
+    assert policy.held(policy.parse({}), notice, NOW) == ""
+    assert policy.held(policy.parse({"watched": False}), notice, NOW) == "off"
+    assert policy.weakening({"watched": False}, policy.parse({})) == []
+    assert collector.collect(now=NOW) == []   # the first reading only learns
+
+
+def test_a_shield_alert_with_an_unknown_category_is_a_security_notice():
+    alert = shields.ShieldAlert(key="k", kind="x", ts=NOW, severity="high", title="t", text="x", category="made-up")
+    assert sources._shield_notice(alert).category == "security"

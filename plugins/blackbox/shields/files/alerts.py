@@ -1,7 +1,7 @@
 """File Shield's alerts: what a Mac notification may say about the shield, newest first.
 
 Blackbox Desktop (and any notifier) polls ``GET /api/shields/file-shield/api/alerts`` and shows one
-notification per alert it has not seen (``key``). Three kinds:
+notification per alert it has not seen (``key``). These kinds:
 
 * ``protected-change`` — something changed inside an item the person protects (the system
   protection helper's real-time file events, :mod:`.changes`);
@@ -9,14 +9,17 @@ notification per alert it has not seen (``key``). Three kinds:
   findings, every route, and the OS sandbox's refusals);
 * ``path-restored`` — the block that puts the agent sandbox's launchers first on PATH was removed or
   changed in a shell startup file, and File Shield put it back (KI-535);
+* ``file-known-bad`` / ``file-new`` — a watched folder's scan (Blackbox Desktop's add-on, through
+  :mod:`.watched`) found a file the verified graph lists, or a new file. A known-bad file is a
+  ``security`` notice; a new file is ``watched`` (the person's own switch). WHY here: the add-on
+  used to word and send these itself; one wording now lives in the core (engine rule, 2026-11-22).
 
 WHY (KI-532, E2E full3 2026-11-22): a change inside a protected folder raised no notification at
 all, and a refusal reached the person only as the generic "Blocked: a critical threat".
 
 Lock-screen safe: ``text`` and ``title`` name an item by its LAST NAME only (``Taxes``, never
 ``~/Documents/Taxes``) and never a file inside it, an address or a user name; the full item is in
-``item`` for the app's own window. New files in a watched (not protected) folder are not alerts
-here — Blackbox Desktop's add-on reports those.
+``item`` for the app's own window. A watched folder's file is never named on the lock screen.
 
 Shape of one alert (all strings except ``ts``)::
 
@@ -27,12 +30,13 @@ Shape of one alert (all strings except ``ts``)::
 
 from __future__ import annotations
 
+import hashlib
 import os
 from typing import Any
 
 from ... import audit
 from ..contract import ShieldAlert
-from . import changes, sandbox
+from . import changes, sandbox, watched
 from .protect import FILE_HIT_ID, FOLDER_HIT_ID, SANDBOX_AGENT
 
 MAX_ALERTS = 50
@@ -48,9 +52,17 @@ def item_name(item: str) -> str:
     return os.path.basename(str(item).rstrip("/")) or str(item)
 
 
+_CATEGORY = {"file-new": "watched"}   # every other kind is a security notice
+_WATCHED_TEXT = {
+    "file-known-bad": "A file in a watched folder is on the threat list. Do not open it — open Blackbox to see which.",
+    "file-new": "A new file arrived in a watched folder. Open Blackbox to see the details.",
+}
+
+
 def _alert(key: str, kind: str, ts: float, severity: str, item: str, agent: str, text: str) -> dict[str, Any]:
     return {"key": key, "kind": kind, "ts": ts, "severity": severity, "item": item,
-            "item_name": item_name(item), "agent": agent, "title": TITLE, "text": text}
+            "item_name": item_name(item), "agent": agent, "title": TITLE, "text": text,
+            "category": _CATEGORY.get(kind, "security")}
 
 
 def _change_alerts() -> list[dict[str, Any]]:
@@ -91,16 +103,29 @@ def _restore_alerts() -> list[dict[str, Any]]:
             for row in sandbox.restorations()]
 
 
+def _watched_alerts() -> list[dict[str, Any]]:
+    rows = []
+    for found in watched.recent(MAX_ALERTS):
+        bad = found.kind == "file-known-bad"
+        # WHY a hash: the key travels in the notification feed; the file's name stays out of it.
+        where = hashlib.sha256(found.path.encode("utf-8")).hexdigest()[:12]
+        rows.append(_alert(f"{found.kind}:{found.ts:.6f}:{where}", found.kind, found.ts,
+                           "critical" if bad else "info", found.path, "", _WATCHED_TEXT[found.kind]))
+    return rows
+
+
 def shield_alerts() -> list[ShieldAlert]:
     """The same alerts as the framework's typed ``Shield.alerts`` (``notify`` reads these). A
     refusal names the finding it speaks for, so that finding is not announced twice."""
     return [ShieldAlert(key=row["key"], kind=row["kind"], ts=row["ts"], severity=row["severity"], title=row["title"],
                         text=row["text"], detail=f"{row['text']} ({row['item']})" if row["item"] else "", agent=row["agent"],
-                        finding={"file-hit": FILE_HIT_ID, "folder-hit": FOLDER_HIT_ID}.get(row["kind"], ""))
+                        finding={"file-hit": FILE_HIT_ID, "folder-hit": FOLDER_HIT_ID}.get(row["kind"], ""),
+                        category=row["category"])
             for row in alerts()]
 
 
 def alerts(limit: int = MAX_ALERTS) -> list[dict[str, Any]]:
-    """The shield's latest alerts (changes inside protected items, refusals, a restored PATH block), newest first."""
-    merged = _change_alerts() + _hit_alerts() + _restore_alerts()
+    """The shield's latest alerts (changes inside protected items, refusals, a restored PATH block,
+    a watched folder's new and known-bad files), newest first."""
+    merged = _change_alerts() + _hit_alerts() + _restore_alerts() + _watched_alerts()
     return sorted(merged, key=lambda alert: -alert["ts"])[:max(0, limit)]

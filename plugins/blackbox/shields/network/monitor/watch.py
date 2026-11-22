@@ -1,5 +1,8 @@
 """What Network Shield's enforcer watches and reports: SSH into this machine, the files that decide
-who may log in or where names go, and the malicious connections it cut — kept as alerts.
+who may log in or where names go, and the malicious connections it cut — kept as alerts. Also a
+connection to a listed address that Blackbox Desktop's live collector SAW (:func:`observed`): the
+collector only reports the facts; this module decides it is listed and keeps it, and Network
+Shield words the notice (engine rule, 2026-11-22 — Desktop used to word and send it itself).
 
 The enforcer (a root helper) observes; this module validates and keeps what it says, bounded, in
 Blackbox's own folder (``network-shield/watch.json``). It never receives a file's contents or a
@@ -51,9 +54,15 @@ _SYSTEM_FILES = {"/etc/hosts": "hosts file", "/private/etc/hosts": "hosts file",
                  "/etc/ssh/sshd_config": "SSH server settings", "/private/etc/ssh/sshd_config": "SSH server settings"}
 _SHA_PREFIX = re.compile(r"^[0-9a-f]{0,16}$")
 KINDS = ("ssh-session-new", "ssh-session-ended", "file-changed", "connection-cut", "remote-login-changed")
+#: Not from the helper: a connection a live collector saw (:func:`observed`).
+SEEN = "connection-seen"
+#: One sighting per process and address in this long (the collector reports every reading).
+SEEN_AGAIN_AFTER_SECONDS = 3600
+MAX_PROGRAM_CHARS = 64
+_PROGRAM = re.compile(r"^[^/\x00-\x1f]{1,64}$")
 CHANGES = ("added", "removed", "modified")
 SEVERITY = {"ssh-session-new": "high", "ssh-session-ended": "info", "file-changed": "medium",
-            "connection-cut": "high", "remote-login-changed": "medium"}
+            "connection-cut": "high", "remote-login-changed": "medium", SEEN: "high"}
 
 _lock = threading.Lock()
 
@@ -128,6 +137,26 @@ def _event(item: Any, now: float) -> dict[str, Any]:
     return event
 
 
+def observed(body: Mapping[str, Any], listed: frozenset[str], now: float) -> Optional[dict[str, Any]]:
+    """The event for one connection a live collector saw — ``{pid, program, remote_ip,
+    remote_port, ts}`` (``program``: the process's NAME, never a path) — or None when the address
+    is not on *listed* (Blackbox's own list decides, never the reporter) or this process was
+    already seen talking to it within :data:`SEEN_AGAIN_AFTER_SECONDS`. Raises 400 on bad input."""
+    program = str(body.get("program") or "")
+    if not _PROGRAM.match(program):
+        raise _refuse(f"program is the process's name (no path), 1 to {MAX_PROGRAM_CHARS} characters")
+    event = {"kind": SEEN, "ts": _ts(body.get("ts", int(now)), now), "remote_ip": _ip(body.get("remote_ip")),
+             "remote_port": _whole(body.get("remote_port", 0), "remote_port", 65535),
+             "pid": _whole(body.get("pid"), "pid", 2**31 - 1), "program": program}
+    if event["remote_ip"] not in listed:
+        return None
+    for before in events(MAX_EVENTS):
+        if (before.get("kind") == SEEN and before.get("pid") == event["pid"] and before.get("remote_ip") == event["remote_ip"]
+                and event["ts"] - float(before.get("ts") or 0) < SEEN_AGAIN_AFTER_SECONDS):
+            return None
+    return event
+
+
 def _snapshot(raw: Any, now: float) -> dict[str, Any]:
     if not isinstance(raw, dict) or not isinstance(raw.get("remote_login", False), bool):
         raise _refuse("watch must be an object with remote_login true or false")
@@ -189,6 +218,9 @@ def text_of(event: Mapping[str, Any]) -> str:
         return f"The SSH session from {event.get('remote_ip')} ended."
     if kind == "connection-cut":
         return f"Cut a connection to {event.get('remote_ip')}, which the verified threat graph lists as malicious."
+    if kind == SEEN:
+        return (f"{event.get('program')} (process {event.get('pid')}) is talking to {event.get('remote_ip')}:"
+                f"{event.get('remote_port')}, which the verified threat graph lists as malicious.")
     if kind == "remote-login-changed":
         return "Remote Login (SSH) was switched on." if event.get("on") else "Remote Login (SSH) was switched off."
     change = {"added": "appeared", "removed": "was removed", "modified": "changed"}.get(str(event.get("change")), "changed")

@@ -20,6 +20,9 @@ Reads (``GET``):
 
 Writes (``POST``, the dashboard's token):
   ``enforcer-report``  the helper's report (running state, counters, refused names, watch events)
+  ``observed-connection``  a connection a live collector saw (Blackbox Desktop's, 250 ms):
+                   ``{pid, program, remote_ip, remote_port, ts}`` — Network Shield decides whether
+                   the address is listed, keeps it and words the notice
   ``end-session`` · ``block-address`` · ``unblock-address`` · ``remote-settings``  remote access
   ``system-report`` · ``posture-fix`` · ``posture-refresh`` · ``tamper-guard``  the system watch
 
@@ -29,6 +32,7 @@ watches nothing). The helper's own endpoints answer off too, with an all-off pla
 
 from __future__ import annotations
 
+import time
 from typing import Any, Callable, Mapping
 
 from .. import extensions
@@ -143,6 +147,19 @@ def enforcer_report(context: ShieldContext, body: Mapping[str, Any]) -> dict[str
     return enforcement.record_report(body)
 
 
+def observed_connection(context: ShieldContext, body: Mapping[str, Any]) -> dict[str, Any]:
+    """A connection Blackbox Desktop's live collector saw. WHY the collector and not the core:
+    the core's own reading (:func:`connections`, nettop + ps) takes seconds and runs with the
+    plan; the collector reads the sockets natively every 250 ms while its page is open. It only
+    reports facts — whether the address is listed, and what the person is told, is decided here."""
+    require_on()
+    event = watch.observed(body, malicious_ips(context), time.time())
+    if event is None:
+        return {"recorded": False}
+    watch.record(None, [event])
+    return {"recorded": True}
+
+
 def remote(_context: ShieldContext, _params: Mapping[str, str]) -> dict[str, Any]:
     require_on()
     return {**remote_access.view(), **remote_lock.settings()}
@@ -158,7 +175,7 @@ def _remote_write(action: Callable[[Mapping[str, Any]], Any]) -> Callable[[Shiel
 API = ShieldApi(
     reads={"overview": overview, "connections": connections, "system": system_status, "enforcement": enforcement_plan,
            "blocks": blocks, "ssh": ssh, "remote-access": remote, **system_api.READS},
-    writes={"enforcer-report": enforcer_report,
+    writes={"enforcer-report": enforcer_report, "observed-connection": observed_connection,
             "end-session": _remote_write(sessions.end_session), "block-address": _remote_write(sessions.block_address),
             "unblock-address": _remote_write(sessions.unblock_address),
             "remote-settings": _remote_write(sessions.remote_settings), **system_api.WRITES},

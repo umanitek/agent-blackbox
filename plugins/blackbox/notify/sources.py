@@ -23,7 +23,7 @@ from typing import Any, Callable, Iterable, Mapping, Optional
 from .. import audit, shields
 from ..agent_hooks import tracking
 from . import wording
-from .model import Notice
+from .model import CATEGORIES, Notice
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +33,8 @@ _LEVELS = {"critical": "critical", "high": "warning", "medium": "warning"}
 
 
 def _shield_notice(alert: shields.ShieldAlert) -> Notice:
-    return Notice(id=f"shield:{alert.key}", ts=alert.ts, category="security", kind=f"shield:{alert.kind}",
+    category = alert.category if alert.category in CATEGORIES else "security"
+    return Notice(id=f"shield:{alert.key}", ts=alert.ts, category=category, kind=f"shield:{alert.kind}",
                   level=_LEVELS.get(alert.severity, "info"), title=alert.title, body=alert.text, detail=alert.detail[:400],
                   agent=alert.agent, agent_name=wording.agent_name(alert.agent) if alert.agent else "")
 

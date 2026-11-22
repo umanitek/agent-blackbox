@@ -5,6 +5,9 @@
 * ``lifecycle`` (off): an agent or sub-agent started, ended, or waits for you.
 * ``digest`` (off): what a session did, in one line, when it ends — and every ``digest_minutes``
   while it runs when that is above 0.
+* ``watched`` (ON): a new file arrived in a folder File Shield watches. On by default because
+  Blackbox Desktop told it before the core did — an update keeps what the person saw. Turning it
+  off is not a weakening change: a KNOWN-BAD file in a watched folder is a ``security`` notice.
 * ``muted_agents``: agent ids never shown. ``quiet_hours``: ``"22:00-07:00"`` (local time) — only
   CRITICAL security notices are shown then. ``details``: add the finding's own (redacted) title to
   a notification; off = lock-screen-safe text only. ``per_minute``: the most shown in a minute;
@@ -41,6 +44,7 @@ class Policy:
     security: bool = True
     lifecycle: bool = False
     digest: bool = False
+    watched: bool = True
     digest_minutes: int = 0
     muted_agents: tuple[str, ...] = ()
     quiet_hours: str = ""
@@ -67,7 +71,7 @@ def parse(raw: Any) -> Policy:
     hours = raw.get("quiet_hours")
     return Policy(
         enabled=_bool(raw, "enabled", True), security=_bool(raw, "security", True), lifecycle=_bool(raw, "lifecycle", False),
-        digest=_bool(raw, "digest", False), digest_minutes=_int(raw, "digest_minutes", 0, 0, 720),
+        digest=_bool(raw, "digest", False), watched=_bool(raw, "watched", True), digest_minutes=_int(raw, "digest_minutes", 0, 0, 720),
         muted_agents=tuple(sorted({str(item) for item in muted if str(item) in BY_ID or item == "hermes"})) if isinstance(muted, list) else (),
         quiet_hours=hours if isinstance(hours, str) and _HOURS.match(hours) else "",
         details=_bool(raw, "details", False), per_minute=_int(raw, "per_minute", 6, 1, MAX_PER_MINUTE))
@@ -84,7 +88,7 @@ def validate(raw: Any, errors: list[str]) -> dict[str, Any]:
         errors.append("notifications must be an object")
         return {}
     out: dict[str, Any] = {}
-    for key in ("enabled", "security", "lifecycle", "digest", "details"):
+    for key in ("enabled", "security", "lifecycle", "digest", "watched", "details"):
         if key in raw:
             if isinstance(raw[key], bool):
                 out[key] = raw[key]

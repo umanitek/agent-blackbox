@@ -309,3 +309,32 @@ def test_a_new_file_in_a_watched_folder_is_not_a_file_shield_alert(audited, home
     mode = files_mode.from_entry(audited)
     changes.record([{"path": str(home / "Downloads" / "x.dmg"), "kind": "created", "ts": 2}], mode, now=2.0)
     assert alerts.alerts() == []
+
+
+# -- engine rule (2026-11-22): a watched folder's scan reports facts; File Shield words them -----
+
+
+def test_a_watched_folder_scan_report_becomes_file_shield_alerts_never_naming_the_file(home):
+    from plugins.blackbox.shields.files import alerts, watched
+    watched.reset()
+    try:
+        new = str(home / "Downloads" / "invoice-march.pdf")
+        bad = str(home / "Downloads" / "setup-crack.dmg")
+        kept = watched.report([watched.WatchedFile(kind="file-new", ts=10.0, path=new),
+                               watched.WatchedFile(kind="file-known-bad", ts=11.0, path=bad, sha256="a" * 64),
+                               watched.WatchedFile(kind="file-moved", ts=12.0, path=new),          # not a kind: dropped
+                               watched.WatchedFile(kind="file-new", ts=13.0, path="")])            # no path: dropped
+        assert kept == 2
+        rows = {row["kind"]: row for row in alerts.alerts()}
+        assert set(rows) == {"file-new", "file-known-bad"}
+        assert rows["file-known-bad"]["category"] == "security" and rows["file-known-bad"]["severity"] == "critical"
+        assert rows["file-new"]["category"] == "watched" and rows["file-new"]["severity"] == "info"
+        for row in rows.values():
+            assert row["title"] == "File Shield"
+            for secret in ("invoice-march", "setup-crack", str(home), "Downloads/"):
+                assert secret not in row["text"] and secret not in row["key"]
+        typed = {alert.kind: alert for alert in alerts.shield_alerts()}
+        assert typed["file-new"].category == "watched" and typed["file-known-bad"].category == "security"
+        assert "setup-crack.dmg" in typed["file-known-bad"].detail     # in-app detail only
+    finally:
+        watched.reset()
