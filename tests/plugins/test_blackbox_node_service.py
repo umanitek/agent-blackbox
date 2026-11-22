@@ -123,11 +123,17 @@ def test_a_launch_agent_for_another_install_is_not_ours(cfg, tmp_path, manager, 
     assert node_service.registered(cfg, home=tmp_path) is None
 
 
-def test_a_launch_agent_that_is_not_loaded_yet_is_not_routed_through(cfg, tmp_path, monkeypatch):
+def test_a_launch_agent_that_is_not_loaded_is_started_by_loading_it_never_directly(cfg, tmp_path, monkeypatch):
+    """KI-529: after Stop (bootout) or the handover's fallback the agent is registered but not
+    loaded. Treating that as "no service" let a sync start an unsupervised node, which launchd's
+    own copy then fought ("Daemon already running") the moment the agent loaded."""
     monkeypatch.setattr(node_service.sys, "platform", "darwin")   # os-marker: ok — only picks the launchd strategy; launchctl is stubbed and the plist is in tmp_path
     monkeypatch.setattr(node_service.subprocess, "run", FakeManager(loaded=False).run)
     _launch_agent(tmp_path, cfg.dkg_bin)
-    assert node_service.registered(cfg, home=tmp_path) is None
+    service = node_service.registered(cfg, home=tmp_path)
+    assert service is not None and service.name == LABEL
+    assert service.restart_argv[:2] == ("launchctl", "bootstrap")
+    assert service.restart_argv[-1] == str(tmp_path / "Library" / "LaunchAgents" / f"{LABEL}.plist")
 
 
 def test_an_enabled_system_unit_for_this_install_is_the_node_s_service(cfg, tmp_path, manager, monkeypatch):

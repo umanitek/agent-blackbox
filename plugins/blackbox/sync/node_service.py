@@ -179,7 +179,12 @@ def _launch_agent(cfg: BlackboxConfig, home: Path) -> Optional[NodeService]:
     except (OSError, subprocess.SubprocessError):
         return None
     if not loaded:
-        return None   # registered for the next login only: nothing to route through yet
+        # Registered but not loaded (booted out by Stop, or the handover's fallback): the node is
+        # still launchd's to run, so it is started by loading the agent (RunAtLoad), never by a
+        # copy started here that launchd's own copy would then fight (KI-529). A refused
+        # bootstrap (no GUI session) raises in the caller instead of starting an unsupervised node.
+        return NodeService(LAUNCHD_LABEL, ("launchctl", "print", target),
+                           ("launchctl", "bootstrap", _gui_domain(), str(plist_path)))
     return NodeService(LAUNCHD_LABEL, ("launchctl", "print", target), ("launchctl", "kickstart", "-k", target))
 
 
@@ -213,8 +218,9 @@ def systemd_unit(unit: str) -> NodeService:
 def registered(cfg: BlackboxConfig, home: Optional[Path] = None) -> Optional[NodeService]:
     """The service registered to run this install's node (LaunchAgent / systemd unit), or None.
 
-    None means no service runs THIS install's ``dkg_bin`` (not installed, another install's, a
-    LaunchAgent not loaded yet, a unit not enabled): the caller runs the node itself.
+    None means no service is registered for THIS install's ``dkg_bin`` (not installed, another
+    install's, a unit not enabled): the caller runs the node itself. A LaunchAgent registered but
+    not loaded IS this install's service — restarting it loads it (KI-529).
     """
     home = home if home is not None else Path.home()
     if sys.platform == "darwin":
