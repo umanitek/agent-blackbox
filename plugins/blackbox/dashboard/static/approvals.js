@@ -5,8 +5,8 @@
  * wraps the page's fetch(): on a 428 it shows what would be turned down. "Confirm with your
  * password" asks the core to show the SYSTEM's password prompt. The page itself cannot
  * approve, because a page can be scripted. Once confirmed, the same request is sent again and
- * applied once. "Keep protection on" leaves everything as it was. With Blackbox Desktop open,
- * its native dialog asks too: either answer works.
+ * applied once. "Keep protection on" leaves everything as it was. With a paired companion app
+ * open, its native dialog asks too: either answer works.
  * All text is set with textContent.
  */
 (function () {

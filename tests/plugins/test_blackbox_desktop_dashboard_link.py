@@ -1,6 +1,6 @@
 """Hermes Desktop's door to the dashboard's API (desktop/dashboard_link.py), 2026-11-06.
 
-The Desktop page shows every dashboard panel by forwarding an allowlisted set of the running
+The Hermes Desktop page shows every dashboard panel by forwarding an allowlisted set of the running
 dashboard's own routes. These tests run a small fake dashboard on loopback and check: reads are
 forwarded with the dashboard's Host and no Origin; a change carries the dashboard's change token,
 fetched from /api/session and fetched again when the dashboard restarts (403); a route outside
@@ -115,7 +115,7 @@ def test_a_dashboard_that_is_not_running_is_a_calm_answer():
 
 
 def test_every_panel_route_is_allowed():
-    """The routes the Desktop panels read and change (keep in step with desktop/plugin.js)."""
+    """The routes the Hermes Desktop panels read and change (keep in step with desktop/plugin.js)."""
     reads = ["api/findings", "api/audit", "api/graph-status", "api/verified-sync", "api/graph", "api/threat",
              "api/shields", "api/shields/trader/events", "api/agents", "api/community-stats", "api/reports",
              "api/trust", "api/settings", "shields/trader/content.json"]
@@ -127,7 +127,7 @@ def test_every_panel_route_is_allowed():
 
 def test_every_route_the_desktop_panels_call_is_allowed():
     """desktop/plugin.js and the allowlist move together: a panel calling a route the link refuses
-    would show "Could not load" in Desktop with no test to say why."""
+    would show "Could not load" in Hermes Desktop with no test to say why."""
     import re
     from pathlib import Path
     source = (Path(__file__).resolve().parents[2] / "plugins" / "blackbox" / "desktop" / "plugin.js").read_text(encoding="utf-8")
@@ -141,7 +141,7 @@ def test_every_route_the_desktop_panels_call_is_allowed():
 
 def test_an_assistant_turn_and_a_playground_test_get_the_long_timeout(dashboard, monkeypatch):
     """A chat turn takes up to 120 s on the dashboard and a Playground test ~90 s; the 15 s read
-    limit would cut both off (Desktop parity, 2026-11-07)."""
+    limit would cut both off (Hermes Desktop parity, 2026-11-07)."""
     import importlib
     link_module = importlib.import_module("plugins.blackbox.desktop.dashboard_link")   # the package's dashboard_link() shadows the name
     seen = []
@@ -155,7 +155,7 @@ def test_an_assistant_turn_and_a_playground_test_get_the_long_timeout(dashboard,
 
 def test_agents_are_switched_only_through_the_protection_route():
     """POST /api/attach attached targets without the lock /api/agents/protection holds (a rescan
-    under way could undo or race it, LES-065) and neither page used it; it is gone, and Desktop
+    under way could undo or race it, LES-065) and neither page used it; it is gone, and Hermes Desktop
     may not forward a POST to it."""
     from plugins.blackbox.desktop.dashboard_link import DashboardLink
     assert not DashboardLink.allowed("POST", "api/attach")

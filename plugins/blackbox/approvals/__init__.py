@@ -1,12 +1,12 @@
-"""Turning protection DOWN needs the person's confirmation in Blackbox Desktop (Amos, 2026-11-21:
-"anything that would switch off Blackbox must always require Blackbox permission").
+"""Turning protection DOWN needs the person's confirmation: anything that would switch Blackbox
+off always requires the person's permission.
 
 A change that weakens protection (:mod:`.weakening`) — Audit instead of Block, a shield or a
 detection off, an agent no longer protected, a protected path removed, remote access unlocked —
-is held (:mod:`.store`) until the person answers a native dialog in the Desktop app, which proves
-the answer with its own key — or, without Desktop, until the person passes the system's password
+is held (:mod:`.store`) until the person answers a paired companion app's native dialog, which
+proves the answer with its own key — or, without one, until the person passes the system's password
 prompt from the dashboard page (:mod:`.system_prompt`); the gate is ``dashboard/approval_routes``. Strengthening
-changes apply at once. Blackbox Desktop's docs/security/approvals.md has the threat model.
+changes apply at once.
 
 Usage::
 

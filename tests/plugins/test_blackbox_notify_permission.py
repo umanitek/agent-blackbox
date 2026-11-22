@@ -9,7 +9,7 @@ was recorded as Off for good, with nothing pointing the person at System Setting
 Contracts: the question is asked only through LaunchServices and only when the person is at the
 desktop (an installer outside their session defers it to the dashboard's card); sending never
 asks; while permission is off or not asked yet the status names the way to System Settings
-(``settings`` / ``settings_label``, the names Blackbox Desktop reads) and a security notice still
+(``settings`` / ``settings_label``, the names a companion app reads) and a security notice still
 reaches the person through the labelled script notifier; every send answers what became of it,
 kept on the notice in the feed. The real macOS question is proven on the VM, never on a person's
 own Mac: here the notifier, ``open`` and ``osascript`` are stand-in scripts.

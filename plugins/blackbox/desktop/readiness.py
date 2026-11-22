@@ -2,7 +2,7 @@
 
 A plugin-catalog install copies the plugin only; ``hermes blackbox setup`` then installs the local
 DKG node, starts the dashboard and begins the first sync of Umanitek's verified threat graph. The
-Desktop page shows that journey live instead of empty cards, and can start setup itself.
+Hermes Desktop page shows that journey live instead of empty cards, and can start setup itself.
 
 Three parts, each in one place:
 
@@ -10,7 +10,7 @@ Three parts, each in one place:
   function over :class:`ReadinessFacts`, table-tested). Stages, in order:
   ``setup-needed`` → ``installing`` (or ``setup-failed``) → ``starting`` → ``syncing`` → ``ready``.
   ``syncing`` is the FIRST sync only (no verified rules yet); later catch-ups are ``ready``.
-- :class:`SetupRun` — the one setup run Desktop starts: ``hermes blackbox setup`` in this Hermes, as
+- :class:`SetupRun` — the one setup run Hermes Desktop starts: ``hermes blackbox setup`` in this Hermes, as
   a child process this module owns, its output kept in ``<blackbox home>/desktop_setup/setup.log``.
   It refuses a second run while one is going and never kills anything. A Hermes restart mid-run
   leaves the run going (own session); the record then reads its end from the log.
@@ -89,7 +89,7 @@ STEPS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
 class ReadinessFacts:
     """What :func:`stage_of` decides from.
 
-    ``setup_state``: none | running | failed | done (the Desktop run; ``none`` when setup ran in a
+    ``setup_state``: none | running | failed | done (the Hermes Desktop run; ``none`` when setup ran in a
     terminal or never ran). ``node_reachable``: None = could not tell. ``rules``: compiled verified
     rules, None = could not read.
     """
@@ -115,7 +115,7 @@ def step_states(log_lines: list[str], run_state: str, node_installed: bool) -> l
     """Each step's state, read from the installer's section headings in *log_lines*.
 
     A step is done once a later step's heading appears; the newest is active while the run goes,
-    failed when it failed, done when it finished. With no Desktop run (setup ran in a terminal),
+    failed when it failed, done when it finished. With no Hermes Desktop run (setup ran in a terminal),
     every step is done when the node is installed, else waiting."""
     reached = -1
     for line in log_lines:
@@ -142,7 +142,7 @@ def _clean(line: str) -> str:
 
 
 class SetupRun:
-    """The one setup run Desktop starts, and its record (``run.json`` + ``setup.log`` in *folder*).
+    """The one setup run Hermes Desktop starts, and its record (``run.json`` + ``setup.log`` in *folder*).
 
     One lock guards the start and the record. ``spawn`` is injectable for tests; it takes
     (command, log file, working folder) and returns a ``subprocess.Popen``-like object with ``pid``,
@@ -226,7 +226,7 @@ class SetupRun:
                 log.flush()
                 self._process = self._spawn(command, log, self._folder())
             self._write_record({"started": self._clock(), "finished": None, "exitCode": None, "pid": self._process.pid})
-            threading.Thread(target=self._wait, args=(self._process,), name="blackbox-desktop-setup", daemon=True).start()
+            threading.Thread(target=self._wait, args=(self._process,), name="blackbox-hermes-ui-setup", daemon=True).start()
             return {"started": True}
 
     def _wait(self, process: Any) -> None:
@@ -256,7 +256,7 @@ def _node_reachable(cfg: Any) -> Optional[bool]:
     try:
         return DkgClient.for_config(cfg).reachable(timeout=NODE_PROBE_SECONDS)
     except Exception as exc:   # health: allow BLE001 -- a probe that cannot run is "could not tell" (LES-011)
-        logger.debug("blackbox: node probe for Desktop could not run: %s", exc)
+        logger.debug("blackbox: node probe for Hermes Desktop could not run: %s", exc)
         return None
 
 
@@ -265,7 +265,7 @@ def _sync_reading(link: Any) -> tuple[bool, Optional[dict[str, Any]]]:
     try:
         answer = link.forward("GET", "api/verified-sync")
     except Exception as exc:   # health: allow BLE001 -- no reading is "could not tell", never an error
-        logger.debug("blackbox: sync meter unreadable for Desktop: %s", exc)
+        logger.debug("blackbox: sync meter unreadable for Hermes Desktop: %s", exc)
         return False, None
     if answer.status != 200 or not isinstance(answer.body, dict):
         return False, None
@@ -287,7 +287,7 @@ def _sync_reading(link: Any) -> tuple[bool, Optional[dict[str, Any]]]:
 
 
 class _Cache:
-    """One shared reading for :data:`CACHE_SECONDS` (several Desktop windows poll at once), kept
+    """One shared reading for :data:`CACHE_SECONDS` (several Hermes Desktop windows poll at once), kept
     per *key* — what the reading was built FOR (the setup run and the link): a caller asking
     about another run never gets this one's answer."""
 
@@ -345,7 +345,7 @@ def readiness_payload(rules: RuleCount, link: Any, run: SetupRun = RUN) -> dict[
 
 
 def start_setup(run: SetupRun = RUN, *, protect_new_agents: Optional[bool] = None) -> dict[str, Any]:
-    """Start ``hermes blackbox setup`` from Desktop (see :class:`SetupRun`); refuses a second run."""
+    """Start ``hermes blackbox setup`` from Hermes Desktop (see :class:`SetupRun`); refuses a second run."""
     answer = run.start(setup_command(protect_new_agents))
     _cache.clear()
     return answer

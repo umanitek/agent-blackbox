@@ -1,7 +1,7 @@
-"""Pending approvals of changes that turn protection DOWN, and the Desktop app's key.
+"""Pending approvals of changes that turn protection DOWN, and the paired companion app's key.
 
-A change that weakens protection is not applied when it is asked for: it is HELD here and the
-Blackbox Desktop app asks the person in a native macOS dialog. The app proves the answer with a
+A change that weakens protection is not applied when it is asked for: it is HELD here and a
+paired companion app asks the person in a native dialog. The app proves the answer with a
 key only it holds — an HMAC-SHA256 over the answer, the request id, the route and the exact body
 — so a program that can call the dashboard (an agent that got hold of its token) cannot approve
 its own request. An approved request is applied when the same body is sent again to the same
@@ -10,7 +10,7 @@ route, once, within :data:`USE_WINDOW_SECONDS`.
 The key is paired once per dashboard run: the first ``pair`` is accepted; a later one (the app
 relaunched with a fresh per-launch key) only with a proof made with the key held now — and the
 requests already waiting keep waiting for the new app to show them. The app
-keeps its current key in the macOS Keychain, readable without a prompt by the app alone.
+keeps its current key where only it can read it.
 
 Pattern: **State** — each held request is ``pending`` → ``approved`` → used (gone), or denied /
 expired (gone).
@@ -41,7 +41,7 @@ APPROVAL_TTL_SECONDS = 300
 USE_WINDOW_SECONDS = 120
 #: Held requests kept at once (an agent repeating a request cannot grow this).
 MAX_HELD = 20
-#: The Desktop key's length, in bytes.
+#: The companion app's key length, in bytes.
 KEY_BYTES = 32
 
 
@@ -50,7 +50,7 @@ def body_digest(body: bytes) -> str:
 
 
 def sign(key: bytes, message: str) -> str:
-    """The proof the Desktop app sends: HMAC-SHA256 of *message* with its key, as hex."""
+    """The proof the companion app sends: HMAC-SHA256 of *message* with its key, as hex."""
     return hmac.new(key, message.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
@@ -100,7 +100,7 @@ class Approvals:
         key (``sign(current, pair_message(key_hex))``). Held requests KEEP waiting across a new key:
         the app relaunched (a fresh per-launch key, proven by the old one) shows them again and its
         answers are checked against the new key. WHY: dropping them (until 2026-11-21) silently
-        cancelled a weakening request the person had not yet answered whenever Desktop restarted
+        cancelled a weakening request the person had not yet answered whenever the app restarted
         while the dashboard kept running — the requester was never told. An APPROVED request also
         stays usable within its window: the person's answer was already given."""
         try:

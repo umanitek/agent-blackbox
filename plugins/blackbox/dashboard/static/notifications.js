@@ -27,7 +27,7 @@
     $("nt-quiet").value = policy.quiet_hours || "";
     $("nt-rate").value = policy.per_minute || 6;
     $("nt-digest-minutes").value = policy.digest_minutes || 0;
-    const who = answer.holder === "desktop" ? "Blackbox Desktop is running and shows them. " : "";
+    const who = answer.holder ? "A companion app is running and shows them. " : "";
     $("nt-notifier").textContent = who + ((answer.notifier || {}).detail || "");
     const settings = $("nt-settings");
     settings.hidden = !(answer.notifier || {}).settings;

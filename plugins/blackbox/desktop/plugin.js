@@ -3,7 +3,7 @@
 // dashboard's own design), and an alert the moment Blackbox flags or
 // blocks something an agent tried to do.
 //
-// Data: Blackbox's own Desktop routes (dashboard/plugin_api.py) through ctx.rest — /status,
+// Data: Blackbox's own Hermes Desktop routes (dashboard/plugin_api.py) through ctx.rest — /status,
 // /mode, and /dash/<route>, which forwards an allowlisted set of the running
 // dashboard's own API (desktop/dashboard_link.py), so every panel here shows exactly what the
 // dashboard shows. Hermes answers these routes only for this app's own credential. The live alert
@@ -40,14 +40,14 @@ let rest = null // ctx.rest, set in register() and cleared on dispose
 
 const fetchStatus = () => (rest ? rest('/status') : Promise.resolve({ available: false }))
 
-// The dashboard's own API through Blackbox's Desktop routes. A failure comes back as an object
+// The dashboard's own API through Blackbox's Hermes Desktop routes. A failure comes back as an object
 // with `error` (and `dashboardDown` when the dashboard is not running), never a thrown request.
 async function dash(path, opts) {
   if (!rest) return { error: 'Blackbox is not loaded', unavailable: true }
   return callRest(`/dash/${path}`, opts)
 }
 
-// A dashboard call that outlasts Desktop's 30 s request limit (an assistant turn, a Playground test):
+// A dashboard call that outlasts Hermes Desktop's 30 s request limit (an assistant turn, a Playground test):
 // started in the background on the backend (desktop/long_calls.py), then read back every 1.5 s.
 const LONG_CALL_POLL_MS = 1500
 const LONG_CALL_LIMIT_MS = 150000
@@ -81,7 +81,7 @@ async function callRest(path, opts) {
   }
 }
 
-// Desktop wraps a refused request as "Error invoking remote method …: Error: 409: {json}". The
+// Hermes Desktop wraps a refused request as "Error invoking remote method …: Error: 409: {json}". The
 // dashboard's own answer is that JSON ({ok:false, error, …}); hand it back so callers show its words.
 function serverRefusal(text) {
   const match = /\b\d{3}: (\{[\s\S]*\})\s*$/.exec(text)
@@ -173,13 +173,13 @@ function StatusChip() {
 
 // ---------------------------------------------------------------- Threat graph map
 
-// The bubble map — the dashboard's Threat graph ported to Desktop: the same layout (the tier at the
+// The bubble map — the dashboard's Threat graph ported to Hermes Desktop: the same layout (the tier at the
 // centre with the Umanitek flag, one hub per threat type, dependencies split into one hub per
 // ecosystem, threats around their hub, a "+N more" bubble where a hub holds more than is drawn), the
 // same palette, sizes, icons and drawing rules (dashboard/static/index.html: CATS, SEV_COLOR, MINT,
 // CAT_ICONS, FLAG_PATHS, graphHubVal, nodeCanvas), and the same feel: a live force layout you can
 // watch settle, drag bubbles, scroll to zoom, drag the background to pan, fullscreen.
-// A Desktop plugin can load neither the dashboard's script nor its vendored force-graph, so this is a
+// A Hermes Desktop plugin can load neither the dashboard's script nor its vendored force-graph, so this is a
 // second copy of those drawing rules — change them in both places (KNOWN_ISSUES records it).
 const LEAVES_PER_TYPE = 40
 const ALPHA_DECAY = 0.0228 // d3's default: the layout cools over about 300 frames
@@ -830,7 +830,7 @@ function localThreats(rows) {
 // ---------------------------------------------------------------- the look
 //
 // The page carries its own small stylesheet (class prefix bbx-) in the Blackbox dashboard's design —
-// uppercase monospace labels, large figures, outlined severity pills, quiet tables — on Desktop's
+// uppercase monospace labels, large figures, outlined severity pills, quiet tables — on Hermes Desktop's
 // theme variables, so it reads as Blackbox and still follows the app's light and dark themes. A disk
 // plugin cannot rely on Tailwind classes the app itself never uses, so nothing here depends on them.
 const SIGNAL = '#FF4F00' // the dashboard's signal orange (block mode, accents)
@@ -3621,7 +3621,7 @@ function ThreatBell({ ctx, onOpen }) {
 
 // The dashboard's Blackbox assistant (index.html #chat-panel / submitChat, POST /api/blackbox-chat):
 // one scoped assistant turn at a time through Blackbox's own profile, with its session carried over.
-// The conversation is kept on this computer in Desktop's plugin storage (last 50 turns).
+// The conversation is kept on this computer in Hermes Desktop's plugin storage (last 50 turns).
 const CHAT_KEY = 'chatHistory'
 const CHAT_SESSION_KEY = 'chatSession'
 const CHAT_KEEP = 50
@@ -4004,7 +4004,7 @@ export default {
       { id: 'nav', area: SIDEBAR_NAV_AREA, data: { path: PAGE, label: 'Blackbox', codicon: 'shield' } },
       { id: 'status', area: STATUSBAR_AREAS.right, order: 110, render: () => jsx(StatusChip, {}) }
     ])
-    // Someone who switches Blackbox on in Desktop should not take audit mode for protection: once,
+    // Someone who switches Blackbox on in Hermes Desktop should not take audit mode for protection: once,
     // say plainly that it is recording, not blocking, with a one-click way to turn blocking on.
     // WHY it waits for setup: a fresh install opens on the setup page, and the notice landed over
     // it, offering "Open Blackbox" on Blackbox's own page; it comes once setup has finished.

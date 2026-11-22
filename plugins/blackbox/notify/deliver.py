@@ -1,14 +1,15 @@
-"""One deliverer at a time: the plugin's own native notifier, or Blackbox Desktop.
+"""One deliverer at a time: the plugin's own native notifier, or a companion app.
 
-Blackbox Desktop, while it runs, already has the system's permission and its own window to open
-on a click — so it shows the feed and the plugin's notifier stays silent. Desktop says so with a
+A companion app, while it runs, delivers instead: it already has the system's permission and its
+own window to open on a click — so it shows the feed and the plugin's notifier stays silent. It
+says so with a
 LEASE it renews (``claim``); when it quits the lease runs out and the plugin's notifier takes
 over from the feed's ONE ``delivered`` cursor — so nothing is shown twice and nothing is lost.
 
 :class:`Pump` is the loop the dashboard runs: each tick it collects new notices
 (:mod:`.sources`), applies the person's policy (:mod:`.policy`: off / muted / quiet hours / at
 most N a minute, the rest counted into one summary), publishes them to the feed and — unless
-Desktop holds the lease — hands the undelivered ones to the platform notifier. A notifier that
+a companion app holds the lease — hands the undelivered ones to the platform notifier. A notifier that
 fails never affects an agent: everything here runs on the dashboard's own thread.
 
 Pattern: **Active Object** (one daemon thread, like ``dashboard.pulse_driver``).
@@ -38,7 +39,7 @@ _lease: dict[str, object] = {"holder": "", "until": 0.0}
 
 
 def claim(holder: str, seconds: float) -> float:
-    """*holder* (``"desktop"``) delivers for the next *seconds* (≤ :data:`MAX_LEASE_SECONDS`);
+    """*holder* (the app's name, e.g. ``"companion"``) delivers for the next *seconds* (≤ :data:`MAX_LEASE_SECONDS`);
     0 seconds gives the lease up. Returns when it runs out (monotonic seconds from now)."""
     seconds = max(0.0, min(float(seconds), MAX_LEASE_SECONDS))
     with _lock:
@@ -141,7 +142,7 @@ class Pump:
         return published
 
     def deliver(self, now: float, current: policy.Policy) -> int:
-        """Show what the feed holds past the delivered cursor — unless Desktop holds the lease.
+        """Show what the feed holds past the delivered cursor — unless a companion app holds the lease.
         Returns how many were shown."""
         if holder():
             return 0

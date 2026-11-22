@@ -1,7 +1,7 @@
-"""Turning protection DOWN needs the person's confirmation (Amos, 2026-11-21; moved from the Desktop
-add-on into the core the same day).
+"""Turning protection DOWN needs the person's confirmation (2026-11-21; moved from an add-on into
+the core the same day).
 
-Contracts: a weakening change is held (428) until the Desktop app answers with its key; an
+Contracts: a weakening change is held (428) until a paired companion app answers with its key; an
 approval applies exactly that change, once; strengthening applies at once; a request without the
 dashboard's token is refused before it can raise a dialog; a program without the app's key can
 neither approve nor re-pair.
@@ -56,7 +56,7 @@ def _post(client, body):
 
 def _approve(client, approvals, held_json, verb="approve", key=KEY):
     held = store_mod.Held(held_json["id"], held_json["route"], held_json["body_sha256"], (), 0)
-    return client.post("/api/desktop/approvals/answer",
+    return client.post("/api/companion/approvals/answer",
                        json={"id": held.id, "approve": verb == "approve", "proof": sign(key, answer_message(verb, held))})
 
 
@@ -91,11 +91,11 @@ def test_without_the_apps_key_nobody_can_approve(dashboard):
     approvals.pair(KEY.hex())
     held = _post(client, {"mode": "audit"}).json()["approval"]
     assert _approve(client, approvals, held, key=b"\x01" * 32).status_code == 403
-    assert client.post("/api/desktop/approvals/answer", json={"id": held["id"], "approve": True}).status_code == 403
+    assert client.post("/api/companion/approvals/answer", json={"id": held["id"], "approve": True}).status_code == 403
     assert _post(client, {"mode": "audit"}).status_code == gate.HELD_STATUS and applied == []
 
 
-def test_before_desktop_pairs_a_weakening_change_still_waits(dashboard):
+def test_before_a_companion_app_pairs_a_weakening_change_still_waits(dashboard):
     client, applied, _approvals = dashboard
     answer = _post(client, {"mode": "audit"})
     assert answer.status_code == gate.HELD_STATUS and gate.NOT_PAIRED in answer.json()["errors"] and applied == []
@@ -117,11 +117,11 @@ def test_a_request_without_the_dashboards_token_raises_no_dialog(dashboard):
 
 def test_only_the_paired_app_can_pair_a_new_key(dashboard):
     client, _applied, _approvals = dashboard
-    assert client.post("/api/desktop/approvals/pair", json={"key": KEY.hex()}).status_code == 200
+    assert client.post("/api/companion/approvals/pair", json={"key": KEY.hex()}).status_code == 200
     other = ("ab" * 32)
-    assert client.post("/api/desktop/approvals/pair", json={"key": other}).status_code == 403          # an impostor
-    assert client.post("/api/desktop/approvals/pair", json={"key": other, "proof": sign(KEY, pair_message(other))}).status_code == 200
-    assert client.get("/api/desktop/approvals").json()["paired"] is True
+    assert client.post("/api/companion/approvals/pair", json={"key": other}).status_code == 403          # an impostor
+    assert client.post("/api/companion/approvals/pair", json={"key": other, "proof": sign(KEY, pair_message(other))}).status_code == 200
+    assert client.get("/api/companion/approvals").json()["paired"] is True
 
 
 def test_an_unanswered_request_expires():
@@ -167,12 +167,12 @@ def test_when_the_current_mode_cannot_be_read_audit_still_asks():
 
 
 
-#: HMAC-SHA256(bytes 0..32, "approve:abc:/api/settings:00"): the same vector Blackbox Desktop's
-#: Rust test checks (blackbox-desktop src-tauri/tests/approval_vector.txt), so both sign alike.
+#: HMAC-SHA256(bytes 0..32, "approve:abc:/api/settings:00"): a fixed vector a companion app's own
+#: test can check too, so both sign alike.
 SHARED_VECTOR = "e0cb2d098d504d505c5e61db1396cc288edaf379bdbdbeb41f0c1ec88b64dc7a"
 
 
-def test_the_desktop_app_and_the_core_sign_alike():
+def test_a_companion_app_and_the_core_sign_alike():
     held = store_mod.Held("abc", "/api/settings", "00", (), 0)
     assert sign(bytes(range(32)), answer_message("approve", held)) == SHARED_VECTOR
     assert pair_message("ff") == "pair:ff"
@@ -192,7 +192,7 @@ def test_the_real_dashboard_holds_block_to_audit_with_its_gate_inside_the_token_
     assert client.get("/approvals.js").status_code == 200
 
 
-# ------------------------------------------------------------- without Desktop: the system's password prompt
+# ------------------------------------------------------------- without a companion app: the system's password prompt
 
 @pytest.fixture
 def prompt(monkeypatch):
@@ -245,8 +245,8 @@ def test_an_invalid_change_is_refused_by_its_route_not_held_for_confirmation():
 
 
 
-def test_a_held_request_survives_desktop_relaunching_with_a_new_key():
-    """E2E 2026-11-21: Desktop restarted while the dashboard kept running; its re-pair dropped the
+def test_a_held_request_survives_the_companion_app_relaunching_with_a_new_key():
+    """E2E 2026-11-21: the companion app restarted while the dashboard kept running; its re-pair dropped the
     waiting request silently. It keeps waiting, and the new key answers it."""
     store = Approvals()
     old_key, new_key = bytes([1] * 32), bytes([2] * 32)

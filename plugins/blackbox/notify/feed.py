@@ -1,5 +1,5 @@
-"""The notifications feed: every notice Blackbox raised, in order — what the notifier and Blackbox
-Desktop read, and the history the dashboard shows.
+"""The notifications feed: every notice Blackbox raised, in order — what the notifier and a
+companion app read, and the history the dashboard shows.
 
 One writer (the dashboard process). Kept in memory and appended to
 ``$BLACKBOX_HOME/notifications/feed.jsonl`` (rewritten bounded when it passes

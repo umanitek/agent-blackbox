@@ -12,7 +12,7 @@ from dataclasses import dataclass
 
 #: ``security`` — something was stopped or needs a look (on by default); ``lifecycle`` — an agent
 #: or sub-agent started, ended or waits for the person; ``digest`` — what a session did, in one line;
-#: ``watched`` — a new file arrived in a folder the person watches (on by default: Blackbox Desktop
+#: ``watched`` — a new file arrived in a folder the person watches (on by default: a companion app
 #: told it before the core did, and an update keeps what the person saw).
 CATEGORIES = ("security", "lifecycle", "digest", "watched")
 LEVELS = ("info", "warning", "critical")
@@ -40,7 +40,7 @@ class Notice:
     seq: int = 0
     deliver: bool = True
     held: str = ""           # why it is not shown: "quiet-hours" | "muted" | "rate" | ""
-    delivery: str = ""       # what the plugin's notifier made of it (OUTCOMES); "" = not handed to it (held, Desktop showed it, not yet)
+    delivery: str = ""       # what the plugin's notifier made of it (OUTCOMES); "" = not handed to it (held, a companion app showed it, not yet)
 
 
 @dataclass(frozen=True)
@@ -52,7 +52,7 @@ class NotifierStatus:
 
     *settings* / *settings_label*: the link that opens the system's notification settings for
     Blackbox and its button's words (both "" when there is nothing to change there) — the
-    dashboard, ``blackbox notifications status`` and Blackbox Desktop offer it while permission
+    dashboard, ``blackbox notifications status`` and a companion app offer it while permission
     is off or not asked yet. *can_ask*: the system has not asked the person yet and Blackbox may
     ask now (``POST /api/notifications/allow`` from a click; never from an installer outside the
     person's desktop session). *screen_hidden*: the screen is shared or mirrored, when the system

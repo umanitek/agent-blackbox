@@ -7,12 +7,12 @@ refused by the boundary and raises no dialog). For a gated route (``approvals.ga
 * not weakening → applied at once (strengthening is never delayed);
 * weakening, approved before with this exact body → applied, once;
 * weakening otherwise → held, answered **428** ``{"ok": false, "approval": {...}, "errors": [why]}``.
-  The Desktop app sees it, asks the person in a native dialog and answers with its key.
+  A paired companion app sees it, asks the person in a native dialog and answers with its key.
 
 Routes (the POSTs behind the boundary's token):
-``GET  /api/desktop/approvals``           ``{"paired": bool, "confirm_here": bool, "waiting": [held …]}``
-``POST /api/desktop/approvals/pair``      ``{"key": hex, "proof": hex?}`` — Blackbox Desktop's key
-``POST /api/desktop/approvals/answer``    ``{"id", "approve": bool, "proof": hex}`` — Desktop's native dialog
+``GET  /api/companion/approvals``           ``{"paired": bool, "confirm_here": bool, "waiting": [held …]}``
+``POST /api/companion/approvals/pair``      ``{"key": hex, "proof": hex?}`` — the companion app's key
+``POST /api/companion/approvals/answer``    ``{"id", "approve": bool, "proof": hex}`` — the app's native dialog
 ``POST /api/approvals/confirm``           ``{"id"}`` — the dashboard page's path: the system's password
                                           prompt (``approvals.system_prompt``), at most once per request
 ``GET  /approvals.js``                    the page script: a held answer shows "Confirm with your
@@ -36,8 +36,8 @@ from ...approvals import Approvals
 MAX_BODY_BYTES = 256 * 1024
 #: The answer to a change that waits for the person's approval.
 HELD_STATUS = 428
-NOT_PAIRED = "Turning protection down needs your confirmation: confirm it with your password, or in Blackbox Desktop."
-ASK = "Waiting for your confirmation in Blackbox Desktop (or confirm it with your password)."
+NOT_PAIRED = "Turning protection down needs your confirmation: confirm it with your password, or in a paired companion app."
+ASK = "Waiting for your confirmation in your companion app (or confirm it with your password)."
 #: The page script (served at ``/approvals.js``; it lives with the dashboard's other static files).
 SCRIPT = Path(__file__).resolve().parents[1] / "static" / "approvals.js"
 
@@ -124,7 +124,7 @@ def register(app: Any, _swr: Any = None, store: Approvals | None = None) -> None
     # first = outermost, when the app starts.
     app.user_middleware.append(Middleware(Gate, store=store))
 
-    @app.get("/api/desktop/approvals")
+    @app.get("/api/companion/approvals")
     def approvals_waiting() -> Any:
         return JSONResponse({"paired": store.paired(), "confirm_here": approvals.system_prompt.available(),
                              "waiting": [held.as_json() for held in store.waiting()]}, headers={"Cache-Control": "no-store"})
@@ -144,13 +144,13 @@ def register(app: Any, _swr: Any = None, store: Approvals | None = None) -> None
             return JSONResponse({"ok": False, "error": "not confirmed: protection stays on"}, status_code=403)
         return JSONResponse({"ok": store.approve_confirmed(held.id)})
 
-    @app.post("/api/desktop/approvals/pair")
+    @app.post("/api/companion/approvals/pair")
     async def approvals_pair(request: Request) -> Any:
         body = await _small_json(request)
         ok = store.pair(str(body.get("key") or ""), str(body.get("proof") or ""))
         return JSONResponse({"ok": ok}, status_code=200 if ok else 403)
 
-    @app.post("/api/desktop/approvals/answer")
+    @app.post("/api/companion/approvals/answer")
     async def approvals_answer(request: Request) -> Any:
         body = await _small_json(request)
         ok = store.answer(str(body.get("id") or ""), body.get("approve") is True, str(body.get("proof") or ""))

@@ -8,7 +8,7 @@ release's ``blackbox-notify-darwin.zip`` checked against the SHA-256 committed i
 or a locally built one a test or a developer names. macOS asks the person's permission ONCE, and
 only a person who is there (:mod:`.session`, KI-PENDING-411cdb): :func:`request` opens the app
 through LaunchServices in their desktop session — from the installer only when it runs there,
-otherwise from the dashboard's "Allow Blackbox to notify you" card or Blackbox Desktop's first
+otherwise from the dashboard's "Allow Blackbox to notify you" card or a companion app's first
 run. When the answer is off, :func:`status` says so with a one-click way to System Settings, and
 :func:`send` says what became of each notification (:class:`..model.Delivery`).
 
@@ -166,7 +166,7 @@ def request() -> NotifierStatus:
     the person's desktop session (an app run directly from a background process is answered
     "denied" with no question). Only when this user is at the desktop and macOS has not asked yet;
     otherwise nothing is asked and the status says why. Called from a click (the dashboard's
-    card, Blackbox Desktop's first run) or an installer running in the person's own session."""
+    card, a companion app's first run) or an installer running in the person's own session."""
     current = status()
     if current.permission != "not-determined" or not session.console_is_ours():
         return current
@@ -221,7 +221,7 @@ def install(source: Optional[Path] = None, sha256: str = "") -> NotifierStatus:
     finally:
         shutil.rmtree(staging, ignore_errors=True)
     # macOS asks only a person who is there to answer (session.py): from an installer in their own
-    # desktop session, now; otherwise the dashboard's card or Blackbox Desktop asks later.
+    # desktop session, now; otherwise the dashboard's card or a companion app asks later.
     return request() if session.in_desktop_session() else status()
 
 

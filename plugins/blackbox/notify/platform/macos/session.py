@@ -11,7 +11,7 @@ VM pass 3, 2026-11-22). So the question is asked only when the person is present
 * :func:`in_desktop_session` — and THIS process runs inside that desktop session (launchd's
   ``Aqua`` manager), not over SSH or in a background service. The installer asks only then;
   otherwise the question waits for the dashboard's "Allow Blackbox to notify you" card or
-  Blackbox Desktop's first run, both of which the person clicks.
+  a companion app's first run, both of which the person clicks.
 * :func:`screen_shared` — Screen Sharing or a mirrored display is in use: macOS hides banners
   then by default ("Allow notifications when mirroring or sharing the display" is off), so a
   notification is in Notification Center but not on the screen.

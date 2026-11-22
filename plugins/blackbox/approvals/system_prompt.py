@@ -1,4 +1,4 @@
-"""Confirming a held change WITHOUT Blackbox Desktop: the operating system asks for the user's
+"""Confirming a held change WITHOUT a paired companion app: the operating system asks for the user's
 password.
 
 The dashboard is a web page, and whoever holds its token can script that page. A "Confirm"
@@ -9,11 +9,11 @@ change is approved only when the person types the password.
 
 * macOS: ``osascript -e 'do shell script "/usr/bin/true" with prompt "…" with administrator privileges'``
 * Linux: ``pkexec /bin/true`` (the desktop's polkit agent asks)
-* anywhere else: unavailable. The change then waits for Blackbox Desktop.
+* anywhere else: unavailable. The change then waits for a paired companion app.
 
 Nothing privileged runs: the authenticated command is ``true``. One prompt at a time, and each
 held request is asked at most once. Limits (UI automation through Accessibility) are those of
-Desktop's dialog. Blackbox Desktop's docs/security/approvals.md has the threat model.
+a companion app's native dialog.
 
 Pattern: **Strategy**. :data:`PROMPTERS` holds one per platform, and tests replace it.
 

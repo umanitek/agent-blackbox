@@ -6,7 +6,7 @@ Contracts: a notice says which agent, what it did and Blackbox's verdict and is 
 screen; the policy decides what is shown (security on by default, lifecycle and digest opt-in,
 mute, quiet hours, a per-minute cap with one summary) and turning security notices off is a
 weakening change; the collector answers only what is new and never announces one thing twice; ONE
-deliverer shows the feed — Blackbox Desktop while it holds the lease, else the plugin's notifier —
+deliverer shows the feed — a companion app while it holds the lease, else the plugin's notifier —
 with nothing shown twice and nothing lost at the hand-over.
 """
 
@@ -247,34 +247,34 @@ def test_a_switched_off_kind_is_not_kept_and_a_muted_agent_is_kept_but_not_shown
     assert feed.delivered() == published[0].seq                            # passed, so it is never shown later
 
 
-def test_while_desktop_holds_the_lease_the_plugin_is_silent_and_nothing_is_shown_twice_or_lost():
+def test_while_a_companion_app_holds_the_lease_the_plugin_is_silent_and_nothing_is_shown_twice_or_lost():
     findings, sent = [], []
     pump = _pump(findings, sent)
-    notify.claim("desktop", 30)
+    notify.claim("companion", 30)
     findings.append(_finding(ts=NOW + 1, tool_call_id="a"))
     pump.step(NOW + 1)
-    assert sent == [] and notify.holder() == "desktop"
-    assert [row["seq"] for row in notify.rows(notify.delivered())] == [1]   # Desktop reads what is undelivered…
+    assert sent == [] and notify.holder() == "companion"
+    assert [row["seq"] for row in notify.rows(notify.delivered())] == [1]   # the app reads what is undelivered…
     notify.mark_delivered(1)                                                # …shows it and says so
     findings.append(_finding(ts=NOW + 2, tool_call_id="b"))
     pump.step(NOW + 2)
     assert sent == []
-    notify.claim("desktop", 0)                                              # Desktop quits before showing #2
+    notify.claim("companion", 0)                                              # the app quits before showing #2
     pump.step(NOW + 3)
     assert [ident for ident, _ in sent] == [notify.rows(1)[0]["id"]]        # the plugin shows exactly the one not yet shown
     assert feed.delivered() == 2
-    notify.claim("desktop", 30)                                             # Desktop is back: nothing left to show again
+    notify.claim("companion", 30)                                             # the app is back: nothing left to show again
     assert notify.rows(notify.delivered()) == []
 
 
 def test_a_lease_runs_out_by_itself(monkeypatch):
     clock = [1000.0]
     monkeypatch.setattr(deliver.time, "monotonic", lambda: clock[0])
-    notify.claim("desktop", 30)
-    assert notify.holder() == "desktop"
+    notify.claim("companion", 30)
+    assert notify.holder() == "companion"
     clock[0] += 31
     assert notify.holder() == ""
-    assert notify.claim("desktop", 99999) == deliver.MAX_LEASE_SECONDS
+    assert notify.claim("companion", 99999) == deliver.MAX_LEASE_SECONDS
 
 
 def test_a_notifier_that_raises_never_stops_the_pump_and_the_notice_stays_in_the_history():
@@ -314,9 +314,9 @@ def test_the_routes_serve_the_feed_the_policy_and_the_lease():
         answer = client.get("/api/notifications/feed").json()
         assert answer["top"] == 1 and answer["delivered"] == 0 and [row["id"] for row in answer["notices"]] == ["finding:x"]
         assert client.get("/api/notifications/policy").json()["policy"]["security"] is True
-        assert client.post("/api/notifications/lease", json={"holder": "desktop", "seconds": 30}).status_code in (401, 403)   # no token
-        assert _post(client, "/api/notifications/lease", {"holder": "desktop", "seconds": 30}).json()["seconds"] == 30
-        assert client.get("/api/notifications/feed").json()["holder"] == "desktop"
+        assert client.post("/api/notifications/lease", json={"holder": "companion", "seconds": 30}).status_code in (401, 403)   # no token
+        assert _post(client, "/api/notifications/lease", {"holder": "companion", "seconds": 30}).json()["seconds"] == 30
+        assert client.get("/api/notifications/feed").json()["holder"] == "companion"
         assert _post(client, "/api/notifications/delivered", {"seq": 1}).json() == {"delivered": 1}
         assert client.get("/api/notifications/feed").json()["notices"] == []
         assert client.get("/api/notifications/history").json()["notices"][0]["title"] == "Blackbox stopped Codex"

@@ -1,5 +1,5 @@
 """Native notifications over HTTP (``notify``): the ONE feed both deliverers read, the policy,
-and the lease by which Blackbox Desktop says "I am showing them".
+and the lease by which a companion app says "I am showing them".
 
 * ``GET /api/notifications/feed[?since=N&limit=&wait=S]`` → ``{top, delivered, holder, notices:
   [Notice]}`` — the feed after ``since`` (default: after the DELIVERED cursor, i.e. what nobody
@@ -10,7 +10,7 @@ and the lease by which Blackbox Desktop says "I am showing them".
   ``details`` on); ``deliver`` is False when the policy holds it back from the screen.
 * ``GET /api/notifications/history[?limit=&before=]`` → ``{notices}`` newest first.
 * ``GET /api/notifications/policy`` → ``{policy, notifier, holder, categories}``.
-* ``POST /api/notifications/lease`` ``{"holder": "desktop", "seconds": 30}`` → the caller shows
+* ``POST /api/notifications/lease`` ``{"holder": "companion", "seconds": 30}`` → the caller shows
   the feed for that long (renew before it runs out; 0 gives it up); the plugin's own notifier is
   silent meanwhile.
 * ``POST /api/notifications/delivered`` ``{"seq": N}`` → the feed is shown up to ``N``.
@@ -19,7 +19,7 @@ and the lease by which Blackbox Desktop says "I am showing them".
   (``outcome``: ``delivered`` | ``fallback`` | ``not-shown``).
 * ``POST /api/notifications/allow`` → ``{notifier}`` — the person asks to be notified: macOS asks
   them once, in their desktop session (the dashboard's "Allow Blackbox to notify you" card and
-  Blackbox Desktop's first run; KI-PENDING-411cdb). Nothing is asked when it was asked before.
+  a companion app's first run; KI-PENDING-411cdb). Nothing is asked when it was asked before.
 * ``POST /api/notifications/settings`` → ``{opened}`` — opens the system's notification settings
   at Blackbox (``notifier.settings`` / ``notifier.settings_label`` name the same action).
 * ``GET /notifications`` — the dashboard's page: settings and the history.

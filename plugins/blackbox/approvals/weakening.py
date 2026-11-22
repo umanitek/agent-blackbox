@@ -1,4 +1,4 @@
-"""Which changes turn protection DOWN — those wait for the person's approval in Blackbox Desktop.
+"""Which changes turn protection DOWN — those wait for the person's approval.
 
 A change is judged by what it ASKS (its route and body) against what is on now. Anything that
 makes Blackbox see or stop less is weakening — and so is one privacy choice, starting to keep

@@ -6,7 +6,7 @@
 * ``digest`` (off): what a session did, in one line, when it ends — and every ``digest_minutes``
   while it runs when that is above 0.
 * ``watched`` (ON): a new file arrived in a folder File Shield watches. On by default because
-  Blackbox Desktop told it before the core did — an update keeps what the person saw. Turning it
+  a companion app told it before the core did — an update keeps what the person saw. Turning it
   off is not a weakening change: a KNOWN-BAD file in a watched folder is a ``security`` notice.
 * ``muted_agents``: agent ids never shown. ``quiet_hours``: ``"22:00-07:00"`` (local time) — only
   CRITICAL security notices are shown then. ``details``: add the finding's own (redacted) title to

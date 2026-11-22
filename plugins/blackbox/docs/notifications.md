@@ -1,7 +1,7 @@
 # Notifications
 
 Blackbox tells you what your AI agents are doing through your system's own notifications. The
-plugin does this itself, from the moment it is installed; Blackbox Desktop shows the same feed
+plugin does this itself, from the moment it is installed; a companion app shows the same feed
 when it is running.
 
 ## What a notification says
@@ -34,7 +34,7 @@ how many are shown in a minute — the rest are counted into one summary, so the
 Turning Security off, turning every notification off, or muting an agent makes Blackbox tell you
 less about threats, so it waits for your confirmation like any change that turns protection down.
 
-Settings: the dashboard's **Notifications** page (`/notifications`), Blackbox Desktop's Settings,
+Settings: the dashboard's **Notifications** page (`/notifications`), a companion app's Settings,
 or `notifications:` in the config:
 
 ```yaml
@@ -70,7 +70,7 @@ tree is no longer attributed to it.
 
 One deliverer at a time, from one feed, so nothing is shown twice and nothing is lost:
 
-- **Blackbox Desktop**, while it runs (it already has your permission and opens the agent on a click).
+- **A companion app**, while it runs, delivers instead (it already has your permission and opens the agent on a click).
 - Otherwise **the plugin's own notifier**:
   - macOS: Blackbox's notifier app, so notifications appear under Blackbox's name and can be
     styled or silenced in System Settings → Notifications. macOS asks once whether to allow it.

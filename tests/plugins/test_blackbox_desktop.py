@@ -1,6 +1,6 @@
 """Blackbox inside Hermes Desktop (plugins/blackbox/desktop/, dashboard/plugin_api.py), 2026-11-05.
 
-The Desktop half shows a status-bar shield, a Blackbox page and an alert on every finding. These
+The Hermes Desktop half shows a status-bar shield, a Blackbox page and an alert on every finding. These
 tests hold what it promises:
 
 - the live alert carries title, severity, category, tool and blocked/flagged — never the evidence,
@@ -55,7 +55,7 @@ def sent(monkeypatch):
 
 def test_one_action_is_one_alert_naming_its_most_severe_finding(sent):
     """Live 2026-11-06: one .env read matched the built-in rule (high) and a protected path
-    (critical), and Desktop showed two toasts and "Audit 2" for one action."""
+    (critical), and Hermes Desktop showed two toasts and "Audit 2" for one action."""
     env_rule = _finding_dict()
     protected = _finding_dict(identifier="fileaccess:read_file:user-protected", severity="critical",
                               title="Access to a user-protected path")
@@ -86,10 +86,10 @@ def test_a_hermes_without_plugin_events_is_a_quiet_no_op(monkeypatch):
 
 def test_a_failing_broadcast_never_reaches_the_tool_call(monkeypatch, caplog):
     def broken(plugin, event, payload):
-        raise RuntimeError("no Desktop window")
+        raise RuntimeError("no Hermes Desktop window")
     monkeypatch.setattr(desktop, "_broadcast", lambda: broken)
     desktop.announce_findings("pre_tool_call", [_finding_dict()], {"decision": "flag"})
-    assert "Desktop alert not sent" in caplog.text
+    assert "Hermes Desktop alert not sent" in caplog.text
 
 
 def test_the_hook_announces_what_it_records(monkeypatch):
@@ -197,7 +197,7 @@ def test_the_backend_finds_the_loaded_blackbox_and_serves_status(monkeypatch):
 
 
 def test_the_switch_saves_block_mode_through_the_settings_path():
-    """The Desktop page's Audit / Block switch writes the same config the dashboard's Settings does."""
+    """The Hermes Desktop page's Audit / Block switch writes the same config the dashboard's Settings does."""
     from plugins.blackbox.kernel.config import load_blackbox_config
     assert desktop.set_mode("block") == {"ok": True, "mode": "block", "errors": []}
     assert load_blackbox_config().mode == "block"
