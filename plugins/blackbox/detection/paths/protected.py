@@ -181,7 +181,7 @@ def _command_accesses(tool: str, command: str, *, every_route: bool = False) -> 
 
 
 #: Commands that act on a folder's whole tree (delete, move, re-own, re-permission, sync, pack):
-#: naming a folder that HOLDS a protected item reaches the item too (``rm -rf ~/Work``).
+#: naming a folder that HOLDS a protected item reaches the item too (deleting ~/Work removes ~/Work/Taxes).
 _TREE_COMMANDS = frozenset({"rm", "rmdir", "mv", "chmod", "chown", "chgrp", "chflags", "xattr", "trash", "srm",
                             "shred", "unlink", "find", "rsync", "ditto", "tar", "zip", "7z", "cp", "scp", "ln",
                             "del", "rd", "remove-item", "move-item", "copy-item", "robocopy", "xcopy"})

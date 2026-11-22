@@ -12,7 +12,7 @@ It is switched on in Settings (or from Blackbox Desktop), like Trader Shield and
   Copilot CLI, Windsurf, Cline, OpenCode, OpenClaw and their MCP tools. Every one of their tool calls
   passes Blackbox's guard, and the guard asks File Shield.
 * **Every route a tool call names.** Opening, copying, archiving, listing, changing, moving or
-  deleting the item; a `cd` into it; a command over a folder that holds it (`rm -rf ~/Documents`
+  deleting the item; a `cd` into it; a command over a folder that holds it (deleting `~/Documents`
   when `~/Documents/Taxes` is protected); code that opens it; an MCP tool's path. Every spelling is
   judged as the real place it names: `~`, `$HOME`, `..` and links all resolve first.
 * **Every mode.** Audit mode too. It is your own explicit rule, like Blackbox's self-protection.

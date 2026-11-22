@@ -1,4 +1,4 @@
-/* @umanitek/blackbox-openclaw — built from src/ by `npm run build`; do not edit. source sha256:bb1f9ae6e52afe745133ff47f5300e70e1433583d88336576d2a2cc895333d6c */
+/* @umanitek/blackbox-openclaw — built from src/ by `npm run build`; do not edit. source sha256:a98b95340f4b80985437d6b116454bd5b4f941edad3192e9a82318feccf6aaba */
 
 // src/consent.ts
 import { readFileSync } from "node:fs";
