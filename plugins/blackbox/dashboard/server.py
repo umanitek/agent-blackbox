@@ -677,7 +677,7 @@ def create_app(*, manage_blackbox: bool = False):
     from .. import audit, community, ruleset
     from ..kernel import settings
     from ..sync import state as sync_state
-    from ..kernel.config import load_blackbox_config
+    from ..kernel.config import load_blackbox_config, mode_answer
     from ..kernel.dkg_client import DkgClient, extract_binding
 
     app = FastAPI(title="Agent Blackbox", docs_url=None, redoc_url=None)
@@ -1060,7 +1060,7 @@ def create_app(*, manage_blackbox: bool = False):
     def findings(limit: int = Query(50, ge=1, le=500), offset: int = Query(0, ge=0)) -> Any:
         items = audit.read_findings(limit=limit, offset=offset)
         return {
-            "mode": load_blackbox_config().mode,
+            "mode": mode_answer(load_blackbox_config()),
             "findings": items,
             "total": audit.count_findings(),
         }
@@ -1070,7 +1070,7 @@ def create_app(*, manage_blackbox: bool = False):
         """Full agent-activity trail: session lifecycle + API + tool-call events."""
         items = audit.read_audit(limit=limit, offset=offset)
         return {
-            "mode": load_blackbox_config().mode,
+            "mode": mode_answer(load_blackbox_config()),
             "entries": items,
             "total": audit.count_audit(),
         }
@@ -1082,7 +1082,7 @@ def create_app(*, manage_blackbox: bool = False):
         Reconstructed from this machine's event logs, never the DKG node.
         """
         data = audit.read_local_activity(max_sessions=sessions)
-        return {"mode": load_blackbox_config().mode, **data}
+        return {"mode": mode_answer(load_blackbox_config()), **data}
 
     @app.get("/api/graph-status")
     def graph_status() -> Any:
@@ -1177,7 +1177,7 @@ def create_app(*, manage_blackbox: bool = False):
                 public_state = "syncing"
 
         return {
-            "mode": cfg.mode,
+            "mode": mode_answer(cfg),
             "context_graph_id": cfg.context_graph_id,
             "dkg_url": cfg.dkg_url,
             "dkg_home": cfg.dkg_home,

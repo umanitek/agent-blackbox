@@ -183,8 +183,19 @@ class BlackboxConfig:
 
 
 def _blackbox_entry() -> dict[str, Any]:
-    """Return the ``plugins.entries.blackbox`` mapping, or ``{}`` on any error (:mod:`.config_values.saved_entry`)."""
+    """Return the ``plugins.entries.blackbox`` mapping (:mod:`.config_values.saved_entry`: the last
+    good one while the file cannot be read; empty before any good read)."""
     return saved_entry.read()
+
+
+#: What a status route says for the mode before the saved settings were ever read in this process.
+MODE_STARTING = "starting"
+
+
+def mode_answer(cfg: BlackboxConfig) -> str:
+    """*cfg*'s mode for a status answer — or :data:`MODE_STARTING` while the saved settings could
+    not be read yet (never the default presented as the person's choice, KI-PENDING-b28f8f)."""
+    return cfg.mode if saved_entry.known(_blackbox_entry()) else MODE_STARTING
 
 
 #: The separate community graph's settings (2026-10-12 to 2026-10-16), config keys and environment

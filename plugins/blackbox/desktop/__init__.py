@@ -43,7 +43,7 @@ from collections.abc import Mapping, Sequence
 
 from .. import audit, ruleset
 from ..kernel import settings
-from ..kernel.config import load_blackbox_config
+from ..kernel.config import load_blackbox_config, mode_answer
 from ..kernel.constants import SEVERITY_RANK
 from . import readiness as readiness_mod
 from .dashboard_link import DashboardLink
@@ -161,7 +161,7 @@ def status_payload() -> dict[str, Any]:
     since = time.time() - _DAY_SECONDS
     today = [action for action in _actions(_rows_since(since)) if action["time"] >= since]
     return {
-        "mode": cfg.mode,
+        "mode": mode_answer(cfg),   # "starting" until the saved settings were read, never a guessed "audit"
         "blockSeverity": cfg.block_severity,
         "today": {
             "findings": len(today),

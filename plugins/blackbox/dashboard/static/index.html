@@ -7891,7 +7891,7 @@
     if (!setState) return;
     var block = setState.mode === "block";
     var ba = $("set-mode-audit"), bb = $("set-mode-block");
-    ba.classList.toggle("active", !block);
+    ba.classList.toggle("active", setState.mode === "audit");   // "starting": the saved mode is not read yet — neither
     bb.classList.toggle("active", block);
     ba.setAttribute("aria-pressed", block ? "false" : "true");
     bb.setAttribute("aria-pressed", block ? "true" : "false");
@@ -8018,7 +8018,8 @@
       cats[c.key] = { enabled: !!st.enabled, min_severity: sevOk(st.min_severity) };
     });
     return {
-      mode: setState.mode === "block" ? "block" : "audit",
+      // Never write a mode the page did not read (KI-PENDING-b28f8f: "starting" → leave the saved one as it is).
+      mode: setState.mode === "block" || setState.mode === "audit" ? setState.mode : undefined,
       block_severity: sevOk(setState.block_severity),
       report: !!setState.report,
       report_min_severity: sevOk(setState.report_min_severity),

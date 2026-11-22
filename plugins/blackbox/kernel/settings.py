@@ -23,7 +23,7 @@ from typing import Any, Callable, Iterable, NamedTuple
 
 from . import constants
 from . import yaml_files
-from .config import DEFAULT_PROTECTED_PATHS, agent_activity, load_blackbox_config
+from .config import DEFAULT_PROTECTED_PATHS, MODE_STARTING, agent_activity, load_blackbox_config, mode_answer
 from .config_values import schema
 from .config_values.schema import DETECTION_CATEGORIES, MAX_PROTECTED_PATHS
 
@@ -61,11 +61,11 @@ SECTION_VALIDATORS: dict[str, Callable[[Any, list[str]], dict[str, Any]]] = {}
 def read_settings() -> dict[str, Any]:
     """Return the current settings as a JSON-friendly, fully-defaulted dict."""
     cfg = load_blackbox_config()
-    categories = {
-        cat: cfg.category_setting(cat) for cat in DETECTION_CATEGORIES
-    }
+    categories = {cat: cfg.category_setting(cat) for cat in DETECTION_CATEGORIES}
+    mode = mode_answer(cfg)
     return {
-        "mode": cfg.mode,
+        "mode": mode,   # "starting" until the saved settings were read (KI-PENDING-b28f8f): never a guessed Audit
+        "starting": mode == MODE_STARTING,
         "block_severity": cfg.block_severity,
         "report": cfg.report,
         "community_sandbox": cfg.community_sandbox,
