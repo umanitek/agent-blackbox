@@ -44,7 +44,7 @@ MAX_RETRIES_KEPT = 1024
 _retried: dict[str, float] = {}
 _OWN_FILE_STYLES = ("own-json", "scripts", "plugin")
 _lock = threading.Lock()
-_seen: dict[str, Any] = {"at": 0.0, "table": {}, "running": [], "pids": frozenset(), "new_profiles": False}
+_seen: dict[str, Any] = {"at": 0.0, "read_at": 0.0, "table": {}, "running": [], "pids": frozenset(), "new_profiles": False}
 
 
 def _snapshot(*, max_age: float = TABLE_SECONDS) -> tuple[Mapping[int, observe.Proc], list[Running]]:
@@ -63,7 +63,7 @@ def _snapshot(*, max_age: float = TABLE_SECONDS) -> tuple[Mapping[int, observe.P
             if sessions and table:   # a program an agent started that runs as root is recorded on its instance
                 root_watch.scan(table, observe.read_users(), sessions)
             changed = pids != _seen["pids"]
-            _seen.update(at=time.monotonic(), table=table, running=running, pids=pids)
+            _seen.update(at=time.monotonic(), read_at=time.time(), table=table, running=running, pids=pids)
             if changed:
                 store.touch()
         return _seen["table"], _seen["running"]
@@ -78,7 +78,7 @@ def observe_now() -> None:
     that went quiet are closed here as well, so the history is right with nobody watching (KI-549)."""
     table, _running = _snapshot(max_age=0.0)
     hermes_sessions.catch_up()   # the Hermes agent's own sessions, from its guard's audit trail
-    views.close_stale(table.keys() if table else None)
+    views.close_stale(table.keys() if table else None, read_at=_seen["read_at"])
 
 
 def new_profiles() -> bool:
@@ -232,7 +232,7 @@ def live() -> dict[str, Any]:
     table, running = _snapshot()
     hermes_sessions.catch_up()
     attribute_kernel_refusals()
-    views.close_stale(table.keys() if table else None)
+    views.close_stale(table.keys() if table else None, read_at=_seen["read_at"])
     prompt_text.expire()
     tree = views.live(running, [asdict(row) for row in profile_rows()])
     tree["prompt_text"] = asdict(prompt_text.status())

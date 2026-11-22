@@ -23,16 +23,23 @@ QUIET_SECONDS = store.QUIET_SECONDS
 GRACE_SECONDS = 20.0
 
 
-def close_stale(alive: Optional[Iterable[int]] = None) -> int:
-    """End the instances whose process left (*alive*: the pids running now; None = unknown) or
-    that went quiet (no event for ``agent_activity.quiet_minutes``). Returns how many were ended."""
+def close_stale(alive: Optional[Iterable[int]] = None, *, read_at: Optional[float] = None) -> int:
+    """End the instances whose process left (*alive*: the pids running when the process list was
+    read at *read_at* — now when not given; None = unknown) or that went quiet (no event for
+    ``agent_activity.quiet_minutes``). Returns how many were ended.
+
+    WHY *read_at* (KI-571, real Gemini CLI 0.70.0, two sessions at once): the process list is
+    cached for a moment, and a session whose process was learned AFTER that list was read is not
+    in it — it was ended "process-exit" 4 ms after it started. Only a list read after the
+    instance's latest event can say its process left."""
     pids = None if alive is None else set(alive)
     now, ended, quiet = time.time(), 0, store.quiet_seconds()
+    read_at = now if read_at is None else read_at
     for item in store.all_instances():
         if item.ended is not None:
             continue
         reason = ""
-        if item.kind == "session" and item.pid and pids is not None and item.pid not in pids:
+        if item.kind == "session" and item.pid and pids is not None and item.pid not in pids and read_at > item.last:
             reason = "process-exit"
         elif now - item.last > quiet and not (item.pid and pids is not None and item.pid in pids):
             reason = "quiet"
