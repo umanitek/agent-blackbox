@@ -15,6 +15,11 @@ Config, under ``plugins.entries.blackbox``::
         enabled: true
         protected: ["~/Documents/Taxes", "~/.config/my-app/token.json"]   # nothing may touch these
         folders: ["~/Downloads"]                                          # new files reported (default ~/Downloads)
+        sandboxed: ["claude-code", "codex"]                               # agents started inside the OS sandbox (Layer 2)
+
+``sandboxed`` lists the coding agents Blackbox starts inside an operating-system sandbox built from
+the protected list (``sandbox/``): a protecting list, so adding one applies at once and removing one
+waits for approval. Empty by default (decision D7: a sandboxed agent can not use ``sudo``).
 
 An item is stored in ONE canonical spelling (LES-105): written from the home folder (``~/…``)
 when it is inside it, absolute otherwise, with ``..`` folded away and an existing link resolved —
@@ -35,11 +40,12 @@ import os
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
-from ..contract import SettingField, ShieldMode
+from ..contract import SettingField, SettingOption, ShieldMode
 
 SHIELD_ID = "file-shield"
 OPT_PROTECTED = "protected"
 OPT_FOLDERS = "folders"
+OPT_SANDBOXED = "sandboxed"
 DEFAULT_FOLDERS = ("~/Downloads",)
 #: Most items the person may protect, and most folders watched for new files.
 MAX_PROTECTED = 200
@@ -94,10 +100,12 @@ def normalise_folder(value: Any) -> Optional[str]:
     return text
 
 
-def build(enabled: bool = False, protected: tuple[str, ...] = (), folders: Optional[tuple[str, ...]] = None) -> ShieldMode:
+def build(enabled: bool = False, protected: tuple[str, ...] = (), folders: Optional[tuple[str, ...]] = None,
+          sandboxed: tuple[str, ...] = ()) -> ShieldMode:
     """File Shield's mode (None: the default watched folders)."""
     return ShieldMode(enabled=enabled, options={OPT_PROTECTED: protected,
-                                                OPT_FOLDERS: DEFAULT_FOLDERS if folders is None else folders})
+                                                OPT_FOLDERS: DEFAULT_FOLDERS if folders is None else folders,
+                                                OPT_SANDBOXED: sandboxed})
 
 
 def protected(mode: ShieldMode) -> tuple[str, ...]:
@@ -148,6 +156,16 @@ def _folders(raw: Any) -> Optional[tuple[str, ...]]:
     return tuple(dict.fromkeys(entry for entry in entries if entry))
 
 
+def _sandboxed(raw: Any) -> Optional[tuple[str, ...]]:
+    """Agent ids from the catalogue that have a command-line launcher; None for anything else."""
+    from ...kernel.agent_hosts import BY_ID
+    if not isinstance(raw, list) or len(raw) > len(BY_ID):
+        return None
+    if any(not isinstance(item, str) or item not in BY_ID or not BY_ID[item].commands or item == "windsurf" for item in raw):
+        return None
+    return tuple(dict.fromkeys(raw))
+
+
 def from_entry(entry: Mapping[str, Any]) -> ShieldMode:
     """The mode as the ``blackbox`` config entry states it (defaults when absent or invalid)."""
     shields = entry.get("shields")
@@ -155,7 +173,7 @@ def from_entry(entry: Mapping[str, Any]) -> ShieldMode:
     section = section if isinstance(section, Mapping) else {}
     chosen = _folders(section.get(OPT_FOLDERS)) if OPT_FOLDERS in section else None
     return build(enabled=section.get("enabled") is True, protected=_items(section.get(OPT_PROTECTED)) or (),
-                 folders=chosen)
+                 folders=chosen, sandboxed=_sandboxed(section.get(OPT_SANDBOXED)) or ())
 
 
 def current() -> ShieldMode:
@@ -196,11 +214,17 @@ def validate(payload: Mapping[str, Any]) -> tuple[str, dict[str, Any], list[str]
                           "home folder, each written from ~/ (for example ~/Downloads)")
         else:
             updates[OPT_FOLDERS] = list(chosen)
+    if OPT_SANDBOXED in raw:
+        chosen = _sandboxed(raw[OPT_SANDBOXED])
+        if chosen is None:
+            errors.append(f"shields.{SHIELD_ID}.sandboxed must list coding agents Blackbox knows (for example claude-code)")
+        else:
+            updates[OPT_SANDBOXED] = list(chosen)
     if errors or not updates:
         return SHIELD_ID, {}, errors
     now = current()
     section = {"enabled": now.enabled, OPT_PROTECTED: list(now.options.get(OPT_PROTECTED, ())),
-               OPT_FOLDERS: list(folders(now)), **updates}
+               OPT_FOLDERS: list(folders(now)), OPT_SANDBOXED: list(now.options.get(OPT_SANDBOXED, ())), **updates}
     return SHIELD_ID, section, []
 
 
@@ -211,7 +235,18 @@ def fields() -> list[SettingField]:
         SettingField(OPT_PROTECTED, "lines", "Protected from every AI agent",
                      "One file or folder per line, from ~/ or /. A folder protects everything inside it. "
                      "Removing one asks you first.", pattern=ITEM_PATTERN),
+        SettingField(OPT_SANDBOXED, "multi-pick", "Run these agents inside the sandbox",
+                     "Blackbox starts the agents you pick inside your Mac's own sandbox, so no program they run can open "
+                     "your protected files either. A sandboxed agent can not use sudo. Taking one off asks you first; "
+                     "a running agent keeps its protection until you restart it.",
+                     options=_agent_options()),
         SettingField(OPT_FOLDERS, "lines", "Folders to watch for new files",
                      f"One per line, written from your home folder (for example ~/Downloads). Up to {MAX_FOLDERS}.",
                      pattern=FOLDER_PATTERN),
     ]
+
+
+def _agent_options() -> tuple[SettingOption, ...]:
+    from ...kernel.agent_hosts import HOSTS
+    return tuple(SettingOption(id=host.id, name=host.name, status="") for host in HOSTS
+                 if host.commands and host.id != "windsurf")

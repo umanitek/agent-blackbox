@@ -11,6 +11,11 @@ Desktop's scan, which used to look every 2 s — are woken at once (:func:`wait_
 FSEvents says what changed, not which program changed it: ``program`` is "" and a person reads
 "a program changed …". Nothing of a file is read: only its path and the kind of change.
 
+``denied`` is the OS sandbox refusing a program (Layer 2, :mod:`.sandbox`): the helper reads the
+kernel's sandbox messages for the protected paths, and here the log names the ``program``. A denial
+inside a protected item is also recorded as a File Shield hit (``files:file-hit`` /
+``files:folder-hit``, agent ``agent-sandbox``) — the same refusal list the hooks fill.
+
 Usage::
 
     changes.record([{"path": "/Users/me/Downloads/x.dmg", "kind": "created", "ts": 1795}], mode)
@@ -34,7 +39,9 @@ from ..json_records import JsonValue, _record_json
 from ..shield_api import ShieldApiError
 from . import mode as mode_module
 
-KINDS = ("created", "modified", "removed", "renamed", "changed")
+KINDS = ("created", "modified", "removed", "renamed", "changed", "denied")
+DENIED = "denied"
+MAX_PROGRAM_CHARS = 64
 MAX_KEPT = 500
 MAX_PER_REPORT = 200
 MAX_PATH_CHARS = 1024
@@ -104,7 +111,7 @@ def _scope(path: str, mode: ShieldMode) -> Optional[tuple[str, str]]:
     return None
 
 
-def _checked(event: Any, now: float) -> tuple[str, str, float]:
+def _checked(event: Any, now: float) -> tuple[str, str, float, str]:
     if not isinstance(event, dict):
         raise ShieldApiError(400, "each file event is an object")
     path, kind = event.get("path"), event.get("kind")
@@ -115,7 +122,10 @@ def _checked(event: Any, now: float) -> tuple[str, str, float]:
     ts = event.get("ts", int(now))
     if type(ts) is not int or not 0 <= ts <= 4_102_444_800:
         raise ShieldApiError(400, "ts must be a whole number of seconds")
-    return path, kind, float(min(ts, now))
+    program = event.get("program", "")
+    if not isinstance(program, str) or len(program) > MAX_PROGRAM_CHARS or "\x00" in program:
+        raise ShieldApiError(400, f"program must be a name of at most {MAX_PROGRAM_CHARS} characters")
+    return path, kind, float(min(ts, now)), program if kind == DENIED else ""
 
 
 def record(events: Sequence[Any], mode: ShieldMode, now: Optional[float] = None) -> list[FileChange]:
@@ -128,17 +138,30 @@ def record(events: Sequence[Any], mode: ShieldMode, now: Optional[float] = None)
     with _cond:
         _load()
         kept: list[FileChange] = []
-        for path, kind, ts in checked:
+        for path, kind, ts, program in checked:
             scope = _scope(path, mode)
-            if scope is None:
+            if scope is None or (kind == DENIED and scope[1] != PROTECTED):
                 continue
             _state["seq"] += 1
-            kept.append(FileChange(seq=_state["seq"], ts=ts, path=path, kind=kind, item=scope[0], scope=scope[1]))
+            kept.append(FileChange(seq=_state["seq"], ts=ts, path=path, kind=kind, item=scope[0], scope=scope[1],
+                                   program=program))
         if kept:
             _state["changes"] = (_state["changes"] + kept)[-MAX_KEPT:]
             _save()
             _cond.notify_all()
-        return kept
+    _record_hits([change for change in kept if change.kind == DENIED])
+    return kept
+
+
+def _record_hits(denials: list[FileChange]) -> None:
+    """Each sandbox refusal as a File Shield hit, in the same local findings the hooks write."""
+    if not denials:
+        return
+    from ... import audit
+    from .protect import SANDBOX_AGENT, sandbox_hit
+    for change in denials:   # one record each: the decision travels in the record's detail
+        audit.record_for(SANDBOX_AGENT, event="sandbox_deny", findings=[sandbox_hit(change.item, change.path, change.program).to_dict()],
+                         detail={"decision": "block", "tool_name": change.program})
 
 
 def since(seq: int) -> tuple[int, list[FileChange]]:

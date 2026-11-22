@@ -5,6 +5,8 @@ per operating system — so a port adds its own and nothing else changes.
 * Python, ``plugins/blackbox/shields/network``: outside ``platform/`` no code names a macOS tool
   (a command in a string the code uses; docstrings and comments may still mention one), and no
   code starts a program (``subprocess``, ``os.system`` and the like).
+* Python, ``plugins/blackbox/shields/files/sandbox`` (File Shield's agent sandbox, Layer 2): the
+  same — ``sandbox-exec`` and every program it starts live in its ``platform/`` modules.
 * Rust, ``plugins/blackbox/helper/src``: outside ``platform/`` no code names a macOS tool. The
   crate's own ``tests/platform_guard.rs`` checks the same under ``cargo test``; this one runs in
   the Python suite, which is where CI's Blackbox lane runs.
@@ -20,6 +22,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 NETWORK = ROOT / "plugins" / "blackbox" / "shields" / "network"
 HELPER_SRC = ROOT / "plugins" / "blackbox" / "helper" / "src"
+FILES_SANDBOX = ROOT / "plugins" / "blackbox" / "shields" / "files" / "sandbox"
 PLATFORM = "platform"
 
 #: macOS tools only a platform/ module may name (matched on a command's program name).
@@ -27,6 +30,7 @@ MACOS_TOOLS = frozenset({
     "pfctl", "networksetup", "launchctl", "scutil", "nettop", "codesign", "spctl", "osascript", "netstat",
     "log", "socketfilterfw", "systemsetup", "fdesetup", "csrutil", "lsof", "ps", "sysadminctl", "plutil",
     "sfltool", "kmutil", "systemextensionsctl", "ipconfig", "route", "defaults", "tailscale", "Tailscale",
+    "sandbox-exec", "pgrep",
 })
 #: Rust: the same tools, as the names or paths code spells them, and the macOS APIs.
 RUST_MACOS_NAMES = (
@@ -106,6 +110,13 @@ def test_network_shield_runs_programs_only_from_its_platform_modules():
     assert len(files) > 20 and (NETWORK / "monitor" / PLATFORM / "macos.py").is_file()
     problems = [f"{path.relative_to(ROOT)}:{problem}" for path in files for problem in python_problems(path.read_text(encoding="utf-8"))]
     assert not problems, "move these into a platform/ module (monitor/platform/macos.py):\n" + "\n".join(problems)
+
+
+def test_file_shields_agent_sandbox_runs_programs_only_from_its_platform_modules():
+    files = _outside_platform(FILES_SANDBOX, "*.py")
+    assert len(files) >= 2 and (FILES_SANDBOX / PLATFORM / "macos.py").is_file()
+    problems = [f"{path.relative_to(ROOT)}:{problem}" for path in files for problem in python_problems(path.read_text(encoding="utf-8"))]
+    assert not problems, "move these into shields/files/sandbox/platform/macos.py:\n" + "\n".join(problems)
 
 
 def test_the_helper_names_macos_tools_only_under_src_platform():

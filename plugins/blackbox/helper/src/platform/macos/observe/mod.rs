@@ -17,6 +17,7 @@ pub mod persistence;
 pub mod posture;
 pub mod remote;
 pub mod remote_procs;
+pub mod sandbox_denials;
 pub mod tamper;
 pub mod watch;
 

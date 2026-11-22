@@ -31,9 +31,32 @@ This is **Layer 1**: Blackbox's guard, which sees every tool call an agent makes
 see: a program an agent wrote or downloaded, and then runs, opens files without naming them in a
 tool call. Layer 1 cannot tell which files such a program opens.
 
-Only the operating system can see every file a process opens: an operating-system sandbox
-around each agent, or the operating system's own file checks. Blackbox does not use either today,
-so treat Layer 1 as a strong guard on what agents do through their tools — not as a vault.
+Only the operating system can see every file a process opens. That is **Layer 2**, the agent
+sandbox, for the coding agents you pick (macOS today):
+
+- Blackbox writes a launcher for each agent you pick (`claude`, `codex`, `cursor-agent`, `gemini`,
+  `copilot`, `cline`, `opencode`) and puts its folder first on your PATH (one marked block at the
+  end of `~/.zshrc`, and `~/.bashrc` / `~/.bash_profile` when you have them). Starting the agent
+  from a terminal then starts it inside macOS's own sandbox, built from your protected list.
+- Inside it, nothing the agent starts — a script, a program it compiled, Python, a shell — can
+  open, copy, list, change, move, link or delete a protected item, or rename a folder above one,
+  or change Blackbox itself. The kernel refuses it; no hook is needed and none can be skipped.
+  Each refusal is shown with the program's name and counts as a File Shield hit.
+- Cursor and Windsurf can be opened inside the sandbox from File Shield's page ("Open protected";
+  quit the editor first).
+- The dashboard shows, per agent session, whether it ran inside the sandbox — proven by a file
+  only a sandboxed process can not read, so it can not be faked.
+
+What Layer 2 can not do, plainly:
+
+- An agent started another way (a full path, an IDE that starts it itself) is not inside — it keeps
+  Layer 1.
+- A sandboxed agent can not run `sudo` (no sandbox can run setuid programs) — that is why you pick
+  agents one by one.
+- It does not stop an agent driving another app with AppleEvents (`osascript`): that app does the
+  work outside the sandbox.
+- A running agent keeps the protection it started with; restart it after you change the list.
+- Linux and Windows: not yet (Layer 1 only there).
 
 ## Setting
 
@@ -46,6 +69,7 @@ plugins:
           enabled: true
           protected: ["~/Documents/Taxes", "~/.config/my-app/token.json"]
           folders: ["~/Downloads"]
+          sandboxed: ["claude-code", "codex"]   # Layer 2 — taking one off asks you first
 ```
 
 The whole disk, your whole home folder and the folders that hold every user (`/Users`) cannot be
@@ -53,6 +77,7 @@ protected: that would stop every agent from working at all.
 
 ## Endpoints
 
-`/api/shields/file-shield/api/<name>` — reads `protected`, `hits`, `changes`, `watch-plan` (signed,
-for the helper); writes `protect`, `unprotect` (held for your approval), `file-report` (the helper's,
-signed).
+`/api/shields/file-shield/api/<name>` — reads `protected`, `hits`, `changes`, `sandbox` (which agents
+are sandboxed, their launchers, the editors that can be opened inside), `watch-plan` (signed, for
+the helper); writes `protect`, `unprotect` (held for your approval), `open-protected`
+(`{"app": "cursor"}`), `file-report` (the helper's, signed — including the sandbox's refusals).

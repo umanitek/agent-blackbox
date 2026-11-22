@@ -6,6 +6,8 @@
 //!   whether to watch and which absolute paths (every protected item and watched folder);
 //! * an FSEvents stream over the paths that exist ([`super::observe::file_watch`]), started again
 //!   when the set changes;
+//! * beside it, the kernel sandbox's refusals for the same paths, read from the system log
+//!   ([`super::observe::sandbox_denials`]) — File Shield Layer 2 — reported the same way (`denied`);
 //! * each change, batched for [`BATCH`] (FSEvents delivers in bursts), `POST …/file-report`,
 //!   signed — so the person sees it within about a second.
 //!
@@ -21,6 +23,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::observe::file_watch::{Change, Watch};
+use super::observe::sandbox_denials::Denials;
 
 const PLAN_PATH: &str = "/api/shields/file-shield/api/watch-plan";
 const REPORT_PATH: &str = "/api/shields/file-shield/api/file-report";
@@ -63,7 +66,13 @@ fn now() -> u64 {
 /// One report's body: each change with its time, at most [`MAX_EVENTS`] (the rest wait for the next).
 pub fn report(changes: &mut Vec<Change>, at: u64) -> Value {
     let taken: Vec<Change> = changes.drain(..changes.len().min(MAX_EVENTS)).collect();
-    json!({"at": at, "events": taken.iter().map(|c| json!({"path": c.path, "kind": c.kind, "ts": at})).collect::<Vec<_>>()})
+    json!({"at": at, "events": taken.iter().map(|c| {
+        let mut event = json!({"path": c.path, "kind": c.kind, "ts": at});
+        if !c.program.is_empty() {
+            event["program"] = json!(c.program);
+        }
+        event
+    }).collect::<Vec<_>>()})
 }
 
 /// The loop (started by the helper; runs until the process ends).
@@ -71,7 +80,8 @@ pub fn run() {
     let Ok(mut link) = crate::link::Link::new(Path::new(super::HOME)) else { return };
     let mut plan = WatchPlan::default();
     let mut watching: Vec<String> = vec![];
-    let mut stream: Option<(Watch, Receiver<Change>)> = None;
+    // The FSEvents watch and the sandbox's denials feed one channel; either may fail to start alone.
+    let mut stream: Option<(Option<Watch>, Option<Denials>, Receiver<Change>)> = None;
     let mut pending: Vec<Change> = vec![];
     let mut last_plan: Option<Instant> = None;
     loop {
@@ -86,11 +96,15 @@ pub fn run() {
                 watching = wanted;
                 if !watching.is_empty() {
                     let (sender, receiver) = channel();
-                    stream = Watch::start(&watching, sender).map(|watch| (watch, receiver));
+                    let denials = Denials::start(&watching, sender.clone());
+                    let watch = Watch::start(&watching, sender);
+                    if watch.is_some() || denials.is_some() {
+                        stream = Some((watch, denials, receiver));
+                    }
                 }
             }
         }
-        let Some((_, receiver)) = &stream else {
+        let Some((_, _, receiver)) = &stream else {
             std::thread::sleep(PLAN_EVERY);
             continue;
         };
@@ -141,10 +155,12 @@ mod tests {
 
     #[test]
     fn a_report_carries_at_most_the_plugins_limit_and_keeps_the_rest() {
-        let mut changes: Vec<Change> = (0..250).map(|i| Change { path: format!("/p/{i}"), kind: "created" }).collect();
+        let mut changes: Vec<Change> = (0..250).map(|i| Change { path: format!("/p/{i}"), kind: "created", program: String::new() }).collect();
         let body = report(&mut changes, 7);
         assert_eq!(body["events"].as_array().unwrap().len(), MAX_EVENTS);
         assert_eq!(body["events"][0], json!({"path": "/p/0", "kind": "created", "ts": 7}));
         assert_eq!(changes.len(), 50);
+        let mut denied = vec![Change { path: "/p/x".into(), kind: "denied", program: "cat".into() }];
+        assert_eq!(report(&mut denied, 8)["events"][0], json!({"path": "/p/x", "kind": "denied", "ts": 8, "program": "cat"}));
     }
 }

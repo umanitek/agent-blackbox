@@ -103,3 +103,8 @@ def _remove_agent_hooks(plan: UninstallPlan, report: list[str]) -> None:
     for folder in plan.addons:
         shutil.rmtree(folder, ignore_errors=True)
         report.append(f"removed the add-on {folder}")
+    # File Shield's agent sandbox put its launcher folder first on PATH (kernel.shell_path); the
+    # folder goes with Blackbox's home, so the PATH lines go too.
+    from ..kernel import shell_path
+    for changed in shell_path.remove():
+        report.append(f"took Blackbox's agent launchers off PATH in {changed}")

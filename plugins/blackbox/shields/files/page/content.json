@@ -1,6 +1,6 @@
 {
  "about": "File Shield page prose: what it does, and how far its protection reaches today. The page loads this file and renders it as given.",
- "version": "Beta \u00b7 2026-11-21",
+ "version": "Beta \u00b7 2026-11-22",
  "can": [
   [
    "Every agent",
@@ -13,12 +13,20 @@
   [
    "In every mode",
    "Audit mode too: it is your own explicit rule"
+  ],
+  [
+   "Inside the sandbox (agents you pick)",
+   "a coding agent you pick starts inside your Mac's own sandbox: no script, program or interpreter it runs can open, copy, change, move or delete a protected item, or change Blackbox \u2014 the kernel refuses it"
   ]
  ],
  "cannot": [
   [
-   "What this layer cannot see",
-   "a program an agent wrote or downloaded and then runs opens files without naming them in a tool call, so this layer cannot see which files it opens"
+   "What the hooks alone cannot see",
+   "a program an agent wrote or downloaded and then runs opens files without naming them in a tool call \u2014 only an agent inside the sandbox is stopped there"
+  ],
+  [
+   "What the sandbox does not cover",
+   "an agent started another way (a full path, an editor that starts it itself), an agent driving another app with AppleEvents, and sudo (a sandboxed agent can not use it); Linux and Windows are not sandboxed yet"
   ]
  ],
  "coming": []

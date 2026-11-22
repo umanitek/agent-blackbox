@@ -16,9 +16,9 @@ folder (or a file inside it). A prompt that NAMES a protected item is ``files:pr
 (high, flagged, never blocking): naming is not touching, and no prompt text is kept.
 
 **Limits, said plainly:** this is Layer 1 (hooks). A program an agent wrote or downloaded and then
-runs reads files without telling a hook what it opens. Only the operating system sees that (an
-OS sandbox around each agent, or the OS's own file checks); Blackbox uses neither today
-(docs/file-shield.md).
+runs reads files without telling a hook what it opens. Only the operating system sees that: an
+agent the person puts in the sandbox (Layer 2, :mod:`.sandbox`) is stopped there by the kernel;
+any other agent keeps this layer only (docs/file-shield.md).
 
 **Undo:** refuses only while File Shield is on and the item is on the list; it never moves,
 deletes or changes a file.
@@ -47,7 +47,9 @@ FINDING_KINDS: tuple[FindingKind, ...] = (
 )
 #: What each route is called in the finding, for a person.
 ROUTES = {"read": "open", "copy": "copy", "write": "change", "name": "use", "tree": "reach (through its folder)",
-          "mention": "ask for"}
+          "mention": "ask for", "sandbox": "reach from inside the sandbox"}
+#: The agent named on a refusal the OS sandbox made (Layer 2): the log names the program, not the agent.
+SANDBOX_AGENT = "agent-sandbox"
 
 
 def is_folder(item: str) -> bool:
@@ -75,6 +77,20 @@ def detect(tool_name: str, args: Any, mode: ShieldMode) -> list[Finding]:
             confirmed=False, source="custom",
             fields={"path": touch.path[:400], "item": touch.pattern, "route": touch.mode, "kind": what})]
     return []
+
+
+def sandbox_hit(item: str, path: str, program: str) -> Finding:
+    """The finding for a refusal the OS sandbox made (Layer 2): a program an agent started tried to
+    reach *path* inside the protected *item*; the system log names the *program*. Blocked by the
+    kernel already — the finding records it, like a hook refusal."""
+    folder = is_folder(item)
+    what = "folder" if folder else "file"
+    return Finding(
+        identifier=FOLDER_HIT_ID if folder else FILE_HIT_ID, category=CATEGORY, severity="critical",
+        title=f"File Shield: the sandbox stopped {program or 'a program'} reaching your protected {what} {item}",
+        tool_name=(program or "program")[:64], matched=PERSON_PROTECTED,
+        evidence=f"sandbox {path} — protected {what} {item}"[:400], confirmed=False, source="custom",
+        fields={"path": path[:400], "item": item, "route": "sandbox", "kind": what, "program": program[:64]})
 
 
 def prompt_check(text: str, mode: ShieldMode) -> list[Finding]:

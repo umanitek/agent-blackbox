@@ -32,6 +32,7 @@ import re
 import stat
 import sys
 import urllib.request
+from pathlib import Path
 
 #: The most of stdin read (a write tool's whole file can be in the payload).
 MAX_INPUT_BYTES = 1024 * 1024
@@ -194,11 +195,28 @@ def _session(payload: dict) -> str:
     return str(value or "")[:200]
 
 
+#: File Shield's sandbox canary (``shields/files/sandbox``): beside this runner's folder in Blackbox's home.
+CANARY = Path(__file__).resolve().parent.parent / "sandbox" / "canary"
+
+
+def sandboxed() -> bool:
+    """True when this hook (so the agent that started it) runs inside Blackbox's OS sandbox: only a
+    sandboxed process is refused the canary — a variable could be faked, the kernel's refusal can not."""
+    try:
+        with open(CANARY, encoding="utf-8-sig") as handle:
+            handle.read(1)
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+
+
 def summary(agent: str, event: str, payload: dict) -> dict:
     """The one shape the dashboard checks: the tool call, and the TEXT to check for injection (a
     prompt, a tool's output, a file about to be read). The text is checked, never recorded."""
     body = {"agent": agent, "event": event, "session": _session(payload),
-            "cwd": str(_first(payload, "cwd", "workspace", "workspaceRoot") or "")[:500]}
+            "cwd": str(_first(payload, "cwd", "workspace", "workspaceRoot") or "")[:500], "sandboxed": sandboxed()}
     if event in ("pre_tool", "post_tool"):
         body["tool_name"], body["args"] = _tool(agent, payload)
         call = _first(payload, "tool_use_id", "toolCallId", "callID", "call_id", "execution_id")

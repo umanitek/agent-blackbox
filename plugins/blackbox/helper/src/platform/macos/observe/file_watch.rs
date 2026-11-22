@@ -24,12 +24,14 @@ extern "C" {
     fn bb_fs_watch_stop(handle: *mut c_void);
 }
 
-/// One change FSEvents reported: the absolute *path* and what happened (*kind*: created, removed,
-/// renamed, modified or changed).
+/// One change: the absolute *path* and what happened (*kind*: created, removed, renamed, modified
+/// or changed from FSEvents; `denied` from the sandbox's log, [`super::sandbox_denials`]). *program*
+/// is the program the log names for a denial ("" from FSEvents, which can not say).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Change {
     pub path: String,
     pub kind: &'static str,
+    pub program: String,
 }
 
 /// What a set of FSEvents flags says happened (the most telling first).
@@ -62,7 +64,7 @@ extern "C" fn bb_fs_event(path: *const c_char, flags: u32, context: *mut c_void)
     let context = unsafe { &*(context as *const Context) };
     let path = unsafe { CStr::from_ptr(path) }.to_string_lossy().into_owned();
     if let Ok(sender) = context.sender.lock() {
-        let _ = sender.send(Change { path, kind: kind_of(flags) });
+        let _ = sender.send(Change { path, kind: kind_of(flags), program: String::new() });
     }
 }
 

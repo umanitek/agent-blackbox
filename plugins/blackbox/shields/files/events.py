@@ -19,7 +19,7 @@ from typing import Any
 from ... import audit
 from ..contract import EventFact, SessionSummary, ShieldEvent
 from . import changes
-from .protect import FILE_HIT_ID, FOLDER_HIT_ID, MENTION_ID, ROUTES
+from .protect import FILE_HIT_ID, FOLDER_HIT_ID, MENTION_ID, ROUTES, SANDBOX_AGENT
 
 FINDINGS_SCANNED = 500
 MAX_EVENTS = 100
@@ -54,6 +54,8 @@ def _hit_event(row: dict[str, Any]) -> ShieldEvent:
 
 
 def _change_event(change: changes.FileChange) -> ShieldEvent:
+    if change.kind == changes.DENIED:
+        return _denial_event(change)
     protected = change.scope == changes.PROTECTED
     title = (f"A program {change.kind} {change.path} — inside protected {change.item}" if protected
              else f"New file activity in {change.item}: {change.kind} {change.path}")
@@ -69,13 +71,27 @@ def _change_event(change: changes.FileChange) -> ShieldEvent:
     )
 
 
+def _denial_event(change: changes.FileChange) -> ShieldEvent:
+    program = change.program or "A program"
+    return ShieldEvent(
+        ts=change.ts, identifier="files:sandbox-denied", title=f"The sandbox stopped {program} reaching {change.path}",
+        severity="critical", outcome="blocked", tool="", command="", asked="", logo="", session=NO_SESSION,
+        story=(f"<b>{escape(program)}</b>, started inside Blackbox's agent sandbox, tried to reach "
+               f"<b>{escape(change.path)}</b>, inside <b>{escape(change.item)}</b>, which you protected. "
+               "macOS refused it."),
+        what_to_do=("If an agent you trust needs it, remove it from File Shield's protected list (Blackbox asks you first).",),
+        facts=(EventFact("Path", change.path, mono=True), EventFact("Program", program)),
+    )
+
+
 def report() -> list[ShieldEvent]:
     """Every event of the shield, newest first (fail-open: empty parts when a source is unreadable)."""
     try:
         findings = audit.read_findings(limit=FINDINGS_SCANNED)
     except Exception:   # health: allow BLE001 -- the events window never breaks on a bad log
         findings = []
-    events = [_hit_event(row) for row in findings if row.get("identifier") in HIT_IDS]
+    # A sandbox refusal is shown once, from its change (it names the program); its hit row is for counts.
+    events = [_hit_event(row) for row in findings if row.get("identifier") in HIT_IDS and row.get("framework") != SANDBOX_AGENT]
     events += [_change_event(change) for change in changes.recent(MAX_EVENTS)]
     return sorted(events, key=lambda event: -event.ts)[:MAX_EVENTS]
 

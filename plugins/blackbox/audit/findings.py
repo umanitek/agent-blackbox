@@ -100,6 +100,8 @@ def _flatten_finding_row(rec: dict[str, Any], default_fw: str) -> dict[str, Any]
         "source": finding.get("source") or ("public" if is_confirmed(finding) else "heuristic"),
         # What the hook did with it: "block" | "flag" ("" for rows older than KI-189).
         "decision": str(detail.get("decision") or ""),
+        # A local rule's own fields (the person's protected item, path, route) — see _finding_summary.
+        "fields": finding.get("fields") if isinstance(finding.get("fields"), dict) else {},
         # Which agent of an OpenClaw profile acted ("" for Hermes rows: the workspace is the agent).
         "agent": str(detail.get("agent") or "")[:120],
         # Local-only conversation snapshot (redacted upstream).
@@ -296,7 +298,19 @@ def _finding_summary(finding: dict[str, Any]) -> dict[str, Any]:
         "sighting": {str(k)[:64]: str(v)[:128] for k, v in (finding.get("sighting") or {}).items()},
         # Where an injection was met — a closed word (constants.INJECTION_CONTEXTS), never content.
         "found_in": _found_in(finding),
+        # A rule of the person's own (source "custom": File Shield, protected paths) is never shared;
+        # its fields (the item, path and route) are what the hits list shows, so they are kept,
+        # redacted and bounded. Every other finding keeps none (unchanged).
+        **({"fields": _local_fields(finding)} if finding.get("source") == "custom" else {}),
     }
+
+
+def _local_fields(finding: dict[str, Any]) -> dict[str, str]:
+    fields = finding.get("fields")
+    if not isinstance(fields, dict):
+        return {}
+    return {str(key)[:32]: redaction.sanitize_text(str(value), 400) for key, value in list(fields.items())[:8]
+            if isinstance(value, (str, int, float, bool))}
 
 
 def _found_in(finding: dict[str, Any]) -> str:

@@ -6,14 +6,19 @@ Reads (GET):
   whether it exists, and how many times an agent was refused on it;
 * ``hits`` — the newest refusals (``?limit=``, at most 200);
 * ``changes`` — the helper's real-time changes after ``?since=<seq>`` (Blackbox Desktop follows these);
-* ``watch-plan`` — what the system protection helper watches, SIGNED for its nonce (helper_link).
+* ``watch-plan`` — what the system protection helper watches, SIGNED for its nonce (helper_link);
+* ``sandbox`` — Layer 2: which agents run inside the OS sandbox, whether their launchers are in
+  place, and the GUI editors that can be opened inside it (:mod:`.sandbox`).
 
 Writes (POST):
 
 * ``protect`` ``{"path": "~/Documents/Taxes"}`` — adds an item at once (stricter, never asks);
 * ``unprotect`` ``{"path": …}`` — removes one: turns protection DOWN, so the core's approvals gate
   holds it for the person (:data:`API` ``weakening``);
-* ``file-report`` — the helper's signed real-time changes (:mod:`.changes`).
+* ``file-report`` — the helper's signed real-time changes (:mod:`.changes`), including the
+  sandbox's refusals the helper reads from the system log;
+* ``open-protected`` ``{"app": "cursor"}`` — relaunches a GUI editor inside the sandbox (stricter,
+  never asks).
 
 Every write goes through the ONE settings writer (``kernel.settings.write_settings``) with File
 Shield's own validator — never a second path into the config.
@@ -27,7 +32,7 @@ from typing import Any, Mapping
 from ...kernel.settings import write_settings
 from .. import helper_link
 from ..shield_api import ShieldApi, ShieldApiError, ShieldContext
-from . import changes, events, mode as mode_module
+from . import changes, events, mode as mode_module, sandbox
 from .protect import is_folder
 
 MAX_HITS = 200
@@ -45,7 +50,16 @@ def _write(items: list[str]) -> dict[str, Any]:
                             validators=(mode_module.validate,))
     if not result.get("ok"):
         raise ShieldApiError(400, "; ".join(result.get("errors") or ["File Shield's list could not be saved"]))
+    _sync_sandbox()
     return protected_view(None)
+
+
+def _sync_sandbox() -> dict[str, Any]:
+    """The sandbox profile and launchers made to match the setting (fail-open: never breaks a read)."""
+    try:
+        return sandbox.sync()
+    except Exception as error:   # health: allow BLE001 -- the sandbox is Layer 2; Layer 1 still refuses
+        return {"unavailable": f"The agent sandbox could not be updated: {type(error).__name__}"}
 
 
 def _stored() -> list[str]:
@@ -102,8 +116,24 @@ def changes_view(_context: ShieldContext, params: Mapping[str, str]) -> dict[str
     return {"seq": seq, "changes": [change.as_json() for change in new[-changes.MAX_KEPT:]]}
 
 
+def sandbox_view(_context: ShieldContext, _params: Mapping[str, str]) -> dict[str, Any]:
+    return _sync_sandbox()
+
+
+def open_protected(_context: ShieldContext, body: Mapping[str, Any]) -> dict[str, Any]:
+    app = str(body.get("app") or "")
+    try:
+        return {"message": sandbox.open_app(app)}
+    except ValueError:
+        raise ShieldApiError(400, "Name an editor Blackbox can open inside its sandbox: cursor or windsurf.")
+    except (LookupError, RuntimeError) as error:
+        raise ShieldApiError(409, str(error))
+
+
 def watch_plan(_context: ShieldContext, params: Mapping[str, str]) -> Any:
-    """What the helper watches in real time, signed for its nonce (a keyed helper obeys nothing else)."""
+    """What the helper watches in real time, signed for its nonce (a keyed helper obeys nothing else).
+    Every poll (about every 2 s) also brings the sandbox profile up to date with the list."""
+    _sync_sandbox()
     current = mode_module.current()
     return helper_link.signed({"watch": current.enabled, "paths": list(mode_module.watch_paths(current))}, params)
 
@@ -118,7 +148,8 @@ def file_report(context: ShieldContext, body: Mapping[str, Any]) -> dict[str, An
 
 
 API = ShieldApi(
-    reads={"protected": protected_view, "hits": hits, "changes": changes_view, "watch-plan": watch_plan},
-    writes={"protect": protect, "unprotect": unprotect, "file-report": file_report},
+    reads={"protected": protected_view, "hits": hits, "changes": changes_view, "watch-plan": watch_plan,
+           "sandbox": sandbox_view},
+    writes={"protect": protect, "unprotect": unprotect, "file-report": file_report, "open-protected": open_protected},
     weakening={"unprotect": unprotect_weakens},
 )

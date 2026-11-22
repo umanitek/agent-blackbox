@@ -37,6 +37,7 @@ from .paths.protected import PathTouch, mentions as protected_path_mentions, tou
 #: off (its self-protection) and an agent touching what the person protected (File Shield).
 ALWAYS_BLOCKED_MATCHES = frozenset({GUARD_TAMPER, PERSON_PROTECTED})
 from .paths.guard_settings import detect_guard_tamper
+from .paths.guard_secrets import builtin_patterns as blackbox_key_patterns
 from .detectors import (
     ANSWERED_BY_FALLBACK,
     Finding,
@@ -78,6 +79,7 @@ __all__ = [
                              'Finding',
                              'PathTouch',
                              'advisory_kind',
+                             'blackbox_key_patterns',
                              'cmd_setup_llm',
                              'command_from_args',
                              'detect_all',

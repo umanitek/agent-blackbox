@@ -92,7 +92,8 @@ def validate(body: Any) -> dict[str, Any]:
         raise ValueError("text must be a string")
     return {"agent": agent, "event": event, "session": _text(body.get("session"), 200), "cwd": _text(body.get("cwd")),
             "tool_name": tool_name, "args": body.get("args"), "tool_call_id": _text(body.get("tool_call_id"), 200),
-            "prompt_chars": chars if isinstance(chars, int) and chars >= 0 else 0, "text": text[:MAX_CHECK_TEXT]}
+            "prompt_chars": chars if isinstance(chars, int) and chars >= 0 else 0, "text": text[:MAX_CHECK_TEXT],
+            "sandboxed": body.get("sandboxed") is True}
 
 
 def _merge(verdicts: list[Mapping[str, Any]]) -> dict[str, Any]:
@@ -148,6 +149,8 @@ def _remember(event: Mapping[str, Any], session: str, verdict: Mapping[str, Any]
         row["blocked"] += verdict.get("decision") == "block"
         row["folder"] = (event["cwd"].rstrip("/").rsplit("/", 1)[-1] or row["folder"])[:120]
         row["ended"] = event["event"] == "stop" or (row.get("ended", False) and event["event"] == "turn_end")
+        # Inside File Shield's OS sandbox (the runner proved it with the canary): once seen, the session is.
+        row["sandboxed"] = bool(row.get("sandboxed")) or event.get("sandboxed") is True
         for old in sorted(sessions, key=lambda key: sessions[key].get("last", 0))[:-MAX_SESSIONS]:
             sessions.pop(old)
         write_state(state)

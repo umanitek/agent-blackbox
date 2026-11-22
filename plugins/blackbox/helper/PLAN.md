@@ -73,9 +73,12 @@ unreachable plugin keeps the last plan.
 
 Report — `POST /api/shields/file-shield/api/file-report`, signed like every report, within about a
 second of a change (changes are gathered for 300 ms): `{"at": <unix s>, "events": [{"path": "/abs",
-"kind": "created|removed|renamed|modified|changed", "ts": <unix s>}, …]}`, at most 200 events. The
-plugin keeps only changes inside its current items and folders. FSEvents cannot say which program
-made a change, and the helper never reads a file.
+"kind": "created|removed|renamed|modified|changed|denied", "ts": <unix s>, "program": "<name>"}, …]}`,
+at most 200 events. `denied` is the kernel sandbox refusing a program (File Shield Layer 2): the
+helper reads the sandbox's deny messages for the same paths from the system log
+(`observe/sandbox_denials.rs`), and only a denial carries `program` (≤ 64 characters, the name the
+log gives). The plugin keeps only changes inside its current items and folders (a denial only inside
+a protected item). FSEvents cannot say which program made a change, and the helper never reads a file.
 
 ## Reports
 

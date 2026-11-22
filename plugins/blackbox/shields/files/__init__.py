@@ -9,6 +9,8 @@ mode; every attempt is recorded and shown; protect on demand; unprotecting asks 
 * :mod:`.protect` — inside Blackbox's guard: the refusal (``files:file-hit`` / ``files:folder-hit``)
   and the prompt flag (``files:protected-mention``);
 * :mod:`.changes` — the system protection helper's real-time changes (FSEvents), signed;
+* :mod:`.sandbox` — Layer 2: the coding agents the person picks run inside the OS sandbox built
+  from the list (launchers first on PATH; Cursor/Windsurf opened inside it on request);
 * :mod:`.events` / :mod:`.status` — the events report and the card;
 * :mod:`.api` — its endpoints (``/api/shields/file-shield/api/<name>``);
 * :mod:`.mode` — its setting, ``shields.file-shield``.
