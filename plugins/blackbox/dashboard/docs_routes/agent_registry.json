@@ -55,13 +55,13 @@
     },
     {
      "scope": "project",
-     "where": "<project>/.claude/settings.json and settings.local.json",
+     "where": "PROJECT/.claude/settings.json and settings.local.json",
      "hooked": false,
      "note": "hooks merge across levels, so the user-level hooks still run; a project's disableAllHooks is reported"
     },
     {
      "scope": "command line",
-     "where": "--settings <file-or-json>",
+     "where": "--settings FILE-OR-JSON",
      "hooked": false,
      "note": "cannot remove user hooks, but --settings '{\"disableAllHooks\": true}' switches every hook off for that run: the process then shows as unprotected"
     },
@@ -272,13 +272,13 @@
     },
     {
      "scope": "profile",
-     "where": "--profile <name> → $CODEX_HOME/<name>.config.toml",
+     "where": "--profile NAME → $CODEX_HOME/NAME.config.toml",
      "hooked": true,
      "note": "a config layer over the same home, so the same hooks.json applies"
     },
     {
      "scope": "project",
-     "where": "<project>/.codex/hooks.json (trusted projects only)",
+     "where": "PROJECT/.codex/hooks.json (trusted projects only)",
      "hooked": false,
      "note": "adds hooks; cannot remove the user's"
     },
@@ -449,7 +449,7 @@
     },
     {
      "scope": "project",
-     "where": "<project>/.cursor/hooks.json",
+     "where": "PROJECT/.cursor/hooks.json",
      "hooked": false,
      "note": "all sources run and a deny from any wins, so the user hooks still decide"
     },
@@ -629,7 +629,7 @@
     },
     {
      "scope": "project",
-     "where": "<project>/.gemini/settings.json",
+     "where": "PROJECT/.gemini/settings.json",
      "hooked": false,
      "note": "hook lists are joined, not replaced; hooksConfig.enabled = false there switches hooks off: reported"
     },
@@ -759,7 +759,7 @@
     },
     {
      "scope": "repository",
-     "where": "<repo>/.github/hooks/*.json",
+     "where": "REPO/.github/hooks/*.json",
      "hooked": false,
      "note": "adds hooks; the only source in a cloud agent job"
     }
@@ -990,7 +990,7 @@
     },
     {
      "scope": "project",
-     "where": "<project>/.devin/hooks.v1.json, .devin/config.json, .claude/settings.json",
+     "where": "PROJECT/.devin/hooks.v1.json, .devin/config.json, .claude/settings.json",
      "hooked": false,
      "note": "adds hooks"
     }
@@ -1107,7 +1107,7 @@
    "scopes": [
     {
      "scope": "user, script hooks",
-     "where": "~/Documents/Cline/Hooks/<Event>",
+     "where": "~/Documents/Cline/Hooks/EVENT",
      "hooked": true,
      "note": "the surface Blackbox was written against (2026-11-21)"
     },
@@ -1218,7 +1218,7 @@
     },
     {
      "scope": "project",
-     "where": "<project>/.opencode/plugins/",
+     "where": "PROJECT/.opencode/plugins/",
      "hooked": false,
      "note": "adds plugins"
     }

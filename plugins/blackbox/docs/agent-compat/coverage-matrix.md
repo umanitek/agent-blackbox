@@ -36,8 +36,8 @@ One `claude` process per session (a native binary). Sub-agents (the Agent tool),
 |---|---|---|---|
 | user | `~/.claude/settings.json` | yes |  |
 | another config home | `$CLAUDE_CONFIG_DIR/settings.json` | yes | found from a hook event, a running process or the environment, then hooked |
-| project | `<project>/.claude/settings.json and settings.local.json` | no | hooks merge across levels, so the user-level hooks still run; a project's disableAllHooks is reported |
-| command line | `--settings <file-or-json>` | no | cannot remove user hooks, but --settings '{"disableAllHooks": true}' switches every hook off for that run: the process then shows as unprotected |
+| project | `PROJECT/.claude/settings.json and settings.local.json` | no | hooks merge across levels, so the user-level hooks still run; a project's disableAllHooks is reported |
+| command line | `--settings FILE-OR-JSON` | no | cannot remove user hooks, but --settings '{"disableAllHooks": true}' switches every hook off for that run: the process then shows as unprotected |
 | managed | `managed-settings.json, MDM or server-managed` | no | allowManagedHooksOnly blocks Blackbox's hooks: reported |
 
 | Launch mode | How | Hooks run | Note |
@@ -93,8 +93,8 @@ One `codex` process per session (CLI or `codex exec`); the desktop app and IDE e
 | Scope | Where | Blackbox's hooks there | Note |
 |---|---|---|---|
 | user | `$CODEX_HOME/hooks.json` | yes | Codex runs a new or changed hook only after the person trusts it once (/hooks): shown as trust-required |
-| profile | `--profile <name> → $CODEX_HOME/<name>.config.toml` | yes | a config layer over the same home, so the same hooks.json applies |
-| project | `<project>/.codex/hooks.json (trusted projects only)` | no | adds hooks; cannot remove the user's |
+| profile | `--profile NAME → $CODEX_HOME/NAME.config.toml` | yes | a config layer over the same home, so the same hooks.json applies |
+| project | `PROJECT/.codex/hooks.json (trusted projects only)` | no | adds hooks; cannot remove the user's |
 | system / managed | `/etc/codex/hooks.json, requirements.toml` | no | allow_managed_hooks_only skips Blackbox's hooks; [features].hooks = false switches hooks off: both reported |
 
 | Launch mode | How | Hooks run | Note |
@@ -146,7 +146,7 @@ The Cursor app (Electron) runs agent chats inside its own processes; `cursor-age
 | Scope | Where | Blackbox's hooks there | Note |
 |---|---|---|---|
 | user | `~/.cursor/hooks.json` | yes |  |
-| project | `<project>/.cursor/hooks.json` | no | all sources run and a deny from any wins, so the user hooks still decide |
+| project | `PROJECT/.cursor/hooks.json` | no | all sources run and a deny from any wins, so the user hooks still decide |
 | enterprise / team | `/Library/Application Support/Cursor/hooks.json, dashboard` | no | run before the user's; cannot remove them |
 
 | Launch mode | How | Hooks run | Note |
@@ -199,7 +199,7 @@ One `gemini` process (Node) per session; `gemini -p` runs headless. Sub-agents r
 |---|---|---|---|
 | user | `~/.gemini/settings.json` | yes |  |
 | another home | `$GEMINI_CLI_HOME/.gemini/settings.json` | yes |  |
-| project | `<project>/.gemini/settings.json` | no | hook lists are joined, not replaced; hooksConfig.enabled = false there switches hooks off: reported |
+| project | `PROJECT/.gemini/settings.json` | no | hook lists are joined, not replaced; hooksConfig.enabled = false there switches hooks off: reported |
 | system | `system settings.json and system-defaults.json` | no | read-only for Blackbox |
 
 | Launch mode | How | Hooks run | Note |
@@ -243,7 +243,7 @@ One `copilot` process per session. Sub-agents run inside it. The Copilot cloud a
 | Scope | Where | Blackbox's hooks there | Note |
 |---|---|---|---|
 | user | `$COPILOT_HOME/hooks/blackbox.json` | yes |  |
-| repository | `<repo>/.github/hooks/*.json` | no | adds hooks; the only source in a cloud agent job |
+| repository | `REPO/.github/hooks/*.json` | no | adds hooks; the only source in a cloud agent job |
 
 | Launch mode | How | Hooks run | Note |
 |---|---|---|---|
@@ -327,7 +327,7 @@ One `devin` process per CLI session; Devin Local is the desktop app. Sub-agents 
 |---|---|---|---|
 | user | `~/.config/devin/config.json` | yes |  |
 | Claude Code's files | `~/.claude/settings.json, ~/.claude.json` | yes | Devin reads them by default (read_config_from.claude); such an event is counted as Devin's, once |
-| project | `<project>/.devin/hooks.v1.json, .devin/config.json, .claude/settings.json` | no | adds hooks |
+| project | `PROJECT/.devin/hooks.v1.json, .devin/config.json, .claude/settings.json` | no | adds hooks |
 
 | Launch mode | How | Hooks run | Note |
 |---|---|---|---|
@@ -368,7 +368,7 @@ The VS Code extension and the `cline` CLI; sub-agents run inside the session.
 
 | Scope | Where | Blackbox's hooks there | Note |
 |---|---|---|---|
-| user, script hooks | `~/Documents/Cline/Hooks/<Event>` | yes | the surface Blackbox was written against (2026-11-21) |
+| user, script hooks | `~/Documents/Cline/Hooks/EVENT` | yes | the surface Blackbox was written against (2026-11-21) |
 | user, plugins | `~/.cline/plugins` | no | on 2026-11-22 Cline's Hooks page points to SDK plugins (beforeTool / afterTool / beforeRun / afterRun). Blackbox has no plugin for it yet |
 
 | Launch mode | How | Hooks run | Note |
@@ -408,7 +408,7 @@ One `opencode` process (TUI) or `opencode serve`; agents and sub-agents run insi
 | Scope | Where | Blackbox's hooks there | Note |
 |---|---|---|---|
 | user | `~/.config/opencode/plugin/blackbox.js` | yes | a V1 plugin (tool.execute.before / after). V2 still discovers the plugin/ folder but, per the migration guide, V1 plugin code does not run in V2 |
-| project | `<project>/.opencode/plugins/` | no | adds plugins |
+| project | `PROJECT/.opencode/plugins/` | no | adds plugins |
 
 | Launch mode | How | Hooks run | Note |
 |---|---|---|---|
