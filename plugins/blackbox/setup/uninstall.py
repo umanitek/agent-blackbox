@@ -140,8 +140,7 @@ def build_plan(*, purge: bool, keep_logs: bool, now: Optional[_dt.datetime] = No
     helper = system_helper.BINARY if system == "Darwin" and (
         system_helper.BINARY.exists() or system_helper.LAUNCH_DAEMON.exists()) else None
     from .. import agent_hooks   # agent_hooks' public entry
-    addon_folders = tuple(home / "plugins" / name for home in hermes_homes for name in addons.ADDON_PACKAGES
-                          if (home / "plugins" / name).is_dir())
+    addon_folders = tuple(home / "plugins" / name for home in hermes_homes for name in addons.found(home / "plugins"))
     return UninstallPlan(
         system_helper=helper, agent_hooks=tuple(agent_hooks.hooked_agents()), addons=addon_folders,
         system=system, hermes_homes=hermes_homes, blackbox_home=blackbox_home, dkg_home=dkg_home,

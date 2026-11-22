@@ -1,8 +1,9 @@
 """The shields' extension point (plugins/blackbox/shields/extensions.py), 2026-11-21.
 
-Amos: the public plugin carries only what works without Blackbox Desktop; Desktop's private
-add-on adds the rest. Contracts: an add-on is found by its FOLDER beside the plugin and registers
-through the plugin's package entries; its own shields join the registry; its extension of a
+The public plugin carries only what works on its own; an add-on registered beside it adds the
+rest. Contracts: an add-on is a package folder beside the plugin that declares itself with the
+add-on manifest (``blackbox-addon.json``, ``{"extends": "blackbox"}``) and registers through the
+plugin's package entries; a folder without the manifest is never loaded; its own shields join the registry; its extension of a
 shield merges endpoints, unlocks options, adds findings (claimed by the gate), decorates the card
 and adds events; an add-on that fails to load contributes nothing and the plugin keeps working;
 an extension's detector that raises adds nothing while the shield's own findings stay.
@@ -37,10 +38,10 @@ def _listed(tool_name, args, mode):
             for host in lockdown.hosts_in(args) if host.endswith("tracker.example")]
 
 
-def _desktop(**changes):
-    registrar = extensions.Registrar(provider_package="blackbox_desktop")
+def _addon(**changes):
+    registrar = extensions.Registrar(provider_package="example_addon")
     parts = dict(
-        shield_id=network_mode.SHIELD_ID, provider="Blackbox Desktop", unlocks=frozenset({"dns", "firewall"}),
+        shield_id=network_mode.SHIELD_ID, provider="Example add-on", unlocks=frozenset({"dns", "firewall"}),
         api=shields.ShieldApi(reads={"overview": lambda context, params: {"ok": True}}),
         detect=_listed, claims=("network:listed-host",),
         status=lambda mode, card: dataclasses.replace(card, sections=card.sections + (
@@ -50,7 +51,7 @@ def _desktop(**changes):
 
 
 def test_an_extension_unlocks_options_merges_its_api_and_adds_claimed_findings():
-    extensions.use(_desktop())
+    extensions.use(_addon())
     network = shields.get(network_mode.SHIELD_ID)
     assert shields.unlocked(network_mode.SHIELD_ID) == {"dns", "firewall"}
     assert network_mode.default_protections() == (network_mode.DNS,)
@@ -64,7 +65,7 @@ def test_an_extension_unlocks_options_merges_its_api_and_adds_claimed_findings()
 
 
 def test_an_add_on_shield_joins_the_registry_after_the_plugins_own():
-    registrar = _desktop()
+    registrar = _addon()
     registrar.register_shield(dataclasses.replace(trader.TRADER, id="file-shield", name="File Shield"))
     extensions.use(registrar)
     assert [shield.id for shield in shields.all_shields()] == ["trader", "network-shield", "file-shield"]
@@ -73,27 +74,29 @@ def test_an_add_on_shield_joins_the_registry_after_the_plugins_own():
 def test_an_extensions_detector_that_raises_adds_nothing_and_the_shields_own_findings_stay():
     def broken(*_args):
         raise RuntimeError("add-on bug")
-    extensions.use(_desktop(detect=broken))
+    extensions.use(_addon(detect=broken))
     found = shields.get(network_mode.SHIELD_ID).detect("terminal", {"command": "curl https://x.unknown-host.com/"}, LOCKED)
     assert [f.identifier for f in found] == [lockdown.LOCKDOWN_ID]
 
 
-def _write_addon(root, body):
-    folder = root / "blackbox_desktop"
+def _write_addon(root, body, name="example_addon", manifest='{"extends": "blackbox"}'):
+    folder = root / name
     folder.mkdir()
     (folder / "__init__.py").write_text(textwrap.dedent(body), encoding="utf-8")
+    if manifest is not None:
+        (folder / "blackbox-addon.json").write_text(manifest, encoding="utf-8")
 
 
-def test_an_add_on_is_found_by_its_folder_and_reaches_the_plugin_through_its_entries(tmp_path):
+def test_an_add_on_is_found_by_its_manifest_and_reaches_the_plugin_through_its_entries(tmp_path):
     _write_addon(tmp_path, """
         from ..blackbox import shields
         def register(registrar):
-            registrar.extend(shields.ShieldExtension(shield_id="network-shield", provider="Blackbox Desktop",
+            registrar.extend(shields.ShieldExtension(shield_id="network-shield", provider="Example add-on",
                                                      unlocks=frozenset({"cut"})))
             registrar.add_routes(lambda app: None)
     """)
     extensions.load("plugins.blackbox", tmp_path / "blackbox")
-    assert extensions.providers() == ["blackbox_desktop"] and extensions.problems() == []
+    assert extensions.providers() == ["example_addon"] and extensions.problems() == []
     assert shields.unlocked(network_mode.SHIELD_ID) == {"cut"} and len(shields.addon_routes()) == 1
 
 
@@ -116,3 +119,25 @@ def test_an_extension_that_brings_packs_must_bring_its_page_and_attack_table(tmp
     with pytest.raises(ValueError):
         extensions.Registrar(provider_package="x").extend(
             extensions.ShieldExtension(shield_id=network_mode.SHIELD_ID, provider="x", packs=tmp_path))
+
+
+@pytest.mark.parametrize("name,manifest", [
+    ("no_manifest", None),
+    ("wrong_target", '{"extends": "something-else"}'),
+    ("not_json", "extends: blackbox"),
+    ("not-a-package", '{"extends": "blackbox"}'),
+])
+def test_a_folder_that_does_not_declare_itself_an_add_on_is_never_loaded(tmp_path, name, manifest):
+    _write_addon(tmp_path, """
+        def register(registrar):
+            raise AssertionError("must not be loaded")
+    """, name=name, manifest=manifest)
+    extensions.load("plugins.blackbox", tmp_path / "blackbox")
+    assert extensions.providers() == [] and extensions.problems() == []
+
+
+def test_every_declared_add_on_is_loaded_in_name_order(tmp_path):
+    for name in ("second_addon", "first_addon"):
+        _write_addon(tmp_path, "def register(registrar):\n    pass\n", name=name)
+    extensions.load("plugins.blackbox", tmp_path / "blackbox")
+    assert extensions.providers() == ["first_addon", "second_addon"]

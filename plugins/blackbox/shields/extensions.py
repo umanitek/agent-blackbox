@@ -1,16 +1,16 @@
 """Add-ons: how an installed add-on extends the shields — the **Extension point** (Plugin) pattern.
 
-The public plugin carries only what works on its own. An add-on installed beside it — Blackbox
-Desktop's, which brings a native helper with deeper system access — adds what needs more:
+The public plugin carries only what works on its own. An add-on registered beside it — for
+example one that brings a native helper with deeper system access — adds what needs more:
 whole shields of its own, and more of an existing shield (its endpoints, detectors, events, the
-options it makes available, a fuller page). The plugin never names the add-on's code; it finds an
-add-on by FOLDER and the add-on registers itself through this module.
+options it makes available, a fuller page). The plugin names no add-on; an add-on declares
+itself and registers through this module.
 
-**Discovery.** For each name in :data:`ADDON_PACKAGES`, a folder of that name next to the
-plugin's own folder (``<plugins dir>/blackbox_desktop/__init__.py``) is loaded as a sibling
-package of the plugin (``hermes_plugins.blackbox_desktop`` beside ``hermes_plugins.blackbox``),
-so its relative imports (``from ..blackbox import shields``) reach the plugin through its package
-entries. Its ``register(registrar)`` is called once with a :class:`Registrar`. Discovery runs once,
+**Discovery.** Every package folder next to the plugin's own folder that ships the add-on
+manifest (``<plugins dir>/<name>/blackbox-addon.json`` holding ``{"extends": "blackbox"}``,
+:func:`..kernel.addons.found`) is loaded, in name order, as a sibling package of the plugin
+(``hermes_plugins.<name>`` beside ``hermes_plugins.blackbox``), so its relative imports
+(``from ..blackbox import shields``) reach the plugin through its package entries. Its ``register(registrar)`` is called once with a :class:`Registrar`. Discovery runs once,
 on the registry's first use, never on import and never again on the hot path.
 
 **Fail-open.** An add-on that cannot be loaded, or whose ``register`` raises, contributes NOTHING
@@ -22,7 +22,7 @@ Usage, inside an add-on::
 
     def register(registrar):
         registrar.register_shield(FILE_SHIELD)
-        registrar.extend(ShieldExtension(shield_id="network-shield", provider="Blackbox Desktop",
+        registrar.extend(ShieldExtension(shield_id="network-shield", provider="Example add-on",
                                          unlocks=frozenset({"dns", "firewall"}), api=MY_API))
         registrar.add_routes(lambda app: ...)
 """
@@ -45,10 +45,6 @@ from .contract import Capability, FindingKind, Shield, ShieldEvent, ShieldMode, 
 from .shield_api import ShieldApi
 
 logger = logging.getLogger(__name__)
-
-#: The add-on folders looked for next to the plugin's own folder, in load order (one list, in the
-#: kernel: the guard protects each one's folder as it protects the plugin's own).
-ADDON_PACKAGES = addons.ADDON_PACKAGES
 
 Detector = Callable[[str, Any, ShieldMode], list[Finding]]
 
@@ -139,15 +135,16 @@ def _load_one(parent: str, plugins_dir: Path, name: str) -> Optional[Registrar]:
     return registrar
 
 
-def load(plugin_package: str, plugin_dir: Path, names: Iterable[str] = ADDON_PACKAGES) -> None:
+def load(plugin_package: str, plugin_dir: Path, names: Optional[Iterable[str]] = None) -> None:
     """Finds and registers every add-on next to *plugin_dir* (once; later calls do nothing).
-    *plugin_package* is the plugin's own package name (``hermes_plugins.blackbox``)."""
+    *plugin_package* is the plugin's own package name (``hermes_plugins.blackbox``); *names*
+    defaults to the add-ons that declare themselves there (:func:`..kernel.addons.found`)."""
     with _lock:
         if _state["loaded"]:
             return
         _state["loaded"] = True
         parent = plugin_package.rpartition(".")[0]
-        for name in names:
+        for name in addons.found(plugin_dir.parent) if names is None else names:
             try:
                 registrar = _load_one(parent, plugin_dir.parent, name)
             except Exception as exc:   # an add-on never takes the plugin down: it contributes nothing
@@ -275,4 +272,4 @@ def assemble(base: Iterable[Shield]) -> tuple[Shield, ...]:
     return tuple(shields)
 
 
-__all__ = ["ADDON_PACKAGES", "Registrar", "ShieldExtension"]
+__all__ = ["Registrar", "ShieldExtension"]

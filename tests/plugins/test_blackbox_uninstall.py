@@ -391,14 +391,19 @@ def test_uninstall_takes_blackboxs_hooks_out_of_coding_agents_and_keeps_the_pers
     assert any("took Blackbox's hooks out of Claude Code" in line for line in report)
 
 
-def test_uninstall_removes_the_add_on_beside_the_plugin(machine):
-    addon = machine / ".hermes" / "plugins" / "blackbox_desktop"
+def test_uninstall_removes_the_add_on_beside_the_plugin_and_no_other_plugin(machine):
+    addon = machine / ".hermes" / "plugins" / "example_addon"
     addon.mkdir(parents=True)
     (addon / "__init__.py").write_text("", encoding="utf-8")
+    (addon / "blackbox-addon.json").write_text('{"extends": "blackbox"}', encoding="utf-8")
+    other = machine / ".hermes" / "plugins" / "someone_elses_plugin"
+    other.mkdir(parents=True)
+    (other / "__init__.py").write_text("", encoding="utf-8")
     plan = _plan(machine)
     assert f"remove the add-on {addon}" in "\n".join(uninstall.describe(plan))
+    assert plan.addons == (addon,)
     _execute(plan)
-    assert not addon.exists()
+    assert not addon.exists() and other.exists()
 
 
 def test_once_the_helper_is_gone_its_pairing_key_and_empty_folders_go_too(machine, tmp_path):
@@ -413,11 +418,11 @@ def test_once_the_helper_is_gone_its_pairing_key_and_empty_folders_go_too(machin
     assert any("pairing key" in line for line in report)
 
 
-def test_a_helper_that_could_not_be_removed_keeps_its_key_and_desktops_files_stay(machine, tmp_path):
+def test_a_helper_that_could_not_be_removed_keeps_its_key_and_a_companion_apps_files_stay(machine, tmp_path):
     folder = machine / "Library" / "Application Support" / "Blackbox" / "helper"
     folder.mkdir(parents=True)
     (folder / "plan.key").write_bytes(b"\x07" * 32)
-    (folder.parent / "engine").write_text("Desktop's", encoding="utf-8")
+    (folder.parent / "engine").write_text("a companion app's", encoding="utf-8")
     helper = tmp_path / "blackbox-netd"
     _execute(dataclasses.replace(_plan(machine), system_helper=helper), admin_code=1)
     assert (folder / "plan.key").exists(), "the still-installed helper needs its key"

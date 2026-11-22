@@ -123,7 +123,7 @@ def _all_places() -> tuple[str, ...]:
     plugin folder, its OpenClaw plugin, the checkout they are copied from), the node's folder,
     the service definitions, the ``blackbox`` command, each coding agent's hook config that
     Blackbox writes into (``kernel.agent_hosts``), every add-on's folder
-    (``kernel.addons.ADDON_PACKAGES``), the places an installed add-on declared, and a shell startup
+    (the folders that carry ``kernel.addons.MANIFEST``), the places an installed add-on declared, and a shell startup
     file that holds the agent sandbox's PATH block (KI-535)."""
     hermes = str(constants.hermes_root())
     home = os.path.expanduser("~")
@@ -148,9 +148,11 @@ def _all_places() -> tuple[str, ...]:
     # block later agents start outside the sandbox. The person's own lines stay editable (guard_settings).
     places += [str(path) for path in shell_path.holding(Path(home))]
     # Each add-on's folder beside the plugin, in every Hermes home: deleting it removes protection.
-    for addon in guarded_extra.ADDON_PACKAGES:
-        places += [os.path.join(hermes, "plugins", addon), os.path.join(hermes, "profiles", "*", "plugins", addon),
-                   os.path.join(hermes, "desktop-plugins", addon), str(_PLUGIN_DIR.parent / addon)]
+    # The manifest name is guarded too, so an agent can neither plant an add-on nor unmake one.
+    plugin_dirs = (os.path.join(hermes, "plugins"), os.path.join(hermes, "profiles", "*", "plugins"),
+                   os.path.join(hermes, "desktop-plugins"), str(_PLUGIN_DIR.parent))
+    for plugin_dir in plugin_dirs:
+        places += [guarded_extra.manifest_pattern(plugin_dir), *guarded_extra.folders(plugin_dir)]
     places += list(guarded_extra.places())   # places an installed add-on declared for itself
     for root in _source_roots():
         places += [str(root / "plugins" / "blackbox"), str(root / "integrations" / "openclaw"), str(root / ".dkg")]

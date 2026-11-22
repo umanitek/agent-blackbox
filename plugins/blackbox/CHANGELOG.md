@@ -81,7 +81,7 @@ that the two version fields agree.
 ### Fixed
 - `blackbox uninstall` also removes the system protection helper, first — your DNS and firewall
   go back to how they were before it (macOS asks for your admin password once).
-- Self-protection covers add-ons: each add-on folder beside the plugin (`kernel.addons.ADDON_PACKAGES`) is guarded in every Hermes home like the plugin's own, and an add-on can declare its other places (`Registrar.protect_places`) — before, an agent could delete an add-on and silently remove the protection it brings.
+- Self-protection covers add-ons: each add-on folder beside the plugin (one that carries the `blackbox-addon.json` manifest, `kernel.addons.MANIFEST`) is guarded in every Hermes home like the plugin's own, and an add-on can declare its other places (`Registrar.protect_places`) — before, an agent could delete an add-on and silently remove the protection it brings.
 
 - **OpenClaw 2026.11.6 and later load Blackbox again.** That OpenClaw release could fail to load
   the Blackbox plugin on a busy machine ("Plugin preparation callback timed out") and then refused
