@@ -139,3 +139,34 @@ def test_off_means_no_reads_and_a_plan_that_watches_nothing(monkeypatch):
         with pytest.raises(ShieldApiError) as refused:
             read(None, {})
         assert refused.value.status == 409
+
+
+
+def test_blackbox_recognises_itself_by_identity_and_never_by_name_alone(home, monkeypatch):
+    """E2E 2026-11-21: Blackbox rated its own LaunchAgents critical (each listed twice) and its DKG
+    node's peer-to-peer port high. Its own items are low and named; a look-alike is not."""
+    import os
+    from plugins.blackbox.kernel import constants
+    monkeypatch.setattr(signature, "lookup", lambda path: signature.Signature(kind="adhoc", signer=""))
+    launcher = str(constants.blackbox_home() / "bin" / "Blackbox")
+    ours = {"kind": "user-agent", "id": "/Users/me/Library/LaunchAgents/ai.umanitek.blackbox-dashboard.plist",
+            "label": "ai.umanitek.blackbox-dashboard", "program": launcher}
+    ours_again = {**ours, "kind": "login-item", "id": "btm:ai.umanitek.blackbox-dashboard"}
+    look_alike = {"kind": "user-agent", "id": "/Users/me/Library/LaunchAgents/ai.umanitek.blackbox-x.plist",
+                  "label": "ai.umanitek.blackbox-x", "program": "/Users/me/.local/evil"}
+    nameless = {"kind": "login-item", "id": "btm:1", "label": "(null)", "program": "/Applications/Tool.app/Contents/MacOS/tool"}
+    node = constants.blackbox_dkg_home()
+    node.mkdir(parents=True, exist_ok=True)
+    (node / "daemon.pid").write_text("4242\n", encoding="utf-8")
+    p2p = {"protocol": "tcp6", "address": "::", "port": 63333, "program": "/usr/local/bin/node", "pid": 4242, "since": 1}
+    stranger = {**p2p, "port": 8000, "pid": 77}
+    system_report.record(system_report.validate(_report(exposure=[p2p, stranger], persistence=[ours, ours_again, look_alike, nameless]), NOW))
+    view = exposure.view(NOW)
+    startup = {row["label"]: row for row in view["startup"]}
+    assert len([row for row in view["startup"] if row["label"] == ours["label"]]) == 1, "listed once"
+    assert startup[ours["label"]]["risk"] == "low" and startup[ours["label"]].get("own")
+    assert startup[look_alike["label"]]["risk"] == "critical", "a Blackbox-looking label elsewhere is not Blackbox"
+    assert "tool" in startup and "(null)" not in startup
+    ports = {row["port"]: row for row in view["listeners"]}
+    assert ports[63333]["risk"] == "low" and "expected" in ports[63333]["why"]
+    assert ports[8000]["risk"] == "high"
