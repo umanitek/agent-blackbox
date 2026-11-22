@@ -67,14 +67,14 @@ One `claude` process per session (a native binary). Sub-agents (the Agent tool),
 
 | OS | Launch mode | Layer | Status | Detail |
 |---|---|---|---|---|
-| macos | interactive | hooks | Tested | 2026-11-22, Blackbox 1.5.0, agent version not recorded: test VM (macOS 26, bb-recheck2): the agent's own configured hook command run with the payloads of its hook reference; refusals in Block and Audit mode — pass |
+| macos | interactive | hooks | Tested | 2026-11-22, Blackbox 1.5.0, agent 2.1.330, macOS 26.6.2: test VM (macOS 26, bb-recheck2): the agent's own configured hook command run with the payloads of its hook reference; refusals in Block and Audit mode — pass |
 | macos | sub-agent | hooks | Built, not yet run in the product | covered by tests with the documented payloads; not yet run inside a signed-in session |
 | macos | headless | hooks | Built, not yet run in the product |  |
 | macos | sdk | hooks | Built, not yet run in the product |  |
 | macos | ide | hooks | Built, not yet run in the product |  |
 | macos | headless, bare | hooks | Not covered | the agent skips hooks |
 | macos | cloud | hooks | Not covered | runs off this machine |
-| macos | interactive | sandbox | Tested | 2026-11-22, Blackbox 1.5.0, agent version not recorded: test VM: the launcher's Seatbelt sandbox; a script written then run, python, a grandchild, links, osascript and open -a all refused by the kernel — pass |
+| macos | interactive | sandbox | Tested | 2026-11-22, Blackbox 1.5.0, agent 2.1.330, macOS 26.6.2: test VM: the launcher's Seatbelt sandbox; a script written then run, python, a grandchild, links, osascript and open -a all refused by the kernel — pass |
 | macos | interactive | os | Not covered | needs Apple's Endpoint Security entitlement (not requested yet) |
 
 **Not covered:**
@@ -121,7 +121,7 @@ One `codex` process per session (CLI or `codex exec`); the desktop app and IDE e
 
 | OS | Launch mode | Layer | Status | Detail |
 |---|---|---|---|---|
-| macos | interactive | hooks | Tested | 2026-11-22, Blackbox 1.5.0, agent version not recorded: test VM (macOS 26, bb-recheck2): the agent's own configured hook command run with the payloads of its hook reference; refusals in Block and Audit mode — pass |
+| macos | interactive | hooks | Tested | 2026-11-22, Blackbox 1.5.0, agent 0.171.0, macOS 26.6.2: test VM (macOS 26, bb-recheck2): the agent's own configured hook command run with the payloads of its hook reference; refusals in Block and Audit mode — pass |
 | macos | headless | hooks | Built, not yet run in the product |  |
 | macos | sdk | hooks | Built, not yet run in the product |  |
 | macos | sub-agent | hooks | Built, not yet run in the product |  |
@@ -178,7 +178,7 @@ The Cursor app (Electron) runs agent chats inside its own processes; `cursor-age
 | macos | ide | hooks | Built, not yet run in the product | the shell, MCP and read hooks were run on the test VM (2026-11-21); the generic tool hooks that replace them are not yet |
 | macos | sub-agent | hooks | Built, not yet run in the product |  |
 | macos | cloud | hooks | Not covered | runs off this machine; user hooks are not loaded |
-| macos | ide | sandbox | Tested | 2026-11-22, Blackbox 1.5.0, agent version not recorded: test VM: Open Cursor protected starts Cursor inside the sandbox and it stays up; reading a protected file from inside was not exercised (sign-in screen) — partial |
+| macos | ide | sandbox | Tested | 2026-11-22, Blackbox 1.5.0, agent 3.31.15, macOS 26.6.2: test VM: Open Cursor protected starts Cursor inside the sandbox and it stays up; reading a protected file from inside was not exercised (sign-in screen) — partial |
 | macos | ide | os | Not covered | needs Apple's Endpoint Security entitlement (not requested yet) |
 
 **Not covered:**
@@ -222,7 +222,7 @@ One `gemini` process (Node) per session; `gemini -p` runs headless. Sub-agents r
 
 | OS | Launch mode | Layer | Status | Detail |
 |---|---|---|---|---|
-| macos | interactive | hooks | Tested | 2026-11-22, Blackbox 1.5.0, agent version not recorded: test VM (macOS 26, bb-recheck2): the agent's own configured hook command run with the payloads of its hook reference; refusals in Block and Audit mode — pass |
+| macos | interactive | hooks | Tested | 2026-11-22, Blackbox 1.5.0, agent 0.70.0, macOS 26.6.2: test VM (macOS 26, bb-recheck2): the agent's own configured hook command run with the payloads of its hook reference; refusals in Block and Audit mode — pass |
 | macos | headless | hooks | Built, not yet run in the product |  |
 | macos | interactive | sandbox | Built, not yet run in the product | the launcher is written; refusals were proven with Claude Code's launcher |
 | macos | interactive | os | Not covered | needs Apple's Endpoint Security entitlement (not requested yet) |

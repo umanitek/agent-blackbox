@@ -178,11 +178,12 @@
      "launch": "interactive",
      "layer": "hooks",
      "status": "tested",
-     "agent_version": "",
+     "agent_version": "2.1.330",
      "date": "2026-11-22",
      "blackbox": "1.5.0",
      "how": "test VM (macOS 26, bb-recheck2): the agent's own configured hook command run with the payloads of its hook reference; refusals in Block and Audit mode",
-     "result": "pass"
+     "result": "pass",
+     "os_version": "macOS 26.6.2"
     },
     {
      "os": "macos",
@@ -228,11 +229,12 @@
      "launch": "interactive",
      "layer": "sandbox",
      "status": "tested",
-     "agent_version": "",
+     "agent_version": "2.1.330",
      "date": "2026-11-22",
      "blackbox": "1.5.0",
      "how": "test VM: the launcher's Seatbelt sandbox; a script written then run, python, a grandchild, links, osascript and open -a all refused by the kernel",
-     "result": "pass"
+     "result": "pass",
+     "os_version": "macOS 26.6.2"
     },
     {
      "os": "macos",
@@ -378,11 +380,12 @@
      "launch": "interactive",
      "layer": "hooks",
      "status": "tested",
-     "agent_version": "",
+     "agent_version": "0.171.0",
      "date": "2026-11-22",
      "blackbox": "1.5.0",
      "how": "test VM (macOS 26, bb-recheck2): the agent's own configured hook command run with the payloads of its hook reference; refusals in Block and Audit mode",
-     "result": "pass"
+     "result": "pass",
+     "os_version": "macOS 26.6.2"
     },
     {
      "os": "macos",
@@ -581,11 +584,12 @@
      "launch": "ide",
      "layer": "sandbox",
      "status": "tested",
-     "agent_version": "",
+     "agent_version": "3.31.15",
      "date": "2026-11-22",
      "blackbox": "1.5.0",
      "how": "test VM: Open Cursor protected starts Cursor inside the sandbox and it stays up; reading a protected file from inside was not exercised (sign-in screen)",
-     "result": "partial"
+     "result": "partial",
+     "os_version": "macOS 26.6.2"
     },
     {
      "os": "macos",
@@ -707,11 +711,12 @@
      "launch": "interactive",
      "layer": "hooks",
      "status": "tested",
-     "agent_version": "",
+     "agent_version": "0.70.0",
      "date": "2026-11-22",
      "blackbox": "1.5.0",
      "how": "test VM (macOS 26, bb-recheck2): the agent's own configured hook command run with the payloads of its hook reference; refusals in Block and Audit mode",
-     "result": "pass"
+     "result": "pass",
+     "os_version": "macOS 26.6.2"
     },
     {
      "os": "macos",

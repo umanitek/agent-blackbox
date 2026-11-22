@@ -56,3 +56,19 @@ the code's catalogue (`kernel/agent_hosts`) and the generated page equal.
 Every instance is tracked (2026-11-22): sessions, the sub-agents they spawn, every config home,
 and an agent process Blackbox has no hook in — see `agent_hooks/instances`, `profiles.py`,
 `observe/` and `GET /api/agent-instances/*`.
+
+## Recording a test run
+
+[coverage-matrix.md](coverage-matrix.md) is generated from `dashboard/docs_routes/agent_registry.json`.
+A run on a real machine ends by recording itself — the agent's version, the OS version and what was run:
+
+```bash
+python -m plugins.blackbox.dashboard.docs_routes.record_test \
+    --agent codex --agent-version "$(codex --version)" --os macos --os-version "macOS $(sw_vers -productVersion)" \
+    --launch interactive --layer hooks --result pass \
+    --how "test VM: Codex's own hook command with its documented payloads; refusals in Block and Audit"
+```
+
+It replaces the row for that OS, launch mode and layer, and rewrites the coverage page. The Docs
+page then says when an installed agent is newer than the last version a run recorded.
+

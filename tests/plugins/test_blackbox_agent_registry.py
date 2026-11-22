@@ -136,3 +136,54 @@ def test_a_caller_cannot_make_it_read_another_path(claude_home, tmp_path):
     (secret / "CLAUDE.md").write_text("not yours", encoding="utf-8")
     detail = profile_detail.read("claude-code", str(home), str(secret), user_home=user_home)
     assert detail.project == "" and all("elsewhere" not in doc.path for doc in detail.instructions)
+
+
+# ---------------------------------------------------------------- a test run records itself
+
+RUN = agent_registry.TestRun(agent="codex", os="macos", launch="interactive", layer="hooks", agent_version="0.200.0",
+                             os_version="macOS 26.6.2", blackbox="1.5.0", date="2026-12-01",
+                             how="test VM: its own hook command with its documented payloads", result="pass")
+
+
+def test_a_recorded_run_replaces_the_row_for_its_os_launch_and_layer():
+    before = agent_registry.load()
+    rows = len(next(agent for agent in before["agents"] if agent["id"] == "codex")["coverage"])
+    after = agent_registry.record_test(before, RUN)
+    codex = next(agent for agent in after["agents"] if agent["id"] == "codex")
+    row = next(row for row in codex["coverage"] if (row["launch"], row["layer"]) == ("interactive", "hooks"))
+    assert (row["status"], row["agent_version"], row["os_version"], row["date"]) == ("tested", "0.200.0", "macOS 26.6.2", "2026-12-01")
+    assert len(codex["coverage"]) == rows and after["updated"] == "2026-12-01"
+    assert agent_registry.version_notice(codex, "0.200.0") == ""
+
+
+def test_a_run_on_a_new_launch_mode_adds_a_row_and_a_vague_run_is_refused():
+    import dataclasses
+
+    registry = agent_registry.record_test(agent_registry.load(), dataclasses.replace(RUN, launch="headless, ci"))
+    codex = next(agent for agent in registry["agents"] if agent["id"] == "codex")
+    assert any(row["launch"] == "headless, ci" and row["status"] == "tested" for row in codex["coverage"])
+    for bad in (dataclasses.replace(RUN, agent="nobody"), dataclasses.replace(RUN, how=" "), dataclasses.replace(RUN, result="fine")):
+        with pytest.raises(ValueError):
+            agent_registry.record_test(agent_registry.load(), bad)
+
+
+def test_the_command_writes_the_registry_and_the_page_together(tmp_path, monkeypatch):
+    from plugins.blackbox.dashboard.docs_routes import record_test
+
+    registry, matrix = tmp_path / "agent_registry.json", tmp_path / "coverage-matrix.md"
+    registry.write_text(agent_registry.PATH.read_text(encoding="utf-8"), encoding="utf-8")
+    monkeypatch.setattr(agent_registry, "PATH", registry)
+    monkeypatch.setattr(agent_registry, "MATRIX", matrix)
+    code = record_test.main(["--agent", "gemini-cli", "--os", "macos", "--os-version", "macOS 26.6.2", "--launch", "interactive",
+                             "--layer", "hooks", "--agent-version", "0.71.0", "--result", "pass", "--how", "test VM run", "--date", "2026-12-02"])
+    assert code == 0 and "agent 0.71.0, macOS 26.6.2" in matrix.read_text(encoding="utf-8")
+    assert matrix.read_text(encoding="utf-8") == agent_registry.render_markdown()
+    assert record_test.main(["--agent", "nobody", "--os", "macos", "--launch", "x", "--layer", "hooks", "--result", "pass", "--how", "y"]) == 2
+
+
+def test_every_tested_row_says_which_agent_version_ran():
+    """Amos, 2026-11-22: keep track of what was tested, in which version, on which OS."""
+    for agent in REGISTRY["agents"]:
+        for row in agent["coverage"]:
+            if row["status"] == "tested":
+                assert row.get("agent_version") and row.get("os_version"), (agent["id"], row["launch"], row["layer"])
