@@ -13,6 +13,8 @@ from __future__ import annotations
 import argparse
 import plistlib
 import re
+import shlex
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -82,6 +84,37 @@ def test_a_loaded_launch_agent_for_this_install_is_the_node_s_service(cfg, tmp_p
     assert service is not None and service.name == LABEL
     assert service.restart_argv[:3] == ("launchctl", "kickstart", "-k")
     assert service.restart_argv[3].endswith(f"/{LABEL}")
+
+
+def _installer_launcher(home: Path, name: str, *programs: str) -> str:
+    """The launcher exactly as the installer writes it (its real write_service_launcher)."""
+    text = (REPO / "scripts" / "blackbox-install.sh").read_text(encoding="utf-8")
+    function = re.search(r"^write_service_launcher\(\) \{.*?\n\}", text, re.MULTILINE | re.DOTALL).group(0)
+    script = f"{function}\nBLACKBOX_HOME={shlex.quote(str(home))}\nwrite_service_launcher " + " ".join(
+        shlex.quote(part) for part in (name, *programs))
+    # Popen, not run: the `manager` fixture stubs subprocess.run for launchctl.
+    with subprocess.Popen(["bash", "-c", script], stdout=subprocess.PIPE, text=True) as process:
+        out, _ = process.communicate()
+    assert process.returncode == 0
+    return out.strip()
+
+
+def test_the_launch_agent_the_installer_writes_through_its_launcher_is_this_install_s_service(cfg, tmp_path, manager, monkeypatch):
+    """KI-529: the plist runs <BLACKBOX_HOME>/bin/"Blackbox Node" (FIX-0255), not dkg itself. Reading
+    only the first argument found no service, so the dashboard's sync started the node behind launchd
+    and launchd's copy failed "Daemon already running" — a fresh install then rolled back."""
+    monkeypatch.setattr(node_service.sys, "platform", "darwin")   # os-marker: ok — only picks the launchd strategy; launchctl is stubbed and the plist is in tmp_path
+    launcher = _installer_launcher(tmp_path / "blackbox-home", "Blackbox Node", cfg.dkg_bin)
+    _launch_agent(tmp_path, launcher)
+    service = node_service.registered(cfg, home=tmp_path)
+    assert service is not None and service.name == LABEL
+
+
+def test_a_launcher_for_another_install_s_node_is_not_ours(cfg, tmp_path, manager, monkeypatch):
+    monkeypatch.setattr(node_service.sys, "platform", "darwin")   # os-marker: ok — only picks the launchd strategy; launchctl is stubbed and the plist is in tmp_path
+    launcher = _installer_launcher(tmp_path / "blackbox-home", "Blackbox Node", "/opt/other install/.bin/dkg")
+    _launch_agent(tmp_path, launcher)
+    assert node_service.registered(cfg, home=tmp_path) is None
 
 
 def test_a_launch_agent_for_another_install_is_not_ours(cfg, tmp_path, manager, monkeypatch):
