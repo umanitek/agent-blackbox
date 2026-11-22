@@ -201,7 +201,13 @@
      "os": "macos",
      "launch": "headless",
      "layer": "hooks",
-     "status": "covered-untested"
+     "status": "tested",
+     "agent_version": "2.1.330",
+     "os_version": "macOS 26.6.2",
+     "date": "2026-11-22",
+     "blackbox": "1.5.0",
+     "how": "test VM bb-recheck2, the real CLI without a sign-in (claude -p): its own SessionStart, UserPromptSubmit and SessionEnd hooks ran and Blackbox tracked the session as headless with its process; tool calls and sub-agents need a login and were not run",
+     "result": "partial"
     },
     {
      "os": "macos",

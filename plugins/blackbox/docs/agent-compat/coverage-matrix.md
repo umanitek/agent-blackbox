@@ -70,7 +70,7 @@ One `claude` process per session (a native binary). Sub-agents (the Agent tool),
 |---|---|---|---|---|
 | macos | interactive | hooks | Tested | 2026-11-22, Blackbox 1.5.0, agent 2.1.330, macOS 26.6.2: test VM (macOS 26, bb-recheck2): the agent's own configured hook command run with the payloads of its hook reference; refusals in Block and Audit mode — pass |
 | macos | sub-agent | hooks | Built, not yet run in the product | covered by tests with the documented payloads; not yet run inside a signed-in session |
-| macos | headless | hooks | Built, not yet run in the product |  |
+| macos | headless | hooks | Tested | 2026-11-22, Blackbox 1.5.0, agent 2.1.330, macOS 26.6.2: test VM bb-recheck2, the real CLI without a sign-in (claude -p): its own SessionStart, UserPromptSubmit and SessionEnd hooks ran and Blackbox tracked the session as headless with its process; tool calls and sub-agents need a login and were not run — partial |
 | macos | sdk | hooks | Built, not yet run in the product |  |
 | macos | ide | hooks | Built, not yet run in the product |  |
 | macos | headless, bare | hooks | Not covered | the agent skips hooks |
