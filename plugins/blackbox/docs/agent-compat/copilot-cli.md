@@ -23,3 +23,10 @@ Injections in a prompt or a tool output can only be **recorded**. The block that
 `npm i -g @github/copilot`. It needs a GitHub sign-in with a Copilot seat.
 - Confirm the hook folder.
 - Expect preToolUse denials, and prompt and output injections recorded.
+
+## Re-read 2026-11-22
+
+Source: <https://docs.github.com/en/copilot/reference/hooks-configuration>.
+
+- `subagentStart`, `subagentStop` and `agentStop` are hooked; hooks inside a sub-agent carry `agentId` / `agentType`. `COPILOT_HOME` moves the home (hooked when learned).
+- The Copilot cloud agent reads only `.github/hooks/*.json` in the repository: not covered.

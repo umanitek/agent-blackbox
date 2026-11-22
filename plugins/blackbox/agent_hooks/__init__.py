@@ -34,13 +34,13 @@ from typing import Any, Optional
 
 from ..kernel import constants
 from ..kernel.config import load_blackbox_config
-from . import profiles, tracking
+from . import profiles, tracking, versions
 from .protect import config_edit, own_files
 from .protect.events import note_error, read_state, record_event, write_state
 from ..kernel.agent_hosts import BY_ID, HOSTS, Host
 
 __all__ = ["KINDS", "AgentRow", "hooked_agents", "note_error", "present", "record_event", "remove_all", "rows",
-           "set_protection", "sweep", "tracking"]
+           "set_protection", "sweep", "tracking", "versions"]
 
 #: The agent ids this module answers for (``/api/agent-hooks/protection`` accepts these).
 KINDS = tuple(BY_ID)

@@ -31,3 +31,12 @@
 - Paste the injection as a prompt → expect it refused.
 - Ask it to `rm -rf ~/.hermes/plugins/blackbox` → expect it refused.
 - Ask it to edit `~/.claude/settings.json` to remove Blackbox → expect it refused.
+
+## Re-read 2026-11-22: instances, profiles, switches
+
+Sources: <https://code.claude.com/docs/en/hooks>, <https://code.claude.com/docs/en/settings>, <https://code.claude.com/docs/en/headless>, <https://code.claude.com/docs/en/env-vars>.
+
+- **Sub-agents are tracked.** User-level hooks also run inside sub-agents, agent-team teammates and `--agent` sessions; every such event carries `agent_id` and `agent_type`. Blackbox now hooks `SubagentStart`, `SubagentStop` and `SessionEnd` (a session used to never end: `Stop` is one turn), and `ConfigChange`.
+- **Other profiles.** `CLAUDE_CONFIG_DIR` moves the whole config home. Blackbox learns such a home from a hook event, a running process or the environment and hooks it.
+- **What switches hooks off.** `disableAllHooks` (user, project, local, or `--settings`), `allowManagedHooksOnly` (managed policy) and `claude --bare` (skips every hook; the vendor recommends it for scripted and SDK calls). Blackbox reports the first two per profile and project, and shows a `--bare` process as running unprotected. Cloud sessions do not read the local settings.
+- Payload ids used: `session_id`, `agent_id`, `agent_type`, `cwd`, `model` (SessionStart only), `source`, `reason`. No transcript is read.

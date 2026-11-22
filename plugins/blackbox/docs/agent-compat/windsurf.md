@@ -21,3 +21,7 @@ Devin.app needs a sign-in.
 - `cat` the injection file → expect pre_read_code to refuse it.
 - Prompt with the injection → expect it refused.
 - Delete Blackbox's plugin → expect it refused.
+
+## Re-read 2026-11-22: the vendor's docs moved
+
+The Cascade hooks page now redirects to Devin Local's customisation page, which describes Devin's own hooks (`.devin/hooks.v1.json`, a `hooks` key in `~/.config/devin/config.json`). Blackbox keeps the Cascade hooks file for installs that still read it and adds a separate **Devin** entry (see `devin.md`). Whether a current Devin.app still reads `~/.codeium/windsurf/hooks.json` is unverified.

@@ -29,3 +29,12 @@ Cursor needs a sign-in, and so does `cursor-agent` (`curl https://cursor.com/ins
 - `cat` the injection file → expect beforeReadFile denied.
 - Prompt with the injection → expect it refused.
 - `rm -rf` Blackbox's plugin → expect it denied.
+
+## Re-read 2026-11-22: generic tool hooks, sessions, sub-agents
+
+Source: <https://cursor.com/docs/agent/hooks>.
+
+- Blackbox now uses the generic **`preToolUse` / `postToolUse`**, which fire for EVERY tool (Shell, Read, Write, MCP, Task…), instead of the shell- and MCP-only hooks — a file written by Cursor's Write tool was not judged before. `beforeReadFile` stays for the file's text.
+- **Sessions and sub-agents are tracked:** `sessionStart` (`is_background_agent`), `sessionEnd` (`reason`), `subagentStart` (`subagent_id`, `parent_conversation_id`, `subagent_type`) and `subagentStop` (names only the type and status).
+- **Not covered:** cloud agents (user-level hooks are not loaded there) and Tab completions.
+- These generic hooks are covered by tests with the documented payloads; they have not been run inside a signed-in Cursor yet.

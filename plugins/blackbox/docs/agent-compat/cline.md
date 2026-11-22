@@ -20,3 +20,7 @@
 Cline is a VS Code extension (`code --install-extension saoudrizwan.claude-dev`) and needs a model provider key.
 - Turn on Enable Hooks.
 - Same checks as the others.
+
+## Re-read 2026-11-22: Cline's hooks are now SDK plugins — a gap
+
+<https://docs.cline.bot/customization/hooks.md> now says only "See details under SDK Plugins". Plugins live in `~/.cline/plugins` (global) or `<project>/.cline/plugins` and hook `beforeTool` / `afterTool` / `beforeRun` / `afterRun` (<https://docs.cline.bot/customization/plugins.md>, <https://docs.cline.bot/sdk/guides/writing-plugins.md>). Blackbox's script hooks in `~/Documents/Cline/Hooks` were written against the earlier reference and may not run in a current release. **Not covered until Blackbox ships a Cline plugin and it is run in the product.**

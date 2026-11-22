@@ -157,4 +157,4 @@ def host(agent_id: str) -> Optional[Host]:
     return BY_ID.get(agent_id)
 
 
-__all__ = ["BY_ID", "EVENTS", "HOSTS", "TOOL_KINDS", "Host", "host"]
+__all__ = ["BY_ID", "EVENTS", "HOSTS", "TOOL_KINDS", "USER_BIN_DIRS", "Host", "host"]

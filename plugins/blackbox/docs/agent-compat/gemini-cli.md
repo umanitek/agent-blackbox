@@ -23,3 +23,11 @@ Editing `settings.json` to remove Blackbox's hook, or to set `hooksConfig.disabl
 ## VM test
 `npm i -g @google/gemini-cli`. Run `gemini` with a Google sign-in, or `GEMINI_API_KEY`.
 - Same checks as the others; expect AfterTool to replace the output with the reason.
+
+## Re-read 2026-11-22: a matcher fix, profiles, switches
+
+Sources: <https://geminicli.com/docs/hooks/reference/>, <https://geminicli.com/docs/reference/configuration/>.
+
+- **Fix:** a lifecycle hook's `matcher` is compared as an EXACT string (`"startup"`), a tool hook's as a regex. Blackbox wrote `".*"` on every group, so its `SessionStart`, `SessionEnd` and `BeforeAgent` hooks could never match. Lifecycle groups now carry no matcher.
+- `AfterAgent` (a turn ended) is hooked. Gemini CLI documents no sub-agent hook event, so its sub-agents are not separate instances; their tool calls are judged in the session.
+- **Profiles:** `GEMINI_CLI_HOME` moves the home. **Switches:** `hooksConfig.enabled = false` and `hooksConfig.disabled` — reported.

@@ -27,7 +27,7 @@ from .instances import record, store, views
 from .instances.model import Profile, Running
 from .protect import config_edit, own_files
 
-__all__ = ["detail", "history", "live", "new_profiles", "profile_rows", "track", "wait"]
+__all__ = ["detail", "history", "live", "new_profiles", "profile", "profile_rows", "track", "wait"]
 
 #: How long one reading of the process list is reused.
 TABLE_SECONDS = 1.5
@@ -123,6 +123,13 @@ def history(**filters: Any) -> dict[str, Any]:
 
 def detail(key: str, **page: Any) -> Optional[dict[str, Any]]:
     return views.detail(key, **page)
+
+
+def profile(agent: str, home: str, project: str = "") -> Optional[dict[str, Any]]:
+    """One profile's detail from the real files (see :mod:`.profile_detail`); None when unknown."""
+    from . import profile_detail
+    found = profile_detail.read(agent, home, project)
+    return asdict(found) if found is not None else None
 
 
 def known(agent: str) -> bool:

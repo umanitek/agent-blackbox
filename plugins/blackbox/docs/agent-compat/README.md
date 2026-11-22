@@ -43,3 +43,16 @@ Tests: `tests/plugins/test_blackbox_agent_security.py`, `test_blackbox_agent_hoo
 Any weakening change, from any screen or caller, waits for the person to confirm it: the
 dashboard asks with the operating system's own password prompt (`plugins/blackbox/approvals`).
 An agent cannot answer that prompt for them.
+
+## What is covered, per agent, scope, launch mode and layer
+
+[coverage-matrix.md](coverage-matrix.md) is generated from the platform map and test registry
+(`dashboard/docs_routes/agent_registry.json`): for every agent, where its profiles live, every
+config scope and launch mode, every hook event, what was tested on a real machine and what is not
+covered. The dashboard's Docs page shows the same data under "What Blackbox protects", with a
+notice when an installed agent is newer than the last tested version. A test holds the registry,
+the code's catalogue (`kernel/agent_hosts`) and the generated page equal.
+
+Every instance is tracked (2026-11-22): sessions, the sub-agents they spawn, every config home,
+and an agent process Blackbox has no hook in — see `agent_hooks/instances`, `profiles.py`,
+`observe/` and `GET /api/agent-instances/*`.

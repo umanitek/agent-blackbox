@@ -27,3 +27,11 @@
 `npm i -g @openai/codex`. It needs a ChatGPT sign-in or API key.
 - Protect it, then trust the hook via `/hooks`.
 - Same four checks as Claude Code, plus "apply a patch that deletes `~/.hermes/plugins/blackbox/__init__.py`" → expect it refused.
+
+## Re-read 2026-11-22: instances, profiles, switches
+
+Source: <https://developers.openai.com/codex/hooks>, <https://developers.openai.com/codex/config-advanced>.
+
+- **Sub-agents are tracked:** `SubagentStart` / `SubagentStop` carry the PARENT `session_id` plus `agent_id` and `agent_type`; `SessionEnd` now ends the session (it does not run for sub-agents).
+- **Profiles:** `CODEX_HOME` moves the home (hooked when learned). `--profile <name>` only layers `<name>.config.toml` over the same home, so the same `hooks.json` applies.
+- **What keeps hooks from running:** an untrusted hook (Codex records trust per hook hash, so NEW events mean one more `/hooks` review), `[features].hooks = false`, `allow_managed_hooks_only` in `requirements.toml`, and Codex Cloud (local hooks do not run there). Hosted tools such as WebSearch do not pass the hook path.

@@ -13,6 +13,11 @@ Desktop's live view and history read. All GETs; hashed ids, no prompt text (see 
   verdict}], offset}``; 404 for an unknown key.
 * ``GET /api/agent-instances/profiles`` → every config home of every agent and what keeps
   Blackbox's hooks from running there.
+* ``GET /api/agent-instances/profile?agent=<id>&home=<a home from the list>[&project=<a folder a
+  session ran in>]`` → what that profile operates under, read from the real files (instruction
+  files with their redacted text, settings per scope, hooks, MCP servers, definitions, where
+  sessions are stored, the program and version, and risk notes derived from those facts);
+  404 for a home or agent Blackbox does not know.
 """
 
 # No ``from __future__ import annotations`` here: FastAPI must see the handlers' annotations.
@@ -55,6 +60,13 @@ def register(app: Any) -> None:
         found = tracking.detail(key[:200], offset=max(0, int(_number(offset))), limit=int(_number(limit, 200)))
         if found is None:
             return JSONResponse({"error": "no such instance"}, status_code=404, headers=NO_CACHE)
+        return JSONResponse(found, headers=NO_CACHE)
+
+    @app.get("/api/agent-instances/profile")
+    def agent_instances_profile(agent: str = "", home: str = "", project: str = "") -> Any:
+        found = tracking.profile(agent[:60], home[:1000], project[:1000])
+        if found is None:
+            return JSONResponse({"error": "no such profile"}, status_code=404, headers=NO_CACHE)
         return JSONResponse(found, headers=NO_CACHE)
 
     @app.get("/api/agent-instances/profiles")

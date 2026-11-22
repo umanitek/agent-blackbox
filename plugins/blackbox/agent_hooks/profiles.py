@@ -38,7 +38,7 @@ from ..kernel.agent_hosts import Host
 from ..kernel.bounded_files import read_json_object, read_small_text, write_json_object
 from .instances.model import Problem
 
-__all__ = ["homes", "problems", "remember", "variant"]
+__all__ = ["homes", "lookup", "problems", "remember", "variant"]
 
 MAX_CONFIG_BYTES = 2 * 1024 * 1024
 MAX_HOMES_PER_AGENT = 12
@@ -106,7 +106,8 @@ def variant(host: Host, folder: Path, *, default: bool) -> Host:
     return dataclasses.replace(host, config=str(folder / host.home_config))
 
 
-def _lookup(data: Any, dotted: str) -> Any:
+def lookup(data: Any, dotted: str) -> Any:
+    """The value at a dotted key of a settings dict (None when any part is missing)."""
     for part in dotted.split("."):
         data = data.get(part) if isinstance(data, dict) else None
     return data
@@ -129,7 +130,7 @@ def _switch_problems(host: Host, folder: Path, where: str) -> list[Problem]:
     for name, key, off in host.switches:
         path = folder / name
         data = _read(path)
-        if data is not None and _lookup(data, key) == off:
+        if data is not None and lookup(data, key) == off:
             out.append(Problem(host.id, "hooks-off", str(path),
                                f"{key} is {json.dumps(off)} in {where}: {host.name} runs no hooks there, Blackbox's included.",
                                fixable=True))
@@ -143,7 +144,7 @@ def problems(host: Host, folder: Path, projects: Iterable[str] = ()) -> list[Pro
     out = _switch_problems(host, settings_folder, "this profile")
     for path, key, value in MANAGED.get(host.id, ()):
         data = _read(Path(path))
-        if data is not None and _lookup(data, key) == value:
+        if data is not None and lookup(data, key) == value:
             out.append(Problem(host.id, "managed-only", path,
                                f"Your organisation's policy ({key}) lets {host.name} run only its own hooks; Blackbox's are skipped."))
     seen = set()
@@ -155,7 +156,7 @@ def problems(host: Host, folder: Path, projects: Iterable[str] = ()) -> list[Pro
             seen.add(path)
             data = _read(path)
             for key, off in dict.fromkeys((key, off) for _name, key, off in host.switches):
-                if data is not None and _lookup(data, key) == off:
+                if data is not None and lookup(data, key) == off:
                     out.append(Problem(host.id, "hooks-off", str(path),
                                        f"{key} is {json.dumps(off)} in this project: {host.name} runs no hooks there."))
     return out

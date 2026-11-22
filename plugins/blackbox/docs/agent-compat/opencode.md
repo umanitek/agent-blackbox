@@ -22,3 +22,7 @@
 `npm i -g opencode-ai`. It needs a provider key. A free OpenCode Zen model may run without a paid key; verify.
 - Edit Blackbox's plugin → expect the throw.
 - `cat` the injection file → expect the output replaced.
+
+## Re-read 2026-11-22: OpenCode V2 does not run V1 plugins — a gap
+
+<https://opencode.ai/docs/build/plugins/migrate-v1/>: "V1 plugin implementations do not run in V2". V2 plugins default-export `{ id, setup(ctx) }` and register `ctx.tool.hook("execute.before" | "execute.after")`; local plugins are discovered in `plugins/` (V2 also looks in `plugin/`). Blackbox's plugin is V1 (`tool.execute.before` / `after` returned from a function). **OpenCode V2 is not protected until the plugin is ported and run in the product.**
