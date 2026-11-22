@@ -170,7 +170,7 @@ def test_the_live_reads_refuse_while_the_shield_is_off(monkeypatch):
         with pytest.raises(ShieldApiError) as refused:
             read(_context(), {})
         assert refused.value.status == 409
-    assert api.overview(_context(), {})["graph"] == {"ready": False, "reachable": None, "keeping_last_lists": False,
+    assert api.overview(_context(), {})["graph"] == {"ready": False, "reachable": None, "keeping_last_lists": False, "syncing": False,
                                                        "complete": False, "domains": 0, "ips": 0}
 
 
@@ -188,6 +188,22 @@ def test_a_graph_that_is_down_is_not_reported_ready_and_the_kept_lists_are_said(
     up = ShieldContext(network_indicators=lambda: lists, graph_reachable=lambda: True,
                        ask_assistant=lambda message: AssistantAnswer(ok=True, answer="fine"))
     assert api.overview(up, {})["graph"]["ready"] is True
+
+
+def test_a_first_sync_is_never_reported_as_the_complete_graph(monkeypatch):
+    """KI-533 (E2E full3, 2026-11-22): during a first sync the overview said complete:true with 8,820
+    of ~1.16 M domains — every asset downloaded so far had been read. Complete means the node is no
+    longer downloading too."""
+    from plugins.blackbox.ruleset.live.network_lists import NetworkIndicators
+    monkeypatch.setattr(network_mode, "current", lambda: network_mode.build(enabled=True))
+    lists = NetworkIndicators(domains=frozenset({"bad.example"}), ips=frozenset(), assets=1, read=1, complete=True, built_at=1.0)
+    def graph(state):
+        return api.overview(ShieldContext(network_indicators=lambda: lists, graph_reachable=lambda: True,
+                                          graph_sync_state=lambda: state,
+                                          ask_assistant=lambda message: AssistantAnswer(ok=True, answer="fine")), {})["graph"]
+    assert graph("syncing")["complete"] is False and graph("syncing")["syncing"] is True
+    assert graph("syncing")["ready"] is True   # the lists in hand are enforced meanwhile
+    assert graph("synced")["complete"] is True and graph("synced")["syncing"] is False
 
 
 def test_only_public_addresses_from_the_graph_are_ever_marked():

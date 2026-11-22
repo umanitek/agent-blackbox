@@ -72,9 +72,13 @@ def _graph_state(context: ShieldContext, indicators: Any) -> dict[str, Any]:
     2026-11-21)."""
     reachable = context.graph_reachable() if context.graph_reachable else None
     have = indicators is not None
+    # "complete" is the WHOLE graph: lists read from every asset this node holds AND the node no
+    # longer downloading. WHY (KI-533, E2E full3): during a first sync it said complete with 8,820
+    # of ~1.16 M domains, because every asset downloaded SO FAR had been read.
+    syncing = (context.graph_sync_state() if context.graph_sync_state else "") == "syncing"
     return {"ready": have and reachable is not False, "reachable": reachable,
-            "keeping_last_lists": have and reachable is False,
-            "complete": bool(indicators and indicators.complete),
+            "keeping_last_lists": have and reachable is False, "syncing": syncing,
+            "complete": bool(indicators and indicators.complete) and not syncing,
             "domains": len(indicators.domains) if indicators else 0,
             "ips": len(indicators.ips) if indicators else 0}
 

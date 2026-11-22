@@ -20,6 +20,7 @@ from typing import Any
 from ... import ruleset, shields
 from ...kernel import threat_ids
 from ...kernel.config import load_blackbox_config
+from .. import sync_meter
 from ..assistant import runner as assistant_runner
 
 NO_CACHE = {"Cache-Control": "no-store"}
@@ -55,6 +56,7 @@ def context(body: bytes = b"", headers: Any = None) -> shields.ShieldContext:
         network_indicators=ruleset.network_indicators,
         network_indicators_now=lambda: ruleset.network_indicators(wait=False),
         graph_reachable=ruleset.graph_reachable,
+        graph_sync_state=sync_meter.current_state,
         ask_assistant=ask_assistant,
         lookup_hashes=lookup_hashes,
         blocking=load_blackbox_config().mode == "block",

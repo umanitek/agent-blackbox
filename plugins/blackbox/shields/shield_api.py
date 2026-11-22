@@ -78,6 +78,9 @@ class ShieldContext:
     #: ``graph_reachable() -> True/False/None`` — whether the threat graph can be read NOW (the lists
     #: above may be kept from before it went down); None where it cannot be asked.
     graph_reachable: Optional[Callable[[], Optional[bool]]] = None
+    #: ``graph_sync_state() -> "synced" | "syncing" | "unknown" | "unavailable"`` — whether this node
+    #: still downloads the verified graph (the dashboard's sync meter); None where it cannot be asked.
+    graph_sync_state: Optional[Callable[[], str]] = None
     request_body: bytes = b""
     request_headers: Mapping[str, str] = field(default_factory=dict)
 
