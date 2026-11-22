@@ -297,22 +297,33 @@ blackbox_dkg_supervisor() {
     return 0
 }
 
-# `blackbox_dkg_control start|stop|restart` — through the supervising service when there is
+# `blackbox_dkg_control start|stop|restart|reload` — through the supervising service when there is
 # one. A supervised node stopped or started with `dkg stop`/`dkg start` behind the service's
 # back makes the two fight: the service's node exits "failed", the service restarts it, and
 # the unit's ExecStartPre `dkg stop` (the orphan guard) kills the copy the installer just
 # started — the unit flaps, and the catch-up that follows fails "Daemon already running"
 # (KI-414). The plugin restarts through the service for the same reason (FIX-0014). A stop
 # through the service stays stopped (systemd does not restart a requested stop; launchd's
-# job is unloaded) until the matching start.
+# job is unloaded) until the matching start. `reload` makes the service re-read its definition
+# first: `restart` (kickstart) runs the definition launchd already HOLDS, so after a rollback
+# put the previous plist back it would keep running the failed attempt's (E2E recheck
+# 2026-11-21: exit 127, node down).
 blackbox_dkg_control() {
     local action="$1" target
     case "$(blackbox_dkg_supervisor)" in
-        systemd) systemctl "$action" blackbox-dkg ;;
-        systemd-user) systemctl --user "$action" blackbox-dkg ;;
+        systemd | systemd-user)
+            local -a systemctl_cmd=(systemctl)
+            [ "$(blackbox_dkg_supervisor)" = systemd-user ] && systemctl_cmd+=(--user)
+            if [ "$action" = reload ]; then
+                "${systemctl_cmd[@]}" daemon-reload || return 1
+                action=restart
+            fi
+            "${systemctl_cmd[@]}" "$action" blackbox-dkg
+            ;;
         launchd)
             target="gui/$(id -u)/$BLACKBOX_DKG_LAUNCHD_LABEL"
             case "$action" in
+                reload) blackbox_launchd_reload "$BLACKBOX_DKG_LAUNCHD_LABEL" ;;
                 stop) launchctl bootout "$target" 2>/dev/null || true ;;
                 start | restart)
                     if launchctl print "$target" >/dev/null 2>&1; then
@@ -328,7 +339,7 @@ blackbox_dkg_control() {
             esac
             ;;
         *)
-            if [ "$action" = restart ]; then
+            if [ "$action" = restart ] || [ "$action" = reload ]; then
                 blackbox_dkg stop && blackbox_dkg start
             else
                 blackbox_dkg "$action"
@@ -489,6 +500,25 @@ record_blackbox_dkg_runtime_fingerprint() {
     return 0
 }
 
+# Why the node did not come up, from what its service recorded: launchd's last exit status and
+# the last lines of the node's error log (E2E recheck 2026-11-21: "did not activate … within
+# 300s" hid "env: node: No such file or directory"). Prints nothing it cannot read.
+BLACKBOX_DKG_ERROR_LINES=8
+explain_dkg_not_ready() {
+    local log status
+    if [ "$(blackbox_dkg_supervisor)" = launchd ]; then
+        status="$(launchctl print "gui/$(id -u)/$BLACKBOX_DKG_LAUNCHD_LABEL" 2>/dev/null |
+            awk -F'= ' '/last exit (code|status)/ { print $2; exit }')"
+        [ -n "$status" ] && step "The node's service last exited with: $status"
+    fi
+    log="$(blackbox_dkg_launchd_error_log)"
+    if [ -s "$log" ]; then
+        step "The node's last errors ($log):"
+        tail -n "$BLACKBOX_DKG_ERROR_LINES" "$log" | sed 's/^/    /'
+    fi
+    return 0
+}
+
 wait_for_blackbox_dkg_runtime() {
     local verifier="$(blackbox_helper blackbox-dkg-runtime-fingerprint.py)"
     local expected_commit
@@ -505,6 +535,7 @@ wait_for_blackbox_dkg_runtime() {
         BLACKBOX_INSTALL_INCOMPLETE=true
         BLACKBOX_THREAT_GRAPH_INCOMPLETE=true
         warn "The DKG daemon did not activate npm build ${expected_commit:0:12} within ${BLACKBOX_DKG_RUNTIME_WAIT_SECONDS}s."
+        explain_dkg_not_ready
         step "A node holding a large graph can need longer: re-run with BLACKBOX_DKG_RUNTIME_WAIT_SECONDS=600"
         return 1
     fi
@@ -1363,6 +1394,37 @@ _node_ok() {
     [ "${maj:-0}" -ge "$NODE_MAJOR" ] 2>/dev/null
 }
 
+# Folders a Node may be installed in that a non-login shell (an SSH command, launchd) does not
+# have on its PATH: Homebrew's (Apple silicon and Intel) and its keg-only versions (node@24 is
+# not linked). E2E recheck 2026-11-21: an update over SSH missed Homebrew's node@24, installed a
+# second Node with nvm, and the node's service failed on it.
+BLACKBOX_NODE_PLACES="${BLACKBOX_NODE_PLACES:-/opt/homebrew/bin /usr/local/bin /opt/homebrew/opt/node/bin /usr/local/opt/node/bin}"
+BLACKBOX_NODE_KEG_ROOTS="${BLACKBOX_NODE_KEG_ROOTS:-/opt/homebrew/opt /usr/local/opt}"
+_installed_node_dirs() {
+    local dir root
+    for dir in $BLACKBOX_NODE_PLACES; do printf '%s\n' "$dir"; done
+    for root in $BLACKBOX_NODE_KEG_ROOTS; do
+        for dir in "$root"/node@*/bin; do
+            [ -d "$dir" ] && printf '%s\n' "$dir"
+        done
+    done | sort -t@ -k2 -rn      # the newest keg-only version first (node@24 before node@22)
+}
+
+# Puts the first folder holding a Node of at least NODE_MAJOR on PATH; fails when there is none.
+_use_installed_node() {
+    local dir
+    while IFS= read -r dir; do
+        [ -x "$dir/node" ] || continue
+        PATH="$dir:$PATH"
+        if _node_ok; then
+            export PATH
+            return 0
+        fi
+        PATH="${PATH#"$dir:"}"
+    done < <(_installed_node_dirs)
+    return 1
+}
+
 ensure_node() {
     if _node_ok; then
         ok "Node.js $(node -v) + npm $(npm -v 2>/dev/null || echo '?')"
@@ -1371,6 +1433,11 @@ ensure_node() {
     fi
     if [ "$SKIP_DKG" = true ]; then
         HAS_NODE=false
+        return 0
+    fi
+    if _use_installed_node; then
+        ok "Node.js $(node -v) (already on this machine, $(dirname "$(command -v node)")) + npm $(npm -v 2>/dev/null || echo '?')"
+        HAS_NODE=true
         return 0
     fi
     # nvm is the portable path on both macOS and Linux and needs no sudo.
@@ -3022,7 +3089,8 @@ install_rewritten_files() {
     printf '%s\n' "$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile" \
         "$HERMES_HOME/config.yaml" "$HERMES_HOME/.env" "$HERMES_HOME/plugins/blackbox" \
         "$BLACKBOX_DKG_HOME/config.json" \
-        "$BLACKBOX_DKG_CLI_DIR/package.json" "$BLACKBOX_DKG_CLI_DIR/package-lock.json"
+        "$BLACKBOX_DKG_CLI_DIR/package.json" "$BLACKBOX_DKG_CLI_DIR/package-lock.json" \
+        "$BLACKBOX_HOME/bin/Blackbox" "$BLACKBOX_HOME/bin/Blackbox Node"   # write_service_launcher
     for label in $BLACKBOX_LAUNCHD_LABELS; do
         printf '%s\n' "$HOME/Library/LaunchAgents/$label.plist"
     done
@@ -3272,10 +3340,11 @@ rollback_repo_head() {
     return 0
 }
 
-# An upgrade whose node was running before runs again on its restored settings.
+# An upgrade whose node was running before runs again on its restored settings: its service
+# re-reads the definition rollback_files put back (a restart would run the failed attempt's).
 rollback_restart_previous() {
     [ -e "$INSTALL_RECORD_DIR/node-was-running" ] || return 0
-    blackbox_dkg_control restart >/dev/null 2>&1 || blackbox_dkg start >/dev/null 2>&1 ||
+    blackbox_dkg_control reload >/dev/null 2>&1 || blackbox_dkg start >/dev/null 2>&1 ||
         warn "Could not restart the Blackbox DKG node that was running before."
     return 0
 }

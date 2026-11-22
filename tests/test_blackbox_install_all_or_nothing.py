@@ -265,7 +265,9 @@ false
 """)
 
     calls = (paths["home"] / "calls").read_text(encoding="utf-8").splitlines()
-    assert calls == ["dkg-control restart"]
+    # reload, not restart: the service must run the RESTORED definition, not the failed attempt's
+    # that launchd still holds (E2E recheck 2026-11-21: exit 127, node down after rollback).
+    assert calls == ["dkg-control reload"]
 
 
 def test_rollback_removes_only_the_docker_store_this_run_created(tmp_path: Path) -> None:
@@ -644,3 +646,22 @@ def test_no_docker_on_the_default_store_path_is_a_neutral_line_not_a_failure(tmp
 
 def test_an_explicit_blazegraph_choice_without_docker_still_says_how_to_get_it(tmp_path: Path) -> None:
     assert "hint" in _no_docker(tmp_path, "blazegraph")
+
+
+def test_rollback_takes_away_the_service_launchers_this_run_wrote_and_restores_older_ones(tmp_path: Path) -> None:
+    """E2E recheck 2026-11-21: a failed update left ~/.hermes/blackbox/bin/"Blackbox" and
+    "Blackbox Node" behind while it said nothing was left behind."""
+    paths = _sandbox(tmp_path)
+    launchers = paths["hermes"] / "blackbox" / "bin"
+    launchers.mkdir(parents=True)
+    (launchers / "Blackbox").write_text("#!/bin/sh\n# the previous install's\n", encoding="utf-8")
+
+    _run(paths, """
+install_record_begin
+printf 'new\\n' >"$BLACKBOX_HOME/bin/Blackbox"
+printf 'new\\n' >"$BLACKBOX_HOME/bin/Blackbox Node"
+false
+""")
+
+    assert sorted(p.name for p in launchers.iterdir()) == ["Blackbox"]
+    assert "the previous install's" in (launchers / "Blackbox").read_text(encoding="utf-8")

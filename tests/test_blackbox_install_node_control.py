@@ -66,6 +66,15 @@ BLACKBOX_DKG_LAUNCHD_LABEL={LABEL}
 HOME={shlex.quote(str(home))}
 PATH={shlex.quote(str(bin_dir))}:/usr/bin:/bin
 blackbox_dkg() {{ echo "dkg $*" >> {shlex.quote(str(calls))}; }}
+sleep() {{ :; }}
+id() {{ if [ "${{1:-}}" = -u ]; then echo {os.getuid()}; else command id "$@"; fi; }}
+BLACKBOX_LAUNCHD_GONE_TRIES=3
+blackbox_launchd_wait_gone() {{
+{_body(text, "blackbox_launchd_wait_gone")}
+}}
+blackbox_launchd_reload() {{
+{_body(text, "blackbox_launchd_reload")}
+}}
 blackbox_dkg_supervisor() {{
 {_body(text, "blackbox_dkg_supervisor")}
 }}
@@ -142,3 +151,50 @@ def test_windows_routes_the_node_through_its_logon_task():
     # outside the control function itself, nothing starts or stops the node directly
     outside = text.replace(control, "")
     assert not re.search(r"Invoke-BlackboxDkg (start|stop)\b", outside)
+
+
+def test_a_reload_makes_launchd_read_the_restored_definition(tmp_path):
+    """E2E recheck 2026-11-21: after a failed update the rollback put the previous plist back and
+    then `restart`ed — kickstart runs the definition launchd already holds, the failed attempt's
+    (exit 127, node down). `reload` boots it out, waits, and bootstraps the file on disk."""
+    uid = os.getuid()
+    plist = tmp_path / "home" / "Library" / "LaunchAgents" / f"{LABEL}.plist"
+    assert _control(tmp_path, "reload", darwin=True, plist=True, loaded=True) == [
+        f"launchctl bootout gui/{uid}/{LABEL}", f"launchctl bootstrap gui/{uid} {plist}"]
+
+
+def test_a_reload_under_systemd_rereads_the_unit_first(tmp_path):
+    assert _control(tmp_path, "reload", system_unit=True) == ["systemctl daemon-reload", "systemctl restart blackbox-dkg"]
+
+
+def test_a_node_that_does_not_come_up_says_why(tmp_path):
+    """The timeout alone hid the cause ("env: node: No such file or directory")."""
+    text = INSTALL_SH.read_text(encoding="utf-8")
+    dkg_home, bin_dir = tmp_path / "dkg", tmp_path / "bin"
+    dkg_home.mkdir(); bin_dir.mkdir()
+    (dkg_home / "launchd-errors.log").write_text("".join(f"line {n}\n" for n in range(20)) + "env: node: No such file or directory\n",
+                                                encoding="utf-8")
+    _fake(bin_dir, "launchctl", 'echo "\tlast exit code = 127: Command not found"\n')
+    script = f"""
+BLACKBOX_DKG_HOME={shlex.quote(str(dkg_home))}
+BLACKBOX_DKG_LAUNCHD_LABEL={LABEL}
+PATH={shlex.quote(str(bin_dir))}:/usr/bin:/bin
+step() {{ echo "step: $*"; }}
+blackbox_dkg_supervisor() {{ echo launchd; }}
+{_assignment(text, "BLACKBOX_DKG_ERROR_LINES")}
+blackbox_dkg_launchd_error_log() {{
+{_body(text, "blackbox_dkg_launchd_error_log")}
+}}
+explain_dkg_not_ready() {{
+{_body(text, "explain_dkg_not_ready")}
+}}
+explain_dkg_not_ready
+"""
+    result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
+    assert "last exited with: 127: Command not found" in result.stdout
+    assert "env: node: No such file or directory" in result.stdout and "line 0" not in result.stdout
+
+
+def _assignment(text: str, name: str) -> str:
+    return next(line for line in text.splitlines() if line.startswith(f"{name}="))
