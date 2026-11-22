@@ -88,6 +88,8 @@ def _flatten_finding_row(rec: dict[str, Any], default_fw: str) -> dict[str, Any]
         "session_id": detail.get("session_id"),
         "task_id": detail.get("task_id"),
         "turn_id": detail.get("turn_id"),
+        # The one tool call (or sandbox refusal) this row is about: distinct calls stay distinct rows.
+        "tool_call_id": str(detail.get("tool_call_id") or ""),
         "identifier": finding.get("identifier"),
         "category": finding.get("category"),
         "severity": finding.get("severity"),
@@ -114,7 +116,9 @@ def _flatten_finding_row(rec: dict[str, Any], default_fw: str) -> dict[str, Any]
 
 
 def _dedupe_finding_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Collapse repeated findings emitted by multiple API calls in one turn."""
+    """Collapse repeated findings emitted by multiple API calls in one turn. Two different tool
+    calls (or sandbox refusals) are never one row: KI-538 (E2E full4) — 13 File Shield refusals in a
+    session showed as 9, because rows with the same evidence in one session were taken as repeats."""
     deduped: dict[tuple, dict[str, Any]] = {}
     order: list[tuple] = []
     for row in rows:
@@ -126,6 +130,7 @@ def _dedupe_finding_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             scope,
             row.get("identifier"),
             row.get("evidence"),
+            row.get("tool_call_id") or "",
         )
         existing = deduped.get(key)
         if existing is None:
@@ -184,12 +189,19 @@ def count_findings() -> int:
     return len(_all_findings())
 
 
+#: Who records File Shield's OS-sandbox refusals: not an agent (any sandboxed agent's program), so
+#: never listed as one (KI-538: the Agents page offered "agent-sandbox" with "Stop protecting").
+SANDBOX_RECORDER = "agent-sandbox"
+#: Recorders whose logs are not an agent's.
+NOT_AGENTS = frozenset({SANDBOX_RECORDER})
+
+
 def local_frameworks() -> list[str]:
     """Frameworks that have written findings into this shared home (for the
     dashboard's agent list). Always includes ``hermes`` when its log exists."""
     out: list[str] = []
     for path, default_fw in log_store._findings_files():
-        if path.exists() and default_fw not in out:
+        if path.exists() and default_fw not in out and default_fw not in NOT_AGENTS:
             out.append(default_fw)
     return out
 
@@ -202,7 +214,7 @@ def local_active_frameworks() -> list[str]:
     """
     out = local_frameworks()
     for audit_path, framework in log_store._audit_files():
-        if framework in out or not audit_path.exists():
+        if framework in out or framework in NOT_AGENTS or not audit_path.exists():
             continue
         try:
             if any(line.strip() for line in audit_path.read_text(encoding="utf-8-sig").splitlines()):

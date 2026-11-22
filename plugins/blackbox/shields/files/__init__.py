@@ -30,6 +30,7 @@ import fnmatch
 from pathlib import Path
 from typing import Any, Mapping
 
+from ...kernel import agent_hosts
 from ..contract import Capability, Shield, ShieldMode
 from . import api, changes, events, mode, protect, status
 
@@ -66,6 +67,19 @@ def allows(_finding: Mapping[str, Any], current: ShieldMode) -> bool:
     return current.enabled
 
 
+def describe_change(option: str, values: list[str], added: bool) -> str:
+    """The approval dialog's sentence for a File Shield list change that turns protection down."""
+    if option == mode.OPT_SANDBOXED:
+        names = ", ".join(agent_hosts.BY_ID[value].name if value in agent_hosts.BY_ID else value for value in values[:4])
+        return f"Take {names} out of the agent sandbox (File Shield)"
+    shown = ", ".join(values[:4])
+    if option == mode.OPT_PROTECTED:
+        return f"Stop protecting {shown} (File Shield)"
+    if option == mode.OPT_FOLDERS:
+        return f"Stop watching {shown} for new files (File Shield)"
+    return f"{'Allow' if added else 'Remove'} {shown} ({option}, File Shield)"
+
+
 FILES = Shield(
     id=mode.SHIELD_ID, name="File Shield",
     tagline="Keep every AI agent away from the files and folders you protect — and see new files arrive.",
@@ -73,5 +87,5 @@ FILES = Shield(
     claims=claims, allows=allows, status=status.build, events=events.report, settings_fields=mode.fields,
     finding_kinds=FINDING_KINDS, capabilities=CAPABILITIES, packs=HERE / "packs",
     page=HERE / "page" / "files.html", attacks=HERE / "attacks.json", api=api.API,
-    prompt_check=protect.prompt_check,
+    prompt_check=protect.prompt_check, describe_change=describe_change,
 )

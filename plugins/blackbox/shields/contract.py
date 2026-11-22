@@ -332,6 +332,10 @@ class Shield:
     #: ``prompt_check(text, mode) -> findings`` for a prompt the person sends an agent (flags only:
     #: a prompt touches nothing; the tool call it leads to is what is refused). None = none.
     prompt_check: Optional[Callable[[str, ShieldMode], list[Finding]]] = None
+    #: ``describe_change(option, values, added) -> sentence`` for the person's approval dialog when a
+    #: list change turns protection down (KI-538: never internal ids); None = a plain sentence
+    #: built from the shield's name.
+    describe_change: Optional[Callable[[str, list[str], bool], str]] = None
 
     @property
     def folder(self) -> Path:

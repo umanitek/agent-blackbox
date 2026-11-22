@@ -161,7 +161,7 @@ def _record_hits(denials: list[FileChange]) -> None:
     from .protect import SANDBOX_AGENT, sandbox_hit
     for change in denials:   # one record each: the decision travels in the record's detail
         audit.record_for(SANDBOX_AGENT, event="sandbox_deny", findings=[sandbox_hit(change.item, change.path, change.program).to_dict()],
-                         detail={"decision": "block", "tool_name": change.program})
+                         detail={"decision": "block", "tool_name": change.program, "tool_call_id": f"sandbox:{change.seq}"})
 
 
 def since(seq: int) -> tuple[int, list[FileChange]]:

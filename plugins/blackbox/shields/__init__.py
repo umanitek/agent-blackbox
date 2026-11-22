@@ -41,27 +41,35 @@ from typing import Any, Iterable, Mapping, Optional
 from ..detection import Finding
 from ..kernel.config import one_entry_read
 from ..kernel.settings import SettingsValidator
+from . import extensions, files, network, trader
+from .change_words import describe_change, shield_name
 from .contract import (
     BrowserRoot,
     Capability,
     OfferDownload,
-    ShieldOffer,
     Pack,
     Shield,
     ShieldEvent,
     ShieldMode,
+    ShieldOffer,
     ShieldsSnapshot,
     ShieldStatus,
 )
-from .local_only import LOCAL_ONLY_SOURCE, LOCAL_ONLY_SOURCES, local_only as _local_only
+from .extensions import Registrar, ShieldExtension
+from .json_records import JsonValue
+from .local_only import LOCAL_ONLY_SOURCE, LOCAL_ONLY_SOURCES
+from .local_only import local_only as _local_only
 from .packs import TABLE_MAX_BYTES, ShieldData, load_shield_data, read_json_file
 from .self_test import SELF_TESTS, SelfTest
-from .json_records import JsonValue
 from .shield_api import MAX_WRITE_BYTES as API_MAX_WRITE_BYTES
 from .shield_api import NAME_PATTERN as API_NAME_PATTERN
-from .shield_api import AssistantAnswer, RawAnswer, ShieldApi, ShieldApiError, ShieldContext
-from . import extensions, files, network, trader
-from .extensions import Registrar, ShieldExtension
+from .shield_api import (
+    AssistantAnswer,
+    RawAnswer,
+    ShieldApi,
+    ShieldApiError,
+    ShieldContext,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +102,7 @@ __all__ = [
     "browser_roots",
     "call_api",
     "check",
+    "describe_change",
     "events",
     "get",
     "loaded_packs",
@@ -103,6 +112,7 @@ __all__ = [
     "self_tests",
     "settings_validators",
     "settings_view",
+    "shield_name",
     "snapshot",
     "statuses",
     "unlocked",

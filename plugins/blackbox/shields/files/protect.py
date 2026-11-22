@@ -29,6 +29,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
+from ... import audit
 from ...detection import PERSON_PROTECTED, Finding, protected_path_mentions, protected_path_touches
 from ..contract import FindingKind, ShieldMode
 from . import mode as mode_module
@@ -49,7 +50,7 @@ FINDING_KINDS: tuple[FindingKind, ...] = (
 ROUTES = {"read": "open", "copy": "copy", "write": "change", "name": "use", "tree": "reach (through its folder)",
           "mention": "ask for", "sandbox": "reach from inside the sandbox"}
 #: The agent named on a refusal the OS sandbox made (Layer 2): the log names the program, not the agent.
-SANDBOX_AGENT = "agent-sandbox"
+SANDBOX_AGENT = audit.SANDBOX_RECORDER   # not an agent: any sandboxed program (KI-538)
 
 
 def is_folder(item: str) -> bool:

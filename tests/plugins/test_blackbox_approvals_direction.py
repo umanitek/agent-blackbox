@@ -121,3 +121,21 @@ def test_the_gate_holds_a_widened_ssh_allow_list_end_to_end(state):
     stronger = client.post(f"/api/shields/{NET}/api/remote-settings", content=json.dumps({"lock": True}),
                            headers={"content-type": "application/json", "X-Blackbox-Token": "t"})
     assert stronger.status_code == 200 and applied == [{"lock": True}]
+
+
+# -- the person reads words, never internal ids (KI-538, E2E full4 2026-11-22) -------------------
+
+def test_a_weakening_list_change_is_described_in_the_persons_words():
+    files = "file-shield"
+    current = weakening.Current(settings={"mode": "block"},
+                                shields={files: {"enabled": True, "sandboxed": ["claude-code", "gemini-cli"],
+                                                 "protected": ["~/Documents/Taxes"]}, NET: NOW},
+                                allow_lists={files: frozenset(), NET: ALLOW})
+    reasons = weakening.reasons("/api/settings", {"shields": {files: {"sandboxed": ["claude-code"], "protected": []}}}, current)
+    assert "Take Gemini CLI out of the agent sandbox (File Shield)" in reasons
+    assert "Stop protecting ~/Documents/Taxes (File Shield)" in reasons
+    assert not any("gemini-cli" in reason or "file-shield" in reason for reason in reasons), reasons
+    off = weakening.reasons("/api/settings", {"shields": {NET: {"enabled": False}}}, CURRENT)
+    assert off == ["Turn off Network Shield"]
+    added = _reasons("ssh_allow", ["10.9.9.0/24"])
+    assert added and "Network Shield" in added[0] and NET not in added[0], added

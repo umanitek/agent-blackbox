@@ -196,7 +196,7 @@ def test_taking_an_agent_out_of_the_sandbox_waits_for_the_person_and_adding_one_
                                 allow_lists={"file-shield": frozenset()})
     out = approvals.reasons("/api/settings", {"shields": {"file-shield": {"sandboxed": []}}}, current)
     added = approvals.reasons("/api/settings", {"shields": {"file-shield": {"sandboxed": ["claude-code", "codex"]}}}, current)
-    assert out and "claude-code" in out[0] and added == []
+    assert out == ["Take Claude Code out of the agent sandbox (File Shield)"] and added == []   # KI-538: words, not ids
 
 
 def test_opening_an_editor_protected_says_why_it_can_not(entry, monkeypatch):
@@ -386,3 +386,24 @@ def test_an_editor_starts_inside_the_sandbox_with_its_own_sandbox_off_and_is_cal
 def test_the_editor_offer_says_what_running_protected_means(entry):
     apps = sandbox.status(files_mode.current())["apps"]
     assert apps and all("web-page sandbox off" in app["note"] for app in apps)
+
+
+# -- refusals are counted one by one, and the sandbox is not an agent (KI-538) --------------------
+
+def test_every_refusal_is_its_own_row_even_with_the_same_path_in_one_session(home):
+    finding = {"identifier": "files:folder-hit", "severity": "critical", "title": "x", "evidence": "read /v/plan.txt — protected folder /v",
+               "confirmed": False, "source": "custom", "tool_name": "terminal"}
+    for call in ("call-1", "call-2", "call-3"):
+        audit.record_for("claude-code", event="pre_tool_call", findings=[dict(finding)],
+                         detail={"session_id": "claude-code:abc", "tool_call_id": call, "decision": "block"})
+    rows = [row for row in audit.read_findings(limit=50) if row["identifier"] == "files:folder-hit"]
+    assert len(rows) == 3
+
+
+def test_sandbox_refusals_are_counted_each_and_the_recorder_is_not_listed_as_an_agent(home, entry):
+    vault = str(home / "Documents" / "Vault")
+    changes.record([{"path": f"{vault}/secret.txt", "kind": "denied", "program": "cat"}] * 3, files_mode.current())
+    hits = [hit for hit in events.hits(limit=50) if hit["agent"] == audit.SANDBOX_RECORDER]
+    assert len(hits) == 3
+    assert audit.SANDBOX_RECORDER not in audit.local_frameworks()
+    assert audit.SANDBOX_RECORDER not in audit.local_active_frameworks()

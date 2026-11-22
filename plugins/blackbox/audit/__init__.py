@@ -27,6 +27,8 @@ from .findings import (
     blocked_counts_by_identifier,
     local_active_frameworks,
     local_frameworks,
+    NOT_AGENTS,
+    SANDBOX_RECORDER,
     read_file_access,
     read_findings,
     record,
@@ -50,6 +52,8 @@ from .share_ledger import (
 )
 
 __all__ = [
+    "NOT_AGENTS",
+    "SANDBOX_RECORDER",
     "allow_report",
     "blocked_counts_by_identifier",
     "count_audit",

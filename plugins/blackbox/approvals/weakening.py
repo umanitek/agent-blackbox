@@ -117,7 +117,7 @@ def _shields(sections: Any, current: Current) -> list[str]:
             continue
         now = current.shields.get(shield_id) or {}
         if section.get("enabled") is False and now.get("enabled", True) is not False:
-            out.append(f"Turn off {shield_id}")
+            out.append(f"Turn off {_name(shield_id)}")
         allow = current.allow_lists.get(shield_id)
         for option, chosen in section.items():
             if not isinstance(chosen, list):
@@ -131,12 +131,31 @@ def _shields(sections: Any, current: Current) -> list[str]:
             if allow is None or option in allow:
                 added = [value for value in chosen if value not in was]
                 if added:
-                    out.append(f"Allow {', '.join(map(str, added[:4]))} ({option} in {shield_id})")
+                    out.append(_describe(shield_id, option, added, True))
             if allow is None or option not in allow:
                 dropped = [value for value in was if value not in chosen]
                 if dropped:
-                    out.append(f"Turn off {', '.join(map(str, dropped[:4]))} in {shield_id}")
+                    out.append(_describe(shield_id, option, dropped, False))
     return out
+
+
+def _name(shield_id: str) -> str:
+    from .. import shields
+    try:
+        return shields.shield_name(shield_id)
+    except Exception:   # health: allow BLE001 -- the registry unreadable: the id still names it
+        return shield_id
+
+
+def _describe(shield_id: str, option: str, values: list[Any], added: bool) -> str:
+    """The person's sentence for a weakening list change (KI-538: words, not internal ids)."""
+    from .. import shields
+    shown = [str(value) for value in values]
+    try:
+        return shields.describe_change(shield_id, option, shown, added)
+    except Exception:   # health: allow BLE001 -- a describer failed: a plain sentence still asks
+        verb = "Allow" if added else "Remove"
+        return f"{verb} {', '.join(shown[:4])} ({option} in {shield_id})"
 
 
 def _agents(body: Mapping[str, Any], _current: Current) -> list[str]:
