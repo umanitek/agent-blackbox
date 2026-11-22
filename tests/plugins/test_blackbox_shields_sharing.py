@@ -40,8 +40,13 @@ from plugins.blackbox.shields.packs import load_packs
 PLUGIN_ROOT = Path(shields.__file__).resolve().parent.parent
 REPORTER = "0x" + "1" * 40
 
-#: Each registered shield's tested attack rows, with their tool calls.
-ATTACK_ROWS = {"trader": ATTACKS}
+#: Each registered shield's tested attack rows, with their tool calls. Every registered shield
+#: needs an entry (test_every_registered_shield_has_its_attack_rows) so a new shield is reviewed here.
+#: Network Shield's is empty on purpose: what it protects is hosts (lockdown, the person's block list,
+#: public lists), never files, so the core FILE-access rule this twin check asks cannot twin it; its
+#: own findings are local-only like every shield's (registry ``source="secret"``). (E2E recheck
+#: 2026-11-21: the missing entry made this whole file fail to collect with KeyError 'network-shield'.)
+ATTACK_ROWS = {"trader": ATTACKS, "network-shield": ()}
 
 
 # -- twins ---------------------------------------------------------------------------
