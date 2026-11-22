@@ -7,6 +7,7 @@ KI-573, KI-574 — real runs on the test VM, 2026-11-22).
 * KI-567: five background sub-agents made one Claude Code prompt count six times; a Codex
   sub-agent's task counted as a prompt of its session.
 * KI-576: the inline ``--settings`` JSON as ``ps`` prints it (quotes gone) was never parsed.
+* KI-578: Codex's ``-c features.hooks=false`` (a one-run config override) was not named.
 * KI-569: hooks switched off by ``--settings '{"disableAllHooks": true}'`` or a project's
   settings showed only "Blackbox has seen no hook event from this process".
 * KI-573: a headless ``cline … --json`` run showed as "interactive"; Cline's prompt is wrapped
@@ -180,6 +181,30 @@ def test_inline_settings_json_is_read_whole_from_the_kernels_argv(monkeypatch):
     monkeypatch.setattr(observe.platform, "process_argv", lambda pid: ["/bin/zsh", "-l"])
     [row] = observe.running(_proc(_PS_INLINE))
     assert "disableAllHooks = true" in row.hooks_skipped
+
+
+#: The round-2 Codex run with its hooks switched off for one run (KI-578, test VM 2026-11-22), as ``ps`` lists it.
+_PS_CODEX_OFF = ("/opt/homebrew/bin/codex exec --json --skip-git-repo-check --dangerously-bypass-hook-trust Run exactly: "
+                 "ping -c 30 127.0.0.1 >/dev/null && echo done -m gpt-5-nano -s danger-full-access -c features.hooks=false")
+
+
+@pytest.mark.parametrize("override", ["-c features.hooks=false", "--config features.hooks=false", "--config=features.hooks=false",
+                                      "-c features.codex_hooks=false", "-c 'features.hooks = false'"])
+def test_codex_hooks_switched_off_on_its_command_line_are_named_at_once(override):
+    command = _PS_CODEX_OFF.replace("-c features.hooks=false", override)
+    [row] = observe.running(_proc(command))
+    key = "features.codex_hooks" if "codex_hooks" in override else "features.hooks"
+    assert row.hooks_skipped.startswith(f"started with {override.split()[0].split('=')[0]} {key}")
+    assert row.hooks_skipped.endswith("which switches every hook off")
+    [unprotected] = views.live([row])["unprotected"]   # named in the first view, not after the grace period
+    assert unprotected["reason"] == row.hooks_skipped
+
+
+def test_a_codex_override_that_keeps_hooks_on_names_nothing():
+    # The last is the TEXT "false" (TOML string), which Codex does not read as off.
+    for kept in ("-c features.hooks=true", "-c model=o4", """-c 'features.hooks="false"'"""):
+        [row] = observe.running(_proc(_PS_CODEX_OFF.replace("-c features.hooks=false", kept)))
+        assert row.hooks_skipped == ""
 
 
 def test_hooks_switched_off_by_the_projects_settings_name_the_file(_fresh, monkeypatch):

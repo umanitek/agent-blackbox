@@ -11,6 +11,7 @@ Usage::
 from __future__ import annotations
 
 import json
+import tomllib
 from pathlib import Path
 
 from ...kernel.agent_hosts import Host
@@ -18,8 +19,6 @@ from ...kernel.bounded_files import read_small_text
 from . import platform
 
 
-#: The options that hand an agent extra settings on its command line: a JSON text or a file.
-_SETTINGS_OPTIONS = {"claude-code": ("--settings",)}
 MAX_SETTINGS_BYTES = 256 * 1024
 
 
@@ -55,23 +54,59 @@ def _inline_json(given: str, option: str, command: str) -> object:
     return value
 
 
+def _toml_value(text: str) -> object:
+    """A ``-c key=value`` value as Codex reads it: TOML (``false``, ``0``, ``"x"``), else the text."""
+    try:
+        return tomllib.loads(f"value = {text}")["value"]
+    except (tomllib.TOMLDecodeError, ValueError):
+        return text
+
+
+def _key_value_off(host: Host, given: str) -> str:
+    """The switch a ``key=value`` override turns to OFF ("" = none): ``features.hooks=false``."""
+    key, sep, raw = given.partition("=")
+    if not sep:
+        return ""
+    value = _toml_value(raw.strip())
+    return next((f"{key.strip()}={raw.strip()}" for _name, switch, off in host.switches
+                 if key.strip() == switch and value == off and type(value) is type(off)), "")
+
+
+def _run_setting_off(host: Host, option: str, form: str, given: str, command: str) -> str:
+    """Why one ``option given`` pair on the command line switches *host*'s hooks off ("" = it does not)."""
+    if form == "key=value":
+        found = _key_value_off(host, given)
+        return f"started with {option} {found}, which switches every hook off" if found else ""
+    if given.lstrip().startswith("{"):
+        found = _off_in(_inline_json(given, option, command), host)
+        return f"started with {option} that sets {found}, which switches every hook off" if found else ""
+    text = read_small_text(given, MAX_SETTINGS_BYTES) if given.startswith(("/", "~", ".")) or "/" in given else None
+    found = _off_in(_settings_value(text or ""), host) if text else ""
+    return f"started with {option} {given}, which sets {found} and switches every hook off" if found else ""
+
+
+def _run_settings(host: Host, args: list[str]) -> list[tuple[str, str, str]]:
+    """Each ``(option, form, value)`` *args* hand *host*, written ``-c v`` or ``--config=v``."""
+    forms, found = dict(host.run_settings), []
+    for position, word in enumerate(args):
+        option, sep, attached = word.partition("=")
+        if word in forms and position + 1 < len(args):
+            found.append((word, forms[word], args[position + 1]))
+        elif sep and option in forms:
+            found.append((option, forms[option], attached))
+    return found
+
+
 def hooks_switched_off(host: Host, args: list[str], pid: int, command: str = "") -> str:
-    """Why *host*'s hooks are off for this run, naming EXACTLY what did it (KI-569): a
-    ``--settings`` text (KI-576: inline JSON, whole) or file on its command line, or its project's
+    """Why *host*'s hooks are off for this run, naming EXACTLY what did it: an option that hands
+    the run settings (:attr:`Host.run_settings` — Claude Code's ``--settings`` text, KI-576 inline
+    JSON whole, or file, KI-569; Codex's ``-c features.hooks=false``, KI-578), or its project's
     settings file (the process's own working folder, ``Host.project_files``). *command*: the
     process list's line, read when *args* lost the JSON's quotes. "" when nothing this can read does."""
-    for position, word in enumerate(args[:-1]):
-        if word in _SETTINGS_OPTIONS.get(host.id, ()):
-            given = args[position + 1]
-            if given.lstrip().startswith("{"):
-                found = _off_in(_inline_json(given, word, command), host)
-                if found:
-                    return f"started with --settings that sets {found}, which switches every hook off"
-            else:
-                text = read_small_text(given, MAX_SETTINGS_BYTES) if given.startswith(("/", "~", ".")) or "/" in given else None
-                found = _off_in(_settings_value(text or ""), host) if text else ""
-                if found:
-                    return f"started with --settings {given}, which sets {found} and switches every hook off"
+    for option, form, given in _run_settings(host, args):
+        found = _run_setting_off(host, option, form, given, command)
+        if found:
+            return found
     folder = platform.process_cwd(pid) if host.project_files else ""
     for relative in host.project_files if folder else ():
         text = read_small_text(str(Path(folder) / relative), MAX_SETTINGS_BYTES)

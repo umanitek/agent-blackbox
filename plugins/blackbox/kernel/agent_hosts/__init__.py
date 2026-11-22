@@ -149,6 +149,11 @@ class Host:
     switches: tuple[tuple[str, str, object], ...] = ()
     #: Per-project files (relative to a project folder) that can carry the same switches.
     project_files: tuple[str, ...] = ()
+    #: Command-line options that hand the agent settings for ONE run, so they can carry the same
+    #: switches: ``(option, form)`` — ``json`` (a JSON text or a settings file: Claude Code's
+    #: ``--settings``) or ``key=value`` (one config key, its value in TOML: Codex's ``-c`` /
+    #: ``--config``); read by ``agent_hooks.observe``.
+    run_settings: tuple[tuple[str, str], ...] = ()
     #: More files of Blackbox's own this agent needs beside :attr:`config`: ``(path relative to
     #: the home folder, form)`` — the form names the template ``own_files`` writes
     #: (``cline-plugin``: Cline's SDK plugin; ``opencode-v2``: OpenCode 2's plugin).
@@ -183,13 +188,14 @@ HOSTS: tuple[Host, ...] = (
          signs=(".claude",), commands=("claude",), matcher="*",
          home_env="CLAUDE_CONFIG_DIR", home_config="settings.json", programs=("claude",), packages=("@anthropic-ai/claude-code",),
          switches=(("settings.json", "disableAllHooks", True), ("settings.local.json", "disableAllHooks", True)),
-         project_files=(".claude/settings.json", ".claude/settings.local.json"),
+         project_files=(".claude/settings.json", ".claude/settings.local.json"), run_settings=(("--settings", "json"),),
          hook_timeout=HookTimeout("timeout")),
     Host("codex", "Codex", "nested", ".codex/hooks.json", _CLAUDE_EVENTS,
          signs=(".codex",), commands=("codex",),
          trust_note="Codex asks you to review new hooks once: run codex, type /hooks and trust Blackbox's.",
          home_env="CODEX_HOME", home_config="hooks.json", programs=("codex",), packages=("@openai/codex",),
          switches=(("config.toml", "features.hooks", False), ("config.toml", "features.codex_hooks", False)),
+         run_settings=(("-c", "key=value"), ("--config", "key=value")),
          hook_timeout=HookTimeout("timeout", caps=(("SessionEnd", 3),))),
     # Cursor (2026-11-22): the generic preToolUse / postToolUse fire for EVERY tool (Shell, Read,
     # Write, MCP, Task…), so they replace the shell- and MCP-only hooks; beforeReadFile stays for
