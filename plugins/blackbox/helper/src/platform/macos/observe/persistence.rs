@@ -127,15 +127,20 @@ pub fn file_items(known: &BTreeMap<String, Item>) -> Vec<Item> {
 }
 
 /// Login and background items from `sfltool dumpbtm` (blocks of `Key: value` lines after `#N:`).
-/// Items whose URL is a plist in a watched job folder are left to the folder scan.
+/// Items whose URL is a plist in a watched job folder are left to the folder scan. A `developer`
+/// entry is only macOS's grouping of one developer's items (no program; its URL is "(null)") —
+/// never a thing that runs, so it is not listed (E2E recheck 2026-11-21: two "(null)" rows).
+/// `sfltool` writes a missing value as "(null)"; it is read as empty.
 pub fn parse_btm(text: &str) -> Vec<Item> {
     let mut items = Vec::new();
     let mut fields: BTreeMap<String, String> = BTreeMap::new();
     let flush = |fields: &mut BTreeMap<String, String>, items: &mut Vec<Item>| {
+        fields.retain(|_, value| value != "(null)");
         let identifier = fields.get("Identifier").cloned().unwrap_or_default();
         let url = fields.get("URL").cloned().unwrap_or_default();
         let in_folder = url.contains("/LaunchAgents/") || url.contains("/LaunchDaemons/");
-        if !identifier.is_empty() && !in_folder {
+        let grouping = fields.get("Type").is_some_and(|kind| kind.starts_with("developer"));
+        if !identifier.is_empty() && !in_folder && !grouping {
             let program = fields.get("Executable Path").cloned().unwrap_or_else(|| url.trim_start_matches("file://").to_string());
             let label = fields.get("Name").cloned().unwrap_or_else(|| identifier.clone());
             let mark = format!("{}|{}|{}", fields.get("Type").cloned().unwrap_or_default(), fields.get("Disposition").cloned().unwrap_or_default(), program);
@@ -349,5 +354,15 @@ mod tests {
         fs::write(&plist, "<?xml version=\"1.0\"?><plist version=\"1.0\"><dict><key>Label</key><string>com.test.job</string><key>ProgramArguments</key><array><string>/usr/bin/true</string></array></dict></plist>").unwrap();
         assert_eq!(job_of(&plist), ("com.test.job".to_string(), "/usr/bin/true".to_string()));
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_developer_grouping_is_not_a_login_item_and_null_is_empty() {
+        // Real `sfltool dumpbtm` shape (Tart VM, 2026-11-21): developer groupings carry no program.
+        let text = " #1:\n                 Name: (null)\n       Developer Name: (null)\n                 Type: developer (0x20)\n           Identifier: Unknown Developer\n                  URL: (null)\n    #1: 16.limit.maxfiles\n #4:\n                 Name: Cirrus Labs, Inc.\n                 Type: developer (0x20)\n           Identifier: Cirrus Labs, Inc.\n                  URL: (null)\n #6:\n                 Name: Helper\n                 Type: app (0x2)\n           Identifier: com.example.helper\n                  URL: (null)\n      Executable Path: /Applications/Example.app/Contents/MacOS/helper\n";
+        let items = parse_btm(text);
+        assert_eq!(items.len(), 1, "{items:?}");
+        assert_eq!(items[0].id, "com.example.helper");
+        assert_eq!(items[0].program, "/Applications/Example.app/Contents/MacOS/helper");
     }
 }
