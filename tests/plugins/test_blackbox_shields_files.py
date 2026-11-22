@@ -296,11 +296,14 @@ def test_a_change_inside_a_protected_item_and_a_refusal_are_alerts_naming_only_t
     kinds = {row["kind"] for row in rows}
     assert {"protected-change", "folder-hit"} <= kinds
     for row in rows:
-        assert row["title"] == "File Shield" and row["item_name"] == "BlackboxVault"
+        assert row["title"].startswith("File Shield") and row["item_name"] == "BlackboxVault"
+        # KI-PENDING-c4249e: the lock-screen text never names the protected item, only "details" does.
+        assert "BlackboxVault" not in row["text"] and "BlackboxVault" in row["detail"]
         assert "notes.txt" not in row["text"] and str(home) not in row["text"] and "~/" not in row["text"]
         assert row["key"]
     hit = next(row for row in rows if row["kind"] == "folder-hit")
-    assert hit["text"].startswith("File Shield stopped an AI agent reaching BlackboxVault")
+    assert hit["title"] == "File Shield stopped Your Hermes agent"
+    assert hit["text"] == "File Shield stopped Your Hermes agent from reaching something you protect."
 
 
 def test_a_new_file_in_a_watched_folder_is_not_a_file_shield_alert(audited, home):

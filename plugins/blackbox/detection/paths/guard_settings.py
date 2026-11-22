@@ -52,7 +52,7 @@ from ...kernel.bounded_files import read_small_text
 from ...kernel.config import BlackboxConfig, load_blackbox_config
 from . import guard_commands, guard_paths, guard_places, guard_secrets, guard_startup, protected, shell_files
 
-MATCHED = "blackbox-settings"
+MATCHED = threat_ids.SELF_PROTECTION
 _TITLE = "Change to Blackbox's own settings"
 #: What this rule cannot see, said plainly (each is a reason for the layers beyond it).
 KNOWN_LIMITS = (

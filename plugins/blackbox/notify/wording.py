@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 from typing import Any, Mapping, Optional
 
+from ..kernel import threat_ids
 from ..kernel.agent_hosts import BY_ID, DECISION_TOO_LATE
 from .model import Notice
 
@@ -28,6 +29,10 @@ WHAT = {
     "skill": "tried to use a suspicious skill", "secret": "was about to expose a secret",
     "ioc": "reached for an address on the threat list",
 }
+#: What an attempt on Blackbox itself was, by the finding's title (detection.paths.guard_secrets
+#: names reading its keys; every other self-protection finding is a change).
+SELF_PROTECTION_WHAT = {"Would read Blackbox's key files": "tried to read Blackbox's own keys",
+                        "": "tried to change, remove or switch off Blackbox"}
 #: Why, in a few words, by where the rule came from.
 WHY = {"public": "it matches the verified threat graph", "community": "the community flagged it",
        "heuristic": "it looks like a known attack pattern", "custom": "one of your own rules covers it",
@@ -74,6 +79,9 @@ def finding(row: Mapping[str, Any]) -> Optional[Notice]:
                       **common)
     what = WHAT.get(str(row.get("category") or ""), "did something Blackbox watches for")
     why = WHY.get(str(row.get("source") or ""), "a Blackbox rule covers it")
+    if threat_ids.is_self_protection(identifier):
+        # Blackbox protecting itself, said as that (KI-PENDING-c4249e: it read "reached for a sensitive file").
+        what, why = SELF_PROTECTION_WHAT.get(str(row.get("title") or ""), SELF_PROTECTION_WHAT[""]), "Blackbox protects itself"
     if str(row.get("decision") or "") == DECISION_TOO_LATE:
         # Decided to stop, but the agent's hook had stopped waiting: the action RAN (KI-PENDING-f5765e).
         return Notice(id=key, kind="too-late", level="critical", title=f"Blackbox could not stop {name} in time",

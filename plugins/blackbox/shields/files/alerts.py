@@ -17,15 +17,18 @@ notification per alert it has not seen (``key``). These kinds:
 WHY (KI-532, E2E full3 2026-11-22): a change inside a protected folder raised no notification at
 all, and a refusal reached the person only as the generic "Blocked: a critical threat".
 
-Lock-screen safe: ``text`` and ``title`` name an item by its LAST NAME only (``Taxes``, never
-``~/Documents/Taxes``) and never a file inside it, an address or a user name; the full item is in
-``item`` for the app's own window. A watched folder's file is never named on the lock screen.
+Lock-screen safe: ``text`` and ``title`` never name a protected item, a file, an address or a user
+name — they name the AGENT (its product) and what happened (KI-PENDING-c4249e: "… reaching Secret"
+named a protected folder, which can itself be private, and not the agent). The item's last name
+(``Taxes``) is in ``detail`` (shown when the person chose "show details") and ``item_name``; the
+full item is in ``item`` for the app's own window.
 
 Shape of one alert (all strings except ``ts``)::
 
     {"key": "protected-change:12", "kind": "protected-change", "ts": 1795310813.2,
      "severity": "high", "item": "~/Documents/Taxes", "item_name": "Taxes",
-     "agent": "", "title": "File Shield", "text": "Something changed inside Taxes, which you protect."}
+     "agent": "", "title": "File Shield", "text": "Something changed inside a folder you protect.",
+     "detail": "Something changed inside Taxes, which you protect."}
 """
 
 from __future__ import annotations
@@ -35,6 +38,7 @@ import os
 from typing import Any
 
 from ... import audit
+from ...kernel import agent_hosts
 from ..contract import ShieldAlert
 from . import changes, sandbox, watched
 from .protect import FILE_HIT_ID, FOLDER_HIT_ID, SANDBOX_AGENT
@@ -59,10 +63,18 @@ _WATCHED_TEXT = {
 }
 
 
-def _alert(key: str, kind: str, ts: float, severity: str, item: str, agent: str, text: str) -> dict[str, Any]:
+def _alert(key: str, kind: str, ts: float, severity: str, item: str, agent: str, text: str, detail: str = "",
+           title: str = TITLE) -> dict[str, Any]:
     return {"key": key, "kind": kind, "ts": ts, "severity": severity, "item": item,
-            "item_name": item_name(item), "agent": agent, "title": TITLE, "text": text,
+            "item_name": item_name(item), "agent": agent, "title": title, "text": text,
+            "detail": detail or (f"{text} ({item})" if item else text),
             "category": _CATEGORY.get(kind, "security")}
+
+
+def _agent_name(agent: str) -> str:
+    """The agent's product name (``Claude Code``), for the lock screen."""
+    host = agent_hosts.BY_ID.get(agent)
+    return host.name if host is not None else "Your Hermes agent" if agent in ("", "hermes") else agent
 
 
 def _change_alerts() -> list[dict[str, Any]]:
@@ -72,7 +84,7 @@ def _change_alerts() -> list[dict[str, Any]]:
             continue   # a sandbox denial is alerted from its hit; a watched folder is not protected
         verb = _CHANGED.get(change.kind, "Something changed inside")
         rows.append(_alert(f"protected-change:{change.seq}", "protected-change", change.ts, "high", change.item, "",
-                           f"{verb} {item_name(change.item)}, which you protect."))
+                           f"{verb} a folder you protect.", f"{verb} {item_name(change.item)}, which you protect."))
     return rows
 
 
@@ -89,11 +101,12 @@ def _hit_alerts() -> list[dict[str, Any]]:
         item = str((row.get("fields") or {}).get("item") or "")
         sandbox = row.get("framework") == SANDBOX_AGENT
         agent = "" if sandbox else str(row.get("framework") or "")
-        who = "a program in the agent sandbox" if sandbox else "an AI agent"
+        who = "a program in the agent sandbox" if sandbox else _agent_name(agent)
         name = item_name(item) if item else "an item you protect"
         ts = float(row.get("ts") or 0)
         rows.append(_alert(f"{kind}:{ts:.6f}:{name}", kind, ts, "critical", item, agent,
-                           f"File Shield stopped {who} reaching {name}."))
+                           f"File Shield stopped {who} from reaching something you protect.",
+                           f"File Shield stopped {who} reaching {name}.", title=f"File Shield stopped {who}"))
     return rows
 
 
@@ -118,7 +131,7 @@ def shield_alerts() -> list[ShieldAlert]:
     """The same alerts as the framework's typed ``Shield.alerts`` (``notify`` reads these). A
     refusal names the finding it speaks for, so that finding is not announced twice."""
     return [ShieldAlert(key=row["key"], kind=row["kind"], ts=row["ts"], severity=row["severity"], title=row["title"],
-                        text=row["text"], detail=f"{row['text']} ({row['item']})" if row["item"] else "", agent=row["agent"],
+                        text=row["text"], detail=row["detail"] if row["item"] else "", agent=row["agent"],
                         finding={"file-hit": FILE_HIT_ID, "folder-hit": FOLDER_HIT_ID}.get(row["kind"], ""),
                         category=row["category"])
             for row in alerts()]
