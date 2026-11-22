@@ -114,4 +114,8 @@ impl Observer for MacObserver {
     fn run_system_watch(&self) {
         system_guard::run();
     }
+
+    fn run_file_watch(&self) {
+        super::file_shield::run();
+    }
 }

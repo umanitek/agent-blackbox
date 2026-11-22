@@ -159,6 +159,9 @@ pub trait Observer: Send + Sync {
     /// The system watch loop — exposure, startup items, tampering, posture and the posture fixes
     /// — with its own small plan and report. Runs until the process ends.
     fn run_system_watch(&self);
+    /// File Shield's real-time watch — changes inside protected items and watched folders, as the
+    /// operating system reports them — with its own small plan and report. Runs until the process ends.
+    fn run_file_watch(&self);
 }
 
 #[cfg(test)]

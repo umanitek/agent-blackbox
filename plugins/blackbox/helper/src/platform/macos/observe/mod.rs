@@ -5,11 +5,13 @@
 //! remote logins as macOS logs them, joined with the inbound sessions on the remote-access ports.
 //! [`exposure`] (listeners the network can reach), [`persistence`] (what starts by itself),
 //! [`tamper`] (DNS / proxy / VPN / firewall / Blackbox's helper changed) and [`posture`] (the
-//! facts behind the posture check) — read by [`super::system_guard`].
+//! facts behind the posture check) — read by [`super::system_guard`]. [`file_watch`]: File
+//! Shield's real-time file events (FSEvents) — read by [`super::file_shield`].
 //! Rule (tested below): nothing here reaches into `enforce` — observing never changes pf,
 //! DNS or a process.
 
 pub mod exposure;
+pub mod file_watch;
 pub mod logstream;
 pub mod persistence;
 pub mod posture;
@@ -27,6 +29,7 @@ mod tests {
         ("observe/remote.rs", include_str!("remote.rs")),
         ("observe/remote_procs.rs", include_str!("remote_procs.rs")),
         ("observe/exposure.rs", include_str!("exposure.rs")),
+        ("observe/file_watch.rs", include_str!("file_watch.rs")),
         ("observe/persistence.rs", include_str!("persistence.rs")),
         ("observe/tamper.rs", include_str!("tamper.rs")),
         ("observe/posture.rs", include_str!("posture.rs")),

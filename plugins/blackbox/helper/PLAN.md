@@ -63,6 +63,20 @@ last one. A list is cleared only by switching its protection off, or by a comple
 `{"watch": bool, "posture_fixes": ["firewall-on", …], "tamper_guard": bool, "posture_refresh": n}`
 — all off when absent.
 
+## File Shield's watch plan — `GET /api/shields/file-shield/api/watch-plan?nonce=<hex>`
+
+Signed like every plan. `{"watch": bool, "paths": ["/abs/path", …]}` — every item the person
+protected and every watched folder, absolute. The helper watches those that exist (at most 256)
+with the operating system's file events (FSEvents on macOS, `platform/macos/file_shield.rs`) and
+starts again when the set changes; `"watch": false` (or an old plugin's empty answer) stops it; an
+unreachable plugin keeps the last plan.
+
+Report — `POST /api/shields/file-shield/api/file-report`, signed like every report, within about a
+second of a change (changes are gathered for 300 ms): `{"at": <unix s>, "events": [{"path": "/abs",
+"kind": "created|removed|renamed|modified|changed", "ts": <unix s>}, …]}`, at most 200 events. The
+plugin keeps only changes inside its current items and folders. FSEvents cannot say which program
+made a change, and the helper never reads a file.
+
 ## Reports
 
 `POST /api/shields/network-shield/api/enforcer-report` — running, `dns_active`, `firewall_active`,

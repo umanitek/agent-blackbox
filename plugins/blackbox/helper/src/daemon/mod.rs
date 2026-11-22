@@ -176,6 +176,9 @@ pub fn run() -> Result<(), String> {
     let guard = helper.clone();
     let _ = thread::Builder::new().name("blackbox-system-guard".into()).stack_size(<SystemObserver as Observer>::SYSTEM_WATCH_STACK)
         .spawn(move || guard.observer.run_system_watch());
+    // File Shield's real-time watch: its own small plan and report (platform/<os>/file_shield).
+    let files = helper.clone();
+    named("blackbox-file-watch", move || files.observer.run_file_watch());
     let remoter = helper.clone();
     named("blackbox-netd-remote", move || loop {
         remoter.look_remote();

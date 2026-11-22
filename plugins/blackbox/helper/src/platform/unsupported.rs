@@ -67,4 +67,5 @@ impl Observer for SystemObserver {
     fn requeue(&self, _watch: Vec<Value>, _remote: Vec<Value>) {}
     fn stop(&self) {}
     fn run_system_watch(&self) {}
+    fn run_file_watch(&self) {}
 }
