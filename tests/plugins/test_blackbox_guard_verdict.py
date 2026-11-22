@@ -140,3 +140,9 @@ def test_a_judgement_that_fails_answers_503_so_the_asker_uses_its_own_checks(cli
     monkeypatch.setattr(guard, "tool_call_verdict", broken)
     answer = client.post("/api/guard/verdict", headers=_token(client), json={"tool_name": "exec", "args": {}})
     assert answer.status_code == 503 and "store unreachable" not in answer.text
+
+
+def test_a_refusal_never_asks_the_agent_to_turn_protection_down(blackbox):
+    blackbox("block")
+    message = guard.tool_call_verdict("exec", {"command": "cat ~/.ssh/id_rsa"})["message"]
+    assert message.startswith("Blackbox blocked this tool call") and "audit mode" not in message

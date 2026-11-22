@@ -53,3 +53,12 @@ def test_clean_or_empty_text_has_no_verdict(mode):
     mode("block")
     assert guard.text_verdict([("in-tool-output", "Build succeeded.")])["decision"] == ""
     assert guard.text_verdict([("in-tool-output", "")]) == {"findings": [], "blocked": [], "decision": "", "message": ""}
+
+
+def test_a_refused_prompt_says_prompt_and_names_the_person_not_audit_mode(mode):
+    """E2E 2026-11-21: a refused PROMPT said "Blackbox blocked this tool call", and every refusal told
+    the agent (which reads it) to "switch Blackbox to audit mode"."""
+    mode("block")
+    message = guard.text_verdict([("in-user-prompt", POISON)])["message"]
+    assert message.startswith("Blackbox blocked this prompt")
+    assert "audit mode" not in message and "the person" in message

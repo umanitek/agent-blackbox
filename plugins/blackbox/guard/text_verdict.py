@@ -46,4 +46,5 @@ def text_verdict(texts: Sequence[tuple[str, str]]) -> ToolCallVerdict:
     decision = hooks._decision(cfg, findings, blocking) if findings else ""
     return ToolCallVerdict(findings=[finding.to_dict() for finding in findings],
                            blocked=[finding.identifier for finding in blocking], decision=decision,
-                           message=blackbox_block_message(blocking) if blocking else "")
+                           message=blackbox_block_message(blocking, sources[0][0] if len({c for c, _ in sources}) == 1 else "text")
+                           if blocking else "")
