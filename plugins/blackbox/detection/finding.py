@@ -62,6 +62,9 @@ class Finding:
     kind: Optional[str] = None
     fields: dict[str, Any] = field(default_factory=dict)
     rule_subject: str = ""
+    #: What the agent can do instead, shown under the finding in a refusal (``""``: nothing to add).
+    #: Written by Blackbox for its own built-in rules; never holds a path, prompt or secret.
+    advice: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -78,6 +81,7 @@ class Finding:
             "kind": self.kind,
             "fields": dict(self.fields),
             "rule_subject": self.rule_subject,
+            "advice": self.advice,
         }
 
 

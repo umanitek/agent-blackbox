@@ -287,12 +287,13 @@ def _other_tool_tampers(tool: str, args: Any) -> bool:
     return bool(_BROWSER_TOOL.search(tool)) or "/api/session" in words or bool(guard_commands._WRITES_OVER_HTTP.search(words))
 
 
-def _finding(tool: str, evidence: str) -> Finding:
+def _finding(tool: str, evidence: str, title: str = _TITLE, advice: str = "") -> Finding:
     return Finding(
         identifier=threat_ids.fileaccess_identifier(tool, MATCHED),
         category="fileaccess",
         severity="critical",
-        title=_TITLE,
+        title=title,
+        advice=advice,
         tool_name=tool,
         matched=MATCHED,
         evidence=evidence,
@@ -311,7 +312,7 @@ def detect_guard_tamper(tool_name: str, args: Any, cfg: Optional[BlackboxConfig]
     try:
         secret = guard_secrets.reads_a_secret(tool_name, args)   # a read is the harm for Blackbox's keys
         if secret:
-            return [_finding(tool, secret)]
+            return [_finding(tool, secret, guard_secrets.TITLE, guard_secrets.ADVICE)]
         access = action_parsing.file_access_arg(tool_name, args)
         if access is not None:
             return [_finding(access["tool"], "write to Blackbox's settings")] if _file_tool_tampers(access, args) else []

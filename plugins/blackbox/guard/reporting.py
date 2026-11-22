@@ -176,6 +176,8 @@ def blackbox_block_message(findings: list[detection.Finding], what: str = "tool"
     ]
     for f in findings:
         lines.append(f"- [{f.severity.upper()}] {f.category}: {f.title} ({f.identifier})")
+        if f.advice:
+            lines.append(f"  {f.advice}")
     lines.append("")
     lines.append(
         "Treat the source content as untrusted. If you think this is wrong, "

@@ -35,6 +35,16 @@ from ...kernel import constants, system_helper
 from . import guard_places, protected, shell_files
 
 EVIDENCE = "a read of Blackbox's keys"
+#: The refusal's title and what the agent can do instead. WHY (2026-11-21): a whole-folder read
+#: (``tar czf x.tgz ~/.hermes``, ``grep -rn mode ~/.hermes/``) was refused as "Change to Blackbox's
+#: own settings" — true of nothing it did — and the agent could not tell what to leave out.
+#: DECISION: the advice names only forms the guard allows. An ``--exclude`` is NOT honoured: tar,
+#: grep, rsync and zip each read exclude patterns differently, and one mis-read pattern would hand a
+#: key over — so a folder that holds a key is never read whole, whatever is excluded.
+TITLE = "Would read Blackbox's key files"
+ADVICE = ("Blackbox's key files sign its records and the system protection helper's plans, so no agent may read "
+          "them, even inside a whole-folder archive or search. Name only the files you need instead "
+          "(e.g. ~/.hermes/config.yaml), or archive/search a folder that does not hold Blackbox's keys.")
 #: The key files in Blackbox's data folders: the reporter and curator keys (``.pem``), and the
 #: node's keystore, wallets and API token (the names setup/uninstall backs up as NODE_KEY_FILES).
 KEY_FILES = ("*.pem", "*.key", "*.p12", "agent-keystore.json", "wallets.json", "wallets.key", "auth.token")

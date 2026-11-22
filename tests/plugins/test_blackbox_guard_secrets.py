@@ -106,3 +106,22 @@ def test_ordinary_work_near_blackbox_is_not_refused(machine, tool, args):
 
 def test_the_key_folder_is_also_guarded_against_change(machine):
     assert _refused("terminal", {"command": "mv ~/Library/Application\\ Support/Blackbox/helper /tmp/x"})
+
+
+@pytest.mark.parametrize("command", ["tar -czf /tmp/b.tgz ~/.hermes", "grep -rn mode ~/.hermes/"])
+def test_a_whole_folder_read_says_it_would_read_the_keys_and_what_to_do_instead(machine, command):
+    """Fix wave 2, 2026-11-21: these were refused as "Change to Blackbox's own settings" with no
+    reason; the refusal now says it would read Blackbox's key files and names a form that passes."""
+    verdict = guard.tool_call_verdict("terminal", {"command": command})
+    assert verdict["decision"] == "block"
+    message = verdict["message"]
+    assert "Would read Blackbox's key files" in message and "Change to Blackbox's own settings" not in message
+    assert "Name only the files you need" in message
+    own = [f for f in verdict["findings"] if f["matched"] == OWN_RULE]
+    assert own and own[0]["advice"] == guard_secrets.ADVICE
+
+
+@pytest.mark.parametrize("command", ["tar -czf /tmp/b.tgz ~/.hermes/config.yaml", "grep -rn mode ~/.hermes/config.yaml"])
+def test_the_form_the_advice_names_is_allowed(machine, command):
+    (machine / ".hermes" / "config.yaml").write_text("mode: block\n", encoding="utf-8")
+    assert not _refused("terminal", {"command": command})
