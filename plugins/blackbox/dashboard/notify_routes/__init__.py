@@ -14,8 +14,17 @@ and the lease by which Blackbox Desktop says "I am showing them".
   the feed for that long (renew before it runs out; 0 gives it up); the plugin's own notifier is
   silent meanwhile.
 * ``POST /api/notifications/delivered`` ``{"seq": N}`` → the feed is shown up to ``N``.
-* ``POST /api/notifications/test`` → shows one harmless notification now.
+* ``POST /api/notifications/test`` → ``{sent, delivery: {outcome, detail}, notifier}`` — hands one
+  harmless notification to the system now; ``sent`` is true only when the system took it
+  (``outcome``: ``delivered`` | ``fallback`` | ``not-shown``).
+* ``POST /api/notifications/allow`` → ``{notifier}`` — the person asks to be notified: macOS asks
+  them once, in their desktop session (the dashboard's "Allow Blackbox to notify you" card and
+  Blackbox Desktop's first run; KI-PENDING-411cdb). Nothing is asked when it was asked before.
+* ``POST /api/notifications/settings`` → ``{opened}`` — opens the system's notification settings
+  at Blackbox (``notifier.settings`` / ``notifier.settings_label`` name the same action).
 * ``GET /notifications`` — the dashboard's page: settings and the history.
+* ``GET /notify-allow.js`` — the dashboard's "Allow Blackbox to notify you" card (or, while they
+  are off, the way to System Settings), drawn into ``#notify-allow-root``.
 
 The policy is SAVED through ``POST /api/settings`` ``{"notifications": {...}}`` — so turning
 security notices off, or muting an agent, is held by the approval gate like any change that makes
@@ -33,6 +42,7 @@ NO_CACHE = {"Cache-Control": "no-store"}
 MAX_WAIT_SECONDS = 25.0
 PAGE = Path(__file__).resolve().parent.parent / "static" / "notifications.html"
 SCRIPT = Path(__file__).resolve().parent.parent / "static" / "notifications.js"
+ALLOW_SCRIPT = Path(__file__).resolve().parent.parent / "static" / "notify_allow.js"
 
 Cache = Callable[..., Any]
 
@@ -104,7 +114,17 @@ def _register_writes(app: Any, notify: Any) -> None:
 
     @app.post("/api/notifications/test")
     def notifications_test() -> Any:
-        return JSONResponse({"sent": notify.send_test(), "notifier": asdict(notify.notifier_status())}, headers=NO_CACHE)
+        delivery = notify.send_test()
+        return JSONResponse({"sent": delivery.reached_system, "delivery": asdict(delivery), "notifier": asdict(notify.notifier_status())},
+                            headers=NO_CACHE)
+
+    @app.post("/api/notifications/allow")
+    def notifications_allow() -> Any:
+        return JSONResponse({"notifier": asdict(notify.request_permission())}, headers=NO_CACHE)
+
+    @app.post("/api/notifications/settings")
+    def notifications_settings() -> Any:
+        return JSONResponse({"opened": notify.open_notification_settings()}, headers=NO_CACHE)
 
     @app.get("/notifications")
     def notifications_page() -> Any:
@@ -113,3 +133,7 @@ def _register_writes(app: Any, notify: Any) -> None:
     @app.get("/notifications.js")
     def notifications_script() -> Any:
         return FileResponse(str(SCRIPT), media_type="application/javascript", headers=NO_CACHE)
+
+    @app.get("/notify-allow.js")
+    def notifications_allow_script() -> Any:
+        return FileResponse(str(ALLOW_SCRIPT), media_type="application/javascript", headers=NO_CACHE)

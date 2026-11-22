@@ -7,6 +7,8 @@
   "use strict";
   const $ = (id) => document.getElementById(id);
   const BOXES = ["enabled", "security", "lifecycle", "digest", "watched", "details"];
+  const DELIVERY = { delivered: "delivered to Notification Center", fallback: "shown through macOS's script notifier",
+                     "not-shown": "macOS did not show it (notifications are off for Blackbox)" };
   const HELD = { "quiet-hours": "held: quiet hours", muted: "held: this agent is muted", rate: "counted into a summary" };
 
   async function token() {
@@ -27,6 +29,9 @@
     $("nt-digest-minutes").value = policy.digest_minutes || 0;
     const who = answer.holder === "desktop" ? "Blackbox Desktop is running and shows them. " : "";
     $("nt-notifier").textContent = who + ((answer.notifier || {}).detail || "");
+    const settings = $("nt-settings");
+    settings.hidden = !(answer.notifier || {}).settings;
+    settings.textContent = (answer.notifier || {}).settings_label || "Open Notification settings";
   }
 
   async function loadHistory() {
@@ -52,6 +57,13 @@
       const when = document.createElement("time");
       when.textContent = new Date((notice.ts || 0) * 1000).toLocaleString();
       item.append(title, body, when);
+      const outcome = DELIVERY[notice.delivery];
+      if (outcome) {
+        const shown = document.createElement("span");
+        shown.className = "nt-held";
+        shown.textContent = " · " + outcome;
+        item.appendChild(shown);
+      }
       if (notice.held) {
         const held = document.createElement("span");
         held.className = "nt-held";
@@ -78,12 +90,23 @@
     loadPolicy();
   });
 
+  $("nt-settings").addEventListener("click", async () => {
+    const result = $("nt-test-result");
+    try {
+      const answer = await (await post("/api/notifications/settings")).json();
+      result.textContent = answer.opened ? "System Settings is open at Blackbox's notifications." : "Open System Settings → Notifications → Blackbox on this Mac.";
+    } catch (_) {
+      result.textContent = "The dashboard did not answer.";
+    }
+  });
+
   $("nt-test").addEventListener("click", async () => {
     const result = $("nt-test-result");
     result.textContent = "Sending…";
     try {
       const answer = await (await post("/api/notifications/test")).json();
-      result.textContent = answer.sent ? "Sent — look at the top right of your screen." : "It could not be shown: " + ((answer.notifier || {}).detail || "");
+      // The system's own answer: "Delivered to Notification Center." or why it did not show it — never "shown" when it was not.
+      result.textContent = (answer.delivery || {}).detail || ((answer.notifier || {}).detail || "");
     } catch (_) {
       result.textContent = "The dashboard did not answer.";
     }

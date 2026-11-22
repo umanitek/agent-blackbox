@@ -23,7 +23,7 @@ from dataclasses import replace
 from typing import Callable, Optional
 
 from . import feed, platform, policy, wording
-from .model import Notice
+from .model import Delivery, Notice
 from .sources import Collector
 
 logger = logging.getLogger(__name__)
@@ -77,13 +77,21 @@ class Limiter:
         return 0
 
 
+def _native(notice: Notice, details: bool) -> Delivery:
+    """The plugin's own notifier (:mod:`.platform`), with the detail only when the person chose it."""
+    body = f"{notice.body} {notice.detail}".strip() if details and notice.detail else notice.body
+    return platform.send(notice.title, body, notice.level, notice.id)
+
+
 class Pump:
     """Collect → policy → feed → deliver, every :data:`TICK_SECONDS`, until stopped.
 
-    *collector*, *send* and *read_policy* are injected for tests; the defaults are the real ones."""
+    *collector*, *send* and *read_policy* are injected for tests; the defaults are the real ones.
+    *send* answers a :class:`.model.Delivery`; its outcome is kept on the notice in the feed, so
+    the history says what became of each one (never "shown" when the system did not take it)."""
 
     def __init__(self, collector: Optional[Collector] = None,
-                 send: Optional[Callable[[Notice, bool], bool]] = None,
+                 send: Optional[Callable[[Notice, bool], Delivery]] = None,
                  read_policy: Optional[Callable[[], policy.Policy]] = None) -> None:
         self._collector = collector or Collector()
         self._send = send
@@ -119,17 +127,18 @@ class Pump:
         Returns how many were shown."""
         if holder():
             return 0
-        shown = 0
+        send = self._send or _native
+        outcomes: dict[int, str] = {}
         for notice in feed.since(feed.delivered()):
             if notice.deliver and now - notice.ts < STALE_SECONDS:
-                send = self._send or (lambda item, details: platform.send(
-                    item.title, f"{item.body} {item.detail}".strip() if details and item.detail else item.body, item.level, item.id))
                 try:
-                    shown += bool(send(notice, current.details))
+                    outcomes[notice.seq] = send(notice, current.details).outcome
                 except Exception:   # health: allow BLE001 -- a notifier fault is never an agent's problem
+                    outcomes[notice.seq] = "not-shown"
                     logger.debug("blackbox notify: the notifier failed", exc_info=True)
             feed.mark_delivered(notice.seq)
-        return shown
+        feed.note_delivery(outcomes)
+        return sum(outcome != "not-shown" for outcome in outcomes.values())
 
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():

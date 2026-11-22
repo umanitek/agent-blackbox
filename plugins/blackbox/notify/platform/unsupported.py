@@ -5,12 +5,20 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
-from ..model import NotifierStatus
+from ..model import Delivery, NotifierStatus
 
 _NONE = NotifierStatus("none", False, "unknown", "Blackbox has no native notifier for this system yet; the dashboard shows every notification.")
 
 
-def send(title: str, body: str, level: str, ident: str) -> bool:
+def send(title: str, body: str, level: str, ident: str) -> Delivery:
+    return Delivery("not-shown", _NONE.detail)
+
+
+def request() -> NotifierStatus:
+    return _NONE
+
+
+def open_settings() -> bool:
     return False
 
 

@@ -22,7 +22,7 @@ from fastapi.testclient import TestClient
 from plugins.blackbox import approvals, notify, shields
 from plugins.blackbox.dashboard import server
 from plugins.blackbox.notify import deliver, feed, policy, sources, wording
-from plugins.blackbox.notify.model import Notice
+from plugins.blackbox.notify.model import Delivery, Notice
 
 NOW = 1_795_000_000.0     # a Sunday afternoon UTC — outside the quiet hours used below
 
@@ -202,7 +202,8 @@ def test_a_source_that_fails_costs_only_its_own_notices():
 
 def _pump(findings, sent, **policy_fields):
     collector = _collector(findings, [], [_tree()])
-    pump = deliver.Pump(collector=collector, send=lambda notice, details: sent.append((notice.id, details)) or True,
+    pump = deliver.Pump(collector=collector, send=lambda notice, details: sent.append((notice.id, details)) or
+                        Delivery("delivered", "Delivered to Notification Center."),
                         read_policy=lambda: policy.parse(policy_fields))
     pump.step(NOW)   # the first tick learns
     return pump
@@ -343,6 +344,8 @@ def test_the_notifier_app_is_installed_only_from_an_archive_that_matches_its_che
 
     from plugins.blackbox.notify.platform import macos
     monkeypatch.setattr(macos, "home", lambda: tmp_path / "notifier")
+    monkeypatch.setattr(macos.session, "in_desktop_session", lambda: False)
+    monkeypatch.setattr(macos.session, "screen_shared", lambda: False)
     archive = tmp_path / "blackbox-notify-darwin.zip"
     bundle = tmp_path / "src" / "Blackbox.app" / "Contents" / "MacOS"
     bundle.mkdir(parents=True)
@@ -362,7 +365,7 @@ def test_the_notifier_app_is_installed_only_from_an_archive_that_matches_its_che
     assert not (tmp_path / "notifier").exists() or not (tmp_path / "notifier" / "Blackbox.app").exists()
     status = macos.install(archive, digest)
     assert (status.kind, status.permission, status.available) == ("app", "authorized", True)
-    assert macos.send("Blackbox stopped Claude Code", "body", "critical", "finding:x") is True
+    assert macos.send("Blackbox stopped Claude Code", "body", "critical", "finding:x").outcome == "delivered"
     macos.remove()
     assert not (tmp_path / "notifier").exists()
     assert macos.status().kind in ("fallback", "none")

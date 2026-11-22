@@ -40,6 +40,7 @@ class Notice:
     seq: int = 0
     deliver: bool = True
     held: str = ""           # why it is not shown: "quiet-hours" | "muted" | "rate" | ""
+    delivery: str = ""       # what the plugin's notifier made of it (OUTCOMES); "" = not handed to it (held, Desktop showed it, not yet)
 
 
 @dataclass(frozen=True)
@@ -47,9 +48,43 @@ class NotifierStatus:
     """The plugin's own native notifier on this machine. *kind*: ``app`` (Blackbox's notifier app:
     notifications carry Blackbox's name), ``fallback`` (the system's script notifier: they carry
     its name), ``none``. *permission*: ``authorized`` | ``denied`` | ``not-determined`` |
-    ``unknown``. *detail*: one plain sentence for the person."""
+    ``unknown``. *detail*: one plain sentence for the person.
+
+    *settings* / *settings_label*: the link that opens the system's notification settings for
+    Blackbox and its button's words (both "" when there is nothing to change there) — the
+    dashboard, ``blackbox notifications status`` and Blackbox Desktop offer it while permission
+    is off or not asked yet. *can_ask*: the system has not asked the person yet and Blackbox may
+    ask now (``POST /api/notifications/allow`` from a click; never from an installer outside the
+    person's desktop session). *screen_hidden*: the screen is shared or mirrored, when the system
+    hides banners by default — a notification then waits in Notification Center."""
 
     kind: str
     available: bool
     permission: str
     detail: str
+    settings: str = ""
+    settings_label: str = ""
+    can_ask: bool = False
+    screen_hidden: bool = False
+
+
+#: What became of one notification: ``delivered`` — the system took it into its notification
+#: centre under Blackbox's name; ``fallback`` — Blackbox's own notifier could not show it, so it
+#: went through the system's script notifier (labelled "Blackbox"); ``not-shown`` — nothing
+#: showed it (permission off, or no notifier at all).
+OUTCOMES = ("delivered", "fallback", "not-shown")
+
+
+@dataclass(frozen=True)
+class Delivery:
+    """The honest answer of one ``send``: *outcome* (one of :data:`OUTCOMES`) and *detail*, one
+    plain sentence for the person ("Delivered to Notification Center." — never "shown" when the
+    system did not take it)."""
+
+    outcome: str
+    detail: str
+
+    @property
+    def reached_system(self) -> bool:
+        """True when the system's notification centre took it (directly or through the fallback)."""
+        return self.outcome != "not-shown"

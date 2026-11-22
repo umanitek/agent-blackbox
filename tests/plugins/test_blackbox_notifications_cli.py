@@ -6,7 +6,7 @@ from __future__ import annotations
 import argparse
 
 from plugins.blackbox import notify
-from plugins.blackbox.notify.model import NotifierStatus
+from plugins.blackbox.notify.model import Delivery, NotifierStatus
 from plugins.blackbox.setup import notifier
 
 
@@ -37,8 +37,8 @@ def test_a_checksum_that_does_not_match_exits_1_and_says_why(monkeypatch, capsys
 
 def test_status_and_test_report_plainly(monkeypatch, capsys):
     monkeypatch.setattr(notify, "notifier_status", lambda: NotifierStatus("fallback", True, "unknown", "Through macOS's script notifier."))
-    monkeypatch.setattr(notify, "send_test", lambda: False)
+    monkeypatch.setattr(notify, "send_test", lambda: Delivery("not-shown", "macOS did not show it."))
     args = _parse("status")
     assert args.func(args) == 0 and "fallback" in capsys.readouterr().out
     args = _parse("test")
-    assert args.func(args) == 1 and "could not be shown" in capsys.readouterr().out
+    assert args.func(args) == 1 and "did not show it" in capsys.readouterr().out

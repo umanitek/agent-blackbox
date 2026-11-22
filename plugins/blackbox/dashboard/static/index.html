@@ -3049,6 +3049,9 @@
     <!-- Each shield's "New" banner, drawn by static/shields.js from /api/shields -->
     <div id="shield-banners"></div>
 
+    <!-- "Allow Blackbox to notify you" (or the way to System Settings while they are off), drawn by notify-allow.js -->
+    <div id="notify-allow-root" hidden></div>
+
     <!-- "Connect your agent to an AI model", drawn by model-connect.js from /api/agent-model (only while the agent has none) -->
     <div id="model-connect-root" hidden></div>
 
@@ -3372,6 +3375,7 @@
 <script src="./shields.js"></script>
 <script src="./model-connect.js"></script>
 <script src="./agent-coverage.js"></script>
+<script src="./notify-allow.js"></script>
 <script src="./playground.js"></script>
 <script>
 (function () {

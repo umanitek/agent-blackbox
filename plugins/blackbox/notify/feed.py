@@ -91,6 +91,22 @@ def publish(notice: Notice) -> Optional[Notice]:
         return kept
 
 
+def note_delivery(outcomes: dict[int, str]) -> None:
+    """Keep what became of each notice (``seq`` → a :data:`.model.OUTCOMES` word) on the notice
+    itself, so the history tells "delivered" from "macOS did not show it"."""
+    if not outcomes:
+        return
+    with _lock:
+        rows = _load()
+        for index, row in enumerate(rows):
+            if row.seq in outcomes:
+                rows[index] = replace(row, delivery=outcomes[row.seq])
+        try:
+            atomic_write(folder() / "feed.jsonl", "".join(json.dumps(asdict(row), ensure_ascii=False) + "\n" for row in rows))
+        except OSError:
+            logger.debug("blackbox notify: the feed file could not be rewritten (it stays in memory)", exc_info=True)
+
+
 def since(seq: int, limit: int = 100) -> list[Notice]:
     """The notices after *seq*, oldest first."""
     with _lock:

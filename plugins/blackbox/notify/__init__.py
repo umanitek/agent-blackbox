@@ -32,12 +32,12 @@ from typing import Any, Optional
 from ..kernel import settings
 from . import deliver, feed, platform, policy
 from .deliver import Pump, claim, holder
-from .model import CATEGORIES, Notice, NotifierStatus
+from .model import CATEGORIES, Delivery, Notice, NotifierStatus
 from .policy import Policy
 
-__all__ = ["CATEGORIES", "PUMP", "Notice", "NotifierStatus", "Policy", "Pump", "claim", "delivered", "history", "holder",
-           "install_notifier", "mark_delivered", "notifier_status", "policy_weakening", "read_policy", "remove_notifier",
-           "rows", "send_test", "top", "wait"]
+__all__ = ["CATEGORIES", "PUMP", "Delivery", "Notice", "NotifierStatus", "Policy", "Pump", "claim", "delivered", "history", "holder",
+           "install_notifier", "mark_delivered", "notifier_status", "open_notification_settings", "policy_weakening", "read_policy",
+           "remove_notifier", "request_permission", "rows", "send_test", "top", "wait"]
 
 #: The saved ``notifications`` section is validated by this package (the settings writer asks it).
 settings.SECTION_VALIDATORS[policy.SECTION] = policy.validate
@@ -96,7 +96,19 @@ def remove_notifier() -> None:
     platform.remove()
 
 
-def send_test() -> bool:
-    """Show one harmless notification now, through whoever delivers (the person's "is it working?")."""
+def request_permission() -> NotifierStatus:
+    """Ask the person now whether Blackbox may notify them — only from their click, and macOS
+    asks only someone at the desktop (``platform.request``)."""
+    return platform.request()
+
+
+def open_notification_settings() -> bool:
+    """Open the system's notification settings for Blackbox (the person's click)."""
+    return platform.open_settings()
+
+
+def send_test() -> Delivery:
+    """Hand one harmless notification to the system now and say what became of it (the person's
+    "is it working?") — "delivered to Notification Center", or why it was not shown."""
     return platform.send("Blackbox notifications are on", "This is what Blackbox shows when an AI agent needs your attention.",
                          "info", "blackbox-test")
