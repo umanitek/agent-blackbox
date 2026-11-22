@@ -1,4 +1,4 @@
-"""The agent sandbox keeps every add-on beside the plugin closed to writes, as it keeps the plugin
+"""The agent sandbox keeps every add-on beside the plugin closed to writes, as it keeps the plugin (FIX-0369)
 (plugins/blackbox/shields/files/sandbox: policy, places.build, platform/macos.render).
 
 Private security finding 2026-11-22-agent-sandbox-does-not-cover-add-on-fold… (security round 3):

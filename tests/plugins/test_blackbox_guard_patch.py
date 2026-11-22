@@ -12,13 +12,34 @@ refused, is still refused.
 from __future__ import annotations
 
 import os
+from types import SimpleNamespace
 
 import pytest
 
+from plugins.blackbox import ruleset as ruleset_mod
 from plugins.blackbox.agent_hooks.protect import events, runner
 from plugins.blackbox.detection.paths import guard_patch
-from plugins.blackbox.kernel import threat_ids
-from tests.plugins.test_blackbox_file_shield_hooks_only_routes import home  # the round's fixture, used by name
+from plugins.blackbox.guard import background as guard_background, reporting as guard_reporting
+from plugins.blackbox.kernel import config as config_mod, threat_ids
+from plugins.blackbox.ruleset import Ruleset
+
+
+@pytest.fixture
+def home(tmp_path, monkeypatch):
+    """Round 3's machine in small: a protected ~/Documents/Secret, a project folder, File Shield on."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("BLACKBOX_HOME", str(tmp_path / "bb"))
+    (tmp_path / "Documents" / "Secret").mkdir(parents=True)
+    (tmp_path / "Documents" / "Secret" / "change-2.txt").write_text("x" * 9, encoding="utf-8")
+    project = tmp_path / "camp" / "projects" / "s3-cx5s"
+    project.mkdir(parents=True)
+    state = {"mode": "block", "report": False, "shields": {"file-shield": {"enabled": True, "protected": ["~/Documents/Secret"]}}}
+    monkeypatch.setattr(config_mod, "_blackbox_entry", lambda: state)
+    monkeypatch.setattr(ruleset_mod, "get", lambda cfg=None: Ruleset())
+    monkeypatch.setattr(guard_background, "_spawn_osv_discovery", lambda *a, **k: None)
+    monkeypatch.setattr(guard_background, "review_tool", lambda *a, **k: None)
+    monkeypatch.setattr(guard_reporting, "_report_and_audit", lambda *a, **k: None)
+    return SimpleNamespace(path=tmp_path, project=project)
 
 SELF = threat_ids.fileaccess_identifier("terminal", threat_ids.SELF_PROTECTION)
 
