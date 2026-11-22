@@ -93,7 +93,7 @@
     var node = el("div", "ai-row" + (depth ? " ai-sub" : "") + (Number(row.too_late) ? " ai-had-late" : ""));
     var head = add(el("div", "ai-row-head"), chip(row.status),
                    link(href("instance", { key: row.key }), title(row), "ai-title"));
-    var facts = [str(row.protection_label) || (row.protection === "sandboxed" ? "sandboxed (kernel-enforced)" : "hooks only"), counts(row)];
+    var facts = [str(row.protection_label) || "hooks only", counts(row)];   // the server always says it; never claim more
     if (row.status === "waiting" && row.waiting_for) facts.unshift("waiting for " + row.waiting_for);
     if (row.model) facts.push("model " + row.model);
     if (row.launch) facts.push("launch mode " + row.launch);
