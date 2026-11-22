@@ -1,5 +1,5 @@
-"""The operating-system seam of the agent observer: the two programs it runs to see which agent
-processes exist are run here, one module per operating system (per-OS structure, 2026-11-21).
+"""The operating-system seam of the agent observer: what it reads to see which agent
+processes exist is read here, one module per operating system (per-OS structure, 2026-11-21).
 
 Each function answers raw text, or ``""`` when this machine cannot be read that way, so a missing
 tool degrades to "no process seen", never to an error. READ-ONLY by construction: nothing here
@@ -12,6 +12,7 @@ Usage::
     from . import platform
     platform.process_table()        # "pid ppid <start> command…" lines, "" when unreadable
     platform.process_environment(1234)
+    platform.process_variable(1234, "CLAUDE_CONFIG_DIR")   # one variable's value, spaces kept; "" when unreadable
 """
 
 from __future__ import annotations
@@ -19,8 +20,8 @@ from __future__ import annotations
 import sys
 
 if sys.platform == "darwin":
-    from .macos import process_environment, process_table
+    from .macos import process_environment, process_table, process_variable
 else:
-    from .unsupported import process_environment, process_table
+    from .unsupported import process_environment, process_table, process_variable
 
-__all__ = ["process_environment", "process_table"]
+__all__ = ["process_environment", "process_table", "process_variable"]

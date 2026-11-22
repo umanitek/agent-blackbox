@@ -35,7 +35,7 @@ One `claude` process per session (a native binary). Sub-agents (the Agent tool),
 | Scope | Where | Blackbox's hooks there | Note |
 |---|---|---|---|
 | user | `~/.claude/settings.json` | yes |  |
-| another config home | `$CLAUDE_CONFIG_DIR/settings.json` | yes | found from a hook event, a running process or the environment, then hooked |
+| another config home | `$CLAUDE_CONFIG_DIR/settings.json` | yes | found from a hook event or a running agent process of the same user (its environment is readable; a path with spaces is read whole), then hooked |
 | project | `PROJECT/.claude/settings.json and settings.local.json` | no | hooks merge across levels, so the user-level hooks still run; a project's disableAllHooks is reported |
 | command line | `--settings FILE-OR-JSON` | no | cannot remove user hooks, but --settings '{"disableAllHooks": true}' switches every hook off for that run: the process then shows as unprotected |
 | managed | `managed-settings.json, MDM or server-managed` | no | allowManagedHooksOnly blocks Blackbox's hooks: reported |

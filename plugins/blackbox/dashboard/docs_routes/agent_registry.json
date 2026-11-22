@@ -51,7 +51,7 @@
      "scope": "another config home",
      "where": "$CLAUDE_CONFIG_DIR/settings.json",
      "hooked": true,
-     "note": "found from a hook event, a running process or the environment, then hooked"
+     "note": "found from a hook event or a running agent process of the same user (its environment is readable; a path with spaces is read whole), then hooked"
     },
     {
      "scope": "project",

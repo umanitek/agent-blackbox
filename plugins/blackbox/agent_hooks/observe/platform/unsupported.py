@@ -9,3 +9,7 @@ def process_table() -> str:
 
 def process_environment(pid: int) -> str:
     return ""
+
+
+def process_variable(pid: int, name: str) -> str:
+    return ""

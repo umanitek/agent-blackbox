@@ -13,6 +13,9 @@ changes. Payloads are the examples in each agent's official hook reference (docs
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 import threading
 import time
 
@@ -33,6 +36,7 @@ def _fresh(monkeypatch, tmp_path):
     store.reset()
     monkeypatch.setattr(observe.platform, "process_table", lambda: "")
     monkeypatch.setattr(observe.platform, "process_environment", lambda pid: "")
+    monkeypatch.setattr(observe.platform, "process_variable", lambda pid, name: "")
     monkeypatch.setattr(agent_hooks, "_home", lambda: tmp_path)
     tracking._seen.update(at=0.0, table={}, running=[], pids=frozenset(), new_profiles=False)
     yield
@@ -153,6 +157,36 @@ def test_a_running_agent_names_a_config_home_blackbox_has_not_hooked(tmp_path, m
     tracking.live()
     assert tracking.new_profiles() is True
     assert (other.resolve(), False) in profiles.homes(hosts.BY_ID["codex"], tmp_path)
+
+
+def test_a_running_agents_moved_home_is_read_whole_even_with_a_space_in_it(tmp_path, monkeypatch):
+    other = tmp_path / "my profiles" / "claude work"
+    other.mkdir(parents=True)
+    monkeypatch.setattr(observe.platform, "process_table",
+                        lambda: "  777     1 Sun Nov 22 06:51:14 2026     /Users/x/.local/bin/claude\n")
+    monkeypatch.setattr(observe.platform, "process_variable", lambda pid, name: str(other) if name == "CLAUDE_CONFIG_DIR" else "")
+    tracking.live()
+    assert (other.resolve(), False) in profiles.homes(hosts.BY_ID["claude-code"], tmp_path)
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="reads the macOS kernel's record of a process")
+def test_macos_gives_a_same_user_programs_variable_and_nothing_for_a_process_it_may_not_read(tmp_path):
+    """Measured, not assumed (2026-11-22): a non-Apple program this user started answers with its
+    environment; a process that does not exist, or that macOS keeps closed, answers ""."""
+    from plugins.blackbox.agent_hooks.observe.platform import macos
+
+    home = str(tmp_path / "with space" / "home")
+    child = subprocess.Popen([sys.executable, "-c", "import sys, time; sys.stdout.write('up'); sys.stdout.flush(); time.sleep(30)"],
+                             env={**os.environ, "CLAUDE_CONFIG_DIR": home}, stdout=subprocess.PIPE)
+    try:
+        assert child.stdout.read(2) == b"up"
+        assert macos.process_variable(child.pid, "CLAUDE_CONFIG_DIR") == home
+        assert macos.process_variable(child.pid, "BLACKBOX_NOT_SET_ANYWHERE") == ""
+    finally:
+        child.kill()
+        child.wait()
+    assert macos.process_variable(child.pid, "CLAUDE_CONFIG_DIR") == ""      # gone: nothing, never an error
+    assert macos.process_variable(1, "PATH") == ""                           # launchd (root): closed to this user
 
 
 @pytest.mark.parametrize("agent, relative, text, key", [

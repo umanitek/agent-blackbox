@@ -97,8 +97,14 @@ def _launch(host: Host, words: list[str]) -> str:
 
 
 def _profile(host: Host, pid: int) -> str:
+    """The config home *pid* was started with (``Host.home_env``), "" for the default one. The
+    kernel's own record is asked first (a path with a space stays whole); ``ps``'s words are the
+    fallback."""
     if not host.home_env:
         return ""
+    exact = platform.process_variable(pid, host.home_env)
+    if exact:
+        return exact[:500]
     match = re.search(rf"(?:^|\s){re.escape(host.home_env)}=(\S+)", platform.process_environment(pid))
     return match.group(1)[:500] if match else ""
 
