@@ -44,7 +44,15 @@ class Running:
     listening: tuple[int, ...] = ()
 
 
+#: macOS's own read-only system folders (System Integrity Protection): nothing there is a
+#: third-party remote-control app. WHY: matching by executable name alone took Apple's Spotlight
+#: helper /System/Library/PrivateFrameworks/CoreParsec.framework/parsecd for Parsec (E2E 2026-11-21).
+_SYSTEM_PREFIXES = ("/System/", "/usr/libexec/", "/usr/sbin/", "/usr/bin/", "/sbin/", "/bin/")
+
+
 def _matches(entry: dict[str, Any], path: str) -> bool:
+    if path.startswith(_SYSTEM_PREFIXES):
+        return False
     name = path.rsplit("/", 1)[-1].lower()
     return name in entry.get("executables", ()) or any(f"/{app}/" in path for app in entry.get("apps", ()))
 

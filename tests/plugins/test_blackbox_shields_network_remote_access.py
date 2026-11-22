@@ -269,3 +269,13 @@ def test_the_status_says_remote_access_is_locked_only_while_the_helper_reports_i
     assert enforcement.summary(now=now)["remote_lock_active"] is True
     stale = now + records.STALE_AFTER_SECONDS + 1
     assert enforcement.summary(now=stale)["remote_lock_active"] is False, "a helper that stopped reporting is not a lock"
+
+
+def test_a_macos_system_program_is_never_taken_for_a_remote_control_app():
+    """E2E 2026-11-21: Apple's Spotlight helper .../CoreParsec.framework/parsecd showed as "Parsec"."""
+    found = catalog.detect([
+        catalog.Running(434, "/System/Library/PrivateFrameworks/CoreParsec.framework/parsecd", connected=True),
+        catalog.Running(20, "/Applications/Parsec.app/Contents/MacOS/parsecd", connected=True),
+    ])
+    parsec = [app for app in found["apps"] if app["id"] == "parsec"]
+    assert len(parsec) == 1 and parsec[0]["pids"] == [20]
