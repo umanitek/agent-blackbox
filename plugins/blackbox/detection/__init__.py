@@ -30,6 +30,7 @@ from .content_scanners import SKILL_DANGER_SHAPES
 from .osv import DEPENDENCY_ECOSYSTEMS, advisory_kind
 from .reviewer_setup import cmd_setup_llm
 from .finding import FIELD_WALLET_SECRET_SENT, KIND_FLAG_ONLY, PERSON_PROTECTED
+from .elevation import ELEVATION_ID, detect_elevation
 from .paths.guard_settings import MATCHED as GUARD_TAMPER
 from .paths.protected import PathTouch, mentions as protected_path_mentions, touches as protected_path_touches
 
@@ -66,6 +67,7 @@ __all__ = [
                              'ALWAYS_BLOCKED_MATCHES',
                              'ANSWERED_BY_FALLBACK',
                              'DEPENDENCY_ECOSYSTEMS',
+                             'ELEVATION_ID',
                              'ESCALATION_SHAPES',
                              'FETCH_TOOL_PREFIXES',
                              'FIELD_WALLET_SECRET_SENT',
@@ -85,6 +87,7 @@ __all__ = [
                              'detect_all',
                              'detect_custom_fileaccess',
                              'detect_dependency',
+                             'detect_elevation',
                              'detect_escalation',
                              'detect_fileaccess',
                              'detect_guard_tamper',

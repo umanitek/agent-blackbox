@@ -121,6 +121,8 @@ def _raw_findings(cfg: BlackboxConfig, rs: Any, tool_name: str, args: Any,
     raw += shields.check(tool_name, args, active)
     # KI-473: an agent never switches its guard off.
     raw += isolated("detect_guard_tamper", lambda: detection.detect_guard_tamper(tool_name, args, cfg))
+    # An agent asking for root is made visible (a flag, never a refusal: D7 leaves sudo alone).
+    raw += isolated("detect_elevation", lambda: detection.detect_elevation(tool_name, args))
     # R14: curator-signed DISABLE / WARN, last-good list.
     raw += isolated("kill_list", lambda: _kill_list_findings(rs, tool_name, args))
     return raw
