@@ -25,7 +25,7 @@ import re
 import threading
 from typing import Any, Mapping, Optional
 
-from ....kernel import constants, system_helper
+from ....kernel import config, constants, system_helper
 from ....kernel.bounded_files import read_small_text
 from . import system_report
 from . import signature
@@ -101,7 +101,7 @@ def judge(program: str, startup: bool = False) -> tuple[str, str, Optional[dict[
 
 def _own_folders() -> tuple[str, ...]:
     return tuple(os.path.realpath(str(folder)) + os.sep for folder in
-                 (constants.blackbox_home(), constants.blackbox_dkg_home(), system_helper.HOME))
+                 (constants.blackbox_home(), config.dkg_home(), system_helper.HOME))
 
 
 def is_own_startup_item(item: Mapping[str, Any]) -> bool:
@@ -113,7 +113,7 @@ def is_own_startup_item(item: Mapping[str, Any]) -> bool:
 def _own_pids() -> dict[int, str]:
     """The processes that are Blackbox: this dashboard, and its DKG node (by its pid file)."""
     pids = {os.getpid(): "Blackbox's dashboard."}
-    text = read_small_text(str(constants.blackbox_dkg_home() / _NODE_PID_FILE), 64)
+    text = read_small_text(str(config.dkg_home() / _NODE_PID_FILE), 64)
     if text and text.strip().isdigit():
         pids[int(text.strip())] = ("Blackbox's own DKG node: its peer-to-peer port is how it receives the threat "
                                    "graph, so other computers are expected to reach it.")

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import os
+from pathlib import Path
 from contextlib import contextmanager
 from contextvars import ContextVar
 from .snapshot_config import SnapshotSyncConfig, snapshot_fields
@@ -222,6 +223,32 @@ def reads_graph_directly(cfg: Any) -> bool:
     return getattr(cfg, "detection_backend", schema.DetectionBackend.LEGACY_CACHE) == schema.DetectionBackend.DKG
 
 
+def _configured_dkg_home(entry: Mapping[str, Any]) -> str:
+    """The ``dkg_home`` the person's config names, or "" (a legacy shared default counts as none)."""
+    configured = str(entry.get("dkg_home") or entry.get("dkgHome") or "").strip()
+    if _is_default_dkg_home(configured):
+        logger.info("blackbox: switching shared default dkg_home %s -> %s", configured, constants.blackbox_dkg_home())
+        return ""
+    return configured
+
+
+def _resolve_dkg_home(entry: Mapping[str, Any]) -> str:
+    """Blackbox's DKG node home: the config's ``dkg_home``, else ``BLACKBOX_DKG_HOME``, else the default."""
+    return str(_configured_dkg_home(entry) or _first_env("BLACKBOX_DKG_HOME") or constants.blackbox_dkg_home()).strip()
+
+
+def dkg_home() -> Path:
+    """Where THIS install's DKG node keeps its state (``daemon.pid``, ``config.json``, the store).
+
+    Cheap — reads only the Blackbox config entry, never credentials — so a page can ask on every
+    read. Use this, not :func:`constants.blackbox_dkg_home`: the installer puts the node beside the
+    install (``<install root>/.dkg``) and records it as ``dkg_home``; the constant is only the
+    fallback when nothing was recorded (E2E recheck 2026-11-21: the node's own port was rated high
+    because its pid file was looked for in the fallback folder).
+    """
+    return Path(_resolve_dkg_home(_blackbox_entry())).expanduser()
+
+
 def load_blackbox_config(*, entry: dict[str, Any] | None = None) -> BlackboxConfig:
     """Resolve the saved or proposed entry with the same environment precedence."""
     entry = _blackbox_entry() if entry is None else entry
@@ -246,14 +273,9 @@ def load_blackbox_config(*, entry: dict[str, Any] | None = None) -> BlackboxConf
     if context_graph_id in constants.LEGACY_CONTEXT_GRAPH_IDS:
         logger.info("blackbox: switching legacy context_graph_id %s -> %s", context_graph_id, constants.DEFAULT_CONTEXT_GRAPH_ID)
         context_graph_id = constants.DEFAULT_CONTEXT_GRAPH_ID
-    default_dkg_home = str(constants.blackbox_dkg_home())
-    dkg_home_env = _first_env("BLACKBOX_DKG_HOME")
-    configured_dkg_home = entry.get("dkg_home") or entry.get("dkgHome")
+    configured_dkg_home = _configured_dkg_home(entry)
     configured_dkg_url = entry.get("dkg_url") or entry.get("dkgUrl")
-    if _is_default_dkg_home(configured_dkg_home):
-        logger.info("blackbox: switching shared default dkg_home %s -> %s", configured_dkg_home, default_dkg_home)
-        configured_dkg_home = ""
-    dkg_home = str(configured_dkg_home or dkg_home_env or default_dkg_home).strip()
+    dkg_home = str(configured_dkg_home or _first_env("BLACKBOX_DKG_HOME") or constants.blackbox_dkg_home()).strip()
     dkg_bin = str(entry.get("dkg_bin") or entry.get("dkgBin") or _first_env("BLACKBOX_DKG_BIN")
                   or constants.blackbox_dkg_bin()).strip()
     dkg_url_env = _first_env("BLACKBOX_DKG_DAEMON_URL", "BLACKBOX_DKG_URL")

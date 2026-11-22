@@ -170,3 +170,23 @@ def test_blackbox_recognises_itself_by_identity_and_never_by_name_alone(home, mo
     ports = {row["port"]: row for row in view["listeners"]}
     assert ports[63333]["risk"] == "low" and "expected" in ports[63333]["why"]
     assert ports[8000]["risk"] == "high"
+
+
+def test_the_node_is_found_where_the_installer_put_it_not_in_the_fallback_folder(home, monkeypatch, tmp_path):
+    """E2E recheck 2026-11-21: the installer runs the node from ``<install root>/.dkg`` and records
+    that as ``dkg_home``; exposure looked for ``daemon.pid`` in the fallback ``BLACKBOX_HOME/dkg``,
+    so Blackbox's own peer-to-peer port stayed "high — signed by no one"."""
+    from plugins.blackbox.kernel import yaml_files
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes"))
+    monkeypatch.delenv("BLACKBOX_DKG_HOME", raising=False)
+    node = tmp_path / "agent-blackbox" / ".dkg"
+    node.mkdir(parents=True)
+    (node / "daemon.pid").write_text("90424\n", encoding="utf-8")
+    (tmp_path / "hermes").mkdir()
+    yaml_files.dump_yaml(tmp_path / "hermes" / "config.yaml",
+                         {"plugins": {"entries": {"blackbox": {"dkg_home": str(node)}}}})
+    monkeypatch.setattr(signature, "lookup", lambda path: signature.Signature(kind="adhoc", signer=""))
+    p2p = {"protocol": "tcp4", "address": "0.0.0.0", "port": 55260, "program": "/opt/homebrew/bin/node", "pid": 90424, "since": 1}
+    system_report.record(system_report.validate(_report(exposure=[p2p]), NOW))
+    row = exposure.view(NOW)["listeners"][0]
+    assert row.get("own") and row["risk"] == "low", row
