@@ -105,7 +105,7 @@ def test_a_broken_add_on_contributes_nothing_and_the_plugin_keeps_working(tmp_pa
     """)
     extensions.load("plugins.blackbox", tmp_path / "blackbox")
     assert extensions.providers() == [] and "half registered" in extensions.problems()[0]
-    assert [shield.id for shield in shields.all_shields()] == ["trader", "network-shield"]
+    assert [shield.id for shield in shields.all_shields()] == ["trader", "network-shield", "file-shield"]
     assert shields.unlocked(network_mode.SHIELD_ID) == frozenset()
     found = shields.get(network_mode.SHIELD_ID).detect("terminal", {"command": "curl https://x.unknown-host.com/"}, LOCKED)
     assert [f.identifier for f in found] == [lockdown.LOCKDOWN_ID]

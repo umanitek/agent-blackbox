@@ -540,7 +540,7 @@ def test_a_corrupt_pack_leaves_the_registry_importable_and_the_other_packs_suppo
     assert states == {"metamask": "supported", "electrum": "supported", "exodus": "unavailable",
                       "vanished": "unavailable"}
     assert loaded.roots == () and len(loaded.health) == 1
-    assert [shield.id for shield in importlib.reload(shields).all_shields()] == ["trader", "network-shield"]
+    assert [shield.id for shield in importlib.reload(shields).all_shields()] == ["trader", "network-shield", "file-shield"]
     monkeypatch.undo()
     importlib.reload(shields)   # the reload above loaded the patched packs; later tests need the real ones
 

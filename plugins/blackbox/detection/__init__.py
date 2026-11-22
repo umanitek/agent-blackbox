@@ -29,8 +29,13 @@ from .action_parsing import (FETCH_TOOL_PREFIXES, HOST_FILE_AND_SKILL_TOOLS, SEN
 from .content_scanners import SKILL_DANGER_SHAPES
 from .osv import DEPENDENCY_ECOSYSTEMS, advisory_kind
 from .reviewer_setup import cmd_setup_llm
-from .finding import FIELD_WALLET_SECRET_SENT, KIND_FLAG_ONLY
+from .finding import FIELD_WALLET_SECRET_SENT, KIND_FLAG_ONLY, PERSON_PROTECTED
 from .paths.guard_settings import MATCHED as GUARD_TAMPER
+from .paths.protected import PathTouch, mentions as protected_path_mentions, touches as protected_path_touches
+
+#: ``Finding.matched`` values refused in EVERY mode, Audit included: an agent switching Blackbox
+#: off (its self-protection) and an agent touching what the person protected (File Shield).
+ALWAYS_BLOCKED_MATCHES = frozenset({GUARD_TAMPER, PERSON_PROTECTED})
 from .paths.guard_settings import detect_guard_tamper
 from .detectors import (
     ANSWERED_BY_FALLBACK,
@@ -57,6 +62,7 @@ from .shell_shapes import ESCALATION_SHAPES, SHELL_TOOLS, command_from_args
 from .content_scanners import iter_ioc_candidates
 
 __all__ = [
+                             'ALWAYS_BLOCKED_MATCHES',
                              'ANSWERED_BY_FALLBACK',
                              'DEPENDENCY_ECOSYSTEMS',
                              'ESCALATION_SHAPES',
@@ -65,10 +71,12 @@ __all__ = [
                              'GUARD_TAMPER',
                              'HOST_FILE_AND_SKILL_TOOLS',
                              'KIND_FLAG_ONLY',
+                             'PERSON_PROTECTED',
                              'SENSITIVE_PATH_CATEGORIES',
                              'SHELL_TOOLS',
                              'SKILL_DANGER_SHAPES',
                              'Finding',
+                             'PathTouch',
                              'advisory_kind',
                              'cmd_setup_llm',
                              'command_from_args',
@@ -93,6 +101,8 @@ __all__ = [
                              'parse_dependency_installs',
                              'parse_downloads',
                              'parse_shell_reads',
+                             'protected_path_mentions',
+                             'protected_path_touches',
                              'reviewer',
                              'run_isolated',
                              'shell_file_args',

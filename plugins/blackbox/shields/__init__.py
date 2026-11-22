@@ -59,7 +59,7 @@ from .json_records import JsonValue
 from .shield_api import MAX_WRITE_BYTES as API_MAX_WRITE_BYTES
 from .shield_api import NAME_PATTERN as API_NAME_PATTERN
 from .shield_api import AssistantAnswer, RawAnswer, ShieldApi, ShieldApiError, ShieldContext
-from . import extensions, network, trader
+from . import extensions, files, network, trader
 from .extensions import Registrar, ShieldExtension
 
 logger = logging.getLogger(__name__)
@@ -97,6 +97,7 @@ __all__ = [
     "get",
     "loaded_packs",
     "pack_logo",
+    "prompt_findings",
     "reload_registry",
     "self_tests",
     "settings_validators",
@@ -109,7 +110,7 @@ __all__ = [
 
 #: The plugin's own shields, in registration order. Registering one is one line here; an add-on's
 #: shields and extensions join them on first use (:func:`_registry`).
-_BASE: tuple[Shield, ...] = (trader.TRADER, network.NETWORK)
+_BASE: tuple[Shield, ...] = (trader.TRADER, network.NETWORK, files.FILES)
 #: The plugin's own folder and package: where add-ons are looked for, and under which parent.
 _PLUGIN_DIR = Path(__file__).resolve().parent.parent
 _PLUGIN_PACKAGE = __name__.rpartition(".")[0]
@@ -226,6 +227,23 @@ def check(tool_name: str, args: Any, active: ShieldsSnapshot) -> list[Finding]:
                 logger.warning("blackbox: shield %s finding %s had source %r; made local-only",
                                shield.id, finding.identifier, finding.source)
             findings.append(dataclasses.replace(finding, source=LOCAL_ONLY_SOURCE))
+    return findings
+
+
+def prompt_findings(texts: Iterable[str], active: ShieldsSnapshot) -> list[Finding]:
+    """Every enabled shield's flags for the prompts *texts* (``Shield.prompt_check``), each marked
+    local-only; a check that raises contributes nothing (fail-open)."""
+    findings: list[Finding] = []
+    for shield, mode in active.entries:
+        if not mode.enabled or shield.prompt_check is None:
+            continue
+        for text in texts:
+            try:
+                raised = shield.prompt_check(text, mode)
+            except Exception:   # a broken check contributes nothing (fail-open); the traceback says why
+                logger.warning("blackbox: shield %s prompt check failed", shield.id, exc_info=True)
+                continue
+            findings.extend(dataclasses.replace(finding, source=LOCAL_ONLY_SOURCE) for finding in raised)
     return findings
 
 

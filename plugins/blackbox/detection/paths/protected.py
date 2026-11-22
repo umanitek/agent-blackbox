@@ -114,13 +114,15 @@ def _folder_holds(folder: str, pattern: str) -> bool:
     return place == norm_folder or place.startswith(norm_folder.rstrip(os.sep) + os.sep)
 
 
-def _accesses(tool_name: str, args: Any, *, whole: bool = False) -> list[tuple[str, str, str]]:
+def _accesses(tool_name: str, args: Any, *, whole: bool = False, every_route: bool = False) -> list[tuple[str, str, str]]:
     """``(tool, path, mode)`` for each file this call reads or copies: the file tool's
     path, every path a terminal command reads, copies or archives (``mode`` is ``read`` or
     ``copy``; where a copy writes is left out), the paths in code a code tool runs, and — for
     any other tool (an MCP tool, a search tool) — a command it carries and the paths in its
     arguments. *whole*: read a long command whole (Blackbox's own protection) rather than by
-    the bounded window every other check reads."""
+    the bounded window every other check reads. *every_route*: also where a command WRITES and
+    every path it names at all (``ls``, ``rm``, ``touch``, ``cd`` …) — for a list nothing may touch
+    by any route (File Shield's protected items), not only what would leave a secret."""
     access = action_parsing.file_access_arg(tool_name, args)
     if access:
         return [(access["tool"], access["path"], access["mode"])]
@@ -129,7 +131,8 @@ def _accesses(tool_name: str, args: Any, *, whole: bool = False) -> list[tuple[s
         return [(tool, arg.path, "copy" if arg.recursive else "read")
                 for arg in shell_files.code_file_args(args["code"])]   # KI-470
     if tool in shell_shapes.SHELL_TOOLS:
-        return [found for command in _commands(tool_name, args, whole) for found in _command_accesses(tool, command)]
+        return [found for command in _commands(tool_name, args, whole)
+                for found in _command_accesses(tool, command, every_route=every_route)]
     if not isinstance(args, dict):
         return []
     found: list[tuple[str, str, str]] = []
@@ -137,7 +140,8 @@ def _accesses(tool_name: str, args: Any, *, whole: bool = False) -> list[tuple[s
         if not isinstance(value, str) or not value.strip():
             continue
         if _COMMAND_ARG.search(str(key)):
-            found += _command_accesses(tool, shell_shapes.with_nested_commands(value[:_MAX_ARG_CHARS]))
+            found += _command_accesses(tool, shell_shapes.with_nested_commands(value[:_MAX_ARG_CHARS]),
+                                       every_route=every_route)
         elif _PATH_ARG.search(str(key)):   # a search query that happens to hold a path is not a file access
             mode = "copy" if re.search(r"grep|search|find|copy|archive|zip|sync", tool) else "read"
             found.append((tool, value.strip(), mode))
@@ -166,12 +170,61 @@ def _commands(tool_name: str, args: Any, whole: bool) -> list[str]:
     return [bounded, shell_shapes.with_nested_commands(middle)] if middle and _PATH_SIGN.search(middle) else [bounded]
 
 
-def _command_accesses(tool: str, command: str) -> list[tuple[str, str, str]]:
-    """The reads and copies of *command*, through the one shell-path parser (:mod:`.shell_files`)."""
+def _command_accesses(tool: str, command: str, *, every_route: bool = False) -> list[tuple[str, str, str]]:
+    """The reads and copies of *command*, through the one shell-path parser (:mod:`.shell_files`);
+    *every_route*: also its writes and every path it names (:func:`_named_paths`)."""
     names = _find_names(command) if "find" in command else ()
-    return [(tool, arg.path, "copy-names:" + "\x00".join(names) if arg.command == "find" and names
-             else "copy" if arg.recursive else "read")
-            for arg in shell_files.shell_file_args(command) if not arg.destination]
+    found = [(tool, arg.path, "write" if arg.destination else "copy-names:" + "\x00".join(names)
+              if arg.command == "find" and names else "copy" if arg.recursive else "read")
+             for arg in shell_files.shell_file_args(command) if every_route or not arg.destination]
+    return found + [(tool, path, "tree" if tree else "name") for path, tree in _named_paths(command)] if every_route else found
+
+
+#: Commands that act on a folder's whole tree (delete, move, re-own, re-permission, sync, pack):
+#: naming a folder that HOLDS a protected item reaches the item too (``rm -rf ~/Work``).
+_TREE_COMMANDS = frozenset({"rm", "rmdir", "mv", "chmod", "chown", "chgrp", "chflags", "xattr", "trash", "srm",
+                            "shred", "unlink", "find", "rsync", "ditto", "tar", "zip", "7z", "cp", "scp", "ln",
+                            "del", "rd", "remove-item", "move-item", "copy-item", "robocopy", "xcopy"})
+
+
+def _named_paths(command: str) -> list[tuple[str, bool]]:
+    """Every path *command* names in any word, whatever the command does with it (``rm``, ``ls``,
+    ``touch``, ``chmod``, ``mv``, a redirect target, ``cd``), with variables set on the line put in,
+    a relative path placed under the folder an earlier ``cd`` moved to, and the home folder
+    written ``~``. WHY: for an item nothing may touch, an unknown command naming it is enough —
+    the list of commands that read files can never be complete."""
+    words = shell_files._with_variables(shell_files._words(command))
+    folder, found, index, verb = "", [], 0, ""
+    while index < len(words):
+        word = words[index]
+        name = word.rsplit("/", 1)[-1].lower()
+        if name in ("cd", "pushd"):
+            moved, index = shell_files._cd(words, index, folder)
+            folder, verb = moved, ""
+            if moved:
+                found.append((moved, False))
+            continue
+        index += 1
+        if word in shell_files._SEPARATORS:
+            verb = ""
+            continue
+        if not verb and not word.startswith("-") and "=" not in word[:1]:
+            verb = name   # the first word of a segment is its command (``sudo`` passes it on)
+            if verb in ("sudo", "doas", "env", "nohup", "time", "command", "exec", "xargs"):
+                verb = ""
+            if not _NAMES_PLACE.search(word):
+                continue
+        if word.startswith("-") or not _NAMES_PLACE.search(word):
+            continue
+        path = word.split("=", 1)[1] if word.startswith(("if=", "of=")) else word
+        if folder and not shell_files._is_anchored(path):
+            path = folder.rstrip("/") + "/" + path.removeprefix("./")
+        found.append((shell_files._home_as_tilde(path), verb in _TREE_COMMANDS))
+    return list(dict.fromkeys(found))
+
+
+#: A word that can name a place: a slash, the home sign, a home variable or a leading dot.
+_NAMES_PLACE = re.compile(r"/|^~|^\$HOME|^\$\{HOME\}|^\.")
 
 
 def _find_names(command: str) -> tuple[str, ...]:
@@ -217,7 +270,7 @@ def _name_glob_hits(path: str, pattern: str) -> bool:
 def _protects(path: str, mode: str, pattern: str) -> bool:
     if any(_protected_path_match(candidate, pattern) for candidate in _candidates(path)) or _name_glob_hits(path, pattern):
         return True
-    if mode == "copy" or mode.startswith("copy-names:"):
+    if mode in ("copy", "tree") or mode.startswith("copy-names:"):
         names = mode.split(":", 1)[1].split("\x00") if ":" in mode else []
         return (not names or any(_names_overlap(name, pattern) for name in names)) and any(
             _folder_holds(candidate, pattern) for candidate in _candidates(path))
@@ -256,15 +309,17 @@ class PathTouch(NamedTuple):
 
 
 def touches(tool_name: str, args: Any, patterns: Iterable[str], *, whole: bool = False,
-            first_only: bool = False) -> list[PathTouch]:
+            first_only: bool = False, every_route: bool = False) -> list[PathTouch]:
     """Every (path, pattern) this call reaches among *patterns* — the reusable answer for any list
     of protected places (the person's, Blackbox's own keys, File Shield's). *whole*: read a long
-    command whole (for a rule that must not be outrun); *first_only*: stop at the first."""
+    command whole (for a rule that must not be outrun); *first_only*: stop at the first;
+    *every_route*: any touch at all counts — writes, deletes, moves, listings, a ``cd`` into it —
+    not only reading or copying (File Shield's protected items)."""
     wanted = [str(p) for p in (patterns or []) if str(p or "").strip()]
     found: list[PathTouch] = []
     if not wanted:
         return found
-    for tool, path, mode in _accesses(tool_name, args, whole=whole):
+    for tool, path, mode in _accesses(tool_name, args, whole=whole, every_route=every_route):
         path = shell_files._home_as_tilde(path)   # a file tool's "$HOME/…" is the same "~/…"
         for pattern in wanted:
             if _protects(path, mode, pattern):
@@ -272,6 +327,26 @@ def touches(tool_name: str, args: Any, patterns: Iterable[str], *, whole: bool =
                 if first_only:
                     return found
                 break
+    return found
+
+
+#: A place written in prose: from the home sign, a home variable, or the root.
+_TEXT_PATH = re.compile(r"(?<![\w.])(?:~|\$HOME|\$\{HOME\}|/)[^\s'\"`<>|;,(){}\[\]]*")
+#: The most of one text read for places it names.
+_MAX_TEXT_CHARS = 64 * 1024
+
+
+def mentions(text: str, patterns: Iterable[str]) -> list[PathTouch]:
+    """Every protected place *text* (a prompt, a message) names among *patterns*: a prompt that
+    asks an agent for a protected item. Naming is not touching — the caller flags it; the agent's
+    tool call that would touch the item is what is refused. Reads no disk."""
+    wanted = [str(p) for p in (patterns or []) if str(p or "").strip()]
+    found: list[PathTouch] = []
+    for match in _TEXT_PATH.finditer(str(text or "")[:_MAX_TEXT_CHARS]) if wanted else ():
+        path = shell_files._home_as_tilde(match.group(0).rstrip(".:!?"))
+        pattern = next((item for item in wanted if _protected_path_match(path, item)), None)
+        if pattern and len(path) > 1:
+            found.append(PathTouch("prompt", path, "mention", pattern))
     return found
 
 

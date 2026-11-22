@@ -43,6 +43,7 @@ from plugins.blackbox.kernel import config as config_mod
 from plugins.blackbox.kernel import crypto_secrets, threat_ids
 from plugins.blackbox.kernel.crypto_secrets import seed_phrase
 from plugins.blackbox.ruleset import Ruleset
+from plugins.blackbox.shields.files import mode as files_mode
 from plugins.blackbox.shields.network import mode as network_mode
 from plugins.blackbox.shields.network.protect import blocklists as network_blocklists
 from plugins.blackbox.shields.trader import detectors, mode as trader_mode
@@ -154,7 +155,16 @@ def _network_setup(monkeypatch, chosen: tuple[str, ...], _values: dict[str, str]
             cached.write_text("# test copy\nlisted-tracker-blackbox-test.com\n", encoding="utf-8")
 
 
-SETUPS = {"trader": _trader_setup, "network-shield": _network_setup}
+def _files_setup(monkeypatch, _chosen: tuple[str, ...], values: dict[str, str]) -> None:
+    """File Shield on with ~/Documents/BlackboxVault protected (laid out, with one file in it)."""
+    vault = Path(values["@HOME@"]) / "Documents" / "BlackboxVault"
+    vault.mkdir(parents=True, exist_ok=True)
+    (vault / "notes.txt").write_text("private", encoding="utf-8")
+    on = files_mode.build(enabled=True, protected=("~/Documents/BlackboxVault",))
+    monkeypatch.setattr(files_mode, "current", lambda: on)
+
+
+SETUPS = {"trader": _trader_setup, "network-shield": _network_setup, "file-shield": _files_setup}
 
 
 def _shell_path(path: Path, home: Path) -> str:
@@ -178,6 +188,7 @@ def _values(home: Path, stores: dict[str, Path], solana: bytes) -> dict[str, str
     # KI-378: the same 12 words spelled to slip past a word matcher.
     values.update({"@SEED12ZW@": "\u200b|".join(seed12.split()), "@SEED12CAMEL@": "".join(w.capitalize() for w in seed12.split())})
     values["@FILLER@"] = "lorem ipsum " * 5000   # KI-376: 60,000 characters of padding
+    values["@HOME@"] = str(home)   # File Shield's rows name the protected folder by its full path
     # One @<PACK>FILE@ per extension store laid out (e.g. @RABBYFILE@), so a new wallet pack's
     # vault row needs no new placeholder here.
     values.update({"@" + re.sub(r"[^A-Z0-9]", "", pack.upper()) + "FILE@": str(store / "000003.log")

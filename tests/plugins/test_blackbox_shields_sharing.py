@@ -27,7 +27,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from _trader_attack_table import ATTACKS
+from _trader_attack_table import ATTACKS, TABLES
 from test_blackbox_trader_shield_attacks import _scenario_setting, shield   # shield: the attack-table fixture
 from plugins.blackbox import detection, shields
 from plugins.blackbox.community import sharing as community_sharing
@@ -46,7 +46,8 @@ REPORTER = "0x" + "1" * 40
 #: public lists), never files, so the core FILE-access rule this twin check asks cannot twin it; its
 #: own findings are local-only like every shield's (registry ``source="secret"``). (E2E recheck
 #: 2026-11-21: the missing entry made this whole file fail to collect with KeyError 'network-shield'.)
-ATTACK_ROWS = {"trader": ATTACKS, "network-shield": ()}
+#: File Shield's rows protect a folder of the person's choosing, which no core file category names: no twin.
+ATTACK_ROWS = {"trader": ATTACKS, "network-shield": (), "file-shield": TABLES["file-shield"].attacks}
 
 
 # -- twins ---------------------------------------------------------------------------

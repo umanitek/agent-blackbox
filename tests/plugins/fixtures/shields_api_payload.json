@@ -229,5 +229,27 @@
       "network:blocked-host",
       "network:listed-host"
     ]
+  },
+  {
+    "shield_id": "file-shield",
+    "mode": {
+      "enabled": false,
+      "protected": [],
+      "folders": [
+        "~/Downloads"
+      ]
+    },
+    "blocking": false,
+    "sections": [],
+    "offer": null,
+    "name": "File Shield",
+    "tagline": "Keep every AI agent away from the files and folders you protect — and see new files arrive.",
+    "beta": true,
+    "page": "/shields/file-shield",
+    "claims": [
+      "files:file-hit",
+      "files:folder-hit",
+      "files:protected-mention"
+    ]
   }
 ]

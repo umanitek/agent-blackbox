@@ -329,6 +329,9 @@ class Shield:
     #: SSH in, hosts an agent may reach, names never blocked). Every other list option is a
     #: protecting list, where REMOVING an entry turns protection down. Read by ``approvals``.
     allow_lists: frozenset[str] = frozenset()
+    #: ``prompt_check(text, mode) -> findings`` for a prompt the person sends an agent (flags only:
+    #: a prompt touches nothing; the tool call it leads to is what is refused). None = none.
+    prompt_check: Optional[Callable[[str, ShieldMode], list[Finding]]] = None
 
     @property
     def folder(self) -> Path:

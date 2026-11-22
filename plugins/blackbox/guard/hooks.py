@@ -96,9 +96,10 @@ def _would_block(cfg: BlackboxConfig, findings: list[detection.Finding]) -> list
     are higher-churn / higher-FP than pinned package versions, so they are
     validated in audit mode first.
     """
-    # Blackbox's own core is refused in EVERY mode (2026-11-20): in Audit mode an agent could switch
-    # the guard off and was merely flagged for it. Nothing else blocks unless Block mode is on.
-    always = [f for f in findings if f.matched == detection.GUARD_TAMPER]
+    # Refused in EVERY mode: Blackbox's own core (2026-11-20 — in Audit mode an agent could switch
+    # the guard off and was merely flagged for it) and what the person protected with File Shield
+    # (2026-11-21: their own explicit rule). Nothing else blocks unless Block mode is on.
+    always = [f for f in findings if f.matched in detection.ALWAYS_BLOCKED_MATCHES]
     if not cfg.block_enabled:
         return always
     return always + [
@@ -328,7 +329,10 @@ def on_pre_api_request(**kwargs: Any) -> None:
         if _is_blackbox_assistant():   # it reads Blackbox's own findings back: an old one is not a new attack
             findings = api_request.drop_record_echoes(findings, sources, api_request.tool_output_texts(sources),
                                                       _recorded_findings())
-        findings = reporting._flag_worthy(cfg, findings, shields.snapshot())
+        active = shields.snapshot()
+        # A prompt that names an item the person protected (File Shield): flagged, never kept.
+        findings += shields.prompt_findings([part for context, part in sources if context == "in-user-prompt"], active)
+        findings = reporting._flag_worthy(cfg, findings, active)
         detail = {
             "graph_read": graph_evidence,
             "session_id": kwargs.get("session_id"),

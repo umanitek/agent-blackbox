@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>File Shield · Agent Blackbox</title>
+<meta name="theme-color" content="#0B0B0D" id="theme-color" />
+<script>
+  // Same appearance as the dashboard (its saved preference), applied before paint.
+  (function () {
+    var preference = "system";
+    try {
+      var saved = localStorage.getItem("blackbox.dashboard.theme.v1");
+      if (saved === "light" || saved === "dark" || saved === "system") preference = saved;
+    } catch (_) {}
+    var resolved = preference === "system"
+      ? (window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark")
+      : preference;
+    document.documentElement.setAttribute("data-theme", resolved);
+    document.documentElement.style.colorScheme = resolved;
+  })();
+</script>
+<style>
+  @font-face { font-family: "Archivo"; font-style: normal; font-weight: 400 900; font-stretch: 75% 125%; font-display: swap;
+    src: url("/fonts/archivo-latin.woff2") format("woff2"); }
+  @font-face { font-family: "IBM Plex Mono"; font-style: normal; font-weight: 400; font-display: swap;
+    src: url("/fonts/ibm-plex-mono-400-latin.woff2") format("woff2"); }
+  :root, [data-theme="dark"] {
+    --bg: #0B0B0D; --panel: #131316; --elevated: #18181C; --border: #232329; --text: #F1EFE9; --muted: #99979A;
+    --signal: #FF4F00; --signal-soft: rgba(255,79,0,0.11); --ok: #80CA9C; --warn: #E3B341; --agent: #A78BFA;
+    --body: "Archivo", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --mono: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace; --radius: 4px;
+  }
+  [data-theme="light"] {
+    --bg: #F5F3EE; --panel: #FFFFFF; --elevated: #ECE9E2; --border: #D7D2C9; --text: #171719; --muted: #6D6963;
+    --signal: #C63C00; --signal-soft: rgba(198,60,0,0.10); --ok: #2E7D4F; --warn: #9A6512; --agent: #6D4FD8;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--body); }
+  main { max-width: 980px; margin: 0 auto; padding: 32px 24px 64px; display: flex; flex-direction: column; gap: 20px; }
+  h1 { font-size: 30px; margin: 0; letter-spacing: -0.02em; } h2 { font-size: 17px; margin: 0 0 12px; }
+  .muted { color: var(--muted); } .mono { font-family: var(--mono); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 22px 24px; }
+  .cta { border-color: var(--signal); background: linear-gradient(180deg, var(--signal-soft), transparent); }
+  .cta a { display: inline-block; margin-top: 12px; padding: 10px 18px; border-radius: 10px; background: var(--signal);
+    color: #fff; font-weight: 600; text-decoration: none; }
+  ul { margin: 0; padding-left: 18px; line-height: 1.6; } li b { font-weight: 600; }
+  .row { display: flex; justify-content: space-between; gap: 12px; padding: 10px 0; border-top: 1px solid var(--border); }
+  .row:first-child { border-top: 0; } .tag { font-family: var(--mono); font-size: 11px; color: var(--ok); }
+  .tag.blocked { color: var(--signal); }
+  .gauges { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+  .gauge { background: var(--elevated); border-radius: 10px; padding: 12px 14px; }
+  .gauge b { display: block; font-family: var(--mono); font-size: 22px; margin-top: 4px; }
+  .bar { height: 4px; border-radius: 4px; background: var(--border); margin-top: 8px; overflow: hidden; }
+  .bar i { display: block; height: 100%; background: var(--ok); transition: width .6s ease; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; } td, th { text-align: left; padding: 6px 4px; border-top: 1px solid var(--border); }
+  td.threat { color: var(--signal); font-weight: 600; }
+  form { display: flex; gap: 8px; margin-top: 12px; } input { flex: 1; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border);
+    background: var(--elevated); color: var(--text); font-family: var(--mono); font-size: 13px; }
+  button { padding: 10px 16px; border-radius: 10px; border: 1px solid var(--border); background: var(--elevated); color: var(--text); cursor: pointer; font-weight: 600; }
+  button.primary { background: var(--signal); border-color: var(--signal); color: #fff; }
+  .item { font-family: var(--mono); font-size: 13px; word-break: break-all; } .note { min-height: 1.4em; }
+</style>
+</head>
+<body>
+<main>
+  <div><div class="mono muted" id="version">File Shield</div><h1>File Shield</h1>
+    <p class="muted">Choose files and folders no AI agent may touch. Every agent is refused, by any route its tools take,
+      in Audit mode too — and every attempt is shown here.</p></div>
+  <section class="card">
+    <h2>Protected from every AI agent</h2>
+    <div id="items" class="muted">Switch File Shield on in Settings to protect files and folders.</div>
+    <form id="add-form"><input id="add-path" autocomplete="off" placeholder="~/Documents/Taxes or /Volumes/Vault/keys.txt" aria-label="File or folder to protect" />
+      <button class="primary" type="submit">Protect</button></form>
+    <p class="muted note" id="add-note" aria-live="polite"></p>
+  </section>
+  <section class="card">
+    <h2>Agents refused</h2>
+    <div id="hits" class="muted">No AI agent has tried to reach a protected item.</div>
+  </section>
+  <section class="card">
+    <h2>Changes, in real time</h2>
+    <div id="changes" class="muted">With the system protection helper, changes inside protected items and new files in watched folders appear here within a second.</div>
+  </section>
+  <section class="card">
+    <h2>How far it reaches</h2>
+    <ul id="can"></ul>
+    <h2 style="margin-top:16px">What it cannot see</h2>
+    <ul id="cannot"></ul>
+  </section>
+  <section class="card">
+    <h2>Tested</h2>
+    <p class="muted" id="systems"></p>
+    <div id="tested" class="muted">Reading the attack table…</div>
+  </section>
+</main>
+<script src="/approvals.js"></script>
+<script>
+  // Every value is put on the page as text, never as markup.
+  function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+  function getJSON(name) { return fetch(name, { cache: "no-store" }).then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); }); }
+  var API = "../../api/shields/file-shield/api/";
+  function when(ts) { try { return new Date(Number(ts) * 1000).toLocaleString(); } catch (_) { return ""; } }
+  function post(name, body) {
+    return fetch("../../api/session", { cache: "no-store" }).then(function (r) { return r.json(); }).then(function (session) {
+      return fetch(API + name, { method: "POST", headers: { "Content-Type": "application/json", "X-Blackbox-Token": (session && session.token) || "" },
+                                 body: JSON.stringify(body) });
+    });
+  }
+  function say(text) { document.getElementById("add-note").textContent = text; }
+  function readItems() {
+    getJSON(API + "protected").then(function (view) {
+      var host = document.getElementById("items"); host.textContent = ""; host.className = "";
+      if (!view.items || !view.items.length) { host.className = "muted"; host.textContent = view.enabled ? "Nothing protected yet." : "File Shield is off."; return; }
+      view.items.forEach(function (row) {
+        var line = el("div", "row"), left = el("div");
+        left.appendChild(el("div", "item", String(row.item)));
+        left.appendChild(el("div", "muted", (row.kind === "folder" ? "Folder" : "File") + (row.exists ? "" : " · not there yet") +
+          " · " + (row.hits ? row.hits + " refused" : "no agent has tried")));
+        var remove = el("button", null, "Stop protecting");
+        remove.addEventListener("click", function () {
+          say("Asking you first — stopping protection turns it down…");
+          post("unprotect", { path: row.item }).then(function (r) { say(r.ok ? "No longer protected: " + row.item : "Still protected."); readItems(); })
+            .catch(function () { say("Still protected."); });
+        });
+        line.appendChild(left); line.appendChild(remove); host.appendChild(line);
+      });
+    }).catch(function () {});
+  }
+  document.getElementById("add-form").addEventListener("submit", function (event) {
+    event.preventDefault();
+    var input = document.getElementById("add-path"), path = input.value.trim();
+    if (!path) return;
+    post("protect", { path: path }).then(function (r) {
+      return r.json().then(function (answer) {
+        if (r.ok) { input.value = ""; say("Protected. No AI agent may touch it now."); readItems(); }
+        else { say(String((answer && (answer.error || answer.detail)) || "That could not be protected.")); }
+      });
+    }).catch(function () { say("That could not be protected."); });
+  });
+  function readHits() {
+    getJSON(API + "hits?limit=50").then(function (view) {
+      var host = document.getElementById("hits");
+      if (!view.hits || !view.hits.length) return;
+      host.textContent = ""; host.className = "";
+      view.hits.forEach(function (hit) {
+        var line = el("div", "row");
+        line.appendChild(el("span", null, (hit.agent || "An AI agent") + " · " + (hit.kind === "protected-mention" ? "a prompt named " : (hit.route || "use") + " ") + hit.item));
+        line.appendChild(el("span", "tag " + (hit.decision === "block" ? "blocked" : ""), when(hit.ts)));
+        host.appendChild(line);
+      });
+    }).catch(function () {});
+  }
+  var since = 0;
+  function readChanges() {
+    getJSON(API + "changes?since=0").then(function (view) {
+      if (!view.changes || !view.changes.length || view.seq === since) return;
+      since = view.seq;
+      var host = document.getElementById("changes"); host.textContent = ""; host.className = "";
+      view.changes.slice(-40).reverse().forEach(function (change) {
+        var line = el("div", "row");
+        line.appendChild(el("span", "item", change.kind + " " + change.path));
+        line.appendChild(el("span", "tag " + (change.scope === "protected" ? "blocked" : ""), when(change.ts)));
+        host.appendChild(line);
+      });
+    }).catch(function () {});
+  }
+  getJSON("content.json").then(function (content) {
+    document.getElementById("version").textContent = String(content.version || "File Shield");
+    ["can", "cannot"].forEach(function (key) {
+      var list = document.getElementById(key);
+      (content[key] || []).forEach(function (item) {
+        var li = el("li"); li.appendChild(el("b", null, String(item[0]))); li.appendChild(document.createTextNode(" — " + String(item[1]))); list.appendChild(li);
+      });
+    });
+  }).catch(function () {});
+  // The table as served: its rows, and what they were tested on (composed from the registry).
+  function renderProven(t) {
+    document.getElementById("systems").textContent = "Tested on: " + (t.systems || []).map(function (s) { return String(s.name); }).join(", ");
+    var host = document.getElementById("tested"); host.textContent = ""; host.className = "";
+    (t.attacks || []).forEach(function (row) {
+      var line = el("div", "row"); line.appendChild(el("span", null, String(row.title || row.id)));
+      line.appendChild(el("span", "tag " + (row.outcome === "blocked" ? "blocked" : ""), String(row.outcome || "")));
+      host.appendChild(line);
+    });
+  }
+  getJSON("attacks.json").then(function (t) { renderProven(t); })
+    .catch(function () { document.getElementById("tested").textContent = "The attack table could not be read."; });
+  readItems(); readHits(); readChanges();
+  setInterval(readHits, 5000); setInterval(readChanges, 2000);
+</script>
+</body>
+</html>

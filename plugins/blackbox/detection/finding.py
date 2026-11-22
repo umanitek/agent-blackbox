@@ -17,6 +17,10 @@ from typing import Any, Optional
 #: approval a trading bot sends every day (KI-385). The hook's blocking rule reads it.
 KIND_FLAG_ONLY = "flag-only"
 
+#: ``Finding.matched`` of a finding on an item the PERSON protected (File Shield's protected files
+#: and folders): their own explicit rule, refused in every mode like Blackbox's self-protection.
+PERSON_PROTECTED = "person-protected"
+
 #: ``Finding.fields`` key set on a wallet secret (seed phrase, private key) that a call SENDS
 #: off the machine. A wallet secret has no right destination, so this one is a built-in rule:
 #: it counts whether or not Trader Shield is on (KI-488) — the shield claims every other

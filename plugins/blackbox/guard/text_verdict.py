@@ -41,7 +41,10 @@ def text_verdict(texts: Sequence[tuple[str, str]]) -> ToolCallVerdict:
     cfg = hooks._config()   # through the module: one config source with the tool-call hook
     rules, _evidence = graph_rules.detection_rules(cfg, "", {})
     findings = api_request._injection_by_source(sources, rules, cfg.discover)
-    findings = reporting._flag_worthy(cfg, findings, shields.snapshot())
+    active = shields.snapshot()
+    # A prompt that names an item the person protected (File Shield): flagged, never kept.
+    findings += shields.prompt_findings([text for context, text in sources if context == "in-user-prompt"], active)
+    findings = reporting._flag_worthy(cfg, findings, active)
     blocking = hooks._blocking(cfg, findings)
     decision = hooks._decision(cfg, findings, blocking) if findings else ""
     return ToolCallVerdict(findings=[finding.to_dict() for finding in findings],
