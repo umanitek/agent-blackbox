@@ -419,8 +419,8 @@
      "os_version": "macOS 26.6.2",
      "date": "2026-11-22",
      "blackbox": "1.5.0",
-     "how": "test VM, real codex exec --oss with a local model (Ollama qwen2.5:7b): two sessions with model, a 12-call loop, a File Shield read refused; spawn_agent sub-agents are not tracked as sub-agents (KI-557)",
-     "result": "partial"
+     "how": "test VM, REAL codex exec with OpenAI models (gpt-5-nano, gpt-5.4-nano) and --dangerously-bypass-hook-trust: sessions with the model, two at once, a 12-call loop, File Shield and self-protection refusals, sudo flagged; the sub-agent's task text is not shown yet",
+     "result": "pass"
     },
     {
      "os": "macos",
@@ -432,7 +432,13 @@
      "os": "macos",
      "launch": "sub-agent",
      "layer": "hooks",
-     "status": "covered-untested"
+     "status": "tested",
+     "agent_version": "0.171.0",
+     "os_version": "macOS 26.6.2",
+     "date": "2026-11-22",
+     "blackbox": "1.5.0",
+     "how": "test VM, REAL codex exec (gpt-5.4-nano): three spawn_agent sub-agents in parallel, each its own instance under the session with its model and exact counts (KI-557 fixed); task text not shown yet",
+     "result": "pass"
     },
     {
      "os": "macos",
@@ -756,7 +762,13 @@
      "os": "macos",
      "launch": "headless",
      "layer": "hooks",
-     "status": "covered-untested"
+     "status": "tested",
+     "agent_version": "0.70.0",
+     "os_version": "macOS 26.6.2",
+     "date": "2026-11-22",
+     "blackbox": "1.5.0",
+     "how": "test VM, REAL gemini -p with a hosted model (gemini-3.5-flash-lite, free tier): fail on a stock install, see KI-570; Gemini's invoke_agent sub-agents have no hook event and count on the session",
+     "result": "fail"
     },
     {
      "os": "macos",
@@ -1327,8 +1339,8 @@
      "os_version": "macOS 26.6.2",
      "date": "2026-11-22",
      "blackbox": "1.5.0",
-     "how": "test VM, real cline -P ollama with a local model (qwen2.5:7b): two sessions, a 12-call loop, a File Shield read refused, sudo recorded; this mode has no sub-agents",
-     "result": "pass"
+     "how": "test VM, REAL cline -P gemini (gemini-3.5-flash-lite): sessions, two at once, a 12-call loop, File Shield and self-protection refusals, sudo flagged; every prompt is flagged and the launch mode shows interactive (KI-573)",
+     "result": "partial"
     }
    ]
   },
@@ -1462,7 +1474,7 @@
      "os_version": "macOS 26.6.2",
      "date": "2026-11-22",
      "blackbox": "1.5.0",
-     "how": "test VM, real opencode run with a local model (Ollama qwen2.5:7b): two sessions, a 12-call loop, a File Shield read refused, sudo recorded; a task-tool sub-agent shows as a separate session with no parent (KI-555)",
+     "how": "test VM, REAL opencode run with a hosted model (gemini-3.5-flash-lite): sessions with launch mode, two at once, a 12-call loop, task-tool sub-agents linked under the session with their task and counts (KI-555 fixed) but closed only by the quiet limit (KI-574), File Shield and self-protection refusals, sudo flagged",
      "result": "partial"
     }
    ]
@@ -1549,6 +1561,18 @@
      "layer": "hooks",
      "status": "covered-untested",
      "why": "a delegated task is linked to its session by tests with the guard's own hook calls; not yet run with a hosted model"
+    },
+    {
+     "os": "macos",
+     "launch": "headless",
+     "layer": "hooks",
+     "status": "tested",
+     "agent_version": "2026.9.24",
+     "os_version": "macOS 26.6.2",
+     "date": "2026-11-22",
+     "blackbox": "1.5.0",
+     "how": "test VM, REAL hermes chat -q with hosted free models (OpenRouter nemotron-3.5-lightning:free, Gemini flash-lite): sessions, two at once, a 12-call loop, File Shield and self-protection refusals, sudo flagged, delegate_task children; sessions show the Hermes home instead of the project folder, no model or prompts, and one delegated child shows as its own session (KI-572)",
+     "result": "partial"
     }
    ]
   }

@@ -25,7 +25,7 @@ Statuses:
 | Devin | Built, not yet run in the product | Not covered | Not covered |
 | Cline | Tested | Not covered | Not covered |
 | OpenCode | Tested | Not covered | Not covered |
-| Hermes agent | Built, not yet run in the product | Not covered | Not covered |
+| Hermes agent | Tested | Not covered | Not covered |
 
 ## Claude Code
 
@@ -125,9 +125,9 @@ One `codex` process per session (CLI or `codex exec`); the desktop app and IDE e
 | OS | Launch mode | Layer | Status | Detail |
 |---|---|---|---|---|
 | macos | interactive | hooks | Tested | 2026-11-22, Blackbox 1.5.0, agent 0.171.0, macOS 26.6.2: test VM (macOS 26, bb-recheck2): the agent's own configured hook command run with the payloads of its hook reference; refusals in Block and Audit mode — pass |
-| macos | headless | hooks | Tested | 2026-11-22, Blackbox 1.5.0, agent 0.171.0, macOS 26.6.2: test VM, real codex exec --oss with a local model (Ollama qwen2.5:7b): two sessions with model, a 12-call loop, a File Shield read refused; spawn_agent sub-agents are not tracked as sub-agents (KI-557) — partial |
+| macos | headless | hooks | Tested | 2026-11-22, Blackbox 1.5.0, agent 0.171.0, macOS 26.6.2: test VM, REAL codex exec with OpenAI models (gpt-5-nano, gpt-5.4-nano) and --dangerously-bypass-hook-trust: sessions with the model, two at once, a 12-call loop, File Shield and self-protection refusals, sudo flagged; the sub-agent's task text is not shown yet — pass |
 | macos | sdk | hooks | Built, not yet run in the product |  |
-| macos | sub-agent | hooks | Built, not yet run in the product |  |
+| macos | sub-agent | hooks | Tested | 2026-11-22, Blackbox 1.5.0, agent 0.171.0, macOS 26.6.2: test VM, REAL codex exec (gpt-5.4-nano): three spawn_agent sub-agents in parallel, each its own instance under the session with its model and exact counts (KI-557 fixed); task text not shown yet — pass |
 | macos | cloud | hooks | Not covered | runs off this machine |
 | macos | interactive | sandbox | Built, not yet run in the product | the launcher is written; refusals were proven with Claude Code's launcher |
 | macos | interactive | os | Not covered | needs Apple's Endpoint Security entitlement (not requested yet) |
@@ -227,7 +227,7 @@ One `gemini` process (Node) per session; `gemini -p` runs headless. Sub-agents r
 | OS | Launch mode | Layer | Status | Detail |
 |---|---|---|---|---|
 | macos | interactive | hooks | Tested | 2026-11-22, Blackbox 1.5.0, agent 0.70.0, macOS 26.6.2: test VM (macOS 26, bb-recheck2): the agent's own configured hook command run with the payloads of its hook reference; refusals in Block and Audit mode — pass |
-| macos | headless | hooks | Built, not yet run in the product |  |
+| macos | headless | hooks | Tested | 2026-11-22, Blackbox 1.5.0, agent 0.70.0, macOS 26.6.2: test VM, REAL gemini -p with a hosted model (gemini-3.5-flash-lite, free tier): fail on a stock install, see KI-570; Gemini's invoke_agent sub-agents have no hook event and count on the session — fail |
 | macos | interactive | sandbox | Built, not yet run in the product | the launcher is written; refusals were proven with Claude Code's launcher |
 | macos | interactive | os | Not covered | needs Apple's Endpoint Security entitlement (not requested yet) |
 
@@ -408,7 +408,7 @@ The `cline` CLI (TUI, headless, and a background hub), the SDK (`ClineCore`), Ka
 | macos | ide | hooks | Built, not yet run in the product | hook scripts; not run in the extension |
 | macos | cloud | hooks | Not covered | local hooks never run in the vendor's cloud |
 | macos | interactive | os | Not covered | needs Apple's Endpoint Security entitlement (not requested yet) |
-| macos | headless | hooks | Tested | 2026-11-22, Blackbox 1.5.0, agent 3.0.75, macOS 26.6.2: test VM, real cline -P ollama with a local model (qwen2.5:7b): two sessions, a 12-call loop, a File Shield read refused, sudo recorded; this mode has no sub-agents — pass |
+| macos | headless | hooks | Tested | 2026-11-22, Blackbox 1.5.0, agent 3.0.75, macOS 26.6.2: test VM, REAL cline -P gemini (gemini-3.5-flash-lite): sessions, two at once, a 12-call loop, File Shield and self-protection refusals, sudo flagged; every prompt is flagged and the launch mode shows interactive (KI-573) — partial |
 
 **Not covered:**
 - Not run with a model yet: the CLI needs a sign-in. The SDK's own loader loaded Blackbox's plugin and found its hook scripts; a real session is still to be run.
@@ -451,7 +451,7 @@ One `opencode` process (TUI) or `opencode serve`; agents and sub-agents run insi
 | macos | interactive, version 2 | hooks | Built, not yet run in the product | the version-2 plugin is run under Node with the documented events; OpenCode 2 itself is not released on npm's latest tag |
 | macos | headless, pure | hooks | Not covered | --pure loads no external plugin |
 | macos | interactive | os | Not covered | needs Apple's Endpoint Security entitlement (not requested yet) |
-| macos | headless | hooks | Tested | 2026-11-22, Blackbox 1.5.0, agent 1.19.6, macOS 26.6.2: test VM, real opencode run with a local model (Ollama qwen2.5:7b): two sessions, a 12-call loop, a File Shield read refused, sudo recorded; a task-tool sub-agent shows as a separate session with no parent (KI-555) — partial |
+| macos | headless | hooks | Tested | 2026-11-22, Blackbox 1.5.0, agent 1.19.6, macOS 26.6.2: test VM, REAL opencode run with a hosted model (gemini-3.5-flash-lite): sessions with launch mode, two at once, a 12-call loop, task-tool sub-agents linked under the session with their task and counts (KI-555 fixed) but closed only by the quiet limit (KI-574), File Shield and self-protection refusals, sudo flagged — partial |
 
 **Not covered:**
 - `opencode --pure` runs without external plugins: nothing Blackbox installs is loaded.
@@ -491,6 +491,7 @@ One Hermes process per run (CLI, gateway or a profile's service). A task it dele
 |---|---|---|---|---|
 | macos | interactive | hooks | Built, not yet run in the product | the plugin's own Hermes hooks, recorded in the instance tree, are covered by tests; the real run on the test VM did not complete (the local model was too slow for Hermes' prompt, 2026-11-22) |
 | macos | sub-agent | hooks | Built, not yet run in the product | a delegated task is linked to its session by tests with the guard's own hook calls; not yet run with a hosted model |
+| macos | headless | hooks | Tested | 2026-11-22, Blackbox 1.5.0, agent 2026.9.24, macOS 26.6.2: test VM, REAL hermes chat -q with hosted free models (OpenRouter nemotron-3.5-lightning:free, Gemini flash-lite): sessions, two at once, a 12-call loop, File Shield and self-protection refusals, sudo flagged, delegate_task children; sessions show the Hermes home instead of the project folder, no model or prompts, and one delegated child shows as its own session (KI-572) — partial |
 
 **Not covered:**
 - A plugin that is not loaded (Blackbox removed from a profile) sees nothing of that profile.
