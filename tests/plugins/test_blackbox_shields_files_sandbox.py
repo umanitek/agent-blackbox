@@ -262,3 +262,87 @@ git --version >/dev/null 2>&1; echo git=$?
             done = subprocess.run([macos.SANDBOX_EXEC, "-f", str(sandbox.profile_path()), found, "--version"],
                                   capture_output=True, text=True, timeout=60, check=False)
             assert done.returncode == 0, (agent, done.stderr)
+
+
+# -- the PATH block can not be undone (KI-535, E2E full4 2026-11-22) -------------------------------
+
+def test_the_profile_closes_every_shell_startup_file_to_writes(home):
+    text = macos.render(sandbox.policy(_mode()))
+    for name in shell_path.STARTUP_FILES:
+        assert f'(literal "{home / name}")' in text, name
+
+
+@REAL
+def test_a_real_sandbox_can_not_write_create_or_remove_a_shell_startup_file(home):
+    (home / ".zshrc").write_text("export EDITOR=vim\n", encoding="utf-8")
+    sandbox.sync(_mode())
+    before = (home / ".zshrc").read_text(encoding="utf-8")
+    script = f"""
+echo 'export PATH=/evil:$PATH' >> '{home}/.zshrc' 2>/dev/null; echo append=$?
+printf '' > '{home}/.zshrc' 2>/dev/null; echo truncate=$?
+mv '{home}/.zshrc' '{home}/z.bak' 2>/dev/null; echo move=$?
+rm -f '{home}/.zshrc' 2>/dev/null; echo remove=$?
+echo 'export PATH=/evil:$PATH' > '{home}/.zlogin' 2>/dev/null; echo create=$?
+echo ok > '{home}/Documents/notes.txt'; echo elsewhere=$?
+"""
+    lines = dict(line.split("=", 1) for line in _run(sandbox.profile_path(), script).stdout.split())
+    assert {k: lines[k] for k in ("append", "truncate", "move", "remove", "create")} == dict.fromkeys(
+        ("append", "truncate", "move", "remove", "create"), "1"), lines
+    assert lines["elsewhere"] == "0"
+    assert (home / ".zshrc").read_text(encoding="utf-8") == before and not (home / ".zlogin").exists()
+
+
+def test_an_agent_may_edit_its_own_lines_of_a_startup_file_but_never_the_block(home):
+    from plugins.blackbox.detection import detect_guard_tamper
+    (home / ".zshrc").write_text("autoload -U compinit\nexport EDITOR=vim\n", encoding="utf-8")
+    shell_path.add(home / "bb" / "agent-bin")
+    zshrc = str(home / ".zshrc")
+    text = (home / ".zshrc").read_text(encoding="utf-8")
+    block = shell_path.section(text)
+    refused = [
+        ("Edit", {"file_path": zshrc, "old_string": block, "new_string": ""}),
+        ("Edit", {"file_path": zshrc, "old_string": shell_path.END, "new_string": shell_path.END + "\nexport PATH=/x:$PATH"}),
+        ("Write", {"file_path": zshrc, "content": "autoload -U compinit\n"}),
+        ("Bash", {"command": f"sed -i '' '/Blackbox agent sandbox/d' {zshrc}"}),
+        ("Bash", {"command": "echo 'export PATH=/evil:$PATH' >> ~/.zshrc"}),
+    ]
+    allowed = [
+        ("Edit", {"file_path": zshrc, "old_string": "export EDITOR=vim", "new_string": "export EDITOR=nano"}),
+        ("Edit", {"file_path": zshrc, "old_string": "autoload -U compinit", "new_string": "autoload -Uz compinit"}),
+        ("Write", {"file_path": zshrc, "content": "export EDITOR=nano\n" + block + "\n"}),
+        ("Bash", {"command": "cat ~/.zshrc"}),
+    ]
+    for tool, args in refused:
+        assert detect_guard_tamper(tool, args), (tool, args)
+    for tool, args in allowed:
+        assert not detect_guard_tamper(tool, args), (tool, args)
+
+
+def test_without_the_block_a_startup_file_is_the_persons_own(home):
+    from plugins.blackbox.detection import detect_guard_tamper
+    (home / ".zshrc").write_text("export EDITOR=vim\n", encoding="utf-8")
+    assert not detect_guard_tamper("Bash", {"command": "echo 'export PATH=/opt/x:$PATH' >> ~/.zshrc"})
+    assert not detect_guard_tamper("Write", {"file_path": str(home / ".zshrc"), "content": "export EDITOR=nano\n"})
+
+
+def test_a_removed_or_changed_block_is_put_back_and_the_person_is_told(home, entry):
+    from plugins.blackbox.shields.files import alerts
+    sandbox.sync(_mode())
+    assert sandbox.restorations() == [] and alerts.alerts() == []
+    zshrc = home / ".zshrc"
+    zshrc.write_text(zshrc.read_text(encoding="utf-8").replace(str(sandbox.launcher_dir()), "/elsewhere"), encoding="utf-8")
+    sandbox.sync(_mode())
+    assert shell_path.intact(sandbox.launcher_dir(), home)
+    zshrc.write_text("export EDITOR=vim\n", encoding="utf-8")   # the block taken out
+    sandbox.sync(_mode())
+    assert shell_path.intact(sandbox.launcher_dir(), home)
+    rows = sandbox.restorations()
+    assert len(rows) == 2 and rows[0]["files"] == [str(zshrc)]
+    kinds = [alert["kind"] for alert in alerts.alerts()]
+    assert kinds.count("path-restored") == 2
+
+
+def test_the_first_time_the_block_is_written_is_not_a_restoration(home):
+    sandbox.sync(_mode())
+    sandbox.sync(_mode())
+    assert sandbox.restorations() == []

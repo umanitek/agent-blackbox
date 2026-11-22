@@ -11,6 +11,9 @@ resolved, ``..`` folded), because a kernel sandbox matches the path the kernel s
   the sandbox can not rewrite its own sandbox or switch Blackbox off;
 * every folder ABOVE a protected item — never renamed or removed (``mv ~/Documents ~/D2`` would
   otherwise walk the item out from under its rule; files inside those folders stay writable);
+* the shell startup files (``~/.zshrc`` …) — never written: the block that puts Blackbox's agent
+  launchers first on PATH lives there, and an agent that removed it would send every later agent
+  outside the sandbox (KI-535). Named as given AND resolved (a dotfiles link is closed at both ends);
 * the canary — a file only a sandboxed process can not read: the proof a session really is
   inside (an agent can not fake it by setting a variable).
 
@@ -38,6 +41,8 @@ class Places:
     no_write: tuple[str, ...]
     no_rename: tuple[str, ...]
     canary: str
+    #: Files never written, created, renamed or removed (the shell startup files).
+    no_write_files: tuple[str, ...] = ()
 
     def watched(self) -> tuple[str, ...]:
         """Every refused place (a denial naming one of these is a File Shield hit)."""
@@ -64,10 +69,11 @@ def _unique(values: Iterable[str]) -> tuple[str, ...]:
 
 
 def build(items: Iterable[str], key_patterns: Iterable[str], own: Iterable[str], canary: str,
-          is_folder=os.path.isdir) -> Places:
+          is_folder=os.path.isdir, startup_files: Iterable[str] = ()) -> Places:
     """The policy for the person's *items* (as File Shield stores them), Blackbox's *key_patterns*
-    (folders, or ``folder/glob``), Blackbox's *own* places and the *canary* file. *is_folder*
-    decides an item's kind (File Shield's own rule, so a not-yet-existing folder is a folder)."""
+    (folders, or ``folder/glob``), Blackbox's *own* places, the *canary* file and the shell
+    *startup_files* (absolute; they need not exist). *is_folder* decides an item's kind (File
+    Shield's own rule, so a not-yet-existing folder is a folder)."""
     folders: list[str] = []
     files: list[str] = []
     for item in items:
@@ -81,5 +87,7 @@ def build(items: Iterable[str], key_patterns: Iterable[str], own: Iterable[str],
     canary_path = canonical(canary)
     refused = folders + files + [os.path.dirname(glob) for glob in globs]
     above = [parent for place in refused for parent in _ancestors(place)]
+    startup = [form for path in startup_files for form in (os.path.normpath(os.path.expanduser(path)), canonical(path))]
     return Places(denied_folders=_unique(folders), denied_files=_unique(files + [canary_path]), denied_globs=_unique(globs),
-                  no_write=_unique(canonical(place) for place in own), no_rename=_unique(above), canary=canary_path)
+                  no_write=_unique(canonical(place) for place in own), no_rename=_unique(above), canary=canary_path,
+                  no_write_files=_unique(startup))

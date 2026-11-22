@@ -81,6 +81,8 @@ def render(places: Places, digest_line: str = "") -> str:
         lines.append("(deny file-read* file-write* file-link\n  " + "\n  ".join(refused) + ")")
     if places.no_write:
         lines.append("(deny file-write*\n  " + "\n  ".join(f"(subpath {_quote(p)})" for p in places.no_write) + ")")
+    if places.no_write_files:   # the shell startup files: the PATH block that keeps later agents inside (KI-535)
+        lines.append("(deny file-write*\n  " + "\n  ".join(f"(literal {_quote(p)})" for p in places.no_write_files) + ")")
     if places.no_rename:
         lines.append("(deny file-write-unlink\n  " + "\n  ".join(f"(literal {_quote(p)})" for p in places.no_rename) + ")")
     lines.append("(deny lsopen)")   # `open -a OtherApp file`: another app would read it outside the sandbox

@@ -47,7 +47,7 @@ from typing import Any, Optional
 
 from .. import action_parsing, shell_shapes
 from ..finding import Finding
-from ...kernel import addons as guarded_extra, agent_hosts, threat_ids
+from ...kernel import addons as guarded_extra, agent_hosts, shell_path, threat_ids
 from ...kernel.bounded_files import read_small_text
 from ...kernel.config import BlackboxConfig, load_blackbox_config
 from . import guard_commands, guard_paths, guard_places, guard_secrets, protected, shell_files
@@ -73,7 +73,8 @@ _MAX_CONFIG_BYTES = 1_000_000
 _SHARED_HOOK_STYLES = frozenset({"nested", "flat"})
 #: Another program's file among the guarded places: only an edit that reaches Blackbox's part is refused.
 _HOST_CONFIGS = ("config.yaml", "openclaw.json",
-                 *sorted({os.path.basename(host.config) for host in agent_hosts.HOSTS if host.style in _SHARED_HOOK_STYLES}))
+                 *sorted({os.path.basename(host.config) for host in agent_hosts.HOSTS if host.style in _SHARED_HOOK_STYLES}),
+                 *shell_path.STARTUP_FILES)   # the person's startup file: everything but the sandbox's PATH block
 #: Startup files: a ``BLACKBOX_…`` variable written there lowers the guard of every later session.
 _STARTUP_FILES = frozenset({".zshrc", ".zshenv", ".zprofile", ".bashrc", ".bash_profile", ".profile", ".env", "config.fish"})
 #: A file whose text is run: a script that would itself be refused may not be written.
@@ -225,14 +226,38 @@ def _blackbox_section(config_text: str) -> str:
 
 def _edit_reaches_blackbox(config_path: str, edits: list[str]) -> bool:
     """True when an edit's text touches Blackbox: names it or the plugin lists, or changes text that sits
-    inside Blackbox's section of the file as it is now (``mode: block`` → ``mode: audit``)."""
+    inside Blackbox's section of the file as it is now (``mode: block`` → ``mode: audit``).
+    A shell startup file is judged by its PATH block alone: words like ``load`` or ``allow`` are
+    ordinary there (``autoload -U compinit``)."""
+    if os.path.basename(os.path.expanduser(config_path)) in shell_path.STARTUP_FILES:
+        return _edit_reaches_path_block(config_path, edits)
     if any(_BLACKBOX_TEXT.search(edit) for edit in edits):
         return True
     text = read_small_text(os.path.expanduser(config_path), _MAX_CONFIG_BYTES)
     if text is None:
         return any(_BLACKBOX_KEYS.search(edit) for edit in edits)
-    section = _blackbox_section(text) or _json_entry(text)
+    section = _blackbox_section(text) or _json_entry(text) or shell_path.section(text)
     return bool(section) and any(edit.strip() and edit.strip() in section for edit in edits)
+
+
+def _edit_reaches_path_block(config_path: str, edits: list[str]) -> bool:
+    """True when an edit of a shell startup file touches the agent sandbox's PATH block: names its
+    markers, or changes text that sits inside the block as the file is now."""
+    if any(shell_path.BEGIN in edit or shell_path.END in edit for edit in edits):
+        return True
+    block = shell_path.section(read_small_text(os.path.expanduser(config_path), _MAX_CONFIG_BYTES) or "")
+    return bool(block) and any(edit.strip() and edit.strip() in block for edit in edits)
+
+
+def _keeps_path_block(path: str, args: dict[str, Any]) -> bool:
+    """True when a whole-file write of shell startup file *path* keeps the agent sandbox's PATH
+    block exactly as it is now, as its last lines (KI-535: the person's own lines stay theirs)."""
+    if os.path.basename(os.path.expanduser(str(path))) not in shell_path.STARTUP_FILES:
+        return False
+    content = args.get("content")
+    current = read_small_text(os.path.expanduser(str(path)), _MAX_CONFIG_BYTES)
+    block = shell_path.section(current or "")
+    return isinstance(content, str) and bool(block) and content.rstrip("\n").endswith(block) and content.count(shell_path.BEGIN) == 1
 
 
 def _json_entry(config_text: str) -> str:
@@ -269,7 +294,7 @@ def _file_tool_tampers(access: dict[str, str], args: Any) -> bool:
         return True                        # Blackbox's own folders and files: any write
     edits = [args.get(key) for key in ("old_string", "new_string", "old_str", "new_str", "patch", "diff", "edits")]
     if not any(isinstance(edit, str) and edit for edit in edits):
-        return True                        # a whole-file write or a delete can drop Blackbox
+        return not _keeps_path_block(path, args)   # a whole-file write or a delete can drop Blackbox
     return _edit_reaches_blackbox(path, [edit for edit in edits if isinstance(edit, str) and edit])
 
 

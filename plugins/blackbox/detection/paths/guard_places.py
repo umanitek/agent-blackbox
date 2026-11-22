@@ -30,7 +30,7 @@ import time
 from pathlib import Path
 from typing import Callable, Generic, Hashable, TypeVar
 
-from ...kernel import addons as guarded_extra, agent_hosts, constants, system_helper
+from ...kernel import addons as guarded_extra, agent_hosts, constants, shell_path, system_helper
 from .shell_words import _home_as_tilde
 
 #: The plugin folder this code runs from: an installed copy, or a source checkout.
@@ -123,7 +123,8 @@ def _all_places() -> tuple[str, ...]:
     plugin folder, its OpenClaw plugin, the checkout they are copied from), the node's folder,
     the service definitions, the ``blackbox`` command, each coding agent's hook config that
     Blackbox writes into (``kernel.agent_hosts``), every add-on's folder
-    (``kernel.addons.ADDON_PACKAGES``) and the places an installed add-on declared."""
+    (``kernel.addons.ADDON_PACKAGES``), the places an installed add-on declared, and a shell startup
+    file that holds the agent sandbox's PATH block (KI-535)."""
     hermes = str(constants.hermes_root())
     home = os.path.expanduser("~")
     places = [
@@ -141,6 +142,9 @@ def _all_places() -> tuple[str, ...]:
     # Each coding agent's hook config: removing Blackbox's hook there switches that agent's protection
     # off. A shared settings file stays editable except for Blackbox's part (guard_settings).
     places += [str(host.config_path(Path(home))) for host in agent_hosts.HOSTS]
+    # A shell startup file holding the agent sandbox's PATH block (kernel.shell_path): without the
+    # block later agents start outside the sandbox. The person's own lines stay editable (guard_settings).
+    places += [str(path) for path in shell_path.holding(Path(home))]
     # Each add-on's folder beside the plugin, in every Hermes home: deleting it removes protection.
     for addon in guarded_extra.ADDON_PACKAGES:
         places += [os.path.join(hermes, "plugins", addon), os.path.join(hermes, "profiles", "*", "plugins", addon),

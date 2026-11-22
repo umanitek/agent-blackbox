@@ -17,6 +17,11 @@ the person (it is a protecting list).
 The profile follows the list: :func:`sync` rewrites it (and the launchers) when the items or the
 chosen agents change. A running agent keeps the profile it started with until it is restarted.
 
+The PATH block is watched too (KI-535): when the block Blackbox put in the person's startup files is
+gone or changed, :func:`sync` puts it back at once (it only protects more) and records it, so File
+Shield alerts the person (:func:`restorations`). Inside the sandbox no startup file can be written
+at all; outside, the guard refuses an agent's edit of the block (``detection`` guarded places).
+
 Pattern: **Facade** over :mod:`.places` (the policy) and :mod:`.platform` (one Strategy per OS).
 
 Usage::
@@ -29,8 +34,10 @@ Usage::
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import stat
+import time
 from pathlib import Path
 from typing import Any, Optional
 
@@ -43,7 +50,8 @@ from ..protect import is_folder
 from . import platform
 from .places import Places, build
 
-__all__ = ["CLI_AGENTS", "Places", "launcher_dir", "open_app", "policy", "profile_path", "proven", "status", "sync"]
+__all__ = ["CLI_AGENTS", "Places", "launcher_dir", "open_app", "policy", "profile_path", "proven", "restorations",
+           "status", "sync"]
 
 #: GUI agents are relaunched, not given a command-line launcher.
 _GUI_ONLY = frozenset({"windsurf"})
@@ -51,6 +59,8 @@ _GUI_ONLY = frozenset({"windsurf"})
 CLI_AGENTS: dict[str, tuple[str, ...]] = {host.id: tuple(host.commands) for host in agent_hosts.HOSTS
                                           if host.id not in _GUI_ONLY and host.commands}
 CANARY_TEXT = "Blackbox agent sandbox canary — a sandboxed agent can not read this file.\n"
+#: How many PATH-block restorations are kept for File Shield's alerts.
+MAX_RESTORATIONS = 20
 _PLUGIN = Path(__file__).resolve().parents[3]
 
 
@@ -70,6 +80,15 @@ def launcher_dir() -> Path:
     return constants.blackbox_home() / "agent-bin"
 
 
+def _on_path_marker() -> Path:
+    """Written once Blackbox has put its block on PATH: a block missing AFTER that was removed."""
+    return home() / "on-path"
+
+
+def _restorations_path() -> Path:
+    return home() / "path-restored.json"
+
+
 def chosen(mode: ShieldMode) -> tuple[str, ...]:
     """The agents the person sandboxes (none while File Shield is off)."""
     return tuple(mode.options.get(mode_module.OPT_SANDBOXED, ())) if mode.enabled else ()
@@ -78,7 +97,9 @@ def chosen(mode: ShieldMode) -> tuple[str, ...]:
 def policy(mode: ShieldMode) -> Places:
     """The sandbox's policy for *mode*: the person's items, Blackbox's keys and own places."""
     own = (str(constants.blackbox_home()), str(_PLUGIN))
-    return build(mode_module.protected(mode), blackbox_key_patterns(), own, str(canary_path()), is_folder=is_folder)
+    startup = [str(Path.home() / name) for name in shell_path.STARTUP_FILES]
+    return build(mode_module.protected(mode), blackbox_key_patterns(), own, str(canary_path()), is_folder=is_folder,
+                 startup_files=startup)
 
 
 def _write_if_changed(path: Path, text: str, mode: int) -> bool:
@@ -97,13 +118,41 @@ def _sync_launchers(commands: set[str]) -> None:
     if commands:
         for command in sorted(commands):
             _write_if_changed(folder / command, platform.launcher_script(command, str(folder), str(profile_path())), 0o755)
-        shell_path.add(folder)
+        _keep_on_path(folder)
     else:
         shell_path.remove()
+        _on_path_marker().unlink(missing_ok=True)
     if folder.is_dir():
         for entry in folder.iterdir():
             if entry.name not in commands and entry.is_file():
                 entry.unlink()
+
+
+def _keep_on_path(folder: Path) -> None:
+    """Puts the block on PATH; when Blackbox had put it there before and it is gone or changed, the
+    restoration is recorded for File Shield's alerts (an agent or a program undid it)."""
+    marker = _on_path_marker()
+    was_on, whole = marker.is_file(), shell_path.intact(folder)
+    changed = shell_path.add(folder)
+    if changed and was_on and not whole:
+        _record_restoration([str(path) for path in changed])
+    if not was_on:
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write(marker, "1\n", mode=0o644)
+
+
+def _record_restoration(files: list[str]) -> None:
+    rows = [{"ts": time.time(), "files": files}] + restorations()
+    atomic_write(_restorations_path(), json.dumps(rows[:MAX_RESTORATIONS]), mode=0o644)
+
+
+def restorations() -> list[dict[str, Any]]:
+    """The times File Shield put the PATH block back, newest first: ``[{"ts", "files"}]``."""
+    try:
+        rows = json.loads(_restorations_path().read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return []
+    return [row for row in rows if isinstance(row, dict) and isinstance(row.get("files"), list)] if isinstance(rows, list) else []
 
 
 def sync(mode: Optional[ShieldMode] = None) -> dict[str, Any]:

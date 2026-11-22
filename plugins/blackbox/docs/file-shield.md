@@ -38,6 +38,10 @@ sandbox, for the coding agents you pick (macOS today):
   `copilot`, `cline`, `opencode`) and puts its folder first on your PATH (one marked block at the
   end of `~/.zshrc`, and `~/.bashrc` / `~/.bash_profile` when you have them). Starting the agent
   from a terminal then starts it inside macOS's own sandbox, built from your protected list.
+- That block can not be undone by an agent: inside the sandbox no shell startup file (`~/.zshrc`,
+  `~/.zprofile`, `~/.zlogin`, `~/.bashrc` …) can be written at all, and outside it Blackbox's guard
+  refuses any agent edit of the block (your own lines stay editable). If something removes or
+  changes the block anyway, File Shield puts it back within seconds and tells you.
 - Inside it, nothing the agent starts — a script, a program it compiled, Python, a shell — can
   open, copy, list, change, move, link or delete a protected item, or rename a folder above one,
   or change Blackbox itself. The kernel refuses it; no hook is needed and none can be skipped.

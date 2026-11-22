@@ -7,6 +7,8 @@ notification per alert it has not seen (``key``). Three kinds:
   protection helper's real-time file events, :mod:`.changes`);
 * ``file-hit`` / ``folder-hit`` — File Shield refused an AI agent reaching an item (the guard's
   findings, every route, and the OS sandbox's refusals);
+* ``path-restored`` — the block that puts the agent sandbox's launchers first on PATH was removed or
+  changed in a shell startup file, and File Shield put it back (KI-535);
 
 WHY (KI-532, E2E full3 2026-11-22): a change inside a protected folder raised no notification at
 all, and a refusal reached the person only as the generic "Blocked: a critical threat".
@@ -29,7 +31,7 @@ import os
 from typing import Any
 
 from ... import audit
-from . import changes
+from . import changes, sandbox
 from .protect import FILE_HIT_ID, FOLDER_HIT_ID, SANDBOX_AGENT
 
 MAX_ALERTS = 50
@@ -82,7 +84,13 @@ def _hit_alerts() -> list[dict[str, Any]]:
     return rows
 
 
+def _restore_alerts() -> list[dict[str, Any]]:
+    return [_alert(f"path-restored:{float(row.get('ts') or 0):.6f}", "path-restored", float(row.get("ts") or 0), "high",
+                   "", "", "Something removed Blackbox's agent sandbox from your shell settings. File Shield put it back.")
+            for row in sandbox.restorations()]
+
+
 def alerts(limit: int = MAX_ALERTS) -> list[dict[str, Any]]:
-    """The shield's latest alerts (changes inside protected items and refusals), newest first."""
-    merged = _change_alerts() + _hit_alerts()
+    """The shield's latest alerts (changes inside protected items, refusals, a restored PATH block), newest first."""
+    merged = _change_alerts() + _hit_alerts() + _restore_alerts()
     return sorted(merged, key=lambda alert: -alert["ts"])[:max(0, limit)]
