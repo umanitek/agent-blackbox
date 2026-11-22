@@ -1,9 +1,9 @@
 """`blackbox uninstall` removes Blackbox from a machine and nothing else (2026-11-03).
 
 Until now there was no way out but `detach`. The machine below is the Hermes Desktop install
-proven live that day: Desktop's Hermes home with a commented config and Hermes's own record of
+proven live that day: Hermes Desktop's Hermes home with a commented config and Hermes's own record of
 the plugin, Blackbox's node (marker, wallet and identity files, pid file) and reporter key, our
-`blackbox` launcher beside Desktop's `hermes`, a Foreman-style node in ~/.dkg that must survive,
+`blackbox` launcher beside Hermes Desktop's `hermes`, a Foreman-style node in ~/.dkg that must survive,
 and the two login services. Service commands are recorded, never run.
 """
 

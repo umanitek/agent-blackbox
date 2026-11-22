@@ -42,7 +42,7 @@ from typing import Optional
 
 #: Where user tools live beyond PATH. WHY: the dashboard runs as a login service with a minimal
 #: PATH, so an agent installed with npm, Homebrew, bun or its own installer is not on it (found on
-#: bb-desktop-1120: Claude Code and Copilot CLI in ~/.npm-global/bin went undetected).
+#: a test VM (2026-11-20): Claude Code and Copilot CLI in ~/.npm-global/bin went undetected).
 USER_BIN_DIRS = (".npm-global/bin", ".local/bin", ".bun/bin", ".claude/local", ".opencode/bin", "bin",
                  "/opt/homebrew/bin", "/usr/local/bin")
 

@@ -1,10 +1,10 @@
 """Self-protection covers each coding agent's hook config, in the core (2026-11-21: coding-agent
-protection moved from the Desktop add-on into the public plugin).
+protection moved from an add-on into the public plugin).
 
 An agent may still edit its own settings file, but not Blackbox's hook in it. That means an edit
 touching Blackbox's text, or a whole-file overwrite, is refused. Blackbox's own hook files are
 guarded whole: OpenCode's plugin, Copilot's ``blackbox.json`` and Cline's hook scripts.
-Without Desktop installed the same holds, because no add-on declares these files any more.
+Without any add-on installed the same holds, because no add-on declares these files any more.
 """
 
 from __future__ import annotations

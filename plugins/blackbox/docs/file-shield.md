@@ -1,7 +1,7 @@
 # File Shield — keeping AI agents away from what you protect
 
 File Shield is Blackbox's third shield. You choose files and folders; no AI agent may touch them.
-It is switched on in Settings (or from Blackbox Desktop), like Trader Shield and Network Shield.
+It is switched on in Settings (or from a companion app), like Trader Shield and Network Shield.
 
 ## What it does
 
@@ -19,7 +19,7 @@ It is switched on in Settings (or from Blackbox Desktop), like Trader Shield and
 * **Prompts.** A prompt that names a protected item is flagged (the prompt itself is never kept).
   The tool call it leads to is what is refused.
 * **Shown to you.** Every refusal is a local finding (`files:file-hit`, `files:folder-hit`) on the
-  File Shield page, in the dashboard and in Blackbox Desktop. These findings never leave your
+  File Shield page, in the dashboard and in any companion app. These findings never leave your
   machine and never carry a file's contents.
 * **Real time.** With the system protection helper installed, the helper watches every protected
   item and every watched folder with the operating system's own file events (FSEvents on macOS) and

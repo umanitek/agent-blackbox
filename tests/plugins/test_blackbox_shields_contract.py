@@ -619,7 +619,7 @@ def test_the_registry_views_fan_out_to_every_shield(tmp_path, monkeypatch):
 
 def test_every_shield_opens_its_settings_with_its_engage_switch():
     """Settings draws a shield's first field as its on/off switch and greys out the rest while it
-    is off (dashboard/static/shields.js, Blackbox Desktop's Shields page). A shield without one
+    is off (dashboard/static/shields.js, a companion app's Shields page). A shield without one
     (Network Shield before this) shows no switch there, and its other settings can never be edited."""
     for shield in shields.all_shields():
         first = shield.settings_fields()[0]

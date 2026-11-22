@@ -1,6 +1,6 @@
 //! Every process's sockets and the interfaces' byte counters, read natively (native/sockets.c:
 //! libproc + getifaddrs) — no program started, a few milliseconds a pass. The helper's watches
-//! read it as root; Blackbox Desktop's live collector reads it as the person (fast tier).
+//! read it as root; a live collector (an add-on) may read it as the person (fast tier).
 //!
 //! Only processes this user may inspect are listed (root's and other users' are not); the slow
 //! tier's `nettop` snapshot still covers those. The C side flattens libproc's unions into the two

@@ -64,7 +64,7 @@ def setup_environment(base: dict[str, str] | None = None, *,
     """The environment the installer runs with: setup-only mode in this Hermes, pinned DKG.
 
     *base* defaults to this process's environment; the keys set here always win.
-    *protect_new_agents* (``--protect-new-agents`` / ``--no-…``, Desktop's switch) answers the
+    *protect_new_agents* (``--protect-new-agents`` / ``--no-…``, Hermes Desktop's switch) answers the
     installer's one question as ``BLACKBOX_AUTO_ATTACH`` — setup has no terminal to ask on.
     """
     env = dict(os.environ if base is None else base)

@@ -164,8 +164,8 @@ def test_the_monitor_tells_inbound_from_outbound():
 
 
 # ------------------------------------------------------------------ a connection a live collector saw
-# Engine rule (Amos 2026-11-22): every notification comes from the core. Blackbox Desktop's live
-# collector used to word and send "talking to a listed address" itself; it now reports the facts
+# Engine rule (2026-11-22): every notification comes from the core. A live collector (an add-on)
+# used to word and send "talking to a listed address" itself; it now reports the facts
 # (POST observed-connection) and Network Shield decides, keeps and words it.
 
 LISTED = "45.130.148.102"

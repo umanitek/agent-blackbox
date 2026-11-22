@@ -8,7 +8,7 @@ Two sources, merged newest first:
   (:mod:`.changes`).
 
 A story is HTML with a few bold spans; every value put in it — a path, an agent's name — is
-escaped first. Blackbox Desktop's add-on adds its own events (``ShieldExtension.events``).
+escaped first. An add-on may add its own events (``ShieldExtension.events``).
 """
 
 from __future__ import annotations
@@ -97,7 +97,7 @@ def report() -> list[ShieldEvent]:
 
 
 def hits(limit: int = 50) -> list[dict[str, Any]]:
-    """The newest refusals as plain rows (the hits list on the page and in Blackbox Desktop)."""
+    """The newest refusals as plain rows (the hits list on the page and in a companion app)."""
     try:
         findings = audit.read_findings(limit=FINDINGS_SCANNED)
     except Exception:   # health: allow BLE001 -- an unreadable log lists nothing

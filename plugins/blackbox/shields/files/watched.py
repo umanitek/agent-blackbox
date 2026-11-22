@@ -1,11 +1,11 @@
 """What a watched folder's scan found, reported by whoever scans it, worded by File Shield.
 
-Blackbox Desktop's add-on fingerprints the files of the person's WATCHED folders (not protected
+An add-on fingerprints the files of the person's WATCHED folders (not protected
 ones: those are refused, see :mod:`.protect`) and finds two kinds of news: a new file arrived, and
 a file the verified threat graph lists as known-bad. It reports each as a typed :class:`WatchedFile`
 through :func:`report`; File Shield turns them into alerts in its own words (:mod:`.alerts`), and
 ``notify`` shows them like every other notice. The add-on never words a notification itself
-(engine rule, Amos 2026-11-22: every notification comes from the core; Desktop only delivers).
+(engine rule, 2026-11-22: every notification comes from the core; a companion app only delivers).
 
 Kept in memory, newest first, bounded (:data:`MAX_KEPT`): the reporter and the notifier run in the
 same dashboard process, and the notifier reads every couple of seconds. A dashboard restart drops

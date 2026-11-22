@@ -5,8 +5,8 @@ it on and gets a set of extra rules made for them. **Trader Shield** is the firs
 agent away from crypto wallets, seed phrases and keys. **Network Shield** is the second: it keeps
 AI agents to the hosts the user allows, shows what talks to the internet, and — through the system
 protection helper (`blackbox-netd`, a small root daemon) — refuses malicious domains and addresses
-for every app, cuts connections, locks SSH and watches who is in the machine. Blackbox Desktop's
-add-on adds richer views on top (see Add-ons below).
+for every app, cuts connections, locks SSH and watches who is in the machine. An add-on may
+add richer views on top (see Add-ons below).
 
 This folder holds everything a shield is. Blackbox's core (the hooks, the dashboard and the
 settings) never names a shield or a wallet; it asks the **registry** in `__init__.py`. Adding a
@@ -29,7 +29,7 @@ shields/
 ├── extensions.py      the extension point: an add-on beside the plugin adds shields and more of a shield
 ├── network/           Network Shield
 │   ├── __init__.py    NETWORK = Shield(...); __all__ = what an add-on may use
-│   ├── mode.py        its setting (shields.network-shield); Desktop's links in one place
+│   ├── mode.py        its setting (shields.network-shield)
 │   ├── helper.py      whether the system protection helper is installed (needs-helper)
 │   ├── lockdown.py    agent network lockdown and the block list, in the guard
 │   ├── monitor/       see: traffic (nettop + ps), SSH watch, remote access, exposure, posture, signatures
@@ -38,7 +38,7 @@ shields/
 │   ├── system.py      CPU, memory, disks, network interfaces (psutil)
 │   ├── addresses.py   which graph addresses may be acted on (public ones only)
 │   ├── api.py · system_api.py   every endpoint, the helper's plan and report included
-│   ├── status.py      the card: active only while the helper reports it; the Desktop offer
+│   ├── status.py      the card: active only while the helper reports it
 │   ├── events.py · lists/ · attacks.json · page/
 └── trader/            Trader Shield
     ├── __init__.py    TRADER = Shield(...): wires its parts together
@@ -220,9 +220,11 @@ Run the whole Blackbox suite before a commit:
 
 ## Add-ons
 
-An add-on installed beside the plugin — Blackbox Desktop's, in `<Hermes plugins>/blackbox_desktop/`
-— is found by **folder** on the registry's first use (`extensions.py`) and calls
-`register(registrar)`. It reaches the plugin only through its package entries
+An add-on is a package folder beside the plugin, `<Hermes plugins>/<name>/`, that declares itself
+with a manifest file, `blackbox-addon.json`, holding `{"extends": "blackbox"}`
+(`kernel.addons.MANIFEST`). Every declared add-on is found on the registry's first use
+(`extensions.py`), in name order, and its `register(registrar)` is called. A folder without the
+manifest is never loaded, and self-protection guards each add-on folder and the manifest name. It reaches the plugin only through its package entries
 (`from ..blackbox import shields`) and may:
 
 * `registrar.register_shield(shield)` — a whole shield of its own;
@@ -232,7 +234,6 @@ An add-on installed beside the plugin — Blackbox Desktop's, in `<Hermes plugin
 * `registrar.add_routes(register_routes)` — dashboard routes (`register_routes(app)`).
 
 An add-on that fails to load contributes nothing (`extensions.problems()` says why); an extension's
-detector, card or events that raise add nothing for that call. Network Shield's card offers
-Blackbox Desktop ("get") until the add-on is registered, then opens it ("open"). Network Shield's
+detector, card or events that raise add nothing for that call. Network Shield's
 protections do not need the add-on — they need the system protection helper; an add-on builds on
 the shield through `shields.network`'s `__all__` (its API, the helper's plan, the signature reader).

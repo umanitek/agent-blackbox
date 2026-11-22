@@ -132,7 +132,7 @@ def _skill(finding: Mapping[str, Any]) -> Classification:
 #: An AI agent reaching a host it should not (Network Shield): exfiltration over a network channel.
 _NETWORK = Classification("data-exfil", "host-system", "T1041")
 #: An AI agent touching a file or folder the person protected (File Shield): collection of data
-#: from the local system. Blackbox Desktop's known-bad file finding is a malware file.
+#: from the local system. An add-on's known-bad file finding is a malware file.
 _PROTECTED_FILE = Classification("data-exfil", "host-system", "T1005")
 
 
@@ -149,7 +149,7 @@ _BY_CATEGORY: dict[str, Callable[[Mapping[str, Any]], Classification]] = {
     "ioc": _indicator,
     # Network Shield (agent lockdown, block list): data leaving through the network.
     "network": lambda finding: _NETWORK,
-    # File Shield (protected files and folders; Blackbox Desktop's known-bad files).
+    # File Shield (protected files and folders; an add-on's known-bad files).
     "files": _files,
     "secret": lambda finding: _SECRET.get(str(finding.get("identifier") or "").split(":", 1)[-1],
                                           Classification("credential-theft", "api-keys", "T1552")),

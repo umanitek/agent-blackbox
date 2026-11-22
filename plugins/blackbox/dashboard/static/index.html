@@ -5617,7 +5617,7 @@
   }
   // A reference becomes a link only as an http(s) address: graph and finding data choose these
   // strings, and a javascript: (or data:) link clicked here would run in the dashboard's own
-  // origin, which holds the session token. Anything else is shown as text (Desktop does the same).
+  // origin, which holds the session token. Anything else is shown as text (Hermes Desktop does the same).
   function isWebLink(u) { return /^https?:\/\/[^\s]+$/i.test(String(u || "").trim()); }
   function refsHTML(refs) {
     if (!Array.isArray(refs) || !refs.length) return "";

@@ -7,7 +7,7 @@ Contracts: the signature must be intact AND satisfy the requirement of the signe
 claim that does not verify is its own state — never safe, high (critical for a startup item) —
 in listeners and startup items; a check that could not run is not safe either and is retried.
 
-The verifier moved into the core (``kernel/code_signing``, Amos 2026-11-21); Blackbox Desktop's
+The verifier moved into the core (``kernel/code_signing``, 2026-11-21); an add-on's
 process verdicts and File Shield import it from there and keep their own tests.
 """
 

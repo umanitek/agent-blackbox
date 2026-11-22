@@ -147,8 +147,10 @@ def addon(tmp_path, monkeypatch):
     """An add-on folder in the agent's Hermes home (the plugin guards every add-on folder there)."""
     hermes = tmp_path / "hermes"
     monkeypatch.setenv("HERMES_HOME", str(hermes))
-    (hermes / "plugins" / "blackbox_desktop").mkdir(parents=True)
-    return hermes / "plugins" / "blackbox_desktop" / "__init__.py"
+    (hermes / "plugins" / "example_addon").mkdir(parents=True)
+    (hermes / "plugins" / "example_addon" / "blackbox-addon.json").write_text('{"extends": "blackbox"}', encoding="utf-8")
+    (hermes / "plugins" / "example_addon" / "__init__.py").write_text("", encoding="utf-8")
+    return hermes / "plugins" / "example_addon" / "__init__.py"
 
 
 @pytest.mark.parametrize("agent, payload", [

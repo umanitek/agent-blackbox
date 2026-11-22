@@ -4,7 +4,7 @@ real-time watch is running.
 Protection runs inside Blackbox's own guard, so a protected item is protected whenever the shield
 is on — no helper needed. The real-time watch (changes inside protected items and watched
 folders) is the system protection helper's: without it the card says so plainly. An add-on
-(Blackbox Desktop: fingerprints and file reputation) may decorate the card.
+(fingerprints and file reputation, say) may decorate the card.
 """
 
 from __future__ import annotations
@@ -44,7 +44,7 @@ def _watch_section(mode: ShieldMode) -> StatusSection:
                      else f"{len(mode_module.watch_paths(mode))} places")
            if installed else
            StatusRow(icon="live", state="needs-helper", text="Real-time watch needs the system protection helper",
-                     sub="Install it with Blackbox's installer (system protection), or from Blackbox Desktop."))
+                     sub="Install it with Blackbox's installer (system protection), or from a companion app that offers it."))
     return StatusSection("Real-time watch", "Changes inside protected items and new files in watched folders.", (row,))
 
 

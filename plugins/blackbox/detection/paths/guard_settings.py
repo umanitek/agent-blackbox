@@ -27,7 +27,7 @@ or run code, up to :data:`MAX_READ_CLOSELY` characters of those — past that, a
 variables are put in and base64 words decoded. What stays open: :data:`KNOWN_LIMITS`.
 
 ``source="custom"``, and its findings ALWAYS block (``guard.hooks._would_block``): the person
-changes Blackbox through its dashboard, the Desktop page, the ``blackbox`` commands they type or
+changes Blackbox through its dashboard, the Hermes Desktop page, the ``blackbox`` commands they type or
 their own editor — none of which pass through an agent's tool calls.
 
 Usage::

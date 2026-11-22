@@ -1,4 +1,4 @@
-"""Network Shield's remote access (Blackbox Desktop add-on): who is in this machine and how,
+"""Network Shield's remote access: who is in this machine and how,
 Lock remote access, brute-force auto-block, blocked addresses and ending a session.
 
 Contracts: the helper's ``remote`` report part is validated strictly (one bad item refuses the

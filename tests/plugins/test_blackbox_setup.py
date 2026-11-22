@@ -47,7 +47,7 @@ def test_the_environment_selects_setup_only_mode_in_this_hermes_with_the_pinned_
 @pytest.mark.parametrize("protect, expected", [(True, "1"), (False, "0")])
 def test_setup_answers_the_installers_protect_every_agent_question(tmp_path, monkeypatch, protect, expected):
     # Setup runs the installer with no terminal: its one question ("protect every agent, now and
-    # later?") is answered by --protect-new-agents / --no-… (Desktop's switch) as BLACKBOX_AUTO_ATTACH.
+    # later?") is answered by --protect-new-agents / --no-… (Hermes Desktop's switch) as BLACKBOX_AUTO_ATTACH.
     monkeypatch.delenv("BLACKBOX_AUTO_ATTACH", raising=False)
     assert setup.setup_environment(protect_new_agents=protect)["BLACKBOX_AUTO_ATTACH"] == expected
     assert "BLACKBOX_AUTO_ATTACH" not in setup.setup_environment()   # not given: not asked, only this home

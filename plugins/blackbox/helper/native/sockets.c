@@ -1,5 +1,5 @@
 /*
- * Blackbox Desktop — every process's TCP/UDP sockets and the network interfaces' byte counters,
+ * Every process's TCP/UDP sockets and the network interfaces' byte counters,
  * read straight from macOS (libproc, getifaddrs): no program started, microseconds per call.
  *
  * WHY C and not Rust FFI structs: struct socket_fdinfo (sys/proc_info.h) is a deep union whose

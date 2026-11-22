@@ -1,6 +1,6 @@
 """Public block lists, inside Blackbox's guard: an AI agent reaching a domain on a list the user
 chose for DNS Shield is a ``network:listed-host`` finding (critical, local-only like every shield
-finding). The lists are DNS Shield's, so this runs only with Blackbox Desktop — added to the
+finding). The lists are DNS Shield's, so this runs only with an add-on — added to the
 public shield's own detector through the extension point (``ShieldExtension.detect``).
 
 The hot path reads a list only from its downloaded copy (:func:`.blocklists.cached_domains`):

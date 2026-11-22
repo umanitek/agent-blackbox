@@ -1,6 +1,6 @@
 """Network Shield's protection core (plugins/blackbox/shields/network/protect, api, status).
 
-Moved from Blackbox Desktop's add-on into the core (Amos, 2026-11-21): a public list's manifest is
+Moved from an add-on into the core (2026-11-21): a public list's manifest is
 checked, a list is parsed safely and the hot path never downloads; the helper's plan follows the
 mode, carries the verified lists only while the shield is on, never firewalls a non-public
 address (FIX-0222) and is versioned; a helper report is validated and stored bounded; the card
@@ -94,7 +94,7 @@ def test_the_plan_carries_the_verified_lists_only_while_the_protections_are_on()
 
 
 def test_the_firewall_never_drops_a_non_public_address_from_the_graph():
-    """Seen on bb-desktop-1120: the verified graph lists 192.168.54.1, CGNAT 100.x (tailnets),
+    """Seen on a test VM (2026-11-20): the verified graph lists 192.168.54.1, CGNAT 100.x (tailnets),
     169.254.169.254 and 0.0.0.0. Dropping them would cut a user off their own router, tailnet or
     cloud metadata service; the user's own block list may still name one."""
     listed = {"45.130.148.102", "192.168.54.1", "100.106.194.93", "169.254.169.254", "0.0.0.0", "10.0.0.1", "::1", "fe80::1"}

@@ -10,7 +10,7 @@ tests hold what it promises:
 - a Hermes without plugin events, a failing broadcast, a ruleset that cannot load and an unreadable
   log all give a calm answer, never an exception into the agent's tool call;
 - the backend file works the way Hermes loads it (on its own, outside Blackbox's package);
-- desktop/plugin.js passes Hermes's own Desktop admission lint and parses as an ES module.
+- desktop/plugin.js passes Hermes Desktop's own admission lint and parses as an ES module.
 """
 
 from __future__ import annotations

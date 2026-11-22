@@ -1,5 +1,5 @@
-"""A program an AI agent started that runs as root is seen, recorded once and shown (Amos,
-2026-11-22: "Blackbox Desktop needs to alert when an agent has obtained sudo access").
+"""A program an AI agent started that runs as root is seen, recorded once and shown (2026-11-22:
+the person is alerted when an agent has obtained sudo access).
 
 Contracts: a root process (real AND effective user 0) anywhere under a live session's process is
 recorded on that session — timeline entry, `root` on the live row, one local finding; a setuid

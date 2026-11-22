@@ -5,8 +5,8 @@ operating system's own file events (FSEvents on macOS — ``helper/src/platform/
 file_watch.rs``) and posts each change within about a second, SIGNED (``shields.helper_link``) to
 ``POST /api/shields/file-shield/api/file-report``. This module checks each event, keeps the ones
 inside an item or folder of the CURRENT setting (a report naming anything else is dropped), and
-remembers the newest :data:`MAX_KEPT` (one small file, written atomically). Waiters — Blackbox
-Desktop's scan, which used to look every 2 s — are woken at once (:func:`wait_for`).
+remembers the newest :data:`MAX_KEPT` (one small file, written atomically). Waiters — an
+add-on's scan, which used to look every 2 s — are woken at once (:func:`wait_for`).
 
 FSEvents says what changed, not which program changed it: ``program`` is "" and a person reads
 "a program changed …". Nothing of a file is read: only its path and the kind of change.

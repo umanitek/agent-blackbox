@@ -7,7 +7,7 @@ Reads (GET):
 * ``hits`` — the newest refusals (``?limit=``, at most 200);
 * ``alerts`` — what a Mac notification may say: changes inside protected items and refusals,
   lock-screen safe (:mod:`.alerts`; ``?limit=``, at most 50);
-* ``changes`` — the helper's real-time changes after ``?since=<seq>`` (Blackbox Desktop follows these);
+* ``changes`` — the helper's real-time changes after ``?since=<seq>`` (a companion app follows these);
 * ``watch-plan`` — what the system protection helper watches, SIGNED for its nonce (helper_link);
 * ``sandbox`` — Layer 2: which agents run inside the OS sandbox, whether their launchers are in
   place, and the GUI editors that can be opened inside it (:mod:`.sandbox`).

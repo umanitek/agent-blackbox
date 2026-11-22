@@ -1,6 +1,6 @@
-"""The core dashboard serves coding-agent protection itself (2026-11-21: moved from the Desktop
-add-on into the public plugin). The paths and JSON are unchanged, so Blackbox Desktop keeps
-working on top of them, and a Blackbox without Desktop protects coding agents too."""
+"""The core dashboard serves coding-agent protection itself (2026-11-21: moved from an add-on
+into the public plugin). The paths and JSON are unchanged, so a companion app keeps working on
+top of them, and Blackbox alone protects coding agents too."""
 
 from __future__ import annotations
 

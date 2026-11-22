@@ -255,7 +255,7 @@ def test_the_runner_answers_fast_when_the_dashboard_is_down(monkeypatch):
 
 
 def test_an_agent_installed_outside_the_services_path_is_found(tmp_path, monkeypatch):
-    """Found on bb-desktop-1120: the dashboard runs with a minimal PATH, so Claude Code installed with
+    """Found on a test VM (2026-11-20): the dashboard runs with a minimal PATH, so Claude Code installed with
     npm into ~/.npm-global/bin (no ~/.claude yet — it appears on first run) was never hooked."""
     monkeypatch.setattr(agent_hooks, "_home", lambda: tmp_path)
     monkeypatch.setenv("PATH", "/usr/bin:/bin")

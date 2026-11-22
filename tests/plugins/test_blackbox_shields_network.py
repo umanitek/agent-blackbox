@@ -2,10 +2,10 @@
 
 Contracts: the setting refuses anything invalid and stores nothing then; lockdown judges only real
 hosts (never a file name) and always lets an agent reach this machine and the local network; the
-block list works without lockdown; findings count only while the shield is on. Without Blackbox
-Desktop's add-on (Amos, 2026-11-21: the public plugin carries only what works without Desktop):
-a first switch-on runs agent lockdown, the protections that need Desktop say so in Settings and on
-the card (never "active"), and stories escape every outside value.
+block list works without lockdown; findings count only while the shield is on. With the plugin
+alone (it carries only what works on its own): a first switch-on runs agent lockdown, the
+protections that need the system protection helper say so in Settings and on the card (never
+"active"), the card offers no app, and stories escape every outside value.
 """
 
 from __future__ import annotations
@@ -53,7 +53,7 @@ def test_settings_say_which_protections_need_the_system_protection_helper(tmp_pa
                         "cut": "needs-helper", "ssh-lockdown": "needs-helper"}
     installed = tmp_path / "ai.umanitek.blackbox.netd.plist"
     installed.write_text("<plist/>", encoding="utf-8")
-    monkeypatch.setattr(helper, "LAUNCH_DAEMON", installed)   # the core installer (or Desktop) put it there
+    monkeypatch.setattr(helper, "LAUNCH_DAEMON", installed)   # the core installer (or a companion app) put it there
     assert set(states().values()) == {"supported"}
     assert network_mode.default_protections() == (network_mode.DNS,)
 

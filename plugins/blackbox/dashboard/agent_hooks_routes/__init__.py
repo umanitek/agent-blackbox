@@ -7,7 +7,7 @@
   (:data:`HOOK_THREADS`), and recorded right after on the recorder thread (KI-552). 400 for a
   malformed event; 503 when it could not be judged (the runner then lets the agent continue).
 * ``POST /api/agent-hooks/protection`` ``{"kind": <agent id>, "enabled": bool}`` — install or
-  remove an agent's hooks (Protect / Stop protecting, on the dashboard or in Blackbox Desktop).
+  remove an agent's hooks (Protect / Stop protecting, on the dashboard or in a companion app).
 
 Both POSTs pass the app-wide browser boundary (the session token from ``GET /api/session``), so a
 web page cannot reach them. While "Protect new agents automatically" is on, a background sweep

@@ -20,7 +20,7 @@ every shield and apply the rules no shield may opt out of:
 Packs and browser roots are loaded once — the plugin's own shields' at import, an add-on's
 changes on the registry's first use — never on the hot path, and loading never raises: a broken pack is ``unavailable`` with its reason, the rest
 load. That first use also finds any add-on installed beside the plugin (:mod:`.extensions`, the
-extension point Blackbox Desktop's add-on registers through): its own shields join the registry
+extension point every add-on registers through): its own shields join the registry
 and its extensions are applied to the shields they extend.
 
 Usage::

@@ -1,5 +1,5 @@
 {
-  "about": "Remote-control apps and tunnel tools Blackbox Desktop recognises, by executable name (lower case) or app folder. relay_domains are the vendors' own service domains, refused by DNS Shield while 'Lock remote access' is on. Blackbox's own list.",
+  "about": "Remote-control apps and tunnel tools Network Shield recognises, by executable name (lower case) or app folder. relay_domains are the vendors' own service domains, refused by DNS Shield while 'Lock remote access' is on. Blackbox's own list.",
   "apps": [
     {"id": "teamviewer", "name": "TeamViewer", "executables": ["teamviewer", "teamviewer_service", "teamviewer_desktop"], "apps": ["TeamViewer.app", "TeamViewerHost.app", "TeamViewerQS.app"], "relay_domains": ["teamviewer.com"]},
     {"id": "anydesk", "name": "AnyDesk", "executables": ["anydesk"], "apps": ["AnyDesk.app"], "relay_domains": ["anydesk.com", "net.anydesk.com"]},

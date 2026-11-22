@@ -1,6 +1,6 @@
 //! `blackbox-netd install` and `blackbox-netd uninstall` — the ONE way the root helper is put on
 //! a Mac and taken off it, used by the plugin's installer (`scripts/blackbox-install.sh`) and by
-//! Blackbox Desktop alike. Run as root (sudo, or Desktop's admin prompt).
+//! a companion app alike. Run as root (sudo, or the app's admin prompt).
 //!
 //! ```text
 //! blackbox-netd install --from <binary> --sha256 <64 hex> [--team-id <ID>]

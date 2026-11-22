@@ -1,4 +1,4 @@
-"""What the dashboard and Blackbox Desktop read: the live tree, the history and one instance.
+"""What the dashboard and a companion app read: the live tree, the history and one instance.
 
 ``live`` groups instances as product → profile → session → sub-agents and adds the agent
 processes Blackbox has no hook in (``unprotected``). An instance is LIVE while its agent process

@@ -1,7 +1,7 @@
 """The network monitor's records: one connection, one process with its connections, one reading.
 
 Frozen dataclasses with ``as_json()`` (the shields' record convention), so the monitor's
-reading crosses to the dashboard and Blackbox Desktop as plain JSON.
+reading crosses to the dashboard and any companion app as plain JSON.
 """
 
 from __future__ import annotations

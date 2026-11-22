@@ -1,5 +1,5 @@
-"""Every instance of every coding agent, over HTTP (``agent_hooks.tracking``) — what Blackbox
-Desktop's live view and history read. Hashed ids. No GET ever carries a prompt's text: the text a
+"""Every instance of every coding agent, over HTTP (``agent_hooks.tracking``) — what a
+companion app's live view and history read. Hashed ids. No GET ever carries a prompt's text: the text a
 person chose to keep (``agent_hooks.prompt_text``, off by default) is served only by the POST
 routes below, which the browser boundary answers only with the session token — so a program that
 merely curls this dashboard cannot read it.

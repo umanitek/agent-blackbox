@@ -67,7 +67,7 @@ def _watch_event(event: dict[str, Any]) -> ShieldEvent:
 
 
 def report() -> list[ShieldEvent]:
-    """Desktop's events of the shield, newest first: the helper's refusals and what it watched."""
+    """The shield's events, newest first: the helper's refusals and what it watched."""
     events = [_dns_event(block) for block in enforcement.recent_blocks(MAX_EVENTS) if block.get("list") == "verified"]
     events += [_watch_event(event) for event in watch.events(MAX_EVENTS)]
     return sorted(events, key=lambda event: -event.ts)[:MAX_EVENTS]

@@ -4,7 +4,7 @@ A hook event says which session it belongs to — and, inside a session, which s
 (``agent_id`` for Claude Code, Codex and Copilot CLI; ``subagent_id`` for Cursor). :func:`record`
 turns each event into the instance it belongs to (created on first sight, ended when the agent
 says so), counts what Blackbox checked and refused, and adds the action to the instance's
-timeline. :mod:`.views` answers what the dashboard and Blackbox Desktop show.
+timeline. :mod:`.views` answers what the dashboard and a companion app show.
 
 Privacy: keys are hashed ids; an action keeps a tool's name and a short redacted summary (a
 command's start, a file's path) — never a prompt, a tool's output or a file's text.

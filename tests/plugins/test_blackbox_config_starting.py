@@ -1,10 +1,10 @@
 """The mode Blackbox reports is never a guess (KI-PENDING-b28f8f, agents campaign pass 3,
-2026-11-22: Desktop's Overview said "Audit mode … nothing is blocked yet" while ``blackbox status``
+2026-11-22: a companion app's Overview said "Audit mode … nothing is blocked yet" while ``blackbox status``
 said block and blocks were recorded — the settings could not be read during a dashboard restart,
 and the defaults were served as the person's settings).
 
 Contracts: before the saved settings were ever read in this process, every status answer says
-``starting`` (``/api/settings`` with ``starting: true``, the Desktop status, the findings and audit
+``starting`` (``/api/settings`` with ``starting: true``, the Hermes Desktop status, the findings and audit
 routes) — never "audit"; once they were read, a read that fails keeps the last good settings, so
 Block stays Block (for the answers AND the guard); Hermes' stand-in for an unreadable file counts
 as unread.

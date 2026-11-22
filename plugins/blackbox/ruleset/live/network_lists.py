@@ -16,7 +16,7 @@ guard's own spelling (:func:`~...kernel.threat_ids.normalize_ioc_value`).
 
 **How it reads** (the pattern of :mod:`.asset_facts`): a verified asset never changes once
 confirmed, so each asset's indicators are read ONCE — one plain query per asset, bound to its own
-graph (``GRAPH <asset>``; measured 0.06 s for 1,000 rows on bb-desktop-1120, where a batched
+graph (``GRAPH <asset>``; measured 0.06 s for 1,000 rows on a test VM (2026-11-20), where a batched
 ``VALUES ?g`` join with a type FILTER timed out) — and kept; assets the scope's facts count no
 indicators in are skipped; a later scope reads only its new assets. One build runs at a time, in the background
 (:func:`network_indicators` with ``wait=False`` never blocks a page); reads stop at the

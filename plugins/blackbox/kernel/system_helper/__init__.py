@@ -2,7 +2,7 @@
 for Network Shield, which checks whether it is there, and ``blackbox uninstall``, which removes it.
 
 The helper is root-owned: its folder, its program and its LaunchDaemon (system domain). It is
-installed by Blackbox's installer (``--system-protection``) or by Blackbox Desktop.
+installed by Blackbox's installer (``--system-protection``) or by a companion app.
 
 Usage::
 

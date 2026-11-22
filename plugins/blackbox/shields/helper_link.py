@@ -3,8 +3,8 @@
 The helper obeys only plans signed with the key made when it was installed, and reports only to
 a server that proved that key (security wave 2, finding 1 — a process that grabs the dashboard's
 port first cannot steer a root daemon). ``blackbox-netd install`` writes the key for the person
-who installed it to :func:`key_path` (ONE place per person, so Blackbox's installer and Blackbox
-Desktop both drive the same helper). This module reads it and:
+who installed it to :func:`key_path` (ONE place per person, so Blackbox's installer and a
+companion app both drive the same helper). This module reads it and:
 
 * signs each plan answer: ``X-Blackbox-Signature = hex(HMAC-SHA256(key, nonce + "\\n" + body))``
   over the exact bytes sent, with the ``nonce`` the helper put in the request (:func:`signed`);

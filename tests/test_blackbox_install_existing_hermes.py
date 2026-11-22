@@ -2,7 +2,7 @@
 
 Found 2026-11-03 with Hermes Desktop 0.22.6 on a Mac: the one-liner never looked for an existing
 Hermes, so it would clone Agent Blackbox (a Hermes fork) and build a second, older Hermes into the
-same ~/.hermes, fighting Desktop over the `hermes` launcher. Now, when `hermes --version` names an
+same ~/.hermes, fighting Hermes Desktop over the `hermes` launcher. Now, when `hermes --version` names an
 install directory that is not an Agent Blackbox checkout, the installer installs the Blackbox
 plugin from the Hermes plugin catalog (the reviewed pin, Hermes's trust model) and hands over to
 `hermes blackbox setup`. Our own earlier installs keep the standalone path.

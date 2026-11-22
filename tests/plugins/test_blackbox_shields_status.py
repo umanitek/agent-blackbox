@@ -351,7 +351,7 @@ def test_the_captured_payload_has_every_section_and_no_address(home, monkeypatch
 
 
 def test_an_off_shield_does_not_tick_its_own_checks(home, monkeypatch):
-    """2026-11-08 (bb-test-4): with Trader Shield off, Desktop's Shields tab still ticked "Seed phrases
+    """2026-11-08 (bb-test-4): with Trader Shield off, Hermes Desktop's Shields tab still ticked "Seed phrases
     — checker on" while a seed phrase went out unchecked. Off, its own checks read "not protected";
     protected files are a built-in rule and stay on."""
     _config(monkeypatch, mode="block")

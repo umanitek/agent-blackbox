@@ -5,7 +5,7 @@ credential boundary, so Blackbox must not join them by a silent default. 2026-11
 "every new profile and every new instance, automatically"): the installer asks ONCE whether to
 protect every agent on the machine now and every one added later. Enter or no answer is yes (the
 question is on screen); "n" changes nothing more; no terminal asks nothing and protects only the
-installer's own home. BLACKBOX_AUTO_ATTACH=1/0 answers for scripts and for Desktop's setup switch,
+installer's own home. BLACKBOX_AUTO_ATTACH=1/0 answers for scripts and for Hermes Desktop's setup switch,
 an earlier yes is kept on a re-run, and the one writer of the setting is
 `blackbox attach --all --auto` (tests/plugins/test_blackbox_attach_auto.py). These tests run the
 installer's real functions with a fake `hermes` that records what it is asked.

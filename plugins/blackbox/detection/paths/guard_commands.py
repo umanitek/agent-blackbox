@@ -38,7 +38,7 @@ _SERVICE_JOB = re.compile(
     r"\blaunchctl\s+(?:bootout|unload|remove|disable|kill|stop)\b[^|;&\n]*\bai\.umanitek\.blackbox"
     r"|\bsystemctl\b[^|;&\n]*\b(?:stop|disable|mask|kill)\b[^|;&\n]*\bblackbox-", re.IGNORECASE)
 _KILLS = re.compile(r"\b(?:pkill|killall|kill|taskkill|stop-process)\b|\bfuser\b[^|;&\n]*\s-\w*k", re.IGNORECASE)
-#: The Desktop app's route to Blackbox (the app's own port, whatever it is): its switches, never a read.
+#: Hermes Desktop's route to Blackbox (the app's own port, whatever it is): its switches, never a read.
 _DESKTOP_ROUTE = re.compile(r"/api/plugins/blackbox/(?:mode|dash|setup)\b", re.IGNORECASE)
 _KILL_TARGET = re.compile(r"blackbox|ai\.umanitek|oxigraph|blazegraph|\bdkg\b|hermes[^|;&\n]{0,20}dashboard", re.IGNORECASE)
 _LISTENS_OR_FILTERS = re.compile(r"http\.server|\b(?:nc|ncat|netcat|socat)\b|uvicorn|gunicorn|--port\b|\bpfctl\b|\biptables\b|\bnft\b|\bufw\b",

@@ -67,7 +67,7 @@ def _report_and_audit(cfg: BlackboxConfig, event: str, findings: list[detection.
     """Audit findings locally, then fan out (Observer-style) per finding:
     private WM audit KA always; community share when the policy allows.
 
-    Only the local record and the Desktop alert happen here. Everything that talks
+    Only the local record and the Hermes Desktop alert happen here. Everything that talks
     to the node — this node's identity, the private audit record, the share — is
     handed to :data:`report_queue.REPORTS` and runs after the hook has answered: a
     slow or down node must never stall the agent's tool call (KI-033).

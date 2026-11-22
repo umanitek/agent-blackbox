@@ -1,6 +1,6 @@
 """File Shield's alerts: what a Mac notification may say about the shield, newest first.
 
-Blackbox Desktop (and any notifier) polls ``GET /api/shields/file-shield/api/alerts`` and shows one
+A companion app (and any notifier) polls ``GET /api/shields/file-shield/api/alerts`` and shows one
 notification per alert it has not seen (``key``). These kinds:
 
 * ``protected-change`` — something changed inside an item the person protects (the system
@@ -9,7 +9,7 @@ notification per alert it has not seen (``key``). These kinds:
   findings, every route, and the OS sandbox's refusals);
 * ``path-restored`` — the block that puts the agent sandbox's launchers first on PATH was removed or
   changed in a shell startup file, and File Shield put it back (KI-535);
-* ``file-known-bad`` / ``file-new`` — a watched folder's scan (Blackbox Desktop's add-on, through
+* ``file-known-bad`` / ``file-new`` — a watched folder's scan (an add-on, through
   :mod:`.watched`) found a file the verified graph lists, or a new file. A known-bad file is a
   ``security`` notice; a new file is ``watched`` (the person's own switch). WHY here: the add-on
   used to word and send these itself; one wording now lives in the core (engine rule, 2026-11-22).

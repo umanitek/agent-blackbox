@@ -44,13 +44,13 @@ that the two version fields agree.
   notifications which AI agent did what and whether it was allowed, flagged or stopped — safe to
   read on a locked screen. Security notices are on; agents starting and ending, and a one-line
   session summary, are opt-in. Mute an agent, set quiet hours, cap how many a minute. On macOS
-  they appear under Blackbox's own name once its notifier is installed; Blackbox Desktop shows the
-  same feed while it runs. See `docs/notifications.md` and the dashboard's Notifications page.
+  they appear under Blackbox's own name once its notifier is installed; a companion app, while it
+  runs, delivers instead. See `docs/notifications.md` and the dashboard's Notifications page.
 - **An agent asking for root, and a program it started running as root, are flagged and shown.**
   `sudo` is not refused; it is made visible on the agent's instance, in the findings and in a
   notification.
-- Turning protection down needs your confirmation: Audit instead of Block, a shield, detection or agent switched off, a protected path removed, an address unblocked or remote access unlocked waits until you confirm it, with your computer's password prompt on the dashboard or in Blackbox Desktop's dialog. Strengthening applies at once.
-- Coding-agent protection is in the core: Claude Code, Codex, Cursor, Gemini CLI, GitHub Copilot CLI, Windsurf (Devin), Cline and OpenCode are protected through their own hooks (`agent_hooks`; `/api/agent-hooks`), with prompt-injection checks on prompts and tool outputs and self-protection of each agent's hook config — without Blackbox Desktop.
+- Turning protection down needs your confirmation: Audit instead of Block, a shield, detection or agent switched off, a protected path removed, an address unblocked or remote access unlocked waits until you confirm it, with your computer's password prompt on the dashboard or in a paired companion app's dialog. Strengthening applies at once.
+- Coding-agent protection is in the core: Claude Code, Codex, Cursor, Gemini CLI, GitHub Copilot CLI, Windsurf (Devin), Cline and OpenCode are protected through their own hooks (`agent_hooks`; `/api/agent-hooks`), with prompt-injection checks on prompts and tool outputs and self-protection of each agent's hook config — with the plugin alone.
 - `guard.text_verdict`: a prompt or a tool's output checked for prompt injection with the same rules as a tool call (only a verified pattern blocks, in Block mode) — for runtimes that are not Hermes, such as a coding agent's own hooks.
 
 - **Network Shield, the second shield.** Switch it on (Settings → Shields) and Blackbox keeps AI
@@ -58,14 +58,14 @@ that the two version fields agree.
   this machine's system status (CPU on every core, memory, disks, each network interface) and
   what talks to the internet right now (download and upload — this machine's own local traffic
   kept apart — the apps online and their connections, each checked against the verified threat
-  graph). With the **system protection helper** (a small root helper the installer offers, or
-  Blackbox Desktop installs) it also runs DNS Shield, the Threat Firewall, cutting malicious
+  graph). With the **system protection helper** (a small root helper the installer offers, or a
+  companion app installs) it also runs DNS Shield, the Threat Firewall, cutting malicious
   connections, SSH lockdown and watch, Lock remote access, the exposure and posture checks — each
   shown active only while the helper reports it; without the helper they say "needs the system
-  protection helper". **Blackbox Desktop** adds the live views on top (Download for macOS;
-  Windows and Linux coming); once installed the card opens it instead.
-- Add-ons: an app installed beside Blackbox (Blackbox Desktop) can add shields and more to a
-  shield through one documented extension point; a broken add-on never stops Blackbox.
+  protection helper". An add-on may add richer views on top.
+- Add-ons: a package installed beside the plugin that declares itself with a `blackbox-addon.json`
+  manifest can add shields and more to a shield through one documented extension point; a broken
+  add-on never stops Blackbox.
 
 - **Every agent protected, now and later, on one yes.** The installer asks once (Enter is yes):
   "Protect every agent, now and later, automatically?" — every Hermes profile and OpenClaw
@@ -155,7 +155,7 @@ that the two version fields agree.
 - While Blackbox's service is not answering, an OpenClaw agent is refused anything that touches
   Blackbox itself until the service is back.
 - **The system protection helper is hardened and lives in the core** (`plugins/blackbox/helper`,
-  one helper for Blackbox and Blackbox Desktop). It obeys only plans signed with its own install
+  one helper for Blackbox and any companion app). It obeys only plans signed with its own install
   key (another program on port 9700 cannot drive it) and reports only to Blackbox; the firewall is
   checked really on after every change and after a restart; DNS Shield switches only to a resolver
   that answers, puts your DNS back if it stops, follows the network you are on and never sends your
@@ -330,13 +330,13 @@ that the two version fields agree.
 - **The Playground's sandbox lane shows other members' tests safely.** Their text is cleaned and
   defanged like the Community graph's, a threat's category comes from its identifier, and a test can no
   longer break the threat window by filling its sources with text.
-- **Desktop's status bar counts every action of the day.** On a day with more than 100 findings the
+- **Hermes Desktop's status bar counts every action of the day.** On a day with more than 100 findings the
   count stopped at the newest 100; it now counts everything from the last 24 hours.
 - **An older finding shows the same trust everywhere.** A recorded finding that does not say whether it
   came from a verified rule now reads the same in the findings list and the Local activity view.
 - **The dashboard links a threat's references only when they are web addresses.** Anything else is
-  shown as plain text, as Desktop already did.
-- **Desktop says the first sync is done only when verified rules have arrived.** Community reports that
+  shown as plain text, as Hermes Desktop already did.
+- **Hermes Desktop says the first sync is done only when verified rules have arrived.** Community reports that
   Blackbox can match against were counted as verified rules, so the setup page could call the first sync
   finished too early.
 - **A sync failure is no longer hidden by an older catch-up job.** The dashboard's sync activity read a
@@ -361,10 +361,10 @@ that the two version fields agree.
   phase, percentage and asset counts, refreshed every few seconds: "First sync in progress" before
   any rule, then "Still syncing" with how many verified rules already protect, or "Sync stopped
   making progress" with what to do. The empty verified map says why it is empty.
-- **The Blackbox assistant in Desktop.** The chat button in the page header opens the dashboard's
+- **The Blackbox assistant in Hermes Desktop.** The chat button in the page header opens the dashboard's
   assistant beside the page: its three example questions, a running conversation kept on this
   computer (New chat starts over), and progress messages while it works.
-- **Docs and the Playground in Desktop.** The book button opens the dashboard's documentation in
+- **Docs and the Playground in Hermes Desktop.** The book button opens the dashboard's documentation in
   your browser. With Sandbox mode on, the Overview holds the Playground: send a listed threat of
   each kind through the real check, and run every wallet test Trader Shield has for this machine
   (one at a time or Run all), each with its result.
@@ -375,8 +375,8 @@ that the two version fields agree.
   address, sent by a script or a messaging tool) is blocked even with Trader Shield off — a
   wallet secret has no right destination. Writing or reading one on the machine stays Trader
   Shield's to watch.
-- The Desktop page refreshes every 4 seconds, as the dashboard does (was 10 to 30).
-- The Desktop page opens with your connected agents, then the stats, then Trader Shield as the
+- The Hermes Desktop page refreshes every 4 seconds, as the dashboard does (was 10 to 30).
+- The Hermes Desktop page opens with your connected agents, then the stats, then Trader Shield as the
   dashboard's "Engage Trader Shield" card (one line once it is on). A new **Shields** tab turns each
   shield on or off (turning off asks first) and holds what it protects, its events and its settings.
 - A shield's recent events are clickable, as on the dashboard: each opens the shield's events window
@@ -387,14 +387,14 @@ that the two version fields agree.
 
 ### Fixed
 
-- The Desktop page's "Open findings" card opens Threats detected, as the bell does (it was
+- The Hermes Desktop page's "Open findings" card opens Threats detected, as the bell does (it was
   a count you could not click through).
 - An agent can no longer stop Blackbox's own services: unloading or stopping its login
   services, killing its dashboard or node by name, or killing whatever holds their ports is
   treated like editing Blackbox's settings (ordinary process commands stay allowed).
-- The Desktop Shields tab no longer ticks Trader Shield's checks while the shield is off — each
+- The Hermes Desktop Shields tab no longer ticks Trader Shield's checks while the shield is off — each
   shows "off — engage Trader Shield to watch this".
-- The Desktop "Threats detected" table fits beside the sidebar: the outcome sits under the
+- The Hermes Desktop "Threats detected" table fits beside the sidebar: the outcome sits under the
   severity and long reasons wrap instead of squeezing every column.
 - On a Mac the installer hands the dashboard to its login service at once, so a crashed
   dashboard is restarted from the first day (it used to run unsupervised until the next login).
@@ -406,14 +406,14 @@ that the two version fields agree.
   re-checks the assets it already holds, and that re-check is no longer counted as data still to
   download (a fresh Mac fell from 100% to 51% of a "1,842-asset" graph that has 971).
 - In the minute after a reboot, while the DKG node reopens its store, the page says "the DKG node is
-  starting" (and Desktop's header "Node starting") instead of a red "my node is stale — run
+  starting" (and Hermes Desktop's header "Node starting") instead of a red "my node is stale — run
   `blackbox sync --wait`".
 - The Blackbox assistant looks threats up instead of reading a whole graph tier into the model: its
   answers are faster, and its own request no longer trips Blackbox's prompt-injection alert on the
   attack phrases quoted in threat names.
 - Turning on Trader Shield, or saving its settings, no longer tells you to restart your agent: a
   running agent picks the change up at once (README and the Trader Shield page updated too).
-- Desktop: a long package name in Threats detected, or the graph on a Retina screen, no longer
+- Hermes Desktop: a long package name in Threats detected, or the graph on a Retina screen, no longer
   pushes the page sideways past the window; the tabs line up with the header once the first sync
   is done; the first-sync note is not shown twice; the "recording, not blocking" notice waits until
   setup has finished instead of covering the setup page; "Watching" (audit mode) is amber like the
@@ -422,40 +422,40 @@ that the two version fields agree.
   a click on the button's edge did anything), and Escape closes that window.
 - The Trader Shield page no longer says "Not engaged" for the first moments after the dashboard
   starts: it shows "Checking this machine…" until the dashboard knows, then the real state.
-- Threat graph labels stay readable in the dashboard and in Desktop: hub names and threat counts
+- Threat graph labels stay readable in the dashboard and in Hermes Desktop: hub names and threat counts
   sit on a small plate above the dots, two labels never land on each other, and on a phone they
   keep a readable size instead of shrinking to a few pixels.
 - Layout and sizing: the umanitek logo at the foot of the dashboard shows on the light theme; the
   tier tabs show "970,000" like the cards; the Trader Shield card has no empty fourth column and
   its header wraps on a phone; the Trader Shield page's headline fits in four lines on a laptop
   and its picture no longer runs into the status box on a phone; the docs search box and figure
-  labels fit on a phone; Desktop's five summary cards sit 3 + 2 beside Hermes' sidebar instead of
+  labels fit on a phone; Hermes Desktop's five summary cards sit 3 + 2 beside Hermes' sidebar instead of
   five squeezed columns, and its wordmark reads BLACKB●X.
 - A fresh dashboard no longer says "UNPROTECTED: run `blackbox sync --wait`" while setup's own first
   sync is running: its health check reads the sync meter before judging the first sync.
 - On a fresh install the first sync of the verified threat graph starts within seconds of setup
   finishing. It could wait an hour: setup's own compile left an empty ruleset that the dashboard
   took for a finished one.
-- The Blackbox assistant answers again, in the dashboard and in Desktop. On Hermes 0.23 every
+- The Blackbox assistant answers again, in the dashboard and in Hermes Desktop. On Hermes 0.23 every
   question failed with "No such file or directory: '/usr/local/sbin/-c'": it re-ran Hermes by the
   name of the running program, which Hermes' new launcher reports as `-c`.
 - The assistant's own Hermes profile no longer appears in Connected agents as an idle agent.
-- One slow request (an assistant answer) no longer freezes the Desktop page: it used to empty
+- One slow request (an assistant answer) no longer freezes the Hermes Desktop page: it used to empty
   every card until the answer came back.
 - A question to the assistant that starts with a dash ("-v", "--why") is asked as written
   instead of failing, and when the assistant cannot start, the page says so in plain words
   instead of showing the system's error text.
-- Desktop's assistant shows `code` and **bold** in its answers as formatting, not as symbols.
-- Desktop no longer says "0 connected agents" above an agent it protects: like the dashboard, it
+- Hermes Desktop's assistant shows `code` and **bold** in its answers as formatting, not as symbols.
+- Hermes Desktop no longer says "0 connected agents" above an agent it protects: like the dashboard, it
   counts only agents active right now and shows nothing when none is.
-- Desktop's assistant: "New chat" while an answer is on its way really starts a new chat (the old
+- Hermes Desktop's assistant: "New chat" while an answer is on its way really starts a new chat (the old
   answer no longer comes back), closing and reopening the assistant mid-answer keeps that answer,
   and answers keep their paragraph breaks.
-- A long Desktop request (an assistant answer, a Playground test) no longer gives up after one
+- A long Hermes Desktop request (an assistant answer, a Playground test) no longer gives up after one
   failed check while it is still running, and Playground "Run all" stops when you leave the page.
-- Desktop's threat bell counts the same threats the findings list shows, and clicking it before
+- Hermes Desktop's threat bell counts the same threats the findings list shows, and clicking it before
   the list has loaded no longer marks every threat as new again.
-- A Shield's list setting in Desktop (addresses, names) can be typed one entry per line; Enter and
+- A Shield's list setting in Hermes Desktop (addresses, names) can be typed one entry per line; Enter and
   commas no longer vanish as you type them.
 
 ## [1.3.0] - 2026-11-06
@@ -474,10 +474,10 @@ that the two version fields agree.
   - **Settings:** the mode (Audit or Block; switching to Audit asks you to confirm), what
     Blackbox checks and from which severity, protected paths, Trader Shield (wallets, your
     addresses) and community sharing (with its consent step).
-- **A shield in Desktop's status bar** shows the mode — Audit in amber, Block in green — and what
-  was caught today; Desktop says once, with a Turn on blocking button, when Blackbox is recording
+- **A shield in Hermes Desktop's status bar** shows the mode — Audit in amber, Block in green — and what
+  was caught today; Hermes Desktop says once, with a Turn on blocking button, when Blackbox is recording
   but not blocking.
-- **Live alerts in Desktop** the moment Blackbox flags or blocks something an agent tried to do:
+- **Live alerts in Hermes Desktop** the moment Blackbox flags or blocks something an agent tried to do:
   the finding, its severity, the tool and whether it was blocked — never the command or file
   contents. An action that matches several rules is one alert.
 
@@ -499,7 +499,7 @@ that the two version fields agree.
 - **Hermes Desktop support.** The one-line installer puts Blackbox into the Hermes that is already
   on the machine (such as Hermes Desktop's) instead of installing a second Hermes. When Blackbox
   was installed first and Hermes Desktop afterwards, re-running the installer moves Blackbox onto
-  Desktop's Hermes — the DKG node, its keys and its synced graph move with it — and retires the
+  Hermes Desktop's Hermes — the DKG node, its keys and its synced graph move with it — and retires the
   Hermes it installed earlier.
 - **`blackbox uninstall`** removes Blackbox and nothing else: its services, its DKG node, its data
   and the plugin. Node and wallet keys are kept in a private backup folder unless `--purge` is

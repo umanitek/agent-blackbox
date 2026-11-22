@@ -1,7 +1,7 @@
 """Which agents on this machine Blackbox protects, and which new ones it just protected (2026-11-19).
 
 Amos: "every new profile and every new instance, automatically, always protected moving forward".
-With ``auto_attach`` on (the one yes the installers and Desktop's setup ask for), the dashboard's
+With ``auto_attach`` on (the one yes the installers and Hermes Desktop's setup ask for), the dashboard's
 sweep protects each new Hermes profile or OpenClaw workspace within a minute; this module is the
 step that does it (:func:`protect_automatically`, called by that sweep) and remembers what it
 protected, so the dashboard can say "New agent protected: Hermes · coder". :func:`coverage` is

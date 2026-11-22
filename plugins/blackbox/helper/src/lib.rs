@@ -16,7 +16,7 @@
 //! It opens no port of its own besides DNS on 127.0.0.1:53, and takes no commands from the app:
 //! there is no control API to attack. Runs as a LaunchDaemon (`ai.umanitek.blackbox.netd`),
 //! installed with one admin approval (by Blackbox's installer when the person turns on system
-//! protection, or by Blackbox Desktop). When the plugin cannot be reached it
+//! protection, or by a companion app). When the plugin cannot be reached it
 //! keeps enforcing the last plan; when it is stopped it puts the Mac's DNS settings and pf back.
 //!
 //! Modules: [`dns`] (the resolver), [`plan`] (the plan), [`link`] (the signed link to the
@@ -39,14 +39,14 @@ mod undo;
 // The system is reached only through the platform's two traits (platform/mod.rs).
 pub use platform::{Enforcer, Observer, SystemEnforcer, SystemObserver, HOME};
 
-/// The socket and interface records, and on macOS the native reader — Blackbox Desktop's live
-/// traffic collector reads it as the person (fast tier). Elsewhere only the records exist.
+/// The socket and interface records, and on macOS the native reader — a live
+/// traffic collector (an add-on) may read it as the person (fast tier). Elsewhere only the records exist.
 pub mod sockets {
     pub use crate::platform::sockets::{Iface, Socket};
     #[cfg(target_os = "macos")]
     pub use crate::platform::macos::sockets::{layouts_match, tcp_state_name, Reader};
 }
-/// The helper's LaunchDaemon label (Blackbox Desktop installs and checks the same service).
+/// The helper's LaunchDaemon label (a companion app installs and checks the same service).
 #[cfg(target_os = "macos")]
 pub use platform::macos::LABEL;
 

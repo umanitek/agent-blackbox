@@ -603,7 +603,7 @@ def test_setup_llm_still_saves_through_the_writer():
 
 
 def test_settings_carry_the_protected_files_a_reset_restores(monkeypatch):
-    """Found building Blackbox Desktop's Settings (2026-11-21): "Reset to defaults" sent
+    """Found building a companion app's Settings (2026-11-21): "Reset to defaults" sent
     protected_paths [], which is kept as given, so a reset stripped ~/.ssh/*, .env, *.pem … The
     settings now carry the plugin's own default list, and a reset sends it back."""
     monkeypatch.setattr(config_mod, "_blackbox_entry", lambda: {"protected_paths": []})   # the person cleared it

@@ -51,8 +51,8 @@ def _remove_system_helper(plan: UninstallPlan, run_as_admin: Runner, report: lis
 
 def _remove_helper_key(report: list[str]) -> None:
     """Deletes the person's copy of the helper's pairing key, then its folder and the "Blackbox"
-    folder above it only when each is left EMPTY (``rmdir`` refuses anything else — Blackbox
-    Desktop's files there are never touched). Only once the helper is gone: a helper that could not
+    folder above it only when each is left EMPTY (``rmdir`` refuses anything else — a companion
+    app's files there are never touched). Only once the helper is gone: a helper that could not
     be removed still needs the key (E2E recheck 2026-11-21: empty folders were left behind)."""
     folder = system_helper.user_key_folder()
     key = folder / system_helper.KEY_FILE_NAME

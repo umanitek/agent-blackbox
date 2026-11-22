@@ -3,8 +3,8 @@
 The enforcer decides nothing. It pulls :func:`plan` — what DNS must refuse, which IPs the
 firewall must drop, what is always allowed — and applies it; it pushes back
 :func:`record_report` — whether it is running, its counters and the names it refused. All
-policy lives here, in the plugin, so every surface (dashboard, Hermes Desktop, Blackbox
-Desktop) shows the same shield.
+policy lives here, in the plugin, so every surface (dashboard, Hermes Desktop, a
+companion app) shows the same shield.
 
 **The plan** (``GET /api/shields/network-shield/api/enforcement``)::
 

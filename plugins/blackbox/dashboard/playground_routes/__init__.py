@@ -35,7 +35,7 @@ Cache = Callable[..., Any]
 #: Reads the sandbox lane for a config: the node itself, or (in the routes) the dashboard's cache.
 LaneReader = Callable[[Any], Any]
 #: How old a cached sandbox lane may be (LES-040: a recurring node query is cached — the panel
-#: polls every 5 s per tab and Desktop every 4 s; a member's new test shows within this).
+#: polls every 5 s per tab and Hermes Desktop every 4 s; a member's new test shows within this).
 LANE_TTL_SECONDS = 10.0
 
 

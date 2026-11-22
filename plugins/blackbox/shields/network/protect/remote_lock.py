@@ -13,7 +13,7 @@ protections (PROTECT). Each becomes part of the plan the root helper applies (``
 * **End session**: a session the user confirmed ending, handed to the helper once, with the pid
   and start the watch reported (the helper checks it is still exactly that session).
 
-Settings and blocks are Desktop's own (``network-shield/remote-lock.json``); the public shield's
+Settings and blocks are kept apart (``network-shield/remote-lock.json``); the public shield's
 settings schema is not touched. Defaults: everything off.
 
 **Undo:** switching the lock off drops its pf rules and the relay domains at the helper's next

@@ -1794,8 +1794,8 @@ function Configure-BlackboxMode {
 # LES-067). That yes is asked ONCE (2026-11-19): protect every agent here now AND every
 # one added later — `blackbox attach --all --auto`, the one writer the bash installer
 # and `blackbox setup` share. Enter is yes; no console asks nothing and protects only
-# $HermesHome. BLACKBOX_AUTO_ATTACH=1/0 answers it for scripts and for Desktop's setup
-# switch; an earlier yes is kept on a re-run. BLACKBOX_ATTACH_ALL=1 still protects
+# $HermesHome. BLACKBOX_AUTO_ATTACH=1/0 answers it for scripts and for Hermes Desktop's
+# setup switch; an earlier yes is kept on a re-run. BLACKBOX_ATTACH_ALL=1 still protects
 # every agent here now, once.
 function Get-AutoAttachAnswer {
     $flag = "$env:BLACKBOX_AUTO_ATTACH".ToLower()

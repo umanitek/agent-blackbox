@@ -401,7 +401,7 @@ has `queue`, `show`, `propose`, `approve`, `policy`, `run`, `pool`, `export`,
 
 Blackbox also lives inside the Hermes Desktop app, with everything the dashboard
 does. Switch it on once under **Capabilities → Plugins** (Hermes ships every
-plugin's Desktop part switched off until you choose it), then open **Blackbox** in
+plugin's Hermes Desktop part switched off until you choose it), then open **Blackbox** in
 the sidebar:
 
 | Tab | What you see and do |
@@ -413,13 +413,13 @@ the sidebar:
 The **status bar** shows a shield with the mode — **Audit** in amber (recording,
 not stopping), **Block** in green — and what was caught today. Switching to Audit
 asks you to confirm, because it lowers protection; while Blackbox is in audit mode,
-Desktop says so once, with a **Turn on blocking** button. An **alert** appears the
+Hermes Desktop says so once, with a **Turn on blocking** button. An **alert** appears the
 moment Blackbox flags or blocks something an agent tried to do (and a system
 notification when you are in another app). Alerts and the page show the finding,
 its severity, the tool and whether it was blocked — never the command, the file or
 what it contained.
 
-The Desktop section reads Blackbox's dashboard service (it starts at login); if it
+The Hermes Desktop section reads Blackbox's dashboard service (it starts at login); if it
 is not running, the page says how to start it.
 
 **An agent cannot change these settings.** Blackbox flags, and in block mode

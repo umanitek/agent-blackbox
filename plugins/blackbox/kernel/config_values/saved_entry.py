@@ -9,7 +9,7 @@ error), the entry read last in this process stands in, so a passing read failure
 Blackbox's mode — Block stays Block. Before any good read there is nothing to stand in: the
 answer is an :class:`UnreadEntry` (empty), and :func:`known` is False, so a status route says
 "starting" instead of presenting the defaults (Audit, nothing blocked) as the person's settings.
-WHY (KI-PENDING-b28f8f, VM pass 3, 2026-11-22): Desktop's Overview said "Audit mode … nothing is
+WHY (KI-PENDING-b28f8f, VM pass 3, 2026-11-22): a companion app's Overview said "Audit mode … nothing is
 blocked yet" while ``blackbox status`` said block, during a dashboard restart.
 
 Pattern: a small **Memento** — the last good read kept for the failures after it.

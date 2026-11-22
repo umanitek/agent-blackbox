@@ -11,7 +11,7 @@ does not know is ignored.
 `/Library/Application Support/Blackbox/netd/plan.key` (root, 0600) and a copy for the person
 who installed it at `~/Library/Application Support/Blackbox/helper/plan.key` (owner: that
 person, 0600, written as them). ONE place per person, not per `BLACKBOX_HOME`: the installer's
-Blackbox and Blackbox Desktop's engine both read it, so either can drive a helper the other
+Blackbox and any companion app both read it, so either can drive a helper the other
 installed. Another account on the Mac has no key and cannot drive it (by design).
 A later install (an upgrade) keeps the key, so pairing survives it. An upgrade that fails puts
 the previous helper back and starts it again; a successful install writes the public receipt

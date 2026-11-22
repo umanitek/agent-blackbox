@@ -1,8 +1,8 @@
 """What Network Shield's enforcer watches and reports: SSH into this machine, the files that decide
 who may log in or where names go, and the malicious connections it cut — kept as alerts. Also a
-connection to a listed address that Blackbox Desktop's live collector SAW (:func:`observed`): the
+connection to a listed address that a live collector (an add-on) SAW (:func:`observed`): the
 collector only reports the facts; this module decides it is listed and keeps it, and Network
-Shield words the notice (engine rule, 2026-11-22 — Desktop used to word and send it itself).
+Shield words the notice (engine rule, 2026-11-22 — the collector used to word and send it itself).
 
 The enforcer (a root helper) observes; this module validates and keeps what it says, bounded, in
 Blackbox's own folder (``network-shield/watch.json``). It never receives a file's contents or a

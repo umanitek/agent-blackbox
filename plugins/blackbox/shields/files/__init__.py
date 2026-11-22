@@ -1,6 +1,6 @@
 """File Shield — the third shield: files and folders the person protects from every AI agent,
 and the folders where new files arrive, watched in real time. The core of it lives here;
-Blackbox Desktop adds file fingerprints and reputation through :mod:`..extensions`.
+an add-on may add file fingerprints and reputation through :mod:`..extensions`.
 
 Founder direction (Amos, 2026-11-21): an active defence, not a reactive watcher. An item the
 person protects can not be touched by ANY AI agent by ANY route, in Audit mode as well as Block
@@ -10,7 +10,7 @@ mode; every attempt is recorded and shown; protect on demand; unprotecting asks 
   and the prompt flag (``files:protected-mention``);
 * :mod:`.changes` — the system protection helper's real-time changes (FSEvents), signed;
 * :mod:`.watched` — what a watched folder's scan found (new and known-bad files), reported by
-  Blackbox Desktop's add-on and worded here as alerts;
+  an add-on and worded here as alerts;
 * :mod:`.sandbox` — Layer 2: the coding agents the person picks run inside the OS sandbox built
   from the list (launchers first on PATH; Cursor/Windsurf opened inside it on request);
 * :mod:`.events` / :mod:`.status` — the events report and the card;
@@ -36,7 +36,7 @@ from ...kernel import agent_hosts
 from ..contract import Capability, Shield, ShieldMode
 from . import alerts, api, changes, events, mode, protect, sandbox, status, watched
 
-#: What another package (Blackbox Desktop's add-on) may use: the shield, its mode (watched folders,
+#: What another package (an add-on) may use: the shield, its mode (watched folders,
 #: protected items), its real-time changes, its events and :mod:`.watched` (where a watched
 #: folder's scan reports what it found — File Shield words the notification).
 __all__ = ["CAPABILITIES", "FILES", "FINDING_KINDS", "changes", "events", "mode", "protect", "sandbox", "watched"]

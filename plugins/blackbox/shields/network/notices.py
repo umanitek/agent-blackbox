@@ -3,7 +3,7 @@ kind of alert — never the address, the user name or the file a notification on
 give away. The full sentence (``api.alerts``'s own text) travels as the alert's ``detail``, for
 inside the app and for a person who chose "show details in notifications".
 
-One wording for the dashboard's notifier and Blackbox Desktop (which used to keep its own copy).
+One wording for the dashboard's notifier and any companion app (one used to keep its own copy).
 
 Usage::
 

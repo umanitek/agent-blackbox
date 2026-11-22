@@ -887,8 +887,8 @@ require_docker_for_blazegraph() {
 
 # Whether Docker can run the Blazegraph store RIGHT NOW (its engine answers). Setup-only mode
 # (`hermes blackbox setup`) uses this to pick its store: a Docker Desktop that is installed but not
-# running is not started for it, because Oxigraph needs no Docker and opening someone's Docker
-# Desktop is not ours to do (2026-11-03: setup on Hermes Desktop launched it and waited 120 s).
+# running is not started for it, because Oxigraph needs no Docker and opening someone's
+# Docker Desktop is not ours to do (2026-11-03: setup on Hermes Desktop launched it and waited 120 s).
 # The Windows installer's setup-only check already asked only "is it running".
 blackbox_docker_available() {
     command -v docker >/dev/null 2>&1 || return 1
@@ -2649,7 +2649,7 @@ configure_blackbox_mode() {
 # by the dashboard's sweep within a minute of a new agent appearing). Enter, or no
 # answer in time, is yes — the question is on screen; no terminal at all (a script)
 # asks nothing and protects only $HERMES_HOME. BLACKBOX_AUTO_ATTACH=1/0 answers it
-# for scripts and for `blackbox setup` (Desktop's switch); an earlier yes is kept on
+# for scripts and for `blackbox setup` (Hermes Desktop's switch); an earlier yes is kept on
 # a re-run. BLACKBOX_ATTACH_ALL=1 still protects every agent here now, once.
 BLACKBOX_AUTO_ATTACH_PROMPT_SECONDS="${BLACKBOX_AUTO_ATTACH_PROMPT_SECONDS:-30}"
 
@@ -4167,8 +4167,8 @@ install_into_existing_hermes() {
         warn "--skip-dkg is not used when installing into an existing Hermes; setup installs Blackbox's DKG node."
     fi
     # The list is captured first: `hermes plugins list | grep -q` under pipefail fails when grep
-    # stops early and Hermes, still printing its table, dies of SIGPIPE (2026-11-03, Hermes
-    # Desktop). The plugin's folder counts too: it is what Hermes's "already exists" refusal checks.
+    # stops early and Hermes, still printing its table, dies of SIGPIPE (2026-11-03,
+    # Hermes Desktop). The plugin's folder counts too: it is what Hermes's "already exists" refusal checks.
     local listed=""
     listed="$("$hermes" plugins list 2>/dev/null || true)"
     if [ -d "$HERMES_HOME/plugins/blackbox" ] ||
@@ -4291,7 +4291,7 @@ retire_services_pointing_into() {
 
 # Blackbox was installed first (with its own Hermes) and the user then installed Hermes Desktop:
 # two Hermes programs now share one ~/.hermes, the `hermes` command runs ours and the app runs
-# Desktop's (found 2026-11-03). Blackbox moves onto that Hermes, so there is one Hermes again:
+# Hermes Desktop's (found 2026-11-03). Blackbox moves onto that Hermes, so there is one Hermes again:
 # the node (its identity, keys and synced graph) moves to where `hermes blackbox setup` keeps it,
 # the hermes command runs that Hermes, Blackbox is installed into it and set up, and only then is
 # the Hermes this installer put here retired (its checkout and its environment record). Never returns.
@@ -4364,7 +4364,7 @@ BLACKBOX_HELPER_DAEMON="/Library/LaunchDaemons/ai.umanitek.blackbox.netd.plist"
 BLACKBOX_HELPER_RECEIPT="/Library/Application Support/Blackbox/netd-installed"
 BLACKBOX_SYSTEM_PROTECTION_STATE=""   # installed | kept | declined | failed | unsupported (for next_steps)
 # The plugin's copy of the helper's plan key — ONE place per person, whichever Blackbox (this
-# install or Blackbox Desktop's engine) serves the dashboard (helper/PLAN.md).
+# install or a companion app) serves the dashboard (helper/PLAN.md).
 BLACKBOX_HELPER_KEY_DIR="$HOME/Library/Application Support/Blackbox/helper"
 
 helper_manifest_file() {

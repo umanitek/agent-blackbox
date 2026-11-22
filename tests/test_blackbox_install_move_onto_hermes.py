@@ -3,9 +3,9 @@
 Found 2026-11-03 on a Mac: after the standalone one-liner (Blackbox with its own Hermes, an Agent
 Blackbox checkout behind ~/.local/bin/hermes) the user installed Hermes Desktop, which put its own
 Hermes in ~/.hermes/hermes-agent. Two Hermes programs then shared one ~/.hermes: the hermes command
-ran ours (0.22.2 fork), the app ran Desktop's (0.22.7). Re-running the one-liner saw only "our
-Hermes" and updated the fork. Now it moves Blackbox onto Desktop's Hermes: the node (identity, keys,
-graph) moves to where `hermes blackbox setup` keeps it, the hermes command runs Desktop's Hermes,
+ran ours (0.22.2 fork), the app ran Hermes Desktop's (0.22.7). Re-running the one-liner saw only "our
+Hermes" and updated the fork. Now it moves Blackbox onto Hermes Desktop's Hermes: the node (identity, keys,
+graph) moves to where `hermes blackbox setup` keeps it, the hermes command runs Hermes Desktop's Hermes,
 Blackbox is installed and set up there, and only after that succeeds is our checkout retired with
 its environment record. Also KI-467: a fresh clone at a path whose checkout is gone inherited that
 checkout's environment record and Hermes refused to start; the stale record is now removed.
@@ -191,7 +191,7 @@ def test_the_windows_hand_over_carries_the_node_across_and_retires_the_checkout(
 
 def test_a_move_that_stopped_half_way_finishes_as_a_move(mac):
     """Live 2026-11-04: the first move's setup rolled back (the 90 s node wait, KI-457) after the
-    hermes command already ran Desktop's Hermes and the node had moved; a re-run must still retire
+    hermes command already ran Hermes Desktop's Hermes and the node had moved; a re-run must still retire
     our checkout, so with our checkout present the foreign-Hermes path goes through the move."""
     main = _body("main")
     foreign = main.index('if existing_hermes="$(existing_foreign_hermes)"; then')

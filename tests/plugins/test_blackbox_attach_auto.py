@@ -2,7 +2,7 @@
 
 Amos: "every new profile and every new instance, automatically, always protected moving forward".
 The Hermes catalog review (KI-429 / LES-067) forbids a silent default, so the yes is asked once
-(the installers, Desktop's setup switch) and saved as ``auto_attach`` through ONE writer, which
+(the installers, Hermes Desktop's setup switch) and saved as ``auto_attach`` through ONE writer, which
 these tests drive through the real CLI parser, the real settings API and the real dashboard sweep:
 a profile created AFTER the yes is protected by the next rescan, with no further step.
 """
