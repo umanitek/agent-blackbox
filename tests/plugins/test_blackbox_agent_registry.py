@@ -30,7 +30,14 @@ MATRIX = Path(agent_registry.PATH).parents[2] / "docs" / "agent-compat" / "cover
 
 
 def test_the_registry_and_the_catalogue_name_the_same_agents():
-    assert sorted(BY_ID) == sorted(hosts.BY_ID)
+    # The coding agents of the catalogue, plus Blackbox's own host (guarded by the plugin's hooks).
+    assert sorted(BY_ID) == sorted([*hosts.BY_ID, hosts.HERMES_ID])
+
+
+def test_the_hermes_agent_lists_exactly_the_hook_events_its_instances_are_built_from():
+    from plugins.blackbox.agent_hooks import hermes_sessions
+    listed = {row["kind"] for row in BY_ID[hosts.HERMES_ID]["events"] if row["hooked"]}
+    assert listed == set(hermes_sessions.EVENTS.values()) and BY_ID[hosts.HERMES_ID]["name"] == hosts.HERMES_NAME
 
 
 @pytest.mark.parametrize("host", hosts.HOSTS, ids=lambda host: host.id)

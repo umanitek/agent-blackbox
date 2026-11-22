@@ -1454,6 +1454,91 @@
      "result": "partial"
     }
    ]
+  },
+  {
+   "id": "hermes",
+   "name": "Hermes agent",
+   "sources": [
+    {
+     "url": "https://github.com/NousResearch/hermes-agent",
+     "read": "2026-11-22"
+    }
+   ],
+   "processes": "One Hermes process per run (CLI, gateway or a profile's service). A task it delegates (delegate_task) runs as a child agent inside that process with a session of its own. Blackbox is a plugin loaded into it: its hooks are called in-process, never through a command Blackbox installs.",
+   "home_env": "HERMES_HOME",
+   "profiles": {
+    "macos": "~/.hermes and each profile's home (hermes -p NAME)",
+    "linux": "~/.hermes and each profile's home",
+    "windows": "%LOCALAPPDATA%\\hermes"
+   },
+   "scopes": [
+    {
+     "scope": "every profile",
+     "where": "the Blackbox plugin in each Hermes home (blackbox attach)",
+     "hooked": true,
+     "note": "one set of Blackbox settings in the main Hermes home protects every profile"
+    }
+   ],
+   "launch_modes": [
+    {
+     "mode": "interactive",
+     "how": "hermes",
+     "hooks_run": true
+    },
+    {
+     "mode": "gateway",
+     "how": "hermes gateway (messaging platforms)",
+     "hooks_run": true
+    }
+   ],
+   "events": [
+    {
+     "event": "on_session_start",
+     "kind": "session_start",
+     "hooked": true
+    },
+    {
+     "event": "pre_tool_call",
+     "kind": "pre_tool",
+     "hooked": true
+    },
+    {
+     "event": "post_tool_call",
+     "kind": "post_tool",
+     "hooked": true
+    },
+    {
+     "event": "on_session_end",
+     "kind": "stop",
+     "hooked": true
+    },
+    {
+     "event": "pre_api_request",
+     "hooked": false,
+     "why": "checked for prompt injection by the guard; not an instance event"
+    }
+   ],
+   "sub_agents": "Tracked from the existing hook data: a session that first appears in the same Hermes home within two minutes of a delegate_task call is recorded as that call's sub-agent (its tool calls and its end).",
+   "not_covered": [
+    "A plugin that is not loaded (Blackbox removed from a profile) sees nothing of that profile.",
+    "Hermes sessions that run on another machine never touch this machine's plugin."
+   ],
+   "coverage": [
+    {
+     "os": "macos",
+     "launch": "interactive",
+     "layer": "hooks",
+     "status": "covered-untested",
+     "why": "the plugin's own Hermes hooks, recorded in the instance tree, are covered by tests; the real run on the test VM did not complete (the local model was too slow for Hermes' prompt, 2026-11-22)"
+    },
+    {
+     "os": "macos",
+     "launch": "sub-agent",
+     "layer": "hooks",
+     "status": "covered-untested",
+     "why": "a delegated task is linked to its session by tests with the guard's own hook calls; not yet run with a hosted model"
+    }
+   ]
   }
  ]
 }

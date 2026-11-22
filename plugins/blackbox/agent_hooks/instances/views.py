@@ -12,7 +12,7 @@ import time
 from dataclasses import asdict
 from typing import Any, Iterable, Mapping, Optional
 
-from ...kernel.agent_hosts import BY_ID
+from ...kernel.agent_hosts import BY_ID, product_name
 from . import store
 from .model import Instance, Running
 
@@ -105,8 +105,7 @@ def live(running: Iterable[Running] = (), profiles: Iterable[Mapping[str, Any]] 
             subs.setdefault(item.parent, []).append(item)
     products: dict[str, dict[str, Any]] = {}
     for item in sorted((item for item in shown if item.kind == "session"), key=lambda item: item.started):
-        host = BY_ID.get(item.agent)
-        product = products.setdefault(item.agent, {"id": item.agent, "name": host.name if host else item.agent, "profiles": {}})
+        product = products.setdefault(item.agent, {"id": item.agent, "name": product_name(item.agent), "profiles": {}})
         product["profiles"].setdefault(item.profile, {"home": item.profile, "instances": []})["instances"].append(_row(item, subs))
     for product in products.values():
         product["profiles"] = list(product["profiles"].values())

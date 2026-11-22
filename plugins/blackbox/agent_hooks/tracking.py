@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any, Mapping, Optional
 
 from ..kernel.agent_hosts import BY_ID, HOSTS
-from . import observe, profiles, prompt_text, root_watch
+from . import hermes_sessions, observe, profiles, prompt_text, root_watch
 from .instances import links, record, store, sub_key, views
 from .instances.model import Profile, Running
 from .protect import config_edit, own_files
@@ -74,6 +74,7 @@ def observe_now() -> None:
     someone watched. The dashboard calls this every few seconds. Instances whose process left or
     that went quiet are closed here as well, so the history is right with nobody watching (KI-549)."""
     table, _running = _snapshot(max_age=0.0)
+    hermes_sessions.catch_up()   # the Hermes agent's own sessions, from its guard's audit trail
     views.close_stale(table.keys() if table else None)
 
 
@@ -211,6 +212,7 @@ def profile_rows(home: Optional[Path] = None) -> list[Profile]:
 def live() -> dict[str, Any]:
     """The live tree (see :func:`.instances.views.live`), with stale instances closed first."""
     table, running = _snapshot()
+    hermes_sessions.catch_up()
     views.close_stale(table.keys() if table else None)
     prompt_text.expire()
     tree = views.live(running, [asdict(row) for row in profile_rows()])
@@ -223,6 +225,7 @@ def wait(cursor: int, seconds: float) -> int:
     deadline = time.monotonic() + seconds
     while True:
         _snapshot()   # a process that came or went moves the cursor
+        hermes_sessions.catch_up()   # so does a Hermes event
         left = deadline - time.monotonic()
         now = store.wait_for_change(cursor, min(TABLE_SECONDS, max(0.0, left)))
         if now > cursor or left <= 0:

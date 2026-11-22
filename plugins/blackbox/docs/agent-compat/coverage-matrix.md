@@ -25,6 +25,7 @@ Statuses:
 | Devin | Built, not yet run in the product | Not covered | Not covered |
 | Cline | Tested | Not covered | Not covered |
 | OpenCode | Tested | Not covered | Not covered |
+| Hermes agent | Built, not yet run in the product | Not covered | Not covered |
 
 ## Claude Code
 
@@ -459,3 +460,39 @@ One `opencode` process (TUI) or `opencode serve`; agents and sub-agents run insi
 - Sessions that run in the vendor's cloud never touch this machine's hooks.
 
 Sources: <https://opencode.ai/docs/plugins/> (read 2026-11-22), <https://opencode.ai/docs/build/plugins/server/> (read 2026-11-22), <https://opencode.ai/docs/build/plugins/migrate-v1/> (read 2026-11-22)
+
+## Hermes agent
+
+One Hermes process per run (CLI, gateway or a profile's service). A task it delegates (delegate_task) runs as a child agent inside that process with a session of its own. Blackbox is a plugin loaded into it: its hooks are called in-process, never through a command Blackbox installs.
+
+**Profiles:** macOS `~/.hermes and each profile's home (hermes -p NAME)` · Linux `~/.hermes and each profile's home` · Windows `%LOCALAPPDATA%\hermes` · moved by `HERMES_HOME`
+
+| Scope | Where | Blackbox's hooks there | Note |
+|---|---|---|---|
+| every profile | `the Blackbox plugin in each Hermes home (blackbox attach)` | yes | one set of Blackbox settings in the main Hermes home protects every profile |
+
+| Launch mode | How | Hooks run | Note |
+|---|---|---|---|
+| interactive | `hermes` | yes |  |
+| gateway | `hermes gateway (messaging platforms)` | yes |  |
+
+| Hook event | Blackbox reads it as | Hooked | Why not |
+|---|---|---|---|
+| on_session_start | session_start | yes |  |
+| pre_tool_call | pre_tool | yes |  |
+| post_tool_call | post_tool | yes |  |
+| on_session_end | stop | yes |  |
+| pre_api_request |  | no | checked for prompt injection by the guard; not an instance event |
+
+**Sub-agents:** Tracked from the existing hook data: a session that first appears in the same Hermes home within two minutes of a delegate_task call is recorded as that call's sub-agent (its tool calls and its end).
+
+| OS | Launch mode | Layer | Status | Detail |
+|---|---|---|---|---|
+| macos | interactive | hooks | Built, not yet run in the product | the plugin's own Hermes hooks, recorded in the instance tree, are covered by tests; the real run on the test VM did not complete (the local model was too slow for Hermes' prompt, 2026-11-22) |
+| macos | sub-agent | hooks | Built, not yet run in the product | a delegated task is linked to its session by tests with the guard's own hook calls; not yet run with a hosted model |
+
+**Not covered:**
+- A plugin that is not loaded (Blackbox removed from a profile) sees nothing of that profile.
+- Hermes sessions that run on another machine never touch this machine's plugin.
+
+Sources: <https://github.com/NousResearch/hermes-agent> (read 2026-11-22)

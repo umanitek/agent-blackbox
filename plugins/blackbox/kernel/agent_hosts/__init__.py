@@ -47,6 +47,19 @@ USER_BIN_DIRS = (".npm-global/bin", ".local/bin", ".bun/bin", ".claude/local", "
                  "/opt/homebrew/bin", "/usr/local/bin")
 
 #: What every agent event is mapped to.
+#: Blackbox's own host, the Hermes agent: guarded by the plugin's own Hermes hooks (never a hook
+#: Blackbox installs), and shown in the instance tree beside the coding agents
+#: (``agent_hooks.hermes_sessions``). Not in :data:`HOSTS`: nothing here installs or sweeps it.
+HERMES_ID = "hermes"
+HERMES_NAME = "Hermes agent"
+
+
+def product_name(agent: str) -> str:
+    """The product's name for an agent id (the Hermes agent included); the id when unknown."""
+    host = BY_ID.get(agent)
+    return host.name if host is not None else HERMES_NAME if agent == HERMES_ID else agent
+
+
 #: The decision recorded when Blackbox decided to stop an agent's action but its answer reached
 #: the agent's hook only after the hook's limit — the agent was NOT stopped (fail-open), so it is
 #: never counted or announced as "stopped" (KI-PENDING-f5765e, 2026-11-22).
@@ -193,4 +206,4 @@ def host(agent_id: str) -> Optional[Host]:
     return BY_ID.get(agent_id)
 
 
-__all__ = ["BY_ID", "DECISION_TOO_LATE", "EVENTS", "HOSTS", "TOOL_KINDS", "USER_BIN_DIRS", "Host", "host"]
+__all__ = ["BY_ID", "DECISION_TOO_LATE", "EVENTS", "HERMES_ID", "HERMES_NAME", "HOSTS", "TOOL_KINDS", "USER_BIN_DIRS", "Host", "host", "product_name"]
