@@ -69,6 +69,15 @@ def _owner(ts: float) -> Optional[Instance]:
     return ranked[0] if gap(ranked[0]) < gap(ranked[1]) else None
 
 
+def _reason(fields: Mapping[str, Any], path: str, program: str) -> str:
+    """What the timeline says the kernel stopped: a protected item's read, or — the sandbox's
+    self-protection (KI-581) — a write to a file that keeps Blackbox's hook."""
+    if fields.get("route") == "self":
+        return f"The operating system's sandbox stopped {program} changing {path}, which keeps Blackbox's hook (self-protection)."
+    return (f"The operating system's sandbox stopped {program} reaching {os.path.basename(path) or path} "
+            f"in your protected {fields.get('kind') or 'item'} {fields.get('item') or ''} (File Shield).").replace("  ", " ")
+
+
 def attribute(rows: Iterable[Mapping[str, Any]]) -> int:
     """Give each sandbox refusal in *rows* (``audit.read_findings`` rows) to its instance; answers
     how many were given now. Fail-open: a row that does not fit is left alone."""
@@ -85,8 +94,7 @@ def attribute(rows: Iterable[Mapping[str, Any]]) -> int:
                 continue
             fields = row.get("fields") or {}
             path, program = str(fields.get("path") or ""), str(fields.get("program") or row.get("tool_name") or "a program")
-            reason = (f"The operating system's sandbox stopped {program} reaching {os.path.basename(path) or path} "
-                      f"in your protected {fields.get('kind') or 'item'} {fields.get('item') or ''} (File Shield).").replace("  ", " ")
+            reason = _reason(fields, path, program)
             owner.refused += 1
             owner.events += 1
             action = Action(ts, "pre_tool", program[:120], path[:300], "block", reason[:300])

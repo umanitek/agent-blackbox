@@ -128,9 +128,12 @@ def _checked(event: Any, now: float) -> tuple[str, str, float, str]:
     return path, kind, float(min(ts, now)), program if kind == DENIED else ""
 
 
-def record(events: Sequence[Any], mode: ShieldMode, now: Optional[float] = None) -> list[FileChange]:
+def record(events: Sequence[Any], mode: ShieldMode, now: Optional[float] = None,
+           self_protected: Sequence[str] = ()) -> list[FileChange]:
     """Keeps the events inside the current items and folders; answers the ones kept. Refuses a
-    report with a malformed event (nothing kept) or more than :data:`MAX_PER_REPORT` events."""
+    report with a malformed event (nothing kept) or more than :data:`MAX_PER_REPORT` events.
+    *self_protected*: the files the sandbox keeps closed for Blackbox (``sandbox.self_protected_files``)
+    — a refusal naming one is recorded as a self-protection hit (KI-581), not kept as a change."""
     now = time.time() if now is None else now
     if len(events) > MAX_PER_REPORT:
         raise ShieldApiError(400, f"a file report carries at most {MAX_PER_REPORT} events")
@@ -138,6 +141,9 @@ def record(events: Sequence[Any], mode: ShieldMode, now: Optional[float] = None)
     with _cond:
         _load()
         kept: list[FileChange] = []
+        guarded = set(self_protected)
+        self_denials = [(os.path.normpath(path), program) for path, kind, _ts, program in checked
+                        if kind == DENIED and os.path.normpath(path) in guarded]
         for path, kind, ts, program in checked:
             scope = _scope(path, mode)
             if scope is None or (kind == DENIED and scope[1] != PROTECTED):
@@ -150,7 +156,19 @@ def record(events: Sequence[Any], mode: ShieldMode, now: Optional[float] = None)
             _save()
             _cond.notify_all()
     _record_hits([change for change in kept if change.kind == DENIED])
+    _record_self_hits(self_denials)
     return kept
+
+
+def _record_self_hits(denials: list[tuple[str, str]]) -> None:
+    """Each sandbox refusal of a write to a file kept closed for Blackbox, as a self-protection hit."""
+    if not denials:
+        return
+    from ... import audit
+    from .protect import SANDBOX_AGENT, sandbox_self_hit
+    for path, program in denials:
+        audit.record_for(SANDBOX_AGENT, event="sandbox_deny", findings=[sandbox_self_hit(path, program).to_dict()],
+                         detail={"decision": "block", "tool_name": program, "tool_call_id": f"sandbox-self:{time.time():.6f}:{path}"})
 
 
 def _record_hits(denials: list[FileChange]) -> None:

@@ -8,7 +8,9 @@ real program — the launcher was first on PATH in interactive zsh only (finding
 2026-11-22-hooks-only-file-shield-an-agent-written); inside the sandbox an agent could open its own
 hook config for writing and signal Blackbox's processes (finding
 2026-11-22-agent-sandbox-lets-the-agent-open-its-own); the Hermes agent had no sandbox at all; a
-kernel refusal never reached the instance (KI-568: ``python3 r.py allow``, refused 0).
+kernel refusal never reached the instance (KI-568: ``python3 r.py allow``, refused 0). Round 2
+(KI-581): the kernel refused a sandboxed Claude Code's script writing its OWN hook config
+(~/.claude/settings.json), and nothing recorded it.
 """
 
 from __future__ import annotations
@@ -25,7 +27,7 @@ from plugins.blackbox.agent_hooks import tracking
 from plugins.blackbox.agent_hooks.instances import kernel_refusals, store
 from plugins.blackbox.agent_hooks.protect import events as hook_events
 from plugins.blackbox.kernel import agent_hosts, shell_path
-from plugins.blackbox.shields.files import changes, mode as files_mode, sandbox
+from plugins.blackbox.shields.files import api as files_api, changes, mode as files_mode, sandbox
 from plugins.blackbox.shields.files.sandbox.platform import macos
 
 VAULT = "~/Documents/Vault"
@@ -162,3 +164,38 @@ def test_a_refusal_with_two_equally_likely_sessions_is_not_guessed(home, monkeyp
     row = {"framework": audit.SANDBOX_RECORDER, "event": "sandbox_deny", "ts": time.time(), "tool_call_id": "sandbox:9",
            "fields": {"path": "/x"}}
     assert kernel_refusals.attribute([row]) == 0
+
+
+# -- KI-581: the kernel's refusal of an agent rewriting its own hook config ------------------------
+
+def test_the_helper_watches_the_hook_configs_the_sandbox_keeps_closed(home, monkeypatch):
+    if sandbox.platform.unavailable() is not None:
+        pytest.skip("this system can not sandbox agents")
+    monkeypatch.setattr(files_mode, "current", lambda: _mode())
+    monkeypatch.setattr(files_api.helper_link, "signed", lambda body, _params: body)
+    monkeypatch.setattr(files_api, "_sync_sandbox", lambda: None)
+    paths = files_api.watch_plan(None, {})["paths"]
+    assert paths[0] == str(home / "Documents" / "Vault")   # the person's items come first
+    assert str(home / ".claude" / "settings.json") in paths
+    assert sandbox.self_protected_files(_mode(())) == ()   # nothing sandboxed: nothing extra watched
+
+
+def test_a_kernel_refusal_of_an_agent_writing_its_own_hook_config_is_recorded_as_self_protection(home, monkeypatch):
+    if sandbox.platform.unavailable() is not None:
+        pytest.skip("this system can not sandbox agents")
+    monkeypatch.setattr(hook_events.guard, "tool_call_verdict", lambda **_k: {"findings": [], "blocked": [], "decision": "", "message": ""})
+    base = {"agent": "claude-code", "session": "s2-cc-self", "cwd": str(home / "camp"), "sandboxed": True}
+    hook_events.record_event({**base, "event": "session_start"})
+    hook_events.record_event({**base, "event": "pre_tool", "tool_name": "Bash", "args": {"command": "python3 w.py"}})
+    config = str(home / ".claude" / "settings.json")
+    kept = changes.record([{"path": config, "kind": "denied", "program": "python3.14", "ts": int(time.time())},
+                           {"path": str(home / "elsewhere.txt"), "kind": "denied", "program": "python3.14", "ts": int(time.time())}],
+                          _mode(), self_protected=sandbox.self_protected_files(_mode()))
+    assert kept == []   # not a change inside a protected item
+    [finding] = [row for row in audit.read_findings(limit=50) if (row.get("fields") or {}).get("route") == "self"]
+    assert finding["identifier"] == "fileaccess:sandbox:blackbox-settings" and finding["fields"]["path"] == config
+    tracking.attribute_kernel_refusals()
+    instance = store.get(hook_events.session_key("claude-code", base["session"], base["cwd"]))
+    assert instance.refused == 1
+    [row] = [action for action in store.actions(instance.key) if action.verdict == "block"]
+    assert config in row.reason and "self-protection" in row.reason and "python3.14" in row.reason

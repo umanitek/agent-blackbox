@@ -52,7 +52,7 @@ from . import platform
 from .places import Places, build
 
 __all__ = ["CLI_AGENTS", "HERMES_SHELLS", "Places", "enter_hermes_process", "enter_hermes_session", "hermes_shell_dir", "launcher_dir", "offer",
-           "open_app", "policy", "profile_path", "protection", "proven", "restorations", "status", "sync"]
+           "open_app", "policy", "profile_path", "protection", "proven", "restorations", "self_protected_files", "status", "sync"]
 
 #: GUI agents are relaunched, not given a command-line launcher.
 _GUI_ONLY = frozenset({"windsurf"})
@@ -131,6 +131,16 @@ def policy(mode: ShieldMode) -> Places:
     holders = sorted({os.path.dirname(path) for path in hooks} - {str(Path.home())})
     return build(mode_module.protected(mode), blackbox_key_patterns(), own, str(canary_path()), is_folder=is_folder,
                  startup_files=startup, keep_in_place=holders)
+
+
+def self_protected_files(mode: ShieldMode) -> tuple[str, ...]:
+    """The files the sandbox keeps closed to writes for Blackbox's sake — every agent's hook config
+    and the shell startup files (canonical paths) — while any agent is sandboxed; () otherwise. The
+    helper watches them for the kernel's refusals too, so a refusal of an agent rewriting its OWN
+    hook config is recorded as self-protection (KI-581)."""
+    if not chosen(mode) or platform.unavailable() is not None:
+        return ()
+    return policy(mode).no_write_files
 
 
 def _write_if_changed(path: Path, text: str, mode: int) -> bool:

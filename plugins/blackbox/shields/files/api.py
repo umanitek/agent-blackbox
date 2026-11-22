@@ -143,7 +143,10 @@ def watch_plan(_context: ShieldContext, params: Mapping[str, str]) -> Any:
     Every poll (about every 2 s) also brings the sandbox profile up to date with the list."""
     _sync_sandbox()
     current = mode_module.current()
-    return helper_link.signed({"watch": current.enabled, "paths": list(mode_module.watch_paths(current))}, params)
+    # The person's items first (the helper names at most 64 paths in its log filter), then the
+    # files the sandbox keeps closed for Blackbox, whose refusals are self-protection (KI-581).
+    paths = dict.fromkeys(mode_module.watch_paths(current) + sandbox.self_protected_files(current))
+    return helper_link.signed({"watch": current.enabled, "paths": list(paths)}, params)
 
 
 def file_report(context: ShieldContext, body: Mapping[str, Any]) -> dict[str, Any]:
@@ -151,7 +154,8 @@ def file_report(context: ShieldContext, body: Mapping[str, Any]) -> dict[str, An
     events_in = body.get("events")
     if not isinstance(events_in, list):
         raise ShieldApiError(400, "a file report carries a list of events")
-    kept = changes.record(events_in, mode_module.current())
+    current = mode_module.current()
+    kept = changes.record(events_in, current, self_protected=sandbox.self_protected_files(current))
     return {"kept": len(kept)}
 
 

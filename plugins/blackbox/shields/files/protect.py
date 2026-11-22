@@ -34,6 +34,7 @@ from typing import Any
 from ... import audit
 from ...detection import (KIND_FLAG_ONLY, PERSON_PROTECTED, SHELL_TOOLS, Finding, builds_hidden_command, command_from_args,
                            protected_path_mentions, protected_path_touches)
+from ...kernel import threat_ids
 from ..contract import FindingKind, ShieldMode
 from . import mode as mode_module, written
 
@@ -164,6 +165,18 @@ def sandbox_hit(item: str, path: str, program: str) -> Finding:
         tool_name=(program or "program")[:64], matched=PERSON_PROTECTED,
         evidence=f"sandbox {path} — protected {what} {item}"[:400], confirmed=False, source="custom",
         fields={"path": path[:400], "item": item, "route": "sandbox", "kind": what, "program": program[:64]})
+
+
+def sandbox_self_hit(path: str, program: str) -> Finding:
+    """The finding for a refusal the OS sandbox made of a write to a file it keeps closed for
+    Blackbox (an agent's hook config, a shell startup file): Blackbox's self-protection, worded as
+    that (``kernel.threat_ids.SELF_PROTECTION``) — the kernel already refused (KI-581)."""
+    return Finding(
+        identifier=threat_ids.fileaccess_identifier("sandbox", threat_ids.SELF_PROTECTION), category="fileaccess",
+        severity="critical", title=f"Blackbox's sandbox stopped {program or 'a program'} changing {path}, which keeps Blackbox's hook",
+        tool_name=(program or "program")[:64], matched=threat_ids.SELF_PROTECTION,
+        evidence=f"sandbox {path} — kept closed for Blackbox"[:400], confirmed=False, source="custom",
+        fields={"path": path[:400], "route": "self", "program": program[:64]})
 
 
 def prompt_check(text: str, mode: ShieldMode) -> list[Finding]:
