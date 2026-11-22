@@ -332,5 +332,6 @@ def test_the_history_filters_by_project_date_and_outcome_and_names_its_choices()
     assert keys(outcome="stopped") == ["app@3000", "site@2000"]
     assert keys(agent="claude-code", project="app") == ["app@1000"]
     facets = client.get("/api/agent-instances/history").json()["facets"]
-    assert facets == {"agents": ["claude-code", "codex"], "projects": ["app", "site"]}
+    assert facets == {"agents": [{"id": "claude-code", "name": "Claude Code"}, {"id": "codex", "name": "Codex"}],
+                      "projects": ["app", "site"]}
     assert client.get("/api/agent-instances/history?outcome=maybe").status_code == 400

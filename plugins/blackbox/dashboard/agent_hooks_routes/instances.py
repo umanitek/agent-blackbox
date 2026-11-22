@@ -4,13 +4,16 @@ person chose to keep (``agent_hooks.prompt_text``, off by default) is served onl
 routes below, which the browser boundary answers only with the session token — so a program that
 merely curls this dashboard cannot read it.
 
+* ``GET /agent-instances.js``, ``/agent-pages.js``, ``/agent-profiles.js`` — the core dashboard's
+  plain views over these routes (``dashboard/static/agent_*.js``): "Running now" under Connected
+  agents, and the instance, history and profile pages. A companion app draws richer ones.
 * ``GET /api/agent-instances/live[?cursor=N&wait=S]`` → the live tree ``{cursor, at, products:
   [{id, name, profiles: [{home, instances: [Instance + status + sub_agents]}]}], unprotected:
   [agent processes with no hook], profiles: [Profile + problems], counts}``. With ``cursor`` and
   ``wait`` (≤ :data:`MAX_WAIT_SECONDS`) the answer is held until something changed — a long-poll,
   so a view is current within about a second without polling fast.
 * ``GET /api/agent-instances/history[?agent=&kind=session|sub-agent&project=&since=&until=&outcome=&before=&limit=]``
-  → ended instances, newest first: ``{instances, more, next_before, facets: {agents, projects}}``.
+  → ended instances, newest first: ``{instances, more, next_before, facets: {agents: [{id, name}], projects}}``.
   ``project`` is a project folder's name, ``since`` / ``until`` bound when it ended (epoch
   seconds), ``outcome`` is ``refused`` / ``too-late`` / ``stopped`` (either); 400 for an
   unknown agent, kind or outcome.
@@ -37,10 +40,14 @@ merely curls this dashboard cannot read it.
 
 # No ``from __future__ import annotations`` here: FastAPI must see the handlers' annotations.
 from dataclasses import asdict
+from pathlib import Path
 from typing import Any
 
 NO_CACHE = {"Cache-Control": "no-store"}
 MAX_WAIT_SECONDS = 25.0
+#: The view scripts, served by name (never a path from the request): route → file in ``static/``.
+STATIC = Path(__file__).resolve().parents[1] / "static"
+SCRIPTS = {"/agent-instances.js": "agent_instances.js", "/agent-pages.js": "agent_pages.js", "/agent-profiles.js": "agent_profiles.js"}
 #: A project folder name longer than this is cut before it is matched.
 MAX_PROJECT_CHARS = 200
 
@@ -57,6 +64,8 @@ def register(app: Any) -> None:
     from fastapi.responses import JSONResponse
 
     from ...agent_hooks import tracking
+
+    _register_scripts(app)
 
     @app.get("/api/agent-instances/live")
     def agent_instances_live(cursor: str = "", wait: str = "") -> Any:   # sync: a long-poll waits in the thread pool
@@ -93,6 +102,17 @@ def register(app: Any) -> None:
     @app.get("/api/agent-instances/profiles")
     def agent_instances_profiles() -> Any:
         return JSONResponse({"profiles": [asdict(row) for row in tracking.profile_rows()]}, headers=NO_CACHE)
+
+
+def _register_scripts(app: Any) -> None:
+    """One GET per view script in :data:`SCRIPTS`."""
+    from fastapi.responses import FileResponse
+
+    def serve(name: str) -> Any:
+        return lambda: FileResponse(str(STATIC / name), media_type="application/javascript", headers=NO_CACHE)
+
+    for route, name in SCRIPTS.items():
+        app.add_api_route(route, serve(name), methods=["GET"], include_in_schema=False)
 
 
 def _register_kept_text(app: Any, tracking: Any) -> None:

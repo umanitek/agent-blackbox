@@ -179,8 +179,8 @@ def history(*, before: float = 0.0, limit: int = 50, **filters: Any) -> dict[str
     """Ended instances, newest first, a page at a time (``before``: the ``ended`` of the last row
     of the previous page), narrowed by *filters* (the fields of :class:`HistoryFilter`).
 
-    Answers ``{instances, more, next_before, facets: {agents, projects}}`` — *facets* are the
-    agent ids and project names among every ended instance of the kind, so a view can offer them
+    Answers ``{instances, more, next_before, facets: {agents: [{id, name}], projects: [name]}}``
+    — *facets* are the agents and project names among every ended instance of the kind, so a view can offer them
     as filter choices without reading the whole history."""
     limit = max(1, min(limit, 200))
     wanted = HistoryFilter(**filters)
@@ -195,7 +195,8 @@ def history(*, before: float = 0.0, limit: int = 50, **filters: Any) -> dict[str
     ended = [item for item in everything if item.ended is not None and item.kind == wanted.kind]
     return {"instances": [_row(item, subs) for item in page], "more": len(rows) > limit,
             "next_before": page[-1].ended if page and len(rows) > limit else None,
-            "facets": {"agents": sorted({item.agent for item in ended}), "projects": sorted({item.folder for item in ended if item.folder})}}
+            "facets": {"agents": [{"id": agent, "name": product_name(agent)} for agent in sorted({item.agent for item in ended})],
+                       "projects": sorted({item.folder for item in ended if item.folder})}}
 
 
 def detail(key: str, *, offset: int = 0, limit: int = 200, with_text: bool = False) -> Optional[dict[str, Any]]:
