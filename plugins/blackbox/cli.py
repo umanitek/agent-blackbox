@@ -110,6 +110,12 @@ def _add_sync_parser(sub) -> None:
         action="store_true",
         help="Return non-zero if the refreshed ruleset is empty (used by installers)",
     )
+    sync.add_argument(
+        "--node-profile-only",
+        action="store_true",
+        help="Write the managed DKG node's sync profile into its config.json and exit: no transfer, "
+             "no restart (used by installers before the node's service first starts it)",
+    )
     sync.set_defaults(func=cmd_sync)
 
 

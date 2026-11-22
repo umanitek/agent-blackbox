@@ -115,9 +115,18 @@ class Machine:
               f'  *stop*) {log}rm -f {state}/service_pid; exit 0;;\n'
               f'esac\nexit 0\n')
         _fake(self.bin, "ps", f'pid=""; for a in "$@"; do pid="$a"; done\ncat {state}/ppid_$pid 2>/dev/null\n')
-        _fake(self.bin, "curl", f'[ -f {state}/answers ]\n')
+        # A service already starting its node (KI-541): it answers after `start_in` more checks.
+        starting = (f'if [ -f {state}/start_in ]; then n=$(cat {state}/start_in); if [ "$n" -gt 0 ]; then '
+                    f'echo $((n - 1)) > {state}/start_in; else rm -f {state}/start_in; echo {SERVICE_NODE} > {pid_file}; '
+                    f'echo {SERVICE_SUPERVISOR} > {state}/ppid_{SERVICE_NODE}; echo 1 > {state}/answers; '
+                    f'echo {SERVICE_NODE} > {state}/listener; fi; fi\n')
+        _fake(self.bin, "curl", starting + f'[ -f {state}/answers ]\n')
         _fake(self.bin, "lsof", f'[ -f {state}/answers ] && cat {state}/listener 2>/dev/null\nexit 0\n')
         _fake(self.bin, "sleep", "exit 0\n")
+
+    def service_starting(self, checks: int) -> None:
+        """launchd already runs the node it started when the job was loaded; it answers later."""
+        _set(self.state, service_pid=SERVICE_SUPERVISOR, start_in=str(checks))
 
     def orphan_lingers(self, checks: int) -> None:
         """`dkg stop` returns while the stopped node still runs for *checks* more liveness checks."""
@@ -299,3 +308,15 @@ def test_the_services_own_node_is_never_stopped_as_a_stray_while_it_writes_its_p
     assert "OK The DKG node now runs under its launchd service" in out, out
     assert "Another copy of the DKG node" not in out, out
     assert [call for call in calls if call.startswith("launchctl kickstart")].__len__() == 1, calls
+
+
+def test_a_node_the_service_is_still_starting_is_waited_for_never_stopped_and_started_again(tmp_path):
+    """KI-541 (E2E full5 2026-11-22): on a fresh install launchd started the node 4 times in a minute.
+    Loading the job already starts the node; the handover stopped that copy and kickstarted it
+    again — a second start for nothing. A service that runs its node is waited for."""
+    machine = Machine(tmp_path, "launchd")
+    machine.service_starting(checks=3)
+    calls, output = machine.run(wait_seconds=10)
+    assert calls == [], calls   # no `dkg stop`, no kickstart
+    assert machine.node_pid() == SERVICE_NODE
+    assert "OK The DKG node now runs under its launchd service" in output

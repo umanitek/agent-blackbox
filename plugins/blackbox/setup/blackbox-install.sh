@@ -473,8 +473,12 @@ hand_dkg_node_to_service() {
         return 0
     fi
     step "Handing the DKG node to its $supervisor service ..."
-    blackbox_dkg_stop_and_wait   # the installer's own, unsupervised copy
-    blackbox_dkg_control restart >/dev/null 2>&1 || true
+    # The service already runs its node, still starting (it answers after it opens its store): wait
+    # for it — stopping it here and restarting it was a second, needless start (KI-541).
+    if [ -z "$(blackbox_dkg_service_pid "$supervisor")" ] || blackbox_dkg_stray "$supervisor"; then
+        blackbox_dkg_stop_and_wait   # the installer's own, unsupervised copy
+        blackbox_dkg_control restart >/dev/null 2>&1 || true
+    fi
     while [ "$waited" -lt "$BLACKBOX_DKG_HANDOVER_WAIT_SECONDS" ]; do
         if blackbox_dkg_owned_by "$supervisor" && blackbox_dkg_answers; then
             ok "The DKG node now runs under its $supervisor service"
@@ -3530,6 +3534,13 @@ register_boot_service() {
     local node_bin_dir
     node_bin_dir="$(dirname "$(command -v node)")"
     secure_dkg_token_perms
+    # One profile, written once (KI-541, E2E full5 2026-11-22): the node's sync switches in its
+    # config.json are written by the plugin's own profile code — the same code every later sync
+    # checks — BEFORE the service first starts the node. Written later by the first sync, they
+    # changed under a running node and the sync restarted it right after the install.
+    if [ -n "${HERMES_BIN:-}" ] && ! "$HERMES_BIN" blackbox sync --node-profile-only >/dev/null 2>&1; then
+        warn "Could not write the DKG node's sync profile now; the first sync writes it (one node restart)."
+    fi
     case "$(uname -s)" in
         Linux)
             if ! command -v systemctl >/dev/null 2>&1; then
@@ -3634,6 +3645,12 @@ PLIST
             else
                 mv -f "$written" "$plist"
                 : >"$(blackbox_dkg_launchd_error_log)" 2>/dev/null || true   # this registration's errors only
+                # Single start (KI-541): loading the job starts the node (RunAtLoad). While the
+                # installer's own unsupervised copy still runs, that start exits "Daemon already
+                # running" and launchd retries — so the installer's copy goes first, and is gone.
+                if blackbox_dkg_answers && ! blackbox_dkg_owned_by launchd; then
+                    blackbox_dkg_stop_and_wait
+                fi
                 blackbox_launchd_reload "$BLACKBOX_DKG_LAUNCHD_LABEL" >/dev/null 2>&1 \
                     && ok "LaunchAgent registered — the node survives reboots" \
                     || warn "could not load the LaunchAgent; load manually: launchctl bootstrap gui/$(id -u) $plist"

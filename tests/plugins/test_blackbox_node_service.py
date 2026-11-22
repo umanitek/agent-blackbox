@@ -163,16 +163,31 @@ def test_a_unit_for_another_install_or_not_enabled_is_not_ours(cfg, tmp_path, mo
 
 # ── which process the service runs ───────────────────────────────────────────
 
+GRANDCHILD_PID, MIDDLE_PID = 7003, 7002
+#: Each simulated process's parent: the service runs a launcher whose CLI runs the daemon.
+PARENTS = {NODE_PID: SERVICE_PID, MIDDLE_PID: SERVICE_PID, GRANDCHILD_PID: MIDDLE_PID, STRAY_PID: 4500, 4500: 1}
+#: The environment the service started its node with (a LaunchAgent's EnvironmentVariables).
+SERVICE_ENVIRONMENT = {"DKG_SYNC_ON_CONNECT_ENABLED": "1"}
+
+
 class _Process:
     def __init__(self, pid: int) -> None:
+        if pid not in PARENTS and pid != SERVICE_PID:
+            raise node_service.psutil.NoSuchProcess(pid)
         self.pid = pid
 
     def ppid(self) -> int:
-        return {NODE_PID: SERVICE_PID, STRAY_PID: 4500}[self.pid]
+        return PARENTS.get(self.pid, 1)
+
+    def environ(self) -> dict[str, str]:
+        return dict(SERVICE_ENVIRONMENT) if self.pid in (NODE_PID, GRANDCHILD_PID) else {}
 
 
-@pytest.mark.parametrize("pid, owned", [(SERVICE_PID, True), (NODE_PID, True), (STRAY_PID, False), (None, False)])
+@pytest.mark.parametrize("pid, owned", [(SERVICE_PID, True), (NODE_PID, True), (GRANDCHILD_PID, True), (STRAY_PID, False),
+                                        (None, False)])
 def test_the_service_owns_its_process_and_that_process_s_child(manager, monkeypatch, pid, owned):
+    """KI-541 (E2E full5 2026-11-22): under launchd the daemon is the service's GRANDCHILD
+    (launcher -> `dkg start --foreground` -> daemon); a parent-only check missed it."""
     monkeypatch.setattr(node_service.psutil, "Process", _Process)
     assert node_service.systemd_unit("blackbox-dkg.service").owns(pid) is owned
 
@@ -235,6 +250,19 @@ def test_a_node_under_the_launch_agent_is_not_restarted_for_settings_only_its_pl
     monkeypatch.setattr(managed_node, "_daemon_pid", lambda _cfg: NODE_PID)
     expected = managed_node.expected_node_settings(cfg)
     assert not set(expected) & set(managed_node._DKG_ENV_ONLY_SETTINGS)
+
+
+def test_a_setting_the_service_pins_is_not_a_reason_to_restart_through_it(cfg, manager, restart_world, monkeypatch, caplog):
+    """KI-541 (E2E full5 2026-11-22): the LaunchAgent pins sync-on-connect ON (KI-044) while the
+    snapshot profile asks for it off. A restart through the service starts the node with the same
+    environment, so the sync kickstarted the node again and again for a value it can never change."""
+    monkeypatch.setattr(managed_node, "_daemon_pid", lambda _cfg: GRANDCHILD_PID)
+    monkeypatch.setattr(managed_node, "node_sync_settings",
+                        lambda _cfg: {"DKG_SYNC_ON_CONNECT_ENABLED": "0", "DKG_VM_RECOVERY_PREFETCH_ENABLED": "0"})
+    with caplog.at_level("WARNING"):
+        expected = managed_node.expected_node_settings(cfg)
+    assert expected == {"DKG_VM_RECOVERY_PREFETCH_ENABLED": "0"}   # not pinned: still held to the profile
+    assert "DKG_SYNC_ON_CONNECT_ENABLED" in caplog.text
 
 
 def test_a_stray_node_is_held_to_every_setting(cfg, manager, restart_world, monkeypatch):

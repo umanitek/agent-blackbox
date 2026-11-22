@@ -100,17 +100,30 @@ class NodeService:
         service_pid = self.running_pid()
         if pid is None or service_pid is None:
             return False
-        if pid == service_pid:
-            return True
-        try:
-            return psutil.Process(pid).ppid() == service_pid
-        except psutil.Error:
-            return False
+        # WHY ancestry, not only the parent (KI-541): under launchd the service runs Blackbox's
+        # "Blackbox Node" launcher, so the daemon can be the service's grandchild
+        # (launcher -> `dkg start --foreground` -> daemon); a parent-only check called the
+        # service's own node unsupervised and every sync wanted to restart it.
+        current: Optional[int] = pid
+        for _ in range(_OWNERSHIP_LEVELS):
+            if current is None or current <= 1:
+                return False
+            if current == service_pid:
+                return True
+            try:
+                current = psutil.Process(current).ppid()
+            except psutil.Error:
+                return False
+        return False
 
     def restart(self) -> subprocess.CompletedProcess[str]:
         """Restart the node through the service manager (raises OSError / SubprocessError)."""
         return subprocess.run(list(self.restart_argv), stdin=subprocess.DEVNULL, capture_output=True,
                               text=True, timeout=_COMMAND_TIMEOUT_SECONDS, check=False)
+
+
+#: How many parents up the service's process may be from the node daemon (launcher, CLI, daemon).
+_OWNERSHIP_LEVELS = 6
 
 
 def _pid_in(text: str) -> Optional[int]:

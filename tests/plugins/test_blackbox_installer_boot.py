@@ -269,7 +269,7 @@ def _installer_constant(name: str) -> str:
     return match.group(0)
 
 
-def _register_boot_service(tmp_path, os_name: str, launchctl: str = "exit 0"):
+def _register_boot_service(tmp_path, os_name: str, launchctl: str = "exit 0", extra: tuple[str, ...] = ()):
     """Run the real register_boot_service in a sandbox shaped like *os_name* (*launchctl*: the
     stub's body)."""
     import shutil
@@ -287,6 +287,8 @@ def _register_boot_service(tmp_path, os_name: str, launchctl: str = "exit 0"):
         "ok() { :; }", "warn() { echo \"WARN $*\"; }", "step() { :; }", "heading() { :; }",
         "secure_dkg_token_perms() { :; }", "id() { echo 1000; }",
         "hand_dkg_node_to_service() { :; }", "ensure_user_lingering() { :; }",   # own tests: test_blackbox_install_node_handover.py, _user_linger.py
+        "blackbox_dkg_answers() { return 1; }", "blackbox_dkg_owned_by() { return 1; }", "blackbox_dkg_stop_and_wait() { :; }",
+        *extra,
         f"HOME={tmp_path}",
         *(f"{key}='{value}'" for key, value in _NODE_SETTINGS.items()),
         f"BLACKBOX_DKG_BIN='{_installed_dkg_bin(tmp_path)}'",
@@ -390,3 +392,23 @@ def test_an_unchanged_login_item_is_left_running_and_a_changed_one_is_reloaded_o
     _register_boot_service(tmp_path, "Darwin", launchctl=stub)
     again = calls.read_text().split()
     assert "bootout" not in again and "bootstrap" not in again and "unload" not in again, again
+
+
+def test_the_installer_s_own_node_is_gone_before_launchd_starts_the_node_once(tmp_path):
+    """KI-541 (E2E full5 2026-11-22): loading the LaunchAgent starts the node (RunAtLoad) while the
+    installer's own copy still served — launchd's start exited "Daemon already running" and was
+    retried. The installer's copy is stopped first; the node profile is written before any start."""
+    calls = tmp_path / "calls"
+    calls.write_text("")
+    hermes = tmp_path / "bin" / "hermes"
+    hermes.parent.mkdir(exist_ok=True)
+    hermes.write_text(f'#!/bin/sh\necho "hermes $*" >> {calls}\n')
+    hermes.chmod(0o755)
+    stub = f'echo "launchctl $1" >> {calls}\ncase "$1" in print) exit 113;; esac\nexit 0'
+    _register_boot_service(tmp_path, "Darwin", launchctl=stub, extra=(
+        f"HERMES_BIN={hermes}",
+        "blackbox_dkg_answers() { return 0; }",            # the installer's own copy serves
+        f'blackbox_dkg_stop_and_wait() {{ echo "stop installer copy" >> {calls}; }}'))
+    lines = calls.read_text().splitlines()
+    assert lines[0] == "hermes blackbox sync --node-profile-only", lines
+    assert lines.index("stop installer copy") < lines.index("launchctl bootstrap"), lines
