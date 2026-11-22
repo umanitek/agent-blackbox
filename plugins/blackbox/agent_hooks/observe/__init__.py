@@ -12,6 +12,7 @@ Usage::
     table = observe.read_table()            # {pid: Proc}
     observe.running(table)                  # [Running] — one per agent process tree root
     observe.agent_of(table, hook_parent_pid)  # the agent process a hook was run by
+    observe.launch_of(table, agent_pid)     # "headless" / "interactive" / "ide" / "sdk"
     observe.read_users()                    # {pid: (real uid, effective uid)}
     observe.descendants(table, pid)         # every process started (at any depth) by *pid*
 """
@@ -22,14 +23,15 @@ import re
 import shlex
 import time
 from dataclasses import dataclass
-from pathlib import PurePath
+from functools import lru_cache
+from pathlib import Path, PurePath
 from typing import Mapping, Optional
 
 from ...kernel.agent_hosts import HOSTS, Host
 from ..instances.model import Running
 from . import platform
 
-__all__ = ["Proc", "agent_of", "classify", "descendants", "read_table", "read_users", "running"]
+__all__ = ["Proc", "agent_of", "classify", "descendants", "launch_of", "read_table", "read_users", "running"]
 
 _LINE = re.compile(r"^\s*(\d+)\s+(\d+)\s+(\w{3} +\w{3} +\d+ +[\d:]+ +\d{4})\s+(.*)$")
 #: argv words that say an agent runs without a person at the keyboard, per agent.
@@ -38,8 +40,12 @@ _HEADLESS = {"claude-code": ("-p", "--print"), "gemini-cli": ("-p", "--prompt"),
 _SERVER = {"codex": ("app-server", "mcp-server", "mcp"), "opencode": ("serve",), "claude-code": ("mcp",)}
 #: Runs whose hooks the agent itself skips (documented): the reason shown to the person.
 _SKIPS = {("claude-code", "--bare"): "started with --bare, which skips every hook"}
-#: Runtimes that run an agent's script: the SECOND word is then the program.
-_RUNTIMES = ("node", "bun", "deno", "python", "python3", "tsx")
+#: Runtimes that run an agent's script — the script (or ``-m`` module) is then the program. Any
+#: spelling a runtime is installed under: ``python3.14``, macOS's framework ``Python``, ``nodejs``.
+_RUNTIME = re.compile(r"^(?:node(?:js)?|bun|deno|tsx|pypy3?|[Pp]ython(?:\d+(?:\.\d+)*)?)$")
+#: A runtime's options that run inline code (no program), and those that take a value.
+_INLINE = frozenset({"-c", "-e", "--eval", "-p", "--print"})
+_VALUED = frozenset({"-X", "-W", "-r", "--require", "--import", "--loader", "--env-file", "--config"})
 MAX_ANCESTORS = 12
 
 
@@ -73,29 +79,72 @@ def _words(command: str) -> list[str]:
         return command.split()[:40]
 
 
+def _split(words: list[str]) -> tuple[str, list[str]]:
+    """``(program, its arguments)`` of a command line: argv[0], or — for a runtime — the script
+    it runs (past the runtime's own options) or the module after ``-m``. ``("", [])`` when a
+    runtime runs inline code (``-c`` / ``-e``) or nothing."""
+    if not words or not _RUNTIME.match(PurePath(words[0]).name):
+        return (words[0], words[1:]) if words else ("", [])
+    skip = False
+    for position, word in enumerate(words[1:], start=1):
+        if skip:
+            skip = False
+        elif word == "-m" and position + 1 < len(words):
+            return words[position + 1], words[position + 2:]
+        elif word in _INLINE:
+            return "", []
+        elif word in _VALUED:
+            skip = True   # the option's value is not the script
+        elif not word.startswith("-"):
+            return word, words[position + 1:]
+    return "", []
+
+
+@lru_cache(maxsize=2048)
+def _real_path(program: str) -> str:
+    """*program*'s real file (links followed); "" when it is not a path to a file."""
+    if "/" not in program:
+        return ""
+    try:
+        return str(Path(program).resolve())
+    except (OSError, RuntimeError):
+        return ""
+
+
 def classify(command: str) -> Optional[Host]:
-    """The agent a command line is, judged by its program (or the script a runtime runs): the
-    first two words' file names against each agent's ``programs`` — never a substring match, so
+    """The agent a command line is, judged by its PROGRAM (:func:`_split`: argv[0], or the script
+    or module a runtime runs): its file name — as run and as its real file — against each
+    agent's ``programs``, and its real path against each agent's ``packages`` (an npm-installed
+    agent's ``…/node_modules/@openai/codex/bin/codex.js``). Never a substring of the line, so
     ``vim claude.md`` is not Claude Code."""
-    words = _words(command)
-    if not words:
+    program, _args = _split(_words(command))
+    if not program:
         return None
-    names = {PurePath(words[0]).name}
-    if names & set(_RUNTIMES) and len(words) > 1:
-        names = {PurePath(words[1]).name}
+    real = _real_path(program)
+    names = {PurePath(program).name, PurePath(real).name if real else ""} - {""}
     for host in HOSTS:
-        if names & set(host.programs):
+        if names & set(host.programs) or any(f"/node_modules/{package}/" in real for package in host.packages):
             return host
     return None
 
 
 def _launch(host: Host, words: list[str]) -> str:
-    rest = words[1:]
+    program, rest = _split(words)
     if any(word in _SERVER.get(host.id, ()) for word in rest[:2]):
         return "sdk"
     if any(word in _HEADLESS.get(host.id, ()) for word in rest):
         return "headless"
-    return "ide" if PurePath(words[0]).name in ("Cursor", "Windsurf") else "interactive"
+    return "ide" if PurePath(program).name in ("Cursor", "Windsurf") else "interactive"
+
+
+def launch_of(table: Mapping[int, Proc], pid: int) -> str:
+    """How the agent process *pid* was started, read from its command line: ``headless``
+    (``claude -p``, ``codex exec``, ``gemini -p``, ``opencode run``…), ``sdk`` (``codex
+    app-server``, ``opencode serve``), ``ide`` (the Cursor / Windsurf app) or ``interactive``;
+    "" when *pid* is not an agent process in *table*."""
+    proc = table.get(pid)
+    host = classify(proc.command) if proc is not None else None
+    return _launch(host, _words(proc.command)) if host is not None and proc is not None else ""
 
 
 def _profile(host: Host, pid: int) -> str:

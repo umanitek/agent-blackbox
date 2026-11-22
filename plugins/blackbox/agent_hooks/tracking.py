@@ -71,8 +71,10 @@ def observe_now() -> None:
     agent names a config home it uses — learned here, hooked by the sweep that asks
     :func:`new_profiles`). WHY (KI-553): the list was read only when the live view was read or a
     hook event came, so a moved home of an agent that sends no event was found only while
-    someone watched. The dashboard calls this every few seconds."""
-    _snapshot(max_age=0.0)
+    someone watched. The dashboard calls this every few seconds. Instances whose process left or
+    that went quiet are closed here as well, so the history is right with nobody watching (KI-549)."""
+    table, _running = _snapshot(max_age=0.0)
+    views.close_stale(table.keys() if table else None)
 
 
 def new_profiles() -> bool:
@@ -142,6 +144,8 @@ def track(event: Mapping[str, Any], session_key: str, *, decision: str = "", fin
     # may come from a new run of the same session id (instances._resumes compares them).
     if (known is None or not known.pid or known.ended is not None) and isinstance(event.get("pid"), int) and event["pid"] > 1:
         fields["agent_pid"] = agent_process(session_key, event["pid"], event["agent"]) or None
+        if fields["agent_pid"]:   # how it was started, from its command line (KI-549)
+            fields["launch"] = observe.launch_of(_snapshot()[0], fields["agent_pid"])
     session_key = _as_sub_agent(fields, session_key)
     links.note_spawn(session_key, fields)
     if event.get("profile") and profiles.remember(event["agent"], str(event["profile"])):

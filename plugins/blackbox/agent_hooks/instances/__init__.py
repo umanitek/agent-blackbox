@@ -24,7 +24,7 @@ from typing import Any, Mapping
 
 from ...kernel.redaction import redact_secret_values
 from . import links, store
-from .model import Action, Instance
+from .model import LAUNCHES, Action, Instance
 
 __all__ = ["links", "record", "store", "sub_key"]
 
@@ -91,7 +91,9 @@ def _describe(instance: Instance, event: Mapping[str, Any]) -> None:
         if event.get("background"):
             instance.launch = "background"
         elif instance.launch == "unknown":
-            instance.launch = _ENTRY_LAUNCH.get(str(event.get("entry") or ""), "unknown")
+            # The agent's own word first (Claude Code's entry point), then its command line.
+            from_process = str(event.get("launch") or "")
+            instance.launch = _ENTRY_LAUNCH.get(str(event.get("entry") or "")) or (from_process if from_process in LAUNCHES else "unknown")
         if not instance.pid and isinstance(event.get("agent_pid"), int):
             instance.pid = event["agent_pid"]
     else:

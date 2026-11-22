@@ -79,6 +79,10 @@ class Host:
     home_config: str = ""
     #: Program names (argv[0] or a script's file name) that say a running process is this agent.
     programs: tuple[str, ...] = ()
+    #: The package a runtime-run script of this agent belongs to (its folder under
+    #: ``node_modules``): the program's IDENTITY when its file name is generic (``cli.js``) or a
+    #: link names it otherwise — read from the script's real path, not from what it is called.
+    packages: tuple[str, ...] = ()
     #: Settings that switch this agent's hooks off: ``(file relative to the config's folder,
     #: dotted key, the value that means OFF)``; read by ``agent_hooks.profiles``.
     switches: tuple[tuple[str, str, object], ...] = ()
@@ -113,13 +117,13 @@ HOSTS: tuple[Host, ...] = (
     Host("claude-code", "Claude Code", "nested", ".claude/settings.json",
          {**_CLAUDE_EVENTS, "ConfigChange": "config_change", "Notification": "attention"},
          signs=(".claude",), commands=("claude",), matcher="*",
-         home_env="CLAUDE_CONFIG_DIR", home_config="settings.json", programs=("claude",),
+         home_env="CLAUDE_CONFIG_DIR", home_config="settings.json", programs=("claude",), packages=("@anthropic-ai/claude-code",),
          switches=(("settings.json", "disableAllHooks", True), ("settings.local.json", "disableAllHooks", True)),
          project_files=(".claude/settings.json", ".claude/settings.local.json")),
     Host("codex", "Codex", "nested", ".codex/hooks.json", _CLAUDE_EVENTS,
          signs=(".codex",), commands=("codex",),
          trust_note="Codex asks you to review new hooks once: run codex, type /hooks and trust Blackbox's.",
-         home_env="CODEX_HOME", home_config="hooks.json", programs=("codex",),
+         home_env="CODEX_HOME", home_config="hooks.json", programs=("codex",), packages=("@openai/codex",),
          switches=(("config.toml", "features.hooks", False), ("config.toml", "features.codex_hooks", False))),
     # Cursor (2026-11-22): the generic preToolUse / postToolUse fire for EVERY tool (Shell, Read,
     # Write, MCP, Task…), so they replace the shell- and MCP-only hooks; beforeReadFile stays for
@@ -134,14 +138,14 @@ HOSTS: tuple[Host, ...] = (
          {"SessionStart": "session_start", "BeforeAgent": "prompt", "BeforeTool": "pre_tool",
           "AfterTool": "post_tool", "AfterAgent": "turn_end", "SessionEnd": "stop", "Notification": "attention"},
          signs=(".gemini",), commands=("gemini",), matcher=".*",
-         home_env="GEMINI_CLI_HOME", home_config=".gemini/settings.json", programs=("gemini",),
+         home_env="GEMINI_CLI_HOME", home_config=".gemini/settings.json", programs=("gemini",), packages=("@google/gemini-cli",),
          switches=(("settings.json", "hooksConfig.enabled", False),), project_files=(".gemini/settings.json",)),
     Host("copilot-cli", "GitHub Copilot CLI", "own-json", ".copilot/hooks/blackbox.json",
          {"sessionStart": "session_start", "userPromptSubmitted": "prompt", "preToolUse": "pre_tool",
           "postToolUse": "post_tool", "agentStop": "turn_end", "sessionEnd": "stop",
           "subagentStart": "subagent_start", "subagentStop": "subagent_stop"},
          signs=(".copilot",), commands=("copilot",),
-         home_env="COPILOT_HOME", home_config="hooks/blackbox.json", programs=("copilot",)),
+         home_env="COPILOT_HOME", home_config="hooks/blackbox.json", programs=("copilot",), packages=("@github/copilot",)),
     # Windsurf ships as "Devin.app" since 2026-11 (docs moved to docs.devin.ai); the documented
     # user-level hooks file is unchanged.
     Host("windsurf", "Windsurf (Devin)", "flat", ".codeium/windsurf/hooks.json",
@@ -167,14 +171,14 @@ HOSTS: tuple[Host, ...] = (
          {"TaskStart": "session_start", "TaskResume": "session_start", "UserPromptSubmit": "prompt",
           "PreToolUse": "pre_tool", "PostToolUse": "post_tool", "TaskComplete": "turn_end", "TaskCancel": "turn_end",
           "SessionShutdown": "stop"},
-         signs=("Documents/Cline", ".cline"), commands=("cline",), programs=("cline",),
+         signs=("Documents/Cline", ".cline"), commands=("cline",), programs=("cline",), packages=("cline",),
          companions=(("Documents/Cline/Plugins/blackbox.js", "cline-plugin"),)),
     # OpenCode: version 1 loads plugin/blackbox.js (a function returning hooks by name); version 2
     # runs NO V1 plugin and loads plugins/<name>/index.js (a default export with id + setup that
     # registers ctx.tool.hook). Both files are written; each version reads only its own.
     Host("opencode", "OpenCode", "plugin", ".config/opencode/plugin/blackbox.js",
          {"tool.execute.before": "pre_tool", "tool.execute.after": "post_tool"},
-         signs=(".config/opencode",), commands=("opencode",), programs=("opencode",),
+         signs=(".config/opencode",), commands=("opencode",), programs=("opencode",), packages=("opencode-ai",),
          companions=((".config/opencode/plugins/blackbox/index.js", "opencode-v2"),)),
 )
 
