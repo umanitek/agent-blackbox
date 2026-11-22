@@ -1,13 +1,13 @@
 """Network Shield's API — the core: what the shield decides, detects and is told.
 
 Served at ``/api/shields/network-shield/api/<name>`` (``dashboard/shields_routes/api_routes.py``).
-Blackbox Desktop's add-on adds its richer views (every process explained, the history, the
-security review, its native collector's feeds) through the extension point
-(``ShieldExtension.api``); these paths and their JSON are the contract Desktop's screens use.
+An add-on registered beside the plugin may add richer views (more endpoints, a live collector's
+feeds) through the extension point (``ShieldExtension.api``); these paths and their JSON are the
+contract a companion app's screens use.
 
 Reads (``GET``):
   ``overview``     the mode, its protections, the helper's status, list sizes, the busiest refused
-                   names, the latest alerts, whether the helper / Blackbox Desktop are installed
+                   names, the latest alerts, whether the helper is installed and an add-on registered
   ``connections``  one network monitor reading (apps, connections in and out, internet rates with
                    this machine's own local traffic kept apart, threats — public addresses only)
   ``system``       system status: CPU, memory, disks, interfaces, uptime (:mod:`.system`)
@@ -20,7 +20,7 @@ Reads (``GET``):
 
 Writes (``POST``, the dashboard's token):
   ``enforcer-report``  the helper's report (running state, counters, refused names, watch events)
-  ``observed-connection``  a connection a live collector saw (Blackbox Desktop's, 250 ms):
+  ``observed-connection``  a connection a live collector (an add-on) saw:
                    ``{pid, program, remote_ip, remote_port, ts}`` — Network Shield decides whether
                    the address is listed, keeps it and words the notice
   ``end-session`` · ``block-address`` · ``unblock-address`` · ``remote-settings``  remote access
@@ -97,7 +97,7 @@ def overview(context: ShieldContext, _params: Mapping[str, str]) -> dict[str, An
         "protections": list(mode_module.protections(current)),
         "blocking": context.blocking,
         "helper": helper.installed(),
-        "desktop": bool(extensions.providers()),
+        "addons": bool(extensions.providers()),
         "enforcer": enforcement.summary(),
         "graph": _graph_state(context, indicators),
         "top_blocked": enforcement.top_blocked(),
@@ -148,10 +148,10 @@ def enforcer_report(context: ShieldContext, body: Mapping[str, Any]) -> dict[str
 
 
 def observed_connection(context: ShieldContext, body: Mapping[str, Any]) -> dict[str, Any]:
-    """A connection Blackbox Desktop's live collector saw. WHY the collector and not the core:
-    the core's own reading (:func:`connections`, nettop + ps) takes seconds and runs with the
-    plan; the collector reads the sockets natively every 250 ms while its page is open. It only
-    reports facts — whether the address is listed, and what the person is told, is decided here."""
+    """A connection a live collector (an add-on) saw. WHY a collector and not the core: the
+    core's own reading (:func:`connections`, nettop + ps) takes seconds and runs with the plan; a
+    collector may read the sockets natively and far more often. It only reports facts — whether
+    the address is listed, and what the person is told, is decided here."""
     require_on()
     event = watch.observed(body, malicious_ips(context), time.time())
     if event is None:

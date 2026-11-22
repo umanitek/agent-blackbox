@@ -66,12 +66,6 @@ MAX_EVENT_TEXT = 8000
 #: A card's ``logo`` and ``page``: a path on this dashboard (``/shields/trader/packs/metamask/logo.svg``),
 #: served as is or not at all.
 LOCAL_PATHS = ("logo", "page")
-#: The links a shield's own offer carries (``ShieldOffer.open_url``, ``OfferDownload.url``): written
-#: by the shield's code, never by the graph, so they are kept as links — not defanged, which turned
-#: the Desktop download into ``hxxps://blackboxcommand[.]com`` (E2E B1) — but only in the one shape
-#: the page opens (``static/shields.js`` ``safeLink``: https, or Desktop's own scheme); else "".
-OFFER_LINKS = ("url", "open_url")
-OFFER_LINK = re.compile(r"(?:https://|blackbox-desktop://)[^\s\"'<>]*")
 LOCAL_URL = re.compile(r"/[A-Za-z0-9_-]+(?:[./][A-Za-z0-9_-]+)*")
 #: A pack logo is an image, never a document: opened directly, its script cannot run.
 LOGO_HEADERS = {"X-Content-Type-Options": "nosniff",
@@ -144,7 +138,7 @@ def sanitised(value: Any, text: Callable[[str], str] = _card_text) -> Any:
         return text(value)
     if isinstance(value, dict):
         return {key: _local_url(item) if key in LOCAL_PATHS else safe_identifier(item) if key == "identifier"
-                else _offer(item, text) if key == "offer" else sanitised(item, text) for key, item in value.items()}
+                else sanitised(item, text) for key, item in value.items()}
     if isinstance(value, list):
         return [sanitised(item, text) for item in value]
     return value
@@ -265,19 +259,6 @@ def register(app: Any, swr: Cache) -> None:
         if payload is None:
             return JSONResponse({"error": "not found"}, status_code=404)
         return payload
-
-
-def _offer(value: Any, text: Callable[[str], str]) -> Any:
-    """A card's ``offer`` sanitised like the rest, except its links (:data:`OFFER_LINKS`)."""
-    if isinstance(value, list):
-        return [_offer(item, text) for item in value]
-    if not isinstance(value, dict):
-        return sanitised(value, text)
-    return {key: _offer_link(item) if key in OFFER_LINKS else _offer(item, text) for key, item in value.items()}
-
-
-def _offer_link(value: Any) -> str:
-    return value if isinstance(value, str) and len(value) <= MAX_CARD_TEXT and OFFER_LINK.fullmatch(value) else ""
 
 
 def _local_url(value: Any) -> str:

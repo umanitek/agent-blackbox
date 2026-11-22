@@ -41,9 +41,6 @@
   h1 { font-size: 30px; margin: 0; letter-spacing: -0.02em; } h2 { font-size: 17px; margin: 0 0 12px; }
   .muted { color: var(--muted); } .mono { font-family: var(--mono); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; }
   .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 22px 24px; }
-  .cta { border-color: var(--signal); background: linear-gradient(180deg, var(--signal-soft), transparent); }
-  .cta a { display: inline-block; margin-top: 12px; padding: 10px 18px; border-radius: 10px; background: var(--signal);
-    color: #fff; font-weight: 600; text-decoration: none; }
   ul { margin: 0; padding-left: 18px; line-height: 1.6; } li b { font-weight: 600; }
   .row { display: flex; justify-content: space-between; gap: 12px; padding: 10px 0; border-top: 1px solid var(--border); }
   .row:first-child { border-top: 0; } .tag { font-family: var(--mono); font-size: 11px; color: var(--ok); }
@@ -81,14 +78,8 @@
   <section class="card">
     <h2>With the system protection helper</h2>
     <p class="muted">A small root helper applies these for every app on this machine. Install it with Blackbox's
-      installer (system protection), or from Blackbox Desktop:</p>
+      installer (system protection), or from a companion app that offers it:</p>
     <ul id="helper-list"></ul>
-  </section>
-  <section class="card cta">
-    <h2>See everything with Blackbox Desktop</h2>
-    <p class="muted">The Blackbox Desktop app shows what Network Shield sees, live:</p>
-    <ul id="desktop-list"></ul>
-    <a id="desktop-cta" href="https://blackboxcommand.com/desktop" rel="noopener noreferrer" target="_blank">Get Blackbox Desktop</a>
   </section>
   <section class="card">
     <h2>Tested</h2>
@@ -102,7 +93,7 @@
   function getJSON(name) { return fetch(name, { cache: "no-store" }).then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); }); }
   getJSON("content.json").then(function (content) {
     document.getElementById("version").textContent = String(content.version || "Network Shield");
-    [["helper-list", content.helper], ["desktop-list", content.desktop]].forEach(function (pair) {
+    [["helper-list", content.helper]].forEach(function (pair) {
       var list = document.getElementById(pair[0]);
       (pair[1] || []).forEach(function (item) {
         var li = el("li"); li.appendChild(el("b", null, String(item[0]))); li.appendChild(document.createTextNode(" — " + String(item[1]))); list.appendChild(li);
@@ -158,16 +149,7 @@
       host.appendChild(table);
     }).catch(function () {});
   }
-  function readOffer() {
-    getJSON("../../api/shields").then(function (cards) {
-      var card = (cards || []).filter(function (c) { return c.shield_id === "network-shield"; })[0] || {};
-      var offer = card.offer || {}, cta = document.getElementById("desktop-cta");
-      if (offer.kind === "open" && /^blackbox-desktop:\/\//.test(String(offer.open_url))) {
-        cta.textContent = "Open Blackbox Desktop"; cta.href = String(offer.open_url); cta.removeAttribute("target");
-      }
-    }).catch(function () {});
-  }
-  readSystem(); readConnections(); readOffer();
+  readSystem(); readConnections();
   setInterval(readSystem, 3000); setInterval(readConnections, 4000);
   getJSON("attacks.json").then(function (t) { renderProven(t); })
     .catch(function () { document.getElementById("tested").textContent = "The attack table could not be read."; });

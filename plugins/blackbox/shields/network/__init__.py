@@ -1,5 +1,5 @@
 """Network Shield — the second shield: this machine's network watched and guarded, and AI agents
-kept to the hosts you allow. The core of it lives here; Blackbox Desktop adds richer views.
+kept to the hosts you allow. The core of it lives here; an add-on may add richer views.
 
 Split the same way as every protection feature — see (read-only), act (reversible), respond:
 
@@ -21,7 +21,7 @@ Split the same way as every protection feature — see (read-only), act (reversi
 
 The system protection helper (``blackbox-netd``, a small root daemon) applies the plan and reports
 back; without it DNS Shield, the Threat Firewall, cutting and SSH lockdown say so plainly and
-lockdown works regardless. Blackbox Desktop's add-on adds its views through :mod:`..extensions`.
+lockdown works regardless. An add-on adds its views through :mod:`..extensions`.
 
 Lockdown, block-list and public-list findings are claimed by the gate (``claims``) and counted
 only while the shield is on (``allows``).
@@ -46,7 +46,7 @@ from .monitor import listening, signature, watch
 from .protect import blocklists, enforcement, listed
 from .respond import events as watch_events
 
-#: What another package (Blackbox Desktop's add-on) may use: the shield, its API (``require_on``,
+#: What another package (an add-on) may use: the shield, its API (``require_on``,
 #: ``malicious_ips``), the helper's plan and report (``enforcement``), the SSH watch, and the
 #: signature and listener readers its process views build on.
 __all__ = ["CAPABILITIES", "FINDING_KINDS", "NETWORK", "api", "enforcement", "helper", "listening", "mode",

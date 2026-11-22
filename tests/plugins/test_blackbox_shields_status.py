@@ -381,20 +381,10 @@ def test_the_browser_comes_from_the_browser_folder_not_from_words_in_the_users_n
     detectors.EXISTING_STORES.reset()
 
 
-# --- E2E B1 (bb-e2e-1121, 2026-11-21): the offer's links reach the page as links -----------------
+# --- E2E B1 (2026-11-21): a card's links are defanged like any other text -----------------------
 
-def test_a_shield_offer_keeps_its_download_and_open_links_undefanged():
+def test_a_cards_free_text_is_defanged_and_no_field_is_kept_as_a_link():
     from plugins.blackbox.dashboard.shields_routes import sanitised
-    card = {"offer": {"kind": "get", "text": "Get it at https://evil.example/x", "open_url": "blackbox-desktop://open",
-                      "downloads": [{"os": "macos", "url": "https://blackboxcommand.com/desktop/download/macos"}]}}
+    card = {"offer": {"text": "Get it at https://evil.example/x", "open_url": "https://evil.example/open"}}
     served = sanitised(card)["offer"]
-    assert served["downloads"][0]["url"] == "https://blackboxcommand.com/desktop/download/macos"
-    assert served["open_url"] == "blackbox-desktop://open"
-    assert "hxxp" in served["text"]   # free text is still defanged
-
-
-def test_an_offer_link_in_any_other_shape_is_dropped_not_served():
-    from plugins.blackbox.dashboard.shields_routes import sanitised
-    for bad in ("http://plain.example", "javascript:alert(1)", "https://x.example/\"onload", "file:///etc/passwd"):
-        assert sanitised({"offer": {"downloads": [{"url": bad}], "open_url": bad}})["offer"] == {
-            "downloads": [{"url": ""}], "open_url": ""}
+    assert "hxxp" in served["text"] and "hxxp" in served["open_url"]

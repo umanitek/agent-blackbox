@@ -46,12 +46,10 @@ from .change_words import describe_change, shield_name
 from .contract import (
     BrowserRoot,
     Capability,
-    OfferDownload,
     Pack,
     Shield, ShieldAlert,
     ShieldEvent,
     ShieldMode,
-    ShieldOffer,
     ShieldsSnapshot,
     ShieldStatus,
 )
@@ -80,7 +78,6 @@ __all__ = [
     "AssistantAnswer",
     "BrowserRoot",
     "Capability",
-    "OfferDownload",
     "Pack",
     "RawAnswer",
     "Registrar",
@@ -92,7 +89,6 @@ __all__ = [
     "ShieldEvent",
     "ShieldExtension",
     "ShieldMode",
-    "ShieldOffer",
     "ShieldStatus",
     "ShieldsSnapshot",
     "addon_routes", "alerts",

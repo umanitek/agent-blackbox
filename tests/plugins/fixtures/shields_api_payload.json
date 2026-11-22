@@ -92,7 +92,6 @@
         ]
       }
     ],
-    "offer": null,
     "name": "Trader Shield",
     "tagline": "Keeps your AI agent away from your crypto wallets, seed phrases and keys.",
     "beta": true,
@@ -151,14 +150,14 @@
             "icon": "↓",
             "state": "needs-helper",
             "text": "DNS Shield needs the system protection helper",
-            "sub": "Refuses the verified threat graph's malicious domains (and the lists you chose) for every app. Install it with Blackbox's installer (system protection), or from Blackbox Desktop.",
+            "sub": "Refuses the verified threat graph's malicious domains (and the lists you chose) for every app. Install it with Blackbox's installer (system protection), or from a companion app that offers it.",
             "logo": ""
           },
           {
             "icon": "↓",
             "state": "needs-helper",
             "text": "Threat Firewall needs the system protection helper",
-            "sub": "Drops traffic to and from the verified threat graph's malicious IP addresses. Install it with Blackbox's installer (system protection), or from Blackbox Desktop.",
+            "sub": "Drops traffic to and from the verified threat graph's malicious IP addresses. Install it with Blackbox's installer (system protection), or from a companion app that offers it.",
             "logo": ""
           },
           {
@@ -172,14 +171,14 @@
             "icon": "↓",
             "state": "needs-helper",
             "text": "Cut malicious connections needs the system protection helper",
-            "sub": "Ends connections already open to listed addresses. Install it with Blackbox's installer (system protection), or from Blackbox Desktop.",
+            "sub": "Ends connections already open to listed addresses. Install it with Blackbox's installer (system protection), or from a companion app that offers it.",
             "logo": ""
           },
           {
             "icon": "↓",
             "state": "needs-helper",
             "text": "SSH lockdown needs the system protection helper",
-            "sub": "Only the addresses or networks you allow may SSH in. Install it with Blackbox's installer (system protection), or from Blackbox Desktop.",
+            "sub": "Only the addresses or networks you allow may SSH in. Install it with Blackbox's installer (system protection), or from a companion app that offers it.",
             "logo": ""
           }
         ]
@@ -192,34 +191,12 @@
             "icon": "↓",
             "state": "needs-helper",
             "text": "System protection helper not installed",
-            "sub": "Install it with Blackbox's installer (system protection), or from Blackbox Desktop.",
+            "sub": "Install it with Blackbox's installer (system protection), or from a companion app that offers it.",
             "logo": ""
           }
         ]
       }
     ],
-    "offer": {
-      "kind": "get",
-      "title": "See everything with Blackbox Desktop",
-      "text": "Network Shield protects this machine from here. Blackbox Desktop adds the live views:",
-      "items": [
-        "A live traffic map: every app and AI agent, and who it talks to",
-        "Every process explained: who signed it and what it does",
-        "Who is in this Mac right now — SSH, Screen Sharing and remote-control apps — live",
-        "Exposure, startup items and a posture check with one-click fixes",
-        "File Shield — your downloads fingerprinted and checked",
-        "Mac notifications, the connection history and a security review"
-      ],
-      "downloads": [
-        {
-          "os": "macos",
-          "label": "Download for macOS",
-          "url": "https://blackboxcommand.com/desktop/download/macos",
-          "available": true
-        }
-      ],
-      "open_url": ""
-    },
     "name": "Network Shield",
     "tagline": "See and stop the malicious ones — for every app on this machine and every AI agent.",
     "beta": true,
@@ -242,7 +219,6 @@
     },
     "blocking": false,
     "sections": [],
-    "offer": null,
     "name": "File Shield",
     "tagline": "Keep every AI agent away from the files and folders you protect — and see new files arrive.",
     "beta": true,

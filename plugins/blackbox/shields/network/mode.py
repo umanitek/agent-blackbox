@@ -7,8 +7,8 @@ app like Trader Shield. Off (the default) it watches nothing and blocks nothing.
 What runs where (Amos, 2026-11-21): agent network lockdown and the block list run in Blackbox's
 own guard, so they always work. DNS Shield, the Threat Firewall, cutting connections and SSH
 lockdown are decided here too, and applied by the system protection helper (:mod:`.helper`) — a
-small root daemon Blackbox's installer offers (or Blackbox Desktop installs); without it they say
-so (:func:`needs_helper`). Blackbox Desktop adds richer views on top. The setting is ONE shape
+small root daemon Blackbox's installer offers (or a companion app installs); without it they say
+so (:func:`needs_helper`). An add-on may add richer views on top. The setting is ONE shape
 either way, so installing the helper keeps every choice.
 
 Config, under ``plugins.entries.blackbox``::
@@ -75,15 +75,6 @@ MAX_SSH_ALLOW = 100
 SOURCE_PATTERN = r"^[0-9A-Fa-f.:]{2,45}(/[0-9]{1,3})?$"
 #: The protections that run in Blackbox's own guard — with this plugin alone.
 IN_GUARD = (LOCKDOWN,)
-#: Blackbox Desktop's links — the ONE place they are kept. PLACEHOLDERS until Desktop has a
-#: public release page (2026-11-21): change these and nothing else when it does.
-#: ``DESKTOP_URL`` — its page; ``DESKTOP_DOWNLOADS`` — per OS, "" while not out yet;
-#: ``DESKTOP_OPEN_URL`` — the app's own URL scheme, registered by the app (opens it).
-DESKTOP_URL = "https://blackboxcommand.com/desktop"
-DESKTOP_DOWNLOADS = {"macos": "https://blackboxcommand.com/desktop/download/macos", "windows": "", "linux": ""}
-DESKTOP_OPEN_URL = "blackbox-desktop://open"
-#: The add-on package Blackbox Desktop installs beside the plugin (its presence = Desktop is here).
-DESKTOP_ADDON = "blackbox_desktop"
 #: The option status Settings shows for a protection that needs the system protection helper.
 NEEDS_HELPER = "needs-helper"
 

@@ -16,7 +16,6 @@ from types import SimpleNamespace
 import pytest
 
 from plugins.blackbox import shields
-from plugins.blackbox.shields import extensions
 from plugins.blackbox.shields.network import helper, api, events, lockdown, mode as network_mode, monitor, status
 from plugins.blackbox.shields.network.addresses import public_only
 from plugins.blackbox.shields.network.monitor import nettop
@@ -116,7 +115,7 @@ def test_findings_are_claimed_and_count_only_while_on():
 def test_the_card_needs_the_helper_and_never_says_active_on_the_setting_alone(tmp_path, monkeypatch):
     card = status.build(_on(protections=(network_mode.DNS, network_mode.LOCKDOWN)))
     assert [row.state for row in card.sections[0].rows] == ["needs-helper", "needs-helper", "active", "needs-helper", "needs-helper"]
-    assert card.offer.kind == "get" and card.offer.title == "See everything with Blackbox Desktop"
+    assert "offer" not in card.as_json(), "the card offers no app"
     installed = tmp_path / "ai.umanitek.blackbox.netd.plist"
     installed.write_text("<plist/>", encoding="utf-8")
     monkeypatch.setattr(helper, "LAUNCH_DAEMON", installed)
@@ -131,29 +130,6 @@ def test_stories_escape_outside_values(monkeypatch):
          "decision": "block", "ts": 1}])
     story = events.report()[0].story
     assert "<script>" not in story and "&lt;script&gt;" in story and "&lt;b&gt;agent" in story
-
-
-# ------------------------------------------------------------------ Blackbox Desktop, offered
-
-
-def test_switched_on_without_blackbox_desktop_the_card_offers_it_for_this_os():
-    offer = status.build(_on()).offer
-    assert offer.kind == "get" and "Blackbox Desktop" in offer.title and offer.items
-    downloads = {d.os: d for d in offer.downloads}
-    assert downloads["macos"].available and downloads["macos"].url.startswith("https://")
-    # Launch-first (E2E 2026-11-21): a download that does not exist yet is not offered at all —
-    # no "Windows — coming soon" button.
-    assert set(downloads) == {"macos"} and all(d.available for d in offer.downloads)
-
-
-def test_with_blackbox_desktops_add_on_the_card_opens_it_instead():
-    shields.reload_registry()
-    try:
-        extensions.use(extensions.Registrar(provider_package=network_mode.DESKTOP_ADDON))
-        offer = status.build(_on()).offer
-        assert offer.kind == "open" and offer.open_url == network_mode.DESKTOP_OPEN_URL and not offer.downloads
-    finally:
-        shields.reload_registry()
 
 
 # ------------------------------------------------------------------ the monitor and the system status (no special rights)

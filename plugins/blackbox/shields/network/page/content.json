@@ -1,28 +1,6 @@
 {
- "about": "Network Shield page prose: what works with Blackbox alone, what the system protection helper applies, and what Blackbox Desktop shows on top. The page loads this file and renders it as given.",
+ "about": "Network Shield page prose: what works with Blackbox alone and what the system protection helper applies. The page loads this file and renders it as given.",
  "version": "Beta · 2026-11-21",
- "desktop": [
-  [
-   "Live traffic map",
-   "every app and AI agent and who it talks to, updated several times a second"
-  ],
-  [
-   "Every process explained",
-   "who signed it, what it is and what it does"
-  ],
-  [
-   "Who is in this Mac",
-   "SSH, Screen Sharing and remote-control sessions, live, with End session and Block address"
-  ],
-  [
-   "Exposure, startup items and a posture check",
-   "with one-click fixes you can undo"
-  ],
-  [
-   "Notifications, history and a security review",
-   "Mac notifications within a second, the connection history, and the assistant's review"
-  ]
- ],
  "can": [
   [
    "Keep AI agents to the hosts you allow",
@@ -52,7 +30,7 @@
   ]
  ],
  "coming": [
-  "The system protection helper and Blackbox Desktop for Windows and Linux"
+  "The system protection helper for Windows and Linux"
  ],
  "helper": [
   [

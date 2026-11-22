@@ -161,11 +161,11 @@ def test_live_endpoints_refuse_while_off_and_the_plan_always_answers(monkeypatch
     view = api.overview(_context(), {})
     assert view["graph"] == {"ready": False, "reachable": None, "loading": True, "keeping_last_lists": False, "syncing": False,
                              "complete": False, "domains": 0, "ips": 0}
-    assert view["helper"] is False and view["enforcer"]["running"] is False
+    assert view["helper"] is False and view["enforcer"]["running"] is False and view["addons"] is False
 
 
-def test_every_endpoint_desktop_uses_is_served_by_the_core():
-    """Blackbox Desktop's screens call these paths; their JSON is the contract (no add-on needed)."""
+def test_every_endpoint_a_companion_app_uses_is_served_by_the_core():
+    """A companion app's screens call these paths; their JSON is the contract (no add-on needed)."""
     assert {"overview", "connections", "system", "enforcement", "blocks", "ssh", "remote-access",
             "system-plan", "exposure", "posture"} <= set(api.API.reads)
     assert {"enforcer-report", "end-session", "block-address", "unblock-address", "remote-settings",
