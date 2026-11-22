@@ -25,7 +25,7 @@ Usage::
 
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any, Optional
 
@@ -83,17 +83,27 @@ def wait(seq: int, seconds: float) -> int:
 
 
 def notifier_status() -> NotifierStatus:
-    return platform.status()
+    """The system notifier's state — and, on a Blackbox home that is not an installed one (a
+    test, a developer's dashboard), that nothing reaches the screen from it."""
+    status = platform.status()
+    if feed.delivers_here():
+        return status
+    return replace(status, available=False,
+                   detail="This is not an installed Blackbox, so notifications stay in the dashboard. " + status.detail)
 
 
 def install_notifier(source: Optional[Path] = None, sha256: str = "") -> NotifierStatus:
-    """Put the plugin's own notifier in place (see ``platform``); raises ValueError for an
-    archive that does not match its checksum."""
-    return platform.install(source, sha256)
+    """Put the plugin's own notifier in place (see ``platform``) and mark this Blackbox home as an
+    installed one whose notices reach the screen (``feed.DELIVERS_HERE``; the installer's step).
+    Raises ValueError for an archive that does not match its checksum (nothing is marked)."""
+    status = platform.install(source, sha256)
+    feed.set_delivers_here(True)
+    return status
 
 
 def remove_notifier() -> None:
     platform.remove()
+    feed.set_delivers_here(False)
 
 
 def request_permission() -> NotifierStatus:
@@ -110,5 +120,7 @@ def open_notification_settings() -> bool:
 def send_test() -> Delivery:
     """Hand one harmless notification to the system now and say what became of it (the person's
     "is it working?") — "delivered to Notification Center", or why it was not shown."""
+    if not feed.delivers_here():
+        return Delivery("not-shown", "Nothing was sent: this is not an installed Blackbox (run `blackbox notifications setup`).")
     return platform.send("Blackbox notifications are on", "This is what Blackbox shows when an AI agent needs your attention.",
                          "info", "blackbox-test")

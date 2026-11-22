@@ -243,3 +243,30 @@ def test_the_dashboard_serves_the_blackbox_mark():
     answer = client.get("/assets/blackbox-mark.svg")
     assert answer.status_code == 200 and answer.headers["content-type"].startswith("image/svg+xml")
     assert "#FF4F00" in answer.text
+
+
+# ---- only an installed Blackbox reaches the screen (2026-11-22) ---------------------------------
+
+def test_a_blackbox_that_is_not_installed_never_hands_a_notice_to_the_system(monkeypatch):
+    """A developer's dashboard on a temporary home showed the founder real notifications about his
+    own agents. Without the installer's mark nothing reaches the system; with it, it does."""
+    from plugins.blackbox.notify import sources
+    shown = []
+    monkeypatch.setattr(notify.platform, "send", lambda *args: shown.append(args) or Delivery("delivered", "Delivered."))
+    findings: list = []
+    collector = sources.Collector(read_findings=lambda: list(findings), read_alerts=list, read_live=lambda: {"products": []})
+    pump = deliver.Pump(collector=collector, read_policy=lambda: policy.parse({}))   # the real notifier path
+    now = 1_795_000_000.0
+    pump.step(now)
+    findings.append({"identifier": "escalation:x", "category": "escalation", "severity": "critical", "title": "x", "evidence": "",
+                     "framework": "codex", "workspace": "/w/p", "source": "public", "decision": "block", "ts": now + 1,
+                     "session_id": "codex:aaaaaaaaaaaaaaaa", "tool_call_id": "t1", "fields": {}})
+    pump.step(now + 1)
+    assert shown == [] and len(notify.history()) == 1 and feed.delivered() == feed.top()
+    assert notify.send_test().outcome == "not-shown" and "not an installed Blackbox" in notify.notifier_status().detail
+    notify.install_notifier(None)                            # the installer's step marks this home
+    findings.append({**findings[0], "identifier": "escalation:y", "ts": now + 2, "tool_call_id": "t2"})
+    pump.step(now + 2)
+    assert len(shown) == 1
+    notify.remove_notifier()
+    assert not feed.delivers_here()

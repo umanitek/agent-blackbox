@@ -1,5 +1,6 @@
 """Make ``tests/plugins`` importable for shared helpers (e.g. ``_blackbox_loader``)."""
 
+import os
 import sys
 from pathlib import Path
 
@@ -151,11 +152,47 @@ def _no_real_notifications(monkeypatch):
     the developer's screen. The pump does not start and the system notifier shows nothing unless
     a test injects its own."""
     from plugins.blackbox import notify
-    monkeypatch.setattr(notify.Pump, "start", lambda self: None)
-    monkeypatch.setattr(notify.platform, "send", lambda *args, **kwargs: False)
-    for name in ("hermes_plugins.blackbox.notify",):
-        module = sys.modules.get(name)
-        if module is not None:
-            monkeypatch.setattr(module.Pump, "start", lambda self: None)
-            monkeypatch.setattr(module.platform, "send", lambda *args, **kwargs: False)
+    for module in (notify, sys.modules.get("hermes_plugins.blackbox.notify")):
+        if module is None:
+            continue
+        nothing = module.Delivery("not-shown", "a test never shows a notification")
+        monkeypatch.setattr(module.Pump, "start", lambda self: None)
+        monkeypatch.setattr(module.platform, "send", lambda *args, **kwargs: nothing)
+        monkeypatch.setattr(module.platform, "request", lambda: module.platform.status())     # macOS never asks from a test
+        monkeypatch.setattr(module.platform, "open_settings", lambda: False)
     yield
+
+
+# ---- never the real home (2026-11-22) -----------------------------------------------------------
+# A Blackbox test that wrote to the developer's real ~/.hermes/blackbox (File Shield state, a
+# ruleset) and a test dashboard that showed real notifications on the founder's Mac: every
+# Blackbox test runs with HOME pointed at its own temporary folder, and a test run that creates
+# the real ~/.hermes/blackbox fails.
+
+_REAL_HOME = Path.home()
+_REAL_BLACKBOX = _REAL_HOME / ".hermes" / "blackbox"
+_BLACKBOX_EXISTED = {"before": _REAL_BLACKBOX.exists()}
+
+
+@pytest.fixture(autouse=True)
+def _never_the_real_home(request, monkeypatch, tmp_path_factory):
+    """HOME, and any Blackbox/Hermes home still inside the real one, point at a temporary folder
+    for every ``test_blackbox_*`` test (other plugins' tests are left as they are)."""
+    if not request.module.__name__.rsplit(".", 1)[-1].startswith("test_blackbox_"):
+        yield
+        return
+    home = tmp_path_factory.mktemp("home")
+    monkeypatch.setenv("HOME", str(home))
+    for name in ("HERMES_HOME", "BLACKBOX_HOME", "BLACKBOX_DKG_HOME"):
+        value = os.environ.get(name, "")
+        if not value or Path(value).expanduser().resolve().is_relative_to(_REAL_HOME.resolve()):
+            if name == "HERMES_HOME" or value:
+                monkeypatch.setenv(name, str(home / ".hermes" if name == "HERMES_HOME" else home / name.lower()))
+    yield
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """Fail the run when its tests created Blackbox's home inside the developer's real home."""
+    if not _BLACKBOX_EXISTED["before"] and _REAL_BLACKBOX.exists():
+        session.exitstatus = 1
+        print(f"\nBLACKBOX TEST GUARD: a test created {_REAL_BLACKBOX} — tests must never write to the real home.")

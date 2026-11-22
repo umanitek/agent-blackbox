@@ -55,6 +55,27 @@ def _load() -> list[Notice]:
     return _state["rows"]   # type: ignore[return-value]
 
 
+#: The file that says "this is an installed Blackbox: show notifications on this machine's screen".
+#: Written by ``blackbox notifications setup`` (the installer's notifier step), removed with the
+#: notifier. WHY (2026-11-22): a test or a developer's dashboard on a temporary home ran the real
+#: notifier and showed the founder notifications about his own agents. Without this file the feed
+#: and the history still fill; nothing is handed to the system.
+DELIVERS_HERE = "delivers-here"
+
+
+def delivers_here() -> bool:
+    """True on an installed Blackbox (:data:`DELIVERS_HERE` is in place)."""
+    return (folder() / DELIVERS_HERE).is_file()
+
+
+def set_delivers_here(on: bool) -> None:
+    """Mark (or unmark) this Blackbox home as an installed one whose notices reach the screen."""
+    if on:
+        atomic_write(folder() / DELIVERS_HERE, "installed: notifications are shown on this machine\n")
+    else:
+        (folder() / DELIVERS_HERE).unlink(missing_ok=True)
+
+
 def reset() -> None:
     """Forget what is in memory (tests; a new ``BLACKBOX_HOME``)."""
     with _lock:

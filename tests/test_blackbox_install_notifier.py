@@ -70,15 +70,15 @@ def test_a_named_archive_is_handed_to_the_plugin_with_its_checksum(tmp_path):
     assert "OK Blackbox's notifications are set up" in out
 
 
-def test_without_an_archive_nothing_is_run_and_the_person_is_told(tmp_path):
+def test_without_an_archive_only_the_installed_mark_is_set_and_the_person_is_told(tmp_path):
     out, ran, code = _run(tmp_path)
-    assert code == 0 and ran == []
+    assert code == 0 and ran == ["blackbox notifications setup"]   # marks the installed Blackbox; nothing downloaded
     assert "macOS's own notifier" in out and "AFTER" in out
 
 
 def test_a_manifest_that_does_not_list_the_notifier_downloads_nothing(tmp_path):
     out, ran, code = _run(tmp_path, manifest="version 0.1.0\n" + "a" * 64 + "  blackbox-netd-darwin-arm64\n")
-    assert code == 0 and ran == [] and "macOS's own notifier" in out
+    assert code == 0 and ran == ["blackbox notifications setup"] and "macOS's own notifier" in out
 
 
 def test_a_failing_set_up_never_fails_the_install(tmp_path):
@@ -89,9 +89,9 @@ def test_a_failing_set_up_never_fails_the_install(tmp_path):
     assert "WARN Blackbox's own notifier was not installed" in out
 
 
-def test_another_system_skips_the_step(tmp_path):
+def test_another_system_only_marks_the_installed_blackbox(tmp_path):
     out, ran, code = _run(tmp_path, os_name="linux")
-    assert code == 0 and ran == [] and out.strip() == "AFTER"
+    assert code == 0 and ran == ["blackbox notifications setup"] and out.strip() == "AFTER"
 
 
 def test_the_plugin_copy_of_the_installer_is_identical():

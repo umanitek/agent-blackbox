@@ -4514,11 +4514,16 @@ install_system_protection() {
 # release's blackbox-notify-darwin.zip checked against the SHA-256 in this checkout's helper
 # manifest (the same trust anchor as the helper), or a locally built one a test or a developer
 # names with BLACKBOX_NOTIFIER_PATH + BLACKBOX_NOTIFIER_SHA256. Without one, notifications still
-# work through macOS's own script notifier. This step never fails an install.
+# work through macOS's own script notifier. Every system runs `blackbox notifications setup`: it
+# marks this as an installed Blackbox whose notices reach the screen (a test or a developer's
+# dashboard never does). This step never fails an install.
 install_native_notifier() {
     local folder archive expected manifest version url
-    [ "$OS" = "macos" ] || return 0
     [ -n "${HERMES_BIN:-}" ] || return 0
+    if [ "$OS" != "macos" ]; then
+        "$HERMES_BIN" blackbox notifications setup >/dev/null 2>&1 || true
+        return 0
+    fi
     if [ -n "${BLACKBOX_NOTIFIER_PATH:-}" ]; then
         archive="$BLACKBOX_NOTIFIER_PATH"
         expected="$(printf '%s' "${BLACKBOX_NOTIFIER_SHA256:-}" | tr '[:upper:]' '[:lower:]')"
@@ -4531,10 +4536,12 @@ install_native_notifier() {
         if ! curl -fsSL --proto '=https' --tlsv1.2 --max-time 120 -o "$archive" "$url"; then
             rm -rf "$folder"
             step "Notifications will use macOS's own notifier (Blackbox's notifier could not be downloaded)."
+            "$HERMES_BIN" blackbox notifications setup >/dev/null 2>&1 || true
             return 0
         fi
     else
         step "Notifications use macOS's own notifier (this release carries no Blackbox notifier yet)."
+        "$HERMES_BIN" blackbox notifications setup >/dev/null 2>&1 || true
         return 0
     fi
     step "Blackbox tells you when an AI agent is stopped, asks for root or needs you. macOS may ask once to allow it."

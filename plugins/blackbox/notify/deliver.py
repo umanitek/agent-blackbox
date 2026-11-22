@@ -127,6 +127,9 @@ class Pump:
         Returns how many were shown."""
         if holder():
             return 0
+        if self._send is None and not feed.delivers_here():
+            feed.mark_delivered(feed.top())   # not an installed Blackbox: the history only, never the screen
+            return 0
         send = self._send or _native
         outcomes: dict[int, str] = {}
         for notice in feed.since(feed.delivered()):
