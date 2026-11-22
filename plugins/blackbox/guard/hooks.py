@@ -359,11 +359,13 @@ def on_pre_api_request(**kwargs: Any) -> None:
 
 def on_session_start(session_id: str = "", **kwargs: Any) -> None:
     try:
-        # Where it works, its process, how it started and its model: the instance tree's facts (KI-572).
-        audit.record(event="session_start", detail={"session_id": session_id, "model": str(kwargs.get("model") or "")[:80],
-                                                     **host_process.facts(str(kwargs.get("platform") or ""))})
         # The Hermes agent picked for File Shield's sandbox: its terminal tool's shells start inside it.
-        shields.enter_hermes_process()
+        shells_sandboxed = shields.enter_hermes_process() is True
+        # Where it works, its process, how it started, its model and whether its shells are
+        # sandboxed: the instance tree's facts (KI-572, KI-580).
+        audit.record(event="session_start", detail={"session_id": session_id, "model": str(kwargs.get("model") or "")[:80],
+                                                     "shells_sandboxed": shells_sandboxed,
+                                                     **host_process.facts(str(kwargs.get("platform") or ""))})
         cfg = _config()
         background._spawn_auto_attach(cfg)
         from . import semantic_review

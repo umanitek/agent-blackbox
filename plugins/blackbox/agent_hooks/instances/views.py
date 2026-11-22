@@ -12,7 +12,7 @@ import time
 from dataclasses import asdict, dataclass
 from typing import Any, Iterable, Mapping, Optional
 
-from ...kernel.agent_hosts import BY_ID, PROTECTION_HOOKS, PROTECTION_SANDBOXED, product_name
+from ...kernel.agent_hosts import BY_ID, PROTECTION_HOOKS, PROTECTION_SANDBOXED, PROTECTION_SHELLS, product_name
 from . import store
 from .model import Instance, Running
 
@@ -95,8 +95,9 @@ def _row(item: Instance, subs: Mapping[str, list[Instance]]) -> dict[str, Any]:
     row["waiting"], row["waiting_for"] = waiting, WAITING_FOR.get(waiting, "")
     if row.get("last_action"):
         row["last_action"].pop("text", None)   # the live tree never carries a prompt's text
-    row["protection"] = "sandboxed" if item.sandboxed else "hooks"
-    row["protection_label"] = PROTECTION_SANDBOXED if item.sandboxed else PROTECTION_HOOKS   # said plainly, every screen
+    # Said plainly, every screen: the Hermes agent's shells can be sandboxed while it is not (KI-580).
+    row["protection"] = "sandboxed" if item.sandboxed else "shells" if item.shells_sandboxed else "hooks"
+    row["protection_label"] = {"sandboxed": PROTECTION_SANDBOXED, "shells": PROTECTION_SHELLS}.get(row["protection"], PROTECTION_HOOKS)
     row["sub_agents"] = [_row(sub, subs) for sub in sorted(subs.get(item.key, []), key=lambda sub: sub.started)]
     return row
 

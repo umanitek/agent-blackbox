@@ -54,7 +54,7 @@ def _key(row: Mapping[str, Any]) -> str:
 
 def _candidates(ts: float) -> list[Instance]:
     return [item for item in store.all_instances()
-            if item.sandboxed and item.started <= ts + 1 and item.last >= ts - LIVE_GRACE_SECONDS
+            if (item.sandboxed or item.shells_sandboxed) and item.started <= ts + 1 and item.last >= ts - LIVE_GRACE_SECONDS
             and (item.ended is None or item.ended >= ts - 2)]
 
 

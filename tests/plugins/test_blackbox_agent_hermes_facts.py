@@ -8,19 +8,27 @@ prompts 0, launch "unknown", model ''; two runs in two projects shared one ".her
 `delegate_task` that started two children showed the second child as a session of its own (its
 first audit event is a tool call); `/api/agent-instances/history?agent=hermes` answered "unknown
 agent or kind". Driven here through the REAL guard hooks Hermes calls, with that command line.
+
+KI-580 (security round 2, Hermes picked for File Shield's sandbox, 2026-11-22): its terminal
+tool's shells really ran inside the sandbox, yet every Hermes session showed "hooks only", the
+kernel's refusal of an argv-built script's read was not on the session (refused 0, no row), and
+its refused / flagged rows carried no reason (the audit trail had it).
 """
 
 from __future__ import annotations
 
 import os
 import sys
+import time
 
 import pytest
 
 from plugins.blackbox import audit
 from plugins.blackbox.agent_hooks import hermes_sessions, observe, tracking
-from plugins.blackbox.agent_hooks.instances import store
+from plugins.blackbox.agent_hooks.instances import store, views
 from plugins.blackbox.guard import hooks
+from plugins.blackbox.kernel import agent_hosts
+from plugins.blackbox.shields.files import changes, mode as files_mode
 
 ARGV = ["hermes", "chat", "-Q", "-q", "run ls", "--provider", "openrouter", "-m", "nvidia/nemotron-3.5-lightning:free", "--yolo"]
 MODEL = "nvidia/nemotron-3.5-lightning:free"
@@ -92,3 +100,44 @@ def test_every_child_of_one_delegation_is_its_sub_agent_and_another_process_is_n
 
 def test_the_history_answers_for_the_hermes_agent():
     assert tracking.known("hermes") and not tracking.known("nobody")
+
+
+# -- KI-580: the Hermes agent picked for the sandbox ---------------------------------------------------
+
+@pytest.mark.parametrize(("entered", "level", "label"), [(True, "shells", "terminal tool sandboxed; execute_code hooks only"),
+                                                         (False, "hooks", agent_hosts.PROTECTION_HOOKS)])
+def test_a_hermes_session_says_whether_its_shells_are_sandboxed(_fresh, monkeypatch, entered, level, label):
+    monkeypatch.setattr(hooks.shields, "enter_hermes_process", lambda: entered)
+    hooks.on_session_start(session_id="s2-hm1", model=MODEL, platform="cli")
+    [session] = _hermes().values()
+    row = views.detail(session.key)["instance"]
+    assert (row["protection"], row["protection_label"]) == (level, label)
+
+
+def test_the_kernels_refusal_in_a_sandboxed_hermes_shell_is_on_its_session_with_its_reason(_fresh, monkeypatch, tmp_path):
+    monkeypatch.setattr(hooks.shields, "enter_hermes_process", lambda: True)
+    hooks.on_session_start(session_id="s2-hm5", model=MODEL, platform="cli")
+    hooks.on_pre_tool_call(tool_name="terminal", args={"command": "python3 r.py Doc Sec"}, session_id="s2-hm5", tool_call_id="c1")
+    _hermes()
+    secret = tmp_path / "Documents" / "Secret"
+    secret.mkdir(parents=True)
+    changes.reset()
+    changes.record([{"path": str(secret / "change-2.txt"), "kind": "denied", "program": "Python", "ts": int(time.time())}],
+                   files_mode.build(enabled=True, protected=(str(secret),)))
+    assert tracking.attribute_kernel_refusals() == 1
+    [session] = _hermes().values()
+    assert session.refused == 1
+    [row] = [action for action in store.actions(session.key) if action.verdict == "block"]
+    assert "sandbox stopped Python reaching change-2.txt" in row.reason
+    changes.reset()
+
+
+def test_a_hermes_rows_reason_names_what_refused_it(_fresh):
+    hooks.on_session_start(session_id="s2-hm6", model=MODEL, platform="cli")
+    audit.record(event="pre_tool_call", detail={"session_id": "s2-hm6", "tool_name": "terminal", "tool_call_id": "c9",
+                                                "args": {"command": "rm -rf ~/.hermes/plugins/blackbox"}, "decision": "block"},
+                 findings=[{"identifier": "fileaccess:terminal:self-protection", "title": "Change to Blackbox's own plugin",
+                            "severity": "critical", "category": "fileaccess"}])
+    [session] = _hermes().values()
+    [row] = [action for action in store.actions(session.key) if action.verdict == "block"]
+    assert row.reason == "Change to Blackbox's own plugin"

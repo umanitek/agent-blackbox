@@ -43,6 +43,7 @@ class Instance:
     model_given: bool = False      # *model* is the one its command line named (``--model``): it stays
     launch: str = "unknown"
     sandboxed: bool = False
+    shells_sandboxed: bool = False  # only its shell tool's shells run in the OS sandbox (the Hermes agent, KI-580)
     pid: int = 0                   # the agent process, when it could be found
     ended: Optional[float] = None
     end_reason: str = ""           # the agent's own word, "process-exit" or "quiet"

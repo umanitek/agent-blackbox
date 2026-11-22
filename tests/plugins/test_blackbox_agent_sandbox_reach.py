@@ -80,7 +80,9 @@ def test_each_agent_says_plainly_how_it_is_protected(home):
     view = sandbox.status(_mode(("claude-code", "hermes")))
     levels = {agent["id"]: agent["protection"] for agent in view["agents"]}
     if sandbox.platform.unavailable() is None:
-        assert levels["claude-code"] == levels["hermes"] == agent_hosts.PROTECTION_SANDBOXED
+        assert levels["claude-code"] == agent_hosts.PROTECTION_SANDBOXED
+        # The Hermes agent's shells are sandboxed; Hermes starts execute_code's Python by full path (KI-580).
+        assert levels["hermes"] == agent_hosts.PROTECTION_SHELLS == "terminal tool sandboxed; execute_code hooks only"
     assert levels["gemini-cli"] == levels["codex"] == agent_hosts.PROTECTION_HOOKS
 
 

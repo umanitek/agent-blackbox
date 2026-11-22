@@ -49,7 +49,7 @@ from ..kernel import constants
 from ..kernel.agent_hosts import HERMES_ID
 from ..kernel.bounded_files import read_json_object, write_json_object
 from .instances import record, store
-from .protect.events import session_key
+from .protect.events import reason_of, session_key
 
 logger = logging.getLogger(__name__)
 
@@ -122,7 +122,8 @@ def _session_facts(raw: str, kind: str, detail: Mapping[str, Any]) -> dict[str, 
     if kind == "session_start":
         pid = detail.get("pid")
         known.update(cwd=str(detail.get("cwd") or "")[:500], launch=str(detail.get("launch") or ""),
-                     pid=pid if isinstance(pid, int) and not isinstance(pid, bool) and pid > 1 else 0)
+                     pid=pid if isinstance(pid, int) and not isinstance(pid, bool) and pid > 1 else 0,
+                     shells_sandboxed=detail.get("shells_sandboxed") is True)
     if detail.get("model"):
         known["model"] = str(detail["model"])[:80]
     _bounded_put(_facts, raw, known)
@@ -159,13 +160,17 @@ def apply(row: Mapping[str, Any]) -> bool:
         parent = _parent_of(raw, home, now, store.get(session_key(HERMES_ID, raw, "")) is not None)
     fields: dict[str, Any] = {"agent": HERMES_ID, "event": kind, "session": raw, "cwd": facts.get("cwd", ""), "profile": home,
                               "tool_name": tool, "args": detail.get("args"), "tool_call_id": str(detail.get("tool_call_id") or "")[:200],
-                              "model": facts.get("model", ""), "launch": facts.get("launch", ""), "agent_pid": facts.get("pid") or None}
+                              "model": facts.get("model", ""), "launch": facts.get("launch", ""), "agent_pid": facts.get("pid") or None,
+                              "shells_sandboxed": facts.get("shells_sandboxed") is True}
     key = session_key(HERMES_ID, raw, "")
     if parent:
         fields.update(sub=raw, sub_type="delegated task", event={"session_start": "subagent_start", "stop": "subagent_stop"}.get(kind, kind))
         key = session_key(HERMES_ID, parent, "")
     decision = str(detail.get("decision") or "")
-    record(fields, key, decision=decision if decision == "block" else "", findings=int(row.get("findingCount") or 0))
+    findings = [finding for finding in row.get("findings") or [] if isinstance(finding, dict)]
+    # The row's reason: the titles of what refused or flagged it, as for every coding agent (KI-580).
+    record(fields, key, decision=decision if decision == "block" else "", findings=int(row.get("findingCount") or 0),
+           reason=reason_of({}, findings) if findings else "")
     return True
 
 

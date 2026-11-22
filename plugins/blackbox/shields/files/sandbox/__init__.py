@@ -275,7 +275,9 @@ def enter_hermes_session() -> bool:
 #: What each protection level means, in the words the dashboard shows.
 SANDBOXED = agent_hosts.PROTECTION_SANDBOXED
 HOOKS_ONLY = agent_hosts.PROTECTION_HOOKS
-_HERMES_NOTE = "its terminal tool's shells run inside the sandbox; its execute_code tool and file tools stay on hooks"
+SHELLS_ONLY = agent_hosts.PROTECTION_SHELLS
+_HERMES_NOTE = ("its terminal tool's shells run inside the sandbox; its execute_code tool (Hermes starts that Python by its "
+                "full path, outside the sandbox) and its file tools stay on hooks")
 _LAUNCH_NOTE = "when started from a shell that has Blackbox's launchers first on PATH (see coverage)"
 
 
@@ -301,7 +303,9 @@ def protection(agent: str, picked: bool) -> dict[str, str]:
     and this OS can sandbox it; otherwise hooks only, said plainly."""
     if not picked or platform.unavailable() is not None:
         return {"protection": HOOKS_ONLY, "protection_note": platform.unavailable() or "not picked for the sandbox"}
-    return {"protection": SANDBOXED, "protection_note": _HERMES_NOTE if agent == agent_hosts.HERMES_ID else _LAUNCH_NOTE}
+    if agent == agent_hosts.HERMES_ID:
+        return {"protection": SHELLS_ONLY, "protection_note": _HERMES_NOTE}
+    return {"protection": SANDBOXED, "protection_note": _LAUNCH_NOTE}
 
 
 def open_app(app: str) -> str:
