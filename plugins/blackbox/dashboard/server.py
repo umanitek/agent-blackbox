@@ -992,8 +992,8 @@ def create_app(*, manage_blackbox: bool = False):
 
     @app.get("/assets/{name}")
     def asset(name: str) -> Any:
-        # Serve only the two known-safe brand SVGs (no path traversal).
-        allowed = {"blackbox-logo.svg", "umanitek-icon.svg"}
+        # Serve only the known-safe brand SVGs (no path traversal).
+        allowed = {"blackbox-logo.svg", "umanitek-icon.svg", "blackbox-mark.svg"}
         if name not in allowed:
             return JSONResponse({"error": "not found"}, status_code=404)
         path = _ASSETS_DIR / name

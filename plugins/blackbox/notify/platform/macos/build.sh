@@ -19,21 +19,9 @@ for arch in arm64 x86_64; do
 done
 lipo -create -output "$app/Contents/MacOS/blackbox-notify" "$out/blackbox-notify-arm64" "$out/blackbox-notify-x86_64"
 rm -f "$out/blackbox-notify-arm64" "$out/blackbox-notify-x86_64"
-# The icon is drawn from the dashboard's own logo when the system tools can do it; without one
-# macOS shows its generic app icon (the name is still Blackbox).
-logo="$here/../../../dashboard/assets/blackbox-logo.svg"
-if [ -f "$logo" ] && command -v qlmanage >/dev/null && command -v iconutil >/dev/null; then
-    work="$(mktemp -d)"
-    if qlmanage -t -s 1024 -o "$work" "$logo" >/dev/null 2>&1 && [ -f "$work/blackbox-logo.svg.png" ]; then
-        mkdir "$work/Blackbox.iconset"
-        for size in 16 32 128 256 512; do
-            sips -z "$size" "$size" "$work/blackbox-logo.svg.png" --out "$work/Blackbox.iconset/icon_${size}x${size}.png" >/dev/null
-            sips -z "$((size * 2))" "$((size * 2))" "$work/blackbox-logo.svg.png" --out "$work/Blackbox.iconset/icon_${size}x${size}@2x.png" >/dev/null
-        done
-        iconutil -c icns -o "$app/Contents/Resources/Blackbox.icns" "$work/Blackbox.iconset" || true
-    fi
-    rm -rf "$work"
-fi
+# The icon is the dashboard's Blackbox mark (icon.sh); without the tools for it macOS shows its
+# generic app icon (the name is still Blackbox).
+"$here/icon.sh" "$app/Contents/Resources/Blackbox.icns" || echo "note: the icon could not be built; macOS shows its generic one" >&2
 codesign --force --sign - --identifier ai.umanitek.blackbox.notifier "$app"
 (cd "$out" && ditto -c -k --keepParent Blackbox.app blackbox-notify-darwin.zip)
 printf 'sha256 %s  blackbox-notify-darwin.zip\n' "$(shasum -a 256 "$out/blackbox-notify-darwin.zip" | awk '{print $1}')"

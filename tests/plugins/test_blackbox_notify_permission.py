@@ -207,3 +207,39 @@ def test_the_routes_ask_open_settings_and_report_the_delivery(monkeypatch):
     assert (policy_view["settings"], policy_view["settings_label"]) == ("x-apple:s", "Open")
     assert asked == ["ask", "settings"]
     assert "notify-allow-root" in client.get("/").text and client.get("/notify-allow.js").status_code == 200
+
+
+# ---- the notifier's icon is the dashboard's Blackbox mark (VM pass 3 NOTE) ---------------------
+
+@pytest.mark.skipif(sys.platform != "darwin" or not __import__("shutil").which("swiftc"), reason="builds with Xcode's tools")
+def test_the_notifier_icon_is_the_blackbox_mark_on_a_transparent_ground(tmp_path):
+    """Pass 3 saw a white tile with a tiny "umanitek" wordmark: the build drew the wide wordmark
+    SVG through a thumbnailer that paints a white ground. The icon is now the dashboard's own
+    Blackbox mark — dark rounded square, light rim, orange record dot — with its corners clear."""
+    import subprocess
+    image = pytest.importorskip("PIL.Image")
+    from plugins.blackbox.notify.platform import macos
+    script = __import__("pathlib").Path(macos.__file__).with_name("icon.sh")
+    icns = tmp_path / "Blackbox.icns"
+    subprocess.run([str(script), str(icns)], check=True, capture_output=True, timeout=300)
+    subprocess.run(["/usr/bin/sips", "-s", "format", "png", str(icns), "--out", str(tmp_path / "icon.png")], check=True,
+                   capture_output=True, timeout=60)
+    with image.open(tmp_path / "icon.png") as drawn:
+        pixels = drawn.convert("RGBA")
+        width, height = pixels.size
+        centre = pixels.getpixel((width // 2, height // 2))
+        corner = pixels.getpixel((2, 2))
+        body = pixels.getpixel((width // 2, height // 2 + int(height * 0.25)))
+    assert centre[0] > 200 and 50 < centre[1] < 120 and centre[2] < 60          # the orange record dot (#FF4F00)
+    assert max(body[:3]) < 40 and body[3] == 255                                 # the dark box (#0B0B0D)
+    assert corner[3] == 0                                                        # no white tile behind it
+
+
+def test_the_dashboard_serves_the_blackbox_mark():
+    from fastapi.testclient import TestClient
+
+    from plugins.blackbox.dashboard import server
+    client = TestClient(server.create_app(), base_url="http://127.0.0.1:9700")
+    answer = client.get("/assets/blackbox-mark.svg")
+    assert answer.status_code == 200 and answer.headers["content-type"].startswith("image/svg+xml")
+    assert "#FF4F00" in answer.text
