@@ -283,21 +283,3 @@ def detect_custom_fileaccess(
             )
         ]
     return []
-    for tool, path, mode in _accesses(tool_name, args):
-        for pattern in patterns:
-            if _protects(path, mode, pattern):
-                return [
-                    Finding(
-                        identifier=threat_ids.fileaccess_identifier(tool, "user-protected"),
-                        category="fileaccess",
-                        severity="critical",
-                        title="Access to a user-protected path",
-                        tool_name=tool,
-                        matched="user-protected",
-                        evidence=f"{mode} path matching protected pattern {str(pattern)[:120]}",
-                        confirmed=False,
-                        source="custom",
-                        fields={},
-                    )
-                ]
-    return []

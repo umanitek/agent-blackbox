@@ -102,7 +102,7 @@ def _python() -> Path:
         "done\n"
         "exit 0   # no Python left: the agent goes on (fail-open)\n"
     )
-    if not target.exists() or target.read_text(encoding="utf-8") != text:
+    if not target.exists() or target.read_text(encoding="utf-8-sig") != text:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(text, encoding="utf-8")
         target.chmod(0o755)
