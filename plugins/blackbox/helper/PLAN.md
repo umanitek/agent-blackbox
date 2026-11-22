@@ -85,7 +85,9 @@ a protected item). FSEvents cannot say which program made a change, and the help
 `POST /api/shields/network-shield/api/enforcer-report` — running, `dns_active`, `firewall_active`,
 `cut_active`, `ssh_lockdown_active`, `version`, `queries`, `firewall_dropped`, `blocks`, `watch`,
 `events`, `remote`, plus (wave 2) `auth` ("signed" | "legacy" | "broken"), `last_error`,
-`pf_enabled`, `resolver_ok`, `dns_error`, `filter_error`.
+`pf_enabled`, `resolver_ok`, `dns_error`, `filter_error`, and `resolved` (KI-588:
+`[{"ip", "domain", "ts"}]`, at most 500 — which name each address DNS Shield relayed an answer for
+was asked as; the plugin keeps it in memory only, never on disk).
 `protections` = `{"dns"|"firewall"|"cut"|"ssh_lockdown"|"remote_lock": {"applied": bool,
 "error": string|null}}` — the screen shows a protection "on" only when `applied` is true.
 

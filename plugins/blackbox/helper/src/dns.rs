@@ -91,6 +91,9 @@ pub struct BlockEvent {
 /// Refusals since the last report: per (name, list), how many and when last.
 pub type PendingBlocks = std::collections::HashMap<(String, ListKind), (u64, u64)>;
 
+/// Addresses looked up since the last report: per address, the name asked for and when (KI-588).
+pub type PendingResolved = std::collections::HashMap<std::net::IpAddr, (String, u64)>;
+
 /// Shared resolver state.
 pub struct Resolver {
     pub lists: RwLock<Blocklists>,
@@ -100,6 +103,8 @@ pub struct Resolver {
     pub blocked: std::sync::atomic::AtomicU64,
     /// Bounded: at most [`MAX_PENDING`] distinct names wait for the next report.
     pending: Mutex<PendingBlocks>,
+    /// Bounded: at most [`MAX_PENDING_RESOLVED`] addresses wait for the next report.
+    resolved: Mutex<PendingResolved>,
     /// True once the resolver is bound and serving; false if it stopped. The Mac's DNS is pointed
     /// here only while this is true AND a [`self_test`] answers (security finding: DNS used to be
     /// switched even when binding :53 had failed, taking the Mac offline).
@@ -112,6 +117,8 @@ pub const SELF_TEST_NAME: &str = "blackbox-self-test.invalid";
 
 /// Distinct refused names kept for one report (the plugin accepts 500 per report).
 pub const MAX_PENDING: usize = 500;
+/// Distinct looked-up addresses kept for one report (the plugin accepts 500 per report).
+pub const MAX_PENDING_RESOLVED: usize = 500;
 
 impl Resolver {
     pub fn new(upstreams: Vec<SocketAddr>) -> Arc<Resolver> {
@@ -122,6 +129,7 @@ impl Resolver {
             queries: Default::default(),
             blocked: Default::default(),
             pending: Mutex::new(PendingBlocks::new()),
+            resolved: Mutex::new(PendingResolved::new()),
             alive: Default::default(),
         })
     }
@@ -154,10 +162,29 @@ impl Resolver {
             return refusal(query, RCODE_NXDOMAIN);
         }
         let upstreams = self.upstreams.read().ok()?.clone();
-        upstreams
+        let relayed = upstreams
             .iter()
-            .find_map(|upstream| if tcp { forward_tcp(query, *upstream) } else { forward_udp(query, *upstream) })
-            .or_else(|| refusal(query, RCODE_SERVFAIL))
+            .find_map(|upstream| if tcp { forward_tcp(query, *upstream) } else { forward_udp(query, *upstream) });
+        if let Some(answer) = &relayed {
+            self.note_resolved(&name, answer);
+        }
+        relayed.or_else(|| refusal(query, RCODE_SERVFAIL))
+    }
+
+    /// Remembers, until the next report, which name each address in *answer* was looked up as.
+    fn note_resolved(&self, name: &str, answer: &[u8]) {
+        let addresses = crate::dns_answers::answer_addresses(answer);
+        if addresses.is_empty() {
+            return;
+        }
+        let ts = now();
+        if let Ok(mut resolved) = self.resolved.lock() {
+            for address in addresses {
+                if resolved.len() < MAX_PENDING_RESOLVED || resolved.contains_key(&address) {
+                    resolved.insert(address, (name.to_string(), ts));
+                }
+            }
+        }
     }
 }
 
@@ -165,6 +192,11 @@ impl Resolver {
     /// Takes the refusals gathered since the last call (for the report to the plugin).
     pub fn drain_pending(&self) -> PendingBlocks {
         self.pending.lock().map(|mut pending| std::mem::take(&mut *pending)).unwrap_or_default()
+    }
+
+    /// Takes the looked-up addresses gathered since the last call (for the report to the plugin).
+    pub fn drain_resolved(&self) -> PendingResolved {
+        self.resolved.lock().map(|mut resolved| std::mem::take(&mut *resolved)).unwrap_or_default()
     }
 }
 
@@ -409,6 +441,27 @@ mod tests {
         let pending = resolver.drain_pending();
         assert_eq!(pending[&("www.evil.example".to_string(), ListKind::Verified)].0, 2);
         assert!(resolver.drain_pending().is_empty(), "a drain takes them");
+    }
+
+    #[test]
+    fn an_allowed_names_relayed_answer_records_its_addresses_for_the_report() {
+        let upstream = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let address = upstream.local_addr().unwrap();
+        thread::spawn(move || {
+            let mut buffer = [0u8; MAX_PACKET];
+            let (size, client) = upstream.recv_from(&mut buffer).unwrap();
+            let mut answer = buffer[..size].to_vec();
+            answer[2] |= 0x80;
+            answer[7] = 1;   // one answer: an A record for the question (compressed owner name)
+            answer.extend_from_slice(&[0xC0, 12, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4, 203, 0, 113, 7]);
+            upstream.send_to(&answer, client).unwrap();
+        });
+        let resolver = Resolver::new(vec![address]);
+        let answer = resolver.answer(&query("api.example.com"), false).unwrap();
+        assert_eq!(answer[3] & 0x0f, 0, "relayed unchanged");
+        let resolved = resolver.drain_resolved();
+        assert_eq!(resolved[&"203.0.113.7".parse::<std::net::IpAddr>().unwrap()].0, "api.example.com");
+        assert!(resolver.drain_resolved().is_empty(), "a drain takes them");
     }
 
     #[test]

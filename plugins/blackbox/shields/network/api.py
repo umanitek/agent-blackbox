@@ -17,6 +17,8 @@ Reads (``GET``):
   ``ssh``          Remote Login, open SSH sessions, the watched login files, the latest watch events
   ``remote-access`` who is in this machine and how: live sessions, failed logins, the remote-access
                    services, remote-control apps and tunnels, the lock and blocked addresses
+  ``address``      ``?ip=``: the name DNS Shield saw that address looked up as, ``country`` /
+                   ``network`` "unknown" (:mod:`.monitor.resolved`; memory only, no outside lookups)
   ``system-plan`` · ``exposure`` · ``posture``  the system watch (:mod:`.system_api`)
 
 Writes (``POST``, the dashboard's token):
@@ -33,6 +35,7 @@ watches nothing). The helper's own endpoints answer off too, with an all-off pla
 
 from __future__ import annotations
 
+import ipaddress
 import time
 from typing import Any, Callable, Mapping
 
@@ -41,7 +44,7 @@ from ..shield_api import ShieldApi, ShieldApiError, ShieldContext
 from . import helper, mode as mode_module, monitor, system, system_api
 from .. import helper_link
 from .addresses import public_only
-from .monitor import remote_access, watch
+from .monitor import remote_access, resolved, watch
 from .protect import connection_state, enforcement, remote_lock, weakening
 from .respond import sessions, system_alerts
 
@@ -164,6 +167,26 @@ def observed_connection(context: ShieldContext, body: Mapping[str, Any]) -> dict
     return {"recorded": True}
 
 
+#: What the core says about an address's country and network: it has no source for them, and
+#: asking an outside service would tell it which addresses this machine talks to (privacy).
+UNKNOWN = "unknown"
+
+
+def address(_context: ShieldContext, params: Mapping[str, str]) -> dict[str, Any]:
+    """``address?ip=<ip>``: the name DNS Shield saw it looked up as (KI-588 c) —
+    ``{ip, domain, seen_at, source, country, network}``; ``domain`` "" and ``source`` "" when no
+    lookup through DNS Shield gave it; country and network are always "unknown" (no source, and no
+    outside lookups). 400 for something that is not an IP address."""
+    require_on()
+    try:
+        ip = str(ipaddress.ip_address(str(params.get("ip") or "")[:64]))
+    except ValueError:
+        raise ShieldApiError(400, "ip must be an IP address") from None
+    found = resolved.lookup(ip)
+    return {"ip": ip, "domain": found.domain if found else "", "seen_at": found.seen_at if found else None,
+            "source": "dns-shield" if found else "", "country": UNKNOWN, "network": UNKNOWN}
+
+
 def remote(_context: ShieldContext, _params: Mapping[str, str]) -> dict[str, Any]:
     require_on()
     return {**remote_access.view(), **remote_lock.settings()}
@@ -178,7 +201,7 @@ def _remote_write(action: Callable[[Mapping[str, Any]], Any]) -> Callable[[Shiel
 
 API = ShieldApi(
     reads={"overview": overview, "connections": connections, "system": system_status, "enforcement": enforcement_plan,
-           "blocks": blocks, "ssh": ssh, "remote-access": remote, **system_api.READS},
+           "blocks": blocks, "ssh": ssh, "remote-access": remote, "address": address, **system_api.READS},
     writes={"enforcer-report": enforcer_report, "observed-connection": observed_connection,
             "end-session": _remote_write(sessions.end_session), "block-address": _remote_write(sessions.block_address),
             "unblock-address": _remote_write(sessions.unblock_address),

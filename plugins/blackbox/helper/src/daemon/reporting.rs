@@ -11,6 +11,11 @@ impl Helper {
         let blocks: Vec<Value> = self.resolver.drain_pending().into_iter()
             .map(|((domain, list), (count, ts))| json!({"domain": domain, "list": list, "count": count, "ts": ts}))
             .collect();
+        // Which name each looked-up address was asked as (KI-588) — under its own key, so an older
+        // plugin ignores it.
+        let resolved: Vec<Value> = self.resolver.drain_resolved().into_iter()
+            .map(|(ip, (domain, ts))| json!({"ip": ip.to_string(), "domain": domain, "ts": ts}))
+            .collect();
         let snapshot = if self.watching.load(Ordering::SeqCst) { self.observer.watch_snapshot() } else { None };
         let pf_on = state.firewall_active || state.cut_active || state.ssh_lockdown_active || state.remote_lock_active;
         let remote = if self.watching.load(Ordering::SeqCst) { self.observer.remote_snapshot() } else { None };
@@ -29,7 +34,7 @@ impl Helper {
             "firewall_dropped": if pf_on { self.enforcer.dropped() } else { 0 },
             // What is really enforced, not what was asked: pf must be seen Enabled.
             "pf_enabled": if pf_on { self.enforcer.filter_enabled() } else { None },
-            "blocks": blocks, "watch": snapshot, "events": events,
+            "blocks": blocks, "resolved": resolved, "watch": snapshot, "events": events,
             // Under its own key, so a plugin that predates it ignores it instead of refusing the report.
             "remote": remote.map(|snapshot| json!({"snapshot": snapshot, "events": remote_events, "lock_active": state.remote_lock_active})),
         })

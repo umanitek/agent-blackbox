@@ -31,6 +31,7 @@ while the shield is on; with the shield off the plan switches everything off.
      "cut_active": true, "ssh_lockdown_active": false,            # optional (older helpers)
      "queries": 1200, "firewall_dropped": 3,
      "blocks": [{"domain": "evil.example", "list": "verified", "count": 2, "ts": 1795219000}],
+     "resolved": [{"ip": "93.184.215.14", "domain": "example.com", "ts": 1795219000}],   # optional (KI-588)
      "watch": {...}, "events": [...]}                             # optional — see :mod:`.watch`
 
 Stored bounded in Blackbox's own folder (``network-shield/state.json``): per-name counts (the
@@ -58,7 +59,7 @@ from ....shields.shield_api import ShieldApiError
 from ....shields.network import mode as mode_module
 from ....shields.network.addresses import public_only
 from . import blocklists, never_block, remote_lock
-from ..monitor import remote_access, watch
+from ..monitor import remote_access, resolved, watch
 
 LISTS = ("verified", "lists", "block")
 MAX_RECENT = 300
@@ -225,6 +226,7 @@ def record_report(body: Mapping[str, Any], now: Optional[float] = None) -> dict[
     health = _health(body)
     snapshot, watched = watch.validate(body, now)
     remote = remote_access.validate(body.get("remote"), now)   # before anything is stored: one bad part refuses all
+    looked_up = resolved.validate(body.get("resolved"), now)
     raw_blocks = body.get("blocks", [])
     if not isinstance(raw_blocks, list) or len(raw_blocks) > MAX_BLOCKS_PER_REPORT:
         raise ShieldApiError(400, f"blocks must be a list of at most {MAX_BLOCKS_PER_REPORT}")
@@ -256,6 +258,7 @@ def record_report(body: Mapping[str, Any], now: Optional[float] = None) -> dict[
         }
         write_json_object(_state_path(), state, what="Network Shield's enforcer state")
     watch.record(snapshot, watched)
+    resolved.record(looked_up)   # memory only (privacy: a browsing history never reaches the disk)
     remote_access.record(remote, now)
     remote_lock.check_failures(now)   # brute-force auto-block (opt-in) reads the failed logins just kept
     return summary(state, now)

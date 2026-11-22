@@ -10,6 +10,9 @@ protections that need the system protection helper say so in Settings and on the
 
 from __future__ import annotations
 
+import os
+import pathlib
+import time
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -258,6 +261,34 @@ def test_each_connection_says_whether_the_threat_firewall_drops_it_or_it_was_cut
     monkeypatch.setattr(enforcement, "summary", lambda: {"firewall_active": False})
     off = connection_state.with_enforcement(reading, mode, frozenset({"45.130.148.102"}), now=now).as_json()
     assert {c["remote_ip"]: c["dropped"] for p in off["processes"] for c in p["connections"]}["45.130.148.102"] is False
+
+
+def test_an_address_names_the_domain_dns_shield_saw_it_looked_up_as_and_says_unknown_for_the_rest(monkeypatch):
+    """KI-588 (c): the helper's report says which name each relayed answer's addresses were asked
+    as; the core keeps them in memory only and never asks an outside service."""
+    from plugins.blackbox.shields.network.monitor import resolved
+    from plugins.blackbox.shields.network.protect import enforcement
+
+    resolved.forget()
+    monkeypatch.setattr(network_mode, "current", lambda: _on())
+    now = int(time.time())
+    report = {"running": True, "dns_active": True, "firewall_active": False,
+              "resolved": [{"ip": "93.184.215.14", "domain": "Example.COM.", "ts": now - 10},
+                           {"ip": "192.168.1.9", "domain": "printer", "ts": now - 10}]}   # a local name: skipped, not refused
+    enforcement.record_report(report, now=now)
+    found = api.address(None, {"ip": "93.184.215.14"})
+    assert found["domain"] == "example.com" and found["source"] == "dns-shield" and found["seen_at"] == now - 10
+    assert (found["country"], found["network"]) == ("unknown", "unknown")
+    assert api.address(None, {"ip": "192.168.1.9"})["domain"] == ""
+    assert resolved.lookup("93.184.215.14", now=now + resolved.KEEP_SECONDS + 60) is None   # forgotten after an hour
+    assert api.address(None, {"ip": "2001:db8::5"}) == {"ip": "2001:db8::5", "domain": "", "seen_at": None, "source": "",
+                                                        "country": "unknown", "network": "unknown"}
+    with pytest.raises(ShieldApiError):
+        api.address(None, {"ip": "example.com"})
+    with pytest.raises(ShieldApiError):
+        enforcement.record_report({**report, "resolved": [{"ip": "not-an-ip", "domain": "a.com"}]})
+    assert not list((pathlib.Path(os.environ["BLACKBOX_HOME"]) / "network-shield").glob("*resolv*"))
+    assert "example.com" not in (pathlib.Path(os.environ["BLACKBOX_HOME"]) / "network-shield" / "state.json").read_text(encoding="utf-8")
 
 
 def test_children_of_an_agent_are_the_agents_and_blackbox_is_labelled():
