@@ -1,4 +1,4 @@
-/* @umanitek/blackbox-openclaw — built from src/ by `npm run build`; do not edit. source sha256:29cee51cda2d2d52eccbd0ad11b2386f7d0db91780f0360cc4f7c2a10542d6e0 */
+/* @umanitek/blackbox-openclaw — built from src/ by `npm run build`; do not edit. source sha256:bb82d8d4b7c5ff2ed9541d17b1e54def21bfdc781494a91821ed52963071f243 */
 
 // src/consent.ts
 import { readFileSync } from "node:fs";
@@ -593,6 +593,7 @@ var LANGUAGE = {
   perl: "perl"
 };
 var JOINED = /(['"`])((?:\\.|(?!\1)[^\\\n]){0,1024})\1\s*([+./])\s*(['"`])((?:\\.|(?!\4)[^\\\n]){0,1024})\4/;
+var BRACKETED = /(?<![\w\])\]])\(\s*((['"`])(?:\\.|(?!\2)[^\\\n]){0,1024}\2)\s*\)/;
 var MAX_JOINS = 64;
 var JOIN_CALL = /(?:\bjoinpath|\bos\.path\.join|\bpath\.join|\bpath\.resolve|\bFile\.join|\bPath)\s*\(([^()]{1,1024})\)/g;
 var SLASH_CHAIN = /(?:\)|\w)\s*\/\s*['"][^'"\n]{1,256}['"](?:\s*\/\s*['"][^'"\n]{1,256}['"])*/g;
@@ -608,7 +609,7 @@ function resolved(interpreter, code, argv = []) {
     });
   }
   for (let round = 0; round < MAX_JOINS; round += 1) {
-    const joined = text.replace(JOINED, (_whole, _q1, left, operator, _q2, right) => JSON.stringify(operator === "/" ? left.replace(/\/+$/, "") + "/" + right.replace(/^\/+/, "") : left + right));
+    const joined = text.replace(JOINED, (_whole, _q1, left, operator, _q2, right) => JSON.stringify(operator === "/" ? left.replace(/\/+$/, "") + "/" + right.replace(/^\/+/, "") : left + right)).replace(BRACKETED, (_whole, literal2) => literal2);
     if (joined === text) break;
     text = joined;
   }

@@ -9,6 +9,12 @@ agent's write tool, the same script run in a later call, an argv-built path, ``n
 then run, and ``echo … | tee x.sh; bash x.sh``. The commands and scripts below are the REAL ones
 of that run (bypass.py / bypass2.py), sent through the real runner and the dashboard's verdict
 (``agent_hooks.protect.events``), so the agent's working folder travels as the hook names it.
+
+Second private finding of round 2: the Hermes agent picked for the sandbox — its ``execute_code``
+tool starts Python by its full path, outside the sandboxed shells, and its code joined the path
+from pieces (``'Doc'+'uments'``); the hook allowed it and the file was read. Covering it in the
+kernel needs a Hermes-owned change (a decision for the founder); the hook layer now judges that
+code text with the same static reading, through the real Hermes hook.
 """
 
 from __future__ import annotations
@@ -20,7 +26,7 @@ import pytest
 
 from plugins.blackbox import ruleset as ruleset_mod
 from plugins.blackbox.agent_hooks.protect import events, runner
-from plugins.blackbox.guard import background as guard_background
+from plugins.blackbox.guard import background as guard_background, hooks
 from plugins.blackbox.guard import reporting as guard_reporting
 from plugins.blackbox.kernel import config as config_mod
 from plugins.blackbox.ruleset import Ruleset
@@ -122,3 +128,20 @@ def test_a_script_too_large_to_read_beside_protected_items_is_flagged(home):
     verdict = _verdict(f"python3 {big}", home.project)
     assert verdict["decision"] != "block"
     assert "is larger than the 256 KiB Blackbox reads" in verdict["findings"][0]["title"]
+
+
+# -- the Hermes agent's execute_code --------------------------------------------------------------
+
+@pytest.mark.parametrize("code", [
+    "import os\nprint(len(open(os.path.join(os.path.expanduser('~'), 'Doc'+'uments', 'Sec'+'ret', 'change-1.txt')).read()))",
+    "import os\nprint(open(os.environ['HOME'] + '/Doc' + 'uments/Sec' + 'ret/change-1.txt').read())",
+    "from pathlib import Path\nprint((Path.home() / ('Doc' + 'uments') / 'Secret' / 'change-1.txt').read_text())",
+])
+def test_hermes_execute_code_that_joins_the_path_from_pieces_is_refused(home, code):
+    answer = hooks.on_pre_tool_call(tool_name="execute_code", args={"code": code}, session_id="s2-hm5", tool_call_id="x1")
+    assert answer is not None and answer["action"] == "block" and "File Shield" in answer["message"]
+
+
+def test_hermes_execute_code_that_touches_nothing_protected_runs(home):
+    code = "import os\nprint(sorted(os.listdir(os.path.join(os.path.expanduser('~'), 'camp'))))"
+    assert hooks.on_pre_tool_call(tool_name="execute_code", args={"code": code}, session_id="s2-hm5", tool_call_id="x2") is None

@@ -457,6 +457,8 @@ const LANGUAGE: Record<string, string> = {
 };
 /** Two literals joined: `'a' + 'b'`, `'a' . 'b'` (Perl), `'a' / 'b'` (a path). */
 const JOINED = /(['"`])((?:\\.|(?!\1)[^\\\n]){0,1024})\1\s*([+./])\s*(['"`])((?:\\.|(?!\4)[^\\\n]){0,1024})\4/;
+/** A literal alone in brackets that are not a call: `('Doc' + 'uments')` once joined. */
+const BRACKETED = /(?<![\w\])\]])\(\s*((['"`])(?:\\.|(?!\2)[^\\\n]){0,1024}\2)\s*\)/;
 const MAX_JOINS = 64;
 const JOIN_CALL = /(?:\bjoinpath|\bos\.path\.join|\bpath\.join|\bpath\.resolve|\bFile\.join|\bPath)\s*\(([^()]{1,1024})\)/g;
 const SLASH_CHAIN = /(?:\)|\w)\s*\/\s*['"][^'"\n]{1,256}['"](?:\s*\/\s*['"][^'"\n]{1,256}['"])*/g;
@@ -475,7 +477,8 @@ function resolved(interpreter: string, code: string, argv: readonly string[] = [
   }
   for (let round = 0; round < MAX_JOINS; round += 1) {
     const joined = text.replace(JOINED, (_whole, _q1, left: string, operator: string, _q2, right: string) =>
-      JSON.stringify(operator === "/" ? left.replace(/\/+$/, "") + "/" + right.replace(/^\/+/, "") : left + right));
+      JSON.stringify(operator === "/" ? left.replace(/\/+$/, "") + "/" + right.replace(/^\/+/, "") : left + right))
+      .replace(BRACKETED, (_whole, literal: string) => literal);
     if (joined === text) break;
     text = joined;
   }

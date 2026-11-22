@@ -77,6 +77,8 @@ _LANGUAGE = {"python": "python", "python3": "python", "python2": "python", "py":
              "bun": "node", "deno": "node", "ruby": "ruby", "perl": "perl"}
 #: Two literals joined: ``'a' + 'b'`` (Python, JS, Ruby), ``'a' . 'b'`` (Perl), ``'a' / 'b'`` (a path).
 _JOINED = re.compile(r"""(['"`])((?:\\.|(?!\1)[^\\\n]){0,1024})\1\s*([+./])\s*(['"`])((?:\\.|(?!\4)[^\\\n]){0,1024})\4""")
+#: A literal alone in brackets that are not a call: ``('Doc' + 'uments')`` once joined.
+_BRACKETED = re.compile(r"""(?<![\w\])\]])\(\s*((['"`])(?:\\.|(?!\2)[^\\\n]){0,1024}\2)\s*\)""")
 #: A template literal's home part: `` `${process.env.HOME}/x` ``.
 _TEMPLATE_HOME = re.compile(r"\$\{\s*(" + _HOME_ASKED.pattern + r")\s*\}")
 MAX_JOINS = 64
@@ -103,7 +105,7 @@ def _resolved(interpreter: str, code: str, argv: tuple[str, ...] = ()) -> str:
         def join(found: re.Match[str]) -> str:
             left, operator, right = found.group(2), found.group(3), found.group(5)
             return _quoted(left.rstrip("/") + "/" + right.lstrip("/") if operator == "/" else left + right)
-        joined = _JOINED.sub(join, text, count=1)
+        joined = _BRACKETED.sub(lambda found: found.group(1), _JOINED.sub(join, text, count=1), count=1)
         if joined == text:
             break
         text = joined
