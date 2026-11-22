@@ -1,6 +1,7 @@
 /*
- * Every process's TCP/UDP sockets and the network interfaces' byte counters,
- * read straight from macOS (libproc, getifaddrs): no program started, microseconds per call.
+ * Every process's TCP/UDP sockets and the network interfaces' byte and packet counters,
+ * read straight from macOS (libproc; the routing socket's NET_RT_IFLIST2 for the interfaces'
+ * 64-bit counters): no program started, microseconds per call.
  *
  * WHY C and not Rust FFI structs: struct socket_fdinfo (sys/proc_info.h) is a deep union whose
  * layout only the system headers define correctly; compiling against them keeps the layout exact
@@ -13,8 +14,11 @@
 #include <sys/proc_info.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
-#include <ifaddrs.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <sys/sysctl.h>
 #include <net/if.h>
+#include <net/route.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -34,9 +38,12 @@ typedef struct {
     char name[16];
     uint8_t loopback;
     uint8_t up;
-    uint8_t _pad[2];
-    uint32_t bytes_in;   /* if_data counters wrap at 4 GiB: rates use wrapping differences */
-    uint32_t bytes_out;
+    uint8_t _pad[6];
+    /* 64-bit (struct if_data64): getifaddrs' if_data counters are 32-bit and wrapped at 4 GiB. */
+    uint64_t bytes_in;
+    uint64_t bytes_out;
+    uint64_t packets_in;
+    uint64_t packets_out;
 } bb_iface;
 
 static void copy_addr(uint8_t *out, int ipv4, const struct in_sockinfo *in, int foreign) {
@@ -92,23 +99,36 @@ int bb_list_sockets(bb_socket *out, int cap, int fd_cap) {
     return count;
 }
 
-/* Every link-level interface's byte counters. Answers how many records were written. */
+/* Every interface's 64-bit byte and packet counters (one RTM_IFINFO2 message per interface).
+ * Answers how many records were written. */
 int bb_list_ifaces(bb_iface *out, int cap) {
-    struct ifaddrs *all = NULL;
-    if (getifaddrs(&all) != 0) return 0;
+    int mib[6] = {CTL_NET, PF_ROUTE, 0, 0, NET_RT_IFLIST2, 0};
+    size_t length = 0;
+    if (cap <= 0 || sysctl(mib, 6, NULL, &length, NULL, 0) != 0 || length == 0) return 0;
+    length += length / 4;   /* room for an interface that appears between the two calls */
+    char *buffer = malloc(length);
+    if (!buffer) return 0;
+    if (sysctl(mib, 6, buffer, &length, NULL, 0) != 0) { free(buffer); return 0; }
     int count = 0;
-    for (struct ifaddrs *i = all; i && count < cap; i = i->ifa_next) {
-        if (!i->ifa_addr || i->ifa_addr->sa_family != AF_LINK || !i->ifa_data) continue;
-        const struct if_data *d = (const struct if_data *)i->ifa_data;
-        bb_iface *f = &out[count++];
+    for (char *next = buffer; next + sizeof(struct if_msghdr) <= buffer + length && count < cap;) {
+        const struct if_msghdr *message = (const struct if_msghdr *)next;
+        if (message->ifm_msglen == 0) break;
+        next += message->ifm_msglen;
+        if (message->ifm_type != RTM_IFINFO2 || message->ifm_msglen < sizeof(struct if_msghdr2)) continue;
+        const struct if_msghdr2 *info = (const struct if_msghdr2 *)message;
+        bb_iface *f = &out[count];
         memset(f, 0, sizeof(*f));
-        strncpy(f->name, i->ifa_name, sizeof(f->name) - 1);
-        f->loopback = (i->ifa_flags & IFF_LOOPBACK) != 0;
-        f->up = (i->ifa_flags & IFF_UP) != 0;
-        f->bytes_in = d->ifi_ibytes;
-        f->bytes_out = d->ifi_obytes;
+        if (!if_indextoname(info->ifm_index, f->name)) continue;   /* IFNAMSIZ == sizeof(f->name) */
+        f->name[sizeof(f->name) - 1] = 0;
+        f->loopback = (info->ifm_flags & IFF_LOOPBACK) != 0;
+        f->up = (info->ifm_flags & IFF_UP) != 0;
+        f->bytes_in = info->ifm_data.ifi_ibytes;
+        f->bytes_out = info->ifm_data.ifi_obytes;
+        f->packets_in = info->ifm_data.ifi_ipackets;
+        f->packets_out = info->ifm_data.ifi_opackets;
+        count++;
     }
-    freeifaddrs(all);
+    free(buffer);
     return count;
 }
 

@@ -1,5 +1,5 @@
-//! Every process's sockets and the interfaces' byte counters, read natively (native/sockets.c:
-//! libproc + getifaddrs) — no program started, a few milliseconds a pass. The helper's watches
+//! Every process's sockets and the interfaces' 64-bit byte and packet counters, read natively
+//! (native/sockets.c: libproc + the routing socket's NET_RT_IFLIST2) — no program started, a few milliseconds a pass. The helper's watches
 //! read it as root; a live collector (an add-on) may read it as the person (fast tier).
 //!
 //! Only processes this user may inspect are listed (root's and other users' are not); the slow
@@ -35,9 +35,11 @@ struct RawIface {
     name: [u8; 16],
     loopback: u8,
     up: u8,
-    _pad: [u8; 2],
-    bytes_in: u32,
-    bytes_out: u32,
+    _pad: [u8; 6],
+    bytes_in: u64,
+    bytes_out: u64,
+    packets_in: u64,
+    packets_out: u64,
 }
 
 extern "C" {
@@ -86,7 +88,7 @@ pub struct Reader {
 impl Default for Reader {
     fn default() -> Self {
         let empty_socket = RawSocket { pid: 0, family: 0, protocol: 0, tcp_state: 0, local_port: 0, remote_port: 0, local_addr: [0; 16], remote_addr: [0; 16] };
-        let empty_iface = RawIface { name: [0; 16], loopback: 0, up: 0, _pad: [0; 2], bytes_in: 0, bytes_out: 0 };
+        let empty_iface = RawIface { name: [0; 16], loopback: 0, up: 0, _pad: [0; 6], bytes_in: 0, bytes_out: 0, packets_in: 0, packets_out: 0 };
         Reader { sockets: vec![empty_socket; MAX_SOCKETS], ifaces: vec![empty_iface; MAX_IFACES] }
     }
 }
@@ -100,14 +102,14 @@ impl Reader {
         self.sockets[..count.clamp(0, MAX_SOCKETS as i32) as usize].iter().map(socket_of).collect()
     }
 
-    /// Every link-level interface's counters.
+    /// Every interface's counters.
     pub fn ifaces(&mut self) -> Vec<Iface> {
         // SAFETY: as above, MAX_IFACES records of the checked layout.
         let count = unsafe { bb_list_ifaces(self.ifaces.as_mut_ptr(), MAX_IFACES as i32) };
         self.ifaces[..count.clamp(0, MAX_IFACES as i32) as usize].iter().map(|raw| {
             let end = raw.name.iter().position(|&b| b == 0).unwrap_or(raw.name.len());
             Iface { name: String::from_utf8_lossy(&raw.name[..end]).into_owned(), loopback: raw.loopback != 0, up: raw.up != 0,
-                    bytes_in: raw.bytes_in, bytes_out: raw.bytes_out }
+                    bytes_in: raw.bytes_in, bytes_out: raw.bytes_out, packets_in: raw.packets_in, packets_out: raw.packets_out }
         }).collect()
     }
 }
@@ -155,5 +157,22 @@ mod tests {
         let mine = reader.sockets().into_iter().any(|s| s.pid == std::process::id() && s.local_port == port && s.listening());
         assert!(mine, "this test's own listening socket is seen");
         assert!(reader.ifaces().iter().any(|i| i.loopback), "lo0 is listed");
+    }
+
+    /// KI-588: the counters carry packets and are 64-bit (getifaddrs' were 32-bit bytes only).
+    #[test]
+    fn the_loopback_counts_the_packets_this_test_sends() {
+        let lo0 = |reader: &mut Reader| reader.ifaces().into_iter().find(|i| i.loopback).expect("lo0 is listed");
+        let mut reader = Reader::default();
+        let before = lo0(&mut reader);
+        let receiver = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        let sender = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        for _ in 0..50 {
+            sender.send_to(&[0u8; 512], receiver.local_addr().unwrap()).unwrap();
+        }
+        let after = lo0(&mut reader);
+        assert!(after.packets_out >= before.packets_out + 50, "{before:?} -> {after:?}");
+        assert!(after.bytes_out >= before.bytes_out + 50 * 512, "{before:?} -> {after:?}");
+        assert!(after.up && !after.name.is_empty());
     }
 }

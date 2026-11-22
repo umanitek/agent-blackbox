@@ -29,12 +29,16 @@ impl Socket {
     }
 }
 
-/// One interface's byte counters (cumulative, 32-bit: they wrap at 4 GiB).
+/// One interface's counters since the system started: bytes and packets each way, 64-bit (they
+/// no longer wrap at 4 GiB — KI-588), so one reader serves the traffic tiles and per-interface
+/// packet figures alike.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Iface {
     pub name: String,
     pub loopback: bool,
     pub up: bool,
-    pub bytes_in: u32,
-    pub bytes_out: u32,
+    pub bytes_in: u64,
+    pub bytes_out: u64,
+    pub packets_in: u64,
+    pub packets_out: u64,
 }
