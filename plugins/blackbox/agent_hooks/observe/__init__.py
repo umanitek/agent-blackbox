@@ -12,6 +12,8 @@ Usage::
     table = observe.read_table()            # {pid: Proc}
     observe.running(table)                  # [Running] — one per agent process tree root
     observe.agent_of(table, hook_parent_pid)  # the agent process a hook was run by
+    observe.read_users()                    # {pid: (real uid, effective uid)}
+    observe.descendants(table, pid)         # every process started (at any depth) by *pid*
 """
 
 from __future__ import annotations
@@ -27,7 +29,7 @@ from ...kernel.agent_hosts import HOSTS, Host
 from ..instances.model import Running
 from . import platform
 
-__all__ = ["Proc", "agent_of", "classify", "read_table", "running"]
+__all__ = ["Proc", "agent_of", "classify", "descendants", "read_table", "read_users", "running"]
 
 _LINE = re.compile(r"^\s*(\d+)\s+(\d+)\s+(\w{3} +\w{3} +\d+ +[\d:]+ +\d{4})\s+(.*)$")
 #: argv words that say an agent runs without a person at the keyboard, per agent.
@@ -138,3 +140,31 @@ def agent_of(table: Mapping[int, Proc], pid: int, agent: str) -> int:
             top = current.pid   # keep climbing: the outermost process of this agent is the instance
         current = table.get(current.ppid)
     return top
+
+
+MAX_DESCENDANTS = 2000
+
+
+def read_users() -> dict[int, tuple[int, int]]:
+    """``{pid: (real uid, effective uid)}`` for every process ({} when it cannot be read)."""
+    users = {}
+    for line in platform.process_users().splitlines():
+        words = line.split()
+        if len(words) == 3 and all(word.lstrip("-").isdigit() for word in words):
+            users[int(words[0])] = (int(words[1]), int(words[2]))
+    return users
+
+
+def descendants(table: Mapping[int, Proc], pid: int) -> list[Proc]:
+    """Every process *pid* started, at any depth (bounded), nearest first; *pid* itself is not in it."""
+    children: dict[int, list[Proc]] = {}
+    for proc in table.values():
+        children.setdefault(proc.ppid, []).append(proc)
+    found, queue, seen = [], [pid], {pid}
+    while queue and len(found) < MAX_DESCENDANTS:
+        for child in children.get(queue.pop(0), []):
+            if child.pid not in seen:
+                seen.add(child.pid)
+                found.append(child)
+                queue.append(child.pid)
+    return found

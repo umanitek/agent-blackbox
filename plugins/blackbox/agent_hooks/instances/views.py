@@ -47,8 +47,28 @@ def close_stale(alive: Optional[Iterable[int]] = None) -> int:
 WAITING_FOR = {"idle": "your next message", "permission": "your answer to a permission question", "attention": "your attention"}
 
 
+#: How long sudo usually stays unlocked in a terminal after a password (its default timestamp_timeout).
+SUDO_CACHE_SECONDS = 300
+
+
+def root_note(item: Instance, now: Optional[float] = None) -> str:
+    """What to say about root for *item* ("" = nothing): a program it started runs as root now,
+    or did within sudo's usual unlocked time."""
+    now = time.time() if now is None else now
+    if item.ended is not None:
+        return ""
+    if item.root:
+        return "A program this agent started is running as root right now."
+    if item.root_last and now - item.root_last < SUDO_CACHE_SECONDS:
+        return ("A program this agent started ran as root a moment ago. sudo usually stays unlocked for about "
+                "5 minutes in that terminal, so the agent may run more as root without a password.")
+    return ""
+
+
 def _row(item: Instance, subs: Mapping[str, list[Instance]]) -> dict[str, Any]:
     row = asdict(item)
+    row["root"] = bool(item.root) and item.ended is None
+    row["root_note"] = root_note(item)
     waiting = item.waiting if item.ended is None else ""
     row["status"] = "ended" if item.ended is not None else "waiting" if waiting else "live"
     row["waiting"], row["waiting_for"] = waiting, WAITING_FOR.get(waiting, "")
@@ -94,6 +114,7 @@ def live(running: Iterable[Running] = (), profiles: Iterable[Mapping[str, Any]] 
     return {"cursor": store.cursor(), "at": now, "products": list(products.values()),
             "unprotected": _unprotected(running, sessions), "profiles": list(profiles),
             "counts": {"live": sum(item.ended is None for item in shown if item.kind == "session"),
+                       "root": sum(item.root and item.ended is None for item in shown if item.kind == "session"),
                        "sub_agents": sum(item.ended is None for item in shown if item.kind == "sub-agent")}}
 
 

@@ -276,7 +276,7 @@ def _client() -> TestClient:
 def test_the_live_view_answers_a_waiting_reader_when_something_changes():
     client = _client()
     first = client.get("/api/agent-instances/live").json()
-    assert first["products"] == [] and first["counts"] == {"live": 0, "sub_agents": 0}
+    assert first["products"] == [] and first["counts"] == {"live": 0, "root": 0, "sub_agents": 0}
     answers = []
     waiter = threading.Thread(target=lambda: answers.append(client.get(f"/api/agent-instances/live?cursor={first['cursor']}&wait=20").json()))
     started = time.monotonic()

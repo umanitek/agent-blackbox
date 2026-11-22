@@ -7,6 +7,10 @@ def process_table() -> str:
     return ""
 
 
+def process_users() -> str:
+    return ""
+
+
 def process_environment(pid: int) -> str:
     return ""
 

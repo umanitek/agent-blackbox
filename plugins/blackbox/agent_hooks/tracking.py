@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any, Mapping, Optional
 
 from ..kernel.agent_hosts import BY_ID, HOSTS
-from . import observe, profiles, prompt_text
+from . import observe, profiles, prompt_text, root_watch
 from .instances import record, store, views
 from .instances.model import Profile, Running
 from .protect import config_edit, own_files
@@ -47,6 +47,9 @@ def _snapshot() -> tuple[Mapping[int, observe.Proc], list[Running]]:
             for proc in running:   # a running agent names a config home Blackbox has not hooked yet
                 if proc.profile and profiles.remember(proc.agent, proc.profile):
                     _seen["new_profiles"] = True
+            sessions = [item for item in store.all_instances() if item.kind == "session" and item.ended is None and item.pid]
+            if sessions and table:   # a program an agent started that runs as root is recorded on its instance
+                root_watch.scan(table, observe.read_users(), sessions)
             changed = pids != _seen["pids"]
             _seen.update(at=time.monotonic(), table=table, running=running, pids=pids)
             if changed:

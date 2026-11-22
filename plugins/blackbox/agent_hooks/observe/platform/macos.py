@@ -33,6 +33,13 @@ def process_table() -> str:
     return _run(["/bin/ps", "-axo", "pid=,ppid=,lstart=,command="])
 
 
+def process_users() -> str:
+    """Every process as ``pid ruid euid``, one per line: the user that started it and the user it
+    acts as. A program ``sudo`` started has BOTH 0; a setuid system tool (``ps``, ``sudo`` while it
+    still asks for the password) has only the second."""
+    return _run(["/bin/ps", "-axo", "pid=,ruid=,uid="])
+
+
 def process_environment(pid: int) -> str:
     """*pid*'s command line followed by its environment (``NAME=value`` words) — only for this
     user's own processes, and empty for the programs macOS keeps closed."""

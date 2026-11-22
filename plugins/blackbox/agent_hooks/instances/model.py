@@ -51,6 +51,9 @@ class Instance:
     prompts: int = 0
     waiting: str = ""              # one of WAITING while the agent waits for its person, else ""
     last_action: Optional[Action] = None   # the newest timeline entry (the live tree shows it)
+    root: bool = False             # a program this agent started is running as root NOW (root_watch)
+    root_runs: int = 0             # how many programs it started ran as root, so far
+    root_last: float = 0.0         # when the newest of them was first seen (0 = never)
 
 
 @dataclass(frozen=True)
