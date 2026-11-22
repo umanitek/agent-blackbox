@@ -37,10 +37,10 @@ from pathlib import Path
 # The runner is run as a script from Blackbox's data folder (its sibling is beside it there) and
 # imported as a module by the plugin and its tests.
 if __package__:
-    from .identity import effective_agent, identity
+    from .identity import effective_agent, identity, workspace
     from .tool_shapes import cline_tool
 else:
-    from identity import effective_agent, identity
+    from identity import effective_agent, identity, workspace
     from tool_shapes import cline_tool
 
 #: The most of stdin read (a write tool's whole file can be in the payload).
@@ -226,13 +226,6 @@ def _tool(agent: str, payload: dict) -> tuple[str, object]:
     return _canonical(str(_first(payload, "tool_name", "toolName") or ""), _first(payload, "tool_input", "tool_args", "input", "arguments"))
 
 
-def _roots(payload: dict) -> str:
-    """Cursor names the workspace as ``workspace_roots`` (a list) instead of ``cwd``; Cline as
-    ``workspaceRoots``."""
-    roots = payload.get("workspace_roots") or payload.get("workspaceRoots")
-    return str(roots[0]) if isinstance(roots, list) and roots else ""
-
-
 def _call_id(payload: dict) -> str:
     """The agent's own id for this tool call (Cline nests it: ``tool_call.id``). WHY it matters:
     an agent that reports one call through two hook forms is answered once, by this id."""
@@ -273,7 +266,7 @@ def summary(agent: str, event: str, payload: dict) -> dict:
     """The one shape the dashboard checks: the tool call, and the TEXT to check for injection (a
     prompt, a tool's output, a file about to be read). The text is checked, never recorded."""
     body = {"agent": agent, "event": event, "session": _session(payload),
-            "cwd": str(_first(payload, "cwd", "workspace", "workspaceRoot") or _roots(payload))[:500],
+            "cwd": workspace(payload, _first)[:500],
             "sandboxed": sandboxed(), **identity(agent, payload, _first)}
     if event in ("pre_tool", "post_tool"):
         body["tool_name"], body["args"] = _tool(agent, payload)

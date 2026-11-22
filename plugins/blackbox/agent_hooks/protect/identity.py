@@ -38,6 +38,26 @@ def identity(agent: str, payload: dict, _first) -> dict:
     }
 
 
+def workspace(payload: dict, _first) -> str:
+    """The project folder the event comes from, as each agent's payload names it: ``cwd`` (Claude
+    Code, Codex, Gemini CLI, Copilot CLI, Devin), ``workspace_roots`` (Cursor, a list),
+    ``workspaceRoots`` (Cline, a list), ``tool_info.cwd`` (Windsurf's command hooks). When the
+    payload names none (Windsurf's other hooks, OpenCode without a directory), the hook's own
+    working folder — a hook starts in its agent's — unless that is ``/`` or the person's home,
+    which name no project (KI-547)."""
+    named = _first(payload, "cwd", "workspace", "workspaceRoot")
+    roots = payload.get("workspace_roots") or payload.get("workspaceRoots")
+    info = payload.get("tool_info") if isinstance(payload.get("tool_info"), dict) else {}
+    found = named or (roots[0] if isinstance(roots, list) and roots else "") or info.get("cwd") or ""
+    if found:
+        return str(found)
+    try:
+        here = os.getcwd()
+    except OSError:
+        return ""
+    return "" if here in ("/", str(Path.home())) else here
+
+
 #: Devin CLI sets this for every hook it runs.
 DEVIN_ENV = "DEVIN_PROJECT_DIR"
 

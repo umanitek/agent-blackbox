@@ -15,6 +15,8 @@
 | `pre_mcp_tool_use` | pre_tool | tool + input | **refuse** |
 | `post_run_command` | post_tool | `tool_info.output` | record and flag only (post-hooks cannot block) |
 
+**Project folder:** `tool_info.cwd` (command hooks). Hooks without it (read, write, MCP) use the hook's own working folder, which it inherits from the agent; `/` and the home folder are never taken for a project (KI-547).
+
 ## VM test
 Devin.app needs a sign-in.
 - Confirm the hooks file.
