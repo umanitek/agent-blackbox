@@ -608,6 +608,35 @@ def _parent_process_handle(child_env: dict[str, str]):
     return handle, close, startupinfo
 
 
+#: Optional interpreter launcher: a JSON array of argv strings placed BEFORE the interpreter when a
+#: local kernel starts (``[launcher..., child_python, runner]``), e.g. ``["/usr/bin/nice", "-n", "5"]``
+#: or a plugin's sandbox wrapper. Read from this process's environment at each spawn, so a plugin can
+#: set it for the process it runs in. Unset or empty: the argv is exactly what it always was. Fail-open:
+#: a malformed value or a first element that is not an executable file is ignored with a warning, and
+#: the interpreter starts as usual — execute_code never breaks because a wrapper went away.
+INTERPRETER_LAUNCHER_ENV = "HERMES_EXECUTE_CODE_LAUNCHER"
+
+
+def interpreter_launcher(environ: Optional[dict[str, str]] = None) -> list[str]:
+    """The argv prefix from :data:`INTERPRETER_LAUNCHER_ENV` (``os.environ`` when *environ* is None);
+    ``[]`` when unset, empty, malformed, or its program is not an executable file."""
+    raw = (os.environ if environ is None else environ).get(INTERPRETER_LAUNCHER_ENV, "").strip()
+    if not raw:
+        return []
+    try:
+        prefix = json.loads(raw)
+    except ValueError:
+        prefix = None
+    if not isinstance(prefix, list) or not prefix or not all(isinstance(part, str) and part for part in prefix):
+        logger.warning("Ignoring %s: expected a JSON array of non-empty strings", INTERPRETER_LAUNCHER_ENV)
+        return []
+    if not (os.path.isfile(prefix[0]) and os.access(prefix[0], os.X_OK)):
+        logger.warning("Ignoring %s: %s is not an executable file; execute_code starts its interpreter directly",
+                       INTERPRETER_LAUNCHER_ENV, prefix[0])
+        return []
+    return prefix
+
+
 def _spawn(kernel: SessionKernel, *, child_python: str, child_cwd: str,
            sandbox_tools: frozenset, max_tool_calls: int, task_id: str = "") -> None:
     from tools.code_execution_env import _build_child_env
@@ -637,7 +666,7 @@ def _spawn(kernel: SessionKernel, *, child_python: str, child_cwd: str,
         pass_fds = (death_r,)
     try:
         kernel.proc = subprocess.Popen(
-            [child_python, os.path.join(kernel.tmpdir, "hermes_kernel_runner.py")],
+            [*interpreter_launcher(), child_python, os.path.join(kernel.tmpdir, "hermes_kernel_runner.py")],
             # Strict mode passes an empty cwd: the kernel's staging dir plays the per-call tmpdir's role.
             cwd=child_cwd or kernel.tmpdir, env=child_env, start_new_session=True,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.PIPE,
