@@ -406,13 +406,17 @@
     function loadSettings(view) {
       state.view = obj(view);
       state.drafts = {};
+      state.read = {};   // per shield: each field's value as served (KI-582), JSON — absent when not served
       Object.keys(state.view).forEach(function (id) {
-        var mode = obj(obj(state.view[id]).mode), draft = {};
+        var mode = obj(obj(state.view[id]).mode), draft = {}, read = {};
         fieldsOf(id).forEach(function (field) {
           draft[field.key] = field.kind === "toggle" ? mode[field.key] === true : list(mode[field.key]).map(str);
+          if (Object.prototype.hasOwnProperty.call(mode, field.key)) read[field.key] = JSON.stringify(draft[field.key]);
         });
         state.drafts[id] = draft;
+        state.read[id] = read;
       });
+      state.started = JSON.parse(JSON.stringify(state.drafts));
     }
     function linesOf(id, field) {   // [kept, left out]: a line the field's pattern refuses is never sent
       var regex = field.pattern ? new RegExp(field.pattern) : null, kept = [], refused = 0;
@@ -489,12 +493,17 @@
       var out = {};
       Object.keys(state.drafts).forEach(function (id) {
         var section = {};
+        var read = obj(obj(state.read)[id]), started = obj(obj(state.started)[id]);
         fieldsOf(id).forEach(function (field) {
           var value = state.drafts[id][field.key];
+          // KI-582: a field the server did not serve is posted only when the person changed it —
+          // never the default the page drew for it (a weakening the person never made).
+          var changed = JSON.stringify(value) !== JSON.stringify(started[field.key]);
+          if (!Object.prototype.hasOwnProperty.call(read, field.key) && !changed) return;
           section[field.key] = field.kind === "toggle" ? value === true
             : field.kind === "lines" ? linesOf(id, field)[0] : list(value).slice(0, list(field.options).length);
         });
-        out[id] = section;
+        if (Object.keys(section).length) out[id] = section;
       });
       return out;
     }

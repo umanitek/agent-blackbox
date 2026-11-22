@@ -2,7 +2,7 @@
 // with a minimal DOM stand-in (no browser, no server): what the page would put in #set-shields.
 //
 //   node tests/plugins/shields_settings_render.mjs <shields.js> <view.json>
-//   -> stdout: {"settings": "<html of #set-shields>", "pathRows": "<html>"}
+//   -> stdout: {"settings": "<html of #set-shields>", "pathRows": "<html>", "payload": {what Save posts unchanged}}
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
 
@@ -30,4 +30,6 @@ const ui = context.window.BlackboxShields.mount({ esc, getJSON: never, postJSON:
                                                   openSettings() {}, lockScroll() {}, unlockScroll() {}, onSettingsChange() {} });
 ui.settings.load(JSON.parse(readFileSync(viewPath, "utf8")));
 ui.settings.render();
-process.stdout.write(JSON.stringify({ settings: document.getElementById("set-shields").innerHTML, pathRows: ui.settings.pathRows() }));
+const settingsHTML = document.getElementById("set-shields").innerHTML;
+const rows = ui.settings.pathRows();
+process.stdout.write(JSON.stringify({ settings: settingsHTML, pathRows: rows, payload: ui.settings.payload() }));

@@ -297,3 +297,16 @@ def test_the_real_file_shield_choices_are_pickable_where_the_sandbox_runs(tmp_pa
     view["file-shield"]["mode"]["enabled"] = True
     drawn = _render_settings(view, tmp_path)
     assert 'class="wallet-pick soon"' not in drawn["settings"] and 'data-option="hermes"' in drawn["settings"]
+
+
+@pytest.mark.skipif(NODE is None, reason="node draws the Settings picks")
+def test_a_shield_field_the_server_did_not_serve_is_never_posted_as_a_default(tmp_path):
+    """KI-582 (FIX-0364): Save must post the values the page read (or the person's changes), never a default
+    for a field it was not served — the page once posted a weakening the person never made."""
+    fields = [{"key": "enabled", "kind": "toggle", "label": "Engage"},
+              {"key": "sandboxed", "kind": "multi-pick", "label": "Sandbox", "options": [{"id": "a", "name": "A", "status": "supported"}]},
+              {"key": "protected", "kind": "lines", "label": "Protected"}]
+    view = {"file-shield": {"mode": {"enabled": True, "sandboxed": ["a"]}, "fields": fields}}
+    assert _render_settings(view, tmp_path)["payload"] == {"file-shield": {"enabled": True, "sandboxed": ["a"]}}
+    view = {"file-shield": {"mode": {"enabled": True, "sandboxed": ["a"], "protected": ["~/Vault"]}, "fields": fields}}
+    assert _render_settings(view, tmp_path)["payload"] == {"file-shield": {"enabled": True, "sandboxed": ["a"], "protected": ["~/Vault"]}}

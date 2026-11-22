@@ -7877,6 +7877,15 @@
 
   // A fully-defaulted state (used as a fallback and by "Reset to defaults").
   function defaultSetState() {
+    var fresh = defaultValues();
+    if (!fresh.initial) {   // nothing was read: what it starts with is all it may post unchanged — nothing
+      fresh.initial = {};
+      SET_SCALARS.forEach(function (key) { fresh.initial[key] = fresh[key]; });
+    }
+    return fresh;
+  }
+
+  function defaultValues() {
     var cats = {};
     SET_CATS.forEach(function (c) { cats[c.key] = { enabled: true, min_severity: "info" }; });
     return {
@@ -7890,9 +7899,18 @@
       categories: cats,
       protected_paths: (setState && Array.isArray(setState.default_protected_paths)) ? setState.default_protected_paths.slice() : [],
       default_protected_paths: (setState && Array.isArray(setState.default_protected_paths)) ? setState.default_protected_paths.slice() : [],
-      category_labels: {}
+      category_labels: {},
+      // Which fields the server SERVED, and their values as read (KI-582): Save posts a field only
+      // when the server served it or the person changed it — never a default the page made up.
+      served: (setState && setState.served) ? Object.assign({}, setState.served) : {},
+      initial: (setState && setState.initial) ? Object.assign({}, setState.initial) : null
     };
   }
+
+  // The top-level settings Save may post, each only when served or changed (see buildPayload).
+  var SET_SCALARS = ["mode", "block_severity", "report", "report_min_severity", "discover", "osv_lookup",
+                     "auto_attach", "community_sandbox"];
+  var SET_LISTS = ["categories", "protected_paths"];
 
   // Normalize whatever the API returns into our safe, complete shape.
   function normalizeSettings(data) {
@@ -7905,6 +7923,9 @@
     out.community_sandbox = data.community_sandbox === true;
     out.discover = data.discover !== false;
     out.osv_lookup = data.osv_lookup !== false;
+    // KI-582: never defaulted to off — a page that did not copy it posted "auto_attach": false on
+    // every save and asked the person to approve a weakening they never made.
+    out.auto_attach = data.auto_attach === true;
     var cats = (data.categories && typeof data.categories === "object") ? data.categories : {};
     SET_CATS.forEach(function (c) {
       var item = cats[c.key] || {};
@@ -7922,6 +7943,12 @@
       : out.default_protected_paths;
     out.category_labels = (data.category_labels && typeof data.category_labels === "object")
       ? data.category_labels : {};
+    out.served = {};
+    SET_SCALARS.concat(SET_LISTS).forEach(function (key) {
+      if (Object.prototype.hasOwnProperty.call(data, key)) out.served[key] = true;
+    });
+    out.initial = {};
+    SET_SCALARS.forEach(function (key) { out.initial[key] = out[key]; });
     return out;
   }
 
@@ -8060,7 +8087,7 @@
       var st = setState.categories[c.key];
       cats[c.key] = { enabled: !!st.enabled, min_severity: sevOk(st.min_severity) };
     });
-    return {
+    var payload = {
       // Never write a mode the page did not read (KI-PENDING-b28f8f: "starting" → leave the saved one as it is).
       mode: setState.mode === "block" || setState.mode === "audit" ? setState.mode : undefined,
       block_severity: sevOk(setState.block_severity),
@@ -8069,12 +8096,26 @@
       discover: !!setState.discover,
       osv_lookup: !!setState.osv_lookup,
       auto_attach: !!setState.auto_attach,
-      report: !!setState.report,
       community_sandbox: !!setState.community_sandbox,
       categories: cats,
       protected_paths: setState.protected_paths.slice(0, 100),
       shields: shieldsUI.settings.payload()   // only the shields the settings view carried
     };
+    return onlyServedOrChanged(payload);
+  }
+
+  // KI-582: a field the server did not serve is posted only when the person changed it (its value
+  // differs from the one the page started with); a list it did not serve is never posted.
+  function onlyServedOrChanged(payload) {
+    var served = setState.served || {};
+    var initial = setState.initial || {};
+    SET_SCALARS.forEach(function (key) {
+      var changed = Object.prototype.hasOwnProperty.call(initial, key) && initial[key] !== setState[key];
+      if (!served[key] && !changed) delete payload[key];
+    });
+    SET_LISTS.forEach(function (key) { if (!served[key]) delete payload[key]; });
+    Object.keys(payload).forEach(function (key) { if (payload[key] === undefined) delete payload[key]; });
+    return payload;
   }
 
   // Every mutation carries the per-process session token (browser-boundary
