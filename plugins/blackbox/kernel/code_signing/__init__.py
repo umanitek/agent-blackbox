@@ -25,6 +25,7 @@ Usage::
 
     claim = parse_display(displayed_text)      # Claim(kind="developer_id", signer="Brave Software, Inc.", …)
     describe("/opt/homebrew/bin/claude")       # Signer(kind, signer, team, verified, notarised) — links followed
+    described("/opt/homebrew/bin/claude")      # the kept answer, or None — never runs a tool
     found = verify("/Applications/Safari.app/Contents/MacOS/Safari", claimed="apple")
     found.valid, found.notarised
 """
@@ -34,6 +35,7 @@ from __future__ import annotations
 import os
 import subprocess
 import threading
+import time
 from dataclasses import dataclass
 from typing import Callable, Optional
 
@@ -182,10 +184,52 @@ class Signer:
     notarised: bool = False
 
 
+#: How long an answer that could not be checked (a tool timed out: Gatekeeper's ``spctl`` takes
+#: seconds on a loaded Mac) is reused before it is asked again — WHY (KI-584): uncached, every
+#: open of an agent's profile waited the full timeout again.
+UNKNOWN_RETRY_SECONDS = 600.0
+_described: dict[tuple[str, float, int], tuple[Signer, float]] = {}
+
+
+def _version(real: str) -> Optional[tuple[str, float, int]]:
+    try:
+        status = os.stat(real)
+    except OSError:
+        return None
+    return real, status.st_mtime, status.st_size
+
+
+def described(path: str) -> Optional[Signer]:
+    """:func:`describe`'s kept answer for *path*'s current version, or None when it has not been
+    checked yet — never runs a tool (a page that must not wait asks this first)."""
+    key = _version(os.path.realpath(path))
+    with _lock:
+        found = _described.get(key) if key else None
+    return found[0] if found else None
+
+
 def describe(path: str, run: Runner = _run) -> Signer:
     """The signer of the program at *path* (links followed), verified — for showing a person
-    what a program is. A file that starts with ``#!`` is a script."""
+    what a program is. A file that starts with ``#!`` is a script. Kept per program version (path
+    + modification time + size); an answer that could not be checked is asked again after
+    :data:`UNKNOWN_RETRY_SECONDS`."""
     real = os.path.realpath(path)
+    key = _version(real)
+    if key is None:
+        return Signer(kind="unknown")
+    with _lock:
+        kept = _described.get(key)
+    if kept is not None and (kept[0].kind != "unknown" or time.monotonic() - kept[1] < UNKNOWN_RETRY_SECONDS):
+        return kept[0]
+    found = _describe(real, run)
+    with _lock:
+        if len(_described) >= MAX_CACHED:
+            _described.pop(next(iter(_described)))
+        _described[key] = (found, time.monotonic())
+    return found
+
+
+def _describe(real: str, run: Runner) -> Signer:
     try:
         with open(real, "rb") as handle:
             if handle.read(2) == b"#!":
@@ -211,3 +255,4 @@ def forget() -> None:
     """Drops every cached verification (tests)."""
     with _lock:
         _cache.clear()
+        _described.clear()

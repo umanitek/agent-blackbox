@@ -29,3 +29,15 @@ def process_ancestry(pid: int, limit: int) -> list[tuple[int, int, float, str]] 
 
 def process_cwd(pid: int) -> str:
     return ""
+
+
+def process_path(pid: int) -> str:
+    return ""
+
+
+def process_sandboxed(pid: int) -> bool | None:
+    return None
+
+
+def program_entitlements(path: str) -> str | None:
+    return None

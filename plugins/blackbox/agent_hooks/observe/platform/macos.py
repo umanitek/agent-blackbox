@@ -162,3 +162,42 @@ def process_cwd(pid: int) -> str:
     if size != _VNODEPATHINFO_SIZE:
         return ""
     return buffer.raw[_VNODE_INFO_SIZE:_VNODE_INFO_SIZE + _MAXPATHLEN].split(b"\0")[0].decode("utf-8", "replace")
+
+
+PROC_PIDPATHINFO_MAXSIZE = 4096
+CODESIGN = "/usr/bin/codesign"
+
+
+def process_path(pid: int) -> str:
+    """The executable *pid* runs, from the kernel (``proc_pidpath``); "" when gone or not readable."""
+    try:
+        libc = _libc()
+        libc.proc_pidpath.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_uint32]
+        buffer = ctypes.create_string_buffer(PROC_PIDPATHINFO_MAXSIZE)
+        length = libc.proc_pidpath(int(pid), buffer, PROC_PIDPATHINFO_MAXSIZE)
+    except (OSError, ValueError, AttributeError, TypeError):
+        return ""
+    return buffer.value.decode("utf-8", "replace") if length > 0 else ""
+
+
+def process_sandboxed(pid: int) -> bool | None:
+    """Whether the kernel runs *pid* in a sandbox — App Sandbox, Blackbox's agent sandbox or any
+    ``sandbox-exec`` profile (``sandbox_check(pid, NULL, 0)``); None when it cannot be asked."""
+    try:
+        libc = _libc()
+        libc.sandbox_check.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int]
+        answer = libc.sandbox_check(int(pid), None, 0)
+    except (OSError, ValueError, AttributeError, TypeError):
+        return None
+    return None if answer < 0 else answer > 0
+
+
+def program_entitlements(path: str) -> str | None:
+    """The entitlements *path* is signed with, as plist XML ("" when it has none); None when
+    ``codesign`` cannot say (unsigned, gone, timed out)."""
+    try:
+        done = subprocess.run([CODESIGN, "-d", "--entitlements", "-", "--xml", path], capture_output=True, encoding="utf-8",
+                              errors="replace", timeout=TIMEOUT_SECONDS, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return done.stdout[:MAX_OUTPUT_CHARS] if done.returncode == 0 else None

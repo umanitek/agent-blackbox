@@ -73,3 +73,25 @@ def test_a_tool_that_cannot_run_never_reads_as_verified(tmp_path):
     code_signing.forget()
     assert code_signing.describe(_program(tmp_path), lambda command: None) == code_signing.Signer(kind="unknown")
     assert code_signing.describe(str(tmp_path / "gone"), _run(DEVELOPER)).kind == "unknown"
+
+
+def test_a_programs_answer_is_kept_per_version_and_a_timeout_is_not_asked_again_at_once(tmp_path):
+    """KI-584: an agent's profile page stayed blank ~5 s on EVERY open — Gatekeeper's check timed
+    out and a timeout was never kept, so each open waited for it again."""
+    code_signing.forget()
+    program = _program(tmp_path)
+    asked = []
+
+    def slow(command):   # every tool times out (answers None)
+        asked.append(command)
+
+    assert code_signing.described(program) is None   # nothing checked yet: a page does not wait
+    assert code_signing.describe(program, slow).kind == "unknown"
+    calls = len(asked)
+    assert code_signing.describe(program, slow).kind == "unknown" and len(asked) == calls   # kept for a while
+    assert code_signing.described(program) == code_signing.Signer(kind="unknown")
+    code_signing.forget()
+    assert code_signing.describe(program, _run(DEVELOPER)).verified is True
+    with open(program, "ab") as handle:   # a new version of the program is checked again
+        handle.write(b"changed")
+    assert code_signing.describe(program, _run(DEVELOPER, verifies=False)).kind == "invalid"

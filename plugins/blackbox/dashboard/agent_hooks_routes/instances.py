@@ -40,6 +40,11 @@ merely curls this dashboard cannot read it.
   (itself or an ancestor is the agent's process; ``agent_hooks.owners.of_pid``, bounded and
   cached): ``{pid, found, agent, instance, sub_agent, folder, agent_pid}`` — "" / 0 each and
   ``found: false`` when none does; 400 for a pid that is not a whole number above 1.
+* ``GET /api/agent-instances/process?pid=<pid>`` → what that process is
+  (``agent_hooks.process_facts``): ``{pid, path, found, signer: {kind, signer, team, verified,
+  notarised}, sandboxed, app_sandbox}`` — the signature verified and kept per program version,
+  ``sandboxed`` the kernel's answer for the running process; None / "unknown" where it cannot be
+  read; 400 for a bad pid.
 """
 
 # No ``from __future__ import annotations`` here: FastAPI must see the handlers' annotations.
@@ -72,7 +77,7 @@ def register(app: Any) -> None:
     from ...agent_hooks import tracking
 
     _register_scripts(app)
-    _register_by_pid(app)
+    _register_process_routes(app)
 
     @app.get("/api/agent-instances/live")
     def agent_instances_live(cursor: str = "", wait: str = "") -> Any:   # sync: a long-poll waits in the thread pool
@@ -111,11 +116,11 @@ def register(app: Any) -> None:
         return JSONResponse({"profiles": [asdict(row) for row in tracking.profile_rows()]}, headers=NO_CACHE)
 
 
-def _register_by_pid(app: Any) -> None:
-    """``GET /api/agent-instances/by-pid`` (see the module doc)."""
+def _register_process_routes(app: Any) -> None:
+    """``GET /api/agent-instances/by-pid`` and ``/process`` (see the module doc)."""
     from fastapi.responses import JSONResponse
 
-    from ...agent_hooks import owners
+    from ...agent_hooks import owners, process_facts
 
     @app.get("/api/agent-instances/by-pid")
     def agent_instances_by_pid(pid: str = "") -> Any:
@@ -125,6 +130,12 @@ def _register_by_pid(app: Any) -> None:
         return JSONResponse({"pid": int(pid), "found": owner is not None, "agent": owner.agent if owner else "",
                              "instance": owner.instance if owner else "", "sub_agent": owner.sub_agent if owner else "",
                              "folder": owner.folder if owner else "", "agent_pid": owner.pid if owner else 0}, headers=NO_CACHE)
+
+    @app.get("/api/agent-instances/process")
+    def agent_instances_process(pid: str = "") -> Any:   # sync: codesign runs in the thread pool
+        if not pid.isdigit() or not 1 < int(pid) <= MAX_PID:
+            return JSONResponse({"error": "pid must be a process id"}, status_code=400, headers=NO_CACHE)
+        return JSONResponse(asdict(process_facts.facts(int(pid))), headers=NO_CACHE)
 
 
 def _register_scripts(app: Any) -> None:
