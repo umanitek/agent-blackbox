@@ -28,7 +28,7 @@ Usage::
 
     state = sync(mode)          # profile + launchers made to match the setting; answers status()
     status(mode)["agents"]      # [{"id": "claude-code", "sandboxed": True, ...}]
-    open_app("cursor")          # "Cursor is starting inside Blackbox's sandbox."
+    open_app("cursor")          # "Cursor is running inside Blackbox's sandbox."
 """
 
 from __future__ import annotations
@@ -59,6 +59,10 @@ _GUI_ONLY = frozenset({"windsurf"})
 CLI_AGENTS: dict[str, tuple[str, ...]] = {host.id: tuple(host.commands) for host in agent_hosts.HOSTS
                                           if host.id not in _GUI_ONLY and host.commands}
 CANARY_TEXT = "Blackbox agent sandbox canary — a sandboxed agent can not read this file.\n"
+#: What the person is told before opening an editor protected (KI-534: its own sandbox can not
+#: start inside Blackbox's, so it runs with that one off).
+APP_NOTE = ("Quit the editor first. Inside Blackbox's sandbox the editor runs with its own web-page sandbox off "
+            "(two sandboxes can not nest): Blackbox's covers the whole editor and your protected items instead.")
 #: How many PATH-block restorations are kept for File Shield's alerts.
 MAX_RESTORATIONS = 20
 _PLUGIN = Path(__file__).resolve().parents[3]
@@ -189,7 +193,8 @@ def status(mode: ShieldMode) -> dict[str, Any]:
                     "sandboxed": agent in picked,
                     "launcher": all((folder / command).is_file() for command in commands) if agent in picked else False}
                    for agent, commands in CLI_AGENTS.items()],
-        "apps": [{"id": app, "name": name, "installed": os.path.isdir(bundle)} for app, (name, bundle) in platform.APPS.items()],
+        "apps": [{"id": app, "name": name, "installed": os.path.isdir(bundle), "note": APP_NOTE}
+                 for app, (name, bundle) in platform.APPS.items()],
     }
 
 
@@ -201,7 +206,7 @@ def open_app(app: str) -> str:
     if not current.enabled:
         raise RuntimeError("Engage File Shield first: the sandbox protects its list.")
     sync(current)
-    return platform.open_app(app, str(profile_path()))
+    return platform.open_app(app, str(profile_path()), log=str(home() / f"{app}.log"))
 
 
 def proven(canary: Optional[Path] = None) -> bool:

@@ -47,7 +47,11 @@ sandbox, for the coding agents you pick (macOS today):
   or change Blackbox itself. The kernel refuses it; no hook is needed and none can be skipped.
   Each refusal is shown with the program's name and counts as a File Shield hit.
 - Cursor and Windsurf can be opened inside the sandbox from File Shield's page ("Open protected";
-  quit the editor first).
+  quit the editor first). Blackbox says it is running only once it still runs a few seconds later.
+  These editors sandbox their own web pages, and two sandboxes can not nest, so inside Blackbox's
+  sandbox the editor runs with its own one off: Blackbox's sandbox then covers the whole editor and
+  your protected items, but its web pages lose that extra isolation. Apps from the App Store can not
+  be opened inside at all.
 - The dashboard shows, per agent session, whether it ran inside the sandbox — proven by a file
   only a sandboxed process can not read, so it can not be faked.
 

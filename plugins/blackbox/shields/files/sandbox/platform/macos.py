@@ -20,7 +20,14 @@ What it can not do, said plainly (proposal §04):
 * setuid programs (``sudo``, ``su``) can not run inside any Seatbelt sandbox — so Layer 2 is a
   per-agent choice of the person (D7: agents keep ``sudo`` unless the person sandboxes them);
 * ``sandbox-exec`` is marked deprecated by Apple but is what Apple's own tools still use; the
-  long-term path is the OS's file checks (Endpoint Security, Layer 3).
+  long-term path is the OS's file checks (Endpoint Security, Layer 3);
+* a GUI editor built on Electron/Chromium (Cursor, Windsurf) sandboxes its own helper processes
+  with Seatbelt, and a second Seatbelt sandbox can not be started inside one ("sandbox
+  initialization failed: Operation not permitted" — every helper exits, so the editor never
+  appears; KI-534, probed 2026-11-22 with a Chromium app). Inside Blackbox's sandbox the editor
+  therefore runs with its OWN sandbox off (:data:`ELECTRON_FLAGS`): Blackbox's sandbox then covers
+  the whole editor, but its web pages lose Chromium's extra isolation — the page says so before the
+  person chooses it. An app from the App Store (Apple's App Sandbox) can not be started inside at all.
 
 Pattern: one **Strategy** of :mod:`.` (the platform facade).
 
@@ -36,6 +43,7 @@ import os
 import plistlib
 import re
 import subprocess
+import time
 from typing import Optional
 
 from ..places import Places
@@ -52,6 +60,11 @@ APP_DRIVERS = ("/usr/bin/osascript", "/usr/bin/automator", "/usr/bin/shortcuts")
 #: The SSH port on this Mac: an agent may not log back into the Mac outside its sandbox.
 LOCAL_SSH = ('"localhost:22"',)
 TIMEOUT_SECONDS = 5.0
+#: An Electron/Chromium editor's own sandbox can not start inside Blackbox's (see the module doc).
+ELECTRON_FLAGS = ("--no-sandbox",)
+#: How long an editor started inside the sandbox must stay up before it is called running.
+STARTED_SECONDS = 4.0
+STARTED_POLL_SECONDS = 0.2
 
 
 def unavailable() -> Optional[str]:
@@ -135,18 +148,34 @@ def _running(executable: str) -> bool:
     return done.returncode == 0
 
 
-def open_app(app: str, profile: str) -> str:
-    """Starts the GUI agent *app* (``cursor`` / ``windsurf``) inside the profile; answers what
-    happened, for a person. Refused while it already runs: an editor hands a second launch to the
-    copy already running — outside the sandbox."""
-    if app not in APPS:
+def open_app(app: str, profile: str, apps: Optional[dict[str, tuple[str, str]]] = None, log: Optional[str] = None,
+             started_seconds: float = STARTED_SECONDS) -> str:
+    """Starts the GUI agent *app* (``cursor`` / ``windsurf``) inside the profile and answers what
+    happened, for a person — only once it is still running :data:`STARTED_SECONDS` later (KI-534:
+    "is starting" was said for an editor that had already died). Refused while it already runs: an
+    editor hands a second launch to the copy already running — outside the sandbox. *apps* and
+    *log* (where its output goes) are for tests."""
+    apps = APPS if apps is None else apps
+    if app not in apps:
         raise ValueError(f"unknown app {app!r}")
-    name, bundle = APPS[app]
+    name, bundle = apps[app]
     executable = _executable(bundle)
     if executable is None:
-        raise LookupError(f"{name} is not installed in /Applications.")
+        raise LookupError(f"{name} is not installed in {os.path.dirname(bundle)}.")
     if _running(executable):
         raise RuntimeError(f"Quit {name} first: a copy already running would open outside the sandbox.")
-    subprocess.Popen([SANDBOX_EXEC, "-f", profile, executable], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                     stderr=subprocess.DEVNULL, start_new_session=True, env={**os.environ, "BLACKBOX_AGENT_SANDBOX": "1"})
-    return f"{name} is starting inside Blackbox's sandbox."
+    output = open(log or os.devnull, "ab")   # windows-footgun: ok (binary log)
+    try:
+        process = subprocess.Popen([SANDBOX_EXEC, "-f", profile, executable, *ELECTRON_FLAGS], stdin=subprocess.DEVNULL,
+                                   stdout=output, stderr=output, start_new_session=True,
+                                   env={**os.environ, "BLACKBOX_AGENT_SANDBOX": "1"})
+    finally:
+        output.close()
+    deadline = time.monotonic() + started_seconds
+    while time.monotonic() < deadline:
+        code = process.poll()
+        if code is not None:
+            raise RuntimeError(f"{name} stopped right after starting inside the sandbox (exit {code}), so it is not "
+                               "running. Open it normally if you need it now; its use stays covered by Blackbox's hooks.")
+        time.sleep(STARTED_POLL_SECONDS)
+    return f"{name} is running inside Blackbox's sandbox."

@@ -346,3 +346,43 @@ def test_the_first_time_the_block_is_written_is_not_a_restoration(home):
     sandbox.sync(_mode())
     sandbox.sync(_mode())
     assert sandbox.restorations() == []
+
+
+# -- opening an editor protected (KI-534, E2E full4 2026-11-22) ------------------------------------
+
+def _fake_editor(home: Path, body: str) -> tuple[dict, Path]:
+    import plistlib
+    bundle = home / "Apps" / "Fake.app"
+    (bundle / "Contents" / "MacOS").mkdir(parents=True)
+    with open(bundle / "Contents" / "Info.plist", "wb") as handle:
+        plistlib.dump({"CFBundleExecutable": "Fake"}, handle)
+    program = bundle / "Contents" / "MacOS" / "Fake"
+    program.write_text("#!/bin/sh\n" + body, encoding="utf-8")
+    program.chmod(0o755)
+    return {"fake": ("Fake", str(bundle))}, home / "fake.log"
+
+
+@REAL
+def test_an_editor_that_dies_inside_the_sandbox_is_reported_never_called_starting(home):
+    sandbox.sync(_mode())
+    apps, log = _fake_editor(home, 'echo "sandbox initialization failed: Operation not permitted" >&2; exit 133\n')
+    with pytest.raises(RuntimeError, match="stopped right after starting"):
+        macos.open_app("fake", str(sandbox.profile_path()), apps=apps, log=str(log), started_seconds=2)
+    assert "sandbox initialization failed" in log.read_text(encoding="utf-8")
+
+
+@REAL
+def test_an_editor_starts_inside_the_sandbox_with_its_own_sandbox_off_and_is_called_running(home):
+    sandbox.sync(_mode())
+    marker = home / "args.txt"
+    apps, log = _fake_editor(home, f'echo "$@" > "{marker}"\ncat "{home}/Documents/Vault/secret.txt" 2>/dev/null; '
+                                   f'echo "vault=$?" >> "{marker}"\nexec sleep 3\n')   # ends by itself
+    message = macos.open_app("fake", str(sandbox.profile_path()), apps=apps, log=str(log), started_seconds=1.5)
+    assert message == "Fake is running inside Blackbox's sandbox."
+    text = marker.read_text(encoding="utf-8")
+    assert "--no-sandbox" in text and "vault=1" in text   # inside Blackbox's sandbox: the vault is refused
+
+
+def test_the_editor_offer_says_what_running_protected_means(entry):
+    apps = sandbox.status(files_mode.current())["apps"]
+    assert apps and all("web-page sandbox off" in app["note"] for app in apps)
