@@ -88,15 +88,21 @@ def _kinfo(libc: ctypes.CDLL, pid: int) -> tuple[int, float, str] | None:
     return parent, float(seconds), name
 
 
-def _command(pid: int) -> str:
-    """*pid*'s argv joined by spaces — what ``ps -o command=`` prints — or "" when unreadable."""
+def process_argv(pid: int) -> list[str]:
+    """*pid*'s arguments as the kernel keeps them, each word WHOLE ([] when unreadable). WHY
+    (KI-576): ``ps`` joins argv with spaces, so ``--settings '{"disableAllHooks": true}'`` reads
+    back as two words without their quotes and the JSON could not be parsed."""
     raw = _procargs(pid)
     if len(raw) < 8:
-        return ""
+        return []
     argc = struct.unpack("i", raw[:4])[0]
     _program, _, rest = raw[4:].partition(b"\0")
-    words = rest.lstrip(b"\0").split(b"\0")[:max(0, argc)]
-    return " ".join(word.decode("utf-8", "replace") for word in words)
+    return [word.decode("utf-8", "replace") for word in rest.lstrip(b"\0").split(b"\0")[:max(0, argc)]]
+
+
+def _command(pid: int) -> str:
+    """*pid*'s argv joined by spaces — what ``ps -o command=`` prints — or "" when unreadable."""
+    return " ".join(process_argv(pid))
 
 
 def process_ancestry(pid: int, limit: int) -> list[tuple[int, int, float, str]] | None:

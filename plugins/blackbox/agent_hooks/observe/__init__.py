@@ -102,6 +102,16 @@ def _words(command: str) -> list[str]:
         return command.split()[:40]
 
 
+def _argv(proc: Proc) -> list[str]:
+    """*proc*'s arguments, each word whole: the kernel's record when it is the SAME command line
+    the process list showed (a reused pid answers another one), else the line split as a shell
+    would — which loses the quotes ``ps`` never printed."""
+    exact = platform.process_argv(proc.pid)
+    if exact and " ".join(exact)[:4000] == proc.command:
+        return exact[:40]
+    return _words(proc.command)
+
+
 def _split(words: list[str]) -> tuple[str, list[str]]:
     """``(program, its arguments)`` of a command line: argv[0], or — for a runtime — the script
     it runs (past the runtime's own options) or the module after ``-m``. ``("", [])`` when a
@@ -254,15 +264,30 @@ def _settings_value(text: str) -> object:
         return None
 
 
-def hooks_switched_off(host: Host, args: list[str], pid: int) -> str:
+def _inline_json(given: str, option: str, command: str) -> object:
+    """The JSON text given to *option*: *given* itself, or — when the words came from ``ps``'s
+    joined line, which drops the quotes — the JSON value that starts right after *option* in
+    *command* (bounded by :data:`MAX_SETTINGS_BYTES`)."""
+    value = _settings_value(given)
+    at = command.find(f"{option} {{")
+    if value is None and at >= 0:
+        try:
+            value = json.JSONDecoder().raw_decode(command[at + len(option) + 1:][:MAX_SETTINGS_BYTES])[0]
+        except ValueError:
+            value = None
+    return value
+
+
+def hooks_switched_off(host: Host, args: list[str], pid: int, command: str = "") -> str:
     """Why *host*'s hooks are off for this run, naming EXACTLY what did it (KI-569): a
-    ``--settings`` text or file on its command line, or its project's settings file (the process's
-    own working folder, ``Host.project_files``). "" when nothing this can read does."""
+    ``--settings`` text (KI-576: inline JSON, whole) or file on its command line, or its project's
+    settings file (the process's own working folder, ``Host.project_files``). *command*: the
+    process list's line, read when *args* lost the JSON's quotes. "" when nothing this can read does."""
     for position, word in enumerate(args[:-1]):
         if word in _SETTINGS_OPTIONS.get(host.id, ()):
             given = args[position + 1]
             if given.lstrip().startswith("{"):
-                found = _off_in(_settings_value(given), host)
+                found = _off_in(_inline_json(given, word, command), host)
                 if found:
                     return f"started with --settings that sets {found}, which switches every hook off"
             else:
@@ -290,9 +315,9 @@ def running(table: Mapping[int, Proc]) -> list[Running]:
         parent = table.get(proc.ppid)
         if parent is not None and classify(parent.command) is host:
             continue
-        words = _words(proc.command)
+        words = _argv(proc)
         skipped = next((reason for (agent, flag), reason in _SKIPS.items() if agent == host.id and flag in words), "")
-        skipped = skipped or hooks_switched_off(host, _split(words)[1], proc.pid)
+        skipped = skipped or hooks_switched_off(host, _split(words)[1], proc.pid, proc.command)
         out.append(Running(proc.pid, proc.ppid, host.id, _launch(host, words), _profile(host, proc.pid), skipped, proc.started,
                            tuple(permission_risks.from_command(host.id, _split(words)[1]))))
     return out

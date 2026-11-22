@@ -6,6 +6,7 @@ KI-573, KI-574 — real runs on the test VM, 2026-11-22).
   from the first lines of the transcript the payload points at — the model field only.
 * KI-567: five background sub-agents made one Claude Code prompt count six times; a Codex
   sub-agent's task counted as a prompt of its session.
+* KI-576: the inline ``--settings`` JSON as ``ps`` prints it (quotes gone) was never parsed.
 * KI-569: hooks switched off by ``--settings '{"disableAllHooks": true}'`` or a project's
   settings showed only "Blackbox has seen no hook event from this process".
 * KI-573: a headless ``cline … --json`` run showed as "interactive"; Cline's prompt is wrapped
@@ -34,6 +35,7 @@ def _fresh(monkeypatch, tmp_path):
     monkeypatch.setattr(observe.platform, "process_table", lambda: "")
     monkeypatch.setattr(observe.platform, "process_environment", lambda pid: "")
     monkeypatch.setattr(observe.platform, "process_variable", lambda pid, name: "")
+    monkeypatch.setattr(observe.platform, "process_argv", lambda pid: [], raising=False)
     monkeypatch.setattr(observe.platform, "process_ancestry", lambda pid, limit: None)
     monkeypatch.setattr(agent_hooks, "_home", lambda: tmp_path)
     monkeypatch.setattr(tracking, "agent_process", lambda key, parent, agent: parent)
@@ -157,6 +159,27 @@ def test_hooks_switched_off_by_a_settings_flag_are_named_exactly():
     assert "--settings that sets disableAllHooks = true" in observe.hooks_switched_off(claude, words, 4242)
     [row] = observe.running(_proc("""/opt/homebrew/bin/claude -p --settings '{"disableAllHooks": true}' 'sleep 15'"""))
     assert "disableAllHooks" in row.hooks_skipped
+
+
+#: What ``ps`` really printed for the inline-settings run (KI-576, test VM 2026-11-22): argv joined
+#: by spaces, the shell's quotes gone.
+_PS_INLINE = '/opt/homebrew/bin/claude -p --settings {"disableAllHooks": true} ping -c 25 127.0.0.1'
+
+
+def test_inline_settings_json_is_named_from_the_process_lists_own_line():
+    [row] = observe.running(_proc(_PS_INLINE))
+    assert row.hooks_skipped == "started with --settings that sets disableAllHooks = true, which switches every hook off"
+
+
+def test_inline_settings_json_is_read_whole_from_the_kernels_argv(monkeypatch):
+    argv = ["/opt/homebrew/bin/claude", "-p", "--settings", '{"disableAllHooks": true}', "ping", "-c", "25", "127.0.0.1"]
+    monkeypatch.setattr(observe.platform, "process_argv", lambda pid: argv if pid == 4242 else [], raising=False)
+    [row] = observe.running(_proc(_PS_INLINE))
+    assert "disableAllHooks = true" in row.hooks_skipped
+    # A reused pid's argv (another command line) is never trusted for this process.
+    monkeypatch.setattr(observe.platform, "process_argv", lambda pid: ["/bin/zsh", "-l"])
+    [row] = observe.running(_proc(_PS_INLINE))
+    assert "disableAllHooks = true" in row.hooks_skipped
 
 
 def test_hooks_switched_off_by_the_projects_settings_name_the_file(_fresh, monkeypatch):

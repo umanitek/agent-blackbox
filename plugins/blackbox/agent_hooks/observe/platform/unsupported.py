@@ -19,6 +19,10 @@ def process_variable(pid: int, name: str) -> str:
     return ""
 
 
+def process_argv(pid: int) -> list[str]:
+    return []
+
+
 def process_ancestry(pid: int, limit: int) -> list[tuple[int, int, float, str]] | None:
     return None   # cannot be asked this way: callers read the whole process list
 
