@@ -47,10 +47,10 @@ from typing import Any, Optional
 
 from .. import action_parsing, shell_shapes
 from ..finding import Finding
-from ...kernel import addons as guarded_extra, agent_hosts, shell_path, threat_ids
+from ...kernel import action_context, addons as guarded_extra, agent_hosts, shell_path, threat_ids
 from ...kernel.bounded_files import read_small_text
 from ...kernel.config import BlackboxConfig, load_blackbox_config
-from . import guard_commands, guard_paths, guard_places, guard_secrets, guard_startup, protected, shell_files
+from . import guard_commands, guard_patch, guard_paths, guard_places, guard_secrets, guard_startup, protected, shell_files
 
 MATCHED = threat_ids.SELF_PROTECTION
 _TITLE = "Change to Blackbox's own settings"
@@ -167,8 +167,31 @@ def _lines(text: str) -> list[str]:
     return _decoded(_TEXT_HEREDOC.sub(plain, text) if "<<" in text else text).split("\n")
 
 
+def _patch_path(path: str) -> str:
+    """A path an ``apply_patch`` names, joined onto the agent's working folder when relative."""
+    expanded = os.path.expanduser(path)
+    if os.path.isabs(expanded):
+        return path
+    return os.path.join(action_context.working_folder() or guard_paths.START_FOLDER, path)
+
+
+def _patch_tampers(patch: guard_patch.Patch) -> bool:
+    """True when a Codex ``apply_patch`` adds, changes, deletes or moves a file the way a file tool
+    writing it would be refused (KI-583: the patch is judged as the writes it makes, not as shell)."""
+    for path in patch.paths:
+        text = patch.added.get(path, "")
+        # An update is an edit (judged by what it adds to a host's config); an addition a whole file.
+        args = ({"patch": text} if patch.verbs.get(path) == "Update File" else {"content": text}) if text else {}
+        if _file_tool_tampers({"mode": "write", "path": _patch_path(path), "tool": "terminal"}, args):
+            return True
+    return False
+
+
 def _text_tampers(text: str) -> bool:
     """True when command text *text* would change Blackbox, switch it off or go round it."""
+    text, patches = guard_patch.split(text)
+    if any(_patch_tampers(patch) for patch in patches):
+        return True
     ports = _ports()
     folder, closely = guard_paths.START_FOLDER, MAX_READ_CLOSELY
     for line in _lines(text):
