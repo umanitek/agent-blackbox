@@ -118,7 +118,7 @@ One `codex` process per session (CLI or `codex exec`); the desktop app and IDE e
 | SubagentStop | subagent_stop | yes |  |
 | PermissionRequest, PreCompact, PostCompact, Interrupt, PreModelRequest, PostModelRequest |  | no | not needed to judge an action or follow an instance |
 
-**Sub-agents:** Tracked: sub-agent hooks carry the parent session id, agent_id and agent_type.
+**Sub-agents:** Tracked: SubagentStart/SubagentStop carry the parent session id, agent_id and agent_type. Seen 2026-11-22 (Codex 0.171.0, codex exec): spawn_agent fired NO sub-agent hook event. A spawned agent whose events carry its own thread id is linked to the session that called spawn_agent by process ancestry (the same codex process) and order (the oldest spawn not yet claimed); one whose events carry the parent's session id and no agent_id cannot be told apart from its session: its actions are checked and counted in the session.
 
 | OS | Launch mode | Layer | Status | Detail |
 |---|---|---|---|---|
@@ -440,7 +440,7 @@ One `opencode` process (TUI) or `opencode serve`; agents and sub-agents run insi
 | tool.execute.before | pre_tool | yes |  |
 | tool.execute.after | post_tool | yes |  |
 
-**Sub-agents:** Not tracked as instances: the plugin reports tool calls, each with its session id.
+**Sub-agents:** Tracked: a sub-agent (the task tool) runs as a child session. OpenCode 1's plugin names the child's parent (OpenCode's session.created event, or one question to OpenCode per session) with every call, so the child is shown under its session with the task call's description and type. OpenCode 2's plugin names no parent: a new session whose first event is a tool call, in the same opencode process as a session with an unclaimed task call, is linked to that call (by process and order).
 
 | OS | Launch mode | Layer | Status | Detail |
 |---|---|---|---|---|

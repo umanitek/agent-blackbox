@@ -378,7 +378,7 @@
      "why": "not needed to judge an action or follow an instance"
     }
    ],
-   "sub_agents": "Tracked: sub-agent hooks carry the parent session id, agent_id and agent_type.",
+   "sub_agents": "Tracked: SubagentStart/SubagentStop carry the parent session id, agent_id and agent_type. Seen 2026-11-22 (Codex 0.171.0, codex exec): spawn_agent fired NO sub-agent hook event. A spawned agent whose events carry its own thread id is linked to the session that called spawn_agent by process ancestry (the same codex process) and order (the oldest spawn not yet claimed); one whose events carry the parent's session id and no agent_id cannot be told apart from its session: its actions are checked and counted in the session.",
    "not_covered": [
     "Hosted tools (for example WebSearch) do not pass through Codex's hook path.",
     "Until the person trusts Blackbox's hooks in Codex (/hooks), Codex skips them.",
@@ -1381,7 +1381,7 @@
      "hooked": true
     }
    ],
-   "sub_agents": "Not tracked as instances: the plugin reports tool calls, each with its session id.",
+   "sub_agents": "Tracked: a sub-agent (the task tool) runs as a child session. OpenCode 1's plugin names the child's parent (OpenCode's session.created event, or one question to OpenCode per session) with every call, so the child is shown under its session with the task call's description and type. OpenCode 2's plugin names no parent: a new session whose first event is a tool call, in the same opencode process as a session with an unclaimed task call, is linked to that call (by process and order).",
    "not_covered": [
     "`opencode --pure` runs without external plugins: nothing Blackbox installs is loaded.",
     "OpenCode 2 is not on npm's `latest` yet (1.19.6 is): the version-2 plugin is built against @opencode/plugin 2.3.2 and run under Node with its documented events, not in OpenCode 2 itself.",

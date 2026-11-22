@@ -23,9 +23,10 @@ from typing import Any, Mapping, Optional
 
 from ..kernel.agent_hosts import BY_ID, HOSTS
 from . import observe, profiles, prompt_text, root_watch
-from .instances import record, store, views
+from .instances import links, record, store, sub_key, views
 from .instances.model import Profile, Running
 from .protect import config_edit, own_files
+from .protect.events import session_key as key_of_session
 
 __all__ = ["detail", "export", "history", "live", "new_profiles", "profile", "profile_rows", "prompt_text", "track", "wait"]
 
@@ -97,18 +98,44 @@ def agent_process(session_key: str, hook_parent: int, agent: str) -> int:
     return observe.agent_of(table, hook_parent, agent)
 
 
+#: A child session's own start and end, as its parent's sub-agent sees them.
+_AS_SUB = {"session_start": "subagent_start", "stop": "subagent_stop"}
+
+
+def _as_sub_agent(fields: dict[str, Any], session_key: str) -> str:
+    """When *fields* come from a child session that is another session's sub-agent
+    (:func:`.instances.links.resolve`), make them that sub-agent's event; the session key to
+    record under. A sub-agent seen for the first time claims its spawn call's task and type."""
+    agent, cwd = fields["agent"], str(fields.get("cwd") or "")
+    link = links.resolve(fields, session_key, key_of=lambda raw: key_of_session(agent, raw, cwd),
+                         known=store.get(session_key), sessions=store.all_instances())
+    if link is not None:
+        session_key = link.parent
+        fields["sub"] = link.child   # a sub-agent the child names is shown flat under the parent
+        fields["event"] = _AS_SUB.get(fields["event"], fields["event"])
+    if fields.get("sub") and store.get(sub_key(session_key, str(fields["sub"]))) is None:
+        spawn = links.claim(session_key)
+        if spawn is not None:
+            fields["task"] = fields.get("task") or spawn.task
+            fields["sub_type"] = fields.get("sub_type") or spawn.type
+    return session_key
+
+
 def track(event: Mapping[str, Any], session_key: str, *, decision: str = "", findings: int = 0, reason: str = "",
           text: str = "") -> None:
     """Record *event* against its instance; find the agent's process the first time a session is
-    seen; remember a config home the event names. *reason*: what the agent was told when
-    Blackbox refused the action. *text*: a prompt's text — kept (redacted) only while the person
-    has prompt-text recording on, dropped here otherwise."""
+    seen; link a child session to its parent (a sub-agent run as a session of its own); remember
+    a config home the event names. *reason*: what the agent was told when Blackbox refused the
+    action. *text*: a prompt's text — kept (redacted) only while the person has prompt-text
+    recording on, dropped here otherwise."""
     fields = dict(event)
     known = store.get(session_key)
     # The process is looked up while it is unknown — and for an ended session, whose next event
     # may come from a new run of the same session id (instances._resumes compares them).
     if (known is None or not known.pid or known.ended is not None) and isinstance(event.get("pid"), int) and event["pid"] > 1:
         fields["agent_pid"] = agent_process(session_key, event["pid"], event["agent"]) or None
+    session_key = _as_sub_agent(fields, session_key)
+    links.note_spawn(session_key, fields)
     if event.get("profile") and profiles.remember(event["agent"], str(event["profile"])):
         with _lock:
             _seen["new_profiles"] = True

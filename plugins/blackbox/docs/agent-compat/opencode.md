@@ -47,3 +47,11 @@ The version-2 file imports nothing from `@opencode/plugin` (`Plugin.define` only
 - OpenCode 2 itself was not run: it is not npm's `latest` yet.
 - `opencode --pure` "runs without external plugins" — Blackbox's included. Such a run shows as unprotected.
 - No prompt or session events are wired (version 2 has `ctx.session.hook("prompt")`; not used yet).
+
+## Sub-agents (2026-11-22, KI-555)
+
+OpenCode runs a `task` sub-agent as a CHILD session (`Session.parentID`). Seen on OpenCode 1.19.6: the child reported as a second, separate session in the same process, with no parent.
+
+- **OpenCode 1:** the plugin learns each child's parent from OpenCode's `session.created` / `session.updated` events (`properties.info.parentID`), or asks `client.session.get` once per session, and sends `parent_session_id` with every call. Blackbox records the child as the parent's sub-agent.
+- **OpenCode 2:** the plugin names no parent. A new session whose first event is a tool call, in the same `opencode` process as a session with a `task` call not yet claimed, is that call's sub-agent (oldest call first).
+- Either way the sub-agent carries the `task` call's `description` (its title, never its prompt) and `subagent_type`.

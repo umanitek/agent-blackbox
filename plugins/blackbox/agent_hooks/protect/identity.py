@@ -27,6 +27,11 @@ def identity(agent: str, payload: dict, _first) -> dict:
         sub = ""   # Cline names agent_id on EVERY event; only an agent with a parent was spawned
     return {
         "sub": sub,
+        # A sub-agent's task title as its agent names it (Cursor's ``task``; OpenCode's plugin sends
+        # its ``task`` call's description) — never a prompt.
+        "task": str(payload.get("task") or "")[:200] if sub and isinstance(payload.get("task"), str) else "",
+        # Hooks that always name a child session's parent (OpenCode 1's plugin): no other link is guessed.
+        "parents_named": payload.get("parents_named") is True,
         "sub_type": str(_first(payload, "agent_type", "agentType", "subagent_type") or "")[:80],
         "parent": str(_first(payload, "parent_conversation_id", "parent_session_id") or "")[:200],
         "model": str(_first(payload, "model", "subagent_model", "model_id") or "")[:80],

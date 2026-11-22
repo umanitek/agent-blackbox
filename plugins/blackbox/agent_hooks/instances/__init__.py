@@ -23,12 +23,13 @@ import time
 from typing import Any, Mapping
 
 from ...kernel.redaction import redact_secret_values
-from . import store
+from . import links, store
 from .model import Action, Instance
 
-__all__ = ["record", "store", "sub_key"]
+__all__ = ["links", "record", "store", "sub_key"]
 
 MAX_WHAT = 200
+MAX_TASK = 200
 _ENTRY_LAUNCH = {"cli": "interactive", "sdk-ts": "sdk", "sdk-py": "sdk", "sdk-cli": "headless", "claude-vscode": "ide",
                  "claude-desktop": "ide", "mcp": "sdk"}
 
@@ -42,7 +43,9 @@ def _what(event: Mapping[str, Any]) -> str:
     args = event.get("args")
     text = ""
     if isinstance(args, dict):
-        text = str(args.get("command") or args.get("path") or args.get("file_path") or args.get("url") or "")
+        # A spawn tool (Task, task, spawn_agent) is shown by its task's title — never its prompt.
+        text = str(args.get("command") or args.get("path") or args.get("file_path") or args.get("url")
+                   or args.get("description") or "")
     return redact_secret_values(text.replace("\n", " "))[:MAX_WHAT]
 
 
@@ -93,6 +96,8 @@ def _describe(instance: Instance, event: Mapping[str, Any]) -> None:
             instance.pid = event["agent_pid"]
     else:
         instance.type = str(event.get("sub_type") or instance.type)[:80]
+        if not instance.task and event.get("task"):
+            instance.task = redact_secret_values(str(event["task"]).replace("\n", " "))[:MAX_TASK]
 
 
 #: What each kind of event says about waiting ("" = the agent is working again).

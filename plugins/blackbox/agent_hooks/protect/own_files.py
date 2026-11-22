@@ -45,14 +45,38 @@ function ask(argv, payload) {{
     return {{}};
   }}
 }}
-export const BlackboxPlugin = async ({{ directory }} = {{}}) => ({{
+// A sub-agent (the task tool) runs as a CHILD session: its parent is named with every call, so
+// Blackbox shows it under the session that started it. Learned from OpenCode's session events,
+// or asked of OpenCode once per session.
+const parents = new Map();
+async function parentOf(client, sessionID) {{
+  if (!sessionID) return "";
+  if (!parents.has(sessionID)) {{
+    try {{
+      const found = await client?.session?.get?.({{ path: {{ id: sessionID }} }});
+      parents.set(sessionID, found?.data?.parentID ?? "");
+    }} catch {{
+      parents.set(sessionID, "");
+    }}
+  }}
+  return parents.get(sessionID) ?? "";
+}}
+export const BlackboxPlugin = async ({{ directory, client }} = {{}}) => ({{
+  event: async ({{ event }}) => {{
+    const info = event?.properties?.info;
+    if ((event?.type === "session.created" || event?.type === "session.updated") && info?.id) parents.set(info.id, info.parentID ?? "");
+  }},
   "tool.execute.before": async (input, output) => {{
-    const answer = ask(BEFORE, {{ tool: input.tool, args: output.args, sessionID: input.sessionID, cwd: directory }});
+    const parent = await parentOf(client, input.sessionID);
+    const answer = ask(BEFORE, {{ tool: input.tool, args: output.args, sessionID: input.sessionID, callID: input.callID, cwd: directory,
+                                 parent_session_id: parent, parents_named: true }});
     if (answer.decision === "block") throw new Error(answer.reason || "Blocked by Blackbox");
   }},
   "tool.execute.after": async (input, output) => {{
     const text = typeof output?.output === "string" ? output.output.slice(0, 262144) : output?.output;
-    const answer = ask(AFTER, {{ tool: input.tool, sessionID: input.sessionID, cwd: directory, output: text }});
+    const parent = await parentOf(client, input.sessionID);
+    const answer = ask(AFTER, {{ tool: input.tool, sessionID: input.sessionID, callID: input.callID, cwd: directory, output: text,
+                                parent_session_id: parent, parents_named: true }});
     // A known prompt injection in the output: the model reads Blackbox's notice instead.
     if (answer.decision === "block" && output) output.output = answer.reason || "Blackbox withheld this output: it carries a known prompt injection.";
   }},

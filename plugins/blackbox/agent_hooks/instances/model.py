@@ -36,6 +36,7 @@ class Instance:
     profile: str = ""              # the config home it ran with ("" = the default one)
     parent: str = ""               # a sub-agent's session key
     type: str = ""                 # a sub-agent's type (Explore, generalPurpose…), an agent's --agent name
+    task: str = ""                 # a sub-agent's task title (its spawn call's description), redacted — never its prompt
     folder: str = ""               # the project folder's name
     cwd: str = ""
     model: str = ""
