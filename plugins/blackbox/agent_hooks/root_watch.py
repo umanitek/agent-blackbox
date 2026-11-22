@@ -24,6 +24,7 @@ Usage::
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from dataclasses import dataclass
@@ -36,6 +37,8 @@ from .instances import store, views
 from .instances.model import Action, Instance
 
 __all__ = ["ASKERS", "ROOT_ID", "RootRun", "note", "reset", "scan"]
+
+logger = logging.getLogger(__name__)
 
 ROOT_ID = "agent:running-as-root"
 TITLE = "A program started by an AI agent is running as root"
@@ -92,7 +95,7 @@ def _record(run: RootRun, session: Instance) -> None:
         audit.record_for(run.agent, event="agent_root", workspace=session.cwd, findings=[finding],
                          detail={"session_id": session.key, "program": run.program, "pid": run.pid, "decision": "flag"})
     except Exception:   # health: allow BLE001 -- the timeline and the live view already hold it
-        pass
+        logger.debug("blackbox root watch: the finding could not be recorded", exc_info=True)
 
 
 def scan(table: Mapping[int, observe.Proc], users: Mapping[int, tuple[int, int]], sessions: Iterable[Instance]) -> list[RootRun]:

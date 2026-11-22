@@ -12,6 +12,7 @@ Pattern: **Repository** — callers see ``publish`` / ``since`` / ``latest`` / `
 from __future__ import annotations
 
 import json
+import logging
 import threading
 import time
 from dataclasses import asdict, fields, replace
@@ -19,8 +20,10 @@ from pathlib import Path
 from typing import Optional
 
 from ..kernel import constants
-from ..kernel.bounded_files import atomic_write, read_json_object, read_small_text, write_json_object
+from ..kernel.bounded_files import append_line, atomic_write, read_json_object, read_small_text, write_json_object
 from .model import Notice
+
+logger = logging.getLogger(__name__)
 
 MAX_KEPT = 500
 MAX_FEED_BYTES = 2 * 1024 * 1024
@@ -80,11 +83,10 @@ def publish(notice: Notice) -> Optional[Notice]:
                 _state["ids"] = {row.id for row in rows}
                 atomic_write(folder() / "feed.jsonl", "".join(json.dumps(asdict(row), ensure_ascii=False) + "\n" for row in rows))
             else:
-                with open(folder() / "feed.jsonl", "a", encoding="utf-8") as handle:
-                    handle.write(json.dumps(asdict(kept), ensure_ascii=False) + "\n")
+                append_line(folder() / "feed.jsonl", json.dumps(asdict(kept), ensure_ascii=False))
             _save_cursor()
         except OSError:
-            pass   # the feed is in memory; the next publish writes again
+            logger.debug("blackbox notify: the feed file could not be written (it stays in memory)", exc_info=True)
         _changed.notify_all()
         return kept
 
