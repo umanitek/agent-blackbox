@@ -70,6 +70,44 @@ EVENTS = ("session_start", "prompt", "pre_tool", "post_tool", "turn_end", "stop"
 #: event's matcher as an EXACT string ("startup"), so a tool regex there never matches — the
 #: lifecycle groups carry no matcher (every agent treats a missing matcher as "every occurrence").
 TOOL_KINDS = ("pre_tool", "post_tool")
+#: How long an agent should wait for Blackbox's hook, in SECONDS (the runner itself gives up after
+#: 2.5 s, so anything shorter than :data:`HOOK_WAIT_FLOOR_SECONDS` cuts the verdict off).
+HOOK_WAIT_SECONDS = 10
+HOOK_WAIT_FLOOR_SECONDS = 3
+
+
+@dataclass(frozen=True)
+class HookTimeout:
+    """The field an agent reads a hook's time limit from, and the UNIT it reads it in.
+
+    WHY a unit: the agents disagree. Claude Code and Codex read ``timeout`` in seconds, Copilot CLI
+    ``timeoutSec`` in seconds, but Gemini CLI reads ``timeout`` in MILLISECONDS — Blackbox once
+    wrote ``10`` there, every hook was cut off after 10 ms and Gemini ran unprotected (KI-570,
+    real Gemini CLI 0.70.0, 2026-11-22). Per-event caps the agent documents (Codex holds
+    SessionEnd to 3 s) go in :attr:`caps`, in the same unit.
+
+    Usage: ``host.hook_timeout.value()`` / ``.value("SessionEnd")`` → the number to write;
+    ``.seconds(raw)`` → what a written number means in seconds.
+    """
+
+    key: str
+    per_second: int = 1          # 1 = seconds, 1000 = milliseconds
+    caps: tuple[tuple[str, int], ...] = ()
+
+    def value(self, event: str = "") -> int:
+        wanted = HOOK_WAIT_SECONDS * self.per_second
+        return min(wanted, dict(self.caps).get(event, wanted))
+
+    def seconds(self, raw: object) -> Optional[float]:
+        """*raw* (a value read from the agent's config) in seconds; None when it is not a number."""
+        if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+            return None
+        return raw / self.per_second
+
+    def floor(self, event: str = "") -> float:
+        """The least wait (seconds) that still lets Blackbox's verdict arrive for *event*."""
+        cap = dict(self.caps).get(event)
+        return min(HOOK_WAIT_FLOOR_SECONDS, cap / self.per_second) if cap is not None else HOOK_WAIT_FLOOR_SECONDS
 
 
 @dataclass(frozen=True)
@@ -109,6 +147,9 @@ class Host:
     #: the home folder, form)`` — the form names the template ``own_files`` writes
     #: (``cline-plugin``: Cline's SDK plugin; ``opencode-v2``: OpenCode 2's plugin).
     companions: tuple[tuple[str, str], ...] = ()
+    #: The time-limit field Blackbox writes in each hook entry, in the agent's own unit (None:
+    #: the agent documents no such field, so none is written and its default applies).
+    hook_timeout: Optional[HookTimeout] = None
 
     def config_path(self, home: Path) -> Path:
         return home / self.config
@@ -136,12 +177,14 @@ HOSTS: tuple[Host, ...] = (
          signs=(".claude",), commands=("claude",), matcher="*",
          home_env="CLAUDE_CONFIG_DIR", home_config="settings.json", programs=("claude",), packages=("@anthropic-ai/claude-code",),
          switches=(("settings.json", "disableAllHooks", True), ("settings.local.json", "disableAllHooks", True)),
-         project_files=(".claude/settings.json", ".claude/settings.local.json")),
+         project_files=(".claude/settings.json", ".claude/settings.local.json"),
+         hook_timeout=HookTimeout("timeout")),
     Host("codex", "Codex", "nested", ".codex/hooks.json", _CLAUDE_EVENTS,
          signs=(".codex",), commands=("codex",),
          trust_note="Codex asks you to review new hooks once: run codex, type /hooks and trust Blackbox's.",
          home_env="CODEX_HOME", home_config="hooks.json", programs=("codex",), packages=("@openai/codex",),
-         switches=(("config.toml", "features.hooks", False), ("config.toml", "features.codex_hooks", False))),
+         switches=(("config.toml", "features.hooks", False), ("config.toml", "features.codex_hooks", False)),
+         hook_timeout=HookTimeout("timeout", caps=(("SessionEnd", 3),))),
     # Cursor (2026-11-22): the generic preToolUse / postToolUse fire for EVERY tool (Shell, Read,
     # Write, MCP, Task…), so they replace the shell- and MCP-only hooks; beforeReadFile stays for
     # the file's text (the injection check), and the session and sub-agent events are tracked.
@@ -156,13 +199,15 @@ HOSTS: tuple[Host, ...] = (
           "AfterTool": "post_tool", "AfterAgent": "turn_end", "SessionEnd": "stop", "Notification": "attention"},
          signs=(".gemini",), commands=("gemini",), matcher=".*",
          home_env="GEMINI_CLI_HOME", home_config=".gemini/settings.json", programs=("gemini",), packages=("@google/gemini-cli",),
-         switches=(("settings.json", "hooksConfig.enabled", False),), project_files=(".gemini/settings.json",)),
+         switches=(("settings.json", "hooksConfig.enabled", False),), project_files=(".gemini/settings.json",),
+         hook_timeout=HookTimeout("timeout", per_second=1000)),
     Host("copilot-cli", "GitHub Copilot CLI", "own-json", ".copilot/hooks/blackbox.json",
          {"sessionStart": "session_start", "userPromptSubmitted": "prompt", "preToolUse": "pre_tool",
           "postToolUse": "post_tool", "agentStop": "turn_end", "sessionEnd": "stop",
           "subagentStart": "subagent_start", "subagentStop": "subagent_stop"},
          signs=(".copilot",), commands=("copilot",),
-         home_env="COPILOT_HOME", home_config="hooks/blackbox.json", programs=("copilot",), packages=("@github/copilot",)),
+         home_env="COPILOT_HOME", home_config="hooks/blackbox.json", programs=("copilot",), packages=("@github/copilot",),
+         hook_timeout=HookTimeout("timeoutSec")),
     # Windsurf ships as "Devin.app" since 2026-11 (docs moved to docs.devin.ai); the documented
     # user-level hooks file is unchanged.
     Host("windsurf", "Windsurf (Devin)", "flat", ".codeium/windsurf/hooks.json",
@@ -206,4 +251,5 @@ def host(agent_id: str) -> Optional[Host]:
     return BY_ID.get(agent_id)
 
 
-__all__ = ["BY_ID", "DECISION_TOO_LATE", "EVENTS", "HERMES_ID", "HERMES_NAME", "HOSTS", "TOOL_KINDS", "USER_BIN_DIRS", "Host", "host", "product_name"]
+__all__ = ["BY_ID", "DECISION_TOO_LATE", "EVENTS", "HERMES_ID", "HERMES_NAME", "HOOK_WAIT_FLOOR_SECONDS", "HOOK_WAIT_SECONDS", "HOSTS",
+           "TOOL_KINDS", "USER_BIN_DIRS", "HookTimeout", "Host", "host", "product_name"]

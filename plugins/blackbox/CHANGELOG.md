@@ -120,6 +120,10 @@ that the two version fields agree.
 
 ### Security
 
+- **Gemini CLI's hooks now really run.** Blackbox wrote each hook's time limit in seconds, but
+  Gemini CLI reads it in milliseconds, so every hook was cut off and Gemini ran without Blackbox.
+  Each agent now gets its limit in its own unit, the sweep rewrites a config written the old way,
+  and the Agents page and the agent's profile say so when a hook is written but would not run.
 - **An agent cannot switch Blackbox off, in any mode.** An action that would change Blackbox's
   settings, rules, logs or program files, stop its services, use its control page, or start an
   agent with Blackbox's own variables changed is now refused in Audit mode too (before, Audit mode

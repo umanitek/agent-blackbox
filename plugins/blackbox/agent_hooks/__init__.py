@@ -157,7 +157,12 @@ def _runnable(host: Host, commands: list[str]) -> bool:
     return own_files.runnable(paths)
 
 
-def _state_of(host: Host, hooked: bool, runnable: bool, record: dict[str, Any]) -> tuple[str, str]:
+def _invalid(host: Host) -> list[str]:
+    """Why the agent's own loader would not run Blackbox's entries (own-file styles: never)."""
+    return [] if host.style in _OWN_FILE_STYLES else config_edit.invalid_entries(host, _home())
+
+
+def _state_of(host: Host, hooked: bool, runnable: bool, record: dict[str, Any], invalid: tuple[str, ...] = ()) -> tuple[str, str]:
     last, last_error = record.get("last_event") or 0, record.get("last_error") or 0
     if record.get("disabled"):
         return "off", "You stopped protecting it."
@@ -165,6 +170,8 @@ def _state_of(host: Host, hooked: bool, runnable: bool, record: dict[str, Any]) 
         return "available", "Found on this Mac; Blackbox's hooks are not installed."
     if not runnable:
         return "degraded", "The hook cannot run: the Python or the runner it names is gone. Protect it again."
+    if invalid:
+        return "degraded", f"{host.name} would not run Blackbox's hook as written ({invalid[0]}). Protect it again."
     if last_error > last:
         return "degraded", "Its latest hook event could not be checked."
     if last and time.time() - last < CONNECTED_SECONDS:
@@ -183,7 +190,7 @@ def rows() -> list[AgentRow]:
         record = state.get(host.id, {})
         if not host.installed(_home()) and not commands and not record:
             continue
-        name, detail = _state_of(host, bool(commands), _runnable(host, commands), record)
+        name, detail = _state_of(host, bool(commands), _runnable(host, commands), record, tuple(_invalid(host)))
         sessions = sorted(({"id": key, **value} for key, value in (record.get("sessions") or {}).items()),
                           key=lambda row: row.get("last", 0), reverse=True)
         out.append(AgentRow(host.id, host.name, name, detail, str(host.config_path(_home())), record.get("last_event"),
@@ -212,7 +219,8 @@ def present() -> frozenset[str]:
 
 
 def sweep() -> list[dict[str, Any]]:
-    """Hook every agent found that is not switched off, and repair hooks whose paths moved.
+    """Hook every agent found that is not switched off, and repair hooks whose paths moved or that
+    the agent's own loader would not run as written (a time limit in the wrong unit — KI-570).
     Runs only while "Protect new agents automatically" is on (the same opt-in as ``attach``)."""
     if not load_blackbox_config().auto_attach:
         return []
@@ -224,7 +232,7 @@ def sweep() -> list[dict[str, Any]]:
         wanted = [command for _argv, command in _invocations(host).values()]
         for variant in _variants(host):
             current = _editor(variant).installed_commands(variant, _home())
-            if variant.style in _OWN_FILE_STYLES or sorted(current) != sorted(wanted):
+            if variant.style in _OWN_FILE_STYLES or sorted(current) != sorted(wanted) or _invalid(variant):
                 done.append(asdict(install(variant)) | {"kind": host.id})
     return done
 

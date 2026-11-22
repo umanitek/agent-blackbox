@@ -20,7 +20,7 @@ Usage::
     profiles.remember("claude-code", "/Users/me/.claude-work")
     profiles.homes(host)                      # [(folder, default?)…]
     profiles.variant(host, folder)            # a Host whose config is in that folder
-    profiles.problems(host, folder, projects) # [Problem…]
+    profiles.problems(host, folder, projects, config) # [Problem…]
 """
 
 from __future__ import annotations
@@ -37,6 +37,7 @@ from ..kernel import constants
 from ..kernel.agent_hosts import Host
 from ..kernel.bounded_files import read_json_object, read_small_text, write_json_object
 from .instances.model import Problem
+from .protect import config_edit
 
 __all__ = ["homes", "lookup", "problems", "remember", "variant"]
 
@@ -137,11 +138,16 @@ def _switch_problems(host: Host, folder: Path, where: str) -> list[Problem]:
     return out
 
 
-def problems(host: Host, folder: Path, projects: Iterable[str] = ()) -> list[Problem]:
+def problems(host: Host, folder: Path, projects: Iterable[str] = (), config: Optional[Path] = None) -> list[Problem]:
     """What keeps Blackbox's hooks from running for *host* in the config home *folder* and in the
-    *projects* (folders) its sessions worked in."""
+    *projects* (folders) its sessions worked in. With *config* (the profile's hook config file),
+    Blackbox's own entries there are also checked against the agent's hook schema."""
     settings_folder = folder / ".gemini" if host.id == "gemini-cli" else folder
     out = _switch_problems(host, settings_folder, "this profile")
+    if config is not None and host.style == "nested":   # written is not loadable: the agent's own schema (KI-570)
+        checked = dataclasses.replace(host, config=str(config))
+        out.extend(Problem(host.id, "hook-invalid", str(config), f"{reason} — Blackbox repairs it on its next sweep.", fixable=True)
+                   for reason in config_edit.invalid_entries(checked, Path("/")))
     for path, key, value in MANAGED.get(host.id, ()):
         data = _read(Path(path))
         if data is not None and lookup(data, key) == value:

@@ -26,7 +26,7 @@ import os
 from pathlib import Path
 
 from ...kernel.bounded_files import atomic_write
-from .config_edit import HOOK_TIMEOUT, MARK, EditResult
+from .config_edit import MARK, EditResult
 from ...kernel.agent_hosts import Host
 
 Invocations = dict[str, tuple[list[str], str]]
@@ -205,7 +205,8 @@ def install(host: Host, home: Path, invocations: Invocations) -> EditResult:
     try:
         _install_companions(host, home, invocations)
         if host.style == "own-json":
-            hooks = {event: [{"type": "command", "bash": command, "timeoutSec": HOOK_TIMEOUT}]
+            limit = host.hook_timeout
+            hooks = {event: [{"type": "command", "bash": command, **({limit.key: limit.value(event)} if limit else {})}]
                      for event, (_argv, command) in invocations.items()}
             target.parent.mkdir(parents=True, exist_ok=True)
             atomic_write(target, json.dumps({"version": 1, "hooks": hooks}, indent=2) + "\n")

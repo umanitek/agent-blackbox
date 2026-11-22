@@ -205,7 +205,7 @@ def profile_rows(home: Optional[Path] = None) -> list[Profile]:
         for folder, default in profiles.homes(host, home):
             variant = profiles.variant(host, folder, default=default)
             rows.append(Profile(host.id, str(folder), str(variant.config_path(home)), default, _hooked(variant, home),
-                                profiles.problems(host, folder, sorted(projects.get(host.id, ())))))
+                                profiles.problems(host, folder, sorted(projects.get(host.id, ())), variant.config_path(home))))
     return rows
 
 

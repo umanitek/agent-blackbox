@@ -22,6 +22,7 @@ Usage::
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import tomllib
 from dataclasses import dataclass, field
@@ -35,6 +36,7 @@ from ..kernel.redaction import redact_secret_values
 from . import permission_risks, profiles, versions
 from .instances import store
 from .instances.model import Running
+from .protect import config_edit
 from .protect.config_edit import MARK
 
 __all__ = ["InstructionFile", "McpServer", "ProfileDetail", "ScopeSettings", "read"]
@@ -101,6 +103,7 @@ class ScopeSettings:
     other_hooks: int = 0
     hooks_off: bool = False
     skips_prompts: tuple[str, ...] = ()   # its settings that skip the person's permission prompts
+    unloadable: tuple[str, ...] = ()      # why the agent would not run Blackbox's hooks as written (KI-570)
 
 
 @dataclass(frozen=True)
@@ -207,7 +210,9 @@ def _settings(host: Host, path: Path, scope: str) -> Optional[ScopeSettings]:
     off = any(profiles.lookup(data, key) == value for _name, key, value in host.switches)
     return ScopeSettings(str(path), scope, mode, _names(permissions.get("allow")), _names(permissions.get("deny")),
                          tuple(sorted(str(name)[:80] for name in env)[:MAX_LIST]), model[:80], ours, others, off,
-                         tuple(permission_risks.from_settings(host.id, data)))
+                         tuple(permission_risks.from_settings(host.id, data)),
+                         tuple(config_edit.invalid_entries(dataclasses.replace(host, config=str(path)), Path("/")))
+                         if host.style == "nested" else ())
 
 
 def _mcp(path: Path) -> list[McpServer]:
@@ -265,6 +270,8 @@ def _risks(detail: ProfileDetail) -> list[str]:
             risks.append(f"Runs with permission prompts skipped ({setting} in {scope.path}): it acts without asking you.")
         if scope.hooks_off:
             risks.append(f"Hooks are switched off in {scope.path}: Blackbox's hooks do not run there.")
+        for reason in scope.unloadable:
+            risks.append(f"Blackbox's hook in {scope.path} does not protect: {reason}.")
         if scope.scope == "user" and not scope.blackbox_hooks and BY_ID[detail.agent].style in ("nested", "flat"):
             risks.append(f"Blackbox's hooks are not in {scope.path}.")
     for server in detail.mcp_servers:

@@ -95,7 +95,7 @@ class Problem:
     """Something that keeps Blackbox's hooks from running in one profile or project."""
 
     agent: str
-    kind: str                      # "hooks-off" | "managed-only" | "hooks-missing" | "unreadable"
+    kind: str                      # "hooks-off" | "managed-only" | "hooks-missing" | "hook-invalid" | "unreadable"
     file: str
     detail: str
     fixable: bool = False
