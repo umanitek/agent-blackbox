@@ -34,7 +34,7 @@ def setting(monkeypatch, tmp_path):
     monkeypatch.setattr(config_mod, "_blackbox_entry", lambda: state)
     monkeypatch.setattr(kernel_settings, "_persist", lambda updates: state.update(updates) or True)
     monkeypatch.setattr(jobs, "brew_path", lambda: "/opt/homebrew/bin/brew")
-    monkeypatch.setattr(jobs, "start", lambda request, brew, done, owner: type("Job", (), {"id": "job-1"})())
+    monkeypatch.setattr(jobs, "start", lambda request, brew, **_: type("Job", (), {"id": "job-1"})())
     requests.reset()
     grants.reset()
     yield state

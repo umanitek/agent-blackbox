@@ -29,6 +29,7 @@ from plugins.blackbox.shields.files.sandbox.packages.request import Refused
 from plugins.blackbox.shields.files.sandbox.permissions import requests
 from plugins.blackbox.shields.files.sandbox.platform.macos import shims
 from plugins.blackbox.shields.shield_api import ShieldApiError, ShieldContext
+from tests.waiting import wait_until
 
 MAC = pytest.mark.skipif(sys.platform != "darwin", reason="the shims are macOS's")
 
@@ -129,9 +130,9 @@ def test_the_broker_decides_checks_and_runs_the_fixed_argv(setting, monkeypatch,
     assert finished.wait(30) and started["command"] == "npm install --global typescript"
     command, env = ran[0]
     assert command == ["/opt/homebrew/bin/npm", "install", "--global", "typescript"] and set(env) <= {"HOME", "USER", "LOGNAME", "PATH", "LANG", "TMPDIR"}
-    with pytest.raises(ShieldApiError) as listed:
-        packages.API_WRITES["install"](_context(), {"manager": "npm", "argv": ["install", "-g", "evil-pkg"]})
-    assert listed.value.status == 403 and "evil-pkg" in listed.value.message
+    listed = packages.API_WRITES["install"](_context(), {"manager": "npm", "argv": ["install", "-g", "evil-pkg"]})
+    refused = wait_until(lambda: jobs.get(listed["job"]).refused, what="the listed package refused in its job")
+    assert "evil-pkg" in refused and len(ran) == 1
     setting["agent_sandbox"] = {"permissions": [{"permission": "global-installs", "mode": "block"}]}
     with pytest.raises(ShieldApiError) as blocked:
         packages.API_WRITES["install"](_context(), {"manager": "npm", "argv": ["install", "-g", "typescript"]})

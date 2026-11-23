@@ -7,17 +7,25 @@ a clean environment. Contracts (real proof comes on the VM):
 
 * validation refuses every injection form: taps, URLs, paths, build flags, valued flags, env;
 * the argv Blackbox runs is fixed: Homebrew's own path, the verb, the validated names;
-* a package a threat rule lists is refused, and so is every name when the verdict can't be asked;
+* a package a threat rule lists is refused, and so is every name when the verdict can't be asked
+  (the job's refusal: the request is answered at once and checked in its job, KI-632);
 * "ask" asks the person (the ``homebrew`` sandbox permission); loosening the setting waits too;
 * "off" refuses; an unreachable broker tells the agent to run brew in its own terminal.
+
+KI-632 (security round 6, clean VM): during the first threat-graph sync the broker held the agent's
+request while it asked the graph's busy store, the client gave up after 10 s and said only "Blackbox
+couldn't install this". Now the request is answered at once, a busy dashboard's reads are asked
+again for a bounded time, and a give-up says why.
 """
 
 from __future__ import annotations
 
 import io
+import json
 import subprocess
 import sys
 import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
@@ -27,6 +35,7 @@ from plugins.blackbox.shields.files.sandbox import packages
 from plugins.blackbox.shields.files.sandbox.packages import client, jobs, request
 from plugins.blackbox.shields.files.sandbox.platform import macos
 from plugins.blackbox.shields.shield_api import ShieldApiError, ShieldContext
+from tests.waiting import wait_until
 
 
 @pytest.fixture(autouse=True)
@@ -95,14 +104,24 @@ def test_the_persons_own_harmless_homebrew_preferences_are_kept(monkeypatch, tmp
     assert env["HOMEBREW_NO_ENV_HINTS"] == "1" and env["HOME"] == str(tmp_path)
 
 
+def _ended(started: dict) -> dict:
+    """The brew-job read once the job has ended."""
+    def ended():
+        state = packages.API_READS["brew-job"](_context(), {"job": started["job"], "from": "0"})
+        return state if state["done"] else None
+    return wait_until(ended, what="the job ended")
+
+
 def test_a_package_a_threat_rule_lists_is_refused(monkeypatch):
+    ran = []
     monkeypatch.setattr(jobs, "brew_path", lambda: "/opt/homebrew/bin/brew")
+    monkeypatch.setattr(jobs.platform, "spawn_brew", lambda command, env, cwd: ran.append(command))
     listed = lambda tool, args: {"decision": "", "findings": [{"source": "public"}]} if "evil-pkg" in args["command"] else {"findings": []}
-    with pytest.raises(ShieldApiError) as refused:
-        packages.API_WRITES["brew"](_context(listed), {"argv": ["install", "tree", "evil-pkg"]})
-    assert "evil-pkg" in refused.value.message and "tree" not in refused.value.message
-    with pytest.raises(ShieldApiError):   # the verdict can not be asked: fail closed
-        packages.API_WRITES["brew"](_context(None), {"argv": ["install", "tree"]})
+    state = _ended(packages.API_WRITES["brew"](_context(listed), {"argv": ["install", "tree", "evil-pkg"]}))
+    assert "evil-pkg" in state["refused"] and "tree" not in state["refused"] and state["exit"] == 1
+    state = _ended(packages.API_WRITES["brew"](_context(None), {"argv": ["install", "tree"]}))   # can not be asked: fail closed
+    assert state["refused"] and state["exit"] == 1
+    assert ran == [] and packages.alerts() == []   # nothing ran, so no "installed" notice
 
 
 def test_an_allowed_install_runs_the_fixed_argv_and_streams_its_output(monkeypatch):
@@ -127,7 +146,7 @@ def test_off_refuses_and_ask_puts_the_question_to_the_person(setting, monkeypatc
     """Sandbox permissions step 9: "ask" is the homebrew permission's three answers, not one 428 per install."""
     from plugins.blackbox.shields.files.sandbox.permissions import requests
     monkeypatch.setattr(jobs, "brew_path", lambda: "/opt/homebrew/bin/brew")
-    monkeypatch.setattr(jobs, "start", lambda request, brew, done, owner: type("Job", (), {"id": "j1"})())
+    monkeypatch.setattr(jobs, "start", lambda request, brew, **_: type("Job", (), {"id": "j1"})())
     requests.reset()
     setting["agent_packages"] = {"installs": "off"}
     with pytest.raises(ShieldApiError) as refused:
@@ -154,7 +173,9 @@ def test_loosening_the_setting_waits_for_the_person(setting):
 
 def test_an_unreachable_broker_says_to_run_brew_in_your_own_terminal(capsys):
     assert client.main(["brew-client.py", "http://127.0.0.1:9", "install", "tree"]) == 1
-    assert "Blackbox couldn't install this; run `brew install tree` in your own terminal." in capsys.readouterr().err
+    said = capsys.readouterr().err
+    assert "Blackbox couldn't install this: Blackbox is not answering" in said and "Nothing was installed" in said
+    assert "run `brew install tree` in your own terminal." in said
 
 
 def test_the_shim_sends_installs_to_blackbox_and_runs_reads_as_they_are(tmp_path):
@@ -222,3 +243,118 @@ def test_the_install_notice_and_audit_row_name_the_agent_that_asked(monkeypatch,
     unknown = ShieldContext(network_indicators=lambda: None, ask_assistant=lambda message: None,
                             tool_call_verdict=lambda tool, args: {"decision": "", "findings": []}, owner_of_pid=lambda pid: None)
     assert packages._asker(unknown, {"argv": ["install", "x"], "pid": 1}) is None
+
+
+def test_the_broker_answers_at_once_while_the_threat_check_is_slow(monkeypatch):
+    """KI-632: the threat check asks the graph's store, slow during the first sync. The request is
+    answered with its job before the check ends; the job runs once the check clears it."""
+    graph_answers, answered, finished = threading.Event(), threading.Event(), threading.Event()
+
+    def slow_verdict(tool, args):
+        assert graph_answers.wait(30)
+        return {"decision": "", "findings": []}
+    monkeypatch.setattr(jobs.platform, "spawn_brew", lambda command, env, cwd: subprocess.Popen(
+        [sys.executable, "-c", "print('==> Pouring hello')"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True))
+    monkeypatch.setattr(jobs, "brew_path", lambda: "/opt/homebrew/bin/brew")
+    monkeypatch.setattr(packages, "_record", lambda job: finished.set())
+    started: dict = {}
+    threading.Thread(target=lambda: (started.update(packages.API_WRITES["brew"](_context(slow_verdict), {"argv": ["install", "hello"]})),
+                                     answered.set()), daemon=True).start()
+    try:
+        assert answered.wait(10), "the request waited for the threat check"
+        assert not packages.API_READS["brew-job"](_context(), {"job": started["job"], "from": "0"})["done"]
+    finally:
+        graph_answers.set()
+    assert finished.wait(30)
+    assert _ended(started)["lines"] == ["==> Pouring hello"]
+
+
+class _Dashboard:
+    """A loopback stand-in for Blackbox's dashboard. *slow*: the request kinds ("session", "job")
+    whose FIRST request gets no answer until the client asks again (a busy dashboard, then an
+    answering one); *silent*: nothing is ever answered; *job*: what the job read answers."""
+
+    def __init__(self, slow=(), silent=False, job=None):
+        self.slow, self.silent, self.job = set(slow), silent, job or {}
+        self.asked: dict = {}
+        self.again = {kind: threading.Event() for kind in ("session", "brew", "job")}
+        self.closing = threading.Event()
+        dashboard = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def do_GET(self):
+                dashboard.answer(self, "session" if self.path == "/api/session" else "job")
+
+            def do_POST(self):
+                self.rfile.read(int(self.headers.get("content-length") or 0))
+                dashboard.answer(self, "brew")
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.server.daemon_threads = True
+        self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def answer(self, handler, kind):
+        nth = self.asked[kind] = self.asked.get(kind, 0) + 1
+        if nth > 1:
+            self.again[kind].set()
+        if self.silent:
+            self.closing.wait(30)
+            return
+        if nth == 1 and kind in self.slow:
+            self.again[kind].wait(30)   # busy: answers only after the client gave up on it and asked again
+        body = {"session": {"token": "t"}, "brew": {"job": "j1", "command": "brew install hello"}, "job": self.job}[kind]
+        try:
+            data = json.dumps(body).encode()
+            handler.send_response(200)
+            handler.send_header("content-type", "application/json")
+            handler.send_header("content-length", str(len(data)))
+            handler.end_headers()
+            handler.wfile.write(data)
+        except OSError:
+            pass   # the client gave up on this one already
+
+    def close(self):
+        self.closing.set()
+        self.server.shutdown()
+        self.server.server_close()
+
+
+@pytest.fixture
+def dashboard(monkeypatch):
+    monkeypatch.setattr(client, "ANSWER_SECONDS", 0.3)
+    monkeypatch.setattr(client, "POLL_SECONDS", 0)
+    made = []
+    yield lambda **kwargs: made.append(_Dashboard(**kwargs)) or made[-1]
+    for each in made:
+        each.close()
+
+
+def test_a_busy_dashboard_is_asked_again_and_the_install_goes_through(dashboard, capsys):
+    """KI-632, round 6: during the first sync the dashboard answered late; the client gave up after
+    10 s. Now a read with no answer is asked again, and the install goes through."""
+    busy = dashboard(slow=("session", "job"), job={"lines": ["==> Pouring hello"], "next": 1, "done": True, "exit": 0})
+    assert client.main(["brew-client.py", busy.url, "install", "hello"]) == 0
+    assert "==> Pouring hello" in capsys.readouterr().out
+    assert busy.asked == {"session": 2, "brew": 1, "job": 2}   # the install itself was asked for once
+
+
+def test_a_dashboard_that_never_answers_is_given_up_on_with_the_reason(dashboard, monkeypatch, capsys):
+    monkeypatch.setattr(client, "BUSY_SECONDS", 1)
+    silent = dashboard(silent=True)
+    assert client.main(["brew-client.py", silent.url, "install", "hello"]) == 1
+    said = capsys.readouterr().err
+    assert "it was busy and did not answer within 1 s" in said and "Nothing was installed" in said
+    assert "try again in a minute, or run `brew install hello` in your own terminal" in said
+    assert "brew" not in silent.asked   # nothing was asked to run
+
+
+def test_a_refusal_in_the_job_is_told_to_the_agent(dashboard, capsys):
+    refusing = dashboard(job={"lines": [], "next": 0, "done": True, "exit": 1,
+                              "refused": "evil-pkg: a threat rule lists this package, so Blackbox will not install it"})
+    assert client.main(["brew-client.py", refusing.url, "install", "evil-pkg"]) == 1
+    assert ("Blackbox's sandbox refused this (brew install evil-pkg): evil-pkg: a threat rule lists this package"
+            in capsys.readouterr().err)

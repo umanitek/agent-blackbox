@@ -23,10 +23,12 @@ process, port and credential to keep, for no extra isolation. For each request i
    allowed. Until the person sets the permission, the older ``agent_packages.installs``
    (:data:`SETTING`: off / ask / allow) is read as its everywhere rule;
 2. validates the argv (``request.parse``: names only, official taps only, a short list of flags);
-3. checks each name against the threat graph as a package action (``brew install <name>``, the
-   guard's one tool-call verdict through ``ShieldContext.tool_call_verdict``). A name any rule
-   matches is refused, and so is every name when the verdict can not be asked (fail closed);
-4. runs the FIXED argv ``<brew> <verb> [--cask|--formula] <names>`` as the person, with a clean
+3. answers with a job at once; the job checks each name against the threat graph as a package
+   action (``brew install <name>``, the guard's one tool-call verdict through
+   ``ShieldContext.tool_call_verdict``). A name any rule matches is refused (the job's
+   ``refused``), and so is every name when the verdict can not be asked (fail closed). WHY in the
+   job (KI-632): the verdict asks the graph's local store, slow while the first sync loads it;
+4. then runs the FIXED argv ``<brew> <verb> [--cask|--formula] <names>`` as the person, with a clean
    environment (``jobs``), and streams the output back;
 5. records the run in the audit log (``agent-sandbox``, ``package_install``) and alerts the person
    (File Shield's alerts, :func:`alerts`).
@@ -157,19 +159,24 @@ def _listed(context: ShieldContext, request: jobs.Request) -> list[str]:
     return listed
 
 
+def _threat_check(context: ShieldContext, request: jobs.Request) -> jobs.Check:
+    """The job's check (:func:`jobs.start`): the refusal when a threat rule lists a name, else ""."""
+    def check() -> str:
+        listed = _listed(context, request)
+        return f"{', '.join(listed)}: a threat rule lists this package, so Blackbox will not install it" if listed else ""
+    return check
+
+
 def _brew(context: ShieldContext, body: Mapping[str, Any]) -> dict[str, Any]:
     try:
         request = _request(body)
     except Refused as why:
         raise ShieldApiError(400, str(why)) from None
     owner = _decide(context, body, request)
-    listed = _listed(context, request)
-    if listed:
-        raise ShieldApiError(403, f"{', '.join(listed)}: a threat rule lists this package, so Blackbox will not install it")
     brew = jobs.brew_path()
     if not brew:
         raise ShieldApiError(404, "Homebrew is not installed on this Mac.")
-    job = jobs.start(request, brew, done=_record, owner=owner)
+    job = jobs.start(request, brew, done=_record, owner=owner, check=_threat_check(context, request))
     return {"job": job.id, "command": request.shown()}
 
 
@@ -199,13 +206,11 @@ def _install(context: ShieldContext, body: Mapping[str, Any]) -> dict[str, Any]:
     except Refused as why:
         raise ShieldApiError(400, str(why)) from None
     owner = _decide(context, body, request, GLOBAL_PERMISSION)
-    listed = _listed(context, request)
-    if listed:
-        raise ShieldApiError(403, f"{', '.join(listed)}: a threat rule lists this package, so Blackbox will not install it")
     program = manager_path(managers.MANAGERS[request.manager].program)
     if not program:
         raise ShieldApiError(404, f"{request.tool} is not installed on this Mac.")
-    job = jobs.start(request, program, done=_record, owner=owner, env=jobs.manager_environment(program))
+    job = jobs.start(request, program, done=_record, owner=owner, env=jobs.manager_environment(program),
+                     check=_threat_check(context, request))
     return {"job": job.id, "command": request.shown()}
 
 
@@ -240,7 +245,7 @@ def _job(_context: ShieldContext, query: Mapping[str, str]) -> dict[str, Any]:
     except ValueError:
         start = 0
     lines, next_line, done, code = job.since(start)
-    return {"lines": lines, "next": next_line, "done": done, "exit": code}
+    return {"lines": lines, "next": next_line, "done": done, "exit": code, **({"refused": job.refused} if job.refused else {})}
 
 
 def _record(job: jobs.Job) -> None:
@@ -260,7 +265,7 @@ def alerts() -> list[dict[str, Any]]:
     rows = []
     for job in jobs.recent():
         _, _, done, code = job.since(0)
-        if done:
+        if done and not job.refused:   # a refused job ran nothing: the agent was told, no notice
             verb = {"install": "installed", "upgrade": "upgraded", "reinstall": "reinstalled", "uninstall": "uninstalled"}[job.request.verb]
             what = ", ".join(job.request.names) or "every package"
             rows.append({"key": f"package-install:{job.id}", "ts": job.started, "ok": code == 0,

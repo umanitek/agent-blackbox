@@ -1,6 +1,8 @@
 """The brew runs Blackbox makes for sandboxed agents: a fixed argv, a clean environment, bounded output.
 
-One :class:`Job` per validated request (``request.BrewRequest``). It runs
+One :class:`Job` per validated request (``request.BrewRequest``). It first runs the request's
+*check* (the threat-graph check of each name, ``packages``): a refusal ends the job with its reason
+(:attr:`Job.refused`) and nothing runs. Otherwise it runs
 ``<brew> <request.words()>`` as the person (never root: the dashboard's own user), outside the
 sandbox, with :func:`clean_environment`, no stdin, its own process group, and at most
 :data:`MAX_SECONDS`. Its output is kept in memory, bounded (:data:`MAX_LINES`), for the agent's
@@ -14,12 +16,14 @@ or "off" (``packages``).
 
 Usage::
 
-    job = start(BrewRequest("install", ("tree",)))
+    job = start(BrewRequest("install", ("tree",)), brew, check=lambda: "")
     lines, next_line, done, code = job.since(0)
+    job.refused                     # "" unless the check refused it
 """
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import secrets
@@ -27,6 +31,8 @@ import threading
 import time
 from collections import OrderedDict
 from typing import TYPE_CHECKING, Any, Callable, Optional
+
+from agent.memory_provider import spawn_context_thread
 
 from .....kernel import shell_path
 from .....kernel.bounded_files import read_small_text
@@ -48,6 +54,13 @@ MAX_LINE_CHARS = 2000
 MAX_JOBS = 50
 #: Starts the process: ``(argv, env, cwd) -> Popen`` (tests hand in their own).
 Spawn = Callable[[list[str], dict[str, str], str], "subprocess.Popen[str]"]   # platform.spawn_brew by default
+#: Answers why a request must not run ("" = it may): called in the job, before anything runs.
+Check = Callable[[], str]
+#: A refused job's exit code (the client exits with it).
+REFUSED_EXIT = 1
+#: The refusal when the check itself failed: fail closed.
+CHECK_FAILED = "Blackbox could not check this against the threat graph, so it will not run it"
+logger = logging.getLogger(__name__)
 
 
 def brew_path() -> str:
@@ -121,6 +134,8 @@ class Job:
         self._lines: list[str] = []
         self._dropped = 0
         self._code: Optional[int] = None
+        #: Why the check refused this request ("" when it did not): nothing ran.
+        self.refused = ""
         self._lock = threading.Lock()
 
     def add(self, line: str) -> None:
@@ -133,6 +148,11 @@ class Job:
     def finish(self, code: int) -> None:
         with self._lock:
             self._code = code
+
+    def refuse(self, reason: str) -> None:
+        """Ends the job unrun: *reason* is what the agent is told."""
+        with self._lock:
+            self.refused, self._code = reason, REFUSED_EXIT
 
     def since(self, line: int) -> tuple[list[str], int, bool, Optional[int]]:
         """``(new lines, next line number, done, exit code)`` from line *line* on."""
@@ -163,21 +183,40 @@ def reset() -> None:
 
 
 def start(request: Request, brew: str, *, spawn: Optional[Spawn] = None, done: Optional[Callable[[Job], None]] = None,
-          owner: Any = None, env: Optional[dict[str, str]] = None) -> Job:
+          owner: Any = None, env: Optional[dict[str, str]] = None, check: Optional[Check] = None) -> Job:
     """Runs *request* with the program at *brew* (Homebrew, or a package manager) in a thread;
-    answers the :class:`Job` at once. *done* is called with the job when it has ended (the broker
-    records and notifies there); *owner*: the agent instance that asked; *env*: the environment
-    (Homebrew's :func:`clean_environment` when None)."""
+    answers the :class:`Job` at once. *check* runs first, in that thread (a refusal ends the job
+    unrun: :meth:`Job.refuse`); *done* is called with the job when the program has ended (the
+    broker records and notifies there; not for a refused job, where nothing ran); *owner*: the agent
+    instance that asked; *env*: the environment (Homebrew's :func:`clean_environment` when None).
+
+    WHY the check is in the job (KI-632): it asks the threat graph's store, which during the first
+    sync is slow to answer; done before the answer, it held the agent's request past its timeout."""
     job = Job(request, owner, env)
     with _lock:
         _JOBS[job.id] = job
         while len(_JOBS) > MAX_JOBS:
             _JOBS.popitem(last=False)
-    threading.Thread(target=_run, args=(job, brew, spawn or platform.spawn_brew, done), name=f"blackbox-brew-{job.id}", daemon=True).start()
+    # The asker's context goes with the job: its check reads the config of the profile in scope.
+    spawn_context_thread(_run, args=(job, brew, spawn or platform.spawn_brew, done, check), name=f"blackbox-brew-{job.id}").start()
     return job
 
 
-def _run(job: Job, brew: str, spawn: Spawn, done: Optional[Callable[[Job], None]]) -> None:
+def _refusal(check: Optional[Check]) -> str:
+    if check is None:
+        return ""
+    try:
+        return check()
+    except Exception:   # health: allow BLE001 -- the check could not answer: fail closed
+        logger.warning("blackbox: a brokered install could not be checked", exc_info=True)
+        return CHECK_FAILED
+
+
+def _run(job: Job, brew: str, spawn: Spawn, done: Optional[Callable[[Job], None]], check: Optional[Check]) -> None:
+    refusal = _refusal(check)
+    if refusal:
+        job.refuse(refusal)
+        return
     try:
         process = spawn(argv(brew, job.request), job.env or clean_environment(brew), os.path.expanduser("~"))
     except OSError as error:
