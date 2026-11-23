@@ -200,6 +200,6 @@ API = ShieldApi(
     writes={"protect": protect, "unprotect": unprotect, "file-report": file_report, "open-protected": open_protected,
             **packages.API_WRITES, **{name: _then_sync(write) for name, write in permissions.API_WRITES.items()},
             "permission-answer": permission_answer},
-    weakening={"unprotect": unprotect_weakens, "brew": packages.weakening, **permissions.API_WEAKENING,
-               "permission-answer": permissions.answers.weakening},   # "ask me each time" holds every install
+    weakening={"unprotect": unprotect_weakens, **permissions.API_WEAKENING,
+               "permission-answer": permissions.answers.weakening},
 )

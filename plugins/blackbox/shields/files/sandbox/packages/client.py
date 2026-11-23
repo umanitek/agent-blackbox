@@ -7,8 +7,9 @@ there (first on the SANDBOXED PATH only). Standard library only; it runs inside 
 its session token): ``POST /api/shields/file-shield/api/brew`` with the argv alone. Blackbox
 validates it, checks each package against the threat graph and runs Homebrew outside the
 sandbox. The client prints the output as it arrives (``GET …/brew-job``) and exits with brew's
-exit code. "Ask me each time": the dashboard holds the request (428) until the person approves
-it in the companion app or with their password; the client waits, sending the same request again.
+exit code. When the person is asked first (the ``homebrew`` sandbox permission on "ask"), the
+dashboard answers 423 while the question is open; the client waits, sending the same request
+again, until it runs or is refused. (428, the approval gate holding a request, is waited on alike.)
 FAIL CLOSED: when Blackbox can not be reached, nothing is installed and the agent is told to run
 brew in the person's own terminal.
 
@@ -31,6 +32,8 @@ POLL_SECONDS = 1.0
 APPROVAL_SECONDS = 10 * 60
 TIMEOUT_SECONDS = 10
 HELD = 428
+#: The person has not answered the permission request yet (``packages.WAITING``).
+WAITING = 423
 
 
 def _unreachable(argv: list) -> str:
@@ -57,12 +60,12 @@ def main(argv: list) -> int:
         with urllib.request.urlopen(f"{url}/api/session", timeout=TIMEOUT_SECONDS) as response:
             token = json.loads(response.read(65536)).get("token", "")
         # Who asks: this process's parent (the agent's shell), so Blackbox names the agent (KI-605).
-        asking = {"argv": words, "pid": os.getppid()}
+        asking = {"argv": words, "pid": os.getppid(), "cwd": os.getcwd()}
         status, answer = _call(url, "/api/shields/file-shield/api/brew", token, asking)
         deadline = time.monotonic() + APPROVAL_SECONDS
-        if status == HELD:
+        if status in (HELD, WAITING):
             print("Blackbox: waiting for your approval to run this outside the sandbox …", file=sys.stderr)
-        while status == HELD and time.monotonic() < deadline:
+        while status in (HELD, WAITING) and time.monotonic() < deadline:
             time.sleep(POLL_SECONDS * 2)
             status, answer = _call(url, "/api/shields/file-shield/api/brew", token, asking)
         if status != 200:

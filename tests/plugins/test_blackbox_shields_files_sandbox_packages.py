@@ -8,7 +8,7 @@ a clean environment. Contracts (real proof comes on the VM):
 * validation refuses every injection form: taps, URLs, paths, build flags, valued flags, env;
 * the argv Blackbox runs is fixed: Homebrew's own path, the verb, the validated names;
 * a package a threat rule lists is refused, and so is every name when the verdict can't be asked;
-* "ask me each time" holds each request for the person's approval; loosening the setting waits too;
+* "ask" asks the person (the ``homebrew`` sandbox permission); loosening the setting waits too;
 * "off" refuses; an unreachable broker tells the agent to run brew in its own terminal.
 """
 
@@ -123,15 +123,25 @@ def test_an_allowed_install_runs_the_fixed_argv_and_streams_its_output(monkeypat
     assert any("installed tree" in row["text"] for row in packages.alerts())
 
 
-def test_off_refuses_and_ask_holds_every_request_for_the_person(setting):
+def test_off_refuses_and_ask_puts_the_question_to_the_person(setting, monkeypatch):
+    """Sandbox permissions step 9: "ask" is the homebrew permission's three answers, not one 428 per install."""
+    from plugins.blackbox.shields.files.sandbox.permissions import requests
+    monkeypatch.setattr(jobs, "brew_path", lambda: "/opt/homebrew/bin/brew")
+    monkeypatch.setattr(jobs, "start", lambda request, brew, done, owner: type("Job", (), {"id": "j1"})())
+    requests.reset()
     setting["agent_packages"] = {"installs": "off"}
     with pytest.raises(ShieldApiError) as refused:
         packages.API_WRITES["brew"](_context(), {"argv": ["install", "tree"]})
     assert refused.value.status == 403
     setting["agent_packages"] = {"installs": "ask"}
-    assert packages.weakening({"argv": ["install", "tree"]}) == ["Let an AI agent run `brew install tree` outside its sandbox (Homebrew)"]
-    setting["agent_packages"] = {"installs": "allow"}
-    assert packages.weakening({"argv": ["install", "tree"]}) == []
+    with pytest.raises(ShieldApiError) as waiting:
+        packages.API_WRITES["brew"](_context(), {"argv": ["install", "tree"]})
+    assert waiting.value.status == packages.WAITING
+    [asked] = requests.pending()
+    assert (asked.permission, asked.what) == ("homebrew", "brew install tree")
+    setting["agent_sandbox"] = {"permissions": [{"permission": "homebrew", "mode": "allow"}]}
+    assert packages.API_WRITES["brew"](_context(), {"argv": ["install", "tree"]})["job"] == "j1"
+    requests.reset()
 
 
 def test_loosening_the_setting_waits_for_the_person(setting):

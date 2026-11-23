@@ -61,13 +61,26 @@ def raise_request(permission: str, agent: str, instance: str, project: str, what
         _recent[:] = [ts for ts in _recent if now - ts < 60]
         if len(_open) >= MAX_OPEN or len(_recent) >= MAX_PER_MINUTE:
             return None
-        sealed = digest(permission, agent, project)
+        sealed = digest(permission, agent, project, what[:MAX_WHAT_CHARS])
         request = PermissionRequest(id=sealed[:16] + hashlib.sha256(f"{instance}{now}".encode()).hexdigest()[:8],
                                     permission=permission, agent=agent, instance=instance, project=project,
                                     what=what[:MAX_WHAT_CHARS], digest=sealed, pid=pid, created=now)
         _open[request.id] = request
         _recent.append(now)
         return request
+
+
+OPEN, COOLING = "open", "cooling"
+
+
+def state(instance: str, permission: str, now: Optional[float] = None) -> Optional[str]:
+    """``open`` while a request for (instance, permission) waits, ``cooling`` after the person
+    kept it blocked lately, None otherwise."""
+    now = time.time() if now is None else now
+    with _lock:
+        if any((each.instance or each.agent, each.permission) == (instance, permission) for each in _open.values()):
+            return OPEN
+        return COOLING if now - _kept_blocked.get((instance, permission), 0.0) < COOLDOWN_SECONDS else None
 
 
 def pending() -> list[PermissionRequest]:
@@ -104,5 +117,19 @@ def reset() -> None:
         _recent.clear()
 
 
-__all__ = ["COOLDOWN_SECONDS", "MAX_OPEN", "MAX_PER_MINUTE", "MAX_WHAT_CHARS", "digest", "get", "keep_blocked", "pending",
-           "raise_request", "reset", "take"]
+__all__ = [
+    "COOLDOWN_SECONDS",
+    "COOLING",
+    "MAX_OPEN",
+    "MAX_PER_MINUTE",
+    "MAX_WHAT_CHARS",
+    "OPEN",
+    "digest",
+    "get",
+    "keep_blocked",
+    "pending",
+    "raise_request",
+    "reset",
+    "state",
+    "take",
+]

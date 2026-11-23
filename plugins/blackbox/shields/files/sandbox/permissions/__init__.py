@@ -58,18 +58,48 @@ def allowances(settings: Settings, agent: str = "", folder: str = "") -> Allowan
     return Allowances(lifted=lifted, ports=settings.ports("local-ports", agent, folder), hidden=hidden, read_only=read_only)
 
 
-def ask(permission: str, agent: str, instance: str, folder: str, what: str, pid: int = 0) -> bool:
-    """Opens a request for *permission* when it is on "ask" for *agent* in *folder* (the project
-    the request names is the rule's own project, else *folder*); True when one was opened."""
-    settings = current()
-    if settings.mode(BY_ID[permission], agent, folder) is not Mode.ASK:
-        return False
+def _scope_of(settings: Settings, permission: str, agent: str, folder: str) -> Scope:
+    """The scope a request is for: the deciding rule's project, else *folder* in its one spelling."""
     rule = settings.rule(permission, agent, folder)
     project = rule.scope.project if rule is not None and rule.scope.project else _spelling(folder)
-    opened = requests.raise_request(permission, agent, instance, project, what, pid)
+    return Scope(agent=agent, project=project)
+
+
+def _open(permission: str, scope: Scope, instance: str, what: str, pid: int) -> bool:
+    opened = requests.raise_request(permission, scope.agent, instance, scope.project, what, pid)
     if opened is not None:
         answers.requested(opened)
     return opened is not None
+
+
+def ask(permission: str, agent: str, instance: str, folder: str, what: str, pid: int = 0) -> bool:
+    """Opens a request for *permission* when it is on "ask" for *agent* in *folder*; True when one was opened."""
+    settings = current()
+    if settings.mode(BY_ID[permission], agent, folder) is not Mode.ASK:
+        return False
+    return _open(permission, _scope_of(settings, permission, agent, folder), instance, what, pid)
+
+
+#: What a broker does with a request (:func:`broker_decision`).
+ALLOWED, WAITING, REFUSED = "allow", "wait", "block"
+
+
+def broker_decision(permission: str, agent: str, instance: str, folder: str, what: str, pid: int = 0) -> str:
+    """For a broker asked to do *what* (Blackbox's own words for it, e.g. ``brew install tree``):
+    :data:`ALLOWED` (the mode allows it, or the person allowed this exact request once — the grant
+    is spent), :data:`REFUSED` (blocked, or the person kept it blocked lately, or the request
+    bounds are reached) or :data:`WAITING` (a request is open: ask again shortly)."""
+    settings = current()
+    mode = settings.mode(BY_ID[permission], agent, folder)
+    if mode is not Mode.ASK:
+        return ALLOWED if mode is Mode.ALLOW else REFUSED
+    scope = _scope_of(settings, permission, agent, folder)
+    if grants.use(permission, scope, requests.digest(permission, agent, scope.project, what)):
+        return ALLOWED
+    asked = requests.state(instance or agent, permission)
+    if asked == requests.COOLING:
+        return REFUSED
+    return WAITING if asked == requests.OPEN or _open(permission, scope, instance, what, pid) else REFUSED
 
 
 #: Which permission a refusal kind asks for when several share it (``open`` of an app vs a link:
@@ -99,7 +129,8 @@ def section_weakening(raw: Any) -> list[str]:
     return [] if errors else loosened(stored(), with_legacy(after))
 
 
-__all__ = ["API_WEAKENING", "API_WRITES", "BY_ID", "NEVER", "NOT_CONTROLLABLE", "PERMISSIONS", "SECTION", "Access",
-           "Allowances", "Choice", "FolderRule", "Mode", "Permission", "PermissionRequest", "Route", "Rule", "Scope",
-           "Settings", "allowances", "answers", "ask", "catalogue", "current", "decide", "grants", "loosened",
-           "refused", "requests", "section_weakening", "stored", "validate_section", "view"]
+__all__ = ["ALLOWED", "API_WEAKENING", "API_WRITES", "BY_ID", "NEVER", "NOT_CONTROLLABLE", "PERMISSIONS", "REFUSED",
+           "SECTION", "WAITING", "Access", "Allowances", "Choice", "FolderRule", "Mode", "Permission",
+           "PermissionRequest", "Route", "Rule", "Scope", "Settings", "allowances", "answers", "ask",
+           "broker_decision", "catalogue", "current", "decide", "grants", "loosened", "refused", "requests",
+           "section_weakening", "stored", "validate_section", "view"]

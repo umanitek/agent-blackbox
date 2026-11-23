@@ -16,9 +16,12 @@ a new daemon: it already runs as the person (never root), outside the sandbox, o
 behind the session token and the approval gate. A second per-user service would be one more
 process, port and credential to keep, for no extra isolation. For each request it:
 
-1. reads the setting, ``agent_packages.installs`` (:data:`SETTING`): ``allow`` (the default:
-   allow and notify), ``ask`` (the approval gate holds each request until the person approves it
-   in the companion app's dialog or with their password; :func:`weakening`) or ``off``;
+1. decides by the sandbox permission ``homebrew`` (``sandbox.permissions``) for the agent that
+   asked, in the folder it asked from: ``allow`` (the default: allow and notify), ``block``, or
+   ``ask`` — the person is asked (Allow once / Always for this agent here / Keep blocked); the
+   client waits while the question is open (423) and the broker runs the request once it is
+   allowed. Until the person sets the permission, the older ``agent_packages.installs``
+   (:data:`SETTING`: off / ask / allow) is read as its everywhere rule;
 2. validates the argv (``request.parse``: names only, official taps only, a short list of flags);
 3. checks each name against the threat graph as a package action (``brew install <name>``, the
    guard's one tool-call verdict through ``ShieldContext.tool_call_verdict``). A name any rule
@@ -53,11 +56,11 @@ from .....kernel import agent_hosts, settings as kernel_settings
 from .....kernel.bounded_files import atomic_write, read_small_text
 from .....kernel.config import load_blackbox_config, shield_entry
 from ....shield_api import ShieldApiError, ShieldContext
-from .. import platform
+from .. import permissions, platform
 from . import jobs
 from .request import BrewRequest, Refused, parse
 
-__all__ = ["API_READS", "API_WRITES", "SETTING", "alerts", "install_shim", "installs", "setting_weakening", "weakening"]
+__all__ = ["API_READS", "API_WRITES", "PERMISSION", "SETTING", "WAITING", "alerts", "install_shim", "installs", "setting_weakening"]
 
 #: The config section and key: ``plugins.entries.blackbox.agent_packages.installs``.
 SECTION, SETTING = "agent_packages", "installs"
@@ -72,7 +75,8 @@ logger = logging.getLogger(__name__)
 
 
 def installs() -> str:
-    """The person's choice: ``allow`` (default), ``ask`` or ``off``."""
+    """The older setting as stored: ``allow`` (default), ``ask`` or ``off`` (read as the everywhere
+    rule of the ``homebrew`` permission until one is set; :func:`setting_weakening` judges it)."""
     section = shield_entry().get(SECTION)
     value = section.get(SETTING) if isinstance(section, Mapping) else None
     return value if value in CHOICES else DEFAULT
@@ -97,21 +101,39 @@ def setting_weakening(raw: Any) -> list[str]:
 kernel_settings.SECTION_VALIDATORS[SECTION] = validate_section
 
 
+#: The broker's answer while the person has not answered the request yet: the client asks again.
+WAITING = 423
+PERMISSION = "homebrew"
+MAX_CWD_CHARS = 1024
+
+
 def _request(body: Mapping[str, Any]) -> BrewRequest:
-    # The brew words, and the asking process's pid (who asked, never what runs: KI-605).
-    if set(body) - {"argv", "pid"}:
+    # The brew words, the asking process's pid (who asked, never what runs: KI-605) and its working
+    # folder (which project's rule decides; the agent can cd anywhere, so this is no weaker).
+    if set(body) - {"argv", "pid", "cwd"}:
         raise Refused("a request carries the brew words only")
     return parse(body.get("argv") or [])
 
 
-def weakening(body: Mapping[str, Any]) -> list[str]:
-    """In "ask me each time", every valid request waits for the person (the approval gate)."""
-    if installs() != ASK:
-        return []
-    try:
-        return [f"Let an AI agent run `{_request(body).shown()}` outside its sandbox (Homebrew)"]
-    except Refused:
-        return []   # refused by the endpoint itself: nothing to confirm
+def _folder(body: Mapping[str, Any]) -> str:
+    cwd = body.get("cwd")
+    return os.path.realpath(cwd) if isinstance(cwd, str) and cwd.startswith("/") and len(cwd) <= MAX_CWD_CHARS \
+        and "\x00" not in cwd else ""
+
+
+def _decide(context: ShieldContext, body: Mapping[str, Any], request: BrewRequest) -> Any:
+    """The homebrew permission's decision for the asking agent; raises when it is not ALLOWED."""
+    owner = _asker(context, body)
+    agent, instance = (owner.agent, owner.instance) if owner is not None else ("", "")
+    pid = body.get("pid")
+    decision = permissions.broker_decision(PERMISSION, agent, instance, _folder(body), request.shown(),
+                                           pid if isinstance(pid, int) and not isinstance(pid, bool) else 0)
+    if decision == permissions.WAITING:
+        raise ShieldApiError(WAITING, "Blackbox asked you whether this agent may run it; it runs once you allow it.")
+    if decision == permissions.REFUSED:
+        raise ShieldApiError(403, "Homebrew installs by this AI agent are blocked in Blackbox's sandbox permissions; "
+                                  "run brew in your own terminal.")
+    return owner
 
 
 def _listed(context: ShieldContext, request: BrewRequest) -> list[str]:
@@ -135,19 +157,18 @@ def _listed(context: ShieldContext, request: BrewRequest) -> list[str]:
 
 
 def _brew(context: ShieldContext, body: Mapping[str, Any]) -> dict[str, Any]:
-    if installs() == OFF:
-        raise ShieldApiError(403, "Package installs by AI agents are off in Blackbox's settings; run brew in your own terminal.")
     try:
         request = _request(body)
     except Refused as why:
         raise ShieldApiError(400, str(why)) from None
+    owner = _decide(context, body, request)
     listed = _listed(context, request)
     if listed:
         raise ShieldApiError(403, f"{', '.join(listed)}: a threat rule lists this package, so Blackbox will not install it")
     brew = jobs.brew_path()
     if not brew:
         raise ShieldApiError(404, "Homebrew is not installed on this Mac.")
-    job = jobs.start(request, brew, done=_record, owner=_asker(context, body))
+    job = jobs.start(request, brew, done=_record, owner=owner)
     return {"job": job.id, "command": request.shown()}
 
 
