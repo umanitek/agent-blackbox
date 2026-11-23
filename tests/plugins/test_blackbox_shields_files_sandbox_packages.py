@@ -10,7 +10,8 @@ a clean environment. Contracts (real proof comes on the VM):
 * a package a threat rule lists is refused, and so is every name when the verdict can't be asked
   (the job's refusal: the request is answered at once and checked in its job, KI-632);
 * "ask" asks the person (the ``homebrew`` sandbox permission); loosening the setting waits too;
-* "off" refuses; an unreachable broker tells the agent to run brew in its own terminal.
+* "off" refuses; an unreachable broker tells the agent to run brew in its own terminal;
+* the notice follows what Homebrew did: a package it says it left as it was is not "installed" (KI-639).
 
 KI-632 (security round 6, clean VM): during the first threat-graph sync the broker held the agent's
 request while it asked the graph's busy store, the client gave up after 10 s and said only "Blackbox
@@ -358,3 +359,49 @@ def test_a_refusal_in_the_job_is_told_to_the_agent(dashboard, capsys):
     assert client.main(["brew-client.py", refusing.url, "install", "evil-pkg"]) == 1
     assert ("Blackbox's sandbox refused this (brew install evil-pkg): evil-pkg: a threat rule lists this package"
             in capsys.readouterr().err)
+
+
+@pytest.mark.parametrize("argv, line, left", [
+    (["install", "tree"], "Warning: tree 2.3.2 is already installed", "tree"),            # round 6, word for word
+    (["install", "tree"], "Warning: tree 2.3.2 is already installed and up-to-date.", "tree"),
+    (["install", "tree"], "Warning: tree 2.3.2 is already installed, it's just not linked.", "tree"),
+    (["upgrade", "tree"], "Warning: tree 2.3.2 already installed", "tree"),
+    (["install", "--cask", "firefox"], "Warning: Cask 'firefox' is already installed.", "firefox"),
+    (["upgrade", "--cask", "firefox"], "Warning: Not upgrading firefox, the latest version is already installed", "firefox"),
+    (["install", "tree"], "==> Pouring tree--2.3.2.arm64_sequoia.bottle.tar.gz", ""),
+    (["install", "tree"], "Warning: wget 1.25.0 is already installed", ""),                 # not a name it asked for
+    (["reinstall", "tree"], "Warning: tree 2.3.2 is already installed", ""),               # a reinstall always changes it
+])
+def test_homebrews_own_words_say_which_package_it_left_as_it_was(argv, line, left):
+    assert request.parse(argv).unchanged(line) == left
+
+
+def _run_printing(monkeypatch, argv, *lines):
+    """Runs a brokered brew whose output is *lines* (exit 0); answers the job once recorded."""
+    finished = threading.Event()
+    script = "".join(f"print({line!r});" for line in lines)
+    monkeypatch.setattr(jobs.platform, "spawn_brew", lambda command, env, cwd: subprocess.Popen(
+        [sys.executable, "-c", script], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True))
+    monkeypatch.setattr(jobs, "brew_path", lambda: "/opt/homebrew/bin/brew")
+    real_record = packages._record
+    monkeypatch.setattr(packages, "_record", lambda job: (real_record(job), finished.set()))
+    started = packages.API_WRITES["brew"](_context(), {"argv": argv})
+    assert finished.wait(30)
+    return started
+
+
+def test_a_second_install_of_a_package_already_there_sends_no_installed_notice(monkeypatch):
+    """KI-639 (round 6, s6-br13): the second `brew install tree` printed "Warning: tree 2.3.2 is
+    already installed", yet a second "Blackbox installed tree with Homebrew …" notice was sent."""
+    from plugins.blackbox import audit
+    _run_printing(monkeypatch, ["install", "tree"], "==> Pouring tree--2.3.2.arm64_sequoia.bottle.tar.gz")
+    _run_printing(monkeypatch, ["install", "tree"], "Warning: tree 2.3.2 is already installed")
+    assert [row["text"] for row in packages.alerts()] == ["Blackbox installed tree with Homebrew for an AI agent."]
+    rows = [row["detail"] for row in audit.read_audit(limit=50) if row.get("event") == "package_install"]
+    assert sorted(row.get("unchanged", []) for row in rows) == [[], ["tree"]]   # the no-op run is still recorded
+
+
+def test_the_notice_names_only_what_homebrew_installed(monkeypatch):
+    _run_printing(monkeypatch, ["install", "tree", "hello"], "Warning: tree 2.3.2 is already installed",
+                  "==> Pouring hello--2.12.2.arm64_sequoia.bottle.tar.gz")
+    assert [row["text"] for row in packages.alerts()] == ["Blackbox installed hello with Homebrew for an AI agent."]

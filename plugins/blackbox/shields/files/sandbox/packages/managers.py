@@ -101,6 +101,11 @@ class InstallRequest:
         """What *name* is threat-checked as (the guard's package rules)."""
         return f"{MANAGERS[self.manager].check} {name}"
 
+    def unchanged(self, line: str) -> str:
+        """"": a manager's output is not read, so every name of a run that ended well counts as
+        installed (Homebrew's is: ``request.BrewRequest.unchanged``)."""
+        return ""
+
 
 def parse(manager_id: str, argv: Sequence[str]) -> InstallRequest:
     """The :class:`InstallRequest` for ``<program> <argv>``; raises :class:`Refused` with the reason."""

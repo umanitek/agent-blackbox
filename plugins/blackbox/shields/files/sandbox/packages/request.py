@@ -40,6 +40,14 @@ OFFICIAL_TAPS = ("homebrew/core/", "homebrew/cask/")
 FLAGS = frozenset({"--cask", "--formula", "--quiet", "-q", "--verbose", "-v"})
 MAX_NAMES = 20
 MAX_NAME_CHARS = 100
+#: Homebrew's own words for a package it left as it was (KI-639): ``Warning: tree 2.3.2 is already
+#: installed`` (``… and up-to-date.``, ``…, it's just not linked``), ``Warning: tree 2.3.2 already
+#: installed`` (upgrade), ``Warning: Cask 'firefox' is already installed.``, ``Warning: Not upgrading
+#: firefox, the latest version is already installed``. Homebrew's output is not translated.
+UNCHANGED = (re.compile(r"^Warning: (?:Cask ')?([a-z0-9][a-z0-9+_.@-]*)'?(?: \S+)? (?:is )?already installed\b"),
+             re.compile(r"^Warning: Not upgrading ([a-z0-9][a-z0-9+_.@-]*), the latest version is already installed\b"))
+#: The verbs whose run may leave a package as it was (reinstall and uninstall always change it).
+MAY_LEAVE = frozenset({"install", "upgrade"})
 
 
 class Refused(ValueError):
@@ -73,6 +81,16 @@ class BrewRequest:
     def check_command(self, name: str) -> str:
         """What *name* is threat-checked as (the guard's package rules)."""
         return f"brew install {self.kind + ' ' if self.kind else ''}{name}"
+
+    def unchanged(self, line: str) -> str:
+        """The asked-for name an output *line* says Homebrew left as it was (:data:`UNCHANGED`), or ""."""
+        if self.verb not in MAY_LEAVE:
+            return ""
+        for pattern in UNCHANGED:
+            found = pattern.match(line)
+            if found and found.group(1) in self.names:
+                return found.group(1)
+        return ""
 
 
 def brokered(argv: Sequence[str]) -> bool:

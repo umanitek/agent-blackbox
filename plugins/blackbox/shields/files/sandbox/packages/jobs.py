@@ -136,11 +136,17 @@ class Job:
         self._code: Optional[int] = None
         #: Why the check refused this request ("" when it did not): nothing ran.
         self.refused = ""
+        #: The names the program's output said it left as they were (``Request.unchanged``, KI-639).
+        self._unchanged: set[str] = set()
         self._lock = threading.Lock()
 
     def add(self, line: str) -> None:
+        text = line.rstrip("\n")[:MAX_LINE_CHARS]
+        left = self.request.unchanged(text)
         with self._lock:
-            self._lines.append(line.rstrip("\n")[:MAX_LINE_CHARS])
+            if left:
+                self._unchanged.add(left)
+            self._lines.append(text)
             if len(self._lines) > MAX_LINES:
                 self._lines.pop(0)
                 self._dropped += 1
@@ -148,6 +154,16 @@ class Job:
     def finish(self, code: int) -> None:
         with self._lock:
             self._code = code
+
+    def unchanged(self) -> tuple[str, ...]:
+        """The asked-for names the program's output said it left as they were, in the order asked."""
+        with self._lock:
+            return tuple(name for name in self.request.names if name in self._unchanged)
+
+    def changed(self) -> tuple[str, ...]:
+        """The asked-for names it did not say that of, in the order asked."""
+        left = self.unchanged()
+        return tuple(name for name in self.request.names if name not in left)
 
     def refuse(self, reason: str) -> None:
         """Ends the job unrun: *reason* is what the agent is told."""

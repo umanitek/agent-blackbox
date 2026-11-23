@@ -249,25 +249,31 @@ def _job(_context: ShieldContext, query: Mapping[str, str]) -> dict[str, Any]:
 
 
 def _record(job: jobs.Job) -> None:
-    """The audit row of a finished run (local only; the names, the verb and the exit code)."""
+    """The audit row of a finished run (local only; the names, the verb, the exit code and the
+    names Homebrew left as they were)."""
     _, _, _, code = job.since(0)
+    unchanged = list(job.unchanged())   # Homebrew left these as they were (KI-639)
     try:
         owner = job.owner
         audit.record_for(audit.SANDBOX_RECORDER, event="package_install", workspace=getattr(owner, "folder", "") or "",
                          detail={"command": job.request.shown(), "exit": code, "job": job.id,
+                                 **({"unchanged": unchanged} if unchanged else {}),
                                  **({"agent": owner.agent, "session_id": owner.instance} if owner is not None else {})})
     except Exception:   # health: allow BLE001 -- the install happened; a failed record is logged
         logger.warning("blackbox: a brokered brew run was not recorded", exc_info=True)
 
 
 def alerts() -> list[dict[str, Any]]:
-    """One alert per brokered run that ended: ``{key, ts, ok, text}`` (File Shield words them)."""
+    """One alert per brokered run that ended: ``{key, ts, ok, text}`` (File Shield words them).
+    None for a refused run (nothing ran) nor for one that changed nothing: every name it was asked
+    for Homebrew said it left as it was (``Warning: tree 2.3.2 is already installed``, KI-639)."""
     rows = []
     for job in jobs.recent():
         _, _, done, code = job.since(0)
-        if done and not job.refused:   # a refused job ran nothing: the agent was told, no notice
+        changed = job.changed()
+        if done and not job.refused and not (code == 0 and job.request.names and not changed):
             verb = {"install": "installed", "upgrade": "upgraded", "reinstall": "reinstalled", "uninstall": "uninstalled"}[job.request.verb]
-            what = ", ".join(job.request.names) or "every package"
+            what = ", ".join(changed if code == 0 else job.request.names) or "every package"
             rows.append({"key": f"package-install:{job.id}", "ts": job.started, "ok": code == 0,
                          "text": (f"Blackbox {verb} {what} with {job.request.tool} {_who(job)}." if code == 0 else
                                   f"{job.request.tool} could not finish `{job.request.shown()}` {_who(job)}."),
