@@ -102,12 +102,29 @@ def _row(item: Instance, subs: Mapping[str, list[Instance]]) -> dict[str, Any]:
     return row
 
 
+#: Clock slack between a process's start time (``ps``, whole seconds) and a session's own times.
+START_SLACK_SECONDS = 2.0
+
+
+def _hooked(proc: Running, sessions: Iterable[Instance]) -> bool:
+    """True when *proc* is a process Blackbox has seen hook events from: a session ran in it —
+    live, or ENDED while this same process was already running (started no later than the end).
+
+    WHY (KI-594, sandbox developer day 2026-11-22: 7 of 26 hooked ``claude -p`` runs): a session
+    that has just ended leaves its process in the process list for a moment (it is exiting, and
+    the list is reused for a second and a half), and only LIVE sessions counted as hooked, so a
+    fully hooked run was announced as "running without Blackbox". A later process that reuses the
+    pid started after that end, so it is not taken for the hooked one."""
+    return any(item.pid == proc.pid and (item.ended is None or item.ended + START_SLACK_SECONDS >= proc.started)
+               for item in sessions if item.pid)
+
+
 def _unprotected(running: Iterable[Running], sessions: Iterable[Instance]) -> list[dict[str, Any]]:
-    hooked = {item.pid for item in sessions if item.pid and item.ended is None}
+    sessions = list(sessions)
     now = time.time()
     out = []
     for proc in running:
-        if proc.pid in hooked or (not proc.hooks_skipped and now - proc.started < GRACE_SECONDS):
+        if _hooked(proc, sessions) or (not proc.hooks_skipped and now - proc.started < GRACE_SECONDS):
             continue
         host = BY_ID.get(proc.agent)
         out.append({"pid": proc.pid, "agent": proc.agent, "name": host.name if host else proc.agent, "launch": proc.launch,

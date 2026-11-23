@@ -335,3 +335,18 @@ def test_the_history_filters_by_project_date_and_outcome_and_names_its_choices()
     assert facets == {"agents": [{"id": "claude-code", "name": "Claude Code"}, {"id": "codex", "name": "Codex"}],
                       "projects": ["app", "site"]}
     assert client.get("/api/agent-instances/history?outcome=maybe").status_code == 400
+
+
+def test_a_hooked_run_that_just_ended_is_never_called_running_without_blackbox():
+    """KI-594 (sandbox developer day, 2026-11-22): within 1-2 s after 7 of 26 fully hooked
+    ``claude -p`` runs ended, "Claude Code is running without Blackbox" fired — the ended session's
+    process was still in the (reused) process list, and only LIVE sessions counted as hooked."""
+    now = time.time()
+    session = store.Instance("claude-code:" + "a" * 16, "claude-code", "session", now - 60, now - 50, pid=2955)
+    session.ended, session.end_reason = now - 50, "ended"
+    store.put(session)
+    exiting = Running(pid=2955, ppid=1, agent="claude-code", launch="terminal", started=now - 60)
+    assert views.live([exiting])["unprotected"] == []
+    for unhooked in (Running(pid=2955, ppid=1, agent="claude-code", launch="terminal", started=now - 30),   # pid reused later
+                     Running(pid=3001, ppid=1, agent="claude-code", launch="terminal", started=now - 60)):
+        assert [row["pid"] for row in views.live([unhooked])["unprotected"]] == [unhooked.pid]
