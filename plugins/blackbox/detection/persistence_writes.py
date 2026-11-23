@@ -53,8 +53,10 @@ _HOW = {"write": "a write to {place}", "code": "code that writes {place}", "comm
 
 
 def _schedules(command: str) -> bool:
-    """True when a command line leaves a job without naming its file (``echo … | crontab -``)."""
-    for line in command.split("\n"):
+    """True when a command line leaves a job without naming its file (``echo … | crontab -``) —
+    also when it hands that command to another shell (``bash -lc "launchctl bootstrap …"``,
+    Codex's wrapper: round 6 loaded a launchd job, a cron and an ``at`` job that way)."""
+    for line in shell_shapes.with_nested_commands(command).split("\n"):
         for segment in guard_paths._segments(shell_files._with_variables(shell_files._words(line))):
             name, rest = guard_paths._command_of(segment)
             if persistence_places.schedules(name, rest):

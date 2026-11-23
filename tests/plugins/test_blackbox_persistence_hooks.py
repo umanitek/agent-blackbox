@@ -156,3 +156,31 @@ def test_every_place_the_sandbox_closes_is_refused_by_the_hook_too(machine, monk
               or not _refused("write_file", {"path": path, "content": "x"})]
     assert not missed, "\n".join(missed)
 
+
+
+#: Codex wraps every command as ``/bin/zsh -lc 'bash -lc "…"'`` (security round 6, raw/bB.log).
+_WRAPS = ("{c}", "bash -lc \"{c}\"", "/bin/zsh -lc 'bash -lc \"{c}\"'", "sh -c '{c}'")
+
+
+@pytest.mark.parametrize("command", [
+    "launchctl bootstrap gui/$(id -u) pl.plist", "launchctl bootstrap gui/$UID ~/Library/LaunchAgents/ai.x.plist",
+    "launchctl load -w pl.plist", "launchctl submit -l ai.x -- /usr/bin/true", "launchctl enable gui/501/ai.x",
+    "launchctl kickstart -k gui/501/ai.x", "/bin/launchctl bootstrap gui/501 pl.plist",
+    "launchctl asuser 501 launchctl load pl.plist", "sudo launchctl bootstrap system pl.plist",
+    "xargs launchctl load < plists.txt", "echo '*/30 * * * * /usr/bin/true' | crontab -", "echo /usr/bin/true | at now + 2 hours",
+])
+@pytest.mark.parametrize("wrap", _WRAPS)
+def test_every_launchctl_load_verb_and_job_command_is_refused_however_it_is_wrapped(machine, command, wrap):
+    """Round 6 (hooks only, Codex): ``launchctl bootstrap gui/$UID pl.plist`` LOADED a job, and a cron
+    and an ``at`` job were written, because the job commands were judged only unwrapped — Claude
+    Code's bare commands were refused. Every launchctl verb that loads, submits, enables or starts a
+    job is refused, for any plist or label, bare or inside another shell."""
+    if "'" in command and "'" in wrap:
+        pytest.skip("a single quote cannot sit inside this wrapper's single quotes")
+    assert _refused("terminal", {"command": wrap.format(c=command)}), wrap.format(c=command)
+
+
+@pytest.mark.parametrize("command", ["launchctl list", "launchctl print gui/501/ai.load", "launchctl bootout gui/501/ai.x",
+                                     "launchctl unload pl.plist", "bash -lc \"launchctl list | grep ai.x\"", "xargs -n1 echo < f"])
+def test_launchctl_reads_and_removals_stay_allowed(machine, command):
+    assert not _refused("terminal", {"command": command}), command

@@ -168,9 +168,22 @@ def _with_real_spellings(places: list[str] | tuple[str, ...]) -> tuple[str, ...]
 #: Commands that leave a job in a persistence place without naming it, and the options with which
 #: they only look or remove: a cron table written from text (``crontab -`` / ``crontab file`` /
 #: ``crontab -e``), an ``at`` / ``batch`` job, a launchd job loaded or submitted (``launchctl
-#: submit`` makes one with no file at all), a systemd user unit enabled.
+#: submit`` makes one with no file at all; ``kickstart`` runs a loaded one now), a systemd user
+#: unit enabled. launchctl's verb may come after ``asuser <uid>`` (round 6, KI-PENDING: an agent's
+#: ``launchctl bootstrap gui/$UID <plist>`` loaded a job), so every word is read for it.
 _ONLY_LOOK = {"crontab": frozenset({"-l", "-r"}), "at": frozenset({"-l", "-r", "-c", "-d"}), "batch": frozenset()}
-_LOADS = {"launchctl": frozenset({"load", "bootstrap", "submit", "enable"}), "systemctl": frozenset({"enable", "link"})}
+_LOADS = {"launchctl": frozenset({"load", "bootstrap", "submit", "enable", "kickstart"}),
+          "systemctl": frozenset({"enable", "link"})}
+#: Programs that run another program given as their words.
+_RUNS_ANOTHER = frozenset({"xargs", "parallel", "watch"})
+#: Every program :func:`schedules` judges.
+_SCHEDULERS = frozenset({*_ONLY_LOOK, *_LOADS, "osascript"})
+
+
+def _program(word: str) -> str:
+    return word.rsplit("/", 1)[-1].lower()
+
+
 #: A login item made through System Events (``osascript -e '… make login item …'``).
 _LOGIN_ITEM = re.compile(r"\blogin\s+item\b", re.IGNORECASE)
 
@@ -179,8 +192,13 @@ def schedules(name: str, rest: list[str]) -> bool:
     """True when command *name* (its program name, lower case) with words *rest* leaves a job that
     starts by itself later: ``crontab -``, ``at now + 1 hour``, ``launchctl submit …``,
     ``systemctl --user enable x``, ``osascript -e '… make login item …'``."""
+    if name in _RUNS_ANOTHER:   # ``xargs launchctl load``: the command it runs, with its words
+        found = next((index for index, word in enumerate(rest) if _program(word) in _SCHEDULERS), None)
+        return found is not None and schedules(_program(rest[found]), rest[found + 1:])
     if name in _ONLY_LOOK:
         return not (rest and rest[0] in _ONLY_LOOK[name])
+    if name == "launchctl":
+        return any(word.lower() in _LOADS[name] for word in rest)
     if name in _LOADS:
         return any(word in _LOADS[name] for word in rest[:3]) and (name != "systemctl" or "--user" in rest)
     if name == "osascript":
