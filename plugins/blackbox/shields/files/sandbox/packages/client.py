@@ -20,8 +20,10 @@ once per ask (it starts an install: asking twice could install twice) and waits 
 :data:`BUSY_SECONDS`. FAIL CLOSED: when Blackbox does not answer, nothing is run for the agent, and
 the message says why (not running, or busy for N s) and what to do.
 
-The ``open`` stand-in runs it with ``--action open-link`` / ``--action open-app``: one request to
-that endpoint, waited on the same way, and Blackbox's answer printed.
+The ``open`` and ``osascript`` stand-ins run it with ``--action open-link`` / ``open-app`` /
+``applescript``: the same shape — the request answered at once with a job (the threat check of a
+link and the action itself run in it), followed through ``GET …/action-job``, waited on while busy
+the same way (KI-632's pattern for every broker, wave 9).
 
 A package manager's shim (``npm``, ``pipx``, ``pip``, ``cargo``, ``gem``, ``uv``) runs it with
 ``--manager <id>`` for a global install: ``POST …/install`` and ``GET …/install-job`` instead.
@@ -64,9 +66,15 @@ class Unanswered(Exception):
         self.busy, self.seconds, self.detail = busy, seconds, detail
 
 
-def _gave_up(program: str, argv: list, error: Unanswered, phase: str) -> str:
-    """The sentence the agent reads when Blackbox did not answer: why, and what to do."""
+#: How the agent's command is shown for each brokered action (the program the agent ran).
+_ACTION_PROGRAM = {"open-link": "open", "open-app": "open", "applescript": "osascript"}
+
+
+def _gave_up(program: str, argv: list, error: Unanswered, phase: str, action: bool = False) -> str:
+    """The sentence the agent reads when Blackbox did not answer: why, and what to do. *action*: a
+    brokered action (open a link …), not an install."""
     command = f"{program} {' '.join(argv)}"
+    could_not, nothing = ("do this", "Nothing was done") if action else ("install this", "Nothing was installed")
     if phase == RUNNING:
         why = f"for {error.seconds:.0f} s" if error.busy else f"({error.detail})"
         return (f"Blackbox stopped answering {why} while it ran `{command}`; it may still finish. "
@@ -75,9 +83,9 @@ def _gave_up(program: str, argv: list, error: Unanswered, phase: str) -> str:
         return (f"Blackbox was asked to run `{command}` but did not answer within {error.seconds:.0f} s (it is busy, "
                 "perhaps syncing its threat graph); it may still run it. Check in a minute before you run it in your own terminal.")
     if error.busy:
-        return (f"Blackbox couldn't install this: it was busy and did not answer within {error.seconds:.0f} s (perhaps "
-                f"syncing its threat graph). Nothing was installed; try again in a minute, or run `{command}` in your own terminal.")
-    return (f"Blackbox couldn't install this: Blackbox is not answering ({error.detail}). Nothing was installed; "
+        return (f"Blackbox couldn't {could_not}: it was busy and did not answer within {error.seconds:.0f} s (perhaps "
+                f"syncing its threat graph). {nothing}; try again in a minute, or run `{command}` in your own terminal.")
+    return (f"Blackbox couldn't {could_not}: Blackbox is not answering ({error.detail}). {nothing}; "
             f"run `{command}` in your own terminal.")
 
 
@@ -127,30 +135,6 @@ def _ask(url: str, path: str, token: str, body: dict) -> tuple:
         raise Unanswered(False, 0.0, "its answer could not be read") from None
 
 
-def _action(url: str, action: str, words: list) -> int:
-    """A brokered action (``open-link``, ``open-app`` …): one request, waited on while the person
-    is asked, then Blackbox's answer printed."""
-    try:
-        with urllib.request.urlopen(f"{url}/api/session", timeout=ANSWER_SECONDS) as response:
-            token = json.loads(response.read(65536)).get("token", "")
-        asking = {"argv": words, "pid": os.getppid(), "cwd": os.getcwd()}
-        status, answer = _call(url, f"/api/shields/file-shield/api/{action}", token, asking)
-        deadline = time.monotonic() + APPROVAL_SECONDS
-        if status in (HELD, WAITING):
-            print("Blackbox: waiting for your approval to do this outside the sandbox …", file=sys.stderr)
-        while status in (HELD, WAITING) and time.monotonic() < deadline:
-            time.sleep(POLL_SECONDS * 2)
-            status, answer = _call(url, f"/api/shields/file-shield/api/{action}", token, asking)
-    except (OSError, ValueError):
-        print(f"Blackbox couldn't do this ({action}); do it yourself.", file=sys.stderr)
-        return 1
-    if status != 200:
-        print(f"Blackbox's sandbox refused this ({action}): {answer.get('error') or 'not allowed'}", file=sys.stderr)
-        return 1
-    print(str(answer.get("message") or ""))
-    return int(answer.get("exit") or 0)
-
-
 def _follow(url: str, endpoint: str, token: str, job: str, refused: str) -> int:
     """Prints the job's output as it comes; its exit code, or 1 with *refused* + the reason."""
     line = 0
@@ -169,24 +153,21 @@ def _follow(url: str, endpoint: str, token: str, job: str, refused: str) -> int:
         time.sleep(POLL_SECONDS)
 
 
-def main(argv: list) -> int:
-    url, words = argv[1].rstrip("/"), argv[2:]
-    if words[:1] == ["--action"] and len(words) > 1:
-        return _action(url, words[1], words[2:])
-    manager = words[1] if words[:1] == ["--manager"] and len(words) > 1 else ""
-    words = words[2:] if manager else words
-    endpoint, program = ("install", manager) if manager else ("brew", "brew")
+def _brokered(url: str, endpoint: str, follow: str, program: str, words: list, extra: dict) -> int:
+    """Asks Blackbox at *endpoint* to do *words* (``brew``, ``install`` or an action), waits while
+    the person is asked, then follows the job at ``<follow>-job``: its exit code, or 1 with why."""
+    action = follow == "action"
     refused, phase = f"Blackbox's sandbox refused this ({program} {' '.join(words)})", BEFORE
     try:
         _, session = _read(url, "/api/session")
         token = str(session.get("token") or "")
         # Who asks: this process's parent (the agent's shell), so Blackbox names the agent (KI-605).
-        asking = {"argv": words, "pid": os.getppid(), "cwd": os.getcwd(), **({"manager": manager} if manager else {})}
+        asking = {"argv": words, "pid": os.getppid(), "cwd": os.getcwd(), **extra}
         phase = ASKED
         status, answer = _ask(url, f"/api/shields/file-shield/api/{endpoint}", token, asking)
         deadline = time.monotonic() + APPROVAL_SECONDS
         if status in (HELD, WAITING):
-            print("Blackbox: waiting for your approval to run this outside the sandbox …", file=sys.stderr)
+            print(f"Blackbox: waiting for your approval to {'do' if action else 'run'} this outside the sandbox …", file=sys.stderr)
         while status in (HELD, WAITING) and time.monotonic() < deadline:
             time.sleep(POLL_SECONDS * 2)
             status, answer = _ask(url, f"/api/shields/file-shield/api/{endpoint}", token, asking)
@@ -195,10 +176,20 @@ def main(argv: list) -> int:
             print(f"{refused}: {error}", file=sys.stderr)
             return 1
         phase = RUNNING
-        return _follow(url, endpoint, token, str(answer.get("job", "")), refused)
+        return _follow(url, follow, token, str(answer.get("job", "")), refused)
     except Unanswered as error:
-        print(_gave_up(program, words, error, phase), file=sys.stderr)
+        print(_gave_up(program, words, error, phase, action), file=sys.stderr)
         return 1
+
+
+def main(argv: list) -> int:
+    url, words = argv[1].rstrip("/"), argv[2:]
+    if words[:1] == ["--action"] and len(words) > 1:
+        return _brokered(url, words[1], "action", _ACTION_PROGRAM.get(words[1], words[1]), words[2:], {})
+    manager = words[1] if words[:1] == ["--manager"] and len(words) > 1 else ""
+    if manager:
+        return _brokered(url, "install", "install", manager, words[2:], {"manager": manager})
+    return _brokered(url, "brew", "brew", "brew", words, {})
 
 
 if __name__ == "__main__":

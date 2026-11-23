@@ -236,7 +236,7 @@ def _then_sync(write: WriteHandler) -> WriteHandler:
 API = ShieldApi(
     reads={"protected": protected_view, "hits": hits, "alerts": alerts_view, "changes": changes_view, "watch-plan": watch_plan,
            "sandbox": sandbox_view, "permissions": permissions_view,
-           "permission-requests": permissions.answers.read, **packages.API_READS},
+           "permission-requests": permissions.answers.read, **packages.API_READS, **brokered.API_READS},
     writes={"protect": protect, "unprotect": unprotect, "file-report": file_report, "open-protected": open_protected,
             **packages.API_WRITES, **{name: _then_sync(write) for name, write in permissions.API_WRITES.items()},
             "permission-answer": permission_answer, "stop-agent": stop_agent, **brokered.API_WRITES},

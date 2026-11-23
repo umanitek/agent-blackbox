@@ -13,7 +13,9 @@ open a file in an app):
   neither protected nor Blackbox's own, and only when ``open-apps`` allows it (ask by default);
 * the ``open`` stand-in sends a link, ``open -a App file`` or a folder to the broker and refuses
   every other form;
-* LaunchServices stays closed in the profile (``(deny lsopen)`` is in the never-list).
+* LaunchServices stays closed in the profile (``(deny lsopen)`` is in the never-list);
+* (wave 9, KI-632's pattern for every broker) each door answers a JOB at once; the link's threat
+  check and the opening run in it, failing closed (the job's ``refused``).
 """
 
 from __future__ import annotations
@@ -21,6 +23,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import threading
 
 import pytest
 
@@ -31,6 +34,7 @@ from plugins.blackbox.shields.files.sandbox.brokered import open_apps, open_link
 from plugins.blackbox.shields.files.sandbox.permissions import requests
 from plugins.blackbox.shields.files.sandbox.platform.macos import opener, shims
 from plugins.blackbox.shields.shield_api import ShieldApiError, ShieldContext
+from tests.waiting import wait_until
 
 MAC = pytest.mark.skipif(sys.platform != "darwin", reason="the open stand-in is macOS's")
 
@@ -64,6 +68,14 @@ def _context(block=""):
                                                                "findings": []})
 
 
+def _ended(started: dict) -> dict:
+    """The action-job read once the job a door started has ended."""
+    def ended():
+        state = brokered.API_READS["action-job"](_context(), {"job": started["job"], "from": "0"})
+        return state if state["done"] else None
+    return wait_until(ended, what="the brokered action ended")
+
+
 @pytest.mark.parametrize("argv", [["file:///etc/passwd"], ["javascript:alert(1)"], ["https://user:pw@example.com/"],
                                   ["https://"], ["https://a.example", "https://b.example"], ["https://x.example/\n"]])
 def test_only_one_plain_web_link_is_opened(argv):
@@ -73,31 +85,67 @@ def test_only_one_plain_web_link_is_opened(argv):
 
 def test_a_link_is_opened_when_allowed_and_unlisted(setting):
     state, opened, _ = setting
-    answer = brokered.API_WRITES["open-link"](_context(), {"argv": ["https://github.com/login/device"], "pid": 4242})
-    assert answer["exit"] == 0 and opened == [("url", "https://github.com/login/device")]
-    with pytest.raises(ShieldApiError) as listed:
-        brokered.API_WRITES["open-link"](_context(block="evil.example"), {"argv": ["https://evil.example/x"]})
-    assert listed.value.status == 403
+    done = _ended(brokered.API_WRITES["open-link"](_context(), {"argv": ["https://github.com/login/device"], "pid": 4242}))
+    assert done["exit"] == 0 and done["lines"] == ["Opened in your browser."] and opened == [("url", "https://github.com/login/device")]
+    listed = _ended(brokered.API_WRITES["open-link"](_context(block="evil.example"), {"argv": ["https://evil.example/x"]}))
+    assert listed["refused"] == open_links.LISTED and listed["exit"] == 1
     unknown = ShieldContext(network_indicators=lambda: None, ask_assistant=lambda message: None)
-    with pytest.raises(ShieldApiError):
-        brokered.API_WRITES["open-link"](unknown, {"argv": ["https://github.com/"]})   # the verdict can not be asked: refused
+    asked_nothing = _ended(brokered.API_WRITES["open-link"](unknown, {"argv": ["https://github.com/"]}))
+    assert asked_nothing["refused"] == open_links.LISTED   # the verdict can not be asked: refused (fail closed)
     state["agent_sandbox"] = {"permissions": [{"permission": "open-links", "mode": "block"}]}
     with pytest.raises(ShieldApiError) as blocked:
         brokered.API_WRITES["open-link"](_context(), {"argv": ["https://github.com/"]})
     assert blocked.value.status == 403 and len(opened) == 1
 
 
+def test_a_link_is_answered_at_once_while_its_threat_check_is_slow(setting):
+    """KI-632's pattern (wave 9): the threat check asks the graph's store, slow during the first
+    sync; the door answers with the job before the check ends, and the link opens once it clears."""
+    _, opened, _ = setting
+    graph_answers = threading.Event()
+
+    def slow_verdict(tool, args):
+        assert graph_answers.wait(30)
+        return {"decision": "", "findings": []}
+    slow = ShieldContext(network_indicators=lambda: None, ask_assistant=lambda message: None, tool_call_verdict=slow_verdict)
+    try:
+        started = brokered.API_WRITES["open-link"](slow, {"argv": ["https://github.com/login/device"]})
+        assert not brokered.API_READS["action-job"](slow, {"job": started["job"], "from": "0"})["done"] and opened == []
+    finally:
+        graph_answers.set()
+    assert _ended(started)["exit"] == 0 and opened == [("url", "https://github.com/login/device")]
+
+
+def test_a_check_that_fails_refuses_and_a_failing_open_is_told(setting, monkeypatch):
+    _, opened, _ = setting
+    def broken(tool, args):
+        raise RuntimeError("store down")
+    failing = ShieldContext(network_indicators=lambda: None, ask_assistant=lambda message: None, tool_call_verdict=broken)
+    assert _ended(brokered.API_WRITES["open-link"](failing, {"argv": ["https://github.com/"]}))["refused"] and opened == []
+    def cannot(url):
+        raise OSError("no browser")
+    monkeypatch.setattr(sandbox_platform, "open_url", cannot)
+    done = _ended(brokered.API_WRITES["open-link"](_context(), {"argv": ["https://github.com/"]}))
+    assert done["exit"] == 1 and "no browser" in done["lines"][0]
+
+
 def test_a_file_opens_only_in_a_safe_app_and_never_a_kept_one(setting):
     state, opened, home = setting
     state["agent_sandbox"] = {"permissions": [{"permission": "open-apps", "mode": "allow"}]}
-    brokered.API_WRITES["open-app"](_context(), {"argv": ["-a", "Preview", "a.pdf"], "cwd": str(home / "shop")})
-    assert opened == [("Preview.app", [str(home / "shop" / "a.pdf")])]
+    done = _ended(brokered.API_WRITES["open-app"](_context(), {"argv": ["-a", "Preview", "a.pdf"], "cwd": str(home / "shop")}))
+    assert done["lines"] == ["Opened in Preview."] and opened == [("Preview.app", [str(home / "shop" / "a.pdf")])]
     for argv, status in ((["-a", "Terminal", "a.pdf"], 403), (["-a", "Nope", "a.pdf"], 403), (["-a", "Preview", "../Vault/s.pdf"], 403),
                          (["-a", "Preview", str(home / "bb")], 403), (["-a", "Preview", "missing.pdf"], 400), (["a.pdf"], 400)):
         with pytest.raises(ShieldApiError) as refused:
             brokered.API_WRITES["open-app"](_context(), {"argv": argv, "cwd": str(home / "shop")})
         assert refused.value.status == status, argv
     assert len(opened) == 1
+
+
+def test_an_action_job_gives_no_install_notice(setting):
+    from plugins.blackbox.shields.files.sandbox import packages
+    _ended(brokered.API_WRITES["open-link"](_context(), {"argv": ["https://github.com/"]}))
+    assert packages.alerts() == []
 
 
 def test_opening_an_app_asks_by_default(setting):

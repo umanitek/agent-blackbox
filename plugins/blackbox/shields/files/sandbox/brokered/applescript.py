@@ -22,7 +22,7 @@ from typing import Any, Mapping
 from ..... import audit
 from ....shield_api import ShieldApiError, ShieldContext
 from .. import platform
-from .asking import Asking, decide
+from .asking import Asking, Planned, decide
 
 PERMISSION = "applescript"
 MAX_SCRIPT_CHARS = 16 * 1024
@@ -50,16 +50,21 @@ def parse(argv: Any, folder: str) -> str:
     return script
 
 
-def run(context: ShieldContext, body: Mapping[str, Any]) -> dict[str, Any]:
+def run(context: ShieldContext, body: Mapping[str, Any]) -> Planned:
+    """The door: the script read, the asker found and the permission decided (a once grant is spent
+    here; raises when not allowed); the script runs in the job (``brokered``): it can take minutes."""
     if set(body) - {"argv", "pid", "cwd"}:
         raise ShieldApiError(400, "a request carries the script only")
     asked = Asking.of(context, body)
     script = parse(body.get("argv"), asked.folder)
     decide(PERMISSION, asked, script, show_whole=True)
-    code, output = platform.run_script(script)
-    audit.record_for(audit.SANDBOX_RECORDER, event="brokered_applescript", workspace=asked.folder,
-                     detail={"agent": asked.agent, "chars": len(script), "exit": code})
-    return {"message": output, "exit": code}
+
+    def work() -> tuple[int, str]:
+        code, output = platform.run_script(script)
+        audit.record_for(audit.SANDBOX_RECORDER, event="brokered_applescript", workspace=asked.folder,
+                         detail={"agent": asked.agent, "chars": len(script), "exit": code})
+        return code, output
+    return Planned("applescript", f"osascript ({len(script)} characters)", asked, work)
 
 
 __all__ = ["MAX_SCRIPT_CHARS", "PERMISSION", "parse", "run"]

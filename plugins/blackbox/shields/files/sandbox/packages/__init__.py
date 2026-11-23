@@ -63,7 +63,8 @@ from .. import permissions, platform
 from . import jobs, managers
 from .request import BrewRequest, Refused, parse
 
-__all__ = ["API_READS", "API_WRITES", "PERMISSION", "SETTING", "WAITING", "alerts", "install_shim", "installs", "setting_weakening"]
+__all__ = ["API_READS", "API_WRITES", "PERMISSION", "SETTING", "WAITING", "alerts", "install_shim", "installs", "job_read", "jobs",
+           "setting_weakening"]
 
 #: The config section and key: ``plugins.entries.blackbox.agent_packages.installs``.
 SECTION, SETTING = "agent_packages", "installs"
@@ -236,7 +237,9 @@ def _who(job: jobs.Job) -> str:
     return f"for {name}" + (f" in {owner.folder}" if owner.folder else "")
 
 
-def _job(_context: ShieldContext, query: Mapping[str, str]) -> dict[str, Any]:
+def job_read(_context: ShieldContext, query: Mapping[str, str]) -> dict[str, Any]:
+    """A job's output from line ``from`` on: ``{lines, next, done, exit[, refused]}`` (brew, install
+    and brokered-action jobs alike: the client follows each the same way)."""
     job = jobs.get(str(query.get("job") or ""))
     if job is None:
         raise ShieldApiError(404, "no such install")
@@ -271,6 +274,8 @@ def alerts() -> list[dict[str, Any]]:
     for job in jobs.recent():
         _, _, done, code = job.since(0)
         changed = job.changed()
+        if isinstance(job.request, jobs.ActionRequest):
+            continue   # a brokered action: recorded by its broker, no install notice
         if done and not job.refused and not (code == 0 and job.request.names and not changed):
             verb = {"install": "installed", "upgrade": "upgraded", "reinstall": "reinstalled", "uninstall": "uninstalled"}[job.request.verb]
             what = ", ".join(changed if code == 0 else job.request.names) or "every package"
@@ -282,7 +287,7 @@ def alerts() -> list[dict[str, Any]]:
 
 
 API_WRITES = {"brew": _brew, "install": _install}
-API_READS = {"brew-job": _job, "install-job": _job}
+API_READS = {"brew-job": job_read, "install-job": job_read}
 
 
 def install_shim(tools: Path, dashboard_url: str = "") -> None:

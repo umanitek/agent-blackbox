@@ -361,6 +361,30 @@ def test_a_refusal_in_the_job_is_told_to_the_agent(dashboard, capsys):
             in capsys.readouterr().err)
 
 
+def test_a_brokered_action_waits_on_a_busy_dashboard_and_follows_its_job(dashboard, capsys):
+    """Wave 9 (KI-632's pattern for every broker): ``open`` / ``osascript`` used one 10 s request;
+    now the session read is asked again while busy, the action asked for once, its job followed."""
+    busy = dashboard(slow=("session", "job"), job={"lines": ["Opened in your browser."], "next": 1, "done": True, "exit": 0})
+    assert client.main(["brew-client.py", busy.url, "--action", "open-link", "https://github.com/login/device"]) == 0
+    assert "Opened in your browser." in capsys.readouterr().out
+    assert busy.asked == {"session": 2, "brew": 1, "job": 2}
+
+
+def test_a_brokered_action_given_up_on_says_why_and_that_nothing_was_done(dashboard, monkeypatch, capsys):
+    monkeypatch.setattr(client, "BUSY_SECONDS", 1)
+    silent = dashboard(silent=True)
+    assert client.main(["brew-client.py", silent.url, "--action", "open-link", "https://github.com/"]) == 1
+    said = capsys.readouterr().err
+    assert "Blackbox couldn't do this: it was busy and did not answer within 1 s" in said and "Nothing was done" in said
+    assert "run `open https://github.com/` in your own terminal" in said and "brew" not in silent.asked
+
+
+def test_a_brokered_actions_refusal_in_the_job_is_told(dashboard, capsys):
+    refusing = dashboard(job={"lines": [], "next": 0, "done": True, "exit": 1, "refused": "a threat rule lists this address"})
+    assert client.main(["brew-client.py", refusing.url, "--action", "open-link", "https://evil.example/"]) == 1
+    assert "Blackbox's sandbox refused this (open https://evil.example/): a threat rule lists this address" in capsys.readouterr().err
+
+
 @pytest.mark.parametrize("argv, line, left", [
     (["install", "tree"], "Warning: tree 2.3.2 is already installed", "tree"),            # round 6, word for word
     (["install", "tree"], "Warning: tree 2.3.2 is already installed and up-to-date.", "tree"),

@@ -22,7 +22,7 @@ from .....kernel import constants
 from ....shield_api import ShieldApiError, ShieldContext
 from ... import mode as mode_module
 from .. import platform
-from .asking import Asking, decide
+from .asking import Asking, Planned, decide
 
 PERMISSION = "open-apps"
 MAX_FILES = 20
@@ -63,17 +63,23 @@ def parse(argv: Any, folder: str) -> tuple[str, list[str]]:
     return app, [_file(word, folder, protected) for word in files]
 
 
-def open_app(context: ShieldContext, body: Mapping[str, Any]) -> dict[str, Any]:
+def open_app(context: ShieldContext, body: Mapping[str, Any]) -> Planned:
+    """The door: the app and files checked, the asker found and the permission decided (raises when
+    not allowed); the opening runs in the job (``brokered``)."""
     if set(body) - {"argv", "pid", "cwd"}:
         raise ShieldApiError(400, "a request carries the app and the files only")
     asked = Asking.of(context, body)
     app, files = parse(body.get("argv"), asked.folder)
     name = os.path.basename(app)[:-4]
-    decide(PERMISSION, asked, f"open -a {name} " + " ".join(files))
-    code = platform.open_with(app, files)
-    audit.record_for(audit.SANDBOX_RECORDER, event="brokered_open", workspace=asked.folder,
-                     detail={"what": "app", "app": name, "files": len(files), "agent": asked.agent, "exit": code})
-    return {"message": f"Opened in {name}." if code == 0 else "macOS could not open it.", "exit": code}
+    command = f"open -a {name} " + " ".join(files)
+    decide(PERMISSION, asked, command)
+
+    def work() -> tuple[int, str]:
+        code = platform.open_with(app, files)
+        audit.record_for(audit.SANDBOX_RECORDER, event="brokered_open", workspace=asked.folder,
+                         detail={"what": "app", "app": name, "files": len(files), "agent": asked.agent, "exit": code})
+        return code, f"Opened in {name}." if code == 0 else "macOS could not open it."
+    return Planned("open-app", command, asked, work)
 
 
 __all__ = ["FINDER", "MAX_FILES", "PERMISSION", "open_app", "parse"]

@@ -5,10 +5,16 @@ The agent and instance come from Blackbox's own attribution of the asking pid
 (``ShieldContext.owner_of_pid``), never from the request; the working folder is the client's
 (an agent can ``cd`` anywhere, so naming it is no weaker than being there).
 
+Each action's door (``open_link``, ``open_app``, ``applescript.run``) does only the cheap steps —
+validate, find who asked, decide the permission — and answers a :class:`Planned` action; the
+broker (``brokered.API_WRITES``) starts it as a job and answers at once. The slow part (the threat
+check, opening, running the script) runs in the job (KI-632's pattern; LES-143).
+
 Usage::
 
     asked = Asking.of(context, body)
     decide("open-links", asked, "open https://github.com/login/device")   # raises unless allowed
+    return Planned("open-link", "open https://…", asked, work=lambda: (0, "Opened."), check=lambda: "")
 """
 
 from __future__ import annotations
@@ -16,7 +22,7 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass
-from typing import Any, Mapping, Optional
+from typing import Any, Callable, Mapping, Optional
 
 from ....shield_api import InstanceRef, ShieldApiError, ShieldContext
 from .. import permissions
@@ -59,6 +65,19 @@ class Asking:
         return Asking(owner, folder, pid)
 
 
+@dataclass(frozen=True)
+class Planned:
+    """An action its door allowed, to be done in a job: its *tool* (``open-link`` …), the *command*
+    as the person reads it, who *asked*, the *work* (``() -> (exit code, message)``) and the
+    *check* that runs first in the job (``() -> refusal``, "" = go on; a failing check refuses)."""
+
+    tool: str
+    command: str
+    asked: Asking
+    work: Callable[[], tuple[int, str]]
+    check: Optional[Callable[[], str]] = None
+
+
 def decide(permission: str, asked: Asking, what: str, show_whole: bool = False) -> None:
     """Raises :class:`ShieldApiError` (423 while the person is asked, 403 when refused) unless
     *permission* lets *asked* do *what* now (a once grant is spent here)."""
@@ -70,4 +89,4 @@ def decide(permission: str, asked: Asking, what: str, show_whole: bool = False) 
         raise ShieldApiError(403, f"{name} is blocked for this AI agent in Blackbox's sandbox permissions; do it yourself.")
 
 
-__all__ = ["WAITING", "Asking", "decide"]
+__all__ = ["WAITING", "Asking", "Planned", "decide"]

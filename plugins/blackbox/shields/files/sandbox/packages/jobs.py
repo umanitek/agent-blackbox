@@ -14,9 +14,14 @@ typing ``brew install`` in their own terminal. That is why only names from the o
 checked against the threat graph first, are run, and why the person can choose "ask me each time"
 or "off" (``packages``).
 
+A brokered action (open a link, open a file in an app, run an AppleScript: ``brokered``) is a job
+too (:class:`ActionRequest`, :func:`start_action`): its check and its *work* run in the job thread,
+so the broker answers at once whatever the work costs (KI-632's pattern, wave 9).
+
 Usage::
 
     job = start(BrewRequest("install", ("tree",)), brew, check=lambda: "")
+    job = start_action(ActionRequest("open-link", "open https://github.com"), work=lambda: (0, "Opened."))
     lines, next_line, done, code = job.since(0)
     job.refused                     # "" unless the check refused it
 """
@@ -30,6 +35,7 @@ import secrets
 import threading
 import time
 from collections import OrderedDict
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
 from agent.memory_provider import spawn_context_thread
@@ -40,8 +46,30 @@ from .. import platform
 from .managers import InstallRequest
 from .request import BrewRequest
 
-#: A validated request a job runs: Homebrew's or a global install's.
-Request = BrewRequest | InstallRequest
+
+
+@dataclass(frozen=True)
+class ActionRequest:
+    """A brokered action run as a job (``brokered``): *tool* (``open-link``, ``open-app``,
+    ``applescript``) and the *command* as the person reads it. It runs no program argv and names
+    no packages; :func:`start_action`'s *work* does it."""
+
+    tool: str
+    command: str
+    names: tuple[str, ...] = ()
+    verb: str = "action"
+
+    def shown(self) -> str:
+        return self.command
+
+    def unchanged(self, _line: str) -> str:
+        return ""
+
+
+#: A validated request a job runs: Homebrew's, a global install's, or a brokered action.
+Request = BrewRequest | InstallRequest | ActionRequest
+#: A brokered action's work: ``() -> (exit code, message)``, run in the job after its check.
+Work = Callable[[], tuple[int, str]]
 
 if TYPE_CHECKING:
     import subprocess
@@ -208,14 +236,42 @@ def start(request: Request, brew: str, *, spawn: Optional[Spawn] = None, done: O
 
     WHY the check is in the job (KI-632): it asks the threat graph's store, which during the first
     sync is slow to answer; done before the answer, it held the agent's request past its timeout."""
-    job = Job(request, owner, env)
+    job = _kept(Job(request, owner, env))
+    # The asker's context goes with the job: its check reads the config of the profile in scope.
+    spawn_context_thread(_run, args=(job, brew, spawn or platform.spawn_brew, done, check), name=f"blackbox-brew-{job.id}").start()
+    return job
+
+
+def start_action(request: ActionRequest, *, work: Work, owner: Any = None, check: Optional[Check] = None) -> Job:
+    """Runs a brokered action in a thread; answers the :class:`Job` at once. *check* runs first (a
+    refusal, or a check that fails, ends the job unrun: fail closed); then *work*, whose message is
+    the job's output and whose exit code its own. *owner*: the agent instance that asked."""
+    job = _kept(Job(request, owner))
+    spawn_context_thread(_act, args=(job, work, check), name=f"blackbox-action-{job.id}").start()
+    return job
+
+
+def _kept(job: Job) -> Job:
     with _lock:
         _JOBS[job.id] = job
         while len(_JOBS) > MAX_JOBS:
             _JOBS.popitem(last=False)
-    # The asker's context goes with the job: its check reads the config of the profile in scope.
-    spawn_context_thread(_run, args=(job, brew, spawn or platform.spawn_brew, done, check), name=f"blackbox-brew-{job.id}").start()
     return job
+
+
+def _act(job: Job, work: Work, check: Optional[Check]) -> None:
+    refusal = _refusal(check)
+    if refusal:
+        job.refuse(refusal)
+        return
+    try:
+        code, message = work()
+    except Exception as error:   # health: allow BLE001 -- the action failed: the agent is told, nothing is retried
+        logger.warning("blackbox: a brokered action failed", exc_info=True)
+        code, message = 1, f"Blackbox could not do this: {error}"
+    for line in str(message or "").splitlines()[:MAX_LINES]:
+        job.add(line)
+    job.finish(code)
 
 
 def _refusal(check: Optional[Check]) -> str:

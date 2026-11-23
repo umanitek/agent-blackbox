@@ -19,10 +19,11 @@ from urllib.parse import urlsplit
 from ..... import audit
 from ....shield_api import ShieldApiError, ShieldContext
 from .. import platform
-from .asking import Asking, decide
+from .asking import Asking, Planned, decide
 
 PERMISSION = "open-links"
 MAX_URL_CHARS = 2048
+LISTED = "a threat rule lists this address (or it could not be checked), so Blackbox will not open it"
 
 
 def parse(argv: Any) -> str:
@@ -49,18 +50,21 @@ def listed(context: ShieldContext, url: str) -> bool:
     return verdict.get("decision") == "block" or any(found.get("source") != "heuristic" for found in verdict.get("findings") or [])
 
 
-def open_link(context: ShieldContext, body: Mapping[str, Any]) -> dict[str, Any]:
+def open_link(context: ShieldContext, body: Mapping[str, Any]) -> Planned:
+    """The door: the link checked, the asker found and the permission decided (raises when not
+    allowed); the threat check and the opening run in the job (``brokered``)."""
     if set(body) - {"argv", "pid", "cwd"}:
         raise ShieldApiError(400, "a request carries the link only")
     url = parse(body.get("argv"))
     asked = Asking.of(context, body)
     decide(PERMISSION, asked, f"open {urlsplit(url).scheme}://{urlsplit(url).hostname}")
-    if listed(context, url):
-        raise ShieldApiError(403, "a threat rule lists this address (or it could not be checked), so Blackbox will not open it")
-    code = platform.open_url(url)
-    audit.record_for(audit.SANDBOX_RECORDER, event="brokered_open", workspace=asked.folder,
-                     detail={"what": "link", "host": urlsplit(url).hostname or "", "agent": asked.agent, "exit": code})
-    return {"message": "Opened in your browser." if code == 0 else "macOS could not open it.", "exit": code}
+
+    def work() -> tuple[int, str]:
+        code = platform.open_url(url)
+        audit.record_for(audit.SANDBOX_RECORDER, event="brokered_open", workspace=asked.folder,
+                         detail={"what": "link", "host": urlsplit(url).hostname or "", "agent": asked.agent, "exit": code})
+        return code, "Opened in your browser." if code == 0 else "macOS could not open it."
+    return Planned("open-link", f"open {url}", asked, work, check=lambda: LISTED if listed(context, url) else "")
 
 
-__all__ = ["MAX_URL_CHARS", "PERMISSION", "listed", "open_link", "parse"]
+__all__ = ["LISTED", "MAX_URL_CHARS", "PERMISSION", "listed", "open_link", "parse"]
