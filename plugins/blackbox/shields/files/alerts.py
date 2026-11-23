@@ -44,6 +44,10 @@ from . import changes, sandbox, watched
 from .protect import FILE_HIT_ID, FOLDER_HIT_ID, SANDBOX_AGENT
 
 MAX_ALERTS = 50
+#: Who an OS-sandbox refusal is said to be from here: the kernel's log names a program, not an
+#: agent. The notifier (``notify.wording.SANDBOX_PROGRAM``, the same words) puts the agent
+#: instance it was attributed to in its place (KI-586).
+SANDBOX_WHO = "a program in Blackbox's agent sandbox"
 FINDINGS_SCANNED = 500
 TITLE = "File Shield"
 _HITS = {FILE_HIT_ID: "file-hit", FOLDER_HIT_ID: "folder-hit"}
@@ -101,7 +105,7 @@ def _hit_alerts() -> list[dict[str, Any]]:
         item = str((row.get("fields") or {}).get("item") or "")
         sandbox = row.get("framework") == SANDBOX_AGENT
         agent = "" if sandbox else str(row.get("framework") or "")
-        who = "a program in the agent sandbox" if sandbox else _agent_name(agent)
+        who = SANDBOX_WHO if sandbox else _agent_name(agent)
         name = item_name(item) if item else "an item you protect"
         ts = float(row.get("ts") or 0)
         rows.append(_alert(f"{kind}:{ts:.6f}:{name}", kind, ts, "critical", item, agent,

@@ -18,12 +18,15 @@ from __future__ import annotations
 
 import logging
 import time
+from dataclasses import replace
 from typing import Any, Callable, Iterable, Mapping, Optional
 
 from .. import audit, shields
 from ..agent_hooks import owners, tracking
 from . import wording
 from .model import CATEGORIES, Notice
+#: How File Shield words a sandbox hit no agent is named for (its alerts use the same words, KI-586).
+SANDBOX_WHO = wording.SANDBOX_PROGRAM
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +52,16 @@ def _attributed(row: Mapping[str, Any], owner_of: Optional[Callable[[Mapping[str
     if owner is None:
         return row
     return {**row, "framework": owner.agent, "session_id": owner.instance, "workspace": owner.folder}
+
+
+def _named(notice: Notice, owner: Optional[owners.Owner]) -> Notice:
+    """*notice* naming *owner*'s agent (and project) instead of "a program in the agent sandbox"."""
+    if owner is None:
+        return notice
+    name = wording.agent_name(owner.agent)
+    return replace(notice, title=notice.title.replace(SANDBOX_WHO, name), body=notice.body.replace(SANDBOX_WHO, name),
+                   detail=notice.detail.replace(SANDBOX_WHO, name), agent=owner.agent, agent_name=name,
+                   instance=owner.instance, project=owner.folder[:80])
 
 
 class Collector:
@@ -86,7 +99,27 @@ class Collector:
     def _from_shields(self) -> list[Notice]:
         alerts = list(self._read_alerts())
         self._covered.update(alert.finding for alert in alerts if alert.finding)
-        return self._new(_shield_notice(alert) for alert in alerts)
+        named = self._sandbox_owners(alerts)
+        return self._new(_named(_shield_notice(alert), named.get(alert.key)) for alert in alerts)
+
+    def _sandbox_owners(self, alerts: list[shields.ShieldAlert]) -> dict[str, owners.Owner]:
+        """``{alert key: owner}`` for File Shield's OS-sandbox hits, from the finding row each one
+        speaks for (same identifier, same moment) and the instance it was attributed to (KI-586:
+        the hit's notice said "a program in the agent sandbox" while the self-protection notice
+        already named Claude Code)."""
+        wanted = [alert for alert in alerts if alert.finding and not alert.agent and SANDBOX_WHO in alert.title]
+        if not wanted:
+            return {}
+        rows = [row for row in self._read_findings() if row.get("framework") == audit.SANDBOX_RECORDER]
+        owner_of = self._read_owners() if rows else None
+        found: dict[str, owners.Owner] = {}
+        for alert in wanted:
+            row = next((row for row in rows if row.get("identifier") == alert.finding
+                        and abs(float(row.get("ts") or 0) - alert.ts) < 1e-3), None)
+            owner = owner_of(row) if owner_of is not None and row is not None else None
+            if owner is not None:
+                found[alert.key] = owner
+        return found
 
     def _from_findings(self) -> list[Notice]:
         rows = [row for row in self._read_findings() if str(row.get("identifier") or "") not in self._covered]

@@ -466,3 +466,29 @@ def test_a_kernel_sandbox_refusal_names_the_agent_instance_it_was_attributed_to(
             assert notice.instance == session and notice.project == "s3-cc8b" and notice.body.startswith("Claude Code in s3-cc8b ")
         else:   # no instance was live and sandboxed then: said honestly, never guessed
             assert notice.body.startswith("A program in Blackbox's agent sandbox ")
+
+
+def test_a_file_shield_sandbox_hit_names_the_agent_instance_it_was_attributed_to():
+    """KI-586 leftover (sandbox developer day, 2026-11-22): the self-protection notice named Claude
+    Code, but File Shield's sandbox hit still said "File Shield stopped a program in the agent sandbox"."""
+    from plugins.blackbox import audit
+    from plugins.blackbox.agent_hooks import owners
+    from plugins.blackbox.shields.files import alerts as files_alerts
+
+    assert files_alerts.SANDBOX_WHO == wording.SANDBOX_PROGRAM   # one wording, replaced by the notifier
+    who = files_alerts.SANDBOX_WHO
+    alert = shields.ShieldAlert(key=f"folder-hit:{NOW + 5:.6f}:Secret", kind="folder-hit", ts=NOW + 5, severity="critical",
+                                title=f"File Shield stopped {who}", text=f"File Shield stopped {who} from reaching something you protect.",
+                                detail=f"File Shield stopped {who} reaching Secret.", finding="files:folder-hit")
+    hit = _finding("files:folder-hit", ts=NOW + 5, framework=audit.SANDBOX_RECORDER, tool_call_id="sandbox:7", category="files")
+    session = "claude-code:00112233aabbccdd"
+    for owner, expected in ((owners.Owner("claude-code", session, "", "dd-blocked-A", 812), "Claude Code"), (None, who)):
+        alerts: list = []
+        collector = sources.Collector(read_alerts=lambda: list(alerts), read_findings=lambda: [hit], read_live=_tree,
+                                      read_owners=lambda: (lambda row, found=owner: found))
+        collector.collect(NOW)
+        alerts.append(alert)
+        [notice] = [item for item in collector.collect(NOW + 5) if item.kind == "shield:folder-hit"]
+        assert notice.title == f"File Shield stopped {expected}"
+        if owner is not None:
+            assert who not in notice.body + notice.detail and notice.instance == session and notice.project == "dd-blocked-A"
