@@ -194,6 +194,49 @@ source — a verified rule, one of your protected paths, or a secret. Community
 and heuristic findings never block. Secret and protected-path findings never
 leave your machine.
 
+### What Blackbox checks for packages
+
+Every package below is checked against the same threat graph, in the same
+tiers: verified-listed blocks (in block mode), community-listed flags.
+
+- **Named installs** — the packages written in the command: `npm install
+  express`, `pip install requests==2.32.3`, `uv add`, `cargo add`, `gem
+  install`, and the runners `npx`, `pnpm dlx`, `bunx`. Checked before it runs.
+- **Lockfiles and manifests** (KI-595) — an install that names no package
+  (`npm install`, `npm ci`, `pnpm install`, `yarn`, `bun install`, `pip install
+  -r`, `pip install .`, `uv sync`, `uv pip sync`, `poetry install`, `pipenv
+  install`, `cargo build`, `bundle install`) is checked by the files it
+  installs from, in the folder it runs in (the call's `workdir`/`cwd`, `cd X &&`
+  prefixes, `--prefix`/`-C`/`--cwd`/`--project`): package-lock.json (v1–v3,
+  and `node_modules/.package-lock.json`), npm-shrinkwrap.json, pnpm-lock.yaml,
+  yarn.lock (classic and berry), bun.lock, requirements files (with `-r`/`-c`
+  includes, five deep), uv.lock, poetry.lock, Pipfile.lock, pyproject.toml,
+  Pipfile, Cargo.lock and Gemfile.lock. A block names the package, version, file
+  and chain (`express → body-parser → bad-pkg@1.2.3`); past ten matches the
+  rest are counted, not listed. Without a lockfile, package.json, pyproject.toml
+  and Pipfile hold **ranges, not exact versions**: only whole-package rules and
+  exact pins can match, and the session says so.
+- **Transitive dependencies** — what a lockfile pins is checked before the
+  install, down the whole tree. A named install with no lockfile yet is checked
+  **after** it runs: Blackbox reads the lockfile it wrote and checks every
+  package it added; a verified-listed package that landed is a critical alert
+  naming the removal command and warning that its install scripts may already
+  have run. **Before an install, Blackbox can only see what a lockfile already pins.**
+- **Writes** — writing or editing package.json, a lockfile or a requirements
+  file is judged by the packages it adds: verified blocks the write, community flags.
+
+Limits, plainly: it recognises **known-bad** packages only, not new malware.
+The verified graph's package data is a July 2026 snapshot until Umanitek's feed
+resumes. The OSV.dev lookup runs in the background for named, pinned installs
+and never blocks. Files over 25 MB, symlinks, unparsable files, bun's binary
+`bun.lockb`, git/URL/path sources and an unknown working folder are not
+checked: the install goes ahead (fail-open) with a `dependency_check` note on
+the session ("dependencies not checked: …"). Under the per-call graph backend
+(`detection_backend: dkg`) lockfiles are not checked against the graph (it
+reads only the packages a command names) and the session says so. A shell
+write such as `echo bad==1 >> requirements.txt` is not read as a write. The
+agent sandbox is the backstop for unknown malware.
+
 ## Trader Shield (crypto wallets and keys)
 
 Trader Shield keeps an AI agent away from your crypto wallets and keys. It is

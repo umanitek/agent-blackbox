@@ -21,7 +21,7 @@ from . import api_request, background, graph_rules
 from . import injection_sites
 from . import reporting
 from .reporting import blackbox_block_message
-from . import host_process, session_context
+from . import dependency_files, host_process, session_context
 
 logger = logging.getLogger(__name__)
 
@@ -112,8 +112,9 @@ def _would_block(cfg: BlackboxConfig, findings: list[detection.Finding]) -> list
 
 
 def _raw_findings(cfg: BlackboxConfig, rs: Any, tool_name: str, args: Any,
-                  active: shields.ShieldsSnapshot) -> list[detection.Finding]:
-    """All raw findings for one call, gathered here so new detectors join without growing the hook body."""
+                  active: shields.ShieldsSnapshot, session_id: Optional[str] = None) -> list[detection.Finding]:
+    """All raw findings for one call, gathered here so new detectors join without growing the hook body.
+    *session_id*: the Hermes session, on which what could not be checked is noted (None: note nothing)."""
     isolated = detection.run_isolated   # each check on its own: one that raises costs only its findings
     raw = detection.detect_all(tool_name, args, rs, discover=cfg.discover)
     raw += isolated("detect_custom_fileaccess",
@@ -125,6 +126,8 @@ def _raw_findings(cfg: BlackboxConfig, rs: Any, tool_name: str, args: Any,
     raw += isolated("detect_elevation", lambda: detection.detect_elevation(tool_name, args))
     # R14: curator-signed DISABLE / WARN, last-good list.
     raw += isolated("kill_list", lambda: _kill_list_findings(rs, tool_name, args))
+    # KI-595: the manifests and lockfiles an install installs from, and packages a write adds to them.
+    raw += isolated("dependency_files", lambda: dependency_files.before_call(cfg, rs, tool_name, args, session_id))
     return raw
 
 
@@ -165,14 +168,14 @@ class _Judgement:
     blocking: list[detection.Finding]
 
 
-def _judge(tool_name: str, args: Any, cwd: str = "") -> _Judgement:
+def _judge(tool_name: str, args: Any, cwd: str = "", session_id: Optional[str] = None) -> _Judgement:
     """The checks on one call run in the folder *cwd* (``kernel.action_context``: a script a
-    command names by a relative path is the one there)."""
+    command names by a relative path is the one there). *session_id*: see :func:`_raw_findings`."""
     cfg = _config()
     rs, graph_evidence = graph_rules.detection_rules(cfg, tool_name, args)
     active = shields.snapshot()   # every shield's mode, read once for this call
     with action_context.working_in(cwd):
-        findings = reporting._flag_worthy(cfg, _raw_findings(cfg, rs, tool_name, args, active), active)
+        findings = reporting._flag_worthy(cfg, _raw_findings(cfg, rs, tool_name, args, active, session_id), active)
     return _Judgement(cfg, rs, graph_evidence, findings, _blocking(cfg, findings))
 
 
@@ -225,7 +228,7 @@ def on_pre_tool_call(
     Only CONFIRMED graph findings can block; discovery candidates only alert.
     """
     try:
-        judged = _judge(tool_name, args, host_process.facts()["cwd"])   # in this Hermes process's working folder
+        judged = _judge(tool_name, args, host_process.facts()["cwd"], session_id)   # in this Hermes process's folder
         cfg, findings, blocking = judged.cfg, judged.findings, judged.blocking
         _record_activity(tool_name, args)   # visibility: log every file-access tool call (best-effort)
         detail = {"tool_name": tool_name, "session_id": session_id, "task_id": task_id,
@@ -316,6 +319,8 @@ def on_post_tool_call(
         )
     except Exception as exc:  # pragma: no cover - fail open, said out loud (FIX-0160)
         reporting.hook_failed("post_tool_call", exc, tool_name=tool_name, consequence="the result was not audited")
+    # KI-595: what an install added to its lockfile (a named install's transitive packages). Fail-open.
+    dependency_files.after_call(_config, tool_name, args, session_id, tool_call_id)
 
 
 

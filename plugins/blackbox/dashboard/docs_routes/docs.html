@@ -37,6 +37,7 @@
   <ol>
     <li><a href="#overview">What Blackbox is</a></li>
     <li><a href="#protection">Built-in protection</a></li>
+    <li><a href="#packages">What Blackbox checks for packages</a></li>
     <li><a href="#check">How a check works</a></li>
     <li><a href="#flows">The four flows</a></li>
     <li><a href="#decisions">Block, flag or allow</a></li>
@@ -123,6 +124,18 @@
       <p>Off unless you set it up with <code>blackbox setup-llm</code>: a model you choose reviews text the agent reads for injection attempts. Its answers are advice, never a block on their own.</p>
       <span class="tier">Off by default · advisory</span>
     </article>
+  </div>
+</section>
+
+<section id="packages" class="doc" data-keywords="packages dependencies npm pip pypi uv poetry cargo gem lockfile manifest package-lock requirements transitive supply chain install">
+  <h2>What Blackbox checks for packages</h2>
+  <p>Every package Blackbox sees is checked against the same threat graph, in the same tiers: a package the <b>verified</b> graph lists is blocked (in block mode), one only the community lists is flagged.</p>
+  <div class="cards">
+    <article class="card"><h3>Named installs</h3><p>The packages written in an install command — <code>npm install express</code>, <code>pip install requests==2.32.3</code>, <code>uv add</code>, <code>cargo add</code>, <code>gem install</code>, and runners such as <code>npx</code>, <code>pnpm dlx</code> and <code>bunx</code> — are checked before the command runs.</p></article>
+    <article class="card"><h3>Lockfiles and manifests</h3><p>An install that names no package — <code>npm install</code>, <code>npm ci</code>, <code>pnpm install</code>, <code>yarn</code>, <code>bun install</code>, <code>pip install -r</code>, <code>pip install .</code>, <code>uv sync</code>, <code>uv pip sync</code>, <code>poetry install</code>, <code>pipenv install</code>, <code>cargo build</code>, <code>bundle install</code> — is checked by the files it installs from, in the folder it runs in: package-lock.json, npm-shrinkwrap.json, pnpm-lock.yaml, yarn.lock, bun.lock, requirements files (with their <code>-r</code> includes), uv.lock, poetry.lock, Pipfile.lock, pyproject.toml, Cargo.lock and Gemfile.lock. A block names the package, its version, the file and the chain that pulled it in, such as <code>express → body-parser → bad-pkg@1.2.3</code>. With no lockfile, package.json, pyproject.toml and Pipfile hold <b>ranges, not exact versions</b>: only whole-package rules and exact pins can match them, and Blackbox says so.</p></article>
+    <article class="card"><h3>Transitive dependencies</h3><p>What a lockfile pins is checked before the install, all the way down the tree. A named install with no lockfile yet can only be seen after it runs: Blackbox then reads the lockfile the install wrote and checks every package it added. A verified-listed package that landed is a critical alert that names the command to remove it and warns that its install scripts may already have run. <b>Before an install, Blackbox can only see what a lockfile already pins.</b></p></article>
+    <article class="card"><h3>Writes to these files</h3><p>An agent writing or editing package.json, a lockfile or a requirements file is judged at the write by the packages it adds: a verified-listed one blocks the write, a community-listed one flags it.</p></article>
+    <article class="card"><h3>What it cannot do</h3><p>It recognises <b>known-bad</b> packages only — not new malware nobody has listed yet. The verified graph's package data is a July 2026 snapshot until Umanitek's feed resumes. The OSV.dev lookup runs in the background for named, pinned installs and never blocks. A file it cannot read (too large, a symlink, unparsable, a binary bun.lockb, a git or URL source) lets the install through with a note on the session ("dependencies not checked: …") — never silently. The agent sandbox, not this check, is the backstop for unknown malware.</p></article>
   </div>
 </section>
 

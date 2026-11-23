@@ -4,7 +4,7 @@ Generated from `dashboard/docs_routes/agent_registry.json` — edit that file, n
 
 Three layers:
 
-- **hooks** — Layer 1 — the agent's own hooks: every action the agent reports is judged before it runs.
+- **hooks** — Layer 1 — the agent's own hooks: every action the agent reports is judged before it runs, including the packages an install takes from lockfiles and manifests (their transitive dependencies included; see What Blackbox checks for packages).
 - **sandbox** — Layer 2 — the agent sandbox (macOS): the kernel refuses protected files to the agent and everything it starts.
 - **os** — Layer 3 — operating-system file authorisation for every process. Not built yet.
 

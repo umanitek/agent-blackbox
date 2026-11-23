@@ -11,6 +11,10 @@ Callers use this package's surface only:
   ``parse_downloads``, ``parse_shell_reads``, ``file_access_arg``,
   ``command_from_args`` / ``SHELL_TOOLS``, and ``shell_file_args`` (what a shell
   command reads or copies whole — Trader Shield's wallet matcher builds on it).
+* Dependency files (:mod:`.manifests`, KI-595) — ``check_install_files`` (the manifests and
+  lockfiles an install that names no package installs from), ``check_landed`` (what an install
+  added to its lockfile, after it ran), ``check_dependency_write`` (packages a write adds to such
+  a file); each answers ``DependencyCheck`` (findings + the notes on what was not checked).
 * :mod:`.osv` — OSV.dev dependency lookups (3 s timeout, background only).
 * :mod:`.reviewer` — the opt-in LLM second opinion (advisory, never blocks);
   :func:`cmd_setup_llm` configures it (``blackbox setup-llm``).
@@ -63,6 +67,7 @@ from .shell_shapes import ESCALATION_SHAPES, SHELL_TOOLS, command_from_args
 from .hidden_commands import undecidable as builds_hidden_command
 
 from .content_scanners import iter_ioc_candidates
+from .manifests import DependencyCheck, check_dependency_write, check_install_files, check_landed
 
 __all__ = [
                              'ALWAYS_BLOCKED_MATCHES',
@@ -79,11 +84,15 @@ __all__ = [
                              'SENSITIVE_PATH_CATEGORIES',
                              'SHELL_TOOLS',
                              'SKILL_DANGER_SHAPES',
+                             'DependencyCheck',
                              'Finding',
                              'PathTouch',
                              'advisory_kind',
                              'blackbox_key_patterns',
                              'builds_hidden_command',
+                             'check_dependency_write',
+                             'check_install_files',
+                             'check_landed',
                              'cmd_setup_llm',
                              'command_from_args',
                              'detect_all',

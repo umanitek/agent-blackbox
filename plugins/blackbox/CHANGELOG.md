@@ -120,6 +120,18 @@ that the two version fields agree.
 
 ### Security
 
+- **Installs from lockfiles and manifests, and transitive dependencies, are checked (KI-595).**
+  Blackbox used to check only the package names written in an install command, so `npm ci`,
+  `npm install`, `uv sync`, `pip install -r`, `poetry install`, `cargo build`, `bundle install` and
+  the packages a named install pulls in were never checked against the threat graph. Now the files
+  they install from (npm/pnpm/yarn/bun lockfiles, package.json, requirements files, uv.lock,
+  poetry.lock, Pipfile(.lock), pyproject.toml, Cargo.lock, Gemfile.lock) are read — bounded,
+  offline, cached — and every package is judged in the usual tiers: verified blocks naming the
+  package, version, file and chain, community flags. After a named install, the packages it added
+  to its lockfile are checked; a verified one that landed is a critical alert with the removal
+  command. Writes that add a listed package to these files are judged at the write. A file that
+  cannot be read lets the install through with a note on the session. See "What Blackbox checks
+  for packages" in the README and the dashboard's Docs page.
 - **The agent sandbox reaches more launches and cannot be turned against Blackbox.** The sandbox
   launchers are now first on PATH for zsh started without a terminal too (`zsh -c`, a zsh script,
   an SSH command); File Shield's page lists which ways of starting an agent are covered and says
