@@ -193,7 +193,10 @@ _CLAUDE_EVENTS = {"SessionStart": "session_start", "UserPromptSubmit": "prompt",
 
 HOSTS: tuple[Host, ...] = (
     Host("claude-code", "Claude Code", "nested", ".claude/settings.json",
-         {**_CLAUDE_EVENTS, "ConfigChange": "config_change", "Notification": "attention"},
+         # PostToolUseFailure: a tool call that FAILED (a non-zero exit) — where the OS sandbox's
+         # refusals show (KI-599: PostToolUse never fires for them, so `open`, `osascript`, `kill`
+         # stayed bare and uncounted).
+         {**_CLAUDE_EVENTS, "PostToolUseFailure": "post_tool", "ConfigChange": "config_change", "Notification": "attention"},
          signs=(".claude",), commands=("claude",), matcher="*",
          home_env="CLAUDE_CONFIG_DIR", home_config="settings.json", programs=("claude",), packages=("@anthropic-ai/claude-code",),
          switches=(("settings.json", "disableAllHooks", True), ("settings.local.json", "disableAllHooks", True)),

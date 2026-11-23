@@ -136,6 +136,11 @@
      "hooked": true
     },
     {
+     "event": "PostToolUseFailure",
+     "kind": "post_tool",
+     "hooked": true
+    },
+    {
      "event": "Stop",
      "kind": "turn_end",
      "hooked": true
@@ -166,7 +171,7 @@
      "hooked": true
     },
     {
-     "event": "PermissionRequest, PermissionDenied, PostToolUseFailure, PostToolBatch, TaskCreated, TaskCompleted, StopFailure, TeammateIdle, PreCompact, PostCompact, CwdChanged, DirectoryAdded, FileChanged, WorktreeCreate, WorktreeRemove, PreModelSwitch, PostModelSwitch, Setup, InstructionsLoaded, UserPromptExpansion, MessageDisplay, Elicitation, ElicitationResult",
+     "event": "PermissionRequest, PermissionDenied, PostToolBatch, TaskCreated, TaskCompleted, StopFailure, TeammateIdle, PreCompact, PostCompact, CwdChanged, DirectoryAdded, FileChanged, WorktreeCreate, WorktreeRemove, PreModelSwitch, PostModelSwitch, Setup, InstructionsLoaded, UserPromptExpansion, MessageDisplay, Elicitation, ElicitationResult",
      "hooked": false,
      "why": "not needed to judge an action or follow an instance"
     }

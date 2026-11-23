@@ -50,9 +50,12 @@ def fresh(tmp_path, monkeypatch):
     (SUDO, sandbox_errors.SETUID, f"(sudo, a setuid program): {SETUID}"),
     (OSASCRIPT, sandbox_errors.APP_DRIVER, "(osascript): a program that drives another app"),
     (OPEN, sandbox_errors.OPEN_APP, "(open): opening another app would run it outside the sandbox"),
-    (KILL, sandbox_errors.SIGNAL, "(kill): an agent may stop only the programs it started itself"),
-    (BREW, sandbox_errors.NESTED, "(a second sandbox): a tool that starts its own sandbox (Homebrew, for one)"),
-    (ZSHRC, sandbox_errors.FILE, "(/Users/admin/.zshrc): this file is kept closed to agents"),
+    (KILL, sandbox_errors.SIGNAL, "(a signal to a process outside the sandbox): an agent may stop only the programs it started"),
+    (BREW, sandbox_errors.NESTED, "(a second sandbox): a tool that starts its own sandbox can not run inside Blackbox's; SwiftPM: "
+                                  "use `swift build --disable-sandbox`"),
+    (ZSHRC, sandbox_errors.STARTUP, "(/Users/admin/.zshrc): Blackbox keeps your shell startup files closed to agents"),
+    ("(eval):1: operation not permitted: /Users/admin/notes/x.txt", sandbox_errors.FILE,
+     "(/Users/admin/notes/x.txt): this file is kept closed to agents"),
 ])
 def test_each_bare_os_error_is_read_as_the_sandbox_refusal_it_is(output, kind, said):
     found = sandbox_errors.refusals(output)
@@ -89,7 +92,7 @@ def test_every_kernel_refusal_kind_is_counted_not_only_file_writes(output):
 
 def test_a_file_refusal_is_explained_and_left_for_the_deny_log_to_count():
     answer = _call(ZSHRC)
-    assert "kept closed to agents" in answer["note"]
+    assert "closed to agents" in answer["note"]
     [instance] = [item for item in store.all_instances() if item.agent == "claude-code"]
     assert instance.refused == 0
 

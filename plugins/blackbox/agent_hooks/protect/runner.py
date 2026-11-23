@@ -197,7 +197,8 @@ def output_text(agent: str, payload: dict) -> str:
     if agent == "copilot-cli":
         result = payload.get("toolResult")
         return _text(_first(result, "textResultForLlm", "text") if isinstance(result, dict) else result)
-    return _text(_first(payload, "tool_response", "tool_output", "output", "result_json", "result", "response"))
+    # A failed call's output: Claude Code's PostToolUseFailure carries it as ``error`` (KI-599).
+    return _text(_first(payload, "tool_response", "tool_output", "output", "result_json", "result", "response", "error"))
 
 
 def read_text(agent: str, payload: dict) -> str:
@@ -335,6 +336,7 @@ def main(argv: list) -> int:
     agent, event, url = effective_agent(argv[1]), argv[2], argv[3].rstrip("/")
     if not agent:
         return 0   # Devin's own hook reports this action
+    payload: dict = {}
     try:
         raw = sys.stdin.buffer.read(MAX_INPUT_BYTES)
         payload = json.loads(raw.decode("utf-8", "replace") or "{}")
@@ -350,7 +352,7 @@ def main(argv: list) -> int:
         sys.stderr.write(reason + "\n")
         return code
     note = str(answer.get("note") or "")[:1000] if event == "post_tool" else ""
-    out = note_output(agent, note) if note else allow_output(agent, event)
+    out = note_output(agent, note, str(payload.get("hook_event_name") or "")) if note else allow_output(agent, event)
     if note:   # the OS sandbox refused part of the call: said beside the output, never refusing it (KI-590)
         sys.stderr.write(note + "\n")
     if out:

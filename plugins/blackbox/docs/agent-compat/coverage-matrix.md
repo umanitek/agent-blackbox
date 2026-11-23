@@ -57,13 +57,14 @@ One `claude` process per session (a native binary). Sub-agents (the Agent tool),
 | UserPromptSubmit | prompt | yes |  |
 | PreToolUse | pre_tool | yes |  |
 | PostToolUse | post_tool | yes |  |
+| PostToolUseFailure | post_tool | yes |  |
 | Stop | turn_end | yes |  |
 | SessionEnd | stop | yes |  |
 | SubagentStart | subagent_start | yes |  |
 | SubagentStop | subagent_stop | yes |  |
 | ConfigChange | config_change | yes |  |
 | Notification | attention | yes |  |
-| PermissionRequest, PermissionDenied, PostToolUseFailure, PostToolBatch, TaskCreated, TaskCompleted, StopFailure, TeammateIdle, PreCompact, PostCompact, CwdChanged, DirectoryAdded, FileChanged, WorktreeCreate, WorktreeRemove, PreModelSwitch, PostModelSwitch, Setup, InstructionsLoaded, UserPromptExpansion, MessageDisplay, Elicitation, ElicitationResult |  | no | not needed to judge an action or follow an instance |
+| PermissionRequest, PermissionDenied, PostToolBatch, TaskCreated, TaskCompleted, StopFailure, TeammateIdle, PreCompact, PostCompact, CwdChanged, DirectoryAdded, FileChanged, WorktreeCreate, WorktreeRemove, PreModelSwitch, PostModelSwitch, Setup, InstructionsLoaded, UserPromptExpansion, MessageDisplay, Elicitation, ElicitationResult |  | no | not needed to judge an action or follow an instance |
 
 **Sub-agents:** Tracked: SubagentStart/SubagentStop carry agent_id and agent_type, and every tool call a sub-agent makes carries them too. The built-in web-fetch sub-agent runs SubagentStart/Stop hooks from managed settings only; its WebFetch tool call is still judged.
 

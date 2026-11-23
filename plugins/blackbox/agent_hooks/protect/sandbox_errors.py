@@ -35,6 +35,21 @@ from dataclasses import dataclass
 
 #: The kinds of refusal; only :data:`FILE` is left for the helper's deny-log watch to count.
 SETUID, APP_DRIVER, OPEN_APP, SIGNAL, NESTED, FILE = "setuid", "app-driver", "open-app", "signal", "nested", "file"
+#: Blackbox's own stand-in already said it (counted, not said again); a shell startup file an
+#: installer tried to change (its lines are handed to the person).
+OWN, STARTUP = "own", "startup"
+#: The shell startup files (as ``kernel.shell_path`` keeps them closed).
+STARTUP_FILES = frozenset({".zshrc", ".zshenv", ".zprofile", ".zlogin", ".bashrc", ".bash_profile", ".profile", ".bash_login"})
+#: What each well-known installer wanted to add to a startup file — said to the person to add
+#: themselves (security round 4 UX: the installer failed with a bare error and the agent was stuck).
+INSTALLER_LINES = {
+    "nvm": ('export NVM_DIR="$HOME/.nvm"', '[ -s "$NVM_DIR/nvm.sh" ] && \\. "$NVM_DIR/nvm.sh"'),
+    "pyenv": ('export PYENV_ROOT="$HOME/.pyenv"', '[[ -d $PYENV_ROOT/bin ]] && export PATH="$PYENV_ROOT/bin:$PATH"',
+              'eval "$(pyenv init - zsh)"'),
+    "rustup": ('. "$HOME/.cargo/env"',),
+    "bun": ('export BUN_INSTALL="$HOME/.bun"', 'export PATH="$BUN_INSTALL/bin:$PATH"'),
+    "deno": ('. "$HOME/.deno/env"',),
+}
 #: Programs that drive other apps: refused inside (the app they drive would act outside it).
 APP_DRIVERS = frozenset({"osascript", "automator", "shortcuts"})
 SETUID_NOTE = "macOS doesn't allow setuid programs inside the agent sandbox; run it in your own terminal"
@@ -43,19 +58,24 @@ _WHY = {
     APP_DRIVER: "a program that drives another app would act outside the sandbox; do that step in your own terminal",
     OPEN_APP: "opening another app would run it outside the sandbox; open it yourself",
     SIGNAL: "an agent may stop only the programs it started itself, never one outside its sandbox",
-    NESTED: ("a tool that starts its own sandbox (Homebrew, for one) can not run inside Blackbox's; "
-             "run it in your own terminal"),
+    NESTED: ("a tool that starts its own sandbox can not run inside Blackbox's; SwiftPM: use `swift build "
+             "--disable-sandbox` (Blackbox's sandbox still covers it, nothing is lost); anything else: run it in "
+             "your own terminal"),
     FILE: "this file is kept closed to agents (a protected item, or a file that keeps Blackbox's hook)",
 }
-_WHAT = {SETUID: "{name}, a setuid program", APP_DRIVER: "{name}", OPEN_APP: "open", SIGNAL: "kill",
-         NESTED: "a second sandbox", FILE: "{name}"}
+_WHAT = {SETUID: "{name}, a setuid program", APP_DRIVER: "{name}", OPEN_APP: "open",
+         SIGNAL: "a signal to a process outside the sandbox", NESTED: "a second sandbox", FILE: "{name}", STARTUP: "{name}"}
 #: zsh: ``(eval):1: operation not permitted: sudo``; bash: ``bash: /usr/bin/sudo: Operation not
 #: permitted``; sandbox-exec itself: ``execvp() of '/bin/ps' failed: Operation not permitted``.
 _EXEC = re.compile(r"operation not permitted: (?P<z>\S+)\s*$|(?:^|\s)(?P<b>/\S+): operation not permitted"
                    r"|execvp\(\) of '(?P<x>[^']+)' failed: operation not permitted", re.IGNORECASE | re.MULTILINE)
 _OPEN = re.compile(r"LSOpenURLs\w*\(\) failed.*?error -54|LSOpenURLsWithRole\(\) failed with error -54", re.IGNORECASE)
-_SIGNAL = re.compile(r"kill(?::\d+:)? kill \d+ failed: operation not permitted|kill: \(\d+\) - operation not permitted", re.IGNORECASE)
+_SIGNAL = re.compile(r"kill(?::\d+:?)? kill (?:-\S+ )?\d+ failed: operation not permitted|kill: \(\d+\) - operation not permitted"
+                     r"|kill: \d+: operation not permitted", re.IGNORECASE)
 _NESTED = re.compile(r"sandbox_apply: operation not permitted", re.IGNORECASE)
+#: Blackbox's own stand-ins already say it (``sudo``, ``crontab``, ``top``, the brew shim): counted,
+#: and not said twice.
+_OWN = re.compile(r"Blackbox's sandbox refused this \((?P<what>[^)]{1,80})\)")
 #: The most refusals one output is read for, and the most characters read.
 MAX_FOUND = 8
 MAX_READ_CHARS = 64 * 1024
@@ -67,9 +87,17 @@ class Refusal:
 
     kind: str
     name: str = ""
+    #: For a startup file: the installer whose lines the person is handed ("" when not known).
+    installer: str = ""
 
     def line(self) -> str:
         """``<what>): <why>`` — the part of the note after "refused this (". """
+        if self.kind == STARTUP:
+            lines = INSTALLER_LINES.get(self.installer, ())
+            ask = (f"; to finish {self.installer}'s setup, add these lines to {self.name} yourself: " + " | ".join(lines)
+                   if lines else "; add the lines the installer printed to it yourself")
+            return (f"{self.name}): Blackbox keeps your shell startup files closed to agents (they keep later agents inside "
+                    f"the sandbox){ask}")
         return f"{_WHAT[self.kind].format(name=self.name)}): {_WHY[self.kind]}"
 
 
@@ -81,11 +109,19 @@ def _privileged(program: str) -> bool:
         return False
 
 
-def _exec_kind(word: str) -> Refusal:
+def _installer(text: str) -> str:
+    """The well-known installer whose output *text* is ("" for none)."""
+    lowered = text.lower()
+    return next((name for name in INSTALLER_LINES if re.search(rf"\b{name}\b", lowered)), "")
+
+
+def _exec_kind(word: str, text: str = "") -> Refusal:
     """A program the kernel would not start, or a file it would not open (zsh words both alike)."""
     name = os.path.basename(word.rstrip(":"))
     if name in APP_DRIVERS:
         return Refusal(APP_DRIVER, name)
+    if name in STARTUP_FILES:
+        return Refusal(STARTUP, word.rstrip(":"), _installer(text))
     if _privileged(word):
         return Refusal(SETUID, name)
     return Refusal(FILE, word)
@@ -101,18 +137,27 @@ def refusals(output: str) -> list[Refusal]:
         found.append(Refusal(OPEN_APP))
     if _NESTED.search(text):
         found.append(Refusal(NESTED))
+    found += [Refusal(OWN, match.group("what")) for match in _OWN.finditer(text)]
     for match in _EXEC.finditer(text):
         word = match.group("z") or match.group("b") or match.group("x") or ""
         if word:
-            found.append(_exec_kind(word))
+            found.append(_exec_kind(word, text))
     return list(dict.fromkeys(found))[:MAX_FOUND]
 
 
 def counted(found: list[Refusal]) -> bool:
-    """True when *found* holds a refusal the post-call counts (every kind but a file's)."""
-    return any(each.kind != FILE for each in found)
+    """True when *found* holds a refusal the post-call counts (every kind but a file's: the helper's
+    deny-log watch counts those with their exact path)."""
+    return any(each.kind not in (FILE, STARTUP) for each in found)
 
 
 def note(found: list[Refusal]) -> str:
-    """One line per refusal, "Blackbox's sandbox refused this (<what>): <why>." — "" for none."""
-    return " ".join(f"Blackbox's sandbox refused this ({each.line()})." for each in found)
+    """One line per refusal, "Blackbox's sandbox refused this (<what>): <why>." — "" for none, and
+    nothing for what Blackbox's own stand-in already said."""
+    return " ".join(f"Blackbox's sandbox refused this ({each.line()})." for each in found if each.kind != OWN)
+
+
+def reason(found: list[Refusal]) -> str:
+    """Why the call is recorded as refused, for its timeline: the note, or what Blackbox's own
+    stand-in said (``Blackbox's sandbox refused this (crontab)``)."""
+    return note(found) or " ".join(f"Blackbox's sandbox refused this ({each.name})." for each in found if each.kind == OWN)

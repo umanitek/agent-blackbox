@@ -289,9 +289,10 @@ def judge(body: Any) -> tuple[dict[str, Any], Optional[Judged]]:
               "findings": len(findings), "recorded": True}
     refused = sandbox_errors.refusals(event["text"]) if event["event"] == "post_tool" and event["sandboxed"] is True else []
     if refused and not blocked:   # the kernel refused part of the call: said to the agent, counted (KI-590)
-        answer["note"] = sandbox_errors.note(refused)
+        if sandbox_errors.note(refused):
+            answer["note"] = sandbox_errors.note(refused)
         if sandbox_errors.counted(refused):
-            verdict = {**verdict, "decision": "block", "message": answer["note"]}
+            verdict = {**verdict, "decision": "block", "message": sandbox_errors.reason(refused)}
     if event["tool_call_id"] and event["event"] in ("pre_tool", "post_tool"):
         _note_answer(session, call_key, answer)
     from .. import tracking   # late: tracking imports this package's editors

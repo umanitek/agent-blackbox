@@ -72,12 +72,13 @@ def post_output(agent: str, reason: str) -> tuple[str, int]:
     return "", 0
 
 
-def note_output(agent: str, note: str) -> str:
+def note_output(agent: str, note: str, hook_event: str = "") -> str:
     """What puts *note* (the OS sandbox refused part of this call, KI-590) BESIDE a tool's output
     for the model, without refusing the output, where *agent*'s post-tool hook takes added context;
-    "" elsewhere (the runner says it on stderr then)."""
+    "" elsewhere (the runner says it on stderr then). *hook_event*: the agent's own event name
+    (Claude Code's answer names the event it answers: PostToolUse or PostToolUseFailure)."""
     if agent in ("claude-code", "codex", "gemini-cli"):
-        event = "AfterTool" if agent == "gemini-cli" else "PostToolUse"
+        event = "AfterTool" if agent == "gemini-cli" else hook_event if hook_event == "PostToolUseFailure" else "PostToolUse"
         return json.dumps({"hookSpecificOutput": {"hookEventName": event, "additionalContext": note}})
     if agent == "cline":
         return json.dumps({"cancel": False, "contextModification": note})
