@@ -20,7 +20,7 @@ from .. import community
 from ..kernel import identity
 from ..kernel.config import BlackboxConfig
 from ..kernel.dkg_client import DkgClient
-from . import report_queue
+from . import host_process, report_queue
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +78,8 @@ def _report_and_audit(cfg: BlackboxConfig, event: str, findings: list[detection.
     report of the same threat — and adds no verified sighting or private KA.
     """
     finding_dicts = [f.to_dict() for f in findings]
+    # The folder this Hermes agent works in, so its notices name the project, not the Hermes home (KI-603).
+    detail = {"cwd": host_process.facts()["cwd"], **detail}
     _attach_sightings(finding_dicts, detail)   # before recording, so the local record carries the profile too
     audit.record(event=event, findings=finding_dicts or None, detail=detail)
     if not findings:

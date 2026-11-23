@@ -2,6 +2,9 @@
 
 Every sentence built here is lock-screen safe — an agent's product name, the project folder's
 NAME and a fixed description of what happened; never a path, a command, a prompt or an address.
+One exception, on purpose: a listed package that already LANDED names its removal command, built
+by Blackbox from the package manager and the package's name (the finding's ``advice``, KI-603) —
+the person needs it at once.
 ``detail`` carries the finding's own title and evidence (both already redacted where they were
 recorded), for a person who chose ``notifications.details``.
 
@@ -68,7 +71,8 @@ def finding(row: Mapping[str, Any]) -> Optional[Notice]:
     if not identifier:
         return None
     agent = str(row.get("framework") or "hermes")
-    name, project = agent_name(agent), project_of(row.get("workspace"))
+    # A Hermes row's workspace is its Hermes home: the folder the agent works in names the project (KI-603).
+    name, project = agent_name(agent), project_of(row.get("folder") or row.get("workspace"))
     subject = name[:1].upper() + name[1:]   # a sentence that starts with the name
     ts = float(row.get("ts") or 0)
     stopped = str(row.get("decision") or "") in ("block", "blocked")
@@ -95,6 +99,13 @@ def finding(row: Mapping[str, Any]) -> Optional[Notice]:
         return Notice(id=key, kind="too-late", level="critical", title=f"Blackbox could not stop {name} in time",
                       body=f"{subject}{_where(project)} {what}. Blackbox decided to stop it, but its answer came after the agent's "
                            f"limit, so the action ran: {why}.", **common)
+    if row.get("after_install") and str(row.get("category") or "") == "dependency":
+        # It already ran: what to do now is the message (the removal, the install-scripts warning).
+        return Notice(id=key, kind="installed", level="critical" if severity == "critical" else "warning",
+                      title=f"{name} installed a package on the threat list",
+                      body=f"{subject}{_where(project)} installed a package on the threat list ({why}). "
+                           + (str(row.get("advice") or "")[:400] or "Remove it, and check what its install scripts changed."),
+                      **common)
     if stopped:
         return Notice(id=key, kind="stopped", level="critical" if severity == "critical" else "warning",
                       title=f"Blackbox stopped {name}", body=f"{subject}{_where(project)} {what}. Stopped by Blackbox: {why}.", **common)

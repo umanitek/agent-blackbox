@@ -111,6 +111,12 @@ def _flatten_finding_row(rec: dict[str, Any], default_fw: str) -> dict[str, Any]
         # Local-only conversation snapshot (redacted upstream).
         "context": _bounded_context(detail.get("context") or finding.get("context")),
         "found_in": finding.get("found_in") or "",
+        "advice": str(finding.get("advice") or ""),
+        # An install's package that already landed (the after-install check): the alert says how to remove it.
+        "after_install": detail.get("after_install") is True,
+        # The folder the agent works in, where the row's workspace names something else (a Hermes
+        # row's workspace is its Hermes home — KI-603).
+        "folder": str(detail.get("cwd") or ""),
     }
     # What the pages group on (one threat on screen) and which row stands for it — served, not re-derived.
     row["display_key"], row["display_rank"] = finding_display.display_key(row), finding_display.display_rank(row)
@@ -312,6 +318,9 @@ def _finding_summary(finding: dict[str, Any]) -> dict[str, Any]:
         "sighting": {str(k)[:64]: str(v)[:128] for k, v in (finding.get("sighting") or {}).items()},
         # Where an injection was met — a closed word (constants.INJECTION_CONTEXTS), never content.
         "found_in": _found_in(finding),
+        # What the person should do now (a landed package: its removal command and the
+        # install-scripts warning, KI-603) — Blackbox's own words, bounded.
+        **({"advice": redaction.sanitize_text(str(finding["advice"]), 500)} if finding.get("advice") else {}),
         # A rule of the person's own (source "custom": File Shield, protected paths) is never shared;
         # its fields (the item, path and route) are what the hits list shows, so they are kept,
         # redacted and bounded. Every other finding keeps none (unchanged).
