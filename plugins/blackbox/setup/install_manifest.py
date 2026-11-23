@@ -221,18 +221,49 @@ def _take_out(target: Path, block: str, report: list[str]) -> None:
     report.append(f"took the installer's lines out of {target}")
 
 
-def remove_host(manifest: InstallManifest, report: list[str]) -> None:
-    """Everything the manifest lists for the host, and nothing else."""
+#: Hermes's own commands in the person's ``~/.local/bin``: Hermes republishes them when it starts
+#: (``hermes_cli/_launchers.py``, ``expose_cli``), so one may be written AFTER the install — round 6
+#: saw ``hermes-agent`` rewritten by the uninstall's own Hermes and left pointing into the removed
+#: checkout. Removed with the host only when it points into a folder the host removal took away.
+HERMES_COMMANDS = ("hermes", "hermes-agent", "hermes-acp")
+MAX_LAUNCHER_BYTES = 4096
+
+
+def _points_into(command: Path, folders: tuple[Path, ...]) -> bool:
+    """Whether the small launcher *command* (a shim or a link) leads into one of *folders*."""
+    if command.is_symlink():
+        target = os.path.realpath(command)
+        return any(target == str(folder) or target.startswith(str(folder) + os.sep) for folder in folders)
+    text = read_small_text(str(command), MAX_LAUNCHER_BYTES, nofollow=True) if command.is_file() else None
+    return bool(text) and any(str(folder) + os.sep in text for folder in folders)
+
+
+def _remove_commands_into(home: Path, folders: tuple[Path, ...], report: list[str]) -> None:
+    """Each of Hermes's commands in ``~/.local/bin`` that leads into a removed host folder."""
+    for name in HERMES_COMMANDS:
+        command = home / ".local" / "bin" / name
+        if (command.is_file() or command.is_symlink()) and _points_into(command, folders):
+            command.unlink(missing_ok=True)
+            report.append(f"removed {command} (it ran the Hermes just removed)")
+
+
+def remove_host(manifest: InstallManifest, report: list[str], home: Path | None = None) -> None:
+    """Everything the manifest lists for the host, and nothing else — plus Hermes's own commands
+    that lead into what was removed (written after the install, so not listed: see above).
+    *home* defaults to this person's."""
     for target, block in manifest.appended:
         _take_out(target, block, report)
+    folders: list[Path] = []
     for path in manifest.host:
         if path.is_symlink() or path.is_file():
             path.unlink(missing_ok=True)
         elif path.is_dir():
             shutil.rmtree(path, ignore_errors=True)
+            folders.append(path)
         else:
             continue
         report.append(f"removed {path}")
+    _remove_commands_into(Path(os.path.normpath(home or Path.home())), tuple(folders), report)
     _remove_empty(manifest.host_dirs, report)
 
 

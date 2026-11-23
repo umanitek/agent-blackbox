@@ -186,3 +186,26 @@ def test_components_that_were_there_before_the_install_are_not_listed(machine):
     _shell(home, record, linger_dir, fake_bin, "install_manifest_write")
     text = (home / ".hermes" / "blackbox" / install_manifest.FOLDER / install_manifest.MANIFEST).read_text(encoding="utf-8")
     assert "system-helper" not in text and "notifier" not in text
+
+
+def test_removing_the_host_takes_hermes_commands_that_lead_into_it_even_unlisted(tmp_path):
+    """Security round 6 (variant B): Hermes republishes ``~/.local/bin/hermes-agent`` when it starts,
+    so the uninstall's own Hermes rewrote it after the install manifest was written; removing the
+    host left it pointing into the deleted checkout. A Hermes command that leads into a removed host
+    folder goes with it; one that leads elsewhere (another Hermes) stays."""
+    home = tmp_path.resolve()
+    checkout = home / "agent-blackbox"
+    (checkout / ".hermes" / "bin").mkdir(parents=True)
+    bin_dir = home / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    (bin_dir / "hermes-agent").write_text(f'#!/bin/sh\nexec "{checkout}/.hermes/bin/hermes" --run-module run_agent "$@"\n',
+                                         encoding="utf-8")
+    (bin_dir / "hermes-acp").symlink_to(checkout / ".hermes" / "bin" / "hermes-acp")
+    (bin_dir / "hermes").write_text("#!/bin/sh\nexec /Applications/Hermes.app/Contents/MacOS/hermes \"$@\"\n", encoding="utf-8")
+    manifest = install_manifest.InstallManifest(host=(checkout,))
+    report: list[str] = []
+    install_manifest.remove_host(manifest, report, home=home)
+    assert not checkout.exists()
+    assert not (bin_dir / "hermes-agent").exists() and not (bin_dir / "hermes-acp").is_symlink()
+    assert (bin_dir / "hermes").exists()                       # another Hermes's command stays
+    assert any("hermes-agent" in line and "just removed" in line for line in report)
