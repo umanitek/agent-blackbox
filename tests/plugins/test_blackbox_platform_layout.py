@@ -163,3 +163,39 @@ def test_the_rust_scanner_ignores_comments_and_catches_code():
     assert rust_problems('pub const HOME: &str = "/Library/Application Support/Blackbox";') == ["1: names /library/"]
     assert rust_problems('let url = "http://127.0.0.1"; run("/usr/sbin/netstat");') == ["1: names netstat"]
     assert rust_problems("//! reads pfctl's answer\n    // netstat failing costs nothing\nfn one() -> u8 { 1 }") == []
+
+
+#: The service and signing tools KI-628 moved behind platform/ (beside the macOS ones above).
+SERVICE_TOOLS = frozenset({"systemctl", "schtasks", "loginctl"})
+#: Shared code that reaches the system's service manager or signing tools only through its platform/.
+SERVICE_SEAMS = (ROOT / "plugins" / "blackbox" / "sync", ROOT / "plugins" / "blackbox" / "setup",
+                 ROOT / "plugins" / "blackbox" / "kernel" / "code_signing")
+
+
+def _names_a_tool(source: str, tools: frozenset[str]) -> list[str]:
+    """Where *source* names one of *tools* as a command (the first item of an argument list or a path)."""
+    tree = ast.parse(source)
+    docstrings = _docstrings(tree)
+    heads = {id(node.elts[0]) for node in ast.walk(tree) if isinstance(node, (ast.List, ast.Tuple)) and node.elts}
+    found = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in docstrings:
+            words = node.value.split()
+            command = words[0] if words and ("/" in words[0] or id(node) in heads) else ""
+            if command and command.rsplit("/", 1)[-1] in tools:
+                found.append(f"{node.lineno}: names {command}")
+    return found
+
+
+def test_service_managers_and_signing_tools_are_named_only_in_their_platform_modules():
+    """KI-628: launchctl / systemctl / schtasks (sync's node service, uninstall's login services) and
+    codesign / spctl (kernel/code_signing) live in each package's platform/ modules."""
+    tools = MACOS_TOOLS | SERVICE_TOOLS
+    problems = [f"{path.relative_to(ROOT)}:{problem}" for root in SERVICE_SEAMS for path in _outside_platform(root, "*.py")
+                for problem in _names_a_tool(path.read_text(encoding="utf-8"), tools)]
+    assert not problems, "move these into the package's platform/ module:\n" + "\n".join(problems)
+
+
+def test_the_service_tool_scanner_finds_a_command_and_ignores_a_docstring():
+    source = '"""Runs launchctl."""\nARGV = ["systemctl", "restart", "x"]\nPATH = "/usr/bin/codesign"\nLABEL = "launchctl"\n'
+    assert sorted(_names_a_tool(source, MACOS_TOOLS | SERVICE_TOOLS)) == ["2: names systemctl", "3: names /usr/bin/codesign"]
