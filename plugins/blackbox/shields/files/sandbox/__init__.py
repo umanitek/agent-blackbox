@@ -47,7 +47,7 @@ from ....kernel.bounded_files import atomic_write
 from ...contract import ShieldMode
 from .. import mode as mode_module
 from ..protect import is_folder
-from . import addon_places, defaults, own_places, packages, platform
+from . import addon_places, defaults, own_places, packages, permissions, platform
 from .hermes import HERMES_CODE_LAUNCHER, HERMES_LAUNCHER_ENV, HERMES_SHELLS, HermesCover, enter_hermes_process, sync_shells
 from .layout import CLI_AGENTS, canary_path, chosen, hermes_shell_dir, home, launcher_dir, profile_path, write_if_changed
 from .places import Places, build, canonical

@@ -72,14 +72,15 @@ from .shield_api import (
 logger = logging.getLogger(__name__)
 
 __all__ = [
-    "API_MAX_WRITE_BYTES", "API_NAME_PATTERN", "PACKAGE_INSTALLS", "AssistantAnswer", "BrowserRoot",
-    "Capability", "InstanceRef", "Pack", "RawAnswer", "Registrar", "SelfTest", "Shield", "ShieldAlert",
-    "ShieldApi", "ShieldApiError", "ShieldContext", "ShieldEvent", "ShieldExtension", "ShieldMode",
-    "ShieldStatus", "ShieldsSnapshot", "addon_routes", "alerts", "all_shields", "allow_lists", "allows",
-    "apply_sandbox_default", "attack_table", "browser_roots", "call_api", "check", "describe_change",
-    "enter_hermes_process", "events", "get", "loaded_packs", "pack_logo", "package_installs_weakening",
-    "prompt_findings", "reload_registry", "self_tests", "settings_validators", "settings_view",
-    "shield_name", "snapshot", "statuses", "unlocked", "write_weakening",
+    "AGENT_SANDBOX", "API_MAX_WRITE_BYTES", "API_NAME_PATTERN", "PACKAGE_INSTALLS", "AssistantAnswer",
+    "BrowserRoot", "Capability", "InstanceRef", "Pack", "RawAnswer", "Registrar", "SelfTest", "Shield",
+    "ShieldAlert", "ShieldApi", "ShieldApiError", "ShieldContext", "ShieldEvent", "ShieldExtension",
+    "ShieldMode", "ShieldStatus", "ShieldsSnapshot", "addon_routes", "agent_sandbox_weakening",
+    "alerts", "all_shields", "allow_lists", "allows", "apply_sandbox_default", "attack_table",
+    "browser_roots", "call_api", "check", "describe_change", "enter_hermes_process", "events", "get",
+    "loaded_packs", "pack_logo", "package_installs_weakening", "prompt_findings", "reload_registry",
+    "self_tests", "settings_validators", "settings_view", "shield_name", "snapshot", "statuses",
+    "unlocked", "write_weakening",
 ]
 
 #: File Shield's sandbox for the Hermes agent's own shells, at each Hermes session start (fail-open).
@@ -88,6 +89,8 @@ enter_hermes_process = files.sandbox.enter_hermes_session
 apply_sandbox_default = files.sandbox.defaults.apply
 #: ``agent_packages``: Homebrew installs Blackbox makes for sandboxed agents; loosening it waits (approvals).
 PACKAGE_INSTALLS, package_installs_weakening = files.sandbox.packages.SECTION, files.sandbox.packages.setting_weakening
+#: ``agent_sandbox``: the sandbox permissions per agent and project; loosening them waits (approvals).
+AGENT_SANDBOX, agent_sandbox_weakening = files.sandbox.permissions.SECTION, files.sandbox.permissions.section_weakening
 
 #: The plugin's own shields, in registration order. Registering one is one line here; an add-on's
 #: shields and extensions join them on first use (:func:`_registry`).

@@ -89,8 +89,9 @@ def _valid(shield_id: str, name: str) -> bool:
 
 def register(app: Any) -> None:
     """Adds the two routes to *app*, and holds a loosening of the agents' Homebrew installs
-    (``agent_packages``) for the person's approval."""
+    (``agent_packages``) and of the sandbox permissions (``agent_sandbox``) for the person's approval."""
     approvals.SECTION_JUDGES[shields.PACKAGE_INSTALLS] = shields.package_installs_weakening
+    approvals.SECTION_JUDGES[shields.AGENT_SANDBOX] = shields.agent_sandbox_weakening
     from fastapi import Request
     from fastapi.responses import JSONResponse, Response
     from starlette.concurrency import run_in_threadpool
