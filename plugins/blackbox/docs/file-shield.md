@@ -37,14 +37,31 @@ does not run anything. Within that, it judges:
   its text, when it is written;
 - any script file a command runs (`python3 r.py`, `node x.js`, `bash x.sh`, `./x`), read from disk
   when it is run (up to 256 KiB) with the arguments the command hands it (`sys.argv`,
-  `process.argv`, `ARGV`, `$1`), in the folder the agent works in.
+  `process.argv`, `ARGV`, `$1`), in the folder the agent works in — also when it is handed to
+  another shell (`bash -lc '…'`, `/bin/zsh -lc '…'`);
+- a script written AND run in the same command (`cat > r.py <<EOF … EOF && python3 r.py`,
+  `printf … > x.sh; sh x.sh`, `… | tee x.py; python3 x.py`): the text it writes is the text judged,
+  because the file does not exist yet when the hook looks (security round 6);
+- the same script reading for the startup places: a script the agent runs whose text writes an SSH
+  login file, a launchd job, a login item or a cron table is refused like the write itself.
 
 What only the sandbox (Layer 2, below) stops, because no text says which file will be opened:
 
 - a path a program builds while it runs from anything else — input it reads, a file or the network,
   environment variables other than the home folder, values it computes;
 - a compiled program, or a script fetched and run in one go;
-- a script larger than 256 KiB (flagged, not judged);
+- a script whose behaviour is only known at run time: it writes or fetches the code it then runs,
+  decodes or decrypts it, picks a path by a condition, a loop or a value it computes, or is changed
+  between the hook's look and the run (another process, a second command racing it);
+- a script run by a program the hook does not know as a runner (an interpreter under another name,
+  a build tool, a test runner, `make`, a package's own install script);
+- a script larger than 256 KiB (flagged, not judged).
+
+**Hooks only can never be a guarantee.** Layer 1 judges what a call SAYS; a script can always be
+written so that what it does is decided only when it runs. For an agent on hooks only — one you
+took out of the sandbox, one started another way, an IDE that starts its own agent — Blackbox
+refuses everything it can read and flags what it cannot, and that is all. The sandbox (Layer 2) is
+the guarantee: the kernel refuses the open, the write or the job whatever the script computes.
 - Hermes's `execute_code` tool beyond what its code text says. When the Hermes agent is picked for
   the sandbox, Blackbox sets Hermes's interpreter-launcher hook point
   (`HERMES_EXECUTE_CODE_LAUNCHER`) to its sandbox launcher, so that Python runs inside the sandbox
@@ -88,8 +105,15 @@ sandbox with real agents).
   (`~/.ssh/authorized_keys`, `authorized_keys2`, `rc`, `environment`), your shell startup files and
   Homebrew's own folders — are ONE list (`kernel/persistence_places`). The sandbox's profile closes
   them to writes, and Blackbox's hooks refuse an agent's write to them in every mode, by any route
-  (`>>`, `tee`, `cp`, a script, Python, a file tool, Codex's `apply_patch`), plus the commands that
-  schedule a job without naming a file (`crontab -`, `at`, `launchctl submit`). Reading them, and
+  (`>>`, `tee`, `cp`, a script it writes or runs, Python, a file tool, Codex's `apply_patch`), plus
+  the commands that schedule a job without naming a file (`crontab -`, `at`, `launchctl
+  bootstrap|load|submit`, `sfltool add-item`, `defaults write com.apple.loginwindow …`), also handed
+  to another shell. On hooks only this is as far as a hook can read (above); in the sandbox the
+  kernel refuses a write to those files and folders whatever the script computes. NOT yet proven:
+  a login-window or login-item preference written through macOS's preferences service (`defaults
+  write`, `CFPreferences` from code) is written by that service, not by the agent's process, so the
+  sandbox's file rules may not see it — the hook refuses the command, a script that does it while it
+  runs may pass (a VM test is due). Reading them, and
   running a program from Homebrew's folders, stays allowed. If you meant it, add the job, key or
   line yourself in your own terminal.
 - **Your own program folders are closed to writes** (`~/.local/bin`, `~/.cargo/bin`, `~/go/bin`,
