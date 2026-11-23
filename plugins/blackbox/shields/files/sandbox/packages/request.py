@@ -66,6 +66,14 @@ class BrewRequest:
         """The request as the person reads it: ``brew install tree wget``."""
         return " ".join(["brew", *self.words()])
 
+    @property
+    def tool(self) -> str:
+        return "Homebrew"
+
+    def check_command(self, name: str) -> str:
+        """What *name* is threat-checked as (the guard's package rules)."""
+        return f"brew install {self.kind + ' ' if self.kind else ''}{name}"
+
 
 def brokered(argv: Sequence[str]) -> bool:
     """True when ``brew <argv>`` changes what is installed (Blackbox runs it); else it is a read."""

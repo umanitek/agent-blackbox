@@ -59,6 +59,10 @@ def brew_shim(_tools: str, _python: str, _dashboard_url: str) -> str:
     return ""
 
 
+def manager_shims(_tools: str, _python: str, _dashboard_url: str) -> dict[str, str]:
+    return {}
+
+
 def spawn_brew(_command: list[str], _env: dict[str, str], _cwd: str) -> object:
     raise OSError("Homebrew runs for agents only on macOS")
 

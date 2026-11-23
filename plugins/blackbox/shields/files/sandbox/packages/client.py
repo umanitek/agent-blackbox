@@ -13,9 +13,13 @@ again, until it runs or is refused. (428, the approval gate holding a request, i
 FAIL CLOSED: when Blackbox can not be reached, nothing is installed and the agent is told to run
 brew in the person's own terminal.
 
+A package manager's shim (``npm``, ``pipx``, ``pip``, ``cargo``, ``gem``, ``uv``) runs it with
+``--manager <id>`` for a global install: ``POST …/install`` and ``GET …/install-job`` instead.
+
 Usage (what the shim runs)::
 
     python3 brew-client.py http://127.0.0.1:9700 install tree
+    python3 brew-client.py http://127.0.0.1:9700 --manager npm install -g typescript
 """
 
 from __future__ import annotations
@@ -36,8 +40,8 @@ HELD = 428
 WAITING = 423
 
 
-def _unreachable(argv: list) -> str:
-    return f"Blackbox couldn't install this; run `brew {' '.join(argv)}` in your own terminal."
+def _unreachable(program: str, argv: list) -> str:
+    return f"Blackbox couldn't install this; run `{program} {' '.join(argv)}` in your own terminal."
 
 
 def _call(url: str, path: str, token: str, body: object = None) -> tuple:
@@ -56,25 +60,28 @@ def _call(url: str, path: str, token: str, body: object = None) -> tuple:
 
 def main(argv: list) -> int:
     url, words = argv[1].rstrip("/"), argv[2:]
+    manager = words[1] if words[:1] == ["--manager"] and len(words) > 1 else ""
+    words = words[2:] if manager else words
+    endpoint, program = ("install", manager) if manager else ("brew", "brew")
     try:
         with urllib.request.urlopen(f"{url}/api/session", timeout=TIMEOUT_SECONDS) as response:
             token = json.loads(response.read(65536)).get("token", "")
         # Who asks: this process's parent (the agent's shell), so Blackbox names the agent (KI-605).
-        asking = {"argv": words, "pid": os.getppid(), "cwd": os.getcwd()}
-        status, answer = _call(url, "/api/shields/file-shield/api/brew", token, asking)
+        asking = {"argv": words, "pid": os.getppid(), "cwd": os.getcwd(), **({"manager": manager} if manager else {})}
+        status, answer = _call(url, f"/api/shields/file-shield/api/{endpoint}", token, asking)
         deadline = time.monotonic() + APPROVAL_SECONDS
         if status in (HELD, WAITING):
             print("Blackbox: waiting for your approval to run this outside the sandbox …", file=sys.stderr)
         while status in (HELD, WAITING) and time.monotonic() < deadline:
             time.sleep(POLL_SECONDS * 2)
-            status, answer = _call(url, "/api/shields/file-shield/api/brew", token, asking)
+            status, answer = _call(url, f"/api/shields/file-shield/api/{endpoint}", token, asking)
         if status != 200:
             error = answer.get("error") or "; ".join(answer.get("errors") or []) or "not approved"
-            print(f"Blackbox's sandbox refused this (brew {' '.join(words)}): {error}", file=sys.stderr)
+            print(f"Blackbox's sandbox refused this ({program} {' '.join(words)}): {error}", file=sys.stderr)
             return 1
         job, line = answer.get("job", ""), 0
         while True:
-            status, state = _call(url, f"/api/shields/file-shield/api/brew-job?job={job}&from={line}", token)
+            status, state = _call(url, f"/api/shields/file-shield/api/{endpoint}-job?job={job}&from={line}", token)
             if status != 200:
                 raise OSError("lost the job")
             for text in state.get("lines") or []:
@@ -84,7 +91,7 @@ def main(argv: list) -> int:
                 return int(state.get("exit") or 0)
             time.sleep(POLL_SECONDS)
     except (OSError, ValueError):
-        print(_unreachable(words), file=sys.stderr)
+        print(_unreachable(program, words), file=sys.stderr)
         return 1
 
 

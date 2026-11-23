@@ -67,7 +67,7 @@ def test_the_one_list_holds_the_fixed_folders_and_the_owned_path_folders(home):
 def test_the_profile_closes_them_only_while_tool_folders_is_not_allowed(home):
     blocked = permissions.allowances(Settings(rules=(Rule("tool-folders", Mode.BLOCK, permissions.Scope(agent="codex")),)), "codex")
     assert any(f'(subpath "{home}/.local/bin")' in line for line in macos_profile.permission_lines(blocked, str(home)))
-    allowed = permissions.allowances(Settings(), "codex")
+    allowed = permissions.allowances(Settings(rules=(Rule("tool-folders", Mode.ALLOW),)), "codex")
     assert not any(".local/bin" in line for line in macos_profile.permission_lines(allowed, str(home)))
 
 

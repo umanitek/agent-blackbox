@@ -47,17 +47,18 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 import sys
 from pathlib import Path
 from typing import Any, Mapping
 
 from ..... import audit
-from .....kernel import agent_hosts, settings as kernel_settings
+from .....kernel import agent_hosts, constants, settings as kernel_settings
 from .....kernel.bounded_files import atomic_write, read_small_text
 from .....kernel.config import load_blackbox_config, shield_entry
 from ....shield_api import ShieldApiError, ShieldContext
 from .. import permissions, platform
-from . import jobs
+from . import jobs, managers
 from .request import BrewRequest, Refused, parse
 
 __all__ = ["API_READS", "API_WRITES", "PERMISSION", "SETTING", "WAITING", "alerts", "install_shim", "installs", "setting_weakening"]
@@ -121,22 +122,22 @@ def _folder(body: Mapping[str, Any]) -> str:
         and "\x00" not in cwd else ""
 
 
-def _decide(context: ShieldContext, body: Mapping[str, Any], request: BrewRequest) -> Any:
-    """The homebrew permission's decision for the asking agent; raises when it is not ALLOWED."""
+def _decide(context: ShieldContext, body: Mapping[str, Any], request: jobs.Request, permission: str = PERMISSION) -> Any:
+    """*permission*'s decision for the asking agent; raises when it is not ALLOWED; answers the asker."""
     owner = _asker(context, body)
     agent, instance = (owner.agent, owner.instance) if owner is not None else ("", "")
     pid = body.get("pid")
-    decision = permissions.broker_decision(PERMISSION, agent, instance, _folder(body), request.shown(),
+    decision = permissions.broker_decision(permission, agent, instance, _folder(body), request.shown(),
                                            pid if isinstance(pid, int) and not isinstance(pid, bool) else 0)
     if decision == permissions.WAITING:
         raise ShieldApiError(WAITING, "Blackbox asked you whether this agent may run it; it runs once you allow it.")
     if decision == permissions.REFUSED:
-        raise ShieldApiError(403, "Homebrew installs by this AI agent are blocked in Blackbox's sandbox permissions; "
-                                  "run brew in your own terminal.")
+        raise ShieldApiError(403, f"{request.tool} installs by this AI agent are blocked in Blackbox's sandbox permissions; "
+                                  "run it in your own terminal.")
     return owner
 
 
-def _listed(context: ShieldContext, request: BrewRequest) -> list[str]:
+def _listed(context: ShieldContext, request: jobs.Request) -> list[str]:
     """The names a threat rule matches as a package action; every name when it can not be asked."""
     if request.verb == "uninstall":
         return []
@@ -146,7 +147,7 @@ def _listed(context: ShieldContext, request: BrewRequest) -> list[str]:
     listed = []
     for name in request.names:
         try:
-            verdict = judge("terminal", {"command": f"brew install {request.kind + ' ' if request.kind else ''}{name}"})
+            verdict = judge("terminal", {"command": request.check_command(name)})
         except Exception:   # health: allow BLE001 -- the verdict could not be asked: fail closed
             listed.append(name)
             continue
@@ -169,6 +170,42 @@ def _brew(context: ShieldContext, body: Mapping[str, Any]) -> dict[str, Any]:
     if not brew:
         raise ShieldApiError(404, "Homebrew is not installed on this Mac.")
     job = jobs.start(request, brew, done=_record, owner=owner)
+    return {"job": job.id, "command": request.shown()}
+
+
+#: The global-installs permission (``npm i -g``, ``pipx install`` … — :mod:`.managers`).
+GLOBAL_PERMISSION = "global-installs"
+#: Where a package manager is looked for besides the dashboard's own PATH (Blackbox's folders never).
+MANAGER_PATHS = ("/opt/homebrew/bin", "/usr/local/bin", "{home}/.cargo/bin", "{home}/.local/bin", "/usr/bin")
+
+
+def manager_path(program: str) -> str:
+    """The person's *program* ("" when none): on the dashboard's PATH or a usual place, never in
+    Blackbox's own folders (the shims live there)."""
+    own = os.path.realpath(str(constants.blackbox_home()))
+    home = os.path.expanduser("~")
+    folders = [part for part in os.environ.get("PATH", "").split(os.pathsep) if part.startswith("/")]
+    folders += [place.replace("{home}", home) for place in MANAGER_PATHS]
+    safe = [folder for folder in dict.fromkeys(folders) if not os.path.realpath(folder).startswith(own)]
+    return shutil.which(program, path=os.pathsep.join(safe)) or ""
+
+
+def _install(context: ShieldContext, body: Mapping[str, Any]) -> dict[str, Any]:
+    """``install`` ``{"manager", "argv", "pid", "cwd"}``: a global install, decided by ``global-installs``."""
+    if set(body) - {"manager", "argv", "pid", "cwd"}:
+        raise ShieldApiError(400, "a request carries the manager and its words only")
+    try:
+        request = managers.parse(str(body.get("manager") or ""), body.get("argv") or [])
+    except Refused as why:
+        raise ShieldApiError(400, str(why)) from None
+    owner = _decide(context, body, request, GLOBAL_PERMISSION)
+    listed = _listed(context, request)
+    if listed:
+        raise ShieldApiError(403, f"{', '.join(listed)}: a threat rule lists this package, so Blackbox will not install it")
+    program = manager_path(managers.MANAGERS[request.manager].program)
+    if not program:
+        raise ShieldApiError(404, f"{request.tool} is not installed on this Mac.")
+    job = jobs.start(request, program, done=_record, owner=owner, env=jobs.manager_environment(program))
     return {"job": job.id, "command": request.shown()}
 
 
@@ -227,18 +264,18 @@ def alerts() -> list[dict[str, Any]]:
             verb = {"install": "installed", "upgrade": "upgraded", "reinstall": "reinstalled", "uninstall": "uninstalled"}[job.request.verb]
             what = ", ".join(job.request.names) or "every package"
             rows.append({"key": f"package-install:{job.id}", "ts": job.started, "ok": code == 0,
-                         "text": (f"Blackbox {verb} {what} with Homebrew {_who(job)}." if code == 0 else
-                                  f"Homebrew could not finish `{job.request.shown()}` {_who(job)}."),
+                         "text": (f"Blackbox {verb} {what} with {job.request.tool} {_who(job)}." if code == 0 else
+                                  f"{job.request.tool} could not finish `{job.request.shown()}` {_who(job)}."),
                          **({"agent": job.owner.agent, "instance": job.owner.instance} if job.owner is not None else {})})
     return rows
 
 
-API_WRITES = {"brew": _brew}
-API_READS = {"brew-job": _job}
+API_WRITES = {"brew": _brew, "install": _install}
+API_READS = {"brew-job": _job, "install-job": _job}
 
 
 def install_shim(tools: Path, dashboard_url: str = "") -> None:
-    """The ``brew`` shim and its client in the sandbox's tools folder (first on the sandboxed PATH
+    """The ``brew`` shim, the package managers' shims and their client in the sandbox's tools folder (first on the sandboxed PATH
     only), talking to this Blackbox's dashboard (*dashboard_url*, by default its configured port);
     nothing when this OS has no shim (``platform.brew_shim`` answers "")."""
     url = dashboard_url or f"http://127.0.0.1:{load_blackbox_config().dashboard_port}"
@@ -246,6 +283,7 @@ def install_shim(tools: Path, dashboard_url: str = "") -> None:
     if not shim or not tools.is_dir():
         return
     client = read_small_text(str(_CLIENT), 256 * 1024) or ""
-    for path, text in ((tools / CLIENT_NAME, client), (tools / "brew", shim)):
+    managed = platform.manager_shims(str(tools), sys.executable, url)   # global installs (sandbox permission global-installs)
+    for path, text in ((tools / CLIENT_NAME, client), (tools / "brew", shim), *((tools / name, text) for name, text in managed.items())):
         if read_small_text(str(path), 256 * 1024) != text or not os.access(path, os.X_OK):
             atomic_write(path, text, mode=0o755)

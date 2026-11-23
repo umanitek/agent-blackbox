@@ -31,7 +31,11 @@ from typing import TYPE_CHECKING, Any, Callable, Optional
 from .....kernel import shell_path
 from .....kernel.bounded_files import read_small_text
 from .. import platform
+from .managers import InstallRequest
 from .request import BrewRequest
+
+#: A validated request a job runs: Homebrew's or a global install's.
+Request = BrewRequest | InstallRequest
 
 if TYPE_CHECKING:
     import subprocess
@@ -90,17 +94,27 @@ def clean_environment(brew: str) -> dict[str, str]:
             **({"TMPDIR": os.environ["TMPDIR"]} if os.environ.get("TMPDIR") else {})}
 
 
-def argv(brew: str, request: BrewRequest) -> list[str]:
-    """The FIXED argv Blackbox runs: Homebrew's own path, then the validated words."""
-    return [brew, *request.words()]
+def argv(program: str, request: Request) -> list[str]:
+    """The FIXED argv Blackbox runs: the program's own path, then the validated words."""
+    return [program, *request.words()]
+
+
+def manager_environment(program: str) -> dict[str, str]:
+    """The environment a global install runs with (``managers``): what the package manager needs,
+    nothing the agent set — its own folder first on PATH so it finds its runtime (node, python)."""
+    home = os.path.expanduser("~")
+    return {"HOME": home, "USER": os.environ.get("USER", ""), "LOGNAME": os.environ.get("LOGNAME", os.environ.get("USER", "")),
+            "PATH": f"{os.path.dirname(program)}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin", "LANG": "en_US.UTF-8",
+            **({"TMPDIR": os.environ["TMPDIR"]} if os.environ.get("TMPDIR") else {})}
 
 
 class Job:
     """One brew run: its *id*, *request*, output lines (bounded), and whether / how it ended."""
 
-    def __init__(self, request: BrewRequest, owner: Any = None) -> None:
+    def __init__(self, request: Request, owner: Any = None, env: Optional[dict[str, str]] = None) -> None:
         self.id = secrets.token_hex(8)
         self.request = request
+        self.env = env
         #: The agent instance that asked (``shields.InstanceRef``), None when not known (KI-605).
         self.owner = owner
         self.started = time.time()
@@ -148,12 +162,13 @@ def reset() -> None:
         _JOBS.clear()
 
 
-def start(request: BrewRequest, brew: str, *, spawn: Optional[Spawn] = None, done: Optional[Callable[[Job], None]] = None,
-          owner: Any = None) -> Job:
-    """Runs *request* with Homebrew at *brew* in a thread; answers the :class:`Job` at once.
-    *done* is called with the job when it has ended (the broker records and notifies there);
-    *owner*: the agent instance that asked."""
-    job = Job(request, owner)
+def start(request: Request, brew: str, *, spawn: Optional[Spawn] = None, done: Optional[Callable[[Job], None]] = None,
+          owner: Any = None, env: Optional[dict[str, str]] = None) -> Job:
+    """Runs *request* with the program at *brew* (Homebrew, or a package manager) in a thread;
+    answers the :class:`Job` at once. *done* is called with the job when it has ended (the broker
+    records and notifies there); *owner*: the agent instance that asked; *env*: the environment
+    (Homebrew's :func:`clean_environment` when None)."""
+    job = Job(request, owner, env)
     with _lock:
         _JOBS[job.id] = job
         while len(_JOBS) > MAX_JOBS:
@@ -164,9 +179,9 @@ def start(request: BrewRequest, brew: str, *, spawn: Optional[Spawn] = None, don
 
 def _run(job: Job, brew: str, spawn: Spawn, done: Optional[Callable[[Job], None]]) -> None:
     try:
-        process = spawn(argv(brew, job.request), clean_environment(brew), os.path.expanduser("~"))
+        process = spawn(argv(brew, job.request), job.env or clean_environment(brew), os.path.expanduser("~"))
     except OSError as error:
-        job.add(f"Blackbox could not start Homebrew: {error}")
+        job.add(f"Blackbox could not start {job.request.tool}: {error}")
         job.finish(127)
     else:
         timer = threading.Timer(MAX_SECONDS, lambda: platform.stop_group(process))

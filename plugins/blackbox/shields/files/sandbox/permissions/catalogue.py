@@ -2,7 +2,7 @@
 per project, what each costs, how it is enforced, and the list nothing unlocks.
 
 Founder decisions (2026-11-23, F1–F9 as recommended): global installs allowed through Blackbox's
-broker (F1); the agent tool folders allowed until the brokers ship (F2); "Always" means this agent
+broker (F1); the agent tool folders blocked now that the global-installs broker ships (F2); "Always" means this agent
 in this project (F3); Docker asks, per project (F4); AppleScript only ever asks once (F5); the
 most specific scope wins both ways, the never-list above all (F6); ssh to this Mac never (F7);
 keychain and clipboard allowed, camera and microphone blocked once the OS check is proven (F8);
@@ -40,7 +40,7 @@ PERMISSIONS: tuple[Permission, ...] = (
     Permission("tool-folders", "Writing to your tool folders", "direct writes to ~/.local/bin, ~/.cargo/bin, ~/go/bin, ~/bin "
                "and the other program folders on your PATH that you own",
                "a program the agent leaves there runs outside the sandbox the next time you type its name",
-               Route.PROFILE, Mode.ALLOW, BLOCK_ALLOW, refusal_kinds=(KIND_TOOL_FOLDER,)),
+               Route.PROFILE, Mode.BLOCK, BLOCK_ALLOW, refusal_kinds=(KIND_TOOL_FOLDER,)),   # F2: blocked once the broker ships
     Permission("open-links", "Opening web links", "open https://… in your browser (sign-ins such as gh auth login --web)",
                "the page loads outside the sandbox, and a link can carry data out", Route.BROKER, Mode.ALLOW, BLOCK_ASK_ALLOW,
                refusal_kinds=(KIND_OPEN_APP,)),

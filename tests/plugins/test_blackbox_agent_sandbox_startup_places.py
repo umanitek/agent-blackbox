@@ -88,11 +88,16 @@ echo x > '{brew}/var/log/service.log' 2>/dev/null; echo var=$?
 
 
 @REAL
-def test_the_folders_still_open_are_the_ones_named_as_a_pending_decision(home):
-    """``~/.local/bin`` (pipx) is not closed yet (founder decision): proven open, so the doc stays true."""
+def test_the_tool_folders_are_closed_by_default_and_open_only_when_allowed(home, monkeypatch):
+    """Sandbox permissions, F2 (2026-11-23): ``~/.local/bin`` is closed while ``tool-folders`` is
+    blocked — the default since the global-installs broker ships — and open once it is allowed."""
+    (home / ".local" / "bin").mkdir(parents=True)
     _sync()
-    lines = _run(f"mkdir -p '{home}/.local/bin' && echo x > '{home}/.local/bin/tool'; echo local_bin=$?")
-    assert lines == {"local_bin": "0"}
+    assert _run(f"echo x > '{home}/.local/bin/tool'; echo local_bin=$?") == {"local_bin": "1"}
+    from plugins.blackbox.kernel import config as config_mod
+    monkeypatch.setattr(config_mod, "_blackbox_entry", lambda: {"agent_sandbox": {"permissions": [{"permission": "tool-folders", "mode": "allow"}]}})
+    _sync()
+    assert _run(f"echo x > '{home}/.local/bin/tool'; echo local_bin=$?") == {"local_bin": "0"}
 
 
 def test_homebrews_folders_are_named_only_where_homebrew_is_installed(tmp_path):

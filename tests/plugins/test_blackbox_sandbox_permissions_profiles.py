@@ -5,7 +5,7 @@ permissions" 2026-11-23, build step 5, local-only).
 Contracts (red on the base ed4152ceac: one shared agents.sb, no per-agent profile, no never mark):
 * every rendered profile ends with the never-list: everything after its mark is exactly the
   shared policy's lines, and every permission line comes before it (Seatbelt: a later rule wins);
-* the catalogue defaults add only the lines of what they do not allow (Docker asks: its sockets);
+* the catalogue defaults add only the lines of what they do not allow (Docker's sockets, the tool folders);
 * a folder rule adds exactly its lines (none: no read, no write; read: no write);
 * sync writes each sandboxed agent's own profile, removes the profile of an agent taken out, and
   each launcher / Hermes shell starts its agent in ITS profile;
@@ -72,18 +72,19 @@ def test_the_never_list_is_the_tail_and_every_permission_line_is_above_it(home, 
 
 @MAC
 def test_the_catalogue_defaults_add_only_the_lines_of_what_is_not_allowed(home, entry):
-    """Step 10 changed this: Docker asks by default (F4), so its sockets are closed by default."""
-    assert macos_profile.permission_lines(permissions.allowances(Settings(), "claude-code"), str(home)) == \
-        macos_profile._docker_lines(str(home))
+    """Docker asks by default (F4, step 10) and the tool folders are blocked by default (F2, step 12)."""
+    lines = macos_profile.permission_lines(permissions.allowances(Settings(), "claude-code"), str(home))
+    assert lines[0] == macos_profile._docker_lines(str(home))[0]
+    assert len(lines) == 2 and f'(subpath "{home}/.local/bin")' in lines[1]
 
 
 @MAC
 def test_each_folder_rule_adds_exactly_its_lines(home):
     keep_out = permissions.allowances(Settings(folders=(FolderRule("~/clients", Access.NONE),)))
     read_only = permissions.allowances(Settings(folders=(FolderRule("~/clients", Access.READ),)))
-    docker = macos_profile._docker_lines(str(home))
-    assert macos_profile.permission_lines(keep_out, str(home)) == docker + [f'(deny file-read* file-write* file-link\n  (subpath "{home}/clients"))']
-    assert macos_profile.permission_lines(read_only, str(home)) == docker + [f'(deny file-write*\n  (subpath "{home}/clients"))']
+    base = macos_profile.permission_lines(permissions.allowances(Settings()), str(home))
+    assert macos_profile.permission_lines(keep_out, str(home)) == base + [f'(deny file-read* file-write* file-link\n  (subpath "{home}/clients"))']
+    assert macos_profile.permission_lines(read_only, str(home)) == base + [f'(deny file-write*\n  (subpath "{home}/clients"))']
 
 
 @MAC
