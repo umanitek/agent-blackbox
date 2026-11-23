@@ -138,10 +138,25 @@ def uninstall(host: Host, home: Path) -> EditResult:
     else:
         data.pop("hooks")
     try:
-        _write(path, data)
+        _put_back(path, data)
     except OSError as exc:
         return EditResult(False, str(path), f"could not write the config: {exc.strerror or exc}")
     return EditResult(True, str(path))
+
+
+def _put_back(path: Path, data: dict[str, Any]) -> None:
+    """Writes the config without Blackbox's entries and takes Blackbox's backup of it away. When
+    that config is the one the backup kept (the person changed nothing since), the backup's own
+    BYTES go back — their formatting too (uninstall leaves the person's files byte-identical)."""
+    backup = path.with_name(path.name + BACKUP_SUFFIX)
+    original = backup.read_bytes() if backup.is_file() and not backup.is_symlink() else None
+    try:
+        same = original is not None and json.loads(original.decode("utf-8-sig") or "{}") == data
+    except (ValueError, RecursionError):
+        same = False
+    atomic_write(path, original if same and original is not None else json.dumps(data, indent=2) + "\n")
+    if original is not None:
+        backup.unlink()
 
 
 def installed_commands(host: Host, home: Path) -> list[str]:

@@ -81,6 +81,8 @@ def _remove_from_agents(plan: UninstallPlan, report: list[str]) -> list[Path]:
         entries = plugins.get("entries") if isinstance(plugins, dict) else None   # hand-edited: nothing to remove
         if isinstance(entries, dict) and "blackbox" in entries:
             del entries["blackbox"]
+            if not entries:   # Blackbox's entry was the only one: no empty ``entries: {}`` is left behind
+                del plugins["entries"]
             yaml_files.dump_yaml(config, data)
         metadata = home / "plugins" / ".install-metadata.json"
         if metadata.is_file() and '"blackbox"' in metadata.read_text(encoding="utf-8-sig", errors="ignore"):

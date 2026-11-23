@@ -198,14 +198,40 @@ def _stop_services(plan: UninstallPlan, run: Runner, report: list[str]) -> None:
                 report.append(f"removed login service {unit}")
         if removed:
             run(["systemctl", "--user", "daemon-reload"])
-        for unit in plan.system_units:
-            report.append(f"needs root: sudo systemctl disable --now {unit.name} && sudo rm {unit} "
-                          "&& sudo systemctl daemon-reload")
+        _stop_system_units(plan, run, report)
     elif plan.system == "Windows":
         for task in WINDOWS_TASKS:
             run(["schtasks", "/End", "/TN", task])
             if run(["schtasks", "/Delete", "/TN", task, "/F"]) == 0:
                 report.append(f"removed scheduled task {task}")
+
+
+def _is_root() -> bool:
+    return getattr(os, "geteuid", lambda: -1)() == 0
+
+
+def _stop_system_units(plan: UninstallPlan, run: Runner, report: list[str]) -> None:
+    """Linux's root units (``/etc/systemd/system``): stopped, disabled and removed when uninstall
+    runs as root (KI-506: they were left enabled even then); otherwise each is named with the root
+    commands that finish it."""
+    if not plan.system_units:
+        return
+    if not _is_root():
+        for unit in plan.system_units:
+            report.append(f"needs root: sudo systemctl disable --now {unit.name} && sudo rm {unit} "
+                          "&& sudo systemctl daemon-reload")
+        return
+    for unit in plan.system_units:
+        run(["systemctl", "disable", "--now", unit.name])
+        unit.unlink(missing_ok=True)
+        report.append(f"removed system service {unit.name}")
+    run(["systemctl", "daemon-reload"])
+
+
+def _supervised(plan: UninstallPlan) -> bool:
+    """True while a root unit still supervises the dashboard and the node (KI-507): stopping them
+    by pid would only see systemd start them again, so they are left to the unit's own stop."""
+    return plan.system == "Linux" and any(unit.exists() for unit in plan.system_units)
 
 
 def _stop_dashboard_on(port: int) -> list[int]:
@@ -216,6 +242,9 @@ def _stop_dashboard_on(port: int) -> list[int]:
 def _stop_running_dashboard(plan: UninstallPlan, stop: Callable[[int], list[int]], report: list[str]) -> None:
     """A dashboard setup started directly (its service takes over at the next login): stopped
     before the data goes, or it re-creates $BLACKBOX_HOME (seen live 2026-11-03)."""
+    if _supervised(plan):
+        report.append("left running: Blackbox's dashboard and node run under the root units above; they stop with them")
+        return
     for pid in stop(plan.dashboard_port):
         report.append(f"stopped Blackbox's dashboard (pid {pid})")
 
@@ -223,7 +252,7 @@ def _stop_running_dashboard(plan: UninstallPlan, stop: Callable[[int], list[int]
 def _stop_unsupervised_node(plan: UninstallPlan, report: list[str]) -> None:
     """A node Blackbox started without its service: only the pid in Blackbox's own DKG home."""
     pid_file = plan.dkg_home / "daemon.pid" if plan.dkg_home else None
-    if not pid_file or not pid_file.is_file():
+    if not pid_file or not pid_file.is_file() or _supervised(plan):
         return
     from ..kernel.config import load_blackbox_config
     try:

@@ -447,3 +447,33 @@ def test_uninstall_clears_the_hermes_agents_execute_code_launcher(machine):
     _execute(_plan(machine))
     assert not (sandbox.hermes_shell_dir() / sandbox.HERMES_CODE_LAUNCHER).exists()
     assert code_kernel.interpreter_launcher(env) == []
+
+
+def _system_unit(tmp_path):
+    unit = tmp_path / "etc" / "blackbox-dkg.service"
+    unit.parent.mkdir(exist_ok=True)
+    unit.write_text("[Unit]", encoding="utf-8")
+    return unit
+
+
+def test_run_as_root_the_linux_system_units_are_stopped_and_removed(machine, tmp_path, monkeypatch):
+    """KI-506: run as root, the root units in /etc/systemd/system were still left enabled."""
+    unit = _system_unit(tmp_path)
+    monkeypatch.setattr(uninstall, "_is_root", lambda: True)
+    plan = dataclasses.replace(_plan(machine, system="Linux"), system_units=(unit,))
+    calls, report = _execute(plan)
+    assert ["systemctl", "disable", "--now", "blackbox-dkg.service"] in calls and ["systemctl", "daemon-reload"] in calls
+    assert not unit.exists() and "removed system service blackbox-dkg.service" in report
+    assert not any(line.startswith("needs root") for line in report)
+
+
+def test_a_dashboard_and_node_a_root_unit_still_supervises_are_never_stopped_by_pid(machine, tmp_path, monkeypatch):
+    """KI-507: with the root units left (not root), stopping by pid only saw systemd start them again."""
+    unit = _system_unit(tmp_path)
+    monkeypatch.setattr(uninstall, "_is_root", lambda: False)
+    signalled = []
+    monkeypatch.setattr(uninstall.os, "kill", lambda pid, sig: signalled.append(pid))
+    plan = dataclasses.replace(_plan(machine, system="Linux"), system_units=(unit,))
+    calls, report = _execute(plan, dashboard_pids=(4242,))
+    assert not any(call[0] == "stop-dashboard" for call in calls) and signalled == []
+    assert any(line.startswith("left running:") for line in report)
