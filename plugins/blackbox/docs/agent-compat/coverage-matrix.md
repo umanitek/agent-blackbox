@@ -398,6 +398,7 @@ The `cline` CLI (TUI, headless, and a background hub), the SDK (`ClineCore`), Ka
 | SessionShutdown | stop | yes |  |
 | TaskError |  | no | carries nothing Blackbox judges |
 | PreCompact |  | no | carries nothing Blackbox judges |
+| plugin beforeRun | prompt | no | not a hook event of its own: Blackbox's SDK plugin sends the task Cline starts with in UserPromptSubmit's form (KI-617: TaskStart carries no task text) |
 | plugin beforeTool / afterTool | pre_tool / post_tool | no | not a hook event of its own: Blackbox's SDK plugin reports the same calls as PreToolUse / PostToolUse, and one call is answered once |
 
 **Sub-agents:** Tracked: every event names agent_id and parent_agent_id, so an agent a session spawned is its own instance under that session.
@@ -412,6 +413,7 @@ The `cline` CLI (TUI, headless, and a background hub), the SDK (`ClineCore`), Ka
 | macos | headless | hooks | Tested | 2026-11-22, Blackbox 1.5.0, agent 3.0.75, macOS 26.6.2: test VM, REAL cline -P gemini (gemini-3.5-flash-lite): sessions, two at once, a 12-call loop, File Shield and self-protection refusals, sudo flagged; every prompt is flagged and the launch mode shows interactive (KI-573) — partial |
 
 **Not covered:**
+- The task Cline starts with (its first message): Cline 3.0.75's TaskStart hook payload carries no task text, and UserPromptSubmit fires only for later messages. Blackbox's SDK plugin reads it from the first run's messages (beforeRun) in the CLI, SDK and Kanban; in the IDE extensions (hook scripts only) the first message is NOT checked (KI-617).
 - Not run with a model yet: the CLI needs a sign-in. The SDK's own loader loaded Blackbox's plugin and found its hook scripts; a real session is still to be run.
 - The IDE extensions run the hook scripts only, and only with Enable Hooks on — Blackbox cannot see that switch.
 - A host built on the SDK can switch plugins off for a session; the hook scripts still report its tool calls.

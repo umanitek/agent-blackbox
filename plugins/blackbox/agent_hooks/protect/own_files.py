@@ -126,6 +126,11 @@ export default {{
 #: 3.0.75's own loader): an ``AgentPlugin`` default export whose ``beforeTool`` may return
 #: ``{skip, reason}`` and whose ``afterTool`` may return ``{result}``. It sends the runner the
 #: SAME payload the hook scripts get, so one mapping serves both. Each hook call has 3 seconds.
+#: ``beforeRun`` (KI-617): Cline 3.0.75's TaskStart script payload carries NO task text and its
+#: UserPromptSubmit fires only for later messages, so the task the person starts with is read
+#: here, from the run's ``snapshot.messages`` (docs.cline.bot/sdk/plugins: every hook's context
+#: holds the snapshot with its messages) — once, on the run whose snapshot holds ONE user message —
+#: and sent as the prompt it is (``userPromptSubmit.prompt``); a refused one stops the run.
 _CLINE_PLUGIN = """// Blackbox Agent Hooks — written by Blackbox ({mark}); removing Blackbox removes this file.
 // Cline SDK plugin (CLI, SDK, Kanban). Asks Blackbox before every tool call (a refused call is
 // skipped with Blackbox's reason) and after it (an output carrying a known prompt injection is
@@ -134,7 +139,14 @@ _CLINE_PLUGIN = """// Blackbox Agent Hooks — written by Blackbox ({mark}); rem
 import {{ spawnSync }} from "node:child_process";
 const BEFORE = {before};
 const AFTER = {after};
+const PROMPT = {prompt};
 let cwd = "";
+function words(message) {{
+  const content = message?.content;
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) return content.map((part) => (typeof part === "string" ? part : part?.text ?? "")).join("\\n");
+  return "";
+}}
 function ask(argv, payload) {{
   try {{
     if (!argv.length) return {{}};
@@ -156,6 +168,15 @@ const plugin = {{
     cwd = ctx?.cwd ?? "";
   }},
   hooks: {{
+    beforeRun(context) {{
+      // The task Cline starts with: the first run is the one whose snapshot holds one user message.
+      const users = (context?.snapshot?.messages ?? []).filter((message) => message?.role === "user");
+      if (users.length !== 1) return;
+      const prompt = words(users[0]).slice(0, 262144);
+      if (!prompt) return;
+      const answer = ask(PROMPT, event(context, "userPromptSubmit", {{ prompt }}));
+      if (answer.cancel === true) return {{ stop: true, reason: answer.errorMessage || "Blocked by Blackbox" }};
+    }},
     beforeTool(context) {{
       const call = {{ toolName: context?.toolCall?.toolName ?? context?.tool?.name ?? "", parameters: context?.input ?? {{}} }};
       const answer = ask(BEFORE, event(context, "preToolUse", call));
@@ -195,7 +216,8 @@ def _install_companions(host: Host, home: Path, invocations: Invocations) -> Non
         if target.exists() and not _ours(target):
             continue   # a file of the person's own at that path stays
         text = _COMPANION_TEXT[form].format(mark=MARK, before=json.dumps(by_kind.get("pre_tool", [])),
-                                            after=json.dumps(by_kind.get("post_tool", [])))
+                                            after=json.dumps(by_kind.get("post_tool", [])),
+                                            prompt=json.dumps(by_kind.get("prompt", [])))
         target.parent.mkdir(parents=True, exist_ok=True)
         atomic_write(target, text)
 

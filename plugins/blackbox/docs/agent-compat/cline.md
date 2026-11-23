@@ -42,6 +42,10 @@ The CLI's tools differ from the extension's. Blackbox reads them from the call's
 | `apply_patch` | `input` | `apply_patch` — every file in the patch |
 | `fetch_web_content` | `requests[].url` | as sent; its output is checked as a fetched page |
 
+### The task Cline starts with (KI-617)
+
+Security round 5 (real Cline 3.0.75 runs) captured what Cline's `TaskStart` hook really sends: `clineVersion`, `timestamp`, `taskId`, `sessionContext`, `workspaceRoots`, `workspaceInfo`, `userId`, `agent_id`, `parent_agent_id`, `hookName: "agent_start"`. It holds **no task text**, and `UserPromptSubmit` fires only for later messages, so a hook script never sees the first message. Blackbox's SDK plugin reads it instead: its `beforeRun` hook takes the first user message from the run's `snapshot.messages` (once, on the run whose snapshot holds one user message) and sends it as a prompt; Cline's own boilerplate (its mode tag and completion nudge) stays set aside. Plainly: in the **IDE extensions**, which run hook scripts only, Cline's first message is **not checked** — its tool calls still are.
+
 ### Still open
 
 - No run with a model: the CLI needs a sign-in. What ran: the SDK's loader on Blackbox's installed files (plugin loaded, 8 scripts found, a refused call skipped).
