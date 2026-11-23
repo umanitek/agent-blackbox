@@ -131,8 +131,33 @@ def _find_only_reads(rest: list[str]) -> bool:
     return True
 
 
+#: Signature and attribute tools: the options that make them WRITE (sign, re-sign, strip; add a
+#: policy rule; write, delete or clear an attribute). Without one they only read (KI-608:
+#: ``codesign -dv`` of a guarded app was refused as a change). Single-dash letters run together
+#: count letter by letter (``-fs`` signs).
+_WRITES_WITH = {
+    "codesign": ({"--sign", "--force", "--remove-signature"}, set("sf")),
+    "spctl": ({"--add", "--remove", "--enable", "--disable", "--global-enable", "--global-disable",
+               "--master-enable", "--master-disable", "--reset-default"}, set()),
+    "xattr": (set(), set("wdc")),
+}
+
+
+def _signature_only_reads(name: str, rest: list[str]) -> bool:
+    long_options, letters = _WRITES_WITH[name]
+    for word in rest:
+        if word.startswith("--") and word.split("=", 1)[0] in long_options:
+            return False
+        if word.startswith("-") and not word.startswith("--") and set(word[1:]) & letters:
+            return False
+    return name != "spctl" or any(word in ("-a", "--assess") or (word.startswith("-a") and not word.startswith("--"))
+                                  for word in rest)
+
+
 def _only_reads(name: str, rest: list[str]) -> bool:
     """True when command *name* with words *rest* cannot change the files it is given."""
+    if name in _WRITES_WITH:
+        return _signature_only_reads(name, rest)
     if name == "find":
         return _find_only_reads(rest)
     if name in ("tar", "bsdtar", "gtar"):          # making an archive reads; unpacking one writes
