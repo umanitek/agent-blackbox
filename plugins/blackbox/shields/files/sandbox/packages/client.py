@@ -20,6 +20,7 @@ Usage (what the shim runs)::
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 import urllib.error
@@ -55,13 +56,15 @@ def main(argv: list) -> int:
     try:
         with urllib.request.urlopen(f"{url}/api/session", timeout=TIMEOUT_SECONDS) as response:
             token = json.loads(response.read(65536)).get("token", "")
-        status, answer = _call(url, "/api/shields/file-shield/api/brew", token, {"argv": words})
+        # Who asks: this process's parent (the agent's shell), so Blackbox names the agent (KI-605).
+        asking = {"argv": words, "pid": os.getppid()}
+        status, answer = _call(url, "/api/shields/file-shield/api/brew", token, asking)
         deadline = time.monotonic() + APPROVAL_SECONDS
         if status == HELD:
             print("Blackbox: waiting for your approval to run this outside the sandbox …", file=sys.stderr)
         while status == HELD and time.monotonic() < deadline:
             time.sleep(POLL_SECONDS * 2)
-            status, answer = _call(url, "/api/shields/file-shield/api/brew", token, {"argv": words})
+            status, answer = _call(url, "/api/shields/file-shield/api/brew", token, asking)
         if status != 200:
             error = answer.get("error") or "; ".join(answer.get("errors") or []) or "not approved"
             print(f"Blackbox's sandbox refused this (brew {' '.join(words)}): {error}", file=sys.stderr)

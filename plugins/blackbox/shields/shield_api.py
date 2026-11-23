@@ -61,6 +61,8 @@ class InstanceRef:
     agent: str
     instance: str
     sub_agent: str = ""
+    #: The project folder's name ("" when not known).
+    folder: str = ""
 
 
 #: ``finding_owners() -> owner_of(row) -> InstanceRef | None`` — built once per listing.
@@ -104,6 +106,9 @@ class ShieldContext:
     #: ``tool_call_verdict(tool, args) -> {"decision", "findings", …}`` — the guard's one judgement of
     #: an action (File Shield's Homebrew broker asks it for each package); None where it can not be asked.
     tool_call_verdict: Optional[Callable[[str, Mapping[str, Any]], Mapping[str, Any]]] = None
+    #: ``owner_of_pid(pid) -> InstanceRef | None`` — the live agent instance a process belongs to
+    #: by its ancestry (the agent tracker's ``owners.of_pid``, never guessed); None where it can not be asked.
+    owner_of_pid: Optional[Callable[[int], Optional[InstanceRef]]] = None
 
     def indicators_now(self) -> Optional[Any]:
         """The verified network lists known now, never waiting for a build."""

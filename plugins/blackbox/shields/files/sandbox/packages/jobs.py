@@ -25,7 +25,7 @@ import secrets
 import threading
 import time
 from collections import OrderedDict
-from typing import TYPE_CHECKING, Callable, Optional
+from typing import TYPE_CHECKING, Any, Callable, Optional
 
 from .. import platform
 from .request import BrewRequest
@@ -66,9 +66,11 @@ def argv(brew: str, request: BrewRequest) -> list[str]:
 class Job:
     """One brew run: its *id*, *request*, output lines (bounded), and whether / how it ended."""
 
-    def __init__(self, request: BrewRequest) -> None:
+    def __init__(self, request: BrewRequest, owner: Any = None) -> None:
         self.id = secrets.token_hex(8)
         self.request = request
+        #: The agent instance that asked (``shields.InstanceRef``), None when not known (KI-605).
+        self.owner = owner
         self.started = time.time()
         self._lines: list[str] = []
         self._dropped = 0
@@ -114,10 +116,12 @@ def reset() -> None:
         _JOBS.clear()
 
 
-def start(request: BrewRequest, brew: str, *, spawn: Optional[Spawn] = None, done: Optional[Callable[[Job], None]] = None) -> Job:
+def start(request: BrewRequest, brew: str, *, spawn: Optional[Spawn] = None, done: Optional[Callable[[Job], None]] = None,
+          owner: Any = None) -> Job:
     """Runs *request* with Homebrew at *brew* in a thread; answers the :class:`Job` at once.
-    *done* is called with the job when it has ended (the broker records and notifies there)."""
-    job = Job(request)
+    *done* is called with the job when it has ended (the broker records and notifies there);
+    *owner*: the agent instance that asked."""
+    job = Job(request, owner)
     with _lock:
         _JOBS[job.id] = job
         while len(_JOBS) > MAX_JOBS:

@@ -122,7 +122,7 @@ def _restore_alerts() -> list[dict[str, Any]]:
 
 def _package_alerts() -> list[dict[str, Any]]:
     """A Homebrew install Blackbox ran for a sandboxed agent (KI-593): said every time."""
-    return [_alert(row["key"], "package-install", row["ts"], "info" if row["ok"] else "high", "", "", row["text"])
+    return [_alert(row["key"], "package-install", row["ts"], "info" if row["ok"] else "high", "", str(row.get("agent") or ""), row["text"])
             for row in sandbox.packages.alerts()]
 
 

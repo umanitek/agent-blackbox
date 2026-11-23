@@ -49,7 +49,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from ..... import audit
-from .....kernel import settings as kernel_settings
+from .....kernel import agent_hosts, settings as kernel_settings
 from .....kernel.bounded_files import atomic_write, read_small_text
 from .....kernel.config import load_blackbox_config, shield_entry
 from ....shield_api import ShieldApiError, ShieldContext
@@ -98,7 +98,8 @@ kernel_settings.SECTION_VALIDATORS[SECTION] = validate_section
 
 
 def _request(body: Mapping[str, Any]) -> BrewRequest:
-    if set(body) - {"argv"}:
+    # The brew words, and the asking process's pid (who asked, never what runs: KI-605).
+    if set(body) - {"argv", "pid"}:
         raise Refused("a request carries the brew words only")
     return parse(body.get("argv") or [])
 
@@ -146,8 +147,30 @@ def _brew(context: ShieldContext, body: Mapping[str, Any]) -> dict[str, Any]:
     brew = jobs.brew_path()
     if not brew:
         raise ShieldApiError(404, "Homebrew is not installed on this Mac.")
-    job = jobs.start(request, brew, done=_record)
+    job = jobs.start(request, brew, done=_record, owner=_asker(context, body))
     return {"job": job.id, "command": request.shown()}
+
+
+def _asker(context: ShieldContext, body: Mapping[str, Any]) -> Any:
+    """The agent instance whose process asked (the client sends its parent's pid; KI-605: the notice
+    said "for an AI agent", naming none). None when not known — never guessed."""
+    pid = body.get("pid")
+    if context.owner_of_pid is None or not isinstance(pid, int) or isinstance(pid, bool) or pid <= 1:
+        return None
+    try:
+        return context.owner_of_pid(pid)
+    except Exception:   # health: allow BLE001 -- the install goes ahead; the notice then names no agent
+        logger.debug("blackbox: the asking agent of a brew run could not be found", exc_info=True)
+        return None
+
+
+def _who(job: jobs.Job) -> str:
+    """``for Claude Code in s4-br1`` (or ``for an AI agent`` when the asker is not known)."""
+    owner = job.owner
+    if owner is None:
+        return "for an AI agent"
+    name = agent_hosts.BY_ID[owner.agent].name if owner.agent in agent_hosts.BY_ID else owner.agent or "an AI agent"
+    return f"for {name}" + (f" in {owner.folder}" if owner.folder else "")
 
 
 def _job(_context: ShieldContext, query: Mapping[str, str]) -> dict[str, Any]:
@@ -166,8 +189,10 @@ def _record(job: jobs.Job) -> None:
     """The audit row of a finished run (local only; the names, the verb and the exit code)."""
     _, _, _, code = job.since(0)
     try:
-        audit.record_for(audit.SANDBOX_RECORDER, event="package_install",
-                         detail={"command": job.request.shown(), "exit": code, "job": job.id})
+        owner = job.owner
+        audit.record_for(audit.SANDBOX_RECORDER, event="package_install", workspace=getattr(owner, "folder", "") or "",
+                         detail={"command": job.request.shown(), "exit": code, "job": job.id,
+                                 **({"agent": owner.agent, "session_id": owner.instance} if owner is not None else {})})
     except Exception:   # health: allow BLE001 -- the install happened; a failed record is logged
         logger.warning("blackbox: a brokered brew run was not recorded", exc_info=True)
 
@@ -181,8 +206,9 @@ def alerts() -> list[dict[str, Any]]:
             verb = {"install": "installed", "upgrade": "upgraded", "reinstall": "reinstalled", "uninstall": "uninstalled"}[job.request.verb]
             what = ", ".join(job.request.names) or "every package"
             rows.append({"key": f"package-install:{job.id}", "ts": job.started, "ok": code == 0,
-                         "text": (f"Blackbox {verb} {what} with Homebrew for an AI agent." if code == 0 else
-                                  f"Homebrew could not finish `{job.request.shown()}` for an AI agent.")})
+                         "text": (f"Blackbox {verb} {what} with Homebrew {_who(job)}." if code == 0 else
+                                  f"Homebrew could not finish `{job.request.shown()}` {_who(job)}."),
+                         **({"agent": job.owner.agent, "instance": job.owner.instance} if job.owner is not None else {})})
     return rows
 
 

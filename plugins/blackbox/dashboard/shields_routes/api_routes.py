@@ -59,6 +59,12 @@ def finding_owners() -> Any:
     return resolve
 
 
+def owner_of_pid(pid: int) -> Any:
+    """The agent instance a process belongs to by its ancestry (KI-605), as the shields' own record."""
+    found = agent_hooks.owners.of_pid(pid)
+    return shields.InstanceRef(found.agent, found.instance, found.sub_agent, found.folder) if found is not None else None
+
+
 def context(body: bytes = b"", headers: Any = None) -> shields.ShieldContext:
     """The context one shield endpoint call receives (*body* / *headers*: the request's own)."""
     return shields.ShieldContext(
@@ -73,6 +79,7 @@ def context(body: bytes = b"", headers: Any = None) -> shields.ShieldContext:
         blocking=load_blackbox_config().mode == "block",
         finding_owners=finding_owners,
         tool_call_verdict=lambda tool, args: guard.tool_call_verdict(tool_name=tool, args=args),
+        owner_of_pid=owner_of_pid,
     )
 
 

@@ -165,3 +165,30 @@ def test_the_shim_refuses_every_command_that_changes_homebrew_and_runs_reads(tmp
         assert done.returncode == 126 and "Blackbox's sandbox refused this (brew" in done.stderr and "REAL-BREW" not in done.stdout
     else:
         assert done.returncode == 0 and done.stdout.startswith("REAL-BREW"), done.stderr
+
+
+def test_the_install_notice_and_audit_row_name_the_agent_that_asked(monkeypatch, tmp_path):
+    """KI-605 (round 4, s4-br1): "Blackbox installed hello with Homebrew for an AI agent." named no
+    agent, session or project; the client now sends its parent's pid and the broker asks the agent
+    tracker whose process that is (by ancestry, never guessed)."""
+    from plugins.blackbox import audit
+    from plugins.blackbox.shields.shield_api import InstanceRef
+    finished = threading.Event()
+    monkeypatch.setattr(jobs.platform, "spawn_brew", lambda command, env, cwd: subprocess.Popen(
+        [sys.executable, "-c", "print('ok')"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True))
+    monkeypatch.setattr(jobs, "brew_path", lambda: "/opt/homebrew/bin/brew")
+    real_record = packages._record
+    monkeypatch.setattr(packages, "_record", lambda job: (real_record(job), finished.set()))
+    asked = []
+    context = ShieldContext(network_indicators=lambda: None, ask_assistant=lambda message: None,
+                            tool_call_verdict=lambda tool, args: {"decision": "", "findings": []},
+                            owner_of_pid=lambda pid: asked.append(pid) or InstanceRef("claude-code", "claude-code:ab12", "", "s4-br1"))
+    packages.API_WRITES["brew"](context, {"argv": ["install", "hello"], "pid": 4242})
+    assert finished.wait(30) and asked == [4242]
+    assert any(row["text"] == "Blackbox installed hello with Homebrew for Claude Code in s4-br1." and row["agent"] == "claude-code"
+               for row in packages.alerts())
+    [row] = [row for row in audit.read_audit(limit=50) if row.get("event") == "package_install"]
+    assert row["detail"]["session_id"] == "claude-code:ab12" and row["workspace"] == "s4-br1"
+    unknown = ShieldContext(network_indicators=lambda: None, ask_assistant=lambda message: None,
+                            tool_call_verdict=lambda tool, args: {"decision": "", "findings": []}, owner_of_pid=lambda pid: None)
+    assert packages._asker(unknown, {"argv": ["install", "x"], "pid": 1}) is None
