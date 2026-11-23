@@ -175,6 +175,11 @@ def counted(found: list[Refusal]) -> bool:
     return any(each.kind not in (FILE, STARTUP) for each in found)
 
 
+def files(found: list[Refusal]) -> list[str]:
+    """The files *found* says the kernel kept closed (:data:`FILE` refusals), as named."""
+    return [each.name for each in found if each.kind == FILE]
+
+
 def note(found: list[Refusal]) -> str:
     """One line per refusal, "Blackbox's sandbox refused this (<what>): <why>." — "" for none, and
     nothing for what Blackbox's own stand-in already said."""

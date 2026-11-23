@@ -94,3 +94,16 @@ def test_the_policy_names_the_settings_files_and_every_folder_above_blackboxs_pl
     assert {hermes + "/config.yaml", hermes + "/.env"} <= set(places.no_write_files)
     assert hermes + "/profiles/*/config.yaml" in places.no_write_globs
     assert {hermes, str(home)} <= set(places.no_rename)
+
+
+@REAL
+def test_the_canary_is_still_refused_inside_but_never_reported(home):
+    """KI-600 (round 5): every hook call probes the canary; each probe was a kernel log line (~30 in
+    36 s) and the real refusal after them never reached the log the helper reads. The canary is now
+    refused without a report — still the proof a session is inside."""
+    _sync()
+    canary = sandbox.canary_path()
+    assert _run(f"cat '{canary}' >/dev/null 2>&1; echo canary=$?") == {"canary": "1"}
+    profile = sandbox.profile_path().read_text(encoding="utf-8")
+    [line] = [each for each in profile.splitlines() if str(canary.resolve()) in each]
+    assert line.startswith("(deny file-read*") and line.endswith("(with no-report))")

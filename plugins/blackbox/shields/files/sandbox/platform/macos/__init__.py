@@ -114,11 +114,15 @@ def render(places: Places, digest_line: str = "") -> str:
     """The Seatbelt profile for *places*. Everything not named stays allowed: the agent works as
     before, except on what the person (and Blackbox) protect."""
     refused = [f"(subpath {_quote(p)})" for p in places.denied_folders]
-    refused += [f"(literal {_quote(p)})" for p in places.denied_files]
+    refused += [f"(literal {_quote(p)})" for p in places.denied_files if p != places.canary]
     refused += [f"(regex {_glob_regex(g)})" for g in places.denied_globs]
     lines = ["(version 1)", f"; Blackbox agent sandbox — generated, do not edit. {digest_line}".rstrip(), "(allow default)"]
     if refused:
         lines.append("(deny file-read* file-write* file-link\n  " + "\n  ".join(refused) + ")")
+    if places.canary:
+        # The canary is refused WITHOUT a report: every hook call probes it, and a log line per probe
+        # buried the refusals the helper reads (KI-600: ~30 canary lines, then no line for a real read).
+        lines.append(f"(deny file-read* file-write* file-link (literal {_quote(places.canary)}) (with no-report))")
     if places.no_write:
         lines.append("(deny file-write*\n  " + "\n  ".join(f"(subpath {_quote(p)})" for p in places.no_write) + ")")
     if places.no_write_globs:   # every add-on's manifest, existing or not: no add-on is planted or removed

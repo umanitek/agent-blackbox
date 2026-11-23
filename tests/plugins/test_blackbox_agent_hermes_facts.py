@@ -144,3 +144,30 @@ def test_a_hermes_rows_reason_names_what_refused_it(_fresh):
     [session] = _hermes().values()
     [row] = [action for action in store.actions(session.key) if action.verdict == "block"]
     assert row.reason == "Change to Blackbox's own plugin"
+
+
+def test_a_refused_read_in_sandboxed_execute_code_is_counted_once_from_its_own_output(_fresh, monkeypatch, tmp_path):
+    """KI-600, the execute_code half (round 5, s5-hmx1): the kernel refused execute_code's read of
+    ~/Documents/Secret/change-2.txt with PermissionError, but logged NO deny line for it, so the
+    deny-log watch had nothing to count (refused 0). The code tool's own output is the signal."""
+    monkeypatch.setattr(hooks.shields, "enter_hermes_process", lambda: HermesCover(shells=True, execute_code=True))
+    hooks.on_session_start(session_id="s5-hmx1", model=MODEL, platform="cli")
+    secret = tmp_path / "Documents" / "Secret"
+    secret.mkdir(parents=True)
+    code = "p = ''.join(reversed('txt.2-egnahc/terceS/stnemucoD/~'))\nprint(open(__import__('os').path.expanduser(p)).read())"
+    output = ("Traceback (most recent call last):\n  File \"<stdin>\", line 2, in <module>\n"
+              f"PermissionError: [Errno 1] Operation not permitted: '{secret / 'change-2.txt'}'")
+    hooks.on_pre_tool_call(tool_name="execute_code", args={"code": code}, session_id="s5-hmx1", tool_call_id="x1")
+    hooks.on_post_tool_call(tool_name="execute_code", args={"code": code}, result=output, session_id="s5-hmx1", tool_call_id="x1")
+    [session] = _hermes().values()
+    assert session.refused == 1
+    [row] = [action for action in store.actions(session.key) if action.verdict == "block"]
+    assert str(secret / "change-2.txt") in row.reason
+    # Should the kernel's log line arrive after all, it is the same refusal, not a second one.
+    changes.reset()
+    changes.record([{"path": str(secret / "change-2.txt"), "kind": "denied", "program": "python3.14", "ts": int(time.time())}],
+                   files_mode.build(enabled=True, protected=(str(secret),)))
+    tracking.attribute_kernel_refusals()
+    [session] = _hermes().values()
+    assert session.refused == 1
+    changes.reset()

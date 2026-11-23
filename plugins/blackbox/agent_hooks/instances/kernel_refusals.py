@@ -87,6 +87,20 @@ def _owner(row: Mapping[str, Any], ts: float) -> Optional[Instance]:
     return found[0] if len(found) == 1 else None
 
 
+#: How close in time a tool call's own refusal and the kernel's log line of it are taken as one.
+SAME_REFUSAL_SECONDS = 60
+
+
+def _counted_already(owner: Instance, path: str, ts: float) -> bool:
+    """True when *owner*'s timeline already holds a refusal naming *path* near *ts* — the code
+    tool's own output counted it (``hermes_sessions``, KI-600), so the log line is not a second one."""
+    if not path:
+        return False
+    recent = store.actions(owner.key, limit=500)
+    return any(action.verdict == "block" and path in action.reason and abs(action.ts - ts) <= SAME_REFUSAL_SECONDS
+               for action in recent)
+
+
 def _reason(fields: Mapping[str, Any], path: str, program: str) -> str:
     """What the timeline says the kernel stopped: a protected item's read, or — the sandbox's
     self-protection (KI-581) — a write to a file that keeps Blackbox's hook."""
@@ -112,6 +126,10 @@ def attribute(rows: Iterable[Mapping[str, Any]]) -> int:
                 continue
             fields = row.get("fields") or {}
             path, program = str(fields.get("path") or ""), str(fields.get("program") or row.get("tool_name") or "a program")
+            if _counted_already(owner, path, ts):   # its own tool's output already counted it (KI-600)
+                known.add(_key(row))
+                given.append(_key(row))
+                continue
             reason = _reason(fields, path, program)
             owner.refused += 1
             owner.events += 1
@@ -131,4 +149,4 @@ def attribute(rows: Iterable[Mapping[str, Any]]) -> int:
         return added
 
 
-__all__ = ["LIVE_GRACE_SECONDS", "attribute", "owners", "refusal_id"]
+__all__ = ["LIVE_GRACE_SECONDS", "SAME_REFUSAL_SECONDS", "attribute", "owners", "refusal_id"]

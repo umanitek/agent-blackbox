@@ -59,6 +59,8 @@ EVENTS = {"session_start": "session_start", "pre_tool_call": "pre_tool", "post_t
           "pre_api_request": "prompt"}
 #: Hermes' tool that runs a task as a child agent.
 DELEGATE_TOOL = "delegate_task"
+#: Hermes' code tool: its Python runs inside the sandbox when the session's code is sandboxed.
+CODE_TOOL = "execute_code"
 #: How soon after a ``delegate_task`` call a new session in the same Hermes home is its child.
 DELEGATE_SECONDS = 120.0
 MAX_READ_BYTES = 1024 * 1024
@@ -125,6 +127,7 @@ def _session_facts(raw: str, kind: str, detail: Mapping[str, Any]) -> dict[str, 
         known.update(cwd=str(detail.get("cwd") or "")[:500], launch=str(detail.get("launch") or ""),
                      pid=pid if isinstance(pid, int) and not isinstance(pid, bool) and pid > 1 else 0,
                      shells_sandboxed=detail.get("shells_sandboxed") is True,
+                     code_sandboxed=detail.get("code_sandboxed") is True,
                      # Shells AND execute_code inside: the whole agent's code runs kernel-enforced.
                      sandboxed=detail.get("shells_sandboxed") is True and detail.get("code_sandboxed") is True)
     if detail.get("model"):
@@ -173,8 +176,12 @@ def apply(row: Mapping[str, Any]) -> bool:
     findings = [finding for finding in row.get("findings") or [] if isinstance(finding, dict)]
     # The row's reason: the titles of what refused or flagged it, as for every coding agent (KI-580).
     reason = reason_of({}, findings) if findings else ""
-    refused = sandbox_errors.refusals(str(detail.get("result") or "")) if kind == "post_tool" and fields["shells_sandboxed"] else []
-    if sandbox_errors.counted(refused):   # the kernel refused part of a sandboxed shell's call (KI-590)
+    # KI-600 (execute_code half): the kernel logged NO deny line for execute_code's refused read
+    # (round 5, s5-hmx1), so the helper's deny-log watch had nothing to count; the refusal the
+    # code tool's own output names (PermissionError: [Errno 1] … '<path>') is counted here instead.
+    code_call = kind == "post_tool" and tool == CODE_TOOL and facts.get("code_sandboxed") is True
+    refused = sandbox_errors.refusals(str(detail.get("result") or "")) if kind == "post_tool" and (fields["shells_sandboxed"] or code_call) else []
+    if sandbox_errors.counted(refused) or (code_call and sandbox_errors.files(refused)):   # KI-590 / KI-600
         decision, reason = "block", sandbox_errors.note(refused)
     record(fields, key, decision=decision if decision == "block" else "", findings=int(row.get("findingCount") or 0), reason=reason)
     return True
