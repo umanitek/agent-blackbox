@@ -14,7 +14,7 @@ import argparse
 import logging
 from typing import Any
 import time
-from . import attach, audit, community, ruleset, sync
+from . import attach, audit, community, ruleset, shields, sync
 from .kernel import health
 from .kernel.config import load_blackbox_config, reads_graph_directly
 from .kernel.dkg_client import DkgClient, DkgError
@@ -60,7 +60,7 @@ def setup_cli(parser: argparse.ArgumentParser) -> None:
     add_setup_parser(sub)   # the full install after a Hermes plugin-catalog install
     _add_sync_parser(sub)
 
-    add_attach_parsers(sub)
+    _add_attach_parsers(sub)
     add_report_parser(sub, compiled_community=lambda cfg: ruleset.peek(cfg).community)
     add_curate_parser(sub, compiled_ruleset=lambda cfg: ruleset.peek(cfg))
     dash = sub.add_parser("dashboard", help="Start the local Blackbox dashboard")
@@ -83,6 +83,22 @@ def setup_cli(parser: argparse.ArgumentParser) -> None:
     )
     setup_llm.add_argument("--disable", action="store_true", help="Turn the LLM reviewer off and exit")
     setup_llm.set_defaults(func=cmd_setup_llm)
+
+
+def _add_attach_parsers(sub) -> None:
+    add_attach_parsers(sub)
+    sub.choices["attach"].set_defaults(func=_cmd_attach)
+
+
+def _cmd_attach(args: argparse.Namespace) -> int:
+    """``blackbox attach`` (the installer runs it on install and upgrade), then File Shield's agent
+    sandbox default: every agent found here picked unless the person took it out (gated off until
+    the system-level VM test passes — ``shields`` ``sandbox.defaults``)."""
+    code = attach.cmd_attach(args)
+    added = shields.apply_sandbox_default()
+    if added:
+        print(f"  agent sandbox: {', '.join(added)} will start inside Blackbox's sandbox (turn off per agent in Settings)")
+    return code
 
 
 def _cmd_dashboard(args: argparse.Namespace) -> int:

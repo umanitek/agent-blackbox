@@ -4,10 +4,8 @@
 plain callables (composition, no base class); the functions here fan a call out to
 every shield and apply the rules no shield may opt out of:
 
-* ``snapshot()`` reads every shield's mode ONCE; the hooks take one snapshot per call
-  and hand it to ``check`` and ``allows``. Nothing here reads config on its own
-  behalf — a mode is read only by the shield's own ``mode()``, only in ``snapshot()``
-  and the dashboard views.
+* ``snapshot()`` reads every shield's mode ONCE; the hooks take one snapshot per call and hand it
+  to ``check`` and ``allows``. A mode is read only by the shield's own ``mode()``.
 * ``check()`` runs every ENABLED shield's ``detect`` and marks each finding
   ``source="secret"`` (local only: the community gate refuses that source); a finding
   whose ``fields["pack"]`` names no pack of its shield is dropped, and a shield whose
@@ -74,52 +72,20 @@ from .shield_api import (
 logger = logging.getLogger(__name__)
 
 __all__ = [
-    "API_MAX_WRITE_BYTES",
-    "API_NAME_PATTERN",
-    "AssistantAnswer",
-    "BrowserRoot",
-    "Capability",
-    "InstanceRef",
-    "Pack",
-    "RawAnswer",
-    "Registrar",
-    "SelfTest",
-    "Shield", "ShieldAlert",
-    "ShieldApi",
-    "ShieldApiError",
-    "ShieldContext",
-    "ShieldEvent",
-    "ShieldExtension",
-    "ShieldMode",
-    "ShieldStatus",
-    "ShieldsSnapshot",
-    "addon_routes", "alerts",
-    "all_shields",
-    "allow_lists",
-    "allows",
-    "attack_table",
-    "browser_roots",
-    "call_api",
-    "check",
-    "describe_change", "enter_hermes_process",
-    "events",
-    "get",
-    "loaded_packs",
-    "pack_logo",
-    "prompt_findings",
-    "reload_registry",
-    "self_tests",
-    "settings_validators",
-    "settings_view",
-    "shield_name",
-    "snapshot",
-    "statuses",
-    "unlocked",
-    "write_weakening",
+    "API_MAX_WRITE_BYTES", "API_NAME_PATTERN", "AssistantAnswer", "BrowserRoot",
+    "Capability", "InstanceRef", "Pack", "RawAnswer", "Registrar", "SelfTest", "Shield", "ShieldAlert",
+    "ShieldApi", "ShieldApiError", "ShieldContext", "ShieldEvent", "ShieldExtension", "ShieldMode",
+    "ShieldStatus", "ShieldsSnapshot", "addon_routes", "alerts", "all_shields", "allow_lists", "allows",
+    "apply_sandbox_default", "attack_table", "browser_roots", "call_api", "check", "describe_change",
+    "enter_hermes_process", "events", "get", "loaded_packs", "pack_logo",
+    "prompt_findings", "reload_registry", "self_tests", "settings_validators", "settings_view",
+    "shield_name", "snapshot", "statuses", "unlocked", "write_weakening",
 ]
 
 #: File Shield's sandbox for the Hermes agent's own shells, at each Hermes session start (fail-open).
 enter_hermes_process = files.sandbox.enter_hermes_session
+#: File Shield's agent sandbox by default, on install, upgrade and attach (gated: ``sandbox.defaults``).
+apply_sandbox_default = files.sandbox.defaults.apply
 
 #: The plugin's own shields, in registration order. Registering one is one line here; an add-on's
 #: shields and extensions join them on first use (:func:`_registry`).

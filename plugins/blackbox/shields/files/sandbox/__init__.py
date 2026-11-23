@@ -49,7 +49,7 @@ from ....kernel.bounded_files import atomic_write
 from ...contract import OPTION_NOT_INSTALLED, OPTION_SUPPORTED, OPTION_UNAVAILABLE, ShieldMode
 from .. import mode as mode_module
 from ..protect import is_folder
-from . import addon_places, platform
+from . import addon_places, defaults, platform
 from .places import Places, build
 
 __all__ = ["CLI_AGENTS", "HERMES_LAUNCHER_ENV", "HERMES_SHELLS", "HermesCover", "Places", "enter_hermes_process", "enter_hermes_session", "hermes_shell_dir", "launcher_dir", "offer",

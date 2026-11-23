@@ -72,7 +72,7 @@ def allows(_finding: Mapping[str, Any], current: ShieldMode) -> bool:
 
 def describe_change(option: str, values: list[str], added: bool) -> str:
     """The approval dialog's sentence for a File Shield list change that turns protection down."""
-    if option == mode.OPT_SANDBOXED:
+    if option in (mode.OPT_SANDBOXED, mode.OPT_DECLINED):
         names = ", ".join(agent_hosts.BY_ID[value].name if value in agent_hosts.BY_ID else value for value in values[:4])
         return f"Take {names} out of the agent sandbox (File Shield)"
     shown = ", ".join(values[:4])
@@ -91,4 +91,5 @@ FILES = Shield(
     finding_kinds=FINDING_KINDS, capabilities=CAPABILITIES, packs=HERE / "packs",
     page=HERE / "page" / "files.html", attacks=HERE / "attacks.json", api=api.API,
     prompt_check=protect.prompt_check, describe_change=describe_change, alerts=alerts.shield_alerts,
+    allow_lists=frozenset({mode.OPT_DECLINED}),
 )

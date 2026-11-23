@@ -19,7 +19,9 @@ Config, under ``plugins.entries.blackbox``::
 
 ``sandboxed`` lists the coding agents Blackbox starts inside an operating-system sandbox built from
 the protected list (``sandbox/``): a protecting list, so adding one applies at once and removing one
-waits for approval. Empty by default (decision D7: a sandboxed agent can not use ``sudo``).
+waits for approval. Empty until the sandbox default picks the agents found here (``sandbox.defaults``,
+gated off until the system-level VM test passes); an agent the person took out (``sandbox_declined``)
+is never picked again.
 
 An item is stored in ONE canonical spelling (LES-105): written from the home folder (``~/…``)
 when it is inside it, absolute otherwise, with ``..`` folded away and an existing link resolved —
@@ -46,6 +48,10 @@ SHIELD_ID = "file-shield"
 OPT_PROTECTED = "protected"
 OPT_FOLDERS = "folders"
 OPT_SANDBOXED = "sandboxed"
+#: The agents the person took OUT of the sandbox: the sandbox default never picks them again
+#: (``sandbox.defaults``). Kept by :func:`validate`, never shown as a field; an allow-list (adding
+#: to it turns protection down, so it rides on the approved removal from ``sandboxed``).
+OPT_DECLINED = "sandbox_declined"
 DEFAULT_FOLDERS = ("~/Downloads",)
 #: Most items the person may protect, and most folders watched for new files.
 MAX_PROTECTED = 200
@@ -101,11 +107,11 @@ def normalise_folder(value: Any) -> Optional[str]:
 
 
 def build(enabled: bool = False, protected: tuple[str, ...] = (), folders: Optional[tuple[str, ...]] = None,
-          sandboxed: tuple[str, ...] = ()) -> ShieldMode:
+          sandboxed: tuple[str, ...] = (), declined: tuple[str, ...] = ()) -> ShieldMode:
     """File Shield's mode (None: the default watched folders)."""
     return ShieldMode(enabled=enabled, options={OPT_PROTECTED: protected,
                                                 OPT_FOLDERS: DEFAULT_FOLDERS if folders is None else folders,
-                                                OPT_SANDBOXED: sandboxed})
+                                                OPT_SANDBOXED: sandboxed, OPT_DECLINED: declined})
 
 
 def protected(mode: ShieldMode) -> tuple[str, ...]:
@@ -174,7 +180,8 @@ def from_entry(entry: Mapping[str, Any]) -> ShieldMode:
     section = section if isinstance(section, Mapping) else {}
     chosen = _folders(section.get(OPT_FOLDERS)) if OPT_FOLDERS in section else None
     return build(enabled=section.get("enabled") is True, protected=_items(section.get(OPT_PROTECTED)) or (),
-                 folders=chosen, sandboxed=_sandboxed(section.get(OPT_SANDBOXED)) or ())
+                 folders=chosen, sandboxed=_sandboxed(section.get(OPT_SANDBOXED)) or (),
+                 declined=_sandboxed(section.get(OPT_DECLINED)) or ())
 
 
 def current() -> ShieldMode:
@@ -226,7 +233,22 @@ def validate(payload: Mapping[str, Any]) -> tuple[str, dict[str, Any], list[str]
     now = current()
     section = {"enabled": now.enabled, OPT_PROTECTED: list(now.options.get(OPT_PROTECTED, ())),
                OPT_FOLDERS: list(folders(now)), OPT_SANDBOXED: list(now.options.get(OPT_SANDBOXED, ())), **updates}
+    section[OPT_DECLINED] = declined_after(now, section[OPT_SANDBOXED])
     return SHIELD_ID, section, []
+
+
+def declined_after(now: ShieldMode, sandboxed: list[str]) -> list[str]:
+    """The agents the person has taken out of the sandbox once *sandboxed* is stored: the ones
+    taken out now added, the ones put back now dropped — the person's choice, kept for good."""
+    before = tuple(now.options.get(OPT_SANDBOXED, ()))
+    declined = [*now.options.get(OPT_DECLINED, ()), *(agent for agent in before if agent not in sandboxed)]
+    return [agent for agent in dict.fromkeys(declined) if agent not in sandboxed]
+
+
+#: The plain line the dashboard shows under the sandbox choice (founder wording, 2026-11-22).
+SANDBOX_HELP = ("Agents run inside Blackbox's sandbox: they can't use sudo, change their own hook settings or your shell "
+                "startup files, or reach protected items. Turn off per agent if a tool you need doesn't work. "
+                "Taking one off asks you first; a running agent keeps its protection until you restart it.")
 
 
 def fields() -> list[SettingField]:
@@ -237,9 +259,7 @@ def fields() -> list[SettingField]:
                      "One file or folder per line, from ~/ or /. A folder protects everything inside it. "
                      "Removing one asks you first.", pattern=ITEM_PATTERN),
         SettingField(OPT_SANDBOXED, "multi-pick", "Run these agents inside the sandbox",
-                     "Blackbox starts the agents you pick inside your Mac's own sandbox, so no program they run can open "
-                     "your protected files either. A sandboxed agent can not use sudo. Taking one off asks you first; "
-                     "a running agent keeps its protection until you restart it.",
+                     SANDBOX_HELP,
                      options=_agent_options()),
         SettingField(OPT_FOLDERS, "lines", "Folders to watch for new files",
                      f"One per line, written from your home folder (for example ~/Downloads). Up to {MAX_FOLDERS}.",
@@ -247,12 +267,19 @@ def fields() -> list[SettingField]:
     ]
 
 
+def sandboxable() -> list:
+    """The agents the sandbox can start (``kernel.agent_hosts.Host`` rows): every command-line
+    agent but Windsurf (a GUI editor, relaunched instead), and the Hermes agent."""
+    from ...kernel.agent_hosts import HERMES_ID, HERMES_NAME, HOSTS
+    from types import SimpleNamespace
+    return [host for host in HOSTS if host.commands and host.id != "windsurf"] + [SimpleNamespace(id=HERMES_ID, name=HERMES_NAME)]
+
+
 def _agent_options() -> tuple[SettingOption, ...]:
     """One option per agent the sandbox can start, each with its REAL status on this machine
     (``sandbox.offer``: supported, not installed, or unavailable with the reason) — never an
     empty one (BB-SHIELDS-001)."""
-    from ...kernel.agent_hosts import HERMES_ID, HERMES_NAME, HOSTS
     from .sandbox import offer   # lazy: the sandbox package imports this module
-    agents = [(host.id, host.name) for host in HOSTS if host.commands and host.id != "windsurf"] + [(HERMES_ID, HERMES_NAME)]
+    agents = [(host.id, host.name) for host in sandboxable()]
     return tuple(SettingOption(id=agent, name=name, status=status, note=note)
                  for agent, name in agents for status, note in (offer(agent),))

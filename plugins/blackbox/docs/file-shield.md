@@ -58,6 +58,19 @@ read, File Shield flags it and says why, rather than showing a plain "allowed".
 Only the operating system can see every file a process opens. That is **Layer 2**, the agent
 sandbox, for the coding agents you pick (macOS today):
 
+> Agents run inside Blackbox's sandbox: they can't use sudo, change their own hook settings or
+> your shell startup files, or reach protected items. Turn off per agent if a tool you need
+> doesn't work.
+
+**On by default — once proven.** Until the operating system's own file checks (Layer 3) exist,
+every agent Blackbox finds is meant to run inside the sandbox by default: on install, upgrade and
+`blackbox attach` each detected agent is picked, unless you took it out of the sandbox before —
+your choice is kept (`sandbox_declined`) and never overridden. Taking an agent out asks you first
+(the companion app's dialog, or your password). A File Shield you turned off stays off. This
+default is switched on only after a full system-level test day on a test Mac passes; until then
+it is off (`SANDBOX_DEFAULT = "off"` in `shields/files/sandbox/defaults.py`) and you pick agents
+yourself.
+
 - Blackbox writes a launcher for each agent you pick (`claude`, `codex`, `cursor-agent`, `gemini`,
   `copilot`, `cline`, `opencode`) and puts its folder first on your PATH (one marked block at the
   end of `~/.zshrc`, and `~/.bashrc` / `~/.bash_profile` when you have them). Starting the agent
@@ -83,13 +96,28 @@ What Layer 2 can not do, plainly:
 
 - An agent started another way (a full path, an IDE that starts it itself) is not inside — it keeps
   Layer 1.
-- A sandboxed agent can not run `sudo` (no sandbox can run setuid programs) — that is why you pick
-  agents one by one.
-- Driving another app is refused inside: `osascript` (AppleScript and JavaScript), `automator`,
-  `shortcuts` and `open` (the other app would do the work outside the sandbox). Not covered: a
+- **sudo and other setuid tools.** macOS does not start a setuid program inside any sandbox, and no
+  rule can allow it. `sudo`, `su`, `top`, `crontab -l` (and `at`, `login`, `quota`) answer with
+  "Blackbox's sandbox refused this (top): macOS doesn't allow setuid programs inside the agent
+  sandbox; run it in your own terminal". `ps` works: the sandbox gets its own copy without the
+  setuid bit (first on the sandboxed PATH only; an absolute `/bin/ps` still fails). Use
+  `ps -Ao pid,pcpu,comm -r` instead of `top`.
+- **Homebrew installs** (`brew install`) fail inside: Homebrew runs each install inside its own
+  sandbox, and macOS will not start a second sandbox inside one (`sandbox_apply: Operation not
+  permitted`). Run `brew` in your own terminal. The same holds for any tool that sandboxes itself
+  (SwiftPM manifest builds, an agent's own sandbox mode).
+- **Opening or driving other apps** is refused inside: `open -a`, `osascript`, `automator`,
+  `shortcuts`.
+  The other app would do the work outside the sandbox. Not covered: a
   program the agent compiles itself that sends AppleEvents through macOS's own frameworks. The
   only rule that stops that inside a sandbox makes every app launch from the agent hang (opening
   a browser to log in, `open`), so it is not used; the OS's own file checks (Layer 3) close it.
+- **A folder that holds a protected item** is not swept whole, sandboxed or not: `grep -r … ~` or
+  `zip -r b.zip ~/Documents` is refused when `~/Documents` holds a protected folder, with "~/Documents
+  contains a protected folder; exclude it or work on a subfolder" — name the subfolders or files you
+  need (an exclude option alone is not enough).
+- When the sandbox refuses something, the agent is told "Blackbox's sandbox refused this (…)" beside
+  the error, and the refusal counts on the session (every kind, not only files).
 - A running agent keeps the protection it started with; restart it after you change the list.
 - Linux and Windows: not yet (Layer 1 only there).
 

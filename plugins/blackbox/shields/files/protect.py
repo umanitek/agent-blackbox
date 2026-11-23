@@ -82,11 +82,24 @@ def detect(tool_name: str, args: Any, mode: ShieldMode) -> list[Finding]:
         return [Finding(
             identifier=FOLDER_HIT_ID if folder else FILE_HIT_ID, category=CATEGORY, severity="critical",
             title=f"File Shield: an AI agent tried to {ROUTES.get(touch.mode, 'use')} your protected {what} {touch.pattern}",
-            tool_name=touch.tool, matched=PERSON_PROTECTED,
+            tool_name=touch.tool, matched=PERSON_PROTECTED, advice=sweep_advice(touch.path, touch.pattern, what),
             evidence=f"{touch.mode} {touch.path} — protected {what} {touch.pattern}"[:400],
             confirmed=False, source="custom",
             fields={"path": touch.path[:400], "item": touch.pattern, "route": touch.mode, "kind": what})]
     return _script_hit(tool_name, args, items) or _unseen_route(tool_name, args, items)
+
+
+def sweep_advice(path: str, item: str, what: str) -> str:
+    """What the agent can do when it reached *item* through a folder ABOVE it (``grep -r ~``,
+    ``zip -r b.zip ~/Documents``): "" when it named the item itself. The sweep stays refused
+    (founder decision on KI-592); an exclude option is not enough, because each tool reads one
+    its own way and one misread pattern would hand the item over."""
+    above = os.path.normpath(os.path.expanduser(path))
+    inside = os.path.normpath(os.path.expanduser(item))
+    if above == inside or not inside.startswith(above.rstrip(os.sep) + os.sep):
+        return ""
+    return (f"{path} contains a protected {what}; exclude it or work on a subfolder: name the subfolders or files you "
+            "need instead (an exclude option alone is not enough).")
 
 
 def _script_hit(tool_name: str, args: Any, items: list[str]) -> list[Finding]:
