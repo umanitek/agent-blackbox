@@ -7,7 +7,9 @@ Each contract below is a REAL Seatbelt run on this Mac (a sandbox-exec'd child o
 listeners are this test's own sockets), proven before the permission is offered:
 
 * local-ports blocked: a service on this Mac is refused, a listed port and Blackbox's dashboard
-  port stay reachable, Docker's TCP port stays closed even when listed;
+  port stay reachable — every time (probe: an allow list FOLLOWED by a deny let ports through only
+  sometimes, so the reachable ports are rendered after the never-list) — and Docker's TCP port and
+  ssh's are never reopened; a rule listing port 22 is refused;
 * Seatbelt's ``localhost`` filter also matches every address of this Mac (probe, macOS 27.2): a
   ``localhost:<port>`` rule refuses that port on the Mac's own network addresses too — which is
   why the never-list's ``localhost:22`` already refuses ``ssh <this Mac's LAN IP>`` (KI-621;
@@ -83,9 +85,11 @@ def test_blocked_local_ports_refuse_this_mac_but_the_listed_and_dashboard_ports(
         sandbox.sync(files_mode.build(enabled=True, sandboxed=("claude-code",)))
         profile = str(sandbox.layout.agent_profile("claude-code"))
         text = open(profile, encoding="utf-8").read()
-        assert text.index('(remote ip "localhost:2375")', text.index("(allow network-outbound")) > 0   # Docker's port re-closed after
-        out = _sandboxed(profile, sys.executable, "-I", "-c", CONNECT, "127.0.0.1", *map(str, ports)).stdout.split("\n")
-        assert out[:3] == [f"{ports[0]} open", f"{ports[1]} refused 1", f"{ports[2]} open"], out
+        after = text.split(macos_profile.NEVER_MARK)[1].split(macos_profile.PORTS_MARK)[1]
+        assert "localhost:2375" not in after and "localhost:22\"" not in after   # never reopened: Docker refused, ssh never
+        for _ in range(5):   # probed: an allow list followed by a deny was let through only sometimes — hence allows last
+            out = _sandboxed(profile, sys.executable, "-I", "-c", CONNECT, "127.0.0.1", *map(str, ports)).stdout.split("\n")
+            assert out[:3] == [f"{ports[0]} open", f"{ports[1]} refused 1", f"{ports[2]} open"], out
     finally:
         for server in (listed, other, dashboard):
             server.close()
@@ -130,6 +134,12 @@ def test_blocked_clipboard_fails_at_once_without_a_hang(home, entry):
     sandbox.sync(files_mode.build(enabled=True, sandboxed=("claude-code",)))
     done = _sandboxed(str(sandbox.layout.agent_profile("claude-code")), "/bin/sh", "-c", "/usr/bin/pbpaste >/dev/null; echo code=$?")
     assert "code=1" in done.stdout
+
+
+def test_port_22_can_never_be_listed():
+    errors: list = []
+    permissions.validate_section({"permissions": [{"permission": "local-ports", "mode": "block", "ports": [22]}]}, errors)
+    assert any("ssh into this Mac" in error for error in errors)
 
 
 def test_unproven_permissions_are_neither_accepted_nor_rendered(home):

@@ -54,15 +54,33 @@ DOCKER_PORTS = (2375, 2376)
 PASTEBOARD = "com.apple.pasteboard.1"
 
 
+#: Opens the reachable-ports block, the ONLY lines after the never-list. WHY there: probed on macOS
+#: 27.2 (2026-11-23), an ``(allow network-outbound …)`` list followed by any later
+#: ``(deny network-outbound …)`` (Docker's ports, the never-list's ssh rule) let the allowed ports
+#: through only SOMETIMES — nondeterministically, run to run. With the allows last it held every
+#: time. They never name a port the never-list or another refused permission closes (:func:`port_lines`).
+PORTS_MARK = "; reachable ports while local-ports is blocked — after the never-list, never one it closes"
+#: The ports the never-list closes on this Mac (ssh back into it).
+NEVER_PORTS = (22,)
+
+
 def _local_port_lines(allowances: Allowances) -> list[str]:
-    """Every service on this Mac refused, then the listed ports and Blackbox's dashboard reopened.
+    """Every service on this Mac refused (the listed ports are reopened at the very end, :func:`port_lines`).
     Probed on macOS 27.2 (2026-11-23): ``localhost`` here also matches every address of this Mac
     (en0, link-local, Tailscale), so "this Mac" is covered whatever address an agent dials."""
-    ports = sorted({*allowances.ports, *([allowances.dashboard_port] if allowances.dashboard_port else [])})
-    lines = ['(deny network-outbound (remote ip "localhost:*"))']
-    if ports:
-        lines.append("(allow network-outbound\n  " + "\n  ".join(f'(remote ip "localhost:{port}")' for port in ports) + ")")
-    return lines
+    return ['(deny network-outbound (remote ip "localhost:*"))']
+
+
+def port_lines(allowances: Allowances) -> list[str]:
+    """The listed ports and Blackbox's dashboard port, reopened while local-ports is blocked — minus
+    the never-list's ports and Docker's while Docker is refused."""
+    if "local-ports" not in allowances.refused:
+        return []
+    closed = set(NEVER_PORTS) | (set(DOCKER_PORTS) if "docker" in allowances.refused else set())
+    ports = sorted({*allowances.ports, *([allowances.dashboard_port] if allowances.dashboard_port else [])} - closed)
+    if not ports:
+        return []
+    return [PORTS_MARK, "(allow network-outbound\n  " + "\n  ".join(f'(remote ip "localhost:{port}")' for port in ports) + ")"]
 
 
 def _docker_lines(home: str) -> list[str]:
@@ -80,11 +98,13 @@ NEVER_MARK = "; never-list — rendered last: no permission above lifts it"
 def render(places: Places, digest_line: str = "", allowances: Allowances = Allowances()) -> str:
     """The Seatbelt profile for *places* with the permissions *allowances* lets through. Everything
     not named stays allowed: the agent works as before, except on what the person (and Blackbox)
-    protect. The permission lines come first, the never-list (:data:`NEVER_MARK`) last."""
+    protect. The permission lines come first, then the never-list (:data:`NEVER_MARK`); only the
+    ports local-ports keeps reachable follow it (:data:`PORTS_MARK`), never one the never-list closes."""
     lines = ["(version 1)", f"; Blackbox agent sandbox — generated, do not edit. {digest_line}".rstrip(), "(allow default)"]
     lines += permission_lines(allowances)
     lines.append(NEVER_MARK)
     lines += _never(places)
+    lines += port_lines(allowances)
     return "\n".join(lines) + "\n"
 
 
@@ -93,7 +113,7 @@ def permission_lines(allowances: Allowances, home: str = "") -> list[str]:
     (Docker's sockets, the person's tool folders …) and the folder rules (kept out / read only)."""
     home = home or os.path.realpath(os.path.expanduser("~"))
     lines = _local_port_lines(allowances) if "local-ports" in allowances.refused else []
-    lines += _docker_lines(home) if "docker" in allowances.refused else []   # after local-ports: a listed port never reopens Docker's
+    lines += _docker_lines(home) if "docker" in allowances.refused else []
     if "clipboard" in allowances.refused:   # probed 2026-11-23: pbpaste fails at once, no hang
         lines.append(f'(deny mach-lookup (global-name "{PASTEBOARD}"))')
     tools = [f"(subpath {_quote(p)})" for p in allowances.tool_folders] + [f"(regex {_glob_regex(g)})" for g in allowances.tool_globs]
@@ -145,4 +165,4 @@ def _never(places: Places) -> list[str]:
 
 
 
-__all__ = ["APP_DRIVERS", "DOCKER_PORTS", "DOCKER_SOCKETS", "DOCKER_SOCKET_GLOBS", "LOCAL_SSH", "NEVER_MARK", "PASTEBOARD", "PROFILE_SUFFIX", "SANDBOX_EXEC", "permission_lines", "render"]
+__all__ = ["APP_DRIVERS", "DOCKER_PORTS", "DOCKER_SOCKETS", "DOCKER_SOCKET_GLOBS", "LOCAL_SSH", "NEVER_MARK", "NEVER_PORTS", "PASTEBOARD", "PORTS_MARK", "PROFILE_SUFFIX", "SANDBOX_EXEC", "permission_lines", "port_lines", "render"]

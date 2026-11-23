@@ -65,9 +65,20 @@ def test_the_never_list_is_the_tail_and_every_permission_line_is_above_it(home, 
     places = sandbox.policy(_mode())
     hidden = permissions.Allowances(hidden=(str(home / "clients"),), read_only=(str(home / "Documents"),))
     head, tail = _split(profiles.render_signed(places, hidden))
-    assert "\n".join(tail) == "\n".join(macos_profile._never(places))
+    assert "\n".join(tail) == "\n".join(macos_profile._never(places))   # local-ports allowed: no reachable-ports block
     assert "\n".join(macos_profile.permission_lines(hidden)) in "\n".join(head)
     assert all(str(home / "clients") not in line for line in tail)
+
+
+@MAC
+def test_only_the_reachable_ports_follow_the_never_list(home, entry):
+    places = sandbox.policy(_mode())
+    blocked = permissions.allowances(Settings(rules=(permissions.Rule("local-ports", permissions.Mode.BLOCK, ports=(5432,)),)))
+    _head, tail = _split(profiles.render_signed(places, blocked))
+    never = macos_profile._never(places)
+    assert "\n".join(tail).startswith("\n".join(never))
+    assert tail[len("\n".join(never).splitlines()):] == "\n".join(macos_profile.port_lines(blocked)).splitlines()
+    assert "localhost:5432" in "\n".join(macos_profile.port_lines(blocked))
 
 
 @MAC

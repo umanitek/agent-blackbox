@@ -40,6 +40,8 @@ from .model import Access, FolderRule, Mode, Rule, Scope, Settings
 SECTION = "agent_sandbox"
 RULES, FOLDERS = "permissions", "folders"
 MAX_RULES, MAX_FOLDERS, MAX_PORTS = 200, 100, 32
+#: ssh into this Mac: in the never-list (F7), so no local-ports rule may list it.
+NEVER_PORT = 22
 _RULE_KEYS = frozenset({"permission", "mode", "agent", "project", "ports"})
 _FOLDER_KEYS = frozenset({"path", "access", "agent", "project"})
 #: The older Homebrew setting (``packages.SETTING`` values) read until a homebrew rule exists.
@@ -88,6 +90,9 @@ def _rule(row: Any, errors: list[str], where: str) -> Optional[Rule]:
     if not isinstance(ports, list) or len(ports) > MAX_PORTS or \
             not all(isinstance(port, int) and not isinstance(port, bool) and 1 <= port <= 65535 for port in ports):
         errors.append(f"{where}: ports are at most {MAX_PORTS} numbers from 1 to 65535")
+        return None
+    if NEVER_PORT in ports:
+        errors.append(f"{where}: port {NEVER_PORT} (ssh into this Mac) is never reachable from the sandbox")
         return None
     scope = _scope(row, errors, where)
     return None if scope is None else Rule(permission.id, mode, scope, tuple(sorted(set(ports))))
