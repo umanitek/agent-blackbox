@@ -7,9 +7,10 @@ Real run (test VM, 2026-11-22): Claude Code started through the launcher wrote a
 it; the kernel refused the read, but the instance said ``python3 r.py allow``, refused 0.
 
 This module gives each such refusal to the instance it belongs to: a SANDBOXED instance that was
-live when it happened. When exactly one sandboxed instance was live then, the refusal is its; when
-several were, the one whose latest tool call is closest before the refusal; a tie, or none, leaves
-it on File Shield's own list only (honest: never guessed). The instance counts it as refused and
+live when it happened: the one the refused process's ancestry named when the refusal was recorded
+(the helper reads its pid from the log), else — the process already gone — the one sandboxed
+instance live then; several, or none, leaves it on File Shield's own list only, unattributed
+(honest: never guessed, KI-598). The instance counts it as refused and
 its timeline gets a ``block`` row whose reason says the kernel stopped it. Each refusal is given
 once (its record id is remembered, bounded, with the instance it was given to).
 
@@ -74,15 +75,16 @@ def _candidates(ts: float) -> list[Instance]:
             and (item.ended is None or item.ended >= ts - 2)]
 
 
-def _owner(ts: float) -> Optional[Instance]:
+def _owner(row: Mapping[str, Any], ts: float) -> Optional[Instance]:
+    """The instance a refusal belongs to: the one its process's ANCESTRY named when it was recorded
+    (``session_id``, KI-598); else, when the process was already gone, the one sandboxed instance live
+    then. Two or more live, or none: None — recorded as unattributed, never guessed (KI-598: a
+    refusal landed on the NEXT Codex session, and on a Cline session that was not the refuser's)."""
+    named = str(row.get("session_id") or "")
+    if named:
+        return store.get(named)
     found = _candidates(ts)
-    if len(found) <= 1:
-        return found[0] if found else None
-    def gap(item: Instance) -> float:
-        last = item.last_action.ts if item.last_action and item.last_action.ts <= ts + 1 else 0.0
-        return ts - last if last else float("inf")
-    ranked = sorted(found, key=gap)
-    return ranked[0] if gap(ranked[0]) < gap(ranked[1]) else None
+    return found[0] if len(found) == 1 else None
 
 
 def _reason(fields: Mapping[str, Any], path: str, program: str) -> str:
@@ -105,7 +107,7 @@ def attribute(rows: Iterable[Mapping[str, Any]]) -> int:
             if row.get("framework") != SANDBOX_RECORDER or row.get("event") != "sandbox_deny" or _key(row) in known:
                 continue
             ts = float(row.get("ts") or 0)
-            owner = _owner(ts)
+            owner = _owner(row, ts)
             if owner is None:
                 continue
             fields = row.get("fields") or {}

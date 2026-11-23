@@ -71,6 +71,9 @@ pub fn report(changes: &mut Vec<Change>, at: u64) -> Value {
         if !c.program.is_empty() {
             event["program"] = json!(c.program);
         }
+        if c.pid > 0 {
+            event["pid"] = json!(c.pid);
+        }
         event
     }).collect::<Vec<_>>()})
 }
@@ -155,12 +158,12 @@ mod tests {
 
     #[test]
     fn a_report_carries_at_most_the_plugins_limit_and_keeps_the_rest() {
-        let mut changes: Vec<Change> = (0..250).map(|i| Change { path: format!("/p/{i}"), kind: "created", program: String::new() }).collect();
+        let mut changes: Vec<Change> = (0..250).map(|i| Change { path: format!("/p/{i}"), kind: "created", program: String::new(), pid: 0 }).collect();
         let body = report(&mut changes, 7);
         assert_eq!(body["events"].as_array().unwrap().len(), MAX_EVENTS);
         assert_eq!(body["events"][0], json!({"path": "/p/0", "kind": "created", "ts": 7}));
         assert_eq!(changes.len(), 50);
-        let mut denied = vec![Change { path: "/p/x".into(), kind: "denied", program: "cat".into() }];
-        assert_eq!(report(&mut denied, 8)["events"][0], json!({"path": "/p/x", "kind": "denied", "ts": 8, "program": "cat"}));
+        let mut denied = vec![Change { path: "/p/x".into(), kind: "denied", program: "cat".into(), pid: 77 }];
+        assert_eq!(report(&mut denied, 8)["events"][0], json!({"path": "/p/x", "kind": "denied", "ts": 8, "program": "cat", "pid": 77}));
     }
 }

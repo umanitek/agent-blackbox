@@ -51,8 +51,10 @@ def home(tmp_path, monkeypatch):
     (real / ".claude").mkdir()
     (real / ".claude" / "settings.json").write_text("{}", encoding="utf-8")
     changes.reset()
+    store.reset()   # each test's instances are its own: a refusal is given only to a single live one (KI-598)
     yield real
     changes.reset()
+    store.reset()
 
 
 def _mode(sandboxed=("claude-code",)):
@@ -321,3 +323,28 @@ def test_a_kernel_refusal_inside_an_add_on_folder_is_recorded_counted_and_notice
     assert len(hits) == 2
     tracking.attribute_kernel_refusals()
     assert store.get(hook_events.session_key("claude-code", base["session"], base["cwd"])).refused == 2
+
+
+def test_a_kernel_refusal_goes_to_the_instance_its_process_belongs_to_and_is_never_guessed(home, monkeypatch):
+    """KI-598 (round 4): Codex s4-cxp3s's kernel refusal landed on the NEXT session s4-cxp7s, a resumed
+    Codex showed "refused 1" with no refusal, and a Cline session got another agent's refusal — the
+    rule picked the live instance whose last tool call was closest. Now the helper hands over the
+    refused process's pid, the agent tracker names the instance by its ancestry while it still runs,
+    and with the process gone and two live sandboxed instances the refusal stays unattributed."""
+    from plugins.blackbox.shields.shield_api import InstanceRef
+    monkeypatch.setattr(hook_events.guard, "tool_call_verdict", lambda **_k: {"findings": [], "blocked": [], "decision": "", "message": ""})
+    sessions = {}
+    for name in ("s4-cxp3s", "s4-cxp7s"):
+        base = {"agent": "codex", "session": name, "cwd": str(home / "camp" / name), "sandboxed": True}
+        hook_events.record_event({**base, "event": "session_start"})
+        hook_events.record_event({**base, "event": "pre_tool", "tool_name": "terminal", "args": {"command": "python3 r.py"}})
+        sessions[name] = hook_events.session_key("codex", name, base["cwd"])
+    secret = str(home / "Documents" / "Vault" / "secret.txt")
+    now = int(time.time())
+    changes.record([{"path": secret, "kind": "denied", "program": "python3.14", "ts": now, "pid": 4242}], _mode(),
+                   owner_of_pid=lambda pid: InstanceRef("codex", sessions["s4-cxp3s"]) if pid == 4242 else None)
+    changes.record([{"path": secret, "kind": "denied", "program": "python3.14", "ts": now, "pid": 999}], _mode(),
+                   owner_of_pid=lambda pid: None)   # gone before it could be asked
+    assert tracking.attribute_kernel_refusals() == 1
+    assert store.get(sessions["s4-cxp3s"]).refused == 1
+    assert store.get(sessions["s4-cxp7s"]).refused == 0, "the other live session is never given a refusal it did not make"

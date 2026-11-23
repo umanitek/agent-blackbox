@@ -32,6 +32,9 @@ pub struct Change {
     pub path: String,
     pub kind: &'static str,
     pub program: String,
+    /// The refused process's pid as the log names it (0 from FSEvents): the plugin finds the agent
+    /// instance it belongs to by its ancestry while it may still run (KI-598).
+    pub pid: u32,
 }
 
 /// What a set of FSEvents flags says happened (the most telling first).
@@ -64,7 +67,7 @@ extern "C" fn bb_fs_event(path: *const c_char, flags: u32, context: *mut c_void)
     let context = unsafe { &*(context as *const Context) };
     let path = unsafe { CStr::from_ptr(path) }.to_string_lossy().into_owned();
     if let Ok(sender) = context.sender.lock() {
-        let _ = sender.send(Change { path, kind: kind_of(flags), program: String::new() });
+        let _ = sender.send(Change { path, kind: kind_of(flags), program: String::new(), pid: 0 });
     }
 }
 

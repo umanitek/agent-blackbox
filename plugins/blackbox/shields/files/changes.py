@@ -30,7 +30,7 @@ import os
 import threading
 import time
 from dataclasses import dataclass
-from typing import Any, Optional, Sequence
+from typing import Any, Callable, Optional, Sequence
 
 from ...kernel import constants
 from ...kernel.bounded_files import atomic_write, read_small_text
@@ -128,35 +128,66 @@ def _checked(event: Any, now: float) -> tuple[str, str, float, str]:
     return path, kind, float(min(ts, now)), program if kind == DENIED else ""
 
 
+#: The largest pid a refusal may name.
+_MAX_PID = 2 ** 31 - 1
+
+
+def _pid_of(event: Any) -> int:
+    """The refused process's pid the helper read from the kernel's log (0: not named)."""
+    pid = event.get("pid") if isinstance(event, dict) else None
+    return pid if type(pid) is int and 0 < pid <= _MAX_PID else 0
+
+
 def record(events: Sequence[Any], mode: ShieldMode, now: Optional[float] = None,
-           self_protected: Sequence[str] = ()) -> list[FileChange]:
+           self_protected: Sequence[str] = (), owner_of_pid: Optional[Callable[[int], Any]] = None) -> list[FileChange]:
     """Keeps the events inside the current items and folders; answers the ones kept. Refuses a
     report with a malformed event (nothing kept) or more than :data:`MAX_PER_REPORT` events.
     *self_protected*: the files the sandbox keeps closed for Blackbox (``sandbox.self_protected_files``)
-    — a refusal naming one is recorded as a self-protection hit (KI-581), not kept as a change."""
+    — a refusal naming one is recorded as a self-protection hit (KI-581), not kept as a change.
+    *owner_of_pid*: the agent tracker's ``pid -> InstanceRef | None``; a refusal whose pid it knows
+    NOW (the refused process, or its agent, may still run) is recorded on that instance (KI-598)."""
     now = time.time() if now is None else now
     if len(events) > MAX_PER_REPORT:
         raise ShieldApiError(400, f"a file report carries at most {MAX_PER_REPORT} events")
     checked = [_checked(event, now) for event in events]
+    owners = {index: _owner(owner_of_pid, _pid_of(event)) for index, event in enumerate(events)
+              if checked[index][1] == DENIED and _pid_of(event)}
     with _cond:
         _load()
         kept: list[FileChange] = []
-        self_denials = [(os.path.normpath(path), program) for path, kind, _ts, program in checked
+        self_denials = [(os.path.normpath(path), program, owners.get(index)) for index, (path, kind, _ts, program) in enumerate(checked)
                         if kind == DENIED and _inside_any(os.path.normpath(path), self_protected)]
-        for path, kind, ts, program in checked:
+        hit_owners: dict[int, Any] = {}
+        for index, (path, kind, ts, program) in enumerate(checked):
             scope = _scope(path, mode)
             if scope is None or (kind == DENIED and scope[1] != PROTECTED):
                 continue
             _state["seq"] += 1
             kept.append(FileChange(seq=_state["seq"], ts=ts, path=path, kind=kind, item=scope[0], scope=scope[1],
                                    program=program))
+            hit_owners[_state["seq"]] = owners.get(index)
         if kept:
             _state["changes"] = (_state["changes"] + kept)[-MAX_KEPT:]
             _save()
             _cond.notify_all()
-    _record_hits([change for change in kept if change.kind == DENIED])
+    _record_hits([change for change in kept if change.kind == DENIED], hit_owners)
     _record_self_hits(self_denials)
     return kept
+
+
+def _owner(owner_of_pid: Optional[Callable[[int], Any]], pid: int) -> Any:
+    """The instance *pid* belongs to by its ancestry now, None when not known (never guessed)."""
+    if owner_of_pid is None or not pid:
+        return None
+    try:
+        return owner_of_pid(pid)
+    except Exception:   # health: allow BLE001 -- a refusal is still recorded; it then names no instance
+        return None
+
+
+def _owned(owner: Any) -> dict[str, str]:
+    """The record's ``session_id`` / ``agent`` for a known owner (``kernel_refusals`` gives it there)."""
+    return {"session_id": owner.instance, "agent": owner.agent} if owner is not None else {}
 
 
 def _inside_any(path: str, places: Sequence[str]) -> bool:
@@ -164,18 +195,19 @@ def _inside_any(path: str, places: Sequence[str]) -> bool:
     return any(_under(path, place) for place in places)
 
 
-def _record_self_hits(denials: list[tuple[str, str]]) -> None:
+def _record_self_hits(denials: list[tuple[str, str, Any]]) -> None:
     """Each sandbox refusal of a write to a file kept closed for Blackbox, as a self-protection hit."""
     if not denials:
         return
     from ... import audit
     from .protect import SANDBOX_AGENT, sandbox_self_hit
-    for path, program in denials:
+    for path, program, owner in denials:
         audit.record_for(SANDBOX_AGENT, event="sandbox_deny", findings=[sandbox_self_hit(path, program).to_dict()],
-                         detail={"decision": "block", "tool_name": program, "tool_call_id": f"sandbox-self:{time.time():.6f}:{path}"})
+                         detail={"decision": "block", "tool_name": program, "tool_call_id": f"sandbox-self:{time.time():.6f}:{path}",
+                                 **_owned(owner)})
 
 
-def _record_hits(denials: list[FileChange]) -> None:
+def _record_hits(denials: list[FileChange], owners: Optional[dict[int, Any]] = None) -> None:
     """Each sandbox refusal as a File Shield hit, in the same local findings the hooks write."""
     if not denials:
         return
@@ -183,7 +215,8 @@ def _record_hits(denials: list[FileChange]) -> None:
     from .protect import SANDBOX_AGENT, sandbox_hit
     for change in denials:   # one record each: the decision travels in the record's detail
         audit.record_for(SANDBOX_AGENT, event="sandbox_deny", findings=[sandbox_hit(change.item, change.path, change.program).to_dict()],
-                         detail={"decision": "block", "tool_name": change.program, "tool_call_id": f"sandbox:{change.seq}"})
+                         detail={"decision": "block", "tool_name": change.program, "tool_call_id": f"sandbox:{change.seq}",
+                                 **_owned((owners or {}).get(change.seq))})
 
 
 def since(seq: int) -> tuple[int, list[FileChange]]:

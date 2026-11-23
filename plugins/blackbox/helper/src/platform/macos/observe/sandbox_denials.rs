@@ -38,7 +38,8 @@ AND eventMessage CONTAINS \" deny(\" AND ({})", named.join(" OR ")))
 pub fn parse(message: &str) -> Option<Change> {
     let rest = message.strip_prefix("Sandbox: ")?;
     let deny_at = rest.find(") deny(")?;
-    let program = rest[..deny_at].rsplit_once('(').map(|(name, _)| name)?;
+    let (program, pid) = rest[..deny_at].rsplit_once('(')?;
+    let pid: u32 = pid.parse().unwrap_or(0);
     let after = &rest[deny_at + ") deny(".len()..];
     let after = &after[after.find(") ")? + 2..];
     let (operation, path) = after.split_once(' ')?;
@@ -46,7 +47,7 @@ pub fn parse(message: &str) -> Option<Change> {
         return None;
     }
     let program: String = program.chars().filter(|c| !c.is_control()).take(MAX_PROGRAM_CHARS).collect();
-    Some(Change { path: path.to_string(), kind: "denied", program })
+    Some(Change { path: path.to_string(), kind: "denied", program, pid })
 }
 
 /// A running `log stream` over the sandbox's denials; ends (killed and waited for) when dropped.
@@ -91,7 +92,7 @@ mod tests {
     #[test]
     fn a_file_denial_names_the_program_and_the_path() {
         let change = parse("Sandbox: python3.14(4242) deny(1) file-read-data /Users/me/Taxes/2025 return.pdf").unwrap();
-        assert_eq!(change, Change { path: "/Users/me/Taxes/2025 return.pdf".into(), kind: "denied", program: "python3.14".into() });
+        assert_eq!(change, Change { path: "/Users/me/Taxes/2025 return.pdf".into(), kind: "denied", program: "python3.14".into(), pid: 4242 });
         let odd = parse("Sandbox: Code Helper (Plugin)(77) deny(1) file-write-unlink /Users/me/Taxes").unwrap();
         assert_eq!((odd.program.as_str(), odd.path.as_str()), ("Code Helper (Plugin)", "/Users/me/Taxes"));
     }
