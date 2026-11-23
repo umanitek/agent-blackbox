@@ -52,7 +52,7 @@ def test_a_pattern_that_is_not_verified_never_blocks(mode):
 def test_clean_or_empty_text_has_no_verdict(mode):
     mode("block")
     assert guard.text_verdict([("in-tool-output", "Build succeeded.")])["decision"] == ""
-    assert guard.text_verdict([("in-tool-output", "")]) == {"findings": [], "blocked": [], "decision": "", "message": ""}
+    assert guard.text_verdict([("in-tool-output", "")]) == {"findings": [], "blocked": [], "decision": "", "message": "", "notes": []}
 
 
 def test_a_refused_prompt_says_prompt_and_names_the_person_not_audit_mode(mode):

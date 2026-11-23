@@ -37,7 +37,7 @@ def text_verdict(texts: Sequence[tuple[str, str]]) -> ToolCallVerdict:
     sources = [(context if context in constants.INJECTION_CONTEXTS else "in-tool-output", str(text or "")[:MAX_TEXT_CHARS])
                for context, text in texts if text]
     if not sources:
-        return ToolCallVerdict(findings=[], blocked=[], decision="", message="")
+        return ToolCallVerdict(findings=[], blocked=[], decision="", message="", notes=[])
     cfg = hooks._config()   # through the module: one config source with the tool-call hook
     rules, _evidence = graph_rules.detection_rules(cfg, "", {})
     findings = api_request._injection_by_source(sources, rules, cfg.discover)
@@ -50,4 +50,4 @@ def text_verdict(texts: Sequence[tuple[str, str]]) -> ToolCallVerdict:
     return ToolCallVerdict(findings=[finding.to_dict() for finding in findings],
                            blocked=[finding.identifier for finding in blocking], decision=decision,
                            message=blackbox_block_message(blocking, sources[0][0] if len({c for c, _ in sources}) == 1 else "text")
-                           if blocking else "")
+                           if blocking else "", notes=[])

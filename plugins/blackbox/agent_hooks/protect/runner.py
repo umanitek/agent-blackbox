@@ -172,6 +172,22 @@ def prompt_text(agent: str, payload: dict) -> str:
                  else _first(payload, "prompt", "user_prompt", "message"))
 
 
+#: Where Cline's TaskStart carries the task the person started it with (its first message never
+#: reaches UserPromptSubmit — KI-604): ``taskStart.task`` / ``.initialTask`` / ``.prompt``, or the
+#: same keys inside ``taskStart.taskMetadata``.
+TASK_KEYS = ("task", "initialTask", "initial_task", "prompt", "text")
+
+
+def task_text(agent: str, payload: dict) -> str:
+    """The person's FIRST message of a Cline task, from its TaskStart event ("" for any other)."""
+    if agent != "cline":
+        return ""
+    start = payload.get("taskStart") if isinstance(payload.get("taskStart"), dict) else {}
+    meta = start.get("taskMetadata") if isinstance(start.get("taskMetadata"), dict) else {}
+    found = _first(start, *TASK_KEYS) or _first(meta, *TASK_KEYS)
+    return _text(found) if isinstance(found, str) else ""
+
+
 def output_text(agent: str, payload: dict) -> str:
     """The tool's output in *agent*'s post-tool payload — what the model is about to read."""
     if agent == "cline":
@@ -287,6 +303,8 @@ def summary(agent: str, event: str, payload: dict) -> dict:
         body["text"] = read_text(agent, payload)
     if event == "post_tool":
         body["text"] = output_text(agent, payload)
+    if event == "session_start":
+        body["text"] = task_text(agent, payload)   # checked like a prompt, never kept (KI-604)
     if event == "prompt":
         body["text"] = prompt_text(agent, payload)
         body["prompt_chars"] = len(body["text"])

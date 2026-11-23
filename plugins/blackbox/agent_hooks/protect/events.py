@@ -141,9 +141,9 @@ def validate(body: Any) -> dict[str, Any]:
     text = body.get("text", "")
     if not isinstance(text, str):
         raise ValueError("text must be a string")
-    if event == "prompt":   # the person's words: the agent's own wrapper and boilerplate set aside (KI-573, KI-579)
+    if event in ("prompt", "session_start"):   # the person's words: the agent's own wrapper and boilerplate set aside (KI-573, KI-579)
         text = persons_words(agent, text[:MAX_CHECK_TEXT])
-        chars = len(text)
+        chars = len(text) if event == "prompt" else 0
     return {"agent": agent, "event": event, "session": _text(body.get("session"), 200), "cwd": _text(body.get("cwd")),
             "tool_name": tool_name, "args": body.get("args"), "tool_call_id": _text(body.get("tool_call_id"), 200),
             "prompt_chars": chars if isinstance(chars, int) and chars >= 0 else 0, "text": text[:MAX_CHECK_TEXT],
@@ -201,7 +201,7 @@ def _verdict(event: Mapping[str, Any]) -> dict[str, Any]:
         if text:   # a file a pre-read hook is about to let the agent read
             verdicts.append(guard.text_verdict([("in-tool-output", text)]))
         return _merge(verdicts)
-    if kind == "prompt" and text:
+    if kind in ("prompt", "session_start") and text:   # a task's first message comes with its start (Cline, KI-604)
         return _merge([guard.text_verdict([("in-user-prompt", text)])])
     if kind == "post_tool" and text:
         fetched = event["tool_name"].lower().startswith(_FETCH_TOOLS)
