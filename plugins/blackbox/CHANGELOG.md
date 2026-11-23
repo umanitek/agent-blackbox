@@ -40,6 +40,15 @@ that the two version fields agree.
 
 ### Added
 
+- **Sandbox permissions.** What an AI agent inside Blackbox's sandbox may do beyond your files is
+  now a list you control — block, ask each time, or allow, for every agent, one agent, one project
+  folder or one agent in one project: Homebrew and global installs (`npm i -g`, `pipx`, `pip
+  --user`, `cargo`, `gem`, `uv tool`, done by Blackbox, names only and threat-checked), opening web
+  links and opening files in apps, one AppleScript you read first, stopping a stray program, Docker,
+  services on this Mac and the clipboard. On "ask" you answer Allow once / Always for this agent
+  here / Keep blocked. Turning one up asks you first. File Shield's page lists them, the rules you
+  set and what is never unlocked, and names a running agent that still needs a restart.
+
 - **Native notifications from Blackbox itself.** Blackbox now tells you through your system's own
   notifications which AI agent did what and whether it was allowed, flagged or stopped — safe to
   read on a locked screen. Security notices are on; agents starting and ending, and a one-line
@@ -137,6 +146,13 @@ that the two version fields agree.
 
 
 ### Security
+
+- **The Docker socket is closed inside the agent sandbox** unless you allow Docker for that agent:
+  a container runs outside the sandbox, so `docker run -v <protected folder>:/x` could read a
+  protected item (KI-622). Mounting a protected item into a container is refused by the hooks too.
+- **Your own program folders (`~/.local/bin`, `~/.cargo/bin`, `~/bin` …) are closed to writes inside
+  the sandbox** by default: a program an agent left there would run outside it the next time you
+  typed its name. Global installs now go through Blackbox.
 
 - **No AI agent can leave something that starts by itself later — sandboxed or not.** An agent
   checked only by its hooks could add a key to `~/.ssh/authorized_keys`, write a launchd job, a
