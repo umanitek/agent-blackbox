@@ -114,7 +114,7 @@ def test_events_become_alerts_with_sentences_and_severity(monkeypatch):
     system_report.record(system_report.validate(_report(events=events), NOW))
     alerts = system_alerts.alerts(10)
     assert [a["severity"] for a in alerts] == ["critical", "medium", "high", "critical"]
-    assert "Launch agent (your account) “com.evil” was added." == alerts[0]["text"]
+    assert "New startup item: Launch agent (your account) “com.evil” — starts evil." == alerts[0]["text"]
     assert "port 5900 (Screen Sharing)" in alerts[1]["text"]
     assert "switched off" in alerts[2]["text"]
 

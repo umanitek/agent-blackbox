@@ -3,7 +3,7 @@
 //! [`watch`]: inbound SSH sessions, whether Remote Login is on, and fingerprints of the login
 //! files. [`logstream`] + [`remote`] (+ [`remote_procs`]): who is in this Mac right now and how —
 //! remote logins as macOS logs them, joined with the inbound sessions on the remote-access ports.
-//! [`exposure`] (listeners the network can reach), [`persistence`] (what starts by itself),
+//! [`exposure`] (listeners the network can reach), [`persistence`] (what starts by itself), [`run_later`] (what runs at a login, a shell or a typed command),
 //! [`tamper`] (DNS / proxy / VPN / firewall / Blackbox's helper changed) and [`posture`] (the
 //! facts behind the posture check) — read by [`super::system_guard`]. [`file_watch`]: File
 //! Shield's real-time file events (FSEvents) — read by [`super::file_shield`].
@@ -17,6 +17,7 @@ pub mod persistence;
 pub mod posture;
 pub mod remote;
 pub mod remote_procs;
+pub mod run_later;
 pub mod sandbox_denials;
 pub mod tamper;
 pub mod watch;
@@ -32,6 +33,7 @@ mod tests {
         ("observe/exposure.rs", include_str!("exposure.rs")),
         ("observe/file_watch.rs", include_str!("file_watch.rs")),
         ("observe/persistence.rs", include_str!("persistence.rs")),
+        ("observe/run_later.rs", include_str!("run_later.rs")),
         ("observe/tamper.rs", include_str!("tamper.rs")),
         ("observe/posture.rs", include_str!("posture.rs")),
     ];

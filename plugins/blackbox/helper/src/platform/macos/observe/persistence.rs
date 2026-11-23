@@ -67,7 +67,7 @@ pub fn job_folders() -> Vec<(&'static str, String)> {
     folders
 }
 
-fn mark_of(path: &Path) -> Option<String> {
+pub fn mark_of(path: &Path) -> Option<String> {
     // As root in folders the person can write: the link itself, never what it points to (safe_read).
     let meta = fs::symlink_metadata(path).ok().filter(|m| m.file_type().is_file())?;
     let mtime = meta.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_secs()).unwrap_or(0);
@@ -223,6 +223,11 @@ impl Persistence {
     /// The items of the kinds *kinds* were looked at again: compare, queue events. A kind whose
     /// source failed (None) keeps its last items. True when it queued any event.
     pub fn update(&mut self, kinds: &[&str], found: Vec<Item>, now: u64) -> bool {
+        self.update_capped(kinds, found, now, MAX_ITEMS)
+    }
+
+    /// [`Self::update`] keeping at most *cap* items (the run-later watch's program folders hold thousands).
+    pub fn update_capped(&mut self, kinds: &[&str], found: Vec<Item>, now: u64, cap: usize) -> bool {
         let before = self.pending.len();
         let fresh: BTreeMap<String, Item> = found.into_iter().map(|i| (format!("{}|{}", i.kind, i.id), i)).collect();
         for (key, item) in &fresh {
@@ -238,7 +243,7 @@ impl Persistence {
                 if self.started { self.push("persistence-removed", &item, now); }
             }
         }
-        for (key, item) in fresh.into_iter().take(MAX_ITEMS) {
+        for (key, item) in fresh.into_iter().take(cap) {
             self.items.insert(key, item);
         }
         self.pending.len() > before

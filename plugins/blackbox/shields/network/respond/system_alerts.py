@@ -1,9 +1,10 @@
 """The system watch's events as alerts for a person: a sentence and a severity each (newest first).
 Merged into Network Shield's ``overview`` alerts, so they reach the app's Mac notifications.
 
-Severity follows what the event means: a new startup item or listener is judged by who signed its
-program (:func:`..monitor.exposure.judge`); Blackbox's own helper changing is critical; DNS
-moved away, a proxy set or the firewall switched off is high.
+Severity follows what the event means: a new listener is judged by who signed its program
+(:func:`..monitor.exposure.judge`); a startup item by whether an AI agent wrote it, then by what
+it is, within a per-source budget (:mod:`.startup_items`); Blackbox's own helper changing is
+critical; DNS moved away, a proxy set or the firewall switched off is high.
 """
 
 from __future__ import annotations
@@ -11,7 +12,9 @@ from __future__ import annotations
 import os
 from typing import Any, Mapping
 
+from .... import audit
 from ..monitor import exposure, system_report
+from . import startup_items
 
 _FIX_NAMES = {"firewall-on": "the macOS firewall", "stealth-on": "stealth mode", "guest-off": "the guest account",
               "screen-sharing-off": "Screen Sharing", "file-sharing-off": "File Sharing", "remote-login-off": "Remote Login",
@@ -31,11 +34,6 @@ def text_of(event: Mapping[str, Any]) -> str:
         return f"{_name(str(event.get('program', '')))} started listening on port {event.get('port')}" + (f" ({service})" if service else "") + " — reachable from the network."
     if kind == "listener-closed":
         return f"{_name(str(event.get('program', '')))} stopped listening on port {event.get('port')}."
-    if kind.startswith("persistence-"):
-        what = exposure.ITEM_NAMES.get(str(event.get("item_kind")), "startup item")
-        label = event.get("label") or _name(str(event.get("id", "")))
-        verb = {"persistence-new": "was added", "persistence-changed": "changed", "persistence-removed": "was removed"}[kind]
-        return f"{what} “{label}” {verb}."
     if kind == "dns-changed":
         return f"This Mac's DNS changed to {', '.join(event.get('servers') or []) or 'none'}."
     if kind == "proxy-set":
@@ -65,8 +63,8 @@ def text_of(event: Mapping[str, Any]) -> str:
 
 def severity(event: Mapping[str, Any]) -> str:
     kind = str(event.get("kind"))
-    if kind in ("listener-new", "persistence-new", "persistence-changed"):
-        risk, _, _ = exposure.judge(str(event.get("program", "")), startup=kind != "listener-new")
+    if kind == "listener-new":
+        risk, _, _ = exposure.judge(str(event.get("program", "")))
         return {"critical": "critical", "high": "high", "medium": "medium"}.get(risk, "low" if risk == "low" else "medium")
     if kind == "firewall-changed":
         return "high" if event.get("state") == "off" else "info"
@@ -75,6 +73,11 @@ def severity(event: Mapping[str, Any]) -> str:
 
 
 def alerts(limit: int = 20) -> list[dict[str, Any]]:
-    """The latest system events as alerts (``kind``, ``ts``, ``severity``, ``text``)."""
-    return [{"kind": e["kind"], "ts": e["ts"], "severity": severity(e), "text": text_of(e),
-             **({"path": e["program"]} if e.get("program") else {})} for e in system_report.events(limit)]
+    """The latest system events as alerts (``kind``, ``ts``, ``severity``, ``text``); startup items
+    through :mod:`.startup_items` (the writer from Blackbox's own records, the budget)."""
+    events = system_report.events(limit)
+    startup = [e for e in events if str(e["kind"]).startswith("persistence-")]
+    rows = audit.read_audit(limit=startup_items.MAX_ROWS) if startup else []
+    others = [{"kind": e["kind"], "ts": e["ts"], "severity": severity(e), "text": text_of(e),
+               **({"path": e["program"]} if e.get("program") else {})} for e in events if e not in startup]
+    return sorted(others + startup_items.startup_alerts(startup, rows), key=lambda alert: -float(alert["ts"]))[:limit]

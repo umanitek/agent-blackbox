@@ -25,7 +25,12 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::enforce::{posture::Fixes, restore};
-use super::observe::{exposure, persistence, posture, tamper};
+use super::observe::{exposure, persistence, posture, run_later, tamper};
+
+/// The most run-later items kept (every PATH folder entry on this Mac).
+const RUN_LATER_CAP: usize = 20_000;
+/// The most events one report carries (the dashboard's `system_report.MAX_EVENTS_PER_REPORT`).
+const MAX_EVENTS_PER_REPORT: usize = 300;
 use crate::platform::macos::sockets::Reader;
 
 const PLAN_PATH: &str = "/api/shields/network-shield/api/system-plan";
@@ -86,6 +91,9 @@ impl Client {
 struct Watchers {
     exposure: exposure::Exposure,
     persistence: persistence::Persistence,
+    /// Shell startup files, OpenSSH's login files, `at` jobs and PATH programs (`run_later`); its
+    /// items are not in the report's snapshot (thousands of links), only its events.
+    run_later: persistence::Persistence,
     tamper: tamper::Tamper,
     posture: Value,
     last_posture: Option<Instant>,
@@ -111,6 +119,8 @@ impl Watchers {
             self.last_folders = Some(Instant::now());
             let kinds = ["launch-agent", "launch-daemon", "user-agent", "cron", "periodic"];
             happened |= self.persistence.update(&kinds, persistence::file_items(&self.persistence.known()), at);
+            happened |= self.run_later.update_capped(run_later::KINDS, run_later::items(&run_later::homes()), at, RUN_LATER_CAP);
+            self.run_later.baseline_done();
         }
         if Self::due(self.last_commands, persistence::COMMANDS_EVERY) {
             let with_kexts = Self::due(self.last_kexts, persistence::KEXTS_EVERY);
@@ -145,6 +155,12 @@ impl Watchers {
         events.extend(self.tamper.take_events());
         let at = now();
         events.extend(fix_events.into_iter().map(|mut e| { e["ts"] = json!(at); e }));
+        events.extend(self.run_later.take_events());
+        if events.len() > MAX_EVENTS_PER_REPORT {
+            // The dashboard refuses a longer report: the rest (run-later changes last) go in the next one.
+            self.events = events.split_off(MAX_EVENTS_PER_REPORT);
+            self.events.truncate(MAX_EVENTS_PER_REPORT);   // bounded: a flood loses its oldest tail, never memory
+        }
         json!({"watching": true, "at": at, "exposure": self.exposure.snapshot(), "persistence": self.persistence.snapshot(),
                "tamper": self.tamper.snapshot(), "posture": self.posture, "fixes": fixes().lock().map(|f| f.applied()).unwrap_or_default(),
                "events": events})
