@@ -92,7 +92,7 @@ def test_an_allowed_install_runs_the_fixed_argv_and_streams_its_output(monkeypat
         ran.append(command)
         return subprocess.Popen([sys.executable, "-c", "print('==> Pouring tree'); print('done')"],
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-    monkeypatch.setattr(jobs, "_spawn", spawn)
+    monkeypatch.setattr(jobs.platform, "spawn_brew", spawn)
     monkeypatch.setattr(jobs, "brew_path", lambda: "/opt/homebrew/bin/brew")
     monkeypatch.setattr(packages, "_record", lambda job: finished.set())
     started = packages.API_WRITES["brew"](_context(), {"argv": ["install", "tree"]})

@@ -73,7 +73,7 @@ class Refusal:
         return f"{_WHAT[self.kind].format(name=self.name)}): {_WHY[self.kind]}"
 
 
-def _setuid(program: str) -> bool:
+def _privileged(program: str) -> bool:
     found = program if os.path.isabs(program) else shutil.which(program, path="/usr/bin:/bin:/usr/sbin:/sbin")
     try:
         return bool(found) and bool(os.stat(found).st_mode & (stat.S_ISUID | stat.S_ISGID))
@@ -86,7 +86,7 @@ def _exec_kind(word: str) -> Refusal:
     name = os.path.basename(word.rstrip(":"))
     if name in APP_DRIVERS:
         return Refusal(APP_DRIVER, name)
-    if _setuid(word):
+    if _privileged(word):
         return Refusal(SETUID, name)
     return Refusal(FILE, word)
 

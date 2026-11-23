@@ -215,7 +215,8 @@
       "folders": [
         "~/Downloads"
       ],
-      "sandboxed": []
+      "sandboxed": [],
+      "sandbox_declined": []
     },
     "blocking": false,
     "sections": [],

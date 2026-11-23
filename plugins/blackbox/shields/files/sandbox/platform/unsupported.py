@@ -52,5 +52,13 @@ def brew_shim(_tools: str, _python: str, _dashboard_url: str) -> str:
     return ""
 
 
+def spawn_brew(_command: list[str], _env: dict[str, str], _cwd: str) -> object:
+    raise OSError("Homebrew runs for agents only on macOS")
+
+
+def stop_group(_process: object) -> None:
+    return None
+
+
 def refresh_tools(_launchers: str, _wanted: bool = True) -> bool:
     return False

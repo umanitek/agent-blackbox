@@ -22,14 +22,16 @@ from __future__ import annotations
 
 import os
 import secrets
-import signal
-import subprocess
 import threading
 import time
 from collections import OrderedDict
-from typing import Callable, Optional
+from typing import TYPE_CHECKING, Callable, Optional
 
+from .. import platform
 from .request import BrewRequest
+
+if TYPE_CHECKING:
+    import subprocess
 
 #: Where Homebrew lives, newest layout first (Apple silicon, then Intel).
 BREW_PATHS = ("/opt/homebrew/bin/brew", "/usr/local/bin/brew")
@@ -38,7 +40,7 @@ MAX_LINES = 4000
 MAX_LINE_CHARS = 2000
 MAX_JOBS = 50
 #: Starts the process: ``(argv, env, cwd) -> Popen`` (tests hand in their own).
-Spawn = Callable[[list[str], dict[str, str], str], "subprocess.Popen[str]"]
+Spawn = Callable[[list[str], dict[str, str], str], "subprocess.Popen[str]"]   # platform.spawn_brew by default
 
 
 def brew_path() -> str:
@@ -59,11 +61,6 @@ def clean_environment(brew: str) -> dict[str, str]:
 def argv(brew: str, request: BrewRequest) -> list[str]:
     """The FIXED argv Blackbox runs: Homebrew's own path, then the validated words."""
     return [brew, *request.words()]
-
-
-def _spawn(command: list[str], env: dict[str, str], cwd: str) -> subprocess.Popen[str]:
-    return subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, cwd=cwd,
-                            text=True, encoding="utf-8", errors="replace", start_new_session=True)
 
 
 class Job:
@@ -125,7 +122,7 @@ def start(request: BrewRequest, brew: str, *, spawn: Optional[Spawn] = None, don
         _JOBS[job.id] = job
         while len(_JOBS) > MAX_JOBS:
             _JOBS.popitem(last=False)
-    threading.Thread(target=_run, args=(job, brew, spawn or _spawn, done), name=f"blackbox-brew-{job.id}", daemon=True).start()
+    threading.Thread(target=_run, args=(job, brew, spawn or platform.spawn_brew, done), name=f"blackbox-brew-{job.id}", daemon=True).start()
     return job
 
 
@@ -136,7 +133,7 @@ def _run(job: Job, brew: str, spawn: Spawn, done: Optional[Callable[[Job], None]
         job.add(f"Blackbox could not start Homebrew: {error}")
         job.finish(127)
     else:
-        timer = threading.Timer(MAX_SECONDS, lambda: _stop(process))
+        timer = threading.Timer(MAX_SECONDS, lambda: platform.stop_group(process))
         timer.start()
         try:
             for line in process.stdout or ():
@@ -147,9 +144,3 @@ def _run(job: Job, brew: str, spawn: Spawn, done: Optional[Callable[[Job], None]
     if done is not None:
         done(job)
 
-
-def _stop(process: subprocess.Popen[str]) -> None:
-    try:
-        os.killpg(process.pid, signal.SIGTERM)   # windows-footgun: ok (Homebrew runs on macOS only)
-    except OSError:
-        pass

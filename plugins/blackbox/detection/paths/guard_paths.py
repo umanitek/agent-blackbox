@@ -39,7 +39,7 @@ READ_ONLY = frozenset({
 _ONLY_ADDS = frozenset({"mkdir"})
 #: Inside quoted text, the root folder or a wildcard right under it is how comments start
 #: (``sed -i '1i // note'``, ``'/* c */'``), not a folder handed to a command: a root handed to a
-#: command is a word of its own (``rm -rf /`` is still read). KI-591.
+#: command is a word of its own, and that is still read. KI-591.
 _ROOT_IN_TEXT = re.compile(r"^/+(?:\*+)?$")
 #: Commands that copy: a guarded place may be what they read, never where they write.
 _COPIES = frozenset({"cp", "rsync", "scp", "ditto", "zip"})

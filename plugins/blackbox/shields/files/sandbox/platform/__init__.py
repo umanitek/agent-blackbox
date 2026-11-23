@@ -17,10 +17,10 @@ import sys
 
 if sys.platform == "darwin":
     from .macos import (APPS, PROFILE_SUFFIX, SETUID_NOTE, TOOLS_FOLDER, brew_shim, command_shim, launcher_script, open_app, refresh_tools, render,
-                        shell_shim, unavailable)
+                        shell_shim, spawn_brew, stop_group, unavailable)
 else:
     from .unsupported import (APPS, PROFILE_SUFFIX, SETUID_NOTE, TOOLS_FOLDER, brew_shim, command_shim, launcher_script, open_app, refresh_tools, render,
-                              shell_shim, unavailable)
+                              shell_shim, spawn_brew, stop_group, unavailable)
 
 __all__ = ["APPS", "PROFILE_SUFFIX", "SETUID_NOTE", "TOOLS_FOLDER", "brew_shim", "command_shim", "launcher_script", "open_app", "refresh_tools", "render",
-           "shell_shim", "unavailable"]
+           "shell_shim", "spawn_brew", "stop_group", "unavailable"]

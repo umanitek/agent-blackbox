@@ -49,6 +49,7 @@ import os
 import plistlib
 import re
 import shutil
+import signal
 import stat
 import subprocess
 import time
@@ -215,6 +216,21 @@ path_rest=$(printf '%s' "$PATH" | tr ':' '\\n' | grep -vxF "$tools" | paste -sd:
 real=$(PATH="$path_rest" command -v brew) || {{ echo "brew is not installed" >&2; exit 127; }}
 exec "$real" "$@"
 """
+
+
+def spawn_brew(command: list[str], env: dict[str, str], cwd: str) -> subprocess.Popen[str]:
+    """Starts the brokered Homebrew run (``packages.jobs``): no stdin, output and errors as one text
+    stream, its own process group (so :func:`stop_group` stops brew and every child it started)."""
+    return subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, cwd=cwd,
+                            text=True, encoding="utf-8", errors="replace", start_new_session=True)
+
+
+def stop_group(process: subprocess.Popen[str]) -> None:
+    """Stops a run :func:`spawn_brew` started, with everything in its process group."""
+    try:
+        os.killpg(process.pid, signal.SIGTERM)   # windows-footgun: ok (macOS module)
+    except OSError:
+        pass
 
 
 def _with_tools(tools: str) -> str:
