@@ -263,17 +263,48 @@ def _on_disk(target: str, folder: str) -> Optional[str]:
     return full if full and os.path.isfile(full) else None
 
 
+def _where(target: str, folder: str) -> str:
+    """Where *target* (a path a command writes or runs) is, as :func:`_on_disk` would look for it
+    — absolute, or in the line's ``cd`` folder or the action's folder — whether it exists or not."""
+    full = _expanded(target)
+    if os.path.isabs(full):
+        return full
+    base = folder or action_context.working_folder()
+    return os.path.normpath(os.path.join(base, full)) if base else full
+
+
+def _written_here(command: str) -> dict[str, str]:
+    """``{where: text}`` for each file *command* itself writes (a heredoc, ``echo``/``printf …
+    >``, ``tee``), whatever its name: a file written and run in ONE command is run with this text.
+    Every text one file is given is kept, joined (an append, or the same heredoc read once inside
+    ``bash -lc "…"`` and once as the inner command's own line, where its body is cut off)."""
+    here: dict[str, str] = {}
+    for path, text in _shell_writes(command):
+        where = _where(path, "")
+        here[where] = "\n".join(part for part in (here.get(where, ""), text) if part)
+    return here
+
+
 def scripts_run(command: str) -> list[ScriptRun]:
-    """Each script file *command* runs, read now from disk (bounded): one an agent wrote through a
-    tool, or any other file at that path (:func:`_on_disk`)."""
-    out = []
+    """Each script file *command* runs: one the SAME command writes, judged by the text it writes
+    (private finding ``2026-11-23-hooks-only-an-agent-writes-a-script-with``, round 6: Codex ran
+    ``bash -lc "cat << 'EOF' > r.py … EOF" && python3 r.py Doc Sec`` — r.py did not exist yet when
+    the hook looked, and the protected file was read); else read now from disk (bounded): one an
+    agent wrote through a tool, or any other file at that path (:func:`_on_disk`). A file that is
+    both on disk and written here is judged as both."""
+    out, here = [], _written_here(command)
     for target, argv, runner, folder in _run_targets(command):
-        path = _on_disk(target, folder) or _remembered(target)
+        written_now = here.get(_where(target, folder))
+        if written_now is None and not os.path.isabs(_expanded(target)):   # written before a ``cd``: by its name
+            written_now = next((text for where, text in here.items() if os.path.basename(where) == os.path.basename(target)), None)
+        if written_now is not None:
+            out.append(ScriptRun(_where(target, folder), written_now, argv, runner))
+        path = _on_disk(target, folder) or (None if written_now is not None else _remembered(target))
         if not path:
             continue
         text = read_small_text(path, MAX_SCRIPT_BYTES)
-        if text is None and os.path.isfile(path) and os.path.getsize(path) <= MAX_SCRIPT_BYTES:
-            continue   # unreadable (not a regular file, no permission): nothing to judge
+        if text is None and (written_now is not None or (os.path.isfile(path) and os.path.getsize(path) <= MAX_SCRIPT_BYTES)):
+            continue   # unreadable (not a regular file, no permission) or not there yet: nothing more to judge
         out.append(ScriptRun(path, text, argv, runner))
     return out
 
