@@ -25,6 +25,24 @@ WAITING = ("idle", "permission", "attention")
 
 
 @dataclass
+class SeenRefusal:
+    """One refusal :mod:`.refusals` has seen on an instance, kept WITH the instance (its record in
+    ``index.json``) so a dashboard restart does not count it twice. *key*: a hash of how it was
+    identified (call id + what, or the kernel record id) — never the agent's own ids; *source*:
+    hook / output / kernel; *what*: the refused path or ``<kind>:<name>`` (the timeline shows the
+    same); *start*/*end*: the run it belongs to; *call_seq*: the instance's pre_tools so far when
+    it was seen; *paired*: a kernel line and an output refusal already matched as one."""
+
+    key: str
+    source: str
+    what: str
+    start: float
+    end: float
+    call_seq: int
+    paired: bool = False
+
+
+@dataclass
 class Instance:
     """One session or sub-agent. ``key`` is ``<agent>:<16 hex>`` (a sub-agent adds ``/<12 hex>``)."""
 
@@ -59,6 +77,8 @@ class Instance:
     root: bool = False             # a program this agent started is running as root NOW (root_watch)
     root_runs: int = 0             # how many programs it started ran as root, so far
     root_last: float = 0.0         # when the newest of them was first seen (0 = never)
+    seen_refusals: list[SeenRefusal] = field(default_factory=list)   # the count's memory (refusals.py), bounded and pruned
+    call_seq: int = 0              # pre_tools seen so far (refusals.py: an output repeat before a new call is one)
 
 
 @dataclass(frozen=True)

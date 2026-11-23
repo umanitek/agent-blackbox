@@ -18,8 +18,14 @@ through :func:`count`, which is idempotent on its key — ``(instance, call id +
 the same place made while that call ran (:data:`SLACK_SECONDS` either side). The same thing
 reported twice for one call — the same id, or no id and no new call started in between — is one.
 
-Memory only, bounded: the instance store is the dashboard process's Repository, and every caller
-(the hook recorder, the Hermes reader, the kernel-log attribution) runs in that process.
+Kept WITH the instance (wave 9): what was seen goes into the instance's own record
+(``Instance.seen_refusals``, ``Instance.call_seq``), which the store flushes to ``index.json`` with
+the rest of it — so a dashboard restart, after which an agent reports the same call again or the
+kernel's log is read again, does not count one refusal twice. Bounded and pruned: at most
+:data:`MAX_KEPT` per instance, none older than :data:`KEEP_SECONDS` (a repeat comes while its call
+runs; a pairing within seconds); the keys are hashes, never the agent's own ids. Every caller (the
+hook recorder, the Hermes reader, the kernel-log attribution) runs in the dashboard process and
+puts the instance back in the store after counting.
 
 Usage::
 
@@ -30,13 +36,14 @@ Usage::
 
 from __future__ import annotations
 
+import hashlib
 import itertools
 import os
 import threading
 from collections import OrderedDict, deque
 from dataclasses import dataclass, field
 
-from .model import Instance
+from .model import Instance, SeenRefusal
 
 HOOK, OUTPUT, KERNEL = "hook", "output", "kernel"
 #: What :func:`count` did: counted it now; it was the other view of one counted already (a kernel
@@ -50,20 +57,12 @@ UNSEEN_START_SECONDS = 60.0
 MAX_INSTANCES = 512
 MAX_SEEN = 64
 MAX_CALLS = 64
+#: What is kept with the instance's record: the newest refusals, none older than this.
+MAX_KEPT = 32
+KEEP_SECONDS = 30 * 60.0
 
 _lock = threading.Lock()
 _unique = itertools.count()
-
-
-@dataclass
-class _Seen:
-    key: str
-    source: str
-    what: str
-    start: float
-    end: float
-    call_seq: int
-    paired: bool = False
 
 
 @dataclass
@@ -78,13 +77,25 @@ _memory: OrderedDict[str, _Memory] = OrderedDict()
 
 
 def _of(instance: Instance) -> _Memory:
+    """The count's memory of *instance*: in this process, else what its record kept (a restart)."""
     found = _memory.get(instance.key)
     if found is None or found.started != instance.started:
-        found = _memory[instance.key] = _Memory(instance.started)
+        found = _memory[instance.key] = _Memory(instance.started, deque(instance.seen_refusals, maxlen=MAX_SEEN),
+                                                call_seq=instance.call_seq)
     _memory.move_to_end(instance.key)
     while len(_memory) > MAX_INSTANCES:
         _memory.popitem(last=False)
     return found
+
+
+def _keep(instance: Instance, memory: _Memory, now: float) -> None:
+    """Writes the memory into *instance*'s record (bounded, pruned: :data:`MAX_KEPT`, :data:`KEEP_SECONDS`)."""
+    recent = [seen for seen in memory.seen if seen.end >= now - KEEP_SECONDS]
+    instance.seen_refusals, instance.call_seq = recent[-MAX_KEPT:], memory.call_seq
+
+
+def _hashed(key: str) -> str:
+    return hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
 
 
 def reset() -> None:
@@ -102,6 +113,7 @@ def call_started(instance: Instance, call_id: str, ts: float) -> None:
             memory.calls[call_id] = ts
             while len(memory.calls) > MAX_CALLS:
                 memory.calls.popitem(last=False)
+        _keep(instance, memory, ts)
 
 
 def _same_place(one: str, other: str) -> bool:
@@ -112,7 +124,7 @@ def _same_place(one: str, other: str) -> bool:
     return one == other or one.startswith(other.rstrip("/") + "/") or other.startswith(one.rstrip("/") + "/")
 
 
-def _pair(memory: _Memory, new: _Seen) -> bool:
+def _pair(memory: _Memory, new: SeenRefusal) -> bool:
     """Pair *new* with the unpaired refusal of the same place seen the OTHER way during the same run."""
     wanted = OUTPUT if new.source == KERNEL else KERNEL
     for old in memory.seen:
@@ -125,7 +137,7 @@ def _pair(memory: _Memory, new: _Seen) -> bool:
     return False
 
 
-def _repeat(memory: _Memory, new: _Seen) -> bool:
+def _repeat(memory: _Memory, new: SeenRefusal) -> bool:
     """True when *new* was counted already: the same key, or the same output refusal reported again
     before any new call started (one call through two hook forms, KI-551)."""
     return any(old.key == new.key or (new.source == OUTPUT and old.source == OUTPUT and old.what == new.what
@@ -148,15 +160,17 @@ def count(instance: Instance, source: str, what: str, *, ts: float, call_id: str
         else:   # no id: the event is its own (only an output repeat before a new call is the same)
             key = f"{source}:#{next(_unique)}:{what}"
         start = memory.calls.get(call_id, ts - UNSEEN_START_SECONDS) if source == OUTPUT else ts
-        new = _Seen(key, source, what, min(start, ts), ts, memory.call_seq)
+        new = SeenRefusal(_hashed(key), source, what, min(start, ts), ts, memory.call_seq)
         if _repeat(memory, new):
             return REPEAT
         new.paired = source != HOOK and _pair(memory, new)
         memory.seen.append(new)
+        _keep(instance, memory, ts)
         if new.paired:
             return SAME
         instance.refused += 1
         return COUNTED
 
 
-__all__ = ["COUNTED", "HOOK", "KERNEL", "OUTPUT", "REPEAT", "SAME", "SLACK_SECONDS", "call_started", "count", "reset"]
+__all__ = ["COUNTED", "HOOK", "KEEP_SECONDS", "KERNEL", "MAX_KEPT", "OUTPUT", "REPEAT", "SAME", "SLACK_SECONDS", "call_started", "count",
+           "reset"]

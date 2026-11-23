@@ -20,7 +20,7 @@ import pytest
 
 from plugins.blackbox import audit
 from plugins.blackbox.agent_hooks import hermes_sessions
-from plugins.blackbox.agent_hooks.instances import kernel_refusals, store
+from plugins.blackbox.agent_hooks.instances import kernel_refusals, refusals, store
 from plugins.blackbox.agent_hooks.protect import events as hook_events
 
 #: What p.py printed in the sandbox (Claude Code and Codex alike).
@@ -147,3 +147,62 @@ def test_two_separate_calls_refused_the_same_way_are_two_refusals():
         hook_events.record_event({**base, "event": "post_tool", "tool_name": "terminal", "args": {},
                                   "text": "(eval):1: operation not permitted: sudo"})
     assert _refused(hook_events.session_key("claude-code", base["session"], base["cwd"])) == 2
+
+
+# -- wave 9: the count's memory is kept with the instance's record, so a restart counts nothing twice --
+
+def _restart() -> None:
+    """The dashboard process starts again: everything in memory is gone, the store reads its files."""
+    store.flush()
+    store.reset()
+    refusals.reset()
+    hook_events._answered.clear()
+
+
+def _post(base: dict, call_id: str, output: str) -> None:
+    hook_events.record_event({**base, "event": "post_tool", "tool_name": "terminal", "args": {"command": "python3 p.py"},
+                              "tool_call_id": call_id, "text": output})
+
+
+def test_a_refusal_reported_again_after_a_restart_is_not_counted_twice():
+    key = _agent("claude-code", "s9-rst", "toolu_r9", "python3 p.py hermes config env", P_PY)
+    assert _refused(key) == 3
+    _restart()
+    base = {"agent": "claude-code", "session": "s9-rst", "cwd": "/Users/admin/camp/projects/s9-rst", "sandboxed": True}
+    _post(base, "toolu_r9", P_PY)   # the same call's output, reported again
+    now = time.time()
+    kernel_refusals.attribute([_kernel_row(key, "/Users/admin/.hermes/config.yaml", now - 1, "sandbox-self:9")])
+    assert _refused(key) == 3       # the repeat and the kernel's view of a counted refusal add nothing
+
+
+def test_an_output_repeat_without_a_call_id_stays_one_across_a_restart():
+    base = {"agent": "cline", "session": "s9-cl", "cwd": "/Users/admin/camp/projects/s9-cl", "sandboxed": True}
+    refused = "PermissionError: [Errno 1] Operation not permitted: '/Users/admin/Library/LaunchAgents/x.plist'"
+    hook_events.record_event({**base, "event": "session_start"})
+    hook_events.record_event({**base, "event": "pre_tool", "tool_name": "terminal", "args": {"command": "python3 w.py"}})
+    hook_events.record_event({**base, "event": "post_tool", "tool_name": "terminal", "args": {}, "text": refused})
+    key = hook_events.session_key("cline", base["session"], base["cwd"])
+    _restart()
+    hook_events.record_event({**base, "event": "post_tool", "tool_name": "terminal", "args": {}, "text": refused})   # its second hook form
+    assert _refused(key) == 1
+
+
+def test_the_kept_memory_is_bounded_pruned_and_names_no_agent_id(monkeypatch):
+    key = _agent("codex", "s9-bd", "call_r9bound_secretish", "python3 p.py", P_PY)
+    instance = store.get(key)
+    assert instance is not None and instance.seen_refusals and len(instance.seen_refusals) <= refusals.MAX_KEPT
+    far = time.time() + refusals.KEEP_SECONDS + 60
+    for number in range(refusals.MAX_KEPT + 10):
+        refusals.count(instance, refusals.HOOK, f"terminal:{number}", ts=far + number, call_id=f"call_{number}")
+    assert len(instance.seen_refusals) == refusals.MAX_KEPT
+    assert all(seen.end >= far for seen in instance.seen_refusals)   # the old ones were pruned
+    store.put(instance, flush=True)
+    index = (store.folder() / "index.json").read_text(encoding="utf-8")
+    assert "call_r9bound_secretish" not in index and "call_1" not in index
+
+
+def test_the_live_view_does_not_carry_the_counts_memory():
+    from plugins.blackbox.agent_hooks.instances import views
+    key = _agent("codex", "s9-vw", "call_r9vw", "python3 p.py", P_PY)
+    row = views._row(store.get(key), {})
+    assert "seen_refusals" not in row and "call_seq" not in row

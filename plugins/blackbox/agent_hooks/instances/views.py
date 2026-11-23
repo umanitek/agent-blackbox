@@ -88,6 +88,8 @@ def root_note(item: Instance, now: Optional[float] = None) -> str:
 
 def _row(item: Instance, subs: Mapping[str, list[Instance]]) -> dict[str, Any]:
     row = asdict(item)
+    for bookkeeping in ("seen_refusals", "call_seq"):   # the refusal count's memory, not something to show
+        row.pop(bookkeeping, None)
     row["root"] = bool(item.root) and item.ended is None
     row["root_note"] = root_note(item)
     waiting = item.waiting if item.ended is None else ""

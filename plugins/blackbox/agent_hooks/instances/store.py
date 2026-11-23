@@ -25,7 +25,7 @@ from typing import Iterable, Optional
 from ...kernel import constants
 from ...kernel.bounded_files import atomic_write, read_small_text
 from ...kernel.config import agent_activity
-from .model import Action, Instance
+from .model import Action, Instance, SeenRefusal
 
 #: How long an ended instance stays in the history when the setting cannot be read
 #: (``agent_activity.history_days`` in config.yaml; see :func:`history_days`).
@@ -65,6 +65,18 @@ def _action(row: object) -> Optional[Action]:
         return None
 
 
+def _seen_refusals(rows: object) -> list[SeenRefusal]:
+    """The refusal count's saved memory of one instance (rows that do not fit are dropped)."""
+    out = []
+    for row in rows if isinstance(rows, list) else []:
+        try:
+            out.append(SeenRefusal(str(row["key"]), str(row["source"]), str(row["what"]), float(row["start"]), float(row["end"]),
+                                   int(row["call_seq"]), row.get("paired") is True))
+        except (KeyError, TypeError, ValueError, AttributeError):
+            continue
+    return out
+
+
 def _load() -> dict[str, Instance]:
     """The instances dict, read from disk once per process (a damaged file starts empty)."""
     if not _state["loaded"]:
@@ -75,6 +87,7 @@ def _load() -> dict[str, Instance]:
                 if isinstance(row, dict) and isinstance(row.get("key"), str):
                     values = {name: value for name, value in row.items() if name in _FIELDS}
                     values["last_action"] = _action(values.get("last_action"))
+                    values["seen_refusals"] = _seen_refusals(values.get("seen_refusals"))
                     found[row["key"]] = Instance(**values)
         except (ValueError, TypeError):
             found = {}
