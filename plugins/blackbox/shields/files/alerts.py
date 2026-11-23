@@ -7,6 +7,8 @@ notification per alert it has not seen (``key``). These kinds:
   protection helper's real-time file events, :mod:`.changes`);
 * ``file-hit`` / ``folder-hit`` — File Shield refused an AI agent reaching an item (the guard's
   findings, every route, and the OS sandbox's refusals);
+* ``permission-request`` — an agent inside the sandbox wants a permission on "ask" (sandbox
+  permissions: Docker, opening an app …); the person answers in Blackbox;
 * ``path-restored`` — the block that puts the agent sandbox's launchers first on PATH was removed or
   changed in a shell startup file, and File Shield put it back (KI-535);
 * ``file-known-bad`` / ``file-new`` — a watched folder's scan (an add-on, through
@@ -126,6 +128,14 @@ def _package_alerts() -> list[dict[str, Any]]:
             for row in sandbox.packages.alerts()]
 
 
+def _request_alerts() -> list[dict[str, Any]]:
+    """An agent wants a sandbox permission it does not have: the person is asked (no path, no command)."""
+    return [_alert(f"permission-request:{request.id}", "permission-request", request.created, "medium", "", request.agent,
+                   f"{_agent_name(request.agent)} wants to use {sandbox.permissions.BY_ID[request.permission].name}. "
+                   "Open Blackbox to allow it once, always here, or keep it blocked.")
+            for request in sandbox.permissions.requests.pending()]
+
+
 def _watched_alerts() -> list[dict[str, Any]]:
     rows = []
     for found in watched.recent(MAX_ALERTS):
@@ -150,5 +160,5 @@ def shield_alerts() -> list[ShieldAlert]:
 def alerts(limit: int = MAX_ALERTS) -> list[dict[str, Any]]:
     """The shield's latest alerts (changes inside protected items, refusals, a restored PATH block,
     a watched folder's new and known-bad files), newest first."""
-    merged = _change_alerts() + _hit_alerts() + _restore_alerts() + _watched_alerts() + _package_alerts()
+    merged = _change_alerts() + _hit_alerts() + _restore_alerts() + _watched_alerts() + _package_alerts() + _request_alerts()
     return sorted(merged, key=lambda alert: -alert["ts"])[:max(0, limit)]

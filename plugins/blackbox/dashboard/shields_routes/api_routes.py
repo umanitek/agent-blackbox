@@ -87,11 +87,17 @@ def _valid(shield_id: str, name: str) -> bool:
     return bool(_SHIELD_ID.fullmatch(shield_id) and _NAME.fullmatch(name))
 
 
+def _ask_on_refusal(seen: agent_hooks.RefusalSeen) -> None:
+    """Observer: a sandbox refusal an agent's hook saw may ask the person (sandbox permissions)."""
+    shields.permission_refused(seen.kind, seen.agent, seen.instance, seen.folder, seen.pid)
+
+
 def register(app: Any) -> None:
     """Adds the two routes to *app*, and holds a loosening of the agents' Homebrew installs
     (``agent_packages``) and of the sandbox permissions (``agent_sandbox``) for the person's approval."""
     approvals.SECTION_JUDGES[shields.PACKAGE_INSTALLS] = shields.package_installs_weakening
     approvals.SECTION_JUDGES[shields.AGENT_SANDBOX] = shields.agent_sandbox_weakening
+    agent_hooks.on_sandbox_refusal(_ask_on_refusal)
     from fastapi import Request
     from fastapi.responses import JSONResponse, Response
     from starlette.concurrency import run_in_threadpool

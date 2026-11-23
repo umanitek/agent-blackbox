@@ -22,8 +22,14 @@ the ONE list the sandbox profile is built from (``kernel.persistence_places``).
 It reads text only, and only for a session the hook has proven to be inside the sandbox (the
 canary), so an output that merely quotes such an error elsewhere is not taken for one.
 
+Each refusal seen on a sandboxed call is also handed to the listeners registered with
+:func:`on_sandbox_refusal` as a typed :class:`RefusalSeen` (Observer): the dashboard wires File
+Shield's sandbox permissions there, which may ask the person (a permission on "ask"). This
+package never imports the shields; the composer connects them.
+
 Usage::
 
+    on_sandbox_refusal(listener)          # listener(RefusalSeen) per refusal seen
     found = refusals("(eval):1: operation not permitted: sudo")
     note(found)   # "Blackbox's sandbox refused this (sudo, a setuid program): macOS doesn't allow …"
     counted(found)  # True: not a file refusal
@@ -32,11 +38,13 @@ Usage::
 from __future__ import annotations
 
 import fnmatch
+import logging
 import os
 import re
 import shutil
 import stat
 from dataclasses import dataclass
+from typing import Callable
 
 from ...kernel import persistence_places
 
@@ -190,3 +198,38 @@ def reason(found: list[Refusal]) -> str:
     """Why the call is recorded as refused, for its timeline: the note, or what Blackbox's own
     stand-in said (``Blackbox's sandbox refused this (crontab)``)."""
     return note(found) or " ".join(f"Blackbox's sandbox refused this ({each.name})." for each in found if each.kind == OWN)
+
+
+@dataclass(frozen=True)
+class RefusalSeen:
+    """One sandbox refusal on a sandboxed call, and who it was: the *agent*, its *instance* (the
+    session key Blackbox attributed the call to), its working *folder* and the hook's *pid* (0
+    when not known)."""
+
+    kind: str
+    name: str
+    agent: str
+    instance: str
+    folder: str
+    pid: int = 0
+
+
+_listeners: list[Callable[[RefusalSeen], None]] = []
+logger = logging.getLogger(__name__)
+
+
+def on_sandbox_refusal(listener: Callable[[RefusalSeen], None]) -> None:
+    """Registers *listener* for every refusal seen (once per listener)."""
+    if listener not in _listeners:
+        _listeners.append(listener)
+
+
+def emit(found: list[Refusal], agent: str, instance: str, folder: str, pid: int = 0) -> None:
+    """Hands each of *found* to the listeners; a failing listener is logged, never raised."""
+    for each in found:
+        seen = RefusalSeen(each.kind, each.name, agent, instance, folder, pid)
+        for listener in _listeners:
+            try:
+                listener(seen)
+            except Exception:   # health: allow BLE001 -- a listener's fault never reaches the agent's answer
+                logger.warning("blackbox: a sandbox refusal listener failed", exc_info=True)

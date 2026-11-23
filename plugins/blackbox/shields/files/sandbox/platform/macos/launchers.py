@@ -23,6 +23,10 @@ if [ -d "$tools" ]; then PATH="$tools:$PATH"; export PATH; fi
 
 #: The index of an agent's project profiles beside its profile (``profiles.INDEX``).
 PROJECT_INDEX = "projects.idx"
+#: Allow once for a profile's permission: ``<profile>.once.sb`` beside the profile the launch picks;
+#: the launch that MOVES it to ``<profile>.run.<pid>.sb`` (a rename: only one of two launches can)
+#: runs in it, if it is younger than :data:`ONCE_MINUTES`.
+ONCE_SUFFIX, RUN_INFIX, ONCE_MINUTES = ".once" + PROFILE_SUFFIX, ".run.", 30
 
 
 def pick_profile() -> str:
@@ -30,12 +34,20 @@ def pick_profile() -> str:
     folder in ``<profile without suffix>/projects.idx`` that holds the physical working folder
     (``pwd -P``). The folder goes to awk through the environment, so a backslash in it stays as it
     is; no index, no match or an unreadable file keeps the agent's own profile. Exports the
-    profile chosen (``BLACKBOX_SANDBOX_PROFILE``) for the session's records."""
+    profile chosen (``BLACKBOX_SANDBOX_PROFILE``) for the session's records. An allow-once profile
+    beside the chosen one (:data:`ONCE_SUFFIX`) is taken by this launch alone (see there)."""
     return f"""projects="${{profile%{PROFILE_SUFFIX}}}"
 if [ -r "$projects/{PROJECT_INDEX}" ]; then
   found=$(BLACKBOX_CWD="$(pwd -P 2>/dev/null)" awk -F '\t' 'BEGIN {{ d = ENVIRON["BLACKBOX_CWD"] }}
     length($1) > n && (d == $1 || index(d, $1 "/") == 1) {{ n = length($1); best = $2 }} END {{ print best }}' "$projects/{PROJECT_INDEX}")
   if [ -n "$found" ] && [ -r "$projects/$found" ]; then profile="$projects/$found"; fi
+fi
+once="${{profile%{PROFILE_SUFFIX}}}{ONCE_SUFFIX}"
+if [ -f "$once" ]; then
+  taken="${{profile%{PROFILE_SUFFIX}}}{RUN_INFIX}$${PROFILE_SUFFIX}"
+  if mv "$once" "$taken" 2>/dev/null; then
+    if [ -n "$(find "$taken" -mmin -{ONCE_MINUTES} 2>/dev/null)" ]; then profile="$taken"; else rm -f "$taken"; fi
+  fi
 fi
 BLACKBOX_SANDBOX_PROFILE="$profile"; export BLACKBOX_SANDBOX_PROFILE
 """
@@ -98,4 +110,4 @@ if [ "${{BLACKBOX_AGENT_SANDBOX:-}}" = 1 ] || [ ! -r "$profile" ]; then exec "$@
 """
 
 
-__all__ = ["PROJECT_INDEX", "command_shim", "launcher_script", "pick_profile", "quote_shell", "shell_shim", "with_tools"]
+__all__ = ["ONCE_MINUTES", "ONCE_SUFFIX", "PROJECT_INDEX", "RUN_INFIX", "command_shim", "launcher_script", "pick_profile", "quote_shell", "shell_shim", "with_tools"]

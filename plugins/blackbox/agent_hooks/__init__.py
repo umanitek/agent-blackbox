@@ -38,11 +38,13 @@ from ..kernel.config import load_blackbox_config
 from . import owners, process_facts, profiles, prompt_text, tracking, versions
 from .protect import config_edit, own_files
 from .protect import recorder
+from .protect.sandbox_errors import RefusalSeen, on_sandbox_refusal
 from .protect.events import answer_event, note_error, read_state, record_event, write_state
 from ..kernel.agent_hosts import BY_ID, HOSTS, Host
 
-__all__ = ["KINDS", "AgentRow", "answer_event", "hooked_agents", "note_error", "owners", "present", "process_facts", "prompt_text", "record_event", "remove_all",
-           "rows", "set_protection", "settle", "sweep", "tracking", "versions"]
+__all__ = ["KINDS", "AgentRow", "RefusalSeen", "answer_event", "hooked_agents", "note_error", "on_sandbox_refusal",
+           "owners", "present", "process_facts", "prompt_text", "record_event", "remove_all", "rows", "set_protection",
+           "settle", "sweep", "tracking", "versions"]
 
 def settle(timeout: float = 5.0) -> bool:
     """Wait until every answered hook event is recorded (tests; the dashboard before it stops)."""

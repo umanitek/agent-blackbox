@@ -293,6 +293,7 @@ def judge(body: Any) -> tuple[dict[str, Any], Optional[Judged]]:
             answer["note"] = sandbox_errors.note(refused)
         if sandbox_errors.counted(refused):
             verdict = {**verdict, "decision": "block", "message": sandbox_errors.reason(refused)}
+        recorder.submit(lambda: sandbox_errors.emit(refused, event["agent"], session, event["cwd"], event["pid"]))
     if event["tool_call_id"] and event["event"] in ("pre_tool", "post_tool"):
         _note_answer(session, call_key, answer)
     from .. import tracking   # late: tracking imports this package's editors

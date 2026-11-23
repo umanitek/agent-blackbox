@@ -66,7 +66,7 @@ __all__ = [
     "canary_path",
     "chosen",
     "enter_hermes_process",
-    "enter_hermes_session",
+    "enter_hermes_session", "grant_once",
     "hermes_shell_dir",
     "home",
     "launcher_dir",
@@ -199,6 +199,12 @@ def enter_hermes_session() -> HermesCover:
     except Exception:   # the agent always runs; the reason is logged
         logger.warning("blackbox: could not put the Hermes agent's shells in the sandbox", exc_info=True)
         return HermesCover(note="Blackbox could not set up the sandbox for this session (see the log)")
+
+
+def grant_once(request: permissions.PermissionRequest) -> None:
+    """Allow once for a profile's permission: the one-launch profile the agent's next start takes
+    (``profiles.write_once``); its own rules apply again after that launch."""
+    profiles.write_once(policy(mode_module.current()), request, permissions.current())
 
 
 def open_app(app: str) -> str:

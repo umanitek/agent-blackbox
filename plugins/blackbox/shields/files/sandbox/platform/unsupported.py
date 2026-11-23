@@ -20,6 +20,7 @@ from ..places import Places
 
 PROFILE_SUFFIX = ".txt"
 PROJECT_INDEX = "projects.idx"
+ONCE_SUFFIX, RUN_INFIX, ONCE_MINUTES = ".once.txt", ".run.", 30
 SETUID_NOTE = ""
 TOOLS_FOLDER = "sandbox-tools"
 APPS: dict[str, tuple[str, str]] = {}

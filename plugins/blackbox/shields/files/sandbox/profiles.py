@@ -22,12 +22,13 @@ from __future__ import annotations
 
 import hashlib
 import os
+import time
 import shutil
 from pathlib import Path
 
 from . import platform
 from .layout import agent_profile, profiles_dir, write_if_changed
-from .permissions import Allowances, Settings, allowances
+from .permissions import Allowances, Mode, PermissionRequest, Rule, Scope, Settings, allowances
 from .places import Places
 
 #: How many hex digits of the profile's sha256 its digest line carries.
@@ -62,6 +63,44 @@ def project_file(folder: str) -> str:
     return f"{digest(folder)}{platform.PROFILE_SUFFIX}"
 
 
+def _transient(entry: Path, now: float) -> bool:
+    """True for an allow-once profile still waiting (younger than ``ONCE_MINUTES``) or one a running
+    launch took (its pid alive): kept by sync; an expired or orphaned one is not."""
+    name = entry.name
+    if name.endswith(platform.ONCE_SUFFIX):
+        return now - entry.stat().st_mtime < platform.ONCE_MINUTES * 60
+    if platform.RUN_INFIX in name:
+        pid = name.rsplit(platform.RUN_INFIX, 1)[1][: -len(platform.PROFILE_SUFFIX)]
+        return pid.isdigit() and _alive(int(pid))
+    return False
+
+
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)   # windows-footgun: ok (signal 0 only asks whether the process exists)
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def write_once(places: Places, request: PermissionRequest, settings: Settings) -> Path:
+    """Allow once, for a profile's permission: the profile the agent's next launch in the request's
+    project would pick, with that permission allowed, written beside it as ``…once.sb``. The
+    launch that takes it runs in it; every later one is back to the rule (``launchers.pick_profile``)."""
+    scope = Scope(agent=request.agent, project=request.project)
+    granted = Settings(settings.rules + (Rule(request.permission, Mode.ALLOW, scope),), settings.folders)
+    folder = os.path.realpath(scope.project_path()) if request.project else ""
+    if folder and folder in projects_for(settings, request.agent):
+        target = projects_dir(request.agent) / project_file(folder)
+    else:
+        target = agent_profile(request.agent)   # no profile of its own for that project: the agent's next launch
+    once = target.with_name(target.name[: -len(platform.PROFILE_SUFFIX)] + platform.ONCE_SUFFIX)
+    write_if_changed(once, render_signed(places, allowances(granted, request.agent, folder)), 0o644)
+    return once
+
+
 def _sync_projects(places: Places, agent: str, settings: Settings) -> None:
     folder, projects = projects_dir(agent), projects_for(settings, agent)
     if not projects:
@@ -71,8 +110,9 @@ def _sync_projects(places: Places, agent: str, settings: Settings) -> None:
     for project in projects:
         write_if_changed(folder / project_file(project), render_signed(places, allowances(settings, agent, project)), 0o644)
     write_if_changed(folder / INDEX, "".join(f"{project}\t{project_file(project)}\n" for project in projects), 0o644)
+    now = time.time()
     for entry in folder.iterdir():
-        if entry.is_file() and entry.name not in wanted:
+        if entry.is_file() and entry.name not in wanted and not _transient(entry, now):
             entry.unlink()
 
 
@@ -85,9 +125,9 @@ def sync(places: Places, agents: tuple[str, ...], settings: Settings) -> None:
     folder = profiles_dir()
     if not folder.is_dir():
         return
-    keep = {agent_profile(agent).name for agent in agents} | set(agents)
+    keep, now = {agent_profile(agent).name for agent in agents} | set(agents), time.time()
     for entry in folder.iterdir():
-        if entry.name in keep:
+        if entry.name in keep or (entry.is_file() and _transient(entry, now)):
             continue
         if entry.is_dir():
             shutil.rmtree(entry, ignore_errors=True)
@@ -101,4 +141,4 @@ def clear() -> None:
 
 
 __all__ = ["DIGEST_CHARS", "INDEX", "clear", "digest", "project_file", "projects_dir", "projects_for",
-           "render_signed", "sync"]
+           "render_signed", "sync", "write_once"]

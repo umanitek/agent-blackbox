@@ -78,7 +78,7 @@ __all__ = [
     "ShieldMode", "ShieldStatus", "ShieldsSnapshot", "addon_routes", "agent_sandbox_weakening",
     "alerts", "all_shields", "allow_lists", "allows", "apply_sandbox_default", "attack_table",
     "browser_roots", "call_api", "check", "describe_change", "enter_hermes_process", "events", "get",
-    "loaded_packs", "pack_logo", "package_installs_weakening", "prompt_findings", "reload_registry",
+    "loaded_packs", "pack_logo", "package_installs_weakening", "permission_refused", "prompt_findings", "reload_registry",
     "self_tests", "settings_validators", "settings_view", "shield_name", "snapshot", "statuses",
     "unlocked", "write_weakening",
 ]
@@ -91,6 +91,8 @@ apply_sandbox_default = files.sandbox.defaults.apply
 PACKAGE_INSTALLS, package_installs_weakening = files.sandbox.packages.SECTION, files.sandbox.packages.setting_weakening
 #: ``agent_sandbox``: the sandbox permissions per agent and project; loosening them waits (approvals).
 AGENT_SANDBOX, agent_sandbox_weakening = files.sandbox.permissions.SECTION, files.sandbox.permissions.section_weakening
+#: A sandbox refusal an agent's hook saw: asks the person when the permission it means is on "ask".
+permission_refused = files.sandbox.permissions.refused
 
 #: The plugin's own shields, in registration order. Registering one is one line here; an add-on's
 #: shields and extensions join them on first use (:func:`_registry`).

@@ -11,7 +11,8 @@ Reads (GET):
 * ``watch-plan`` — what the system protection helper watches, SIGNED for its nonce (helper_link);
 * ``sandbox`` — Layer 2: which agents run inside the OS sandbox, whether their launchers are in
   place, and the GUI editors that can be opened inside it (:mod:`.sandbox`);
-* ``permissions`` — the sandbox permissions per agent and project (``sandbox.permissions``).
+* ``permissions`` — the sandbox permissions per agent and project (``sandbox.permissions``);
+* ``permission-requests`` — what agents asked for and the person has not answered yet.
 
 Writes (POST):
 
@@ -24,7 +25,9 @@ Writes (POST):
   never asks);
 * ``permission-set`` / ``permission-clear`` / ``folder-set`` / ``folder-clear`` — the sandbox
   permissions; a loosening waits for the person (``sandbox.permissions.API_WEAKENING``), and the
-  profiles are brought in step after each write.
+  profiles are brought in step after each write;
+* ``permission-answer`` ``{"id", "choice"}`` — Allow once / Always for this agent here (both wait for
+  the person) / Keep blocked (at once).
 
 Every write goes through the ONE settings writer (``kernel.settings.write_settings``) with File
 Shield's own validator — never a second path into the config.
@@ -167,6 +170,13 @@ def file_report(context: ShieldContext, body: Mapping[str, Any]) -> dict[str, An
     return {"kept": len(kept)}
 
 
+def permission_answer(context: ShieldContext, body: Mapping[str, Any]) -> dict[str, Any]:
+    """``permission-answer`` ``{"id", "choice"}``: the person's answer (``permissions.answers``)."""
+    answered = permissions.answers.answer(body, once_profile=sandbox.grant_once)
+    _sync_sandbox()
+    return {**answered, **permissions.answers.read(context, {})}
+
+
 def permissions_view(_context: ShieldContext, _params: Mapping[str, str]) -> dict[str, Any]:
     return permissions.view(sandbox.chosen(mode_module.current()))
 
@@ -185,8 +195,11 @@ def _then_sync(write: WriteHandler) -> WriteHandler:
 
 API = ShieldApi(
     reads={"protected": protected_view, "hits": hits, "alerts": alerts_view, "changes": changes_view, "watch-plan": watch_plan,
-           "sandbox": sandbox_view, "permissions": permissions_view, **packages.API_READS},
+           "sandbox": sandbox_view, "permissions": permissions_view,
+           "permission-requests": permissions.answers.read, **packages.API_READS},
     writes={"protect": protect, "unprotect": unprotect, "file-report": file_report, "open-protected": open_protected,
-            **packages.API_WRITES, **{name: _then_sync(write) for name, write in permissions.API_WRITES.items()}},
-    weakening={"unprotect": unprotect_weakens, "brew": packages.weakening, **permissions.API_WEAKENING},   # "ask me each time" holds every install
+            **packages.API_WRITES, **{name: _then_sync(write) for name, write in permissions.API_WRITES.items()},
+            "permission-answer": permission_answer},
+    weakening={"unprotect": unprotect_weakens, "brew": packages.weakening, **permissions.API_WEAKENING,
+               "permission-answer": permissions.answers.weakening},   # "ask me each time" holds every install
 )

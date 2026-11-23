@@ -29,11 +29,12 @@ import os
 from typing import Any
 
 from .....kernel import settings as kernel_settings
-from . import catalogue
+from ... import mode as mode_module
+from . import answers, catalogue, grants, requests
 from .api import API_WEAKENING, API_WRITES, view
 from .catalogue import BY_ID, NEVER, NOT_CONTROLLABLE, PERMISSIONS, profile_permissions
 from .judge import loosened
-from .model import Access, Allowances, Choice, FolderRule, Mode, Permission, Route, Rule, Scope, Settings
+from .model import Access, Allowances, Choice, FolderRule, Mode, Permission, PermissionRequest, Route, Rule, Scope, Settings
 from .section import SECTION, current, parse, stored, validate_section, with_legacy
 
 kernel_settings.SECTION_VALIDATORS[SECTION] = validate_section
@@ -57,6 +58,39 @@ def allowances(settings: Settings, agent: str = "", folder: str = "") -> Allowan
     return Allowances(lifted=lifted, ports=settings.ports("local-ports", agent, folder), hidden=hidden, read_only=read_only)
 
 
+def ask(permission: str, agent: str, instance: str, folder: str, what: str, pid: int = 0) -> bool:
+    """Opens a request for *permission* when it is on "ask" for *agent* in *folder* (the project
+    the request names is the rule's own project, else *folder*); True when one was opened."""
+    settings = current()
+    if settings.mode(BY_ID[permission], agent, folder) is not Mode.ASK:
+        return False
+    rule = settings.rule(permission, agent, folder)
+    project = rule.scope.project if rule is not None and rule.scope.project else _spelling(folder)
+    opened = requests.raise_request(permission, agent, instance, project, what, pid)
+    if opened is not None:
+        answers.requested(opened)
+    return opened is not None
+
+
+#: Which permission a refusal kind asks for when several share it (``open`` of an app vs a link:
+#: a link goes through Blackbox's ``open`` stand-in, so a bare LaunchServices refusal is an app).
+_FIRST_FOR_KIND = {catalogue.KIND_OPEN_APP: "open-apps"}
+
+
+def refused(kind: str, agent: str, instance: str, folder: str, pid: int = 0) -> bool:
+    """A sandbox refusal of *kind* seen on *agent*'s call: asks the person when the permission it
+    means is on "ask" (:func:`ask`); True when a request was opened."""
+    wanted = _FIRST_FOR_KIND.get(kind) or next((each.id for each in PERMISSIONS if kind in each.refusal_kinds), "")
+    if not wanted or not BY_ID[wanted].controllable:
+        return False
+    return ask(wanted, agent, instance, folder, BY_ID[wanted].name, pid)
+
+
+def _spelling(folder: str) -> str:
+    """*folder* in the one spelling a rule stores ("" when it is too broad to be a project)."""
+    return mode_module.canonical_item(folder) or ""
+
+
 def section_weakening(raw: Any) -> list[str]:
     """Why writing *raw* as the ``agent_sandbox`` section turns protection down (``[]`` when it does
     not, or when the writer will refuse it anyway)."""
@@ -65,6 +99,7 @@ def section_weakening(raw: Any) -> list[str]:
     return [] if errors else loosened(stored(), with_legacy(after))
 
 
-__all__ = ["API_WEAKENING", "API_WRITES", "BY_ID", "NEVER", "NOT_CONTROLLABLE", "PERMISSIONS", "SECTION", "Access", "Allowances", "Choice", "FolderRule", "Mode",
-           "Permission", "Route", "Rule", "Scope", "Settings", "allowances", "catalogue", "current", "decide", "loosened", "section_weakening",
-           "stored", "validate_section", "view"]
+__all__ = ["API_WEAKENING", "API_WRITES", "BY_ID", "NEVER", "NOT_CONTROLLABLE", "PERMISSIONS", "SECTION", "Access",
+           "Allowances", "Choice", "FolderRule", "Mode", "Permission", "PermissionRequest", "Route", "Rule", "Scope",
+           "Settings", "allowances", "answers", "ask", "catalogue", "current", "decide", "grants", "loosened",
+           "refused", "requests", "section_weakening", "stored", "validate_section", "view"]
