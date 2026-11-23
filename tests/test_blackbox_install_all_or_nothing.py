@@ -107,6 +107,9 @@ BLACKBOX_DKG_CLI_DIR="$BLACKBOX_INSTALL_ROOT/dkg"
 BLACKBOX_DKG_BIN="$BLACKBOX_DKG_CLI_DIR/node_modules/.bin/dkg"
 BLACKBOX_SYSTEMD_DIR="$HOME/system-units"
 BLACKBOX_LINGER_DIR="$HOME/linger"
+BLACKBOX_HELPER_HOME="$HOME/helper"
+BLACKBOX_HELPER_DAEMON="$HOME/LaunchDaemons/netd.plist"
+sudo_with_tty() {{ echo "sudo $*" >>"$HOME/calls"; rm -f "$BLACKBOX_HELPER_DAEMON"; }}
 step() {{ echo "step: $1"; }}
 ok() {{ echo "ok: $1"; }}
 warn() {{ echo "warn: $1"; }}
@@ -694,3 +697,35 @@ false
 
     assert sorted(p.name for p in launchers.iterdir()) == ["Blackbox"]
     assert "the previous install's" in (launchers / "Blackbox").read_text(encoding="utf-8")
+
+
+def test_a_failed_install_uninstalls_the_system_helper_it_added_and_keeps_one_that_was_there(tmp_path: Path) -> None:
+    """KI-629: the helper and the notifier are inside the all-or-nothing install. A later failure
+    uninstalls a helper THIS run added (through itself) and takes its new notifier away; a helper
+    the person had is never touched."""
+    paths = _sandbox(tmp_path)
+    result = _run(paths, """
+install_record_begin
+mkdir -p "$HOME/LaunchDaemons" "$BLACKBOX_HOME/notifier/Blackbox.app"
+echo plist >"$BLACKBOX_HELPER_DAEMON"
+false
+""")
+    assert result.returncode != 0
+    assert "Nothing from this install attempt was left behind." in result.stdout, result.stderr
+    assert f"sudo {paths['home']}/helper/blackbox-netd uninstall" in (paths["home"] / "calls").read_text(encoding="utf-8")
+    assert not (paths["hermes"] / "blackbox" / "notifier").exists()
+
+    (tmp_path / "kept").mkdir()
+    kept = _sandbox(tmp_path / "kept")
+    (kept["home"] / "LaunchDaemons").mkdir()
+    (kept["home"] / "LaunchDaemons" / "netd.plist").write_text("theirs", encoding="utf-8")
+    result = _run(kept, "install_record_begin\nfalse\n")
+    assert result.returncode != 0
+    assert (kept["home"] / "LaunchDaemons" / "netd.plist").read_text(encoding="utf-8") == "theirs"
+    assert "sudo" not in ((kept["home"] / "calls").read_text(encoding="utf-8") if (kept["home"] / "calls").exists() else "")
+
+
+def test_main_runs_the_helper_and_the_notifier_before_the_final_check_and_the_commit() -> None:
+    main = _function("main")
+    assert main.index("offer_system_protection") < main.index("verify_install") < main.index("install_record_commit")
+    assert main.index("install_native_notifier") < main.index("verify_install")

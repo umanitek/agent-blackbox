@@ -73,6 +73,10 @@ fi
 DKG_NETWORK="${BLACKBOX_DKG_NETWORK:-mainnet-base}"   # a valid dkg mainnet (mainnet-base | mainnet-gnosis). Base uses ETH for gas. No testnet.
 BLACKBOX_HOME="${BLACKBOX_HOME:-$HERMES_HOME/blackbox}"
 BLACKBOX_SYSTEMD_DIR=/etc/systemd/system   # where system units go (node service units below)
+# Present only while systemd runs as the init system (sd_booted(3)): a container, or WSL2 without
+# [boot] systemd=true, has the systemctl command but no running systemd (KI-626).
+BLACKBOX_SYSTEMD_RUNTIME_DIR=/run/systemd/system
+BLACKBOX_BOOT_SERVICES=""   # "none" when this Linux cannot start Blackbox's services at boot (protection_summary)
 BLACKBOX_DKG_LAUNCHD_LABEL=ai.umanitek.blackbox-dkg   # the node's LaunchAgent on macOS (register_boot_service)
 # The system folders every service PATH carries after its own tools. /usr/sbin is not optional: the
 # DKG node runs `lsof` to see who holds its store's LOCK and refuses to start when it cannot, and
@@ -1777,6 +1781,74 @@ detect_os() {
         *) err "Unsupported processor: $ARCH. Blackbox (and the Hermes it runs in) needs x86_64 or arm64."; exit 1 ;;
     esac
     ok "Detected $OS ($ARCH)"
+    [ "$OS" != linux ] || check_linux_distro
+}
+
+# `linux_distro_support [OS_RELEASE] [LIB_DIR]` prints "<level><TAB><name>" for this Linux (KI-627):
+# supported — Debian, Ubuntu and their derivatives (ID / ID_LIKE), what Blackbox is tested on;
+# untested — another glibc Linux (Fedora, Arch, openSUSE …): it may work, nobody has checked;
+# unsupported — a musl Linux (Alpine: its loader is LIB_DIR/ld-musl-*), where Hermes's pinned
+# Python and uv, built for glibc, are not expected to run.
+linux_distro_support() {
+    local release="${1:-/etc/os-release}" libdir="${2:-/lib}" id="" like="" name=""
+    if [ -r "$release" ]; then
+        id="$(sed -n 's/^ID=//p' "$release" | tr -d '"' | head -1)"
+        like="$(sed -n 's/^ID_LIKE=//p' "$release" | tr -d '"' | head -1)"
+        name="$(sed -n 's/^PRETTY_NAME=//p' "$release" | tr -d '"' | head -1)"
+    fi
+    name="${name:-${id:-this Linux}}"
+    if compgen -G "$libdir/ld-musl-*" >/dev/null; then
+        printf 'unsupported\t%s\n' "$name"
+        return 0
+    fi
+    case " $id $like " in
+        *" debian "*|*" ubuntu "*) printf 'supported\t%s\n' "$name" ;;
+        *) printf 'untested\t%s\n' "$name" ;;
+    esac
+}
+
+# Says plainly where this Linux stands (linux_distro_support), before anything changes. An
+# unsupported one stops here, unless BLACKBOX_ALLOW_UNSUPPORTED_DISTRO=1 asks to try anyway.
+check_linux_distro() {
+    local support level name
+    support="$(linux_distro_support)"
+    level="${support%%$'\t'*}"
+    name="${support#*$'\t'}"
+    case "$level" in
+        supported) ok "$name: supported" ;;
+        untested)
+            warn "$name has not been tested with Blackbox yet (it is tested on Ubuntu and Debian)."
+            step "The install may work. If a step fails, everything this run changed is put back."
+            ;;
+        *)
+            if [ "${BLACKBOX_ALLOW_UNSUPPORTED_DISTRO:-}" = 1 ]; then
+                warn "$name is not supported (a musl Linux); trying anyway (BLACKBOX_ALLOW_UNSUPPORTED_DISTRO=1)."
+                return 0
+            fi
+            err "$name is not supported yet: it is a musl Linux, and the Python and uv that Hermes pins are built for glibc."
+            step "Use a glibc Linux (Ubuntu or Debian are tested), or set BLACKBOX_ALLOW_UNSUPPORTED_DISTRO=1 to try anyway."
+            exit 1
+            ;;
+    esac
+}
+
+# An install as root — under sudo, or from a root shell — would run the DKG node, the dashboard and
+# Blackbox's checks as root, with root's home, beside agents the person runs as themselves (KI-625).
+# Refused before anything changes. A machine meant to run Blackbox as root (a single-user server or
+# a container) says so with BLACKBOX_ALLOW_ROOT=1.
+check_install_user() {
+    [ "$(id -u)" = 0 ] || return 0
+    if [ "${BLACKBOX_ALLOW_ROOT:-}" = 1 ]; then
+        warn "Installing as root (BLACKBOX_ALLOW_ROOT=1): Blackbox's node and dashboard run as root, with root's home ($HOME)."
+        return 0
+    fi
+    if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != root ]; then
+        err "Run the installer as $SUDO_USER, without sudo: under sudo, Blackbox's node and dashboard would run as root, not as you."
+    else
+        err "Blackbox installs for the person who runs the AI agents, not for root: as root, its node and dashboard would run with root's rights."
+        step "Run it as that user (make one with: adduser <name>), or set BLACKBOX_ALLOW_ROOT=1 on a machine meant to run it as root (a single-user server, a container)."
+    fi
+    exit 1
 }
 
 # ── Python venv + editable install (reuse setup-hermes.sh when present) ──────
@@ -3097,6 +3169,9 @@ protection_summary() {
     echo "    Agent hooks (every tool call checked):   on — Hermes loads Blackbox (checked above)"
     echo "    Threat detection + dependency checks:    on"
     echo "    Dashboard + agent tracking:              $dashboard"
+    if [ "$BLACKBOX_BOOT_SERVICES" = none ]; then
+        echo "    Start at boot (node, dashboard):         not set up — no running systemd (start them as shown above)"
+    fi
     if [ "$OS" != macos ]; then
         echo "    Root system-protection helper:           $BLACKBOX_NOT_YET"
         echo "    Kernel sandbox for agents:               $BLACKBOX_NOT_YET"
@@ -3406,7 +3481,8 @@ install_rewritten_files() {
         "$HERMES_HOME/config.yaml" "$HERMES_HOME/.env" "$HERMES_HOME/plugins/blackbox" \
         "$BLACKBOX_DKG_HOME/config.json" \
         "$BLACKBOX_DKG_CLI_DIR/package.json" "$BLACKBOX_DKG_CLI_DIR/package-lock.json" \
-        "$BLACKBOX_HOME/bin/Blackbox" "$BLACKBOX_HOME/bin/Blackbox Node"   # write_service_launcher
+        "$BLACKBOX_HOME/bin/Blackbox" "$BLACKBOX_HOME/bin/Blackbox Node" \
+        "$BLACKBOX_HOME/notifier"   # write_service_launcher; install_native_notifier (its Blackbox.app)
     for label in $BLACKBOX_LAUNCHD_LABELS; do
         printf '%s\n' "$HOME/Library/LaunchAgents/$label.plist"
     done
@@ -3514,6 +3590,9 @@ install_record_begin() {
     if [ -n "${USER:-}" ] && [ -e "$BLACKBOX_LINGER_DIR/$USER" ]; then
         : >"$INSTALL_RECORD_DIR/linger-was-on"
     fi
+    # The system protection helper is root's (a LaunchDaemon): it is not copied, only noted, and
+    # one this run installs is uninstalled through itself on rollback (rollback_system_protection).
+    install_path_exists "$BLACKBOX_HELPER_DAEMON" || : >"$INSTALL_RECORD_DIR/helper-was-absent"
     install_manifest_begin
     trap install_record_on_exit EXIT
     trap 'exit 130' INT
@@ -3561,6 +3640,9 @@ install_manifest_begin() {
     while IFS= read -r path; do
         install_path_exists "$path" || printf 'own-dir\t%s\n' "$path" >>"$INSTALL_RECORD_DIR/made"
     done < <(install_own_dirs)
+    # The optional components this run may add (KI-629): uninstall removes exactly these.
+    install_path_exists "$BLACKBOX_HELPER_DAEMON" || printf 'system-helper\t%s\n' "$BLACKBOX_HELPER_DAEMON" >>"$INSTALL_RECORD_DIR/made"
+    install_path_exists "$BLACKBOX_HOME/notifier" || printf 'notifier\t%s\n' "$BLACKBOX_HOME/notifier" >>"$INSTALL_RECORD_DIR/made"
     # Linux: lingering (ensure_user_lingering) is a system setting; when this run turns it on,
     # uninstall turns it off again. Written only if it is on at the end (install_manifest_write).
     path="$BLACKBOX_LINGER_DIR/$(id -un)"
@@ -3633,6 +3715,7 @@ install_record_on_exit() {
 rollback_install() {
     echo ""
     err "Blackbox was not installed. Putting this machine back the way it was ..."
+    rollback_system_protection   # first: the helper puts DNS and the firewall back before anything stops
     rollback_stop_started
     rollback_services
     rollback_docker_store
@@ -3667,11 +3750,23 @@ rollback_leftovers() {
             printf '%s (not restored)\n' "$path"
         fi
     done <"$INSTALL_RECORD_DIR/saved"
+    if [ -e "$INSTALL_RECORD_DIR/helper-was-absent" ] && install_path_exists "$BLACKBOX_HELPER_DAEMON"; then
+        printf '%s (the system protection helper)\n' "$BLACKBOX_HELPER_DAEMON"
+    fi
     if [ -s "$INSTALL_RECORD_DIR/repo-head" ] && [ -d "$BLACKBOX_INSTALL_ROOT/.git" ]; then
         before="$(cat "$INSTALL_RECORD_DIR/repo-head")"
         [ "$(git -C "$BLACKBOX_INSTALL_ROOT" rev-parse -q --verify HEAD 2>/dev/null)" = "$before" ] ||
             printf '%s (not back on %s)\n' "$BLACKBOX_INSTALL_ROOT" "${before:0:12}"
     fi
+    return 0
+}
+
+# A system protection helper this run installed is uninstalled through itself (it restores DNS and
+# the firewall from its own saved state); one that was there before is left as it is.
+rollback_system_protection() {
+    [ -e "$INSTALL_RECORD_DIR/helper-was-absent" ] && install_path_exists "$BLACKBOX_HELPER_DAEMON" || return 0
+    sudo_with_tty "$BLACKBOX_HELPER_HOME/blackbox-netd" uninstall >/dev/null 2>&1 ||
+        warn "Could not remove the system protection helper; remove it with: sudo '$BLACKBOX_HELPER_HOME/blackbox-netd' uninstall"
     return 0
 }
 
@@ -3861,9 +3956,13 @@ register_boot_service() {
     fi
     case "$(uname -s)" in
         Linux)
-            if ! command -v systemctl >/dev/null 2>&1; then
-                warn "systemd not found — the DKG node will NOT auto-start after a reboot."
-                warn "Start it manually after reboots: DKG_HOME=\"$BLACKBOX_DKG_HOME\" \"$BLACKBOX_DKG_BIN\" start"
+            local reason
+            if reason="$(linux_services_unavailable)"; then
+                warn "No boot services on this Linux: $reason."
+                warn "Blackbox's DKG node and dashboard will NOT start at boot, or restart if they stop."
+                step "After a restart, start them yourself:"
+                echo "    DKG_HOME=\"$BLACKBOX_DKG_HOME\" \"$BLACKBOX_DKG_BIN\" start && blackbox dashboard"
+                BLACKBOX_BOOT_SERVICES=none
                 return 0
             fi
             local unit=/etc/systemd/system/blackbox-dkg.service
@@ -4026,7 +4125,7 @@ register_dashboard_service() {
     node_bin_dir="$(dirname "$(command -v node)")"
     case "$(uname -s)" in
         Linux)
-            command -v systemctl >/dev/null 2>&1 || return 0   # register_boot_service already warned
+            linux_services_unavailable >/dev/null && return 0   # register_boot_service already said so
             local unit=/etc/systemd/system/blackbox-dashboard.service before="" start_action=start
             local -a systemctl_cmd=(systemctl)
             if [ ! -w /etc/systemd/system ] && [ "$(id -u)" != 0 ]; then
@@ -4140,7 +4239,32 @@ secure_dkg_token_perms() {
 # these units exist only on the Ubuntu curator nodes and benches.
 # ---------------------------------------------------------------------------
 have_systemd() {
-    [ "$(uname -s)" = Linux ] && command -v systemctl >/dev/null 2>&1
+    [ "$(uname -s)" = Linux ] && ! systemd_unavailable >/dev/null
+}
+
+# Why systemd cannot supervise anything here (printed; returns 0), or nothing (returns 1): it must
+# be installed AND running as the init system — a container, or WSL2 without systemd=true, has
+# the systemctl command but no running systemd (KI-626).
+systemd_unavailable() {
+    if ! command -v systemctl >/dev/null 2>&1; then
+        echo "systemd is not installed"
+    elif [ ! -d "$BLACKBOX_SYSTEMD_RUNTIME_DIR" ]; then
+        echo "systemd is not running (a container, or WSL2 without [boot] systemd=true in /etc/wsl.conf)"
+    else
+        return 1
+    fi
+    return 0
+}
+
+# The same for Blackbox's own node and dashboard, which become USER units when this user cannot
+# write system ones: then the user's own systemd manager must answer too.
+linux_services_unavailable() {
+    systemd_unavailable && return 0
+    if ! can_write_system_units && ! systemctl --user show-environment >/dev/null 2>&1; then
+        echo "your user's systemd manager does not answer (no login session for ${USER:-this user})"
+        return 0
+    fi
+    return 1
 }
 
 # A system unit when this user may write one, otherwise a user unit.
@@ -4955,6 +5079,7 @@ main() {
     banner
     heading "Checking your system"
     detect_os
+    check_install_user
     if [ "$BLACKBOX_SETUP_ONLY" != true ] && ! install_uses_local_checkout; then
         local existing_hermes=""
         local ours_dir=""
@@ -5005,10 +5130,13 @@ main() {
     register_curate_watch
     register_lab_tunnel
     register_key_console
-    verify_install
-    install_record_commit
+    # Inside the all-or-nothing install (KI-629): each is optional and never fails the install by
+    # itself, but a later failure takes the helper and the notifier this run added away again,
+    # and the manifest names both for `blackbox uninstall`.
     offer_system_protection
     install_native_notifier
+    verify_install
+    install_record_commit
     next_steps
     offer_model_connect
 }

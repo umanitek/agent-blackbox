@@ -22,7 +22,11 @@ their first change, which of those places did not exist, and on success write
 * ``own-linger <file>`` (Linux) — systemd lingering the installer turned on for this user
   (``/var/lib/systemd/linger/<user>``): turned off on every uninstall;
 * ``user-path <folder>`` (Windows) — the folder the installer added to the user PATH for the
-  ``blackbox`` command: taken off it on every uninstall.
+  ``blackbox`` command: taken off it on every uninstall;
+* ``system-helper <LaunchDaemon>`` (macOS) — the system protection helper this install added:
+  uninstall removes it through itself (accepted only for the helper's own LaunchDaemon);
+* ``notifier <folder>`` (macOS) — Blackbox's own notifier (``Blackbox.app``): removed on every
+  uninstall (KI-629: both optional components are in the one list).
 
 A Hermes the person had before Blackbox is never in it (it existed when the installer looked), so
 it is never offered for removal. Every path is checked again here: absolute, inside the home
@@ -45,7 +49,7 @@ from pathlib import Path
 
 from typing import Callable, Sequence
 
-from ..kernel import shell_path
+from ..kernel import shell_path, system_helper as system_helper_paths
 from ..kernel.bounded_files import read_small_text
 from . import platform
 
@@ -70,6 +74,8 @@ class InstallManifest:
     appended: tuple[tuple[Path, str], ...] = ()   # (startup file, the exact text appended)
     linger_user: str = ""                         # Linux: the user lingering was turned on for
     user_path: tuple[Path, ...] = ()              # Windows: folders added to the user PATH
+    system_helper: bool = False                   # macOS: the install added the system protection helper
+    notifier: tuple[Path, ...] = ()               # macOS: the notifier folder it added
 
     @property
     def has_host(self) -> bool:
@@ -104,12 +110,15 @@ def read(blackbox_home: Path, home: Path | None = None, user: str | None = None)
     user = getpass.getuser() if user is None else user
     folder = blackbox_home / FOLDER
     text = read_small_text(str(folder / MANIFEST), MAX_MANIFEST_BYTES) or ""
-    found: dict[str, list] = {"own-dir": [], "host": [], "host-dir": [], "host-append": [], "user-path": []}
-    linger_user = ""
+    found: dict[str, list] = {"own-dir": [], "host": [], "host-dir": [], "host-append": [], "user-path": [], "notifier": []}
+    linger_user, helper = "", False
     for line in text.splitlines()[:MAX_ENTRIES]:
         parts = line.split("\t")
         if len(parts) >= 2 and parts[0] == "own-linger":
             linger_user = _linger_user(parts[1], user) or linger_user
+            continue
+        if len(parts) >= 2 and parts[0] == "system-helper":
+            helper = helper or parts[1] == str(system_helper_paths.LAUNCH_DAEMON)   # the helper's own path only
             continue
         if parts[0] not in found or len(parts) < 2:
             continue
@@ -128,7 +137,7 @@ def read(blackbox_home: Path, home: Path | None = None, user: str | None = None)
             found["host-append"].append((path, block))
     unique = {kind: tuple(dict.fromkeys(paths)) for kind, paths in found.items()}
     return InstallManifest(unique["own-dir"], unique["host"], unique["host-dir"], unique["host-append"],
-                           linger_user, unique["user-path"])
+                           linger_user, unique["user-path"], helper, unique["notifier"])
 
 
 def host_size(manifest: InstallManifest) -> int:
@@ -168,6 +177,15 @@ def _remove_empty(folders: tuple[Path, ...], report: list[str]) -> None:
 def remove_own_dirs(manifest: InstallManifest, report: list[str]) -> None:
     """The folders the installer made for Blackbox's services, when empty now."""
     _remove_empty(manifest.own_dirs, report)
+
+
+def remove_components(manifest: InstallManifest, report: list[str]) -> None:
+    """The optional components the installer added that live in the person's folders: the
+    notifier. (The system protection helper is root's: uninstall removes it through itself.)"""
+    for folder in manifest.notifier:
+        if folder.is_dir() and not folder.is_symlink():
+            shutil.rmtree(folder, ignore_errors=True)
+            report.append(f"removed Blackbox's notifier ({folder})")
 
 
 def restore_system_settings(manifest: InstallManifest, run: Runner, report: list[str]) -> None:
@@ -218,5 +236,5 @@ def remove_host(manifest: InstallManifest, report: list[str]) -> None:
     _remove_empty(manifest.host_dirs, report)
 
 
-__all__ = ["BLOCKS", "FOLDER", "MANIFEST", "InstallManifest", "host_size", "human_size", "read", "remove_host",
-           "remove_own_dirs", "restore_system_settings"]
+__all__ = ["BLOCKS", "FOLDER", "MANIFEST", "InstallManifest", "host_size", "human_size", "read", "remove_components",
+           "remove_host", "remove_own_dirs", "restore_system_settings"]

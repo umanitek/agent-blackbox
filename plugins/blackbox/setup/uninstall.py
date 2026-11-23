@@ -143,8 +143,10 @@ def build_plan(*, purge: bool, keep_logs: bool, now: Optional[_dt.datetime] = No
                  if p.is_file() and SHIM_MARKER in p.read_text(encoding="utf-8-sig", errors="ignore")), None)
     system_units = tuple(p for p in (sync.SYSTEM_UNIT_DIR / u for u in SYSTEMD_UNITS) if p.exists())
     system = platform.system()
+    manifest = install_manifest.read(blackbox_home)
+    # The helper as found, or as the install manifest names it (KI-629: one list of what was added).
     helper = system_helper.BINARY if system == "Darwin" and (
-        system_helper.BINARY.exists() or system_helper.LAUNCH_DAEMON.exists()) else None
+        system_helper.BINARY.exists() or system_helper.LAUNCH_DAEMON.exists() or manifest.system_helper) else None
     from .. import agent_hooks   # agent_hooks' public entry
     addon_folders = tuple(home / "plugins" / name for home in hermes_homes for name in addons.found(home / "plugins"))
     return UninstallPlan(
@@ -153,7 +155,7 @@ def build_plan(*, purge: bool, keep_logs: bool, now: Optional[_dt.datetime] = No
         key_files=tuple(p for p in keys if p.is_file()),
         backup_dir=None if purge else Path.home() / f"blackbox-backup-{stamp}",
         keep_logs=keep_logs, shim=shim, system_units=system_units, dashboard_port=dashboard_port,
-        notes=tuple(notes), manifest=install_manifest.read(blackbox_home), addon_cleanup=addon_cleanup.cleanup_for(addon_folders))
+        notes=tuple(notes), manifest=manifest, addon_cleanup=addon_cleanup.cleanup_for(addon_folders))
 
 
 def installed(plan: UninstallPlan) -> bool:
@@ -320,6 +322,7 @@ def execute(plan: UninstallPlan, *, run: Runner = _run,
     _remove_agent_hooks(plan, report)
     addon_cleanup.remove(plan.addon_cleanup, run, report)   # what a companion app left (its manifest, read above)
     _delete_data(plan, report)
+    install_manifest.remove_components(plan.manifest, report)   # the notifier it added (KI-629)
     install_manifest.remove_own_dirs(plan.manifest, report)   # e.g. an empty ~/Library/LaunchAgents it made (KI-611)
     install_manifest.restore_system_settings(plan.manifest, run, report)   # lingering (Linux), user PATH (Windows)
     if remove_host and plan.manifest.has_host:   # the host goes as a whole: no plugin to remove from it first

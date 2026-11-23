@@ -58,7 +58,8 @@ main
 def test_curl_install_runs_every_step_in_the_same_order_as_before():
     steps = _main_steps(setup_only=False)
 
-    assert steps[:14] == ["banner", "detect_os", "install_record_begin", "preflight_install", "check_git", "check_python", "ensure_node", "resolve_repo",
+    assert steps[:15] == ["banner", "detect_os", "check_install_user",   # KI-625: root refused before any change
+                          "install_record_begin", "preflight_install", "check_git", "check_python", "ensure_node", "resolve_repo",
                           "drop_stale_hermes_install_record",   # KI-467: a fresh clone drops a gone checkout's record
                           "release_old_hermes_link", "install_python_env",
                           "narrow_checkout_after_setup",   # FIX-0414: a checkout cloned whole before Python existed
@@ -71,10 +72,10 @@ def test_setup_only_skips_the_hermes_steps_and_keeps_everything_after():
     setup = _main_steps(setup_only=True)
 
     assert not set(HERMES_STEPS) & set(setup)
-    assert setup[:6] == ["banner", "detect_os", "install_record_begin", "preflight_install", "ensure_node",
-                         "use_running_hermes"]
+    assert setup[:7] == ["banner", "detect_os", "check_install_user", "install_record_begin", "preflight_install",
+                         "ensure_node", "use_running_hermes"]
     after_hermes = curl[curl.index("run_hermes_setup") + 1:]
-    assert setup[6:] == after_hermes
+    assert setup[7:] == after_hermes
 
 
 def _use_running_hermes(tmp_path: Path, *, hermes_on_path: bool, inner_bin: Path | None = None) -> tuple[subprocess.CompletedProcess, Path]:

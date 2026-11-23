@@ -37,6 +37,7 @@ def _shell(home: Path, record: Path, linger_dir: Path, fake_bin: Path, call: str
         assert found is not None, name
         bodies.append(found.group(0))
     script = "\n".join([f'export PATH="{fake_bin}:$PATH"', f'HOME="{home}"', f'HERMES_HOME="{home}/.hermes"',
+                        f'BLACKBOX_HELPER_DAEMON="{home}/LaunchDaemons/netd.plist"',
                         f'BLACKBOX_HOME="{home}/.hermes/blackbox"', f'BLACKBOX_INSTALL_ROOT="{home}/agent-blackbox"',
                         f'INSTALL_RECORD_DIR="{record}"', f'BLACKBOX_LINGER_DIR="{linger_dir}"', *bodies, call])
     done = subprocess.run(["/bin/bash", "-c", script], capture_output=True, text=True, timeout=60, check=False)
@@ -146,3 +147,42 @@ def test_on_macos_restoring_system_settings_changes_nothing(tmp_path):
     from plugins.blackbox.setup.platform import macos
     assert macos.disable_linger("alice", lambda argv: 0) is False
     assert macos.remove_user_path_entry("/x") is False
+
+
+def test_the_helper_and_the_notifier_this_install_added_are_in_the_manifest(machine, monkeypatch):
+    """KI-629: the optional components are in the one list `blackbox uninstall` reads: the helper
+    (accepted only as the helper's own LaunchDaemon) and the notifier, which uninstall removes."""
+    from plugins.blackbox.kernel import system_helper
+    home, record, linger_dir, fake_bin = machine
+    _shell(home, record, linger_dir, fake_bin, "install_manifest_begin")
+    (home / "LaunchDaemons").mkdir()
+    (home / "LaunchDaemons" / "netd.plist").write_text("plist", encoding="utf-8")
+    (home / ".hermes" / "blackbox" / "notifier" / "Blackbox.app").mkdir(parents=True)
+    _shell(home, record, linger_dir, fake_bin, "install_manifest_write")
+    text = (home / ".hermes" / "blackbox" / install_manifest.FOLDER / install_manifest.MANIFEST).read_text(encoding="utf-8")
+    assert f"system-helper\t{home}/LaunchDaemons/netd.plist" in text
+    assert f"notifier\t{home}/.hermes/blackbox/notifier" in text
+    monkeypatch.setattr(system_helper, "LAUNCH_DAEMON", home / "LaunchDaemons" / "netd.plist")
+    manifest = install_manifest.read(home / ".hermes" / "blackbox", home=home)
+    assert manifest.system_helper and manifest.notifier == (home / ".hermes" / "blackbox" / "notifier",)
+    report: list[str] = []
+    install_manifest.remove_components(manifest, report)
+    assert not (home / ".hermes" / "blackbox" / "notifier").exists() and any("notifier" in line for line in report)
+
+
+def test_a_system_helper_entry_names_only_the_helpers_own_launch_daemon(tmp_path):
+    folder = tmp_path / "bb" / install_manifest.FOLDER
+    folder.mkdir(parents=True)
+    (folder / install_manifest.MANIFEST).write_text("system-helper\t/Library/LaunchDaemons/evil.plist\n", encoding="utf-8")
+    assert install_manifest.read(tmp_path / "bb", home=tmp_path, user="alice").system_helper is False
+
+
+def test_components_that_were_there_before_the_install_are_not_listed(machine):
+    home, record, linger_dir, fake_bin = machine
+    (home / "LaunchDaemons").mkdir()
+    (home / "LaunchDaemons" / "netd.plist").write_text("theirs", encoding="utf-8")
+    (home / ".hermes" / "blackbox" / "notifier").mkdir(parents=True)
+    _shell(home, record, linger_dir, fake_bin, "install_manifest_begin")
+    _shell(home, record, linger_dir, fake_bin, "install_manifest_write")
+    text = (home / ".hermes" / "blackbox" / install_manifest.FOLDER / install_manifest.MANIFEST).read_text(encoding="utf-8")
+    assert "system-helper" not in text and "notifier" not in text
