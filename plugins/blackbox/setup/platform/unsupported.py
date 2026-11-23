@@ -26,8 +26,12 @@ def disable_linger(_user: str, _run: Runner) -> bool:
     return False
 
 
+def stop_login_services(_names, _system_units, _run: Runner, _report: list[str]) -> None:
+    """No login services Blackbox registers on this system."""
+
+
 def remove_user_path_entry(_folder: str) -> bool:
     return False
 
 
-__all__ = ["delete_keychain_item", "delete_preferences", "disable_linger", "remove_user_path_entry"]
+__all__ = ["delete_keychain_item", "delete_preferences", "disable_linger", "remove_user_path_entry", "stop_login_services"]

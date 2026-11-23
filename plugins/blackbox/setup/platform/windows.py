@@ -11,8 +11,9 @@ Usage::
 from __future__ import annotations
 
 import ctypes
-import winreg
+from pathlib import Path
 
+from .contract import Runner, ServiceNames
 from .unsupported import delete_keychain_item, delete_preferences, disable_linger
 
 ENVIRONMENT_KEY = "Environment"
@@ -26,6 +27,9 @@ def _same_folder(entry: str, folder: str) -> bool:
 
 def remove_user_path_entry(folder: str) -> bool:
     """*folder* taken off the user PATH; False when it was not on it (nothing changed)."""
+    # WHY here: the registry module exists only on Windows; the module's other answers (the
+    # Scheduled Tasks below) load on any system, so the suite runs them with a fake runner.
+    import winreg
     with winreg.OpenKey(winreg.HKEY_CURRENT_USER, ENVIRONMENT_KEY, 0,
                         winreg.KEY_READ | winreg.KEY_SET_VALUE) as key:
         try:
@@ -42,4 +46,12 @@ def remove_user_path_entry(folder: str) -> bool:
     return True
 
 
-__all__ = ["delete_keychain_item", "delete_preferences", "disable_linger", "remove_user_path_entry"]
+def stop_login_services(names: ServiceNames, _system_units: tuple[Path, ...], run: Runner, report: list[str]) -> None:
+    """Each Blackbox sign-in task ended and deleted."""
+    for task in names.windows_tasks:
+        run(["schtasks", "/End", "/TN", task])
+        if run(["schtasks", "/Delete", "/TN", task, "/F"]) == 0:
+            report.append(f"removed scheduled task {task}")
+
+
+__all__ = ["delete_keychain_item", "delete_preferences", "disable_linger", "remove_user_path_entry", "stop_login_services"]

@@ -23,6 +23,7 @@ from pathlib import Path
 import pytest
 
 from plugins.blackbox.setup import uninstall
+from plugins.blackbox.setup.platform import macos as platform_macos
 
 #: The person's own files before Blackbox: a config with comments, shell startup files with their
 #: own lines, Claude Code's settings with their own hook, another DKG node, an unrelated plugin.
@@ -41,6 +42,13 @@ PERSON = {
 #: Hermes's own records, written by Hermes whenever its config is read (a dated copy of the last good
 #: config): the host's, not Blackbox's, and a person's real Hermes home already has them.
 HOST_RECORDS = (".hermes/backups/",)
+
+
+@pytest.fixture(autouse=True)
+def os_services(monkeypatch):
+    """The login services are removed through ``setup/platform/<os>``; these plans are macOS's
+    unless a test says otherwise (``_on``), whatever machine runs the suite."""
+    monkeypatch.setattr(uninstall, "os_platform", platform_macos)
 
 
 def _tree(root: Path) -> dict[str, bytes]:

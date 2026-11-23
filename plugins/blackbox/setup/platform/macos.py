@@ -9,8 +9,11 @@ Usage::
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
 from typing import Callable, Sequence
 
+from .contract import ServiceNames
 from .unsupported import disable_linger, remove_user_path_entry
 
 SECURITY = "/usr/bin/security"
@@ -28,4 +31,15 @@ def delete_preferences(domain: str, run: Runner) -> bool:
     return run([DEFAULTS, "delete", domain]) == 0
 
 
-__all__ = ["delete_keychain_item", "delete_preferences", "disable_linger", "remove_user_path_entry"]
+def stop_login_services(names: ServiceNames, _system_units: tuple[Path, ...], run: Runner, report: list[str]) -> None:
+    """Each Blackbox LaunchAgent booted out of the person's GUI domain and its plist removed."""
+    uid = os.getuid()
+    for label in names.launchd_labels:
+        run(["launchctl", "bootout", f"gui/{uid}/{label}"])
+        plist = Path.home() / "Library" / "LaunchAgents" / f"{label}.plist"
+        if plist.exists():
+            plist.unlink()
+            report.append(f"removed login service {label}")
+
+
+__all__ = ["delete_keychain_item", "delete_preferences", "disable_linger", "remove_user_path_entry", "stop_login_services"]

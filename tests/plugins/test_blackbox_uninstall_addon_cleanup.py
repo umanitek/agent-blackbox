@@ -19,9 +19,17 @@ import pytest
 
 from plugins.blackbox.kernel import os_layout
 from plugins.blackbox.setup import addon_cleanup, uninstall
+from plugins.blackbox.setup.platform import macos as platform_macos
 from plugins.blackbox.setup.platform import macos
 
 APP = "com.example.companion"
+
+
+@pytest.fixture(autouse=True)
+def os_services(monkeypatch):
+    """The login services are removed through ``setup/platform/<os>``; these plans are macOS's
+    unless a test says otherwise (``_on``), whatever machine runs the suite."""
+    monkeypatch.setattr(uninstall, "os_platform", platform_macos)
 
 
 @pytest.fixture

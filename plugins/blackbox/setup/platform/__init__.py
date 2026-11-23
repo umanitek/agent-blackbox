@@ -14,6 +14,7 @@ Usage::
     platform.delete_preferences("com.example.app", run)
     platform.disable_linger("alice", run)                     # Linux
     platform.remove_user_path_entry(r"C:\\Users\\a\\.local\\bin")  # Windows
+    platform.stop_login_services(names, system_units, run, report)   # launchd / systemd / Scheduled Tasks
 """
 
 from __future__ import annotations
@@ -21,12 +22,15 @@ from __future__ import annotations
 import sys
 
 if sys.platform == "darwin":
-    from .macos import delete_keychain_item, delete_preferences, disable_linger, remove_user_path_entry
+    from .macos import delete_keychain_item, delete_preferences, disable_linger, remove_user_path_entry, stop_login_services
 elif sys.platform.startswith("linux"):
-    from .linux import delete_keychain_item, delete_preferences, disable_linger, remove_user_path_entry
+    from .linux import delete_keychain_item, delete_preferences, disable_linger, remove_user_path_entry, stop_login_services
 elif sys.platform == "win32":
-    from .windows import delete_keychain_item, delete_preferences, disable_linger, remove_user_path_entry
+    from .windows import delete_keychain_item, delete_preferences, disable_linger, remove_user_path_entry, stop_login_services
 else:
-    from .unsupported import delete_keychain_item, delete_preferences, disable_linger, remove_user_path_entry
+    from .unsupported import delete_keychain_item, delete_preferences, disable_linger, remove_user_path_entry, stop_login_services
 
-__all__ = ["delete_keychain_item", "delete_preferences", "disable_linger", "remove_user_path_entry"]
+from .contract import ServiceNames
+
+__all__ = ["ServiceNames", "delete_keychain_item", "delete_preferences", "disable_linger", "remove_user_path_entry",
+           "stop_login_services"]

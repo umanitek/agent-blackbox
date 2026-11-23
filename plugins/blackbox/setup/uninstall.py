@@ -44,7 +44,7 @@ from typing import Callable, Optional, Sequence
 from .. import sync   # sync's public entry: the service names, which process is our node
 from ..kernel import addons, constants, system_helper, terminal_question, yaml_files
 from ..kernel.host_command import hermes_argv
-from . import addon_cleanup, install_manifest
+from . import addon_cleanup, install_manifest, platform as os_platform
 from .uninstall_data import _back_up, _delete_data
 from .uninstall_outside import Runner, _remove_agent_hooks, _remove_from_agents, _remove_system_helper, _run_at_terminal
 
@@ -57,6 +57,7 @@ DKG_HOME_MARKER = "blackbox-process-limits.json"
 SHIM_MARKER = "managed-by: agent-blackbox-installer"
 # The services to remove: the names the installers register, owned by sync (one place to rename).
 LAUNCHD_LABELS, SYSTEMD_UNITS, WINDOWS_TASKS = sync.LAUNCHD_LABELS, sync.SYSTEMD_UNITS, sync.WINDOWS_TASKS
+SERVICE_NAMES = os_platform.ServiceNames(LAUNCHD_LABELS, SYSTEMD_UNITS, WINDOWS_TASKS)
 
 
 
@@ -215,54 +216,8 @@ def host_kept_note(plan: UninstallPlan) -> str:
 
 
 def _stop_services(plan: UninstallPlan, run: Runner, report: list[str]) -> None:
-    if plan.system == "Darwin":
-        # Only reached on macOS; getattr keeps the module importable where os has no getuid (Windows).
-        uid = getattr(os, "getuid", lambda: 0)()
-        for label in LAUNCHD_LABELS:
-            run(["launchctl", "bootout", f"gui/{uid}/{label}"])
-            plist = Path.home() / "Library" / "LaunchAgents" / f"{label}.plist"
-            if plist.exists():
-                plist.unlink()
-                report.append(f"removed login service {label}")
-    elif plan.system == "Linux":
-        user_dir = Path.home() / ".config" / "systemd" / "user"
-        removed = False
-        for unit in SYSTEMD_UNITS:
-            if (user_dir / unit).exists():
-                run(["systemctl", "--user", "disable", "--now", unit])
-                (user_dir / unit).unlink()
-                removed = True
-                report.append(f"removed login service {unit}")
-        if removed:
-            run(["systemctl", "--user", "daemon-reload"])
-        _stop_system_units(plan, run, report)
-    elif plan.system == "Windows":
-        for task in WINDOWS_TASKS:
-            run(["schtasks", "/End", "/TN", task])
-            if run(["schtasks", "/Delete", "/TN", task, "/F"]) == 0:
-                report.append(f"removed scheduled task {task}")
-
-
-def _is_root() -> bool:
-    return getattr(os, "geteuid", lambda: -1)() == 0
-
-
-def _stop_system_units(plan: UninstallPlan, run: Runner, report: list[str]) -> None:
-    """Linux's root units (``/etc/systemd/system``): stopped, disabled and removed when uninstall
-    runs as root (KI-506: they were left enabled even then); otherwise each is named with the root
-    commands that finish it."""
-    if not plan.system_units:
-        return
-    if not _is_root():
-        for unit in plan.system_units:
-            report.append(f"needs root: sudo systemctl disable --now {unit.name} && sudo rm {unit} "
-                          "&& sudo systemctl daemon-reload")
-        return
-    for unit in plan.system_units:
-        run(["systemctl", "disable", "--now", unit.name])
-        unit.unlink(missing_ok=True)
-        report.append(f"removed system service {unit.name}")
-    run(["systemctl", "daemon-reload"])
+    """Blackbox's login services, through this system's own tools (``setup/platform/<os>``)."""
+    os_platform.stop_login_services(SERVICE_NAMES, plan.system_units, run, report)
 
 
 def _supervised(plan: UninstallPlan) -> bool:

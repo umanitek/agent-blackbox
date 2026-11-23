@@ -20,6 +20,7 @@ from pathlib import Path
 import pytest
 
 from plugins.blackbox.setup import uninstall
+from plugins.blackbox.setup.platform import linux as platform_linux, macos as platform_macos, windows as platform_windows
 
 CONFIG = """\
 # Hermes Agent CLI Configuration
@@ -34,6 +35,13 @@ plugins:
       mode: audit
       dkg_home: {dkg_home}
 """
+
+
+@pytest.fixture(autouse=True)
+def os_services(monkeypatch):
+    """The login services are removed through ``setup/platform/<os>``; these plans are macOS's
+    unless a test says otherwise (``_on``), whatever machine runs the suite."""
+    monkeypatch.setattr(uninstall, "os_platform", platform_macos)
 
 
 @pytest.fixture()
@@ -152,7 +160,8 @@ def test_a_blackbox_command_we_did_not_write_is_left_alone(machine):
     assert shim.exists()
 
 
-def test_linux_user_services_go_and_system_units_are_named_with_their_root_commands(machine, tmp_path):
+def test_linux_user_services_go_and_system_units_are_named_with_their_root_commands(machine, tmp_path, monkeypatch):
+    monkeypatch.setattr(uninstall, "os_platform", platform_linux)
     user_units = machine / ".config" / "systemd" / "user"
     user_units.mkdir(parents=True)
     for unit in uninstall.SYSTEMD_UNITS:
@@ -168,7 +177,8 @@ def test_linux_user_services_go_and_system_units_are_named_with_their_root_comma
     assert system_unit.exists()
 
 
-def test_windows_tasks_are_ended_and_deleted(machine):
+def test_windows_tasks_are_ended_and_deleted(machine, monkeypatch):
+    monkeypatch.setattr(uninstall, "os_platform", platform_windows)
     calls, _ = _execute(_plan(machine, system="Windows"))
     for task in uninstall.WINDOWS_TASKS:
         assert ["schtasks", "/Delete", "/TN", task, "/F"] in calls
@@ -459,7 +469,8 @@ def _system_unit(tmp_path):
 def test_run_as_root_the_linux_system_units_are_stopped_and_removed(machine, tmp_path, monkeypatch):
     """KI-506: run as root, the root units in /etc/systemd/system were still left enabled."""
     unit = _system_unit(tmp_path)
-    monkeypatch.setattr(uninstall, "_is_root", lambda: True)
+    monkeypatch.setattr(uninstall, "os_platform", platform_linux)
+    monkeypatch.setattr(platform_linux, "_is_root", lambda: True)
     plan = dataclasses.replace(_plan(machine, system="Linux"), system_units=(unit,))
     calls, report = _execute(plan)
     assert ["systemctl", "disable", "--now", "blackbox-dkg.service"] in calls and ["systemctl", "daemon-reload"] in calls
@@ -470,7 +481,8 @@ def test_run_as_root_the_linux_system_units_are_stopped_and_removed(machine, tmp
 def test_a_dashboard_and_node_a_root_unit_still_supervises_are_never_stopped_by_pid(machine, tmp_path, monkeypatch):
     """KI-507: with the root units left (not root), stopping by pid only saw systemd start them again."""
     unit = _system_unit(tmp_path)
-    monkeypatch.setattr(uninstall, "_is_root", lambda: False)
+    monkeypatch.setattr(uninstall, "os_platform", platform_linux)
+    monkeypatch.setattr(platform_linux, "_is_root", lambda: False)
     signalled = []
     monkeypatch.setattr(uninstall.os, "kill", lambda pid, sig: signalled.append(pid))
     plan = dataclasses.replace(_plan(machine, system="Linux"), system_units=(unit,))
