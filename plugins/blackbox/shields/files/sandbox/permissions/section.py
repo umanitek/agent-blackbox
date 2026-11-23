@@ -60,7 +60,7 @@ def _scope(row: Mapping[str, Any], errors: list[str], where: str) -> Optional[Sc
     if not isinstance(agent, str) or (agent and not known_agent(agent)):
         errors.append(f"{where}: unknown agent {agent!r}")
         return None
-    if not isinstance(project, str) or (project and mode_module.canonical_item(project) != project):
+    if not isinstance(project, str) or "\t" in project or (project and mode_module.canonical_item(project) != project):
         errors.append(f"{where}: name the project folder as {mode_module.canonical_item(project) or 'one folder under ~/ or /'}")
         return None
     return Scope(agent=agent, project=project)

@@ -53,7 +53,7 @@ from typing import Optional
 
 from ......kernel.persistence_places import startup_places
 from .apps import APPS, ELECTRON_FLAGS, open_app
-from .launchers import command_shim, launcher_script, shell_shim
+from .launchers import PROJECT_INDEX, command_shim, launcher_script, shell_shim
 from .profile import APP_DRIVERS, LOCAL_SSH, PROFILE_SUFFIX, SANDBOX_EXEC, render
 from .shims import BREW_READ_ONLY, brew_shim, spawn_brew, stop_group
 from .tools import PS, SETUID_NOTE, SETUID_TOOLS, TOOLS_FOLDER, refresh_tools
@@ -65,6 +65,6 @@ def unavailable() -> Optional[str]:
 
 
 
-__all__ = ["APPS", "APP_DRIVERS", "BREW_READ_ONLY", "ELECTRON_FLAGS", "LOCAL_SSH", "PROFILE_SUFFIX", "PS", "SANDBOX_EXEC",
+__all__ = ["APPS", "APP_DRIVERS", "BREW_READ_ONLY", "ELECTRON_FLAGS", "LOCAL_SSH", "PROFILE_SUFFIX", "PROJECT_INDEX", "PS", "SANDBOX_EXEC",
            "SETUID_NOTE", "SETUID_TOOLS", "TOOLS_FOLDER", "brew_shim", "command_shim", "launcher_script", "open_app",
            "refresh_tools", "render", "shell_shim", "spawn_brew", "startup_places", "stop_group", "unavailable"]

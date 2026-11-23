@@ -16,11 +16,11 @@ from __future__ import annotations
 import sys
 
 if sys.platform == "darwin":
-    from .macos import (APPS, PROFILE_SUFFIX, SETUID_NOTE, TOOLS_FOLDER, brew_shim, command_shim, launcher_script, open_app, refresh_tools, render,
+    from .macos import (APPS, PROFILE_SUFFIX, PROJECT_INDEX, SETUID_NOTE, TOOLS_FOLDER, brew_shim, command_shim, launcher_script, open_app, refresh_tools, render,
                         shell_shim, spawn_brew, startup_places, stop_group, unavailable)
 else:
-    from .unsupported import (APPS, PROFILE_SUFFIX, SETUID_NOTE, TOOLS_FOLDER, brew_shim, command_shim, launcher_script, open_app, refresh_tools, render,
+    from .unsupported import (APPS, PROFILE_SUFFIX, PROJECT_INDEX, SETUID_NOTE, TOOLS_FOLDER, brew_shim, command_shim, launcher_script, open_app, refresh_tools, render,
                               shell_shim, spawn_brew, startup_places, stop_group, unavailable)
 
-__all__ = ["APPS", "PROFILE_SUFFIX", "SETUID_NOTE", "TOOLS_FOLDER", "brew_shim", "command_shim", "launcher_script", "open_app", "refresh_tools", "render",
+__all__ = ["APPS", "PROFILE_SUFFIX", "PROJECT_INDEX", "SETUID_NOTE", "TOOLS_FOLDER", "brew_shim", "command_shim", "launcher_script", "open_app", "refresh_tools", "render",
            "shell_shim", "spawn_brew", "startup_places", "stop_group", "unavailable"]
