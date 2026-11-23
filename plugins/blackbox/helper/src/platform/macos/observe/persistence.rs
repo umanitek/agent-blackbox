@@ -89,6 +89,24 @@ pub fn mark_of(path: &Path) -> Option<String> {
     Some(format!("{}:{}:{}", meta.len(), mtime, sha))
 }
 
+/// True when two marks say the entry holds what it held: a file's `size:mtime:sha` compared by size
+/// and sha — a rewrite that leaves its bytes as they were (`sed -i` deleting nothing) is not a
+/// change (KI-636: it raised a critical alert); a file too big to hash, and every other mark, whole.
+fn same_content(old: &str, new: &str) -> bool {
+    let content = |mark: &str| -> Option<(String, String)> {
+        let parts: Vec<&str> = mark.split(':').collect();
+        match parts.as_slice() {
+            [size, mtime, sha] if mtime.parse::<u64>().is_ok() && size.parse::<u64>().is_ok_and(|n| n <= MAX_READ) =>
+                Some((size.to_string(), sha.to_string())),
+            _ => None,
+        }
+    };
+    match (content(old), content(new)) {
+        (Some(before), Some(after)) => before == after,
+        _ => old == new,
+    }
+}
+
 /// A launchd plist's label and program (`plutil -convert json`), read only when it is new or changed.
 pub fn job_of(path: &Path) -> (String, String) {
     // Read safely as root (no links, no FIFOs, capped), then parsed from stdin: plutil never
@@ -242,7 +260,7 @@ impl Persistence {
         for (key, item) in &fresh {
             match self.items.get(key) {
                 None if self.started => self.push("persistence-new", item, now),
-                Some(old) if self.started && old.mark != item.mark => self.push("persistence-changed", item, now),
+                Some(old) if self.started && !same_content(&old.mark, &item.mark) => self.push("persistence-changed", item, now),
                 _ => {}
             }
         }
@@ -359,6 +377,23 @@ mod tests {
         assert!(!watch.update(&["profile"], vec![], 4), "a profile look never removes jobs");
         assert!(watch.update(&["user-agent"], vec![job("/a.plist", "2")], 5));
         assert_eq!(watch.take_events()[0]["kind"], "persistence-removed");
+    }
+
+    #[test]
+    fn a_rewrite_that_leaves_the_content_as_it_was_is_not_a_change() {
+        // KI-636 (security round 6): the harness's `sed -i` on ~/.ssh/authorized_keys deleted nothing,
+        // and the new write time alone raised "Startup item changed".
+        let key = |mark: &str| Item { kind: "ssh-login", id: "/u/.ssh/authorized_keys".into(), label: "authorized_keys".into(), program: String::new(), mark: mark.into() };
+        let mut watch = Persistence::default();
+        watch.update(&["ssh-login"], vec![key("120:1795462800:ab12cd34")], 1);
+        watch.baseline_done();
+        assert!(!watch.update(&["ssh-login"], vec![key("120:1795462830:ab12cd34")], 2), "same bytes, new write time");
+        assert!(watch.update(&["ssh-login"], vec![key("161:1795462841:ffee0011")], 3));
+        assert_eq!(watch.take_events()[0]["kind"], "persistence-changed");
+        let big = MAX_READ + 1;
+        assert!(watch.update(&["ssh-login"], vec![key(&format!("{big}:5:e3b0c442"))], 4));
+        watch.take_events();
+        assert!(watch.update(&["ssh-login"], vec![key(&format!("{big}:6:e3b0c442"))], 5), "a file too big to hash: its write time is all there is");
     }
 
     #[test]
