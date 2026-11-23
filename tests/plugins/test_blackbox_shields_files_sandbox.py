@@ -158,11 +158,11 @@ def test_the_canary_proves_a_session_is_inside_and_a_variable_can_not_fake_it(ho
 def test_sync_writes_launchers_and_the_path_block_and_takes_them_away(home):
     sandbox.sync(_mode(("claude-code", "codex")))
     folder = sandbox.launcher_dir()
-    assert sorted(path.name for path in folder.iterdir()) == ["claude", "codex"]
+    assert sorted(path.name for path in folder.iterdir() if path.is_file()) == ["claude", "codex"]
     assert os.access(folder / "claude", os.X_OK) and sandbox.profile_path().is_file()
     assert shell_path.present(home) and str(folder) in (home / ".zshrc").read_text(encoding="utf-8")
     sandbox.sync(_mode(("codex",)))
-    assert sorted(path.name for path in folder.iterdir()) == ["codex"]
+    assert sorted(path.name for path in folder.iterdir() if path.is_file()) == ["codex"]
     sandbox.sync(_mode(()))
     assert list(folder.iterdir()) == [] and not shell_path.present(home)
 

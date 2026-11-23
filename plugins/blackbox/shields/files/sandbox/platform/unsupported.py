@@ -19,6 +19,7 @@ from typing import Optional
 from ..places import Places
 
 PROFILE_SUFFIX = ".txt"
+SETUID_NOTE = ""
 APPS: dict[str, tuple[str, str]] = {}
 
 
@@ -38,9 +39,13 @@ def open_app(app: str, _profile: str, **_options: object) -> str:
     raise ValueError(f"unknown app {app!r}")
 
 
-def shell_shim(_shell: str, _here: str, _profile: str) -> str:
+def shell_shim(_shell: str, _here: str, _profile: str, _launchers: str = "") -> str:
     return ""
 
 
-def command_shim(_profile: str) -> str:
+def command_shim(_profile: str, _launchers: str = "") -> str:
     return ""
+
+
+def refresh_tools(_launchers: str, _wanted: bool = True) -> bool:
+    return False

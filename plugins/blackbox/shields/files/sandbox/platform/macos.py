@@ -17,8 +17,13 @@ What it can not do, said plainly (proposal §04):
   HANG (``open``, a browser login) — so it is not used. Left open: a program the agent compiles
   itself that sends AppleEvents through the system's own frameworks (``NSAppleScript``) — the
   OS's file checks (Layer 3) close that;
-* setuid programs (``sudo``, ``su``) can not run inside any Seatbelt sandbox — so Layer 2 is a
-  per-agent choice of the person (D7: agents keep ``sudo`` unless the person sandboxes them);
+* setuid programs (``sudo``, ``su``, ``top``, ``crontab``, ``/bin/ps``) can not run inside any Seatbelt
+  sandbox (the kernel's ``forbidden-exec-sugid``; no profile rule lifts it) — so Layer 2 is a per-agent
+  choice of the person. ``ps`` works from a copy without the setuid bit, which :func:`refresh_tools`
+  keeps in ``<launchers>/sandbox-tools`` (made again when macOS changes) and every launcher puts
+  first on the sandboxed PATH (KI-589; an absolute ``/bin/ps`` still fails). The others need root to
+  work at all, so a stand-in there says why (:data:`SETUID_NOTE`) instead of a bare
+  "operation not permitted";
 * ``sandbox-exec`` is marked deprecated by Apple but is what Apple's own tools still use; the
   long-term path is the OS's file checks (Endpoint Security, Layer 3);
 * a GUI editor built on Electron/Chromium (Cursor, Windsurf) sandboxes its own helper processes
@@ -35,6 +40,7 @@ Usage::
 
     text = render(places)                         # the profile
     launcher_script("claude", here, profile)      # the launcher Blackbox puts on PATH
+    refresh_tools(here)                           # the setuid-free ps + stand-ins, first on the sandboxed PATH
 """
 
 from __future__ import annotations
@@ -42,10 +48,15 @@ from __future__ import annotations
 import os
 import plistlib
 import re
+import shutil
+import stat
 import subprocess
 import time
+from pathlib import Path
+from platform import mac_ver
 from typing import Optional
 
+from .....kernel.bounded_files import atomic_write, read_small_text
 from ..places import Places
 
 SANDBOX_EXEC = "/usr/bin/sandbox-exec"
@@ -62,6 +73,20 @@ LOCAL_SSH = ('"localhost:22"',)
 TIMEOUT_SECONDS = 5.0
 #: An Electron/Chromium editor's own sandbox can not start inside Blackbox's (see the module doc).
 ELECTRON_FLAGS = ("--no-sandbox",)
+#: The folder beside the launchers whose programs come first on the SANDBOXED PATH only (never the
+#: person's own PATH): the setuid-free ``ps`` and the stand-ins for setuid tools.
+TOOLS_FOLDER = "sandbox-tools"
+#: ``ps`` without its setuid bit runs inside the sandbox with the agent's own rights (KI-589). The
+#: copy is signed ad hoc: macOS 27 kills a plain copy of a platform binary (probed 2026-11-22, exit
+#: 137), macOS 26 ran one. A copy that still does not run is removed (the stand-in says why).
+PS = "/bin/ps"
+CODESIGN = "/usr/bin/codesign"
+#: Setuid tools that need root to work at all (``top`` reads every process through a root-only
+#: library, ``crontab`` the root-owned tables): each existing one gets a stand-in saying why.
+SETUID_TOOLS = ("/usr/bin/top", "/usr/bin/crontab", "/usr/bin/sudo", "/usr/bin/su", "/usr/bin/at", "/usr/bin/atq",
+                "/usr/bin/atrm", "/usr/bin/batch", "/usr/bin/login", "/usr/bin/newgrp", "/usr/bin/quota")
+SETUID_NOTE = "macOS doesn't allow setuid programs inside the agent sandbox; run it in your own terminal"
+_TOOLS_STAMP = ".macos"
 #: How long an editor started inside the sandbox must stay up before it is called running.
 STARTED_SECONDS = 4.0
 STARTED_POLL_SECONDS = 0.2
@@ -113,11 +138,81 @@ def render(places: Places, digest_line: str = "") -> str:
     return "\n".join(lines) + "\n"
 
 
+def _tools_dir(launchers: str) -> str:
+    return os.path.join(launchers, TOOLS_FOLDER)
+
+
+def _stamp() -> str:
+    """What the tool copies were made from: this macOS and the ``ps`` it ships."""
+    try:
+        found = os.stat(PS)
+    except OSError:
+        return ""
+    return f"{mac_ver()[0]} {os.uname().version} {found.st_size} {found.st_mtime_ns}\n"
+
+
+def refresh_tools(launchers: str, wanted: bool = True) -> bool:
+    """Makes ``<launchers>/sandbox-tools`` hold a setuid-free copy of ``ps`` and a stand-in for each
+    setuid tool here (:data:`SETUID_TOOLS`), again whenever macOS (or its ``ps``) changed; removes
+    the folder when no agent is sandboxed (*wanted* False). Answers True when it wrote them.
+    Fail-open: a Mac without ``/bin/ps`` or a read-only folder keeps none."""
+    folder, stamp = _tools_dir(launchers), _stamp()
+    if not wanted:
+        shutil.rmtree(folder, ignore_errors=True)
+        return False
+    marker = os.path.join(folder, _TOOLS_STAMP)
+    if stamp and read_small_text(marker, len(stamp) + 1) == stamp and os.access(os.path.join(folder, "ps"), os.X_OK):
+        return False
+    try:
+        os.makedirs(folder, exist_ok=True)
+        if stamp:
+            _copy_ps(os.path.join(folder, "ps"))
+        for tool in SETUID_TOOLS:
+            standin = os.path.join(folder, os.path.basename(tool))
+            if os.path.exists(tool) and os.stat(tool).st_mode & (stat.S_ISUID | stat.S_ISGID):
+                atomic_write(Path(standin), _standin(os.path.basename(tool)), mode=0o755)
+        atomic_write(Path(marker), stamp, mode=0o644)
+    except OSError:
+        return False
+    return True
+
+
+def _copy_ps(target: str) -> None:
+    """A copy of ``ps`` at *target* without the setuid bit (copyfile copies bytes only), signed ad
+    hoc, kept only when it runs."""
+    shutil.copyfile(PS, target)
+    os.chmod(target, 0o755)
+    try:
+        subprocess.run([CODESIGN, "--force", "--sign", "-", target], capture_output=True, timeout=TIMEOUT_SECONDS, check=False)
+        runs = subprocess.run([target, "-p", str(os.getpid()), "-o", "pid="], capture_output=True,
+                              timeout=TIMEOUT_SECONDS, check=False).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        runs = False
+    if not runs:
+        atomic_write(Path(target), _standin("ps"), mode=0o755)
+
+
+def _standin(name: str) -> str:
+    return f"""#!/bin/sh
+# Blackbox agent sandbox: {name} is setuid and can not run inside the sandbox — generated by Blackbox (File Shield).
+echo "Blackbox's sandbox refused this ({name}): {SETUID_NOTE}." >&2
+exit 126
+"""
+
+
+def _with_tools(tools: str) -> str:
+    """The shell lines that put the sandbox's tools first on PATH, for the sandboxed program only."""
+    return f"""tools={_shell(tools)}
+if [ -d "$tools" ]; then PATH="$tools:$PATH"; export PATH; fi
+"""
+
+
 def launcher_script(command: str, here: str, profile: str) -> str:
     """The launcher put first on PATH for *command*: finds the real program further down PATH and
-    runs it inside the profile. Already inside a sandbox (an agent starting another) it runs the
-    program as it is — the sandbox it is in still applies. No profile: Blackbox's hooks only, said
-    on stderr (fail-open: an agent always starts)."""
+    runs it inside the profile, with the sandbox's tools (``<here>/sandbox-tools``) first on ITS
+    PATH. Already inside a sandbox (an agent starting another) it runs the program as it is — the
+    sandbox it is in still applies. No profile: Blackbox's hooks only, said on stderr (fail-open: an
+    agent always starts)."""
     return f"""#!/bin/sh
 # Blackbox agent sandbox launcher for {command} — generated by Blackbox (File Shield), rewritten on change.
 here={_shell(here)}
@@ -127,6 +222,7 @@ real=$(PATH="$path_rest" command -v {_shell(command)}) || {{ echo "blackbox: {co
 if [ "${{BLACKBOX_AGENT_SANDBOX:-}}" = 1 ]; then exec "$real" "$@"; fi
 if [ -r "$profile" ]; then
   BLACKBOX_AGENT_SANDBOX=1; export BLACKBOX_AGENT_SANDBOX
+  {_with_tools(_tools_dir(here)).strip().replace(chr(10), chr(10) + "  ")}
   exec {SANDBOX_EXEC} -f "$profile" "$real" "$@"
 fi
 echo "blackbox: no sandbox profile — {command} runs with Blackbox's hooks only" >&2
@@ -190,10 +286,11 @@ def open_app(app: str, profile: str, apps: Optional[dict[str, tuple[str, str]]] 
     return f"{name} is running inside Blackbox's sandbox."
 
 
-def shell_shim(shell: str, here: str, profile: str) -> str:
+def shell_shim(shell: str, here: str, profile: str, launchers: str = "") -> str:
     """A ``bash`` / ``sh`` / ``zsh`` that runs the real shell inside the profile — put first on the
     Hermes agent's OWN PATH (never the person's), so every shell its terminal tool starts is inside
-    the sandbox while the Hermes process itself (and Blackbox in it) stays outside."""
+    the sandbox while the Hermes process itself (and Blackbox in it) stays outside. *launchers*:
+    the folder whose ``sandbox-tools`` go first on the sandboxed shell's PATH."""
     return f"""#!/bin/sh
 # Blackbox agent sandbox: {shell} for the Hermes agent's tools — generated by Blackbox (File Shield).
 here={_shell(here)}
@@ -202,11 +299,11 @@ path_rest=$(printf '%s' "$PATH" | tr ':' '\\n' | grep -vxF "$here" | paste -sd: 
 real=$(PATH="$path_rest" command -v {_shell(shell)}) || real=/bin/{shell}
 if [ "${{BLACKBOX_AGENT_SANDBOX:-}}" = 1 ] || [ ! -r "$profile" ]; then exec "$real" "$@"; fi
 BLACKBOX_AGENT_SANDBOX=1; export BLACKBOX_AGENT_SANDBOX
-exec {SANDBOX_EXEC} -f "$profile" "$real" "$@"
+{_with_tools(_tools_dir(launchers)) if launchers else ""}exec {SANDBOX_EXEC} -f "$profile" "$real" "$@"
 """
 
 
-def command_shim(profile: str) -> str:
+def command_shim(profile: str, launchers: str = "") -> str:
     """A wrapper that runs the command it is given inside the profile — the interpreter launcher
     Blackbox hands the Hermes agent for its ``execute_code`` Python (Hermes's
     ``HERMES_EXECUTE_CODE_LAUNCHER`` hook point). Already inside a sandbox, or no profile: the
@@ -216,5 +313,5 @@ def command_shim(profile: str) -> str:
 profile={_shell(profile)}
 if [ "${{BLACKBOX_AGENT_SANDBOX:-}}" = 1 ] || [ ! -r "$profile" ]; then exec "$@"; fi
 BLACKBOX_AGENT_SANDBOX=1; export BLACKBOX_AGENT_SANDBOX
-exec {SANDBOX_EXEC} -f "$profile" "$@"
+{_with_tools(_tools_dir(launchers)) if launchers else ""}exec {SANDBOX_EXEC} -f "$profile" "$@"
 """

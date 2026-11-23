@@ -90,7 +90,6 @@ def launcher_dir() -> Path:
 #: The shells the Hermes agent's terminal tool may start (it looks ``bash`` up on its own PATH).
 HERMES_SHELLS = ("bash", "sh", "zsh")
 
-
 #: Hermes's interpreter-launcher hook point (carried patch in ``tools/code_kernel.py``): a JSON
 #: argv array put before the Python its ``execute_code`` tool starts, read from Hermes's own process.
 HERMES_LAUNCHER_ENV = "HERMES_EXECUTE_CODE_LAUNCHER"
@@ -217,11 +216,13 @@ def sync(mode: Optional[ShieldMode] = None) -> dict[str, Any]:
         text = platform.render(rules)
         _write_if_changed(profile_path(), platform.render(rules, f"sha256:{_digest(text)}"), 0o644)
         _write_if_changed(canary_path(), CANARY_TEXT, 0o644)
+        platform.refresh_tools(str(launcher_dir()), bool(chosen(mode)))   # the setuid-free ps for the sandboxed PATH (KI-589)
         _sync_launchers({command for agent in chosen(mode) for command in CLI_AGENTS.get(agent, ())})
         _sync_hermes_shells(agent_hosts.HERMES_ID in chosen(mode))
     else:
         _sync_launchers(set())
         _sync_hermes_shells(False)
+        platform.refresh_tools(str(launcher_dir()), False)
     return status(mode)
 
 
@@ -229,11 +230,11 @@ def _sync_hermes_shells(wanted: bool) -> None:
     folder = hermes_shell_dir()
     for shell in HERMES_SHELLS:
         if wanted:
-            _write_if_changed(folder / shell, platform.shell_shim(shell, str(folder), str(profile_path())), 0o755)
+            _write_if_changed(folder / shell, platform.shell_shim(shell, str(folder), str(profile_path()), str(launcher_dir())), 0o755)
         else:
             (folder / shell).unlink(missing_ok=True)
     if wanted:
-        _write_if_changed(_hermes_code_launcher(), platform.command_shim(str(profile_path())), 0o755)
+        _write_if_changed(_hermes_code_launcher(), platform.command_shim(str(profile_path()), str(launcher_dir())), 0o755)
     else:
         _hermes_code_launcher().unlink(missing_ok=True)
 
@@ -345,8 +346,6 @@ _HERMES_NOTE = ("its terminal tool's shells and its execute_code Python run insi
                 "Hermes itself and stay on hooks")
 _HERMES_SHELLS_NOTE = "its terminal tool's shells run inside the sandbox; its execute_code tool stays on hooks: "
 _LAUNCH_NOTE = "when started from a shell that has Blackbox's launchers first on PATH (see coverage)"
-
-
 NOT_INSTALLED_NOTE = "not installed on this machine yet — pick it now and it starts sandboxed once installed"
 
 
