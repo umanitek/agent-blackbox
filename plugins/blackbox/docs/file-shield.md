@@ -121,14 +121,16 @@ sandbox with real agents).
   name glued at run time any other way (`''.join(reversed(…))`, `chr()`, a value read from a file)
   can not be judged by text: that is the sandbox's job. On hooks only this is as far as a hook can read (above); in the sandbox the
   kernel refuses a write to those files and folders whatever the script computes (the login
-  window's preference files included: a direct `cp` or `plutil` of them is refused). Measured on
-  macOS 27 with a throwaway domain: a preference written through macOS's preferences service
-  (`defaults write`, `CFPreferences` from code) is written BY that service (cfprefsd), so the
-  sandbox's file rules do not see it, and Seatbelt's `user-preference-write` rule is accepted but
-  not enforced for it. The hook refuses the command; a script that does it while it runs may pass
-  on the login window's domain until the VM test of the real domain is done. A prepared rule
-  (`CLOSE_PREFERENCES_THROUGH_CFPREFSD`, off) closes cfprefsd to the sandbox so preferences are
-  written directly and the file rules hold; other preferences keep working. Reading them, and
+  window's preference files included: a direct `cp` or `plutil` of them is refused). A preference written through macOS's
+  preferences service (`defaults write`, `CFPreferences` from code) is written BY that service
+  (cfprefsd), so file rules alone do not see it (measured on macOS 27; security round 7 found the
+  real login-window and login-items domains written from inside the sandbox that way). The sandbox
+  therefore closes cfprefsd to agents (`CLOSE_PREFERENCES_THROUGH_CFPREFSD`, on since fix wave 10):
+  preferences are written directly by the agent's own process, so the file rules hold — the login
+  window's and login items' preferences stay unchanged (a refused write there is silent: `defaults`
+  still answers 0), while every other preference, git, npm and brew keep working. One cost: a
+  preference a sandboxed program writes reaches an app that is already running only when that app
+  restarts. Reading them, and
   running a program from Homebrew's folders, stays allowed. If you meant it, add the job, key or
   line yourself in your own terminal.
 - **Your own program folders are closed to writes** (`~/.local/bin`, `~/.cargo/bin`, `~/go/bin`,

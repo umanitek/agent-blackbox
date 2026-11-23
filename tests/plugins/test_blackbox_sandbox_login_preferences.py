@@ -11,10 +11,12 @@ THROWAWAY domain only - never the real login window - removed again after each t
   process writes the plist itself, so the file deny then refuses the write, while every other
   domain is still written and read, and global preferences are still read.
 
-So the rule is PREPARED (``profile.CLOSE_PREFERENCES_THROUGH_CFPREFSD``, off) for when the VM probe
-of the real domain says the installed profile lets it through. The hook refusal is already there
+So the rule (``profile.CLOSE_PREFERENCES_THROUGH_CFPREFSD``) is ON since fix wave 10: security
+round 7's VM probe of the REAL login-window and login-items domains (lw7.sh, core 96b24d43b1) found
+them written from inside the installed profile, and unchanged with the rule on, while ordinary work
+(other domains, git, npm, brew) kept running. The hook refusal is there too
 (``defaults write loginwindow …`` is a schedule, test_blackbox_persistence_scripts.py), and the
-login window's plists are persistence places now (``kernel.persistence_places.PERSISTENCE_GLOBS``):
+login window's plists are persistence places (``kernel.persistence_places.PERSISTENCE_GLOBS``):
 a direct write of them (``cp x.plist ~/Library/Preferences/com.apple.loginwindow.plist``) is refused
 by the sandbox's file deny and by the hook alike.
 """
@@ -97,20 +99,28 @@ def test_with_cfprefsd_closed_the_file_deny_holds_and_other_preferences_keep_wor
     assert _defaults("read", "-g", "AppleLocale", profile=profile).returncode in (0, 1)   # reads, found or not: no hang, no crash
 
 
-def test_the_rule_is_prepared_and_off_until_the_vm_probe_answers(tmp_path):
-    assert macos_profile.CLOSE_PREFERENCES_THROUGH_CFPREFSD is False
+def test_the_rule_is_on_and_rendered_in_the_never_list(tmp_path):
+    """Security round 7's VM probe answered: the installed profile let login-domain writes through
+    cfprefsd; the rule is on, after the never-list's mark where no permission lifts it."""
+    assert macos_profile.CLOSE_PREFERENCES_THROUGH_CFPREFSD is True
     assert macos_profile.cfprefsd_lines() == ['(deny mach-lookup (global-name "com.apple.cfprefsd.agent") '
                                               '(global-name "com.apple.cfprefsd.daemon"))']
     text = macos_profile.render(_places())
-    assert "com.apple.cfprefsd" not in text
+    assert macos_profile.cfprefsd_lines()[0] in text.split(macos_profile.NEVER_MARK)[1]
 
 
 @REAL
-def test_the_profile_with_the_rule_on_is_one_seatbelt_runs(monkeypatch, tmp_path):
-    monkeypatch.setattr(macos_profile, "CLOSE_PREFERENCES_THROUGH_CFPREFSD", True)
-    text = macos_profile.render(_places(startup_globs=(f"{tmp_path}/Library/Preferences/com.apple.loginwindow*",)))
-    assert "com.apple.cfprefsd.daemon" in text.split(macos_profile.NEVER_MARK)[1]
+def test_the_rendered_profile_refuses_a_login_domain_write_and_keeps_others_working(domain, tmp_path):
+    """The profile Blackbox renders, with a throwaway domain standing in for the login window (never
+    the real one): its ``defaults write`` leaves it unchanged, another domain is written and read."""
+    home = os.path.realpath(pwd.getpwuid(os.getuid()).pw_dir)
+    text = macos_profile.render(_places(startup_globs=(f"{home}/Library/Preferences/{domain}.p*",)))
     assert subprocess.run([macos_profile.SANDBOX_EXEC, "-p", text, "/usr/bin/true"], timeout=30, check=False).returncode == 0
+    _defaults("write", domain, "LoginHook", "-string", "/tmp/x", profile=text)
+    assert _defaults("read", domain, "LoginHook").returncode != 0   # read outside: never written
+    other = domain + "-other"
+    assert _defaults("write", other, "k", "-string", "v", profile=text).returncode == 0
+    assert _defaults("read", other, "k", profile=text).stdout.strip() == "v"
 
 
 def test_the_login_windows_preference_files_are_persistence_places(tmp_path):

@@ -101,10 +101,16 @@ NEVER_MARK = "; never-list — rendered last: no permission above lifts it"
 #: the plist files itself, as the sandboxed process — every other domain keeps working, and the
 #: file denies of the login window's and login items' preferences then hold.
 CFPREFSD_SERVICES = ("com.apple.cfprefsd.agent", "com.apple.cfprefsd.daemon")
-#: PREPARED, OFF: on once the VM probe of the real login-window domain shows the installed profile
-#: lets a ``defaults write`` through (wave 9, item 4), and real agents ran in the VM with it (a
-#: sandboxed program's preference writes then miss a running app's cfprefsd cache until it restarts).
-CLOSE_PREFERENCES_THROUGH_CFPREFSD = False
+#: ON (fix wave 10). Security round 7's VM probe (core 96b24d43b1, lw7.sh): with the installed profile
+#: a sandboxed ``defaults write com.apple.loginwindow LoginHook …`` and ``… com.apple.loginitems …``
+#: CHANGED the real domains (also through a pre-placed script, and a REAL sandboxed Codex running
+#: one); with this rule on they stayed unchanged, ``plutil`` on loginwindow.plist was refused, and
+#: ordinary work still ran inside — ``defaults write/read`` of another domain, ``defaults read -g``,
+#: git commit, npm view + install, brew --version and a brokered brew install. Known cost: a
+#: sandboxed program's preference write misses a running app's cfprefsd cache until that app
+#: restarts, and a refused login-domain write is a silent no-op (``defaults`` answers 0) — the hook
+#: still refuses the command itself.
+CLOSE_PREFERENCES_THROUGH_CFPREFSD = True
 
 
 def cfprefsd_lines() -> list[str]:
