@@ -109,11 +109,15 @@ sandbox with real agents).
   the commands that schedule a job without naming a file (`crontab -`, `at`, `launchctl
   bootstrap|load|submit`, `sfltool add-item`, `defaults write com.apple.loginwindow …`), also handed
   to another shell. On hooks only this is as far as a hook can read (above); in the sandbox the
-  kernel refuses a write to those files and folders whatever the script computes. NOT yet proven:
-  a login-window or login-item preference written through macOS's preferences service (`defaults
-  write`, `CFPreferences` from code) is written by that service, not by the agent's process, so the
-  sandbox's file rules may not see it — the hook refuses the command, a script that does it while it
-  runs may pass (a VM test is due). Reading them, and
+  kernel refuses a write to those files and folders whatever the script computes (the login
+  window's preference files included: a direct `cp` or `plutil` of them is refused). Measured on
+  macOS 27 with a throwaway domain: a preference written through macOS's preferences service
+  (`defaults write`, `CFPreferences` from code) is written BY that service (cfprefsd), so the
+  sandbox's file rules do not see it, and Seatbelt's `user-preference-write` rule is accepted but
+  not enforced for it. The hook refuses the command; a script that does it while it runs may pass
+  on the login window's domain until the VM test of the real domain is done. A prepared rule
+  (`CLOSE_PREFERENCES_THROUGH_CFPREFSD`, off) closes cfprefsd to the sandbox so preferences are
+  written directly and the file rules hold; other preferences keep working. Reading them, and
   running a program from Homebrew's folders, stays allowed. If you meant it, add the job, key or
   line yourself in your own terminal.
 - **Your own program folders are closed to writes** (`~/.local/bin`, `~/.cargo/bin`, `~/go/bin`,

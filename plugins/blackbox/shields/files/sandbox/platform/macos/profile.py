@@ -93,6 +93,23 @@ def _docker_lines(home: str) -> list[str]:
 #: The comment that opens the never-list: everything after it is rendered LAST in every profile,
 #: so no permission rule above can lift it (Seatbelt: a later rule wins).
 NEVER_MARK = "; never-list — rendered last: no permission above lifts it"
+#: cfprefsd's two services. A ``defaults write`` (any CFPreferences write) is made BY cfprefsd, so
+#: the file denies below do not hold for it, and Seatbelt's ``user-preference-write`` is accepted
+#: but not enforced for a ``sandbox-exec`` process (both measured on macOS 27 with a throwaway
+#: domain, tests/plugins/test_blackbox_sandbox_login_preferences.py). Denying BOTH lookups (never
+#: one: without only the agent's, every preference write fails) makes CFPreferences read and write
+#: the plist files itself, as the sandboxed process — every other domain keeps working, and the
+#: file denies of the login window's and login items' preferences then hold.
+CFPREFSD_SERVICES = ("com.apple.cfprefsd.agent", "com.apple.cfprefsd.daemon")
+#: PREPARED, OFF: on once the VM probe of the real login-window domain shows the installed profile
+#: lets a ``defaults write`` through (wave 9, item 4), and real agents ran in the VM with it (a
+#: sandboxed program's preference writes then miss a running app's cfprefsd cache until it restarts).
+CLOSE_PREFERENCES_THROUGH_CFPREFSD = False
+
+
+def cfprefsd_lines() -> list[str]:
+    """The rule that puts a sandboxed process's preferences in direct mode (:data:`CFPREFSD_SERVICES`)."""
+    return ["(deny mach-lookup " + " ".join(f'(global-name "{name}")' for name in CFPREFSD_SERVICES) + ")"]
 
 
 def render(places: Places, digest_line: str = "", allowances: Allowances = Allowances()) -> str:
@@ -151,6 +168,8 @@ def _never(places: Places) -> list[str]:
         lines.append("(deny file-write*\n  " + "\n  ".join(startup) + ")")
     if places.no_rename:
         lines.append("(deny file-write-unlink\n  " + "\n  ".join(f"(literal {_quote(p)})" for p in places.no_rename) + ")")
+    if CLOSE_PREFERENCES_THROUGH_CFPREFSD:
+        lines += cfprefsd_lines()
     lines.append("(deny lsopen)")   # `open -a OtherApp file`: another app would read it outside the sandbox
     lines.append("(deny process-exec " + " ".join(f"(literal {_quote(p)})" for p in APP_DRIVERS) + ")")
     lines.append(f"(deny network-outbound (remote ip {LOCAL_SSH[0]}))")   # ssh back into this Mac
@@ -165,4 +184,5 @@ def _never(places: Places) -> list[str]:
 
 
 
-__all__ = ["APP_DRIVERS", "DOCKER_PORTS", "DOCKER_SOCKETS", "DOCKER_SOCKET_GLOBS", "LOCAL_SSH", "NEVER_MARK", "NEVER_PORTS", "PASTEBOARD", "PORTS_MARK", "PROFILE_SUFFIX", "SANDBOX_EXEC", "permission_lines", "port_lines", "render"]
+__all__ = ["APP_DRIVERS", "CFPREFSD_SERVICES", "CLOSE_PREFERENCES_THROUGH_CFPREFSD", "DOCKER_PORTS", "DOCKER_SOCKETS", "DOCKER_SOCKET_GLOBS", "LOCAL_SSH", "NEVER_MARK", "NEVER_PORTS", "PASTEBOARD", "PORTS_MARK", "PROFILE_SUFFIX", "SANDBOX_EXEC", "cfprefsd_lines", "permission_lines", "port_lines",
+           "render"]

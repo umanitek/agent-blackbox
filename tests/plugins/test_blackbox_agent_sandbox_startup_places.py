@@ -61,12 +61,13 @@ mkdir -p '{home}/Library/LaunchAgents' 2>/dev/null; echo agents_dir=$?
 echo '<plist/>' > '{home}/Library/LaunchAgents/com.evil.plist' 2>/dev/null; echo agent=$?
 mkdir -p '{home}/Library/Application Support/com.apple.backgroundtaskmanagementagent' 2>/dev/null; echo btm=$?
 echo x > '{home}/Library/Preferences/com.apple.loginitems.plist' 2>/dev/null; echo loginitems=$?
+echo x > '{home}/Library/Preferences/com.apple.loginwindow.plist' 2>/dev/null; echo loginwindow=$?
 echo x > '{home}/Library/Preferences/com.example.app.plist' 2>/dev/null; echo other_pref=$?
 echo 'ssh-ed25519 AAAA x' >> '{home}/.ssh/authorized_keys' 2>/dev/null; echo authorized=$?
 echo 'touch /tmp/x' > '{home}/.ssh/rc' 2>/dev/null; echo rc=$?
 echo x > '{home}/.ssh/known_hosts' 2>/dev/null; echo known_hosts=$?
 """)
-    assert lines == {"agents_dir": "1", "agent": "1", "btm": "1", "loginitems": "1", "other_pref": "0",
+    assert lines == {"agents_dir": "1", "agent": "1", "btm": "1", "loginitems": "1", "loginwindow": "1", "other_pref": "0",
                      "authorized": "1", "rc": "1", "known_hosts": "0"}, lines
     assert not (home / "Library" / "LaunchAgents").exists() and not (home / ".ssh" / "authorized_keys").exists()
 

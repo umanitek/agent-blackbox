@@ -14,7 +14,8 @@ installs go through Blackbox's broker (``packages``), which runs brew outside.
   and login-item stores, the cron and ``at`` spools, the old StartupItems;
 * :data:`PERSISTENCE_FILES` — what OpenSSH runs or trusts at a login into this Mac
   (``~/.ssh/rc``, ``environment``, ``authorized_keys``);
-* :data:`PERSISTENCE_GLOBS` — the login-items preference files;
+* :data:`PERSISTENCE_GLOBS` — the login-items and login-window preference files (``LoginHook``,
+  ``AutoLaunchedApplicationDictionary`` start a program at login);
 * :func:`homebrew_folders` — the folders Homebrew owns in its prefix (Apple silicon
   ``/opt/homebrew``, Intel ``/usr/local`` when Homebrew is there): its programs, kegs, casks,
   taps and links. ``var`` (a brew service's data and logs) stays writable: a database the agent
@@ -67,7 +68,8 @@ PERSISTENCE_FOLDERS = (
 )
 PERSISTENCE_FILES = ("{home}/.ssh/rc", "{home}/.ssh/environment", "{home}/.ssh/authorized_keys", "{home}/.ssh/authorized_keys2",
                      "/etc/crontab")
-PERSISTENCE_GLOBS = ("{home}/Library/Preferences/com.apple.loginitems*", "{home}/Library/Preferences/com.apple.LSSharedFileList*")
+PERSISTENCE_GLOBS = ("{home}/Library/Preferences/com.apple.loginitems*", "{home}/Library/Preferences/com.apple.LSSharedFileList*",
+                     "{home}/Library/Preferences/com.apple.loginwindow*", "{home}/Library/Preferences/loginwindow*")
 #: Homebrew's prefixes and the folders it owns in each (``var`` left out on purpose, see the module doc).
 HOMEBREW_PREFIXES = ("/opt/homebrew", "/usr/local")
 HOMEBREW_OWNED = ("bin", "sbin", "Cellar", "Caskroom", "Library", "opt", "etc", "lib", "share", "include", "Frameworks",
