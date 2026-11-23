@@ -260,7 +260,47 @@ def test_on_a_clean_mac_no_keeps_the_host_with_blackbox_switched_off_in_it(clean
     assert (clean_mac / "agent-blackbox").is_dir() and (clean_mac / ".local" / "bin" / "hermes").is_symlink()
     assert HERMES_PATH_BLOCK in (clean_mac / ".zshrc").read_text(encoding="utf-8")   # Hermes still needs it
     assert not (clean_mac / "Library" / "LaunchAgents").exists()
-    assert "Kept the Hermes host" in uninstall.host_kept_note(plan) and "~/agent-blackbox" in uninstall.host_kept_note(plan)
+    assert "Kept the Hermes host" in uninstall.host_kept_note(plan)[0] and "~/agent-blackbox" in uninstall.host_kept_note(plan)[0]
+
+
+def test_a_host_kept_on_no_can_still_be_removed_later_with_the_commands_uninstall_printed(clean_mac, tmp_path):
+    """KI-630 (security round 6, variant A): after N the ``blackbox`` command and the install
+    manifest were gone, so ``--remove-host`` could never run, and the note named neither the exact
+    commands nor the installer's PATH lines in ~/.zshrc. A person who runs the printed commands and
+    deletes the printed lines has the home they had before the install, byte for byte."""
+    import subprocess
+    before, empty_before = _tree(clean_mac), _empty_folders(clean_mac)
+    _install_on_a_clean_mac(clean_mac, tmp_path / "record")
+    plan = dataclasses.replace(uninstall.build_plan(homes=[clean_mac / ".hermes"], purge=True, keep_logs=False), system="Darwin")
+    uninstall.execute(plan, run=lambda command: 0, stop_dashboard=lambda port: [], run_as_admin=lambda command: 0)
+    assert not (clean_mac / ".hermes" / "blackbox").exists()            # the manifest went with Blackbox's data
+    note = uninstall.host_kept_note(plan)
+    commands = [line.strip() for line in note[note.index("To remove it later (the blackbox command is gone with Blackbox), run:") + 1:]
+                if line.startswith("    ") and line.strip().startswith(("rm ", "rmdir "))]
+    for command in commands:
+        subprocess.run(["/bin/sh", "-c", command], check=False, timeout=60)
+    header = next(index for index, line in enumerate(note) if line.startswith("and delete these lines") and ".zshrc" in line)
+    lines = [line[4:] for line in note[header + 1:] if line.startswith("    ")]
+    zshrc = clean_mac / ".zshrc"
+    zshrc.write_text(zshrc.read_text(encoding="utf-8").replace("\n" + "\n".join(lines) + "\n", "", 1), encoding="utf-8")
+    after = _tree(clean_mac)
+    assert sorted(set(after) - set(before)) == [], f"left behind: {sorted(set(after) - set(before))}"
+    assert [name for name in before if after.get(name) != before[name]] == []
+    assert _empty_folders(clean_mac) == empty_before
+
+
+def test_the_printed_commands_leave_a_folder_the_person_filled_since_and_quote_odd_names(tmp_path):
+    """KI-630: ``rmdir`` takes a listed folder only when empty, and a name with a space or a quote
+    is one argument."""
+    import subprocess
+    odd = tmp_path / "it's a folder"
+    (odd / "inside").mkdir(parents=True)
+    filled, empty = tmp_path / "config", tmp_path / "config" / "openui"
+    empty.mkdir(parents=True)
+    (filled / "mine.txt").write_text("mine", encoding="utf-8")
+    for command in platform_macos.manual_removal([odd], [empty, filled]):
+        subprocess.run(["/bin/sh", "-c", command], check=False, timeout=60)
+    assert not odd.exists() and not empty.exists() and (filled / "mine.txt").exists()
 
 
 def test_a_hermes_the_person_had_before_blackbox_is_never_offered_for_removal(home, tmp_path):

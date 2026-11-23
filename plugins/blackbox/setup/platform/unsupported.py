@@ -1,14 +1,18 @@
 """What a system does not have: no Keychain or preferences domains, no systemd lingering, no
 per-user PATH in the registry — nothing to remove there. The other modules take the functions
-they have no use for from here.
+they have no use for from here, and macOS and Linux take the POSIX shell's spelling of the
+commands a person types (:func:`manual_removal`), which every Unix shares.
 
 Usage::
 
     delete_keychain_item("com.example.app", "token", run)   # False: not on this system
+    manual_removal([Path("/home/a/agent-blackbox")], [])    # ("rm -rf -- /home/a/agent-blackbox",)
 """
 
 from __future__ import annotations
 
+import shlex
+from pathlib import Path
 from typing import Callable, Sequence
 
 Runner = Callable[[Sequence[str]], int]
@@ -34,4 +38,15 @@ def remove_user_path_entry(_folder: str) -> bool:
     return False
 
 
-__all__ = ["delete_keychain_item", "delete_preferences", "disable_linger", "remove_user_path_entry", "stop_login_services"]
+def manual_removal(paths: Sequence[Path], empty_dirs: Sequence[Path]) -> tuple[str, ...]:
+    """The shell commands that remove *paths* (files, links as links, folders with what is in
+    them) and then each of *empty_dirs* that is empty (``rmdir`` refuses one that is not), quoted
+    for a POSIX shell. For the person to type: nothing runs here."""
+    commands = [f"rm -rf -- {shlex.join(str(path) for path in paths)}"] if paths else []
+    if empty_dirs:
+        commands.append(f"rmdir -- {shlex.join(str(path) for path in empty_dirs)} 2>/dev/null")
+    return tuple(commands)
+
+
+__all__ = ["delete_keychain_item", "delete_preferences", "disable_linger", "manual_removal", "remove_user_path_entry",
+           "stop_login_services"]

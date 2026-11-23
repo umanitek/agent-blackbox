@@ -208,11 +208,24 @@ def host_question(plan: UninstallPlan) -> str:
     return f"Blackbox also set up the Hermes host it runs in ({size}). Remove it too? [y/N] "
 
 
-def host_kept_note(plan: UninstallPlan) -> str:
-    """The one line said when the host stays."""
+def host_kept_note(plan: UninstallPlan) -> list[str]:
+    """The lines said when the host stays (KI-630): what was kept, and the exact commands that
+    remove it later — the ``blackbox`` command and the install manifest go with Blackbox, so
+    ``--remove-host`` can not run again. Worked out after the uninstall ran (Hermes may have
+    rewritten one of its own commands meanwhile). Printing beats leaving a remover behind: an
+    uninstall leaves nothing of Blackbox's, and the commands are the manifest itself, spelled out."""
     home = str(Path.home())
-    paths = ", ".join(str(path).replace(home, "~", 1) for path in plan.manifest.host)
-    return f"Kept the Hermes host Blackbox's installer set up ({paths}): delete it yourself when you no longer need it."
+    listed = ", ".join(str(path).replace(home, "~", 1) for path in plan.manifest.host)
+    kept = install_manifest.kept_host(plan.manifest)
+    lines = [f"Kept the Hermes host Blackbox's installer set up ({listed})."]
+    commands = os_platform.manual_removal(kept.paths, kept.empty_dirs)
+    if commands:
+        lines.append("To remove it later (the blackbox command is gone with Blackbox), run:")
+        lines += [f"    {command}" for command in commands]
+    for target, block in kept.appended:
+        lines.append(f"and delete these lines the installer added to {target} (your own lines there stay):")
+        lines += [f"    {line}" for line in block.strip("\n").splitlines()]
+    return lines
 
 
 def _stop_services(plan: UninstallPlan, run: Runner, report: list[str]) -> None:
@@ -327,7 +340,7 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
     for line in execute(plan, remove_host=remove_host):
         print(f"  {line}")
     if plan.manifest.has_host and not remove_host:
-        print(host_kept_note(plan))
+        print("\n".join(host_kept_note(plan)))
     print("Blackbox is uninstalled." + (f" Your keys are in {plan.backup_dir}" if plan.backup_dir and plan.key_files else ""))
     return 0
 

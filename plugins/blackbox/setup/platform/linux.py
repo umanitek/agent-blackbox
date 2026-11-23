@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Callable, Sequence
 
 from .contract import ServiceNames
-from .unsupported import delete_keychain_item, delete_preferences, remove_user_path_entry
+from .unsupported import delete_keychain_item, delete_preferences, manual_removal, remove_user_path_entry
 
 LOGINCTL = "loginctl"
 Runner = Callable[[Sequence[str]], int]
@@ -63,4 +63,5 @@ def _stop_system_units(system_units: tuple[Path, ...], run: Runner, report: list
     run(["systemctl", "daemon-reload"])
 
 
-__all__ = ["delete_keychain_item", "delete_preferences", "disable_linger", "remove_user_path_entry", "stop_login_services"]
+__all__ = ["delete_keychain_item", "delete_preferences", "disable_linger", "manual_removal", "remove_user_path_entry",
+           "stop_login_services"]

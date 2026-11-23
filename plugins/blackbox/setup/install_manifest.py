@@ -37,6 +37,7 @@ Usage::
     manifest = read(constants.blackbox_home())     # before Blackbox's home is deleted
     manifest.has_host, human_size(host_size(manifest))
     remove_own_dirs(manifest, report); remove_host(manifest, report)
+    kept_host(manifest)        # a host the person kept: what to remove by hand later (KI-630)
 """
 
 from __future__ import annotations
@@ -238,13 +239,18 @@ def _points_into(command: Path, folders: tuple[Path, ...]) -> bool:
     return bool(text) and any(str(folder) + os.sep in text for folder in folders)
 
 
+def _commands_into(home: Path, folders: tuple[Path, ...]) -> tuple[Path, ...]:
+    """Hermes's commands in ``~/.local/bin`` that lead into one of the host's *folders*."""
+    commands = (home / ".local" / "bin" / name for name in HERMES_COMMANDS)
+    return tuple(command for command in commands
+                 if (command.is_file() or command.is_symlink()) and _points_into(command, folders))
+
+
 def _remove_commands_into(home: Path, folders: tuple[Path, ...], report: list[str]) -> None:
     """Each of Hermes's commands in ``~/.local/bin`` that leads into a removed host folder."""
-    for name in HERMES_COMMANDS:
-        command = home / ".local" / "bin" / name
-        if (command.is_file() or command.is_symlink()) and _points_into(command, folders):
-            command.unlink(missing_ok=True)
-            report.append(f"removed {command} (it ran the Hermes just removed)")
+    for command in _commands_into(home, folders):
+        command.unlink(missing_ok=True)
+        report.append(f"removed {command} (it ran the Hermes just removed)")
 
 
 def remove_host(manifest: InstallManifest, report: list[str], home: Path | None = None) -> None:
@@ -267,5 +273,35 @@ def remove_host(manifest: InstallManifest, report: list[str], home: Path | None 
     _remove_empty(manifest.host_dirs, report)
 
 
-__all__ = ["BLOCKS", "FOLDER", "MANIFEST", "InstallManifest", "host_size", "human_size", "read", "remove_components",
-           "remove_host", "remove_own_dirs", "restore_system_settings"]
+@dataclass(frozen=True)
+class KeptHost:
+    """What :func:`remove_host` would take away, as the machine is now — for a host the person
+    kept (KI-630). The ``blackbox`` command and this manifest go with Blackbox, so this is all the
+    person has to remove the host by hand later: ``paths`` (files and folders, Hermes's commands
+    that lead into them included), ``empty_dirs`` (deepest first; removed only when empty) and
+    ``appended`` (startup file, the exact lines the installer added that are still in it)."""
+
+    paths: tuple[Path, ...] = ()
+    empty_dirs: tuple[Path, ...] = ()
+    appended: tuple[tuple[Path, str], ...] = ()
+
+
+def kept_host(manifest: InstallManifest, home: Path | None = None) -> KeptHost:
+    """The host *manifest* lists, as it stands now (see :class:`KeptHost`). *home* defaults to this
+    person's. Reads only."""
+    present = tuple(path for path in manifest.host if path.exists() or path.is_symlink())
+    folders = tuple(path for path in present if path.is_dir() and not path.is_symlink())
+    commands = _commands_into(Path(os.path.normpath(home or Path.home())), folders)
+    appended = []
+    for target, block in manifest.appended:
+        try:
+            if block.encode("utf-8") in target.read_bytes():   # a block the person changed is not theirs to delete as ours
+                appended.append((target, block))
+        except OSError:
+            continue
+    return KeptHost(tuple(dict.fromkeys(present + commands)),
+                    tuple(sorted(manifest.host_dirs, key=lambda path: -len(path.parts))), tuple(appended))
+
+
+__all__ = ["BLOCKS", "FOLDER", "MANIFEST", "InstallManifest", "KeptHost", "host_size", "human_size", "kept_host", "read",
+           "remove_components", "remove_host", "remove_own_dirs", "restore_system_settings"]

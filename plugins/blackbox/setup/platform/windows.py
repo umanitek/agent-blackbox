@@ -6,12 +6,14 @@ it again, every other entry kept in its order. The change is broadcast the way W
 Usage::
 
     remove_user_path_entry(r"C:\\Users\\alice\\.local\\bin")   # True when it was there and is gone
+    manual_removal([Path(r"C:\\Users\\alice\\agent-blackbox")], [])   # the PowerShell line a person types
 """
 
 from __future__ import annotations
 
 import ctypes
 from pathlib import Path
+from typing import Sequence
 
 from .contract import Runner, ServiceNames
 from .unsupported import delete_keychain_item, delete_preferences, disable_linger
@@ -54,4 +56,20 @@ def stop_login_services(names: ServiceNames, _system_units: tuple[Path, ...], ru
             report.append(f"removed scheduled task {task}")
 
 
-__all__ = ["delete_keychain_item", "delete_preferences", "disable_linger", "remove_user_path_entry", "stop_login_services"]
+def _quoted(path: Path) -> str:
+    """*path* as a PowerShell literal string ('' stands for one ')."""
+    return "'" + str(path).replace("'", "''") + "'"
+
+
+def manual_removal(paths: Sequence[Path], empty_dirs: Sequence[Path]) -> tuple[str, ...]:
+    """The PowerShell commands that remove *paths* (folders with what is in them) and then each of
+    *empty_dirs* that is empty. For the person to type: nothing runs here."""
+    commands = [f"Remove-Item -LiteralPath {','.join(map(_quoted, paths))} -Recurse -Force"] if paths else []
+    if empty_dirs:
+        commands.append(f"foreach ($d in {','.join(map(_quoted, empty_dirs))}) {{ if (-not (Get-ChildItem -LiteralPath $d -Force "
+                        "-ErrorAction SilentlyContinue)) { Remove-Item -LiteralPath $d -ErrorAction SilentlyContinue } }")
+    return tuple(commands)
+
+
+__all__ = ["delete_keychain_item", "delete_preferences", "disable_linger", "manual_removal", "remove_user_path_entry",
+           "stop_login_services"]

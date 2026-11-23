@@ -15,7 +15,9 @@ Gaps closed here, each red on the base:
 
 from __future__ import annotations
 
+import os
 import re
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -209,3 +211,21 @@ def test_removing_the_host_takes_hermes_commands_that_lead_into_it_even_unlisted
     assert not (bin_dir / "hermes-agent").exists() and not (bin_dir / "hermes-acp").is_symlink()
     assert (bin_dir / "hermes").exists()                       # another Hermes's command stays
     assert any("hermes-agent" in line and "just removed" in line for line in report)
+
+
+@pytest.mark.skipif(not (os.environ.get("BLACKBOX_TEST_PWSH") or shutil.which("pwsh")), reason="PowerShell (pwsh) is not installed")
+def test_windows_the_printed_commands_remove_a_kept_host_and_leave_a_filled_folder(tmp_path):
+    """KI-630 on Windows: the PowerShell spelling of the commands printed for a kept host removes
+    each listed path (a quote in its name included) and a listed folder only when it is empty."""
+    from plugins.blackbox.setup.platform import windows as windows_platform
+    odd = tmp_path / "it's a folder"
+    (odd / "inside").mkdir(parents=True)
+    filled, empty = tmp_path / "config", tmp_path / "config" / "openui"
+    empty.mkdir(parents=True)
+    (filled / "mine.txt").write_text("mine", encoding="utf-8")
+    script = "\n".join(windows_platform.manual_removal([odd], [empty, filled]))
+    pwsh = os.environ.get("BLACKBOX_TEST_PWSH") or shutil.which("pwsh")
+    done = subprocess.run([pwsh, "-NoProfile", "-NonInteractive", "-Command", script], capture_output=True, text=True,
+                          timeout=120, check=False)
+    assert done.returncode == 0, done.stderr
+    assert not odd.exists() and not empty.exists() and (filled / "mine.txt").exists()
