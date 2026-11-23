@@ -33,6 +33,11 @@ from dataclasses import dataclass, field
 _PATCH_HEREDOC = re.compile(
     r"(?m)^(?P<head>[^\n]*?(?<![\w./-])(?:\S*/)?apply_patch\b[^\n]*?<<-?[ \t]*(?P<quote>['\"]?)(?P<tag>\w+)(?P=quote)[^\n]*)\n"
     r"(?P<body>.*?)\n[ \t]*(?P=tag)(?P<close>['\"]?)[ \t]*$", re.DOTALL)
+#: ``apply_patch '*** Begin Patch …'`` — the patch as the program's ARGUMENT (KI-616: Codex 0.171.0's
+#: own patch tool reaches the hook as this shell command, quoted, or as its argv joined unquoted).
+_PATCH_ARGUMENT = re.compile(
+    r"(?m)^(?P<head>[^\n]*?(?<![\w./-])(?:\S*/)?apply_patch)[ \t]+(?P<quote>['\"]?)"
+    r"(?P<body>\*\*\* Begin Patch[ \t]*\n.*?\n\*\*\* End Patch)[ \t]*\n?(?P=quote)[ \t]*$", re.DOTALL)
 #: The patch format's file headers (Codex's apply_patch grammar).
 _FILE_HEADER = re.compile(r"(?m)^\*\*\* (?P<verb>Add File|Update File|Delete File|Move to): (?P<path>[^\n]+?)[ \t]*$")
 #: The patch format's own lines that are not file content.
@@ -70,9 +75,10 @@ def _parse(body: str) -> Patch:
 
 
 def split(command: str) -> tuple[str, list[Patch]]:
-    """*command* with each ``apply_patch`` heredoc's marker lines taken out, and the patches those
-    heredocs hold. A command with no patch is returned as is."""
-    if "apply_patch" not in command or "<<" not in command:
+    """*command* with each ``apply_patch`` patch's marker lines taken out — a heredoc
+    (``apply_patch <<'PATCH' …``) or the program's argument (``apply_patch '*** Begin Patch …'``) —
+    and the patches they hold. A command with no patch is returned as is."""
+    if "apply_patch" not in command or ("<<" not in command and "*** Begin Patch" not in command):
         return command, []
     patches: list[Patch] = []
 
@@ -82,9 +88,12 @@ def split(command: str) -> tuple[str, list[Patch]]:
         body = found.group("body")
         patches.append(_parse(body))
         content = [line for line in body.split("\n") if not _MARKER.match(line)]
-        return "\n".join([found.group("head"), *content, found.group("tag") + found.group("close")])
+        tail = [found.group("tag") + found.group("close")] if "tag" in found.re.groupindex else []
+        return "\n".join([found.group("head"), *content, *tail])
 
-    return _PATCH_HEREDOC.sub(take, command), patches
+    if "<<" in command:
+        command = _PATCH_HEREDOC.sub(take, command)
+    return _PATCH_ARGUMENT.sub(take, command), patches
 
 
 __all__ = ["MAX_PATCHES", "Patch", "split"]

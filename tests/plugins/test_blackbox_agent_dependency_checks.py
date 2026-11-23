@@ -174,3 +174,30 @@ def test_an_ordinary_post_tool_call_is_not_judged_as_an_install(project, tmp_pat
     assert answer["decision"] == "allow"
     assert _rows(tmp_path, "claude-code", events.LANDED_EVENT) == []
     assert _rows(tmp_path, "claude-code", events.NOTES_EVENT) == []
+
+
+#: KI-616 (round 5, REAL Codex 0.171.0, s5-cxap2 / s5-cxdD): Codex's own patch tool reached the hook
+#: as a shell call with the patch as apply_patch's ARGUMENT — quoted, or its argv joined — and the
+#: patch's ``***`` lines were read as wildcards: every package.json patch was refused as "Change to
+#: Blackbox's own settings", a harmless one too.
+def _codex_patch_calls(added: str) -> list[dict]:
+    patch = f'*** Begin Patch\n*** Update File: package.json\n@@\n   "dependencies": {{\n-    {OLD}\n+    {OLD},\n+    {added}\n   }}\n*** End Patch'
+    return [{"tool_name": "Bash", "tool_input": {"command": f"apply_patch '{patch}'"}},
+            {"tool_name": "Bash", "tool_input": {"command": ["apply_patch", patch]}}]
+
+
+def test_a_codex_patch_argument_adding_a_harmless_dependency_is_allowed(project):
+    manifest = project / "package.json"
+    for payload in _codex_patch_calls('"lodash": "4.17.21"'):
+        manifest.write_text(MANIFEST, encoding="utf-8")
+        answer = events.record_event(runner.summary("codex", "pre_tool", {"session_id": "s", "cwd": str(project), **payload}))
+        assert answer["decision"] == "allow", answer
+
+
+def test_a_codex_patch_argument_adding_a_listed_dependency_is_refused_for_that_reason(project):
+    manifest = project / "package.json"
+    for payload in _codex_patch_calls('"left-pad": "1.3.0"'):
+        manifest.write_text(MANIFEST, encoding="utf-8")
+        answer = events.record_event(runner.summary("codex", "pre_tool", {"session_id": "s", "cwd": str(project), **payload}))
+        assert answer["decision"] == "block" and "left-pad@1.3.0" in answer["message"], answer
+        assert "self-protection" not in answer["message"] and "own settings" not in answer["message"], answer["message"]
