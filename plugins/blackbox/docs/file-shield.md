@@ -201,7 +201,12 @@ plugins:
 ```
 
 Agents on hooks only (not in the sandbox) get the folder rules and the startup places through their
-hooks; the other permissions need the sandbox.
+hooks; the other permissions need the sandbox. The hook reads the same folder rules the profile is
+built from, for the agent and the folder it works in: a folder kept out refuses any touch (reading,
+listing, a `cd`, writing, a whole-tree command on a folder above it); a read-only folder refuses
+writes, redirects, deletes, moves, new files and permission changes there, and stays readable. Like
+every hook check, it judges what a call names: a program that builds a path while it runs is stopped
+only by the sandbox.
 
 ## Setting
 

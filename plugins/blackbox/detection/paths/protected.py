@@ -114,7 +114,8 @@ def _folder_holds(folder: str, pattern: str) -> bool:
     return place == norm_folder or place.startswith(norm_folder.rstrip(os.sep) + os.sep)
 
 
-def _accesses(tool_name: str, args: Any, *, whole: bool = False, every_route: bool = False) -> list[tuple[str, str, str]]:
+def _accesses(tool_name: str, args: Any, *, whole: bool = False, every_route: bool = False,
+              changes: bool = False) -> list[tuple[str, str, str]]:
     """``(tool, path, mode)`` for each file this call reads or copies: the file tool's
     path, every path a terminal command reads, copies or archives (``mode`` is ``read`` or
     ``copy``; where a copy writes is left out), the paths in code a code tool runs, and — for
@@ -122,7 +123,8 @@ def _accesses(tool_name: str, args: Any, *, whole: bool = False, every_route: bo
     arguments. *whole*: read a long command whole (Blackbox's own protection) rather than by
     the bounded window every other check reads. *every_route*: also where a command WRITES and
     every path it names at all (``ls``, ``rm``, ``touch``, ``cd`` …) — for a list nothing may touch
-    by any route (File Shield's protected items), not only what would leave a secret."""
+    by any route (File Shield's protected items), not only what would leave a secret. *changes*:
+    with *every_route*, a named path counts only for a command that changes it (:data:`_CHANGE_COMMANDS`)."""
     access = action_parsing.file_access_arg(tool_name, args)
     if access:
         return [(access["tool"], access["path"], access["mode"])]
@@ -132,7 +134,7 @@ def _accesses(tool_name: str, args: Any, *, whole: bool = False, every_route: bo
                 for arg in shell_files.code_file_args(args["code"])]   # KI-470
     if tool in shell_shapes.SHELL_TOOLS:
         return [found for command in _commands(tool_name, args, whole)
-                for found in _command_accesses(tool, command, every_route=every_route)]
+                for found in _command_accesses(tool, command, every_route=every_route, changes=changes)]
     if not isinstance(args, dict):
         return []
     found: list[tuple[str, str, str]] = []
@@ -141,9 +143,10 @@ def _accesses(tool_name: str, args: Any, *, whole: bool = False, every_route: bo
             continue
         if _COMMAND_ARG.search(str(key)):
             found += _command_accesses(tool, shell_shapes.with_nested_commands(value[:_MAX_ARG_CHARS]),
-                                       every_route=every_route)
+                                       every_route=every_route, changes=changes)
         elif _PATH_ARG.search(str(key)):   # a search query that happens to hold a path is not a file access
-            mode = "copy" if re.search(r"grep|search|find|copy|archive|zip|sync", tool) else "read"
+            mode = ("write" if changes and _WRITING_TOOL.search(tool) else
+                    "copy" if re.search(r"grep|search|find|copy|archive|zip|sync", tool) else "read")
             found.append((tool, value.strip(), mode))
     return found
 
@@ -170,14 +173,19 @@ def _commands(tool_name: str, args: Any, whole: bool) -> list[str]:
     return [bounded, shell_shapes.with_nested_commands(middle)] if middle and _PATH_SIGN.search(middle) else [bounded]
 
 
-def _command_accesses(tool: str, command: str, *, every_route: bool = False) -> list[tuple[str, str, str]]:
+def _command_accesses(tool: str, command: str, *, every_route: bool = False, changes: bool = False) -> list[tuple[str, str, str]]:
     """The reads and copies of *command*, through the one shell-path parser (:mod:`.shell_files`);
-    *every_route*: also its writes and every path it names (:func:`_named_paths`)."""
+    *every_route*: also its writes and every path it names (:func:`_named_paths`); *changes*: only
+    its writes and the paths named to a command that changes them."""
     names = _find_names(command) if "find" in command else ()
     found = [(tool, arg.path, "write" if arg.destination else "copy-names:" + "\x00".join(names)
               if arg.command == "find" and names else "copy" if arg.recursive else "read")
              for arg in shell_files.shell_file_args(command) if every_route or not arg.destination]
-    return found + [(tool, path, "tree" if tree else "name") for path, tree in _named_paths(command)] if every_route else found
+    if not every_route:
+        return found
+    named = [(tool, path, "tree" if verb in _TREE_COMMANDS else "write" if changes else "name")
+             for path, verb in _named_paths(command) if not changes or verb in _CHANGE_COMMANDS]
+    return [each for each in found if each[2] == "write"] + named if changes else found + named
 
 
 #: Commands that act on a folder's whole tree (delete, move, re-own, re-permission, sync, pack):
@@ -185,14 +193,21 @@ def _command_accesses(tool: str, command: str, *, every_route: bool = False) -> 
 _TREE_COMMANDS = frozenset({"rm", "rmdir", "mv", "chmod", "chown", "chgrp", "chflags", "xattr", "trash", "srm",
                             "shred", "unlink", "find", "rsync", "ditto", "tar", "zip", "7z", "cp", "scp", "ln",
                             "del", "rd", "remove-item", "move-item", "copy-item", "robocopy", "xcopy"})
+#: Commands that change what they name (a folder kept read-only refuses them): delete, move, link,
+#: create, re-own, re-permission, a redirect (``>``). Readers that may also write (``sed``, ``dd``) are left to the sandbox.
+_CHANGE_COMMANDS = frozenset({">", "rm", "rmdir", "mv", "chmod", "chown", "chgrp", "chflags", "xattr", "trash", "srm", "shred",
+                              "unlink", "ln", "touch", "mkdir", "truncate", "tee", "install", "del", "rd", "remove-item",
+                              "move-item", "rename-item", "new-item", "set-content", "add-content", "out-file"})
+#: A non-shell tool (an MCP tool) whose name says it writes the path it is given.
+_WRITING_TOOL = re.compile(r"write|edit|create|delete|remove|move|rename|patch|save|upload|mkdir", re.IGNORECASE)
 
 
-def _named_paths(command: str) -> list[tuple[str, bool]]:
+def _named_paths(command: str) -> list[tuple[str, str]]:
     """Every path *command* names in any word, whatever the command does with it (``rm``, ``ls``,
     ``touch``, ``chmod``, ``mv``, a redirect target, ``cd``), with variables set on the line put in,
     a relative path placed under the folder an earlier ``cd`` moved to, and the home folder
     written ``~``. WHY: for an item nothing may touch, an unknown command naming it is enough —
-    the list of commands that read files can never be complete."""
+    the list of commands that read files can never be complete. Each comes with its command's name."""
     words = shell_files._with_variables(shell_files._words(command))
     folder, found, index, verb = "", [], 0, ""
     while index < len(words):
@@ -202,7 +217,7 @@ def _named_paths(command: str) -> list[tuple[str, bool]]:
             moved, index = shell_files._cd(words, index, folder)
             folder, verb = moved, ""
             if moved:
-                found.append((moved, False))
+                found.append((moved, "cd"))
             continue
         index += 1
         if word in shell_files._SEPARATORS:
@@ -219,7 +234,8 @@ def _named_paths(command: str) -> list[tuple[str, bool]]:
         path = word.split("=", 1)[1] if word.startswith(("if=", "of=")) else word
         if folder and not shell_files._is_anchored(path):
             path = folder.rstrip("/") + "/" + path.removeprefix("./")
-        found.append((shell_files._home_as_tilde(path), verb in _TREE_COMMANDS))
+        redirected = index > 1 and words[index - 2] in (">", ">>", ">|", "&>", "&>>")   # a redirect target is written
+        found.append((shell_files._home_as_tilde(path), ">" if redirected else verb))
     return list(dict.fromkeys(found))
 
 
@@ -309,17 +325,20 @@ class PathTouch(NamedTuple):
 
 
 def touches(tool_name: str, args: Any, patterns: Iterable[str], *, whole: bool = False,
-            first_only: bool = False, every_route: bool = False) -> list[PathTouch]:
+            first_only: bool = False, every_route: bool = False, changes: bool = False) -> list[PathTouch]:
     """Every (path, pattern) this call reaches among *patterns* — the reusable answer for any list
     of protected places (the person's, Blackbox's own keys, File Shield's). *whole*: read a long
     command whole (for a rule that must not be outrun); *first_only*: stop at the first;
     *every_route*: any touch at all counts — writes, deletes, moves, listings, a ``cd`` into it —
-    not only reading or copying (File Shield's protected items)."""
+    not only reading or copying (File Shield's protected items); *changes*: only what WRITES, deletes,
+    moves, creates or re-permissions there — a folder kept read-only (``mode`` ``write`` or ``tree``)."""
     wanted = [str(p) for p in (patterns or []) if str(p or "").strip()]
     found: list[PathTouch] = []
     if not wanted:
         return found
-    for tool, path, mode in _accesses(tool_name, args, whole=whole, every_route=every_route):
+    for tool, path, mode in _accesses(tool_name, args, whole=whole, every_route=every_route or changes, changes=changes):
+        if changes and mode not in ("write", "tree"):
+            continue
         path = shell_files._home_as_tilde(path)   # a file tool's "$HOME/…" is the same "~/…"
         for pattern in wanted:
             if _protects(path, mode, pattern):

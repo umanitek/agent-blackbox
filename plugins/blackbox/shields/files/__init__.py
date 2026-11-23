@@ -8,6 +8,8 @@ mode; every attempt is recorded and shown; protect on demand; unprotecting asks 
 
 * :mod:`.protect` — inside Blackbox's guard: the refusal (``files:file-hit`` / ``files:folder-hit``)
   and the prompt flag (``files:protected-mention``);
+* :mod:`.folder_rules` — the person's folder rules (kept out / read only) judged by the hook
+  layer from the same answer the sandbox profile renders (F9, LES-137);
 * :mod:`.changes` — the system protection helper's real-time changes (FSEvents), signed;
 * :mod:`.watched` — what a watched folder's scan found (new and known-bad files), reported by
   an add-on and worded here as alerts;
@@ -32,9 +34,10 @@ import fnmatch
 from pathlib import Path
 from typing import Any, Mapping
 
+from ...detection import Finding
 from ...kernel import agent_hosts
 from ..contract import Capability, Shield, ShieldMode
-from . import alerts, api, changes, events, mode, protect, sandbox, status, watched
+from . import alerts, api, changes, events, folder_rules, mode, protect, sandbox, status, watched
 
 #: What another package (an add-on) may use: the shield, its mode (watched folders,
 #: protected items), its real-time changes, its events and :mod:`.watched` (where a watched
@@ -70,6 +73,11 @@ def allows(_finding: Mapping[str, Any], current: ShieldMode) -> bool:
     return current.enabled
 
 
+def detect(tool_name: str, args: Any, current: ShieldMode) -> list[Finding]:
+    """File Shield's findings for one tool call: a protected item, else a folder rule."""
+    return protect.detect(tool_name, args, current) or folder_rules.detect(tool_name, args)
+
+
 def describe_change(option: str, values: list[str], added: bool) -> str:
     """The approval dialog's sentence for a File Shield list change that turns protection down."""
     if option in (mode.OPT_SANDBOXED, mode.OPT_DECLINED):
@@ -86,7 +94,7 @@ def describe_change(option: str, values: list[str], added: bool) -> str:
 FILES = Shield(
     id=mode.SHIELD_ID, name="File Shield",
     tagline="Keep every AI agent away from the files and folders you protect — and see new files arrive.",
-    beta=True, mode=_current_mode, validate=mode.validate, detect=protect.detect,
+    beta=True, mode=_current_mode, validate=mode.validate, detect=detect,
     claims=claims, allows=allows, status=status.build, events=events.report, settings_fields=mode.fields,
     finding_kinds=FINDING_KINDS, capabilities=CAPABILITIES, packs=HERE / "packs",
     page=HERE / "page" / "files.html", attacks=HERE / "attacks.json", api=api.API,

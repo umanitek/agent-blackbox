@@ -178,19 +178,20 @@ def _merge(verdicts: list[Mapping[str, Any]]) -> dict[str, Any]:
     return {"findings": findings, "blocked": blocked, "decision": decision, "message": message, "notes": notes}
 
 
-def _tool_verdicts(tool_name: str, args: Any, cwd: str = "") -> list[Mapping[str, Any]]:
-    """The tool call itself, run in the agent's folder *cwd* — and, for Codex's ``apply_patch``,
+def _tool_verdicts(tool_name: str, args: Any, cwd: str = "", agent: str = "") -> list[Mapping[str, Any]]:
+    """The tool call itself, run by *agent* in its folder *cwd* — and, for Codex's ``apply_patch``,
     each file it touches as a write (a deletion as a whole-file write, an update or addition with
     the patch as its edit)."""
-    verdicts = [guard.tool_call_verdict(tool_name=tool_name, args=args, cwd=cwd)]
+    verdicts = [guard.tool_call_verdict(tool_name=tool_name, args=args, cwd=cwd, agent=agent)]
     if tool_name == "read_file" and isinstance(args, dict) and isinstance(args.get("paths"), list):
         # One call that reads several files (Cline's read_files): each file is judged.
-        verdicts += [guard.tool_call_verdict(tool_name="read_file", args={"path": str(path)}, cwd=cwd) for path in args["paths"][1:50]]
+        verdicts += [guard.tool_call_verdict(tool_name="read_file", args={"path": str(path)}, cwd=cwd, agent=agent)
+                     for path in args["paths"][1:50]]
     if tool_name == "apply_patch" and isinstance(args, dict):
         patch = str(args.get("patch") or "")
         for path in patch_files(patch):
             deleted = f"*** Delete File: {path}" in patch
-            verdicts.append(guard.tool_call_verdict(tool_name="write_file", cwd=cwd,
+            verdicts.append(guard.tool_call_verdict(tool_name="write_file", cwd=cwd, agent=agent,
                                                     args={"path": path, "content": ""} if deleted else {"path": path, "patch": patch}))
     return verdicts
 
@@ -198,7 +199,7 @@ def _tool_verdicts(tool_name: str, args: Any, cwd: str = "") -> list[Mapping[str
 def _verdict(event: Mapping[str, Any]) -> dict[str, Any]:
     kind, text = event["event"], event["text"]
     if kind == "pre_tool" and event["tool_name"]:
-        verdicts = _tool_verdicts(event["tool_name"], event["args"], event["cwd"])
+        verdicts = _tool_verdicts(event["tool_name"], event["args"], event["cwd"], event["agent"])
         if text:   # a file a pre-read hook is about to let the agent read
             verdicts.append(guard.text_verdict([("in-tool-output", text)]))
         return _merge(verdicts)

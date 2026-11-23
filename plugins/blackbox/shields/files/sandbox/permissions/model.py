@@ -164,6 +164,16 @@ class Settings:
 
 
 @dataclass(frozen=True)
+class FolderLimits:
+    """The folder rules in force for one agent in one folder, as canonical (real) paths: ``hidden``
+    kept out (no read, no write), ``read_only`` readable only. The ONE answer both layers read —
+    the sandbox profile (:class:`Allowances`) and the hook judgement — so they can not drift (LES-137)."""
+
+    hidden: tuple[str, ...] = ()
+    read_only: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class Allowances:
     """What one profile lets through — the OS-neutral input a platform module renders.
 
@@ -225,5 +235,5 @@ class PermissionChange:
     request: str = ""
 
 
-__all__ = ["Access", "Allowances", "Choice", "FolderRule", "Mode", "Never", "OnceGrant", "Permission", "PermissionChange",
+__all__ = ["Access", "Allowances", "Choice", "FolderLimits", "FolderRule", "Mode", "Never", "OnceGrant", "Permission", "PermissionChange",
            "PermissionRequest", "Route", "Rule", "Scope", "Settings"]

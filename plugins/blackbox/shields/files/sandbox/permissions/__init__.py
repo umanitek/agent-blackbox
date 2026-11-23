@@ -35,7 +35,7 @@ from . import answers, catalogue, grants, requests
 from .api import API_WEAKENING, API_WRITES, view
 from .catalogue import BY_ID, NEVER, NOT_CONTROLLABLE, PERMISSIONS, profile_permissions
 from .judge import loosened
-from .model import Access, Allowances, Choice, FolderRule, Mode, Permission, PermissionRequest, Route, Rule, Scope, Settings
+from .model import Access, Allowances, Choice, FolderLimits, FolderRule, Mode, Permission, PermissionRequest, Route, Rule, Scope, Settings
 from .section import SECTION, current, parse, stored, validate_section, with_legacy
 
 kernel_settings.SECTION_VALIDATORS[SECTION] = validate_section
@@ -46,6 +46,17 @@ def decide(permission: str, agent: str = "", folder: str = "") -> Mode:
     return current().mode(BY_ID[permission], agent, folder)
 
 
+def folder_limits(settings: Settings, agent: str = "", folder: str = "") -> FolderLimits:
+    """The folder rules that apply to *agent* working in absolute *folder* ("" = no project), as
+    canonical paths (the kernel matches real paths): kept out, and read only unless also kept out.
+    The sandbox profile (:func:`allowances`) and the hook judgement (``files.folder_rules``) both
+    read this one answer (LES-137, F9)."""
+    real = [(os.path.realpath(os.path.expanduser(each.path)), each.access) for each in settings.folder_rules(agent, folder)]
+    hidden = tuple(dict.fromkeys(path for path, access in real if access is Access.NONE))
+    read_only = tuple(dict.fromkeys(path for path, access in real if access is Access.READ and path not in hidden))
+    return FolderLimits(hidden=hidden, read_only=read_only)
+
+
 def allowances(settings: Settings, agent: str = "", folder: str = "") -> Allowances:
     """What one profile lets through for *agent* working in absolute *folder* ("" = no project):
     the profile-route permissions in force as ALLOW, local-ports' reachable ports, and the folder
@@ -53,16 +64,13 @@ def allowances(settings: Settings, agent: str = "", folder: str = "") -> Allowan
     profile until the person answers (a profile is fixed when the agent starts)."""
     lifted = frozenset(each.id for each in profile_permissions() if settings.mode(each, agent, folder) is Mode.ALLOW)
     refused = frozenset(each.id for each in profile_permissions()) - lifted
-    rules = settings.folder_rules(agent, folder)
-    real = [(os.path.realpath(os.path.expanduser(each.path)), each.access) for each in rules]
-    hidden = tuple(dict.fromkeys(path for path, access in real if access is Access.NONE))
-    read_only = tuple(dict.fromkeys(path for path, access in real if access is Access.READ and path not in hidden))
+    limits = folder_limits(settings, agent, folder)
     tools: tuple[list[str], list[str]] = ([], [])
     if "tool-folders" not in lifted:
         tools = persistence_places.user_path_folders(os.path.realpath(os.path.expanduser("~")), os.environ.get("PATH", ""),
                                                      getattr(os, "getuid", lambda: -1)(), exclude=(os.path.realpath(constants.blackbox_home()),))
     return Allowances(lifted=lifted, refused=refused, ports=settings.ports("local-ports", agent, folder),
-                      dashboard_port=load_blackbox_config().dashboard_port, hidden=hidden, read_only=read_only,
+                      dashboard_port=load_blackbox_config().dashboard_port, hidden=limits.hidden, read_only=limits.read_only,
                       tool_folders=tuple(tools[0]), tool_globs=tuple(tools[1]))
 
 
@@ -140,7 +148,7 @@ def section_weakening(raw: Any) -> list[str]:
 
 
 __all__ = ["ALLOWED", "API_WEAKENING", "API_WRITES", "BY_ID", "NEVER", "NOT_CONTROLLABLE", "PERMISSIONS", "REFUSED",
-           "SECTION", "WAITING", "Access", "Allowances", "Choice", "FolderRule", "Mode", "Permission",
+           "SECTION", "WAITING", "Access", "Allowances", "Choice", "FolderLimits", "FolderRule", "Mode", "Permission",
            "PermissionRequest", "Route", "Rule", "Scope", "Settings", "allowances", "answers", "ask",
-           "broker_decision", "catalogue", "current", "decide", "grants", "loosened", "refused", "requests",
+           "broker_decision", "catalogue", "current", "decide", "folder_limits", "grants", "loosened", "refused", "requests",
            "section_weakening", "stored", "validate_section", "view"]
