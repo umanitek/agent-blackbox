@@ -8,6 +8,7 @@ functions in a sandbox HOME, break the install on purpose, and check what is lef
 
 from __future__ import annotations
 
+import itertools
 import json
 import os
 import pty
@@ -124,9 +125,24 @@ blackbox_dkg() {{ echo "dkg $*" >>"$HOME/calls"; }}
 """
 
 
+_SCRIPT_NUMBERS = itertools.count()
+
+
+def _bash(directory: Path, script: str) -> list[str]:
+    """The argv that runs *script* from a file in *directory* (outside any home under test).
+
+    WHY a file, not ``bash -c <script>``: these scripts carry whole installer sections (tens of
+    KB). Started through the test runner on a Mac, a ``bash -c`` with such an argument took ~12 s
+    before its first command ran (measured: the same text as a file, 0.01 s), which put this
+    file at the runner's 300 s limit. bash runs a file exactly as it runs -c text."""
+    path = directory / f"under-test-{next(_SCRIPT_NUMBERS)}.sh"
+    path.write_text(script, encoding="utf-8")
+    return ["bash", str(path)]
+
+
 def _run(paths: dict[str, Path], body: str, **kwargs) -> subprocess.CompletedProcess[str]:
     _isolated_bin(paths["bin"], paths["service_calls"])
-    return subprocess.run(["bash", "-c", _script(paths, body)], capture_output=True, text=True,
+    return subprocess.run(_bash(paths["home"].parent, _script(paths, body)), capture_output=True, text=True,
                           check=False, timeout=60, **kwargs)
 
 
@@ -208,7 +224,7 @@ install_record_commit
 #: the test below): a tiny launcher resets SIGINT, then becomes bash (no preexec_fn).
 _WITH_DEFAULT_SIGINT = [sys.executable, "-c",
                         "import os, signal, sys; signal.signal(signal.SIGINT, signal.SIG_DFL); "
-                        "os.execvp('bash', ['bash', '-c', sys.argv[1]])"]
+                        "os.execvp('bash', ['bash', sys.argv[1]])"]
 
 
 def test_ctrl_c_rolls_the_install_back(tmp_path: Path) -> None:
@@ -221,12 +237,12 @@ def test_ctrl_c_rolls_the_install_back(tmp_path: Path) -> None:
     paths = _sandbox(tmp_path)
     ready = tmp_path / "ready"
     _isolated_bin(paths["bin"], paths["service_calls"])
-    process = subprocess.Popen([*_WITH_DEFAULT_SIGINT, _script(paths, f"""
+    process = subprocess.Popen([*_WITH_DEFAULT_SIGINT, _bash(tmp_path, _script(paths, f"""
 install_record_begin
 mkdir -p "$BLACKBOX_INSTALL_ROOT"
 touch {shlex.quote(str(ready))}
 while :; do sleep 0.1; done
-""")], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
+"""))[1]], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
     try:
         assert wait_until(ready.exists, timeout=180), "the installer never reached its ready point"
         os.killpg(process.pid, signal.SIGINT)
@@ -346,7 +362,7 @@ BLACKBOX_DEFAULT_CONTEXT_GRAPH_ID=graph
 BLACKBOX_DKG_ALREADY_RUNNING={'true' if running else 'false'}
 ensure_blackbox_dkg_config
 """
-    result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=False, timeout=60)
+    result = subprocess.run(_bash(tmp_path, script), capture_output=True, text=True, check=False, timeout=60)
     assert result.returncode == 0, result.stdout + result.stderr
     return json.loads((home / "config.json").read_text(encoding="utf-8"))["store"]
 
@@ -441,7 +457,7 @@ BLACKBOX_INSTALL_ROOT={shlex.quote(str(install_root))}
 BLACKBOX_DKG_HOME="$BLACKBOX_INSTALL_ROOT/.dkg"
 {body}
 """
-    return subprocess.run(["bash", "-c", script], stdin=subprocess.DEVNULL, capture_output=True, text=True,
+    return subprocess.run(_bash(tmp_path, script), stdin=subprocess.DEVNULL, capture_output=True, text=True,
                           check=False, timeout=60, start_new_session=True)
 
 
@@ -511,7 +527,7 @@ BLACKBOX_AUTO_DASHBOARD=0
 verify_install
 echo committed
 """
-    return subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=False, timeout=60)
+    return subprocess.run(_bash(tmp_path, script), capture_output=True, text=True, check=False, timeout=60)
 
 
 def test_the_install_is_kept_only_when_every_part_answers(tmp_path: Path) -> None:
@@ -615,7 +631,7 @@ PATH={shlex.quote(str(bin_dir))}
 require_docker_for_blazegraph
 echo "opened=${{BLACKBOX_OPENED_DOCKER_DESKTOP:-false}}" >>{shlex.quote(str(calls))}
 """
-    subprocess.run(["bash", "-c", script], check=False, timeout=60)
+    subprocess.run(_bash(tmp_path, script), check=False, timeout=60)
     return calls.read_text(encoding="utf-8").splitlines()
 
 
@@ -664,7 +680,7 @@ PATH={shlex.quote(str(bin_dir))}
 BLACKBOX_DKG_STORE_BACKEND={backend}
 require_docker_for_blazegraph || true
 """
-    subprocess.run(["bash", "-c", script], check=False, timeout=60)
+    subprocess.run(_bash(tmp_path, script), check=False, timeout=60)
     return said.read_text(encoding="utf-8").splitlines() if said.exists() else []
 
 
