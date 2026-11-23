@@ -30,7 +30,8 @@ scheduled an ``at`` job — the sandbox refused all of them, the hooks none):
   (:attr:`HookPlaces.starts`) and Homebrew's program folders (:attr:`HookPlaces.programs`, where
   running and reading what is there is the person's everyday work — only a write is judged);
 * :func:`schedules` — a command that leaves a job in one of these places without naming it
-  (``crontab -``, ``at``, ``launchctl submit``, a login item made through System Events);
+  (``crontab -``, ``at``, ``launchctl submit``, a login item made through System Events, ``sfltool
+  add-item``, a ``defaults write`` of the login window's or login items' preferences);
 * :func:`describe` — the words for a place in a refusal ("an SSH login file").
 
 The person's own program folders (``~/.local/bin``, ``~/.cargo/bin``, ``~/bin`` and the other PATH
@@ -174,10 +175,20 @@ def _with_real_spellings(places: list[str] | tuple[str, ...]) -> tuple[str, ...]
 _ONLY_LOOK = {"crontab": frozenset({"-l", "-r"}), "at": frozenset({"-l", "-r", "-c", "-d"}), "batch": frozenset()}
 _LOADS = {"launchctl": frozenset({"load", "bootstrap", "submit", "enable", "kickstart"}),
           "systemctl": frozenset({"enable", "link"})}
+#: ``sfltool``'s verbs that add a login item or reset the record of them (the person's own
+#: approvals of what starts at login) — security round 6: ``sfltool add-item`` passed the hook.
+_SFLTOOL_CHANGES = frozenset({"add-item", "resetbtm"})
+#: ``defaults``' verbs that write a preference domain.
+_DEFAULTS_WRITES = frozenset({"write", "import"})
+#: The preference domains that start something at login: the login window's (``LoginHook``,
+#: ``AutoLaunchedApplicationDictionary``) and the login items' — as a domain, by its short name or
+#: as a plist path (round 6: ``defaults write loginwindow AutoLaunchedApplicationDictionary
+#: -array-add …`` passed the hook).
+_LOGIN_DOMAIN = re.compile(r"(?:^|[/.])(?:loginwindow|loginitems)(?:\.plist)?$", re.IGNORECASE)
 #: Programs that run another program given as their words.
 _RUNS_ANOTHER = frozenset({"xargs", "parallel", "watch"})
 #: Every program :func:`schedules` judges.
-_SCHEDULERS = frozenset({*_ONLY_LOOK, *_LOADS, "osascript"})
+_SCHEDULERS = frozenset({*_ONLY_LOOK, *_LOADS, "osascript", "sfltool", "defaults"})
 
 
 def _program(word: str) -> str:
@@ -191,7 +202,8 @@ _LOGIN_ITEM = re.compile(r"\blogin\s+item\b", re.IGNORECASE)
 def schedules(name: str, rest: list[str]) -> bool:
     """True when command *name* (its program name, lower case) with words *rest* leaves a job that
     starts by itself later: ``crontab -``, ``at now + 1 hour``, ``launchctl submit …``,
-    ``systemctl --user enable x``, ``osascript -e '… make login item …'``."""
+    ``systemctl --user enable x``, ``osascript -e '… make login item …'``, ``sfltool add-item …``
+    (or ``resetbtm``), ``defaults write com.apple.loginwindow …`` / ``… loginitems …``."""
     if name in _RUNS_ANOTHER:   # ``xargs launchctl load``: the command it runs, with its words
         found = next((index for index, word in enumerate(rest) if _program(word) in _SCHEDULERS), None)
         return found is not None and schedules(_program(rest[found]), rest[found + 1:])
@@ -203,6 +215,11 @@ def schedules(name: str, rest: list[str]) -> bool:
         return any(word in _LOADS[name] for word in rest[:3]) and (name != "systemctl" or "--user" in rest)
     if name == "osascript":
         return any(_LOGIN_ITEM.search(word) for word in rest)
+    if name == "sfltool":
+        return any(word.lower() in _SFLTOOL_CHANGES for word in rest)
+    if name == "defaults":
+        verb = next((at for at, word in enumerate(rest) if word.lower() in _DEFAULTS_WRITES), None)
+        return verb is not None and any(_LOGIN_DOMAIN.search(word) for word in rest[verb + 1:verb + 4] if not word.startswith("-"))
     return False
 
 
