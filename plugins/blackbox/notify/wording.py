@@ -20,7 +20,7 @@ import os
 from typing import Any, Mapping, Optional
 
 from ..audit import SANDBOX_RECORDER
-from ..kernel import threat_ids
+from ..kernel import persistence_places, threat_ids
 from ..kernel.agent_hosts import BY_ID, DECISION_TOO_LATE
 from .model import Notice
 
@@ -91,6 +91,8 @@ def finding(row: Mapping[str, Any]) -> Optional[Notice]:
                       **common)
     what = WHAT.get(str(row.get("category") or ""), "did something Blackbox watches for")
     why = WHY.get(str(row.get("source") or ""), "a Blackbox rule covers it")
+    if persistence_places.is_startup_item(identifier):
+        what, why = "tried to leave something that starts by itself later", "nothing an agent leaves may run outside its checks"
     if threat_ids.is_self_protection(identifier):
         # Blackbox protecting itself, said as that (KI-PENDING-c4249e: it read "reached for a sensitive file").
         what, why = SELF_PROTECTION_WHAT.get(str(row.get("title") or ""), SELF_PROTECTION_WHAT[""]), "Blackbox protects itself"

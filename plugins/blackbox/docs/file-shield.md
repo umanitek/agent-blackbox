@@ -83,6 +83,20 @@ yourself.
   open, copy, list, change, move, link or delete a protected item, or rename a folder above one,
   or change Blackbox itself. The kernel refuses it; no hook is needed and none can be skipped.
   Each refusal is shown with the program's name and counts as a File Shield hit.
+- **Nothing is left to start by itself later — for every agent, sandboxed or not.** The places
+  something starts from on its own or that you run later — launchd jobs (`~/Library/LaunchAgents`
+  and the system's), login and background items, cron and `at`, OpenSSH's login files
+  (`~/.ssh/authorized_keys`, `authorized_keys2`, `rc`, `environment`), your shell startup files and
+  Homebrew's own folders — are ONE list (`kernel/persistence_places`). The sandbox's profile closes
+  them to writes, and Blackbox's hooks refuse an agent's write to them in every mode, by any route
+  (`>>`, `tee`, `cp`, a script, Python, a file tool, Codex's `apply_patch`), plus the commands that
+  schedule a job without naming a file (`crontab -`, `at`, `launchctl submit`). Reading them, and
+  running a program from Homebrew's folders, stays allowed. If you meant it, add the job, key or
+  line yourself in your own terminal.
+- **Your own PATH folders stay writable** (`~/.local/bin`, npm's global prefix outside Homebrew,
+  `pipx`): closing them would break `pipx install` and `npm i -g`. Instead Network Shield's
+  persistence watch raises a **critical** alert, naming the agent, for every new program an agent
+  writes into a folder on your PATH.
 - Cursor and Windsurf can be opened inside the sandbox from File Shield's page ("Open protected";
   quit the editor first). Blackbox says it is running only once it still runs a few seconds later.
   These editors sandbox their own web pages, and two sandboxes can not nest, so inside Blackbox's

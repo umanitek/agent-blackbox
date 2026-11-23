@@ -41,6 +41,14 @@ _ONLY_ADDS = frozenset({"mkdir"})
 #: (``sed -i '1i // note'``, ``'/* c */'``), not a folder handed to a command: a root handed to a
 #: command is a word of its own, and that is still read. KI-591.
 _ROOT_IN_TEXT = re.compile(r"^/+(?:\*+)?$")
+#: In Homebrew's program folders (``guard_places.PROGRAMS``) only these write what they are given:
+#: running a program there, or giving one of its folders to a compiler, is everyday work.
+_PROGRAM_WRITERS = frozenset({"touch", "install", "rm", "rmdir", "unlink", "chmod", "chown", "chflags", "truncate",
+                              "dd", "patch", "vi", "vim", "nvim", "nano", "emacs", "ed", "ex", "git", "curl", "wget",
+                              "mkfifo", "ln", "mv", "cp", "tee"})
+#: A bare wildcard inside quoted text (``echo '*/30 * * * *'``) is text, not the files of the
+#: folder the command runs in (KI-614: a cron line was refused as a change to Blackbox).
+_WILDCARD_IN_TEXT = re.compile(r"^[*?]+$")
 #: Commands that copy: a guarded place may be what they read, never where they write.
 _COPIES = frozenset({"cp", "rsync", "scp", "ditto", "zip"})
 #: Words that run another command: the command after them is the one judged.
@@ -103,6 +111,8 @@ def _named_places(words: list[str], folder: str) -> int:
         pieces = [(word, False), *((value, False) for value in word.split("=", 1)[1:]),
                   *((piece, True) for piece in (word.split() if " " in word else []))]
         for piece, in_text in pieces:
+            if in_text and folder == START_FOLDER and _WILDCARD_IN_TEXT.match(piece):
+                continue
             path = _place(_UNQUOTED.sub("", piece), folder) if piece else ""
             if not path or (in_text and _ROOT_IN_TEXT.match(path)) or not guard_places.reaches(path):
                 continue
@@ -162,6 +172,8 @@ def _only_reads(name: str, rest: list[str]) -> bool:
         return _find_only_reads(rest)
     if name in ("tar", "bsdtar", "gtar"):          # making an archive reads; unpacking one writes
         return bool(rest) and "c" in rest[0].lstrip("-") and "x" not in rest[0].lstrip("-")
+    if name == "plutil":                           # ``-p`` / ``-lint`` / ``-type`` print; every other verb writes
+        return bool(rest) and rest[0] in ("-p", "-lint", "-type", "-help") and "-o" not in rest
     if name in ("sed", "gsed", "perl", "yq", "awk", "gawk"):
         return not any(word.startswith("--in-place") or (word.startswith("-") and not word.startswith("--") and "i" in word)
                        for word in rest)
@@ -190,21 +202,28 @@ def line_changes_a_place(line: str, folder: str) -> tuple[bool, str]:
             continue
         if _segment_changes_a_place(name, rest, segment, folder, line):
             return True, folder
-    # Where output is sent is checked whatever the command was (``echo 'exit 0' > ~/.local/bin/blackbox``).
-    return any(guard_places.reaches(_place(found.group(1) or found.group(2) or "", folder))
-               for found in _REDIRECT_TARGET.finditer(line)), folder
+    # Where output is sent is checked whatever the command was (``echo 'exit 0' > ~/.local/bin/blackbox``),
+    # as written and as the shell reads it (a quoted target, one with a space: ``>> '~/Library/Application Support/x'``).
+    sent = [found.group(1) or found.group(2) or "" for found in _REDIRECT_TARGET.finditer(line)]
+    sent += [words[index + 1] for index, word in enumerate(words[:-1]) if word in (">", ">>")]
+    return any(guard_places.reaches(_place(target, folder)) for target in sent if target), folder
 
 
 def _segment_changes_a_place(name: str, rest: list[str], segment: list[str], folder: str, line: str) -> bool:
-    """True when one simple command (*name* with words *rest*) changes a guarded place."""
+    """True when one simple command (*name* with words *rest*) changes a guarded place.
+
+    Judging a persistence place (``guard_places.STARTS`` / ``PROGRAMS``) the program run is not
+    one of the places it names (``/opt/homebrew/bin/git status``), and a folder that only HOLDS
+    one is not reached (deleting ``~/.ssh`` leaves nothing that starts by itself)."""
     if name == "git" and _git_rewrites_a_checkout(rest, folder):
         return True
     if name in _OWN_COMMANDS:
         return False
-    named = _named_places(segment, folder)
+    own = guard_places.scope() == guard_places.OWN
+    named = _named_places(segment if own else rest, folder)
     if guard_places.inside(folder) and rest:
         named = NAMES_ONE
-    if named == NAMES_NOTHING:
+    if named == NAMES_NOTHING or (named == HOLDS_ONE and not own):
         return False
     if name in guard_landing.LANDING_COPIES:
         # Judged by what LANDS, not by the folder word: ``cp notes.md ~`` writes ``~/notes.md``.
@@ -214,6 +233,8 @@ def _segment_changes_a_place(name: str, rest: list[str], segment: list[str], fol
         return any(guard_places.reaches(_place(path, folder)) for path in written)
     if guard_landing.extracts(name, rest):
         return guard_landing.unpack_writes_a_place(name, rest, folder)
+    if guard_places.scope() == guard_places.PROGRAMS:
+        return name in _PROGRAM_WRITERS or (name in ("sed", "gsed", "perl") and not _only_reads(name, rest))
     if name in ("echo", "printf"):
         return bool(re.search(r"[|>]", line))          # printed into a file or another program
     if named == HOLDS_ONE and name in _ONLY_ADDS:

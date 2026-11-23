@@ -66,6 +66,8 @@ _CODE_ACTS = re.compile(
     r"\bopen\(.*['\"][wax][+bt]?['\"]|write_text|write_bytes|\.write\(|\.writelines\(|os\.remove|os\.unlink|\.unlink\(|rmtree"
     r"|os\.replace|os\.rename|\.rename\(|shutil\.|yaml\.(?:safe_)?dump|json\.dump\(|truncate|chmod|subprocess|os\.system|Popen|os\.exec"
     r"|writeFile|appendFile|rmSync|unlinkSync|renameSync|copyFile|child_process|execSync|spawn\(|File\.(?:write|delete)|FileUtils", re.IGNORECASE)
+_CODE_WRITES = re.compile(_CODE_ACTS.pattern.replace(r"|subprocess|os\.system|Popen|os\.exec", "")
+                          .replace(r"|child_process|execSync|spawn\(", ""), re.IGNORECASE)
 #: In an edit of a host's config, the text that touches Blackbox: its entry, or the plugin lists that enable it.
 _BLACKBOX_TEXT = re.compile(r"blackbox|plugins|\benabled\b|\bdisabled\b|\ballow\b|\bentries\b|\bload\b", re.IGNORECASE)
 _BLACKBOX_KEYS = re.compile(r"\b(?:mode|block_severity|protected_paths|shields|report|detection|auto_attach)\s*:")
@@ -145,6 +147,8 @@ def _decoded(text: str) -> str:
 def _says_it(line: str, ports: tuple[int, ...]) -> bool:
     """True when *line*, as written or with its quote marks taken out (``he''rmes``), is a command
     that switches Blackbox off, stops it, sets its environment or uses its control API."""
+    if guard_places.scope() != guard_places.OWN:
+        return False
     for text in dict.fromkeys((line, _QUOTE_MARKS.sub("", line))):
         if guard_commands.switches_off(text) or guard_commands.stops_service(text, ports) or guard_commands.sets_environment(text):
             return True
@@ -207,7 +211,7 @@ def _text_tampers(text: str) -> bool:
     folder, closely = guard_paths.START_FOLDER, MAX_READ_CLOSELY
     code_written: list[tuple[str, str]] = []
     for line in _lines(text, code_written):
-        if not line.strip() or guard_startup.plain_startup_append(line):
+        if not line.strip() or (guard_places.scope() == guard_places.OWN and guard_startup.plain_startup_append(line)):
             continue
         if _says_it(line, ports):
             return True
@@ -257,14 +261,15 @@ def _inline_code(command: str) -> list[str]:
 
 def _code_tampers(code: str) -> bool:
     """True when *code* talks to the control API other than by a plain read, sets Blackbox's
-    environment, or names a guarded place (whole or in pieces) and writes, deletes or runs anything."""
-    if guard_commands.uses_control_api(code, _ports()) and (
-            guard_commands._WRITES_OVER_HTTP.search(code) or guard_commands._DESKTOP_ROUTE.search(code)):
-        return True
-    if guard_commands.sets_environment(code) or guard_commands.switches_off(code):
+    environment, or names a guarded place (whole or in pieces) and writes, deletes or runs anything —
+    in Homebrew's program folders only a write counts (running a program there is everyday work)."""
+    if guard_places.scope() == guard_places.OWN and (guard_commands.sets_environment(code) or guard_commands.switches_off(code) or (
+            guard_commands.uses_control_api(code, _ports()) and (
+            guard_commands._WRITES_OVER_HTTP.search(code) or guard_commands._DESKTOP_ROUTE.search(code)))):
         return True
     names = any(guard_places.reaches(arg.path) for arg in shell_files.code_file_args(code)) or guard_places.names_in_pieces(code)
-    return names and bool(_CODE_ACTS.search(code))
+    acts = _CODE_WRITES if guard_places.scope() == guard_places.PROGRAMS else _CODE_ACTS
+    return names and bool(acts.search(code))
 
 
 def _edit_reaches_blackbox(config_path: str, edits: list[str]) -> bool:
@@ -292,7 +297,9 @@ def _written_text(args: Any) -> str:
 def _file_tool_tampers(access: dict[str, str], args: Any) -> bool:
     if access["mode"] != "write":
         return False
-    path, text = access["path"], _written_text(args)[:_MAX_STAGED_CHARS]
+    path, text, own = access["path"], _written_text(args)[:_MAX_STAGED_CHARS], guard_places.scope() == guard_places.OWN
+    if not own:   # a persistence place: any write; a script that would write one (not in Homebrew's folders)
+        return guard_places.reaches(path) or (guard_places.scope() == guard_places.STARTS and script_tampers(str(path), text))
     if not guard_places.reaches(path):
         name = os.path.basename(os.path.expanduser(str(path or "")))
         if name in _STARTUP_FILES and guard_commands.sets_environment(text):
@@ -321,7 +328,7 @@ def _other_tool_tampers(tool: str, args: Any) -> bool:
     if any(_text_tampers(command[:_MAX_STAGED_CHARS]) for command in commands):
         return True                        # a shell by another name (an MCP shell, a process or schedule tool)
     words = " ".join(str(value) for value in (values.values() if values else [args]) if isinstance(value, str))
-    if not guard_commands.names_control_address(words, _ports()):
+    if guard_places.scope() != guard_places.OWN or not guard_commands.names_control_address(words, _ports()):
         return False
     return bool(_BROWSER_TOOL.search(tool)) or "/api/session" in words or bool(guard_commands._WRITES_OVER_HTTP.search(words))
 
@@ -342,30 +349,40 @@ def _finding(tool: str, evidence: str, title: str = _TITLE, advice: str = "") ->
     )
 
 
+#: What :func:`tampering` found, in the words of a self-protection finding.
+_EVIDENCE = {"write": "write to Blackbox's settings", "code": "code that changes Blackbox's settings",
+             "long": "command too long to be read in full", "page": "request to Blackbox's own control page",
+             "command": "command that changes Blackbox's settings or switches it off"}
+
+
+def tampering(tool_name: str, args: Any) -> tuple[str, str]:
+    """``(tool, how)``: how a call changes a place of the set being judged (``guard_places.judging``)
+    — ``"write"`` (a file tool), ``"code"``, ``"command"``, ``"long"`` (a command too long to read
+    whole), ``"page"`` (Blackbox's control page) — or ``(tool, "")``. Raises on a detector fault."""
+    tool = (tool_name or "").strip().lower()
+    access = action_parsing.file_access_arg(tool_name, args)
+    if access is not None:
+        return access["tool"], "write" if _file_tool_tampers(access, args) else ""
+    if tool in protected.CODE_TOOLS and isinstance(args, dict) and isinstance(args.get("code"), str):
+        return tool, "code" if _code_tampers(args["code"]) else ""
+    if tool in shell_shapes.SHELL_TOOLS:
+        # Read WHOLE, not by the first and last part as the other checks read a long command:
+        # a change in the middle of a long one must not pass.
+        command = shell_shapes.whole_command_from_args(tool_name, args)
+        return tool, "long" if len(command) > MAX_COMMAND_CHARS else "command" if _text_tampers(command) else ""
+    return tool, "page" if _other_tool_tampers(tool, args) else ""
+
+
 def detect_guard_tamper(tool_name: str, args: Any, cfg: Optional[BlackboxConfig] = None) -> list[Finding]:
     """A finding when an agent's call would change Blackbox, switch it off or go round it, else [].
     *cfg*: the config the caller already loaded for this call (its ports are used, not re-read)."""
     if cfg is not None:
         _PORTS.put(guard_places._machine(), _ports_of(cfg))
-    tool = (tool_name or "").strip().lower()
     try:
         secret = guard_secrets.reads_a_secret(tool_name, args)   # a read is the harm for Blackbox's keys
         if secret:
-            return [_finding(tool, secret, guard_secrets.TITLE, guard_secrets.ADVICE)]
-        access = action_parsing.file_access_arg(tool_name, args)
-        if access is not None:
-            return [_finding(access["tool"], "write to Blackbox's settings")] if _file_tool_tampers(access, args) else []
-        if tool in protected.CODE_TOOLS and isinstance(args, dict) and isinstance(args.get("code"), str):
-            return [_finding(tool, "code that changes Blackbox's settings")] if _code_tampers(args["code"]) else []
-        if tool in shell_shapes.SHELL_TOOLS:
-            # Read WHOLE, not by the first and last part as the other checks read a long command:
-            # a change to Blackbox in the middle of a long one must not pass.
-            command = shell_shapes.whole_command_from_args(tool_name, args)
-            if len(command) > MAX_COMMAND_CHARS:
-                return [_finding(tool, "command too long to be read in full")]
-            if _text_tampers(command):
-                return [_finding(tool, "command that changes Blackbox's settings or switches it off")]
-            return []
-        return [_finding(tool, "request to Blackbox's own control page")] if _other_tool_tampers(tool, args) else []
+            return [_finding((tool_name or "").strip().lower(), secret, guard_secrets.TITLE, guard_secrets.ADVICE)]
+        tool, how = tampering(tool_name, args)
+        return [_finding(tool, _EVIDENCE[how])] if how else []
     except Exception:  # pragma: no cover  # health: allow BLE001 -- fail open: a detector fault never breaks the agent's tool call
         return []

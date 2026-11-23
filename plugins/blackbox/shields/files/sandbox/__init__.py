@@ -44,7 +44,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from ....detection import blackbox_key_patterns
-from ....kernel import addons, agent_hosts, constants, shell_path
+from ....kernel import addons, agent_hosts, constants, persistence_places, shell_path
 from ....kernel.bounded_files import atomic_write
 from ...contract import OPTION_NOT_INSTALLED, OPTION_SUPPORTED, OPTION_UNAVAILABLE, ShieldMode
 from .. import mode as mode_module
@@ -134,7 +134,7 @@ def policy(mode: ShieldMode) -> Places:
     """The policy for *mode*: the person's items, Blackbox's keys, own and add-on places, the OS's startup places."""
     own = (str(constants.blackbox_home()), str(_PLUGIN), *addon_places.of(_PLUGIN.parent))
     hooks = _hook_configs()
-    startup = [str(Path.home() / name) for name in shell_path.STARTUP_FILES] + hooks
+    startup = persistence_places.shell_startup_files(str(Path.home())) + hooks   # the hook judgement reads the same list
     holders = sorted({os.path.dirname(path) for path in hooks} - {str(Path.home())})
     return build(mode_module.protected(mode), blackbox_key_patterns(), own, str(canary_path()), is_folder=is_folder,
                  startup_files=startup, keep_in_place=holders, no_write_globs=[addons.manifest_pattern(str(_PLUGIN.parent))],

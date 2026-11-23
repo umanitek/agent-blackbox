@@ -13,6 +13,12 @@ command, and every wildcard, parent folder or pieced-together spelling of all of
   reach below it)?
 * :func:`names_in_pieces` — does this text spell a guarded place piece by piece
   (``homedir() + '/.hermes/config.yaml'``, ``Path.home() / '.hermes' / 'config.yaml'``)?
+* :func:`judging` — which places are "guarded" while a check runs: Blackbox's own (:data:`OWN`,
+  the default), the places something starts from by itself (:data:`STARTS`) or Homebrew's program
+  folders (:data:`PROGRAMS`) — both read from ``kernel.persistence_places``, the one list the agent
+  sandbox's profile reads too (private security finding
+  ``2026-11-23-hooks-only-an-agent-appends-an-ssh-key-t``). Pattern: **Context Object** (a
+  ``ContextVar``, per thread and task), so the one reading of a command line serves every place set.
 
 Usage::
 
@@ -23,16 +29,18 @@ Usage::
 
 from __future__ import annotations
 
+import contextvars
 import fnmatch
 import glob
 import os
 import re
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Callable, Generic, Hashable, TypeVar
+from typing import Callable, Generic, Hashable, Iterator, TypeVar
 
-from ...kernel import addons as guarded_extra, agent_hosts, constants, shell_path, system_helper
+from ...kernel import addons as guarded_extra, agent_hosts, constants, persistence_places, shell_path, system_helper
 from .shell_words import _home_as_tilde
 
 #: The plugin folder this code runs from: an installed copy, or a source checkout.
@@ -47,6 +55,30 @@ _GLOB_CHARS = "*?["
 _IN_PIECES = re.compile(
     r"\.hermes\b[^\n]{0,80}?(?:config\.yaml|\.env\b|blackbox|plugins)"
     r"|\.openclaw[\w-]*\b[^\n]{0,40}?openclaw\.json|ai\.umanitek\.blackbox|integrations\W{1,6}openclaw", re.IGNORECASE)
+#: Text that spells a place something starts from, in pieces (``Path.home() / '.ssh' / 'authorized_keys'``).
+_STARTS_IN_PIECES = re.compile(
+    r"\.ssh\b[^\n]{0,60}?(?:authorized_keys|\benvironment\b|['\"/]rc\b)|Launch(?:Agents|Daemons)\b|com\.apple\.loginitems"
+    r"|backgroundtaskmanagement", re.IGNORECASE)
+
+#: The place sets a check can judge against (see :func:`judging`).
+OWN, STARTS, PROGRAMS = "own", "starts", "programs"
+_SCOPE: contextvars.ContextVar[str] = contextvars.ContextVar("blackbox_guard_scope", default=OWN)
+
+
+@contextmanager
+def judging(scope: str) -> Iterator[None]:
+    """Within the block, :func:`reaches`, :func:`holds`, :func:`inside` and :func:`guarded_places`
+    answer for the place set *scope* (:data:`OWN`, :data:`STARTS` or :data:`PROGRAMS`)."""
+    token = _SCOPE.set(scope)
+    try:
+        yield
+    finally:
+        _SCOPE.reset(token)
+
+
+def scope() -> str:
+    """The place set the running check judges against (:func:`judging`)."""
+    return _SCOPE.get()
 
 
 Value = TypeVar("Value")
@@ -105,16 +137,29 @@ def _machine() -> tuple[object, ...]:
 
 
 def guarded_places() -> tuple[str, ...]:
-    """Every place an agent may not change, as absolute patterns (see :func:`_read_places`)."""
-    return _PLACES.get(_machine())[0]
+    """Every place an agent may not change, as absolute patterns (see :func:`_read_places`), in
+    the place set being judged (:func:`judging`)."""
+    return _current()[0]
 
 
-def _read_places() -> tuple[tuple[str, ...], tuple[str, ...], re.Pattern[str]]:
+def _current() -> tuple[tuple[str, ...], tuple[str, ...], re.Pattern[str]]:
+    return _PLACES[_SCOPE.get()].get(_machine())
+
+
+def _starts_places() -> tuple[str, ...]:
+    return persistence_places.hook_places(os.path.expanduser("~")).starts
+
+
+def _program_places() -> tuple[str, ...]:
+    return persistence_places.hook_places(os.path.expanduser("~"), persistence_places.HOMEBREW_PREFIXES).programs
+
+
+def _read_places(places: tuple[str, ...]) -> tuple[tuple[str, ...], tuple[str, ...], re.Pattern[str]]:
     """The guarded patterns, the real files they stand for on this machine, and ONE expression
     that matches a path which is a guarded place or lies inside one."""
-    places = _all_places()
     within = "|".join(fnmatch.translate(pattern) for place in places for pattern in (place, place.rstrip(os.sep) + os.sep + "*"))
-    return places, tuple(dict.fromkeys(real for place in places for real in _real(place))), re.compile(within)
+    # An empty set (no Homebrew on this machine) matches nothing: "" would match every path.
+    return places, tuple(dict.fromkeys(real for place in places for real in _real(place))), re.compile(within or "(?!)")
 
 
 def _all_places() -> tuple[str, ...]:
@@ -186,7 +231,7 @@ def reaches(word: str) -> bool:
     path = _expanded(word)
     if not path:
         return False
-    _, real_files, within = _PLACES.get(_machine())
+    _, real_files, within = _current()
     if within.match(path):
         return True
     parent, wildcard = path.rstrip(os.sep) + os.sep, any(char in path for char in _GLOB_CHARS)
@@ -198,7 +243,8 @@ def reaches(word: str) -> bool:
     return False
 
 
-_PLACES = Kept(_read_places)
+_PLACES = {OWN: Kept(lambda: _read_places(_all_places())), STARTS: Kept(lambda: _read_places(_starts_places())),
+           PROGRAMS: Kept(lambda: _read_places(_program_places()))}
 
 
 def holds(word: str) -> bool:
@@ -211,23 +257,26 @@ def holds(word: str) -> bool:
     path = _expanded(word)
     if not path or any(char in path for char in _GLOB_CHARS):
         return False
-    return reaches(word) and not _PLACES.get(_machine())[2].match(path)
+    return reaches(word) and not _current()[2].match(path)
 
 
 def inside(folder: str) -> bool:
     """True when *folder* is a guarded place or lies inside one (never for a mere parent of one:
     the home folder holds Blackbox, and working there is ordinary)."""
     path = _expanded(folder)
-    return bool(path) and bool(_PLACES.get(_machine())[2].match(path))
+    return bool(path) and bool(_current()[2].match(path))
 
 
 def is_source_checkout(folder: str) -> bool:
     """True when *folder* is, or lies inside, a checkout whose files a running install loads or
     copies from — where a ``git`` command that rewrites the working tree rewrites Blackbox."""
+    if _SCOPE.get() != OWN:
+        return False
     path = _expanded(folder)
     return bool(path) and any(path == str(root) or path.startswith(str(root) + os.sep) for root in _source_roots())
 
 
 def names_in_pieces(text: str) -> bool:
     """True when *text* spells a guarded place in pieces a path check cannot join."""
-    return bool(_IN_PIECES.search(text or ""))
+    pieces = {OWN: _IN_PIECES, STARTS: _STARTS_IN_PIECES}.get(_SCOPE.get())
+    return bool(pieces and pieces.search(text or ""))
