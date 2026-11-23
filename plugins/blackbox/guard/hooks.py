@@ -113,9 +113,10 @@ def _would_block(cfg: BlackboxConfig, findings: list[detection.Finding]) -> list
 
 
 def _raw_findings(cfg: BlackboxConfig, rs: Any, tool_name: str, args: Any,
-                  active: shields.ShieldsSnapshot, notes: list[str]) -> list[detection.Finding]:
+                  active: shields.ShieldsSnapshot, notes: Optional[list[str]] = None) -> list[detection.Finding]:
     """All raw findings for one call, gathered here so new detectors join without growing the hook body.
-    What could not be checked is added to *notes*."""
+    What could not be checked is added to *notes* (None: not kept)."""
+    notes = [] if notes is None else notes
     isolated = detection.run_isolated   # each check on its own: one that raises costs only its findings
     raw = detection.detect_all(tool_name, args, rs, discover=cfg.discover)
     raw += isolated("detect_custom_fileaccess",
