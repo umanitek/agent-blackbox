@@ -21,6 +21,7 @@ import pytest
 
 from plugins.blackbox.kernel import config as config_mod
 from plugins.blackbox.sync import managed_node, node_service
+from plugins.blackbox.sync.platform import linux as sync_linux, macos as sync_macos, model as sync_model
 
 REPO = Path(__file__).resolve().parents[2]
 LABEL = "ai.umanitek.blackbox-dkg"
@@ -60,7 +61,7 @@ class FakeManager:
 @pytest.fixture
 def manager(monkeypatch) -> FakeManager:
     fake = FakeManager()
-    monkeypatch.setattr(node_service.subprocess, "run", fake.run)
+    monkeypatch.setattr(subprocess, "run", fake.run)
     return fake
 
 
@@ -78,7 +79,7 @@ def _unit(folder: Path, program: str) -> None:
 # ── finding the service by registration ──────────────────────────────────────
 
 def test_a_loaded_launch_agent_for_this_install_is_the_node_s_service(cfg, tmp_path, manager, monkeypatch):
-    monkeypatch.setattr(node_service.sys, "platform", "darwin")   # os-marker: ok — only picks the launchd strategy; launchctl is stubbed and the plist is in tmp_path
+    monkeypatch.setattr(node_service, "os_platform", sync_macos)   # the launchd strategy; launchctl is stubbed
     _launch_agent(tmp_path, cfg.dkg_bin)
     service = node_service.registered(cfg, home=tmp_path)
     assert service is not None and service.name == LABEL
@@ -103,7 +104,7 @@ def test_the_launch_agent_the_installer_writes_through_its_launcher_is_this_inst
     """KI-529: the plist runs <BLACKBOX_HOME>/bin/"Blackbox Node" (FIX-0255), not dkg itself. Reading
     only the first argument found no service, so the dashboard's sync started the node behind launchd
     and launchd's copy failed "Daemon already running" — a fresh install then rolled back."""
-    monkeypatch.setattr(node_service.sys, "platform", "darwin")   # os-marker: ok — only picks the launchd strategy; launchctl is stubbed and the plist is in tmp_path
+    monkeypatch.setattr(node_service, "os_platform", sync_macos)   # the launchd strategy; launchctl is stubbed
     launcher = _installer_launcher(tmp_path / "blackbox-home", "Blackbox Node", cfg.dkg_bin)
     _launch_agent(tmp_path, launcher)
     service = node_service.registered(cfg, home=tmp_path)
@@ -111,14 +112,14 @@ def test_the_launch_agent_the_installer_writes_through_its_launcher_is_this_inst
 
 
 def test_a_launcher_for_another_install_s_node_is_not_ours(cfg, tmp_path, manager, monkeypatch):
-    monkeypatch.setattr(node_service.sys, "platform", "darwin")   # os-marker: ok — only picks the launchd strategy; launchctl is stubbed and the plist is in tmp_path
+    monkeypatch.setattr(node_service, "os_platform", sync_macos)   # the launchd strategy; launchctl is stubbed
     launcher = _installer_launcher(tmp_path / "blackbox-home", "Blackbox Node", "/opt/other install/.bin/dkg")
     _launch_agent(tmp_path, launcher)
     assert node_service.registered(cfg, home=tmp_path) is None
 
 
 def test_a_launch_agent_for_another_install_is_not_ours(cfg, tmp_path, manager, monkeypatch):
-    monkeypatch.setattr(node_service.sys, "platform", "darwin")   # os-marker: ok — only picks the launchd strategy; launchctl is stubbed and the plist is in tmp_path
+    monkeypatch.setattr(node_service, "os_platform", sync_macos)   # the launchd strategy; launchctl is stubbed
     _launch_agent(tmp_path, "/opt/other-install/node_modules/.bin/dkg")
     assert node_service.registered(cfg, home=tmp_path) is None
 
@@ -127,8 +128,8 @@ def test_a_launch_agent_that_is_not_loaded_is_started_by_loading_it_never_direct
     """KI-529: after Stop (bootout) or the handover's fallback the agent is registered but not
     loaded. Treating that as "no service" let a sync start an unsupervised node, which launchd's
     own copy then fought ("Daemon already running") the moment the agent loaded."""
-    monkeypatch.setattr(node_service.sys, "platform", "darwin")   # os-marker: ok — only picks the launchd strategy; launchctl is stubbed and the plist is in tmp_path
-    monkeypatch.setattr(node_service.subprocess, "run", FakeManager(loaded=False).run)
+    monkeypatch.setattr(node_service, "os_platform", sync_macos)   # the launchd strategy; launchctl is stubbed
+    monkeypatch.setattr(subprocess, "run", FakeManager(loaded=False).run)
     _launch_agent(tmp_path, cfg.dkg_bin)
     service = node_service.registered(cfg, home=tmp_path)
     assert service is not None and service.name == LABEL
@@ -137,16 +138,16 @@ def test_a_launch_agent_that_is_not_loaded_is_started_by_loading_it_never_direct
 
 
 def test_an_enabled_system_unit_for_this_install_is_the_node_s_service(cfg, tmp_path, manager, monkeypatch):
-    monkeypatch.setattr(node_service.sys, "platform", "linux")
-    monkeypatch.setattr(node_service, "SYSTEM_UNIT_DIR", tmp_path / "etc-systemd")
+    monkeypatch.setattr(node_service, "os_platform", sync_linux)
+    monkeypatch.setattr(sync_linux, "SYSTEM_UNIT_DIR", tmp_path / "etc-systemd")
     _unit(tmp_path / "etc-systemd", cfg.dkg_bin)
     service = node_service.registered(cfg, home=tmp_path)
     assert service is not None and service.restart_argv == ("systemctl", "restart", "blackbox-dkg")
 
 
 def test_a_user_unit_is_restarted_with_systemctl_user(cfg, tmp_path, manager, monkeypatch):
-    monkeypatch.setattr(node_service.sys, "platform", "linux")
-    monkeypatch.setattr(node_service, "SYSTEM_UNIT_DIR", tmp_path / "absent")
+    monkeypatch.setattr(node_service, "os_platform", sync_linux)
+    monkeypatch.setattr(sync_linux, "SYSTEM_UNIT_DIR", tmp_path / "absent")
     _unit(tmp_path / ".config" / "systemd" / "user", cfg.dkg_bin)
     service = node_service.registered(cfg, home=tmp_path)
     assert service is not None and service.restart_argv == ("systemctl", "--user", "restart", "blackbox-dkg")
@@ -154,9 +155,9 @@ def test_a_user_unit_is_restarted_with_systemctl_user(cfg, tmp_path, manager, mo
 
 @pytest.mark.parametrize("program, enabled", [("/opt/other/dkg", True), (None, False)])
 def test_a_unit_for_another_install_or_not_enabled_is_not_ours(cfg, tmp_path, monkeypatch, program, enabled):
-    monkeypatch.setattr(node_service.sys, "platform", "linux")
-    monkeypatch.setattr(node_service, "SYSTEM_UNIT_DIR", tmp_path / "etc-systemd")
-    monkeypatch.setattr(node_service.subprocess, "run", FakeManager(enabled=enabled).run)
+    monkeypatch.setattr(node_service, "os_platform", sync_linux)
+    monkeypatch.setattr(sync_linux, "SYSTEM_UNIT_DIR", tmp_path / "etc-systemd")
+    monkeypatch.setattr(subprocess, "run", FakeManager(enabled=enabled).run)
     _unit(tmp_path / "etc-systemd", program or cfg.dkg_bin)
     assert node_service.registered(cfg, home=tmp_path) is None
 
@@ -173,7 +174,7 @@ SERVICE_ENVIRONMENT = {"DKG_SYNC_ON_CONNECT_ENABLED": "1"}
 class _Process:
     def __init__(self, pid: int) -> None:
         if pid not in PARENTS and pid != SERVICE_PID:
-            raise node_service.psutil.NoSuchProcess(pid)
+            raise sync_model.psutil.NoSuchProcess(pid)
         self.pid = pid
 
     def ppid(self) -> int:
@@ -188,13 +189,13 @@ class _Process:
 def test_the_service_owns_its_process_and_that_process_s_child(manager, monkeypatch, pid, owned):
     """KI-541 (E2E full5 2026-11-22): under launchd the daemon is the service's GRANDCHILD
     (launcher -> `dkg start --foreground` -> daemon); a parent-only check missed it."""
-    monkeypatch.setattr(node_service.psutil, "Process", _Process)
-    assert node_service.systemd_unit("blackbox-dkg.service").owns(pid) is owned
+    monkeypatch.setattr(sync_model.psutil, "Process", _Process)
+    assert sync_linux.systemd_unit("blackbox-dkg.service").owns(pid) is owned
 
 
 def test_a_service_that_runs_nothing_owns_nothing(monkeypatch):
-    monkeypatch.setattr(node_service.subprocess, "run", FakeManager(service_pid=None).run)
-    assert node_service.systemd_unit("blackbox-dkg.service").owns(NODE_PID) is False
+    monkeypatch.setattr(subprocess, "run", FakeManager(service_pid=None).run)
+    assert sync_linux.systemd_unit("blackbox-dkg.service").owns(NODE_PID) is False
 
 
 # ── restarting through it ────────────────────────────────────────────────────
@@ -211,7 +212,7 @@ def restart_world(cfg, manager, monkeypatch):
     monkeypatch.setattr(managed_node, "_wait_for_managed_dkg_ready", lambda _cfg, _detail: None)
     monkeypatch.setattr(managed_node, "_stop_managed_dkg", lambda _cfg, pid, _env, _command: stops.append(pid))
     monkeypatch.setattr(managed_node.node_service, "registered", lambda _cfg: LAUNCHD)
-    monkeypatch.setattr(node_service.psutil, "Process", _Process)
+    monkeypatch.setattr(sync_model.psutil, "Process", _Process)
     return stops
 
 
@@ -240,7 +241,7 @@ def test_a_node_the_launch_agent_runs_is_just_kickstarted(cfg, manager, restart_
 
 def test_a_failed_kickstart_raises_with_its_detail(cfg, restart_world, monkeypatch):
     monkeypatch.setattr(managed_node, "_daemon_pid", lambda _cfg: None)
-    monkeypatch.setattr(node_service.subprocess, "run", lambda *_a, **_k: argparse.Namespace(returncode=5, stdout="", stderr="Could not find service"))
+    monkeypatch.setattr(subprocess, "run", lambda *_a, **_k: argparse.Namespace(returncode=5, stdout="", stderr="Could not find service"))
     with pytest.raises(RuntimeError, match=f"could not restart {LABEL}: Could not find service"):
         managed_node._restart_managed_dkg(cfg)
 
