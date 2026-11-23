@@ -20,6 +20,7 @@ from ..places import Places
 
 PROFILE_SUFFIX = ".txt"
 SETUID_NOTE = ""
+TOOLS_FOLDER = "sandbox-tools"
 APPS: dict[str, tuple[str, str]] = {}
 
 
@@ -44,6 +45,10 @@ def shell_shim(_shell: str, _here: str, _profile: str, _launchers: str = "") -> 
 
 
 def command_shim(_profile: str, _launchers: str = "") -> str:
+    return ""
+
+
+def brew_shim(_tools: str, _python: str, _dashboard_url: str) -> str:
     return ""
 
 

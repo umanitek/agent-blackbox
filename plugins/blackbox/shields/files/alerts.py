@@ -120,6 +120,12 @@ def _restore_alerts() -> list[dict[str, Any]]:
             for row in sandbox.restorations()]
 
 
+def _package_alerts() -> list[dict[str, Any]]:
+    """A Homebrew install Blackbox ran for a sandboxed agent (KI-593): said every time."""
+    return [_alert(row["key"], "package-install", row["ts"], "info" if row["ok"] else "high", "", "", row["text"])
+            for row in sandbox.packages.alerts()]
+
+
 def _watched_alerts() -> list[dict[str, Any]]:
     rows = []
     for found in watched.recent(MAX_ALERTS):
@@ -144,5 +150,5 @@ def shield_alerts() -> list[ShieldAlert]:
 def alerts(limit: int = MAX_ALERTS) -> list[dict[str, Any]]:
     """The shield's latest alerts (changes inside protected items, refusals, a restored PATH block,
     a watched folder's new and known-bad files), newest first."""
-    merged = _change_alerts() + _hit_alerts() + _restore_alerts() + _watched_alerts()
+    merged = _change_alerts() + _hit_alerts() + _restore_alerts() + _watched_alerts() + _package_alerts()
     return sorted(merged, key=lambda alert: -alert["ts"])[:max(0, limit)]

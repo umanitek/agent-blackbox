@@ -102,10 +102,21 @@ What Layer 2 can not do, plainly:
   sandbox; run it in your own terminal". `ps` works: the sandbox gets its own copy without the
   setuid bit (first on the sandboxed PATH only; an absolute `/bin/ps` still fails). Use
   `ps -Ao pid,pcpu,comm -r` instead of `top`.
-- **Homebrew installs** (`brew install`) fail inside: Homebrew runs each install inside its own
+- **Homebrew installs: Blackbox installs for the agent.** Homebrew runs each install inside its own
   sandbox, and macOS will not start a second sandbox inside one (`sandbox_apply: Operation not
-  permitted`). Run `brew` in your own terminal. The same holds for any tool that sandboxes itself
-  (SwiftPM manifest builds, an agent's own sandbox mode).
+  permitted`). So inside the sandbox `brew` is Blackbox's shim: `brew install|upgrade|reinstall|
+  uninstall <names>` (and `--cask`) is sent to Blackbox, which accepts package names from
+  Homebrew's official taps only (no other tap, URL, file, `--HEAD`, `--build-from-source` / `-s` or
+  other flags beyond `--cask`, `--formula`, `--quiet`, `--verbose`), refuses a package a threat rule
+  lists, and runs a fixed `/opt/homebrew/bin/brew install <names>` as you, with a clean
+  environment, streaming the output back. Each run is recorded and you are notified. Other `brew`
+  commands (`list`, `info`, `search`, `outdated`, `deps`) run inside the sandbox as they are.
+  Setting `agent_packages.installs`: `allow` (default: allow and notify), `ask` (each install waits
+  for your approval in the companion app or with your password) or `off`; loosening it asks you
+  first. If Blackbox can't be reached, nothing is installed and the agent is told to run `brew` in
+  your own terminal. **Security cost:** Homebrew's own install scripts run outside the sandbox,
+  with your rights, exactly as when you run `brew` yourself. Other tools that sandbox themselves
+  (SwiftPM manifest builds, an agent's own sandbox mode) still can't run inside.
 - **Opening or driving other apps** is refused inside: `open -a`, `osascript`, `automator`,
   `shortcuts`.
   The other app would do the work outside the sandbox. Not covered: a

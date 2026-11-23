@@ -101,6 +101,9 @@ class ShieldContext:
     #: ``finding_owners()`` — which agent instance each audit finding row belongs to (the agent
     #: tracker's answer, KI-588); None where it cannot be asked.
     finding_owners: Optional[FindingOwners] = None
+    #: ``tool_call_verdict(tool, args) -> {"decision", "findings", …}`` — the guard's one judgement of
+    #: an action (File Shield's Homebrew broker asks it for each package); None where it can not be asked.
+    tool_call_verdict: Optional[Callable[[str, Mapping[str, Any]], Mapping[str, Any]]] = None
 
     def indicators_now(self) -> Optional[Any]:
         """The verified network lists known now, never waiting for a build."""

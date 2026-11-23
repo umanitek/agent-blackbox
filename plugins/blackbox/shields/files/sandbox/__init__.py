@@ -49,7 +49,7 @@ from ....kernel.bounded_files import atomic_write
 from ...contract import OPTION_NOT_INSTALLED, OPTION_SUPPORTED, OPTION_UNAVAILABLE, ShieldMode
 from .. import mode as mode_module
 from ..protect import is_folder
-from . import addon_places, defaults, platform
+from . import addon_places, defaults, packages, platform
 from .places import Places, build
 
 __all__ = ["CLI_AGENTS", "HERMES_LAUNCHER_ENV", "HERMES_SHELLS", "HermesCover", "Places", "enter_hermes_process", "enter_hermes_session", "hermes_shell_dir", "launcher_dir", "offer",
@@ -217,6 +217,7 @@ def sync(mode: Optional[ShieldMode] = None) -> dict[str, Any]:
         _write_if_changed(profile_path(), platform.render(rules, f"sha256:{_digest(text)}"), 0o644)
         _write_if_changed(canary_path(), CANARY_TEXT, 0o644)
         platform.refresh_tools(str(launcher_dir()), bool(chosen(mode)))   # the setuid-free ps for the sandboxed PATH (KI-589)
+        packages.install_shim(launcher_dir() / platform.TOOLS_FOLDER)        # brew installs through Blackbox (KI-593)
         _sync_launchers({command for agent in chosen(mode) for command in CLI_AGENTS.get(agent, ())})
         _sync_hermes_shells(agent_hosts.HERMES_ID in chosen(mode))
     else:

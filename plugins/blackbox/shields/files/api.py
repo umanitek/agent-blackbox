@@ -35,6 +35,7 @@ from ...kernel.settings import write_settings
 from .. import helper_link
 from ..shield_api import ShieldApi, ShieldApiError, ShieldContext
 from . import alerts, changes, events, mode as mode_module, sandbox
+from .sandbox import packages
 from .protect import is_folder
 
 MAX_HITS = 200
@@ -163,7 +164,8 @@ def file_report(context: ShieldContext, body: Mapping[str, Any]) -> dict[str, An
 
 API = ShieldApi(
     reads={"protected": protected_view, "hits": hits, "alerts": alerts_view, "changes": changes_view, "watch-plan": watch_plan,
-           "sandbox": sandbox_view},
-    writes={"protect": protect, "unprotect": unprotect, "file-report": file_report, "open-protected": open_protected},
-    weakening={"unprotect": unprotect_weakens},
+           "sandbox": sandbox_view, **packages.API_READS},
+    writes={"protect": protect, "unprotect": unprotect, "file-report": file_report, "open-protected": open_protected,
+            **packages.API_WRITES},
+    weakening={"unprotect": unprotect_weakens, "brew": packages.weakening},   # "ask me each time" holds every install
 )

@@ -185,7 +185,7 @@
   <p>Agents run inside Blackbox's sandbox: they can't use sudo, change their own hook settings or your shell startup files, or reach protected items. Turn off per agent if a tool you need doesn't work (File Shield's settings; turning one off asks you first). The sandbox is meant to be on by default for every agent Blackbox finds, keeping any agent you took out; that default is switched on only after a full system-level test passes.</p>
   <ul>
     <li><b>sudo and setuid tools</b> (<code>sudo</code>, <code>su</code>, <code>top</code>, <code>crontab -l</code>): macOS doesn't allow setuid programs inside the agent sandbox; run them in your own terminal. <code>ps</code> works from the sandbox's own copy.</li>
-    <li><b>Homebrew installs</b>: Homebrew sandboxes its own installs, and two sandboxes can't nest. Run <code>brew</code> in your own terminal.</li>
+    <li><b>Homebrew installs</b>: Homebrew sandboxes its own installs, and two sandboxes can't nest, so Blackbox installs for the agent: official packages by name only, checked against the threat rules, run as you and reported to you (setting <code>agent_packages.installs</code>: allow, ask each time, or off). Homebrew's own install scripts then run outside the sandbox, as when you run <code>brew</code> yourself.</li>
     <li><b>Opening or driving other apps</b> (<code>open -a</code>, <code>osascript</code>, Automator, Shortcuts) is refused: the other app would act outside the sandbox.</li>
     <li><b>A folder holding a protected item</b> (<code>grep -r ~</code>, a zip of <code>~/Documents</code>) is not swept whole: work on its subfolders.</li>
   </ul>

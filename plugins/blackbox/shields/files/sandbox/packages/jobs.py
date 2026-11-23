@@ -1,0 +1,155 @@
+"""The brew runs Blackbox makes for sandboxed agents: a fixed argv, a clean environment, bounded output.
+
+One :class:`Job` per validated request (``request.BrewRequest``). It runs
+``<brew> <request.words()>`` as the person (never root: the dashboard's own user), outside the
+sandbox, with :func:`clean_environment`, no stdin, its own process group, and at most
+:data:`MAX_SECONDS`. Its output is kept in memory, bounded (:data:`MAX_LINES`), for the agent's
+shim to read as it comes (:meth:`Job.since`). Nothing is written to disk here.
+
+**Security cost, said plainly:** Homebrew's own install scripts (a formula's ``post_install``, a
+cask's installer) run outside the sandbox, with the person's rights — the same as the person
+typing ``brew install`` in their own terminal. That is why only names from the official taps,
+checked against the threat graph first, are run, and why the person can choose "ask me each time"
+or "off" (``packages``).
+
+Usage::
+
+    job = start(BrewRequest("install", ("tree",)))
+    lines, next_line, done, code = job.since(0)
+"""
+
+from __future__ import annotations
+
+import os
+import secrets
+import signal
+import subprocess
+import threading
+import time
+from collections import OrderedDict
+from typing import Callable, Optional
+
+from .request import BrewRequest
+
+#: Where Homebrew lives, newest layout first (Apple silicon, then Intel).
+BREW_PATHS = ("/opt/homebrew/bin/brew", "/usr/local/bin/brew")
+MAX_SECONDS = 30 * 60
+MAX_LINES = 4000
+MAX_LINE_CHARS = 2000
+MAX_JOBS = 50
+#: Starts the process: ``(argv, env, cwd) -> Popen`` (tests hand in their own).
+Spawn = Callable[[list[str], dict[str, str], str], "subprocess.Popen[str]"]
+
+
+def brew_path() -> str:
+    """The Homebrew on this Mac ("" when none): a regular, executable file at a known place."""
+    return next((path for path in BREW_PATHS if os.path.isfile(path) and os.access(path, os.X_OK)), "")
+
+
+def clean_environment(brew: str) -> dict[str, str]:
+    """The environment brew runs with: only what Homebrew needs, nothing the agent set."""
+    home = os.path.expanduser("~")
+    prefix_bin = os.path.dirname(brew)
+    return {"HOME": home, "USER": os.environ.get("USER", ""), "LOGNAME": os.environ.get("LOGNAME", os.environ.get("USER", "")),
+            "PATH": f"{prefix_bin}:/usr/bin:/bin:/usr/sbin:/sbin", "LANG": "en_US.UTF-8",
+            "HOMEBREW_NO_ENV_HINTS": "1", "HOMEBREW_NO_EMOJI": "1",
+            **({"TMPDIR": os.environ["TMPDIR"]} if os.environ.get("TMPDIR") else {})}
+
+
+def argv(brew: str, request: BrewRequest) -> list[str]:
+    """The FIXED argv Blackbox runs: Homebrew's own path, then the validated words."""
+    return [brew, *request.words()]
+
+
+def _spawn(command: list[str], env: dict[str, str], cwd: str) -> subprocess.Popen[str]:
+    return subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, cwd=cwd,
+                            text=True, encoding="utf-8", errors="replace", start_new_session=True)
+
+
+class Job:
+    """One brew run: its *id*, *request*, output lines (bounded), and whether / how it ended."""
+
+    def __init__(self, request: BrewRequest) -> None:
+        self.id = secrets.token_hex(8)
+        self.request = request
+        self.started = time.time()
+        self._lines: list[str] = []
+        self._dropped = 0
+        self._code: Optional[int] = None
+        self._lock = threading.Lock()
+
+    def add(self, line: str) -> None:
+        with self._lock:
+            self._lines.append(line.rstrip("\n")[:MAX_LINE_CHARS])
+            if len(self._lines) > MAX_LINES:
+                self._lines.pop(0)
+                self._dropped += 1
+
+    def finish(self, code: int) -> None:
+        with self._lock:
+            self._code = code
+
+    def since(self, line: int) -> tuple[list[str], int, bool, Optional[int]]:
+        """``(new lines, next line number, done, exit code)`` from line *line* on."""
+        with self._lock:
+            first = max(0, line - self._dropped)
+            return list(self._lines[first:]), self._dropped + len(self._lines), self._code is not None, self._code
+
+
+_JOBS: OrderedDict[str, Job] = OrderedDict()
+_lock = threading.Lock()
+
+
+def get(job_id: str) -> Optional[Job]:
+    with _lock:
+        return _JOBS.get(str(job_id))
+
+
+def recent() -> list[Job]:
+    """The jobs kept, oldest first."""
+    with _lock:
+        return list(_JOBS.values())
+
+
+def reset() -> None:
+    """Tests: forget every job."""
+    with _lock:
+        _JOBS.clear()
+
+
+def start(request: BrewRequest, brew: str, *, spawn: Optional[Spawn] = None, done: Optional[Callable[[Job], None]] = None) -> Job:
+    """Runs *request* with Homebrew at *brew* in a thread; answers the :class:`Job` at once.
+    *done* is called with the job when it has ended (the broker records and notifies there)."""
+    job = Job(request)
+    with _lock:
+        _JOBS[job.id] = job
+        while len(_JOBS) > MAX_JOBS:
+            _JOBS.popitem(last=False)
+    threading.Thread(target=_run, args=(job, brew, spawn or _spawn, done), name=f"blackbox-brew-{job.id}", daemon=True).start()
+    return job
+
+
+def _run(job: Job, brew: str, spawn: Spawn, done: Optional[Callable[[Job], None]]) -> None:
+    try:
+        process = spawn(argv(brew, job.request), clean_environment(brew), os.path.expanduser("~"))
+    except OSError as error:
+        job.add(f"Blackbox could not start Homebrew: {error}")
+        job.finish(127)
+    else:
+        timer = threading.Timer(MAX_SECONDS, lambda: _stop(process))
+        timer.start()
+        try:
+            for line in process.stdout or ():
+                job.add(line)
+            job.finish(process.wait())
+        finally:
+            timer.cancel()
+    if done is not None:
+        done(job)
+
+
+def _stop(process: subprocess.Popen[str]) -> None:
+    try:
+        os.killpg(process.pid, signal.SIGTERM)   # windows-footgun: ok (Homebrew runs on macOS only)
+    except OSError:
+        pass

@@ -17,7 +17,7 @@ import json
 import re
 from typing import Any
 
-from ... import agent_hooks, ruleset, shields
+from ... import agent_hooks, approvals, guard, ruleset, shields
 from ...kernel import threat_ids
 from ...kernel.config import load_blackbox_config
 from .. import sync_meter
@@ -72,6 +72,7 @@ def context(body: bytes = b"", headers: Any = None) -> shields.ShieldContext:
         lookup_hashes=lookup_hashes,
         blocking=load_blackbox_config().mode == "block",
         finding_owners=finding_owners,
+        tool_call_verdict=lambda tool, args: guard.tool_call_verdict(tool_name=tool, args=args),
     )
 
 
@@ -80,7 +81,9 @@ def _valid(shield_id: str, name: str) -> bool:
 
 
 def register(app: Any) -> None:
-    """Adds the two routes to *app*."""
+    """Adds the two routes to *app*, and holds a loosening of the agents' Homebrew installs
+    (``agent_packages``) for the person's approval."""
+    approvals.SECTION_JUDGES[shields.PACKAGE_INSTALLS] = shields.package_installs_weakening
     from fastapi import Request
     from fastapi.responses import JSONResponse, Response
     from starlette.concurrency import run_in_threadpool
