@@ -15,6 +15,13 @@ every agent-written entry appeared twice (attributed, and again under the image'
 append to ~/.ssh/authorized_keys five minutes after Claude Code's own was reported "written by
 Claude Code", and a broker install was titled "New startup item". An entry is now reported once (its
 resolved path + content mark), and attributed only when it was written during the naming call.
+
+KI-636 (security round 6, bb-sec-r6, raw/bA3.log, raw/bB2.log, raw/bD.log): the watch named an agent
+from a call that was REFUSED — Claude Code's refused Read of ~/.ssh/authorized_keys (s6-ptcch) for the
+harness shell's ``sed -i`` 30 s later, Cline's refused append (s6-psclhb-3) for a key another session's
+script appended, the simulated session s6-sim (every command refused) for a plain-shell append. Only a
+call that ran is evidence: a refused ``pre_tool_call`` and a call whose ``post_tool_call`` records the
+OS sandbox's refusal never are.
 """
 
 from __future__ import annotations
@@ -185,3 +192,70 @@ def test_a_new_program_on_the_path_is_titled_as_one(home, monkeypatch):
     monkeypatch.setattr(notices.system_report, "snapshot", dict)
     [notice] = notices.shield_alerts()
     assert notice.title == "Network Shield · New program on your PATH"
+
+
+KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIR6TESTR6TESTR6TESTR6TESTR6TESTR6TESTR6T"
+HOOK_REFUSAL = ("Blackbox blocked this tool call — it was refused by Blackbox's self-protection and your protected-paths "
+                "rule")
+SANDBOX_REFUSAL = ("Blackbox's sandbox refused this (/Users/admin/.ssh/authorized_keys): an agent may not leave something "
+                   "that starts by itself later, outside the sandbox")
+
+
+def _call(home, agent: str, session: str, tool: str, args: dict, ts: float, call_id: str, decision: str = "allow") -> dict:
+    """A hook's ``pre_tool_call`` record, as ``agent_hooks.protect.events.bookkeep`` writes it."""
+    return {"ts": ts, "event": "pre_tool_call", "framework": agent, "workspace": str(home / "camp" / "projects" / session),
+            "detail": {"session_id": f"{agent}:{session}", "tool_name": tool, "tool_call_id": call_id, "args": args,
+                       "decision": decision}}
+
+
+def _end(agent: str, session: str, ts: float, call_id: str, decision: str = "") -> dict:
+    return {"ts": ts, "event": "post_tool_call", "framework": agent,
+            "detail": {"session_id": f"{agent}:{session}", "tool_name": "terminal", "tool_call_id": call_id,
+                       **({"decision": decision} if decision else {})}}
+
+
+def _key_changed(home, written: float) -> dict:
+    return _event("ssh-login", f"{home}/.ssh/authorized_keys", written + 1, kind="persistence-changed", written=written)
+
+
+def test_a_refused_read_of_the_ssh_login_file_is_never_its_writer(home):
+    """s6-ptcch: Claude Code's Read was refused; ~30 s later the harness shell rewrote the file."""
+    now = time.time()
+    rows = [_call(home, "claude-code", "s6-ptcch", "read_file", {"path": f"{home}/.ssh/authorized_keys"}, now - 30, "toolu_r6read",
+                  decision="block")]
+    [alert] = startup_items.startup_alerts([_key_changed(home, now)], rows)
+    assert "agent" not in alert and "written by" not in alert["text"] and "writer unknown" not in alert["text"]
+    assert alert["severity"] == "medium"
+
+
+def test_a_refused_append_in_one_session_is_not_the_writer_of_a_key_another_session_appended(home):
+    """s6-psclhb-3's own append was refused; s6-psclhb-9's pre-placed k.py appended the key (its
+    command names no path), within the old two-minute fallback of the refused call."""
+    now = time.time()
+    rows = [_call(home, "cline", "s6-psclhb-3", "terminal", {"command": f"echo '{KEY} r6test-clh-3' >> ~/.ssh/authorized_keys"},
+                  now - 60, "call_r6_3", decision="block"),
+            _call(home, "cline", "s6-psclhb-9", "terminal", {"command": f"python3 k.py ssh authorized {KEY.replace(' ', '_')}_r6test-clh-9"},
+                  now - 2, "call_r6_9"),
+            _end("cline", "s6-psclhb-9", now + 1, "call_r6_9")]
+    [alert] = startup_items.startup_alerts([_key_changed(home, now)], rows)
+    assert "agent" not in alert and "s6-psclhb-3" not in alert["text"] and "written by" not in alert["text"]
+
+
+def test_a_call_the_sandbox_refused_while_it_ran_is_not_the_writer(home):
+    """A sandboxed append that ran and was refused by the kernel (its post_tool_call says block)."""
+    now = time.time()
+    command = ("python3 -c \"import os; open(os.path.expanduser('~/.ssh/authorized_keys'),'a').write('" + KEY + " r6test-ccs\\n')\"")
+    rows = [_call(home, "claude-code", "s6-psccsb-2", "terminal", {"command": command}, now - 3, "toolu_r6s"),
+            _end("claude-code", "s6-psccsb-2", now + 1, "toolu_r6s", decision="block")]
+    [alert] = startup_items.startup_alerts([_key_changed(home, now)], rows)
+    assert "agent" not in alert and "written by" not in alert["text"]
+
+
+def test_a_call_that_ran_is_still_the_writer_and_one_decided_too_late_ran(home):
+    now = time.time()
+    for decision in ("allow", "too-late"):
+        rows = [_call(home, "codex", "s6-pscxh", "terminal", {"command": f"echo '{KEY} r6' >> ~/.ssh/authorized_keys"}, now - 2,
+                      "call_cx", decision=decision),
+                _end("codex", "s6-pscxh", now + 1, "call_cx")]
+        [alert] = startup_items.startup_alerts([_key_changed(home, now)], rows)
+        assert alert["severity"] == "critical" and "written by Codex in s6-pscxh" in alert["text"], decision

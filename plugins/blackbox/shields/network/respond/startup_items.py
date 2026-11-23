@@ -12,7 +12,12 @@ and only with EVIDENCE (KI-615: a plain-shell append five minutes after an agent
 the entry's path (``echo … > ~/Library/LaunchAgents/x.plist``, a write tool on it) AND during which
 the entry was written — its write time between the call's start and its end (the matching
 ``post_tool_call``, else :data:`CALL_SECONDS`). A call that named the path at another time is not
-the writer: the alert says the writer is unknown. Each entry is reported once (KI-615): the same
+the writer: the alert says the writer is unknown. Only a call that RAN is evidence (KI-636, security
+round 6: a REFUSED Read of ``~/.ssh/authorized_keys``, and refused appends in two other sessions, were
+named as the writer of a later change by the harness shell and by a script in another session): a
+``pre_tool_call`` the hook refused (``decision: block``) never ran, and a call whose
+``post_tool_call`` records a refusal (the OS sandbox stopped it, KI-590) did not write — neither is
+evidence, nor even "named". A call decided too late (``too-late``) ran, and is. Each entry is reported once (KI-615): the same
 file, seen under another spelling (a home reached through a link), with the same content, is one
 event. Then:
 
@@ -49,6 +54,8 @@ WINDOW_SECONDS = 600
 CALL_SECONDS = 120
 #: Clock slack between a hook's record and a file's write time.
 SLACK_SECONDS = 2
+#: A record's ``decision`` when the hook refused the call, or the OS sandbox refused it while it ran.
+REFUSED = "block"
 #: The agent tool-call records read to find a writer (newest first).
 MAX_ROWS = 2000
 #: Alerts per source (item kind + folder) per window; the rest are folded into one line.
@@ -89,17 +96,31 @@ def written_at(event: Mapping[str, Any]) -> Optional[float]:
     return float(parts[1]) if len(parts) > 1 and parts[1].isdigit() else None
 
 
-def _call_end(row: Mapping[str, Any], rows: Sequence[Mapping[str, Any]]) -> float:
-    """When the tool call *row* ended: its own ``post_tool_call`` record, else :data:`CALL_SECONDS` after it."""
-    detail = row.get("detail") if isinstance(row.get("detail"), Mapping) else {}
-    call_id, start = str(detail.get("tool_call_id") or ""), float(row.get("ts") or 0)
-    ends = [float(other.get("ts") or 0) for other in rows if call_id and other.get("event") == "post_tool_call"
-            and isinstance(other.get("detail"), Mapping) and other["detail"].get("tool_call_id") == call_id]
-    return min((end for end in ends if end >= start), default=start + CALL_SECONDS)
+def _detail(row: Mapping[str, Any]) -> Mapping[str, Any]:
+    return row["detail"] if isinstance(row.get("detail"), Mapping) else {}
 
 
-def _naming_calls(event: Mapping[str, Any], rows: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
-    """The agents' tool calls in the window before *event* that name its path, newest first."""
+def _refused(row: Mapping[str, Any]) -> bool:
+    """True when the hook or the OS sandbox refused the call this record is of (:data:`REFUSED`)."""
+    return str(_detail(row).get("decision") or "") == REFUSED
+
+
+def _call_end(row: Mapping[str, Any], rows: Sequence[Mapping[str, Any]]) -> Optional[float]:
+    """When the tool call *row* ended: its own ``post_tool_call`` record, else :data:`CALL_SECONDS`
+    after it; None when it was refused — before it ran, or by the sandbox while it ran (KI-636)."""
+    if _refused(row):
+        return None
+    call_id, start = str(_detail(row).get("tool_call_id") or ""), float(row.get("ts") or 0)
+    ends = [other for other in rows if call_id and other.get("event") == "post_tool_call"
+            and _detail(other).get("tool_call_id") == call_id and float(other.get("ts") or 0) >= start]
+    if any(_refused(end) for end in ends):
+        return None
+    return min((float(end.get("ts") or 0) for end in ends), default=start + CALL_SECONDS)
+
+
+def _naming_calls(event: Mapping[str, Any], rows: Sequence[Mapping[str, Any]]) -> list[tuple[Mapping[str, Any], float]]:
+    """The agents' tool calls that RAN in the window before *event* and name its path, each with
+    when it ended, newest first."""
     path, ts = str(event.get("id") or ""), float(event.get("ts") or 0)
     if not path.startswith("/"):
         return []   # a login item or profile: named by identifier, not a path an agent writes
@@ -109,25 +130,27 @@ def _naming_calls(event: Mapping[str, Any], rows: Sequence[Mapping[str, Any]]) -
         when = float(row.get("ts") or 0)
         if row.get("event") != "pre_tool_call" or not ts - WINDOW_SECONDS <= when <= ts + 5:
             continue
-        detail = row.get("detail") if isinstance(row.get("detail"), Mapping) else {}
-        text = json.dumps(detail.get("args"), ensure_ascii=False) if detail.get("args") is not None else ""
-        if text and any(form in text for form in forms):
-            found.append(row)
-    return sorted(found, key=lambda row: -float(row.get("ts") or 0))
+        args = _detail(row).get("args")
+        text = json.dumps(args, ensure_ascii=False) if args is not None else ""
+        if not (text and any(form in text for form in forms)):
+            continue
+        end = _call_end(row, rows)
+        if end is not None:
+            found.append((row, end))
+    return sorted(found, key=lambda pair: -float(pair[0].get("ts") or 0))
 
 
 def writer_of(event: Mapping[str, Any], rows: Sequence[Mapping[str, Any]]) -> Optional[Writer]:
-    """The agent whose tool call named *event*'s path AND ran while the entry was written (*rows*:
-    audit rows, any order); None without that evidence — never a guess."""
+    """The agent whose ALLOWED tool call named *event*'s path AND ran while the entry was written
+    (*rows*: audit rows, any order); None without that evidence — never a guess, never a refused call."""
     written = written_at(event)
     if written is None:
         return None
-    for row in _naming_calls(event, rows):
+    for row, end in _naming_calls(event, rows):
         start = float(row.get("ts") or 0)
-        if start - SLACK_SECONDS <= written <= _call_end(row, rows) + SLACK_SECONDS:
-            detail = row.get("detail") if isinstance(row.get("detail"), Mapping) else {}
+        if start - SLACK_SECONDS <= written <= end + SLACK_SECONDS:
             project = os.path.basename(str(row.get("workspace") or "").rstrip("/"))
-            return Writer(str(row.get("framework") or ""), str(detail.get("session_id") or ""), project)
+            return Writer(str(row.get("framework") or ""), str(_detail(row).get("session_id") or ""), project)
     return None
 
 
@@ -216,5 +239,5 @@ def startup_alerts(events: Sequence[Mapping[str, Any]], rows: Sequence[Mapping[s
     return sorted(kept + list(folded.values()), key=lambda alert: -float(alert["ts"]))
 
 
-__all__ = ["BUDGET", "BUDGET_SECONDS", "CALL_SECONDS", "MAX_ROWS", "RUN_LATER_NAMES", "SLACK_SECONDS", "WINDOW_SECONDS", "Writer",
+__all__ = ["BUDGET", "BUDGET_SECONDS", "CALL_SECONDS", "MAX_ROWS", "REFUSED", "RUN_LATER_NAMES", "SLACK_SECONDS", "WINDOW_SECONDS", "Writer",
            "grade", "startup_alerts", "text_of", "writer_of", "written_at"]
