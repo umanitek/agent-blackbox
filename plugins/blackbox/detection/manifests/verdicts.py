@@ -29,8 +29,9 @@ from ..detectors import _dependency_candidates, dependency_rules
 from ..finding import Finding, _rule_source, rule_subject
 from .model import CHAIN_ARROW, DependencyGraph, Package
 
-#: Candidates per ruleset question (the live lookup caps one question at 4,000 values).
-LOOKUP_CHUNK = 1000
+#: Candidates per ruleset question: the live lookup's own cap (4,000 values), so a 2,000-package
+#: lockfile is one question whose store queries run side by side (``ruleset.live.lookup``).
+LOOKUP_CHUNK = 4000
 #: Matches listed one by one; the rest are counted on the last listed row.
 MAX_LISTED = 10
 #: How long one file's answer is reused for the same ruleset generation.

@@ -23,7 +23,9 @@ Safety:
 from __future__ import annotations
 
 import logging
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Optional, Sequence
 
@@ -45,6 +47,10 @@ COULD_NOT_TELL = "could-not-tell"
 
 #: Values per query. A 50-value IOC batch answered in 17 ms on the bench.
 CHUNK = 200
+#: Queries of one lookup asked at once (the store answers them side by side). WHY (security round
+#: 4 timing, 2026-11-23): a 2,000-package lockfile is ~20 queries; asked one after another they were
+#: 40 of the 67 ms a cold check took on a 4-CPU VM (target < 50 ms).
+PARALLEL_QUERIES = 4
 #: The most values one call looks up — the content scanner's own candidate cap.
 MAX_VALUES = 4000
 #: Rows per query: candidates × ~15 triples each, with headroom.
@@ -76,6 +82,19 @@ class LookupAnswer:
     @property
     def known(self) -> bool:
         return self.outcome != COULD_NOT_TELL
+
+
+_POOL: Optional[ThreadPoolExecutor] = None
+_POOL_LOCK = threading.Lock()
+
+
+def _pool() -> ThreadPoolExecutor:
+    """The one small pool every lookup in this process shares (made on first use)."""
+    global _POOL
+    with _POOL_LOCK:
+        if _POOL is None:
+            _POOL = ThreadPoolExecutor(max_workers=PARALLEL_QUERIES, thread_name_prefix="blackbox-store-lookup")
+        return _POOL
 
 
 class VerifiedLookup:
@@ -146,8 +165,9 @@ class VerifiedLookup:
         if not self.scope.ready:
             return LookupAnswer({}, COULD_NOT_TELL, "verified scope not ready")
         rules: dict[str, dict[str, Any]] = {}
-        for start in range(0, len(items), CHUNK):
-            answer = self.store.select(build_query(items[start:start + CHUNK]))
+        queries = [build_query(items[start:start + CHUNK]) for start in range(0, len(items), CHUNK)]
+        answers = _pool().map(self.store.select, queries) if len(queries) > 1 else map(self.store.select, queries)
+        for answer in answers:   # in query order: the first could-not-tell is the answer, as before
             if not answer.known:
                 return LookupAnswer(rules, COULD_NOT_TELL, answer.reason)
             rules.update(self._rules_from(answer.rows or [], category))
