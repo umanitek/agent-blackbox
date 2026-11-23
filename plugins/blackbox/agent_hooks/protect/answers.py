@@ -3,7 +3,8 @@
 Split out of :mod:`.runner` (a move only): the runner asks the dashboard, then answers the agent
 with one of these — a refusal before a tool runs (:func:`deny_output`), a refused prompt
 (:func:`prompt_output`), a tool output kept from steering the model (:func:`post_output`), or
-the "go ahead" an agent that expects an answer needs (:func:`allow_output`). Standard library
+the "go ahead" an agent that expects an answer needs (:func:`allow_output`), and a note beside a
+tool's output that the OS sandbox refused part of the call (:func:`note_output`, KI-590). Standard library
 only; copied beside ``runner.py`` into Blackbox's data folder (``agent_hooks.RUNNER_FILES``).
 docs/agent-compat/ has the per-agent references.
 
@@ -69,6 +70,18 @@ def post_output(agent: str, reason: str) -> tuple[str, int]:
     if agent == "opencode":
         return json.dumps({"decision": "block", "reason": reason}), 0
     return "", 0
+
+
+def note_output(agent: str, note: str) -> str:
+    """What puts *note* (the OS sandbox refused part of this call, KI-590) BESIDE a tool's output
+    for the model, without refusing the output, where *agent*'s post-tool hook takes added context;
+    "" elsewhere (the runner says it on stderr then)."""
+    if agent in ("claude-code", "codex", "gemini-cli"):
+        event = "AfterTool" if agent == "gemini-cli" else "PostToolUse"
+        return json.dumps({"hookSpecificOutput": {"hookEventName": event, "additionalContext": note}})
+    if agent == "cline":
+        return json.dumps({"cancel": False, "contextModification": note})
+    return ""
 
 
 def allow_output(agent: str, event: str) -> str:

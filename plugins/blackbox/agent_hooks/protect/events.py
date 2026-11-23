@@ -40,7 +40,7 @@ from ... import audit, guard
 from ...kernel import constants
 from ...kernel.bounded_files import read_json_object, write_json_object
 from ...kernel.agent_hosts import BY_ID, DECISION_TOO_LATE, EVENTS
-from . import recorder
+from . import recorder, sandbox_errors
 from .own_prompt import persons_words
 from .runner import patch_files
 
@@ -271,6 +271,11 @@ def judge(body: Any) -> tuple[dict[str, Any], Optional[Judged]]:
     blocked = verdict.get("decision") == "block"
     answer = {"decision": "block" if blocked else "allow", "message": verdict.get("message", "") if blocked else "",
               "findings": len(findings), "recorded": True}
+    refused = sandbox_errors.refusals(event["text"]) if event["event"] == "post_tool" and event["sandboxed"] is True else []
+    if refused and not blocked:   # the kernel refused part of the call: said to the agent, counted (KI-590)
+        answer["note"] = sandbox_errors.note(refused)
+        if sandbox_errors.counted(refused):
+            verdict = {**verdict, "decision": "block", "message": answer["note"]}
     if event["tool_call_id"] and event["event"] in ("pre_tool", "post_tool"):
         _note_answer(session, call_key, answer)
     from .. import tracking   # late: tracking imports this package's editors

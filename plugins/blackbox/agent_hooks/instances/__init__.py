@@ -250,7 +250,7 @@ def record(event: Mapping[str, Any], session_key: str, *, decision: str = "", fi
             _close_session(session, str(event.get("why") or ""))
         if kind == "post_tool" and target is session:
             _end_spawned(session, event)
-    if kind in _TIMELINE or late:
+    if kind in _TIMELINE or late or decision == "block":   # a refused post-call too (the kernel's, KI-590)
         _timeline(target, event, decision, findings, reason, prompt_text, late)
     if target is not session:
         store.put(target)

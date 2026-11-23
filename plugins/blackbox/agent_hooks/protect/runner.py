@@ -38,11 +38,11 @@ from pathlib import Path
 # The runner is run as a script from Blackbox's data folder (its sibling is beside it there) and
 # imported as a module by the plugin and its tests.
 if __package__:
-    from .answers import allow_output, deny_output, post_output, prompt_output
+    from .answers import allow_output, deny_output, note_output, post_output, prompt_output
     from .identity import AGENT_TURN_MARKS, MODEL_EVENTS, effective_agent, identity, transcript_model, workspace
     from .tool_shapes import cline_tool
 else:
-    from answers import allow_output, deny_output, post_output, prompt_output
+    from answers import allow_output, deny_output, note_output, post_output, prompt_output
     from identity import AGENT_TURN_MARKS, MODEL_EVENTS, effective_agent, identity, transcript_model, workspace
     from tool_shapes import cline_tool
 
@@ -327,7 +327,10 @@ def main(argv: list) -> int:
             sys.stdout.write(out)
         sys.stderr.write(reason + "\n")
         return code
-    out = allow_output(agent, event)
+    note = str(answer.get("note") or "")[:1000] if event == "post_tool" else ""
+    out = note_output(agent, note) if note else allow_output(agent, event)
+    if note:   # the OS sandbox refused part of the call: said beside the output, never refusing it (KI-590)
+        sys.stderr.write(note + "\n")
     if out:
         sys.stdout.write(out)
     return 0

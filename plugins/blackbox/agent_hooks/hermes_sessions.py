@@ -49,6 +49,7 @@ from ..kernel import constants
 from ..kernel.agent_hosts import HERMES_ID
 from ..kernel.bounded_files import read_json_object, write_json_object
 from .instances import record, store
+from .protect import sandbox_errors
 from .protect.events import reason_of, session_key
 
 logger = logging.getLogger(__name__)
@@ -171,8 +172,11 @@ def apply(row: Mapping[str, Any]) -> bool:
     decision = str(detail.get("decision") or "")
     findings = [finding for finding in row.get("findings") or [] if isinstance(finding, dict)]
     # The row's reason: the titles of what refused or flagged it, as for every coding agent (KI-580).
-    record(fields, key, decision=decision if decision == "block" else "", findings=int(row.get("findingCount") or 0),
-           reason=reason_of({}, findings) if findings else "")
+    reason = reason_of({}, findings) if findings else ""
+    refused = sandbox_errors.refusals(str(detail.get("result") or "")) if kind == "post_tool" and fields["shells_sandboxed"] else []
+    if sandbox_errors.counted(refused):   # the kernel refused part of a sandboxed shell's call (KI-590)
+        decision, reason = "block", sandbox_errors.note(refused)
+    record(fields, key, decision=decision if decision == "block" else "", findings=int(row.get("findingCount") or 0), reason=reason)
     return True
 
 
