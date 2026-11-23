@@ -201,3 +201,44 @@ def test_a_codex_patch_argument_adding_a_listed_dependency_is_refused_for_that_r
         answer = events.record_event(runner.summary("codex", "pre_tool", {"session_id": "s", "cwd": str(project), **payload}))
         assert answer["decision"] == "block" and "left-pad@1.3.0" in answer["message"], answer
         assert "self-protection" not in answer["message"] and "own settings" not in answer["message"], answer["message"]
+
+
+#: KI-640 (security round 6, REAL Codex 0.171.0 gpt-5.4-nano, sandboxed; k616.sh): the round's two
+#: patches, byte for byte, on the package.json ``npm init -y`` writes. On the VM the harmless one
+#: (s6-k616c) was refused as "Change to Blackbox's own settings" and the one adding the listed
+#: left-pad (s6-k616d, the heredoc form) was allowed. Every shape Codex can send them in — its own
+#: ``apply_patch`` tool with the patch in ``command`` (as its hooks document), a shell call with the
+#: patch as apply_patch's argument (argv or joined), the heredoc, the heredoc inside ``bash -lc`` —
+#: is judged the right way round here, the dashboard's working folder elsewhere or not.
+K616_INIT = json.dumps({"name": "s6-k616c", "version": "1.0.0", "description": "", "main": "index.js",
+                        "scripts": {"test": "echo \"Error: no test specified\" && exit 1"}, "keywords": [], "author": "",
+                        "license": "ISC", "type": "commonjs"}, indent=2) + "\n"
+K616_HARMLESS = ('*** Begin Patch\n*** Update File: package.json\n@@\n-  "description": "",\n+  "description": "round six",\n'
+                 '*** End Patch')
+K616_LISTED = ('*** Begin Patch\n*** Update File: package.json\n@@\n   "license": "ISC",\n'
+               '+  "dependencies": { "left-pad": "1.3.0" },\n   "type": "commonjs"\n*** End Patch')
+
+
+def _k616_shapes(patch: str) -> list[dict]:
+    return [{"tool_name": "apply_patch", "tool_input": {"command": patch}},
+            {"tool_name": "apply_patch", "tool_input": {"command": patch + "\n"}},
+            {"tool_name": "Bash", "tool_input": {"command": ["apply_patch", patch]}},
+            {"tool_name": "Bash", "tool_input": {"command": "apply_patch " + patch}},
+            {"tool_name": "Bash", "tool_input": {"command": f"apply_patch <<'PATCH'\n{patch}\nPATCH"}},
+            {"tool_name": "Bash", "tool_input": {"command": ["bash", "-lc", f"apply_patch <<'PATCH'\n{patch}\nPATCH"]}}]
+
+
+@pytest.mark.parametrize("shape", range(6))
+def test_the_round6_codex_patches_are_judged_the_right_way_round(project, monkeypatch, shape):
+    monkeypatch.chdir(project.parent)   # the dashboard runs elsewhere than the agent's folder
+    manifest = project / "package.json"
+    harmless, listed = _k616_shapes(K616_HARMLESS)[shape], _k616_shapes(K616_LISTED)[shape]
+    for payload, refused in ((harmless, False), (listed, True)):
+        manifest.write_text(K616_INIT, encoding="utf-8")
+        events._answered.clear()
+        answer = events.record_event(runner.summary("codex", "pre_tool", {"session_id": "s6-k616", "cwd": str(project),
+                                                                         "tool_use_id": f"call_{shape}_{refused}", **payload}))
+        assert (answer["decision"] == "block") is refused, (shape, payload, answer)
+        assert "own settings" not in answer["message"] and "self-protection" not in answer["message"], answer["message"]
+        if refused:
+            assert "left-pad@1.3.0" in answer["message"]
