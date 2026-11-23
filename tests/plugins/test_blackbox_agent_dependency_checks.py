@@ -183,7 +183,9 @@ def test_an_ordinary_post_tool_call_is_not_judged_as_an_install(project, tmp_pat
 def _codex_patch_calls(added: str) -> list[dict]:
     patch = f'*** Begin Patch\n*** Update File: package.json\n@@\n   "dependencies": {{\n-    {OLD}\n+    {OLD},\n+    {added}\n   }}\n*** End Patch'
     return [{"tool_name": "Bash", "tool_input": {"command": f"apply_patch '{patch}'"}},
-            {"tool_name": "Bash", "tool_input": {"command": ["apply_patch", patch]}}]
+            {"tool_name": "Bash", "tool_input": {"command": ["apply_patch", patch]}},
+            # KI-645 (round 7's full capture): the patch on the line after the program, unquoted.
+            {"tool_name": "Bash", "tool_input": {"command": f"apply_patch\n{patch}"}}]
 
 
 def test_a_codex_patch_argument_adding_a_harmless_dependency_is_allowed(project):

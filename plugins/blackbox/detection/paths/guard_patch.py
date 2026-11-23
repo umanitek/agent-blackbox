@@ -34,10 +34,13 @@ _PATCH_HEREDOC = re.compile(
     r"(?m)^(?P<head>[^\n]*?(?<![\w./-])(?:\S*/)?apply_patch\b[^\n]*?<<-?[ \t]*(?P<quote>['\"]?)(?P<tag>\w+)(?P=quote)[^\n]*)\n"
     r"(?P<body>.*?)\n[ \t]*(?P=tag)(?P<close>['\"]?)[ \t]*$", re.DOTALL)
 #: ``apply_patch '*** Begin Patch …'`` — the patch as the program's ARGUMENT (KI-616: Codex 0.171.0's
-#: own patch tool reaches the hook as this shell command, quoted, or as its argv joined unquoted).
+#: own patch tool reaches the hook as this shell command, quoted, or as its argv joined unquoted) —
+#: also on the line AFTER the program, with no quote (KI-645, security round 7's full capture:
+#: ``apply_patch\n*** Begin Patch\n…\n*** End Patch``; read as shell its ``***`` lines matched
+#: every guarded place, and a package.json description edit was refused as a Blackbox change).
 _PATCH_ARGUMENT = re.compile(
-    r"(?m)^(?P<head>[^\n]*?(?<![\w./-])(?:\S*/)?apply_patch)[ \t]+(?P<quote>['\"]?)"
-    r"(?P<body>\*\*\* Begin Patch[ \t]*\n.*?\n\*\*\* End Patch)[ \t]*\n?(?P=quote)[ \t]*$", re.DOTALL)
+    r"(?m)^(?P<head>[^\n]*?(?<![\w./-])(?:\S*/)?apply_patch)(?:[ \t]+|[ \t]*\n)(?P<quote>['\"]?)"
+    r"(?P<body>\*\*\* Begin Patch[ \t]*\n.*?\n\*\*\* End Patch)[ \t]*\n?(?P=quote)(?P<close>['\"]?)[ \t]*$", re.DOTALL)
 #: The patch format's file headers (Codex's apply_patch grammar).
 _FILE_HEADER = re.compile(r"(?m)^\*\*\* (?P<verb>Add File|Update File|Delete File|Move to): (?P<path>[^\n]+?)[ \t]*$")
 #: The patch format's own lines that are not file content.
@@ -88,7 +91,9 @@ def split(command: str) -> tuple[str, list[Patch]]:
         body = found.group("body")
         patches.append(_parse(body))
         content = [line for line in body.split("\n") if not _MARKER.match(line)]
-        tail = [found.group("tag") + found.group("close")] if "tag" in found.re.groupindex else []
+        # The heredoc's closing tag, or the quote that ends a ``bash -lc '…'`` around the argument form.
+        tail = [found.group("tag") + found.group("close")] if "tag" in found.re.groupindex else \
+            [found.group("close")] if found.group("close") else []
         return "\n".join([found.group("head"), *content, *tail])
 
     if "<<" in command:

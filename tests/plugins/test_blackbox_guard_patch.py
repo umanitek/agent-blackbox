@@ -95,3 +95,28 @@ def test_the_patch_is_read_with_its_files_and_added_text():
     assert patch.added["r.py"].startswith("import os, sys") and patch.added["a.txt"] == "y"
     assert "***" not in rest and "@@" not in rest and rest.endswith("PATCH'") and "+y" in rest
     assert guard_patch.split("echo hi") == ("echo hi", [])
+
+
+#: KI-645 (security round 7, REAL Codex 0.171.0, the full PreToolUse stdin captured by a tee wrapper):
+#: Codex sent apply_patch as `tool_name: "Bash"` with the patch on the line AFTER the program — no
+#: heredoc, no quotes. Read as shell, its `***` lines were wildcards, and a harmless description edit
+#: of the project's package.json was refused as "Change to Blackbox's own settings".
+K645_DESCRIPTION = ('apply_patch\n*** Begin Patch\n*** Update File: package.json\n@@\n-  "description": "",\n'
+                    '+  "description": "round seven",\n*** End Patch')
+K645_IS_ODD = ('apply_patch\n*** Begin Patch\n*** Add File: web/package.json\n+{ "name": "web", "version": "1.0.0", '
+               '"dependencies": { "is-odd": "3.0.1" } }\n*** End Patch')
+
+
+@pytest.mark.parametrize("command", [K645_DESCRIPTION, K645_IS_ODD, "bash -lc '" + K645_DESCRIPTION + "'"])
+def test_codexs_plain_patch_spelling_is_read_as_the_patch_it_is(home, command):
+    (home.project / "package.json").write_text('{\n  "name": "x",\n  "description": "",\n  "license": "ISC"\n}\n', encoding="utf-8")
+    verdict = _verdict(command, home.project)
+    assert SELF not in _identifiers(verdict) and verdict.get("decision") != "block", verdict
+    rest, [patch] = guard_patch.split(command)
+    assert "***" not in rest and patch.paths in (("package.json",), ("web/package.json",))
+
+
+def test_codexs_plain_patch_spelling_still_refuses_a_patch_that_reaches_blackbox(home):
+    plugin = os.path.join(os.environ["HERMES_HOME"], "plugins", "blackbox")
+    command = f"apply_patch\n*** Begin Patch\n*** Update File: {plugin}/plugin.yaml\n@@\n-hooks:\n+hooks: []\n*** End Patch"
+    assert SELF in _identifiers(_verdict(command, home.project))
