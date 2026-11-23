@@ -30,7 +30,8 @@ from plugins.blackbox.guard import background as guard_background, hooks
 from plugins.blackbox.guard import reporting as guard_reporting
 from plugins.blackbox.kernel import config as config_mod
 from plugins.blackbox.ruleset import Ruleset
-from plugins.blackbox.shields.files import protect, written
+from plugins.blackbox.detection import script_files as written
+from plugins.blackbox.shields.files import protect
 
 #: The scripts the round-2 harness left in the project folder (never written through a hook).
 R_PY = 'from pathlib import Path; print(Path.home().joinpath("Documents", "Secret", "change-1.txt").read_text())\n'

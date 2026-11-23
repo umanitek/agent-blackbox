@@ -1,4 +1,8 @@
-"""File Shield, Layer 1, for a script an agent WRITES and then RUNS: judged by what it says.
+"""The script files a command writes and runs, read so a hook can judge a script by what it says.
+
+Moved from ``shields/files/written.py`` (a move only) so every detector reads ONE answer — File
+Shield's protected items and the persistence places alike (LES-137). The words below are File
+Shield's use of it.
 
 A hook sees ``python3 r.py`` — not what ``r.py`` opens. Real agents (Claude Code, Gemini CLI and
 the Hermes agent with hosted models, 2026-11-22) wrote a script that builds a protected file's path
@@ -45,8 +49,8 @@ import time
 from collections import OrderedDict
 from typing import Any, NamedTuple, Optional
 
-from ...kernel import action_context
-from ...kernel.bounded_files import read_small_text
+from ..kernel import action_context
+from ..kernel.bounded_files import read_small_text
 
 #: The most scripts remembered (the oldest forgotten first).
 MAX_REMEMBERED = 256

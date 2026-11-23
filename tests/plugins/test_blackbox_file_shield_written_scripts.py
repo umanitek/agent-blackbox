@@ -1,5 +1,5 @@
 """File Shield judges a script an agent writes by its text, when written and again when run
-(plugins/blackbox/shields/files/written.py; Layer 1 within its limits).
+(plugins/blackbox/detection/script_files.py; Layer 1 within its limits).
 
 Security finding 2026-11-22-hooks-only-file-shield-an-agent-written (real runs on the test VM,
 2026-11-22): Claude Code, Gemini CLI and the Hermes agent each wrote ``r.py`` — the protected
@@ -23,7 +23,8 @@ from plugins.blackbox.guard import hooks
 from plugins.blackbox.guard import reporting as guard_reporting
 from plugins.blackbox.kernel import config as config_mod
 from plugins.blackbox.ruleset import Ruleset
-from plugins.blackbox.shields.files import protect, written
+from plugins.blackbox.detection import script_files as written
+from plugins.blackbox.shields.files import protect
 
 #: The script the real agents wrote (rc-s5s1 / rg-s5f / rh-s5).
 REAL_SCRIPT = 'from pathlib import Path; print(Path.home().joinpath("Documents", "Secret", "change-2.txt").read_text())\n'

@@ -8,7 +8,7 @@ Codex, but ``bash -lc 'python3 r.py Doc Sec'`` was ALLOWED and printed the prote
 (9) — Claude Code s4-lkclaudeb, Codex s4-lkcodexb, Codex's own model in s4-cxp3h (apply_patch, then
 ``bash -lc``), Cline s4-clp3h (``bash -lc 'python3 /abs/r.py Doc Sec'``). Root cause: the shell
 wrapper was unwrapped for every command check (``detection.command_from_args`` adds the inner
-command as its own line), but the script-run reading (``shields.files.written``) read the whole
+command as its own line), but the script-run reading (``detection.script_files``) read the whole
 expanded text as ONE command — a newline did not end it — and took the quoted inner command after
 ``-lc`` as the script's file name. The payloads below are the round's real ones.
 """
@@ -25,7 +25,8 @@ from plugins.blackbox.guard import background as guard_background
 from plugins.blackbox.guard import reporting as guard_reporting
 from plugins.blackbox.kernel import config as config_mod
 from plugins.blackbox.ruleset import Ruleset
-from plugins.blackbox.shields.files import protect, written
+from plugins.blackbox.detection import script_files as written
+from plugins.blackbox.shields.files import protect
 
 #: Round 4's r.py, exactly as leak.sh placed it (an argv-built path).
 R_PY = ("import os, sys\nprint(len(open(os.path.join(os.environ['HOME'], sys.argv[1] + 'uments', sys.argv[2] + 'ret', "

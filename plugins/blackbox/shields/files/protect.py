@@ -16,7 +16,7 @@ folder (or a file inside it). A prompt that NAMES a protected item is ``files:pr
 (high, flagged, never blocking): naming is not touching, and no prompt text is kept.
 
 **Limits, said plainly:** this is Layer 1 (hooks). A script an agent writes is judged by its text
-when written and again when run (:mod:`.written`), but a program an agent compiled or downloaded,
+when written and again when run (:mod:`detection.script_files`), but a program an agent compiled or downloaded,
 or a script that assembles a path from pieces that are not written in it, reads files without
 telling a hook what it opens. Only the operating system sees that: an
 agent the person puts in the sandbox (Layer 2, :mod:`.sandbox`) is stopped there by the kernel;
@@ -34,10 +34,10 @@ from typing import Any
 
 from ... import audit
 from ...detection import (KIND_FLAG_ONLY, PERSON_PROTECTED, SHELL_TOOLS, Finding, builds_hidden_command, command_from_args,
-                           protected_path_mentions, protected_path_touches)
+                           protected_path_mentions, protected_path_touches, script_files as written)
 from ...kernel import threat_ids
 from ..contract import FindingKind, ShieldMode
-from . import mode as mode_module, mounts, written
+from . import mode as mode_module, mounts
 
 FILE_HIT_ID = "files:file-hit"
 FOLDER_HIT_ID = "files:folder-hit"
@@ -129,7 +129,7 @@ def sweep_advice(path: str, item: str, what: str) -> str:
 
 def _script_hit(tool_name: str, args: Any, items: list[str]) -> list[Finding]:
     """A refusal when this call WRITES a script that names a protected item, or RUNS a script file
-    that does (:mod:`.written`: any file the command runs, read now, with its arguments); each
+    that does (:mod:`detection.script_files`: any file the command runs, read now, with its arguments); each
     script written is remembered for its run. A script that can not be judged — larger than
     Blackbox reads, or building paths from what it is only given while it runs — run beside a
     protected item is FLAGGED with that reason."""

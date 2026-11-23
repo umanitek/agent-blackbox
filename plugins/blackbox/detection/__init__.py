@@ -27,7 +27,7 @@ Usage::
 
 from __future__ import annotations
 
-from . import osv, reviewer
+from . import osv, reviewer, script_files
 from .action_parsing import (FETCH_TOOL_PREFIXES, HOST_FILE_AND_SKILL_TOOLS, SENSITIVE_PATH_CATEGORIES, file_access_arg, parse_dependency_installs,
                              parse_downloads, parse_shell_reads, skill_install_arg)
 from .content_scanners import SKILL_DANGER_SHAPES
@@ -125,6 +125,7 @@ __all__ = [
                              'protected_path_touches',
                              'reviewer',
                              'run_isolated',
+                             'script_files',
                              'shell_file_args',
                              'skill_install_arg',
 ]
