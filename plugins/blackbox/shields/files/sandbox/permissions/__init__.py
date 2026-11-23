@@ -25,11 +25,12 @@ Usage::
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from .....kernel import settings as kernel_settings
 from . import catalogue
-from .catalogue import BY_ID, NEVER, NOT_CONTROLLABLE, PERMISSIONS
+from .catalogue import BY_ID, NEVER, NOT_CONTROLLABLE, PERMISSIONS, profile_permissions
 from .judge import loosened
 from .model import Access, Allowances, Choice, FolderRule, Mode, Permission, Route, Rule, Scope, Settings
 from .section import SECTION, current, parse, stored, validate_section, with_legacy
@@ -42,6 +43,19 @@ def decide(permission: str, agent: str = "", folder: str = "") -> Mode:
     return current().mode(BY_ID[permission], agent, folder)
 
 
+def allowances(settings: Settings, agent: str = "", folder: str = "") -> Allowances:
+    """What one profile lets through for *agent* working in absolute *folder* ("" = no project):
+    the profile-route permissions in force as ALLOW, local-ports' reachable ports, and the folder
+    rules that apply, as canonical paths (the kernel matches real paths). "Ask" is refused in the
+    profile until the person answers (a profile is fixed when the agent starts)."""
+    lifted = frozenset(each.id for each in profile_permissions() if settings.mode(each, agent, folder) is Mode.ALLOW)
+    rules = settings.folder_rules(agent, folder)
+    real = [(os.path.realpath(os.path.expanduser(each.path)), each.access) for each in rules]
+    hidden = tuple(dict.fromkeys(path for path, access in real if access is Access.NONE))
+    read_only = tuple(dict.fromkeys(path for path, access in real if access is Access.READ and path not in hidden))
+    return Allowances(lifted=lifted, ports=settings.ports("local-ports", agent, folder), hidden=hidden, read_only=read_only)
+
+
 def section_weakening(raw: Any) -> list[str]:
     """Why writing *raw* as the ``agent_sandbox`` section turns protection down (``[]`` when it does
     not, or when the writer will refuse it anyway)."""
@@ -51,5 +65,5 @@ def section_weakening(raw: Any) -> list[str]:
 
 
 __all__ = ["BY_ID", "NEVER", "NOT_CONTROLLABLE", "PERMISSIONS", "SECTION", "Access", "Allowances", "Choice", "FolderRule", "Mode",
-           "Permission", "Route", "Rule", "Scope", "Settings", "catalogue", "current", "decide", "loosened", "section_weakening",
+           "Permission", "Route", "Rule", "Scope", "Settings", "allowances", "catalogue", "current", "decide", "loosened", "section_weakening",
            "stored", "validate_section"]

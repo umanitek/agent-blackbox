@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 
+from ...permissions import Allowances
 from ...places import Places
 
 SANDBOX_EXEC = "/usr/bin/sandbox-exec"
@@ -33,13 +34,39 @@ def _glob_regex(glob: str) -> str:
     return "#\"^" + body.replace('"', '\\"') + "$\""
 
 
-def render(places: Places, digest_line: str = "") -> str:
-    """The Seatbelt profile for *places*. Everything not named stays allowed: the agent works as
-    before, except on what the person (and Blackbox) protect."""
+#: The comment that opens the never-list: everything after it is rendered LAST in every profile,
+#: so no permission rule above can lift it (Seatbelt: a later rule wins).
+NEVER_MARK = "; never-list — rendered last: no permission above lifts it"
+
+
+def render(places: Places, digest_line: str = "", allowances: Allowances = Allowances()) -> str:
+    """The Seatbelt profile for *places* with the permissions *allowances* lets through. Everything
+    not named stays allowed: the agent works as before, except on what the person (and Blackbox)
+    protect. The permission lines come first, the never-list (:data:`NEVER_MARK`) last."""
+    lines = ["(version 1)", f"; Blackbox agent sandbox — generated, do not edit. {digest_line}".rstrip(), "(allow default)"]
+    lines += permission_lines(allowances)
+    lines.append(NEVER_MARK)
+    lines += _never(places)
+    return "\n".join(lines) + "\n"
+
+
+def permission_lines(allowances: Allowances) -> list[str]:
+    """What the person's permissions refuse for one scope: folder rules (kept out / read only)."""
+    lines = []
+    if allowances.hidden:
+        lines.append("(deny file-read* file-write* file-link\n  " + "\n  ".join(f"(subpath {_quote(p)})" for p in allowances.hidden) + ")")
+    if allowances.read_only:
+        lines.append("(deny file-write*\n  " + "\n  ".join(f"(subpath {_quote(p)})" for p in allowances.read_only) + ")")
+    return lines
+
+
+def _never(places: Places) -> list[str]:
+    """The never-list: the person's protected items, Blackbox's own places, the startup places, app
+    drivers, ssh to this Mac and signals out of the sandbox."""
     refused = [f"(subpath {_quote(p)})" for p in places.denied_folders]
     refused += [f"(literal {_quote(p)})" for p in places.denied_files if p != places.canary]
     refused += [f"(regex {_glob_regex(g)})" for g in places.denied_globs]
-    lines = ["(version 1)", f"; Blackbox agent sandbox — generated, do not edit. {digest_line}".rstrip(), "(allow default)"]
+    lines = []
     if refused:
         lines.append("(deny file-read* file-write* file-link\n  " + "\n  ".join(refused) + ")")
     if places.canary:
@@ -68,8 +95,8 @@ def render(places: Places, digest_line: str = "") -> str:
     # alone does NOT stop a signal; deny-all then allow ``same-sandbox`` does.
     lines.append("(deny signal)")
     lines.append("(allow signal (target same-sandbox))")
-    return "\n".join(lines) + "\n"
+    return lines
 
 
 
-__all__ = ["APP_DRIVERS", "LOCAL_SSH", "PROFILE_SUFFIX", "SANDBOX_EXEC", "render"]
+__all__ = ["APP_DRIVERS", "LOCAL_SSH", "NEVER_MARK", "PROFILE_SUFFIX", "SANDBOX_EXEC", "permission_lines", "render"]

@@ -33,7 +33,6 @@ Usage::
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import os
@@ -47,9 +46,9 @@ from ....kernel.bounded_files import atomic_write
 from ...contract import ShieldMode
 from .. import mode as mode_module
 from ..protect import is_folder
-from . import addon_places, defaults, own_places, packages, permissions, platform
+from . import addon_places, defaults, own_places, packages, permissions, platform, profiles
 from .hermes import HERMES_CODE_LAUNCHER, HERMES_LAUNCHER_ENV, HERMES_SHELLS, HermesCover, enter_hermes_process, sync_shells
-from .layout import CLI_AGENTS, canary_path, chosen, hermes_shell_dir, home, launcher_dir, profile_path, write_if_changed
+from .layout import CLI_AGENTS, agent_profile, canary_path, chosen, hermes_shell_dir, home, launcher_dir, profile_path, write_if_changed
 from .places import Places, build, canonical
 from .status import HOOKS_ONLY, NOT_INSTALLED_NOTE, SANDBOXED, SHELLS_ONLY, offer, protection, status
 
@@ -121,11 +120,13 @@ def self_protected_files(mode: ShieldMode) -> tuple[str, ...]:
     return policy(mode).no_write_files + tuple(canonical(place) for place in addon_places.of(_PLUGIN.parent))
 
 
-def _sync_launchers(commands: set[str]) -> None:
+def _sync_launchers(commands: dict[str, str]) -> None:
+    """One launcher per command in *commands* (``{command: agent}``), each starting its agent in
+    the agent's own profile; every other launcher removed."""
     folder = launcher_dir()
     if commands:
-        for command in sorted(commands):
-            write_if_changed(folder / command, platform.launcher_script(command, str(folder), str(profile_path())), 0o755)
+        for command, agent in sorted(commands.items()):
+            write_if_changed(folder / command, platform.launcher_script(command, str(folder), str(agent_profile(agent))), 0o755)
         _keep_on_path(folder)
     else:
         shell_path.remove()
@@ -172,22 +173,20 @@ def sync(mode: Optional[ShieldMode] = None) -> dict[str, Any]:
     mode = mode or mode_module.current()
     if platform.unavailable() is None and mode.enabled:
         rules = policy(mode)
-        text = platform.render(rules)
-        write_if_changed(profile_path(), platform.render(rules, f"sha256:{_digest(text)}"), 0o644)
+        settings = permissions.current()
+        write_if_changed(profile_path(), profiles.render_signed(rules, permissions.allowances(settings)), 0o644)
+        profiles.sync(rules, chosen(mode), settings)   # each agent's own permissions on top (sandbox permissions)
         write_if_changed(canary_path(), CANARY_TEXT, 0o644)
         platform.refresh_tools(str(launcher_dir()), bool(chosen(mode)))   # the setuid-free ps for the sandboxed PATH (KI-589)
         packages.install_shim(launcher_dir() / platform.TOOLS_FOLDER)        # brew installs through Blackbox (KI-593)
-        _sync_launchers({command for agent in chosen(mode) for command in CLI_AGENTS.get(agent, ())})
+        _sync_launchers({command: agent for agent in chosen(mode) for command in CLI_AGENTS.get(agent, ())})
         sync_shells(agent_hosts.HERMES_ID in chosen(mode))
     else:
-        _sync_launchers(set())
+        _sync_launchers({})
+        profiles.clear()
         sync_shells(False)
         platform.refresh_tools(str(launcher_dir()), False)
     return status(mode)
-
-
-def _digest(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
 
 
 def enter_hermes_session() -> HermesCover:
@@ -210,7 +209,8 @@ def open_app(app: str) -> str:
     if not current.enabled:
         raise RuntimeError("Engage File Shield first: the sandbox protects its list.")
     sync(current)
-    return platform.open_app(app, str(profile_path()), log=str(home() / f"{app}.log"))
+    own = agent_profile(app)   # the editor's own permissions when it is sandboxed, else the everywhere profile
+    return platform.open_app(app, str(own if own.is_file() else profile_path()), log=str(home() / f"{app}.log"))
 
 
 def proven(canary: Optional[Path] = None) -> bool:

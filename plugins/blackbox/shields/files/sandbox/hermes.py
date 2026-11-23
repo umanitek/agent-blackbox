@@ -24,7 +24,7 @@ from ....kernel import agent_hosts
 from ...contract import ShieldMode
 from .. import mode as mode_module
 from . import platform
-from .layout import chosen, hermes_shell_dir, launcher_dir, profile_path, write_if_changed
+from .layout import agent_profile, chosen, hermes_shell_dir, launcher_dir, write_if_changed
 
 #: The shells the Hermes agent's terminal tool may start (it looks ``bash`` up on its own PATH).
 HERMES_SHELLS = ("bash", "sh", "zsh")
@@ -38,14 +38,14 @@ HERMES_CODE_LAUNCHER = "execute-code"
 
 def sync_shells(wanted: bool) -> None:
     """Writes the sandboxed shells and the ``execute_code`` launcher when *wanted*; removes them otherwise."""
-    folder = hermes_shell_dir()
+    folder, profile = hermes_shell_dir(), str(agent_profile(agent_hosts.HERMES_ID))   # the Hermes agent's own profile
     for shell in HERMES_SHELLS:
         if wanted:
-            write_if_changed(folder / shell, platform.shell_shim(shell, str(folder), str(profile_path()), str(launcher_dir())), 0o755)
+            write_if_changed(folder / shell, platform.shell_shim(shell, str(folder), profile, str(launcher_dir())), 0o755)
         else:
             (folder / shell).unlink(missing_ok=True)
     if wanted:
-        write_if_changed(code_launcher(), platform.command_shim(str(profile_path()), str(launcher_dir())), 0o755)
+        write_if_changed(code_launcher(), platform.command_shim(profile, str(launcher_dir())), 0o755)
     else:
         code_launcher().unlink(missing_ok=True)
 

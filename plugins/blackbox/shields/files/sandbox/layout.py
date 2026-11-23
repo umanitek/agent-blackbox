@@ -36,6 +36,16 @@ def profile_path() -> Path:
     return home() / f"agents{platform.PROFILE_SUFFIX}"
 
 
+def profiles_dir() -> Path:
+    """Where each sandboxed agent's own profile lives (``<agent>.sb``)."""
+    return home() / "profiles"
+
+
+def agent_profile(agent: str) -> Path:
+    """*agent*'s own profile: its permissions on top of the shared policy."""
+    return profiles_dir() / f"{agent}{platform.PROFILE_SUFFIX}"
+
+
 def canary_path() -> Path:
     return home() / "canary"
 
@@ -67,4 +77,4 @@ def write_if_changed(path: Path, text: str, mode: int) -> bool:
     return True
 
 
-__all__ = ["CLI_AGENTS", "canary_path", "chosen", "hermes_shell_dir", "home", "launcher_dir", "profile_path", "write_if_changed"]
+__all__ = ["CLI_AGENTS", "agent_profile", "canary_path", "chosen", "hermes_shell_dir", "home", "launcher_dir", "profile_path", "profiles_dir", "write_if_changed"]

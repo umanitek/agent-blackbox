@@ -33,7 +33,7 @@ def startup_places(_home: str) -> tuple[list[str], list[str], list[str]]:
     return [], [], []
 
 
-def render(_places: Places, digest_line: str = "") -> str:
+def render(_places: Places, digest_line: str = "", allowances: object = None) -> str:
     return ""
 
 
