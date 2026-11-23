@@ -16,6 +16,8 @@ from __future__ import annotations
 import pytest
 
 from plugins.blackbox.kernel import code_signing as signing
+from plugins.blackbox.kernel import code_signing as code_signing_module
+from plugins.blackbox.kernel.code_signing.platform import macos as macos_signing
 from plugins.blackbox.shields.network.monitor import exposure, signature
 
 APPLE_DISPLAY = "Executable=/usr/bin/true\nAuthority=Software Signing\nAuthority=Apple Code Signing Certification Authority\nAuthority=Apple Root CA\nTeamIdentifier=not set\n"
@@ -31,13 +33,20 @@ def runner(intact=0, requirement=0, spctl=(0, "accepted\nsource=Notarized Develo
         calls.append(command)
         if timeout:
             return None
-        if command[0] == signing.SPCTL:
+        if command[0] == macos_signing.SPCTL:
             return spctl
         if any(part.startswith("-R=") for part in command):
             return requirement, "" if requirement == 0 else "test-requirement: code failed to satisfy specified code requirement(s)"
         return intact, "" if intact == 0 else "a sealed resource is missing or invalid"
     run.calls = calls
     return run
+
+
+@pytest.fixture(autouse=True)
+def macos_commands(monkeypatch):
+    """The commands are macOS's (``code_signing/platform/macos.py``) on every machine the suite runs on;
+    the fake runners below answer them, so nothing is run."""
+    monkeypatch.setattr(code_signing_module, "platform", macos_signing)
 
 
 @pytest.fixture(autouse=True)

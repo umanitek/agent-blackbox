@@ -34,15 +34,13 @@ Usage::
 from __future__ import annotations
 
 import os
-import subprocess
 import threading
 import time
 from dataclasses import dataclass
 from typing import Callable, Optional
 
-CODESIGN = "/usr/bin/codesign"
-SPCTL = "/usr/sbin/spctl"
-TIMEOUT_SECONDS = 5.0
+from . import platform
+
 MAX_CACHED = 4000
 
 #: The code requirement each claimed signer must satisfy (Apple's certificate extension OIDs:
@@ -113,12 +111,8 @@ def parse_display(text: str) -> Claim:
 
 
 def _run(command: list[str]) -> Optional[tuple[int, str]]:
-    try:
-        done = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                              timeout=TIMEOUT_SECONDS, stdin=subprocess.DEVNULL, check=False)
-    except (OSError, subprocess.SubprocessError):
-        return None
-    return done.returncode, (done.stdout or "") + (done.stderr or "")
+    """The system's own way to run a signing tool (``platform``: None where there is none)."""
+    return platform.run(command)
 
 
 def bundle_of(path: str) -> str:
@@ -131,19 +125,19 @@ def assess(path: str, claimed: str, run: Runner = _run) -> Verification:
     requirement = REQUIREMENTS.get(claimed)
     if requirement is None:
         return Verification(valid=False)   # a claim we cannot hold to a requirement is not believed
-    intact = run([CODESIGN, "--verify", "--strict", path])
+    intact = run(platform.intact_command(path))
     if intact is None:
         return Verification(valid=None)
     if intact[0] != 0:
         return Verification(valid=False)
-    holds = run([CODESIGN, "--verify", f"-R={requirement}", path])
+    holds = run(platform.requirement_command(path, requirement))
     if holds is None:
         return Verification(valid=None)
     if holds[0] != 0:
         return Verification(valid=False)
     notarised = False
     if claimed == "developer_id":
-        verdict = run([SPCTL, "--assess", "--type", "execute", "-vv", bundle_of(path)])
+        verdict = run(platform.notarisation_command(bundle_of(path)))
         notarised = bool(verdict and verdict[0] == 0 and "Notarized Developer ID" in verdict[1])
     return Verification(valid=True, notarised=notarised or claimed in ("apple", "app_store"))
 
@@ -246,7 +240,7 @@ def describe_soon(path: str, run: Runner = _run, wait: float = SOON_SECONDS) -> 
 def entitlements(path: str, run: Runner = _run) -> Optional[str]:
     """The entitlements *path* is signed with, as plist XML ("" when it has none); None when
     ``codesign`` cannot say (unsigned, gone, timed out)."""
-    shown = run([CODESIGN, "-d", "--entitlements", "-", "--xml", path])
+    shown = run(platform.entitlements_command(path))
     return None if shown is None or shown[0] != 0 else _xml_part(shown[1])
 
 
@@ -284,7 +278,7 @@ def _describe(real: str, run: Runner) -> Signer:
                 return Signer(kind="script")
     except OSError:
         return Signer(kind="unknown")
-    shown = run([CODESIGN, "-dv", "--verbose=2", real])
+    shown = run(platform.display_command(real))
     if shown is None:
         return Signer(kind="unknown")
     claim = parse_display(shown[1])

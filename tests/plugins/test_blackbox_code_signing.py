@@ -10,11 +10,22 @@ from __future__ import annotations
 
 import os
 
+import pytest
+
 from plugins.blackbox.kernel import code_signing
+from plugins.blackbox.kernel import code_signing as code_signing_module
+from plugins.blackbox.kernel.code_signing.platform import macos as macos_signing
 
 DEVELOPER = ("Executable=/x/claude\nAuthority=Developer ID Application: Anthropic PBC (Q6L2SF6YDW)\n"
              "Authority=Developer ID Certification Authority\nAuthority=Apple Root CA\nTeamIdentifier=Q6L2SF6YDW\n")
 ADHOC = "Executable=/x/tool\nSignature=adhoc\nTeamIdentifier=not set\n"
+
+
+@pytest.fixture(autouse=True)
+def macos_commands(monkeypatch):
+    """The commands are macOS's (``code_signing/platform/macos.py``) on every machine the suite runs on;
+    the fake runners below answer them, so nothing is run."""
+    monkeypatch.setattr(code_signing_module, "platform", macos_signing)
 
 
 def _run(display: str, verifies: bool = True):
