@@ -49,13 +49,14 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import shutil
 import sys
 from pathlib import Path
 from typing import Any, Mapping
 
 from ..... import audit
-from .....kernel import agent_hosts, constants, settings as kernel_settings
+from .....kernel import agent_hosts, constants, persistence_places, settings as kernel_settings
 from .....kernel.bounded_files import atomic_write, read_small_text
 from .....kernel.config import load_blackbox_config, shield_entry
 from ....shield_api import ShieldApiError, ShieldContext
@@ -183,19 +184,50 @@ def _brew(context: ShieldContext, body: Mapping[str, Any]) -> dict[str, Any]:
 
 #: The global-installs permission (``npm i -g``, ``pipx install`` … — :mod:`.managers`).
 GLOBAL_PERMISSION = "global-installs"
-#: Where a package manager is looked for besides the dashboard's own PATH (Blackbox's folders never).
-MANAGER_PATHS = ("/opt/homebrew/bin", "/usr/local/bin", "{home}/.cargo/bin", "{home}/.local/bin", "/usr/bin")
+#: Where a package manager is looked for FIRST — the places the person's own shell finds it — then
+#: on the dashboard's PATH (Blackbox's folders never). WHY first (KI-648, security round 7): the
+#: dashboard runs on a Homebrew KEG's node (``/opt/homebrew/opt/node@24/bin`` first on its PATH), so
+#: ``npm install -g`` ran that keg's npm and installed into ``Cellar/node@24/…/lib/node_modules`` —
+#: inside a folder only brew may change, and not on the person's PATH.
+MANAGER_PATHS = ("/opt/homebrew/bin", "/usr/local/bin", "{home}/.volta/bin", "{home}/.cargo/bin", "{home}/.local/bin", "/usr/bin")
+#: Homebrew's prefixes: a folder in one of their kegs (``<prefix>/Cellar/<formula>/…``,
+#: ``<prefix>/opt/<formula>/…``) is never where a global install's program is taken from.
+BREW_PREFIXES = persistence_places.HOMEBREW_PREFIXES
+
+
+def _in_a_keg(folder: str) -> bool:
+    """True when *folder* lies in a Homebrew keg (its Cellar or its ``opt`` links)."""
+    normal = os.path.normpath(folder)
+    return any(normal.startswith(f"{prefix}/Cellar/") or normal.startswith(f"{prefix}/opt/") for prefix in BREW_PREFIXES)
 
 
 def manager_path(program: str) -> str:
-    """The person's *program* ("" when none): on the dashboard's PATH or a usual place, never in
-    Blackbox's own folders (the shims live there)."""
+    """The person's *program* ("" when none): in the places their shell finds it first
+    (:data:`MANAGER_PATHS`), then on the dashboard's PATH — never in Blackbox's own folders (the
+    shims live there) nor in a Homebrew keg (:func:`_in_a_keg`)."""
     own = os.path.realpath(str(constants.blackbox_home()))
     home = os.path.expanduser("~")
-    folders = [part for part in os.environ.get("PATH", "").split(os.pathsep) if part.startswith("/")]
-    folders += [place.replace("{home}", home) for place in MANAGER_PATHS]
-    safe = [folder for folder in dict.fromkeys(folders) if not os.path.realpath(folder).startswith(own)]
+    folders = [place.replace("{home}", home) for place in MANAGER_PATHS]
+    folders += [part for part in os.environ.get("PATH", "").split(os.pathsep) if part.startswith("/")]
+    safe = [folder for folder in dict.fromkeys(folders) if not os.path.realpath(folder).startswith(own) and not _in_a_keg(folder)]
     return shutil.which(program, path=os.pathsep.join(safe)) or ""
+
+
+#: An npmrc line that sets the global prefix.
+_NPM_PREFIX_LINE = re.compile(r"^\s*prefix\s*=", re.MULTILINE)
+
+
+def npm_prefix(program: str) -> str:
+    """The global prefix npm is run with ("" = npm's own): Homebrew's prefix for an npm in
+    ``<prefix>/bin``, unless the person set their own in ``~/.npmrc`` — so a global install lands in
+    ``<prefix>/lib/node_modules`` with its program linked into ``<prefix>/bin``, where the person's
+    own ``npm i -g`` puts it, and never inside the node keg npm belongs to (KI-648)."""
+    folder = os.path.dirname(program)
+    prefix = next((each for each in BREW_PREFIXES if folder == f"{each}/bin"), "")
+    if not prefix or os.path.basename(program) != "npm":
+        return ""
+    own = read_small_text(os.path.join(os.path.expanduser("~"), ".npmrc"), 64 * 1024) or ""
+    return "" if _NPM_PREFIX_LINE.search(own) else prefix
 
 
 def _install(context: ShieldContext, body: Mapping[str, Any]) -> dict[str, Any]:
@@ -210,7 +242,10 @@ def _install(context: ShieldContext, body: Mapping[str, Any]) -> dict[str, Any]:
     program = manager_path(managers.MANAGERS[request.manager].program)
     if not program:
         raise ShieldApiError(404, f"{request.tool} is not installed on this Mac.")
-    job = jobs.start(request, program, done=_record, owner=owner, env=jobs.manager_environment(program),
+    env = jobs.manager_environment(program)
+    if npm_prefix(program):
+        env["npm_config_prefix"] = npm_prefix(program)
+    job = jobs.start(request, program, done=_record, owner=owner, env=env,
                      check=_threat_check(context, request))
     return {"job": job.id, "command": request.shown()}
 

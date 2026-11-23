@@ -129,7 +129,9 @@ def test_the_broker_decides_checks_and_runs_the_fixed_argv(setting, monkeypatch,
     started = packages.API_WRITES["install"](_context(), {"manager": "npm", "argv": ["install", "-g", "typescript"]})
     assert finished.wait(30) and started["command"] == "npm install --global typescript"
     command, env = ran[0]
-    assert command == ["/opt/homebrew/bin/npm", "install", "--global", "typescript"] and set(env) <= {"HOME", "USER", "LOGNAME", "PATH", "LANG", "TMPDIR"}
+    assert command == ["/opt/homebrew/bin/npm", "install", "--global", "typescript"]
+    assert set(env) <= {"HOME", "USER", "LOGNAME", "PATH", "LANG", "TMPDIR", "npm_config_prefix"}
+    assert env["npm_config_prefix"] == "/opt/homebrew"   # KI-648: Homebrew's prefix, never the node keg's
     listed = packages.API_WRITES["install"](_context(), {"manager": "npm", "argv": ["install", "-g", "evil-pkg"]})
     refused = wait_until(lambda: jobs.get(listed["job"]).refused, what="the listed package refused in its job")
     assert "evil-pkg" in refused and len(ran) == 1
@@ -146,3 +148,39 @@ def test_the_broker_decides_checks_and_runs_the_fixed_argv(setting, monkeypatch,
 def test_an_unreachable_broker_names_the_managers_own_command(capsys):
     assert client.main(["brew-client.py", "http://127.0.0.1:9", "--manager", "npm", "install", "-g", "x"]) == 1
     assert "run `npm install -g x` in your own terminal" in capsys.readouterr().err
+
+
+def _program(folder, name="npm"):
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / name
+    path.write_text("#!/bin/sh\n", encoding="utf-8")
+    path.chmod(0o755)
+    return str(path)
+
+
+def test_a_global_install_runs_the_persons_npm_never_a_homebrew_kegs(tmp_path, monkeypatch):
+    """KI-648 (security round 7, p6-glob): the dashboard runs on Homebrew's node@24 keg, first on its
+    PATH, so `npm install -g is-odd` ran that keg's npm and installed into
+    /opt/homebrew/Cellar/node@24/…/lib/node_modules — inside brew's Cellar, not on the person's PATH."""
+    brew = tmp_path / "brew"
+    keg = _program(brew / "opt" / "node@24" / "bin")
+    _program(brew / "Cellar" / "node@24" / "24.11.0" / "bin")
+    linked = _program(brew / "bin")
+    monkeypatch.setattr(packages, "BREW_PREFIXES", (str(brew),))
+    monkeypatch.setattr(packages, "MANAGER_PATHS", (str(brew / "bin"),))
+    monkeypatch.setenv("PATH", f"{brew}/opt/node@24/bin:{brew}/Cellar/node@24/24.11.0/bin:/usr/bin:/bin")
+    assert packages.manager_path("npm") == linked != keg
+    (brew / "bin" / "npm").unlink()
+    assert packages.manager_path("npm") == ""   # only a keg's npm: none (the install answers 404), never the keg
+
+
+def test_npm_is_given_homebrews_prefix_unless_the_person_set_their_own(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    brew = tmp_path / "brew"
+    monkeypatch.setattr(packages, "BREW_PREFIXES", (str(brew),))
+    npm = _program(brew / "bin")
+    assert packages.npm_prefix(npm) == str(brew)
+    assert packages.npm_prefix(_program(tmp_path / ".volta" / "bin")) == ""   # another node manager: npm's own
+    assert packages.npm_prefix(_program(brew / "bin", "pipx")) == ""
+    (tmp_path / ".npmrc").write_text("prefix=${HOME}/.npm-global\n", encoding="utf-8")
+    assert packages.npm_prefix(npm) == ""

@@ -205,7 +205,7 @@ sandbox, checked and recorded) applies at once.
 | Permission | What it unlocks | Done by | Default | Cost of allowing it |
 |---|---|---|---|---|
 | Homebrew installs | `brew install/upgrade/reinstall/uninstall` | Blackbox | allow | install scripts run outside, with your rights |
-| Global installs | `npm i -g`, `pipx install`, `pip install --user`, `cargo install`, `gem install`, `uv tool install` — names only, threat-checked | Blackbox | allow | install scripts run outside; the program lands on your PATH |
+| Global installs | `npm i -g`, `pipx install`, `pip install --user`, `cargo install`, `gem install`, `uv tool install` — names only, threat-checked; run with YOUR package manager (the one your shell finds in Homebrew's `bin`, `/usr/local/bin`, Volta, `~/.cargo/bin`, `~/.local/bin`; never a Homebrew keg's), and npm with Homebrew's prefix unless your `~/.npmrc` sets one | Blackbox | allow | install scripts run outside; the program lands on your PATH |
 | Writing to your tool folders | direct writes to `~/.local/bin` and the other folders above | profile | block | a program left there runs outside the sandbox later |
 | Opening web links | `open https://…` (sign-ins) — threat-checked, http/https only | Blackbox | allow | the page loads outside; a link can carry data out |
 | Opening files in apps | `open -a App file`, a folder in Finder — never Terminal or another app that runs commands, never a protected file | Blackbox | ask | the app works on the file outside |
