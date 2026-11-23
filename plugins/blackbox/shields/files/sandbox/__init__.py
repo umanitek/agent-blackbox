@@ -50,7 +50,7 @@ from ...contract import OPTION_NOT_INSTALLED, OPTION_SUPPORTED, OPTION_UNAVAILAB
 from .. import mode as mode_module
 from ..protect import is_folder
 from . import addon_places, defaults, packages, platform
-from .places import Places, build
+from .places import Places, build, canonical
 
 __all__ = ["CLI_AGENTS", "HERMES_LAUNCHER_ENV", "HERMES_SHELLS", "HermesCover", "Places", "enter_hermes_process", "enter_hermes_session", "hermes_shell_dir", "launcher_dir", "offer",
            "open_app", "policy", "profile_path", "protection", "proven", "restorations", "self_protected_files", "status", "sync"]
@@ -145,10 +145,10 @@ def self_protected_files(mode: ShieldMode) -> tuple[str, ...]:
     """The files the sandbox keeps closed to writes for Blackbox's sake — every agent's hook config
     and the shell startup files (canonical paths) — while any agent is sandboxed; () otherwise. The
     helper watches them for the kernel's refusals too, so a refusal of an agent rewriting its OWN
-    hook config is recorded as self-protection (KI-581)."""
+    hook config is recorded as self-protection (KI-581); every add-on folder too, anything in it (KI-600)."""
     if not chosen(mode) or platform.unavailable() is not None:
         return ()
-    return policy(mode).no_write_files
+    return policy(mode).no_write_files + tuple(canonical(place) for place in addon_places.of(_PLUGIN.parent))
 
 
 def _write_if_changed(path: Path, text: str, mode: int) -> bool:

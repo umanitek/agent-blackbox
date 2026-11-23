@@ -294,3 +294,30 @@ def test_the_hermes_execute_code_tool_itself_runs_inside_the_sandbox(home, monke
         shutdown_all_kernels()
     assert result["status"] == "success", result
     assert "read=refused" in result["output"] and "secret" not in result["output"].replace("secret.txt", "")
+
+
+def test_a_kernel_refusal_inside_an_add_on_folder_is_recorded_counted_and_noticed(home, monkeypatch):
+    """KI-600 (round 4, s4-own): pre-placed scripts writing into the add-on folder and appending to its
+    manifest were refused by the kernel (the round-3 finding is fixed) but recorded nowhere: the
+    helper's watch named only the hook configs, startup files and the person's items."""
+    if sandbox.platform.unavailable() is not None:
+        pytest.skip("this system can not sandbox agents")
+    plugins = home / ".hermes" / "plugins"
+    addon = plugins / "example_companion"
+    addon.mkdir(parents=True)
+    (addon / "blackbox-addon.json").write_text('{"extends": "blackbox"}', encoding="utf-8")
+    (addon / "__init__.py").write_text("", encoding="utf-8")
+    monkeypatch.setattr(sandbox, "_PLUGIN", plugins / "blackbox")
+    monkeypatch.setattr(hook_events.guard, "tool_call_verdict", lambda **_k: {"findings": [], "blocked": [], "decision": "", "message": ""})
+    base = {"agent": "claude-code", "session": "s4-own", "cwd": str(home / "camp"), "sandboxed": True}
+    hook_events.record_event({**base, "event": "session_start"})
+    hook_events.record_event({**base, "event": "pre_tool", "tool_name": "Bash", "args": {"command": "python3 ad.py _desktop x"}})
+    watched = sandbox.self_protected_files(_mode())
+    assert str(addon.resolve()) in watched
+    for target in (addon / "x", addon / "blackbox-addon.json"):
+        changes.record([{"path": str(target.resolve()), "kind": "denied", "program": "python3.14", "ts": int(time.time())}],
+                       _mode(), self_protected=watched)
+    hits = [row for row in audit.read_findings(limit=50) if (row.get("fields") or {}).get("route") == "self"]
+    assert len(hits) == 2
+    tracking.attribute_kernel_refusals()
+    assert store.get(hook_events.session_key("claude-code", base["session"], base["cwd"])).refused == 2

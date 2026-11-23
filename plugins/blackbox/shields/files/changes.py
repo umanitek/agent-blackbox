@@ -141,9 +141,8 @@ def record(events: Sequence[Any], mode: ShieldMode, now: Optional[float] = None,
     with _cond:
         _load()
         kept: list[FileChange] = []
-        guarded = set(self_protected)
         self_denials = [(os.path.normpath(path), program) for path, kind, _ts, program in checked
-                        if kind == DENIED and os.path.normpath(path) in guarded]
+                        if kind == DENIED and _inside_any(os.path.normpath(path), self_protected)]
         for path, kind, ts, program in checked:
             scope = _scope(path, mode)
             if scope is None or (kind == DENIED and scope[1] != PROTECTED):
@@ -158,6 +157,11 @@ def record(events: Sequence[Any], mode: ShieldMode, now: Optional[float] = None,
     _record_hits([change for change in kept if change.kind == DENIED])
     _record_self_hits(self_denials)
     return kept
+
+
+def _inside_any(path: str, places: Sequence[str]) -> bool:
+    """True when *path* is one of *places* or inside one of them (an add-on folder)."""
+    return any(_under(path, place) for place in places)
 
 
 def _record_self_hits(denials: list[tuple[str, str]]) -> None:
