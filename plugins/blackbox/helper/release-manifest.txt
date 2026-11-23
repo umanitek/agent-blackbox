@@ -1,5 +1,23 @@
 # blackbox-netd release binaries — the installer checks each download against these SHA-256 values.
 # Release tag: blackbox-helper-v0.1.0 (assets named as below). Regenerate this file with every new build.
+#
+# HOW IT IS REGENERATED. There is no script: this file is the installer's trust anchor (the
+# repository, not the download server), so it changes only together with a release the owner
+# publishes. Building alone publishes nothing:
+#   1. set `version` in plugins/blackbox/helper/Cargo.toml to the new release's version;
+#   2. on a Mac, in plugins/blackbox/helper:
+#        cargo build --release --locked --target aarch64-apple-darwin
+#        cargo build --release --locked --target x86_64-apple-darwin
+#      and copy target/<triple>/release/blackbox-netd to blackbox-netd-darwin-arm64 and
+#      blackbox-netd-darwin-x86_64 (the asset names scripts/blackbox-install.sh asks for);
+#   3. `shasum -a 256 blackbox-netd-darwin-*` and put each line below, `version` set to the same
+#      version; the owner uploads the two files to the release tag blackbox-helper-v<version>;
+#   4. commit this file with the release (never before the assets are up: an install would refuse
+#      the old download against the new SHA-256, and fall back to "system protection not installed").
+# STATE (2026-11-23): the helper's source has changed since 0.1.0 (24 commits under helper/src,
+# among them the KI-606 DNS-thread fix); the binaries below are 0.1.0's. An install from the release
+# gets 0.1.0 until a new release is published; a locally built helper is installed with
+# BLACKBOX_HELPER_PATH + BLACKBOX_HELPER_SHA256.
 version 0.1.0
 82fc8d2bbf3429ebb74202abd9c39065b2d894d01da42f5faaa68f02c511651c  blackbox-netd-darwin-arm64
 7e9c9ddec0b63bd778cba2379fa166a2bc38ad3353531cdac99279741894b74c  blackbox-netd-darwin-x86_64
