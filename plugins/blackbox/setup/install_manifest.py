@@ -143,15 +143,16 @@ def _take_out(target: Path, block: str, report: list[str]) -> None:
     """*block* taken out of startup file *target*, byte for byte; the file removed when nothing of
     the person's is left in it (it did not exist before: the installer's block was all of it)."""
     try:
-        text = target.read_text(encoding="utf-8")
+        data = target.read_bytes()   # bytes, not text: every other byte of the person's file stays exactly
     except OSError:
         return
-    if block not in text:
+    added = block.encode("utf-8")
+    if added not in data:
         report.append(f"left {target} as it is: the lines the installer added there were changed since")
         return
-    kept = text.replace(block, "", 1)
+    kept = data.replace(added, b"", 1)
     if kept:
-        target.write_text(kept, encoding="utf-8")
+        target.write_bytes(kept)
     else:
         target.unlink()
     report.append(f"took the installer's lines out of {target}")
