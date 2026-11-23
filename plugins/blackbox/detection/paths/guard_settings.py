@@ -50,7 +50,7 @@ from ..finding import Finding
 from ...kernel import action_context, addons as guarded_extra, agent_hosts, shell_path, threat_ids
 from ...kernel.bounded_files import read_small_text
 from ...kernel.config import BlackboxConfig, load_blackbox_config
-from . import guard_commands, guard_patch, guard_paths, guard_places, guard_secrets, guard_startup, protected, shell_files
+from . import config_sections, guard_commands, guard_patch, guard_paths, guard_places, guard_secrets, guard_startup, protected, shell_files
 from .shell_scripts import _LITERAL
 
 MATCHED = threat_ids.SELF_PROTECTION
@@ -267,22 +267,6 @@ def _code_tampers(code: str) -> bool:
     return names and bool(_CODE_ACTS.search(code))
 
 
-def _blackbox_section(config_text: str) -> str:
-    """The lines of the ``blackbox:`` entry in a Hermes config (the key and everything indented under it)."""
-    lines, section, indent = config_text.splitlines(), [], None
-    for line in lines:
-        stripped = line.lstrip()
-        if indent is None:
-            if re.match(r"blackbox\s*:", stripped):
-                indent = len(line) - len(stripped)
-                section.append(line)
-            continue
-        if stripped and len(line) - len(stripped) <= indent:
-            break
-        section.append(line)
-    return "\n".join(section)
-
-
 def _edit_reaches_blackbox(config_path: str, edits: list[str]) -> bool:
     """True when an edit's text touches Blackbox: names it or the plugin lists, or changes text that sits
     inside Blackbox's section of the file as it is now (``mode: block`` → ``mode: audit``).
@@ -295,21 +279,8 @@ def _edit_reaches_blackbox(config_path: str, edits: list[str]) -> bool:
     text = read_small_text(os.path.expanduser(config_path), _MAX_CONFIG_BYTES)
     if text is None:
         return any(_BLACKBOX_KEYS.search(edit) for edit in edits)
-    section = _blackbox_section(text) or _json_entry(text) or shell_path.section(text)
+    section = config_sections.blackbox_section(text) or config_sections.json_entry(text) or shell_path.section(text)
     return bool(section) and any(edit.strip() and edit.strip() in section for edit in edits)
-
-
-def _json_entry(config_text: str) -> str:
-    """The text of the ``"blackbox": {…}`` entry in a JSON config (OpenClaw's), braces matched."""
-    start = re.search(r'"blackbox"\s*:\s*\{', config_text)
-    if not start:
-        return ""
-    depth = 0
-    for position in range(start.end() - 1, len(config_text)):
-        depth += {"{": 1, "}": -1}.get(config_text[position], 0)
-        if depth == 0:
-            return config_text[start.start():position + 1]
-    return config_text[start.start():]
 
 
 def _written_text(args: Any) -> str:
