@@ -142,6 +142,7 @@ def test_port_22_can_never_be_listed():
     assert any("ssh into this Mac" in error for error in errors)
 
 
+@pytest.mark.skipif(sys.platform != "darwin", reason="the Seatbelt profile is rendered on macOS")
 def test_unproven_permissions_are_neither_accepted_nor_rendered(home):
     for permission in ("keychain", "camera-mic"):
         assert catalogue.BY_ID[permission].controllable is False

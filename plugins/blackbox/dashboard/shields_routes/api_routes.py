@@ -65,6 +65,11 @@ def owner_of_pid(pid: int) -> Any:
     return shields.InstanceRef(found.agent, found.instance, found.sub_agent, found.folder) if found is not None else None
 
 
+def sandboxed_runs() -> list:
+    """The live sandboxed agents and the profile each started in, as the shields' own record."""
+    return [shields.RunningAgent(run.agent, run.instance, run.pid, run.profile) for run in agent_hooks.owners.sandboxed_runs()]
+
+
 def context(body: bytes = b"", headers: Any = None) -> shields.ShieldContext:
     """The context one shield endpoint call receives (*body* / *headers*: the request's own)."""
     return shields.ShieldContext(
@@ -80,6 +85,7 @@ def context(body: bytes = b"", headers: Any = None) -> shields.ShieldContext:
         finding_owners=finding_owners,
         tool_call_verdict=lambda tool, args: guard.tool_call_verdict(tool_name=tool, args=args),
         owner_of_pid=owner_of_pid,
+        sandboxed_runs=sandboxed_runs,
     )
 
 

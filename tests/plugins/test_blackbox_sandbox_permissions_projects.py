@@ -56,6 +56,7 @@ def _rules(entry, *projects, agent="claude-code"):
                                            **({"agent": agent} if agent else {})} for project in projects]}
 
 
+@pytest.mark.skipif(sys.platform != "darwin", reason="profiles are written where agents can be sandboxed (macOS)")
 def test_each_named_project_gets_a_profile_and_an_index_line(home, entry):
     _rules(entry, "~/work/my shop", "~/work/my shop/api")
     entry["agent_sandbox"]["permissions"] = [{"permission": "docker", "mode": "allow", "agent": "codex", "project": "~/work/other"}]

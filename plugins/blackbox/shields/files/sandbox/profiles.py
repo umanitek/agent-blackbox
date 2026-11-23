@@ -26,6 +26,7 @@ import time
 import shutil
 from pathlib import Path
 
+from ....kernel.bounded_files import read_small_text
 from . import platform
 from .layout import agent_profile, profiles_dir, write_if_changed
 from .permissions import Allowances, Mode, PermissionRequest, Rule, Scope, Settings, allowances
@@ -33,12 +34,22 @@ from .places import Places
 
 #: How many hex digits of the profile's sha256 its digest line carries.
 DIGEST_CHARS = 16
+#: The most of a profile read back (its digest line).
+MAX_PROFILE_BYTES = 1024 * 1024
 #: The index of an agent's project profiles: ``<canonical folder>\t<file>`` per line.
 INDEX = platform.PROJECT_INDEX
 
 
 def digest(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:DIGEST_CHARS]
+
+
+def digest_of(path: str) -> str:
+    """The digest a rendered profile's second line carries ("" when unreadable or none)."""
+    text = read_small_text(path, MAX_PROFILE_BYTES) or ""
+    lines = text.splitlines()
+    marker = lines[1].rsplit("sha256:", 1) if len(lines) > 1 else []
+    return marker[1].strip() if len(marker) == 2 else ""
 
 
 def render_signed(places: Places, allowed: Allowances = Allowances()) -> str:
@@ -140,5 +151,16 @@ def clear() -> None:
     sync(Places((), (), (), (), (), ""), (), Settings())
 
 
-__all__ = ["DIGEST_CHARS", "INDEX", "clear", "digest", "project_file", "projects_dir", "projects_for",
-           "render_signed", "sync", "write_once"]
+__all__ = [
+    "DIGEST_CHARS",
+    "INDEX",
+    "clear",
+    "digest",
+    "digest_of",
+    "project_file",
+    "projects_dir",
+    "projects_for",
+    "render_signed",
+    "sync",
+    "write_once",
+]

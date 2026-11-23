@@ -65,6 +65,18 @@ class InstanceRef:
     folder: str = ""
 
 
+@dataclass(frozen=True)
+class RunningAgent:
+    """A live agent instance inside Blackbox's sandbox: *agent*, *instance* key, agent process *pid*
+    (0 when not known) and the *profile* its launcher chose (``<file>#<digest>``, as its own hook
+    reported it — untrusted)."""
+
+    agent: str
+    instance: str
+    pid: int
+    profile: str
+
+
 #: ``finding_owners() -> owner_of(row) -> InstanceRef | None`` — built once per listing.
 FindingOwners = Callable[[], Callable[[Mapping[str, Any]], Optional[InstanceRef]]]
 
@@ -109,6 +121,9 @@ class ShieldContext:
     #: ``owner_of_pid(pid) -> InstanceRef | None`` — the live agent instance a process belongs to
     #: by its ancestry (the agent tracker's ``owners.of_pid``, never guessed); None where it can not be asked.
     owner_of_pid: Optional[Callable[[int], Optional[InstanceRef]]] = None
+    #: ``sandboxed_runs() -> [RunningAgent]`` — the live agents inside the sandbox with the profile
+    #: each started in (the agent tracker's answer); None where it can not be asked.
+    sandboxed_runs: Optional[Callable[[], list[RunningAgent]]] = None
 
     def indicators_now(self) -> Optional[Any]:
         """The verified network lists known now, never waiting for a build."""

@@ -94,6 +94,7 @@ def _describe(instance: Instance, event: Mapping[str, Any]) -> None:
     instance.profile = str(event.get("profile") or instance.profile)[:500]
     instance.sandboxed = instance.sandboxed or event.get("sandboxed") is True
     instance.shells_sandboxed = instance.shells_sandboxed or event.get("shells_sandboxed") is True
+    instance.sandbox_profile = str(event.get("sandbox_profile") or instance.sandbox_profile)[:600]
     if instance.kind == "session":
         if event.get("background"):
             instance.launch = "background"

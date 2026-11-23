@@ -44,9 +44,10 @@ from ....detection import blackbox_key_patterns
 from ....kernel import addons, agent_hosts, constants, persistence_places, shell_path
 from ....kernel.bounded_files import atomic_write
 from ...contract import ShieldMode
+from ...shield_api import RunningAgent
 from .. import mode as mode_module
 from ..protect import is_folder
-from . import addon_places, brokered, defaults, own_places, packages, permissions, platform, profiles
+from . import addon_places, brokered, defaults, layout, own_places, packages, permissions, platform, profiles
 from .hermes import HERMES_CODE_LAUNCHER, HERMES_LAUNCHER_ENV, HERMES_SHELLS, HermesCover, enter_hermes_process, sync_shells
 from .layout import CLI_AGENTS, agent_profile, canary_path, chosen, hermes_shell_dir, home, launcher_dir, profile_path, write_if_changed
 from .places import Places, build, canonical
@@ -186,6 +187,35 @@ def act_on(request: permissions.PermissionRequest) -> None:
         brokered.stop.act(request)
     else:
         profiles.write_once(policy(mode_module.current()), request, permissions.current())
+
+
+#: What the person is told about a running agent whose permissions changed since it started.
+RESTART_NOTE = "still runs with the permissions it started with; restart it (or stop it) to use the new ones"
+
+
+def stale_runs(runs: list[RunningAgent]) -> list[RunningAgent]:
+    """The *runs* whose profile changed since they started: the file they name — only one inside
+    Blackbox's profiles folder is read (the name came from the agent's own hook) — now carries
+    another digest, or is gone."""
+    root = os.path.realpath(str(layout.profiles_dir()))
+    stale = []
+    for run in runs:
+        path, _, started = run.profile.rpartition("#")
+        real = os.path.realpath(path) if path.startswith("/") else ""
+        if not real.startswith(root + "/") or not started:
+            continue
+        if profiles.digest_of(real) != started:
+            stale.append(run)
+    return stale
+
+
+def stop_run(run: RunningAgent) -> bool:
+    """Stops a sandboxed agent the person chose to restart (its own process, checked first: a live
+    process of this user, not macOS's)."""
+    facts = platform.describe(run.pid) if run.pid > 1 else None
+    if facts is None or facts.uid != getattr(os, "getuid", lambda: -1)() or platform.is_system(facts.path):
+        return False
+    return platform.terminate(run.pid)
 
 
 def on_refusal(kind: str, name: str, agent: str, instance: str, folder: str, pid: int = 0) -> None:

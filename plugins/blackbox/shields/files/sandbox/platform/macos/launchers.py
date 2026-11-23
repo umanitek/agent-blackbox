@@ -49,7 +49,8 @@ if [ -f "$once" ]; then
     if [ -n "$(find "$taken" -mmin -{ONCE_MINUTES} 2>/dev/null)" ]; then profile="$taken"; else rm -f "$taken"; fi
   fi
 fi
-BLACKBOX_SANDBOX_PROFILE="$profile"; export BLACKBOX_SANDBOX_PROFILE
+digest=$(sed -n '2s/.*sha256:\\([0-9a-f]*\\).*/\\1/p' "$profile" 2>/dev/null)
+BLACKBOX_SANDBOX_PROFILE="$profile#$digest"; export BLACKBOX_SANDBOX_PROFILE
 """
 
 

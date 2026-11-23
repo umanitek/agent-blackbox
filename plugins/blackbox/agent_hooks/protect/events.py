@@ -147,7 +147,8 @@ def validate(body: Any) -> dict[str, Any]:
     return {"agent": agent, "event": event, "session": _text(body.get("session"), 200), "cwd": _text(body.get("cwd")),
             "tool_name": tool_name, "args": body.get("args"), "tool_call_id": _text(body.get("tool_call_id"), 200),
             "prompt_chars": chars if isinstance(chars, int) and chars >= 0 else 0, "text": text[:MAX_CHECK_TEXT],
-            "sandboxed": body.get("sandboxed") is True, "answer_by": _answer_by(body.get("answer_by")), **_identity(body)}
+            "sandboxed": body.get("sandboxed") is True, "sandbox_profile": _text(body.get("sandbox_profile"), 600),
+            "answer_by": _answer_by(body.get("answer_by")), **_identity(body)}
 
 
 def _answer_by(value: Any) -> float:

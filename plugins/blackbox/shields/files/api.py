@@ -27,7 +27,10 @@ Writes (POST):
   permissions; a loosening waits for the person (``sandbox.permissions.API_WEAKENING``), and the
   profiles are brought in step after each write;
 * ``permission-answer`` ``{"id", "choice"}`` — Allow once / Always for this agent here (both wait for
-  the person) / Keep blocked (at once).
+  the person) / Keep blocked (at once);
+* ``stop-agent`` ``{"instance"}`` — stops a running agent that still has its old sandbox
+  permissions (``permissions``' ``restart_needed``), so it restarts with the new ones; the person
+  confirms it.
 
 Every write goes through the ONE settings writer (``kernel.settings.write_settings``) with File
 Shield's own validator — never a second path into the config.
@@ -38,6 +41,7 @@ from __future__ import annotations
 import os
 from typing import Any, Callable, Mapping
 
+from ...kernel import agent_hosts
 from ...kernel.settings import write_settings
 from .. import helper_link
 from ..shield_api import ShieldApi, ShieldApiError, ShieldContext
@@ -177,8 +181,44 @@ def permission_answer(context: ShieldContext, body: Mapping[str, Any]) -> dict[s
     return {**answered, **permissions.answers.read(context, {})}
 
 
-def permissions_view(_context: ShieldContext, _params: Mapping[str, str]) -> dict[str, Any]:
-    return permissions.view(sandbox.chosen(mode_module.current()))
+def _runs(context: Any) -> list[Any]:
+    if context is None or context.sandboxed_runs is None:
+        return []
+    try:
+        return list(context.sandboxed_runs())
+    except Exception:   # health: allow BLE001 -- the list is shown without the restart notes
+        return []
+
+
+def permissions_view(context: ShieldContext, _params: Mapping[str, str]) -> dict[str, Any]:
+    """The sandbox permissions, and every running agent that still has its old ones (``restart_needed``)."""
+    view = permissions.view(sandbox.chosen(mode_module.current()))
+    view["restart_needed"] = [{"agent": run.agent, "name": agent_hosts.product_name(run.agent), "instance": run.instance,
+                               "pid": run.pid, "note": sandbox.RESTART_NOTE} for run in sandbox.stale_runs(_runs(context))]
+    return view
+
+
+def _stale(context: Any, body: Mapping[str, Any]) -> Any:
+    instance = str(body.get("instance") or "")
+    return next((run for run in sandbox.stale_runs(_runs(context)) if run.instance == instance), None)
+
+
+def stop_agent(context: ShieldContext, body: Mapping[str, Any]) -> dict[str, Any]:
+    """``stop-agent`` ``{"instance"}``: stops a running agent that still has its old sandbox
+    permissions, so it restarts with the new ones (the person confirms it: :func:`stop_agent_weakens`)."""
+    run = _stale(context, body)
+    if run is None:
+        raise ShieldApiError(404, "No running agent with old sandbox permissions has that id.")
+    if not sandbox.stop_run(run):
+        raise ShieldApiError(409, "Blackbox could not stop it; quit it yourself.")
+    return {"stopped": run.instance}
+
+
+def stop_agent_weakens(body: Mapping[str, Any]) -> list[str]:
+    """Stopping an agent ends the person's work in it: they confirm it (the approval gate)."""
+    instance = str(body.get("instance") or "")
+    agent = instance.split(":", 1)[0]
+    return [f"Stop {agent_hosts.product_name(agent)} now, so it starts again with its new sandbox permissions"] if instance else []
 
 
 WriteHandler = Callable[[ShieldContext, Mapping[str, Any]], dict[str, Any]]
@@ -199,7 +239,7 @@ API = ShieldApi(
            "permission-requests": permissions.answers.read, **packages.API_READS},
     writes={"protect": protect, "unprotect": unprotect, "file-report": file_report, "open-protected": open_protected,
             **packages.API_WRITES, **{name: _then_sync(write) for name, write in permissions.API_WRITES.items()},
-            "permission-answer": permission_answer, **brokered.API_WRITES},
+            "permission-answer": permission_answer, "stop-agent": stop_agent, **brokered.API_WRITES},
     weakening={"unprotect": unprotect_weakens, **permissions.API_WEAKENING,
-               "permission-answer": permissions.answers.weakening},
+               "permission-answer": permissions.answers.weakening, "stop-agent": stop_agent_weakens},
 )

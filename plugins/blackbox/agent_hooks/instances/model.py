@@ -45,6 +45,7 @@ class Instance:
     sandboxed: bool = False
     shells_sandboxed: bool = False  # only its shell tool's shells run in the OS sandbox (the Hermes agent, KI-580)
     pid: int = 0                   # the agent process, when it could be found
+    sandbox_profile: str = ""      # the profile its launcher chose, "<file>#<digest>" (sandbox permissions)
     ended: Optional[float] = None
     end_reason: str = ""           # the agent's own word, "process-exit" or "quiet"
     events: int = 0

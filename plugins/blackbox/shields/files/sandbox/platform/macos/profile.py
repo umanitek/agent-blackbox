@@ -35,7 +35,7 @@ def _glob_regex(glob: str) -> str:
     return "#\"^" + body.replace('"', '\\"') + "$\""
 
 
-#: The container engines' sockets on macOS (Docker Desktop, colima, OrbStack, Rancher Desktop,
+#: The container engines' sockets on macOS (Docker Desktop, colima, OrbStack, Rancher's socket in ~/.rd,
 #: Lima, Podman machine): a container runs OUTSIDE the sandbox and can mount any folder, so a
 #: sandboxed agent may reach these only when the ``docker`` permission allows it (KI-622). Both
 #: spellings of /var/run (a link to /private/var/run). Probed on macOS 27.2 (2026-11-23):

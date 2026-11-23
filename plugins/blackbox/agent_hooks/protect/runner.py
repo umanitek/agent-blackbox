@@ -272,6 +272,9 @@ def _session(payload: dict) -> str:
 #: source tree. Files below it are created at run time, never shipped as package data.
 INSTALLED_HOME = Path(__file__).resolve().parent.parent
 
+#: The launcher's record of the profile an agent started in (``<file>#<sha256 prefix>``).
+SANDBOX_PROFILE_ENV = "BLACKBOX_SANDBOX_PROFILE"
+MAX_PROFILE_CHARS = 600
 #: File Shield's sandbox canary (``shields/files/sandbox``), written into Blackbox's home at run time.
 CANARY = INSTALLED_HOME / "sandbox" / "canary"
 
@@ -295,6 +298,8 @@ def summary(agent: str, event: str, payload: dict) -> dict:
     body = {"agent": agent, "event": event, "session": _session(payload),
             "cwd": workspace(payload, _first)[:500],
             "sandboxed": sandboxed(), **identity(agent, payload, _first)}
+    if body["sandboxed"]:   # the profile its launcher chose, "<file>#<digest>": a changed permission needs a restart
+        body["sandbox_profile"] = os.environ.get(SANDBOX_PROFILE_ENV, "")[:MAX_PROFILE_CHARS]
     if not body["model"] and event in MODEL_EVENTS:   # the payload names none: its transcript does (KI-566)
         body["model"] = transcript_model(payload)
     if event in ("pre_tool", "post_tool"):

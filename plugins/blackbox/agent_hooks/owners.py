@@ -137,10 +137,28 @@ def of_pid(pid: int) -> Optional[Owner]:
     return found
 
 
+@dataclass(frozen=True)
+class SandboxedRun:
+    """A live agent instance running inside Blackbox's sandbox: its *agent*, *instance* key, agent
+    process *pid* (0 when not known) and the *profile* its launcher chose (``<file>#<digest>``, as
+    the agent's own hook reported it — untrusted: a reader checks the file is Blackbox's)."""
+
+    agent: str
+    instance: str
+    pid: int
+    profile: str
+
+
+def sandboxed_runs() -> list[SandboxedRun]:
+    """Every live session that reported the sandbox profile it started in."""
+    return [SandboxedRun(item.agent, item.key, item.pid, item.sandbox_profile) for item in store.all_instances()
+            if item.kind == "session" and item.ended is None and item.sandbox_profile]
+
+
 def forget() -> None:
     """Drops the cached pid answers (tests)."""
     with _lock:
         _pid_cache.clear()
 
 
-__all__ = ["Owner", "finding_owners", "forget", "of_pid"]
+__all__ = ["Owner", "SandboxedRun", "finding_owners", "forget", "of_pid", "sandboxed_runs"]
