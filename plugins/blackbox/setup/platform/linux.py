@@ -42,7 +42,7 @@ def stop_login_services(names: ServiceNames, system_units: tuple[Path, ...], run
 
 
 def _is_root() -> bool:
-    return os.geteuid() == 0
+    return os.geteuid() == 0   # windows-footgun: ok — the Linux module, imported only on Linux
 
 
 def _stop_system_units(system_units: tuple[Path, ...], run: Runner, report: list[str]) -> None:

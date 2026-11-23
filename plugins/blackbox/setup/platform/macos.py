@@ -33,7 +33,7 @@ def delete_preferences(domain: str, run: Runner) -> bool:
 
 def stop_login_services(names: ServiceNames, _system_units: tuple[Path, ...], run: Runner, report: list[str]) -> None:
     """Each Blackbox LaunchAgent booted out of the person's GUI domain and its plist removed."""
-    uid = os.getuid()
+    uid = os.getuid()   # windows-footgun: ok — the macOS module, imported only on macOS
     for label in names.launchd_labels:
         run(["launchctl", "bootout", f"gui/{uid}/{label}"])
         plist = Path.home() / "Library" / "LaunchAgents" / f"{label}.plist"
