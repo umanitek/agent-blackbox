@@ -22,6 +22,7 @@ import pytest
 from plugins.blackbox.kernel import config as config_mod
 from plugins.blackbox.shields.files import changes, mode as files_mode, sandbox
 from plugins.blackbox.shields.files.sandbox.platform import macos
+from plugins.blackbox.shields.files.sandbox.platform.macos import tools as macos_tools
 
 REAL = pytest.mark.skipif(sys.platform != "darwin" or not os.access(macos.SANDBOX_EXEC, os.X_OK) or not os.path.exists(macos.PS),
                           reason="a real Seatbelt sandbox needs macOS")
@@ -80,10 +81,10 @@ def test_the_tools_are_made_again_only_when_macos_changes(home):
     sandbox.sync(_mode())
     launchers = str(sandbox.launcher_dir())
     assert macos.refresh_tools(launchers) is False                 # same macOS: nothing written
-    marker = sandbox.launcher_dir() / macos.TOOLS_FOLDER / macos._TOOLS_STAMP
+    marker = sandbox.launcher_dir() / macos.TOOLS_FOLDER / macos_tools._TOOLS_STAMP
     marker.write_text("26.0 an older macOS\n", encoding="utf-8")
     assert macos.refresh_tools(launchers) is True
-    assert marker.read_text(encoding="utf-8") == macos._stamp()
+    assert marker.read_text(encoding="utf-8") == macos_tools._stamp()
 
 
 def test_the_hermes_shells_put_the_tools_first_on_the_sandboxed_path_only():
