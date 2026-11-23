@@ -5,6 +5,10 @@ Runs the real shell function from scripts/blackbox-install.sh with a fake ``herm
 records what it was asked. Contracts: a locally named archive is handed to ``blackbox
 notifications setup`` with its checksum; with no archive nothing is run and the person is told
 the system's own notifier is used; a failing set-up never fails the install; other systems skip it.
+
+KI-609 (security round 5, clean install on bb-r5-clean): "✓ Blackbox's notifications are set up" was
+printed while `blackbox notifications status` read "permission: denied" and macOS's banner was still
+unanswered. The installer now says what macOS says: a check mark only when allowed.
 """
 
 from __future__ import annotations
@@ -16,7 +20,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 INSTALL_SH = REPO_ROOT / "scripts" / "blackbox-install.sh"
 PLUGIN_COPY = REPO_ROOT / "plugins" / "blackbox" / "setup" / "blackbox-install.sh"
-FUNCTIONS = ("helper_manifest_file", "helper_manifest_version", "helper_manifest_sha256", "install_native_notifier")
+FUNCTIONS = ("helper_manifest_file", "helper_manifest_version", "helper_manifest_sha256", "install_native_notifier",
+             "report_notification_permission")
 
 
 def _function(name: str) -> str:
@@ -30,14 +35,17 @@ def _function(name: str) -> str:
 
 
 def _run(tmp_path: Path, *, archive: str = "", sha: str = "", os_name: str = "macos", setup_fails: bool = False,
-         manifest: str | None = None) -> tuple[str, list[str], int]:
+         manifest: str | None = None, permission: str = "authorized") -> tuple[str, list[str], int]:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     calls = tmp_path / "hermes-calls"
     hermes = bin_dir / "hermes"
-    hermes.write_text(f'#!/bin/sh\nprintf "%s\\n" "$*" >> "{calls}"\nexit {1 if setup_fails else 0}\n', encoding="utf-8")
+    # `notifications status` answers as the real command prints it (setup/notifier.py).
+    status = (f'if [ "$*" = "blackbox notifications status" ]; then printf "Notifications: x\\n  notifier: app · permission: '
+              f'{permission}\\n"; exit 0; fi\n')
+    hermes.write_text(f'#!/bin/sh\nprintf "%s\\n" "$*" >> "{calls}"\n{status}exit {1 if setup_fails else 0}\n', encoding="utf-8")
     hermes.chmod(0o755)
-    for tool in ("awk", "mktemp", "rm", "tr"):
+    for tool in ("awk", "mktemp", "rm", "tr", "printf"):
         for folder in ("/bin", "/usr/bin"):
             if Path(folder, tool).exists():
                 (bin_dir / tool).symlink_to(Path(folder, tool))
@@ -66,8 +74,23 @@ def test_a_named_archive_is_handed_to_the_plugin_with_its_checksum(tmp_path):
     archive.write_bytes(b"zip")
     out, ran, code = _run(tmp_path, archive=str(archive), sha="AB" * 32)
     assert code == 0 and "AFTER" in out
-    assert ran == [f"blackbox notifications setup --from {archive} --sha256 {'ab' * 32}"]
+    assert ran == [f"blackbox notifications setup --from {archive} --sha256 {'ab' * 32}", "blackbox notifications status"]
     assert "OK Blackbox's notifications are set up" in out
+
+
+def test_the_installer_says_what_macos_says_about_the_permission(tmp_path):
+    archive = tmp_path / "blackbox-notify-darwin.zip"
+    archive.write_bytes(b"zip")
+    said = {}
+    for number, permission in enumerate(("denied", "not-determined", "unknown")):
+        folder = tmp_path / str(number)
+        folder.mkdir()
+        out, _ran, code = _run(folder, archive=str(archive), sha="ab" * 32, permission=permission)
+        assert code == 0 and "AFTER" in out and "notifications are set up" not in out, out
+        said[permission] = out
+    assert "WARN Blackbox's notifications are off — turn them on in System Settings > Notifications > Blackbox." in said["denied"]
+    assert "waiting for your OK in the macOS banner" in said["not-determined"]
+    assert "has not said yet" in said["unknown"]
 
 
 def test_without_an_archive_only_the_installed_mark_is_set_and_the_person_is_told(tmp_path):
@@ -85,7 +108,7 @@ def test_a_failing_set_up_never_fails_the_install(tmp_path):
     archive = tmp_path / "blackbox-notify-darwin.zip"
     archive.write_bytes(b"zip")
     out, ran, code = _run(tmp_path, archive=str(archive), sha="cd" * 32, setup_fails=True)
-    assert code == 0 and "AFTER" in out and len(ran) == 1
+    assert code == 0 and "AFTER" in out and len(ran) == 1   # no permission claimed when nothing was installed
     assert "WARN Blackbox's own notifier was not installed" in out
 
 

@@ -4573,12 +4573,26 @@ install_native_notifier() {
     fi
     step "Blackbox tells you when an AI agent is stopped, asks for root or needs you. macOS may ask once to allow it."
     if "$HERMES_BIN" blackbox notifications setup --from "$archive" --sha256 "$expected"; then
-        ok "Blackbox's notifications are set up"
+        report_notification_permission
     else
         warn "Blackbox's own notifier was not installed; notifications use macOS's own notifier (this is non-fatal)."
     fi
     [ -n "${folder:-}" ] && rm -rf "$folder"
     return 0
+}
+
+# What macOS says NOW about Blackbox's notifications, never a check mark it has not earned (KI-609:
+# "✓ notifications are set up" was printed while the permission read denied and the banner was
+# still unanswered). Read from `blackbox notifications status` ("permission: <state>").
+report_notification_permission() {
+    local permission
+    permission="$("$HERMES_BIN" blackbox notifications status 2>/dev/null | awk -F'permission: ' 'NF > 1 { print $2; exit }' | awk '{ print $1 }')"
+    case "$permission" in
+        authorized) ok "Blackbox's notifications are set up" ;;
+        denied) warn "Blackbox's notifications are off — turn them on in System Settings > Notifications > Blackbox." ;;
+        not-determined) step "Notifications: waiting for your OK in the macOS banner (top right of your screen) — choose Allow." ;;
+        *) step "Notifications: macOS has not said yet whether Blackbox may notify you — check later with 'blackbox notifications status'." ;;
+    esac
 }
 
 offer_system_protection() {
