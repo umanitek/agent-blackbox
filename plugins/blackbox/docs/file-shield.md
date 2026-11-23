@@ -42,6 +42,11 @@ does not run anything. Within that, it judges:
 - a script written AND run in the same command (`cat > r.py <<EOF … EOF && python3 r.py`,
   `printf … > x.sh; sh x.sh`, `… | tee x.py; python3 x.py`): the text it writes is the text judged,
   because the file does not exist yet when the hook looks (security round 6);
+- a script fed to its interpreter instead of named (security round 7): on stdin
+  (`python3 - a b <<'EOF' … EOF`, `python3 - <<< "…"`, `python3 - < x.py`, `cat x.py | python3 -`,
+  `printf … | node -`, `bash -s < job.sh`) or as a file's text (`python3 -c "$(cat k.py)"`), with
+  its arguments; and a script run from a copy the hook can not read yet (`cp k.py k2.py && python3
+  k2.py`, `mv`, `cat a > b`, or a copy an earlier call of the session made) is judged by its source;
 - the same script reading for the startup places: a script the agent runs whose text writes an SSH
   login file, a launchd job, a login item or a cron table is refused like the write itself.
 

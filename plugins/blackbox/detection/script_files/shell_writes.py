@@ -99,3 +99,52 @@ def _shell_writes(command: str) -> list[tuple[str, str]]:
                 body.append(following)
             out.append((target.group(1).strip("'\""), "\n".join(body)[:MAX_CONTENT_CHARS]))
     return out + _printed_into_files(command)
+
+
+#: Programs that copy (or move, or link) the files they name to the last one.
+_COPIERS = frozenset({"cp", "mv", "ln", "install", "ditto", "gcp", "gmv", "rsync"})
+#: Their options that take a value (``install -m 644``, ``cp -t DIR`` is read as a folder below).
+_COPY_VALUES = frozenset({"-m", "-o", "-g", "-t", "--target-directory", "-S", "--suffix"})
+
+
+def _copy_of(segment: list[str]) -> list[tuple[str, str]]:
+    """``(destination, source)`` for one simple command that copies, moves or links a single file
+    (``cp a b``, ``mv a dir/``, ``cat a > b``); [] for anything else."""
+    name = segment[0].rsplit("/", 1)[-1] if segment else ""
+    if name == "cat":
+        redirect = next((at for at, word in enumerate(segment) if word in (">", ">>")), -1)
+        sources = [word for word in segment[1:redirect] if not word.startswith("-")] if redirect > 0 else []
+        return [(segment[redirect + 1], sources[0])] if len(sources) == 1 and redirect + 1 < len(segment) else []
+    if name not in _COPIERS:
+        return []
+    plain, at, folder = [], 1, ""
+    while at < len(segment):
+        word = segment[at]
+        if word in _COPY_VALUES:
+            folder = segment[at + 1] if word in ("-t", "--target-directory") and at + 1 < len(segment) else folder
+            at += 2
+            continue
+        if not word.startswith("-"):
+            plain.append(word)
+        at += 1
+    if folder and len(plain) == 1:
+        return [(folder.rstrip("/") + "/" + plain[0].rsplit("/", 1)[-1], plain[0])]
+    if len(plain) != 2:
+        return []
+    source, target = plain
+    if target.endswith("/") or target in (".", ".."):
+        target = target.rstrip("/") + "/" + source.rsplit("/", 1)[-1]
+    return [(target, source)]
+
+
+def _copies(command: str) -> list[tuple[str, str]]:
+    """``(destination, source)`` for each single file *command* copies, moves or links, as written
+    (relative paths stay relative): a script run from the copy in the same command is the source's
+    text (security round 7: ``cp k.py k2.py && python3 k2.py …`` appended an SSH key)."""
+    words = _shell_words(command[:MAX_CONTENT_CHARS * 2])
+    out, start = [], 0
+    while start < len(words):
+        end = next((at for at in range(start, len(words)) if _ends_command(words[at])), len(words))
+        out += _copy_of(words[start:end])
+        start = end + 1
+    return out

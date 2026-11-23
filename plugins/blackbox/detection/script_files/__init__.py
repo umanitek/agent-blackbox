@@ -59,7 +59,8 @@ from typing import Any, Callable, Iterable, NamedTuple, Optional, TypeVar
 from ...kernel import action_context
 from ...kernel.bounded_files import read_small_text
 from ..shell_shapes import command_from_args
-from .shell_writes import MAX_CONTENT_CHARS, _ends_command, _shell_words, _shell_writes
+from .fed import fed_scripts
+from .shell_writes import MAX_CONTENT_CHARS, _copies, _ends_command, _shell_words, _shell_writes
 
 #: The most scripts remembered (the oldest forgotten first).
 MAX_REMEMBERED = 256
@@ -80,6 +81,8 @@ _PATH_KEYS = ("path", "file_path", "filePath", "filename", "target_file", "noteb
 _CONTENT_KEYS = ("content", "new_string", "newString", "new_str", "text", "patch", "diff", "code", "file_text")
 
 _written: OrderedDict[str, float] = OrderedDict()
+#: The copies commands made: where the copy is → where it came from (newest last).
+_copied: OrderedDict[str, str] = OrderedDict()
 _lock = threading.Lock()
 
 
@@ -124,6 +127,7 @@ def forget_all() -> None:
     """Forgets every remembered script (tests)."""
     with _lock:
         _written.clear()
+        _copied.clear()
 
 
 class ScriptRun(NamedTuple):
@@ -160,8 +164,8 @@ def _run_targets(command: str) -> list[tuple[str, tuple[str, ...], str, str]]:
             folder = _expanded(segment[1]) if os.path.isabs(_expanded(segment[1])) else os.path.join(folder, segment[1]) if folder else ""
         elif name in _RUNNERS:
             for at, each in enumerate(segment[1:8], start=1):
-                if each in _NOT_A_FILE or _INLINE_CLUSTER.fullmatch(each):
-                    break   # a module or inline code: not a script file
+                if each in _NOT_A_FILE or _INLINE_CLUSTER.fullmatch(each) or each == "-" or (each == "-s" and name in _SHELLS):
+                    break   # a module, inline code or a script on stdin (:mod:`.fed`): not a script file
                 if not each.startswith("-"):
                     targets.append((each, tuple(segment[at + 1:at + 41]), name, folder))
                     break
@@ -216,27 +220,67 @@ def _written_here(command: str) -> dict[str, str]:
     return here
 
 
-def scripts_run(command: str) -> list[ScriptRun]:
-    """Each script file *command* runs: one the SAME command writes, judged by the text it writes
-    (private finding ``2026-11-23-hooks-only-an-agent-writes-a-script-with``, round 6: Codex ran
-    ``bash -lc "cat << 'EOF' > r.py … EOF" && python3 r.py Doc Sec`` — r.py did not exist yet when
-    the hook looked, and the protected file was read); else read now from disk (bounded): one an
-    agent wrote through a tool, or any other file at that path (:func:`_on_disk`). A file that is
-    both on disk and written here is judged as both."""
-    out, here = [], _written_here(command)
-    for target, argv, runner, folder in _run_targets(command):
-        written_now = here.get(_where(target, folder))
-        if written_now is None and not os.path.isabs(_expanded(target)):   # written before a ``cd``: by its name
-            written_now = next((text for where, text in here.items() if os.path.basename(where) == os.path.basename(target)), None)
-        if written_now is not None:
-            out.append(ScriptRun(_where(target, folder), written_now, argv, runner))
-        path = _on_disk(target, folder) or (None if written_now is not None else _remembered(target))
-        if not path:
-            continue
+def _remember_copies(copies: dict[str, str]) -> None:
+    """Notes each copy a command makes (destination → source, both where they are), bounded like
+    :data:`_written`: a script run later from a copy the hook can not read is judged by its source."""
+    with _lock:
+        for target, source in copies.items():
+            _copied.pop(target, None)
+            _copied[target] = source
+        while len(_copied) > MAX_REMEMBERED:
+            _copied.popitem(last=False)
+
+
+def _copied_from(where: str, copies: dict[str, str]) -> Optional[str]:
+    """The file *where* was copied from: by this command, else by an earlier call (remembered)."""
+    with _lock:
+        return copies.get(where) or _copied.get(where)
+
+
+def _texts(target: str, folder: str, here: dict[str, str], copies: dict[str, str], follow: int = 2) -> list[tuple[str, Optional[str]]]:
+    """``(path, text)`` for the script *target* names (in the line's ``cd`` *folder*): the text this
+    command writes into it (*here*), the file on disk (or a remembered one), and — when neither is
+    there yet — the file it was copied from (*copies*, then earlier calls), *follow* copies deep.
+    ``text`` is None for a file larger than :data:`MAX_SCRIPT_BYTES` (not judged; flagged)."""
+    out: list[tuple[str, Optional[str]]] = []
+    where = _where(target, folder)
+    written_now = here.get(where)
+    if written_now is None and not os.path.isabs(_expanded(target)):   # written before a ``cd``: by its name
+        written_now = next((text for place, text in here.items() if os.path.basename(place) == os.path.basename(target)), None)
+    if written_now is not None:
+        out.append((where, written_now))
+    path = _on_disk(target, folder) or (None if written_now is not None else _remembered(target))
+    if path:
         text = read_small_text(path, MAX_SCRIPT_BYTES)
-        if text is None and (written_now is not None or (os.path.isfile(path) and os.path.getsize(path) <= MAX_SCRIPT_BYTES)):
-            continue   # unreadable (not a regular file, no permission) or not there yet: nothing more to judge
-        out.append(ScriptRun(path, text, argv, runner))
+        if text is not None or (written_now is None and not (os.path.isfile(path) and os.path.getsize(path) <= MAX_SCRIPT_BYTES)):
+            out.append((path, text))   # else unreadable (not a regular file, no permission): nothing more to judge
+    source = _copied_from(where, copies) if not out and follow > 0 else None
+    return _texts(source, "", here, copies, follow - 1) if source else out
+
+
+def scripts_run(command: str) -> list[ScriptRun]:
+    """Each script *command* runs: a script file, or a script it feeds its runner on stdin or as a
+    file's text (:mod:`.fed`: ``python3 - a <<'EOF'``, ``cat x.py | python3 -``, ``python3 -c
+    "$(cat k.py)"`` — private finding ``2026-11-23-round-7-hooks-only-bypasses-remain-stdin``).
+
+    A file the SAME command writes is judged by the text it writes (private finding
+    ``2026-11-23-hooks-only-an-agent-writes-a-script-with``, round 6: Codex ran ``bash -lc "cat <<
+    'EOF' > r.py … EOF" && python3 r.py Doc Sec`` — r.py did not exist yet when the hook looked);
+    else read now from disk (bounded): one an agent wrote through a tool, or any other file at that
+    path (:func:`_on_disk`); else, not there yet, the file it was copied from in this command or an
+    earlier one (``cp k.py k2.py && python3 k2.py``, round 7). A file both on disk and written here
+    is judged as both. Every copy the command makes is remembered (bounded) for later calls."""
+    here = _written_here(command)
+    copies = {_where(target, ""): _where(source, "") for target, source in _copies(command)}
+    _remember_copies(copies)
+    out = [ScriptRun(path, text, argv, runner)
+           for target, argv, runner, folder in _run_targets(command)
+           for path, text in _texts(target, folder, here, copies)]
+    for fed in fed_scripts(command):
+        if fed.text is not None:
+            out.append(ScriptRun(_where("-", ""), fed.text[:MAX_SCRIPT_BYTES], fed.argv, fed.runner))
+        else:
+            out += [ScriptRun(path, text, fed.argv, fed.runner) for path, text in _texts(fed.file, "", here, copies)]
     return out
 
 
