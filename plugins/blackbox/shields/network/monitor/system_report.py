@@ -35,7 +35,7 @@ PROTOCOLS = ("tcp4", "tcp6", "udp4", "udp6")
 ITEM_KINDS = ("launch-agent", "launch-daemon", "user-agent", "cron", "periodic", "login-item", "profile",
               "system-extension", "kernel-extension",
               # what runs later (helper observe/run_later.rs): events only, never in the snapshot
-              "shell-startup", "ssh-login", "at-job", "path-program")
+              "shell-startup", "ssh-login", "at-job", "login-prefs", "path-program")
 PROXIES = ("http", "https", "socks", "auto-config", "auto-discovery")
 STATES = ("on", "off", "unknown", "block-all")
 FIXES = ("firewall-on", "stealth-on", "guest-off", "screen-sharing-off", "file-sharing-off", "remote-login-off",

@@ -87,7 +87,7 @@ def test_a_tool_call_outside_the_window_or_naming_another_file_is_not_the_writer
     other = [_agent_call(home, "cat ~/.ssh/known_hosts", now - 2)]
     for rows in (late, other):
         [alert] = startup_items.startup_alerts([_event("ssh-login", path, now)], rows)
-        assert alert["severity"] == "medium" and "written by" not in alert["text"]
+        assert alert["severity"] == "high" and "written by" not in alert["text"]
 
 
 def test_a_brew_upgrade_relinking_hundreds_of_programs_is_a_few_lines_not_a_flood(home):
@@ -118,7 +118,7 @@ def test_the_helpers_run_later_events_are_accepted_and_reach_the_shields_alerts(
     monkeypatch.setattr(audit, "read_audit", lambda limit=100, offset=0: [])
     texts = {alert["text"]: alert["severity"] for alert in system_alerts.alerts(20)}
     assert texts == {"Startup item changed: Shell startup file “.zshrc”.": "info",
-                     "New startup item: Scheduled job (at) “a0001”.": "medium",
+                     "New startup item: Scheduled job (at) “a0001”.": "high",
                      f"New program on your PATH: “pip-tool” in {home}/.local/bin.": "info"}
 
 
@@ -137,7 +137,7 @@ def test_a_later_write_by_someone_else_is_not_pinned_on_the_agent_that_named_the
     now, rows = _shell_append_after(home, 5)
     event = _event("ssh-login", f"{home}/.ssh/authorized_keys", now, kind="persistence-changed", written=now - 1)
     [alert] = startup_items.startup_alerts([event], rows)
-    assert alert["severity"] == "medium" and "agent" not in alert and "written by" not in alert["text"]
+    assert alert["severity"] == "high" and "agent" not in alert and "written by" not in alert["text"]
     assert alert["text"].endswith("— writer unknown (an AI agent's earlier command named this file).")
     # The agent's own append — written while its call ran — is still the agent's.
     own = _event("ssh-login", f"{home}/.ssh/authorized_keys", now - 300, kind="persistence-changed", written=now - 302.5)
@@ -225,7 +225,7 @@ def test_a_refused_read_of_the_ssh_login_file_is_never_its_writer(home):
                   decision="block")]
     [alert] = startup_items.startup_alerts([_key_changed(home, now)], rows)
     assert "agent" not in alert and "written by" not in alert["text"] and "writer unknown" not in alert["text"]
-    assert alert["severity"] == "medium"
+    assert alert["severity"] == "high"
 
 
 def test_a_refused_append_in_one_session_is_not_the_writer_of_a_key_another_session_appended(home):
@@ -259,3 +259,38 @@ def test_a_call_that_ran_is_still_the_writer_and_one_decided_too_late_ran(home):
                 _end("codex", "s6-pscxh", now + 1, "call_cx")]
         [alert] = startup_items.startup_alerts([_key_changed(home, now)], rows)
         assert alert["severity"] == "critical" and "written by Codex in s6-pscxh" in alert["text"], decision
+
+
+def test_an_unknown_writers_ssh_key_cron_job_or_login_preference_is_high(home):
+    """Security round 7 (byp7.sh 3, 4, 6): an SSH key appended, a cron job written and the login
+    window's preferences changed by a hooks-only agent were alerted MEDIUM and unattributed. A
+    security-sensitive place changed by nobody Blackbox knows is HIGH."""
+    now = time.time()
+    events = [_event("ssh-login", f"{home}/.ssh/authorized_keys", now, kind="persistence-changed", written=now - 1),
+              _event("cron", "/usr/lib/cron/tabs/admin", now, written=now - 1),
+              _event("login-prefs", f"{home}/Library/Preferences/loginwindow.plist", now, kind="persistence-changed", written=now - 1)]
+    alerts = startup_items.startup_alerts(events, [])
+    assert [alert["severity"] for alert in alerts] == ["high", "high", "high"], alerts
+    assert any("Login preferences" in alert["text"] and "loginwindow.plist" in alert["text"] for alert in alerts), alerts
+
+
+def test_the_helpers_login_preference_event_is_accepted(home, monkeypatch):
+    now = time.time()
+    report = system_report.validate({"watching": False, "events": [
+        _event("login-prefs", f"{home}/Library/Preferences/com.apple.loginitems.plist", now - 1, kind="persistence-changed")]}, now)
+    system_report.record(report)
+    monkeypatch.setattr(audit, "read_audit", lambda limit=100, offset=0: [])
+    texts = {alert["text"]: alert["severity"] for alert in system_alerts.alerts(20)}
+    assert texts == {"Startup item changed: Login preferences “com.apple.loginitems.plist”.": "high"}, texts
+
+
+def test_the_helper_watches_the_login_preferences_of_the_one_list():
+    """The helper's watch (run_later.rs LOGIN_PREFERENCES) and the sandbox / hook list
+    (kernel.persistence_places.PERSISTENCE_GLOBS) name the same login preference files."""
+    import re
+    from pathlib import Path
+    from plugins.blackbox.kernel import persistence_places
+    source = (Path(__file__).resolve().parents[2] / "plugins/blackbox/helper/src/platform/macos/observe/run_later.rs").read_text(encoding="utf-8")
+    watched = set(re.findall(r'"([^"]+)"', re.search(r"LOGIN_PREFERENCES: &\[&str\] = &\[([^\]]*)\]", source).group(1)))
+    listed = {glob.rsplit("/", 1)[-1].rstrip("*") for glob in persistence_places.PERSISTENCE_GLOBS if "/Library/Preferences/" in glob}
+    assert watched == listed, (watched, listed)

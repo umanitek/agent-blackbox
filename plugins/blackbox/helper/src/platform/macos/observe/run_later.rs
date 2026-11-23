@@ -5,6 +5,10 @@
 //! * what OpenSSH runs or trusts at a login into this Mac (`~/.ssh/rc`, `environment`,
 //!   `authorized_keys`);
 //! * `at` jobs (`/private/var/at/jobs`);
+//! * the login window's and login items' preference files (`~/Library/Preferences/loginwindow.plist`,
+//!   `com.apple.loginwindow*`, `com.apple.loginitems*`, `com.apple.LSSharedFileList*`: `LoginHook` and
+//!   `AutoLaunchedApplicationDictionary` start a program at login — security round 7: an agent on hooks
+//!   only wrote them with `plutil` and a script's `defaults write`, and nothing watched them);
 //! * the program folders commonly on the PATH: Homebrew's `bin` / `sbin`, `/usr/local/bin`, and per
 //!   user `~/.local/bin`, `~/bin`, `~/.npm-global/bin`, `~/.cargo/bin`.
 //!
@@ -14,7 +18,7 @@
 //! mtime, where a link points; never read, never followed); a file of the first three kinds by
 //! [`super::persistence`]'s mark (it is small and read safely). Looked at with the launchd folders
 //! (every [`super::persistence::FOLDERS_EVERY`]); its events are the same `persistence-*` events,
-//! item kinds `shell-startup`, `ssh-login`, `at-job` and `path-program`.
+//! item kinds `shell-startup`, `ssh-login`, `at-job`, `login-prefs` and `path-program`.
 
 use std::fs;
 use std::os::unix::fs::MetadataExt;
@@ -33,6 +37,10 @@ pub const SSH_FILES: &[&str] = &[".ssh/rc", ".ssh/environment", ".ssh/authorized
 pub const PROGRAM_FOLDERS: &[&str] = &["/opt/homebrew/bin", "/opt/homebrew/sbin", "/usr/local/bin", "/usr/local/sbin"];
 pub const USER_PROGRAM_FOLDERS: &[&str] = &[".local/bin", "bin", ".npm-global/bin", ".cargo/bin"];
 pub const AT_JOBS: &str = "/private/var/at/jobs";
+/// Where a user's preference files are, and the names of the login window's and login items' ones
+/// (the plugin's ONE list, `kernel.persistence_places.PERSISTENCE_GLOBS`; a parity test holds that).
+pub const PREFERENCES: &str = "Library/Preferences";
+pub const LOGIN_PREFERENCES: &[&str] = &["com.apple.loginitems", "com.apple.LSSharedFileList", "com.apple.loginwindow", "loginwindow"];
 
 /// Every user's home folder (`/Users/<name>`, not `Shared`, never a link to another home).
 pub fn homes() -> Vec<String> {
@@ -65,6 +73,16 @@ fn file_item(kind: &'static str, path: &str, items: &mut Vec<Item>) {
     }
 }
 
+fn login_preference_items(folder: &str, items: &mut Vec<Item>) {
+    let Ok(entries) = fs::read_dir(folder) else { return };
+    for entry in entries.flatten().take(MAX_PER_FOLDER) {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.ends_with(".plist") && LOGIN_PREFERENCES.iter().any(|prefix| name.starts_with(prefix)) {
+            file_item("login-prefs", &entry.path().display().to_string(), items);
+        }
+    }
+}
+
 /// Every run-later item now, for the users at *homes* (see the module doc).
 pub fn items(homes: &[String]) -> Vec<Item> {
     let mut items = Vec::new();
@@ -72,6 +90,7 @@ pub fn items(homes: &[String]) -> Vec<Item> {
         for name in SHELL_FILES { file_item("shell-startup", &format!("{home}/{name}"), &mut items); }
         for name in SSH_FILES { file_item("ssh-login", &format!("{home}/{name}"), &mut items); }
         for name in USER_PROGRAM_FOLDERS { program_items(&format!("{home}/{name}"), &mut items); }
+        login_preference_items(&format!("{home}/{PREFERENCES}"), &mut items);
     }
     for folder in PROGRAM_FOLDERS { program_items(folder, &mut items); }
     if let Ok(entries) = fs::read_dir(AT_JOBS) {
@@ -84,7 +103,7 @@ pub fn items(homes: &[String]) -> Vec<Item> {
 }
 
 /// The item kinds this module reports.
-pub const KINDS: &[&str] = &["shell-startup", "ssh-login", "at-job", "path-program"];
+pub const KINDS: &[&str] = &["shell-startup", "ssh-login", "at-job", "login-prefs", "path-program"];
 
 #[cfg(test)]
 mod tests {
@@ -136,12 +155,19 @@ mod tests {
         fs::write(home.join(".local/bin/git"), "#!/bin/sh\n").unwrap();
         std::os::unix::fs::symlink("/tmp/evil", home.join(".local/bin/ls")).unwrap();
         fs::write(home.join(".ssh/authorized_keys"), "ssh-ed25519 AAAA x\n").unwrap();
+        fs::create_dir_all(home.join(PREFERENCES)).unwrap();
+        fs::write(home.join(PREFERENCES).join("loginwindow.plist"), "<plist/>\n").unwrap();
+        fs::write(home.join(PREFERENCES).join("com.apple.loginitems.plist"), "<plist/>\n").unwrap();
+        fs::write(home.join(PREFERENCES).join("com.example.app.plist"), "<plist/>\n").unwrap();
         assert!(watch.update(KINDS, items(&homes), 2));
         let events = watch.take_events();
         let kinds: Vec<(String, String)> = events.iter().map(|e| (e["item_kind"].as_str().unwrap().to_string(), e["label"].as_str().unwrap().to_string())).collect();
         assert!(kinds.contains(&("path-program".into(), "git".into())), "{kinds:?}");
         assert!(kinds.contains(&("path-program".into(), "ls".into())), "a link is an entry, never followed");
         assert!(kinds.contains(&("ssh-login".into(), "authorized_keys".into())));
+        assert!(kinds.contains(&("login-prefs".into(), "loginwindow.plist".into())), "{kinds:?}");
+        assert!(kinds.contains(&("login-prefs".into(), "com.apple.loginitems.plist".into())), "{kinds:?}");
+        assert!(!kinds.iter().any(|(_, label)| label == "com.example.app.plist"), "other preferences are not watched");
         let link = events.iter().find(|e| e["label"] == "ls").unwrap();
         assert_eq!(link["program"], "/tmp/evil", "a link names where it points");
         fs::write(home.join(".zshrc"), "export A=1\ncurl x | sh\n").unwrap();

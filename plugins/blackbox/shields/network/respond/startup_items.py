@@ -25,8 +25,8 @@ event. Then:
   something that runs outside its sandbox, or later as the person, is the attack;
 * otherwise → by what it is: a launchd job or login item judged by its program's signature
   (``monitor.exposure.judge``), a new program on the PATH or a shell startup change
-  **informational** (``brew`` and app installers write these all day), an OpenSSH login file or an
-  ``at`` job **medium**;
+  **informational** (``brew`` and app installers write these all day), an OpenSSH login file, a cron
+  or ``at`` job and the login window's preferences **high** (security-sensitive places, round 7);
 * a **budget** per source (the item's kind and folder): at most :data:`BUDGET` alerts per
   :data:`BUDGET_SECONDS`, the rest folded into one "… and N more" line — a ``brew upgrade`` relinking
   300 programs is one alert, not 300. An agent-written entry is never folded.
@@ -63,8 +63,13 @@ BUDGET = 3
 BUDGET_SECONDS = 600
 #: What each kind of entry is, in the person's words (the launchd kinds are ``exposure.ITEM_NAMES``).
 RUN_LATER_NAMES = {"shell-startup": "Shell startup file", "ssh-login": "SSH login file", "at-job": "Scheduled job (at)",
-                   "path-program": "Program on your PATH"}
-_QUIET = {"path-program": "info", "shell-startup": "info", "ssh-login": "medium", "at-job": "medium"}
+                   "login-prefs": "Login preferences", "path-program": "Program on your PATH"}
+#: The severity of a new or changed entry whose writer is not known, by kind. WHY high for the
+#: security-sensitive ones (security round 7): an SSH key added to ``authorized_keys``, a new cron or
+#: ``at`` job and a change to the login window's preferences were reported medium — each lets
+#: something in or start later with the person's rights, and nobody known made it.
+_QUIET = {"path-program": "info", "shell-startup": "info", "ssh-login": "high", "at-job": "high", "cron": "high",
+          "login-prefs": "high"}
 
 
 @dataclass(frozen=True)
