@@ -75,6 +75,26 @@ def test_the_environment_is_clean(monkeypatch):
     assert not {"HOMEBREW_TAP_URL", "DYLD_INSERT_LIBRARIES"} & set(env) and env["PATH"].startswith("/opt/homebrew/bin:")
 
 
+def test_the_persons_own_harmless_homebrew_preferences_are_kept(monkeypatch, tmp_path):
+    """KI-613 (round 5, bb-r5-clean): the person's ~/.zprofile sets HOMEBREW_NO_AUTO_UPDATE=1 and
+    HOMEBREW_NO_INSTALL_CLEANUP=1; the broker's clean environment dropped them, so Homebrew
+    auto-updated and ran cleanup. Kept now — only the allow-listed "turn it off" ones, only the
+    person's (their startup files or the dashboard's own environment), never one that changes
+    where packages come from."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("HOMEBREW_NO_ANALYTICS", raising=False)
+    (tmp_path / ".zprofile").write_text('eval "$(/opt/homebrew/bin/brew shellenv)"\nexport HOMEBREW_NO_AUTO_UPDATE=1\n'
+                                        "export HOMEBREW_NO_INSTALL_CLEANUP='1'  # keep old versions\n"
+                                        "export HOMEBREW_NO_INSTALL_FROM_API=1\nexport HOMEBREW_NO_AUTO_UPDATE=$(evil)\n",
+                                        encoding="utf-8")
+    monkeypatch.setenv("HOMEBREW_NO_ANALYTICS", "1")
+    monkeypatch.setenv("HOMEBREW_NO_GITHUB_API", "$(touch /tmp/x)")
+    env = jobs.clean_environment("/opt/homebrew/bin/brew")
+    assert env["HOMEBREW_NO_AUTO_UPDATE"] == "1" and env["HOMEBREW_NO_INSTALL_CLEANUP"] == "1" and env["HOMEBREW_NO_ANALYTICS"] == "1"
+    assert "HOMEBREW_NO_INSTALL_FROM_API" not in env and "HOMEBREW_NO_GITHUB_API" not in env
+    assert env["HOMEBREW_NO_ENV_HINTS"] == "1" and env["HOME"] == str(tmp_path)
+
+
 def test_a_package_a_threat_rule_lists_is_refused(monkeypatch):
     monkeypatch.setattr(jobs, "brew_path", lambda: "/opt/homebrew/bin/brew")
     listed = lambda tool, args: {"decision": "", "findings": [{"source": "public"}]} if "evil-pkg" in args["command"] else {"findings": []}

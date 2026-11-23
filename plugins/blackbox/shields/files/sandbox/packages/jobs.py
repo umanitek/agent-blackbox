@@ -21,12 +21,15 @@ Usage::
 from __future__ import annotations
 
 import os
+import re
 import secrets
 import threading
 import time
 from collections import OrderedDict
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
+from .....kernel import shell_path
+from .....kernel.bounded_files import read_small_text
 from .. import platform
 from .request import BrewRequest
 
@@ -48,12 +51,41 @@ def brew_path() -> str:
     return next((path for path in BREW_PATHS if os.path.isfile(path) and os.access(path, os.X_OK)), "")
 
 
+#: The person's own Homebrew preferences passed through to a brokered run (KI-613): each only turns
+#: something OFF (auto-update, cleanup, analytics, hints) — none changes what is installed or from where.
+PERSONS_PREFERENCES = frozenset({
+    "HOMEBREW_NO_AUTO_UPDATE", "HOMEBREW_NO_INSTALL_CLEANUP", "HOMEBREW_NO_ANALYTICS",
+    "HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK", "HOMEBREW_NO_UPDATE_REPORT_NEW", "HOMEBREW_NO_INSTALL_UPGRADE",
+    "HOMEBREW_NO_COLOR", "HOMEBREW_NO_GITHUB_API", "HOMEBREW_NO_INSECURE_REDIRECT",
+})
+#: ``export NAME=value`` / ``NAME=value`` in a shell startup file, the value plain or quoted.
+_PREFERENCE_LINE = re.compile(r"^\s*(?:export\s+)?(HOMEBREW_NO_[A-Z_]+)=([\"']?)([A-Za-z0-9]{1,8})\2\s*(?:#.*)?$", re.MULTILINE)
+_MAX_STARTUP_BYTES = 256 * 1024
+
+
+def persons_preferences(home: str) -> dict[str, str]:
+    """The person's :data:`PERSONS_PREFERENCES` — from their shell startup files (where macOS's
+    shells read them: ``~/.zprofile`` …; an agent can not write those, File Shield keeps them
+    closed) and from this process's own environment, never from the agent's request."""
+    found: dict[str, str] = {}
+    for name in shell_path.STARTUP_FILES:
+        text = read_small_text(os.path.join(home, name), _MAX_STARTUP_BYTES) or ""
+        for match in _PREFERENCE_LINE.finditer(text):
+            if match.group(1) in PERSONS_PREFERENCES:
+                found[match.group(1)] = match.group(3)   # a later line wins, as in a shell
+    found.update({name: value for name, value in os.environ.items()
+                  if name in PERSONS_PREFERENCES and re.fullmatch(r"[A-Za-z0-9]{1,8}", value)})
+    return found
+
+
 def clean_environment(brew: str) -> dict[str, str]:
-    """The environment brew runs with: only what Homebrew needs, nothing the agent set."""
+    """The environment brew runs with: only what Homebrew needs and the person's own harmless
+    Homebrew preferences (:func:`persons_preferences`), nothing the agent set."""
     home = os.path.expanduser("~")
     prefix_bin = os.path.dirname(brew)
     return {"HOME": home, "USER": os.environ.get("USER", ""), "LOGNAME": os.environ.get("LOGNAME", os.environ.get("USER", "")),
             "PATH": f"{prefix_bin}:/usr/bin:/bin:/usr/sbin:/sbin", "LANG": "en_US.UTF-8",
+            **persons_preferences(home),
             "HOMEBREW_NO_ENV_HINTS": "1", "HOMEBREW_NO_EMOJI": "1",
             **({"TMPDIR": os.environ["TMPDIR"]} if os.environ.get("TMPDIR") else {})}
 
