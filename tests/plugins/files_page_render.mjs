@@ -61,5 +61,5 @@ for (const [hostId, text] of fixture.clicks || []) {
   if (button) button.click(); else errors.push(`no button ${text} in #${hostId}`);
   await settle();
 }
-const wanted = ["permissions", "permission-rules", "permission-never", "permissions-note"];
+const wanted = ["permissions", "permission-restart", "permission-rules", "permission-never", "permissions-note"];
 process.stdout.write(JSON.stringify({ hosts: Object.fromEntries(wanted.map((id) => [id, outline(hosts[id])])), posts, errors }));

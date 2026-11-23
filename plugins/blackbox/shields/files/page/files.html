@@ -85,6 +85,7 @@
     <h2>Sandbox permissions</h2>
     <p class="muted">What an agent inside the sandbox may do beyond your files. Block, ask you each time, or allow — for every agent here; a rule for one agent or one project folder wins over it. Turning one up asks you first.</p>
     <div id="permissions" class="muted">Reading the permissions…</div>
+    <div id="permission-restart"></div>
     <h3>Exceptions</h3>
     <div id="permission-rules" class="muted">No exceptions: every agent follows the list above.</div>
     <h3>Never unlocked</h3>
@@ -252,6 +253,15 @@
     });
     rules.className = rules.children.length ? "" : "muted";
     if (!rules.children.length) rules.textContent = "No exceptions: every agent follows the list above.";
+    var restart = document.getElementById("permission-restart"); restart.textContent = "";
+    (view.restart_needed || []).forEach(function (run) {
+      var line = el("div", "row");
+      line.appendChild(el("span", "tag", "restart needed"));
+      line.appendChild(el("span", null, String(run.name) + " " + String(run.note)));
+      var stop = el("button", null, "Stop it");
+      stop.addEventListener("click", function () { changePermission("stop-agent", { instance: run.instance }); });
+      line.appendChild(stop); restart.appendChild(line);
+    });
     var never = document.getElementById("permission-never"); never.textContent = "";
     (view.never || []).concat(view.not_controllable || []).forEach(function (row) {
       var li = el("li"); li.appendChild(el("b", null, String(row.name))); li.appendChild(document.createTextNode(" — " + String(row.why))); never.appendChild(li);

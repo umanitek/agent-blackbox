@@ -102,6 +102,16 @@ def _render(tmp_path: Path, fixture: dict) -> dict:
 
 
 @pytest.mark.skipif(NODE is None, reason="node draws the page")
+def test_the_page_names_an_agent_that_needs_a_restart_and_offers_stop(entry, tmp_path):
+    view = {**api.API.reads["permissions"](None, {}),
+            "restart_needed": [{"agent": "codex", "name": "Codex", "instance": "codex:ab", "pid": 4242, "note": "still runs with its old ones"}]}
+    drawn = _render(tmp_path, {"answers": [["/permissions", view]], "post": {"stop-agent": [200, view]},
+                               "clicks": [["permission-restart", "Stop it"]]})
+    assert "restart needed" in "\n".join(drawn["hosts"]["permission-restart"]) and "Codex still runs" in "\n".join(drawn["hosts"]["permission-restart"])
+    assert drawn["posts"] == [["stop-agent", {"instance": "codex:ab"}]]
+
+
+@pytest.mark.skipif(NODE is None, reason="node draws the page")
 def test_the_page_draws_the_list_and_posts_the_persons_choice(entry, tmp_path):
     api.API.writes["permission-set"](None, {"permission": "docker", "mode": "allow", "agent": "claude-code", "project": "~/work/shop"})
     view = api.API.reads["permissions"](None, {})
