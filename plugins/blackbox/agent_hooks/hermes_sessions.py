@@ -20,7 +20,8 @@ their own, in the delegating session's process. Every session that first appears
 Hermes home within :data:`DELEGATE_SECONDS` of a ``delegate_task`` call — and that is in the same
 process, or names none (a child's first event may be a tool call) — is that call's sub-agent:
 one call may start several (H3: the second child was shown as a session of its own). A session
-started in ANOTHER process is never a child.
+started in ANOTHER process is never a child. A child that never said where it works or what of it
+is sandboxed (no session start of its own) takes its parent's folder, process and sandbox (KI-638).
 
 Read incrementally (:func:`catch_up`, from the observer's look every few seconds and from the live
 view): a byte cursor kept in ``agent-hooks/hermes-cursor.json`` survives restarts, so no event is
@@ -141,6 +142,20 @@ def _session_facts(raw: str, kind: str, detail: Mapping[str, Any]) -> dict[str, 
     return known
 
 
+def _inherited(raw: str, parent: str, facts: dict[str, Any]) -> dict[str, Any]:
+    """A delegated child's facts, completed from its PARENT's: what the child said itself wins.
+    WHY (KI-638, security round 6, s6-hm3): Hermes fires ``on_session_start`` only on a new
+    session's first-turn path, so one of two children opened with a tool call and named no folder,
+    process or sandbox — it was shown "hooks only" with an empty folder although it ran in the same
+    sandboxed process as its parent. :func:`_parent_of` links only a child of that process (or one
+    that named none), so the parent's folder, process and sandbox are the child's too."""
+    if not parent:
+        return facts
+    merged = {**_facts.get(parent, {}), **facts}
+    _bounded_put(_facts, raw, merged)
+    return merged
+
+
 def _new_turn(raw: str, detail: Mapping[str, Any]) -> bool:
     """True for the first model call of a turn this session has not counted yet."""
     turn = str(detail.get("turn_id") or detail.get("task_id") or "")
@@ -169,6 +184,7 @@ def apply(row: Mapping[str, Any]) -> bool:
             queue = _pending.setdefault(home, deque(maxlen=MAX_PENDING))
             queue.append((raw, now))
         parent = _parent_of(raw, home, now, store.get(session_key(HERMES_ID, raw, "")) is not None)
+        facts = _inherited(raw, parent, facts)
     fields: dict[str, Any] = {"agent": HERMES_ID, "event": kind, "session": raw, "cwd": facts.get("cwd", ""), "profile": home,
                               "tool_name": tool, "args": detail.get("args"), "tool_call_id": str(detail.get("tool_call_id") or "")[:200],
                               "model": facts.get("model", ""), "launch": facts.get("launch", ""), "agent_pid": facts.get("pid") or None,

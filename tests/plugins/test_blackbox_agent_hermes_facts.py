@@ -13,6 +13,11 @@ KI-580 (security round 2, Hermes picked for File Shield's sandbox, 2026-11-22): 
 tool's shells really ran inside the sandbox, yet every Hermes session showed "hooks only", the
 kernel's refusal of an argv-built script's read was not on the session (refused 0, no row), and
 its refused / flagged rows carried no reason (the audit trail had it).
+
+KI-638 (security round 6, Hermes gpt-5-nano sandboxed by default, s6-hm3): one ``delegate_task`` ran
+two children in the sandboxed Hermes process; the child whose first audit event was a tool call
+(no session start of its own) was shown with an empty folder and "hooks only" while its sibling
+and the parent were "sandboxed (kernel-enforced)".
 """
 
 from __future__ import annotations
@@ -97,6 +102,21 @@ def test_every_child_of_one_delegation_is_its_sub_agent_and_another_process_is_n
     assert sorted(item.folder for item in sessions) == ["other", "rh-s1"]
     assert len(subs) == 2 and {sub.parent for sub in subs} == {next(s.key for s in sessions if s.folder == "rh-s1")}
     assert sorted(sub.checked for sub in subs) == [1, 2]
+
+
+def test_a_delegated_child_without_its_own_start_takes_its_parents_folder_and_sandbox(_fresh, monkeypatch):
+    """KI-638: a child runs in its parent's process, so what it never said itself is its parent's."""
+    monkeypatch.setattr(hooks.shields, "enter_hermes_process", lambda: HermesCover(shells=True, execute_code=True))
+    hooks.on_session_start(session_id="s6-hm3", model=MODEL, platform="cli")
+    hooks.on_pre_tool_call(tool_name="delegate_task", args={"tasks": ["a", "b"]}, session_id="s6-hm3", tool_call_id="d1")
+    hooks.on_session_start(session_id="child-1", model=MODEL, platform="cli")
+    hooks.on_pre_tool_call(tool_name="terminal", args={"command": "echo sub-1-1"}, session_id="child-1", tool_call_id="k1")
+    hooks.on_pre_tool_call(tool_name="terminal", args={"command": "echo sub-2-1"}, session_id="child-2", tool_call_id="k2")
+    subs = [item for item in _hermes().values() if item.kind == "sub-agent"]
+    assert len(subs) == 2
+    for sub in subs:
+        row = views.detail(sub.key)["instance"]
+        assert (sub.folder, row["protection"], row["sandboxed"]) == ("rh-s1", "sandboxed", True)
 
 
 def test_the_history_answers_for_the_hermes_agent():
