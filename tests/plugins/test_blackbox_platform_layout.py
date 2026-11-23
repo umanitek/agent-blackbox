@@ -118,9 +118,9 @@ def test_network_shield_runs_programs_only_from_its_platform_modules():
 
 def test_file_shields_agent_sandbox_runs_programs_only_from_its_platform_modules():
     files = _outside_platform(FILES_SANDBOX, "*.py")
-    assert len(files) >= 2 and (FILES_SANDBOX / PLATFORM / "macos.py").is_file()
+    assert len(files) >= 2 and (FILES_SANDBOX / PLATFORM / "macos" / "__init__.py").is_file()
     problems = [f"{path.relative_to(ROOT)}:{problem}" for path in files for problem in python_problems(path.read_text(encoding="utf-8"))]
-    assert not problems, "move these into shields/files/sandbox/platform/macos.py:\n" + "\n".join(problems)
+    assert not problems, "move these into shields/files/sandbox/platform/macos/:\n" + "\n".join(problems)
 
 
 def test_the_agent_observer_runs_programs_only_from_its_platform_modules():

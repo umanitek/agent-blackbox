@@ -57,8 +57,8 @@ from pathlib import Path
 from platform import mac_ver
 from typing import Optional
 
-from .....kernel.bounded_files import atomic_write, read_small_text
-from ..places import Places
+from ......kernel.bounded_files import atomic_write, read_small_text
+from ...places import Places
 
 SANDBOX_EXEC = "/usr/bin/sandbox-exec"
 PGREP = "/usr/bin/pgrep"
