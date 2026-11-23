@@ -101,6 +101,14 @@ def terminate(_pid: int) -> bool:
     return False
 
 
+def osascript_shim(_tools: str, _python: str, _dashboard_url: str) -> str:
+    return ""
+
+
+def run_script(_script: str) -> tuple[int, str]:
+    raise OSError("AppleScript runs only on macOS")
+
+
 def spawn_brew(_command: list[str], _env: dict[str, str], _cwd: str) -> object:
     raise OSError("Homebrew runs for agents only on macOS")
 

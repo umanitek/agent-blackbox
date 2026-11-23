@@ -194,6 +194,8 @@ class PermissionRequest:
     digest: str
     pid: int
     created: float
+    #: The whole text the person must read before answering (an AppleScript), "" otherwise.
+    detail: str = ""
 
 
 @dataclass(frozen=True)

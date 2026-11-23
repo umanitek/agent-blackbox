@@ -70,8 +70,8 @@ def _scope_of(settings: Settings, permission: str, agent: str, folder: str) -> S
     return Scope(agent=agent, project=project)
 
 
-def _open(permission: str, scope: Scope, instance: str, what: str, pid: int) -> bool:
-    opened = requests.raise_request(permission, scope.agent, instance, scope.project, what, pid)
+def _open(permission: str, scope: Scope, instance: str, what: str, pid: int, detail: str = "") -> bool:
+    opened = requests.raise_request(permission, scope.agent, instance, scope.project, what, pid, detail=detail)
     if opened is not None:
         answers.requested(opened)
     return opened is not None
@@ -89,11 +89,12 @@ def ask(permission: str, agent: str, instance: str, folder: str, what: str, pid:
 ALLOWED, WAITING, REFUSED = "allow", "wait", "block"
 
 
-def broker_decision(permission: str, agent: str, instance: str, folder: str, what: str, pid: int = 0) -> str:
+def broker_decision(permission: str, agent: str, instance: str, folder: str, what: str, pid: int = 0, show_whole: bool = False) -> str:
     """For a broker asked to do *what* (Blackbox's own words for it, e.g. ``brew install tree``):
     :data:`ALLOWED` (the mode allows it, or the person allowed this exact request once — the grant
     is spent), :data:`REFUSED` (blocked, or the person kept it blocked lately, or the request
-    bounds are reached) or :data:`WAITING` (a request is open: ask again shortly)."""
+    bounds are reached) or :data:`WAITING` (a request is open: ask again shortly). *show_whole*: the
+    person reads all of *what* before answering (an AppleScript), not only its first words."""
     settings = current()
     mode = settings.mode(BY_ID[permission], agent, folder)
     if mode is not Mode.ASK:
@@ -104,7 +105,8 @@ def broker_decision(permission: str, agent: str, instance: str, folder: str, wha
     asked = requests.state(instance or agent, permission)
     if asked == requests.COOLING:
         return REFUSED
-    return WAITING if asked == requests.OPEN or _open(permission, scope, instance, what, pid) else REFUSED
+    opened = asked == requests.OPEN or _open(permission, scope, instance, what, pid, what if show_whole else "")
+    return WAITING if opened else REFUSED
 
 
 #: Which permission a refusal kind asks for when several share it (``open`` of an app vs a link:

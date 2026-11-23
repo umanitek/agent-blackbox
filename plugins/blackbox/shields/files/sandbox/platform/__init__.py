@@ -17,11 +17,11 @@ import sys
 
 if sys.platform == "darwin":
     from .macos import (APPS, ONCE_MINUTES, ProcessFacts, describe, is_system, terminate, ONCE_SUFFIX, PROFILE_SUFFIX, PROJECT_INDEX, RUN_INFIX, SETUID_NOTE, TOOLS_FOLDER, brew_shim, command_shim, find_app, is_driver,
-                        launcher_script, manager_shims, open_app, open_shim, open_url, open_with, refresh_tools, render,
+                        launcher_script, manager_shims, open_app, open_shim, open_url, open_with, osascript_shim, refresh_tools, render, run_script,
                         shell_shim, spawn_brew, startup_places, stop_group, unavailable)
 else:
     from .unsupported import (APPS, ONCE_MINUTES, ProcessFacts, describe, is_system, terminate, ONCE_SUFFIX, PROFILE_SUFFIX, PROJECT_INDEX, RUN_INFIX, SETUID_NOTE, TOOLS_FOLDER, brew_shim, command_shim, find_app, is_driver,
-                        launcher_script, manager_shims, open_app, open_shim, open_url, open_with, refresh_tools, render,
+                        launcher_script, manager_shims, open_app, open_shim, open_url, open_with, osascript_shim, refresh_tools, render, run_script,
                               shell_shim, spawn_brew, startup_places, stop_group, unavailable)
 
 __all__ = ["APPS", "ONCE_MINUTES", "ONCE_SUFFIX", "PROFILE_SUFFIX", "PROJECT_INDEX", "RUN_INFIX", "SETUID_NOTE",

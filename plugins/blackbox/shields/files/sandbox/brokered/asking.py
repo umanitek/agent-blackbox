@@ -59,10 +59,10 @@ class Asking:
         return Asking(owner, folder, pid)
 
 
-def decide(permission: str, asked: Asking, what: str) -> None:
+def decide(permission: str, asked: Asking, what: str, show_whole: bool = False) -> None:
     """Raises :class:`ShieldApiError` (423 while the person is asked, 403 when refused) unless
     *permission* lets *asked* do *what* now (a once grant is spent here)."""
-    decision = permissions.broker_decision(permission, asked.agent, asked.instance, asked.folder, what, asked.pid)
+    decision = permissions.broker_decision(permission, asked.agent, asked.instance, asked.folder, what, asked.pid, show_whole)
     if decision == permissions.WAITING:
         raise ShieldApiError(WAITING, "Blackbox asked you whether this agent may do this; it happens once you allow it.")
     if decision == permissions.REFUSED:

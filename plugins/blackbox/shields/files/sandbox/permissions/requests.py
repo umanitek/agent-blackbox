@@ -36,6 +36,8 @@ from .model import PermissionRequest
 MAX_OPEN, MAX_PER_MINUTE = 20, 10
 COOLDOWN_SECONDS = 15 * 60
 MAX_WHAT_CHARS = 200
+#: The most text kept for the person to read in full (an AppleScript).
+MAX_DETAIL_CHARS = 16 * 1024
 _lock = threading.Lock()
 _open: dict[str, PermissionRequest] = {}
 _kept_blocked: dict[tuple[str, str], float] = {}
@@ -48,7 +50,7 @@ def digest(permission: str, agent: str, project: str, what: str = "") -> str:
 
 
 def raise_request(permission: str, agent: str, instance: str, project: str, what: str, pid: int = 0,
-                  now: Optional[float] = None) -> Optional[PermissionRequest]:
+                  now: Optional[float] = None, detail: str = "") -> Optional[PermissionRequest]:
     """Opens a request, or answers None when one is open for (instance, permission), the person
     kept it blocked lately, or the bounds are reached."""
     now = time.time() if now is None else now
@@ -61,10 +63,10 @@ def raise_request(permission: str, agent: str, instance: str, project: str, what
         _recent[:] = [ts for ts in _recent if now - ts < 60]
         if len(_open) >= MAX_OPEN or len(_recent) >= MAX_PER_MINUTE:
             return None
-        sealed = digest(permission, agent, project, what[:MAX_WHAT_CHARS])
+        sealed = digest(permission, agent, project, what)   # the WHOLE request: a grant fits it exactly
         request = PermissionRequest(id=sealed[:16] + hashlib.sha256(f"{instance}{now}".encode()).hexdigest()[:8],
                                     permission=permission, agent=agent, instance=instance, project=project,
-                                    what=what[:MAX_WHAT_CHARS], digest=sealed, pid=pid, created=now)
+                                    what=what[:MAX_WHAT_CHARS], digest=sealed, pid=pid, created=now, detail=detail[:MAX_DETAIL_CHARS])
         _open[request.id] = request
         _recent.append(now)
         return request

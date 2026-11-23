@@ -52,7 +52,8 @@ def row(request: PermissionRequest) -> dict[str, Any]:
     permission = BY_ID[request.permission]
     return {"id": request.id, "permission": request.permission, "name": permission.name, "cost": permission.cost,
             "agent": request.agent, "agent_name": product_name(request.agent), "instance": request.instance,
-            "project": request.project, "what": request.what, "created": request.created, "choices": choices(request),
+            "project": request.project, "what": request.what, "detail": request.detail, "created": request.created,
+            "choices": choices(request),
             "text": f"{product_name(request.agent)}{' in ' + request.project if request.project else ''} wants to use {permission.name}."}
 
 
