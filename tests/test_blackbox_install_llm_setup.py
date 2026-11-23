@@ -1216,7 +1216,7 @@ def test_installers_offer_both_store_backends_and_actionable_docker_setup() -> N
     assert "Docker.DockerDesktop" in windows
     assert "docker info" in unix and "docker info" in windows
     assert "Continue with Oxigraph? [Y/n]" in unix   # yes by default (Amos, 2026-10-17)
-    assert "Continue with Oxigraph instead? [y/N]" in windows   # Windows parity: next installer change
+    assert "Continue with Oxigraph? [Y/n]" in windows   # Windows parity (KI-436)
     assert "confirm_oxigraph_fallback" in unix
     assert "Confirm-OxigraphFallback" in windows
     assert "Installation stopped before changing the DKG store" in unix

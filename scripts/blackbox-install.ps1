@@ -154,7 +154,7 @@ Usage: blackbox-install.ps1 [-SkipDkg] [-StoreBackend auto|blazegraph|oxigraph] 
 
 Options:
   -SkipDkg          Skip DKG setup; plugin installs but first-run protection is incomplete
-  -StoreBackend     Store backend (default: auto; Blazegraph preferred, Oxigraph fallback asks first)
+  -StoreBackend     Store backend (default: auto; Blazegraph preferred, Oxigraph when Docker cannot run it)
   -Help             Show this help and exit
 
 The DKG node bootstraps on mainnet. The default context graph is public, and
@@ -174,7 +174,7 @@ Blackbox uses its own DKG home and port by default:
   DKG home: $DkgHome
   DKG CLI:  $DkgBin
   DKG URL:  $DkgDaemonUrl
-  Store:    auto (Blazegraph preferred; Oxigraph requires confirmation)
+  Store:    auto (Blazegraph preferred; Oxigraph without Docker, asked with yes as default)
 
 Note: Run the Hermes agent under WSL2 on Windows for best results.
 This installer is idempotent. If DKG setup or the first ruleset sync cannot
@@ -617,6 +617,25 @@ function Select-BlackboxDkgPort {
     return $false
 }
 
+# The DKG-managed Oxigraph store listens on its own loopback port, 7878 unless the node's
+# config.json names one (store.options.port). Another DKG node on this machine very likely holds
+# 7878 already, and two stores cannot share a port: Blackbox's node would fail to start its store.
+# So a Blackbox node whose config names no port gets the first free one from 7879 (KI-436; the
+# .sh's choose_blackbox_oxigraph_port), written into its config. Returns the port to write, or ""
+# to leave the config as it is (a configured port is kept by the writer; a Blackbox node already
+# running holds its port itself); $null when no port in the range is free.
+# The search starts ABOVE 7878: "free" is only what this moment shows, and another node's store is
+# briefly down whenever that node restarts (a Mac install took 7878 in such a gap, 2026-10-22).
+$OxigraphFirstPort = 7879
+$OxigraphLastPort = 7978
+function Select-BlackboxOxigraphPort {
+    if ($script:DkgAlreadyRunning) { return "" }
+    for ($candidate = $OxigraphFirstPort; $candidate -le $OxigraphLastPort; $candidate++) {
+        if (-not (Test-PortInUse $candidate)) { return "$candidate" }
+    }
+    return $null
+}
+
 function Test-BlackboxDkgPort {
     try {
         Invoke-WebRequest -Uri "$DkgDaemonUrl/api/status" -UseBasicParsing -TimeoutSec 3 | Out-Null
@@ -712,21 +731,58 @@ function Use-BlackboxOxigraph {
     Write-Warn2 "Using the DKG-managed Oxigraph store (no Docker container required)."
 }
 
+# Docker cannot run the Blazegraph store (not installed, its engine not answering, or the store's
+# container failing to start - KI-313/KI-398): the install falls back to the DKG-managed Oxigraph
+# store and never dead-ends (Amos, 2026-10-17; confirm_oxigraph_fallback in the .sh, KI-436). A
+# person at a terminal is still asked, with yes as the default - Enter, or no answer within
+# BLACKBOX_STORE_PROMPT_SECONDS, takes Oxigraph; only an explicit "n" stops the install (and the
+# install record then removes everything this run did). With no terminal - an agent, a script, a
+# server, -NonInteractive - Oxigraph is chosen automatically and the run says why.
+$StorePromptSeconds = if ($env:BLACKBOX_STORE_PROMPT_SECONDS) { [int]$env:BLACKBOX_STORE_PROMPT_SECONDS } else { 30 }
+
+# Whether a person can answer at this console: an interactive host whose input is the keyboard.
+function Test-InteractiveConsole {
+    if (-not [Environment]::UserInteractive) { return $false }
+    if ([Environment]::GetCommandLineArgs() -match '^-NonI') { return $false }
+    try { return -not [Console]::IsInputRedirected } catch { return $false }
+}
+
+# The line typed within $Seconds ("" when nothing was entered in time). Read-Host has no
+# timeout, so keys are read one by one until Enter or the deadline.
+function Read-AnswerWithin([int]$Seconds) {
+    $deadline = [DateTime]::UtcNow.AddSeconds($Seconds)
+    $typed = ""
+    while ([DateTime]::UtcNow -lt $deadline) {
+        if (-not [Console]::KeyAvailable) { Start-Sleep -Milliseconds 100; continue }
+        $key = [Console]::ReadKey($true)
+        if ($key.Key -eq [ConsoleKey]::Enter) { Write-Host ""; return $typed }
+        if ($key.Key -eq [ConsoleKey]::Backspace) {
+            if ($typed.Length -gt 0) { $typed = $typed.Substring(0, $typed.Length - 1); Write-Host -NoNewline "`b `b" }
+            continue
+        }
+        $typed += $key.KeyChar
+        Write-Host -NoNewline $key.KeyChar
+    }
+    Write-Host ""
+    return ""
+}
+
 function Confirm-OxigraphFallback {
     param([string]$Reason)
     Write-Warn2 $Reason
-    Write-Step "Recommended default: stop here, install/start or repair Docker, then re-run Blackbox with Blazegraph."
-    Write-Step "Alternative: type y to continue now with the DKG-managed Oxigraph store."
-    try {
-        $answer = Read-Host "Continue with Oxigraph instead? [y/N]"
-    } catch {
-        Write-Warn2 "No interactive terminal is available, so Oxigraph was not selected."
-        Write-Step "To choose it explicitly, re-run with: -StoreBackend oxigraph"
+    if (-not (Test-InteractiveConsole)) {
+        Write-Step "No terminal to ask, so Blackbox uses the DKG-managed Oxigraph store (no Docker needed)."
+        Write-Step "To move to Blazegraph later: make Docker work, then re-run the installer with -StoreBackend blazegraph"
+        return $true
+    }
+    Write-Step "Blackbox can continue with the DKG-managed Oxigraph store, which needs no Docker."
+    Write-Host -NoNewline "Continue with Oxigraph? [Y/n] (yes in ${StorePromptSeconds}s) "
+    $answer = Read-AnswerWithin $StorePromptSeconds
+    if ($answer.Trim() -match '^(n|no)$') {
+        Write-Step "Stopping without installing. Make Docker work, then re-run the installer."
         return $false
     }
-    if ($answer -match '^(y|yes)$') { return $true }
-    Write-Step "Keeping Blazegraph as the default. Set up Docker and re-run the installer."
-    return $false
+    return $true
 }
 
 function Get-BlackboxStoreDescription {
@@ -912,12 +968,17 @@ from pathlib import Path
 home = Path(sys.argv[1]).expanduser()
 api_port = int(sys.argv[2])
 store_backend = sys.argv[3]
-store_url = sys.argv[4]
+# "-" stands for "none": Windows PowerShell 5.1 drops an empty argument to a native program,
+# which would shift every argument after it (the Oxigraph port included).
+store_url = "" if sys.argv[4] == "-" else sys.argv[4]
 store_managed = sys.argv[5].lower() == "true"
 context_graph_id = sys.argv[6]
 # Absent (an older caller): no graph is treated as the default, so the
 # steady profile stays exactly as before.
 default_context_graph_id = sys.argv[7] if len(sys.argv) > 7 else ""
+# The free port the installer chose for a DKG-managed Oxigraph store; used only when the
+# config names none (empty = keep the config as it is).
+oxigraph_port = int(sys.argv[8]) if len(sys.argv) > 8 and sys.argv[8].isdigit() else 0
 # Sync slots for this machine (sync/process_limits.sync_slots): 10/20 from 8 GB, 4/8 below.
 sync_inflight = int(sys.argv[9]) if len(sys.argv) > 9 and sys.argv[9] else 10
 sync_queue = int(sys.argv[10]) if len(sys.argv) > 10 and sys.argv[10] else 20
@@ -1002,9 +1063,12 @@ if store_backend == "blazegraph":
     }
 elif store_backend == "oxigraph-server":
     previous_options = store.get("options") if previous_backend == store_backend else None
+    options = dict(previous_options) if isinstance(previous_options, dict) else {}
+    if oxigraph_port and "port" not in options:
+        options["port"] = oxigraph_port
     data["store"] = {"backend": "oxigraph-server"}
-    if isinstance(previous_options, dict) and previous_options:
-        data["store"]["options"] = previous_options
+    if options:
+        data["store"]["options"] = options
 else:
     raise SystemExit(f"unsupported store backend: {store_backend}")
 rendered = json.dumps(data, indent=2) + "\n"
@@ -1023,10 +1087,21 @@ if not token_path.exists():
     changed = True
 print("switched" if switched else ("changed" if changed else "unchanged"))
 '@
+    $oxigraphPort = ""
+    if ($script:DkgSelectedStoreBackend -eq "oxigraph-server") {
+        $oxigraphPort = Select-BlackboxOxigraphPort
+        if ($null -eq $oxigraphPort) {
+            Write-Err2 "No free port for the Oxigraph store in $OxigraphFirstPort-$OxigraphLastPort."
+            exit 1
+        }
+    }
     $writerFile = Join-Path $env:TEMP "blackbox_dkg_config.py"
     Set-Content -Path $writerFile -Value $writer -Encoding UTF8
     try {
-        $configState = & $VenvPython $writerFile $DkgHome $DkgPort $script:DkgSelectedStoreBackend $DkgStoreUrl $DkgStoreManagedByDkg $ContextGraphId $DefaultContextGraphId "" "$DkgSyncGlobalMaxInflight" "$DkgSyncGlobalQueueLimit"
+        # Never an empty argument (see the writer): "-" for no store URL, "0" for no port to write.
+        $storeUrlArgument = if ($DkgStoreUrl) { $DkgStoreUrl } else { "-" }
+        $oxigraphPortArgument = if ($oxigraphPort) { $oxigraphPort } else { "0" }
+        $configState = & $VenvPython $writerFile $DkgHome $DkgPort $script:DkgSelectedStoreBackend $storeUrlArgument $DkgStoreManagedByDkg $ContextGraphId $DefaultContextGraphId $oxigraphPortArgument "$DkgSyncGlobalMaxInflight" "$DkgSyncGlobalQueueLimit"
         if ($LASTEXITCODE -ne 0) { throw "dkg config exit $LASTEXITCODE" }
         $configResult = $configState | Select-Object -Last 1
         if ($configResult -eq "switched") {
@@ -1570,22 +1645,56 @@ function Install-Dkg {
     }
 }
 
-# Pull the verified ruleset now so detection is live immediately after install.
+# The first verified threat-graph sync is NOT part of the install (Amos, 2026-10-17; sync_ruleset
+# in the .sh, KI-436): it takes about half an hour and depends on the network, so waiting for it
+# would turn a slow connection into a failed install - and, all or nothing, roll back a working
+# one. The dashboard's own sync worker (started once the install is kept: Start-BlackboxDashboard)
+# starts it about ten seconds after the dashboard starts, runs the same controlled
+# `blackbox sync --wait --require-rules`, keeps the graph current and shows the progress.
+$AutoDashboard = if ($env:BLACKBOX_AUTO_DASHBOARD) { $env:BLACKBOX_AUTO_DASHBOARD } else { "1" }
+$DashboardOffPattern = '^(0|false|never|no)$'
+$DashboardTaskName = "Agent Blackbox dashboard"
+$DashboardUrl = "http://127.0.0.1:9700"
+
 function Sync-Ruleset {
     if (-not $script:DkgReady) { return }
-    Write-Heading "Syncing the threat ruleset"
-    Write-Step "Requesting one controlled verified graph catch-up ..."
-    $out = & $script:HermesBin blackbox sync --wait --timeout $CatchupTimeout --require-rules 2>&1
-    $code = $LASTEXITCODE
-    if ($out) { $out | ForEach-Object { Write-Host $_ } }
-    if ($code -eq 0) {
-        Write-Ok "Ruleset synced - Blackbox is watching with the latest threats"
-    } else {
-        $script:InstallIncomplete = $true
-        Write-Err2 "Initial verified threat-graph sync did not complete."
-        Write-Step "A partial verified ruleset may already be active, but setup is incomplete until the curator snapshot settles."
-        Write-Step "Retry the full sync with: blackbox sync --wait --require-rules"
+    Write-Heading "Threat graph"
+    if ($AutoDashboard -match $DashboardOffPattern) {
+        Write-Step "The dashboard is off, so nothing syncs the threat graph yet. Start the first sync with:"
+        Write-Host "    blackbox sync --wait --require-rules"
+        return
     }
+    # Nothing has synced yet: said as what happens next, not as a check mark (KI-609's lesson).
+    Write-Step "The first threat-graph sync starts with the dashboard and runs in the background (about 30 minutes)."
+    Write-Step "Follow it on the dashboard: $DashboardUrl"
+}
+
+# The dashboard started now, once the install is kept (so a rollback never has to stop it), and
+# with it the first threat-graph sync: through its sign-in task when there is one, else as a
+# hidden process (the .sh's start_dashboard). Off with BLACKBOX_AUTO_DASHBOARD=0.
+function Start-BlackboxDashboard {
+    if ($AutoDashboard -match $DashboardOffPattern) {
+        Write-Step "Dashboard auto-start disabled (BLACKBOX_AUTO_DASHBOARD=$AutoDashboard)."
+        return
+    }
+    if ($script:DashboardTaskRegistered) {
+        try {
+            Start-ScheduledTask -TaskName $DashboardTaskName -ErrorAction Stop
+            $script:DashboardStarted = $true
+            Write-Ok "Dashboard starting at $DashboardUrl (task '$DashboardTaskName')"
+            return
+        } catch {
+            Write-Warn2 "Could not start the dashboard task: $($_.Exception.Message)"
+        }
+    }
+    if (-not ($script:HermesBin -and (Test-Path $script:HermesBin))) {
+        Write-Step "Start the dashboard (and with it the first threat-graph sync) with: blackbox dashboard"
+        return
+    }
+    $env:HERMES_HOME = $HermesHome
+    Start-Process -FilePath $script:HermesBin -ArgumentList @("blackbox", "dashboard") -WindowStyle Hidden
+    $script:DashboardStarted = $true
+    Write-Ok "Dashboard starting at $DashboardUrl"
 }
 
 function Show-DkgManualHint {
@@ -2030,6 +2139,9 @@ function Show-NextSteps {
   Watch it live      - findings, assistant, and threat-graph status:
        blackbox dashboard      ->  http://127.0.0.1:9700
 
+  Threat graph       - the first sync runs in the background (about 30 minutes);
+                       the dashboard shows its progress.
+
   DKG node           - Blackbox-owned and separate from the default DKG node:
        $DkgDaemonUrl
        $DkgHome
@@ -2066,7 +2178,10 @@ $(Get-ProtectionSummary)
 # Windows each is said to be not available yet, by name — never implied (matches the .sh).
 function Get-ProtectionSummary {
     $notYet = "not available on this OS yet"
-    $dashboard = if ($script:DashboardTaskRegistered) { "starts when you sign in (or now: blackbox dashboard)" } else { "run it yourself: blackbox dashboard" }
+    $dashboard = if ($script:DashboardStarted -and $script:DashboardTaskRegistered) { "running, and starts when you sign in" }
+                 elseif ($script:DashboardStarted) { "running (after a restart: blackbox dashboard)" }
+                 elseif ($script:DashboardTaskRegistered) { "starts when you sign in (or now: blackbox dashboard)" }
+                 else { "run it yourself: blackbox dashboard" }
     return @"
   Protection on this machine (Windows):
     Agent hooks (every tool call checked):   on - Hermes loads Blackbox (checked above)
@@ -2109,7 +2224,7 @@ function Test-Install {
 # around Main), and the rollback says only what it checked is gone (KI-609's lesson).
 $script:InstallRecord = $null
 $script:InstallCommitted = $false
-$StartupTaskNames = @($DkgTaskName, "Agent Blackbox dashboard")
+$StartupTaskNames = @($DkgTaskName, $DashboardTaskName)
 $BlackboxShimDir = Join-Path $HOME ".local\bin"   # the per-user `blackbox` command (Install-BlackboxCommand)
 
 function Get-InstallCreatedPaths {
@@ -2505,6 +2620,7 @@ function Main {
     Test-Install
     if (-not $script:InstallIncomplete) { Write-InstallManifest }
     Complete-InstallRecord   # checked: kept from here on
+    Start-BlackboxDashboard   # and with it the first threat-graph sync, in the background
     Show-NextSteps
     if ($script:InstallIncomplete) {
         exit 1
