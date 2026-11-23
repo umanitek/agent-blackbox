@@ -45,7 +45,7 @@ import base64
 import binascii
 import re
 
-from .paths.shell_scripts import _INTERPRETERS
+from .paths.shell_scripts import _INTERPRETERS, _resolved
 from .paths.shell_words import _SEPARATORS, _words
 
 #: The most string literals of one piece of inline code read as commands.
@@ -74,9 +74,14 @@ _ANSI_C = re.compile(r"""\$'((?:\\.|[^'\\]){1,""" + str(MAX_DECODED_CHARS) + r""
 #: Wrappers that run the command after their own options; the value each option takes, if any.
 _WRAPPERS = {"env": ("-u", "-C", "-S", "--unset", "--chdir"), "nohup": (), "nice": ("-n",), "stdbuf": ("-i", "-o", "-e"),
              "caffeinate": ("-t", "-w"), "time": (), "command": (), "exec": ("-a",), "sudo": ("-u", "-g", "-C", "-D", "-h", "-p", "-U"),
-             "doas": ("-u", "-C"), "timeout": ("-s", "-k", "--signal", "--kill-after"), "gtimeout": ("-s", "-k")}
-#: Wrappers whose first plain word is a value, not the command (``timeout 5 cat …``).
-_TAKES_VALUE_FIRST = frozenset({"timeout", "gtimeout"})
+             "doas": ("-u", "-C"), "timeout": ("-s", "-k", "--signal", "--kill-after"), "gtimeout": ("-s", "-k"),
+             # security round 7: ``script -q /dev/null crontab c.txt`` wrote a cron job (script(1) runs the
+             # command after its typescript file); arch, flock, unbuffer and taskpolicy run theirs the same way.
+             "script": ("-t", "-T"), "arch": ("-arch", "-e"), "flock": ("-w", "-E", "--timeout", "--conflict-exit-code"),
+             "unbuffer": (), "taskpolicy": ("-c", "-d", "-g", "-t", "-l")}
+#: Wrappers whose first plain word is a value, not the command (``timeout 5 cat …``, ``script FILE cmd``,
+#: ``flock LOCKFILE cmd``).
+_TAKES_VALUE_FIRST = frozenset({"timeout", "gtimeout", "script", "flock"})
 
 
 def _printable(text: str) -> bool:
@@ -196,9 +201,33 @@ def _shell_decodes(command: str) -> list[str]:
     return out + ([resolved] if resolved != command else [])
 
 
-def code_commands(code: str) -> list[str]:
+#: A program started from an argv list in code: Python's ``subprocess.run([…])`` / ``Popen([…])`` /
+#: ``os.execv(p, […])``, and node's ``spawn('x', […])`` / ``execFile`` (the program first, then its list).
+_ARGV_LIST = re.compile(r"""\b(?:run|call|check_call|check_output|Popen|getoutput|exec[lv]p?e?|spawn[lv]p?e?)\s*\(\s*\[(?P<items>[^\]]{1,2000})\]""")
+_NODE_SPAWN = re.compile(r"""\b(?:spawn|spawnSync|execFile|execFileSync)\s*\(\s*(?P<first>(['"`])(?:\\.|(?!\2)[^\\]){1,256}\2)\s*,\s*\[(?P<items>[^\]]{0,2000})\]""")
+
+
+def _argv_commands(code: str) -> list[str]:
+    """The command lines *code* starts from argv lists (security round 7: ``subprocess.run(['cron' +
+    'tab', 'c.txt'])`` wrote a cron job; *code* is read after :func:`_resolved` joined its literals):
+    each literal item a word, any other item a ``_`` placeholder."""
+    out = []
+    for match in list(_ARGV_LIST.finditer(code)) + list(_NODE_SPAWN.finditer(code)):
+        items = ([match.group("first")] if "first" in match.re.groupindex else []) + match.group("items").split(",")
+        words = []
+        for item in items:
+            literal = _LITERAL.fullmatch(item.strip())
+            words.append(_quoted(_unescape(literal.group(2)) or literal.group(2)) if literal else "_")
+        if words and words[0] != "_":
+            out.append(" ".join(words))
+    return out
+
+
+def code_commands(code: str, interpreter: str = "", argv: tuple[str, ...] = ()) -> list[str]:
     """The commands and paths inline *code* spells out: each string literal (a command it may run,
-    a path it may open), and each literal it decodes from base64 or hex."""
+    a path it may open), each literal it decodes from base64 or hex, and — with what the code
+    builds statically written out (its *argv*, joined literals: ``'cron' + 'tab'``) — each joined
+    literal and each command it starts from an argv list."""
     out: list[str] = []
     for match in _CODE_DECODE.finditer(code):
         call, data, rest = match.group("call"), match.group("data"), match.group("rest").lower()
@@ -206,13 +235,15 @@ def code_commands(code: str) -> list[str]:
         value = _decode_bytes(data, "hex" if hexed else "base32" if call == "b32decode" else "base64")
         if value:
             out.append(value)
-    for index, match in enumerate(_LITERAL.finditer(code)):
-        if index >= MAX_LITERALS:
-            break
-        literal = match.group(2)
-        if literal.strip():
-            out.append(_unescape(literal) or literal)
-    return out
+    resolved = _resolved(interpreter, code, argv)
+    for text in (code, resolved) if resolved != code else (code,):
+        for index, match in enumerate(_LITERAL.finditer(text)):
+            if index >= MAX_LITERALS:
+                break
+            literal = match.group(2)
+            if literal.strip():
+                out.append(_unescape(literal) or literal)
+    return out + _argv_commands(resolved)
 
 
 def _wrapped(words: list[str], index: int) -> str:
@@ -252,7 +283,7 @@ def hidden_commands(command: str) -> list[str]:
             end = next((at for at in range(index + 1, len(words)) if words[at] in _SEPARATORS), len(words))
             for position in range(index + 1, end - 1):
                 if words[position] in options:
-                    found.extend(code_commands(words[position + 1]))
+                    found.extend(code_commands(words[position + 1], name, tuple(words[position + 2:end])))
         elif name in _WRAPPERS:
             found.append(_wrapped(words, index))
     seen = {command}

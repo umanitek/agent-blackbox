@@ -145,7 +145,7 @@ def _nested_code(command: str) -> list[str]:
 #: Signs that a command line may hand something hidden on: a shell's ``-c``, ``eval``, inline code
 #: (``-e``, ``-p``, ``-r``, ``-E``, ``eval``), a substitution, a decode, ANSI-C quoting or a wrapper.
 _MAY_HIDE = re.compile(r" -[a-zA-Z]*[cepErS]\b|\beval\b|\$\(|`|\$'|base64|base32|xxd|printf|\b(?:env|nohup|nice|stdbuf|caffeinate|time|"
-                       r"command|exec|sudo|doas|g?timeout)\b")
+                       r"command|exec|sudo|doas|g?timeout|script|arch|flock|unbuffer|taskpolicy)\b")
 
 
 def with_nested_commands(command: str, depth: int = _NESTING_DEPTH) -> str:

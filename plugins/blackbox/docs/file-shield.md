@@ -113,7 +113,13 @@ sandbox with real agents).
   (`>>`, `tee`, `cp`, a script it writes or runs, Python, a file tool, Codex's `apply_patch`), plus
   the commands that schedule a job without naming a file (`crontab -`, `at`, `launchctl
   bootstrap|load|submit`, `sfltool add-item`, `defaults write com.apple.loginwindow …`), also handed
-  to another shell. On hooks only this is as far as a hook can read (above); in the sandbox the
+  to another shell, run through a wrapper (`script -q /dev/null crontab f`, `nohup`, `arch`, `flock`,
+  `env`) or started from an argv list in code whose name is joined from literals or the script's own
+  arguments (`subprocess.run(['cron' + 'tab', f])`, a script's `["def" + "aults", "write",
+  sys.argv[1] + sys.argv[2], …]`), and a plist editor writing the login window's or a launchd job's
+  file (`plutil -insert`, `PlistBuddy -c Add …`; `PlistBuddy -c Print` and `plutil -p` only read). A
+  name glued at run time any other way (`''.join(reversed(…))`, `chr()`, a value read from a file)
+  can not be judged by text: that is the sandbox's job. On hooks only this is as far as a hook can read (above); in the sandbox the
   kernel refuses a write to those files and folders whatever the script computes (the login
   window's preference files included: a direct `cp` or `plutil` of them is refused). Measured on
   macOS 27 with a throwaway domain: a preference written through macOS's preferences service

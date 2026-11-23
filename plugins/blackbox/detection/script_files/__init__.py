@@ -81,6 +81,9 @@ _PATH_KEYS = ("path", "file_path", "filePath", "filename", "target_file", "noteb
 _CONTENT_KEYS = ("content", "new_string", "newString", "new_str", "text", "patch", "diff", "code", "file_text")
 
 _written: OrderedDict[str, float] = OrderedDict()
+#: What marks a file as a compiled program, not a script (a NUL byte in its first bytes): WHY —
+#: ``/usr/libexec/PlistBuddy -c Print x.plist`` was read as Python and its bytes' paths refused it.
+_COMPILED, _COMPILED_PEEK = "\x00", 8192
 #: The copies commands made: where the copy is → where it came from (newest last).
 _copied: OrderedDict[str, str] = OrderedDict()
 _lock = threading.Lock()
@@ -252,6 +255,8 @@ def _texts(target: str, folder: str, here: dict[str, str], copies: dict[str, str
     path = _on_disk(target, folder) or (None if written_now is not None else _remembered(target))
     if path:
         text = read_small_text(path, MAX_SCRIPT_BYTES)
+        if text is not None and _COMPILED in text[:_COMPILED_PEEK]:
+            return out   # a compiled program run by its path (``/usr/libexec/PlistBuddy``): no script text to judge
         if text is not None or (written_now is None and not (os.path.isfile(path) and os.path.getsize(path) <= MAX_SCRIPT_BYTES)):
             out.append((path, text))   # else unreadable (not a regular file, no permission): nothing more to judge
     source = _copied_from(where, copies) if not out and follow > 0 else None

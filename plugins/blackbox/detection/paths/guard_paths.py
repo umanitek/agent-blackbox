@@ -174,6 +174,9 @@ def _only_reads(name: str, rest: list[str]) -> bool:
         return bool(rest) and "c" in rest[0].lstrip("-") and "x" not in rest[0].lstrip("-")
     if name == "plutil":                           # ``-p`` / ``-lint`` / ``-type`` print; every other verb writes
         return bool(rest) and rest[0] in ("-p", "-lint", "-type", "-help") and "-o" not in rest
+    if name == "plistbuddy":                       # only ``-c Print…`` commands read; Add / Set / Delete / Merge / Import write
+        commands = [rest[at + 1] for at, word in enumerate(rest[:-1]) if word == "-c"]
+        return bool(commands) and all(command.strip().lower().startswith("print") for command in commands)
     if name in ("sed", "gsed", "perl", "yq", "awk", "gawk"):
         return not any(word.startswith("--in-place") or (word.startswith("-") and not word.startswith("--") and "i" in word)
                        for word in rest)
