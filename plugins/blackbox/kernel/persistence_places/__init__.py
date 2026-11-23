@@ -33,12 +33,13 @@ scheduled an ``at`` job — the sandbox refused all of them, the hooks none):
   (``crontab -``, ``at``, ``launchctl submit``, a login item made through System Events);
 * :func:`describe` — the words for a place in a refusal ("an SSH login file").
 
-NOT closed (founder decision 2026-11-23, option b): ``~/.local/bin`` (``pipx``, ``pip install
---user``), npm's global prefix outside Homebrew (``~/.npm-global``), ``~/bin`` and the other PATH
-folders the person owns — closing them breaks ``pipx install`` and ``npm i -g``; the persistence
-watch raises a CRITICAL alert for every new program an agent writes there instead. NOTE: with
-Homebrew's node, npm's global prefix IS ``/opt/homebrew`` — ``npm i -g`` inside the sandbox is
-refused (install it in your own terminal).
+The person's own program folders (``~/.local/bin``, ``~/.cargo/bin``, ``~/bin`` and the other PATH
+folders they own: :func:`user_path_folders`) are NOT in the startup places: closing them always
+broke ``pipx install`` and ``npm i -g`` (founder decision 2026-11-23, option b). The sandbox's
+``tool-folders`` permission closes them when the person blocks it (design "Sandbox permissions",
+F2), and the persistence watch raises a CRITICAL alert for every new program an agent writes there.
+NOTE: with Homebrew's node, npm's global prefix IS ``/opt/homebrew`` — ``npm i -g`` inside the
+sandbox is refused there (Blackbox's global-installs broker does it instead).
 
 Paths use ``{home}`` for the person's home folder. Pure: no OS calls but ``os.path.isdir`` on the
 Homebrew prefixes.
@@ -87,6 +88,42 @@ def startup_places(home: str, prefixes: tuple[str, ...] = HOMEBREW_PREFIXES) -> 
     def fill(paths: tuple[str, ...]) -> list[str]:
         return [path.replace("{home}", home.rstrip("/")) for path in paths]
     return fill(PERSISTENCE_FOLDERS) + homebrew_folders(prefixes), fill(PERSISTENCE_FILES), fill(PERSISTENCE_GLOBS)
+
+
+#: The program folders the person owns that are commonly on PATH: a program an agent leaves there
+#: runs OUTSIDE the sandbox the next time the person types its name. The ONE list (LES-137): the
+#: sandbox's ``tool-folders`` permission closes these to writes when blocked, the hook layer reads
+#: a refusal there as that permission's, and the system protection helper's persistence watch
+#: (``helper/src/platform/macos/observe/run_later.rs`` ``USER_PROGRAM_FOLDERS``) watches a subset
+#: of them (a parity test holds that).
+USER_TOOL_FOLDERS = ("{home}/.local/bin", "{home}/.local/pipx", "{home}/.cargo/bin", "{home}/go/bin", "{home}/.bun/bin",
+                     "{home}/.npm-global", "{home}/.nvm/versions", "{home}/.deno/bin", "{home}/bin")
+USER_TOOL_GLOBS = ("{home}/Library/Python/*/bin", "{home}/.gem/ruby/*/bin")
+#: The most PATH folders read (a PATH is short; a huge one is not trusted further).
+MAX_PATH_FOLDERS = 64
+
+
+def user_path_folders(home: str, path: str = "", owner: int = -1, exclude: tuple[str, ...] = ()) -> tuple[list[str], list[str]]:
+    """``(folders, globs)``: :data:`USER_TOOL_FOLDERS` / :data:`USER_TOOL_GLOBS` for the person at
+    *home*, plus every absolute folder on *path* (a PATH value) inside *home* that *owner* (a uid;
+    -1: anyone) owns, except *exclude* and folders inside them (Blackbox's own launchers)."""
+    root = home.rstrip("/")
+    folders = [place.replace("{home}", root) for place in USER_TOOL_FOLDERS]
+    for entry in [part for part in path.split(os.pathsep) if part][:MAX_PATH_FOLDERS]:
+        if not entry.startswith("/") or not os.path.normpath(entry).startswith(root + "/"):
+            continue   # only a folder written inside home is looked at, never resolved from elsewhere
+        real = os.path.realpath(entry)
+        if not real.startswith(root + "/"):
+            continue
+        if any(real == other or real.startswith(other.rstrip("/") + "/") for other in exclude):
+            continue
+        try:
+            if owner >= 0 and os.stat(real).st_uid != owner:
+                continue
+        except OSError:
+            continue
+        folders.append(real)
+    return list(dict.fromkeys(folders)), [place.replace("{home}", root) for place in USER_TOOL_GLOBS]
 
 
 def shell_startup_files(home: str) -> list[str]:
@@ -186,10 +223,13 @@ def describe(path: str) -> str:
 __all__ = [
     "HOMEBREW_OWNED",
     "HOMEBREW_PREFIXES",
+    "MAX_PATH_FOLDERS",
     "PERSISTENCE_FILES",
     "PERSISTENCE_FOLDERS",
     "PERSISTENCE_GLOBS",
     "STARTUP_ITEM",
+    "USER_TOOL_FOLDERS",
+    "USER_TOOL_GLOBS",
     "HookPlaces",
     "describe",
     "homebrew_folders",
@@ -198,4 +238,5 @@ __all__ = [
     "schedules",
     "shell_startup_files",
     "startup_places",
+    "user_path_folders",
 ]

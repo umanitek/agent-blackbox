@@ -167,12 +167,15 @@ class Allowances:
 
     ``lifted``: the profile-route permissions that are allowed (everything else in the catalogue
     with a profile route is refused); ``ports``: localhost ports reachable while local-ports is
-    blocked; ``hidden`` / ``read_only``: canonical folders from folder rules."""
+    blocked; ``hidden`` / ``read_only``: canonical folders from folder rules; ``tool_folders`` /
+    ``tool_globs``: the person's program folders, closed to writes while ``tool-folders`` is not allowed."""
 
     lifted: frozenset[str] = frozenset()
     ports: tuple[int, ...] = ()
     hidden: tuple[str, ...] = ()
     read_only: tuple[str, ...] = ()
+    tool_folders: tuple[str, ...] = ()
+    tool_globs: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

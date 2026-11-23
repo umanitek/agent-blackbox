@@ -54,8 +54,9 @@ SETUID, APP_DRIVER, OPEN_APP, SIGNAL, NESTED, FILE = "setuid", "app-driver", "op
 #: installer tried to change (its lines are handed to the person); a place something starts from by
 #: itself (a launchd job, cron/at, an SSH login file, Homebrew's folders).
 OWN, STARTUP, PERSISTENCE = "own", "startup", "persistence"
-#: The container engine's socket, kept closed while the ``docker`` sandbox permission is not allowed.
-DOCKER = "docker"
+#: The container engine's socket, kept closed while the ``docker`` sandbox permission is not allowed;
+#: a program folder the person owns (``~/.local/bin`` …), closed while ``tool-folders`` is blocked.
+DOCKER, TOOL_FOLDER = "docker", "tool-folder"
 #: The shell startup files (as ``kernel.shell_path`` keeps them closed).
 STARTUP_FILES = frozenset({".zshrc", ".zshenv", ".zprofile", ".zlogin", ".bashrc", ".bash_profile", ".profile", ".bash_login"})
 #: What each well-known installer wanted to add to a startup file — said to the person to add
@@ -80,6 +81,8 @@ _WHY = {
              "--disable-sandbox` (Blackbox's sandbox still covers it, nothing is lost); anything else: run it in "
              "your own terminal"),
     FILE: "this file is kept closed to agents (a protected item, or a file that keeps Blackbox's hook)",
+    TOOL_FOLDER: ("a program the agent leaves in your tool folders would run outside the sandbox the next time you type "
+                  "its name; Blackbox installs global tools for agents itself, or allow it in Blackbox's sandbox permissions"),
     DOCKER: ("a container runs outside the sandbox and can mount any folder; Docker is allowed only when you allow it "
              "for this agent in Blackbox's sandbox permissions (it may be asking you now)"),
     PERSISTENCE: ("an agent may not leave something that starts by itself later, outside the sandbox (a launchd job, "
@@ -87,7 +90,7 @@ _WHY = {
                   "own terminal"),
 }
 _WHAT = {SETUID: "{name}, a setuid program", APP_DRIVER: "{name}", OPEN_APP: "open",
-         SIGNAL: "a signal to a process outside the sandbox", NESTED: "a second sandbox", DOCKER: "Docker", FILE: "{name}", STARTUP: "{name}",
+         SIGNAL: "a signal to a process outside the sandbox", NESTED: "a second sandbox", DOCKER: "Docker", TOOL_FOLDER: "{name}", FILE: "{name}", STARTUP: "{name}",
          PERSISTENCE: "{name}"}
 #: zsh: ``(eval):1: operation not permitted: sudo``; bash: ``bash: /usr/bin/sudo: Operation not
 #: permitted``; sandbox-exec itself: ``execvp() of '/bin/ps' failed: Operation not permitted``.
@@ -152,6 +155,17 @@ def _starts_things(path: str) -> bool:
     return any(fnmatch.fnmatch(path, place) or path.startswith(place.rstrip("/") + "/") for place in (*places.starts, *places.programs))
 
 
+def _in_tool_folder(path: str) -> bool:
+    """True when *path* lies inside one of the person's program folders (the ONE list the profile
+    closes, ``kernel.persistence_places.user_path_folders``)."""
+    if not path.startswith("/"):
+        return False
+    folders, globs = persistence_places.user_path_folders(os.path.realpath(os.path.expanduser("~")), os.environ.get("PATH", ""))
+    real = os.path.realpath(os.path.dirname(path))
+    return any(real == folder or real.startswith(folder.rstrip("/") + "/") for folder in folders) or \
+        any(fnmatch.fnmatch(real, glob) for glob in globs)
+
+
 def _exec_kind(word: str, text: str = "") -> Refusal:
     """A program the kernel would not start, or a file it would not open (zsh words both alike)."""
     name = os.path.basename(word.rstrip(":"))
@@ -161,6 +175,8 @@ def _exec_kind(word: str, text: str = "") -> Refusal:
         return Refusal(STARTUP, word.rstrip(":"), _installer(text))
     if _starts_things(word.rstrip(":")):
         return Refusal(PERSISTENCE, word.rstrip(":"))
+    if _in_tool_folder(word.rstrip(":")):
+        return Refusal(TOOL_FOLDER, word.rstrip(":"))
     if _privileged(word):
         return Refusal(SETUID, name)
     return Refusal(FILE, word)

@@ -28,7 +28,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from .....kernel import settings as kernel_settings
+from .....kernel import constants, persistence_places, settings as kernel_settings
 from ... import mode as mode_module
 from . import answers, catalogue, grants, requests
 from .api import API_WEAKENING, API_WRITES, view
@@ -55,7 +55,12 @@ def allowances(settings: Settings, agent: str = "", folder: str = "") -> Allowan
     real = [(os.path.realpath(os.path.expanduser(each.path)), each.access) for each in rules]
     hidden = tuple(dict.fromkeys(path for path, access in real if access is Access.NONE))
     read_only = tuple(dict.fromkeys(path for path, access in real if access is Access.READ and path not in hidden))
-    return Allowances(lifted=lifted, ports=settings.ports("local-ports", agent, folder), hidden=hidden, read_only=read_only)
+    tools: tuple[list[str], list[str]] = ([], [])
+    if "tool-folders" not in lifted:
+        tools = persistence_places.user_path_folders(os.path.realpath(os.path.expanduser("~")), os.environ.get("PATH", ""),
+                                                     getattr(os, "getuid", lambda: -1)(), exclude=(os.path.realpath(constants.blackbox_home()),))
+    return Allowances(lifted=lifted, ports=settings.ports("local-ports", agent, folder), hidden=hidden, read_only=read_only,
+                      tool_folders=tuple(tools[0]), tool_globs=tuple(tools[1]))
 
 
 def _scope_of(settings: Settings, permission: str, agent: str, folder: str) -> Scope:

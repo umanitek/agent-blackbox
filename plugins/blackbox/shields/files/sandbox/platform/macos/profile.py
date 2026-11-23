@@ -75,9 +75,12 @@ def render(places: Places, digest_line: str = "", allowances: Allowances = Allow
 
 def permission_lines(allowances: Allowances, home: str = "") -> list[str]:
     """What the person's permissions refuse for one scope: each profile permission not lifted
-    (Docker's sockets …) and the folder rules (kept out / read only)."""
+    (Docker's sockets, the person's tool folders …) and the folder rules (kept out / read only)."""
     home = home or os.path.realpath(os.path.expanduser("~"))
     lines = [] if "docker" in allowances.lifted else _docker_lines(home)
+    tools = [f"(subpath {_quote(p)})" for p in allowances.tool_folders] + [f"(regex {_glob_regex(g)})" for g in allowances.tool_globs]
+    if tools:   # tool-folders blocked: a program left there would run outside the sandbox later
+        lines.append("(deny file-write*\n  " + "\n  ".join(tools) + ")")
     if allowances.hidden:
         lines.append("(deny file-read* file-write* file-link\n  " + "\n  ".join(f"(subpath {_quote(p)})" for p in allowances.hidden) + ")")
     if allowances.read_only:
