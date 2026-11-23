@@ -49,7 +49,7 @@ from ....kernel.bounded_files import atomic_write
 from ...contract import OPTION_NOT_INSTALLED, OPTION_SUPPORTED, OPTION_UNAVAILABLE, ShieldMode
 from .. import mode as mode_module
 from ..protect import is_folder
-from . import addon_places, defaults, packages, platform
+from . import addon_places, defaults, own_places, packages, platform
 from .places import Places, build, canonical
 
 __all__ = ["CLI_AGENTS", "HERMES_LAUNCHER_ENV", "HERMES_SHELLS", "HermesCover", "Places", "enter_hermes_process", "enter_hermes_session", "hermes_shell_dir", "launcher_dir", "offer",
@@ -103,19 +103,6 @@ def hermes_shell_dir() -> Path:
     return home() / "hermes-shell"
 
 
-def _hook_configs() -> list[str]:
-    """Every coding agent's hook config and Blackbox's own hook files in the default home: closed
-    to writes inside the sandbox, so a program an agent starts can not take Blackbox's hook out of
-    its own agent's config (hook-layer refusals stop the agent's own tools; this stops a script)."""
-    user = Path.home()
-    out = []
-    for host in agent_hosts.HOSTS:
-        target = host.config_path(user)
-        out += [str(target / event) for event in host.events] if host.style == "scripts" else [str(target)]
-        out += [str(path) for path in host.companion_paths(user)]
-    return out
-
-
 def _on_path_marker() -> Path:
     """Written once Blackbox has put its block on PATH: a block missing AFTER that was removed."""
     return home() / "on-path"
@@ -133,7 +120,7 @@ def chosen(mode: ShieldMode) -> tuple[str, ...]:
 def policy(mode: ShieldMode) -> Places:
     """The policy for *mode*: the person's items, Blackbox's keys, own and add-on places, the OS's startup places."""
     own = (str(constants.blackbox_home()), str(_PLUGIN), *addon_places.of(_PLUGIN.parent))
-    hooks = _hook_configs()
+    hooks = own_places.hook_configs()
     startup = persistence_places.shell_startup_files(str(Path.home())) + hooks   # the hook judgement reads the same list
     holders = sorted({os.path.dirname(path) for path in hooks} - {str(Path.home())})
     return build(mode_module.protected(mode), blackbox_key_patterns(), own, str(canary_path()), is_folder=is_folder,
