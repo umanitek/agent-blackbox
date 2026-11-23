@@ -18,6 +18,8 @@ config_mod = load_blackbox("kernel.config")
 cli_mod = load_blackbox("cli")
 managed_node = load_blackbox("sync.managed_node")
 sync_command = load_blackbox("sync.command")
+node_service = load_blackbox("sync.node_service")
+sync_linux = load_blackbox("sync.platform.linux")
 
 _STEADY_CONFIG = {
     "syncOnConnectEnabled": True,
@@ -118,6 +120,8 @@ def test_service_managed_node_is_restarted_through_systemd(dkg_home, monkeypatch
         return argparse.Namespace(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(managed_node, "_systemd_unit_of", lambda _pid: "blackbox-dkg.service")
+
+    monkeypatch.setattr(node_service, "os_platform", sync_linux)   # a unit found in a cgroup is systemd's (Linux)
     monkeypatch.setattr(managed_node, "_dkg_sync_environment", lambda _cfg: {})
     monkeypatch.setattr(managed_node.subprocess, "run", run)
     monkeypatch.setattr(sync_command, "DkgClient", dkg_client_fake(Client))
@@ -131,6 +135,7 @@ def test_service_managed_node_is_restarted_through_systemd(dkg_home, monkeypatch
 
 def test_failed_systemd_restart_raises_with_detail(dkg_home, monkeypatch):
     monkeypatch.setattr(managed_node, "_systemd_unit_of", lambda _pid: "blackbox-dkg.service")
+    monkeypatch.setattr(node_service, "os_platform", sync_linux)   # a unit found in a cgroup is systemd's (Linux)
     monkeypatch.setattr(managed_node, "_dkg_sync_environment", lambda _cfg: {})
     monkeypatch.setattr(
         managed_node.subprocess,
