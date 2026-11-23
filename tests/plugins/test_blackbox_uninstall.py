@@ -315,7 +315,7 @@ def test_under_a_pipe_the_question_goes_to_the_terminal(machine, monkeypatch, an
 
     monkeypatch.setattr(uninstall.terminal_question, "open", lambda *a, **k: Terminal(answer), raising=False)
     executed = []
-    monkeypatch.setattr(uninstall, "execute", lambda plan: executed.append(plan) or [])   # only the decision is tested
+    monkeypatch.setattr(uninstall, "execute", lambda plan, **kwargs: executed.append(plan) or [])   # only the decision is tested
     args = argparse.Namespace(purge=False, keep_logs=False, dry_run=False, yes=False)
     assert uninstall.cmd_uninstall(args) == 0
     assert bool(executed) is removed

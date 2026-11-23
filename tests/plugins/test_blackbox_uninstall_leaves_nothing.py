@@ -148,3 +148,133 @@ def test_a_look_at_hermes_sessions_never_recreates_a_deleted_blackbox_home(home)
     assert not constants.blackbox_home().exists()
     assert hermes_sessions.catch_up() == 0
     assert not constants.blackbox_home().exists()
+
+
+# ── KI-610 / KI-611: a clean Mac — no Hermes before; Blackbox's installer set up the host ──────────
+INSTALL_SH = Path(__file__).resolve().parents[2] / "scripts" / "blackbox-install.sh"
+MANIFEST_FUNCTIONS = ("install_path_exists", "install_host_paths", "install_own_dirs", "install_startup_files",
+                      "install_manifest_begin", "install_manifest_write")
+#: The block Hermes's own setup appended to ~/.zshrc in round 5 (the person's lines above it stay).
+HERMES_PATH_BLOCK = '\n# Hermes Agent — ensure ~/.local/bin is on PATH\nexport PATH="$HOME/.local/bin:$PATH"\n'
+
+
+def _shell(home: Path, record: Path, call: str) -> None:
+    import re
+    import subprocess
+    text = INSTALL_SH.read_text(encoding="utf-8")
+    bodies = []
+    for name in MANIFEST_FUNCTIONS:
+        found = re.search(rf"^{name}\(\)\s*\{{.*?^\}}\n", text, re.MULTILINE | re.DOTALL)
+        assert found is not None, name
+        bodies.append(found.group(0))
+    script = "\n".join([f'HOME="{home}"', f'HERMES_HOME="{home}/.hermes"', f'BLACKBOX_HOME="{home}/.hermes/blackbox"',
+                        f'BLACKBOX_INSTALL_ROOT="{home}/agent-blackbox"', f'INSTALL_RECORD_DIR="{record}"', *bodies, call])
+    done = subprocess.run(["/bin/bash", "-c", script], capture_output=True, text=True, timeout=60, check=False)
+    assert done.returncode == 0, done.stderr
+
+
+def _install_on_a_clean_mac(home: Path, record: Path) -> None:
+    """The installer's run: its manifest step before and after, the host it sets up, then Blackbox."""
+    record.mkdir()
+    _shell(home, record, "install_manifest_begin")
+    checkout = home / "agent-blackbox"                                  # the Hermes checkout = Blackbox's repo
+    (checkout / "hermes_cli").mkdir(parents=True)
+    (checkout / "plugins" / "blackbox").mkdir(parents=True)
+    (checkout / "plugins" / "blackbox" / "plugin.yaml").write_text("kind: backend\n", encoding="utf-8")
+    (checkout / "venv" / "bin").mkdir(parents=True)
+    (checkout / "venv" / "bin" / "hermes").write_text("#!/bin/sh\n", encoding="utf-8")
+    (home / ".hermes").mkdir()
+    (home / ".hermes" / "config.yaml").write_text("model:\n  default: x\n", encoding="utf-8")
+    (home / ".hermes" / "installs").mkdir()
+    (home / ".hermes" / "installs" / "venv.bin").write_bytes(b"\0" * 4096)
+    bin_dir = home / ".local" / "bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    for name in ("hermes", "hermes-acp", "hermes-agent"):
+        (bin_dir / name).symlink_to(checkout / "venv" / "bin" / "hermes")
+    (bin_dir / "uv").write_text("uv", encoding="utf-8")
+    (home / ".local" / "share" / "uv").mkdir(parents=True)
+    (home / ".local" / "share" / "uv" / "python").write_text("py", encoding="utf-8")
+    (home / ".config" / "openui").mkdir(parents=True)
+    (home / ".config" / "openui" / "telemetry.json").write_text('{"distinctId": "x"}', encoding="utf-8")
+    with (home / ".zshrc").open("a", encoding="utf-8") as zshrc:
+        zshrc.write(HERMES_PATH_BLOCK)
+    _install_everything(home)                                          # Blackbox, its services' folder included
+    _shell(home, record, "install_manifest_write")
+
+
+@pytest.fixture
+def clean_mac(home):
+    """The person's home on a Mac with no Hermes: their own files, ~/Library without LaunchAgents."""
+    import shutil
+    shutil.rmtree(home / ".hermes")
+    (home / ".local" / "bin" / "hermes").unlink()
+    (home / ".local" / "bin").rmdir()
+    (home / ".local").rmdir()
+    (home / "Library").mkdir()
+    return home
+
+
+def _uninstall_clean(home: Path, remove_host: bool) -> list[str]:
+    plan = dataclasses.replace(uninstall.build_plan(homes=[home / ".hermes"], purge=True, keep_logs=False), system="Darwin")
+    assert plan.manifest.has_host
+    return uninstall.execute(plan, run=lambda command: 0, stop_dashboard=lambda port: [], run_as_admin=lambda command: 0,
+                             remove_host=remove_host)
+
+
+def _empty_folders(home: Path) -> list[str]:
+    return sorted(str(path.relative_to(home)) for path in home.rglob("*") if path.is_dir() and not any(path.iterdir()))
+
+
+def test_on_a_clean_mac_yes_removes_the_host_and_the_home_is_as_it_was_byte_for_byte(clean_mac, tmp_path):
+    """KI-610: ~/agent-blackbox, ~/.hermes, ~/.local/bin/hermes*, uv's files, the telemetry id and the
+    Hermes PATH block in ~/.zshrc all stayed. With a yes, exactly what the manifest lists goes."""
+    before, empty_before = _tree(clean_mac), _empty_folders(clean_mac)
+    _install_on_a_clean_mac(clean_mac, tmp_path / "record")
+    report = _uninstall_clean(clean_mac, remove_host=True)
+    after = _tree(clean_mac)
+    assert sorted(set(after) - set(before)) == [], f"left behind: {sorted(set(after) - set(before))}"
+    assert [name for name in before if after.get(name) != before[name]] == []   # .zshrc byte-identical
+    assert _empty_folders(clean_mac) == empty_before                            # no empty LaunchAgents, .local, .config
+    assert any("took the installer's lines out of" in line for line in report)
+
+
+def test_on_a_clean_mac_no_keeps_the_host_with_blackbox_switched_off_in_it(clean_mac, tmp_path, capsys):
+    """KI-610 (c): kept, the host must not list Blackbox as "enabled · bundled"; KI-611: the empty
+    ~/Library/LaunchAgents the installer made goes either way."""
+    from plugins.blackbox.kernel import yaml_files
+    _install_on_a_clean_mac(clean_mac, tmp_path / "record")
+    plan = uninstall.build_plan(homes=[clean_mac / ".hermes"], purge=True, keep_logs=False)
+    assert uninstall.host_question(plan).startswith("Blackbox also set up the Hermes host it runs in (")
+    assert uninstall.host_question(plan).endswith("). Remove it too? [y/N] ")
+    _uninstall_clean(clean_mac, remove_host=False)
+    plugins = yaml_files.load_yaml(clean_mac / ".hermes" / "config.yaml").get("plugins") or {}
+    assert "blackbox" in (plugins.get("disabled") or []) and "blackbox" not in (plugins.get("enabled") or [])
+    assert (clean_mac / "agent-blackbox").is_dir() and (clean_mac / ".local" / "bin" / "hermes").is_symlink()
+    assert HERMES_PATH_BLOCK in (clean_mac / ".zshrc").read_text(encoding="utf-8")   # Hermes still needs it
+    assert not (clean_mac / "Library" / "LaunchAgents").exists()
+    assert "Kept the Hermes host" in uninstall.host_kept_note(plan) and "~/agent-blackbox" in uninstall.host_kept_note(plan)
+
+
+def test_a_hermes_the_person_had_before_blackbox_is_never_offered_for_removal(home, tmp_path):
+    record = tmp_path / "record"
+    record.mkdir()
+    _shell(home, record, "install_manifest_begin")
+    _install_everything(home)
+    _shell(home, record, "install_manifest_write")
+    plan = uninstall.build_plan(homes=[home / ".hermes"], purge=True, keep_logs=False)
+    assert not plan.manifest.has_host and home / ".hermes" not in plan.manifest.host
+
+
+def test_a_planted_manifest_can_not_reach_outside_the_home(home, tmp_path):
+    from plugins.blackbox.kernel import constants
+    from plugins.blackbox.setup import install_manifest
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (home / "link-out").symlink_to(outside)
+    folder = constants.blackbox_home() / install_manifest.FOLDER
+    folder.mkdir(parents=True)
+    (folder / install_manifest.MANIFEST).write_text("\n".join([
+        f"host\t{outside}", f"host\t{home}", f"host\t{home}/../escape", "host\trelative/path", f"host\t{home}/link-out/x",
+        f"host\t{home}/Documents/notes.md"]) + "\n", encoding="utf-8")
+    manifest = install_manifest.read(constants.blackbox_home())
+    assert manifest.host == (home / "Documents" / "notes.md",)   # the only one inside the home (as written)

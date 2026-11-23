@@ -3365,9 +3365,85 @@ install_record_begin() {
     if [ -n "${USER:-}" ] && [ -e "$BLACKBOX_LINGER_DIR/$USER" ]; then
         : >"$INSTALL_RECORD_DIR/linger-was-on"
     fi
+    install_manifest_begin
     trap install_record_on_exit EXIT
     trap 'exit 130' INT
     trap 'exit 143' TERM
+}
+
+# ── The install manifest: what this installer put on the machine besides Blackbox (KI-610/611) ──
+# `blackbox uninstall` (setup/install_manifest.py) takes exactly this away: folders made for
+# Blackbox's services when empty (own-dir), and on the person's yes the Hermes host this run set
+# up (host / host-dir) and the lines it appended to shell startup files (host-append, byte for
+# byte). Only what did NOT exist before this run is listed: a Hermes the person had is never in it.
+# Kept across upgrades: each run adds what it made.
+install_host_paths() {
+    printf '%s\n' "$BLACKBOX_INSTALL_ROOT" "$HERMES_HOME" \
+        "$HOME/.local/bin/hermes" "$HOME/.local/bin/hermes-acp" "$HOME/.local/bin/hermes-agent" \
+        "$HOME/.local/bin/uv" "$HOME/.local/bin/uvx" "$HOME/.local/share/uv" \
+        "$HOME/.config/openui/telemetry.json" "$HOME/.npm/_prebuilds"
+}
+
+install_own_dirs() {
+    printf '%s\n' "$HOME/Library/LaunchAgents" "$HOME/.config/systemd/user"
+}
+
+install_startup_files() {
+    printf '%s\n' "$HOME/.zshrc" "$HOME/.zshenv" "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile"
+}
+
+# Before the first change: each missing host path (and each missing folder above it, inside the
+# home), each missing own folder, and a copy of each shell startup file as it is.
+install_manifest_begin() {
+    local path parent key
+    mkdir -p "$INSTALL_RECORD_DIR/startup"
+    : >"$INSTALL_RECORD_DIR/made"
+    while IFS= read -r path; do
+        install_path_exists "$path" && continue
+        printf 'host\t%s\n' "$path" >>"$INSTALL_RECORD_DIR/made"
+        parent="$(dirname "$path")"
+        while [ "$parent" != "$HOME" ] && [ "$parent" != "/" ] && ! install_path_exists "$parent"; do
+            printf 'host-dir\t%s\n' "$parent" >>"$INSTALL_RECORD_DIR/made"
+            parent="$(dirname "$parent")"
+        done
+    done < <(install_host_paths)
+    while IFS= read -r path; do
+        install_path_exists "$path" || printf 'own-dir\t%s\n' "$path" >>"$INSTALL_RECORD_DIR/made"
+    done < <(install_own_dirs)
+    while IFS= read -r path; do
+        key="$(printf '%s' "$path" | cksum | cut -d' ' -f1)"
+        if [ -f "$path" ]; then cp -p "$path" "$INSTALL_RECORD_DIR/startup/$key"; fi
+    done < <(install_startup_files)
+}
+
+# On success: what exists now of what was missing, and the exact text added to each startup file.
+install_manifest_write() {
+    local folder="$BLACKBOX_HOME/install-manifest" kind path key before size block
+    [ -n "$INSTALL_RECORD_DIR" ] && [ -d "$BLACKBOX_HOME" ] || return 0
+    mkdir -p "$folder/blocks"
+    touch "$folder/manifest.tsv"
+    while IFS="$(printf '\t')" read -r kind path; do
+        install_path_exists "$path" || continue
+        grep -qxF "$kind	$path" "$folder/manifest.tsv" || printf '%s\t%s\n' "$kind" "$path" >>"$folder/manifest.tsv"
+    done <"$INSTALL_RECORD_DIR/made"
+    while IFS= read -r path; do
+        [ -f "$path" ] || continue
+        key="$(printf '%s' "$path" | cksum | cut -d' ' -f1)"
+        before="$INSTALL_RECORD_DIR/startup/$key"
+        block="$folder/blocks/$key.$(date +%s)"
+        if [ ! -f "$before" ]; then
+            cp "$path" "$block"                              # the file is new: all of it is the installer's
+        else
+            size="$(wc -c <"$before" | tr -d ' ')"
+            head -c "$size" "$path" | cmp -s - "$before" || continue   # not a plain append: left alone
+            tail -c +"$((size + 1))" "$path" >"$block"
+        fi
+        if [ -s "$block" ]; then
+            printf 'host-append\t%s\t%s\n' "$path" "$(basename "$block")" >>"$folder/manifest.tsv"
+        else
+            rm -f "$block"
+        fi
+    done < <(install_startup_files)
 }
 
 # A process this run started outside any service (the dashboard before its service exists, a
@@ -3378,6 +3454,7 @@ install_record_started_pid() {
 }
 
 install_record_commit() {
+    install_manifest_write || true   # the uninstall's list; a failure here never undoes a good install
     INSTALL_RECORD_COMMITTED=true
     trap - EXIT INT TERM
     [ -n "$INSTALL_RECORD_DIR" ] && rm -rf "$INSTALL_RECORD_DIR"

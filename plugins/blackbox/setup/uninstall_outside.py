@@ -19,6 +19,36 @@ if TYPE_CHECKING:   # the plan type, for the annotations only (uninstall imports
     from .uninstall import UninstallPlan
 
 Runner = Callable[[Sequence[str]], int]
+#: The plugin folder this code runs from, and the file an installed copy keeps naming its checkout.
+_PLUGIN_DIR = Path(__file__).resolve().parents[1]
+_SOURCE_ROOT_MARKER = ".blackbox-source-root"
+
+
+def bundled_in_hermes() -> bool:
+    """True when the Hermes Blackbox runs in carries Blackbox as one of its OWN (bundled) plugins:
+    the checkout this plugin came from is a Hermes checkout (``hermes_cli/``) holding
+    ``plugins/blackbox`` — what Blackbox's installer sets up on a clean machine. Hermes loads a
+    bundled backend plugin unless ``plugins.disabled`` names it (KI-610: after uninstall
+    ``hermes plugins list`` still said "blackbox enabled · bundled")."""
+    roots = [_PLUGIN_DIR.parents[1]]
+    try:
+        marked = (_PLUGIN_DIR / _SOURCE_ROOT_MARKER).read_text(encoding="utf-8-sig").strip()
+        roots += [Path(marked)] if marked else []
+    except OSError:
+        pass
+    return any((root / "hermes_cli").is_dir() and (root / "plugins" / "blackbox" / "plugin.yaml").is_file() for root in roots)
+
+
+def _disable_bundled(data: dict) -> bool:
+    """``blackbox`` added to *data*'s ``plugins.disabled`` (a parsed config.yaml); True when changed."""
+    plugins = data.setdefault("plugins", {})
+    if not isinstance(plugins, dict):
+        return False   # hand-edited into something else: never rewritten
+    disabled = plugins.get("disabled") if isinstance(plugins.get("disabled"), list) else []
+    if "blackbox" in disabled:
+        return False
+    plugins["disabled"] = [*disabled, "blackbox"]
+    return True
 
 
 def _run_at_terminal(command: Sequence[str]) -> int:
@@ -79,10 +109,17 @@ def _remove_from_agents(plan: UninstallPlan, report: list[str]) -> list[Path]:
         data = yaml_files.load_yaml(config)   # an unreadable config has no entry to remove: never written
         plugins = data.get("plugins")
         entries = plugins.get("entries") if isinstance(plugins, dict) else None   # hand-edited: nothing to remove
-        if isinstance(entries, dict) and "blackbox" in entries:
+        changed = isinstance(entries, dict) and "blackbox" in entries
+        if changed:
             del entries["blackbox"]
             if not entries:   # Blackbox's entry was the only one: no empty ``entries: {}`` is left behind
                 del plugins["entries"]
+        # Only a Hermes Blackbox's installer set up bundles Blackbox (its checkout is Blackbox's own);
+        # a Hermes the person had before is never given a "disabled" entry.
+        if config.is_file() and plan.manifest.has_host and bundled_in_hermes() and _disable_bundled(data):
+            changed = True
+            report.append(f"switched off the copy of Blackbox bundled with the Hermes in {home}")
+        if changed:
             yaml_files.dump_yaml(config, data)
         metadata = home / "plugins" / ".install-metadata.json"
         if metadata.is_file() and '"blackbox"' in metadata.read_text(encoding="utf-8-sig", errors="ignore"):

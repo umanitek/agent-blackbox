@@ -44,6 +44,7 @@ from typing import Callable, Optional, Sequence
 from .. import sync   # sync's public entry: the service names, which process is our node
 from ..kernel import addons, constants, system_helper, terminal_question, yaml_files
 from ..kernel.host_command import hermes_argv
+from . import install_manifest
 from .uninstall_data import _back_up, _delete_data
 from .uninstall_outside import Runner, _remove_agent_hooks, _remove_from_agents, _remove_system_helper, _run_at_terminal
 
@@ -90,6 +91,8 @@ class UninstallPlan:
     system_helper: Optional[Path] = None   # the system protection helper (macOS), when installed
     agent_hooks: tuple[str, ...] = ()      # coding agents whose config holds Blackbox's hooks
     addons: tuple[Path, ...] = ()          # add-on folders beside the plugin (kernel.addons)
+    #: What the installer made besides Blackbox (the Hermes host on a clean machine, KI-610).
+    manifest: install_manifest.InstallManifest = field(default_factory=install_manifest.InstallManifest)
 
 
 def _configured_dkg_home(home: Path) -> Optional[Path]:
@@ -148,7 +151,7 @@ def build_plan(*, purge: bool, keep_logs: bool, now: Optional[_dt.datetime] = No
         key_files=tuple(p for p in keys if p.is_file()),
         backup_dir=None if purge else Path.home() / f"blackbox-backup-{stamp}",
         keep_logs=keep_logs, shim=shim, system_units=system_units, dashboard_port=dashboard_port,
-        notes=tuple(notes))
+        notes=tuple(notes), manifest=install_manifest.read(blackbox_home))
 
 
 def installed(plan: UninstallPlan) -> bool:
@@ -182,8 +185,24 @@ def describe(plan: UninstallPlan) -> list[str]:
     elif plan.key_files or plan.keep_logs:
         what = "keys" + (" and the local audit record" if plan.keep_logs else "")
         lines.append(f"  - keep the {what} in {plan.backup_dir}")
-    lines.append("Your Hermes itself, other DKG nodes and Docker are not touched.")
+    if plan.manifest.has_host:
+        lines.append("Blackbox's installer also set up the Hermes host it runs in: you are asked whether to remove it too.")
+    else:
+        lines.append("Your Hermes itself, other DKG nodes and Docker are not touched.")
     return lines + [f"Note: {n}" for n in plan.notes]
+
+
+def host_question(plan: UninstallPlan) -> str:
+    """The question asked when the installer set up the Hermes host (KI-610)."""
+    size = install_manifest.human_size(install_manifest.host_size(plan.manifest))
+    return f"Blackbox also set up the Hermes host it runs in ({size}). Remove it too? [y/N] "
+
+
+def host_kept_note(plan: UninstallPlan) -> str:
+    """The one line said when the host stays."""
+    home = str(Path.home())
+    paths = ", ".join(str(path).replace(home, "~", 1) for path in plan.manifest.host)
+    return f"Kept the Hermes host Blackbox's installer set up ({paths}): delete it yourself when you no longer need it."
 
 
 def _stop_services(plan: UninstallPlan, run: Runner, report: list[str]) -> None:
@@ -278,10 +297,11 @@ def _stop_unsupervised_node(plan: UninstallPlan, report: list[str]) -> None:
 
 def execute(plan: UninstallPlan, *, run: Runner = _run,
             stop_dashboard: Callable[[int], list[int]] = _stop_dashboard_on,
-            run_as_admin: Runner = _run_at_terminal) -> list[str]:
+            run_as_admin: Runner = _run_at_terminal, remove_host: bool = False) -> list[str]:
     """Carry out *plan*; returns what was done (and what needs root), in order. *run*,
     *stop_dashboard* and *run_as_admin* (sudo, at the terminal) are the ways it reaches running
-    processes (tests pass fakes)."""
+    processes (tests pass fakes). *remove_host*: also remove the Hermes host the installer set up
+    (exactly what its manifest lists), last."""
     remove_plugin = hermes_argv("plugins", "remove", "blackbox")   # the Hermes running this, never another on PATH
     report: list[str] = []
     _remove_system_helper(plan, run_as_admin, report)   # first: DNS back before anything else stops
@@ -292,6 +312,10 @@ def execute(plan: UninstallPlan, *, run: Runner = _run,
     hermes_installed = _remove_from_agents(plan, report)
     _remove_agent_hooks(plan, report)
     _delete_data(plan, report)
+    install_manifest.remove_own_dirs(plan.manifest, report)   # e.g. an empty ~/Library/LaunchAgents it made (KI-611)
+    if remove_host and plan.manifest.has_host:   # the host goes as a whole: no plugin to remove from it first
+        install_manifest.remove_host(plan.manifest, report)
+        return report
     for home in hermes_installed:   # last: this removes the code that is running
         env_home = str(home)
         code = run(["env", f"HERMES_HOME={env_home}", *remove_plugin]) \
@@ -318,8 +342,14 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
         if answer.strip().lower() not in ("y", "yes"):
             print("Nothing removed.")
             return 0
-    for line in execute(plan):
+    remove_host = bool(getattr(args, "remove_host", False))
+    if plan.manifest.has_host and not remove_host and not args.yes:
+        answer = terminal_question.ask(host_question(plan))
+        remove_host = (answer or "").strip().lower() in ("y", "yes")
+    for line in execute(plan, remove_host=remove_host):
         print(f"  {line}")
+    if plan.manifest.has_host and not remove_host:
+        print(host_kept_note(plan))
     print("Blackbox is uninstalled." + (f" Your keys are in {plan.backup_dir}" if plan.backup_dir and plan.key_files else ""))
     return 0
 
@@ -330,5 +360,7 @@ def add_uninstall_parser(sub: argparse._SubParsersAction) -> None:
     parser.add_argument("--purge", action="store_true", help="Also delete the node's keys and the reporter key: a clean uninstall")
     parser.add_argument("--keep-logs", action="store_true", help="Keep the local audit record in the backup folder")
     parser.add_argument("--dry-run", action="store_true", help="Show what would be removed; change nothing")
-    parser.add_argument("--yes", "-y", action="store_true", help="Do not ask")
+    parser.add_argument("--yes", "-y", action="store_true", help="Do not ask (the Hermes host stays unless --remove-host)")
+    parser.add_argument("--remove-host", action="store_true",
+                        help="Also remove the Hermes host Blackbox's installer set up (only what it installed)")
     parser.set_defaults(func=cmd_uninstall)

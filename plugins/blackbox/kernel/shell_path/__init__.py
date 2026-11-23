@@ -51,7 +51,8 @@ def _files(home: Path) -> list[Path]:
     return [home / name for name in ALWAYS] + [home / name for name in IF_PRESENT if (home / name).is_file()]
 
 
-def _without_block(text: str) -> str:
+def without_block(text: str) -> str:
+    """Startup-file *text* with the block's lines (markers included) taken out, every other line as it was."""
     out, inside = [], False
     for line in text.splitlines(keepends=True):
         if line.rstrip("\n") == BEGIN:
@@ -117,7 +118,7 @@ def add(folder: Path, home: Optional[Path] = None) -> list[Path]:
         text = path.read_text(encoding="utf-8-sig") if path.is_file() else ""
         if _holds_exactly(text, wanted_block):
             continue   # already whole, wherever it sits: the person's file is never rewritten
-        base = _without_block(text)
+        base = without_block(text)
         wanted = base + ("" if not base or base.endswith("\n") else "\n") + wanted_block
         if wanted != text:
             path.write_text(wanted, encoding="utf-8")
@@ -134,7 +135,7 @@ def remove(home: Optional[Path] = None) -> list[Path]:
         if not path.is_file():
             continue
         text = path.read_text(encoding="utf-8-sig")
-        cleaned = _without_block(text)
+        cleaned = without_block(text)
         if cleaned != text:
             path.write_text(cleaned, encoding="utf-8")
             changed.append(path)
