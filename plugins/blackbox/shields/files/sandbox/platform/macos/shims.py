@@ -116,6 +116,11 @@ exec {quote_shell(python)} -I "$tools/brew-client.py" {quote_shell(dashboard_url
 """
 
 
+def broker_shims(tools: str, python: str, dashboard_url: str) -> dict[str, str]:
+    """``{program: stand-in}`` for the brokered actions (``brokered``): ``open`` and ``osascript``."""
+    return {"open": open_shim(tools, python, dashboard_url), "osascript": osascript_shim(tools, python, dashboard_url)}
+
+
 def spawn_brew(command: list[str], env: dict[str, str], cwd: str) -> subprocess.Popen[str]:
     """Starts the brokered Homebrew run (``packages.jobs``): no stdin, output and errors as one text
     stream, its own process group (so :func:`stop_group` stops brew and every child it started)."""
@@ -131,4 +136,4 @@ def stop_group(process: subprocess.Popen[str]) -> None:
         pass
 
 
-__all__ = ["BREW_READ_ONLY", "MANAGER_PROGRAMS", "brew_shim", "manager_shims", "open_shim", "osascript_shim", "spawn_brew", "stop_group"]
+__all__ = ["BREW_READ_ONLY", "MANAGER_PROGRAMS", "brew_shim", "broker_shims", "manager_shims", "open_shim", "osascript_shim", "spawn_brew", "stop_group"]

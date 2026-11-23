@@ -101,6 +101,10 @@ def terminate(_pid: int) -> bool:
     return False
 
 
+def broker_shims(_tools: str, _python: str, _dashboard_url: str) -> dict[str, str]:
+    return {}
+
+
 def osascript_shim(_tools: str, _python: str, _dashboard_url: str) -> str:
     return ""
 

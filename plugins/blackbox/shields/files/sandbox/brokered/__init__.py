@@ -35,8 +35,7 @@ API_WRITES = {"open-link": open_link, "open-app": open_app, "applescript": apple
 def install_shims(tools: Path, dashboard_url: str = "") -> None:
     """The brokered actions' stand-ins in the sandbox's tools folder (first on the sandboxed PATH only)."""
     url = dashboard_url or f"http://127.0.0.1:{load_blackbox_config().dashboard_port}"
-    for name, shim in (("open", platform.open_shim(str(tools), sys.executable, url)),
-                       ("osascript", platform.osascript_shim(str(tools), sys.executable, url))):
+    for name, shim in platform.broker_shims(str(tools), sys.executable, url).items():
         path = tools / name
         if shim and tools.is_dir() and (read_small_text(str(path), 256 * 1024) != shim or not os.access(path, os.X_OK)):
             atomic_write(path, shim, mode=0o755)
