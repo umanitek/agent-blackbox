@@ -131,7 +131,7 @@ def _package_alerts() -> list[dict[str, Any]]:
 def _request_alerts() -> list[dict[str, Any]]:
     """An agent wants a sandbox permission it does not have: the person is asked (no path, no command)."""
     return [_alert(f"permission-request:{request.id}", "permission-request", request.created, "medium", "", request.agent,
-                   f"{_agent_name(request.agent)} wants to use {sandbox.permissions.BY_ID[request.permission].name}. "
+                   f"{_agent_name(request.agent) if request.agent else sandbox.permissions.answers.UNKNOWN_AGENT} wants to use {sandbox.permissions.BY_ID[request.permission].name}. "
                    "Open Blackbox to allow it once, always here, or keep it blocked.")
             for request in sandbox.permissions.requests.pending()]
 

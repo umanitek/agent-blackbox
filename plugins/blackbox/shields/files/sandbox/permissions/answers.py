@@ -47,14 +47,26 @@ def choices(request: PermissionRequest) -> list[str]:
     return [Choice.ONCE.value] + ([Choice.ALWAYS.value] if allowed else []) + [Choice.KEEP_BLOCKED.value]
 
 
+#: Who asked, when Blackbox could not tell which agent it was (a refusal seen with no agent name).
+UNKNOWN_AGENT = "An agent"
+
+
+def asker(request: PermissionRequest) -> str:
+    """Who asks, in the words every screen shows: the agent's product name ("Claude Code"), or
+    :data:`UNKNOWN_AGENT` when the agent is not known — never a blank (the companion app's dialog
+    reads "An agent in <project> wants to use …" too) — with " in <project>" when it is known."""
+    name = product_name(request.agent) if request.agent else UNKNOWN_AGENT
+    return name + (f" in {request.project}" if request.project else "")
+
+
 def row(request: PermissionRequest) -> dict[str, Any]:
     """One request as the ``permission-requests`` read shows it."""
     permission = BY_ID[request.permission]
     return {"id": request.id, "permission": request.permission, "name": permission.name, "cost": permission.cost,
-            "agent": request.agent, "agent_name": product_name(request.agent), "instance": request.instance,
+            "agent": request.agent, "agent_name": product_name(request.agent) if request.agent else UNKNOWN_AGENT, "instance": request.instance,
             "project": request.project, "what": request.what, "detail": request.detail, "created": request.created,
             "choices": choices(request),
-            "text": f"{product_name(request.agent)}{' in ' + request.project if request.project else ''} wants to use {permission.name}."}
+            "text": f"{asker(request)} wants to use {permission.name}."}
 
 
 def _request(body: Mapping[str, Any]) -> tuple[PermissionRequest, Choice]:
@@ -75,7 +87,7 @@ def weakening(body: Mapping[str, Any]) -> list[str]:
         return []
     if choice is Choice.KEEP_BLOCKED:
         return []
-    who = product_name(request.agent) + (f" in {request.project}" if request.project else "")
+    who = asker(request)
     how = "once" if choice is Choice.ONCE else "from now on"
     quoted = f' ("{request.what}")' if request.what else ""
     return [f"Let {who} use {BY_ID[request.permission].name} {how}{quoted}"]

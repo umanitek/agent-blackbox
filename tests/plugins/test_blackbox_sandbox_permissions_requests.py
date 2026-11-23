@@ -134,6 +134,20 @@ def test_an_open_request_is_an_alert_naming_the_agent_and_permission_only(entry,
     assert alert["text"].startswith("Claude Code wants to use Opening files in apps.") and "shop" not in alert["text"]
 
 
+def test_a_request_from_an_unknown_agent_reads_an_agent_in_the_project():
+    """The Waiting list's words for a request whose agent Blackbox could not name (a refusal seen
+    with no agent, security round 7's harness runs): "An agent in <project> wants to use …", as
+    the companion app's dialog says — never a sentence that starts with a blank."""
+    request = requests.raise_request("docker", "", "", "s7-dock1", "Docker")
+    row = permissions.answers.row(request)
+    assert row["text"] == "An agent in s7-dock1 wants to use Docker." and row["agent_name"] == "An agent"
+    assert permissions.answers.weakening({"id": request.id, "choice": "once"}) == ["Let An agent in s7-dock1 use Docker once (\"Docker\")"]
+    [alert] = [each for each in alerts.alerts() if each["kind"] == "permission-request"]
+    assert alert["text"].startswith("An agent wants to use Docker.") and "s7-dock1" not in alert["text"]
+    named = requests.raise_request("docker", "claude-code", "s-2", "shop", "Docker")
+    assert permissions.answers.row(named)["text"] == "Claude Code in shop wants to use Docker."
+
+
 def _launcher_env(home):
     fake = home / "fakebin"
     fake.mkdir(exist_ok=True)
