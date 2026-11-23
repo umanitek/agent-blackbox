@@ -13,6 +13,9 @@ again, until it runs or is refused. (428, the approval gate holding a request, i
 FAIL CLOSED: when Blackbox can not be reached, nothing is installed and the agent is told to run
 brew in the person's own terminal.
 
+The ``open`` stand-in runs it with ``--action open-link`` / ``--action open-app``: one request to
+that endpoint, waited on the same way, and Blackbox's answer printed.
+
 A package manager's shim (``npm``, ``pipx``, ``pip``, ``cargo``, ``gem``, ``uv``) runs it with
 ``--manager <id>`` for a global install: ``POST …/install`` and ``GET …/install-job`` instead.
 
@@ -58,8 +61,34 @@ def _call(url: str, path: str, token: str, body: object = None) -> tuple:
             return answer.code, {}
 
 
+def _action(url: str, action: str, words: list) -> int:
+    """A brokered action (``open-link``, ``open-app`` …): one request, waited on while the person
+    is asked, then Blackbox's answer printed."""
+    try:
+        with urllib.request.urlopen(f"{url}/api/session", timeout=TIMEOUT_SECONDS) as response:
+            token = json.loads(response.read(65536)).get("token", "")
+        asking = {"argv": words, "pid": os.getppid(), "cwd": os.getcwd()}
+        status, answer = _call(url, f"/api/shields/file-shield/api/{action}", token, asking)
+        deadline = time.monotonic() + APPROVAL_SECONDS
+        if status in (HELD, WAITING):
+            print("Blackbox: waiting for your approval to do this outside the sandbox …", file=sys.stderr)
+        while status in (HELD, WAITING) and time.monotonic() < deadline:
+            time.sleep(POLL_SECONDS * 2)
+            status, answer = _call(url, f"/api/shields/file-shield/api/{action}", token, asking)
+    except (OSError, ValueError):
+        print(f"Blackbox couldn't do this ({action}); do it yourself.", file=sys.stderr)
+        return 1
+    if status != 200:
+        print(f"Blackbox's sandbox refused this ({action}): {answer.get('error') or 'not allowed'}", file=sys.stderr)
+        return 1
+    print(str(answer.get("message") or ""))
+    return int(answer.get("exit") or 0)
+
+
 def main(argv: list) -> int:
     url, words = argv[1].rstrip("/"), argv[2:]
+    if words[:1] == ["--action"] and len(words) > 1:
+        return _action(url, words[1], words[2:])
     manager = words[1] if words[:1] == ["--manager"] and len(words) > 1 else ""
     words = words[2:] if manager else words
     endpoint, program = ("install", manager) if manager else ("brew", "brew")

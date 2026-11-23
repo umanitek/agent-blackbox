@@ -63,6 +63,26 @@ def manager_shims(_tools: str, _python: str, _dashboard_url: str) -> dict[str, s
     return {}
 
 
+def open_shim(_tools: str, _python: str, _dashboard_url: str) -> str:
+    return ""
+
+
+def find_app(_name: str) -> str:
+    return ""
+
+
+def is_driver(_app_path: str) -> bool:
+    return True
+
+
+def open_url(_url: str) -> int:
+    raise OSError("Blackbox opens links for agents only on macOS")
+
+
+def open_with(_app_path: str, _files: object) -> int:
+    raise OSError("Blackbox opens apps for agents only on macOS")
+
+
 def spawn_brew(_command: list[str], _env: dict[str, str], _cwd: str) -> object:
     raise OSError("Homebrew runs for agents only on macOS")
 

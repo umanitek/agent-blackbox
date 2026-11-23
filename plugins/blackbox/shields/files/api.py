@@ -42,7 +42,7 @@ from ...kernel.settings import write_settings
 from .. import helper_link
 from ..shield_api import ShieldApi, ShieldApiError, ShieldContext
 from . import alerts, changes, events, mode as mode_module, sandbox
-from .sandbox import packages, permissions
+from .sandbox import brokered, packages, permissions
 from .protect import is_folder
 
 MAX_HITS = 200
@@ -199,7 +199,7 @@ API = ShieldApi(
            "permission-requests": permissions.answers.read, **packages.API_READS},
     writes={"protect": protect, "unprotect": unprotect, "file-report": file_report, "open-protected": open_protected,
             **packages.API_WRITES, **{name: _then_sync(write) for name, write in permissions.API_WRITES.items()},
-            "permission-answer": permission_answer},
+            "permission-answer": permission_answer, **brokered.API_WRITES},
     weakening={"unprotect": unprotect_weakens, **permissions.API_WEAKENING,
                "permission-answer": permissions.answers.weakening},
 )
