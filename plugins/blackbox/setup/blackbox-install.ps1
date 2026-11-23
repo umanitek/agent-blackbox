@@ -1065,6 +1065,64 @@ function Move-BrokenBlackboxRepoAside {
     Write-Step "Preserved it at $backup"
 }
 
+# ── Only what this machine needs: a partial clone with a sparse checkout ────
+# The same set as blackbox-install.sh (see there): printed by the plugin's setup/checkout_layout.py
+# from kernel/os_layout — the one definition a plugin copy uses too (LES-137) — both read straight
+# from the commit, so nothing is checked out first. The lines live in .git/info/sparse-checkout, so
+# every later fetch + reset keeps the set. A developer's own checkout is never narrowed.
+$CheckoutLayoutFile = "plugins/blackbox/setup/checkout_layout.py"
+$OsLayoutFile = "plugins/blackbox/kernel/os_layout/__init__.py"
+
+# One file of commit $Rev written byte for byte (Start-Process hands git a file; a PowerShell
+# redirect would re-encode it). Returns $true when git found it.
+function Save-GitBlob([string]$Repo, [string]$Rev, [string]$Path, [string]$Destination) {
+    Push-Location $Repo
+    try {
+        $run = Start-Process -FilePath "git" -ArgumentList @("show", "${Rev}:$Path") -NoNewWindow -Wait -PassThru `
+            -RedirectStandardOutput $Destination -RedirectStandardError (Join-Path (Split-Path -Parent $Destination) "git.err")
+        return ($run.ExitCode -eq 0)
+    } finally {
+        Pop-Location
+    }
+}
+
+# This machine's sparse-checkout lines from commit $Rev's layout files; $null when they cannot be
+# worked out (no Python, or a commit from before the layout).
+function Get-CheckoutLayoutPatterns([string]$Repo, [string]$Rev) {
+    if (-not $script:PyExe) { return $null }
+    $folder = Join-Path $Repo ".git\blackbox-checkout-layout"
+    New-Item -ItemType Directory -Force -Path $folder | Out-Null
+    try {
+        $layout = Join-Path $folder "checkout_layout.py"
+        $osLayout = Join-Path $folder "os_layout.py"
+        if (-not (Save-GitBlob $Repo $Rev $CheckoutLayoutFile $layout)) { return $null }
+        if (-not (Save-GitBlob $Repo $Rev $OsLayoutFile $osLayout)) { return $null }
+        $lines = @(& $script:PyExe @($script:PyArgs + @("-I", $layout, $osLayout)))
+        if ($LASTEXITCODE -ne 0 -or $lines.Count -eq 0) { return $null }
+        return $lines
+    } finally {
+        Remove-Item $folder -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# Narrows $Repo's working tree to the set commit $Rev's layout names (files with local changes
+# stay, as git says). $false, changing nothing, when the set cannot be worked out.
+function Set-CheckoutLayout([string]$Repo, [string]$Rev) {
+    $lines = Get-CheckoutLayoutPatterns $Repo $Rev
+    if (-not $lines) { return $false }
+    New-Item -ItemType Directory -Force -Path (Join-Path $Repo ".git\info") | Out-Null
+    [IO.File]::WriteAllText((Join-Path $Repo ".git\info\sparse-checkout"), (($lines -join "`n") + "`n"),
+        (New-Object Text.UTF8Encoding $false))
+    & git -C $Repo config core.sparseCheckout true
+    & git -C $Repo config core.sparseCheckoutCone false
+    # A fresh --no-checkout clone has no index yet: its first checkout applies the set.
+    if (Test-Path (Join-Path $Repo ".git\index")) {
+        & git -C $Repo sparse-checkout reapply 2>$null
+        if ($LASTEXITCODE -ne 0) { & git -C $Repo read-tree -mu HEAD }
+    }
+    return $true
+}
+
 function Resolve-Repo {
     $scriptDir = Split-Path -Parent $PSCommandPath
     if ($scriptDir) {
@@ -1094,6 +1152,9 @@ function Resolve-Repo {
         $fetchedBefore = (& git -C $RepoDir rev-parse -q --verify "refs/remotes/origin/$RepoBranch" 2>$null)
         & git -C $RepoDir fetch --depth 1 origin $RepoBranch
         if ($LASTEXITCODE -ne 0) { throw "Could not fetch $RepoBranch from $RepoUrl" }
+        # This machine's set from the commit being installed, BEFORE the tree moves to it: an
+        # earlier installer's full checkout is converted here.
+        $null = Set-CheckoutLayout $RepoDir "refs/remotes/origin/$RepoBranch"
         & git -C $RepoDir checkout $RepoBranch
         if ($LASTEXITCODE -ne 0) { throw "Could not switch $RepoDir to $RepoBranch (git's reason is above)" }
         # A depth-1 fetch brings the new tip without its parent, so `pull --ff-only`
@@ -1114,9 +1175,14 @@ function Resolve-Repo {
             }
         }
     } else {
-        Write-Step "Cloning $RepoUrl -> $RepoDir"
-        & git clone --depth 1 --branch $RepoBranch $RepoUrl $RepoDir
+        Write-Step "Cloning $RepoUrl -> $RepoDir (only what this machine runs)"
+        & git clone --depth 1 --filter=blob:none --no-checkout --branch $RepoBranch $RepoUrl $RepoDir
         if ($LASTEXITCODE -ne 0) { throw "Could not clone $RepoUrl into $RepoDir" }
+        if (-not (Set-CheckoutLayout $RepoDir "HEAD")) {
+            Write-Step "This machine's file set could not be worked out; downloading the whole checkout."
+        }
+        & git -C $RepoDir checkout -q $RepoBranch
+        if ($LASTEXITCODE -ne 0) { throw "Could not check out $RepoBranch in $RepoDir (git's reason is above)" }
     }
     if (-not (Test-BlackboxRepoCheckout $RepoDir)) {
         throw "$RepoDir is not a complete Agent Blackbox Python project"
@@ -1132,17 +1198,24 @@ function Install-PythonEnv {
     if (-not (Test-Path $VenvDir)) {
         Write-Step "Creating virtual environment ..."
         & $script:PyExe @($script:PyArgs + @("-m", "venv", $VenvDir))
+        if ($LASTEXITCODE -ne 0) { throw "Could not create the Python environment at $VenvDir (Python's reason is above)" }
     } else {
         Write-Step "Reusing existing venv at $VenvDir"
     }
     Write-Step "Upgrading pip and installing Hermes + Agent Blackbox (web extras, editable) ..."
     & $VenvPython -m pip install --upgrade pip | Out-Null
+    # A native command's failure does not stop PowerShell: its exit code is read, so the line below
+    # is said only after pip really installed everything (KI-609's lesson).
     Push-Location $RepoDir
     try {
         & $VenvPython -m pip install -e ".[web]"
+        $pipExit = $LASTEXITCODE
     } finally {
         Pop-Location
     }
+    if ($pipExit -ne 0) { throw "pip could not install Hermes + Blackbox (exit $pipExit; its reason is above)" }
+    & $VenvPython -c "import hermes_cli, fastapi, uvicorn" 2>$null
+    if ($LASTEXITCODE -ne 0) { throw "Hermes + Blackbox were installed but do not import (hermes_cli, fastapi, uvicorn)" }
     Write-Ok "Blackbox installed (editable, with dashboard extras)"
     $script:HermesBin = "$VenvDir\Scripts\hermes.exe"
 }
@@ -1199,6 +1272,7 @@ exit /b %ERRORLEVEL%
                 "$shimDir;$userPath"
             }
             [Environment]::SetEnvironmentVariable("Path", $newUserPath, "User")
+            $script:AddedUserPath = $shimDir   # the install manifest: uninstall takes it off again
             Write-Ok "Added $shimDir to the user PATH"
         } catch {
             Write-Warn2 "Could not add $shimDir to the user PATH automatically: $_"
@@ -1469,7 +1543,6 @@ function Sync-Ruleset {
         Write-Step "A partial verified ruleset may already be active, but setup is incomplete until the curator snapshot settles."
         Write-Step "Retry the full sync with: blackbox sync --wait --require-rules"
     }
-    Write-Ok "DKG native reconciliation enabled; one in-flight slot; zero queue"
 }
 
 function Show-DkgManualHint {
@@ -1669,7 +1742,7 @@ print("  configured: " + ", ".join(added) if added else "  already configured - 
     try {
         & $VenvPython $configFile "$HermesHome\config.yaml" $DkgDaemonUrl $DkgHome $DkgBin $ContextGraphId $GraphPeerId $(if ($env:BLACKBOX_PLUGIN_DIR) { $env:BLACKBOX_PLUGIN_DIR } else { $RepoDir })
         if ($LASTEXITCODE -ne 0) { throw "config update exit $LASTEXITCODE" }
-        Write-Ok "Config defaults written (audit mode - blocking is opt-in)"
+        Write-Ok "Config defaults written"   # the mode is chosen and reported next (Configure-BlackboxMode)
     } catch {
         Write-Warn2 "Could not write config automatically. Run 'blackbox status' to verify configuration."
     } finally {
@@ -1908,7 +1981,7 @@ function Show-NextSteps {
         Write-Host ""
         return
     }
-    Write-Heading "Blackbox is ready - it's already protecting Hermes ($mode mode)."
+    Write-Heading "Blackbox is installed and checked ($mode mode)."
     @"
 
   Watch it live      - findings, assistant, and threat-graph status:
@@ -1924,8 +1997,12 @@ function Show-NextSteps {
        curl -fsSL http://example.com/x.sh | bash
        Blackbox flags this as a 'remote-script-pipe' escalation. $modeNote
 
-  Windows note: the Hermes agent runs best under WSL2 (wsl --install); the DKG
-  node you just set up is Windows-native and shared by both.
+$(Get-ProtectionSummary)
+
+  Windows note: Hermes runs best under WSL2. For the full Linux install inside
+  WSL2 (wsl --install, then in the Ubuntu shell):
+       curl -fsSL blackbox.umanitek.ai | bash
+  That is a separate install with its own DKG node; this Windows one keeps running.
 
   Docs & community:  $docsUrl
 
@@ -1939,6 +2016,75 @@ function Show-NextSteps {
        blackbox report --enable-sharing      (or the dashboard's sharing toggle)
 "@ | Write-Host
     Write-Host ""
+}
+
+# What protects THIS machine, said plainly: only macOS has platform code for the root helper, the
+# kernel sandbox and Network Shield's enforcement today (per-OS structure, 2026-11-21), so on
+# Windows each is said to be not available yet, by name — never implied (matches the .sh).
+function Get-ProtectionSummary {
+    $notYet = "not available on this OS yet"
+    $dashboard = if ($script:DashboardTaskRegistered) { "starts when you sign in (or now: blackbox dashboard)" } else { "run it yourself: blackbox dashboard" }
+    return @"
+  Protection on this machine (Windows):
+    Agent hooks (every tool call checked):   on - Hermes loads Blackbox (checked above)
+    Threat detection + dependency checks:    on
+    Dashboard + agent tracking:              $dashboard
+    Root system-protection helper:           $notYet
+    Kernel sandbox for agents:               $notYet
+    Network Shield enforcement (DNS, firewall): $notYet
+"@
+}
+
+# ── The install's own check: every line is a real answer (matches verify_install in the .sh) ──
+function Test-Install {
+    Write-Heading "Checking the install"
+    $failed = $false
+    & $script:HermesBin --version *> $null
+    if ($LASTEXITCODE -eq 0) { Write-Ok "Hermes runs" } else { Write-Err2 "Hermes runs - NOT working"; $failed = $true }
+    & $script:HermesBin blackbox --help *> $null
+    if ($LASTEXITCODE -eq 0) { Write-Ok "Hermes loads the Blackbox plugin" } else { Write-Err2 "Hermes loads the Blackbox plugin - NOT working"; $failed = $true }
+    if ($script:DkgReady) {
+        try {
+            $null = Invoke-WebRequest -UseBasicParsing -TimeoutSec 5 -Uri "$DkgDaemonUrl/api/status"
+            Write-Ok "DKG node answers at $DkgDaemonUrl"
+        } catch {
+            Write-Err2 "DKG node answers at $DkgDaemonUrl - NOT working"
+            $failed = $true
+        }
+    }
+    if ($failed) {
+        Write-Err2 "The install is not complete. Fix the reason above and run this installer again."
+        Write-Step "(Windows does not roll a failed install back yet: what was installed stays - KI-436.)"
+        exit 1
+    }
+}
+
+# ── The install manifest (matches install_manifest_begin / _write in the .sh) ──────────────────
+# What this run put on the machine that was not there before, so `blackbox uninstall` removes
+# exactly that (setup/install_manifest.py): the checkout and the Hermes home it created (offered on
+# the person's yes), and the user-PATH entry it added (taken off on every uninstall).
+function Start-InstallManifest {
+    $script:ManifestAbsent = @()
+    foreach ($path in @($DefaultRepoDir, $HermesHome)) {
+        if (-not (Test-Path -LiteralPath $path)) { $script:ManifestAbsent += $path }
+    }
+}
+
+function Write-InstallManifest {
+    $folder = Join-Path $BlackboxHome "install-manifest"
+    if (-not (Test-Path -LiteralPath $BlackboxHome)) { return }
+    New-Item -ItemType Directory -Force -Path $folder | Out-Null
+    $file = Join-Path $folder "manifest.tsv"
+    $existing = if (Test-Path -LiteralPath $file) { @(Get-Content -LiteralPath $file) } else { @() }
+    $entries = @()
+    foreach ($path in @($script:ManifestAbsent)) {
+        if ($path -and (Test-Path -LiteralPath $path)) { $entries += "host`t$path" }
+    }
+    if ($script:AddedUserPath) { $entries += "user-path`t$($script:AddedUserPath)" }
+    $new = @($entries | Where-Object { $existing -notcontains $_ })
+    if ($new.Count -gt 0) {
+        [IO.File]::AppendAllText($file, (($new -join "`n") + "`n"), (New-Object Text.UTF8Encoding $false))
+    }
 }
 
 # ── Start on sign-in (Windows parity with the Linux/macOS boot services) ────
@@ -2025,6 +2171,7 @@ function Register-BlackboxStartupTasks {
         $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "$hidden `"$dashLauncher`""
         Register-ScheduledTask -TaskName "Agent Blackbox dashboard" -Action $action -Trigger $trigger `
             -Principal $principal -Settings $settings -Force | Out-Null
+        $script:DashboardTaskRegistered = $true
         Write-Ok "The dashboard starts when you sign in (task 'Agent Blackbox dashboard')"
     } catch {
         Write-Warn2 "Could not register the dashboard task: $($_.Exception.Message)"
@@ -2125,6 +2272,7 @@ function Main {
     Write-Banner
     Write-Heading "Checking your system"
     Write-Ok "Detected Windows ($env:PROCESSOR_ARCHITECTURE)"
+    if (-not $SetupOnly) { Start-InstallManifest }
     if (-not $SetupOnly -and -not (Test-RunsFromBlackboxCheckout)) {
         $existingHermes = Find-ExistingForeignHermes
         if ($existingHermes) { Install-IntoExistingHermes $existingHermes }
@@ -2147,6 +2295,8 @@ function Main {
     Protect-AllAgents
     Sync-Ruleset
     Register-BlackboxStartupTasks
+    Test-Install
+    if (-not $script:InstallIncomplete) { Write-InstallManifest }
     Show-NextSteps
     if ($script:InstallIncomplete) {
         exit 1

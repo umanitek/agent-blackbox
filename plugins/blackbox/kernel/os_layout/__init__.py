@@ -1,18 +1,25 @@
 """Which operating system a file of the plugin belongs to, so a copy carries only this machine's
 (per-OS structure, Amos 2026-11-21).
 
-The rule: inside a folder named ``platform``, an entry whose name (without its extension) is an
-operating system's folder name — ``macos``, ``windows``, ``linux`` — belongs to that operating
-system. Everything else (``mod.rs``, ``__init__.py``, ``unsupported.py``, …) belongs to every
-system. A copy of the plugin (``blackbox attach``, the installer) leaves out what belongs to
-another operating system, so a Mac's copy holds no Windows or Linux files.
+The rule: inside a folder named ``platform``, an entry whose name up to its first dot is an
+operating system's folder name — ``macos``, ``macos.py``, ``windows``, ``linux.py`` — belongs to
+that operating system. Everything else (``mod.rs``, ``__init__.py``, ``unsupported.py``, …) belongs
+to every system. A copy of the plugin (``blackbox attach``, the installer's plugin refresh) leaves
+out what belongs to another operating system, so a Mac's copy holds no Windows or Linux files; and
+the installer's checkout of the repository (a sparse checkout, ``setup/checkout_layout.py``) never
+downloads them in the first place. Both read the rule here — :func:`other_os_entries` for a copy,
+:func:`other_os_patterns` for git — and a test holds the two to the same answer for every file of
+the repository (LES-137: two layers, one definition, a drift test).
 
-Self-contained (standard library only) so the installer can load this one file by path.
+Self-contained (standard library only, Python 3.8+) so an installer can load this one file by path
+before anything else is installed.
 
 Usage::
 
     shutil.copytree(src, dest, ignore=lambda folder, names: other_os_entries(folder, names))
     other_os_entries("…/monitor/platform", ["macos.py", "windows.py"], "darwin")   # ["windows.py"]
+    other_os_patterns("plugins/blackbox", "darwin")
+    # ["!/plugins/blackbox/**/platform/windows", "!/plugins/blackbox/**/platform/windows.*", …linux…]
 """
 
 from __future__ import annotations
@@ -33,13 +40,30 @@ def os_folder(sys_platform: Optional[str] = None) -> str:
     return next((name for prefix, name in OS_FOLDERS.items() if here.startswith(prefix)), "")
 
 
+def _other_os_folders(sys_platform: Optional[str]) -> list[str]:
+    here = os_folder(sys_platform)
+    return [name for name in OS_FOLDERS.values() if name != here]
+
+
 def other_os_entries(folder: str, names: Iterable[str], sys_platform: Optional[str] = None) -> list[str]:
     """The entries of *names* (in *folder*) that belong to another operating system — for a
     ``shutil.copytree`` ignore. Outside a ``platform`` folder: none."""
     if PurePath(folder).name != PLATFORM_FOLDER:
         return []
-    here = os_folder(sys_platform)
-    return [name for name in names if PurePath(name).stem in OS_FOLDERS.values() and PurePath(name).stem != here]
+    others = _other_os_folders(sys_platform)
+    # Up to the first dot, not PurePath.stem: "linux.tar.gz" is Linux's, and git's patterns
+    # (other_os_patterns: "linux" and "linux.*") say exactly that too.
+    return [name for name in names if name.split(".", 1)[0] in others]
 
 
-__all__ = ["OS_FOLDERS", "PLATFORM_FOLDER", "os_folder", "other_os_entries"]
+def other_os_patterns(root: str, sys_platform: Optional[str] = None) -> list[str]:
+    """Sparse-checkout lines (git's non-cone, .gitignore syntax) that leave out, under *root*
+    (a repository-relative folder such as ``plugins/blackbox``), every entry :func:`other_os_entries`
+    leaves out: a ``platform`` folder's entry named for another OS, with or without an extension.
+    Each line starts with ``!`` — an exclusion, to follow the lines that include *root*."""
+    base = "/" + root.strip("/")
+    return [f"!{base}/**/{PLATFORM_FOLDER}/{name}{suffix}"
+            for name in _other_os_folders(sys_platform) for suffix in ("", ".*")]
+
+
+__all__ = ["OS_FOLDERS", "PLATFORM_FOLDER", "os_folder", "other_os_entries", "other_os_patterns"]

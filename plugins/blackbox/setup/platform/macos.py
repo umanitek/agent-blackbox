@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from typing import Callable, Sequence
 
+from .unsupported import disable_linger, remove_user_path_entry
+
 SECURITY = "/usr/bin/security"
 DEFAULTS = "/usr/bin/defaults"
 Runner = Callable[[Sequence[str]], int]
@@ -26,4 +28,4 @@ def delete_preferences(domain: str, run: Runner) -> bool:
     return run([DEFAULTS, "delete", domain]) == 0
 
 
-__all__ = ["delete_keychain_item", "delete_preferences"]
+__all__ = ["delete_keychain_item", "delete_preferences", "disable_linger", "remove_user_path_entry"]

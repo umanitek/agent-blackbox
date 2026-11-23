@@ -7,8 +7,9 @@ uv's files, the "ensure ~/.local/bin is on PATH" block appended to ``~/.zshrc`` 
 dependency's telemetry id — 3.2 GB, with Blackbox still listed as enabled in it; and an empty
 ``~/Library/LaunchAgents`` the installer had created stayed too.
 
-The installer (``scripts/blackbox-install.sh``: ``install_manifest_begin`` / ``install_manifest_write``)
-notes, before its first change, which of those places did not exist, and on success writes
+The installers (``scripts/blackbox-install.sh``: ``install_manifest_begin`` / ``install_manifest_write``;
+``scripts/blackbox-install.ps1``: ``Start-InstallManifest`` / ``Write-InstallManifest``) note, before
+their first change, which of those places did not exist, and on success write
 ``$BLACKBOX_HOME/install-manifest/manifest.tsv``, one entry per line (tab-separated):
 
 * ``own-dir <path>`` — a folder made for Blackbox's own services (``~/Library/LaunchAgents``):
@@ -17,7 +18,11 @@ notes, before its first change, which of those places did not exist, and on succ
 * ``host-dir <path>`` — a folder made around those: removed on a yes when it is empty;
 * ``host-append <file> <block>`` — the exact text appended to a shell startup file (the block is
   kept in ``blocks/``): on a yes taken out byte for byte; the person's own lines stay as they are,
-  and a block the person changed is left alone and named.
+  and a block the person changed is left alone and named;
+* ``own-linger <file>`` (Linux) — systemd lingering the installer turned on for this user
+  (``/var/lib/systemd/linger/<user>``): turned off on every uninstall;
+* ``user-path <folder>`` (Windows) — the folder the installer added to the user PATH for the
+  ``blackbox`` command: taken off it on every uninstall.
 
 A Hermes the person had before Blackbox is never in it (it existed when the installer looked), so
 it is never offered for removal. Every path is checked again here: absolute, inside the home
@@ -32,13 +37,19 @@ Usage::
 
 from __future__ import annotations
 
+import getpass
 import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
+from typing import Callable, Sequence
+
 from ..kernel import shell_path
 from ..kernel.bounded_files import read_small_text
+from . import platform
+
+Runner = Callable[[Sequence[str]], int]
 
 FOLDER = "install-manifest"
 MANIFEST = "manifest.tsv"
@@ -57,15 +68,22 @@ class InstallManifest:
     host: tuple[Path, ...] = ()
     host_dirs: tuple[Path, ...] = ()
     appended: tuple[tuple[Path, str], ...] = ()   # (startup file, the exact text appended)
+    linger_user: str = ""                         # Linux: the user lingering was turned on for
+    user_path: tuple[Path, ...] = ()              # Windows: folders added to the user PATH
 
     @property
     def has_host(self) -> bool:
         return bool(self.host or self.appended)
 
 
+#: Where systemd-logind keeps one file per lingering user (the installer's BLACKBOX_LINGER_DIR).
+LINGER_DIR = Path("/var/lib/systemd/linger")
+
+
 def _safe(raw: str, home: Path) -> Path | None:
-    """*raw* as a path uninstall may remove: absolute, normalised as written, strictly inside *home*."""
-    if not raw.startswith("/") or ".." in Path(raw).parts:
+    """*raw* as a path uninstall may remove: absolute (``/…``, or ``C:\\…`` on Windows), normalised
+    as written, strictly inside *home*."""
+    if not os.path.isabs(raw) or ".." in Path(raw).parts:
         return None
     path = Path(os.path.normpath(raw))
     real_home, real_parent = os.path.realpath(home), os.path.realpath(path.parent)
@@ -73,14 +91,26 @@ def _safe(raw: str, home: Path) -> Path | None:
     return path if home in path.parents and inside else None
 
 
-def read(blackbox_home: Path, home: Path | None = None) -> InstallManifest:
-    """The manifest the installer left in *blackbox_home* (an empty one when there is none)."""
+def _linger_user(raw: str, user: str) -> str:
+    """The user of an ``own-linger`` entry: only this user's own file in systemd's linger folder."""
+    path = Path(os.path.normpath(raw))
+    return user if user and path.parent == LINGER_DIR and path.name == user else ""
+
+
+def read(blackbox_home: Path, home: Path | None = None, user: str | None = None) -> InstallManifest:
+    """The manifest the installer left in *blackbox_home* (an empty one when there is none).
+    *home* and *user* default to this person's (tests pass their own)."""
     home = Path(os.path.normpath(home or Path.home()))
+    user = getpass.getuser() if user is None else user
     folder = blackbox_home / FOLDER
     text = read_small_text(str(folder / MANIFEST), MAX_MANIFEST_BYTES) or ""
-    found: dict[str, list] = {"own-dir": [], "host": [], "host-dir": [], "host-append": []}
+    found: dict[str, list] = {"own-dir": [], "host": [], "host-dir": [], "host-append": [], "user-path": []}
+    linger_user = ""
     for line in text.splitlines()[:MAX_ENTRIES]:
         parts = line.split("\t")
+        if len(parts) >= 2 and parts[0] == "own-linger":
+            linger_user = _linger_user(parts[1], user) or linger_user
+            continue
         if parts[0] not in found or len(parts) < 2:
             continue
         path = _safe(parts[1], home)
@@ -97,7 +127,8 @@ def read(blackbox_home: Path, home: Path | None = None) -> InstallManifest:
         if block:
             found["host-append"].append((path, block))
     unique = {kind: tuple(dict.fromkeys(paths)) for kind, paths in found.items()}
-    return InstallManifest(unique["own-dir"], unique["host"], unique["host-dir"], unique["host-append"])
+    return InstallManifest(unique["own-dir"], unique["host"], unique["host-dir"], unique["host-append"],
+                           linger_user, unique["user-path"])
 
 
 def host_size(manifest: InstallManifest) -> int:
@@ -139,6 +170,20 @@ def remove_own_dirs(manifest: InstallManifest, report: list[str]) -> None:
     _remove_empty(manifest.own_dirs, report)
 
 
+def restore_system_settings(manifest: InstallManifest, run: Runner, report: list[str]) -> None:
+    """The system settings the installer changed for Blackbox put back: lingering off (Linux), the
+    ``blackbox`` command's folder off the user PATH (Windows). Through ``setup/platform``: on
+    another system each answers False and nothing happens."""
+    if manifest.linger_user:
+        if platform.disable_linger(manifest.linger_user, run):
+            report.append(f"turned lingering off for {manifest.linger_user} again (the installer had turned it on)")
+        else:
+            report.append(f"run to finish: loginctl disable-linger {manifest.linger_user}")
+    for folder in manifest.user_path:
+        if platform.remove_user_path_entry(str(folder)):
+            report.append(f"took {folder} off your PATH again (the installer had added it)")
+
+
 def _take_out(target: Path, block: str, report: list[str]) -> None:
     """*block* taken out of startup file *target*, byte for byte; the file removed when nothing of
     the person's is left in it (it did not exist before: the installer's block was all of it)."""
@@ -174,4 +219,4 @@ def remove_host(manifest: InstallManifest, report: list[str]) -> None:
 
 
 __all__ = ["BLOCKS", "FOLDER", "MANIFEST", "InstallManifest", "host_size", "human_size", "read", "remove_host",
-           "remove_own_dirs"]
+           "remove_own_dirs", "restore_system_settings"]

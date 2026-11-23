@@ -1416,6 +1416,96 @@ blackbox_head_in_branch() {
     git -C "$REPO_DIR" merge-base --is-ancestor HEAD "$remote" 2>/dev/null
 }
 
+# ── Only what this machine needs: a partial clone with a sparse checkout ────
+# The clone downloads Hermes and the plugin without the test suites, the docs site, the sources
+# of Hermes's own desktop app (apps/) or another operating system's files (929 MB / 138k files on
+# a clean Mac in security round 5, most of it never read). The set is printed by the plugin's own
+# setup/checkout_layout.py from kernel/os_layout — the ONE definition a plugin copy uses too
+# (LES-137) — read straight from the commit with `git show`, so nothing has to be checked out
+# first. The patterns live in .git/info/sparse-checkout (git's classic non-cone form), so every
+# later fetch + reset, the installer's and `hermes update`'s, keeps the same set. A developer's
+# own checkout (the script run from a clone) is never narrowed.
+BLACKBOX_CHECKOUT_LAYOUT_FILE="plugins/blackbox/setup/checkout_layout.py"
+BLACKBOX_OS_LAYOUT_FILE="plugins/blackbox/kernel/os_layout/__init__.py"
+
+# A Python that can run those two standard-library files (3.8+): Hermes's environment once it
+# exists, else this machine's. Prints its path.
+checkout_layout_python() {
+    local candidate
+    for candidate in "${VENV_DIR:+$VENV_DIR/bin/python}" "${PY:-}" python3; do
+        [ -n "$candidate" ] || continue
+        if "$candidate" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 8) else 1)' >/dev/null 2>&1; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# `checkout_layout_patterns REPO REV` prints this machine's sparse-checkout lines, computed by
+# the layout files of commit REV (a revision before this change has none: returns 1).
+checkout_layout_patterns() {
+    local repo="$1" rev="$2" python folder status=0
+    python="$(checkout_layout_python)" || return 1
+    folder="$repo/.git/blackbox-checkout-layout"
+    mkdir -p "$folder"
+    if git -C "$repo" show "$rev:$BLACKBOX_CHECKOUT_LAYOUT_FILE" >"$folder/checkout_layout.py" 2>/dev/null &&
+        git -C "$repo" show "$rev:$BLACKBOX_OS_LAYOUT_FILE" >"$folder/os_layout.py" 2>/dev/null; then
+        "$python" -I "$folder/checkout_layout.py" "$folder/os_layout.py" ${BLACKBOX_CHECKOUT_OS:+"$BLACKBOX_CHECKOUT_OS"} ||
+            status=1
+    else
+        status=1
+    fi
+    rm -rf "$folder"
+    return "$status"
+}
+
+# `apply_checkout_layout REPO REV` narrows REPO's working tree to the set REV's layout names.
+# Files with local changes stay (git says which); returns 1, changing nothing, when the set
+# cannot be worked out (no Python yet, or REV predates the layout).
+apply_checkout_layout() {
+    local repo="$1" rev="$2" patterns
+    patterns="$(checkout_layout_patterns "$repo" "$rev")" && [ -n "$patterns" ] || return 1
+    mkdir -p "$repo/.git/info"
+    printf '%s\n' "$patterns" >"$repo/.git/info/sparse-checkout"
+    git -C "$repo" config core.sparseCheckout true
+    git -C "$repo" config core.sparseCheckoutCone false
+    # An index exists once anything is checked out: re-apply the set to it (`reapply` is git
+    # 2.27+; read-tree does the same on older ones). A fresh --no-checkout clone has none yet:
+    # its first checkout applies the set.
+    if [ -f "$repo/.git/index" ]; then
+        git -C "$repo" sparse-checkout reapply 2>/dev/null || git -C "$repo" read-tree -mu HEAD
+    fi
+}
+
+# `clone_this_machines_checkout URL BRANCH DIR` — a blobless, depth-1 clone holding only this
+# machine's set. Without a Python yet to work the set out, the whole tree is checked out and
+# narrowed after Hermes's setup (narrow_checkout_after_setup).
+clone_this_machines_checkout() {
+    local url="$1" branch="$2" dir="$3"
+    git clone --depth 1 --filter=blob:none --no-checkout --branch "$branch" "$url" "$dir"
+    if apply_checkout_layout "$dir" HEAD; then
+        BLACKBOX_CHECKOUT_NARROWED=true
+    else
+        step "No Python 3.8+ on this machine yet: downloading the whole checkout; it is narrowed to this machine's files after Hermes's setup."
+    fi
+    git -C "$dir" checkout -q "$branch"
+}
+
+# After Hermes's setup (its Python exists now): narrow a checkout this installer cloned whole —
+# a first install without a Python, or one made by an installer before the sparse checkout.
+narrow_checkout_after_setup() {
+    [ "${BLACKBOX_CHECKOUT_MANAGED:-false}" = true ] && [ "${BLACKBOX_CHECKOUT_NARROWED:-false}" != true ] || return 0
+    if apply_checkout_layout "$REPO_DIR" HEAD; then
+        BLACKBOX_CHECKOUT_NARROWED=true
+        ok "Checkout narrowed to what this machine runs ($(checkout_file_count "$REPO_DIR") files)"
+    fi
+}
+
+checkout_file_count() {
+    git -C "$1" ls-files -t 2>/dev/null | grep -vc '^S ' || true
+}
+
 resolve_repo() {
     local script_src="${BASH_SOURCE[0]:-}"
     if [ -n "$script_src" ] && [ -f "$script_src" ]; then
@@ -1456,6 +1546,13 @@ resolve_repo() {
             err "Could not fetch $REPO_BRANCH from $REPO_URL."
             return 1
         fi
+        BLACKBOX_CHECKOUT_MANAGED=true
+        # This machine's set, from the commit being installed, BEFORE the tree moves to it: an
+        # earlier installer's full checkout is converted here, and the move then brings only
+        # what this machine needs (files with local changes stay, as git says).
+        if apply_checkout_layout "$REPO_DIR" "refs/remotes/origin/$REPO_BRANCH"; then
+            BLACKBOX_CHECKOUT_NARROWED=true
+        fi
         if ! git -C "$REPO_DIR" checkout "$REPO_BRANCH"; then
             err "Could not switch $REPO_DIR to $REPO_BRANCH (git's reason is above)."
             return 1
@@ -1482,8 +1579,9 @@ resolve_repo() {
             return 1
         fi
     else
-        step "Cloning $REPO_URL → $REPO_DIR"
-        git clone --depth 1 --branch "$REPO_BRANCH" "$REPO_URL" "$REPO_DIR"
+        step "Cloning $REPO_URL → $REPO_DIR (only what this machine runs)"
+        BLACKBOX_CHECKOUT_MANAGED=true
+        clone_this_machines_checkout "$REPO_URL" "$REPO_BRANCH" "$REPO_DIR"
         BLACKBOX_FRESH_CLONE=true
     fi
     if ! blackbox_repo_is_valid "$REPO_DIR"; then
@@ -1671,6 +1769,12 @@ detect_os() {
         Darwin*) OS="macos" ;;
         Linux*)  OS="linux" ;;
         *) err "Unsupported OS: $(uname -s). Blackbox supports macOS and Linux (use blackbox-install.ps1 on Windows)."; exit 1 ;;
+    esac
+    # Hermes's setup ships its tools for these two only (setup-hermes.sh, pm/lock.json): stop here,
+    # before anything changes, rather than half-way through its setup.
+    case "$ARCH" in
+        x86_64|amd64|arm64|aarch64) ;;
+        *) err "Unsupported processor: $ARCH. Blackbox (and the Hermes it runs in) needs x86_64 or arm64."; exit 1 ;;
     esac
     ok "Detected $OS ($ARCH)"
 }
@@ -2341,9 +2445,10 @@ sync_ruleset() {
             return 0
             ;;
     esac
-    ok "The first threat-graph sync runs in the background (about 30 minutes)"
+    # Nothing has synced yet: the dashboard starts the first sync once it runs (start_dashboard),
+    # so this is said as what happens next, not as a check mark (KI-609's lesson).
+    step "The first threat-graph sync starts with the dashboard and runs in the background (about 30 minutes)."
     step "Follow it on the dashboard: http://127.0.0.1:${BLACKBOX_DASHBOARD_PORT:-9700}"
-    ok "DKG native reconciliation enabled; one in-flight slot; zero queue"
 }
 
 dkg_manual_hint() {
@@ -2544,7 +2649,7 @@ else:
     print("  already configured — no changes")
 PYEOF
     then
-        ok "Config defaults written (audit mode — blocking is opt-in)"
+        ok "Config defaults written"   # the mode is chosen and reported next (configure_blackbox_mode)
     else
         warn "Could not write config automatically. Run 'blackbox status' to verify configuration."
     fi
@@ -2970,6 +3075,47 @@ print_sharing_notice() {
 EOF
 }
 
+# ── What protects THIS machine, said per operating system ─────────────────────
+# Every line is either checked in this run (verify_install: Hermes loads the plugin, the node and
+# the dashboard answer) or part of the plugin itself on every system; a macOS-only protection is
+# never implied on Linux. Today only macOS has platform code for the root helper, the kernel
+# sandbox and Network Shield's enforcement (per-OS structure, 2026-11-21): elsewhere each is said
+# to be not available yet, by name.
+BLACKBOX_NOT_YET="not available on this OS yet"
+protection_summary() {
+    local os_name dashboard="running (checked above)"
+    case "$BLACKBOX_AUTO_DASHBOARD" in
+        0|false|never|no) dashboard="installed, not started (start it: blackbox dashboard)" ;;
+    esac
+    case "$OS" in
+        macos) os_name="macOS" ;;
+        linux) os_name="Linux" ;;
+        *) os_name="$OS" ;;
+    esac
+    echo ""
+    echo "  Protection on this machine ($os_name):"
+    echo "    Agent hooks (every tool call checked):   on — Hermes loads Blackbox (checked above)"
+    echo "    Threat detection + dependency checks:    on"
+    echo "    Dashboard + agent tracking:              $dashboard"
+    if [ "$OS" != macos ]; then
+        echo "    Root system-protection helper:           $BLACKBOX_NOT_YET"
+        echo "    Kernel sandbox for agents:               $BLACKBOX_NOT_YET"
+        echo "    Network Shield enforcement (DNS, firewall): $BLACKBOX_NOT_YET"
+        return 0
+    fi
+    case "$BLACKBOX_SYSTEM_PROTECTION_STATE" in
+        installed) echo "    Root system-protection helper:           installed" ;;
+        kept) echo "    Root system-protection helper:           the one you had (its upgrade did not finish)" ;;
+        failed) echo "    Root system-protection helper:           not installed (it failed — the dashboard's Network Shield offers it again)" ;;
+        *) echo "    Root system-protection helper:           not installed (the dashboard's Network Shield offers it)" ;;
+    esac
+    echo "    Kernel sandbox for agents:               available — choose agents in the dashboard's File Shield"
+    case "$BLACKBOX_SYSTEM_PROTECTION_STATE" in
+        installed|kept) echo "    Network Shield enforcement (DNS, firewall): available — switch on DNS Shield and the Threat Firewall" ;;
+        *) echo "    Network Shield enforcement (DNS, firewall): needs the helper above" ;;
+    esac
+}
+
 # ── Guided next steps (short — everything above already ran) ─────────────────
 # Printed only after the final check passed and the install was kept: an install that is not
 # complete never reaches here (it is rolled back), so there is one outcome to describe.
@@ -2998,11 +3144,7 @@ ${path_note}
 ${graph_note}
   Docs:        $docs_url
 EOF
-    case "$BLACKBOX_SYSTEM_PROTECTION_STATE" in
-        installed) echo "  System protection: helper installed — switch on DNS Shield and the Threat Firewall in Network Shield" ;;
-        kept) echo "  System protection: the helper you had is still installed and running (its upgrade did not finish)" ;;
-        declined|failed) echo "  System protection: not installed — the dashboard's Network Shield offers it" ;;
-    esac
+    protection_summary
     print_sharing_notice
     echo ""
 }
@@ -3357,6 +3499,13 @@ install_record_begin() {
     fi
     if [ -d "$BLACKBOX_INSTALL_ROOT/.git" ]; then
         git -C "$BLACKBOX_INSTALL_ROOT" rev-parse -q --verify HEAD >"$INSTALL_RECORD_DIR/repo-head" 2>/dev/null || true
+        # The checkout's file set as it is (an upgrade may narrow it: apply_checkout_layout).
+        if [ "$(git -C "$BLACKBOX_INSTALL_ROOT" config --bool core.sparseCheckout 2>/dev/null)" = true ] &&
+            [ -f "$BLACKBOX_INSTALL_ROOT/.git/info/sparse-checkout" ]; then
+            cp "$BLACKBOX_INSTALL_ROOT/.git/info/sparse-checkout" "$INSTALL_RECORD_DIR/sparse-before"
+        else
+            : >"$INSTALL_RECORD_DIR/sparse-was-off"
+        fi
     fi
     # Blackbox's own node, not whatever else answers on its port (a foreign node is moved off).
     if blackbox_has_dkg_state && blackbox_dkg_answers 2>/dev/null; then
@@ -3378,10 +3527,12 @@ install_record_begin() {
 # byte). Only what did NOT exist before this run is listed: a Hermes the person had is never in it.
 # Kept across upgrades: each run adds what it made.
 install_host_paths() {
+    # ~/.nvm: the Node the DKG node runs on, when ensure_node had to install it (nvm's own lines in
+    # the shell startup files are caught as an append below).
     printf '%s\n' "$BLACKBOX_INSTALL_ROOT" "$HERMES_HOME" \
         "$HOME/.local/bin/hermes" "$HOME/.local/bin/hermes-acp" "$HOME/.local/bin/hermes-agent" \
         "$HOME/.local/bin/uv" "$HOME/.local/bin/uvx" "$HOME/.local/share/uv" \
-        "$HOME/.config/openui/telemetry.json" "$HOME/.npm/_prebuilds"
+        "$HOME/.config/openui/telemetry.json" "$HOME/.npm/_prebuilds" "$HOME/.nvm"
 }
 
 install_own_dirs() {
@@ -3410,6 +3561,12 @@ install_manifest_begin() {
     while IFS= read -r path; do
         install_path_exists "$path" || printf 'own-dir\t%s\n' "$path" >>"$INSTALL_RECORD_DIR/made"
     done < <(install_own_dirs)
+    # Linux: lingering (ensure_user_lingering) is a system setting; when this run turns it on,
+    # uninstall turns it off again. Written only if it is on at the end (install_manifest_write).
+    path="$BLACKBOX_LINGER_DIR/$(id -un)"
+    if command -v loginctl >/dev/null 2>&1 && ! install_path_exists "$path"; then
+        printf 'own-linger\t%s\n' "$path" >>"$INSTALL_RECORD_DIR/made"
+    fi
     while IFS= read -r path; do
         key="$(printf '%s' "$path" | cksum | cut -d' ' -f1)"
         if [ -f "$path" ]; then cp -p "$path" "$INSTALL_RECORD_DIR/startup/$key"; fi
@@ -3482,10 +3639,40 @@ rollback_install() {
     rollback_docker_desktop
     rollback_files
     rollback_repo_head
+    rollback_checkout_layout
     rollback_restart_previous
     rollback_restart_dashboard
-    ok "Nothing from this install attempt was left behind."
+    # Said only after looking (KI-609's lesson: a check mark is a check, never an assumption).
+    local left
+    left="$(rollback_leftovers)"
+    if [ -z "$left" ]; then
+        ok "Nothing from this install attempt was left behind."
+    else
+        warn "Not everything could be put back; still here:"
+        printf '%s\n' "$left" | sed 's/^/    /' >&2
+    fi
     step "Fix the reason shown above, then run the installer again."
+}
+
+# What the rollback could not undo, one line each (nothing when the machine is as it was): a
+# path this run created that is still there, a rewritten file that differs from its copy, a
+# checkout on another commit than before.
+rollback_leftovers() {
+    local path copy before
+    while IFS= read -r path; do
+        [ -n "$path" ] && install_path_removable "$path" && install_path_exists "$path" && printf '%s\n' "$path"
+    done <"$INSTALL_RECORD_DIR/absent"
+    while IFS="$(printf '\t')" read -r path copy; do
+        if [ -n "$path" ] && install_path_removable "$path" && ! diff -rq "$copy" "$path" >/dev/null 2>&1; then
+            printf '%s (not restored)\n' "$path"
+        fi
+    done <"$INSTALL_RECORD_DIR/saved"
+    if [ -s "$INSTALL_RECORD_DIR/repo-head" ] && [ -d "$BLACKBOX_INSTALL_ROOT/.git" ]; then
+        before="$(cat "$INSTALL_RECORD_DIR/repo-head")"
+        [ "$(git -C "$BLACKBOX_INSTALL_ROOT" rev-parse -q --verify HEAD 2>/dev/null)" = "$before" ] ||
+            printf '%s (not back on %s)\n' "$BLACKBOX_INSTALL_ROOT" "${before:0:12}"
+    fi
+    return 0
 }
 
 rollback_stop_started() {
@@ -3588,6 +3775,24 @@ rollback_repo_head() {
     [ "$(git -C "$BLACKBOX_INSTALL_ROOT" rev-parse -q --verify HEAD 2>/dev/null)" = "$before" ] && return 0
     git -C "$BLACKBOX_INSTALL_ROOT" reset -q --keep "$before" 2>/dev/null ||
         warn "Could not move $BLACKBOX_INSTALL_ROOT back to ${before:0:12}."
+    return 0
+}
+
+# An existing checkout this run narrowed (apply_checkout_layout) gets back the file set it had.
+rollback_checkout_layout() {
+    local repo="$BLACKBOX_INSTALL_ROOT"
+    [ -d "$repo/.git" ] || return 0
+    if [ -f "$INSTALL_RECORD_DIR/sparse-before" ]; then
+        cmp -s "$INSTALL_RECORD_DIR/sparse-before" "$repo/.git/info/sparse-checkout" && return 0
+        cp "$INSTALL_RECORD_DIR/sparse-before" "$repo/.git/info/sparse-checkout"
+        git -C "$repo" sparse-checkout reapply >/dev/null 2>&1 || git -C "$repo" read-tree -mu HEAD >/dev/null 2>&1 ||
+            warn "Could not give $repo back the files it had."
+    elif [ -e "$INSTALL_RECORD_DIR/sparse-was-off" ] &&
+        [ "$(git -C "$repo" config --bool core.sparseCheckout 2>/dev/null)" = true ]; then
+        git -C "$repo" sparse-checkout disable >/dev/null 2>&1 ||
+            { git -C "$repo" config core.sparseCheckout false && git -C "$repo" read-tree -mu HEAD >/dev/null 2>&1; } ||
+            warn "Could not give $repo back the files it had."
+    fi
     return 0
 }
 
@@ -4778,6 +4983,7 @@ main() {
         drop_stale_hermes_install_record
         release_old_hermes_link
         install_python_env
+        narrow_checkout_after_setup
         link_hermes
         refresh_blackbox_plugin_copy
         run_hermes_setup

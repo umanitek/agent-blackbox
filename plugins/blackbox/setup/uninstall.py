@@ -183,6 +183,10 @@ def describe(plan: UninstallPlan) -> list[str]:
     lines.append(f"  - delete Blackbox's data: {plan.blackbox_home}")
     if plan.shim:
         lines.append(f"  - remove the blackbox command: {plan.shim}")
+    if plan.manifest.linger_user:
+        lines.append(f"  - turn systemd lingering off for {plan.manifest.linger_user} again (the installer turned it on)")
+    for folder in plan.manifest.user_path:
+        lines.append(f"  - take {folder} off your PATH again (the installer added it)")
     if plan.backup_dir is None:
         lines.append("  - DELETE the node's wallet and identity keys and the reporter key (--purge)")
     elif plan.key_files or plan.keep_logs:
@@ -317,6 +321,7 @@ def execute(plan: UninstallPlan, *, run: Runner = _run,
     addon_cleanup.remove(plan.addon_cleanup, run, report)   # what a companion app left (its manifest, read above)
     _delete_data(plan, report)
     install_manifest.remove_own_dirs(plan.manifest, report)   # e.g. an empty ~/Library/LaunchAgents it made (KI-611)
+    install_manifest.restore_system_settings(plan.manifest, run, report)   # lingering (Linux), user PATH (Windows)
     if remove_host and plan.manifest.has_host:   # the host goes as a whole: no plugin to remove from it first
         install_manifest.remove_host(plan.manifest, report)
         return report
