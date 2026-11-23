@@ -1,0 +1,29 @@
+"""macOS: a Keychain item through ``security delete-generic-password`` and a preferences domain
+through ``defaults delete`` — each run with a fixed argv (never a shell), through the caller's
+runner (``uninstall``'s, so tests pass a fake).
+
+Usage::
+
+    delete_keychain_item("com.example.app", "token", run)   # True when the item is gone
+"""
+
+from __future__ import annotations
+
+from typing import Callable, Sequence
+
+SECURITY = "/usr/bin/security"
+DEFAULTS = "/usr/bin/defaults"
+Runner = Callable[[Sequence[str]], int]
+
+
+def delete_keychain_item(service: str, account: str, run: Runner) -> bool:
+    """The generic password *service* / *account* removed from the login Keychain."""
+    return run([SECURITY, "delete-generic-password", "-s", service, "-a", account]) == 0
+
+
+def delete_preferences(domain: str, run: Runner) -> bool:
+    """The preferences *domain* removed (``defaults delete``, so cfprefsd forgets it too)."""
+    return run([DEFAULTS, "delete", domain]) == 0
+
+
+__all__ = ["delete_keychain_item", "delete_preferences"]

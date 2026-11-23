@@ -44,7 +44,7 @@ from typing import Callable, Optional, Sequence
 from .. import sync   # sync's public entry: the service names, which process is our node
 from ..kernel import addons, constants, system_helper, terminal_question, yaml_files
 from ..kernel.host_command import hermes_argv
-from . import install_manifest
+from . import addon_cleanup, install_manifest
 from .uninstall_data import _back_up, _delete_data
 from .uninstall_outside import Runner, _remove_agent_hooks, _remove_from_agents, _remove_system_helper, _run_at_terminal
 
@@ -93,6 +93,8 @@ class UninstallPlan:
     addons: tuple[Path, ...] = ()          # add-on folders beside the plugin (kernel.addons)
     #: What the installer made besides Blackbox (the Hermes host on a clean machine, KI-610).
     manifest: install_manifest.InstallManifest = field(default_factory=install_manifest.InstallManifest)
+    #: What the add-ons' manifests ask to have removed (read before their folders go), checked.
+    addon_cleanup: addon_cleanup.CleanupPlan = field(default_factory=addon_cleanup.CleanupPlan)
 
 
 def _configured_dkg_home(home: Path) -> Optional[Path]:
@@ -151,7 +153,7 @@ def build_plan(*, purge: bool, keep_logs: bool, now: Optional[_dt.datetime] = No
         key_files=tuple(p for p in keys if p.is_file()),
         backup_dir=None if purge else Path.home() / f"blackbox-backup-{stamp}",
         keep_logs=keep_logs, shim=shim, system_units=system_units, dashboard_port=dashboard_port,
-        notes=tuple(notes), manifest=install_manifest.read(blackbox_home))
+        notes=tuple(notes), manifest=install_manifest.read(blackbox_home), addon_cleanup=addon_cleanup.cleanup_for(addon_folders))
 
 
 def installed(plan: UninstallPlan) -> bool:
@@ -173,6 +175,7 @@ def describe(plan: UninstallPlan) -> list[str]:
         lines.append(f"  - take Blackbox's hooks out of {', '.join(plan.agent_hooks)} (their other settings stay)")
     for folder in plan.addons:
         lines.append(f"  - remove the add-on {folder}")
+    lines += addon_cleanup.describe(plan.addon_cleanup)
     for home in plan.hermes_homes:
         lines.append(f"  - remove Blackbox from the Hermes in {home} (its other settings and comments stay)")
     if plan.dkg_home:
@@ -311,6 +314,7 @@ def execute(plan: UninstallPlan, *, run: Runner = _run,
     _back_up(plan, report)
     hermes_installed = _remove_from_agents(plan, report)
     _remove_agent_hooks(plan, report)
+    addon_cleanup.remove(plan.addon_cleanup, run, report)   # what a companion app left (its manifest, read above)
     _delete_data(plan, report)
     install_manifest.remove_own_dirs(plan.manifest, report)   # e.g. an empty ~/Library/LaunchAgents it made (KI-611)
     if remove_host and plan.manifest.has_host:   # the host goes as a whole: no plugin to remove from it first
