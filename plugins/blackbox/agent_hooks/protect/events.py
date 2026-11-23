@@ -51,7 +51,11 @@ if TYPE_CHECKING:
 MAX_CHECK_TEXT = 256 * 1024
 #: Tools whose output is a fetched web page (an injection there names its site).
 _FETCH_TOOLS = ("webfetch", "web_fetch", "fetch", "web_extract", "browse", "read_url", "url")
-_EMPTY = {"findings": [], "blocked": [], "decision": "", "message": ""}
+_EMPTY = {"findings": [], "blocked": [], "decision": "", "message": "", "notes": []}
+#: The audit events a dependency check's results are recorded under — the Hermes hooks' own
+#: (``guard.dependency_files``), so every agent's session reads the same (KI-602).
+NOTES_EVENT = "dependency_check"
+LANDED_EVENT = "post_install_dependencies"
 
 #: An answer this close to the hook's limit may arrive after it (the bytes still travel): it is
 #: recorded as too late rather than claimed as a stop — Blackbox under-claims, never over-claims.
@@ -169,7 +173,8 @@ def _merge(verdicts: list[Mapping[str, Any]]) -> dict[str, Any]:
     decisions = [str(verdict.get("decision") or "") for verdict in verdicts]
     decision = "block" if "block" in decisions else next((d for d in decisions if d), "")
     message = next((str(v.get("message")) for v in verdicts if v.get("decision") == "block" and v.get("message")), "")
-    return {"findings": findings, "blocked": blocked, "decision": decision, "message": message}
+    notes = list(dict.fromkeys(note for verdict in verdicts for note in verdict.get("notes") or []))
+    return {"findings": findings, "blocked": blocked, "decision": decision, "message": message, "notes": notes}
 
 
 def _tool_verdicts(tool_name: str, args: Any, cwd: str = "") -> list[Mapping[str, Any]]:
@@ -179,12 +184,12 @@ def _tool_verdicts(tool_name: str, args: Any, cwd: str = "") -> list[Mapping[str
     verdicts = [guard.tool_call_verdict(tool_name=tool_name, args=args, cwd=cwd)]
     if tool_name == "read_file" and isinstance(args, dict) and isinstance(args.get("paths"), list):
         # One call that reads several files (Cline's read_files): each file is judged.
-        verdicts += [guard.tool_call_verdict(tool_name="read_file", args={"path": str(path)}) for path in args["paths"][1:50]]
+        verdicts += [guard.tool_call_verdict(tool_name="read_file", args={"path": str(path)}, cwd=cwd) for path in args["paths"][1:50]]
     if tool_name == "apply_patch" and isinstance(args, dict):
         patch = str(args.get("patch") or "")
         for path in patch_files(patch):
             deleted = f"*** Delete File: {path}" in patch
-            verdicts.append(guard.tool_call_verdict(tool_name="write_file",
+            verdicts.append(guard.tool_call_verdict(tool_name="write_file", cwd=cwd,
                                                     args={"path": path, "content": ""} if deleted else {"path": path, "patch": patch}))
     return verdicts
 
@@ -202,6 +207,14 @@ def _verdict(event: Mapping[str, Any]) -> dict[str, Any]:
         fetched = event["tool_name"].lower().startswith(_FETCH_TOOLS)
         return _merge([guard.text_verdict([("in-fetched-page" if fetched else "in-tool-output", text)])])
     return dict(_EMPTY)
+
+
+def _landed(event: Mapping[str, Any]) -> dict[str, Any]:
+    """After a tool ran: what an install added to its lockfile — the same after-install check the
+    Hermes post hook runs (``guard.after_tool_call_verdict``, KI-602). Flags, never refuses."""
+    if event["event"] != "post_tool" or not event["tool_name"]:
+        return dict(_EMPTY)
+    return dict(guard.after_tool_call_verdict(tool_name=event["tool_name"], args=event["args"], cwd=event["cwd"]))
 
 
 def _remember(event: Mapping[str, Any], session: str, decision: str) -> None:
@@ -249,6 +262,8 @@ class Judged:
     blocked: bool
     process: Optional[Captured]
     decision: str = ""   # what is RECORDED: the verdict's, or DECISION_TOO_LATE for a stop the agent never got
+    landed: tuple[dict[str, Any], ...] = ()   # after the call: listed packages an install added (critical when verified)
+    notes: tuple[str, ...] = ()               # what could not be checked ("dependencies not checked: …")
 
 
 def judge(body: Any) -> tuple[dict[str, Any], Optional[Judged]]:
@@ -267,6 +282,7 @@ def judge(body: Any) -> tuple[dict[str, Any], Optional[Judged]]:
         if again is not None:
             return {**again, "recorded": False}, None   # the same call, reported through a second hook form
     verdict = _verdict(event)
+    landed = _landed(event)
     findings = [{**finding, "tool_name": event["tool_name"]} for finding in verdict.get("findings") or []]
     blocked = verdict.get("decision") == "block"
     answer = {"decision": "block" if blocked else "allow", "message": verdict.get("message", "") if blocked else "",
@@ -283,7 +299,9 @@ def judge(body: Any) -> tuple[dict[str, Any], Optional[Judged]]:
     decision = str(verdict.get("decision") or "")
     if blocked and event["answer_by"] and time.time() > event["answer_by"] - LATE_MARGIN_SECONDS:
         decision = DECISION_TOO_LATE   # the hook had stopped waiting: the action ran
-    return answer, Judged(event, session, verdict, findings, blocked, process, decision)
+    notes = tuple(dict.fromkeys([*(verdict.get("notes") or []), *(landed.get("notes") or [])]))
+    landed_findings = tuple({**finding, "tool_name": event["tool_name"]} for finding in landed.get("findings") or [])
+    return answer, Judged(event, session, verdict, findings, blocked, process, decision, landed_findings, notes)
 
 
 def bookkeep(judged: Judged) -> None:
@@ -305,14 +323,29 @@ def bookkeep(judged: Judged) -> None:
         detail["sub_agent_type"] = event["sub_type"]
     audit.record_for(event["agent"], event=AUDIT_EVENT[event["event"]], workspace=event["cwd"],
                      findings=judged.findings or None, detail=detail)
+    _record_dependency_results(judged)
     _remember(event, session, decision)
     from .. import tracking   # late: tracking imports this package's editors
-    tracking.track(event, session, decision=decision, findings=len(judged.findings),
+    tracking.track(event, session, decision=decision, findings=len(judged.findings) + len(judged.landed),
                    reason=reason_of(verdict, judged.findings),
                    text=event["text"] if event["event"] == "prompt" else "",   # kept only if the person turned that on
                    process=judged.process)
     if event["event"] == "post_tool" and event["sandboxed"]:   # a refusal the kernel made during that call (KI-568)
         tracking.attribute_kernel_refusals()
+
+
+def _record_dependency_results(judged: Judged) -> None:
+    """The dependency check's results on the agent's session, as the Hermes hooks record them: a
+    listed package an install added (its own row, so its alert names the removal), and what could
+    not be checked — never silent (KI-602)."""
+    event, session = judged.event, judged.session
+    if judged.landed:
+        audit.record_for(event["agent"], event=LANDED_EVENT, workspace=event["cwd"], findings=list(judged.landed),
+                         detail={"session_id": session, "tool_name": event["tool_name"], "decision": "flag",
+                                 "after_install": True, "tool_call_id": event["tool_call_id"] or f"{session}:{time.time()}"})
+    if judged.notes:
+        audit.record_for(event["agent"], event=NOTES_EVENT, workspace=event["cwd"],
+                         detail={"session_id": session, "tool_name": event["tool_name"], "notes": list(judged.notes)[:10]})
 
 
 #: The most finding titles a flagged row names as its reason.

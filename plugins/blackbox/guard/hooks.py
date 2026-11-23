@@ -113,9 +113,9 @@ def _would_block(cfg: BlackboxConfig, findings: list[detection.Finding]) -> list
 
 
 def _raw_findings(cfg: BlackboxConfig, rs: Any, tool_name: str, args: Any,
-                  active: shields.ShieldsSnapshot, session_id: Optional[str] = None) -> list[detection.Finding]:
+                  active: shields.ShieldsSnapshot, notes: list[str]) -> list[detection.Finding]:
     """All raw findings for one call, gathered here so new detectors join without growing the hook body.
-    *session_id*: the Hermes session, on which what could not be checked is noted (None: note nothing)."""
+    What could not be checked is added to *notes*."""
     isolated = detection.run_isolated   # each check on its own: one that raises costs only its findings
     raw = detection.detect_all(tool_name, args, rs, discover=cfg.discover)
     raw += isolated("detect_custom_fileaccess",
@@ -128,7 +128,7 @@ def _raw_findings(cfg: BlackboxConfig, rs: Any, tool_name: str, args: Any,
     # R14: curator-signed DISABLE / WARN, last-good list.
     raw += isolated("kill_list", lambda: _kill_list_findings(rs, tool_name, args))
     # KI-595: the manifests and lockfiles an install installs from, and packages a write adds to them.
-    raw += isolated("dependency_files", lambda: dependency_files.before_call(cfg, rs, tool_name, args, session_id))
+    raw += isolated("dependency_files", lambda: dependency_files.before_call(cfg, rs, tool_name, args, notes))
     return raw
 
 
@@ -167,28 +167,32 @@ class _Judgement:
     graph_evidence: Any
     findings: list[detection.Finding]
     blocking: list[detection.Finding]
+    notes: list[str]   # what could not be checked ("dependencies not checked: …"), said on the session
 
 
-def _judge(tool_name: str, args: Any, cwd: str = "", session_id: Optional[str] = None) -> _Judgement:
+def _judge(tool_name: str, args: Any, cwd: str = "") -> _Judgement:
     """The checks on one call run in the folder *cwd* (``kernel.action_context``: a script a
-    command names by a relative path is the one there). *session_id*: see :func:`_raw_findings`."""
+    command names by a relative path is the one there)."""
     cfg = _config()
     rs, graph_evidence = graph_rules.detection_rules(cfg, tool_name, args)
     active = shields.snapshot()   # every shield's mode, read once for this call
+    notes: list[str] = []
     with action_context.working_in(cwd):
-        findings = reporting._flag_worthy(cfg, _raw_findings(cfg, rs, tool_name, args, active, session_id), active)
-    return _Judgement(cfg, rs, graph_evidence, findings, _blocking(cfg, findings))
+        findings = reporting._flag_worthy(cfg, _raw_findings(cfg, rs, tool_name, args, active, notes), active)
+    return _Judgement(cfg, rs, graph_evidence, findings, _blocking(cfg, findings), notes)
 
 
 class ToolCallVerdict(TypedDict):
-    """:func:`tool_call_verdict`'s answer. ``findings`` are ``Finding.to_dict()`` rows;
-    ``blocked`` the identifiers that block; ``decision`` is "", "flag", "flag (local override)"
-    or "block"; ``message`` what the agent is told when blocked ("" otherwise)."""
+    """:func:`tool_call_verdict`'s (and :func:`after_tool_call_verdict`'s) answer. ``findings``
+    are ``Finding.to_dict()`` rows; ``blocked`` the identifiers that block; ``decision`` is "",
+    "flag", "flag (local override)" or "block"; ``message`` what the agent is told when blocked
+    ("" otherwise); ``notes`` what could not be checked, for the caller to record on its session."""
 
     findings: list[dict[str, Any]]
     blocked: list[str]
     decision: str
     message: str
+    notes: list[str]
 
 
 @_with_normalised_call
@@ -212,7 +216,21 @@ def tool_call_verdict(tool_name: str = "", args: Any = None, cwd: str = "", **_:
     decision = _decision(judged.cfg, judged.findings, judged.blocking) if judged.findings else ""
     return ToolCallVerdict(findings=[finding.to_dict() for finding in judged.findings],
                            blocked=[finding.identifier for finding in judged.blocking], decision=decision,
-                           message=blackbox_block_message(judged.blocking) if judged.blocking else "")
+                           message=blackbox_block_message(judged.blocking) if judged.blocking else "", notes=judged.notes)
+
+
+@_with_normalised_call
+def after_tool_call_verdict(tool_name: str = "", args: Any = None, cwd: str = "", **_: Any) -> ToolCallVerdict:
+    """What Blackbox makes of one tool call AFTER it ran, for a runtime that is not Hermes: the
+    packages an install added to its lockfile (``dependency_files.after_check``, the same check
+    the Hermes post hook runs — KI-602). Never blocks (it already ran): a listed package that
+    landed is a flag, critical when verified, whose advice names the removal. Records nothing.
+
+        verdict = guard.after_tool_call_verdict("terminal", {"command": "npm install express"}, cwd="/app")
+    """
+    check = dependency_files.after_check(_config(), tool_name, args, cwd)
+    return ToolCallVerdict(findings=[finding.to_dict() for finding in check.findings], blocked=[],
+                           decision="flag" if check.findings else "", message="", notes=check.notes)
 
 
 @_with_normalised_call
@@ -229,13 +247,13 @@ def on_pre_tool_call(
     Only CONFIRMED graph findings can block; discovery candidates only alert.
     """
     try:
-        judged = _judge(tool_name, args, host_process.facts()["cwd"], session_id)   # in this Hermes process's folder
+        judged = _judge(tool_name, args, host_process.facts()["cwd"])   # in this Hermes process's folder
         cfg, findings, blocking = judged.cfg, judged.findings, judged.blocking
+        dependency_files.record_notes(judged.notes, tool_name, session_id)
         _record_activity(tool_name, args)   # visibility: log every file-access tool call (best-effort)
         detail = {"tool_name": tool_name, "session_id": session_id, "task_id": task_id,
                   "tool_call_id": tool_call_id, "args": audit.redact(args), "graph_read": judged.graph_evidence}
-        # Build conversation context only when a finding needs it.
-        if findings:
+        if findings:   # conversation context only when a finding needs it
             ctx = session_context._tool_context(session_id, args)
             if ctx:
                 detail["context"] = ctx

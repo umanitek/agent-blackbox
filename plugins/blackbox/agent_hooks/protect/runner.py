@@ -217,7 +217,11 @@ def _tool(agent: str, payload: dict) -> tuple[str, object]:
             return _canonical(str(info.get("mcp_tool_name")), info.get("mcp_tool_arguments"))
         if "file_path" in info:
             action = str(payload.get("agent_action_name") or "")
-            return _canonical("write_file" if "write" in action else "read_file", {"path": info.get("file_path")})
+            if "write" not in action:
+                return _canonical("read_file", {"path": info.get("file_path")})
+            # The edits Windsurf is about to make: judged on what the file becomes (KI-602).
+            edits = info.get("edits") if isinstance(info.get("edits"), list) else None
+            return _canonical("write_file", {"path": info.get("file_path"), **({"edits": edits} if edits else {})})
     if agent == "cline":
         call = payload.get("preToolUse") or payload.get("postToolUse") or {}
         name = str(_first(call, "toolName", "tool") or "")

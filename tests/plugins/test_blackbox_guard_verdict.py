@@ -63,7 +63,7 @@ def test_audit_mode_flags_the_same_call_and_blocks_nothing(blackbox):
 def test_a_harmless_call_gets_an_empty_verdict(blackbox):
     blackbox("block")
     assert guard.tool_call_verdict("exec", {"command": "echo hello"}) == {
-        "findings": [], "blocked": [], "decision": "", "message": ""}
+        "findings": [], "blocked": [], "decision": "", "message": "", "notes": []}
 
 
 def test_asking_records_nothing(blackbox):

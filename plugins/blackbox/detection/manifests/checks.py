@@ -7,8 +7,8 @@
   install's transitive dependencies, which no command line shows) are judged; a verified one
   that landed is a critical alert that names the removal command and warns that its install
   scripts may already have run. Before an install, Blackbox can only see what a lockfile already pins.
-* :func:`check_dependency_write` — BEFORE a write: a write or edit of a manifest or lockfile is
-  judged by the packages it ADDS.
+* :func:`check_dependency_write` — BEFORE a write: a write, edit or Codex patch of a manifest
+  or lockfile is judged by the packages it ADDS to the file it will produce.
 
 Every check answers a :class:`DependencyCheck`: findings in the usual tiers (verified blocks,
 community flags) and notes — "dependencies not checked: <reason>" — the guard records on the
@@ -32,7 +32,7 @@ from ...kernel import action_context
 from ...kernel.bounded_files import read_small_text
 from .. import action_parsing, shell_shapes
 from ..finding import Finding
-from . import registry
+from . import patches, registry
 from .commands import InstallSite, install_sites
 from .model import DependencyGraph, package_key
 from .verdicts import findings_for, listed_packages
@@ -41,7 +41,7 @@ from .verdicts import findings_for, listed_packages
 FOLDER_KEYS = ("workdir", "cwd", "working_directory", "dir")
 #: Arguments a write or edit carries its new text in.
 _CONTENT_KEYS = ("content", "contents", "file_text", "text")
-_EDIT_PAIRS = (("old_string", "new_string"), ("old_str", "new_str"))
+_EDIT_PAIRS = (("old_string", "new_string"), ("old_str", "new_str"), ("oldString", "newString"))
 NOT_CHECKED = "dependencies not checked: "
 PARTLY_CHECKED = "dependencies partly checked: "
 _SNAPSHOTS = 64
@@ -174,41 +174,82 @@ def check_landed(tool_name: str, args: Any, rules: Callable[[], Any]) -> Depende
     return check
 
 
-def _new_text(args: dict[str, Any], current: Optional[str]) -> Optional[str]:
-    """The file's text after the write or edit, or None when the call's shape is not one read here."""
-    for key in _CONTENT_KEYS:
-        if isinstance(args.get(key), str):
-            return args[key]
+def _edited(current: str, edit: Any) -> Optional[str]:
+    """*current* with one ``old``→``new`` replacement applied, None when it can not be applied."""
+    if not isinstance(edit, dict):
+        return None
     for old_key, new_key in _EDIT_PAIRS:
-        old, new = args.get(old_key), args.get(new_key)
-        if isinstance(old, str) and isinstance(new, str) and current is not None and old in current:
-            return current.replace(old, new) if args.get("replace_all") else current.replace(old, new, 1)
+        old, new = edit.get(old_key), edit.get(new_key)
+        if isinstance(old, str) and isinstance(new, str):
+            if old not in current:
+                return None
+            return current.replace(old, new) if edit.get("replace_all") else current.replace(old, new, 1)
     return None
 
 
-def check_dependency_write(tool_name: str, args: Any, ruleset: Any) -> list[Finding]:
-    """Findings for listed packages a write or edit ADDS to a manifest, lockfile or requirements file."""
-    access = action_parsing.file_access_arg(tool_name, args)
-    if not access or access["mode"] != "write" or not isinstance(args, dict):
+def _new_text(args: dict[str, Any], current: Optional[str]) -> Optional[str]:
+    """The file's text after the write or edit, or None when the call's shape is not one read here.
+
+    An EDIT is read before a whole-file text (KI-602, round 4: Claude Code's Edit tool reaches the
+    guard as ``{content: new_string, old_string, new_string}`` — its ``content`` is only the
+    replacement, which parses as no manifest, so adding ``"left-pad": "1.3.0"`` was allowed)."""
+    edits = args.get("edits")
+    if isinstance(edits, list) and edits and current is not None:   # a multi-edit, applied in order
+        text: Optional[str] = current
+        for edit in edits[:100]:
+            text = _edited(text, edit) if text is not None else None
+        return text
+    if any(isinstance(args.get(old_key), str) for old_key, _new in _EDIT_PAIRS):
+        return _edited(current, args) if current is not None else None
+    for key in _CONTENT_KEYS:
+        if isinstance(args.get(key), str):
+            return args[key]
+    return None
+
+
+def _writes(tool_name: str, args: Any) -> list[tuple[str, Optional[str]]]:
+    """``(path as named, the text it will hold)`` for each dependency file the call writes: a file
+    tool's write or edit (:func:`_new_text`), a Codex patch — its own tool, or ``apply_patch <<…``
+    run in a shell (:mod:`.patches`). The text is None when it can not be worked out."""
+    if not isinstance(args, dict):
         return []
-    name = os.path.basename(access["path"])
-    if registry.reader_for(name) is None:
-        return []
-    path = os.path.expanduser(access["path"])
     folder = call_folder(args)
-    path = path if os.path.isabs(path) else os.path.join(folder, path) if folder else ""
-    before = registry.read(path) if path and os.path.lexists(path) else None
-    current = _current_text(path) if path else None
-    text = _new_text(args, current)
-    if text is None:
-        return []
-    after = registry.parse_text(text, name)
-    if after.graph is None:
-        return []
-    old = before.graph.package_keys() if before is not None and before.graph is not None else frozenset()
-    added = {node for node, p in after.graph.nodes.items() if package_key(p) not in old}
-    hits = listed_packages(ruleset, after.graph, only=added) if added else []
-    return findings_for(tool_name, after.graph, hits, title_prefix=f"Writing {name} adds — ")
+    patch = args.get("patch") if isinstance(args.get("patch"), str) else ""
+    if not patch and (tool_name or "").strip().lower() in shell_shapes.SHELL_TOOLS:
+        command = shell_shapes.whole_command_from_args(tool_name, args)
+        patch = command if "apply_patch" in command else ""
+    access = action_parsing.file_access_arg(tool_name, args)
+    named = [str(args["path"])] if patch and isinstance(args.get("path"), str) else patches.patched_paths(patch) if patch else []
+    if not named and access and access["mode"] == "write":
+        named = [access["path"]]
+    out = []
+    for name in named:
+        if registry.reader_for(os.path.basename(name)) is None:
+            continue
+        path = os.path.expanduser(name)
+        path = path if os.path.isabs(path) else os.path.join(folder, path) if folder else ""
+        current = _current_text(path) if path else None
+        out.append((path, patches.patched_text(patch, name, current) if patch else _new_text(args, current)))
+    return out
+
+
+def check_dependency_write(tool_name: str, args: Any, ruleset: Any) -> list[Finding]:
+    """Findings for listed packages a write, edit or patch ADDS to a manifest, lockfile or
+    requirements file — judged on what the file will hold (an edit applied to it)."""
+    out: list[Finding] = []
+    for path, text in _writes(tool_name, args):
+        if text is None or not path:
+            continue
+        name = os.path.basename(path)
+        before = registry.read(path) if os.path.lexists(path) else None
+        after = registry.parse_text(text, name)
+        if after.graph is None:
+            continue
+        old = before.graph.package_keys() if before is not None and before.graph is not None else frozenset()
+        added = {node for node, p in after.graph.nodes.items() if package_key(p) not in old}
+        hits = listed_packages(ruleset, after.graph, only=added) if added else []
+        out += findings_for(tool_name, after.graph, hits, title_prefix=f"Writing {name} adds — ")
+    return out
 
 
 def _current_text(path: str) -> Optional[str]:
