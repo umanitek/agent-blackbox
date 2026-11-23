@@ -18,7 +18,8 @@ is checked and anything that fails is skipped and named in the plan —
 * a path only directly under ``~/Library/{Application Support, Caches, WebKit, HTTPStorages,
   Preferences, Saved Application State, Logs}/`` and named exactly after ``app_id`` (a
   ``Preferences`` file ``<app_id>.plist``, a ``Saved Application State`` folder
-  ``<app_id>.savedState``); no ``..``, no wildcard, and no link on the way or at the end;
+  ``<app_id>.savedState``, an ``HTTPStorages`` cookie file ``<app_id>.binarycookies``); no ``..``,
+  no wildcard, and no link on the way or at the end;
 * a Keychain item only when its service is ``app_id``; the preferences domain only ``app_id``.
 
 The items are shown in the plan and in ``--dry-run``, then each is removed; a failure is reported
@@ -45,9 +46,12 @@ from ..kernel import addons, os_layout
 from ..kernel.bounded_files import read_small_text
 from . import platform
 
-#: The folders under ``~/Library`` a companion app's data may be in, and how its entry is named there.
-LIBRARY_FOLDERS = {"Application Support": "{id}", "Caches": "{id}", "WebKit": "{id}", "HTTPStorages": "{id}",
-                   "Preferences": "{id}.plist", "Saved Application State": "{id}.savedState", "Logs": "{id}"}
+#: The folders under ``~/Library`` a companion app's data may be in, and the exact names its entries
+#: may have there (HTTPStorages: the folder and the ``<id>.binarycookies`` file macOS keeps beside
+#: it — KI-635, round 6 found the cookie file left after a drag to the Trash).
+LIBRARY_FOLDERS = {"Application Support": ("{id}",), "Caches": ("{id}",), "WebKit": ("{id}",),
+                   "HTTPStorages": ("{id}", "{id}.binarycookies"), "Preferences": ("{id}.plist",),
+                   "Saved Application State": ("{id}.savedState",), "Logs": ("{id}",)}
 _REVERSE_DNS = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$")
 #: Never another vendor's own namespace (an app of the system itself).
 _FOREIGN = ("com.apple.",)
@@ -98,7 +102,7 @@ def _checked_path(raw: Any, app_id: str, home: Path) -> tuple[Optional[Path], st
     library = home / "Library"
     if path.parent.parent != library or path.parent.name not in LIBRARY_FOLDERS:
         return None, f"{text}: only directly under ~/Library/{{{', '.join(LIBRARY_FOLDERS)}}}"
-    if path.name != LIBRARY_FOLDERS[path.parent.name].format(id=app_id):
+    if path.name not in {name.format(id=app_id) for name in LIBRARY_FOLDERS[path.parent.name]}:
         return None, f"{text}: not named after {app_id}"
     if os.path.realpath(path.parent) != os.path.join(os.path.realpath(library), path.parent.name) or path.is_symlink():
         return None, f"{text}: a link leads out of ~/Library"

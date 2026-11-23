@@ -23,12 +23,15 @@ The dashboard process (the person's own user) runs this; the root helper never s
 from __future__ import annotations
 
 import hashlib
+import os
 import shutil
 import subprocess
 import zipfile
 from dataclasses import replace
 from pathlib import Path
 from typing import Optional
+
+import psutil
 
 from ....kernel import constants
 from ...model import Delivery, NotifierStatus
@@ -225,5 +228,53 @@ def install(source: Optional[Path] = None, sha256: str = "") -> NotifierStatus:
     return request() if session.in_desktop_session() else status()
 
 
+#: The launchd jobs macOS makes for an app that LaunchServices opened (``open -n``): one per
+#: instance, ``application.<bundle id>.<numbers>`` in the person's GUI domain (round 6, KI-635).
+LAUNCHCTL = "/bin/launchctl"
+JOB_PREFIX = f"application.{BUNDLE_ID}."
+
+
+def _ours(pid: int, folder: str) -> bool:
+    """Whether process *pid* runs a program from *folder* (this Blackbox's notifier)."""
+    try:
+        exe = psutil.Process(pid).exe()
+    except (psutil.Error, ValueError):
+        return False
+    return bool(exe) and os.path.realpath(exe).startswith(folder)
+
+
+def _jobs(folder: str) -> list[str]:
+    """The labels of the launchd jobs running THIS notifier (``launchctl list``: pid, status,
+    label) — another Blackbox's notifier, from another folder, is never touched."""
+    try:
+        done = subprocess.run([LAUNCHCTL, "list"], capture_output=True, encoding="utf-8", errors="replace",
+                              timeout=TIMEOUT_SECONDS, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    rows = (line.split("\t") for line in (done.stdout or "").splitlines())
+    return [row[2] for row in rows if len(row) >= 3 and row[2].startswith(JOB_PREFIX) and row[0].isdigit()
+            and _ours(int(row[0]), folder)]
+
+
+def stop_running() -> int:
+    """Every running instance of this notifier ended: its launchd jobs removed (which ends their
+    process), then any process still running from its folder terminated. Returns how many."""
+    folder = os.path.realpath(home()) + os.sep
+    jobs = _jobs(folder)
+    for label in jobs:
+        _run([LAUNCHCTL, "remove", label])
+    left = [process for process in psutil.process_iter() if _ours(process.pid, folder)]
+    for process in left:
+        try:
+            process.terminate()
+        except psutil.Error:
+            continue
+    psutil.wait_procs(left, timeout=2)
+    return max(len(jobs), len(left))
+
+
 def remove() -> None:
+    """The notifier taken away: KI-635 — round 6 saw a ``request`` instance and its launchd job
+    still running from the deleted folder after uninstall, so they are ended first."""
+    stop_running()
     shutil.rmtree(home(), ignore_errors=True)

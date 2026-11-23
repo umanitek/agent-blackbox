@@ -220,6 +220,16 @@ def _stop_services(plan: UninstallPlan, run: Runner, report: list[str]) -> None:
     os_platform.stop_login_services(SERVICE_NAMES, plan.system_units, run, report)
 
 
+def _stop_notifier(plan: UninstallPlan, report: list[str]) -> None:
+    """Blackbox's own notifier ended and removed before its folder goes (KI-635: a ``request``
+    instance and its launchd job kept running from the deleted folder)."""
+    from .. import notify   # late, as setup/notifier.py: the notifier's packages load only for this step
+    had = (plan.blackbox_home / "notifier").exists()
+    notify.remove_notifier()
+    if had:
+        report.append("stopped and removed Blackbox's notifier")
+
+
 def _supervised(plan: UninstallPlan) -> bool:
     """True while a root unit still supervises the dashboard and the node (KI-507): stopping them
     by pid would only see systemd start them again, so they are left to the unit's own stop."""
@@ -272,6 +282,7 @@ def execute(plan: UninstallPlan, *, run: Runner = _run,
     _stop_services(plan, run, report)
     _stop_running_dashboard(plan, stop_dashboard, report)
     _stop_unsupervised_node(plan, report)
+    _stop_notifier(plan, report)
     _back_up(plan, report)
     hermes_installed = _remove_from_agents(plan, report)
     _remove_agent_hooks(plan, report)
