@@ -19,7 +19,7 @@ import pytest
 
 from plugins.blackbox.shields.files import changes, mode as files_mode, sandbox
 from plugins.blackbox.shields.files.sandbox import platform
-from plugins.blackbox.shields.files.sandbox.platform.macos import persistence_places as places_mod
+from plugins.blackbox.kernel import persistence_places as places_mod
 
 REAL = pytest.mark.skipif(sys.platform != "darwin" or not os.access("/usr/bin/sandbox-exec", os.X_OK),
                           reason="a real Seatbelt sandbox needs macOS")

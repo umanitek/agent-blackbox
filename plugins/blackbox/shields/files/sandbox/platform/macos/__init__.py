@@ -59,7 +59,7 @@ from typing import Optional
 
 from ......kernel.bounded_files import atomic_write, read_small_text
 from ...places import Places
-from .persistence_places import startup_places
+from ......kernel.persistence_places import startup_places
 
 SANDBOX_EXEC = "/usr/bin/sandbox-exec"
 PGREP = "/usr/bin/pgrep"

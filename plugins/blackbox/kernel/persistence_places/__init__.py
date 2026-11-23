@@ -1,5 +1,6 @@
-"""The places on macOS from which something starts by itself, or is run by the person later — kept
-closed to writes inside the agent sandbox, and watched for new entries.
+"""The places from which something starts by itself, or is run by the person later — kept closed
+to writes inside the agent sandbox (File Shield's Seatbelt profile), and watched for new entries.
+The ONE definition of them: every consumer reads it from here, so they can not drift apart.
 
 Private security finding ``2026-11-23-agent-sandbox-launchagents-opt-homebrew-`` (security round
 4, the installed profile probed from inside): ``~/Library/LaunchAgents/`` was writable — launchd
