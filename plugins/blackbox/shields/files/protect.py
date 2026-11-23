@@ -142,11 +142,10 @@ def _script_hit(tool_name: str, args: Any, items: list[str]) -> list[Finding]:
     for path, _content in writes:
         written.remember(os.path.normpath(os.path.expanduser(path)))
     runs = written.scripts_run(command) if shell else []
-    for run in runs:
-        if run.text is not None and not _inside(run.path, items):
-            call = written.as_call(run.path, run.text, run.argv, run.runner, limit=written.MAX_SCRIPT_BYTES)
-            if (found := _content_hit(call, run.path, items, "run a script that opens")):
-                return found
+    hit = written.judge_runs(command, lambda run, call: [] if _inside(run.path, items) else
+                             _content_hit(call, run.path, items, "run a script that opens"), runs=runs)
+    if hit:
+        return hit[1]
     return next((flag for run in runs if (flag := _unjudged_script(run, items))), [])
 
 

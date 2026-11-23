@@ -92,13 +92,11 @@ def _finding(tool: str, evidence: str) -> Finding:
                    source="custom", fields={})
 
 
-#: How many scripts deep a run is followed (a shell script that runs ``python3 w.py`` is read too).
-SCRIPT_DEPTH = 2
 _SCHEDULES = "a command that schedules a job (cron, at, launchd or a login item)"
 
 
-def _judged(tool_name: str, args: Any, depth: int) -> str:
-    """What the call does to a persistence place, as a finding's evidence; "" for nothing."""
+def _judged(tool_name: str, args: Any) -> str:
+    """What the call itself does to a persistence place, as a finding's evidence; "" for nothing."""
     tool = (tool_name or "").strip().lower()
     if tool in shell_shapes.SHELL_TOOLS and _schedules(shell_shapes.whole_command_from_args(tool_name, args)):
         return _SCHEDULES
@@ -107,29 +105,23 @@ def _judged(tool_name: str, args: Any, depth: int) -> str:
             _tool, how = guard_settings.tampering(tool_name, args)
         if how in _HOW:   # "long" and "page" are self-protection's alone
             return _HOW[how].format(place=_place_named(args))
-    return _script_judged(tool, args, depth)
-
-
-def _script_judged(tool: str, args: Any, depth: int) -> str:
-    """The evidence when a script file this shell call runs writes a persistence place, judged by
-    its text with the command's arguments (:func:`.script_files.as_call`); "" for none."""
-    if depth <= 0 or tool not in shell_shapes.SHELL_TOOLS:
-        return ""
-    for run in script_files.scripts_run(shell_shapes.command_from_args(tool, args)):
-        if run.text is None:
-            continue   # larger than Blackbox reads: beyond a hook (the sandbox's)
-        call = script_files.as_call(run.path, run.text, run.argv, run.runner, limit=script_files.MAX_SCRIPT_BYTES)
-        found = _judged("terminal", call, depth - 1)
-        if found:
-            return f"a script it runs ({os.path.basename(run.path)}): {found}"
     return ""
+
+
+def _script_judged(tool: str, args: Any) -> str:
+    """The evidence when a script file this shell call runs writes a persistence place, judged by
+    the one script judgement (:func:`.script_files.judge_runs`); "" for none."""
+    if tool not in shell_shapes.SHELL_TOOLS:
+        return ""
+    hit = script_files.judge_runs(shell_shapes.command_from_args(tool, args), lambda _run, call: _judged("terminal", call))
+    return f"a script it runs ({os.path.basename(hit[0].path)}): {hit[1]}" if hit else ""
 
 
 def detect_persistence_write(tool_name: str, args: Any) -> list[Finding]:
     """A finding when an agent's call would write a place something starts from by itself — itself
     or through a script file it runs —, else []."""
     try:
-        evidence = _judged(tool_name, args, SCRIPT_DEPTH)
+        evidence = _judged(tool_name, args) or _script_judged((tool_name or "").strip().lower(), args)
         return [_finding((tool_name or "").strip().lower(), evidence)] if evidence else []
     except Exception:  # pragma: no cover  # health: allow BLE001 -- fail open: a detector fault never breaks the agent's tool call
         return []

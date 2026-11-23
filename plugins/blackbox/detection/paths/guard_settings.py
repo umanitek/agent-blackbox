@@ -18,6 +18,8 @@ The rule is now the other way round (deny by reference):
 * code (a code tool, ``python3 -c``, a heredoc) that names a guarded place and writes, deletes or
   runs anything is refused; so is a file tool writing a guarded place, a startup file given a
   ``BLACKBOX_…`` variable, or a script whose text would itself be refused;
+* a script file a shell call RUNS is judged by its text with its arguments, two scripts deep
+  (``detection.script_files.judge_runs``, the one script judgement every place family reads);
 * a browser tool pointed at the dashboard is refused: the dashboard is the person's.
 
 A command is read WHOLE (the other checks read a long one by its first and last part), line by
@@ -45,7 +47,7 @@ import os
 import re
 from typing import Any, Optional
 
-from .. import action_parsing, shell_shapes
+from .. import action_parsing, script_files, shell_shapes
 from ..finding import Finding
 from ...kernel import action_context, addons as guarded_extra, agent_hosts, shell_path, threat_ids
 from ...kernel.bounded_files import read_small_text
@@ -373,6 +375,15 @@ def tampering(tool_name: str, args: Any) -> tuple[str, str]:
     return tool, "page" if _other_tool_tampers(tool, args) else ""
 
 
+def _script_tampering(tool: str, args: Any) -> str:
+    """Evidence when a script this shell call runs would itself be refused (``python3 c.py hermes yaml``
+    building ``~/.hermes/config.yaml``), by the one script judgement (LES-137); "" for none."""
+    if tool not in shell_shapes.SHELL_TOOLS:
+        return ""
+    hit = script_files.judge_runs(shell_shapes.command_from_args(tool, args), lambda _run, call: tampering("terminal", call)[1])
+    return f"a script it runs ({os.path.basename(hit[0].path)}): {_EVIDENCE[hit[1]]}" if hit else ""
+
+
 def detect_guard_tamper(tool_name: str, args: Any, cfg: Optional[BlackboxConfig] = None) -> list[Finding]:
     """A finding when an agent's call would change Blackbox, switch it off or go round it, else [].
     *cfg*: the config the caller already loaded for this call (its ports are used, not re-read)."""
@@ -383,6 +394,7 @@ def detect_guard_tamper(tool_name: str, args: Any, cfg: Optional[BlackboxConfig]
         if secret:
             return [_finding((tool_name or "").strip().lower(), secret, guard_secrets.TITLE, guard_secrets.ADVICE)]
         tool, how = tampering(tool_name, args)
-        return [_finding(tool, _EVIDENCE[how])] if how else []
+        evidence = _EVIDENCE[how] if how else _script_tampering(tool, args)
+        return [_finding(tool, evidence)] if evidence else []
     except Exception:  # pragma: no cover  # health: allow BLE001 -- fail open: a detector fault never breaks the agent's tool call
         return []

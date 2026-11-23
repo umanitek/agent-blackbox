@@ -37,6 +37,13 @@ Usage::
     remember(path)                            # a script an agent wrote (File Shield's detect does this)
     script_writes(tool_name, args)            # [(path, content)] a call writes as scripts
     scripts_run(command)                      # the remembered scripts a command runs
+    judge_runs(command, judge)                # (run, verdict): the first script it runs that *judge* refuses
+
+:func:`judge_runs` is the ONE script judgement every protected-place family reads (LES-137): File
+Shield's protected items, the persistence places and Blackbox's own places each hand it their own
+*judge* — a third copy of the loop (read, as inline code, two scripts deep) is how the families
+drifted apart before (private finding ``2026-11-23-hooks-only-self-protection-does-not-read``).
+Pattern: **Template Method** in function form — the walk is fixed here, the verdict is the caller's.
 """
 
 from __future__ import annotations
@@ -47,13 +54,16 @@ import shlex
 import threading
 import time
 from collections import OrderedDict
-from typing import Any, NamedTuple, Optional
+from typing import Any, Callable, Iterable, NamedTuple, Optional, TypeVar
 
 from ..kernel import action_context
 from ..kernel.bounded_files import read_small_text
+from .shell_shapes import command_from_args
 
 #: The most scripts remembered (the oldest forgotten first).
 MAX_REMEMBERED = 256
+#: How many scripts deep a run is followed (a shell script that runs ``python3 w.py`` is read too).
+SCRIPT_DEPTH = 2
 #: The largest script read at run time.
 MAX_SCRIPT_BYTES = 256 * 1024
 #: The most of one written content judged.
@@ -349,3 +359,39 @@ def as_call(path: str, content: str, argv: tuple[str, ...] = (), runner: str = "
     # node's own argv starts with the script: process.argv[2] is the first argument, as when run from its file.
     args = ((path,) if language == "node" else ()) + tuple(argv)
     return {"command": " ".join([language, _INLINE[language], shlex.quote(text), *map(shlex.quote, args)])}
+
+
+Verdict = TypeVar("Verdict")
+
+
+def judge_runs(command: str, judge: Callable[[ScriptRun, dict[str, str]], Verdict], depth: int = SCRIPT_DEPTH,
+               runs: Optional[Iterable[ScriptRun]] = None) -> Optional[tuple[ScriptRun, Verdict]]:
+    """``(run, verdict)`` for the first script file *command* runs that *judge* finds against, or None.
+
+    *judge* is called with each run whose text could be read and that run as the terminal call
+    every check reads (:func:`as_call`: the script's text as inline code with its arguments) and
+    returns its verdict — anything truthy (an evidence string, a list of findings) counts. The
+    command lines a script runs are walked too, *depth* scripts deep in all (``bash outer.sh``
+    that runs ``python3 w.py``); the run named is the one *command* itself starts. A script larger
+    than :data:`MAX_SCRIPT_BYTES` is skipped (``run.text`` is None): the caller decides whether to
+    flag it. *runs*: :func:`scripts_run` of *command*, when the caller already read them.
+
+    Usage::
+
+        hit = judge_runs(command, lambda run, call: "evidence" if refused(call) else "")
+        if hit:
+            run, evidence = hit
+    """
+    if depth <= 0:
+        return None
+    for run in scripts_run(command) if runs is None else runs:
+        if run.text is None:
+            continue   # larger than Blackbox reads: beyond a hook (the sandbox's)
+        call = as_call(run.path, run.text, run.argv, run.runner, limit=MAX_SCRIPT_BYTES)
+        verdict = judge(run, call)
+        if verdict:
+            return run, verdict
+        deeper = judge_runs(command_from_args("terminal", call), judge, depth - 1)
+        if deeper:
+            return run, deeper[1]
+    return None
