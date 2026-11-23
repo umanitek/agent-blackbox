@@ -113,6 +113,20 @@ that the two version fields agree.
 
 ### Changed
 
+- **Uninstall asks whether to remove the Hermes host Blackbox's installer set up.** On a machine
+  that had no Hermes before, `blackbox uninstall` asks once (`--remove-host` when not at a terminal)
+  and removes exactly what the installer put there — your own lines in `~/.zshrc` stay byte for
+  byte. Kept, the host no longer loads Blackbox. A second uninstall says Blackbox is not installed
+  and changes nothing; an add-on's companion app can name the caches, Keychain item and preferences
+  it leaves, and they go too.
+- **The persistence watch reports each change once, and names an agent only with evidence.** The
+  same entry seen through a linked home folder, or `at`'s own bookkeeping files, no longer raise
+  extra alerts; an agent is named as the writer only when the file was written while its command
+  ran ("writer unknown" otherwise). A new program on your PATH is titled as one.
+- The installer says what macOS really answered about Blackbox's notifications (allowed, waiting for
+  your OK in the banner, or off — with where to turn them on).
+- Installs Blackbox makes for a sandboxed agent keep your own `HOMEBREW_NO_AUTO_UPDATE`,
+  `HOMEBREW_NO_INSTALL_CLEANUP` and similar "turn it off" Homebrew settings.
 - Trader Shield protects a wallet type added in a later Blackbox version without a new save:
   a saved wallet list keeps the wallets you left unticked off, and guards every wallet it was
   never offered (before, those stayed off until you saved Settings again).
@@ -120,6 +134,15 @@ that the two version fields agree.
 
 ### Security
 
+- **No AI agent can leave something that starts by itself later — sandboxed or not.** An agent
+  checked only by its hooks could add a key to `~/.ssh/authorized_keys`, write a launchd job, a
+  cron or `at` job, a line in your shell startup files or a program in Homebrew's folders. Blackbox
+  now refuses those writes for every agent in every mode, by any route, from the same list the agent
+  sandbox closes; reading them stays allowed. Programs an agent writes into your own PATH folders
+  (`~/.local/bin`, npm's global prefix, pipx) stay allowed and raise a critical alert naming the agent.
+- **The agent sandbox keeps Blackbox's settings closed.** Inside the sandbox nothing can change,
+  rename or remove Hermes's `config.yaml` and `.env` (every profile), where Blackbox's settings live,
+  nor move Blackbox's home away.
 - **Installs from lockfiles and manifests, and transitive dependencies, are checked (KI-595).**
   Blackbox used to check only the package names written in an install command, so `npm ci`,
   `npm install`, `uv sync`, `pip install -r`, `poetry install`, `cargo build`, `bundle install` and
@@ -203,6 +226,17 @@ that the two version fields agree.
   the account — and a short note says when it is done.
 
 ### Fixed
+
+- **Codex can edit a package.json with its own patch tool again.** A Codex `apply_patch` of any
+  package.json was refused as a change to Blackbox's own settings; a listed package added that way is
+  now refused for what it is.
+- **Cline's first message is checked.** Cline's start event carries no task text; Blackbox's Cline
+  plugin now reads the task from the first run (CLI, SDK, Kanban). In the IDE extensions, which run
+  hook scripts only, the first message is still not checked.
+- **Refusals the sandbox makes are counted where they were missed:** a launchd job, an SSH key or a
+  program in Homebrew's folders refused inside the sandbox, and a protected file the Hermes agent's
+  `execute_code` was refused, now show on the session as refused.
+- A 2,000-package lockfile is checked with half the store queries it took before.
 
 - **Each agent session tells the truth about itself.** Claude Code and Gemini CLI sessions now show
   their model (from the command line, then from the session's transcript — the model's name only);
