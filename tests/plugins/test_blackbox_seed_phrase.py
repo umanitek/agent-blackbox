@@ -181,7 +181,10 @@ def test_a_real_phrase_is_still_redacted_in_a_command_a_prompt_and_numbered(word
     for text in (f"echo {secret}", f"loop: {secret}", f"please keep my seed safe {secret} thanks",
                  " ".join(f"{i + 1}. {w}" for i, w in enumerate(secret.split())), secret.replace(" ", ",")):
         out = redaction.redact_secret_values(text)
-        assert seed_phrase.MARKER in out and not any(word in out.split() for word in secret.split()[2:-1] if len(word) > 4), text
+        # A word of the wrapper text ("please", "thanks") can be a list word of the random phrase too.
+        wrapper = {"echo", "loop:", "please", "keep", "my", "seed", "safe", "thanks"}
+        assert seed_phrase.MARKER in out and not any(word in out.split() for word in secret.split()[2:-1]
+                                                     if len(word) > 4 and word not in wrapper), text
 
 
 def test_a_real_phrase_in_base64_or_after_a_loop_of_list_words_is_still_redacted():
