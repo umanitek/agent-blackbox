@@ -7,8 +7,8 @@ local Blackbox dashboard (``POST /api/agent-hooks/event``), which records the ev
 with the same guard a Hermes agent gets: before a tool runs, the tool-call verdict (threats and
 self-protection); for a prompt about to be sent and a tool's output about to reach the model, the
 prompt-injection verdict of the verified threat graph (``guard.text_verdict``). Each answer goes
-back in the agent's own documented format (:func:`deny_output`, :func:`prompt_output`,
-:func:`post_output`; docs/agent-compat/ has the per-agent references).
+back in the agent's own documented format (:mod:`.answers`: ``deny_output``, ``prompt_output``,
+``post_output``; docs/agent-compat/ has the per-agent references).
 
 Standard library only and import-free of the plugin, so it starts in a few tens of milliseconds
 under any Python. FAIL-OPEN: any error, a missing dashboard or a slow answer lets the agent
@@ -38,9 +38,11 @@ from pathlib import Path
 # The runner is run as a script from Blackbox's data folder (its sibling is beside it there) and
 # imported as a module by the plugin and its tests.
 if __package__:
+    from .answers import allow_output, deny_output, post_output, prompt_output
     from .identity import AGENT_TURN_MARKS, MODEL_EVENTS, effective_agent, identity, transcript_model, workspace
     from .tool_shapes import cline_tool
 else:
+    from answers import allow_output, deny_output, post_output, prompt_output
     from identity import AGENT_TURN_MARKS, MODEL_EVENTS, effective_agent, identity, transcript_model, workspace
     from tool_shapes import cline_tool
 
@@ -303,69 +305,6 @@ def ask(url: str, body: dict) -> dict:
     with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:
         answer = json.loads(response.read(65536))
     return answer if isinstance(answer, dict) else {}
-
-
-def deny_output(agent: str, reason: str) -> tuple[str, int]:
-    """(stdout, exit code) that make *agent* refuse the tool call, in its documented format."""
-    if agent in ("claude-code", "codex", "devin"):
-        return json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
-                                                  "permissionDecisionReason": reason}}), 0
-    if agent == "cursor":
-        return json.dumps({"permission": "deny", "user_message": reason, "agent_message": reason}), 0
-    if agent == "gemini-cli":
-        return json.dumps({"decision": "deny", "reason": reason}), 0
-    if agent == "copilot-cli":
-        return json.dumps({"permissionDecision": "deny", "permissionDecisionReason": reason}), 0
-    if agent == "cline":
-        return json.dumps({"cancel": True, "errorMessage": reason}), 0
-    if agent == "opencode":
-        return json.dumps({"decision": "block", "reason": reason}), 0
-    return "", 2   # windsurf: a pre-hook blocks by exiting 2; the reason goes to stderr
-
-
-def prompt_output(agent: str, reason: str) -> tuple[str, int]:
-    """(stdout, exit code) that make *agent* refuse to send a prompt carrying a known injection —
-    where its prompt hook can refuse (Copilot CLI's and OpenCode's cannot: recorded only)."""
-    if agent in ("claude-code", "codex", "devin"):
-        return json.dumps({"decision": "block", "reason": reason}), 0
-    if agent == "cursor":
-        return json.dumps({"continue": False, "user_message": reason}), 0
-    if agent == "gemini-cli":
-        return json.dumps({"decision": "deny", "reason": reason}), 0
-    if agent == "cline":
-        return json.dumps({"cancel": True, "errorMessage": reason}), 0
-    if agent == "windsurf":
-        return "", 2
-    return "", 0
-
-
-def post_output(agent: str, reason: str) -> tuple[str, int]:
-    """(stdout, exit code) that keep a tool output carrying a known injection from steering the
-    model, as far as *agent*'s post-tool hook allows: Codex and Gemini CLI REPLACE the output with
-    the reason; Claude Code puts the reason beside it; Cline adds it as context; OpenCode's plugin
-    replaces the output itself; Cursor's, Copilot's and Windsurf's post hooks can only be
-    recorded (their pre-read / pre-tool hooks are where they are protected)."""
-    if agent == "claude-code":
-        return json.dumps({"decision": "block", "reason": reason,
-                           "hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": reason}}), 0
-    if agent == "codex":
-        return json.dumps({"decision": "block", "reason": reason}), 0
-    if agent == "gemini-cli":
-        return json.dumps({"decision": "deny", "reason": reason}), 0
-    if agent == "cline":
-        return json.dumps({"cancel": False, "contextModification": reason}), 0
-    if agent == "opencode":
-        return json.dumps({"decision": "block", "reason": reason}), 0
-    return "", 0
-
-
-def allow_output(agent: str, event: str) -> str:
-    """What an agent that expects an answer gets when the action may go ahead."""
-    if agent == "cursor" and event in ("pre_tool", "prompt", "subagent_start"):
-        return json.dumps({"continue": True} if event == "prompt" else {"permission": "allow"})
-    if agent == "cline":
-        return json.dumps({"cancel": False})
-    return ""
 
 
 def main(argv: list) -> int:
