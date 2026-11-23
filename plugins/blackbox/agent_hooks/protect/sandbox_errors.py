@@ -110,9 +110,20 @@ _OPEN = re.compile(r"LSOpenURLs\w*\(\) failed.*?error -54|LSOpenURLsWithRole\(\)
 _SIGNAL = re.compile(r"kill(?::\d+:?)? kill (?:-\S+ )?\d+ failed: operation not permitted|kill: \(\d+\) - operation not permitted"
                      r"|kill: \d+: operation not permitted", re.IGNORECASE)
 _NESTED = re.compile(r"sandbox_apply: operation not permitted", re.IGNORECASE)
-#: The docker CLI refused its engine's socket: ``… connect to the Docker daemon socket at
-#: unix:///Users/me/.docker/run/docker.sock: … connect: operation not permitted``.
-_DOCKER = re.compile(r"docker daemon[^\n]{0,200}operation not permitted", re.IGNORECASE)
+#: A container engine's socket refused (KI-646, security round 7: docker CLI 29 says ``permission
+#: denied while trying to connect to the docker API at unix:///…/docker.sock``, and the old matcher
+#: wanted "docker daemon … operation not permitted", so Docker on "ask" never asked). Read in order:
+#: the SOCKET PATH itself — a ``docker.sock`` / ``podman.sock`` the refusal names (Docker Desktop,
+#: colima, OrbStack, Rancher, Lima, Podman: every engine's socket ends so) on the same line as the
+#: refusal — then the clients' own words for a refused connect (``… connect to the docker API|Docker
+#: daemon …``, Python's docker SDK ``Error while fetching server API version … PermissionError(1``).
+#: "Cannot connect to the Docker daemon … Is the docker daemon running?" alone is an engine that is
+#: not started, never the sandbox.
+_REFUSED = r"(?:operation not permitted|permission denied)"
+_DOCKER = re.compile(
+    rf"[\w./-]*(?:docker|podman)\.sock\b[^\n]{{0,300}}?{_REFUSED}"
+    rf"|{_REFUSED}[^\n]{{0,60}}connect to the (?:docker|podman) (?:api|daemon|socket)"
+    r"|(?:docker|podman)[^\n]{0,200}server API version[^\n]{0,200}PermissionError\(1,", re.IGNORECASE)
 #: A connect to this Mac refused: ``connect to 127.0.0.1 port 5432 … Operation not permitted``,
 #: curl's ``Immediate connect fail for 127.0.0.1: Operation not permitted``, ``dial tcp [::1]:3000: … operation not permitted``.
 _LOCAL_PORT = re.compile(r"(?:localhost|127\.0\.0\.1|\[?::1\]?)[^\n]{0,120}operation not permitted", re.IGNORECASE)

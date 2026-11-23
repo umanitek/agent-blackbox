@@ -100,6 +100,48 @@ def test_the_docker_cli_refusal_asks_the_person(home, entry):
     assert [each.permission for each in requests.pending()] == ["docker"]
 
 
+#: Every real refusal text of a container engine's socket inside the sandbox (KI-646: docker CLI 29
+#: in security round 7 said the first; the matcher wanted "docker daemon … operation not permitted",
+#: so Docker on "ask" raised no question at all).
+SOCKET_REFUSALS = [
+    "permission denied while trying to connect to the docker API at unix:///Users/admin/.docker/run/docker.sock",
+    "permission denied while trying to connect to the Docker daemon socket at unix:///var/run/docker.sock: Get "
+    "\"http://%2Fvar%2Frun%2Fdocker.sock/v1.24/containers/json\": dial unix /var/run/docker.sock: connect: permission denied",
+    "Cannot connect to the Docker daemon at unix:///Users/me/.colima/default/docker.sock. Is the docker daemon running? "
+    "dial unix /Users/me/.colima/default/docker.sock: connect: operation not permitted",
+    "Error: Cannot connect to Podman. Please verify your connection to the Linux system using `podman system connection "
+    "list`, or try `podman machine init` and `podman machine start` to manage a new Linux VM\nError: unable to connect to "
+    "Podman socket: Get \"http://d/v5.0.0/libpod/_ping\": dial unix /Users/me/.local/share/containers/podman/machine/"
+    "podman.sock: connect: operation not permitted",
+    "docker.errors.DockerException: Error while fetching server API version: ('Connection aborted.', "
+    "PermissionError(1, 'Operation not permitted'))",
+    "error during connect: Get \"http://docker.sock/v1.47/version\": dial unix /Users/me/.orbstack/run/docker.sock: "
+    "connect: operation not permitted",
+]
+NOT_DOCKER = [
+    "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?",   # not started
+    "docker: Error response from daemon: open /work/x: permission denied.",                          # inside the engine
+    "ERROR: failed to solve: failed to read dockerfile: open Dockerfile: permission denied",
+]
+
+
+@pytest.mark.parametrize("output", SOCKET_REFUSALS)
+def test_every_real_socket_refusal_text_is_read_as_docker(output):
+    assert [each.kind for each in sandbox_errors.refusals(output)] == [sandbox_errors.DOCKER], output
+
+
+@pytest.mark.parametrize("output", NOT_DOCKER)
+def test_a_docker_error_that_is_not_the_sandbox_is_not_read_as_docker(output):
+    assert sandbox_errors.DOCKER not in [each.kind for each in sandbox_errors.refusals(output)], output
+
+
+def test_round_sevens_docker_refusal_asks_the_person(home, entry):
+    """KI-646, p1-dock1: REAL sandboxed Claude Code, `docker ps`, Docker on ask — no request was raised."""
+    found = sandbox_errors.refusals(SOCKET_REFUSALS[0])
+    assert permissions.refused(found[0].kind, "claude-code", "s-1", str(home / "work")) is True
+    assert [each.permission for each in requests.pending()] == ["docker"]
+
+
 @pytest.mark.parametrize("command, sources", [
     ("docker run --rm -v ~/Documents/Vault:/x alpine cat /x/a", ["~/Documents/Vault"]),
     ("podman create --volume=/tmp/a:/b:ro img", ["/tmp/a"]),
