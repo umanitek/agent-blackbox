@@ -29,6 +29,7 @@ import os
 from typing import Any
 
 from .....kernel import constants, persistence_places, settings as kernel_settings
+from .....kernel.config import load_blackbox_config
 from ... import mode as mode_module
 from . import answers, catalogue, grants, requests
 from .api import API_WEAKENING, API_WRITES, view
@@ -51,6 +52,7 @@ def allowances(settings: Settings, agent: str = "", folder: str = "") -> Allowan
     rules that apply, as canonical paths (the kernel matches real paths). "Ask" is refused in the
     profile until the person answers (a profile is fixed when the agent starts)."""
     lifted = frozenset(each.id for each in profile_permissions() if settings.mode(each, agent, folder) is Mode.ALLOW)
+    refused = frozenset(each.id for each in profile_permissions()) - lifted
     rules = settings.folder_rules(agent, folder)
     real = [(os.path.realpath(os.path.expanduser(each.path)), each.access) for each in rules]
     hidden = tuple(dict.fromkeys(path for path, access in real if access is Access.NONE))
@@ -59,7 +61,8 @@ def allowances(settings: Settings, agent: str = "", folder: str = "") -> Allowan
     if "tool-folders" not in lifted:
         tools = persistence_places.user_path_folders(os.path.realpath(os.path.expanduser("~")), os.environ.get("PATH", ""),
                                                      getattr(os, "getuid", lambda: -1)(), exclude=(os.path.realpath(constants.blackbox_home()),))
-    return Allowances(lifted=lifted, ports=settings.ports("local-ports", agent, folder), hidden=hidden, read_only=read_only,
+    return Allowances(lifted=lifted, refused=refused, ports=settings.ports("local-ports", agent, folder),
+                      dashboard_port=load_blackbox_config().dashboard_port, hidden=hidden, read_only=read_only,
                       tool_folders=tuple(tools[0]), tool_globs=tuple(tools[1]))
 
 

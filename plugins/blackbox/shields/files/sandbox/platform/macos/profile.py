@@ -50,6 +50,21 @@ DOCKER_SOCKET_GLOBS = ("{home}/.colima/*/docker.sock", "{home}/.lima/*/sock/dock
 DOCKER_PORTS = (2375, 2376)
 
 
+#: The pasteboard server: refusing its lookup refuses reading and writing the clipboard.
+PASTEBOARD = "com.apple.pasteboard.1"
+
+
+def _local_port_lines(allowances: Allowances) -> list[str]:
+    """Every service on this Mac refused, then the listed ports and Blackbox's dashboard reopened.
+    Probed on macOS 27.2 (2026-11-23): ``localhost`` here also matches every address of this Mac
+    (en0, link-local, Tailscale), so "this Mac" is covered whatever address an agent dials."""
+    ports = sorted({*allowances.ports, *([allowances.dashboard_port] if allowances.dashboard_port else [])})
+    lines = ['(deny network-outbound (remote ip "localhost:*"))']
+    if ports:
+        lines.append("(allow network-outbound\n  " + "\n  ".join(f'(remote ip "localhost:{port}")' for port in ports) + ")")
+    return lines
+
+
 def _docker_lines(home: str) -> list[str]:
     sockets = [f"(remote unix-socket (path-literal {_quote(path.format(home=home))}))" for path in DOCKER_SOCKETS]
     sockets += [f"(remote unix-socket (regex {_glob_regex(glob.format(home=home))}))" for glob in DOCKER_SOCKET_GLOBS]
@@ -77,7 +92,10 @@ def permission_lines(allowances: Allowances, home: str = "") -> list[str]:
     """What the person's permissions refuse for one scope: each profile permission not lifted
     (Docker's sockets, the person's tool folders …) and the folder rules (kept out / read only)."""
     home = home or os.path.realpath(os.path.expanduser("~"))
-    lines = [] if "docker" in allowances.lifted else _docker_lines(home)
+    lines = _local_port_lines(allowances) if "local-ports" in allowances.refused else []
+    lines += _docker_lines(home) if "docker" in allowances.refused else []   # after local-ports: a listed port never reopens Docker's
+    if "clipboard" in allowances.refused:   # probed 2026-11-23: pbpaste fails at once, no hang
+        lines.append(f'(deny mach-lookup (global-name "{PASTEBOARD}"))')
     tools = [f"(subpath {_quote(p)})" for p in allowances.tool_folders] + [f"(regex {_glob_regex(g)})" for g in allowances.tool_globs]
     if tools:   # tool-folders blocked: a program left there would run outside the sandbox later
         lines.append("(deny file-write*\n  " + "\n  ".join(tools) + ")")
@@ -127,4 +145,4 @@ def _never(places: Places) -> list[str]:
 
 
 
-__all__ = ["APP_DRIVERS", "DOCKER_PORTS", "DOCKER_SOCKETS", "DOCKER_SOCKET_GLOBS", "LOCAL_SSH", "NEVER_MARK", "PROFILE_SUFFIX", "SANDBOX_EXEC", "permission_lines", "render"]
+__all__ = ["APP_DRIVERS", "DOCKER_PORTS", "DOCKER_SOCKETS", "DOCKER_SOCKET_GLOBS", "LOCAL_SSH", "NEVER_MARK", "PASTEBOARD", "PROFILE_SUFFIX", "SANDBOX_EXEC", "permission_lines", "render"]

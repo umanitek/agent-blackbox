@@ -173,7 +173,11 @@ class Allowances:
     ``tool_globs``: the person's program folders, closed to writes while ``tool-folders`` is not allowed."""
 
     lifted: frozenset[str] = frozenset()
+    #: The controllable profile-route permissions NOT allowed here: each is refused in the profile.
+    refused: frozenset[str] = frozenset()
     ports: tuple[int, ...] = ()
+    #: Blackbox's dashboard port: always reachable (the sandbox's own tools talk to it).
+    dashboard_port: int = 0
     hidden: tuple[str, ...] = ()
     read_only: tuple[str, ...] = ()
     tool_folders: tuple[str, ...] = ()

@@ -57,6 +57,8 @@ OWN, STARTUP, PERSISTENCE = "own", "startup", "persistence"
 #: The container engine's socket, kept closed while the ``docker`` sandbox permission is not allowed;
 #: a program folder the person owns (``~/.local/bin`` …), closed while ``tool-folders`` is blocked.
 DOCKER, TOOL_FOLDER = "docker", "tool-folder"
+#: A service on this Mac, refused while the ``local-ports`` sandbox permission is blocked.
+LOCAL_PORT = "local-port"
 #: The shell startup files (as ``kernel.shell_path`` keeps them closed).
 STARTUP_FILES = frozenset({".zshrc", ".zshenv", ".zprofile", ".zlogin", ".bashrc", ".bash_profile", ".profile", ".bash_login"})
 #: What each well-known installer wanted to add to a startup file — said to the person to add
@@ -81,6 +83,8 @@ _WHY = {
              "--disable-sandbox` (Blackbox's sandbox still covers it, nothing is lost); anything else: run it in "
              "your own terminal"),
     FILE: "this file is kept closed to agents (a protected item, or a file that keeps Blackbox's hook)",
+    LOCAL_PORT: ("a service on this Mac (a database, a dev server) is closed to this agent in Blackbox's sandbox "
+                 "permissions; allow it, or the port it needs, there"),
     TOOL_FOLDER: ("a program the agent leaves in your tool folders would run outside the sandbox the next time you type "
                   "its name; Blackbox installs global tools for agents itself, or allow it in Blackbox's sandbox permissions"),
     DOCKER: ("a container runs outside the sandbox and can mount any folder; Docker is allowed only when you allow it "
@@ -90,7 +94,7 @@ _WHY = {
                   "own terminal"),
 }
 _WHAT = {SETUID: "{name}, a setuid program", APP_DRIVER: "{name}", OPEN_APP: "open",
-         SIGNAL: "a signal to a process outside the sandbox", NESTED: "a second sandbox", DOCKER: "Docker", TOOL_FOLDER: "{name}", FILE: "{name}", STARTUP: "{name}",
+         SIGNAL: "a signal to a process outside the sandbox", NESTED: "a second sandbox", DOCKER: "Docker", TOOL_FOLDER: "{name}", LOCAL_PORT: "a service on this Mac", FILE: "{name}", STARTUP: "{name}",
          PERSISTENCE: "{name}"}
 #: zsh: ``(eval):1: operation not permitted: sudo``; bash: ``bash: /usr/bin/sudo: Operation not
 #: permitted``; sandbox-exec itself: ``execvp() of '/bin/ps' failed: Operation not permitted``.
@@ -104,6 +108,9 @@ _NESTED = re.compile(r"sandbox_apply: operation not permitted", re.IGNORECASE)
 #: The docker CLI refused its engine's socket: ``… connect to the Docker daemon socket at
 #: unix:///Users/me/.docker/run/docker.sock: … connect: operation not permitted``.
 _DOCKER = re.compile(r"docker daemon[^\n]{0,200}operation not permitted", re.IGNORECASE)
+#: A connect to this Mac refused: ``connect to 127.0.0.1 port 5432 … Operation not permitted``,
+#: curl's ``Immediate connect fail for 127.0.0.1: Operation not permitted``, ``dial tcp [::1]:3000: … operation not permitted``.
+_LOCAL_PORT = re.compile(r"(?:localhost|127\.0\.0\.1|\[?::1\]?)[^\n]{0,120}operation not permitted", re.IGNORECASE)
 #: Blackbox's own stand-ins already say it (``sudo``, ``crontab``, ``top``, the brew shim): counted,
 #: and not said twice.
 _OWN = re.compile(r"Blackbox's sandbox refused this \((?P<what>[^)]{1,80})\)")
@@ -195,6 +202,8 @@ def refusals(output: str) -> list[Refusal]:
         found.append(Refusal(NESTED))
     if _DOCKER.search(text):
         found.append(Refusal(DOCKER))
+    elif _LOCAL_PORT.search(text):
+        found.append(Refusal(LOCAL_PORT))
     found += [Refusal(OWN, match.group("what")) for match in _OWN.finditer(text)]
     for match in _EXEC.finditer(text):
         word = match.group("z") or match.group("b") or match.group("x") or match.group("p") or ""

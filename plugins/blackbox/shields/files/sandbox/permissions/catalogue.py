@@ -60,7 +60,8 @@ PERMISSIONS: tuple[Permission, ...] = (
                "the agent can talk to anything listening on this Mac", Route.PROFILE, Mode.ALLOW, BLOCK_ALLOW,
                refusal_kinds=(KIND_LOCAL_PORT,), ports=True),
     Permission("clipboard", "Clipboard", "pbpaste and reading what you last copied",
-               "what you last copied may be a password or a key", Route.PROFILE, Mode.ALLOW, BLOCK_ALLOW),
+               "what you last copied may be a password or a key (blocking it also stops copy and paste inside an editor "
+               "opened in the sandbox)", Route.PROFILE, Mode.ALLOW, BLOCK_ALLOW),
     Permission("keychain", "Keychain", "security, git's keychain helper and agent sign-ins that use your keychain",
                "the agent can use keychain items that trust the tool it runs", Route.PROFILE, Mode.ALLOW, BLOCK_ALLOW,
                controllable=False, note=UNPROVEN),
