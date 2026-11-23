@@ -75,6 +75,8 @@ class Permission:
     note: str = ""
     #: Takes a list of ports (local-ports only): the ports still reachable while it is blocked.
     ports: bool = False
+    #: The broker acts when the person answers (the agent does not ask again): stopping a process.
+    acts_on_answer: bool = False
 
 
 @dataclass(frozen=True)
@@ -180,7 +182,8 @@ class Allowances:
 
 @dataclass(frozen=True)
 class PermissionRequest:
-    """An agent wanted a permission it does not have: what the person is asked about."""
+    """An agent wanted a permission it does not have: what the person is asked about. ``pid``: the
+    asking process — for ``stop-processes`` the process the agent wanted stopped."""
 
     id: str
     permission: str

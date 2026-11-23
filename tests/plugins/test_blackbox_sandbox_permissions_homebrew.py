@@ -61,7 +61,7 @@ def _status(call) -> int:
 
 def _answer(choice):
     [request] = requests.pending()
-    return permissions.answers.answer({"id": request.id, "choice": choice}, once_profile=lambda request: None)
+    return permissions.answers.answer({"id": request.id, "choice": choice}, act=lambda request: None)
 
 
 def test_ask_opens_one_request_and_waits(tmp_path):

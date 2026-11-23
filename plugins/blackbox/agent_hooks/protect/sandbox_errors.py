@@ -186,8 +186,9 @@ def refusals(output: str) -> list[Refusal]:
     """The sandbox refusals a tool's *output* shows, each once, at most :data:`MAX_FOUND`."""
     text = (output or "")[:MAX_READ_CHARS]
     found: list[Refusal] = []
-    if _SIGNAL.search(text):
-        found.append(Refusal(SIGNAL))
+    signal = _SIGNAL.search(text)
+    if signal:   # the process it named: the last number in the line (zsh puts its line number first)
+        found.append(Refusal(SIGNAL, (re.findall(r"\d+", signal.group(0)) or [""])[-1]))
     if _OPEN.search(text):
         found.append(Refusal(OPEN_APP))
     if _NESTED.search(text):

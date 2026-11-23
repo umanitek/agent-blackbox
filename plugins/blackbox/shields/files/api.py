@@ -172,7 +172,7 @@ def file_report(context: ShieldContext, body: Mapping[str, Any]) -> dict[str, An
 
 def permission_answer(context: ShieldContext, body: Mapping[str, Any]) -> dict[str, Any]:
     """``permission-answer`` ``{"id", "choice"}``: the person's answer (``permissions.answers``)."""
-    answered = permissions.answers.answer(body, once_profile=sandbox.grant_once)
+    answered = permissions.answers.answer(body, act=sandbox.act_on)
     _sync_sandbox()
     return {**answered, **permissions.answers.read(context, {})}
 

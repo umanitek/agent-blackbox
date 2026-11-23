@@ -83,6 +83,24 @@ def open_with(_app_path: str, _files: object) -> int:
     raise OSError("Blackbox opens apps for agents only on macOS")
 
 
+class ProcessFacts:   # the same shape as macOS's; never built here
+    uid: int
+    path: str
+    args: str
+
+
+def describe(_pid: int) -> None:
+    return None
+
+
+def is_system(_path: str) -> bool:
+    return True
+
+
+def terminate(_pid: int) -> bool:
+    return False
+
+
 def spawn_brew(_command: list[str], _env: dict[str, str], _cwd: str) -> object:
     raise OSError("Homebrew runs for agents only on macOS")
 

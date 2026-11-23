@@ -52,7 +52,7 @@ PERMISSIONS: tuple[Permission, ...] = (
                Route.BROKER, Mode.BLOCK, (Mode.BLOCK, Mode.ASK), refusal_kinds=(KIND_APP_DRIVER,)),
     Permission("stop-processes", "Stopping your programs", "stop a stray dev server or a program holding a port",
                "a wrong process id would stop a program you are using", Route.BROKER, Mode.ASK, BLOCK_ASK_ALLOW,
-               refusal_kinds=(KIND_SIGNAL,)),
+               refusal_kinds=(KIND_SIGNAL,), acts_on_answer=True),
     Permission("docker", "Docker", "docker and colima: the container engine's socket",
                "a container runs outside the sandbox and can mount any folder, protected ones too",
                Route.PROFILE, Mode.ASK, BLOCK_ASK_ALLOW, refusal_kinds=(KIND_DOCKER,)),

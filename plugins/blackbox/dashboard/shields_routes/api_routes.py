@@ -89,7 +89,7 @@ def _valid(shield_id: str, name: str) -> bool:
 
 def _ask_on_refusal(seen: agent_hooks.RefusalSeen) -> None:
     """Observer: a sandbox refusal an agent's hook saw may ask the person (sandbox permissions)."""
-    shields.permission_refused(seen.kind, seen.agent, seen.instance, seen.folder, seen.pid)
+    shields.permission_refused(seen.kind, seen.name, seen.agent, seen.instance, seen.folder, seen.pid)
 
 
 def register(app: Any) -> None:

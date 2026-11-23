@@ -1,6 +1,7 @@
 """Brokered actions: what a sandboxed agent may ask Blackbox to do OUTSIDE the sandbox, each under
 its sandbox permission (block / ask / allow; ``sandbox.permissions``) — opening a web link
-(``open-links``) and opening a file in an app (``open-apps``).
+(``open-links``), opening a file in an app (``open-apps``) and stopping a program the agent may
+not signal itself (``stop-processes``, :mod:`.stop`: from the refusal the hook saw).
 
 Pattern: **Broker** — the agent's stand-in (``open`` first on the sandboxed PATH,
 ``platform.open_shim``) sends the request; the dashboard process, outside the sandbox, checks who
@@ -22,6 +23,7 @@ from pathlib import Path
 from .....kernel.bounded_files import atomic_write, read_small_text
 from .....kernel.config import load_blackbox_config
 from .. import platform
+from . import stop
 from .asking import WAITING, Asking, decide
 from .open_apps import open_app
 from .open_links import open_link
@@ -40,4 +42,4 @@ def install_shims(tools: Path, dashboard_url: str = "") -> None:
         atomic_write(path, shim, mode=0o755)
 
 
-__all__ = ["API_WRITES", "WAITING", "Asking", "decide", "install_shims"]
+__all__ = ["API_WRITES", "WAITING", "Asking", "decide", "install_shims", "stop"]

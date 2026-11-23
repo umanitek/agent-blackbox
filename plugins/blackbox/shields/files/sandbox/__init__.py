@@ -52,37 +52,11 @@ from .layout import CLI_AGENTS, agent_profile, canary_path, chosen, hermes_shell
 from .places import Places, build, canonical
 from .status import HOOKS_ONLY, NOT_INSTALLED_NOTE, SANDBOXED, SHELLS_ONLY, offer, protection, status
 
-__all__ = [
-    "CLI_AGENTS",
-    "HERMES_CODE_LAUNCHER",
-    "HERMES_LAUNCHER_ENV",
-    "HERMES_SHELLS",
-    "HOOKS_ONLY",
-    "NOT_INSTALLED_NOTE",
-    "SANDBOXED",
-    "SHELLS_ONLY",
-    "HermesCover",
-    "Places",
-    "brokered",
-    "canary_path",
-    "chosen",
-    "enter_hermes_process",
-    "enter_hermes_session",
-    "grant_once",
-    "hermes_shell_dir",
-    "home",
-    "launcher_dir",
-    "offer",
-    "open_app",
-    "policy",
-    "profile_path",
-    "protection",
-    "proven",
-    "restorations",
-    "self_protected_files",
-    "status",
-    "sync",
-]
+__all__ = ["CLI_AGENTS", "HERMES_CODE_LAUNCHER", "HERMES_LAUNCHER_ENV", "HERMES_SHELLS", "HOOKS_ONLY",
+           "NOT_INSTALLED_NOTE", "SANDBOXED", "SHELLS_ONLY", "HermesCover", "Places", "act_on", "brokered",
+           "canary_path", "chosen", "enter_hermes_process", "enter_hermes_session", "hermes_shell_dir", "home",
+           "launcher_dir", "offer", "on_refusal", "open_app", "policy", "profile_path", "protection", "proven",
+           "restorations", "self_protected_files", "status", "sync"]
 
 CANARY_TEXT = "Blackbox agent sandbox canary — a sandboxed agent can not read this file.\n"
 #: How many PATH-block restorations are kept for File Shield's alerts.
@@ -204,10 +178,24 @@ def enter_hermes_session() -> HermesCover:
         return HermesCover(note="Blackbox could not set up the sandbox for this session (see the log)")
 
 
-def grant_once(request: permissions.PermissionRequest) -> None:
-    """Allow once for a profile's permission: the one-launch profile the agent's next start takes
-    (``profiles.write_once``); its own rules apply again after that launch."""
-    profiles.write_once(policy(mode_module.current()), request, permissions.current())
+def act_on(request: permissions.PermissionRequest) -> None:
+    """The person allowed *request* and Blackbox must act: stop the process it names
+    (``stop-processes``), or write the one-launch profile the agent's next start takes
+    (``profiles.write_once``; its own rules apply again after that launch)."""
+    if request.permission == brokered.stop.PERMISSION:
+        brokered.stop.act(request)
+    else:
+        profiles.write_once(policy(mode_module.current()), request, permissions.current())
+
+
+def on_refusal(kind: str, name: str, agent: str, instance: str, folder: str, pid: int = 0) -> None:
+    """A sandbox refusal an agent's hook saw (``agent_hooks.RefusalSeen``): a refused signal goes
+    to the stop broker with the process it named; any other kind may ask the person (its permission
+    on "ask")."""
+    if kind == permissions.catalogue.KIND_SIGNAL:
+        brokered.stop.on_refused(int(name) if name.isdigit() else 0, agent, instance, folder)
+    else:
+        permissions.refused(kind, agent, instance, folder, pid)
 
 
 def open_app(app: str) -> str:

@@ -2,8 +2,9 @@
 
 * **Allow once** — a broker's permission: a single-use grant bound to the exact request
   (:mod:`.grants`, 120 s); a profile's permission: a one-launch profile the agent's launcher takes
-  at its next start (the Hermes agent: its next command), handed to *once_profile* (the facade's
-  ``grant_once``, so this package never imports the facade);
+  at its next start (the Hermes agent: its next command); a broker that acts on the answer
+  (stopping a process): done now. Both are handed to *act* (the facade's ``act_on``, so this
+  package never imports the facade);
 * **Always for this agent here** (F3) — a rule: this permission allowed for this agent in this
   project, written like any other rule;
 * **Keep blocked** — nothing changes; the same instance is not asked again for a while.
@@ -16,7 +17,7 @@ AppleScript is offered "once" and "keep blocked" only (F5).
 
 Usage::
 
-    answer({"id": "…", "choice": "once"}, once_profile=sandbox.grant_once)
+    answer({"id": "…", "choice": "once"}, act=sandbox.act_on)
 """
 
 from __future__ import annotations
@@ -35,7 +36,9 @@ from .model import Choice, Mode, OnceGrant, PermissionRequest, Route, Rule, Scop
 from .section import SECTION, as_section, current
 
 logger = logging.getLogger(__name__)
-OnceProfile = Callable[[PermissionRequest], None]
+#: What Blackbox does when the person allows a request it must act on itself: a profile's one-launch
+#: grant, or a broker that acts at once (stopping a process) — the facade's ``act_on``.
+Act = Callable[[PermissionRequest], None]
 
 
 def choices(request: PermissionRequest) -> list[str]:
@@ -77,9 +80,10 @@ def weakening(body: Mapping[str, Any]) -> list[str]:
     return [f"Let {who} use {BY_ID[request.permission].name} {how}{quoted}"]
 
 
-def answer(body: Mapping[str, Any], once_profile: OnceProfile) -> dict[str, Any]:
+def answer(body: Mapping[str, Any], act: Act) -> dict[str, Any]:
     """Applies the person's answer (see the module doc); answers ``{"answered": id, "choice": …}``."""
     request, choice = _request(body)
+    permission = BY_ID[request.permission]
     if choice is Choice.ALWAYS:
         scope = Scope(agent=request.agent, project=request.project)
         now = current()
@@ -87,12 +91,14 @@ def answer(body: Mapping[str, Any], once_profile: OnceProfile) -> dict[str, Any]
         result = write_settings({SECTION: as_section(Settings(kept + (Rule(request.permission, Mode.ALLOW, scope),), now.folders))})
         if not result.get("ok"):
             raise ShieldApiError(400, "; ".join(result.get("errors") or ["the permission could not be saved"]))
+        if permission.acts_on_answer:
+            act(request)
     elif choice is Choice.ONCE:
-        if BY_ID[request.permission].route is Route.BROKER:
+        if permission.route is Route.BROKER and not permission.acts_on_answer:
             grants.grant(OnceGrant(request.permission, Scope(agent=request.agent, project=request.project), request.digest,
                                    time.time() + grants.ONCE_SECONDS))
         else:
-            once_profile(request)
+            act(request)
     else:
         requests.keep_blocked(request)
     requests.take(request.id)
@@ -122,4 +128,4 @@ def read(_context: Any, _params: Mapping[str, str]) -> dict[str, Any]:
     return {"requests": [row(each) for each in requests.pending()]}
 
 
-__all__ = ["OnceProfile", "answer", "choices", "read", "requested", "row", "weakening"]
+__all__ = ["Act", "answer", "choices", "read", "requested", "row", "weakening"]

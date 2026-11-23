@@ -69,12 +69,12 @@ def _seen(kind, home, instance="s-1", agent="claude-code"):
 
 
 def test_a_refusal_opens_one_request_only_while_its_permission_asks(entry, home):
-    _seen(sandbox_errors.SIGNAL, home)                       # stop-processes: ask by default
-    _seen(sandbox_errors.SIGNAL, home)                       # the same instance again: no second
+    _seen(sandbox_errors.OPEN_APP, home)                       # open-apps: ask by default
+    _seen(sandbox_errors.OPEN_APP, home)                       # the same instance again: no second
     [request] = requests.pending()
-    assert (request.permission, request.agent, request.instance, request.project) == ("stop-processes", "claude-code", "s-1", "~/shop")
+    assert (request.permission, request.agent, request.instance, request.project) == ("open-apps", "claude-code", "s-1", "~/shop")
     _seen(sandbox_errors.APP_DRIVER, home)                   # applescript: block by default
-    assert [each.permission for each in requests.pending()] == ["stop-processes"]
+    assert [each.permission for each in requests.pending()] == ["open-apps"]
 
 
 def test_requests_are_bounded_and_cooled_down(home):
@@ -94,23 +94,23 @@ def _gate(body):
 
 
 def test_once_and_always_wait_for_the_person_and_keep_blocked_does_not(entry, home):
-    _seen(sandbox_errors.SIGNAL, home)
+    _seen(sandbox_errors.OPEN_APP, home)
     [request] = requests.pending()
-    assert _gate({"id": request.id, "choice": "once"}) == ['Let Claude Code in ~/shop use Stopping your programs once ("Stopping your programs")']
-    assert _gate({"id": request.id, "choice": "always"})[0].endswith("from now on (\"Stopping your programs\")")
+    assert _gate({"id": request.id, "choice": "once"}) == ['Let Claude Code in ~/shop use Opening files in apps once ("Opening files in apps")']
+    assert _gate({"id": request.id, "choice": "always"})[0].endswith("from now on (\"Opening files in apps\")")
     assert _gate({"id": request.id, "choice": "keep-blocked"}) == []
     api.API.writes["permission-answer"](None, {"id": request.id, "choice": "keep-blocked"})
     assert requests.pending() == []
-    _seen(sandbox_errors.SIGNAL, home)
+    _seen(sandbox_errors.OPEN_APP, home)
     assert requests.pending() == []                             # cooled down
 
 
 def test_always_writes_the_rule_for_this_agent_in_this_project(entry, home):
-    _seen(sandbox_errors.SIGNAL, home)
+    _seen(sandbox_errors.OPEN_APP, home)
     [request] = requests.pending()
     answer = api.API.writes["permission-answer"](None, {"id": request.id, "choice": "always"})
     assert answer["choice"] == "always" and answer["requests"] == []
-    assert entry["agent_sandbox"]["permissions"] == [{"permission": "stop-processes", "mode": "allow", "agent": "claude-code",
+    assert entry["agent_sandbox"]["permissions"] == [{"permission": "open-apps", "mode": "allow", "agent": "claude-code",
                                                       "project": "~/shop"}]
 
 
@@ -129,9 +129,9 @@ def test_a_broker_grant_is_used_once_and_not_after_it_expires():
 
 
 def test_an_open_request_is_an_alert_naming_the_agent_and_permission_only(entry, home):
-    _seen(sandbox_errors.SIGNAL, home)
+    _seen(sandbox_errors.OPEN_APP, home)
     [alert] = [row for row in alerts.alerts() if row["kind"] == "permission-request"]
-    assert alert["text"].startswith("Claude Code wants to use Stopping your programs.") and "shop" not in alert["text"]
+    assert alert["text"].startswith("Claude Code wants to use Opening files in apps.") and "shop" not in alert["text"]
 
 
 def _launcher_env(home):
