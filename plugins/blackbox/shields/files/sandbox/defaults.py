@@ -10,16 +10,16 @@ turned off stays off, and nothing is picked). An agent the person took out of th
 again: their choice is kept, never overridden. Taking one out stays a weakening change (the
 approval dialog in a companion app, or the person's password).
 
-GATED (founder decision, 2026-11-23): the default only takes effect after the "system-level day"
-VM test passes. Until then :data:`SANDBOX_DEFAULT` is ``"off"`` and :func:`apply` changes
-nothing; the flip to ``"on"`` is its own one-line commit after that test.
+ON BY DEFAULT (founder decision, 2026-11-23, after security round 5): both blockers round 4 named
+are proven fixed with real agents — the places something starts from by itself are closed inside
+the sandbox, and the root helper idles at ~1 % CPU. :data:`SANDBOX_DEFAULT` is ``"on"``.
 
 Adding agents only protects more, so it is written without approval (the settings writer, with
 File Shield's validator); then the profile and launchers are brought in step (``sync``).
 
 Usage::
 
-    apply()                        # [] while the gate is off; else the agents it picked now
+    apply()                        # the agents it picked now ([] when nothing new)
     picks(mode, ("claude-code",))  # what apply would store, without writing
 """
 
@@ -35,8 +35,8 @@ from ...contract import ShieldMode
 from .. import mode as mode_module
 from . import platform
 
-#: "off" until the system-level VM test passes (founder, 2026-11-23); then "on" in a one-line commit.
-SANDBOX_DEFAULT = "off"
+#: On by default (founder, 2026-11-23, after security round 5).
+SANDBOX_DEFAULT = "on"
 logger = logging.getLogger(__name__)
 
 

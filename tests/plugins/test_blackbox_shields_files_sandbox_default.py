@@ -1,8 +1,8 @@
-"""The agent sandbox by default (founder direction 2026-11-22; gated by the founder 2026-11-23).
+"""The agent sandbox by default (founder direction 2026-11-22; on by default since 2026-11-23, after
+security round 5 proved both round-4 blockers fixed with real agents).
 
 Contracts:
-* GATED: the default is off (``SANDBOX_DEFAULT == "off"``) until the system-level VM test passes;
-  while off, install / upgrade / attach change nothing;
+* ON BY DEFAULT (``SANDBOX_DEFAULT == "on"``): install / upgrade / attach pick every detected agent;
 * switched on, every detected agent is picked and File Shield engaged — except an agent the person
   took out (``sandbox_declined``), and a File Shield the person turned off: their choice is kept;
 * taking an agent out is remembered by every settings write (and still asks first — the approval
@@ -48,10 +48,16 @@ def entry(monkeypatch, tmp_path):
     return state, written
 
 
-def test_the_default_is_gated_off_until_the_system_level_test_passes(entry):
+def test_the_sandbox_is_on_by_default(entry):
     state, written = entry
-    assert defaults.SANDBOX_DEFAULT == "off"
-    assert shields.apply_sandbox_default() == [] and written == [] and "shields" not in state
+    assert defaults.SANDBOX_DEFAULT == "on"
+    assert shields.apply_sandbox_default() == ["claude-code", "gemini-cli", "hermes"] and written
+    assert state["shields"]["file-shield"]["sandboxed"] == ["claude-code", "gemini-cli", "hermes"]
+
+
+def test_off_the_default_changes_nothing(entry):
+    state, written = entry
+    assert defaults.apply("off") == [] and written == [] and "shields" not in state
 
 
 def test_switched_on_every_detected_agent_is_picked_and_file_shield_engaged(entry):

@@ -62,14 +62,13 @@ sandbox, for the coding agents you pick (macOS today):
 > your shell startup files, or reach protected items. Turn off per agent if a tool you need
 > doesn't work.
 
-**On by default — once proven.** Until the operating system's own file checks (Layer 3) exist,
-every agent Blackbox finds is meant to run inside the sandbox by default: on install, upgrade and
-`blackbox attach` each detected agent is picked, unless you took it out of the sandbox before —
-your choice is kept (`sandbox_declined`) and never overridden. Taking an agent out asks you first
-(the companion app's dialog, or your password). A File Shield you turned off stays off. This
-default is switched on only after a full system-level test day on a test Mac passes; until then
-it is off (`SANDBOX_DEFAULT = "off"` in `shields/files/sandbox/defaults.py`) and you pick agents
-yourself.
+**On by default.** Until the operating system's own file checks (Layer 3) exist, every agent
+Blackbox finds runs inside the sandbox by default: on install, upgrade and `blackbox attach` each
+detected agent is picked, unless you took it out of the sandbox before — your choice is kept
+(`sandbox_declined`) and never overridden, upgrades included. Taking an agent out asks you first
+(the companion app's dialog, or your password). A File Shield you turned off stays off
+(`SANDBOX_DEFAULT = "on"` in `shields/files/sandbox/defaults.py`, since security round 5 proved the
+sandbox with real agents).
 
 - Blackbox writes a launcher for each agent you pick (`claude`, `codex`, `cursor-agent`, `gemini`,
   `copilot`, `cline`, `opencode`) and puts its folder first on your PATH (one marked block at the

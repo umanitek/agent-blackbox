@@ -113,6 +113,10 @@ that the two version fields agree.
 
 ### Changed
 
+- **Agents run inside Blackbox's sandbox by default.** On install, upgrade and `blackbox attach`
+  every agent Blackbox finds is picked for the agent sandbox (macOS), File Shield engaged. An agent
+  you took out of the sandbox stays out, upgrades included; taking one out still asks you first; a
+  File Shield you turned off stays off.
 - **Uninstall asks whether to remove the Hermes host Blackbox's installer set up.** On a machine
   that had no Hermes before, `blackbox uninstall` asks once (`--remove-host` when not at a terminal)
   and removes exactly what the installer put there — your own lines in `~/.zshrc` stay byte for
