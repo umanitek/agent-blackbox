@@ -120,11 +120,12 @@ def chosen(mode: ShieldMode) -> tuple[str, ...]:
 def policy(mode: ShieldMode) -> Places:
     """The policy for *mode*: the person's items, Blackbox's keys, own and add-on places, the OS's startup places."""
     own = (str(constants.blackbox_home()), str(_PLUGIN), *addon_places.of(_PLUGIN.parent))
-    hooks = own_places.hook_configs()
-    startup = persistence_places.shell_startup_files(str(Path.home())) + hooks   # the hook judgement reads the same list
-    holders = sorted({os.path.dirname(path) for path in hooks} - {str(Path.home())})
+    hooks, settings = own_places.hook_configs(), own_places.settings_files()   # Blackbox's settings live in Hermes' config (P0)
+    startup = persistence_places.shell_startup_files(str(Path.home())) + hooks + settings   # the hook judgement reads the same list
+    holders = sorted({os.path.dirname(path) for path in hooks} - {str(Path.home())}) + own_places.holders([*own, *settings])
     return build(mode_module.protected(mode), blackbox_key_patterns(), own, str(canary_path()), is_folder=is_folder,
-                 startup_files=startup, keep_in_place=holders, no_write_globs=[addons.manifest_pattern(str(_PLUGIN.parent))],
+                 startup_files=startup, keep_in_place=holders,
+                 no_write_globs=[addons.manifest_pattern(str(_PLUGIN.parent)), *own_places.settings_globs()],
                  startup=platform.startup_places(str(Path.home())))
 
 

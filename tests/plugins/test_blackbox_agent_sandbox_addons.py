@@ -68,7 +68,7 @@ def test_the_policy_holds_every_add_on_folder_its_declared_places_and_every_mani
     rules = sandbox.policy(_mode())
     assert str(companion) in rules.no_write and str(data) in rules.no_write
     assert str(plugins / "not_an_addon") not in rules.no_write
-    assert rules.no_write_globs == (str(plugins / "*" / addons.MANIFEST),)
+    assert str(plugins / "*" / addons.MANIFEST) in rules.no_write_globs   # beside Hermes' profile settings (design review P0)
 
 
 def test_a_manifest_pattern_is_made_canonical_before_its_wildcard(tmp_path):
