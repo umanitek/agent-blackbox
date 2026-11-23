@@ -219,24 +219,86 @@ fn serve_bound(resolver: Arc<Resolver>, address: &str) -> std::io::Result<()> {
     resolver.alive.store(true, std::sync::atomic::Ordering::SeqCst);
     let tcp_resolver = resolver.clone();
     thread::Builder::new().name("blackbox-netd-dns-tcp".into()).spawn(move || {
-        for stream in tcp.incoming().flatten() {
-            let resolver = tcp_resolver.clone();
-            let _ = thread::Builder::new().name("blackbox-netd-dns-conn".into()).spawn(move || serve_tcp(stream, &resolver));
+        let mut pace = ErrorPace::default();
+        for stream in tcp.incoming() {
+            match stream {
+                Ok(stream) => {
+                    pace.ok();
+                    let resolver = tcp_resolver.clone();
+                    let _ = thread::Builder::new().name("blackbox-netd-dns-conn".into()).spawn(move || serve_tcp(stream, &resolver));
+                }
+                Err(error) => pace.wait_after(&error),   // e.g. EMFILE: waits instead of spinning (KI-606)
+            }
         }
     })?;
     let mut buffer = [0u8; MAX_PACKET];
+    let mut pace = ErrorPace::default();
     loop {
         let (size, client) = match udp.recv_from(&mut buffer) {
             Ok(received) => received,
-            Err(_) => continue,
+            Err(error) => {
+                pace.wait_after(&error);
+                continue;
+            }
         };
+        let Ok(socket) = udp.try_clone() else {
+            // Out of descriptors: this query is dropped (its client retries) and the loop slows
+            // down; the resolver itself keeps serving — it used to stop here.
+            pace.wait_after(&std::io::Error::other("no descriptor for an answer"));
+            continue;
+        };
+        pace.ok();
         let query = buffer[..size].to_vec();
-        let (resolver, socket) = (resolver.clone(), udp.try_clone()?);
+        let resolver = resolver.clone();
         let _ = thread::Builder::new().name("blackbox-netd-dns-query".into()).spawn(move || {
             if let Some(answer) = resolver.answer(&query, false) {
                 let _ = socket.send_to(&answer, client);
             }
         });
+    }
+}
+
+/// Errors retried at once before the loop starts waiting (an ICMP "port unreachable" left by the
+/// last answer to a client that had gone shows as one `ECONNREFUSED` on the next receive).
+const FREE_RETRIES: u32 = 8;
+const FIRST_ERROR_WAIT: Duration = Duration::from_millis(5);
+const MAX_ERROR_WAIT: Duration = Duration::from_secs(1);
+
+/// How a receive or accept loop paces itself after errors (KI-606, security round 4: the UDP loop
+/// `continue`d on EVERY error with no wait, so a socket that kept failing held a core at 98-100 %
+/// with `blackbox-netd-dns` spinning in `recvfrom`). A few errors in a row are retried at once;
+/// after that each waits, doubling from [`FIRST_ERROR_WAIT`] up to [`MAX_ERROR_WAIT`], until a
+/// receive succeeds. The first error of a run is logged once.
+#[derive(Debug, Default)]
+pub struct ErrorPace {
+    run: u32,
+}
+
+impl ErrorPace {
+    /// A receive or accept succeeded: the next error starts a new run.
+    pub fn ok(&mut self) {
+        self.run = 0;
+    }
+
+    /// How long to wait after the *run*-th error in a row.
+    pub fn wait_for(run: u32) -> Duration {
+        if run <= FREE_RETRIES {
+            return Duration::ZERO;
+        }
+        let doublings = (run - FREE_RETRIES - 1).min(16);
+        (FIRST_ERROR_WAIT * 2u32.pow(doublings)).min(MAX_ERROR_WAIT)
+    }
+
+    /// Counts *error* and sleeps for as long as its place in the run says.
+    pub fn wait_after(&mut self, error: &std::io::Error) {
+        self.run = self.run.saturating_add(1);
+        if self.run == FREE_RETRIES + 1 {
+            eprintln!("blackbox-netd: DNS socket keeps failing ({error}); slowing down until it recovers");
+        }
+        let wait = Self::wait_for(self.run);
+        if !wait.is_zero() {
+            thread::sleep(wait);
+        }
     }
 }
 
@@ -462,6 +524,23 @@ mod tests {
         let resolved = resolver.drain_resolved();
         assert_eq!(resolved[&"203.0.113.7".parse::<std::net::IpAddr>().unwrap()].0, "api.example.com");
         assert!(resolver.drain_resolved().is_empty(), "a drain takes them");
+    }
+
+    #[test]
+    fn a_socket_that_keeps_failing_is_waited_on_never_spun() {
+        // KI-606: count how many errors a loop gets through in 300 ms of a socket that always fails.
+        let mut pace = ErrorPace::default();
+        let started = std::time::Instant::now();
+        let mut tries = 0u32;
+        while started.elapsed() < Duration::from_millis(300) {
+            pace.wait_after(&std::io::Error::from(std::io::ErrorKind::ConnectionRefused));
+            tries += 1;
+        }
+        assert!(tries < 30, "{tries} tries in 300 ms: the loop spins");
+        assert_eq!(ErrorPace::wait_for(1), Duration::ZERO, "one ICMP refusal is retried at once");
+        assert_eq!(ErrorPace::wait_for(40), MAX_ERROR_WAIT, "a long run waits the most, never more");
+        pace.ok();
+        assert_eq!(ErrorPace::wait_for(pace.run + 1), Duration::ZERO, "a success starts over");
     }
 
     #[test]
