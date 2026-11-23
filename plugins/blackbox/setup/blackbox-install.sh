@@ -2098,7 +2098,6 @@ home = Path(sys.argv[2]).expanduser()
 src = repo / "plugins" / "blackbox"
 dest = home / "plugins" / "blackbox"
 openclaw_src = repo / "integrations" / "openclaw"
-openclaw_dest = dest / "_openclaw"
 
 if not src.is_dir():
     raise SystemExit(f"missing Blackbox plugin source: {src}")
@@ -2118,15 +2117,25 @@ def ignore_openclaw(_dir, names):
     skip_dirs = {"node_modules", "dist", ".turbo", "test", "tests", "__pycache__"}
     return [n for n in names if n in skip_dirs or n.endswith((".pyc", ".log", ".tsbuildinfo"))]
 
+# Built beside, then swapped in by two renames (KI-644, security round 7): deleting the old copy in
+# place raced the RUNNING dashboard and hooks, which write fresh __pycache__ folders into it while
+# rmtree walks it ("Directory not empty"), and a failed refresh left a copy mixing two commits. A
+# rename is atomic and does not care what runs from the folder; the old copy is removed afterwards,
+# best effort, OUTSIDE plugins/ (Hermes never sees it as a plugin). Fails before the swap: the old
+# copy stays whole.
+aside = home / ".blackbox-plugin-refresh"
+staged, old_copy = aside / f"new-{os.getpid()}", aside / f"old-{os.getpid()}"
+shutil.rmtree(aside, ignore_errors=True)
+aside.mkdir(parents=True, exist_ok=True)
 home.joinpath("plugins").mkdir(parents=True, exist_ok=True)
-if dest.exists():
-    shutil.rmtree(dest)
-shutil.copytree(src, dest, ignore=ignore_runtime)
+shutil.copytree(src, staged, ignore=ignore_runtime)
 if openclaw_src.is_dir():
-    if openclaw_dest.exists():
-        shutil.rmtree(openclaw_dest)
-    shutil.copytree(openclaw_src, openclaw_dest, ignore=ignore_openclaw)
-(dest / ".blackbox-source-root").write_text(str(repo), encoding="utf-8")
+    shutil.copytree(openclaw_src, staged / "_openclaw", ignore=ignore_openclaw)
+(staged / ".blackbox-source-root").write_text(str(repo), encoding="utf-8")
+if dest.exists() or dest.is_symlink():
+    os.rename(dest, old_copy)
+os.rename(staged, dest)
+shutil.rmtree(aside, ignore_errors=True)
 PYEOF
     then
         ok "Blackbox plugin copy refreshed"
@@ -3837,15 +3846,32 @@ rollback_docker_desktop() {
 }
 
 # Put back every rewritten file, then remove every path that did not exist, deepest first.
+# Puts the saved *copy* back at *path*. A folder is moved aside first by one rename and the copy put
+# in its place before the old one is deleted (KI-644, security round 7): `rm -rf` of the plugin copy
+# raced the running dashboard's fresh __pycache__ folders, failed, and `cp` then filled the survivor —
+# a copy mixing two commits, "(not restored)". The aside is beside the copy's parent folder, never
+# inside it (plugins/ holds only plugins).
+rollback_put_back() {
+    local path="$1" copy="$2" aside=""
+    if [ -d "$path" ] && [ ! -L "$path" ]; then
+        aside="$(dirname "$(dirname "$path")")/.blackbox-rollback-$$-$(basename "$path")"
+        rm -rf "$aside" 2>/dev/null
+        mv "$path" "$aside" 2>/dev/null || aside=""
+    fi
+    [ -z "$aside" ] && rm -rf "$path"
+    mkdir -p "$(dirname "$path")"
+    cp -pRP "$copy" "$path" || warn "Could not restore $path (a copy is in $copy)."
+    [ -n "$aside" ] && rm -rf "$aside" 2>/dev/null
+    return 0
+}
+
 rollback_files() {
     local path copy
     while IFS="$(printf '\t')" read -r path copy; do
         if [ -z "$path" ] || ! install_path_removable "$path"; then
             continue
         fi
-        rm -rf "$path"
-        mkdir -p "$(dirname "$path")"
-        cp -pRP "$copy" "$path" || warn "Could not restore $path (a copy is in $copy)."
+        rollback_put_back "$path" "$copy"
     done <"$INSTALL_RECORD_DIR/saved"
     # New commands in a command folder that already existed (a folder this run created is
     # in the absent list and goes as a whole).
