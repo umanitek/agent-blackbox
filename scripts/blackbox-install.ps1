@@ -1190,9 +1190,52 @@ function Resolve-Repo {
     Write-Ok "Repo ready at $RepoDir"
 }
 
-# ── Python venv + editable install ──────────────────────────────────────────
+# ── Python: Hermes's own setup (pm), or a venv + editable install for an older Hermes ──────────
+# KI-623: a Hermes with pm (0.21.7+: setup-hermes.ps1 and pm\lock.json) is set up by its OWN Windows
+# setup, as the .sh runs setup-hermes.sh: the pinned uv and Python, the hash-verified uv.lock, the
+# environment pm records. Where that environment is, pm says (pm.environments.selected_venv, asked
+# inside activate.ps1's environment - the .sh asks through scripts/run-in-hermes-env). Only a
+# checkout without pm keeps the older venv + `pip install -e`.
+function Test-HermesOwnSetup {
+    (Test-Path -LiteralPath (Join-Path $RepoDir "setup-hermes.ps1")) -and (Test-Path -LiteralPath (Join-Path $RepoDir "pm\lock.json")) -and
+        (Test-Path -LiteralPath (Join-Path $RepoDir "activate.ps1"))
+}
+
+function Install-PythonEnvWithHermesSetup {
+    $shell = (Get-Process -Id $PID).Path
+    Write-Step "Running Hermes's own setup (setup-hermes.ps1: pinned uv + Python, hash-verified dependencies) ..."
+    Push-Location $RepoDir
+    try {
+        & $shell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $RepoDir "setup-hermes.ps1")
+        if ($LASTEXITCODE -ne 0) { throw "Hermes's own setup (setup-hermes.ps1) failed (exit $LASTEXITCODE; its reason is above)" }
+        # Single quotes only: Windows PowerShell 5.1 mangles double quotes inside a native argument.
+        $env:BLACKBOX_PM_PROBE = "from pathlib import Path; from pm.environments import selected_venv; print(selected_venv(Path('.').resolve()))"
+        $activate = (Join-Path $RepoDir "activate.ps1") -replace "'", "''"
+        $lines = @(& $shell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '$activate' *> `$null; python -c `$env:BLACKBOX_PM_PROBE")
+        if ($LASTEXITCODE -ne 0) { throw "Hermes's environment could not be found (pm.environments.selected_venv)" }
+    } finally {
+        Remove-Item env:BLACKBOX_PM_PROBE -ErrorAction SilentlyContinue
+        Pop-Location
+    }
+    $selected = [string]($lines | Where-Object { $_ } | Select-Object -Last 1)
+    if (-not $selected -or -not (Test-Path -LiteralPath (Join-Path $selected.Trim() "Scripts\python.exe"))) {
+        throw "Hermes's setup finished but its environment has no python.exe ($selected)"
+    }
+    $script:VenvDir = $selected.Trim()
+    $script:VenvPython = Join-Path $VenvDir "Scripts\python.exe"
+    Write-Step "Hermes environment: $VenvDir"
+}
+
 function Install-PythonEnv {
     Write-Heading "Installing Hermes + Blackbox (Python)"
+    if (Test-HermesOwnSetup) {
+        Install-PythonEnvWithHermesSetup
+        & $VenvPython -c "import hermes_cli, fastapi, uvicorn" 2>$null
+        if ($LASTEXITCODE -ne 0) { throw "Hermes's environment does not import hermes_cli, fastapi and uvicorn" }
+        $script:HermesBin = Join-Path $VenvDir "Scripts\hermes.exe"
+        Write-Ok "Hermes + Blackbox installed through Hermes's own setup"
+        return
+    }
     $script:VenvDir = "$RepoDir\venv"
     $script:VenvPython = "$VenvDir\Scripts\python.exe"
     if (-not (Test-Path $VenvDir)) {
@@ -1242,7 +1285,7 @@ function Use-RunningHermes {
 }
 
 function Install-BlackboxCommand {
-    $shimDir = Join-Path $HOME ".local\bin"
+    $shimDir = $BlackboxShimDir
     $shimPath = Join-Path $shimDir "blackbox.cmd"
     New-Item -ItemType Directory -Force -Path $shimDir | Out-Null
 
@@ -2053,10 +2096,173 @@ function Test-Install {
         }
     }
     if ($failed) {
-        Write-Err2 "The install is not complete. Fix the reason above and run this installer again."
-        Write-Step "(Windows does not roll a failed install back yet: what was installed stays - KI-436.)"
+        Write-Err2 "The install is not complete, so it will not be kept."
         exit 1
     }
+}
+
+# ── All or nothing (matches install_record_begin / rollback_install in the .sh, KI-436) ───────────
+# Before the first change, the run notes what is there: each place it may create (absent: removed
+# on a rollback), each file it may rewrite (copied: put back), the user PATH entry, the sign-in
+# tasks, the checkout's commit and file set, and whether Blackbox's node was running. Any failure
+# after that - an error, an `exit 1`, Ctrl+C - puts the machine back the way it was (the `finally`
+# around Main), and the rollback says only what it checked is gone (KI-609's lesson).
+$script:InstallRecord = $null
+$script:InstallCommitted = $false
+$StartupTaskNames = @($DkgTaskName, "Agent Blackbox dashboard")
+$BlackboxShimDir = Join-Path $HOME ".local\bin"   # the per-user `blackbox` command (Install-BlackboxCommand)
+
+function Get-InstallCreatedPaths {
+    @($DefaultRepoDir, $HermesHome, $BlackboxHome, (Join-Path $BlackboxShimDir "blackbox.cmd"))
+}
+
+function Get-InstallRewrittenPaths {
+    @((Join-Path $HermesHome "config.yaml"), (Join-Path $HermesHome ".env"), (Join-Path $HermesHome "plugins\blackbox"),
+      (Join-Path $DkgHome "config.json"), (Join-Path $DkgCliDir "package.json"), (Join-Path $DkgCliDir "package-lock.json"),
+      (Join-Path $DkgHome "start-blackbox-dkg.ps1"), (Join-Path $BlackboxHome "start-blackbox-dashboard.ps1"))
+}
+
+# Whether a rollback may delete $Path: absolute, below a top-level folder, never the home folder
+# or a drive root. A guard against an empty or wrong variable, not a policy.
+function Test-InstallPathRemovable([string]$Path) {
+    if (-not $Path -or -not [IO.Path]::IsPathRooted($Path)) { return $false }
+    $absolute = [IO.Path]::GetFullPath($Path)
+    $root = ([string][IO.Path]::GetPathRoot($absolute)).TrimEnd('\', '/')
+    $full = $absolute.TrimEnd('\', '/')
+    if (-not $full -or $full -eq $root) { return $false }
+    $parent = ([string](Split-Path -Parent $full)).TrimEnd('\', '/')
+    if ($parent -eq $root) { return $false }
+    return $full -ne ([IO.Path]::GetFullPath($HOME).TrimEnd('\', '/'))
+}
+
+function Start-InstallRecord {
+    $dir = Join-Path ([IO.Path]::GetTempPath()) ("blackbox-install-" + [guid]::NewGuid().ToString("n"))
+    New-Item -ItemType Directory -Force -Path (Join-Path $dir "copies") | Out-Null
+    $record = [ordered]@{ Dir = $dir; Absent = @(); Saved = @(); Tasks = @(); RepoHead = ""; SparseBefore = $null
+                          SparseWasOff = $false; NodeWasRunning = $false }
+    # A missing path is noted with the top-most missing folder above it (.local when even that
+    # is missing), so a rollback leaves no empty folders behind - as install_record_note does.
+    foreach ($path in @(Get-InstallCreatedPaths) + @(Get-InstallRewrittenPaths)) {
+        if (Test-Path -LiteralPath $path) { continue }
+        $top = $path
+        while (($parent = Split-Path -Parent $top) -and -not (Test-Path -LiteralPath $parent) -and (Test-InstallPathRemovable $parent)) {
+            $top = $parent
+        }
+        $record.Absent += @($top, $path) | Select-Object -Unique
+    }
+    $index = 0
+    foreach ($path in @(Get-InstallRewrittenPaths)) {
+        if (-not (Test-Path -LiteralPath $path)) { continue }
+        $copy = Join-Path $dir "copies\$index"
+        Copy-Item -LiteralPath $path -Destination $copy -Recurse -Force
+        $record.Saved += [pscustomobject]@{ Path = $path; Copy = $copy }
+        $index++
+    }
+    if (Get-Command Get-ScheduledTask -ErrorAction SilentlyContinue) {
+        $record.Tasks = @($StartupTaskNames | Where-Object { Get-ScheduledTask -TaskName $_ -ErrorAction SilentlyContinue })
+    }
+    if (Test-Path -LiteralPath (Join-Path $DefaultRepoDir ".git")) {
+        $record.RepoHead = [string](& git -C $DefaultRepoDir rev-parse -q --verify HEAD 2>$null)
+        $sparse = Join-Path $DefaultRepoDir ".git\info\sparse-checkout"
+        if (((& git -C $DefaultRepoDir config --bool core.sparseCheckout 2>$null) -eq "true") -and (Test-Path -LiteralPath $sparse)) {
+            $record.SparseBefore = [IO.File]::ReadAllText($sparse)
+        } else {
+            $record.SparseWasOff = $true
+        }
+    }
+    try {
+        $null = Invoke-WebRequest -UseBasicParsing -TimeoutSec 3 -Uri "$DkgDaemonUrl/api/status"
+        $record.NodeWasRunning = Test-Path -LiteralPath (Join-Path $DkgHome "config.json")
+    } catch { $record.NodeWasRunning = $false }
+    $script:InstallRecord = $record
+}
+
+function Complete-InstallRecord {
+    $script:InstallCommitted = $true
+    if ($script:InstallRecord) { Remove-Item -LiteralPath $script:InstallRecord.Dir -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+function Undo-Install {
+    $record = $script:InstallRecord
+    Write-Host ""
+    Write-Err2 "Blackbox was not installed. Putting this machine back the way it was ..."
+    if (-not $record.NodeWasRunning -and (Test-Path -LiteralPath $DkgBin)) {
+        try { Invoke-BlackboxDkgControl stop *> $null } catch { Write-Warn2 "Could not stop the DKG node this run started: $($_.Exception.Message)" }
+    }
+    if (Get-Command Unregister-ScheduledTask -ErrorAction SilentlyContinue) {
+        foreach ($name in $StartupTaskNames) {
+            if ($record.Tasks -notcontains $name -and (Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue)) {
+                Unregister-ScheduledTask -TaskName $name -Confirm:$false -ErrorAction SilentlyContinue
+            }
+        }
+    }
+    if ($script:AddedUserPath) { Remove-UserPathEntry $script:AddedUserPath }
+    Undo-InstallCheckout $record
+    foreach ($saved in @($record.Saved)) {
+        if (-not (Test-InstallPathRemovable $saved.Path)) { continue }
+        Remove-Item -LiteralPath $saved.Path -Recurse -Force -ErrorAction SilentlyContinue
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $saved.Path) | Out-Null
+        Copy-Item -LiteralPath $saved.Copy -Destination $saved.Path -Recurse -Force
+    }
+    foreach ($path in @($record.Absent | Sort-Object -Property Length -Descending)) {
+        if ((Test-InstallPathRemovable $path) -and (Test-Path -LiteralPath $path)) {
+            Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+    $left = @(Get-InstallLeftovers $record)
+    if ($left.Count -eq 0) {
+        Write-Ok "Nothing from this install attempt was left behind."
+    } else {
+        Write-Warn2 "Not everything could be put back; still here:"
+        foreach ($line in $left) { Write-Host "    $line" }
+    }
+    Write-Step "Fix the reason shown above, then run the installer again."
+    Remove-Item -LiteralPath $record.Dir -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# An existing checkout this run moved or narrowed goes back to the commit and file set it had.
+function Undo-InstallCheckout($Record) {
+    if (-not $Record.RepoHead -or -not (Test-Path -LiteralPath (Join-Path $DefaultRepoDir ".git"))) { return }
+    if ([string](& git -C $DefaultRepoDir rev-parse -q --verify HEAD 2>$null) -ne $Record.RepoHead) {
+        & git -C $DefaultRepoDir reset -q --keep $Record.RepoHead 2>$null
+    }
+    $sparse = Join-Path $DefaultRepoDir ".git\info\sparse-checkout"
+    if ($null -ne $Record.SparseBefore) {
+        [IO.File]::WriteAllText($sparse, $Record.SparseBefore, (New-Object Text.UTF8Encoding $false))
+        & git -C $DefaultRepoDir sparse-checkout reapply 2>$null
+    } elseif ($Record.SparseWasOff -and ((& git -C $DefaultRepoDir config --bool core.sparseCheckout 2>$null) -eq "true")) {
+        & git -C $DefaultRepoDir sparse-checkout disable 2>$null
+    }
+}
+
+# What the rollback could not undo, one line each (nothing when the machine is as it was).
+function Get-InstallLeftovers($Record) {
+    foreach ($path in @($Record.Absent)) {
+        if ((Test-InstallPathRemovable $path) -and (Test-Path -LiteralPath $path)) { $path }
+    }
+    foreach ($saved in @($Record.Saved)) {
+        if (-not (Test-Path -LiteralPath $saved.Path)) { "$($saved.Path) (not restored)"; continue }
+        if ((Test-Path -LiteralPath $saved.Path -PathType Leaf) -and
+            (Get-FileHash -LiteralPath $saved.Path).Hash -ne (Get-FileHash -LiteralPath $saved.Copy).Hash) {
+            "$($saved.Path) (not restored)"
+        }
+    }
+    if ($Record.RepoHead -and (Test-Path -LiteralPath (Join-Path $DefaultRepoDir ".git")) -and
+        [string](& git -C $DefaultRepoDir rev-parse -q --verify HEAD 2>$null) -ne $Record.RepoHead) {
+        "$DefaultRepoDir (not back on $($Record.RepoHead.Substring(0, [Math]::Min(12, $Record.RepoHead.Length))))"
+    }
+    if ($script:AddedUserPath -and (@([Environment]::GetEnvironmentVariable("Path", "User") -split ';' |
+            ForEach-Object { $_.Trim().TrimEnd('\') }) -contains $script:AddedUserPath.TrimEnd('\'))) {
+        "$($script:AddedUserPath) (still on your PATH)"
+    }
+}
+
+# Takes $Entry off the user PATH (the one this run added), leaving every other entry as it is.
+function Remove-UserPathEntry([string]$Entry) {
+    $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+    if (-not $userPath) { return }
+    $kept = @($userPath -split ';' | Where-Object { $_ -and $_.Trim().TrimEnd('\') -ne $Entry.TrimEnd('\') })
+    [Environment]::SetEnvironmentVariable("Path", ($kept -join ';'), "User")
 }
 
 # ── The install manifest (matches install_manifest_begin / _write in the .sh) ──────────────────
@@ -2277,6 +2483,7 @@ function Main {
         $existingHermes = Find-ExistingForeignHermes
         if ($existingHermes) { Install-IntoExistingHermes $existingHermes }
     }
+    Start-InstallRecord   # before the first change (KI-436)
     if ($SetupOnly) {
         Test-NodeJs
         Use-RunningHermes
@@ -2297,10 +2504,16 @@ function Main {
     Register-BlackboxStartupTasks
     Test-Install
     if (-not $script:InstallIncomplete) { Write-InstallManifest }
+    Complete-InstallRecord   # checked: kept from here on
     Show-NextSteps
     if ($script:InstallIncomplete) {
         exit 1
     }
 }
 
-Main
+# Any way out before Complete-InstallRecord - an error, `exit 1`, Ctrl+C - rolls the install back.
+try {
+    Main
+} finally {
+    if ($script:InstallRecord -and -not $script:InstallCommitted) { Undo-Install }
+}
