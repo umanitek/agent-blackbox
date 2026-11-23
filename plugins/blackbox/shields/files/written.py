@@ -68,8 +68,9 @@ _CONTENT_KEYS = ("content", "new_string", "newString", "new_str", "text", "patch
 #: A heredoc opener and where its text goes, on one line: ``cat > x.py <<'EOF'``, ``tee x.py <<EOF``.
 _HEREDOC_OPEN = re.compile(r"<<-?\s*(['\"]?)(\w+)\1")
 _HEREDOC_TARGET = re.compile(r"(?:>>?|\btee\s+(?:-a\s+)?)\s*([^\s<>|;&]+)")
-#: Words that end one simple command in a shell line (as :func:`_shell_words` splits them).
-_COMMAND_ENDS = frozenset({";", "&&", "||", "&", "|"})
+#: The characters a word that ends one simple command is made of (as :func:`_shell_words` splits
+#: them: ``;``, ``&&``, ``||``, ``&``, ``|`` and a line end, alone or run together like ``;\n``).
+_COMMAND_END_CHARS = frozenset(";&|\n")
 #: The escapes ``printf`` and ``echo -e`` turn into characters.
 _ESCAPES = {"\\n": "\n", "\\t": "\t", "\\\\": "\\"}
 
@@ -99,13 +100,25 @@ def _tool_write(tool_name: str, args: Any) -> list[tuple[str, str]]:
 
 def _shell_words(command: str) -> list[str]:
     """*command* split as the shell splits it: quotes joined (``'Doc''uments'`` → ``Documents``),
-    and ``>``, ``>>``, ``|``, ``;``, ``&&`` as words of their own; [] when it can not be split."""
-    lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|<>")
+    and ``>``, ``>>``, ``|``, ``;``, ``&&`` and a line end outside quotes as words of their own; []
+    when it can not be split.
+
+    WHY the line end (security round 4, 2026-11-23): ``detection.command_from_args`` hands every
+    check a wrapped command with what it runs added on lines of its own (``bash -lc 'python3 r.py'``
+    then ``python3 r.py``). Read as one command, the inner run was never seen as a run — a
+    protected file leaked through ``bash -lc``. A newline ends a shell command; here too."""
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|<>\n")
+    lexer.whitespace = " \t\r"
     lexer.whitespace_split = True
     try:
         return list(lexer)
     except ValueError:
         return []
+
+
+def _ends_command(word: str) -> bool:
+    """True when *word* (one of :func:`_shell_words`) ends a simple command."""
+    return bool(word) and set(word) <= _COMMAND_END_CHARS
 
 
 def _echoed(words: list[str]) -> str:
@@ -125,14 +138,14 @@ def _printed_into_files(command: str) -> list[tuple[str, str]]:
     words = _shell_words(command[:MAX_CONTENT_CHARS * 2])
     out, start = [], 0
     while start < len(words):
-        end = next((at for at in range(start, len(words)) if words[at] in _COMMAND_ENDS), len(words))
+        end = next((at for at in range(start, len(words)) if _ends_command(words[at])), len(words))
         segment = words[start:end]
         if segment and segment[0] in ("echo", "printf"):
             redirect = next((at for at, word in enumerate(segment) if word in (">", ">>")), -1)
             if redirect > 0 and redirect + 1 < len(segment):
                 out.append((segment[redirect + 1], _echoed(segment[:redirect])))
-            elif end < len(words) and words[end] == "|":
-                tee_end = next((at for at in range(end + 1, len(words)) if words[at] in _COMMAND_ENDS), len(words))
+            elif end < len(words) and words[end].strip("\n") == "|":
+                tee_end = next((at for at in range(end + 1, len(words)) if _ends_command(words[at])), len(words))
                 tee = words[end + 1:tee_end]
                 if tee and tee[0] == "tee":
                     out += [(target, _echoed(segment)) for target in tee[1:] if not target.startswith("-") and target not in (">", ">>")]
@@ -191,6 +204,10 @@ class ScriptRun(NamedTuple):
 
 #: A runner's options that hand it a module or inline code instead of a script file.
 _NOT_A_FILE = frozenset({"-m", "-c", "-e", "-p", "-r", "-E"})
+#: Options run together that end in ``c`` (``bash -lc``, ``sh -ec``, ``python3 -Bc``): the next word
+#: is inline code (or, for node/ruby/perl, a syntax check) — never a script file's name. The code
+#: itself is judged on its own line (``detection.command_from_args`` adds it).
+_INLINE_CLUSTER = re.compile(r"-[A-Za-z]*c")
 
 
 def _run_targets(command: str) -> list[tuple[str, tuple[str, ...], str, str]]:
@@ -201,14 +218,14 @@ def _run_targets(command: str) -> list[tuple[str, tuple[str, ...], str, str]]:
     words = _shell_words(command) or command.split()
     targets, folder, start = [], "", 0
     while start < len(words):
-        end = next((at for at in range(start, len(words)) if words[at] in _COMMAND_ENDS), len(words))
+        end = next((at for at in range(start, len(words)) if _ends_command(words[at])), len(words))
         segment = [word for word in words[start:end] if not re.fullmatch(r"\d?[<>]{1,2}", word)]
         name = segment[0].rsplit("/", 1)[-1] if segment else ""
         if name in ("cd", "pushd") and len(segment) > 1:
             folder = _expanded(segment[1]) if os.path.isabs(_expanded(segment[1])) else os.path.join(folder, segment[1]) if folder else ""
         elif name in _RUNNERS:
             for at, each in enumerate(segment[1:8], start=1):
-                if each in _NOT_A_FILE:
+                if each in _NOT_A_FILE or _INLINE_CLUSTER.fullmatch(each):
                     break   # a module or inline code: not a script file
                 if not each.startswith("-"):
                     targets.append((each, tuple(segment[at + 1:at + 41]), name, folder))
