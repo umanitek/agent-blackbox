@@ -4,11 +4,17 @@ and never a flood.
 The system protection helper looks at every place something starts by itself or runs later — launchd
 jobs, login items, cron and ``at``, the shell startup files, OpenSSH's login files and the program
 folders on the PATH (helper ``observe/persistence.rs`` + ``observe/run_later.rs``) — and reports each
-new, changed or removed entry as a ``persistence-*`` event. Its scan can not say WHICH process wrote
-the entry (only the OS's file checks, Layer 3, could). So the writer is found in Blackbox's own
-records: an AI agent's tool call, recorded by its hook in the :data:`WINDOW_SECONDS` before the entry
-appeared, that names the entry's path (``echo … > ~/Library/LaunchAgents/x.plist``, a write tool on
-it). Then:
+new, changed or removed entry as a ``persistence-*`` event, with the entry's ``mark`` (size, the
+time it was last written and a hash of its content). Its scan can not say WHICH process wrote the
+entry (only the OS's file checks, Layer 3, could). So the writer is found in Blackbox's own records,
+and only with EVIDENCE (KI-615: a plain-shell append five minutes after an agent's own append to
+``~/.ssh/authorized_keys`` was reported "written by Claude Code"): an AI agent's tool call that names
+the entry's path (``echo … > ~/Library/LaunchAgents/x.plist``, a write tool on it) AND during which
+the entry was written — its write time between the call's start and its end (the matching
+``post_tool_call``, else :data:`CALL_SECONDS`). A call that named the path at another time is not
+the writer: the alert says the writer is unknown. Each entry is reported once (KI-615): the same
+file, seen under another spelling (a home reached through a link), with the same content, is one
+event. Then:
 
 * written by an AI agent → **critical**, naming the agent and its project — an agent leaving
   something that runs outside its sandbox, or later as the person, is the attack;
@@ -37,15 +43,17 @@ from typing import Any, Mapping, Optional, Sequence
 from ....kernel.agent_hosts import BY_ID
 from ..monitor import exposure
 
-#: How long before an entry appeared an agent's tool call that names it counts as its writer.
+#: How long before an entry appeared an agent's tool call that names it is looked at.
 WINDOW_SECONDS = 600
+#: How long a tool call with no recorded end is taken to run (its write must fall inside).
+CALL_SECONDS = 120
+#: Clock slack between a hook's record and a file's write time.
+SLACK_SECONDS = 2
 #: The agent tool-call records read to find a writer (newest first).
 MAX_ROWS = 2000
 #: Alerts per source (item kind + folder) per window; the rest are folded into one line.
 BUDGET = 3
 BUDGET_SECONDS = 600
-#: The audit events that carry an agent's tool call.
-_CALL_EVENTS = ("pre_tool_call", "post_tool_call")
 #: What each kind of entry is, in the person's words (the launchd kinds are ``exposure.ITEM_NAMES``).
 RUN_LATER_NAMES = {"shell-startup": "Shell startup file", "ssh-login": "SSH login file", "at-job": "Scheduled job (at)",
                    "path-program": "Program on your PATH"}
@@ -75,24 +83,52 @@ def _spellings(path: str) -> tuple[str, ...]:
     return tuple(forms)
 
 
-def writer_of(event: Mapping[str, Any], rows: Sequence[Mapping[str, Any]]) -> Optional[Writer]:
-    """The agent whose tool call in the window before *event* named its path (*rows*: audit rows,
-    any order); None when no record names it — never a guess."""
+def written_at(event: Mapping[str, Any]) -> Optional[float]:
+    """When the entry was last written, from its ``mark`` (``size:mtime:…``); None when not known."""
+    parts = str(event.get("mark") or "").split(":")
+    return float(parts[1]) if len(parts) > 1 and parts[1].isdigit() else None
+
+
+def _call_end(row: Mapping[str, Any], rows: Sequence[Mapping[str, Any]]) -> float:
+    """When the tool call *row* ended: its own ``post_tool_call`` record, else :data:`CALL_SECONDS` after it."""
+    detail = row.get("detail") if isinstance(row.get("detail"), Mapping) else {}
+    call_id, start = str(detail.get("tool_call_id") or ""), float(row.get("ts") or 0)
+    ends = [float(other.get("ts") or 0) for other in rows if call_id and other.get("event") == "post_tool_call"
+            and isinstance(other.get("detail"), Mapping) and other["detail"].get("tool_call_id") == call_id]
+    return min((end for end in ends if end >= start), default=start + CALL_SECONDS)
+
+
+def _naming_calls(event: Mapping[str, Any], rows: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+    """The agents' tool calls in the window before *event* that name its path, newest first."""
     path, ts = str(event.get("id") or ""), float(event.get("ts") or 0)
     if not path.startswith("/"):
-        return None   # a login item or profile: named by identifier, not a path an agent writes
+        return []   # a login item or profile: named by identifier, not a path an agent writes
     forms = _spellings(path)
-    best: Optional[tuple[float, Writer]] = None
+    found = []
     for row in rows:
         when = float(row.get("ts") or 0)
-        if row.get("event") not in _CALL_EVENTS or not ts - WINDOW_SECONDS <= when <= ts + 5:
+        if row.get("event") != "pre_tool_call" or not ts - WINDOW_SECONDS <= when <= ts + 5:
             continue
         detail = row.get("detail") if isinstance(row.get("detail"), Mapping) else {}
         text = json.dumps(detail.get("args"), ensure_ascii=False) if detail.get("args") is not None else ""
-        if text and any(form in text for form in forms) and (best is None or when > best[0]):
+        if text and any(form in text for form in forms):
+            found.append(row)
+    return sorted(found, key=lambda row: -float(row.get("ts") or 0))
+
+
+def writer_of(event: Mapping[str, Any], rows: Sequence[Mapping[str, Any]]) -> Optional[Writer]:
+    """The agent whose tool call named *event*'s path AND ran while the entry was written (*rows*:
+    audit rows, any order); None without that evidence — never a guess."""
+    written = written_at(event)
+    if written is None:
+        return None
+    for row in _naming_calls(event, rows):
+        start = float(row.get("ts") or 0)
+        if start - SLACK_SECONDS <= written <= _call_end(row, rows) + SLACK_SECONDS:
+            detail = row.get("detail") if isinstance(row.get("detail"), Mapping) else {}
             project = os.path.basename(str(row.get("workspace") or "").rstrip("/"))
-            best = (when, Writer(str(row.get("framework") or ""), str(detail.get("session_id") or ""), project))
-    return best[1] if best else None
+            return Writer(str(row.get("framework") or ""), str(detail.get("session_id") or ""), project)
+    return None
 
 
 def grade(event: Mapping[str, Any], writer: Optional[Writer]) -> str:
@@ -108,7 +144,7 @@ def grade(event: Mapping[str, Any], writer: Optional[Writer]) -> str:
     return {"critical": "critical", "high": "high", "medium": "medium"}.get(risk, "low" if risk == "low" else "medium")
 
 
-def text_of(event: Mapping[str, Any], writer: Optional[Writer]) -> str:
+def text_of(event: Mapping[str, Any], writer: Optional[Writer], named: bool = False) -> str:
     """One plain sentence: ``New startup item: Launch agent (your account) “com.x” — starts updater``."""
     item_kind = str(event.get("item_kind") or "")
     what = RUN_LATER_NAMES.get(item_kind) or exposure.ITEM_NAMES.get(item_kind, "startup item")
@@ -127,7 +163,28 @@ def text_of(event: Mapping[str, Any], writer: Optional[Writer]) -> str:
         sentence = f"{head}: {what} “{label}”" + (f" — starts {program}" if program and kind != "persistence-removed" else "")
     if writer is not None:
         sentence += f" — written by {writer.name}" + (f" in {writer.project}" if writer.project else "")
+    elif named:   # an agent named it, but not while it was written: said, never claimed
+        sentence += " — writer unknown (an AI agent's earlier command named this file)"
     return sentence + "."
+
+
+def _same_entry(event: Mapping[str, Any]) -> tuple[str, str, str]:
+    """What makes two events one entry: the kind, the file as the system resolves it (a home
+    reached through a link is the same home) and its content mark."""
+    path = str(event.get("id") or "")
+    return str(event.get("kind")), os.path.realpath(path) if path.startswith("/") else path, str(event.get("mark") or "")
+
+
+def _once(events: Sequence[Mapping[str, Any]], rows: Sequence[Mapping[str, Any]]) -> list[tuple[Mapping[str, Any], Optional[Writer]]]:
+    """Each entry once with its writer, oldest first; of two copies the one with a writer is kept."""
+    kept: dict[tuple[str, str, str], tuple[Mapping[str, Any], Optional[Writer]]] = {}
+    for event in sorted(events, key=lambda e: float(e.get("ts") or 0)):
+        if event.get("item_kind") == "at-job" and os.path.basename(str(event.get("id") or "")).startswith("."):
+            continue   # at's own bookkeeping (.SEQ, .lockfile), from a helper older than KI-615's fix
+        key, writer = _same_entry(event), writer_of(event, rows)
+        if key not in kept or (kept[key][1] is None and writer is not None):
+            kept[key] = (event, writer)
+    return sorted(kept.values(), key=lambda pair: float(pair[0].get("ts") or 0))
 
 
 def _source(event: Mapping[str, Any]) -> str:
@@ -140,10 +197,10 @@ def startup_alerts(events: Sequence[Mapping[str, Any]], rows: Sequence[Mapping[s
     kept: list[dict[str, Any]] = []
     spent: dict[str, list[float]] = {}
     folded: dict[str, dict[str, Any]] = {}
-    for event in sorted(events, key=lambda e: float(e.get("ts") or 0)):
-        writer = writer_of(event, rows)
-        alert = {"kind": event["kind"], "ts": event["ts"], "severity": grade(event, writer), "text": text_of(event, writer),
-                 **({"path": event["program"]} if event.get("program") else {}),
+    for event, writer in _once(events, rows):
+        named = writer is None and bool(_naming_calls(event, rows))
+        alert = {"kind": event["kind"], "ts": event["ts"], "severity": grade(event, writer), "text": text_of(event, writer, named),
+                 "item_kind": str(event.get("item_kind") or ""), **({"path": event["program"]} if event.get("program") else {}),
                  **({"agent": writer.agent, "session": writer.session} if writer else {})}
         source = _source(event)
         recent = [at for at in spent.get(source, []) if float(event["ts"]) - at < BUDGET_SECONDS]
@@ -159,5 +216,5 @@ def startup_alerts(events: Sequence[Mapping[str, Any]], rows: Sequence[Mapping[s
     return sorted(kept + list(folded.values()), key=lambda alert: -float(alert["ts"]))
 
 
-__all__ = ["BUDGET", "BUDGET_SECONDS", "MAX_ROWS", "RUN_LATER_NAMES", "WINDOW_SECONDS", "Writer", "grade", "startup_alerts",
-           "text_of", "writer_of"]
+__all__ = ["BUDGET", "BUDGET_SECONDS", "CALL_SECONDS", "MAX_ROWS", "RUN_LATER_NAMES", "SLACK_SECONDS", "WINDOW_SECONDS", "Writer",
+           "grade", "startup_alerts", "text_of", "writer_of", "written_at"]

@@ -53,16 +53,25 @@ fn cut(text: &str) -> String {
     text.chars().take(FIELD).collect()
 }
 
+/// Every user's home folder under *users* (`/Users/<name>`, not `Shared`): real folders only — a
+/// link to another home (`/Users/runner -> /Users/admin` on CI images) would report every entry of
+/// that home twice under a second spelling (KI-615).
+pub fn user_homes(users: &Path) -> Vec<String> {
+    let Ok(entries) = fs::read_dir(users) else { return Vec::new() };
+    let mut homes: Vec<String> = entries.flatten()
+        .filter(|entry| entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false))   // a link is not followed
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| name != "Shared" && !name.starts_with('.'))
+        .map(|name| users.join(name).display().to_string()).collect();
+    homes.sort();
+    homes
+}
+
 /// The folders of plist jobs, with their kind.
 pub fn job_folders() -> Vec<(&'static str, String)> {
     let mut folders = vec![("launch-agent", "/Library/LaunchAgents".to_string()), ("launch-daemon", "/Library/LaunchDaemons".to_string())];
-    if let Ok(users) = fs::read_dir("/Users") {
-        for user in users.flatten() {
-            let name = user.file_name().to_string_lossy().into_owned();
-            if name != "Shared" && !name.starts_with('.') {
-                folders.push(("user-agent", format!("/Users/{name}/Library/LaunchAgents")));
-            }
-        }
+    for home in user_homes(Path::new("/Users")) {
+        folders.push(("user-agent", format!("{home}/Library/LaunchAgents")));
     }
     folders
 }
@@ -257,6 +266,7 @@ impl Persistence {
     fn push(&mut self, kind: &str, item: &Item, now: u64) {
         if self.pending.len() < MAX_PENDING {
             let mut event = item.json();
+            event["mark"] = json!(cut(&item.mark));   // size:mtime:hash — one report per entry, and the writer's evidence (KI-615)
             event["kind"] = json!(kind);
             event["item_kind"] = json!(item.kind);
             event["ts"] = json!(now);

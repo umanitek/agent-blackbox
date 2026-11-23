@@ -158,6 +158,7 @@ def _event(raw: Any, now: float) -> dict[str, Any]:
         event["id"] = _text(raw.get("id"), "id", 512, empty=False)
         event["label"] = _text(raw.get("label", ""), "label")
         event["program"] = _text(raw.get("program", ""), "program")
+        event["mark"] = _text(raw.get("mark", ""), "mark", 160)   # size:mtime:hash — dedupe and the writer's evidence (KI-615)
     elif kind == "dns-changed":
         event["servers"] = [_ip(s, "server") for s in _list(raw.get("servers", []), "servers", 10)]
         event["was"] = [_ip(s, "server") for s in _list(raw.get("was", []), "was", 10)]

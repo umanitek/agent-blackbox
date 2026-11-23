@@ -49,6 +49,15 @@ WORDS: dict[str, tuple[str, str]] = {
 }
 
 
+#: A new program on the PATH is not something set to run at start (KI-615: a broker install was
+#: titled "New startup item"): its own words, by the alert's item kind.
+PATH_WORDS: dict[str, tuple[str, str]] = {
+    "persistence-new": ("New program on your PATH", "A new program can now be run by name. " + SEE),
+    "persistence-changed": ("A program on your PATH changed", SEE),
+    "persistence-removed": ("A program left your PATH", SEE),
+}
+
+
 #: The end of a remote session: kept in the history and the shield's page, but its notice is
 #: "lifecycle" (shown only when the person turned those on) — the start was the news. WHY
 #: (KI-PENDING-b3bd8e): every short SSH call raised "connected" + "ended" on the screen.
@@ -71,7 +80,8 @@ def shield_alerts() -> list[ShieldAlert]:
     found = _standing()
     for row in api.alerts():
         kind, full = str(row.get("kind") or ""), str(row.get("text") or "")
-        what, then = WORDS.get(kind, ("Network Shield alert", SEE))
+        words = PATH_WORDS if row.get("item_kind") == "path-program" else WORDS
+        what, then = words.get(kind) or WORDS.get(kind, ("Network Shield alert", SEE))
         ts = float(row.get("ts") or 0)
         key = f"network:{kind}:{ts:.3f}:{hashlib.sha256(full.encode('utf-8')).hexdigest()[:10]}"
         found.append(ShieldAlert(key=key, kind=kind, ts=ts, severity=str(row.get("severity") or "info"),

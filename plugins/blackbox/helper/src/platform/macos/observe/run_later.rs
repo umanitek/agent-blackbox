@@ -34,11 +34,9 @@ pub const PROGRAM_FOLDERS: &[&str] = &["/opt/homebrew/bin", "/opt/homebrew/sbin"
 pub const USER_PROGRAM_FOLDERS: &[&str] = &[".local/bin", "bin", ".npm-global/bin", ".cargo/bin"];
 pub const AT_JOBS: &str = "/private/var/at/jobs";
 
-/// Every user's home folder (`/Users/<name>`, not `Shared`).
+/// Every user's home folder (`/Users/<name>`, not `Shared`, never a link to another home).
 pub fn homes() -> Vec<String> {
-    let Ok(users) = fs::read_dir("/Users") else { return Vec::new() };
-    users.flatten().map(|u| u.file_name().to_string_lossy().into_owned()).filter(|n| n != "Shared" && !n.starts_with('.'))
-        .map(|n| format!("/Users/{n}")).collect()
+    crate::platform::macos::observe::persistence::user_homes(Path::new("/Users"))
 }
 
 /// A program entry's mark without reading or following it: size, mtime, mode and a link's target.
@@ -77,7 +75,10 @@ pub fn items(homes: &[String]) -> Vec<Item> {
     }
     for folder in PROGRAM_FOLDERS { program_items(folder, &mut items); }
     if let Ok(entries) = fs::read_dir(AT_JOBS) {
-        for entry in entries.flatten().take(MAX_PER_FOLDER) { file_item("at-job", &entry.path().display().to_string(), &mut items); }
+        // `at`'s own bookkeeping (`.SEQ`, `.lockfile`) is not a job (KI-615: three alerts for one job).
+        for entry in entries.flatten().filter(|e| !e.file_name().to_string_lossy().starts_with('.')).take(MAX_PER_FOLDER) {
+            file_item("at-job", &entry.path().display().to_string(), &mut items);
+        }
     }
     items
 }
@@ -96,6 +97,32 @@ mod tests {
         fs::create_dir_all(dir.join(".local/bin")).unwrap();
         fs::create_dir_all(dir.join(".ssh")).unwrap();
         dir
+    }
+
+    #[test]
+    fn a_home_reached_through_a_link_is_not_walked_twice() {
+        let users = temp_home();
+        fs::create_dir_all(users.join("admin")).unwrap();
+        fs::create_dir_all(users.join("Shared")).unwrap();
+        std::os::unix::fs::symlink(users.join("admin"), users.join("runner")).unwrap();
+        let homes = crate::platform::macos::observe::persistence::user_homes(&users);
+        let names: Vec<String> = homes.iter().map(|h| Path::new(h).file_name().unwrap().to_string_lossy().into_owned()).collect();
+        assert!(names.contains(&"admin".to_string()) && !names.contains(&"runner".to_string()) && !names.contains(&"Shared".to_string()), "{names:?}");
+    }
+
+    #[test]
+    fn an_event_carries_the_entrys_mark() {
+        let home = temp_home();
+        let homes = vec![home.display().to_string()];
+        let mut watch = Persistence::default();
+        watch.update(KINDS, items(&homes), 1);
+        watch.baseline_done();
+        fs::write(home.join(".ssh/authorized_keys"), "ssh-ed25519 AAAA x\n").unwrap();
+        watch.update(KINDS, items(&homes), 2);
+        let events = watch.take_events();
+        let event = events.iter().find(|e| e["label"] == "authorized_keys").unwrap();
+        let mark = event["mark"].as_str().unwrap();
+        assert_eq!(mark.split(':').count(), 3, "size:mtime:hash, got {mark}");
     }
 
     #[test]
