@@ -8,6 +8,7 @@ Usage::
 
 from __future__ import annotations
 
+import os
 import re
 
 from ...permissions import Allowances
@@ -34,6 +35,28 @@ def _glob_regex(glob: str) -> str:
     return "#\"^" + body.replace('"', '\\"') + "$\""
 
 
+#: The container engines' sockets on macOS (Docker Desktop, colima, OrbStack, Rancher Desktop,
+#: Lima, Podman machine): a container runs OUTSIDE the sandbox and can mount any folder, so a
+#: sandboxed agent may reach these only when the ``docker`` permission allows it (KI-622). Both
+#: spellings of /var/run (a link to /private/var/run). Probed on macOS 27.2 (2026-11-23):
+#: ``(remote unix-socket (path-literal …))`` and ``(… (regex …))`` refuse a connect with EPERM.
+DOCKER_SOCKETS = ("/var/run/docker.sock", "/private/var/run/docker.sock", "{home}/.docker/run/docker.sock",
+                  "{home}/.docker/desktop/docker.sock", "{home}/.orbstack/run/docker.sock", "{home}/.rd/docker.sock")
+DOCKER_SOCKET_GLOBS = ("{home}/.colima/*/docker.sock", "{home}/.lima/*/sock/docker.sock",
+                       "{home}/Library/Containers/com.docker.docker/Data/*.sock",
+                       "{home}/.local/share/containers/podman/machine/*/podman.sock",
+                       "{home}/.local/share/containers/podman/machine/*/*/podman.sock")
+#: The Docker engine's TCP ports on this Mac (plain and TLS).
+DOCKER_PORTS = (2375, 2376)
+
+
+def _docker_lines(home: str) -> list[str]:
+    sockets = [f"(remote unix-socket (path-literal {_quote(path.format(home=home))}))" for path in DOCKER_SOCKETS]
+    sockets += [f"(remote unix-socket (regex {_glob_regex(glob.format(home=home))}))" for glob in DOCKER_SOCKET_GLOBS]
+    sockets += [f'(remote ip "localhost:{port}")' for port in DOCKER_PORTS]
+    return ["(deny network-outbound\n  " + "\n  ".join(sockets) + ")"]
+
+
 #: The comment that opens the never-list: everything after it is rendered LAST in every profile,
 #: so no permission rule above can lift it (Seatbelt: a later rule wins).
 NEVER_MARK = "; never-list — rendered last: no permission above lifts it"
@@ -50,9 +73,11 @@ def render(places: Places, digest_line: str = "", allowances: Allowances = Allow
     return "\n".join(lines) + "\n"
 
 
-def permission_lines(allowances: Allowances) -> list[str]:
-    """What the person's permissions refuse for one scope: folder rules (kept out / read only)."""
-    lines = []
+def permission_lines(allowances: Allowances, home: str = "") -> list[str]:
+    """What the person's permissions refuse for one scope: each profile permission not lifted
+    (Docker's sockets …) and the folder rules (kept out / read only)."""
+    home = home or os.path.realpath(os.path.expanduser("~"))
+    lines = [] if "docker" in allowances.lifted else _docker_lines(home)
     if allowances.hidden:
         lines.append("(deny file-read* file-write* file-link\n  " + "\n  ".join(f"(subpath {_quote(p)})" for p in allowances.hidden) + ")")
     if allowances.read_only:
@@ -99,4 +124,4 @@ def _never(places: Places) -> list[str]:
 
 
 
-__all__ = ["APP_DRIVERS", "LOCAL_SSH", "NEVER_MARK", "PROFILE_SUFFIX", "SANDBOX_EXEC", "permission_lines", "render"]
+__all__ = ["APP_DRIVERS", "DOCKER_PORTS", "DOCKER_SOCKETS", "DOCKER_SOCKET_GLOBS", "LOCAL_SSH", "NEVER_MARK", "PROFILE_SUFFIX", "SANDBOX_EXEC", "permission_lines", "render"]

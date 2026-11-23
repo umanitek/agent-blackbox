@@ -54,6 +54,8 @@ SETUID, APP_DRIVER, OPEN_APP, SIGNAL, NESTED, FILE = "setuid", "app-driver", "op
 #: installer tried to change (its lines are handed to the person); a place something starts from by
 #: itself (a launchd job, cron/at, an SSH login file, Homebrew's folders).
 OWN, STARTUP, PERSISTENCE = "own", "startup", "persistence"
+#: The container engine's socket, kept closed while the ``docker`` sandbox permission is not allowed.
+DOCKER = "docker"
 #: The shell startup files (as ``kernel.shell_path`` keeps them closed).
 STARTUP_FILES = frozenset({".zshrc", ".zshenv", ".zprofile", ".zlogin", ".bashrc", ".bash_profile", ".profile", ".bash_login"})
 #: What each well-known installer wanted to add to a startup file — said to the person to add
@@ -78,12 +80,14 @@ _WHY = {
              "--disable-sandbox` (Blackbox's sandbox still covers it, nothing is lost); anything else: run it in "
              "your own terminal"),
     FILE: "this file is kept closed to agents (a protected item, or a file that keeps Blackbox's hook)",
+    DOCKER: ("a container runs outside the sandbox and can mount any folder; Docker is allowed only when you allow it "
+             "for this agent in Blackbox's sandbox permissions (it may be asking you now)"),
     PERSISTENCE: ("an agent may not leave something that starts by itself later, outside the sandbox (a launchd job, "
                   "a scheduled job, an SSH login key, a program in Homebrew's folders); if you meant it, do it in your "
                   "own terminal"),
 }
 _WHAT = {SETUID: "{name}, a setuid program", APP_DRIVER: "{name}", OPEN_APP: "open",
-         SIGNAL: "a signal to a process outside the sandbox", NESTED: "a second sandbox", FILE: "{name}", STARTUP: "{name}",
+         SIGNAL: "a signal to a process outside the sandbox", NESTED: "a second sandbox", DOCKER: "Docker", FILE: "{name}", STARTUP: "{name}",
          PERSISTENCE: "{name}"}
 #: zsh: ``(eval):1: operation not permitted: sudo``; bash: ``bash: /usr/bin/sudo: Operation not
 #: permitted``; sandbox-exec itself: ``execvp() of '/bin/ps' failed: Operation not permitted``.
@@ -94,6 +98,9 @@ _OPEN = re.compile(r"LSOpenURLs\w*\(\) failed.*?error -54|LSOpenURLsWithRole\(\)
 _SIGNAL = re.compile(r"kill(?::\d+:?)? kill (?:-\S+ )?\d+ failed: operation not permitted|kill: \(\d+\) - operation not permitted"
                      r"|kill: \d+: operation not permitted", re.IGNORECASE)
 _NESTED = re.compile(r"sandbox_apply: operation not permitted", re.IGNORECASE)
+#: The docker CLI refused its engine's socket: ``… connect to the Docker daemon socket at
+#: unix:///Users/me/.docker/run/docker.sock: … connect: operation not permitted``.
+_DOCKER = re.compile(r"docker daemon[^\n]{0,200}operation not permitted", re.IGNORECASE)
 #: Blackbox's own stand-ins already say it (``sudo``, ``crontab``, ``top``, the brew shim): counted,
 #: and not said twice.
 _OWN = re.compile(r"Blackbox's sandbox refused this \((?P<what>[^)]{1,80})\)")
@@ -169,6 +176,8 @@ def refusals(output: str) -> list[Refusal]:
         found.append(Refusal(OPEN_APP))
     if _NESTED.search(text):
         found.append(Refusal(NESTED))
+    if _DOCKER.search(text):
+        found.append(Refusal(DOCKER))
     found += [Refusal(OWN, match.group("what")) for match in _OWN.finditer(text)]
     for match in _EXEC.finditer(text):
         word = match.group("z") or match.group("b") or match.group("x") or match.group("p") or ""

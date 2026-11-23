@@ -37,7 +37,7 @@ from ...detection import (KIND_FLAG_ONLY, PERSON_PROTECTED, SHELL_TOOLS, Finding
                            protected_path_mentions, protected_path_touches)
 from ...kernel import threat_ids
 from ..contract import FindingKind, ShieldMode
-from . import mode as mode_module, written
+from . import mode as mode_module, mounts, written
 
 FILE_HIT_ID = "files:file-hit"
 FOLDER_HIT_ID = "files:folder-hit"
@@ -57,7 +57,7 @@ FINDING_KINDS: tuple[FindingKind, ...] = (
 #: What each route is called in the finding, for a person.
 ROUTES = {"read": "open", "copy": "copy", "write": "change", "name": "use", "tree": "reach (through its folder)",
           "mention": "ask for", "sandbox": "reach from inside the sandbox", "unseen": "run a command it cannot read beside",
-          "script": "reach through a script it wrote"}
+          "script": "reach through a script it wrote", "mount": "mount into a container (which runs outside the sandbox)"}
 #: The agent named on a refusal the OS sandbox made (Layer 2): the log names the program, not the agent.
 SANDBOX_AGENT = audit.SANDBOX_RECORDER   # not an agent: any sandboxed program (KI-538)
 
@@ -86,7 +86,32 @@ def detect(tool_name: str, args: Any, mode: ShieldMode) -> list[Finding]:
             evidence=f"{touch.mode} {touch.path} — protected {what} {touch.pattern}"[:400],
             confirmed=False, source="custom",
             fields={"path": touch.path[:400], "item": touch.pattern, "route": touch.mode, "kind": what})]
-    return _script_hit(tool_name, args, items) or _unseen_route(tool_name, args, items)
+    return _mount_hit(tool_name, args, items) or _script_hit(tool_name, args, items) or _unseen_route(tool_name, args, items)
+
+
+def _mount_hit(tool_name: str, args: Any, items: list[str]) -> list[Finding]:
+    """A refusal when a container command mounts a protected item (or a folder holding one): the
+    container reads it outside the sandbox (KI-622, :mod:`.mounts`)."""
+    if (tool_name or "").strip().lower() not in SHELL_TOOLS:
+        return []
+    for source in mounts.sources(command_from_args(tool_name, args)):
+        path = os.path.expandvars(os.path.expanduser(source))
+        # WHY a whole-tree copy: a mount hands the container the folder and everything inside it.
+        for touch in protected_path_touches("terminal", {"command": f"tar cf - {_quoted(path)}"}, items, whole=True,
+                                            first_only=True, every_route=True):
+            folder = is_folder(touch.pattern)
+            what = "folder" if folder else "file"
+            return [Finding(
+                identifier=FOLDER_HIT_ID if folder else FILE_HIT_ID, category=CATEGORY, severity="critical",
+                title=f"File Shield: an AI agent tried to {ROUTES['mount']} your protected {what} {touch.pattern}",
+                tool_name=tool_name, matched=PERSON_PROTECTED, advice=sweep_advice(path, touch.pattern, what),
+                evidence=f"mount {source} — protected {what} {touch.pattern}"[:400], confirmed=False, source="custom",
+                fields={"path": path[:400], "item": touch.pattern, "route": "mount", "kind": what})]
+    return []
+
+
+def _quoted(path: str) -> str:
+    return "'" + path.replace("'", "'\\''") + "'"
 
 
 def sweep_advice(path: str, item: str, what: str) -> str:

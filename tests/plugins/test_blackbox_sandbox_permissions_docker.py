@@ -1,0 +1,127 @@
+"""Sandbox permissions — Docker (KI-622): the engine's sockets closed unless the ``docker``
+permission allows it, the refusal asks the person, and a mount of a protected item is refused
+(plugins/blackbox/shields/files/sandbox/platform/macos/profile.py, agent_hooks/protect/sandbox_errors.py,
+shields/files/mounts.py; design "Sandbox permissions" 2026-11-23, build step 10, local-only).
+
+Contracts (red on the base ed4152ceac: the Docker socket was open inside the sandbox, so
+``docker run -v <protected>:/x`` read a protected item outside it — KI-622):
+* on THIS Mac, a REAL Seatbelt run (probe, 2026-11-23): a connect to a socket at a Docker socket
+  path is refused in the agent's profile while Docker asks or is blocked, and allowed in the
+  profile of the agent it is allowed for — and only that agent;
+* the docker CLI's refusal is read as a DOCKER refusal, and it opens one request (Docker asks by
+  default, per project — F4);
+* the hook layer refuses mounting a protected item (or a folder holding one) into a container,
+  and leaves other folders and named volumes alone;
+* every refusal kind the catalogue names is one the hook layer reads (LES-137: one definition each).
+"""
+
+from __future__ import annotations
+
+import os
+import socket
+import subprocess
+import sys
+import tempfile
+import threading
+from pathlib import Path
+
+import pytest
+
+from plugins.blackbox.agent_hooks.protect import sandbox_errors
+from plugins.blackbox.kernel import config as config_mod
+from plugins.blackbox.shields.files import mode as files_mode, mounts, protect, sandbox
+from plugins.blackbox.shields.files.sandbox import permissions
+from plugins.blackbox.shields.files.sandbox.permissions import catalogue, requests
+from plugins.blackbox.shields.files.sandbox.platform.macos import profile as macos_profile
+
+REAL = pytest.mark.skipif(sys.platform != "darwin" or not os.access(macos_profile.SANDBOX_EXEC, os.X_OK),
+                          reason="a real Seatbelt sandbox needs macOS")
+
+
+@pytest.fixture(autouse=True)
+def home(monkeypatch):
+    # A short home: a unix socket's path is at most 104 bytes on macOS.
+    real = Path(tempfile.mkdtemp(prefix="bbd", dir="/tmp")).resolve()
+    monkeypatch.setenv("HOME", str(real))
+    monkeypatch.setenv("BLACKBOX_HOME", str(real / "bb"))
+    (real / "Documents" / "Vault").mkdir(parents=True)
+    (real / "work").mkdir()
+    requests.reset()
+    yield real
+    requests.reset()
+    subprocess.run(["/bin/rm", "-rf", str(real)], check=False)
+
+
+@pytest.fixture
+def entry(monkeypatch):
+    state: dict = {}
+    monkeypatch.setattr(config_mod, "_blackbox_entry", lambda: state)
+    return state
+
+
+def _listen(path: Path) -> socket.socket:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    server = socket.socket(socket.AF_UNIX)
+    server.bind(str(path))
+    server.listen(4)
+    threading.Thread(target=lambda: [server.accept() for _ in range(4)], daemon=True).start()
+    return server
+
+
+def _connect(profile: Path, path: Path) -> str:
+    code = ("import socket,sys\ns=socket.socket(socket.AF_UNIX)\ntry:\n s.connect(sys.argv[1]); print('connected')\n"
+            "except OSError as e: print('refused', e.errno)")
+    done = subprocess.run([macos_profile.SANDBOX_EXEC, "-f", str(profile), sys.executable, "-I", "-c", code, str(path)],
+                          capture_output=True, text=True, timeout=30, check=False)
+    return done.stdout.strip()
+
+
+@REAL
+def test_the_docker_socket_is_closed_unless_docker_is_allowed_for_that_agent(home, entry):
+    entry["agent_sandbox"] = {"permissions": [{"permission": "docker", "mode": "allow", "agent": "codex"}]}
+    sandbox.sync(files_mode.build(enabled=True, sandboxed=("claude-code", "codex")))
+    for where in (home / ".docker" / "run" / "docker.sock", home / ".colima" / "default" / "docker.sock"):
+        server = _listen(where)
+        try:
+            assert _connect(sandbox.layout.agent_profile("claude-code"), where) == "refused 1"
+            assert _connect(sandbox.layout.agent_profile("codex"), where) == "connected"
+        finally:
+            server.close()
+
+
+def test_the_docker_cli_refusal_asks_the_person(home, entry):
+    output = ("permission denied while trying to connect to the Docker daemon socket at unix:///Users/me/.docker/run/docker.sock: "
+              "Get \"http://%2FUsers%2Fme%2F.docker%2Frun%2Fdocker.sock/v1.47/containers/json\": dial unix "
+              "/Users/me/.docker/run/docker.sock: connect: operation not permitted")
+    found = sandbox_errors.refusals(output)
+    assert [each.kind for each in found] == [sandbox_errors.DOCKER] and sandbox_errors.counted(found)
+    assert "Docker" in sandbox_errors.note(found)
+    assert permissions.refused(sandbox_errors.DOCKER, "claude-code", "s-1", str(home / "work")) is True
+    assert [each.permission for each in requests.pending()] == ["docker"]
+
+
+@pytest.mark.parametrize("command, sources", [
+    ("docker run --rm -v ~/Documents/Vault:/x alpine cat /x/a", ["~/Documents/Vault"]),
+    ("podman create --volume=/tmp/a:/b:ro img", ["/tmp/a"]),
+    ("docker container run --mount type=bind,source=/srv/data,target=/d img", ["/srv/data"]),
+    ("/usr/local/bin/nerdctl run -v$HOME/x:/y img", ["$HOME/x"]),
+    ("docker run -v cache:/root/.cache img", []),
+    ("docker ps -v", []),
+])
+def test_mount_sources_are_read_from_the_command(command, sources):
+    assert mounts.sources(command) == sources
+
+
+def test_mounting_a_protected_item_into_a_container_is_refused(home):
+    mode = files_mode.build(enabled=True, protected=("~/Documents/Vault",))
+    for command in ("docker run --rm -v ~/Documents/Vault:/x alpine ls /x", "docker run -v ~/Documents:/d alpine ls"):
+        [finding] = protect.detect("terminal", {"command": command}, mode)
+        assert finding.fields["route"] == "mount" and finding.fields["item"] == "~/Documents/Vault"
+    assert protect.detect("terminal", {"command": "docker run -v ~/work:/w alpine ls"}, mode) == []
+
+
+def test_every_catalogue_refusal_kind_is_one_the_hooks_read():
+    hook_kinds = {sandbox_errors.SETUID, sandbox_errors.APP_DRIVER, sandbox_errors.OPEN_APP, sandbox_errors.SIGNAL,
+                  sandbox_errors.NESTED, sandbox_errors.FILE, sandbox_errors.DOCKER}
+    named = {kind for each in catalogue.PERMISSIONS for kind in each.refusal_kinds}
+    assert named - {catalogue.KIND_LOCAL_PORT, catalogue.KIND_TOOL_FOLDER} <= hook_kinds
