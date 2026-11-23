@@ -208,14 +208,31 @@ def _command_args(name: str, words: list[str], index: int, *, in_known_folder: b
     # A copy or archive command's operands are all paths, bare folder names included
     # (``cd ~/.config && tar czf x.tgz Exodus``); a read command's need to look like one.
     old_style_tar_flags = name == "tar" and bool(arguments) and arguments[0].isalpha()   # ``tar czf …``
+    patterns = _name_patterns(name, arguments)
     paths = [word for position, word in enumerate(arguments) if not word.startswith("-")
-             and not (old_style_tar_flags and position == 0)
+             and not (old_style_tar_flags and position == 0) and position not in patterns
              and (_looks_like_path(word) or ((name in _RECURSIVE_COMMANDS or in_known_folder) and word != "{}"))]
     written = _destinations(name, arguments, paths)
     if name == "tar":
         paths = _tar_operands(arguments, paths, written)
     return [ShellFileArg(path=word, command=name, recursive=recursive, destination=word in written)
             for word in paths], end
+
+
+def _name_patterns(name: str, arguments: list[str]) -> set[int]:
+    """The positions of zip's ``-x`` / ``-i`` wildcard patterns (up to the next option): patterns to
+    leave out or keep, not files it reads. WHY (KI-591): ``zip -r b.zip ~/Documents -x '*/Secret/*'``
+    took ``*/Secret/*`` for a file read and matched it to Blackbox's keys; the folder itself is
+    still read whole, whatever is left out (``guard_secrets``)."""
+    if name != "zip":
+        return set()
+    positions, listing = set(), False
+    for position, word in enumerate(arguments):
+        if word.startswith("-"):
+            listing = word in ("-x", "-i", "--exclude", "--include")
+        elif listing and any(char in word for char in "*?["):
+            positions.add(position)   # a plain path there is still taken as read: zip may read it
+    return positions
 
 
 def _tar_operands(arguments: list[str], paths: list[str], written: set) -> list[str]:

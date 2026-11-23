@@ -9,6 +9,8 @@ command, and every wildcard, parent folder or pieced-together spelling of all of
 * :func:`guarded_places` — every place, as absolute patterns (``*`` allowed).
 * :func:`reaches` — does this word, as a shell or a script would read it, name a guarded place,
   a wildcard that matches one, or a folder that holds one (``rm -rf ~/.hermes``)?
+* :func:`holds` — is it only a folder ABOVE one (the caller decides whether the command can
+  reach below it)?
 * :func:`names_in_pieces` — does this text spell a guarded place piece by piece
   (``homedir() + '/.hermes/config.yaml'``, ``Path.home() / '.hermes' / 'config.yaml'``)?
 
@@ -197,6 +199,19 @@ def reaches(word: str) -> bool:
 
 
 _PLACES = Kept(_read_places)
+
+
+def holds(word: str) -> bool:
+    """True when *word* is a folder that only HOLDS a guarded place (``~``, ``/``, ``~/Documents``
+    above Cline's hooks): written without a wildcard, not a guarded place itself, not inside one.
+
+    WHY (KI-591): :func:`reaches` answers True for such a folder too, which ``rm -rf ~`` needs —
+    but a command that only reads a folder or only adds a new one to it (``df -h /``,
+    ``mkdir -p ~/Documents``) cannot reach what lies below; the caller judges the command."""
+    path = _expanded(word)
+    if not path or any(char in path for char in _GLOB_CHARS):
+        return False
+    return reaches(word) and not _PLACES.get(_machine())[2].match(path)
 
 
 def inside(folder: str) -> bool:

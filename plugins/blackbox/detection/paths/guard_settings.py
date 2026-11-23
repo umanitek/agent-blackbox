@@ -51,6 +51,7 @@ from ...kernel import action_context, addons as guarded_extra, agent_hosts, shel
 from ...kernel.bounded_files import read_small_text
 from ...kernel.config import BlackboxConfig, load_blackbox_config
 from . import guard_commands, guard_patch, guard_paths, guard_places, guard_secrets, guard_startup, protected, shell_files
+from .shell_scripts import _LITERAL
 
 MATCHED = threat_ids.SELF_PROTECTION
 _TITLE = "Change to Blackbox's own settings"
@@ -77,8 +78,14 @@ _HOST_CONFIGS = ("config.yaml", "openclaw.json",
                  *shell_path.STARTUP_FILES)   # the person's startup file: everything but the sandbox's PATH block
 #: Startup files: a ``BLACKBOX_…`` variable written there lowers the guard of every later session.
 _STARTUP_FILES = frozenset({".zshrc", ".zshenv", ".zprofile", ".bashrc", ".bash_profile", ".profile", ".env", "config.fish"})
-#: A file whose text is run: a script that would itself be refused may not be written.
-_SCRIPT = re.compile(r"\.(?:sh|bash|zsh|command|py|js|mjs|rb|pl|plist|service)$|^#!", re.IGNORECASE)
+#: A file whose text is run: a script that would itself be refused may not be written. Each is judged
+#: in its OWN language (KI-591): a shell script or service definition as command lines, a code file
+#: as code — read as shell, a JavaScript ``// note`` or ``/* c */`` named the root folder.
+_SHELL_SCRIPT = re.compile(r"\.(?:sh|bash|zsh|command|plist|service)$", re.IGNORECASE)
+_CODE_SCRIPT = re.compile(r"\.(?:py|js|mjs|rb|pl)$", re.IGNORECASE)
+_SHEBANG, _SHELLS = re.compile(r"\A#!\s*(\S+)(?:\s+(\S+))?"), frozenset({"sh", "bash", "zsh", "dash", "ksh", "fish"})
+#: Code that runs a command: its quoted command lines (``execSync('rm -rf ~')``) are judged as shell.
+_RUNS_COMMANDS = re.compile(r"subprocess|os\.system|Popen|os\.exec|child_process|execSync|spawn|\bsystem\(|\bexec\(|%x|`", re.IGNORECASE)
 _BASE64_WORD = re.compile(r"(?<![A-Za-z0-9+/=])[A-Za-z0-9+/]{24,}={0,2}(?![A-Za-z0-9+/=])")
 #: Tools that drive a browser: pointed at the dashboard they would press its switches.
 _BROWSER_TOOL = re.compile(r"browser|navigate|computer|click|open_url", re.IGNORECASE)
@@ -93,9 +100,9 @@ _QUOTE_MARKS = re.compile(r"['\"\\]")
 _WRAPS_ANOTHER = re.compile(r"\s*(?:\S*/)?(?:sh|bash|zsh|dash|ksh|fish|eval)\b")
 #: A line that hands text on to a shell or an interpreter (``-c``, ``-e``, ``eval``).
 _HANDS_ON = re.compile(r"\s-{1,2}\w*[cerpE]\b|\beval\b")
-#: A heredoc that ``cat`` writes to a file: ``cat > notes.md <<EOF`` or ``cat <<EOF > notes.md``.
+#: A heredoc that ``cat`` writes to a file: ``cat > notes.md <<EOF`` or ``cat <<EOF > notes.md`` (after ``cd x &&`` too).
 _TEXT_HEREDOC = re.compile(
-    r"(?m)^(?P<head>[ \t]*cat[ \t]*(?:>>?[ \t]*(?P<target>[^\s|;&<>]+)[ \t]*)?<<-?[ \t]*(?P<quote>['\"]?)(?P<tag>\w+)(?P=quote)"
+    r"(?m)^(?P<head>(?:[^\n]*?(?:&&|;)[ \t]*)?[ \t]*cat[ \t]*(?:>>?[ \t]*(?P<target>[^\s|;&<>]+)[ \t]*)?<<-?[ \t]*(?P<quote>['\"]?)(?P<tag>\w+)(?P=quote)"
     r"[ \t]*(?:>>?[ \t]*(?P<after>[^\s|;&<>]+)[ \t]*)?)\n(?P<body>.*?)\n[ \t]*(?P=tag)[ \t]*$", re.DOTALL)
 _MAX_STAGED_CHARS = 200_000
 #: Argument names under which any tool carries a command to run.
@@ -156,13 +163,17 @@ def _read_closely(line: str, folder: str, ports: tuple[int, ...]) -> tuple[bool,
     return guard_paths.line_changes_a_place(line, folder)
 
 
-def _lines(text: str) -> list[str]:
+def _lines(text: str, code: list[tuple[str, str]]) -> list[str]:
     """The lines of *text* to judge as commands: without the body of a heredoc that only writes
     plain text to a file never named again (notes, a README), with every base64 word that decodes
-    to readable text added."""
+    to readable text added. A heredoc that writes a code file is left out too, and its
+    ``(file, body)`` added to *code* for :func:`script_tampers`."""
     def plain(found: re.Match[str]) -> str:
         target = found.group("target") or found.group("after") or ""
-        runs = _SCRIPT.search(target) or os.path.basename(target) in _STARTUP_FILES or text.count(target) != 1
+        if _script_kind(target, found.group("body")) == "code":
+            code.append((target, found.group("body")))   # judged as the code it is, not as command lines
+            return found.group("head")
+        runs = _script_kind(target, "") or os.path.basename(target) in _STARTUP_FILES or text.count(target) != 1
         return found.group(0) if (not target or runs) else found.group("head")
     return _decoded(_TEXT_HEREDOC.sub(plain, text) if "<<" in text else text).split("\n")
 
@@ -194,7 +205,8 @@ def _text_tampers(text: str) -> bool:
         return True
     ports = _ports()
     folder, closely = guard_paths.START_FOLDER, MAX_READ_CLOSELY
-    for line in _lines(text):
+    code_written: list[tuple[str, str]] = []
+    for line in _lines(text, code_written):
         if not line.strip() or guard_startup.plain_startup_append(line):
             continue
         if _says_it(line, ports):
@@ -204,11 +216,35 @@ def _text_tampers(text: str) -> bool:
             tampers, folder = (True, folder) if closely < 0 else _read_closely(line, folder, ports)
             if tampers:
                 return True
+    if any(script_tampers(path, body) for path, body in code_written):
+        return True
     # Code over several lines: after an interpreter's ``-c "…"`` (found by splitting the whole
     # command, when it is short enough to split), or on a heredoc.
     spread = _inline_code(text) if "\n" in text and len(text) <= MAX_READ_CLOSELY and _HANDS_ON.search(text) else []
     heredocs = [found.group("body") for found in shell_files._HEREDOC.finditer(text)] if "<<" in text else []
     return any(_code_tampers(code) for code in spread + heredocs)
+
+
+def _script_kind(path: str, text: str) -> str:
+    """``"shell"``, ``"code"`` or ``""``: the language a file at *path* holding *text* is run in —
+    its ``#!`` line first, then its ending."""
+    first = _SHEBANG.match(text or "")
+    if first:
+        runner = os.path.basename(first.group(2) if os.path.basename(first.group(1)) == "env" and first.group(2) else first.group(1))
+        return "shell" if runner in _SHELLS else "code"
+    return "shell" if _SHELL_SCRIPT.search(str(path)) else "code" if _CODE_SCRIPT.search(str(path)) else ""
+
+
+def script_tampers(path: str, text: str) -> bool:
+    """True when *text*, written to *path* as a script, would itself be refused when run: a shell
+    script's lines as commands, a code file as code (and the command lines it runs as commands)."""
+    kind = _script_kind(path, text)
+    if kind == "shell":
+        return _text_tampers(text) or _code_tampers(text)
+    if kind == "code":
+        return _code_tampers(text) or (bool(_RUNS_COMMANDS.search(text)) and any(
+            " " in literal.group(2) and _text_tampers(literal.group(2)) for literal in _LITERAL.finditer(text)))
+    return False
 
 
 def _inline_code(command: str) -> list[str]:
@@ -290,8 +326,7 @@ def _file_tool_tampers(access: dict[str, str], args: Any) -> bool:
         name = os.path.basename(os.path.expanduser(str(path or "")))
         if name in _STARTUP_FILES and guard_commands.sets_environment(text):
             return True                    # a startup file given one of Blackbox's variables
-        return bool(text) and bool(_SCRIPT.search(str(path)) or _SCRIPT.search(text)) and (
-            _text_tampers(text) or _code_tampers(text))   # a script that would itself be refused
+        return bool(text) and script_tampers(str(path), text)   # a script that would itself be refused
     host_configs = (*_HOST_CONFIGS, *guarded_extra.editable_configs())   # another program's file: Blackbox's part only
     if os.path.basename(os.path.expanduser(str(path))) not in host_configs or not isinstance(args, dict):
         return True                        # Blackbox's own folders and files: any write

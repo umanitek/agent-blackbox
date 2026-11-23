@@ -32,8 +32,15 @@ READ_ONLY = frozenset({
     "cat", "less", "more", "head", "tail", "ls", "ll", "stat", "file", "wc", "grep", "egrep", "fgrep", "rg", "ag",
     "diff", "cmp", "jq", "md5", "md5sum", "shasum", "sha1sum", "sha256sum", "du", "tree", "test", "[", "cd", "pushd",
     "popd", "realpath", "readlink", "basename", "dirname", "sort", "uniq", "cut", "nl", "tac", "xxd", "hexdump",
-    "strings", "od", "base64", "open", "pwd", "true", "which", "column",
+    "strings", "od", "base64", "open", "pwd", "true", "which", "column", "df", "mdfind", "mdls",
 })
+#: Commands that only ADD a new entry and never change one already there: a folder that merely
+#: holds a guarded place may be given to them (``mkdir -p ~/Documents``), a guarded place never.
+_ONLY_ADDS = frozenset({"mkdir"})
+#: Inside quoted text, the root folder or a wildcard right under it is how comments start
+#: (``sed -i '1i // note'``, ``'/* c */'``), not a folder handed to a command: a root handed to a
+#: command is a word of its own (``rm -rf /`` is still read). KI-591.
+_ROOT_IN_TEXT = re.compile(r"^/+(?:\*+)?$")
 #: Commands that copy: a guarded place may be what they read, never where they write.
 _COPIES = frozenset({"cp", "rsync", "scp", "ditto", "zip"})
 #: Words that run another command: the command after them is the one judged.
@@ -83,14 +90,26 @@ def _place(word: str, folder: str) -> str:
     return word
 
 
-def _named_places(words: list[str], folder: str) -> bool:
-    """True when one of *words* — or a word inside one that was quoted, or the value of a
-    ``--flag=value`` / ``NAME=value`` — names a guarded place."""
+#: What a command line's words name: nothing, only a folder ABOVE a guarded place, or the place.
+NAMES_NOTHING, HOLDS_ONE, NAMES_ONE = 0, 1, 2
+
+
+def _named_places(words: list[str], folder: str) -> int:
+    """:data:`NAMES_ONE` when one of *words* — or a word inside one that was quoted, or the value
+    of a ``--flag=value`` / ``NAME=value`` — names a guarded place (or a wildcard matching one);
+    :data:`HOLDS_ONE` when they name only a folder that holds one; else :data:`NAMES_NOTHING`."""
+    level = NAMES_NOTHING
     for word in words:
-        pieces = [word, *word.split("=", 1)[1:], *(word.split() if " " in word else [])]
-        if any(guard_places.reaches(_place(_UNQUOTED.sub("", piece), folder)) for piece in pieces if piece):
-            return True
-    return False
+        pieces = [(word, False), *((value, False) for value in word.split("=", 1)[1:]),
+                  *((piece, True) for piece in (word.split() if " " in word else []))]
+        for piece, in_text in pieces:
+            path = _place(_UNQUOTED.sub("", piece), folder) if piece else ""
+            if not path or (in_text and _ROOT_IN_TEXT.match(path)) or not guard_places.reaches(path):
+                continue
+            if not guard_places.holds(path):
+                return NAMES_ONE
+            level = HOLDS_ONE
+    return level
 
 
 def _git_rewrites_a_checkout(rest: list[str], folder: str) -> bool:
@@ -157,7 +176,10 @@ def _segment_changes_a_place(name: str, rest: list[str], segment: list[str], fol
         return True
     if name in _OWN_COMMANDS:
         return False
-    if not _named_places(segment, folder) and not (guard_places.inside(folder) and rest):
+    named = _named_places(segment, folder)
+    if guard_places.inside(folder) and rest:
+        named = NAMES_ONE
+    if named == NAMES_NOTHING:
         return False
     if name in guard_landing.LANDING_COPIES:
         # Judged by what LANDS, not by the folder word: ``cp notes.md ~`` writes ``~/notes.md``.
@@ -169,4 +191,6 @@ def _segment_changes_a_place(name: str, rest: list[str], segment: list[str], fol
         return guard_landing.unpack_writes_a_place(name, rest, folder)
     if name in ("echo", "printf"):
         return bool(re.search(r"[|>]", line))          # printed into a file or another program
+    if named == HOLDS_ONE and name in _ONLY_ADDS:
+        return False      # it adds a folder; it cannot reach what the folder already holds (KI-591)
     return not _only_reads(name, rest)
