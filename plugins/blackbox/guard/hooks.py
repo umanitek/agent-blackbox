@@ -22,6 +22,7 @@ from . import injection_sites
 from . import reporting
 from .reporting import blackbox_block_message
 from . import dependency_files, host_process, session_context
+from .activity import record_activity as _record_activity
 
 logger = logging.getLogger(__name__)
 
@@ -265,33 +266,6 @@ def _recorded_findings() -> set[tuple[str, str]]:
     """``(identifier, evidence)`` of the findings already in Blackbox's log (the log's own cache)."""
     rows = audit.read_findings(limit=1000)
     return {(str(row.get("identifier") or ""), str(row.get("evidence") or "")) for row in rows}
-
-
-def _record_activity(tool_name: str, args: Any) -> None:
-    """Log what the agent touched to the visibility trail (fail-open).
-
-    Covers both the dedicated file tools and the shell channel (parsing reads,
-    downloads, and dependency installs out of commands). Visibility, not
-    detection: everything is logged regardless of whether it flags.
-    """
-    try:
-        access = detection.file_access_arg(tool_name, args)
-        if access:
-            audit.record_file_access(access["tool"], access["path"], access["mode"])
-            return
-        if (tool_name or "").strip().lower() not in detection.SHELL_TOOLS:
-            return
-        command = detection.command_from_args(tool_name, args)
-        if not command:
-            return
-        for path in detection.parse_shell_reads(command):
-            audit.record_file_access("shell", path, "read")
-        for url in detection.parse_downloads(command):
-            audit.record_file_access("shell", url, "download")
-        for dep in detection.parse_dependency_installs(command):
-            audit.record_dependency(dep["ecosystem"], dep["name"], dep.get("version", ""), "shell")
-    except Exception as exc:  # pragma: no cover - fail open
-        logger.debug("blackbox: activity visibility log failed: %s", exc)
 
 
 def on_post_tool_call(
