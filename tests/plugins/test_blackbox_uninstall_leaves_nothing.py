@@ -120,3 +120,31 @@ def test_an_uninstall_run_again_after_stopping_halfway_finishes_and_changes_noth
     once = _tree(home)
     _uninstall(home)   # a second run: idempotent, and it does not fail on what is already gone
     assert _tree(home) == once == before
+
+
+def test_a_second_uninstall_says_blackbox_is_not_installed_and_changes_nothing(home, capsys):
+    """KI-611 (round 5, bb-r5-clean): the second `hermes blackbox uninstall` exited 0 but made a NEW
+    ~/blackbox-backup-<time>/ (a README and an EMPTY keys/ folder, "kept your keys in …") and deleted
+    a re-created cursor file. Now: no backup without keys, and a second run touches nothing."""
+    import argparse
+    before = _tree(home)
+    _install_everything(home)
+    plan = dataclasses.replace(uninstall.build_plan(homes=[home / ".hermes"], purge=False, keep_logs=False), system="Darwin")
+    uninstall.execute(plan, run=lambda command: 0, stop_dashboard=lambda port: [], run_as_admin=lambda command: 0)
+    assert not list(home.glob("blackbox-backup-*")), "a backup folder with no keys in it"
+    once = _tree(home)
+    assert once == before
+    args = argparse.Namespace(purge=False, keep_logs=False, dry_run=False, yes=True, remove_host=False)
+    assert uninstall.cmd_uninstall(args) == 0
+    assert "Blackbox is not installed here: nothing to remove." in capsys.readouterr().out
+    assert _tree(home) == once and not list(home.glob("blackbox-backup-*"))
+
+
+def test_a_look_at_hermes_sessions_never_recreates_a_deleted_blackbox_home(home):
+    """KI-611: ~/.hermes/blackbox/agent-hooks/hermes-cursor.json came back after the uninstall
+    deleted Blackbox's home — a process still looking wrote it again."""
+    from plugins.blackbox.agent_hooks import hermes_sessions
+    from plugins.blackbox.kernel import constants
+    assert not constants.blackbox_home().exists()
+    assert hermes_sessions.catch_up() == 0
+    assert not constants.blackbox_home().exists()

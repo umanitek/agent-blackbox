@@ -151,6 +151,14 @@ def build_plan(*, purge: bool, keep_logs: bool, now: Optional[_dt.datetime] = No
         notes=tuple(notes))
 
 
+def installed(plan: UninstallPlan) -> bool:
+    """True when *plan* finds any of Blackbox on this machine (KI-611: a second uninstall must
+    change nothing and say so)."""
+    return bool(plan.hermes_homes or plan.blackbox_home.exists() or plan.dkg_home or plan.shim or plan.system_helper
+                or plan.agent_hooks or plan.addons or plan.system_units
+                or any((Path.home() / "Library" / "LaunchAgents" / f"{label}.plist").exists() for label in LAUNCHD_LABELS))
+
+
 def describe(plan: UninstallPlan) -> list[str]:
     """The lines shown before anything changes."""
     lines = ["Blackbox uninstall will:"]
@@ -295,6 +303,9 @@ def execute(plan: UninstallPlan, *, run: Runner = _run,
 
 def cmd_uninstall(args: argparse.Namespace) -> int:
     plan = build_plan(purge=args.purge, keep_logs=args.keep_logs)
+    if not installed(plan):
+        print("Blackbox is not installed here: nothing to remove.")
+        return 0
     for line in describe(plan):
         print(line)
     if args.dry_run:

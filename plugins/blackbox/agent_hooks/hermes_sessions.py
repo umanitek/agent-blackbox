@@ -83,6 +83,11 @@ def _cursor_path() -> Path:
     return constants.blackbox_home() / "agent-hooks" / "hermes-cursor.json"
 
 
+#: Set once a look found no log yet: when it appears it is read from its start, even where no cursor
+#: file could be written (Blackbox's home did not exist then).
+_seen_empty = threading.Event()
+
+
 def reset() -> None:
     """Tests: forget the children and pending delegations (the cursor file stays where it is)."""
     with _lock:
@@ -200,16 +205,19 @@ def _rows(text: str) -> list[dict[str, Any]]:
 
 
 def catch_up() -> int:
-    """Record the Hermes events written to the audit trail since the last look; how many."""
+    """Record the Hermes events written to the audit trail since the last look; how many. With no
+    log and no Blackbox home it writes nothing (KI-611: a process still looking during an uninstall
+    re-created ``agent-hooks/hermes-cursor.json`` after Blackbox's home was deleted)."""
     path = log_path()
     try:
         stat = path.stat()
     except OSError:   # no Hermes event yet: when the log appears, it is read from its start
-        if not _cursor_path().exists():
+        _seen_empty.set()
+        if constants.blackbox_home().is_dir() and not _cursor_path().exists():
             write_json_object(_cursor_path(), {"inode": 0, "offset": 0}, what="the Hermes sessions cursor")
         return 0
     with _lock:
-        cursor = read_json_object(_cursor_path()) or {}
+        cursor = read_json_object(_cursor_path()) or ({"inode": 0, "offset": 0} if _seen_empty.is_set() else {})
         same_file = cursor.get("inode") == stat.st_ino and isinstance(cursor.get("offset"), int) and cursor["offset"] <= stat.st_size
         start = int(cursor["offset"]) if same_file else (stat.st_size if not cursor else 0)
         if start >= stat.st_size:

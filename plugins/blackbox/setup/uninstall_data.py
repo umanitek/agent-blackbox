@@ -18,7 +18,11 @@ if TYPE_CHECKING:
 
 
 def _back_up(plan: UninstallPlan, report: list[str]) -> None:
-    if plan.backup_dir is None:
+    """The keys (and, with --keep-logs, the audit record) moved to the backup folder — made only
+    when there is something to keep (KI-611: a second uninstall made an empty one, "kept your keys")."""
+    keeps_logs = plan.keep_logs and plan.blackbox_home.is_dir() and any(
+        item.suffix == ".jsonl" or item.name == "sandbox" for item in plan.blackbox_home.iterdir())
+    if plan.backup_dir is None or not (plan.key_files or keeps_logs):
         return
     keys = plan.backup_dir / "keys"
     keys.mkdir(parents=True, exist_ok=True)
