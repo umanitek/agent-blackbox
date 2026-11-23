@@ -10,7 +10,8 @@ Reads (GET):
 * ``changes`` — the helper's real-time changes after ``?since=<seq>`` (a companion app follows these);
 * ``watch-plan`` — what the system protection helper watches, SIGNED for its nonce (helper_link);
 * ``sandbox`` — Layer 2: which agents run inside the OS sandbox, whether their launchers are in
-  place, and the GUI editors that can be opened inside it (:mod:`.sandbox`).
+  place, and the GUI editors that can be opened inside it (:mod:`.sandbox`);
+* ``permissions`` — the sandbox permissions per agent and project (``sandbox.permissions``).
 
 Writes (POST):
 
@@ -20,7 +21,10 @@ Writes (POST):
 * ``file-report`` — the helper's signed real-time changes (:mod:`.changes`), including the
   sandbox's refusals the helper reads from the system log;
 * ``open-protected`` ``{"app": "cursor"}`` — relaunches a GUI editor inside the sandbox (stricter,
-  never asks).
+  never asks);
+* ``permission-set`` / ``permission-clear`` / ``folder-set`` / ``folder-clear`` — the sandbox
+  permissions; a loosening waits for the person (``sandbox.permissions.API_WEAKENING``), and the
+  profiles are brought in step after each write.
 
 Every write goes through the ONE settings writer (``kernel.settings.write_settings``) with File
 Shield's own validator — never a second path into the config.
@@ -29,13 +33,13 @@ Shield's own validator — never a second path into the config.
 from __future__ import annotations
 
 import os
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 from ...kernel.settings import write_settings
 from .. import helper_link
 from ..shield_api import ShieldApi, ShieldApiError, ShieldContext
 from . import alerts, changes, events, mode as mode_module, sandbox
-from .sandbox import packages
+from .sandbox import packages, permissions
 from .protect import is_folder
 
 MAX_HITS = 200
@@ -163,10 +167,26 @@ def file_report(context: ShieldContext, body: Mapping[str, Any]) -> dict[str, An
     return {"kept": len(kept)}
 
 
+def permissions_view(_context: ShieldContext, _params: Mapping[str, str]) -> dict[str, Any]:
+    return permissions.view(sandbox.chosen(mode_module.current()))
+
+
+WriteHandler = Callable[[ShieldContext, Mapping[str, Any]], dict[str, Any]]
+
+
+def _then_sync(write: WriteHandler) -> WriteHandler:
+    """*write*, then the profiles brought in step with the new permissions; answers the new view."""
+    def handler(context: ShieldContext, body: Mapping[str, Any]) -> dict[str, Any]:
+        write(context, body)
+        _sync_sandbox()
+        return permissions_view(context, {})
+    return handler
+
+
 API = ShieldApi(
     reads={"protected": protected_view, "hits": hits, "alerts": alerts_view, "changes": changes_view, "watch-plan": watch_plan,
-           "sandbox": sandbox_view, **packages.API_READS},
+           "sandbox": sandbox_view, "permissions": permissions_view, **packages.API_READS},
     writes={"protect": protect, "unprotect": unprotect, "file-report": file_report, "open-protected": open_protected,
-            **packages.API_WRITES},
-    weakening={"unprotect": unprotect_weakens, "brew": packages.weakening},   # "ask me each time" holds every install
+            **packages.API_WRITES, **{name: _then_sync(write) for name, write in permissions.API_WRITES.items()}},
+    weakening={"unprotect": unprotect_weakens, "brew": packages.weakening, **permissions.API_WEAKENING},   # "ask me each time" holds every install
 )

@@ -82,6 +82,16 @@
     <p class="muted note" id="sandbox-note" aria-live="polite"></p>
   </section>
   <section class="card">
+    <h2>Sandbox permissions</h2>
+    <p class="muted">What an agent inside the sandbox may do beyond your files. Block, ask you each time, or allow — for every agent here; a rule for one agent or one project folder wins over it. Turning one up asks you first.</p>
+    <div id="permissions" class="muted">Reading the permissions…</div>
+    <h3>Exceptions</h3>
+    <div id="permission-rules" class="muted">No exceptions: every agent follows the list above.</div>
+    <h3>Never unlocked</h3>
+    <ul id="permission-never" class="muted"></ul>
+    <p class="muted note" id="permissions-note" aria-live="polite"></p>
+  </section>
+  <section class="card">
     <h2>Agents refused</h2>
     <div id="hits" class="muted">No AI agent has tried to reach a protected item.</div>
   </section>
@@ -190,6 +200,64 @@
       });
     }).catch(function () {});
   }
+  var MODE_WORDS = { block: "Block", ask: "Ask", allow: "Allow" };
+  function sayPermission(text) { document.getElementById("permissions-note").textContent = text; }
+  function changePermission(name, body) {
+    sayPermission("Saving…");
+    post(name, body).then(function (r) {
+      return r.json().then(function (answer) {
+        if (r.ok) { sayPermission("Saved."); drawPermissions(answer); }
+        else { sayPermission(String((answer && (answer.error || answer.detail)) || "Not changed.")); }
+      });
+    }).catch(function () { sayPermission("Not changed."); });
+  }
+  function scopeWords(row) {
+    return (row.agent || "every agent") + (row.project ? " in " + row.project : "");
+  }
+  function drawPermissions(view) {
+    var host = document.getElementById("permissions"); host.textContent = ""; host.className = "";
+    (view.permissions || []).forEach(function (permission) {
+      var line = el("div", "row permission"), left = el("div");
+      left.appendChild(el("div", "item", String(permission.name)));
+      left.appendChild(el("div", "muted", String(permission.unlocks)));
+      line.appendChild(left);
+      if (!permission.controllable) { line.appendChild(el("span", "tag", "not controllable yet")); host.appendChild(line); return; }
+      var modes = el("div", "modes");
+      (permission.modes || []).forEach(function (mode) {
+        var button = el("button", mode === permission.mode ? "primary" : null, MODE_WORDS[mode] || mode);
+        button.setAttribute("aria-pressed", mode === permission.mode ? "true" : "false");
+        button.addEventListener("click", function () { changePermission("permission-set", { permission: permission.id, mode: mode }); });
+        modes.appendChild(button);
+      });
+      line.appendChild(modes);
+      line.appendChild(el("span", "tag", permission.applies === "now" ? "now" : "after restart"));
+      host.appendChild(line);
+    });
+    var rules = document.getElementById("permission-rules"); rules.textContent = "";
+    var exceptions = (view.rules || []).filter(function (row) { return row.agent || row.project; });
+    var names = {}; (view.permissions || []).forEach(function (p) { names[p.id] = p.name; });
+    exceptions.forEach(function (row) {
+      var line = el("div", "row");
+      line.appendChild(el("span", null, (names[row.permission] || row.permission) + " · " + (MODE_WORDS[row.mode] || row.mode) + " · " + scopeWords(row)));
+      var remove = el("button", null, "Remove");
+      remove.addEventListener("click", function () { changePermission("permission-clear", { permission: row.permission, agent: row.agent || "", project: row.project || "" }); });
+      line.appendChild(remove); rules.appendChild(line);
+    });
+    (view.folders || []).forEach(function (row) {
+      var line = el("div", "row");
+      line.appendChild(el("span", null, row.path + " · " + (row.access === "read" ? "read only" : "kept out") + " · " + scopeWords(row)));
+      var remove = el("button", null, "Remove");
+      remove.addEventListener("click", function () { changePermission("folder-clear", { path: row.path, agent: row.agent || "", project: row.project || "" }); });
+      line.appendChild(remove); rules.appendChild(line);
+    });
+    rules.className = rules.children.length ? "" : "muted";
+    if (!rules.children.length) rules.textContent = "No exceptions: every agent follows the list above.";
+    var never = document.getElementById("permission-never"); never.textContent = "";
+    (view.never || []).concat(view.not_controllable || []).forEach(function (row) {
+      var li = el("li"); li.appendChild(el("b", null, String(row.name))); li.appendChild(document.createTextNode(" — " + String(row.why))); never.appendChild(li);
+    });
+  }
+  function readPermissions() { getJSON(API + "permissions").then(drawPermissions).catch(function () {}); }
   var since = 0;
   function readChanges() {
     getJSON(API + "changes?since=0").then(function (view) {
@@ -225,7 +293,7 @@
   }
   getJSON("attacks.json").then(function (t) { renderProven(t); })
     .catch(function () { document.getElementById("tested").textContent = "The attack table could not be read."; });
-  readItems(); readHits(); readChanges(); readSandbox();
+  readItems(); readHits(); readChanges(); readSandbox(); readPermissions();
   setInterval(readHits, 5000); setInterval(readChanges, 2000);
 </script>
 </body>
