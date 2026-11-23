@@ -13,7 +13,11 @@ were never counted either.
 in one line: "Blackbox's sandbox refused this (<what>): <why and what to do>". The hook post-call
 passes that line to the agent (beside the output, where the agent's hook allows) and records the
 call as refused on its instance, with the line as the reason. A file the sandbox kept closed is
-explained but not counted here: the helper's deny-log watch counts it with its exact path.
+explained but not counted here: the helper's deny-log watch counts it with its exact path — except a
+place something starts from by itself (KI-614/618, round 5: the kernel refused a LaunchAgent, an
+``authorized_keys`` append and a program in ``/opt/homebrew/bin``, and none was counted — those places
+are not in the deny-log watch): it is :data:`PERSISTENCE`, explained and counted here, judged against
+the ONE list the sandbox profile is built from (``kernel.persistence_places``).
 
 It reads text only, and only for a session the hook has proven to be inside the sandbox (the
 canary), so an output that merely quotes such an error elsewhere is not taken for one.
@@ -27,17 +31,21 @@ Usage::
 
 from __future__ import annotations
 
+import fnmatch
 import os
 import re
 import shutil
 import stat
 from dataclasses import dataclass
 
+from ...kernel import persistence_places
+
 #: The kinds of refusal; only :data:`FILE` is left for the helper's deny-log watch to count.
 SETUID, APP_DRIVER, OPEN_APP, SIGNAL, NESTED, FILE = "setuid", "app-driver", "open-app", "signal", "nested", "file"
 #: Blackbox's own stand-in already said it (counted, not said again); a shell startup file an
-#: installer tried to change (its lines are handed to the person).
-OWN, STARTUP = "own", "startup"
+#: installer tried to change (its lines are handed to the person); a place something starts from by
+#: itself (a launchd job, cron/at, an SSH login file, Homebrew's folders).
+OWN, STARTUP, PERSISTENCE = "own", "startup", "persistence"
 #: The shell startup files (as ``kernel.shell_path`` keeps them closed).
 STARTUP_FILES = frozenset({".zshrc", ".zshenv", ".zprofile", ".zlogin", ".bashrc", ".bash_profile", ".profile", ".bash_login"})
 #: What each well-known installer wanted to add to a startup file — said to the person to add
@@ -62,13 +70,18 @@ _WHY = {
              "--disable-sandbox` (Blackbox's sandbox still covers it, nothing is lost); anything else: run it in "
              "your own terminal"),
     FILE: "this file is kept closed to agents (a protected item, or a file that keeps Blackbox's hook)",
+    PERSISTENCE: ("an agent may not leave something that starts by itself later, outside the sandbox (a launchd job, "
+                  "a scheduled job, an SSH login key, a program in Homebrew's folders); if you meant it, do it in your "
+                  "own terminal"),
 }
 _WHAT = {SETUID: "{name}, a setuid program", APP_DRIVER: "{name}", OPEN_APP: "open",
-         SIGNAL: "a signal to a process outside the sandbox", NESTED: "a second sandbox", FILE: "{name}", STARTUP: "{name}"}
+         SIGNAL: "a signal to a process outside the sandbox", NESTED: "a second sandbox", FILE: "{name}", STARTUP: "{name}",
+         PERSISTENCE: "{name}"}
 #: zsh: ``(eval):1: operation not permitted: sudo``; bash: ``bash: /usr/bin/sudo: Operation not
 #: permitted``; sandbox-exec itself: ``execvp() of '/bin/ps' failed: Operation not permitted``.
 _EXEC = re.compile(r"operation not permitted: (?P<z>\S+)\s*$|(?:^|\s)(?P<b>/\S+): operation not permitted"
-                   r"|execvp\(\) of '(?P<x>[^']+)' failed: operation not permitted", re.IGNORECASE | re.MULTILINE)
+                   r"|execvp\(\) of '(?P<x>[^']+)' failed: operation not permitted"
+                   r"|\[Errno 1\] operation not permitted: '(?P<p>/[^']+)'", re.IGNORECASE | re.MULTILINE)
 _OPEN = re.compile(r"LSOpenURLs\w*\(\) failed.*?error -54|LSOpenURLsWithRole\(\) failed with error -54", re.IGNORECASE)
 _SIGNAL = re.compile(r"kill(?::\d+:?)? kill (?:-\S+ )?\d+ failed: operation not permitted|kill: \(\d+\) - operation not permitted"
                      r"|kill: \d+: operation not permitted", re.IGNORECASE)
@@ -115,6 +128,15 @@ def _installer(text: str) -> str:
     return next((name for name in INSTALLER_LINES if re.search(rf"\b{name}\b", lowered)), "")
 
 
+def _starts_things(path: str) -> bool:
+    """True when *path* is, or lies inside, a place something starts from by itself (the sandbox
+    profile's own list, ``kernel.persistence_places``; the shell startup files are :data:`STARTUP`)."""
+    if not path.startswith("/"):
+        return False
+    places = persistence_places.hook_places(os.path.expanduser("~"), persistence_places.HOMEBREW_PREFIXES)
+    return any(fnmatch.fnmatch(path, place) or path.startswith(place.rstrip("/") + "/") for place in (*places.starts, *places.programs))
+
+
 def _exec_kind(word: str, text: str = "") -> Refusal:
     """A program the kernel would not start, or a file it would not open (zsh words both alike)."""
     name = os.path.basename(word.rstrip(":"))
@@ -122,6 +144,8 @@ def _exec_kind(word: str, text: str = "") -> Refusal:
         return Refusal(APP_DRIVER, name)
     if name in STARTUP_FILES:
         return Refusal(STARTUP, word.rstrip(":"), _installer(text))
+    if _starts_things(word.rstrip(":")):
+        return Refusal(PERSISTENCE, word.rstrip(":"))
     if _privileged(word):
         return Refusal(SETUID, name)
     return Refusal(FILE, word)
@@ -139,7 +163,7 @@ def refusals(output: str) -> list[Refusal]:
         found.append(Refusal(NESTED))
     found += [Refusal(OWN, match.group("what")) for match in _OWN.finditer(text)]
     for match in _EXEC.finditer(text):
-        word = match.group("z") or match.group("b") or match.group("x") or ""
+        word = match.group("z") or match.group("b") or match.group("x") or match.group("p") or ""
         if word:
             found.append(_exec_kind(word, text))
     return list(dict.fromkeys(found))[:MAX_FOUND]
@@ -147,7 +171,7 @@ def refusals(output: str) -> list[Refusal]:
 
 def counted(found: list[Refusal]) -> bool:
     """True when *found* holds a refusal the post-call counts (every kind but a file's: the helper's
-    deny-log watch counts those with their exact path)."""
+    deny-log watch counts those with their exact path; a persistence place it does not watch is counted here)."""
     return any(each.kind not in (FILE, STARTUP) for each in found)
 
 

@@ -126,3 +126,38 @@ def test_the_hermes_agents_sandboxed_shell_refusals_are_counted_too():
     assert hermes_sessions.apply(start) and hermes_sessions.apply(post)
     [instance] = [item for item in store.all_instances() if item.agent == "hermes"]
     assert instance.refused == 1
+
+
+#: KI-614 / KI-618 (security round 5, s5-perss, REAL sandboxed Claude Code): the kernel refused these
+#: and the agent saw only the bare error — none was recorded or counted (refused 3 of 6).
+def _persistence_outputs(home, brew) -> list[str]:
+    return [f"(eval):1: operation not permitted: {home}/Library/LaunchAgents/ai.r5test.s.plist",
+            f"(eval):1: operation not permitted: {home}/.ssh/authorized_keys",
+            f"(eval):1: operation not permitted: {brew}/bin/r5test-tool-s",
+            f"PermissionError: [Errno 1] Operation not permitted: '{home}/.ssh/authorized_keys'"]
+
+
+@pytest.fixture
+def brew(tmp_path, monkeypatch):
+    from plugins.blackbox.kernel import persistence_places
+    prefix = tmp_path / "brew"
+    (prefix / "bin").mkdir(parents=True)
+    (prefix / "bin" / "brew").write_text("#!/bin/sh\n", encoding="utf-8")
+    monkeypatch.setattr(persistence_places, "HOMEBREW_PREFIXES", (str(prefix),))
+    return prefix
+
+
+def test_a_refused_persistence_place_is_explained_and_counted_on_the_session(tmp_path, brew):
+    for number, output in enumerate(_persistence_outputs(tmp_path, brew)):
+        found = sandbox_errors.refusals(output)
+        assert [each.kind for each in found] == [sandbox_errors.PERSISTENCE], output
+        answer = _call(output, session=f"s5-perss-{number}")
+        assert "may not leave something that starts by itself" in answer["note"]
+    counts = [item.refused for item in store.all_instances() if item.agent == "claude-code"]
+    assert counts == [1, 1, 1, 1], counts
+
+
+def test_an_ordinary_refused_file_is_still_left_to_the_deny_log(tmp_path, brew):
+    _call(f"(eval):1: operation not permitted: {tmp_path}/Documents/Secret/change-1.txt")
+    [instance] = [item for item in store.all_instances() if item.agent == "claude-code"]
+    assert instance.refused == 0
