@@ -28,6 +28,11 @@ def unavailable() -> Optional[str]:
     return "Agent sandboxing works on macOS for now. Blackbox's hooks still protect your files here."
 
 
+def startup_places(_home: str) -> tuple[list[str], list[str], list[str]]:
+    """No startup places are closed where agents are not sandboxed."""
+    return [], [], []
+
+
 def render(_places: Places, digest_line: str = "") -> str:
     return ""
 

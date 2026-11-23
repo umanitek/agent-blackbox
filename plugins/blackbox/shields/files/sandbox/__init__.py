@@ -131,14 +131,14 @@ def chosen(mode: ShieldMode) -> tuple[str, ...]:
 
 
 def policy(mode: ShieldMode) -> Places:
-    """The sandbox's policy for *mode*: the person's items, Blackbox's keys and own places (the
-    add-ons' among them, and every add-on manifest — see :mod:`.addon_places`)."""
+    """The policy for *mode*: the person's items, Blackbox's keys, own and add-on places, the OS's startup places."""
     own = (str(constants.blackbox_home()), str(_PLUGIN), *addon_places.of(_PLUGIN.parent))
     hooks = _hook_configs()
     startup = [str(Path.home() / name) for name in shell_path.STARTUP_FILES] + hooks
     holders = sorted({os.path.dirname(path) for path in hooks} - {str(Path.home())})
     return build(mode_module.protected(mode), blackbox_key_patterns(), own, str(canary_path()), is_folder=is_folder,
-                 startup_files=startup, keep_in_place=holders, no_write_globs=[addons.manifest_pattern(str(_PLUGIN.parent))])
+                 startup_files=startup, keep_in_place=holders, no_write_globs=[addons.manifest_pattern(str(_PLUGIN.parent))],
+                 startup=platform.startup_places(str(Path.home())))
 
 
 def self_protected_files(mode: ShieldMode) -> tuple[str, ...]:

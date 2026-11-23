@@ -16,6 +16,10 @@ resolved, ``..`` folded), because a kernel sandbox matches the path the kernel s
 * the shell startup files (``~/.zshrc`` …) — never written: the block that puts Blackbox's agent
   launchers first on PATH lives there, and an agent that removed it would send every later agent
   outside the sandbox (KI-535). Named as given AND resolved (a dotfiles link is closed at both ends);
+* the places something starts from by itself, or the person runs from later (launchd jobs, login
+  items, cron, OpenSSH's login files, Homebrew's prefix — named by the platform module,
+  ``platform.startup_places``) — never written: a job an agent left there would run OUTSIDE the
+  sandbox (security round 4);
 * the canary — a file only a sandboxed process can not read: the proof a session really is
   inside (an agent can not fake it by setting a variable).
 
@@ -47,6 +51,10 @@ class Places:
     no_write_files: tuple[str, ...] = ()
     #: ``*`` patterns never written, created, renamed or removed (every add-on's manifest).
     no_write_globs: tuple[str, ...] = ()
+    #: Startup and PATH places (folders, files, ``*`` patterns) never written: see the module doc.
+    startup_folders: tuple[str, ...] = ()
+    startup_files: tuple[str, ...] = ()
+    startup_globs: tuple[str, ...] = ()
 
     def watched(self) -> tuple[str, ...]:
         """Every refused place (a denial naming one of these is a File Shield hit)."""
@@ -82,14 +90,17 @@ def _canonical_glob(pattern: str) -> str:
 
 def build(items: Iterable[str], key_patterns: Iterable[str], own: Iterable[str], canary: str,
           is_folder=os.path.isdir, startup_files: Iterable[str] = (), keep_in_place: Iterable[str] = (),
-          no_write_globs: Iterable[str] = ()) -> Places:
+          no_write_globs: Iterable[str] = (),
+          startup: tuple[Iterable[str], Iterable[str], Iterable[str]] = ((), (), ())) -> Places:
     """The policy for the person's *items* (as File Shield stores them), Blackbox's *key_patterns*
     (folders, or ``folder/glob``), Blackbox's *own* places, the *canary* file and the shell
     *startup_files* (absolute; they need not exist — every agent's hook config is passed here too:
     closed to writes the same way), and *keep_in_place* (folders never renamed or removed: the
     folders holding those configs, so ``mv ~/.claude …`` can not take the hook away), and
-    *no_write_globs* (absolute ``*`` patterns never written: every add-on's manifest). *is_folder* decides an item's kind (File
+    *no_write_globs* (absolute ``*`` patterns never written: every add-on's manifest), *startup*
+    (``(folders, files, globs)`` of the startup and PATH places, absolute). *is_folder* decides an item's kind (File
     Shield's own rule, so a not-yet-existing folder is a folder)."""
+    startup_folders, startup_paths, startup_globs = startup
     folders: list[str] = []
     files: list[str] = []
     for item in items:
@@ -108,4 +119,7 @@ def build(items: Iterable[str], key_patterns: Iterable[str], own: Iterable[str],
                   no_write=_unique(canonical(place) for place in own),
                   no_rename=_unique(above + [form for path in keep_in_place for form in (os.path.normpath(os.path.expanduser(path)),
                                                                                          canonical(path))]), canary=canary_path,
-                  no_write_files=_unique(startup), no_write_globs=_unique(_canonical_glob(os.path.expanduser(g)) for g in no_write_globs))
+                  no_write_files=_unique(startup), no_write_globs=_unique(_canonical_glob(os.path.expanduser(g)) for g in no_write_globs),
+                  startup_folders=_unique(form for path in startup_folders for form in (os.path.normpath(path), canonical(path))),
+                  startup_files=_unique(form for path in startup_paths for form in (os.path.normpath(path), canonical(path))),
+                  startup_globs=_unique(_canonical_glob(glob) for glob in startup_globs))

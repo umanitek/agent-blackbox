@@ -141,3 +141,27 @@ def test_the_shim_and_its_client_land_in_the_sandbox_tools_folder_only(tmp_path)
     packages.install_shim(tools, "http://127.0.0.1:9700")
     assert (tools / "brew").stat().st_mode & 0o111 and (tools / packages.CLIENT_NAME).is_file()
     assert not (tmp_path / "agent-bin" / "brew").exists()   # the person's own PATH keeps the real brew
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="the brew shim is macOS's")
+@pytest.mark.parametrize("argv, refused", [
+    (["tap", "someone/evil-tap"], True), (["untap", "homebrew/cask"], True), (["link", "jq"], True), (["unlink", "jq"], True),
+    (["pin", "jq"], True), (["services", "start", "postgresql"], True), (["autoremove"], True), (["cleanup"], True),
+    (["tap"], False), (["list"], False), (["info", "jq"], False), (["--prefix"], False), ([], False),
+])
+def test_the_shim_refuses_every_command_that_changes_homebrew_and_runs_reads(tmp_path, argv, refused):
+    """Security round 4: ``brew tap someone/evil-tap`` from inside the sandbox began cloning into the
+    Taps folder; everything but a read or a brokered install is refused with the reason."""
+    tools, real = tmp_path / "tools", tmp_path / "real"
+    tools.mkdir()
+    real.mkdir()
+    (real / "brew").write_text("#!/bin/sh\necho REAL-BREW \"$@\"\n", encoding="utf-8")
+    (real / "brew").chmod(0o755)
+    (tools / "brew").write_text(macos.brew_shim(str(tools), "/usr/bin/python3", "http://127.0.0.1:9"), encoding="utf-8")
+    (tools / "brew").chmod(0o755)
+    done = subprocess.run([str(tools / "brew"), *argv], capture_output=True, text=True, timeout=10, check=False,
+                          env={"PATH": f"{tools}:{real}:/usr/bin:/bin"})
+    if refused:
+        assert done.returncode == 126 and "Blackbox's sandbox refused this (brew" in done.stderr and "REAL-BREW" not in done.stdout
+    else:
+        assert done.returncode == 0 and done.stdout.startswith("REAL-BREW"), done.stderr
