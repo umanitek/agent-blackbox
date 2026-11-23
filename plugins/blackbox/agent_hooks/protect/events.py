@@ -289,11 +289,13 @@ def judge(body: Any) -> tuple[dict[str, Any], Optional[Judged]]:
     blocked = verdict.get("decision") == "block"
     answer = {"decision": "block" if blocked else "allow", "message": verdict.get("message", "") if blocked else "",
               "findings": len(findings), "recorded": True}
-    refused = sandbox_errors.refusals(event["text"]) if event["event"] == "post_tool" and event["sandboxed"] is True else []
-    if refused and not blocked:   # the kernel refused part of the call: said to the agent, counted (KI-590)
+    refused = sandbox_errors.refusals(event["text"]) if event["event"] == "post_tool" and event["sandboxed"] is True \
+        and sandbox_errors.read_output_of(event["tool_name"]) else []
+    if refused and not blocked:   # the kernel refused part of the call: said to the agent, counted once each (KI-590, KI-637)
         if sandbox_errors.note(refused):
             answer["note"] = sandbox_errors.note(refused)
-        if sandbox_errors.counted(refused):
+        event["refused"] = sandbox_errors.counted(refused)
+        if event["refused"]:
             verdict = {**verdict, "decision": "block", "message": sandbox_errors.reason(refused)}
         recorder.submit(lambda: sandbox_errors.emit(refused, event["agent"], session, event["cwd"], event["pid"]))
     if event["tool_call_id"] and event["event"] in ("pre_tool", "post_tool"):

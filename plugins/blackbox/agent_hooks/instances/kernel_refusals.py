@@ -10,7 +10,8 @@ This module gives each such refusal to the instance it belongs to: a SANDBOXED i
 live when it happened: the one the refused process's ancestry named when the refusal was recorded
 (the helper reads its pid from the log), else — the process already gone — the one sandboxed
 instance live then; several, or none, leaves it on File Shield's own list only, unattributed
-(honest: never guessed, KI-598). The instance counts it as refused and
+(honest: never guessed, KI-598). The instance counts it as refused — through the ONE count
+(``refusals.count``), so the same refusal its call's own output showed is not counted again (KI-637) — and
 its timeline gets a ``block`` row whose reason says the kernel stopped it. Each refusal is given
 once (its record id is remembered, bounded, with the instance it was given to).
 
@@ -30,7 +31,7 @@ from typing import Any, Iterable, Mapping, Optional
 
 from ...audit import SANDBOX_RECORDER
 from ...kernel.bounded_files import read_json_object, write_json_object
-from . import store
+from . import refusals, store
 from .model import Action, Instance
 
 #: How long after its last event an instance still counts as live for a refusal (a tool call that
@@ -87,20 +88,6 @@ def _owner(row: Mapping[str, Any], ts: float) -> Optional[Instance]:
     return found[0] if len(found) == 1 else None
 
 
-#: How close in time a tool call's own refusal and the kernel's log line of it are taken as one.
-SAME_REFUSAL_SECONDS = 60
-
-
-def _counted_already(owner: Instance, path: str, ts: float) -> bool:
-    """True when *owner*'s timeline already holds a refusal naming *path* near *ts* — the code
-    tool's own output counted it (``hermes_sessions``, KI-600), so the log line is not a second one."""
-    if not path:
-        return False
-    recent = store.actions(owner.key, limit=500)
-    return any(action.verdict == "block" and path in action.reason and abs(action.ts - ts) <= SAME_REFUSAL_SECONDS
-               for action in recent)
-
-
 def _reason(fields: Mapping[str, Any], path: str, program: str) -> str:
     """What the timeline says the kernel stopped: a protected item's read, or — the sandbox's
     self-protection (KI-581) — a write to a file that keeps Blackbox's hook."""
@@ -126,12 +113,12 @@ def attribute(rows: Iterable[Mapping[str, Any]]) -> int:
                 continue
             fields = row.get("fields") or {}
             path, program = str(fields.get("path") or ""), str(fields.get("program") or row.get("tool_name") or "a program")
-            if _counted_already(owner, path, ts):   # its own tool's output already counted it (KI-600)
+            # The ONE count (KI-637): the same refusal read from the call's own output is not a second one.
+            if refusals.count(owner, refusals.KERNEL, path, ts=ts, record=_key(row)) != refusals.COUNTED:
                 known.add(_key(row))
                 given.append(_key(row))
                 continue
             reason = _reason(fields, path, program)
-            owner.refused += 1
             owner.events += 1
             action = Action(ts, "pre_tool", program[:120], path[:300], "block", reason[:300])
             owner.last_action = action
@@ -149,4 +136,4 @@ def attribute(rows: Iterable[Mapping[str, Any]]) -> int:
         return added
 
 
-__all__ = ["LIVE_GRACE_SECONDS", "SAME_REFUSAL_SECONDS", "attribute", "owners", "refusal_id"]
+__all__ = ["LIVE_GRACE_SECONDS", "attribute", "owners", "refusal_id"]

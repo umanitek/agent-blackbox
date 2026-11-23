@@ -24,10 +24,10 @@ from typing import Any, Mapping
 
 from ...kernel.agent_hosts import BY_ID, DECISION_TOO_LATE
 from ...kernel.redaction import redact_secret_values
-from . import links, store
+from . import links, refusals, store
 from .model import LAUNCHES, Action, Instance
 
-__all__ = ["links", "record", "store", "sub_key"]
+__all__ = ["links", "record", "refusals", "store", "sub_key"]
 
 MAX_WHAT = 200
 MAX_TASK = 200
@@ -145,18 +145,32 @@ def _new_prompt(instance: Instance, event: Mapping[str, Any]) -> bool:
     return True
 
 
-def _count(instance: Instance, kind: str, decision: str, findings: int, event: Mapping[str, Any], own: bool = True) -> None:
-    """Count one event. An ended instance's ``last`` stays where it ended (start ≤ last ≤ end).
-    *own*: the event is this instance's own, not one of its sub-agents' — a sub-agent's prompt
-    (the task its session gave it) is the sub-agent's, never another prompt of the session's person."""
+def _refusal(instance: Instance, kind: str, event: Mapping[str, Any]) -> str:
+    """Count a refused *event* through the ONE count (:func:`.refusals.count`, KI-637): each thing the
+    OS sandbox refused during the call (``event["refused"]``, read from its output), else the call itself."""
+    call_id, ts = str(event.get("tool_call_id") or ""), float(event.get("ts") or time.time())
+    seen = [str(each) for each in event.get("refused") or ()]
+    if kind == "post_tool" and seen:
+        results = [refusals.count(instance, refusals.OUTPUT, what, ts=ts, call_id=call_id) for what in seen]
+        return refusals.REPEAT if all(result == refusals.REPEAT for result in results) else refusals.COUNTED
+    return refusals.count(instance, refusals.HOOK, f"{kind}:{event.get('tool_name') or ''}", ts=ts, call_id=call_id)
+
+
+def _count(instance: Instance, kind: str, decision: str, findings: int, event: Mapping[str, Any], own: bool = True) -> str:
+    """Count one event; answers what its refusal did (:mod:`.refusals`; "" when it was none). An
+    ended instance's ``last`` stays where it ended (start ≤ last ≤ end). *own*: the event is this
+    instance's own, not one of its sub-agents' — a sub-agent's prompt (the task its session gave it)
+    is the sub-agent's, never another prompt of the session's person."""
     if instance.ended is None:
         instance.last = time.time()
     instance.events += 1
     instance.checked += kind == "pre_tool"
     instance.prompts += kind == "prompt" and own and _new_prompt(instance, event)
-    instance.refused += decision == "block"
+    if kind == "pre_tool":
+        refusals.call_started(instance, str(event.get("tool_call_id") or ""), float(event.get("ts") or time.time()))
     instance.too_late += decision == DECISION_TOO_LATE
     instance.flagged += decision not in ("block", DECISION_TOO_LATE) and findings > 0
+    return _refusal(instance, kind, event) if decision == "block" else ""
 
 
 def _end(instance: Instance, reason: str) -> None:
@@ -239,10 +253,11 @@ def record(event: Mapping[str, Any], session_key: str, *, decision: str = "", fi
     session = _open(session_key, event, kind="session")
     target = _target(session, event)
     late = target.ended is not None
+    counted = ""
     for item in (session,) if target is session else (session, target):
         if not late:
             _describe(item, event)
-        _count(item, kind, decision, findings, event, own=item is target)
+        counted = _count(item, kind, decision, findings, event, own=item is target)   # the target's is last
     if not late:
         _waiting(target, kind, str(event.get("why") or ""))
         if kind == "subagent_stop" and target is not session:
@@ -251,7 +266,8 @@ def record(event: Mapping[str, Any], session_key: str, *, decision: str = "", fi
             _close_session(session, str(event.get("why") or ""))
         if kind == "post_tool" and target is session:
             _end_spawned(session, event)
-    if kind in _TIMELINE or late or decision == "block":   # a refused post-call too (the kernel's, KI-590)
+    # A refused post-call too (the kernel's, KI-590) — but not the same call's refusal reported again (KI-637).
+    if kind in _TIMELINE or late or (decision == "block" and counted != refusals.REPEAT):
         _timeline(target, event, decision, findings, reason, prompt_text, late)
     if target is not session:
         store.put(target)

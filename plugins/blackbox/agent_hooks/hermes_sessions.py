@@ -200,9 +200,12 @@ def apply(row: Mapping[str, Any]) -> bool:
     # KI-600 (execute_code half): the kernel logged NO deny line for execute_code's refused read
     # (round 5, s5-hmx1), so the helper's deny-log watch had nothing to count; the refusal the
     # code tool's own output names (PermissionError: [Errno 1] … '<path>') is counted here instead.
+    # Each thing refused is counted once on the instance, paired with the kernel's log line of it (KI-637).
     code_call = kind == "post_tool" and tool == CODE_TOOL and facts.get("code_sandboxed") is True
-    refused = sandbox_errors.refusals(str(detail.get("result") or "")) if kind == "post_tool" and (fields["shells_sandboxed"] or code_call) else []
-    if sandbox_errors.counted(refused) or (code_call and sandbox_errors.files(refused)):   # KI-590 / KI-600
+    reads = kind == "post_tool" and (fields["shells_sandboxed"] or code_call) and sandbox_errors.read_output_of(tool)
+    refused = sandbox_errors.refusals(str(detail.get("result") or "")) if reads else []
+    fields.update(ts=now, refused=sandbox_errors.counted(refused))
+    if fields["refused"]:   # KI-590 / KI-600
         decision, reason = "block", sandbox_errors.note(refused)
     if refused:
         sandbox_errors.emit(refused, HERMES_ID, key, str(detail.get("cwd") or ""))

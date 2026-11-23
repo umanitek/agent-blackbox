@@ -12,15 +12,20 @@ were never counted either.
 :func:`refusals` reads a sandboxed tool call's output for those errors, and :func:`note` says each
 in one line: "Blackbox's sandbox refused this (<what>): <why and what to do>". The hook post-call
 passes that line to the agent (beside the output, where the agent's hook allows) and records the
-call as refused on its instance, with the line as the reason. A file the sandbox kept closed is
-explained but not counted here: the helper's deny-log watch counts it with its exact path — except a
-place something starts from by itself (KI-614/618, round 5: the kernel refused a LaunchAgent, an
-``authorized_keys`` append and a program in ``/opt/homebrew/bin``, and none was counted — those places
-are not in the deny-log watch): it is :data:`PERSISTENCE`, explained and counted here, judged against
-the ONE list the sandbox profile is built from (``kernel.persistence_places``).
+call as refused on its instance, with the line as the reason — each thing refused by its
+:attr:`Refusal.identity`, counted ONCE on the instance (``instances.refusals``, KI-637): a file the
+helper's deny-log watch ALSO reports is paired with that log line, not counted twice, and a file it
+never reports (a refused ``os.rename``, a sandboxed Codex's ``p.py``: security round 6) is still
+counted. A place something starts from by itself is :data:`PERSISTENCE` (KI-614/618), judged against
+the ONE list the sandbox profile is built from (``kernel.persistence_places``); launchd refusing a
+sandboxed ``launchctl bootstrap`` / ``load`` (``Bootstrap failed: 5: Input/output error``) is one too.
+Only a shell startup file (:data:`STARTUP`, an installer's lines handed to the person) is explained
+and not counted.
 
-It reads text only, and only for a session the hook has proven to be inside the sandbox (the
-canary), so an output that merely quotes such an error elsewhere is not taken for one.
+It reads text only, only for a session the hook has proven to be inside the sandbox (the canary),
+and only the output of a tool that runs programs or files (:data:`PROGRAM_TOOLS`): an output that
+merely QUOTES such an error — a completion tool's summary (Cline's ``submit_and_exit`` repeated the
+refusal it had been told, round 6), a sub-agent's answer — is not taken for one.
 
 Each refusal seen on a sandboxed call is also handed to the listeners registered with
 :func:`on_sandbox_refusal` as a typed :class:`RefusalSeen` (Observer): the dashboard wires File
@@ -32,7 +37,7 @@ Usage::
     on_sandbox_refusal(listener)          # listener(RefusalSeen) per refusal seen
     found = refusals("(eval):1: operation not permitted: sudo")
     note(found)   # "Blackbox's sandbox refused this (sudo, a setuid program): macOS doesn't allow …"
-    counted(found)  # True: not a file refusal
+    counted(found)  # ["setuid:sudo"]: what the instance counts
 """
 
 from __future__ import annotations
@@ -114,6 +119,13 @@ _LOCAL_PORT = re.compile(r"(?:localhost|127\.0\.0\.1|\[?::1\]?)[^\n]{0,120}opera
 #: Blackbox's own stand-ins already say it (``sudo``, ``crontab``, ``top``, the brew shim): counted,
 #: and not said twice.
 _OWN = re.compile(r"Blackbox's sandbox refused this \((?P<what>[^)]{1,80})\)")
+#: launchd refusing a sandboxed caller's job: ``Bootstrap failed: 5: Input/output error`` (``launchctl
+#: bootstrap``, real Codex in the sandbox, round 6) — ``Load failed: 5`` for ``launchctl load``.
+_LAUNCHD = re.compile(r"^(?:Bootstrap|Load) failed: 5: Input/output error", re.IGNORECASE | re.MULTILINE)
+#: The tools whose output is what a program printed, in the guard's vocabulary (``protect.runner``
+#: names every agent's shell ``terminal``, Hermes runs code in ``execute_code``) — the only output a
+#: refusal is read from; every other tool's output is words that can quote one (KI-637).
+PROGRAM_TOOLS = frozenset({"terminal", "execute_code", "read_file", "write_file", "apply_patch", "patch"})
 #: The most refusals one output is read for, and the most characters read.
 MAX_FOUND = 8
 MAX_READ_CHARS = 64 * 1024
@@ -137,6 +149,11 @@ class Refusal:
             return (f"{self.name}): Blackbox keeps your shell startup files closed to agents (they keep later agents inside "
                     f"the sandbox){ask}")
         return f"{_WHAT[self.kind].format(name=self.name)}): {_WHY[self.kind]}"
+
+    @property
+    def identity(self) -> str:
+        """What was refused, as the instance counts it: the path, else ``<kind>:<name>``."""
+        return self.name if self.name.startswith("/") else f"{self.kind}:{self.name}"
 
 
 def _privileged(program: str) -> bool:
@@ -204,6 +221,8 @@ def refusals(output: str) -> list[Refusal]:
         found.append(Refusal(DOCKER))
     elif _LOCAL_PORT.search(text):
         found.append(Refusal(LOCAL_PORT))
+    if _LAUNCHD.search(text):
+        found.append(Refusal(PERSISTENCE, "launchctl"))
     found += [Refusal(OWN, match.group("what")) for match in _OWN.finditer(text)]
     for match in _EXEC.finditer(text):
         word = match.group("z") or match.group("b") or match.group("x") or match.group("p") or ""
@@ -212,15 +231,15 @@ def refusals(output: str) -> list[Refusal]:
     return list(dict.fromkeys(found))[:MAX_FOUND]
 
 
-def counted(found: list[Refusal]) -> bool:
-    """True when *found* holds a refusal the post-call counts (every kind but a file's: the helper's
-    deny-log watch counts those with their exact path; a persistence place it does not watch is counted here)."""
-    return any(each.kind not in (FILE, STARTUP) for each in found)
+def read_output_of(tool_name: str) -> bool:
+    """True when *tool_name*'s output is a program's (:data:`PROGRAM_TOOLS`): the only output read."""
+    return tool_name in PROGRAM_TOOLS
 
 
-def files(found: list[Refusal]) -> list[str]:
-    """The files *found* says the kernel kept closed (:data:`FILE` refusals), as named."""
-    return [each.name for each in found if each.kind == FILE]
+def counted(found: list[Refusal]) -> list[str]:
+    """The identities of the refusals in *found* the post-call counts — every kind but a shell
+    startup file's — each once; [] for none (the instance pairs a file with the deny-log's line of it)."""
+    return list(dict.fromkeys(each.identity for each in found if each.kind != STARTUP))
 
 
 def note(found: list[Refusal]) -> str:

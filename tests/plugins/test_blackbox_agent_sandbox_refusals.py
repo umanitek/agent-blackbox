@@ -8,7 +8,8 @@ counted on the session (refused 3, not 7). Contracts, with the outputs the agent
 * each error is read as the refusal it is, and the agent gets one line beside the output,
   "Blackbox's sandbox refused this (<what>): …", without the output being refused;
 * the call is counted as refused on its instance, with that line as the reason, for every kind
-  but a file's (the helper's deny-log watch counts those with their exact path);
+  but a shell startup file's — a closed file too, once: the deny-log watch's line of the same file
+  is not a second refusal (KI-637, test_blackbox_agent_refusal_count.py);
 * only in a session the hook proved sandboxed; the Hermes agent's sandboxed shells alike.
 """
 
@@ -157,7 +158,8 @@ def test_a_refused_persistence_place_is_explained_and_counted_on_the_session(tmp
     assert counts == [1, 1, 1, 1], counts
 
 
-def test_an_ordinary_refused_file_is_still_left_to_the_deny_log(tmp_path, brew):
+def test_an_ordinary_refused_file_is_counted_once(tmp_path, brew):
+    """KI-637: a closed file the deny-log watch never reports (a refused rename) was counted nowhere."""
     _call(f"(eval):1: operation not permitted: {tmp_path}/Documents/Secret/change-1.txt")
     [instance] = [item for item in store.all_instances() if item.agent == "claude-code"]
-    assert instance.refused == 0
+    assert instance.refused == 1
