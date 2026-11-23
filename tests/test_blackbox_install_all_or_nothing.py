@@ -61,7 +61,11 @@ def _function(name: str) -> str:
 # the Mac that ran this suite (2026-10-17). Ordinary tools are linked in one by one; every
 # tool that can touch the machine's services is a stub that only records its call.
 _ORDINARY_TOOLS = ("awk", "cat", "chmod", "cksum", "cp", "cut", "dirname", "grep", "head", "ls", "mkdir",
-                   "mktemp", "ps", "rm", "sed", "sleep", "sort", "tail", "touch", "tr", "id", "wc", "date")
+                   "mktemp", "ps", "rm", "sed", "sleep", "sort", "tail", "touch", "tr", "id", "wc", "date",
+                   # rollback_leftovers compares each restored file with its copy (diff) and the
+                   # checkout layout with the one before (cmp): without them every file read as
+                   # "not restored" (fix wave 7).
+                   "diff", "cmp")
 _SERVICE_TOOLS = ("launchctl", "systemctl", "loginctl", "osascript", "docker", "pgrep", "open")
 
 

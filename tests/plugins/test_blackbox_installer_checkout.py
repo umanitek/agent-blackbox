@@ -14,7 +14,6 @@ a fresh clone, an update that must keep the set, and an older installer's full c
 from __future__ import annotations
 
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -24,12 +23,13 @@ import pytest
 
 from plugins.blackbox.kernel import os_layout
 from plugins.blackbox.setup import checkout_layout
+from tests.plugins._blackbox_installer_shell import functions_with_callees
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 INSTALL_SH = REPO_ROOT / "scripts" / "blackbox-install.sh"
 PLUGIN = REPO_ROOT / "plugins" / "blackbox"
-CHECKOUT_FUNCTIONS = ("step", "ok", "warn", "checkout_layout_python", "checkout_layout_patterns",
-                      "apply_checkout_layout", "clone_this_machines_checkout")
+#: The functions a test program calls; what they call comes with them (_blackbox_installer_shell).
+CHECKOUT_FUNCTIONS = ("apply_checkout_layout", "clone_this_machines_checkout")
 GIT = ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "init.defaultBranch=main",
        "-c", "protocol.file.allow=always"]
 #: Root folders and files the fixture repository carries besides the real plugin.
@@ -91,14 +91,8 @@ def _git(*args: str, cwd: Path) -> str:
 
 
 def _shell(call: str, *, env_extra: dict[str, str] | None = None) -> subprocess.CompletedProcess:
-    text = INSTALL_SH.read_text(encoding="utf-8")
-    bodies = []
-    for name in CHECKOUT_FUNCTIONS:
-        found = re.search(rf"^{name}\(\)\s*\{{.*?^\}}\n|^{name}\(\)\s*\{{[^\n]*\}}\n", text, re.MULTILINE | re.DOTALL)
-        assert found is not None, name
-        bodies.append(found.group(0))
-    variables = re.findall(r"^BLACKBOX_(?:CHECKOUT|OS)_LAYOUT_FILE=.*$", text, re.MULTILINE)
-    script = "\n".join(["set -euo pipefail", "GREEN= YELLOW= CYAN= RED= NC=", f'PY="{sys.executable}"', "VENV_DIR=", *variables, *bodies, call])
+    functions = functions_with_callees(INSTALL_SH.read_text(encoding="utf-8"), CHECKOUT_FUNCTIONS)
+    script = "\n".join(["set -euo pipefail", "GREEN= YELLOW= CYAN= RED= NC=", f'PY="{sys.executable}"', "VENV_DIR=", functions, call])
     env = {**os.environ, "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "protocol.file.allow",
            "GIT_CONFIG_VALUE_0": "always", **(env_extra or {})}
     return subprocess.run(["/bin/bash", "-c", script], capture_output=True, text=True, timeout=300, env=env, check=False)
@@ -168,10 +162,14 @@ def test_the_plugin_imports_from_this_machines_checkout(origin, tmp_path):
     facades = ["plugins.blackbox.notify.platform", "plugins.blackbox.setup.platform",
                "plugins.blackbox.shields.network.monitor.platform", "plugins.blackbox.shields.files.sandbox.platform",
                "plugins.blackbox.agent_hooks.observe.platform"]
-    code = ("import importlib, sys; sys.path.insert(0, sys.argv[1]); import plugins.blackbox as bb; "
+    # The checkout comes first; the real repository last, for Hermes's own modules the plugin imports
+    # (utils, agent, hermes_cli), which the fixture leaves out. The interpreter that runs the suite
+    # need not have them installed, so they are named here rather than assumed.
+    code = ("import importlib, sys; sys.path.insert(0, sys.argv[1]); sys.path.append(sys.argv[2]); "
+            "import plugins.blackbox as bb; "
             "assert bb.__file__.startswith(sys.argv[1]), bb.__file__; "
-            "[importlib.import_module(name) for name in sys.argv[2:]]; print('imported')")
-    done = subprocess.run([sys.executable, "-c", code, str(dest), *facades], capture_output=True, text=True,
+            "[importlib.import_module(name) for name in sys.argv[3:]]; print('imported')")
+    done = subprocess.run([sys.executable, "-c", code, str(dest), str(REPO_ROOT), *facades], capture_output=True, text=True,
                           timeout=300, cwd=tmp_path, check=False)
     assert done.returncode == 0 and "imported" in done.stdout, done.stderr[-3000:]
 
