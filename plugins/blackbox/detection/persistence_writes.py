@@ -54,8 +54,8 @@ from .paths import guard_paths, guard_places, guard_settings, shell_files
 
 MATCHED = persistence_places.STARTUP_ITEM
 TITLE = "Would leave something that starts by itself"
-ADVICE = ("An AI agent may not add a startup item, a scheduled job, an SSH login key, a shell startup line or a "
-          "program in Homebrew's folders: it would run later, outside Blackbox's checks. If you meant it, do it "
+ADVICE = ("An AI agent may not add a startup item, a scheduled job, a systemd unit, an SSH login key, a shell or session "
+          "startup line or a program in Homebrew's folders: it would run later, outside Blackbox's checks. If you meant it, do it "
           "yourself in your own terminal.")
 #: What each kind of change is, in the evidence of a finding.
 _HOW = {"write": "a write to {place}", "code": "code that writes {place}", "command": "a command that writes {place}"}
@@ -92,7 +92,8 @@ def _finding(tool: str, evidence: str) -> Finding:
                    source="custom", fields={})
 
 
-_SCHEDULES = "a command that schedules a job (cron, at, launchd or a login item)"
+_SCHEDULES = ("a command that schedules a job or leaves something to run later (cron, at, launchd, a login item, a systemd "
+              "unit or timer, lingering, a desktop setting, git's hooks)")
 
 
 def _judged(tool_name: str, args: Any) -> str:

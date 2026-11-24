@@ -118,3 +118,9 @@ LOOKS = [
 def test_the_looks_beside_them_stay_allowed(home, command):
     verdict = _verdict("claude-code", command, home)
     assert not any(finding["matched"] == STARTUP_ITEM for finding in verdict["findings"]), (command, verdict)
+
+
+def test_the_refusal_words_name_linuxs_kinds(home):
+    verdict = _verdict("claude-code", L1_FORMS["systemd-run timer (REAL Claude Code)"], home)
+    finding = next(f for f in verdict["findings"] if f["matched"] == STARTUP_ITEM)
+    assert "systemd unit or timer" in finding["evidence"] and "systemd unit" in finding["advice"]
