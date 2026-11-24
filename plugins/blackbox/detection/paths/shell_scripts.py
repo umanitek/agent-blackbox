@@ -22,10 +22,15 @@ Pure and deterministic; reads no files (the home folder is written ``~``).
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import re
 
 from .shell_words import ShellFileArg, _segment_end
+
+#: The most text one decode may produce.
+MAX_DECODED_CHARS = 8192
 
 #: Interpreters and the option that hands them code on the command line.
 _INTERPRETERS = {"python": ("-c",), "python3": ("-c",), "python2": ("-c",), "py": ("-c",),
@@ -82,6 +87,39 @@ _BRACKETED = re.compile(r"""(?<![\w\])\]])\(\s*((['"`])(?:\\.|(?!\2)[^\\\n]){0,1
 #: A template literal's home part: `` `${process.env.HOME}/x` ``.
 _TEMPLATE_HOME = re.compile(r"\$\{\s*(" + _HOME_ASKED.pattern + r")\s*\}")
 MAX_JOINS = 64
+
+
+def _printable(text: str) -> bool:
+    return bool(text) and all(char.isprintable() or char in "\n\t" for char in text)
+
+
+def _decode_bytes(data: str, how: str) -> str:
+    """*data* decoded as *how* (``base64``, ``base32``, ``hex``) to printable text; "" when it does not decode."""
+    compact = re.sub(r"\s+", "", data)
+    try:
+        if how == "hex":
+            raw = binascii.unhexlify(compact)
+        elif how == "base32":
+            raw = base64.b32decode(compact + "=" * (-len(compact) % 8))
+        else:
+            raw = base64.b64decode(compact.replace("-", "+").replace("_", "/") + "=" * (-len(compact) % 4), validate=True)
+        text = raw[:MAX_DECODED_CHARS].decode("utf-8")
+    except (ValueError, binascii.Error, UnicodeDecodeError):
+        return ""
+    return text if _printable(text) else ""
+
+
+def _unescape(data: str) -> str:
+    """Backslash escapes as ``printf`` and ``$'…'`` decode them (``\\x2f``, ``\\057``, ``\\n``)."""
+    def one(match: re.Match[str]) -> str:
+        code = match.group(1)
+        if code[0] in "xX":
+            return chr(int(code[1:], 16))
+        if code[0].isdigit():
+            return chr(int(code, 8) & 0xFF)
+        return {"n": "\n", "t": "\t", "\\": "\\", "'": "'", '"': '"', "e": "", "a": "", "r": ""}.get(code, code)
+    text = re.sub(r"\\(x[0-9A-Fa-f]{1,2}|[0-7]{1,3}|.)", one, data)
+    return text if _printable(text) else ""
 
 
 def _quoted(text: str) -> str:
