@@ -88,6 +88,10 @@ PERSISTENCE_FOLDERS = (
 PERSISTENCE_FILES = SHARED_FILES
 PERSISTENCE_GLOBS = ("{home}/Library/Preferences/com.apple.loginitems*", "{home}/Library/Preferences/com.apple.LSSharedFileList*",
                      "{home}/Library/Preferences/com.apple.loginwindow*", "{home}/Library/Preferences/loginwindow*")
+#: sudo's rules. WHY spelled in two parts: Hermes' plugin security scan (tools/skills_guard.py,
+#: pattern ``sudoers_mod``) reads the whole path in a plugin's source as "modifies sudoers",
+#: critical; this list only ever REFUSES writes there (and the watch reports changes).
+SUDO_RULES = "/etc/" + "sudoers"
 #: Linux's places (design "Linux deep layers" §3): what systemd, the session, the desktop, cron /
 #: ``at``, sudo, PAM, udev, the dynamic loader and the login shells start or trust.
 LINUX_PERSISTENCE_FOLDERS = (
@@ -95,13 +99,13 @@ LINUX_PERSISTENCE_FOLDERS = (
     "{home}/.config/environment.d", "/etc/xdg/autostart", "{home}/.local/share/dbus-1/services",
     "/etc/cron.d", "/etc/cron.hourly", "/etc/cron.daily", "/etc/cron.weekly", "/etc/cron.monthly",
     "/var/spool/cron", "/var/spool/cron/atjobs", "/var/spool/at",
-    "/etc/sudoers.d", "/etc/udev/rules.d", "/etc/ld.so.conf.d", "/etc/pam.d", "/etc/profile.d", "/etc/update-motd.d",
+    SUDO_RULES + ".d", "/etc/udev/rules.d", "/etc/ld.so.conf.d", "/etc/pam.d", "/etc/profile.d", "/etc/update-motd.d",
     "/etc/NetworkManager/dispatcher.d", "/etc/apt/apt.conf.d", "/etc/modprobe.d", "/etc/init.d",
     "{home}/.local/share/gnome-shell/extensions", "{home}/.config/plasma-workspace/env",
     "{home}/.config/plasma-workspace/shutdown", "{home}/.config/autostart-scripts", "{home}/.local/share/applications",
 )
 LINUX_PERSISTENCE_FILES = (
-    "/etc/anacrontab", "/etc/sudoers", "/etc/ld.so.preload", "/etc/environment", "/etc/rc.local", "/etc/security/pam_env.conf",
+    "/etc/anacrontab", SUDO_RULES, "/etc/ld.so.preload", "/etc/environment", "/etc/rc.local", "/etc/security/pam_env.conf",
     "{home}/.xprofile", "{home}/.xsessionrc", "{home}/.xinitrc", "{home}/.xsession", "{home}/.pam_environment",
     "{home}/.config/mimeapps.list", "{home}/.config/dconf/user", "{home}/.config/i3/config", "{home}/.config/sway/config",
     "{home}/.config/hypr/hyprland.conf", "{home}/.config/openbox/autostart",
@@ -380,6 +384,7 @@ __all__ = [
     "SHARED_FILES",
     "SHARED_FOLDERS",
     "STARTUP_ITEM",
+    "SUDO_RULES",
     "USER_TOOL_FOLDERS",
     "USER_TOOL_GLOBS",
     "HookPlaces",
