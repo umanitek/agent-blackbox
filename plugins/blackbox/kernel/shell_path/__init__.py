@@ -41,10 +41,12 @@ END = "# <<< Blackbox agent sandbox <<<"
 #: runs started that way got the agent's real program and hooks only (test VM, 2026-11-22).
 ALWAYS = (".zshrc", ".zshenv")
 IF_PRESENT = (".bashrc", ".bash_profile")
-#: Every file zsh or bash reads when it starts: one written into could undo the block (a PATH line
-#: after it, or ``ZDOTDIR`` pointing zsh at other files), so the agent sandbox may write none of them.
+#: Every file zsh or bash reads when it starts (or, ``.zlogout`` / ``.bash_logout``, when a login
+#: shell ends): one written into could undo the block (a PATH line after it, or ``ZDOTDIR`` pointing
+#: zsh at other files) or runs a line later, so the agent sandbox may write none of them. Linux round
+#: L1: an agent's line in ``~/.bash_logout`` passed the hooks.
 STARTUP_FILES = (".zshrc", ".zshenv", ".zprofile", ".zlogin", ".zlogout", ".bashrc", ".bash_profile", ".bash_login",
-                 ".profile")
+                 ".profile", ".bash_logout")
 
 
 def _files(home: Path) -> list[Path]:

@@ -120,14 +120,35 @@ _NESTING_DEPTH = 3
 _COMMAND_ENDS = frozenset({";", "&&", "||", "|", "&"})
 
 
+#: util-linux ``script``'s option that hands it a command to run in a new shell (``script -qc 'crontab
+#: f' /dev/null``). Linux round L1: that form wrote a cron job past every runner's hook; macOS's
+#: ``script FILE command`` is a wrapper (``hidden_commands``).
+_SCRIPT_COMMAND = "--command"
+
+
+def _script_code(words: list[str]) -> str:
+    """The command util-linux ``script`` runs from *words* (the words after ``script``), or ""."""
+    for offset, option in enumerate(words):
+        if option.startswith(_SCRIPT_COMMAND + "="):
+            return option.split("=", 1)[1]
+        if offset + 1 < len(words) and (option == _SCRIPT_COMMAND or (option[:1] == "-" and option[1:2] != "-" and option.endswith("c"))):
+            return words[offset + 1]
+        if option in _COMMAND_ENDS:
+            break
+    return ""
+
+
 def _nested_code(command: str) -> list[str]:
-    """The commands *command* hands to another shell: the word after a shell's ``-c``, and what
-    follows ``eval`` up to the end of that command (split as every path check splits it)."""
+    """The commands *command* hands to another shell: the word after a shell's ``-c`` (or
+    ``script -c``), and what follows ``eval`` up to the end of that command (split as every path
+    check splits it)."""
     words = _command_words(command)
     found: list[str] = []
     for position, word in enumerate(words):
         name = word.rsplit("/", 1)[-1].lower()
-        if name in _NESTED_SHELLS:
+        if name == "script":
+            found.append(_script_code(words[position + 1:]))
+        elif name in _NESTED_SHELLS:
             for offset in range(position + 1, len(words) - 1):
                 option = words[offset]
                 if not option.startswith("-"):

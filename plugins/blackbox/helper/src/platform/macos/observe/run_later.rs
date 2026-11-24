@@ -29,7 +29,7 @@ pub use crate::platform::system_watch::items::{entry_mark, file_item, program_it
 
 /// The shell startup files of a user, under their home.
 pub const SHELL_FILES: &[&str] = &[".zshenv", ".zprofile", ".zshrc", ".zlogin", ".zlogout", ".bash_profile", ".bash_login",
-                                   ".bashrc", ".profile", ".config/fish/config.fish"];
+                                   ".bashrc", ".profile", ".bash_logout", ".config/fish/config.fish"];
 /// OpenSSH's files of a user that run or trust something at a login into this Mac.
 pub const SSH_FILES: &[&str] = &[".ssh/rc", ".ssh/environment", ".ssh/authorized_keys", ".ssh/authorized_keys2"];
 /// Program folders on most PATHs (system-wide), and under each user's home.

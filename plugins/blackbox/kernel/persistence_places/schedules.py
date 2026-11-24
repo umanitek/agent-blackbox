@@ -49,9 +49,17 @@ _DEFAULTS_WRITES = frozenset({"write", "import"})
 _LOGIN_DOMAIN = re.compile(r"(?:^|[/.])(?:loginwindow|loginitems)(?:\.plist)?$", re.IGNORECASE)
 #: Programs that run another program given as their words.
 _RUNS_ANOTHER = frozenset({"xargs", "parallel", "watch"})
+#: git settings that run a program of the setting's choosing at every later commit, checkout or
+#: status in ANY repository: the hooks folder and the file-system monitor. Set for the person
+#: (``--global``) or the machine (``--system``), they run outside the agent's session — Linux round
+#: L1: ``git config --global core.hooksPath ~/l1hooks`` passed the hooks. A repository's own
+#: ``core.hooksPath`` (husky's ``.husky``) is that project's and stays allowed.
+_GIT_RUNS = frozenset({"core.hookspath", "core.fsmonitor"})
+_GIT_WIDE = frozenset({"--global", "--system"})
+_GIT_LOOKS = frozenset({"--get", "--get-all", "--get-regexp", "--list", "-l", "--unset", "--unset-all", "get", "list", "unset"})
 #: Every program :func:`schedules` judges.
 _SCHEDULERS = frozenset({*_ONLY_LOOK, *_LOADS, "osascript", "sfltool", "defaults", "systemd-run", "loginctl",
-                         *_BUS_CALLERS, "gnome-extensions", *_SETTING_WRITES})
+                         *_BUS_CALLERS, "gnome-extensions", *_SETTING_WRITES, "git"})
 
 
 def _program(word: str) -> str:
@@ -68,7 +76,8 @@ def schedules(name: str, rest: list[str]) -> bool:
     ``systemctl --user enable x``, ``osascript -e '… make login item …'``, ``sfltool add-item …``
     (or ``resetbtm``), ``defaults write com.apple.loginwindow …`` / ``… loginitems …``; on Linux
     ``systemd-run …``, ``loginctl enable-linger``, ``busctl … StartTransientUnit …``,
-    ``gnome-extensions enable x``, ``gsettings set … custom-keybindings …``."""
+    ``gnome-extensions enable x``, ``gsettings set … custom-keybindings …``; and on every OS
+    ``git config --global core.hooksPath …`` (a command git runs at every later commit)."""
     linux = _linux_schedules(name, rest)
     if linux is not None:
         return linux
@@ -85,10 +94,21 @@ def schedules(name: str, rest: list[str]) -> bool:
         return any(_LOGIN_ITEM.search(word) for word in rest)
     if name == "sfltool":
         return any(word.lower() in _SFLTOOL_CHANGES for word in rest)
+    if name == "git":
+        return _git_runs_later(rest)
     if name == "defaults":
         verb = next((at for at, word in enumerate(rest) if word.lower() in _DEFAULTS_WRITES), None)
         return verb is not None and any(_LOGIN_DOMAIN.search(word) for word in rest[verb + 1:verb + 4] if not word.startswith("-"))
     return False
+
+
+def _git_runs_later(rest: list[str]) -> bool:
+    """True for ``git [-C dir] config --global|--system core.hooksPath|core.fsmonitor <value>``."""
+    if "config" not in rest:
+        return False
+    words = rest[rest.index("config") + 1:]
+    return (any(word in _GIT_WIDE for word in words) and not any(word in _GIT_LOOKS for word in words)
+            and any(word.lower() in _GIT_RUNS for word in words))
 
 
 def _linux_schedules(name: str, rest: list[str]) -> bool | None:

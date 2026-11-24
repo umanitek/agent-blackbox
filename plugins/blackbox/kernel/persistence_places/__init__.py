@@ -75,10 +75,12 @@ from dataclasses import dataclass
 from .. import shell_path
 from .schedules import schedules
 
-#: The places every OS has (OpenSSH's login files, the system cron table, XDG autostart).
-SHARED_FOLDERS = ("{home}/.config/autostart",)
+#: The places every OS has (OpenSSH's login files, the system cron table, XDG autostart, and fish's
+#: start files — every fish shell runs ``config.fish`` and ``conf.d/*.fish``; Linux round L1: an
+#: agent's line there passed the hooks).
+SHARED_FOLDERS = ("{home}/.config/autostart", "{home}/.config/fish/conf.d")
 SHARED_FILES = ("{home}/.ssh/rc", "{home}/.ssh/environment", "{home}/.ssh/authorized_keys", "{home}/.ssh/authorized_keys2",
-                "/etc/crontab")
+                "/etc/crontab", "{home}/.config/fish/config.fish")
 #: macOS's places (with the shared ones: the Seatbelt profile's whole list, unchanged in order).
 PERSISTENCE_FOLDERS = (
     "{home}/Library/LaunchAgents", "{home}/Library/LaunchDaemons", "/Library/LaunchAgents", "/Library/LaunchDaemons",
@@ -261,6 +263,7 @@ _KINDS = (
     ("/dbus-1/services", "a session start file"), ("/.local/share/applications", "a session start file"),
     ("/mimeapps.list", "a session start file"), ("/dconf/user", "a session start file"), ("/.config/i3/", "a session start file"),
     ("/.config/sway/", "a session start file"), ("/.config/hypr/", "a session start file"),
+    ("/.config/fish/", "a shell startup file"),
     ("/etc/", "a root configuration file"),
 )
 

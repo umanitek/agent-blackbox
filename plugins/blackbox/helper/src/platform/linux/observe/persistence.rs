@@ -51,6 +51,7 @@ pub const USER_FOLDERS: &[(&str, &str)] = &[
     ("autostart", ".config/autostart-scripts"), ("autostart", ".config/plasma-workspace/env"),
     ("autostart", ".config/plasma-workspace/shutdown"), ("autostart", ".local/share/gnome-shell/extensions"),
     ("dbus-service", ".local/share/dbus-1/services"), ("session-start", ".config/environment.d"),
+    ("session-start", ".config/fish/conf.d"),
 ];
 /// The item kinds this module reports.
 pub const KINDS: &[&str] = &["systemd-unit", "user-unit", "autostart", "cron", "dbus-service", "session-start", "root-config"];

@@ -19,7 +19,7 @@ use crate::platform::system_watch::items::{file_item, program_items, Item, MAX_P
 
 /// The shell startup files of a user, under their home (as macOS's).
 pub const SHELL_FILES: &[&str] = &[".zshenv", ".zprofile", ".zshrc", ".zlogin", ".zlogout", ".bash_profile", ".bash_login",
-                                   ".bashrc", ".profile", ".config/fish/config.fish"];
+                                   ".bashrc", ".profile", ".bash_logout", ".config/fish/config.fish"];
 /// OpenSSH's files of a user that run or trust something at a login into this machine.
 pub const SSH_FILES: &[&str] = &[".ssh/rc", ".ssh/environment", ".ssh/authorized_keys", ".ssh/authorized_keys2"];
 /// The X and desktop session's start files of a user. `~/.config/dconf/user` is left out: every
