@@ -30,6 +30,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 pub mod sockets;
+pub mod system_watch;
 
 #[cfg(target_os = "macos")]
 pub mod macos;
