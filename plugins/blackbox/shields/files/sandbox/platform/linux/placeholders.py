@@ -9,18 +9,21 @@ Blackbox therefore creates, in the person's home only:
   authorized-keys files). Never ``.bash_profile`` / ``.bash_login``: one of them existing stops
   bash from reading ``.profile``. Those (and the rest) stay hooks + the real-time watch only.
 
-Each placeholder made is recorded (:data:`MANIFEST`), so an uninstall removes the ones still empty
-and nothing else.
+Each placeholder made is recorded (:data:`MANIFEST`) — and every folder above it this created —
+so an uninstall (:func:`remove`) takes back the ones still empty and nothing else: a file the
+person has since written in, or a folder they put something in, stays (KI-677).
 
 Usage::
 
     made = ensure(places, home, manifest_path)     # the placeholders created now
+    gone = remove(manifest_path)                   # uninstall: the still-empty ones, deepest first
 """
 
 from __future__ import annotations
 
 import json
 import os
+import stat
 from pathlib import Path
 
 from ......kernel.bounded_files import atomic_write, read_small_text
@@ -60,16 +63,16 @@ def ensure(places: Places, home: str, manifest: Path) -> list[str]:
     """Creates the placeholders *places* needs and records them in *manifest*; answers the new ones.
     Fail-open: one that can not be made is skipped (the hooks and the watch still cover it)."""
     folders, files = wanted(places, home)
-    made = []
+    made: list[str] = []
     for folder in folders:
         try:
-            os.makedirs(folder, mode=0o700)
-            made.append(folder)
+            made += _make_folder(folder, home)
         except OSError:
             continue
     for path in files:
         try:
-            os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+            parents = _make_folder(os.path.dirname(path), home)
+            made += parents
             with open(path, "x", encoding="utf-8"):
                 pass
             made.append(path)
@@ -80,4 +83,39 @@ def ensure(places: Places, home: str, manifest: Path) -> list[str]:
     return made
 
 
-__all__ = ["MANIFEST", "NOOP_FILES", "ensure", "recorded", "wanted"]
+def _make_folder(folder: str, home: str) -> list[str]:
+    """Makes *folder* (mode 0700) and every missing folder above it inside *home*; answers the ones
+    made, outermost first (an uninstall takes back each that is still empty)."""
+    missing = []
+    here = folder
+    while _inside(here, home) and not os.path.lexists(here):
+        missing.append(here)
+        here = os.path.dirname(here)
+    for each in reversed(missing):
+        os.mkdir(each, 0o700)
+    return list(reversed(missing))
+
+
+def remove(manifest: Path) -> list[str]:
+    """Takes back every placeholder *manifest* recorded that is still what Blackbox made — an empty
+    regular file, an empty folder (deepest first, so a folder emptied by the step before goes too) —
+    then the manifest; answers what went. Never follows a link, never removes anything with
+    content. Fail-open: one that can not be removed is left."""
+    gone = []
+    for path in sorted(recorded(manifest), key=lambda each: each.count("/"), reverse=True):
+        try:
+            facts = os.lstat(path)
+            if stat.S_ISREG(facts.st_mode) and facts.st_size == 0:
+                os.unlink(path)
+            elif stat.S_ISDIR(facts.st_mode) and not os.listdir(path):
+                os.rmdir(path)
+            else:
+                continue
+            gone.append(path)
+        except OSError:
+            continue
+    manifest.unlink(missing_ok=True)
+    return gone
+
+
+__all__ = ["MANIFEST", "NOOP_FILES", "ensure", "recorded", "remove", "wanted"]

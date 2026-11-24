@@ -164,7 +164,8 @@ def test_placeholders_only_for_missing_startup_folders_and_no_op_files_and_recor
     manifest.parent.mkdir()
     made = placeholders.ensure(rules, os.path.realpath(home), manifest)
     real = os.path.realpath(home)
-    assert set(made) == {f"{real}/.config/systemd/user", f"{real}/.bashrc", f"{real}/.zshrc", f"{real}/.xprofile"}
+    assert set(made) == {f"{real}/.config/systemd", f"{real}/.config/systemd/user", f"{real}/.bashrc", f"{real}/.zshrc",
+                         f"{real}/.xprofile"}, "every folder made is recorded, the ones above a placeholder too (KI-677)"
     assert not (home / ".bash_profile").exists(), "never .bash_profile: bash would stop reading .profile"
     assert not (home / ".xinitrc").exists(), "an empty .xinitrc is not a no-op"
     assert json.loads(manifest.read_text(encoding="utf-8")) == made
@@ -305,3 +306,44 @@ def test_an_installed_agents_code_folders_are_closed_in_the_sandbox_and_by_the_h
     assert f"{home}/.config/mimeapps.list" in made_files, "a missing mimeapps.list gets its empty, no-op placeholder"
     starts = persistence_places.hook_places(str(home)).starts
     assert set(code) <= set(starts), "the hooks refuse a write there too"
+
+
+#: What Linux round L2's before/after snapshot found left in the home after an uninstall (KI-677).
+L2_LEFT_FILES = (".pam_environment", ".xprofile", ".xsessionrc", ".zlogin", ".zlogout", ".zprofile", ".zshrc",
+                 ".ssh/authorized_keys2")
+L2_LEFT_FOLDERS = (".config/autostart", ".config/autostart-scripts", ".config/environment.d", ".config/fish/conf.d",
+                   ".config/plasma-workspace/env", ".config/plasma-workspace/shutdown", ".local/share/dbus-1/services",
+                   ".local/share/gnome-shell/extensions")
+
+
+def test_an_uninstall_takes_back_every_placeholder_still_empty_and_nothing_the_person_used(tmp_path):
+    """KI-677 (Linux round L2): every F1 placeholder — and the folders made above them — stayed after
+    an uninstall (an empty ~/.zshrc stops zsh's new-user wizard). Only what is still empty goes."""
+    home = tmp_path / "home"
+    home.mkdir()
+    state = tmp_path / "state"
+    state.mkdir()
+    folders = [str(home / folder) for folder in L2_LEFT_FOLDERS]
+    files = [str(home / name) for name in L2_LEFT_FILES]
+    places = build([], [], [], str(home / "canary"), is_folder=lambda _path: True, startup=(folders, files, []))
+    made = placeholders.ensure(places, str(home), state / placeholders.MANIFEST)
+    assert set(folders + files) <= set(made) and str(home / ".config" / "plasma-workspace") in made, "parents are recorded"
+    (home / ".zshrc").write_text("export EDITOR=vim\n", encoding="utf-8")             # the person used two of them
+    (home / ".config" / "autostart" / "mine.desktop").write_text("[x]\n", encoding="utf-8")
+    gone = placeholders.remove(state / placeholders.MANIFEST)
+    assert (home / ".zshrc").read_text(encoding="utf-8") == "export EDITOR=vim\n" and (home / ".config" / "autostart" / "mine.desktop").exists()
+    for path in made:
+        if path not in (str(home / ".zshrc"), str(home / ".config" / "autostart"), str(home / ".config")):
+            assert not os.path.lexists(path), f"{path} is left"
+    assert str(home / ".ssh") in gone and not (state / placeholders.MANIFEST).exists()
+
+
+def test_the_uninstall_plan_names_the_password_prompt_this_os_shows(tmp_path):
+    """KI-677 (Linux round L2): the Linux uninstall plan said "macOS asks for your admin password"."""
+    from plugins.blackbox.setup import uninstall
+    for system, words in (("Linux", "sudo asks for your password"), ("Darwin", "macOS asks for your admin password")):
+        plan = uninstall.UninstallPlan(system=system, hermes_homes=(), blackbox_home=tmp_path, dkg_home=None, key_files=(),
+                                       backup_dir=tmp_path, keep_logs=False, shim=None, system_units=(),
+                                       system_helper=tmp_path / "helper")
+        text = "\n".join(uninstall.describe(plan))
+        assert words in text and ("macOS" in text) == (system == "Darwin"), (system, text)

@@ -171,8 +171,8 @@ def describe(plan: UninstallPlan) -> list[str]:
     """The lines shown before anything changes."""
     lines = ["Blackbox uninstall will:"]
     if plan.system_helper:
-        lines.append("  - remove the system protection helper and put DNS and the firewall back "
-                     "(macOS asks for your admin password)")
+        asks = "macOS asks for your admin password" if plan.system == "Darwin" else "sudo asks for your password"
+        lines.append(f"  - remove the system protection helper and put DNS and the firewall back ({asks})")
     lines.append("  - stop and remove Blackbox's login services (node, dashboard)")
     if plan.agent_hooks:
         lines.append(f"  - take Blackbox's hooks out of {', '.join(plan.agent_hooks)} (their other settings stay)")

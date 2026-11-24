@@ -54,6 +54,11 @@ def prepare(places: Places, home: str, state: Path) -> list[str]:
     return placeholders.ensure(places, home, state / placeholders.MANIFEST)
 
 
+def unprepare(state: Path) -> list[str]:
+    """Uninstall: takes back the placeholders :func:`prepare` made that are still empty (KI-677)."""
+    return placeholders.remove(state / placeholders.MANIFEST)
+
+
 __all__ = [
     "APPS",
     "BREW_READ_ONLY",
@@ -93,4 +98,5 @@ __all__ = [
     "stop_group",
     "terminate",
     "unavailable",
+    "unprepare",
 ]

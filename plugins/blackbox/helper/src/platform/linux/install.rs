@@ -167,7 +167,9 @@ fn restore_previous(error: String, previous: &Path, layout: &Layout, systemd: &d
 /// writes and labels the unit, and starts it.
 fn put_in_place(args: &InstallArgs, copy: &Path, layout: &Layout, systemd: &dyn Systemd) -> Result<(), String> {
     let folder = layout.binary.parent().ok_or("the helper's program place has no folder")?;
+    let made = missing_folders(folder);
     fs::create_dir_all(folder).map_err(|error| format!("{}: {error}", folder.display()))?;
+    record_made_folders(&layout.lib, &made).map_err(|error| format!("{}: {error}", layout.lib.display()))?;
     fs::set_permissions(folder, fs::Permissions::from_mode(0o755)).map_err(|error| error.to_string())?;
     let incoming = folder.join(format!(".{PROGRAM}.incoming"));
     fs::copy(copy, &incoming).map_err(|error| format!("{}: {error}", incoming.display()))?;
@@ -182,6 +184,38 @@ fn put_in_place(args: &InstallArgs, copy: &Path, layout: &Layout, systemd: &dyn 
     systemd.relabel(&[layout.binary.as_path(), layout.unit.as_path()]);
     systemd::start(systemd, UNIT_NAME)
         .map_err(|error| format!("the helper did not start: {error} (see {}/netd.log, journalctl -u {UNIT_NAME})", layout.home.display()))
+}
+
+/// The folders the install records it made (one path a line, in the helper's own state folder):
+/// an uninstall removes each again when it is empty, and never a folder that was there before
+/// (KI-677, Linux round L2: an empty /usr/local/libexec was left on Ubuntu 22.04).
+const MADE_FOLDERS: &str = "made-folders";
+
+/// *folder* and every folder above it that does not exist yet, outermost first.
+fn missing_folders(folder: &Path) -> Vec<PathBuf> {
+    let mut missing: Vec<PathBuf> = folder.ancestors().take_while(|each| !each.exists()).map(Path::to_path_buf).collect();
+    missing.reverse();
+    missing
+}
+
+/// Adds *made* to *lib*'s record (kept across upgrades: the first install's record stays true).
+fn record_made_folders(lib: &Path, made: &[PathBuf]) -> std::io::Result<()> {
+    if made.is_empty() {
+        return Ok(());
+    }
+    fs::create_dir_all(lib)?;
+    let mut all = made_folders(lib);
+    all.extend(made.iter().cloned());
+    all.sort();
+    all.dedup();
+    let text: String = all.iter().map(|path| format!("{}\n", path.display())).collect();
+    fs::write(lib.join(MADE_FOLDERS), text)
+}
+
+fn made_folders(lib: &Path) -> Vec<PathBuf> {
+    crate::safe_read::read_regular(&lib.join(MADE_FOLDERS), 64 * 1024)
+        .map(|bytes| String::from_utf8_lossy(&bytes).lines().filter(|line| line.starts_with('/')).map(PathBuf::from).collect())
+        .unwrap_or_default()
 }
 
 /// The agent sandbox launcher beside the helper, and (Ubuntu, the real install only) the AppArmor
@@ -233,11 +267,17 @@ pub fn uninstall_from(layout: &Layout, systemd: &dyn Systemd, put_back: &dyn Fn(
     if let Some(folder) = layout.binary.parent() {
         let _ = fs::remove_dir(folder);   // only when empty: another Blackbox program may live there
     }
+    let mut made = made_folders(&layout.lib);
+    made.sort_by_key(|path| std::cmp::Reverse(path.components().count()));
+    for folder in made {
+        let _ = fs::remove_dir(folder);   // only when empty, deepest first
+    }
     if !errors.is_empty() {
         // The state stays, so a second uninstall can try again.
         return Err(format!("the helper was stopped but not everything could be put back: {}", errors.join("; ")));
     }
     let _ = fs::remove_dir_all(&layout.home);
+    let _ = fs::remove_file(layout.lib.join(MADE_FOLDERS));   // kept above on a failure: a second try reads it
     let _ = fs::remove_dir(&layout.lib);   // only when empty
     Ok(())
 }
@@ -310,6 +350,25 @@ mod tests {
         // which panics by design — uninstall is exactly when it runs).
         uninstall_from(&layout, &FakeSystemd::default(), &Vec::new).unwrap();
         assert!(!launcher.exists() && !layout.binary.exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// KI-677 (Linux round L2, Ubuntu 22.04): the uninstall left an empty /usr/local/libexec the
+    /// install had made; a folder that was there before (with the person's own program) stays.
+    #[test]
+    fn the_folders_the_install_made_go_with_it_and_one_that_was_there_stays() {
+        let (dir, made) = layout("made");
+        install_into(&args_for(&dir, b"helper"), &made, &FakeSystemd::default(), &no_put_back).unwrap();
+        assert!(dir.join("libexec").is_dir());
+        uninstall_from(&made, &FakeSystemd::default(), &Vec::new).unwrap();
+        assert!(!dir.join("libexec").exists(), "the install made libexec/: it goes again");
+        let _ = fs::remove_dir_all(&dir);
+        let (dir, there) = layout("there");
+        fs::create_dir_all(dir.join("libexec")).unwrap();
+        fs::write(dir.join("libexec/the-persons-tool"), b"x").unwrap();
+        install_into(&args_for(&dir, b"helper"), &there, &FakeSystemd::default(), &no_put_back).unwrap();
+        uninstall_from(&there, &FakeSystemd::default(), &Vec::new).unwrap();
+        assert!(dir.join("libexec/the-persons-tool").exists() && !dir.join("libexec/blackbox").exists());
         let _ = fs::remove_dir_all(&dir);
     }
 

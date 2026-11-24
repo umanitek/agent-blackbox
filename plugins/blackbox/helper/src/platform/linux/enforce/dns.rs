@@ -51,6 +51,9 @@ pub const LINK_SERVERS: &str = "resolved-link:";
 pub const LINK_ROUTE: &str = "resolved-default-route:";
 pub const RESOLV_BYTES: &str = "resolv.conf-hex";
 pub const RESOLV_LINK: &str = "resolv.conf-link";
+/// The drop-in folder Blackbox had to create (it did not exist before): removed again on restore
+/// when it is still empty — never a folder that was there before (KI-677).
+pub const MADE_FOLDER: &str = "made-folder";
 const SMALL: u64 = 64 * 1024;
 const STUBS: [&str; 2] = ["127.0.0.53", "127.0.0.54"];
 
@@ -87,6 +90,9 @@ pub struct DnsView {
     pub links: Vec<Link>,
     pub resolved_drop_in: bool,
     pub nm_drop_in: bool,
+    /// Whether the folders the drop-ins go in exist (resolved's, NetworkManager's).
+    pub resolved_folder: bool,
+    pub nm_folder: bool,
 }
 
 /// One change to the system.
@@ -95,6 +101,8 @@ pub enum Action {
     /// Write *bytes* to *path* (mode 0644), replacing it atomically.
     Write(String, Vec<u8>),
     Remove(String),
+    /// Remove the folder *path* if it is empty (a folder with anything in it stays, silently).
+    RemoveEmptyFolder(String),
     /// Make *path* (second) a link to *target* (first).
     Symlink(String, String),
     Run(Vec<String>),
@@ -147,6 +155,14 @@ pub fn point(view: &DnsView) -> (Vec<Action>, SavedDns) {
         saved.insert(RESOLV_BYTES.into(), vec![hex::encode(&view.resolv)]);
         if let Some(target) = &view.resolv_link { saved.insert(RESOLV_LINK.into(), vec![target.clone()]); }
     }
+    let made = match mode {
+        Mode::Resolved if !view.resolved_folder => folder_of(RESOLVED_DROP_IN),
+        Mode::NetworkManager if !view.nm_folder => folder_of(NM_DROP_IN),
+        _ => None,
+    };
+    if let Some(folder) = made {
+        saved.insert(MADE_FOLDER.into(), vec![folder]);
+    }
     let actions = match mode {
         Mode::Resolved => {
             let mut actions = vec![Action::Write(RESOLVED_DROP_IN.into(), RESOLVED_TEXT.into()), run_line(&[SYSTEMCTL, "restart", "systemd-resolved"])];
@@ -165,6 +181,16 @@ pub fn point(view: &DnsView) -> (Vec<Action>, SavedDns) {
     (actions, saved)
 }
 
+fn folder_of(drop_in: &str) -> Option<String> {
+    Path::new(drop_in).parent().map(|folder| folder.display().to_string())
+}
+
+/// The folder of *drop_in* to remove again, when *saved* says Blackbox made exactly that one.
+fn made_folder(saved: &SavedDns, drop_in: &str) -> Option<Action> {
+    let made = saved.get(MADE_FOLDER)?.first()?;
+    (Some(made.as_str()) == folder_of(drop_in).as_deref()).then(|| Action::RemoveEmptyFolder(made.clone()))
+}
+
 /// What putting back *saved* does (an empty plan when nothing was saved).
 pub fn restore(saved: &SavedDns) -> Vec<Action> {
     let mode = saved.get(MODE_KEY).and_then(|v| v.first()).map(String::as_str).unwrap_or("");
@@ -172,6 +198,7 @@ pub fn restore(saved: &SavedDns) -> Vec<Action> {
     match mode {
         "resolved" => {
             actions.push(Action::Remove(RESOLVED_DROP_IN.into()));
+            actions.extend(made_folder(saved, RESOLVED_DROP_IN));
             actions.push(run_line(&[SYSTEMCTL, "restart", "systemd-resolved"]));
             for (key, value) in saved.iter().filter(|(key, _)| key.starts_with(LINK_ROUTE)) {
                 let route = if value.first().map(String::as_str) == Some("no") { "false" } else { "true" };
@@ -180,6 +207,7 @@ pub fn restore(saved: &SavedDns) -> Vec<Action> {
         }
         "networkmanager" => {
             actions.push(Action::Remove(NM_DROP_IN.into()));
+            actions.extend(made_folder(saved, NM_DROP_IN));
             actions.push(run_line(&[NMCLI, "general", "reload"]));
         }
         "plain" => match (saved.get(RESOLV_LINK).and_then(|v| v.first()), saved.get(RESOLV_BYTES).and_then(|v| v.first())) {
@@ -252,7 +280,9 @@ pub fn read_view() -> DnsView {
         }
     }
     DnsView { resolv, resolv_link, resolved_running, links,
-              resolved_drop_in: Path::new(RESOLVED_DROP_IN).exists(), nm_drop_in: Path::new(NM_DROP_IN).exists() }
+              resolved_drop_in: Path::new(RESOLVED_DROP_IN).exists(), nm_drop_in: Path::new(NM_DROP_IN).exists(),
+              resolved_folder: folder_of(RESOLVED_DROP_IN).is_some_and(|folder| Path::new(&folder).is_dir()),
+              nm_folder: folder_of(NM_DROP_IN).is_some_and(|folder| Path::new(&folder).is_dir()) }
 }
 
 fn write_atomically(path: &str, bytes: &[u8]) -> std::io::Result<()> {
@@ -278,6 +308,10 @@ pub fn run(actions: &[Action]) -> Vec<String> {
                 Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(format!("{path}: {error}")),
                 _ => Ok(()),
             },
+            Action::RemoveEmptyFolder(path) => {
+                let _ = fs::remove_dir(path);   // fails when not empty: then it stays, as meant
+                Ok(())
+            }
             Action::Symlink(target, path) => {
                 let _ = fs::remove_file(path);
                 std::os::unix::fs::symlink(target, path).map_err(|e| format!("{path} -> {target}: {e}"))
@@ -336,6 +370,26 @@ mod tests {
         assert!(back.contains(&run_line(&[RESOLVECTL, "default-route", "wg0", "false"])), "a link without a default route stays without");
         let again = DnsView { resolved_drop_in: true, ..resolved_view() };
         assert!(!point(&again).1.keys().any(|k| k.starts_with(LINK_ROUTE)), "an already-changed link is never saved as the original");
+    }
+
+    /// KI-677 (Linux round L2): after DNS Shield was turned off, an empty
+    /// /etc/systemd/resolved.conf.d was left — Ubuntu ships without that folder, the drop-in made it.
+    #[test]
+    fn the_drop_in_folder_blackbox_made_goes_again_and_one_that_was_there_stays() {
+        let made = restore(&point(&resolved_view()).1);
+        assert!(made.contains(&Action::RemoveEmptyFolder("/etc/systemd/resolved.conf.d".into())), "{made:?}");
+        let there = restore(&point(&DnsView { resolved_folder: true, ..resolved_view() }).1);
+        assert!(!there.iter().any(|action| matches!(action, Action::RemoveEmptyFolder(_))), "{there:?}");
+        let folder = std::env::temp_dir().join(format!("bb-dns-folder-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&folder);
+        fs::create_dir_all(folder.join("kept")).unwrap();
+        fs::create_dir_all(folder.join("empty")).unwrap();
+        fs::write(folder.join("kept/the-persons.conf"), b"[Resolve]\n").unwrap();
+        let actions = [Action::RemoveEmptyFolder(folder.join("empty").display().to_string()),
+                       Action::RemoveEmptyFolder(folder.join("kept").display().to_string())];
+        assert!(run(&actions).is_empty(), "a folder with something in it is not a failure");
+        assert!(!folder.join("empty").exists() && folder.join("kept/the-persons.conf").exists());
+        let _ = fs::remove_dir_all(folder);
     }
 
     #[test]

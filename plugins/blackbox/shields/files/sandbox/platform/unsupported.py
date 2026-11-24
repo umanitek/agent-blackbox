@@ -42,6 +42,10 @@ def prepare(_places: object, _home: str, _state: object) -> list[str]:
     return []
 
 
+def unprepare(_state: object) -> list[str]:
+    return []
+
+
 def startup_places(_home: str) -> tuple[list[str], list[str], list[str]]:
     """No startup places are closed where agents are not sandboxed."""
     return [], [], []

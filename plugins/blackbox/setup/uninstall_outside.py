@@ -147,3 +147,9 @@ def _remove_agent_hooks(plan: UninstallPlan, report: list[str]) -> None:
     from ..kernel import shell_path
     for changed in shell_path.remove():
         report.append(f"took Blackbox's agent launchers off PATH in {changed}")
+    # The agent sandbox's empty placeholders for missing startup places (Linux, F1): their record
+    # lives in Blackbox's home, so they go before it does — only those still empty (KI-677).
+    from .. import shields   # shields' public entry
+    gone = shields.remove_sandbox_placeholders()
+    if gone:
+        report.append(f"removed {len(gone)} empty placeholder(s) the agent sandbox had made in your home")

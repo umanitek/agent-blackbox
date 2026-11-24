@@ -57,7 +57,7 @@ __all__ = ["CLI_AGENTS", "HERMES_CODE_LAUNCHER", "HERMES_LAUNCHER_ENV", "HERMES_
            "NOT_INSTALLED_NOTE", "SANDBOXED", "SHELLS_ONLY", "HermesCover", "Places", "act_on", "brokered",
            "canary_path", "chosen", "enter_hermes_process", "enter_hermes_session", "hermes_shell_dir", "home",
            "launcher_dir", "network_rules", "offer", "on_refusal", "open_app", "policy", "profile_path", "protection", "proven",
-           "restorations", "self_protected_files", "status", "sync", "unavailable"]
+           "remove_placeholders", "restorations", "self_protected_files", "status", "sync", "unavailable"]
 
 
 def unavailable() -> Optional[str]:
@@ -147,6 +147,12 @@ def restorations() -> list[dict[str, Any]]:
     except (OSError, ValueError):
         return []
     return [row for row in rows if isinstance(row, dict) and isinstance(row.get("files"), list)] if isinstance(rows, list) else []
+
+
+def remove_placeholders() -> list[str]:
+    """Uninstall: the empty startup-place placeholders the sandbox made (Linux, F1) taken back —
+    only those still empty; answers what went (KI-677)."""
+    return platform.unprepare(home())
 
 
 def sync(mode: Optional[ShieldMode] = None) -> dict[str, Any]:

@@ -80,12 +80,15 @@ __all__ = [
     "alerts", "all_shields", "allow_lists", "allows", "apply_sandbox_default", "attack_table",
     "browser_roots", "call_api", "check", "describe_change", "enter_hermes_process", "events", "get",
     "loaded_packs", "pack_logo", "package_installs_weakening", "permission_refused", "prompt_findings", "reload_registry",
+    "remove_sandbox_placeholders",
     "self_tests", "settings_validators", "settings_view", "shield_name", "snapshot", "statuses",
     "unlocked", "write_weakening",
 ]
 
 #: File Shield's sandbox for the Hermes agent's own shells, at each Hermes session start (fail-open).
 enter_hermes_process = files.sandbox.enter_hermes_session
+#: Uninstall: the agent sandbox's still-empty startup placeholders taken back (Linux; KI-677).
+remove_sandbox_placeholders = files.sandbox.remove_placeholders
 #: File Shield's agent sandbox by default, on install, upgrade and attach (gated: ``sandbox.defaults``).
 apply_sandbox_default = files.sandbox.defaults.apply
 #: ``agent_packages``: Homebrew installs Blackbox makes for sandboxed agents; loosening it waits (approvals).
