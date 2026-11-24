@@ -5,6 +5,8 @@ Each function answers raw text, or ``""`` when this machine cannot be read that 
 tool degrades to "no process seen", never to an error. READ-ONLY by construction: nothing here
 (or anywhere in ``observe``) signals, stops or changes a process.
 
+``macos.py`` reads the kernel and ``ps``; ``linux.py`` reads ``/proc``; ``unsupported.py`` sees nothing.
+
 Pattern: **Strategy** (one module per OS) behind a **Facade** (this module).
 
 Usage::
@@ -26,6 +28,9 @@ import sys
 
 if sys.platform == "darwin":
     from .macos import (process_ancestry, process_argv, process_cwd, process_environment, process_path, process_sandboxed,
+                        process_table, process_users, process_variable)
+elif sys.platform.startswith("linux"):
+    from .linux import (process_ancestry, process_argv, process_cwd, process_environment, process_path, process_sandboxed,
                         process_table, process_users, process_variable)
 else:
     from .unsupported import (process_ancestry, process_argv, process_cwd, process_environment, process_path, process_sandboxed,
