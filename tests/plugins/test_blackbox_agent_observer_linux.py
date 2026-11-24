@@ -143,3 +143,30 @@ def test_a_pid_namespace_pid_maps_back_to_the_host_pid_of_that_sandbox_only(proc
     assert linux.host_pid(SCOPE, 500, proc_root=proc) == 500, "no PID namespace: the number is the host's"
     for forged in ["../../etc", "user@501.service", "blackbox-agent-0123456789ab-5f3c.scope\n", ""]:
         assert linux.host_pid(forged, 2, proc_root=proc) == 2, f"{forged!r} is not a launcher's id"
+
+
+# --- KI-658 (Linux round L1): the observer loop reads Linux, so sessions get pids and end ---------
+
+def test_on_linux_the_observer_loop_ends_a_session_whose_process_left(proc, tmp_path, monkeypatch):
+    """L1: every CLI agent instance had pid 0 and stayed "live" after its process exited, because the
+    observer read nothing on Linux. With the Linux reader behind the facade, the loop that runs every
+    few seconds (``tracking.observe_now``) sees the agent's process and ends its session once it left."""
+    import shutil
+    from plugins.blackbox.agent_hooks import tracking
+    from plugins.blackbox.agent_hooks.instances import store
+    from plugins.blackbox.agent_hooks.observe import platform as facade
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("BLACKBOX_HOME", str(tmp_path / "bb"))
+    for name in ("process_table", "process_users"):
+        monkeypatch.setattr(facade, name, lambda name=name: getattr(linux, name)(proc_root=proc))
+    monkeypatch.setattr(tracking.hermes_sessions, "catch_up", lambda: None)
+    now = time.time()
+    store.put(store.Instance("claude-code:" + "a" * 16, "claude-code", "session", now - 60, now - 30, pid=500), flush=True)
+    tracking.observe_now()
+    live = store.all_instances()[0]
+    assert live.ended is None, "its process runs: still live"
+    assert 500 in observe.read_table(), "the agent's real pid is seen on Linux"
+    shutil.rmtree(Path(proc) / "500")
+    tracking.observe_now()
+    ended = store.all_instances()[0]
+    assert ended.ended is not None and ended.end_reason == "process-exit"
