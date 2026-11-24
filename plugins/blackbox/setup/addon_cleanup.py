@@ -172,6 +172,8 @@ def remove(plan: CleanupPlan, run: Runner, report: list[str]) -> None:
         except OSError as error:
             report.append(f"could not remove {item.words()}: {error.strerror or error}")
             continue
+        if done is None:
+            continue   # nothing of it there (KI-650: an absent domain was reported as a failure)
         report.append(f"removed {item.words()}" if done else f"could not remove {item.words()}")
 
 

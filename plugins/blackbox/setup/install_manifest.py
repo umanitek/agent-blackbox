@@ -306,6 +306,20 @@ def remove_host(manifest: InstallManifest, report: list[str], home: Path | None 
     _remove_empty(manifest.host_dirs, report)
 
 
+def empty_lines_above(target: Path, block: str) -> int:
+    """How many empty lines the installer's *block* put above its first line in *target* (KI-650:
+    the printed removal lines left the blank line before them, so the file was not as before). A
+    leading line break that only ended the person's own last line is not an empty line."""
+    leading = len(block) - len(block.lstrip("\n"))
+    try:
+        data = target.read_bytes()
+    except OSError:
+        return leading
+    at = data.find(block.encode("utf-8"))
+    ends_own_line = at > 0 and data[at - 1:at] != b"\n"
+    return max(leading - (1 if ends_own_line else 0), 0)
+
+
 @dataclass(frozen=True)
 class KeptHost:
     """What :func:`remove_host` would take away, as the machine is now — for a host the person
@@ -340,6 +354,23 @@ def kept_host(manifest: InstallManifest, home: Path | None = None) -> KeptHost:
                     tuple(sorted(manifest.host_dirs, key=lambda path: -len(path.parts))), tuple(appended))
 
 
-__all__ = ["BLOCKS", "FOLDER", "MANIFEST", "PERSONS_PLACES", "HostRemoval", "InstallManifest", "KeptHost", "PersonsPlaces",
-           "host_removal", "host_size", "human_size", "kept_host", "read",
-           "remove_components", "remove_host", "remove_own_dirs", "restore_system_settings"]
+__all__ = [
+    "BLOCKS",
+    "FOLDER",
+    "MANIFEST",
+    "PERSONS_PLACES",
+    "HostRemoval",
+    "InstallManifest",
+    "KeptHost",
+    "PersonsPlaces",
+    "empty_lines_above",
+    "host_removal",
+    "host_size",
+    "human_size",
+    "kept_host",
+    "read",
+    "remove_components",
+    "remove_host",
+    "remove_own_dirs",
+    "restore_system_settings",
+]

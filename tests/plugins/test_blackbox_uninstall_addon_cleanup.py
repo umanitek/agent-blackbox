@@ -144,5 +144,7 @@ def test_a_foreign_keychain_service_or_preferences_domain_is_refused(home):
 def test_a_failed_item_is_reported_and_the_next_one_still_removed(home):
     made = _left(home, f"Caches/{APP}")
     _addon(home, {"app_id": APP, "paths": [f"~/Library/Caches/{APP}"], "keychain": [{"service": APP, "account": "a"}]})
-    report = uninstall.execute(_plan(home), run=lambda command: 1, stop_dashboard=lambda port: [], run_as_admin=lambda command: 0)
+    # The item is there (find answers 0) but its removal fails (every other command answers 1).
+    report = uninstall.execute(_plan(home), run=lambda command: 0 if "find-generic-password" in command else 1,
+                               stop_dashboard=lambda port: [], run_as_admin=lambda command: 0)
     assert f"could not remove the Keychain item {APP} / a" in report and not made[0].exists()

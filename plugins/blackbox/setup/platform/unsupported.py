@@ -18,12 +18,12 @@ from typing import Callable, Sequence
 Runner = Callable[[Sequence[str]], int]
 
 
-def delete_keychain_item(_service: str, _account: str, _run: Runner) -> bool:
-    return False
+def delete_keychain_item(_service: str, _account: str, _run: Runner) -> bool | None:
+    return None   # no Keychain on this system: nothing there to remove
 
 
-def delete_preferences(_domain: str, _run: Runner) -> bool:
-    return False
+def delete_preferences(_domain: str, _run: Runner) -> bool | None:
+    return None   # no preferences domains on this system: nothing there to remove
 
 
 def disable_linger(_user: str, _run: Runner) -> bool:

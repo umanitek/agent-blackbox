@@ -4,7 +4,7 @@ runner (``uninstall``'s, so tests pass a fake).
 
 Usage::
 
-    delete_keychain_item("com.example.app", "token", run)   # True when the item is gone
+    delete_keychain_item("com.example.app", "token", run)   # True removed, False failed, None: none there
 """
 
 from __future__ import annotations
@@ -21,13 +21,20 @@ DEFAULTS = "/usr/bin/defaults"
 Runner = Callable[[Sequence[str]], int]
 
 
-def delete_keychain_item(service: str, account: str, run: Runner) -> bool:
-    """The generic password *service* / *account* removed from the login Keychain."""
+def delete_keychain_item(service: str, account: str, run: Runner) -> bool | None:
+    """The generic password *service* / *account* removed from the login Keychain: True when
+    removed, False when the removal failed, None when there is no such item (nothing to remove —
+    KI-650: a missing one was reported as a failure)."""
+    if run([SECURITY, "find-generic-password", "-s", service, "-a", account]) != 0:
+        return None
     return run([SECURITY, "delete-generic-password", "-s", service, "-a", account]) == 0
 
 
-def delete_preferences(domain: str, run: Runner) -> bool:
-    """The preferences *domain* removed (``defaults delete``, so cfprefsd forgets it too)."""
+def delete_preferences(domain: str, run: Runner) -> bool | None:
+    """The preferences *domain* removed (``defaults delete``, so cfprefsd forgets it too): True
+    when removed, False when the removal failed, None when the domain does not exist (KI-650)."""
+    if run([DEFAULTS, "read", domain]) != 0:
+        return None
     return run([DEFAULTS, "delete", domain]) == 0
 
 

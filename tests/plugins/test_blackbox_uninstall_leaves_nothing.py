@@ -289,6 +289,43 @@ def test_a_host_kept_on_no_can_still_be_removed_later_with_the_commands_uninstal
     assert _empty_folders(clean_mac) == empty_before
 
 
+def test_the_kept_host_note_names_the_empty_line_the_installer_put_above_its_lines(clean_mac, tmp_path):
+    """KI-650 (security round 7, bb-r7-clean): following the printed note exactly — delete the lines
+    shown — left the blank line Hermes's block starts with, so ~/.zshrc was not byte-identical. The
+    note now names it; deleting what the note names gives the file back as it was."""
+    import re
+    before = (clean_mac / ".zshrc").read_bytes()
+    _install_on_a_clean_mac(clean_mac, tmp_path / "record")
+    plan = dataclasses.replace(uninstall.build_plan(homes=[clean_mac / ".hermes"], purge=True, keep_logs=False), system="Darwin")
+    uninstall.execute(plan, run=lambda command: 0, stop_dashboard=lambda port: [], run_as_admin=lambda command: 0)
+    note = uninstall.host_kept_note(plan)
+    header = next(index for index, line in enumerate(note) if line.startswith("and delete these lines") and ".zshrc" in line)
+    assert "and the empty line just above them" in note[header]
+    found = re.search(r"and the (\d+ )?empty lines? just above them", note[header])
+    empty = int(found.group(1)) if found.group(1) else 1
+    lines = [line[4:] for line in note[header + 1:] if line.startswith("    ")]
+    zshrc = clean_mac / ".zshrc"
+    text = zshrc.read_text(encoding="utf-8")
+    shown = "\n" * empty + "\n".join(lines) + "\n"
+    assert shown in text
+    zshrc.write_text(text.replace(shown, "", 1), encoding="utf-8")
+    assert zshrc.read_bytes() == before
+
+
+def test_an_add_ons_preferences_or_keychain_item_that_is_not_there_is_not_a_failure(monkeypatch):
+    """KI-650: uninstall printed "could not remove the preferences …" for a domain that did not
+    exist (``defaults read`` said so): nothing there is nothing to remove, not a failure."""
+    from plugins.blackbox.setup import addon_cleanup
+    plan = addon_cleanup.CleanupPlan((addon_cleanup.CleanupItem("preferences", "com.example.companion"),
+                                      addon_cleanup.CleanupItem("keychain", "com.example.companion", "key")), ())
+    ran: list[list[str]] = []
+    report: list[str] = []
+    monkeypatch.setattr(addon_cleanup, "platform", platform_macos)
+    addon_cleanup.remove(plan, lambda argv: ran.append(list(argv)) or (1 if argv[1] in ("read", "find-generic-password") else 0), report)
+    assert report == []
+    assert not [argv for argv in ran if argv[1] in ("delete", "delete-generic-password")]
+
+
 def test_the_printed_commands_leave_a_folder_the_person_filled_since_and_quote_odd_names(tmp_path):
     """KI-630: ``rmdir`` takes a listed folder only when empty, and a name with a space or a quote
     is one argument."""

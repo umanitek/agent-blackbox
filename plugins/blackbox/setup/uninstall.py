@@ -226,7 +226,9 @@ def host_kept_note(plan: UninstallPlan) -> list[str]:
         lines.append("To remove it later (the blackbox command is gone with Blackbox), run:")
         lines += [f"    {command}" for command in commands]
     for target, block in kept.appended:
-        lines.append(f"and delete these lines the installer added to {target} (your own lines there stay):")
+        empty = install_manifest.empty_lines_above(target, block)
+        above = "" if not empty else " and the empty line just above them" if empty == 1 else f" and the {empty} empty lines just above them"
+        lines.append(f"and delete these lines the installer added to {target}{above} (your own lines there stay):")
         lines += [f"    {line}" for line in block.strip("\n").splitlines()]
     return lines
 
