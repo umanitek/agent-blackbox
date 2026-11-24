@@ -96,12 +96,22 @@ fn kept_flags(path: &str) -> Result<libc::c_ulong, String> {
     if unsafe { libc::statvfs(target.as_ptr(), &mut stats) } != 0 {
         return Err(last_error(&format!("statvfs {path}")));
     }
-    // WHY a literal: `nosymfollow` (Linux 5.10) is locked like the others; libc names only some.
-    const NOSYMFOLLOW: libc::c_ulong = 256;
-    let pairs = [(NOSYMFOLLOW, NOSYMFOLLOW), (libc::ST_NOSUID, libc::MS_NOSUID), (libc::ST_NODEV, libc::MS_NODEV), (libc::ST_NOEXEC, libc::MS_NOEXEC),
-                 (libc::ST_NOATIME, libc::MS_NOATIME), (libc::ST_NODIRATIME, libc::MS_NODIRATIME), (libc::ST_RELATIME, libc::MS_RELATIME)];
-    Ok(pairs.iter().filter(|(st, _)| stats.f_flag & st != 0).fold(0, |flags, (_, ms)| flags | ms))
+    Ok(LOCKED_FLAGS.iter().filter(|(st, _)| stats.f_flag & st != 0).fold(0, |flags, (_, ms)| flags | ms))
 }
+
+/// Each locked mount flag as `statvfs` reports it (`ST_*`) and as `mount` takes it (`MS_*`).
+/// WHY literals for two: the kernel's own values (include/linux/statfs.h, include/uapi/linux/mount.h).
+/// The libc crate names `ST_RELATIME` for glibc only, so the musl release targets did not build
+/// (KI-667); and `nosymfollow` (Linux 5.10) is `ST_NOSYMFOLLOW` 0x2000 in statvfs but
+/// `MS_NOSYMFOLLOW` 256 for mount — the two are not the same number.
+const ST_RELATIME: libc::c_ulong = 0x1000;
+const ST_NOSYMFOLLOW: libc::c_ulong = 0x2000;
+const MS_NOSYMFOLLOW: libc::c_ulong = 256;
+const LOCKED_FLAGS: [(libc::c_ulong, libc::c_ulong); 7] = [
+    (ST_NOSYMFOLLOW, MS_NOSYMFOLLOW), (libc::ST_NOSUID, libc::MS_NOSUID), (libc::ST_NODEV, libc::MS_NODEV),
+    (libc::ST_NOEXEC, libc::MS_NOEXEC), (libc::ST_NOATIME, libc::MS_NOATIME), (libc::ST_NODIRATIME, libc::MS_NODIRATIME),
+    (ST_RELATIME, libc::MS_RELATIME),
+];
 
 /// Binds *path* onto itself, with every mount below it (a pin: renaming or removing it is `EBUSY`).
 pub fn bind_self(path: &str) -> Result<(), String> {
@@ -297,4 +307,28 @@ pub fn program_name(program: &OsStr) -> String {
     let bytes = program.as_bytes();
     let base = bytes.rsplit(|b| *b == b'/').next().unwrap_or(bytes);
     String::from_utf8_lossy(base).into_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_locked_flags_carry_the_kernels_own_numbers() {
+        #[cfg(target_env = "gnu")]
+        assert_eq!(ST_RELATIME, libc::ST_RELATIME, "glibc's value is the kernel's");
+        assert_eq!((ST_NOSYMFOLLOW, MS_NOSYMFOLLOW), (0x2000, 256), "statvfs and mount spell nosymfollow differently");
+        assert_eq!(LOCKED_FLAGS.iter().map(|(_, ms)| ms).fold(0, |all, ms| all | ms).count_ones(), 7, "seven distinct mount flags");
+    }
+
+    /// The real kernel: a mount that `/proc/self/mountinfo` says is relatime keeps relatime, so a
+    /// read-only remount of it is not refused for dropping a locked flag.
+    #[test]
+    fn a_real_relatime_mount_keeps_relatime() {
+        let Ok(mounts) = std::fs::read_to_string("/proc/self/mountinfo") else { return };
+        let Some(root) = mounts.lines().find(|line| line.split(' ').nth(4) == Some("/")) else { return };
+        if root.split(' ').nth(5).is_some_and(|options| options.split(',').any(|option| option == "relatime")) {
+            assert_ne!(kept_flags("/").unwrap() & libc::MS_RELATIME, 0, "{root}");
+        }
+    }
 }
