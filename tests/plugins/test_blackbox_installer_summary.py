@@ -42,17 +42,23 @@ def _uname(system: str, machine: str = "x86_64") -> str:
 SUMMARY = ("ok", "err", "detect_os", "protection_summary")
 
 
-def test_on_linux_the_macos_only_protections_are_named_as_not_available():
-    done = _run("detect_os; BLACKBOX_SYSTEM_PROTECTION_STATE=unsupported; protection_summary", SUMMARY,
-                _uname("Linux"))
+@pytest.mark.parametrize("state, active, helper, network", [
+    ("installed", True, "installed and running", "available"),
+    ("installed", False, "does not show it running", "needs the helper"),
+    ("unavailable", False, "no published helper", "needs the helper"),
+    ("declined", False, "not installed", "needs the helper"),
+])
+def test_on_linux_the_summary_reads_the_helper_from_systemd_and_the_sandbox_is_not_available(state, active, helper, network):
+    systemctl = f"systemctl() {{ return {0 if active else 3}; }}"
+    done = _run(f"detect_os; BLACKBOX_SYSTEM_PROTECTION_STATE={state}; protection_summary", (*SUMMARY, "linux_protection_summary"),
+                _uname("Linux") + "\ncheck_linux_distro() { :; }\n" + systemctl)
     assert done.returncode == 0, done.stderr
-    out = done.stdout
-    assert "Protection on this machine (Linux):" in out
-    for name in ("Root system-protection helper", "Kernel sandbox for agents", "Network Shield enforcement"):
-        line = next(line for line in out.splitlines() if name in line)
-        assert line.rstrip().endswith(NOT_YET), line
-    assert "Agent hooks" in out and "Threat detection + dependency checks:    on" in out
-    assert "installed" not in out.split("Dashboard")[1] and "File Shield" not in out and "DNS Shield" not in out
+    lines = done.stdout.splitlines()
+    assert "Protection on this machine (Linux):" in done.stdout
+    assert helper in next(line for line in lines if "Root system-protection helper" in line)
+    assert network in next(line for line in lines if "Network Shield enforcement" in line)
+    assert next(line for line in lines if "Kernel sandbox for agents" in line).rstrip().endswith(NOT_YET)
+    assert "File Shield" not in done.stdout
 
 
 @pytest.mark.parametrize("state, helper, network", [

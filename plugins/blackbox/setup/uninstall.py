@@ -146,8 +146,8 @@ def build_plan(*, purge: bool, keep_logs: bool, now: Optional[_dt.datetime] = No
     system = platform.system()
     manifest = install_manifest.read(blackbox_home)
     # The helper as found, or as the install manifest names it (KI-629: one list of what was added).
-    helper = system_helper.BINARY if system == "Darwin" and (
-        system_helper.BINARY.exists() or system_helper.LAUNCH_DAEMON.exists() or manifest.system_helper) else None
+    helper = system_helper.BINARY if system in ("Darwin", "Linux") and (
+        system_helper.BINARY.exists() or system_helper.SERVICE.exists() or manifest.system_helper) else None
     from .. import agent_hooks   # agent_hooks' public entry
     addon_folders = tuple(home / "plugins" / name for home in hermes_homes for name in addons.found(home / "plugins"))
     return UninstallPlan(

@@ -147,7 +147,7 @@ def read(blackbox_home: Path, home: Path | None = None, user: str | None = None)
             packages += [parts[1]] if PACKAGE_NAME.fullmatch(parts[1]) and parts[1] not in packages else []
             continue
         if len(parts) >= 2 and parts[0] == "system-helper":
-            helper = helper or parts[1] == str(system_helper_paths.LAUNCH_DAEMON)   # the helper's own path only
+            helper = helper or parts[1] == str(system_helper_paths.SERVICE)   # the helper's own path only
             continue
         if parts[0] not in found or len(parts) < 2:
             continue

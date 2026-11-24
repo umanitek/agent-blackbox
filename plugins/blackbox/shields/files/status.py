@@ -37,7 +37,7 @@ def _items_section(mode: ShieldMode) -> StatusSection:
 
 
 def _watch_section(mode: ShieldMode) -> StatusSection:
-    installed = system_helper.LAUNCH_DAEMON.is_file()   # the helper is installed (its LaunchDaemon)
+    installed = system_helper.installed()
     last = changes.recent(1)
     row = (StatusRow(icon="live", state="on", text="Watching in real time",
                      sub=f"{len(mode_module.watch_paths(mode))} places; last change {last[0].path}" if last

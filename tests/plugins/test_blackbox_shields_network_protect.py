@@ -132,7 +132,7 @@ def test_reports_are_stored_bounded_and_go_stale():
 def test_the_card_never_says_active_without_the_helpers_report(tmp_path, monkeypatch):
     installed = tmp_path / "ai.umanitek.blackbox.netd.plist"
     installed.write_text("<plist/>", encoding="utf-8")
-    monkeypatch.setattr(helper, "LAUNCH_DAEMON", installed)
+    monkeypatch.setattr(helper, "SERVICE", installed)
     monkeypatch.setattr(helper_link, "pairing", lambda: helper_link.PAIRED)   # paired, but not reporting yet
     quiet = {"running": False, "dns_active": False, "firewall_active": False, "cut_active": False,
              "ssh_lockdown_active": False, "cut_total": 0, "blocked_total": 0, "firewall_dropped": 0}
@@ -180,7 +180,7 @@ _REPORT = {"running": True, "dns_active": False, "firewall_active": True}
 def test_a_protection_the_helper_could_not_apply_says_why_on_the_card(tmp_path, monkeypatch):
     installed = tmp_path / "ai.umanitek.blackbox.netd.plist"
     installed.write_text("<plist/>", encoding="utf-8")
-    monkeypatch.setattr(helper, "LAUNCH_DAEMON", installed)
+    monkeypatch.setattr(helper, "SERVICE", installed)
     enforcement.record_report({**_REPORT, "protections": {"dns": {"applied": False, "error": "port 53\nin use"},
                                                           "firewall": {"applied": True, "error": None}}})
     assert enforcement.summary()["errors"] == {"dns": "port 53 in use"}

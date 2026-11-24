@@ -56,7 +56,7 @@ def test_settings_say_which_protections_need_the_system_protection_helper(tmp_pa
                         "cut": "needs-helper", "ssh-lockdown": "needs-helper"}
     installed = tmp_path / "ai.umanitek.blackbox.netd.plist"
     installed.write_text("<plist/>", encoding="utf-8")
-    monkeypatch.setattr(helper, "LAUNCH_DAEMON", installed)   # the core installer (or a companion app) put it there
+    monkeypatch.setattr(helper, "SERVICE", installed)   # the core installer (or a companion app) put it there
     assert set(states().values()) == {"supported"}
     assert network_mode.default_protections() == (network_mode.DNS,)
 
@@ -121,7 +121,7 @@ def test_the_card_needs_the_helper_and_never_says_active_on_the_setting_alone(tm
     assert "offer" not in card.as_json(), "the card offers no app"
     installed = tmp_path / "ai.umanitek.blackbox.netd.plist"
     installed.write_text("<plist/>", encoding="utf-8")
-    monkeypatch.setattr(helper, "LAUNCH_DAEMON", installed)
+    monkeypatch.setattr(helper, "SERVICE", installed)
     rows = status.build(_on(protections=(network_mode.DNS, network_mode.LOCKDOWN))).sections[0].rows
     assert rows[0].state == "waiting", "installed but not reporting: never active on the setting alone"
     assert rows[1].state == "off" and rows[2].state == "active"

@@ -19,9 +19,9 @@ _REAL_IN_FORCE = _consent_module.in_force
 def _no_system_protection_helper(monkeypatch, tmp_path):
     """Network Shield asks whether the system protection helper's LaunchDaemon is installed
     (/Library/LaunchDaemons/…). Tests never read the real machine: the helper is absent unless a
-    test installs its own (``helper.LAUNCH_DAEMON`` pointed at a file it creates)."""
+    test installs its own (``helper.SERVICE`` pointed at a file it creates)."""
     from plugins.blackbox.shields.network import helper
-    monkeypatch.setattr(helper, "LAUNCH_DAEMON", tmp_path / "no-helper" / "ai.umanitek.blackbox.netd.plist")
+    monkeypatch.setattr(helper, "SERVICE", tmp_path / "no-helper" / "ai.umanitek.blackbox.netd.plist")
     yield
 
 

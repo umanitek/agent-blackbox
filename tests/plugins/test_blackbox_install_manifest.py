@@ -167,7 +167,7 @@ def test_the_helper_and_the_notifier_this_install_added_are_in_the_manifest(mach
     text = (home / ".hermes" / "blackbox" / install_manifest.FOLDER / install_manifest.MANIFEST).read_text(encoding="utf-8")
     assert f"system-helper\t{home}/LaunchDaemons/netd.plist" in text
     assert f"notifier\t{home}/.hermes/blackbox/notifier" in text
-    monkeypatch.setattr(system_helper, "LAUNCH_DAEMON", home / "LaunchDaemons" / "netd.plist")
+    monkeypatch.setattr(system_helper, "SERVICE", home / "LaunchDaemons" / "netd.plist")
     manifest = install_manifest.read(home / ".hermes" / "blackbox", home=home)
     assert manifest.system_helper and manifest.notifier == (home / ".hermes" / "blackbox" / "notifier",)
     report: list[str] = []

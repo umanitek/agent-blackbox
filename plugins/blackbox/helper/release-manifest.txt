@@ -14,13 +14,16 @@
 #      version; the owner uploads the two files to the release tag blackbox-helper-v<version>;
 #   4. commit this file with the release (never before the assets are up: an install would refuse
 #      the old download against the new SHA-256, and fall back to "system protection not installed").
-# LINUX (being ported; no Linux asset is published yet and none is listed below, so an install on
-# Linux finds no helper to download). When the port's SUPPORTED is true, the release adds, built
-# static on each architecture (Blackbox CI builds both on every helper change, uploading nothing):
+# LINUX (SUPPORTED since 2026-11-24; NO Linux asset is published yet and none is listed below, so
+# an install on Linux says "no published helper for this machine in this release yet" and a
+# locally built one installs with BLACKBOX_HELPER_PATH + BLACKBOX_HELPER_SHA256). The release adds,
+# built static on each architecture (Blackbox CI builds both on every helper change, uploading nothing):
 #        cargo build --release --locked --target x86_64-unknown-linux-musl
 #        cargo build --release --locked --target aarch64-unknown-linux-musl
-#      copied to blackbox-netd-linux-x86_64 and blackbox-netd-linux-arm64 (later also the agent
-#      sandbox launcher, blackbox-sandbox-linux-<arch>), each line `sha256sum`'s, as above.
+#      copied to the asset names the installer asks for (helper_asset_name):
+#        blackbox-netd-linux-x86_64   blackbox-netd-linux-arm64
+#      and, for the agent sandbox launcher, blackbox-sandbox-linux-x86_64 / -arm64;
+#      each line `sha256sum`'s, as above.
 # STATE (2026-11-23): the helper's source has changed since 0.1.0 (24 commits under helper/src,
 # among them the KI-606 DNS-thread fix); the binaries below are 0.1.0's. An install from the release
 # gets 0.1.0 until a new release is published; a locally built helper is installed with

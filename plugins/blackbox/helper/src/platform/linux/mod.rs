@@ -21,8 +21,9 @@ pub(crate) mod system_guard;
 pub use enforcer::LinuxEnforcer as SystemEnforcer;
 pub use observer::LinuxObserver as SystemObserver;
 
-/// False until the plugin and the installer can install, find and remove the Linux helper too.
-pub const SUPPORTED: bool = false;
+/// The helper runs on Linux: nftables, DNS Shield, the system watch and the systemd install are in,
+/// and the plugin and the installer install, find and remove it (`kernel/system_helper/platform/linux.py`).
+pub const SUPPORTED: bool = true;
 /// The helper's root-owned folder.
 pub const HOME: &str = "/var/lib/blackbox/netd";
 /// The systemd unit the install writes.

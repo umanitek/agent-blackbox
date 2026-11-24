@@ -26,7 +26,7 @@ FUNCTIONS = (
     "helper_manifest_file", "helper_asset_name", "helper_manifest_version", "helper_manifest_sha256",
     "sha256_of", "want_system_protection", "fetch_helper_binary", "sudo_with_tty",
     "install_system_protection", "offer_system_protection", "helper_installed_sha", "helper_expected_sha",
-    "upgrade_system_protection",
+    "upgrade_system_protection", "forget_sudo", "helper_release_exists",
 )
 
 
@@ -110,7 +110,7 @@ def test_a_matching_binary_goes_to_the_helpers_own_verified_install(tmp_path):
     sha = hashlib.sha256(binary).hexdigest()
     out, ran = _run(tmp_path, choice="yes", helper=binary, sha=sha)
     assert "STATE=installed" in out, out
-    assert len(ran) == 1
+    assert len(ran) == 2 and ran[1] == "-k", "the password sudo took is forgotten at once (an agent started next must not inherit it)"
     command = ran[0]
     assert re.search(rf"blackbox-netd install --from \S+/blackbox-netd --sha256 {sha} ", command)
     assert f"--key-for {tmp_path}/keys --owner {os.getuid()}" in command
@@ -127,21 +127,30 @@ def test_the_download_is_checked_against_the_manifest_committed_in_the_checkout(
     assert done.stdout.splitlines() == ["0.1.0", "b" * 64]
 
 
-def test_the_helper_download_names_only_this_macs_own_architecture():
-    """Per-OS structure (2026-11-21): the installer fetches the one binary built for this Mac's
-    chip — never another OS's or architecture's — and none for a chip it has no build for."""
-    def asset(machine: str) -> subprocess.CompletedProcess[str]:
-        script = f"uname() {{ printf '%s\\n' {machine}; }}\n{_function('helper_asset_name')}\nhelper_asset_name"
+def test_the_helper_download_names_only_this_machines_own_os_and_architecture():
+    """Per-OS structure (2026-11-21): the installer fetches the one binary built for this machine's
+    OS and chip — never another's — and none for a chip it has no build for."""
+    def asset(system: str, machine: str) -> subprocess.CompletedProcess[str]:
+        script = (f"uname() {{ case \"$1\" in -s) echo {system} ;; *) echo {machine} ;; esac; }}\n"
+                  f"{_function('helper_asset_name')}\nhelper_asset_name")
         return subprocess.run(["/bin/bash", "-c", script], capture_output=True, text=True, timeout=30, check=False)
-    assert asset("arm64").stdout.strip() == "blackbox-netd-darwin-arm64"
-    assert asset("x86_64").stdout.strip() == "blackbox-netd-darwin-x86_64"
-    unknown = asset("riscv64")
+    assert asset("Darwin", "arm64").stdout.strip() == "blackbox-netd-darwin-arm64"
+    assert asset("Darwin", "x86_64").stdout.strip() == "blackbox-netd-darwin-x86_64"
+    assert asset("Linux", "aarch64").stdout.strip() == "blackbox-netd-linux-arm64"
+    assert asset("Linux", "x86_64").stdout.strip() == "blackbox-netd-linux-x86_64"
+    unknown = asset("Linux", "riscv64")
     assert unknown.returncode != 0 and unknown.stdout == ""
 
 
-def test_linux_is_never_offered_it(tmp_path):
-    out, ran = _run(tmp_path, choice="yes", os_name="linux")
-    assert ran == [] and "STATE=unsupported" in out and "System protection" not in out.replace("STATE", "")
+def test_on_linux_it_is_offered_and_says_so_when_the_release_has_no_helper_for_it(tmp_path):
+    out, ran = _run(tmp_path, choice="yes", os_name="linux", manifest="version 0.1.0\n")
+    assert ran == [] and "STATE=unavailable" in out and "no published system protection helper" in out, out
+
+
+def test_on_linux_a_checked_helper_is_installed_through_its_own_install_then_sudo_forgets(tmp_path):
+    binary = b"the linux helper"
+    out, ran = _run(tmp_path, choice="yes", os_name="linux", helper=binary, sha=hashlib.sha256(binary).hexdigest())
+    assert "STATE=installed" in out and len(ran) == 2 and " install --from " in ran[0] and ran[1] == "-k", (out, ran)
 
 
 def test_the_plugin_copy_matches_the_installer():
@@ -181,7 +190,7 @@ def test_a_failed_upgrade_never_removes_the_helper_the_person_already_had(tmp_pa
 def test_a_first_install_that_fails_is_cleaned_up(tmp_path):
     binary = b"the helper"
     out, ran = _run(tmp_path, choice="yes", helper=binary, sha=hashlib.sha256(binary).hexdigest(), root_fails=True)
-    assert ran[-1].rstrip().endswith(" uninstall") and "STATE=failed" in out, ran
+    assert ran[-2].rstrip().endswith(" uninstall") and ran[-1] == "-k" and "STATE=failed" in out, ran
 
 
 def test_saying_no_leaves_an_installed_helper_as_it_is(tmp_path):

@@ -3185,10 +3185,14 @@ protection_summary() {
     if [ "$BLACKBOX_BOOT_SERVICES" = none ]; then
         echo "    Start at boot (node, dashboard):         not set up — no running systemd (start them as shown above)"
     fi
-    if [ "$OS" != macos ]; then
+    if [ "$OS" != macos ] && [ "$OS" != linux ]; then
         echo "    Root system-protection helper:           $BLACKBOX_NOT_YET"
         echo "    Kernel sandbox for agents:               $BLACKBOX_NOT_YET"
         echo "    Network Shield enforcement (DNS, firewall): $BLACKBOX_NOT_YET"
+        return 0
+    fi
+    if [ "$OS" = linux ]; then
+        linux_protection_summary
         return 0
     fi
     case "$BLACKBOX_SYSTEM_PROTECTION_STATE" in
@@ -3202,6 +3206,27 @@ protection_summary() {
         installed|kept) echo "    Network Shield enforcement (DNS, firewall): available — switch on DNS Shield and the Threat Firewall" ;;
         *) echo "    Network Shield enforcement (DNS, firewall): needs the helper above" ;;
     esac
+}
+
+# Linux's lines, from what the machine says NOW (never from what this run hoped): the helper is
+# running when systemd reports its unit active; the agent sandbox is not built for Linux yet.
+linux_protection_summary() {
+    local helper network
+    if systemctl is-active --quiet blackbox-netd.service 2>/dev/null; then
+        helper="installed and running"
+        network="available — switch on DNS Shield and the Threat Firewall"
+    else
+        case "$BLACKBOX_SYSTEM_PROTECTION_STATE" in
+            installed|kept) helper="installed, but systemd does not show it running (journalctl -u blackbox-netd)" ;;
+            failed) helper="not installed (it failed — the dashboard's Network Shield offers it again)" ;;
+            unavailable) helper="no published helper for this machine in this release yet" ;;
+            *) helper="not installed (the dashboard's Network Shield offers it)" ;;
+        esac
+        network="needs the helper above"
+    fi
+    echo "    Root system-protection helper:           $helper"
+    echo "    Kernel sandbox for agents:               $BLACKBOX_NOT_YET"
+    echo "    Network Shield enforcement (DNS, firewall): $network"
 }
 
 # ── Guided next steps (short — everything above already ran) ─────────────────
@@ -3828,8 +3853,9 @@ rollback_leftovers() {
 # the firewall from its own saved state); one that was there before is left as it is.
 rollback_system_protection() {
     [ -e "$INSTALL_RECORD_DIR/helper-was-absent" ] && install_path_exists "$BLACKBOX_HELPER_DAEMON" || return 0
-    sudo_with_tty "$BLACKBOX_HELPER_HOME/blackbox-netd" uninstall >/dev/null 2>&1 ||
-        warn "Could not remove the system protection helper; remove it with: sudo '$BLACKBOX_HELPER_HOME/blackbox-netd' uninstall"
+    sudo_with_tty "$BLACKBOX_HELPER_PROGRAM" uninstall >/dev/null 2>&1 ||
+        warn "Could not remove the system protection helper; remove it with: sudo '$BLACKBOX_HELPER_PROGRAM' uninstall"
+    forget_sudo
     return 0
 }
 
@@ -4860,8 +4886,10 @@ move_onto_existing_hermes() {
 # ── System protection: the root helper (blackbox-netd), opt-in (2026-11-21) ──────────────────
 # DNS Shield and the Threat Firewall (and cutting connections, SSH lockdown, Lock remote access)
 # need a small root helper. It is offered at the END of the install, after everything else is
-# committed: declining — or any failure here — leaves nothing of it on the Mac, and the
-# dashboard's Network Shield switch offers the install again later. Never on Linux.
+# committed: declining — or any failure here — leaves nothing of it on the machine, and the
+# dashboard's Network Shield switch offers the install again later. On macOS it is a LaunchDaemon;
+# on Linux a systemd unit (helper/src/platform/linux/install.rs), installed with one `sudo` that is
+# forgotten again at once (`sudo -k`: an agent started from this terminal later must not inherit it).
 #
 # The binary is the prebuilt one for this Mac's architecture from the release, checked against
 # the SHA-256 committed in this checkout (plugins/blackbox/helper/release-manifest.txt — the
@@ -4872,15 +4900,29 @@ BLACKBOX_SYSTEM_PROTECTION="${BLACKBOX_SYSTEM_PROTECTION:-ask}"   # ask | yes | 
 BLACKBOX_SYSTEM_PROTECTION_PROMPT_SECONDS="${BLACKBOX_SYSTEM_PROTECTION_PROMPT_SECONDS:-60}"
 BLACKBOX_HELPER_PATH="${BLACKBOX_HELPER_PATH:-}"
 BLACKBOX_HELPER_SHA256="${BLACKBOX_HELPER_SHA256:-}"
-BLACKBOX_HELPER_HOME="/Library/Application Support/Blackbox/netd"
-BLACKBOX_HELPER_DAEMON="/Library/LaunchDaemons/ai.umanitek.blackbox.netd.plist"
-# The helper's public receipt ("sha256 <hex>" of the installed program), written by its own
-# install: the helper's folder is root-only, so this is how an up-to-date helper is told apart.
-BLACKBOX_HELPER_RECEIPT="/Library/Application Support/Blackbox/netd-installed"
-BLACKBOX_SYSTEM_PROTECTION_STATE=""   # installed | kept | declined | failed | unsupported (for next_steps)
-# The plugin's copy of the helper's plan key — ONE place per person, whichever Blackbox (this
-# install or a companion app) serves the dashboard (helper/PLAN.md).
-BLACKBOX_HELPER_KEY_DIR="$HOME/Library/Application Support/Blackbox/helper"
+# Where the helper lives, per OS (the plugin's kernel/system_helper/platform/<os>.py names the same):
+# its root-only folder, its program, its service definition (BLACKBOX_HELPER_DAEMON: a LaunchDaemon
+# or a systemd unit), and its public receipt ("sha256 <hex>" of the installed program, written by
+# its own install: the helper's folder is root-only, so this is how an up-to-date helper is told
+# apart). BLACKBOX_HELPER_KEY_DIR is the plugin's copy of the helper's plan key — ONE place per
+# person, whichever Blackbox (this install or a companion app) serves the dashboard (helper/PLAN.md).
+case "$(uname -s 2>/dev/null)" in
+    Linux*)
+        BLACKBOX_HELPER_HOME="/var/lib/blackbox/netd"
+        BLACKBOX_HELPER_PROGRAM="/usr/local/libexec/blackbox/blackbox-netd"
+        BLACKBOX_HELPER_DAEMON="/etc/systemd/system/blackbox-netd.service"
+        BLACKBOX_HELPER_RECEIPT="/var/lib/blackbox/netd-installed"
+        BLACKBOX_HELPER_KEY_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/blackbox/helper"
+        BLACKBOX_ADMIN_PROMPT="sudo asks for your password once" ;;
+    *)
+        BLACKBOX_HELPER_HOME="/Library/Application Support/Blackbox/netd"
+        BLACKBOX_HELPER_PROGRAM="$BLACKBOX_HELPER_HOME/blackbox-netd"
+        BLACKBOX_HELPER_DAEMON="/Library/LaunchDaemons/ai.umanitek.blackbox.netd.plist"
+        BLACKBOX_HELPER_RECEIPT="/Library/Application Support/Blackbox/netd-installed"
+        BLACKBOX_HELPER_KEY_DIR="$HOME/Library/Application Support/Blackbox/helper"
+        BLACKBOX_ADMIN_PROMPT="macOS asks for your admin password" ;;
+esac
+BLACKBOX_SYSTEM_PROTECTION_STATE=""   # installed | kept | declined | failed | unavailable | unsupported (for next_steps)
 
 helper_manifest_file() {
     local candidate
@@ -4891,13 +4933,20 @@ helper_manifest_file() {
     return 1
 }
 
-# The release's binary name for this Mac: blackbox-netd-darwin-arm64 | blackbox-netd-darwin-x86_64.
+# The release's binary name for this machine: blackbox-netd-<darwin|linux>-<arm64|x86_64>.
 helper_asset_name() {
-    case "$(uname -m)" in
-        arm64|aarch64) printf 'blackbox-netd-darwin-arm64\n' ;;
-        x86_64) printf 'blackbox-netd-darwin-x86_64\n' ;;
+    local system arch
+    case "$(uname -s)" in
+        Darwin*) system=darwin ;;
+        Linux*) system=linux ;;
         *) return 1 ;;
     esac
+    case "$(uname -m)" in
+        arm64|aarch64) arch=arm64 ;;
+        x86_64|amd64) arch=x86_64 ;;
+        *) return 1 ;;
+    esac
+    printf 'blackbox-netd-%s-%s\n' "$system" "$arch"
 }
 
 # "<field> <asset>" lookups in the manifest: `version 0.1.0` and `<sha256>  <asset>` lines.
@@ -4906,7 +4955,7 @@ helper_manifest_sha256() {
     awk -v asset="$2" '$2 == asset && $1 ~ /^[0-9a-f]{64}$/ { print $1; exit }' "$1"
 }
 
-sha256_of() { shasum -a 256 "$1" | awk '{ print $1 }'; }
+sha256_of() { if command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1"; else sha256sum "$1"; fi | awk '{ print $1 }'; }
 
 # The SHA-256 of the helper installed on this Mac (empty when there is none, or it predates receipts).
 helper_installed_sha() {
@@ -4935,9 +4984,9 @@ want_system_protection() {
     if ! { exec 9<>/dev/tty; } 2>/dev/null; then
         return 1
     fi
-    step "Turn on system protection? DNS Shield blocks known-bad domains for the whole Mac and the"
-    step "Threat Firewall blocks known-bad addresses. A small helper runs as root to do it, so macOS"
-    step "asks for your admin password once. Skip it now and the dashboard's Network Shield offers it later."
+    step "Turn on system protection? DNS Shield blocks known-bad domains for the whole machine and the"
+    step "Threat Firewall blocks known-bad addresses. A small helper runs as root to do it, so $BLACKBOX_ADMIN_PROMPT."
+    step "Skip it now and the dashboard's Network Shield offers it later."
     printf "Turn on system protection? DNS Shield + Threat Firewall (needs your admin password) [Y/n] (no in %ss) " \
         "$BLACKBOX_SYSTEM_PROTECTION_PROMPT_SECONDS" >&9
     if ! IFS= read -r -t "$BLACKBOX_SYSTEM_PROTECTION_PROMPT_SECONDS" answer <&9; then
@@ -5007,11 +5056,12 @@ install_system_protection() {
         return 1
     fi
     owner="$(id -u)"
-    step "Installing the system protection helper (macOS asks for your admin password)"
+    step "Installing the system protection helper ($BLACKBOX_ADMIN_PROMPT)"
     # The binary runs as root only after its checksum matched above; `install` checks it again on
-    # a root-only copy before anything on the Mac changes.
+    # a root-only copy before anything on the machine changes.
     if sudo_with_tty "$folder/blackbox-netd" install --from "$folder/blackbox-netd" --sha256 "$sha" \
         --key-for "$BLACKBOX_HELPER_KEY_DIR" --owner "$owner"; then
+        forget_sudo
         rm -rf "$folder"
         ok "System protection is installed. Turn on DNS Shield and the Threat Firewall in the dashboard's Network Shield."
         return 0
@@ -5021,9 +5071,15 @@ install_system_protection() {
     if [ "$mode" != upgrade ]; then
         sudo_with_tty "$folder/blackbox-netd" uninstall >/dev/null 2>&1 || true
     fi
+    forget_sudo
     rm -rf "$folder"
     return 1
 }
+
+# Forgets the password sudo just took (`sudo -k`): WHY — sudo keeps it for minutes per terminal, and
+# an AI agent started from this terminal right after the install would inherit root without asking
+# (Linux round L1: with sudo cached or passwordless, agents wrote /etc).
+forget_sudo() { sudo -k >/dev/null 2>&1 || true; }
 
 # Blackbox's own notifier (macOS): notifications appear under Blackbox's name. The archive is the
 # release's blackbox-notify-darwin.zip checked against the SHA-256 in this checkout's helper
@@ -5084,7 +5140,7 @@ report_notification_permission() {
 }
 
 offer_system_protection() {
-    if [ "$OS" != "macos" ]; then
+    if [ "$OS" != "macos" ] && [ "$OS" != "linux" ]; then
         BLACKBOX_SYSTEM_PROTECTION_STATE="unsupported"
         return 0
     fi
@@ -5098,6 +5154,12 @@ offer_system_protection() {
         BLACKBOX_SYSTEM_PROTECTION_STATE="declined"
         return 0
     fi
+    if ! helper_release_exists; then
+        step "This Blackbox release carries no published system protection helper for $(uname -s) $(uname -m) yet."
+        step "Blackbox itself is installed and working; a locally built helper installs with BLACKBOX_HELPER_PATH + BLACKBOX_HELPER_SHA256."
+        BLACKBOX_SYSTEM_PROTECTION_STATE="unavailable"
+        return 0
+    fi
     if install_system_protection; then
         BLACKBOX_SYSTEM_PROTECTION_STATE="installed"
     else
@@ -5106,6 +5168,14 @@ offer_system_protection() {
         BLACKBOX_SYSTEM_PROTECTION_STATE="failed"
     fi
     return 0
+}
+
+# True when there is a helper to install: a local one named by BLACKBOX_HELPER_PATH, or a release
+# asset for this machine with its SHA-256 in the manifest committed in this checkout.
+helper_release_exists() {
+    local manifest asset
+    [ -n "$BLACKBOX_HELPER_PATH" ] && return 0
+    manifest="$(helper_manifest_file)" && asset="$(helper_asset_name)" && [ -n "$(helper_manifest_sha256 "$manifest" "$asset")" ]
 }
 
 # A helper is installed: keep it when it is the one this install carries (or the person said no
@@ -5123,7 +5193,7 @@ upgrade_system_protection() {
         ok "The system protection helper is installed and up to date."
         return 0
     fi
-    step "This Blackbox carries a newer system protection helper; upgrading it (macOS asks for your admin password)."
+    step "This Blackbox carries a newer system protection helper; upgrading it ($BLACKBOX_ADMIN_PROMPT)."
     if install_system_protection upgrade; then
         ok "The system protection helper is upgraded."
     else
@@ -5136,7 +5206,7 @@ upgrade_system_protection() {
 # from its own saved state (even if it had stopped), then removes itself. Posture hardening it
 # applied (macOS firewall on, guest off, …) stays unless --undo-hardening is given.
 remove_system_protection() {
-    local helper="$BLACKBOX_HELPER_HOME/blackbox-netd"
+    local helper="$BLACKBOX_HELPER_PROGRAM"
     if [ ! -f "$BLACKBOX_HELPER_DAEMON" ] && [ ! -e "$helper" ]; then
         ok "The system protection helper is not installed."
         return 0
@@ -5147,8 +5217,9 @@ remove_system_protection() {
     fi
     local args=(uninstall)
     [ "$BLACKBOX_UNDO_HARDENING" = true ] && args+=(--undo-hardening)
-    step "Removing the system protection helper (macOS asks for your admin password)"
+    step "Removing the system protection helper ($BLACKBOX_ADMIN_PROMPT)"
     if sudo_with_tty "$helper" "${args[@]}"; then
+        forget_sudo
         rm -f "$BLACKBOX_HELPER_KEY_DIR/plan.key"
         ok "System protection removed; DNS and the firewall are as they were before it."
         return 0

@@ -1,31 +1,31 @@
-"""Where the system protection helper (``blackbox-netd``, macOS) is installed — one definition
-for Network Shield, which checks whether it is there, and ``blackbox uninstall``, which removes it.
+"""Where the system protection helper (``blackbox-netd``) is installed on this machine — one
+definition for Network Shield, which checks whether it is there, File Shield's real-time watch, the
+guard (its key folder is a built-in protected place) and ``blackbox uninstall``, which removes it.
 
-The helper is root-owned: its folder, its program and its LaunchDaemon (system domain). It is
-installed by Blackbox's installer (``--system-protection``) or by a companion app.
+The helper is root-owned: its folder, its program and its service definition (macOS's LaunchDaemon,
+Linux's systemd unit: :data:`SERVICE`). It is installed by Blackbox's installer
+(``--system-protection``) or by a companion app. Each OS's places are in ``platform/<os>.py``.
 
 Usage::
 
     from plugins.blackbox.kernel import system_helper
-    system_helper.LAUNCH_DAEMON.is_file()
+    system_helper.SERVICE.is_file()      # the helper is installed
+    system_helper.user_key_folder()      # the person's copy of its plan key
 """
 
 from __future__ import annotations
 
-from pathlib import Path
+from .platform import BINARY, HOME, LABEL, RECEIPT, SERVICE, SERVICE_KIND, user_key_folder
 
-__all__ = ["BINARY", "HOME", "KEY_FILE_NAME", "LABEL", "LAUNCH_DAEMON", "user_key_folder"]
+__all__ = ["BINARY", "HOME", "KEY_FILE_NAME", "LABEL", "RECEIPT", "SERVICE", "SERVICE_KIND", "installed", "user_key_folder"]
 
-HOME = Path("/Library/Application Support/Blackbox/netd")
-BINARY = HOME / "blackbox-netd"
-LABEL = "ai.umanitek.blackbox.netd"
-LAUNCH_DAEMON = Path("/Library/LaunchDaemons") / f"{LABEL}.plist"
 #: The key file in the person's key folder (the helper keeps its own root-only copy).
 KEY_FILE_NAME = "plan.key"
 
 
-def user_key_folder() -> Path:
-    """The person's folder holding the key that signs the helper's plans and checks its reports
-    (``~/Library/Application Support/Blackbox/helper``). An agent may not read or name it
-    (``detection.paths.guard_secrets``)."""
-    return Path.home() / "Library" / "Application Support" / "Blackbox" / "helper"
+def installed() -> bool:
+    """True when the helper's service definition is in place (an unreadable folder: not installed)."""
+    try:
+        return SERVICE.is_file()
+    except OSError:
+        return False

@@ -110,6 +110,7 @@ BLACKBOX_SYSTEMD_DIR="$HOME/system-units"
 BLACKBOX_LINGER_DIR="$HOME/linger"
 BLACKBOX_HELPER_HOME="$HOME/helper"
 BLACKBOX_HELPER_DAEMON="$HOME/LaunchDaemons/netd.plist"
+BLACKBOX_HELPER_PROGRAM="$BLACKBOX_HELPER_HOME/blackbox-netd"
 sudo_with_tty() {{ echo "sudo $*" >>"$HOME/calls"; rm -f "$BLACKBOX_HELPER_DAEMON"; }}
 step() {{ echo "step: $1"; }}
 ok() {{ echo "ok: $1"; }}
