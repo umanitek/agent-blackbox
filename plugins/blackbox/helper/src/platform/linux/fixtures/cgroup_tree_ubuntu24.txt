@@ -1,0 +1,15 @@
+# Recorded on a real machine (fix wave L-W1, 2026-11-24): Ubuntu 24.04.5, kernel 7.0.0-43, systemd 255.4-1ubuntu8.18.
+# systemd-run --user --scope --quiet --collect --slice=blackbox-agents.slice --unit=blackbox-agent-0123456789ab-5f3c.scope -- \
+#   sh -c 'cat /proc/self/cgroup; find /sys/fs/cgroup/user.slice -maxdepth 7 -type d | sort'
+0::/user.slice/user-1000.slice/user@1000.service/blackbox.slice/blackbox-agents.slice/blackbox-agent-0123456789ab-5f3c.scope
+/sys/fs/cgroup/user.slice
+/sys/fs/cgroup/user.slice/user-1000.slice
+/sys/fs/cgroup/user.slice/user-1000.slice/session-3.scope
+/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service
+/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/app.slice
+/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/app.slice/dbus.socket
+/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/app.slice/gpg-agent-ssh.socket
+/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/blackbox.slice
+/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/blackbox.slice/blackbox-agents.slice
+/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/blackbox.slice/blackbox-agents.slice/blackbox-agent-0123456789ab-5f3c.scope
+/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/init.scope

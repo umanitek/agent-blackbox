@@ -247,3 +247,36 @@ def test_the_cgroup_tree_is_read_only_so_an_agent_can_not_leave_its_scope(places
     helper's per-agent rules (security Critical 2026-11-24-linux-sandbox-the-helper-never-finds-an-)."""
     lines = _lines(profile.render(places, home=str(tmp_path / "home"), runtime=RECORDED_RUNTIME))
     assert "ro /sys/fs/cgroup" in lines[lines.index(profile.NEVER_MARK):]
+
+
+def test_the_status_page_says_when_an_agent_started_without_the_helpers_rules(tmp_path):
+    """Security Critical 2026-11-24-linux-sandbox-the-helper-never-finds-an- (Linux round L2): the
+    status said network-rules "yes" while no agent's rules had ever loaded. A start the launcher
+    marked unbound (scope.rs ``record``) turns the layer to "no" and says why, at once (not cached)."""
+    fake = tmp_path / "blackbox-sandbox"
+    fake.write_text('#!/bin/sh\necho \'{"format":1,"userns":true,"seccomp":true,"signals":"landlock-scope",'
+                    '"scope":true,"helper_rules":true}\'\n', encoding="utf-8")
+    fake.chmod(0o755)
+    runtime = tmp_path / "runtime"
+
+    def rules() -> dict[str, str]:
+        return {row["layer"]: row for row in probe.layers(str(fake), runtime=str(runtime))}["network-rules"]
+
+    assert rules()["enforced"] == "yes"
+    marks = runtime / probe.UNBOUND_FOLDER
+    marks.mkdir(parents=True)
+    (marks / "blackbox-agent-0123456789ab-1.scope").write_text("", encoding="utf-8")
+    row = rules()
+    assert row["enforced"] == "no" and "1 agent start(s)" in row["note"] and "NOT refused" in row["note"]
+
+
+#: What real clients print when the helper's per-agent rule rejects (kernel 7.0, fix wave L-W1).
+REAL_REJECTED_CONNECTS = ("ssh: connect to host 127.0.0.1 port 22: No route to host",
+                          "ssh: connect to host ::1 port 22: Permission denied")
+
+
+def test_a_connect_the_helpers_rules_reject_reads_as_local_ports_and_ssh_auth_does_not():
+    from plugins.blackbox.agent_hooks.protect import sandbox_errors
+    for output in REAL_REJECTED_CONNECTS:
+        assert [each.kind for each in sandbox_errors.refusals(output)] == [sandbox_errors.LOCAL_PORT], output
+    assert sandbox_errors.LOCAL_PORT not in [each.kind for each in sandbox_errors.refusals("admin@127.0.0.1: Permission denied (publickey).")]

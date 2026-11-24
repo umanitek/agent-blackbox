@@ -1,7 +1,7 @@
 //! The agent guard: per-agent network rules for sandboxed agents (design "Linux deep layers" §1.3
 //! and §2.4, build step 17). Linux's agent sandbox runs each agent in its own cgroup scope,
-//! `<user manager>/blackbox-agents.slice/blackbox-agent-<digest12>-<id>.scope`
-//! (`sandbox/scope.rs`); this guard keeps one nftables table of its own, `inet blackbox_agents`,
+//! `<user manager>/blackbox.slice/blackbox-agents.slice/blackbox-agent-<digest12>-<id>.scope`
+//! (`sandbox/scope.rs`, the one definition of its naming); this guard keeps one nftables table of its own, `inet blackbox_agents`,
 //! with a chain per running scope that refuses, for that agent only:
 //!
 //! * ssh back into this computer (TCP 22 to any local address) — always: the never-list;
@@ -11,9 +11,18 @@
 //!
 //! The rules come from File Shield's watch plan (`agents`, keyed by the policy digest a scope's
 //! name carries); a scope whose digest the plan does not name gets the never-list rule only.
-//! Refusals are drops in the output hook, which the agent's `connect` sees as EPERM (the
-//! sandbox's refusal wording reads it). Like the firewall table, the chains only ever drop —
-//! never accept — and the table is replaced in ONE `nft -f` transaction.
+//! Refusals are rejects in the output hook (`reject with icmpx admin-prohibited`): the agent's
+//! `connect` fails AT ONCE — "No route to host" over IPv4, "Permission denied" over IPv6 (the
+//! sandbox's refusal wording reads both). WHY not a drop: a TCP connect whose SYN the output hook
+//! drops does not fail, it retries until its own timeout (proven on kernel 7.0: 7777 hung, fix wave
+//! L-W1). Like the firewall table, the chains only ever refuse — never accept — and the table is
+//! replaced in ONE `nft -f` transaction.
+//!
+//! Finding the scopes: every folder below each user manager's cgroup is walked (bounded:
+//! [`MAX_DEPTH`], [`MAX_FOLDERS`]) for a name [`scope::digest_of_unit`] reads, so a scope is found
+//! wherever systemd nests its slice (Linux round L2: it was looked for one level too high, and no
+//! agent's rules ever loaded — security Critical 2026-11-24-linux-sandbox-the-helper-never-finds-an-).
+//! A folder named like a scope anywhere else only ever gets refusals, never fewer.
 //!
 //! After a table holding a scope is loaded, `/run/blackbox-netd/agents/<scope>.ready` is written:
 //! the launcher waits for it (at most 500 ms) before it starts the agent. WHY a 100 ms look at the
@@ -42,6 +51,12 @@ const PLAN_PATH: &str = "/api/shields/file-shield/api/watch-plan";
 /// The most scopes and rules one table holds (bounded work for any plan).
 pub const MAX_SCOPES: usize = 512;
 pub const MAX_ALLOWED_PORTS: usize = 64;
+/// How deep below a user manager's cgroup a scope is looked for, and the most folders one look reads
+/// (a person's whole systemd tree is a few dozen; the bound keeps a look microseconds-cheap).
+pub const MAX_DEPTH: usize = 8;
+pub const MAX_FOLDERS: usize = 4096;
+/// What a refused connect gets (see the module doc).
+pub const REFUSE: &str = "counter reject with icmpx admin-prohibited";
 /// Docker's TCP ports (plain and TLS).
 pub const DOCKER_PORTS: [u16; 2] = [2375, 2376];
 const SSH_PORT: u16 = 22;
@@ -94,18 +109,32 @@ fn folders(path: &Path) -> Vec<(String, PathBuf)> {
     found
 }
 
-/// Every sandboxed agent's scope under *root* (`/sys/fs/cgroup`), at most [`MAX_SCOPES`].
+/// Every sandboxed agent's scope under *root* (`/sys/fs/cgroup`), at most [`MAX_SCOPES`] (see
+/// the module doc: anywhere below each user manager, within [`MAX_DEPTH`] and [`MAX_FOLDERS`]).
 pub fn scopes(root: &Path) -> Vec<Scope> {
     let mut found = Vec::new();
+    let mut budget = MAX_FOLDERS;
     for (user_slice, user_path) in folders(&root.join("user.slice")).into_iter().filter(|(name, _)| name.starts_with("user-")) {
         for (manager, manager_path) in folders(&user_path).into_iter().filter(|(name, _)| name.starts_with("user@")) {
-            for (unit, _) in folders(&manager_path.join(scope::SLICE)) {
-                if scope::digest_of_unit(&unit).is_some() && found.len() < MAX_SCOPES {
-                    found.push(Scope { path: format!("user.slice/{user_slice}/{manager}/{}/{unit}", scope::SLICE), unit });
+            let mut pending = vec![(manager_path, format!("user.slice/{user_slice}/{manager}"), 0)];
+            while let Some((path, relative, depth)) = pending.pop() {
+                if budget == 0 || found.len() >= MAX_SCOPES {
+                    break;
+                }
+                budget -= 1;
+                for (name, child) in folders(&path) {
+                    let below = format!("{relative}/{name}");
+                    if scope::digest_of_unit(&name).is_some() {
+                        found.push(Scope { unit: name, path: below });
+                    } else if depth + 1 < MAX_DEPTH {
+                        pending.push((child, below, depth + 1));
+                    }
                 }
             }
         }
     }
+    found.sort();
+    found.truncate(MAX_SCOPES);
     found
 }
 
@@ -131,9 +160,9 @@ pub fn ruleset(scopes: &[Scope], rules: &BTreeMap<String, AgentRule>, dashboard:
     for (index, scope) in scopes.iter().enumerate() {
         let rule = scope::digest_of_unit(&scope.unit).and_then(|digest| rules.get(digest)).cloned().unwrap_or_default();
         text.push_str(&format!("\tchain agent_{index} {{\n"));
-        text.push_str(&format!("\t\tfib daddr type local tcp dport {SSH_PORT} counter drop\n"));
+        text.push_str(&format!("\t\tfib daddr type local tcp dport {SSH_PORT} {REFUSE}\n"));
         if rule.docker_tcp {
-            text.push_str(&format!("\t\tfib daddr type local tcp dport {} counter drop\n", ports(&DOCKER_PORTS)));
+            text.push_str(&format!("\t\tfib daddr type local tcp dport {} {REFUSE}\n", ports(&DOCKER_PORTS)));
         }
         if rule.local_ports {
             let mut open: Vec<u16> = rule.allow.iter().copied().filter(|port| *port != SSH_PORT).take(MAX_ALLOWED_PORTS).collect();
@@ -144,7 +173,7 @@ pub fn ruleset(scopes: &[Scope], rules: &BTreeMap<String, AgentRule>, dashboard:
             if rule.docker_tcp {
                 open.retain(|port| !DOCKER_PORTS.contains(port));
             }
-            text.push_str(&format!("\t\tfib daddr type local tcp dport != {} counter drop\n", ports(&open)));
+            text.push_str(&format!("\t\tfib daddr type local tcp dport != {} {REFUSE}\n", ports(&open)));
         }
         text.push_str("\t}\n");
     }
@@ -209,11 +238,22 @@ mod tests {
 
     const UNIT: &str = "blackbox-agent-0123456789ab-5f3c.scope";
 
+    /// The cgroup tree systemd really made (Linux round L2's VM, recorded: LES-153), plus *units*
+    /// beside the recorded scope.
+    const RECORDED: &str = include_str!("fixtures/cgroup_tree_ubuntu24.txt");
+
+    fn recorded_scope() -> String {
+        RECORDED.lines().find_map(|line| line.strip_prefix("0::/")).unwrap().to_string()
+    }
+
     fn tree(root: &Path, units: &[&str]) {
-        for unit in units {
-            fs::create_dir_all(root.join("user.slice/user-1000.slice/user@1000.service").join(scope::SLICE).join(unit)).unwrap();
+        for folder in RECORDED.lines().filter_map(|line| line.strip_prefix("/sys/fs/cgroup/")) {
+            fs::create_dir_all(root.join(folder)).unwrap();
         }
-        fs::create_dir_all(root.join("user.slice/user-1000.slice/user@1000.service/app.slice/gnome-shell.scope")).unwrap();
+        let slice = Path::new(&recorded_scope()).parent().unwrap().to_path_buf();
+        for unit in units {
+            fs::create_dir_all(root.join(&slice).join(unit)).unwrap();
+        }
     }
 
     fn scratch(name: &str) -> PathBuf {
@@ -222,13 +262,57 @@ mod tests {
         path
     }
 
+    /// Security Critical 2026-11-24-linux-sandbox-the-helper-never-finds-an-: the scope is found
+    /// where systemd REALLY put it (`blackbox.slice/blackbox-agents.slice/…`, recorded), and only
+    /// the sandbox's own names count.
     #[test]
-    fn only_the_sandboxs_own_scopes_are_found() {
+    fn the_scope_is_found_where_systemd_really_puts_it_and_only_the_sandboxs_own_names_count() {
         let root = scratch("scopes");
-        tree(&root, &[UNIT, "blackbox-agent-nodigest-1.scope", "something-else.scope"]);
-        assert_eq!(scopes(&root), vec![Scope { unit: UNIT.into(),
-            path: format!("user.slice/user-1000.slice/user@1000.service/blackbox-agents.slice/{UNIT}") }]);
+        tree(&root, &["blackbox-agent-nodigest-1.scope", "something-else.scope"]);
+        let recorded = recorded_scope();
+        assert_eq!(scopes(&root), vec![Scope { unit: recorded.rsplit('/').next().unwrap().into(), path: recorded }]);
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_scope_systemd_nests_elsewhere_is_still_found_within_the_bounds() {
+        let root = scratch("elsewhere");
+        let manager = root.join("user.slice/user-1000.slice/user@1000.service");
+        fs::create_dir_all(manager.join(format!("app.slice/{UNIT}"))).unwrap();
+        fs::create_dir_all(manager.join("a/b/c/d/e/f/g/h/blackbox-agent-ffffffffffff-1.scope")).unwrap();
+        let found = scopes(&root);
+        assert_eq!(found, vec![Scope { unit: UNIT.into(), path: format!("user.slice/user-1000.slice/user@1000.service/app.slice/{UNIT}") }],
+                   "found below the manager, and nothing beyond MAX_DEPTH");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// LES-153: a REAL scope, started the launcher's way ([`scope::systemd_run_argv`]), is found at the
+    /// path its own `/proc/<pid>/cgroup` names. Needs a person's systemd (a login session); without
+    /// one it says so.
+    #[test]
+    fn a_real_scope_started_the_launchers_way_is_found() {
+        let systemd_run = scope::SYSTEMD_RUN.iter().find(|path| Path::new(path).exists());
+        let manager = std::env::var_os("XDG_RUNTIME_DIR").is_some_and(|dir| Path::new(&dir).join("systemd/private").exists());
+        let (Some(systemd_run), true) = (systemd_run, manager) else {
+            eprintln!("skipped: no systemd user manager here");
+            return;
+        };
+        let unit = scope::unit_name("0123456789abcdef", &format!("{:x}", std::process::id()));
+        let argv = scope::systemd_run_argv(systemd_run, &unit, &["/bin/sleep".into(), "30".into()]);
+        let mut child = std::process::Command::new(&argv[0]).args(&argv[1..]).spawn().unwrap();
+        let started = Instant::now();
+        let mut own = String::new();
+        while started.elapsed() < Duration::from_secs(10) && !own.ends_with(&unit) {
+            // The scope's sleep is systemd-run's own process once the scope is made (it execs).
+            own = fs::read_to_string(format!("/proc/{}/cgroup", child.id())).unwrap_or_default().trim()
+                .strip_prefix("0::/").unwrap_or_default().to_string();
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let found = scopes(Path::new(CGROUP_ROOT));
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(own.ends_with(&unit), "the scope never started: {own}");
+        assert!(found.contains(&Scope { unit: unit.clone(), path: own.clone() }), "{own} not in {found:?}");
     }
 
     #[test]
@@ -240,13 +324,14 @@ mod tests {
         let text = ruleset(&[mine, other], &plan.by_digest(), 9700);
         assert!(text.starts_with("table inet blackbox_agents\ndelete table inet blackbox_agents\n"));
         assert!(text.contains(&format!("socket cgroupv2 level 5 \"user.slice/u/user@1/blackbox-agents.slice/{UNIT}\" jump agent_0")));
+        assert!(!text.contains("drop"), "a refusal is a reject (a dropped SYN leaves the connect hanging): {text}");
         let chain = |index: usize| text.split(&format!("chain agent_{index} {{")).nth(1).unwrap().split('}').next().unwrap().to_string();
         let mine = chain(0);
-        assert!(mine.contains("tcp dport 22 counter drop"));
-        assert!(mine.contains("tcp dport { 2375, 2376 } counter drop"));
-        assert!(mine.contains("tcp dport != { 53, 5432, 9700 } counter drop"), "listed ports, DNS and the dashboard stay open — never 22 or Docker's: {mine}");
+        assert!(mine.contains(&format!("tcp dport 22 {REFUSE}")));
+        assert!(mine.contains(&format!("tcp dport {{ 2375, 2376 }} {REFUSE}")));
+        assert!(mine.contains(&format!("tcp dport != {{ 53, 5432, 9700 }} {REFUSE}")), "listed ports, DNS and the dashboard stay open — never 22 or Docker's: {mine}");
         let other = chain(1);
-        assert!(other.contains("tcp dport 22 counter drop") && !other.contains("!="), "an unknown policy: the never-list only");
+        assert!(other.contains(&format!("tcp dport 22 {REFUSE}")) && !other.contains("!="), "an unknown policy: the never-list only");
         assert_eq!(text.matches("accept").count(), 1, "only the hook chain's policy says accept: no rule ever accepts");
     }
 
@@ -288,7 +373,7 @@ mod tests {
             return;
         };
         let check = format!("ip link set lo up; {nft} -f - || exit 3; \
-                             (echo > /dev/tcp/127.0.0.1/7777) 2>&1 | grep -qi 'not permitted' || exit 4; \
+                             (timeout 5 bash -c 'echo > /dev/tcp/127.0.0.1/7777') 2>&1 | grep -qi 'no route to host' || exit 4; \
                              (echo > /dev/tcp/127.0.0.1/5432) 2>&1 | grep -qi 'refused' || exit 5");
         let done = crate::command::output_with_input(std::process::Command::new("unshare").args(["-rn", "bash", "-c", &check]),
                                                      Some(script.as_bytes()), Duration::from_secs(30)).unwrap();

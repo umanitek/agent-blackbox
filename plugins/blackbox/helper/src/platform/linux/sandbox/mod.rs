@@ -142,8 +142,13 @@ fn run(command: Run) -> i32 {
                 libc::close(fd);
             }
         }
-        if !scope::wait_ready(&command.unit) && std::path::Path::new(scope::READY_FOLDER).is_dir() {
-            eprintln!("blackbox: the helper's network rules for this agent are not applied yet (local ports, ssh to this machine)");
+        let helper = std::path::Path::new(scope::HELPER).exists();
+        let ready = scope::wait_ready(std::path::Path::new(scope::READY_FOLDER), &command.unit, helper, scope::READY_WAIT);
+        if ready == scope::Ready::NotBound {
+            eprintln!("{}", scope::NOT_BOUND_LINE);
+        }
+        if let Some(runtime) = std::env::var_os("XDG_RUNTIME_DIR") {
+            scope::record(std::path::Path::new(&runtime), &command.unit, ready);
         }
         command.unit.clone()
     } else {

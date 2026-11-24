@@ -137,9 +137,12 @@ _DOCKER = re.compile(
     rf"[\w./-]*(?:docker|podman)\.sock\b[^\n]{{0,300}}?{_REFUSED}"
     rf"|{_REFUSED}[^\n]{{0,60}}connect to the (?:docker|podman) (?:api|daemon|socket)"
     r"|(?:docker|podman)[^\n]{0,200}server API version[^\n]{0,200}PermissionError\(1,", re.IGNORECASE)
-#: A connect to this Mac refused: ``connect to 127.0.0.1 port 5432 … Operation not permitted``,
+#: A connect to this computer refused: ``connect to 127.0.0.1 port 5432 … Operation not permitted``,
 #: curl's ``Immediate connect fail for 127.0.0.1: Operation not permitted``, ``dial tcp [::1]:3000: … operation not permitted``.
-_LOCAL_PORT = re.compile(r"(?:localhost|127\.0\.0\.1|\[?::1\]?)[^\n]{0,120}operation not permitted", re.IGNORECASE)
+#: On Linux the helper's per-agent rules REJECT (a dropped SYN would hang the connect): IPv4 says
+#: ``ssh: connect to host 127.0.0.1 port 22: No route to host``, IPv6 ``… [::1] … Permission denied``.
+_LOCAL_PORT = re.compile(r"(?:localhost|127\.0\.0\.1|\[?::1\]?)[^\n]{0,120}(?:operation not permitted|no route to host"
+                         r"|permission denied(?! \())", re.IGNORECASE)   # not ssh's own "Permission denied (publickey)"
 #: Linux's words for the sandbox's refusals (its mounts answer EROFS / EBUSY / EACCES, no new
 #: privileges stops sudo): ``touch: cannot touch '/home/me/.bashrc': Read-only file system``,
 #: ``mv: cannot move 'a' to 'b': Device or resource busy``, ``cat: /home/me/Taxes/x: Permission
