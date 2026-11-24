@@ -87,9 +87,11 @@ def proved(base: Path, request_id: str, nonce: str, uid: int | None = None) -> b
     """True when root wrote *nonce* as *request_id*'s proof in *base*/<*uid*> (this process's uid
     when not given): the file root's, plain, one link, small; its folder, *base* and *base*'s
     parent root's and writable by nobody else (see the module doc)."""
-    if not REQUEST_ID.fullmatch(str(request_id)) or not nonce:
+    # Windows has no uid (and no sudo): no proof can exist there.
+    person = uid if uid is not None else (os.getuid() if hasattr(os, "getuid") else None)
+    if not REQUEST_ID.fullmatch(str(request_id)) or not nonce or person is None:
         return False
-    folder = base / str(os.getuid() if uid is None else uid)
+    folder = base / str(person)
     try:
         if not all(_root_folder(place) for place in (folder, base, base.parent)):
             return False
