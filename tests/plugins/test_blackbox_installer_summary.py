@@ -48,17 +48,39 @@ SUMMARY = ("ok", "err", "detect_os", "protection_summary")
     ("unavailable", False, "no published helper", "needs the helper"),
     ("declined", False, "not installed", "needs the helper"),
 ])
-def test_on_linux_the_summary_reads_the_helper_from_systemd_and_the_sandbox_is_not_available(state, active, helper, network):
+def test_on_linux_the_summary_reads_the_helper_from_systemd(state, active, helper, network, tmp_path):
     systemctl = f"systemctl() {{ return {0 if active else 3}; }}"
-    done = _run(f"detect_os; BLACKBOX_SYSTEM_PROTECTION_STATE={state}; protection_summary", (*SUMMARY, "linux_protection_summary"),
-                _uname("Linux") + "\ncheck_linux_distro() { :; }\n" + systemctl)
+    done = _run(f"detect_os; BLACKBOX_SYSTEM_PROTECTION_STATE={state}; protection_summary",
+                (*SUMMARY, "linux_protection_summary", "linux_sandbox_summary"),
+                _uname("Linux") + "\ncheck_linux_distro() { :; }\n" + systemctl + f"\nBLACKBOX_SANDBOX_LAUNCHER={tmp_path}/none")
     assert done.returncode == 0, done.stderr
     lines = done.stdout.splitlines()
     assert "Protection on this machine (Linux):" in done.stdout
     assert helper in next(line for line in lines if "Root system-protection helper" in line)
     assert network in next(line for line in lines if "Network Shield enforcement" in line)
-    assert next(line for line in lines if "Kernel sandbox for agents" in line).rstrip().endswith(NOT_YET)
-    assert "File Shield" not in done.stdout
+    assert "comes with the system protection helper" in next(line for line in lines if "Kernel sandbox for agents" in line)
+
+
+#: The launcher's probe on Ubuntu 24.04 / kernel 7.0 (Linux round L2), before and after the
+#: helper's AppArmor rule — real output, trimmed to the fields the line reads.
+REAL_PROBES = {
+    "on": '{"format":1,"kernel":"7.0.0-43-generic","userns":true,"why":"","apparmor_userns_restricted":true,"landlock_abi":8}',
+    "not available here: Ubuntu's AppArmor restricts user namespaces": (
+        '{"format":1,"kernel":"7.0.0-43-generic","userns":false,"why":"Ubuntu\'s AppArmor restricts user namespaces here and '
+        'Blackbox\'s AppArmor rule for its sandbox is not installed (it comes with the system protection helper)"}'),
+}
+
+
+@pytest.mark.parametrize("said, probe", list(REAL_PROBES.items()))
+def test_on_linux_the_sandbox_line_comes_from_the_installed_launchers_probe(said, probe, tmp_path):
+    """KI-671 (Linux round L2): right after the launcher was installed the summary still said
+    "Kernel sandbox for agents: not available on this OS yet"."""
+    launcher = tmp_path / "blackbox-sandbox"
+    launcher.write_text(f"#!/bin/sh\ncat <<'JSON'\n{probe}\nJSON\n", encoding="utf-8")
+    launcher.chmod(0o755)
+    done = _run("linux_sandbox_summary", ("linux_sandbox_summary",), f"BLACKBOX_SANDBOX_LAUNCHER={launcher}")
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.startswith(said) and NOT_YET not in done.stdout, done.stdout
 
 
 @pytest.mark.parametrize("state, helper, network", [

@@ -3217,7 +3217,8 @@ protection_summary() {
 }
 
 # Linux's lines, from what the machine says NOW (never from what this run hoped): the helper is
-# running when systemd reports its unit active; the agent sandbox is not built for Linux yet.
+# running when systemd reports its unit active; the agent sandbox is available when its launcher
+# (installed with the helper) proves namespaces work here (`blackbox-sandbox probe`).
 linux_protection_summary() {
     local helper network
     if systemctl is-active --quiet blackbox-netd.service 2>/dev/null; then
@@ -3233,8 +3234,27 @@ linux_protection_summary() {
         network="needs the helper above"
     fi
     echo "    Root system-protection helper:           $helper"
-    echo "    Kernel sandbox for agents:               $BLACKBOX_NOT_YET"
+    echo "    Kernel sandbox for agents:               $(linux_sandbox_summary)"
     echo "    Network Shield enforcement (DNS, firewall): $network"
+}
+
+BLACKBOX_SANDBOX_LAUNCHER="${BLACKBOX_SANDBOX_LAUNCHER:-/usr/local/libexec/blackbox/blackbox-sandbox}"
+
+# The agent sandbox's line on Linux (KI-671: it said "not available on this OS yet" right after the
+# launcher was installed).
+linux_sandbox_summary() {
+    local probe why
+    if [ ! -x "$BLACKBOX_SANDBOX_LAUNCHER" ]; then
+        echo "comes with the system protection helper (not installed)"
+        return 0
+    fi
+    probe="$("$BLACKBOX_SANDBOX_LAUNCHER" probe 2>/dev/null)"
+    case "$probe" in
+        *'"userns":true'*) echo "on — your agents start inside it (turn it off per agent in File Shield)" ;;
+        *)
+            why="$(printf '%s' "$probe" | sed -n 's/.*"why":"\([^"]*\)".*/\1/p')"
+            echo "not available here: ${why:-its launcher could not check this machine} (the hooks still protect your files)" ;;
+    esac
 }
 
 # ── Guided next steps (short — everything above already ran) ─────────────────
@@ -5165,6 +5185,7 @@ offer_system_protection() {
     heading "System protection (optional)"
     if [ -f "$BLACKBOX_HELPER_DAEMON" ]; then
         upgrade_system_protection
+        sandbox_default_after_helper
         return 0
     fi
     if ! want_system_protection; then
@@ -5185,7 +5206,24 @@ offer_system_protection() {
         warn "Try again later from the dashboard's Network Shield, or rerun with --system-protection."
         BLACKBOX_SYSTEM_PROTECTION_STATE="failed"
     fi
+    sandbox_default_after_helper
     return 0
+}
+
+# KI-671 (Linux round L2): on Linux the agent sandbox's launcher comes WITH the system protection
+# helper, but the attach step — which applies "every agent starts inside the sandbox" — runs before
+# this one, found no launcher and picked nothing, so a fresh install left every agent hooks-only.
+# Once the helper is in, `blackbox attach` applies the default again (it only ever adds agents the
+# person has not taken out). macOS's sandbox needs no helper: nothing to do there.
+sandbox_default_after_helper() {
+    [ "$OS" = linux ] || return 0
+    case "$BLACKBOX_SYSTEM_PROTECTION_STATE" in installed|kept) ;; *) return 0 ;; esac
+    step "Starting your agents inside Blackbox's sandbox, now that its launcher is installed ..."
+    if "$HERMES_BIN" blackbox attach "$HERMES_HOME"; then
+        ok "Your agents start inside Blackbox's sandbox (turn it off per agent in the dashboard's File Shield)"
+    else
+        warn "Could not switch the sandbox on for your agents (non-fatal). Run: blackbox attach"
+    fi
 }
 
 # True when there is a helper to install: a local one named by BLACKBOX_HELPER_PATH, or a release

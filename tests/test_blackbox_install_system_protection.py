@@ -26,7 +26,7 @@ FUNCTIONS = (
     "helper_manifest_file", "helper_asset_name", "helper_manifest_version", "helper_manifest_sha256",
     "sha256_of", "want_system_protection", "fetch_helper_binary", "sudo_with_tty",
     "install_system_protection", "offer_system_protection", "helper_installed_sha", "helper_expected_sha",
-    "upgrade_system_protection", "forget_sudo", "helper_release_exists",
+    "upgrade_system_protection", "forget_sudo", "helper_release_exists", "sandbox_default_after_helper",
 )
 
 
@@ -51,6 +51,9 @@ def _run(tmp_path: Path, *, choice: str, helper: bytes | None = None, sha: str =
     sudo = bin_dir / "sudo"
     sudo.write_text(f'#!/bin/sh\nprintf "%s\\n" "$*" >> "{calls}"\nexit {1 if root_fails else 0}\n', encoding="utf-8")
     sudo.chmod(0o755)
+    hermes = bin_dir / "hermes"
+    hermes.write_text(f'#!/bin/sh\nprintf "%s\\n" "$*" >> "{tmp_path}/hermes-calls"\n', encoding="utf-8")
+    hermes.chmod(0o755)
     for tool in ("awk", "cat", "chmod", "cp", "grep", "id", "mktemp", "rm", "shasum", "tr", "uname"):
         for folder in ("/bin", "/usr/bin"):
             if Path(folder, tool).exists():
@@ -78,7 +81,7 @@ def _run(tmp_path: Path, *, choice: str, helper: bytes | None = None, sha: str =
         f'BLACKBOX_HELPER_PATH="{helper_path}"', f'BLACKBOX_HELPER_SHA256="{sha}"',
         f'BLACKBOX_HELPER_DAEMON="{daemon}"', f'BLACKBOX_HELPER_RECEIPT="{receipt}"',
         f'BLACKBOX_HELPER_KEY_DIR="{tmp_path}/keys"',
-        f'REPO_DIR="{repo}"', f'HERMES_HOME="{tmp_path}/hermes"', f'TMPDIR="{tmp_path}"',
+        f'REPO_DIR="{repo}"', f'HERMES_HOME="{tmp_path}/hermes"', f'TMPDIR="{tmp_path}"', f'HERMES_BIN="{hermes}"',
         *(_function(name) for name in FUNCTIONS),
         'offer_system_protection', 'printf "STATE=%s\\n" "$BLACKBOX_SYSTEM_PROTECTION_STATE"',
     ])
@@ -196,3 +199,27 @@ def test_a_first_install_that_fails_is_cleaned_up(tmp_path):
 def test_saying_no_leaves_an_installed_helper_as_it_is(tmp_path):
     out, ran = _run(tmp_path, choice="no", helper=b"x", sha=hashlib.sha256(b"x").hexdigest(), installed_sha="a" * 64)
     assert ran == [] and "STATE=installed" in out, out
+
+
+def _hermes_calls(tmp_path: Path) -> list[str]:
+    calls = tmp_path / "hermes-calls"
+    return calls.read_text(encoding="utf-8").splitlines() if calls.exists() else []
+
+
+def test_on_linux_a_helper_installed_now_puts_the_agents_in_the_sandbox_it_brought(tmp_path):
+    """KI-671 (Linux round L2): the attach step's "every agent in the sandbox" ran before the helper
+    (and with it the sandbox's launcher) was installed, so a fresh Linux install left every agent
+    hooks-only until the person ran `blackbox attach`. Once the helper is in, it runs again."""
+    binary = b"the helper"
+    out, _ran = _run(tmp_path, choice="yes", os_name="linux", helper=binary, sha=hashlib.sha256(binary).hexdigest())
+    assert "STATE=installed" in out, out
+    assert _hermes_calls(tmp_path) == [f"blackbox attach {tmp_path}/hermes"], out
+
+
+def test_the_sandbox_default_is_not_run_again_without_a_new_linux_helper(tmp_path):
+    binary = b"the helper"
+    for os_name, choice in (("macos", "yes"), ("linux", "no")):
+        folder = tmp_path / f"{os_name}-{choice}"
+        folder.mkdir()
+        out, _ran = _run(folder, choice=choice, os_name=os_name, helper=binary, sha=hashlib.sha256(binary).hexdigest())
+        assert _hermes_calls(folder) == [], (os_name, choice, out)
