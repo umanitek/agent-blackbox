@@ -58,9 +58,15 @@ if ($env:BLACKBOX_INSTALL_DIR) {
 } else {
     $DefaultRepoDir = Join-Path ([string](Get-Location)) "agent-blackbox"
 }
+# The Agent Blackbox checkout this script runs from (scripts\blackbox-install.ps1 in it), or $null:
+# the ONE place the script's own path is read. Run as `iwr … | iex` there is no script path
+# ($PSCommandPath is empty) and Split-Path on it is a terminating error under
+# $ErrorActionPreference = "Stop" (KI-655), so every function asks this variable instead.
+$InstallerCheckoutDir = $null
 if ($PSCommandPath) {
     $candidateRepoDir = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
     if ((Test-Path "$candidateRepoDir\pyproject.toml") -and (Test-Path "$candidateRepoDir\plugins\blackbox")) {
+        $InstallerCheckoutDir = $candidateRepoDir
         $DefaultRepoDir = $candidateRepoDir
     }
 }
@@ -1202,14 +1208,10 @@ function Set-CheckoutLayout([string]$Repo, [string]$Rev) {
 }
 
 function Resolve-Repo {
-    $scriptDir = Split-Path -Parent $PSCommandPath
-    if ($scriptDir) {
-        $d = Split-Path -Parent $scriptDir
-        if ((Test-Path "$d\pyproject.toml") -and (Test-Path "$d\plugins\blackbox")) {
-            $script:RepoDir = $d
-            Write-Step "Using existing checkout at $RepoDir"
-            return
-        }
+    if ($InstallerCheckoutDir) {
+        $script:RepoDir = $InstallerCheckoutDir
+        Write-Step "Using existing checkout at $RepoDir"
+        return
     }
     if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
         Write-Err2 "git is required to download Blackbox. Install git and re-run."
@@ -2513,10 +2515,7 @@ function Register-BlackboxStartupTasks {
 # setup`; no second Hermes is installed. Our own Agent Blackbox checkouts keep the standalone path.
 # BLACKBOX_USE_EXISTING_HERMES=0 keeps the standalone install.
 function Test-RunsFromBlackboxCheckout {
-    $scriptDir = Split-Path -Parent $PSCommandPath
-    if (-not $scriptDir) { return $false }
-    $d = Split-Path -Parent $scriptDir
-    return ((Test-Path "$d\pyproject.toml") -and (Test-Path "$d\plugins\blackbox"))
+    return [bool]$InstallerCheckoutDir
 }
 
 function Find-ExistingForeignHermes {
