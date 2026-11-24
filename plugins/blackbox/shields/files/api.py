@@ -160,7 +160,11 @@ def watch_plan(_context: ShieldContext, params: Mapping[str, str]) -> Any:
     # The person's items first (the helper names at most 64 paths in its log filter), then the
     # files the sandbox keeps closed for Blackbox, whose refusals are self-protection (KI-581).
     paths = dict.fromkeys(mode_module.watch_paths(current) + sandbox.self_protected_files(current))
-    return helper_link.signed({"watch": current.enabled, "paths": list(paths)}, params)
+    plan: dict[str, Any] = {"watch": current.enabled, "paths": list(paths)}
+    agents = sandbox.network_rules()   # Linux: each sandboxed agent's network rules, keyed by its policy's digest
+    if agents:
+        plan["agents"] = agents
+    return helper_link.signed(plan, params)
 
 
 def file_report(context: ShieldContext, body: Mapping[str, Any]) -> dict[str, Any]:

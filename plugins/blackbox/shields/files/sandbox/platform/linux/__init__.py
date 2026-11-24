@@ -34,6 +34,7 @@ from ......kernel.persistence_places import startup_places
 from ...places import Places
 from . import placeholders
 from .apps import APPS, ELECTRON_FLAGS, open_app
+from .network import NetworkRules, network_rules
 from .launchers import ONCE_MINUTES, ONCE_SUFFIX, PROJECT_INDEX, RUN_INFIX, command_shim, launcher_script, shell_shim
 from .opener import find_app, is_driver, open_url, open_with
 from .probe import layers, unavailable

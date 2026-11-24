@@ -56,7 +56,7 @@ from .status import HOOKS_ONLY, NOT_INSTALLED_NOTE, SANDBOXED, SHELLS_ONLY, offe
 __all__ = ["CLI_AGENTS", "HERMES_CODE_LAUNCHER", "HERMES_LAUNCHER_ENV", "HERMES_SHELLS", "HOOKS_ONLY",
            "NOT_INSTALLED_NOTE", "SANDBOXED", "SHELLS_ONLY", "HermesCover", "Places", "act_on", "brokered",
            "canary_path", "chosen", "enter_hermes_process", "enter_hermes_session", "hermes_shell_dir", "home",
-           "launcher_dir", "offer", "on_refusal", "open_app", "policy", "profile_path", "protection", "proven",
+           "launcher_dir", "network_rules", "offer", "on_refusal", "open_app", "policy", "profile_path", "protection", "proven",
            "restorations", "self_protected_files", "status", "sync"]
 
 CANARY_TEXT = "Blackbox agent sandbox canary — a sandboxed agent can not read this file.\n"
@@ -178,6 +178,12 @@ def enter_hermes_session() -> HermesCover:
     except Exception:   # the agent always runs; the reason is logged
         logger.warning("blackbox: could not put the Hermes agent's shells in the sandbox", exc_info=True)
         return HermesCover(note="Blackbox could not set up the sandbox for this session (see the log)")
+
+
+def network_rules() -> list[dict[str, Any]]:
+    """The per-agent network rules the root helper enforces for sandboxed agents (Linux), for the
+    watch plan (``profiles.network_rules``)."""
+    return profiles.network_rules()
 
 
 def act_on(request: permissions.PermissionRequest) -> None:

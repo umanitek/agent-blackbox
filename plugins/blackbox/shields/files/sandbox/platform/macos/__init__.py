@@ -65,6 +65,11 @@ def unavailable() -> Optional[str]:
     return None if os.access(SANDBOX_EXEC, os.X_OK) else "This Mac has no sandbox-exec, so agents can not be sandboxed."
 
 
+def network_rules(_text: str) -> None:
+    """No per-agent network rules for the helper here (Seatbelt refuses them itself)."""
+    return
+
+
 def layers() -> list[dict[str, str]]:
     """Seatbelt is one layer: the status page shows none apart."""
     return []
@@ -78,6 +83,6 @@ def prepare(_places: object, _home: str, _state: Path) -> list[str]:
 __all__ = ["APPS", "APP_DRIVERS", "BREW_PATHS", "BREW_READ_ONLY", "ELECTRON_FLAGS", "LOCAL_SSH", "MANAGER_FOLDERS", "ONCE_MINUTES", "ONCE_SUFFIX",
            "PROFILE_SUFFIX", "PROJECT_INDEX", "PS", "RUN_INFIX", "SANDBOX_EXEC", "SETUID_NOTE", "SETUID_TOOLS",
            "TOOLS_FOLDER", "ProcessFacts", "brew_shim", "broker_shims", "command_shim", "describe", "find_app", "is_driver",
-           "is_system", "launcher_script", "layers", "manager_shims", "open_app", "open_shim", "open_url", "open_with",
+           "is_system", "launcher_script", "layers", "manager_shims", "network_rules", "open_app", "open_shim", "open_url", "open_with",
            "osascript_shim", "prepare", "refresh_tools", "render", "run_script", "shell_shim", "spawn_brew", "startup_places",
            "stop_group", "terminate", "unavailable"]

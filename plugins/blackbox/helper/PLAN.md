@@ -71,6 +71,14 @@ with the operating system's file events (FSEvents on macOS, `platform/macos/file
 starts again when the set changes; `"watch": false` (or an old plugin's empty answer) stops it; an
 unreachable plugin keeps the last plan.
 
+Linux adds `"agents": [{"digest": "<12 hex>", "local_ports": bool, "allow": [port, …], "docker_tcp": bool}, …]`
+(only when an agent is sandboxed there): each sandboxed agent's network rules, keyed by its
+policy's digest — the start of its cgroup scope's name (`blackbox-agent-<digest>-<id>.scope`).
+The helper's agent guard (`platform/linux/agent_guard.rs`) keeps one nftables table,
+`inet blackbox_agents`, with a chain per running scope: ssh to this computer refused always, Docker's
+TCP ports while `docker_tcp`, every local TCP port but `allow` and DNS while `local_ports`; then it
+writes `/run/blackbox-netd/agents/<scope>.ready`, which the launcher waits for (at most 500 ms).
+
 Report — `POST /api/shields/file-shield/api/file-report`, signed like every report, within about a
 second of a change (changes are gathered for 300 ms): `{"at": <unix s>, "events": [{"path": "/abs",
 "kind": "created|removed|renamed|modified|changed|denied", "ts": <unix s>, "program": "<name>"}, …]}`,

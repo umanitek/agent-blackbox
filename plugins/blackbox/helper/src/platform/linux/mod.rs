@@ -6,6 +6,7 @@
 //! sessions, File Shield's real-time watch, the agent sandbox launcher (`sandbox`).
 //! Compiled only for Linux (`super`'s `#[cfg(target_os)]`).
 
+pub mod agent_guard;
 pub mod enforce;
 mod enforcer;
 pub mod install;

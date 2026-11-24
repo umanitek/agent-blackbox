@@ -29,6 +29,11 @@ def unavailable() -> Optional[str]:
     return "Agent sandboxing works on macOS for now. Blackbox's hooks still protect your files here."
 
 
+def network_rules(_text: str) -> None:
+    """No per-agent network rules for the helper here (Seatbelt refuses them itself)."""
+    return
+
+
 def layers() -> list[dict[str, str]]:
     return []
 

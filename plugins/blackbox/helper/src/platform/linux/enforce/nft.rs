@@ -161,6 +161,11 @@ fn nft(args: &[&str], input: Option<&str>) -> Result<String, String> {
     }
 }
 
+/// Loads one `nft -f` script (another of Blackbox's own tables: the agent guard's).
+pub fn load(script: &str) -> Result<(), String> {
+    nft(&["-f", "-"], Some(script)).map(|_| ())
+}
+
 /// Makes the table enforce *filter*; answers [`TOKEN`] while it is loaded, None once it is removed.
 pub fn apply(filter: &Filter) -> Result<Option<String>, String> {
     if filter.is_off() {

@@ -33,5 +33,9 @@ impl Observer for LinuxObserver {
     fn run_system_watch(&self) {
         super::system_guard::run();
     }
-    fn run_file_watch(&self) {}
+    /// File Shield's real-time watch on Linux (fanotify, build step 10) is not in yet; the watch
+    /// plan's other reader, the agent guard (per-agent network rules for sandboxed agents), runs here.
+    fn run_file_watch(&self) {
+        super::agent_guard::run()
+    }
 }

@@ -28,7 +28,7 @@ from pathlib import Path
 
 from ....kernel.bounded_files import read_small_text
 from . import platform
-from .layout import agent_profile, profiles_dir, write_if_changed
+from .layout import agent_profile, profile_path, profiles_dir, write_if_changed
 from .permissions import Allowances, Mode, PermissionRequest, Rule, Scope, Settings, allowances
 from .places import Places
 
@@ -146,6 +146,24 @@ def sync(places: Places, agents: tuple[str, ...], settings: Settings) -> None:
             entry.unlink()
 
 
+#: The most profiles whose network rules one watch plan carries.
+MAX_NETWORK_RULES = 256
+
+
+def network_rules() -> list[dict[str, object]]:
+    """Every rendered profile's per-agent network rules for the root helper (the watch plan's
+    ``agents``; Linux only — ``platform.network_rules`` answers None where the sandbox refuses
+    them itself), one per digest, at most :data:`MAX_NETWORK_RULES`."""
+    folder = profiles_dir()
+    paths = [profile_path(), *(sorted(folder.rglob("*" + platform.PROFILE_SUFFIX)) if folder.is_dir() else [])]
+    found: dict[str, dict[str, object]] = {}
+    for path in paths[:MAX_NETWORK_RULES]:
+        rules = platform.network_rules(read_small_text(str(path), MAX_PROFILE_BYTES) or "")
+        if rules is not None:
+            found.setdefault(rules.digest, rules.plan())
+    return list(found.values())
+
+
 def clear() -> None:
     """Removes every agent's own profile (no agent is sandboxed)."""
     sync(Places((), (), (), (), (), ""), (), Settings())
@@ -157,6 +175,7 @@ __all__ = [
     "clear",
     "digest",
     "digest_of",
+    "network_rules",
     "project_file",
     "projects_dir",
     "projects_for",

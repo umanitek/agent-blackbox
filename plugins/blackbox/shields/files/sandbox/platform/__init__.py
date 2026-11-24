@@ -19,21 +19,21 @@ import sys
 if sys.platform == "darwin":
     from .macos import (APPS, BREW_PATHS, MANAGER_FOLDERS, ONCE_MINUTES, ProcessFacts, describe, is_system, terminate, ONCE_SUFFIX, PROFILE_SUFFIX,
             PROJECT_INDEX, RUN_INFIX, SETUID_NOTE, TOOLS_FOLDER, brew_shim, broker_shims, command_shim, find_app, is_driver,
-            launcher_script, layers, manager_shims, open_app, open_shim, open_url, open_with, osascript_shim, prepare,
+            launcher_script, layers, manager_shims, network_rules, open_app, open_shim, open_url, open_with, osascript_shim, prepare,
             refresh_tools, render, run_script, shell_shim, spawn_brew, startup_places, stop_group, unavailable)
 elif sys.platform.startswith("linux"):
     from .linux import (APPS, BREW_PATHS, MANAGER_FOLDERS, ONCE_MINUTES, ProcessFacts, describe, is_system, terminate, ONCE_SUFFIX, PROFILE_SUFFIX,
             PROJECT_INDEX, RUN_INFIX, SETUID_NOTE, TOOLS_FOLDER, brew_shim, broker_shims, command_shim, find_app, is_driver,
-            launcher_script, layers, manager_shims, open_app, open_shim, open_url, open_with, osascript_shim, prepare,
+            launcher_script, layers, manager_shims, network_rules, open_app, open_shim, open_url, open_with, osascript_shim, prepare,
             refresh_tools, render, run_script, shell_shim, spawn_brew, startup_places, stop_group, unavailable)
 else:
     from .unsupported import (APPS, BREW_PATHS, MANAGER_FOLDERS, ONCE_MINUTES, ProcessFacts, describe, is_system, terminate, ONCE_SUFFIX, PROFILE_SUFFIX,
             PROJECT_INDEX, RUN_INFIX, SETUID_NOTE, TOOLS_FOLDER, brew_shim, broker_shims, command_shim, find_app, is_driver,
-            launcher_script, layers, manager_shims, open_app, open_shim, open_url, open_with, osascript_shim, prepare,
+            launcher_script, layers, manager_shims, network_rules, open_app, open_shim, open_url, open_with, osascript_shim, prepare,
             refresh_tools, render, run_script, shell_shim, spawn_brew, startup_places, stop_group, unavailable)
 
 __all__ = ["APPS", "BREW_PATHS", "MANAGER_FOLDERS", "ONCE_MINUTES", "ONCE_SUFFIX", "PROFILE_SUFFIX", "PROJECT_INDEX", "RUN_INFIX", "SETUID_NOTE",
            "TOOLS_FOLDER", "ProcessFacts", "brew_shim", "broker_shims", "command_shim", "describe", "find_app", "is_driver",
-           "is_system", "launcher_script", "layers", "manager_shims", "open_app", "open_shim", "open_url", "open_with",
+           "is_system", "launcher_script", "layers", "manager_shims", "network_rules", "open_app", "open_shim", "open_url", "open_with",
            "prepare", "refresh_tools", "render", "shell_shim", "spawn_brew", "startup_places", "stop_group", "terminate",
            "unavailable"]
