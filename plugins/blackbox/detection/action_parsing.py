@@ -190,6 +190,7 @@ _SHELL_INSTALL_PATTERNS = (
     re.compile(r"\b(?:python(?:3)?\s+-m\s+)?pip3?\s+install\b", re.IGNORECASE),
     re.compile(r"\buv\s+pip\s+install\b", re.IGNORECASE),
     re.compile(r"\buv\s+add\b", re.IGNORECASE),
+    re.compile(r"\buv\s+tool\s+(?:install|run)\b", re.IGNORECASE),   # KI-663: `uv tool install six==1.17.0`
     re.compile(r"\buvx\b", re.IGNORECASE),
     re.compile(r"\bnpm\s+(?:install|i|add)\b", re.IGNORECASE),
     re.compile(r"\bpnpm\s+add\b", re.IGNORECASE),
@@ -248,6 +249,7 @@ _MANAGER_SPECS = {
     ("pip3", "install"): ("pypi", 2),
     ("uv", "pip"): ("pypi", 3),  # `uv pip install <pkg>`
     ("uv", "add"): ("pypi", 2),
+    ("uv", "tool"): ("pypi", 3),  # `uv tool install|run <pkg>` (KI-663)
     ("uvx",): ("pypi", 1),
     ("npm", None): ("npm", 2),  # npm install|i|add
     ("pnpm", "add"): ("npm", 2),
@@ -288,6 +290,11 @@ def parse_downloads(command: str) -> list[str]:
     return list(dict.fromkeys(re.findall(r"https?://[^\s;'\"|&>]+", command)))
 
 
+def _third(tokens: list[str], i: int) -> str:
+    """The word two after *i* (``uv tool install`` → ``install``), lower case, or ""."""
+    return tokens[i + 2].lower() if i + 2 < len(tokens) else ""
+
+
 def parse_dependency_installs(command: str) -> list[dict[str, str]]:
     """Parse install commands into ``[{ecosystem, name, version}, ...]``.
 
@@ -308,7 +315,7 @@ def parse_dependency_installs(command: str) -> list[dict[str, str]]:
         if (tok, "pip") in _MANAGER_SPECS and nxt == "pip":
             ecosystem, skip = _MANAGER_SPECS[(tok, "pip")]
             start = i + skip
-        elif (tok, nxt) in _MANAGER_SPECS:
+        elif (tok, nxt) in _MANAGER_SPECS and (nxt != "tool" or _third(tokens, i) in ("install", "run")):
             ecosystem, skip = _MANAGER_SPECS[(tok, nxt)]
             start = i + skip
         elif (tok,) in _MANAGER_SPECS:
@@ -333,7 +340,7 @@ def parse_dependency_installs(command: str) -> list[dict[str, str]]:
                 if key not in seen:
                     seen.add(key)
                     out.append({"ecosystem": ecosystem, **parsed})
-                if tok in _RUNS_ITS_FIRST_WORD or nxt in ("dlx", "run"):
+                if tok in _RUNS_ITS_FIRST_WORD or nxt in ("dlx", "run") or (nxt == "tool" and _third(tokens, i) == "run"):
                     break   # `npx pkg arg…`: only the first word is a package, the rest are its arguments
             j += 1
         i = j
