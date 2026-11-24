@@ -8,6 +8,12 @@ name: Blackbox CI
 # One Linux runner: the Blackbox suite (tests/**/test_blackbox_*.py — the catalog
 # admission test inside it runs ``hermes plugins validate``) and the blocking
 # lints that ``scripts/check`` runs for the lint lane, judged against the base.
+#
+# And the root helper's Rust crate (plugins/blackbox/helper) on Linux x86_64 and
+# arm64 — only when the crate or this file changed: ``cargo test --locked`` (its
+# Linux platform code and fixture tests, and the nftables tests inside an
+# unprivileged user + network namespace), then a release build of the musl
+# targets the Linux release ships (built only, never uploaded).
 
 on:
   workflow_call:
@@ -70,3 +76,65 @@ jobs:
 
       - name: Check the checkout is clean
         uses: ./.github/actions/check-clean-worktree
+
+  helper:
+    name: Root helper (cargo, ${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            musl: x86_64-unknown-linux-musl
+          - runner: ubuntu-24.04-arm
+            musl: aarch64-unknown-linux-musl
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: plugins/blackbox/helper
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
+        with:
+          ref: ${{ inputs.commit }}
+          fetch-depth: 2 # the merge commit and its first parent (the base branch tip)
+
+      - name: Did the helper change?
+        id: changed
+        working-directory: .
+        # A pull request that leaves the crate alone spends no Rust minutes.
+        run: |
+          if git diff --quiet HEAD^1 HEAD -- plugins/blackbox/helper .github/workflows/blackbox-ci.yml 2>/dev/null; then
+            echo "helper=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "helper=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Rust toolchain, nftables, musl and an unprivileged network namespace
+        if: steps.changed.outputs.helper == 'true'
+        # Ubuntu 24.04 restricts unprivileged user namespaces through AppArmor;
+        # the nftables tests need one (``unshare -rn``), so the runner lifts it.
+        run: |
+          set -euo pipefail
+          if ! command -v cargo >/dev/null; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+            export PATH="$HOME/.cargo/bin:$PATH"
+          fi
+          rustup target add "${{ matrix.musl }}"
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y nftables musl-tools
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          unshare -rn true
+
+      - name: cargo test
+        if: steps.changed.outputs.helper == 'true'
+        env:
+          # The nftables tests must run here, not skip (they skip on a machine
+          # without an unprivileged network namespace).
+          BLACKBOX_REQUIRE_NETNS: '1'
+        run: cargo test --locked
+
+      - name: Release build of the musl target (not uploaded)
+        if: steps.changed.outputs.helper == 'true'
+        run: cargo build --release --locked --target "${{ matrix.musl }}"
