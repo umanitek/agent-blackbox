@@ -25,6 +25,7 @@ Usage::
 
 from __future__ import annotations
 
+import json
 import shlex
 import shutil
 import sys
@@ -34,10 +35,12 @@ from pathlib import Path
 from typing import Any, Optional
 
 from ..kernel import constants
+from ..kernel.bounded_files import atomic_write
 from ..kernel.config import load_blackbox_config
 from . import owners, process_facts, profiles, prompt_text, tracking, versions
 from .protect import config_edit, own_files
 from .protect import recorder
+from .protect.judge_here import JUDGE_HERE_FILE
 from .protect.sandbox_errors import RefusalSeen, on_sandbox_refusal
 from .protect.events import answer_event, note_error, read_state, record_event, write_state
 from ..kernel.agent_hosts import BY_ID, HOSTS, Host
@@ -78,7 +81,7 @@ def _home() -> Path:
 
 
 #: The runner and the modules it imports, copied together.
-RUNNER_FILES = ("runner.py", "answers.py", "identity.py", "tool_shapes.py")
+RUNNER_FILES = ("runner.py", "answers.py", "identity.py", "judge_here.py", "tool_shapes.py")
 
 
 def _runner() -> Path:
@@ -91,7 +94,18 @@ def _runner() -> Path:
         if not target.exists() or target.read_text(encoding="utf-8-sig") != text:
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(source, target)
+    _write_judge_here()
     return constants.blackbox_home() / "agent-hooks" / RUNNER_FILES[0]
+
+
+def _write_judge_here() -> None:
+    """Tell the runner where this plugin and its homes are, so it can judge a call itself while
+    the dashboard does not answer (``protect.runner.judge_here``)."""
+    target = constants.blackbox_home() / "agent-hooks" / JUDGE_HERE_FILE
+    text = json.dumps({"plugin": str(Path(__file__).resolve().parent.parent), "hermes_home": str(constants.hermes_root()),
+                       "blackbox_home": str(constants.blackbox_home())}, indent=1) + "\n"
+    if not target.exists() or target.read_text(encoding="utf-8-sig") != text:
+        atomic_write(target, text)
 
 
 #: The launcher every hook names instead of a Python path (:func:`_python`).

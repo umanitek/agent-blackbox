@@ -8,8 +8,12 @@ have been put in — the caller does that):
   blackbox`` (Hermes or OpenClaw, any way the program is named), ``config set|unset`` on the
   plugin lists, ``blackbox detach|uninstall|settings|rules unblock``, ``attach --no-auto``,
   uninstalling the host.
-* :func:`stops_service` — its launchd jobs / systemd units, a kill aimed at Blackbox, its node or
-  the ports they hold, another program put on its port, a firewall rule on that port.
+* :func:`stops_service` — its launchd jobs / systemd units (stopped, killed, restarted, frozen),
+  the person's whole service manager or login (``systemctl --user exit|isolate``, ``loginctl
+  terminate-user``), a kill aimed at Blackbox, its node or the ports they hold, another program put
+  on its port, a firewall rule on that port — and a signal to one of Blackbox's RUNNING processes
+  (:func:`signals_own`: a pid, ``-1``, a process group, a ``pkill`` / ``killall`` pattern that
+  matches one; the machine's reading is ``kernel.own_processes``, Linux round L1).
 * :func:`uses_control_api` — the dashboard's address: only a plain read by ``curl`` / ``wget`` of
   a read-only route is left alone; a write, the session-token route or any other program is not.
 * :func:`sets_environment` — ``BLACKBOX_…=`` anywhere (a startup file, a nested agent's
@@ -24,8 +28,12 @@ Usage::
 
 from __future__ import annotations
 
+import os
 import re
 from typing import Iterable
+
+from ...kernel import own_processes
+from .shell_words import _segment_end, _words
 
 _DYNAMIC = re.compile(r"\$\(|`")
 _SWITCH_OFF = re.compile(
@@ -36,8 +44,13 @@ _SWITCH_OFF = re.compile(
     r"|\b(?:pip3?|uv\s+pip|uv\s+tool|pipx)\s+uninstall\b[^|;&\n]*hermes", re.IGNORECASE)
 _SERVICE_JOB = re.compile(
     r"\blaunchctl\s+(?:bootout|unload|remove|disable|kill|stop)\b[^|;&\n]*\bai\.umanitek\.blackbox"
-    r"|\bsystemctl\b[^|;&\n]*\b(?:stop|disable|mask|kill)\b[^|;&\n]*\bblackbox-", re.IGNORECASE)
-_KILLS = re.compile(r"\b(?:pkill|killall|kill|taskkill|stop-process)\b|\bfuser\b[^|;&\n]*\s-\w*k", re.IGNORECASE)
+    r"|\bsystemctl\b[^|;&\n]*\b(?:stop|disable|mask|kill|restart|try-restart|reload-or-restart|try-reload-or-restart"
+    r"|condrestart|force-reload|freeze|revert)\b[^|;&\n]*\bblackbox-"
+    # The person's whole service manager or login: every user unit (Blackbox's dashboard) stops.
+    r"|\bsystemctl\b[^|;&\n]*--user\b[^|;&\n]*\b(?:exit|isolate|halt|poweroff|reboot|kexec|switch-root|emergency|rescue)\b"
+    r"|\bloginctl\s+(?:terminate-user|kill-user|disable-linger)\b"
+    r"|\blaunchctl\s+(?:reboot\b|bootout\s+(?:gui|user)/\d+\s*(?:$|[|;&\n]))", re.IGNORECASE)
+_KILLS = re.compile(r"\b(?:pkill|killall5?|kill|skill|taskkill|stop-process)\b|\bfuser\b[^|;&\n]*\s-\w*k", re.IGNORECASE)
 #: Hermes Desktop's route to Blackbox (the app's own port, whatever it is): its switches, never a read.
 _DESKTOP_ROUTE = re.compile(r"/api/plugins/blackbox/(?:mode|dash|setup)\b", re.IGNORECASE)
 _KILL_TARGET = re.compile(r"blackbox|ai\.umanitek|oxigraph|blazegraph|\bdkg\b|hermes[^|;&\n]{0,20}dashboard", re.IGNORECASE)
@@ -74,9 +87,91 @@ def stops_service(command: str, ports: Iterable[int]) -> bool:
     if _SERVICE_JOB.search(command):
         return True
     names_port = _names_port(command, ports)
-    if _KILLS.search(command) and (_KILL_TARGET.search(command) or names_port):
+    if _KILLS.search(command) and (_KILL_TARGET.search(command) or names_port or signals_own(command, own_processes.running())):
         return True
     return names_port and bool(_LISTENS_OR_FILTERS.search(command))
+
+
+#: The programs that signal processes, and their options that take a value (``kill -s KILL``,
+#: ``pkill -u me``, ``killall -s 9``).
+_SIGNALLERS = frozenset({"kill", "pkill", "killall", "skill", "killall5"})
+_TAKES_VALUE = {"kill": frozenset({"-s", "-n", "--signal", "-q", "--queue", "--timeout"}),
+                "pkill": frozenset({"-s", "--session", "-u", "--euid", "-U", "--uid", "-g", "--pgroup", "-G", "--group", "-P",
+                                    "--parent", "-t", "--terminal", "-F", "--pidfile", "--signal", "--ns", "--nslist", "-q"}),
+                "killall": frozenset({"-s", "--signal", "-u", "--user", "-o", "--older-than", "-y", "--younger-than", "-n", "--ns",
+                                      "-C", "--context"})}
+
+
+def _arguments(name: str, words: list[str]) -> tuple[set[str], list[str]]:
+    """``(options, operands)`` of a signaller's *words* (after its name). ``kill``'s first ``-9`` /
+    ``-KILL`` is its signal and every later ``-N`` an operand, so ``kill -9 -1`` aims at ``-1``."""
+    options: set[str] = set()
+    operands: list[str] = []
+    index = 0
+    while index < len(words):
+        word = words[index]
+        index += 1
+        if word == "--":
+            operands += words[index:]
+            break
+        if not word.startswith("-") or (name == "kill" and (options or operands) and re.fullmatch(r"-\d+", word)):
+            operands.append(word)
+            continue
+        option = word.split("=", 1)[0]
+        options.add(option)
+        if option in _TAKES_VALUE.get(name, frozenset()) and "=" not in word:
+            index += 1
+    return options, operands
+
+
+def _matches(pattern: str, text: str, exact: bool, folds: bool) -> bool:
+    try:
+        expression = re.compile(pattern, re.IGNORECASE if folds else 0)
+    except re.error:
+        return pattern in text
+    return bool(expression.fullmatch(text) if exact else expression.search(text))
+
+
+def signals_own(command: str, processes: Iterable[own_processes.OwnProcess]) -> bool:
+    """True when *command* sends a signal that reaches one of *processes* (Blackbox's own): ``kill``
+    of its pid, of ``-1`` (every process the user may signal) or of its process group; ``pkill``
+    whose pattern matches its name (its command line with ``-f``), or with no pattern at all;
+    ``killall`` of its name (``-r``: a pattern), or with none (``-u me``: every program); ``killall5``."""
+    ours = tuple(processes)
+    if not ours:
+        return False
+    words = _words(command)
+    start = 0
+    while start < len(words):
+        end = _segment_end(words, start)
+        segment = words[start:end]
+        start = end + 1
+        at = next((index for index, word in enumerate(segment) if os.path.basename(word) in _SIGNALLERS), None)
+        if at is None:
+            continue
+        name = os.path.basename(segment[at])
+        options, operands = _arguments(name, segment[at + 1:])
+        if name == "killall5":
+            return True
+        if name == "kill":
+            numbers = [int(word) for word in operands if re.fullmatch(r"-?\d+", word)]
+            if any(n == -1 or n in {p.pid for p in ours} or (n < -1 and -n in {p.group for p in ours}) for n in numbers):
+                return True
+            continue
+        if not operands:   # ``pkill -u me`` / ``killall -u me``: every program it may signal
+            if options - {"-l", "--list", "-V", "--version", "-h", "--help"}:
+                return True
+            continue
+        exact, folds, whole = "-x" in options or "--exact" in options, "-i" in options or "--ignore-case" in options, "-f" in options or "--full" in options
+        for pattern in operands:
+            for process in ours:
+                program = os.path.basename(process.command.split(" ", 1)[0]) if process.command else ""
+                if name == "killall" and "-r" not in options and "--regexp" not in options:
+                    if pattern in (process.name, program):
+                        return True
+                elif _matches(pattern, process.command if whole else process.name, exact, folds):
+                    return True
+    return False
 
 
 def uses_control_api(text: str, ports: Iterable[int]) -> bool:

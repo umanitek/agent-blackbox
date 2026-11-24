@@ -122,7 +122,7 @@ def test_dashboard_unit_starts_after_the_node_and_runs_the_dashboard():
     assert "After=network-online.target blackbox-dkg.service" in unit
     assert "ExecStart=$HERMES_BIN blackbox dashboard" in unit
     assert "Environment=HERMES_HOME=$HERMES_HOME" in unit
-    assert "Restart=on-failure" in unit
+    assert "Restart=always" in unit   # Linux round L1: on-failure left a SIGTERM'd dashboard down
 
 
 def test_dashboard_service_respects_auto_dashboard_off():

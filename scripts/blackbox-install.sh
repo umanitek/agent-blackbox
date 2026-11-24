@@ -4226,7 +4226,9 @@ Environment=HOME=$HOME
 Environment=HERMES_HOME=$HERMES_HOME
 Environment=PATH=$HOME/.local/bin:$node_bin_dir:$BLACKBOX_SERVICE_SYSTEM_PATH
 ExecStart=$HERMES_BIN blackbox dashboard
-Restart=on-failure
+# always, not on-failure: a SIGTERM (kill's default) is a clean exit for systemd, and Linux round
+# L1's agent stopped the dashboard that way for good. `systemctl --user stop` still stops it.
+Restart=always
 RestartSec=10
 
 [Install]
@@ -4268,7 +4270,7 @@ DASHUNIT
     <key>HERMES_HOME</key><string>$HERMES_HOME</string>
   </dict>
   <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <key>KeepAlive</key><true/>
 </dict></plist>
 DASHPLIST
             if [ "$(blackbox_dashboard_supervisor)" != launchd ]; then

@@ -49,6 +49,18 @@ does not run anything. Within that, it judges:
   k2.py`, `mv`, `cat a > b`, or a copy an earlier call of the session made) is judged by its source;
 - the same script reading for the startup places: a script the agent runs whose text writes an SSH
   login file, a launchd job, a login item or a cron table is refused like the write itself.
+- Linux's `/proc` spellings of a path (`/proc/self/root$HOME/…`, `/proc/<pid>/root/…`,
+  `/proc/self/cwd/…`) as the path they spell (Linux round L1).
+
+**When Blackbox's dashboard is down.** The hooks ask the dashboard for each verdict (it holds the
+compiled rules in memory). If it does not answer — stopped, killed, hung or restarting — the hook
+runner judges the call itself with the installed plugin's own judgement, locally and offline, so
+stopping the dashboard does not switch protection off (Linux round L1: an agent killed it, then
+read a protected file). An agent may not signal Blackbox's running programs (`kill` of their pid,
+`kill -1`, their process group, a `pkill` / `killall` pattern that matches them, `systemctl --user
+stop|restart|exit|isolate`, `loginctl terminate-user`), and the dashboard's service restarts
+whatever way it ends (`Restart=always`, launchd `KeepAlive`). Only genuine breakage — the plugin
+itself missing or broken — lets an agent go on unchecked (fail-open).
 
 What only the sandbox (Layer 2, below) stops, because no text says which file will be opened:
 

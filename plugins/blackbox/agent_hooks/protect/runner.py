@@ -11,8 +11,15 @@ back in the agent's own documented format (:mod:`.answers`: ``deny_output``, ``p
 ``post_output``; docs/agent-compat/ has the per-agent references).
 
 Standard library only and import-free of the plugin, so it starts in a few tens of milliseconds
-under any Python. FAIL-OPEN: any error, a missing dashboard or a slow answer lets the agent
-continue — Blackbox never makes an agent unusable. The prompt and the tool output go only to the
+under any Python: the judgement itself lives in the dashboard, which holds the compiled rules in
+memory. WHEN THE DASHBOARD DOES NOT ANSWER (stopped, killed, hung, restarting) the runner judges
+the call itself, locally and offline (:func:`judge_here`): it loads the installed plugin's own
+judgement (``events.record_event`` — the same guard, ruleset file and local checks) from the
+folder ``agent_hooks`` named in :data:`JUDGE_HERE_FILE`, so stopping the dashboard no longer
+switches the hooks off (private security finding ``2026-11-24-linux-an-agent-stops-blackbox-s-dashboar``,
+Linux round L1: an agent killed the dashboard and then read a protected file). FAIL-OPEN for
+genuine breakage still holds: when that judgement cannot run either (no plugin, an import error),
+the agent continues — Blackbox never makes an agent unusable. The prompt and the tool output go only to the
 LOCAL dashboard (127.0.0.1) to be checked; they are never recorded or shared — the records keep
 their length, and a finding keeps only the matched phrase as its local evidence (as for Hermes).
 
@@ -40,10 +47,12 @@ from pathlib import Path
 if __package__:
     from .answers import allow_output, deny_output, note_output, post_output, prompt_output
     from .identity import AGENT_TURN_MARKS, MODEL_EVENTS, effective_agent, identity, transcript_model, workspace
+    from .judge_here import judge_here
     from .tool_shapes import cline_tool
 else:
     from answers import allow_output, deny_output, note_output, post_output, prompt_output
     from identity import AGENT_TURN_MARKS, MODEL_EVENTS, effective_agent, identity, transcript_model, workspace
+    from judge_here import judge_here
     from tool_shapes import cline_tool
 
 #: The most of stdin read (a write tool's whole file can be in the payload).
@@ -341,6 +350,21 @@ def ask(url: str, body: dict) -> dict:
     return answer if isinstance(answer, dict) else {}
 
 
+def _answer(url: str, event: str, body: dict) -> dict:
+    """The dashboard's answer, or — when it does not answer and the event can stop the action —
+    the same judgement made here (:func:`judge_here`); {} when neither can be had (fail open)."""
+    try:
+        return ask(url, body)
+    except Exception:   # health: allow BLE001 -- the dashboard is down or slow: judge locally instead
+        pass
+    if event not in BLOCKING_EVENTS:
+        return {}
+    try:
+        return judge_here(body)
+    except Exception:   # health: allow BLE001 -- fail open: genuine breakage never stops the agent
+        return {}
+
+
 def main(argv: list) -> int:
     if len(argv) < 4:
         return 0
@@ -352,9 +376,10 @@ def main(argv: list) -> int:
         raw = sys.stdin.buffer.read(MAX_INPUT_BYTES)
         payload = json.loads(raw.decode("utf-8", "replace") or "{}")
         payload = payload if isinstance(payload, dict) else {}
-        answer = ask(url, summary(agent, event, payload))
+        body = summary(agent, event, payload)
     except Exception:   # health: allow BLE001 -- fail open: the agent continues without Blackbox's answer
-        answer = {}
+        body = {}
+    answer = _answer(url, event, body) if body else {}
     if event in BLOCKING_EVENTS and answer.get("decision") == "block":
         reason = str(answer.get("message") or "Blocked by Blackbox: this action matches a verified threat.")[:1000]
         out, code = (prompt_output if event == "prompt" else post_output if event == "post_tool" else deny_output)(agent, reason)
