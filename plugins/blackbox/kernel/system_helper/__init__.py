@@ -15,9 +15,9 @@ Usage::
 
 from __future__ import annotations
 
-from .platform import BINARY, HOME, LABEL, RECEIPT, SERVICE, SERVICE_KIND, user_key_folder
+from .platform import BINARY, HOME, INSTALL_HOW, LABEL, RECEIPT, SERVICE, SERVICE_KIND, user_key_folder
 
-__all__ = ["BINARY", "HOME", "KEY_FILE_NAME", "LABEL", "RECEIPT", "SERVICE", "SERVICE_KIND", "installed", "user_key_folder"]
+__all__ = ["BINARY", "HOME", "INSTALL_HOW", "KEY_FILE_NAME", "LABEL", "RECEIPT", "SERVICE", "SERVICE_KIND", "installed", "user_key_folder"]
 
 #: The key file in the person's key folder (the helper keeps its own root-only copy).
 KEY_FILE_NAME = "plan.key"

@@ -11,6 +11,8 @@ LABEL = "ai.umanitek.blackbox.netd"
 #: The service definition the helper's own install writes (a LaunchDaemon).
 SERVICE = Path("/Library/LaunchDaemons") / f"{LABEL}.plist"
 SERVICE_KIND = "LaunchDaemon"
+#: How a person installs it here (the cards that need it say this).
+INSTALL_HOW = "Install it with Blackbox's installer (system protection), or from a companion app that offers it."
 #: ``sha256 <hex>`` of the installed program, 0644, readable without root.
 RECEIPT = HOME.parent / "netd-installed"
 

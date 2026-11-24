@@ -13,14 +13,15 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
+from ...kernel import system_helper
 from ...kernel.config import load_blackbox_config
 from ..contract import ShieldMode, ShieldStatus, StatusRow, StatusSection
 from . import helper, mode as mode_module
 from .. import helper_link
 from .protect import enforcement
 
-#: How a person installs the helper.
-HELPER_HOW = "Install it with Blackbox's installer (system protection), or from a companion app that offers it."
+#: How a person installs the helper on this OS (KI-661).
+HELPER_HOW = system_helper.INSTALL_HOW
 
 
 #: What each protection does, for its row.

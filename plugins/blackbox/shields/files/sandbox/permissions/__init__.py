@@ -32,7 +32,7 @@ from .....kernel import constants, persistence_places, settings as kernel_settin
 from .....kernel.config import load_blackbox_config
 from ... import mode as mode_module
 from . import answers, catalogue, grants, requests
-from .api import API_WEAKENING, API_WRITES, view
+from .api import API_WEAKENING, API_WRITES, not_here, view
 from .catalogue import BY_ID, NEVER, NOT_CONTROLLABLE, PERMISSIONS, profile_permissions
 from .judge import loosened
 from .model import Access, Allowances, Choice, FolderLimits, FolderRule, Mode, Permission, PermissionRequest, Route, Rule, Scope, Settings
@@ -150,5 +150,5 @@ def section_weakening(raw: Any) -> list[str]:
 __all__ = ["ALLOWED", "API_WEAKENING", "API_WRITES", "BY_ID", "NEVER", "NOT_CONTROLLABLE", "PERMISSIONS", "REFUSED",
            "SECTION", "WAITING", "Access", "Allowances", "Choice", "FolderLimits", "FolderRule", "Mode", "Permission",
            "PermissionRequest", "Route", "Rule", "Scope", "Settings", "allowances", "answers", "ask",
-           "broker_decision", "catalogue", "current", "decide", "folder_limits", "grants", "loosened", "refused", "requests",
+           "broker_decision", "catalogue", "current", "decide", "folder_limits", "grants", "loosened", "not_here", "refused", "requests",
            "section_weakening", "stored", "validate_section", "view"]

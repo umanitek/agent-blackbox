@@ -197,6 +197,9 @@ def _runs(context: Any) -> list[Any]:
 def permissions_view(context: ShieldContext, _params: Mapping[str, str]) -> dict[str, Any]:
     """The sandbox permissions, and every running agent that still has its old ones (``restart_needed``)."""
     view = permissions.view(sandbox.chosen(mode_module.current()))
+    why = sandbox.unavailable()
+    if why:   # nothing here enforces a permission: say so instead of offering controls (KI-660)
+        return permissions.not_here(view, why)
     view["restart_needed"] = [{"agent": run.agent, "name": agent_hosts.product_name(run.agent), "instance": run.instance,
                                "pid": run.pid, "note": sandbox.RESTART_NOTE} for run in sandbox.stale_runs(_runs(context))]
     return view

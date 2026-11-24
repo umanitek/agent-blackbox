@@ -57,7 +57,13 @@ __all__ = ["CLI_AGENTS", "HERMES_CODE_LAUNCHER", "HERMES_LAUNCHER_ENV", "HERMES_
            "NOT_INSTALLED_NOTE", "SANDBOXED", "SHELLS_ONLY", "HermesCover", "Places", "act_on", "brokered",
            "canary_path", "chosen", "enter_hermes_process", "enter_hermes_session", "hermes_shell_dir", "home",
            "launcher_dir", "network_rules", "offer", "on_refusal", "open_app", "policy", "profile_path", "protection", "proven",
-           "restorations", "self_protected_files", "status", "sync"]
+           "restorations", "self_protected_files", "status", "sync", "unavailable"]
+
+
+def unavailable() -> Optional[str]:
+    """Why agents can not be sandboxed on this machine (the platform's reason), or None."""
+    return platform.unavailable()
+
 
 CANARY_TEXT = "Blackbox agent sandbox canary — a sandboxed agent can not read this file.\n"
 #: How many PATH-block restorations are kept for File Shield's alerts.

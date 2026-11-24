@@ -159,7 +159,18 @@ def view(sandboxed: tuple[str, ...] = ()) -> dict[str, Any]:
         "agents": [{"id": agent, "name": product_name(agent), "sandboxed": True, "modes": _mode_row(settings, agent)}
                    for agent in sandboxed],
         "hooks_only_note": HOOKS_ONLY_NOTE,
+        "sandbox_unavailable": "",
     }
+
+
+def not_here(view: dict[str, Any], why: str) -> dict[str, Any]:
+    """*view* on a machine where agents can not be sandboxed (*why*, the platform's reason): every
+    permission shown as not controllable, with that reason, and no never-list — none of them does
+    anything here. KI-660 (Linux round L1): the page offered macOS's whole catalogue with live
+    Block / Ask / Allow buttons (Homebrew, AppleScript, "Services on this Mac", pbpaste…) and
+    "ssh into this Mac … (probed on macOS 27.2)" on a Linux machine with no sandbox at all."""
+    permissions = [{**each, "controllable": False, "note": why} for each in view["permissions"]]
+    return {**view, "permissions": permissions, "never": [], "not_controllable": [], "agents": [], "sandbox_unavailable": why}
 
 
 def _writer(name: str) -> Callable[[ShieldContext, Mapping[str, Any]], dict[str, Any]]:

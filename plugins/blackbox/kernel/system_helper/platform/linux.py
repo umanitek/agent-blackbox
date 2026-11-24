@@ -14,6 +14,9 @@ LABEL = "blackbox-netd.service"
 #: The service definition the helper's own install writes (a systemd unit).
 SERVICE = Path("/etc/systemd/system") / LABEL
 SERVICE_KIND = "systemd service"
+#: How a person installs it here (KI-661: the macOS advice named a companion app Linux does not have).
+INSTALL_HOW = ("Install it by running Blackbox's installer again with --system-protection "
+               "(sudo asks for your password once).")
 #: ``sha256 <hex>`` of the installed program, 0644, readable without root.
 RECEIPT = Path("/var/lib/blackbox/netd-installed")
 

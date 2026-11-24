@@ -44,7 +44,7 @@ def _watch_section(mode: ShieldMode) -> StatusSection:
                      else f"{len(mode_module.watch_paths(mode))} places")
            if installed else
            StatusRow(icon="live", state="needs-helper", text="Real-time watch needs the system protection helper",
-                     sub="Install it with Blackbox's installer (system protection), or from a companion app that offers it."))
+                     sub=system_helper.INSTALL_HOW))
     return StatusSection("Real-time watch", "Changes inside protected items and new files in watched folders.", (row,))
 
 

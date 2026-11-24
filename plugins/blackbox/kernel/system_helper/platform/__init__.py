@@ -12,8 +12,8 @@ from __future__ import annotations
 import sys
 
 if sys.platform.startswith("linux"):
-    from .linux import BINARY, HOME, LABEL, RECEIPT, SERVICE, SERVICE_KIND, user_key_folder
+    from .linux import BINARY, HOME, INSTALL_HOW, LABEL, RECEIPT, SERVICE, SERVICE_KIND, user_key_folder
 else:
-    from .macos import BINARY, HOME, LABEL, RECEIPT, SERVICE, SERVICE_KIND, user_key_folder
+    from .macos import BINARY, HOME, INSTALL_HOW, LABEL, RECEIPT, SERVICE, SERVICE_KIND, user_key_folder
 
-__all__ = ["BINARY", "HOME", "LABEL", "RECEIPT", "SERVICE", "SERVICE_KIND", "user_key_folder"]
+__all__ = ["BINARY", "HOME", "INSTALL_HOW", "LABEL", "RECEIPT", "SERVICE", "SERVICE_KIND", "user_key_folder"]

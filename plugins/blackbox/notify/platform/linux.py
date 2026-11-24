@@ -1,7 +1,11 @@
 """Linux: the desktop's own notifier through ``notify-send`` (libnotify), when it is installed.
 
 No program of Blackbox's own is needed: ``notify-send --app-name Blackbox`` names the sender.
-On a machine without a desktop session (a server) nothing can be shown and ``status`` says so.
+On a machine without a desktop session (a server) nothing can be shown and ``status`` says so:
+"available" means a notification server owns ``org.freedesktop.Notifications`` on the person's
+session bus NOW (asked through ``busctl`` or ``gdbus``). KI-662 (Linux round L1): with notify-send
+installed on a server, the status said "shown by this desktop's own notifier" because a session
+bus exists there too (systemd's user manager), while every send was "not shown".
 """
 
 from __future__ import annotations
@@ -22,11 +26,38 @@ def _tool() -> str:
     return shutil.which("notify-send") or ""
 
 
+#: The bus name a desktop's notification server owns.
+SERVER_NAME = "org.freedesktop.Notifications"
+_ASK_OWNER = {"busctl": ["--user", "call", "org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus", "NameHasOwner", "s", SERVER_NAME],
+              "gdbus": ["call", "--session", "--dest", "org.freedesktop.DBus", "--object-path", "/org/freedesktop/DBus",
+                        "--method", "org.freedesktop.DBus.NameHasOwner", SERVER_NAME]}
+
+
+def server_running() -> Optional[bool]:
+    """Whether a notification server runs on the person's session bus now; None when it can not be asked."""
+    for program, args in _ASK_OWNER.items():
+        found = shutil.which(program)
+        if not found:
+            continue
+        try:
+            done = subprocess.run([found, *args], capture_output=True, text=True, timeout=TIMEOUT_SECONDS, check=False)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if done.returncode == 0:
+            return "true" in done.stdout.lower()
+    return None
+
+
 def status() -> NotifierStatus:
     if not _tool():
         return NotifierStatus("none", False, "unknown", "notify-send is not installed; the dashboard shows every notification.")
-    if not (os.environ.get("DBUS_SESSION_BUS_ADDRESS") or os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+    if not os.environ.get("DBUS_SESSION_BUS_ADDRESS") and not os.path.exists(f"/run/user/{os.getuid()}/bus"):
         return NotifierStatus("fallback", False, "unknown", "This session has no desktop to show a notification on.")
+    running = server_running()
+    if running is None:
+        return NotifierStatus("fallback", False, "unknown", "Blackbox can not tell whether a desktop shows notifications here; the dashboard shows every one.")
+    if not running:
+        return NotifierStatus("fallback", False, "unknown", "No desktop notifier runs here (a server); the dashboard shows every notification.")
     return NotifierStatus("fallback", True, "authorized", "Notifications are shown by this desktop's own notifier.")
 
 
