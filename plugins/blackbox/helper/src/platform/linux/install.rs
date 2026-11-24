@@ -45,6 +45,10 @@ pub const RECEIPT_PATH: &str = "/var/lib/blackbox/netd-installed";
 pub const UNIT_NAME: &str = "blackbox-netd.service";
 /// The program set aside during an upgrade, beside the installed one (same file system).
 const PREVIOUS: &str = "blackbox-netd.previous";
+/// The agent sandbox launcher, beside the helper: a copy of the SAME checked program, which runs
+/// as the launcher when started under this name (`src/bin/blackbox-netd.rs`) — no second
+/// download to verify, and root-owned, so no agent can replace it.
+pub const SANDBOX_NAME: &str = "blackbox-sandbox";
 
 /// Where the helper lives on this machine; [`Layout::system`] is the real one, tests use a temporary one.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -169,6 +173,7 @@ fn put_in_place(args: &InstallArgs, copy: &Path, layout: &Layout, systemd: &dyn 
     fs::copy(copy, &incoming).map_err(|error| format!("{}: {error}", incoming.display()))?;
     fs::set_permissions(&incoming, fs::Permissions::from_mode(0o755)).map_err(|error| error.to_string())?;
     fs::rename(&incoming, &layout.binary).map_err(|error| format!("{}: {error}", layout.binary.display()))?;
+    place_sandbox(layout);
     let key = ensure_key(&layout.home)?;
     if let (Some(folder), Some(owner)) = (&args.key_for, args.owner) {
         hand_key_to(folder, owner, &key)?;
@@ -177,6 +182,27 @@ fn put_in_place(args: &InstallArgs, copy: &Path, layout: &Layout, systemd: &dyn 
     systemd.relabel(&[layout.binary.as_path(), layout.unit.as_path()]);
     systemd::start(systemd, UNIT_NAME)
         .map_err(|error| format!("the helper did not start: {error} (see {}/netd.log, journalctl -u {UNIT_NAME})", layout.home.display()))
+}
+
+/// The agent sandbox launcher beside the helper, and (Ubuntu, the real install only) the AppArmor
+/// rule that lets it make its namespaces (`sandbox::apparmor`, F2). Fail-open: a launcher that can
+/// not be placed leaves agents on hooks only, said, and never fails the helper's install.
+fn place_sandbox(layout: &Layout) {
+    let launcher = layout.binary.with_file_name(SANDBOX_NAME);
+    let incoming = layout.binary.with_file_name(format!(".{SANDBOX_NAME}.incoming"));
+    let placed = fs::copy(&layout.binary, &incoming)
+        .and_then(|_| fs::set_permissions(&incoming, fs::Permissions::from_mode(0o755)))
+        .and_then(|()| fs::rename(&incoming, &launcher));
+    if let Err(error) = placed {
+        let _ = fs::remove_file(&incoming);
+        eprintln!("blackbox-netd: the agent sandbox launcher could not be placed ({error}); agents keep Blackbox's hooks only");
+        return;
+    }
+    if *layout == Layout::system() {
+        if let Err(why) = super::sandbox::apparmor::install(&launcher.to_string_lossy()) {
+            eprintln!("blackbox-netd: Ubuntu's AppArmor rule for the agent sandbox could not be loaded ({why}); agents keep Blackbox's hooks only");
+        }
+    }
 }
 
 fn write_unit(path: &Path, text: &str) -> Result<(), String> {
@@ -198,6 +224,12 @@ pub fn uninstall_from(layout: &Layout, systemd: &dyn Systemd, put_back: &dyn Fn(
     systemd.reload();
     let _ = fs::remove_file(&layout.receipt);
     let _ = fs::remove_file(&layout.binary);
+    if *layout == Layout::system() {
+        for why in super::sandbox::apparmor::remove() {
+            eprintln!("blackbox-netd: Ubuntu's AppArmor rule for the agent sandbox: {why}");
+        }
+    }
+    let _ = fs::remove_file(layout.binary.with_file_name(SANDBOX_NAME));
     if let Some(folder) = layout.binary.parent() {
         let _ = fs::remove_dir(folder);   // only when empty: another Blackbox program may live there
     }
@@ -264,6 +296,18 @@ mod tests {
         assert_eq!(fs::read_to_string(&layout.receipt).unwrap(), format!("sha256 {}\n", hex::encode(Sha256::digest(b"new helper"))));
         assert!(systemd.state.borrow().active && systemd.state.borrow().relabelled.len() == 2, "labelled for SELinux, started");
         assert!(fs::read_dir(&layout.lib).unwrap().flatten().all(|e| !e.file_name().to_string_lossy().starts_with(".netd-staging")));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_agent_sandbox_launcher_is_the_same_checked_program_beside_it_and_leaves_with_it() {
+        let (dir, layout) = layout("sandbox");
+        install_into(&args_for(&dir, b"new helper"), &layout, &FakeSystemd::default(), &no_put_back).unwrap();
+        let launcher = layout.binary.with_file_name(SANDBOX_NAME);
+        assert_eq!(fs::read(&launcher).unwrap(), b"new helper", "a copy of the checked bytes, no second download");
+        assert_eq!(fs::metadata(&launcher).unwrap().permissions().mode() & 0o777, 0o755);
+        uninstall_from(&layout, &FakeSystemd::default(), &no_put_back).unwrap();
+        assert!(!launcher.exists() && !layout.binary.exists());
         let _ = fs::remove_dir_all(&dir);
     }
 
