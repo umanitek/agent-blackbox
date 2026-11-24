@@ -28,8 +28,20 @@ their first change, which of those places did not exist, and on success write
 * ``notifier <folder>`` (macOS) — Blackbox's own notifier (``Blackbox.app``): removed on every
   uninstall (KI-629: both optional components are in the one list).
 
+Beside it, the empty file ``installed-at``, written once by the first install: its time is when
+the install finished, the time the person's own additions are told apart by (an older manifest
+without it uses the manifest's own time).
+
 A Hermes the person had before Blackbox is never in it (it existed when the installer looked), so
-it is never offered for removal. Every path is checked again here: absolute, inside the home
+it is never offered for removal. **What the person added is never removed (KI-654):** a host folder
+the person installs their own things into (:data:`PERSONS_PLACES`: ``~/.nvm``'s Node versions and
+global npm packages, uv's tools and Pythons) is checked first. Anything there created after the
+install is the person's: the folder stays, and only the installer's own parts that hold none of it
+go (the Node version the installer added, when the person's packages are in another one); the
+startup lines that make it work stay with it. Round 7 saw ``~/.nvm`` removed with the Claude Code
+the person had installed into its Node. The rest of the host (the checkout, ``~/.hermes``, uv's
+own commands, Hermes's launchers) is Hermes's own state, rewritten by Hermes as it runs, so a
+change there is not the person's. Every path is checked again here: absolute, inside the home
 folder, never the home itself, no ``..``; a link is removed as a link, never followed.
 
 Usage::
@@ -53,16 +65,20 @@ from typing import Callable, Sequence
 from ..kernel import shell_path, system_helper as system_helper_paths
 from ..kernel.bounded_files import read_small_text
 from . import platform
+from .host_removal import PERSONS_PLACES, HostRemoval, PersonsPlaces, removal_for
 
 Runner = Callable[[Sequence[str]], int]
 
 FOLDER = "install-manifest"
 MANIFEST = "manifest.tsv"
 BLOCKS = "blocks"
+STAMP = "installed-at"
 #: The most entries read, and the most bytes of one appended block.
 MAX_ENTRIES = 200
 MAX_BLOCK_BYTES = 64 * 1024
 MAX_MANIFEST_BYTES = 256 * 1024
+#: The most of the person's additions named in one report line.
+MAX_NAMED = 5
 
 
 @dataclass(frozen=True)
@@ -77,6 +93,7 @@ class InstallManifest:
     user_path: tuple[Path, ...] = ()              # Windows: folders added to the user PATH
     system_helper: bool = False                   # macOS: the install added the system protection helper
     notifier: tuple[Path, ...] = ()               # macOS: the notifier folder it added
+    installed_at: float = 0.0                     # when the first install finished (epoch seconds; 0: no manifest)
 
     @property
     def has_host(self) -> bool:
@@ -137,8 +154,16 @@ def read(blackbox_home: Path, home: Path | None = None, user: str | None = None)
         if block:
             found["host-append"].append((path, block))
     unique = {kind: tuple(dict.fromkeys(paths)) for kind, paths in found.items()}
+    stamps = [folder / STAMP, folder / MANIFEST]   # a manifest from before the stamp: its own time
+    installed_at = next((stamp.stat().st_mtime for stamp in stamps if stamp.is_file()), 0.0)
     return InstallManifest(unique["own-dir"], unique["host"], unique["host-dir"], unique["host-append"],
-                           linger_user, unique["user-path"], helper, unique["notifier"])
+                           linger_user, unique["user-path"], helper, unique["notifier"], installed_at)
+
+
+def host_removal(manifest: InstallManifest, home: Path | None = None) -> HostRemoval:
+    """What removing *manifest*'s host takes, as the machine is now (``setup/host_removal``: the
+    person's additions stay). *home* defaults to this person's. Reads only."""
+    return removal_for(manifest.host, manifest.installed_at, Path(os.path.normpath(home or Path.home())))
 
 
 def host_size(manifest: InstallManifest) -> int:
@@ -257,10 +282,18 @@ def remove_host(manifest: InstallManifest, report: list[str], home: Path | None 
     """Everything the manifest lists for the host, and nothing else — plus Hermes's own commands
     that lead into what was removed (written after the install, so not listed: see above).
     *home* defaults to this person's."""
+    home = Path(os.path.normpath(home or Path.home()))
+    removal = host_removal(manifest, home)
     for target, block in manifest.appended:
+        if removal.keeps_block(block):
+            report.append(f"left the lines the installer added to {target}: what you added to a folder kept below needs them")
+            continue
         _take_out(target, block, report)
+    for folder, added in removal.kept:
+        names = ", ".join(entry.name for entry in added[:MAX_NAMED])
+        report.append(f"kept {folder}: you added to it since the install ({names}); remove it yourself when you no longer need it")
     folders: list[Path] = []
-    for path in manifest.host:
+    for path in removal.remove:
         if path.is_symlink() or path.is_file():
             path.unlink(missing_ok=True)
         elif path.is_dir():
@@ -269,7 +302,7 @@ def remove_host(manifest: InstallManifest, report: list[str], home: Path | None 
         else:
             continue
         report.append(f"removed {path}")
-    _remove_commands_into(Path(os.path.normpath(home or Path.home())), tuple(folders), report)
+    _remove_commands_into(home, tuple(folders), report)
     _remove_empty(manifest.host_dirs, report)
 
 
@@ -289,11 +322,15 @@ class KeptHost:
 def kept_host(manifest: InstallManifest, home: Path | None = None) -> KeptHost:
     """The host *manifest* lists, as it stands now (see :class:`KeptHost`). *home* defaults to this
     person's. Reads only."""
-    present = tuple(path for path in manifest.host if path.exists() or path.is_symlink())
+    home = Path(os.path.normpath(home or Path.home()))
+    removal = host_removal(manifest, home)
+    present = tuple(path for path in removal.remove if path.exists() or path.is_symlink())
     folders = tuple(path for path in present if path.is_dir() and not path.is_symlink())
-    commands = _commands_into(Path(os.path.normpath(home or Path.home())), folders)
+    commands = _commands_into(home, folders)
     appended = []
     for target, block in manifest.appended:
+        if removal.keeps_block(block):
+            continue
         try:
             if block.encode("utf-8") in target.read_bytes():   # a block the person changed is not theirs to delete as ours
                 appended.append((target, block))
@@ -303,5 +340,6 @@ def kept_host(manifest: InstallManifest, home: Path | None = None) -> KeptHost:
                     tuple(sorted(manifest.host_dirs, key=lambda path: -len(path.parts))), tuple(appended))
 
 
-__all__ = ["BLOCKS", "FOLDER", "MANIFEST", "InstallManifest", "KeptHost", "host_size", "human_size", "kept_host", "read",
+__all__ = ["BLOCKS", "FOLDER", "MANIFEST", "PERSONS_PLACES", "HostRemoval", "InstallManifest", "KeptHost", "PersonsPlaces",
+           "host_removal", "host_size", "human_size", "kept_host", "read",
            "remove_components", "remove_host", "remove_own_dirs", "restore_system_settings"]

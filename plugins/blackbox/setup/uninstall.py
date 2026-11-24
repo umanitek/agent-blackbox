@@ -197,6 +197,9 @@ def describe(plan: UninstallPlan) -> list[str]:
         lines.append(f"  - keep the {what} in {plan.backup_dir}")
     if plan.manifest.has_host:
         lines.append("Blackbox's installer also set up the Hermes host it runs in: you are asked whether to remove it too.")
+        for folder, added in install_manifest.host_removal(plan.manifest).kept:   # KI-654
+            names = ", ".join(entry.name for entry in added[:install_manifest.MAX_NAMED])
+            lines.append(f"  - {folder} stays either way: you added to it since the install ({names})")
     else:
         lines.append("Your Hermes itself, other DKG nodes and Docker are not touched.")
     return lines + [f"Note: {n}" for n in plan.notes]

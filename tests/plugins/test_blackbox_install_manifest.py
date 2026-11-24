@@ -10,7 +10,10 @@ Gaps closed here, each red on the base:
 * Linux: systemd lingering the installer turns on (``loginctl enable-linger``) is a system setting
   that stayed on after uninstall;
 * Windows: the folder the installer adds to the user PATH stayed (read here through a fake
-  ``platform``; the registry code itself needs a Windows machine).
+  ``platform``; the registry code itself needs a Windows machine);
+* KI-654 (security round 7, Linux): ``--remove-host`` deleted ``~/.nvm`` with the Claude Code the
+  person had installed into the installer's Node afterwards. Only what the installer created and
+  the person has not added to goes (``setup/host_removal``).
 """
 
 from __future__ import annotations
@@ -229,3 +232,70 @@ def test_windows_the_printed_commands_remove_a_kept_host_and_leave_a_filled_fold
                           timeout=120, check=False)
     assert done.returncode == 0, done.stderr
     assert not odd.exists() and not empty.exists() and (filled / "mine.txt").exists()
+
+
+# -- KI-654: never the person's own tools --------------------------------------------------------
+
+NODE = "versions/node/v22.21.1"
+NVM_BLOCK = 'export NVM_DIR="$HOME/.nvm"\n[ -s "$NVM_DIR/nvm.sh" ] && \\. "$NVM_DIR/nvm.sh"\n'
+
+
+def _installed_nvm(machine) -> Path:
+    """An install that had to add nvm + Node 22 (and nvm's lines in ~/.bashrc), manifest written."""
+    home, record, linger_dir, fake_bin = machine
+    (home / ".bashrc").write_text("# mine\n", encoding="utf-8")
+    _shell(home, record, linger_dir, fake_bin, "install_manifest_begin")
+    (home / ".nvm" / NODE / "lib" / "node_modules" / "npm").mkdir(parents=True)
+    (home / ".nvm" / "nvm.sh").write_text("# nvm\n", encoding="utf-8")
+    with (home / ".bashrc").open("a", encoding="utf-8") as rc:
+        rc.write(NVM_BLOCK)
+    (home / ".hermes" / "blackbox").mkdir(parents=True)
+    _shell(home, record, linger_dir, fake_bin, "install_manifest_write")
+    assert (home / ".hermes" / "blackbox" / install_manifest.FOLDER / install_manifest.STAMP).is_file()
+    return home
+
+
+def test_nvm_holding_a_tool_the_person_installed_later_is_kept_with_its_startup_lines(machine):
+    home = _installed_nvm(machine)
+    claude = home / ".nvm" / NODE / "lib" / "node_modules" / "@anthropic-ai" / "claude-code"
+    claude.mkdir(parents=True)                         # npm install -g @anthropic-ai/claude-code, after the install
+    (claude / "cli.js").write_text("// the person's", encoding="utf-8")
+    manifest = install_manifest.read(home / ".hermes" / "blackbox", home=home)
+    assert home / ".nvm" in manifest.host
+    report: list[str] = []
+    install_manifest.remove_host(manifest, report, home=home)
+    assert (claude / "cli.js").is_file() and (home / ".nvm" / "nvm.sh").is_file()
+    assert NVM_BLOCK in (home / ".bashrc").read_text(encoding="utf-8")   # `claude` still on the person's PATH
+    assert any(f"kept {home / '.nvm'}" in line and "@anthropic-ai" in line for line in report), report
+    assert not (home / "agent-blackbox").exists()     # the rest of the host still goes
+    kept = install_manifest.kept_host(manifest, home=home)
+    assert home / ".nvm" not in kept.paths and not kept.appended   # no printed command deletes it either
+
+
+def test_only_the_installers_node_goes_when_the_persons_tools_are_in_another_version(machine):
+    home = _installed_nvm(machine)
+    theirs = home / ".nvm" / "versions" / "node" / "v20.18.0" / "lib" / "node_modules" / "typescript"
+    theirs.mkdir(parents=True)                         # nvm install 20 && npm install -g typescript, after
+    manifest = install_manifest.read(home / ".hermes" / "blackbox", home=home)
+    report: list[str] = []
+    install_manifest.remove_host(manifest, report, home=home)
+    assert not (home / ".nvm" / NODE).exists()        # the installer's Node 22, holding nothing of theirs
+    assert theirs.is_dir() and (home / ".nvm" / "nvm.sh").is_file()
+    assert any(f"removed {home / '.nvm' / NODE}" == line for line in report), report
+
+
+def test_nvm_nobody_added_to_goes_whole_with_its_lines(machine):
+    home = _installed_nvm(machine)
+    manifest = install_manifest.read(home / ".hermes" / "blackbox", home=home)
+    install_manifest.remove_host(manifest, [], home=home)
+    assert not (home / ".nvm").exists()
+    assert (home / ".bashrc").read_text(encoding="utf-8") == "# mine\n"
+
+
+def test_nvm_the_person_had_before_the_install_is_never_listed(machine):
+    home, record, linger_dir, fake_bin = machine
+    (home / ".nvm" / NODE).mkdir(parents=True)
+    _shell(home, record, linger_dir, fake_bin, "install_manifest_begin")
+    (home / ".hermes" / "blackbox").mkdir(parents=True)
+    _shell(home, record, linger_dir, fake_bin, "install_manifest_write")
+    assert home / ".nvm" not in install_manifest.read(home / ".hermes" / "blackbox", home=home).host

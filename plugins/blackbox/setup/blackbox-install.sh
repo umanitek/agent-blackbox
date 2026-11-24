@@ -3624,11 +3624,13 @@ install_host_paths() {
     printf '%s\n' "$BLACKBOX_INSTALL_ROOT" "$HERMES_HOME" \
         "$HOME/.local/bin/hermes" "$HOME/.local/bin/hermes-acp" "$HOME/.local/bin/hermes-agent" \
         "$HOME/.local/bin/uv" "$HOME/.local/bin/uvx" "$HOME/.local/share/uv" \
-        "$HOME/.config/openui/telemetry.json" "$HOME/.npm/_prebuilds" "$HOME/.nvm"
+        "$HOME/.config/openui/telemetry.json" "$HOME/.npm/_prebuilds" "$HOME/.nvm" \
+        "$HOME/.local/state/hermes"   # Hermes's gateway locks (KI-654: left behind on Linux)
 }
 
 install_own_dirs() {
-    printf '%s\n' "$HOME/Library/LaunchAgents" "$HOME/.config/systemd/user"
+    # ~/.config/systemd too: made around the user units' folder, removed when empty (KI-654).
+    printf '%s\n' "$HOME/Library/LaunchAgents" "$HOME/.config/systemd/user" "$HOME/.config/systemd"
 }
 
 install_startup_files() {
@@ -3674,6 +3676,10 @@ install_manifest_write() {
     [ -n "$INSTALL_RECORD_DIR" ] && [ -d "$BLACKBOX_HOME" ] || return 0
     mkdir -p "$folder/blocks"
     touch "$folder/manifest.tsv"
+    # When the first install wrote it: what appears later in a folder the person installs their own
+    # tools into (~/.nvm's global npm packages) is theirs, and uninstall keeps it (KI-654).
+    # Its own time is the stamp (to the nanosecond); written once, so an upgrade run keeps the first.
+    [ -e "$folder/installed-at" ] || : >"$folder/installed-at"
     while IFS="$(printf '\t')" read -r kind path; do
         install_path_exists "$path" || continue
         grep -qxF "$kind	$path" "$folder/manifest.tsv" || printf '%s\t%s\n' "$kind" "$path" >>"$folder/manifest.tsv"

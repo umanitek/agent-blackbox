@@ -2405,6 +2405,11 @@ function Write-InstallManifest {
         if ($path -and (Test-Path -LiteralPath $path)) { $entries += "host`t$path" }
     }
     if ($script:AddedUserPath) { $entries += "user-path`t$($script:AddedUserPath)" }
+    # When the first install wrote it: what appears later where the person installs their own tools
+    # (uv's tools and Pythons) is theirs, and uninstall keeps it (KI-654). Its own time is the stamp;
+    # written once, so an upgrade run keeps the first.
+    $stamp = Join-Path $folder "installed-at"
+    if (-not (Test-Path -LiteralPath $stamp)) { New-Item -ItemType File -Path $stamp | Out-Null }
     $new = @($entries | Where-Object { $existing -notcontains $_ })
     if ($new.Count -gt 0) {
         [IO.File]::AppendAllText($file, (($new -join "`n") + "`n"), (New-Object Text.UTF8Encoding $false))
