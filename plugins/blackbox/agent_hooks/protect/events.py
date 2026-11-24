@@ -329,6 +329,8 @@ def bookkeep(judged: Judged) -> None:
         detail["checked_chars"] = len(event["text"])   # the text itself is never recorded
     if decision and event["event"] != "pre_tool":
         detail["decision"] = decision
+    if decision == "block":   # which findings refused the call (not a too-late one: that action ran, LES-142)
+        detail["blocked"] = list(verdict.get("blocked") or [])
     if event["sub"] or event["event"] in ("subagent_start", "subagent_stop"):
         detail["sub_agent"] = hashlib.sha256(event["sub"].encode("utf-8")).hexdigest()[:12] if event["sub"] else ""
         detail["sub_agent_type"] = event["sub_type"]
