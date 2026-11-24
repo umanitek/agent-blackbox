@@ -168,6 +168,7 @@ BLOCKED_WHAT = {"tool": "this tool call", "in-user-prompt": "this prompt", "in-t
 _GRAPH_SOURCES = frozenset({"public", "community"})
 #: What a LOCAL rule is, in the person's words (finding ``source`` / ``matched``).
 _LOCAL_RULE_NAMES = {"user-protected": "your protected-path rule", detection.PERSON_PROTECTED: "your File Shield protection",
+                     detection.MANAGER_ORDER: "an order from the organisation that manages this machine",
                      "secret": "Blackbox's built-in secret protection",
                      "heuristic": "Blackbox's built-in checks", "llm": "Blackbox's AI review"}
 _SELF_PROTECTION = "Blackbox's self-protection"

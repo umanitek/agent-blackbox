@@ -33,16 +33,17 @@ from .action_parsing import (FETCH_TOOL_PREFIXES, HOST_FILE_AND_SKILL_TOOLS, SEN
 from .content_scanners import SKILL_DANGER_SHAPES
 from .osv import DEPENDENCY_ECOSYSTEMS, advisory_kind
 from .reviewer_setup import cmd_setup_llm
-from .finding import FIELD_WALLET_SECRET_SENT, KIND_FLAG_ONLY, PERSON_PROTECTED
+from .finding import FIELD_WALLET_SECRET_SENT, KIND_FLAG_ONLY, MANAGER_ORDER, PERSON_PROTECTED
 from .elevation import ELEVATION_ID, detect_elevation
 from .paths.guard_settings import MATCHED as GUARD_TAMPER
 from .persistence_writes import MATCHED as STARTUP_ITEM, detect_persistence_write
 from .paths.protected import PathTouch, mentions as protected_path_mentions, touches as protected_path_touches
 
 #: ``Finding.matched`` values refused in EVERY mode, Audit included: an agent switching Blackbox
-#: off (its self-protection), an agent touching what the person protected (File Shield) and an
-#: agent writing a place something starts from by itself (as the agent sandbox refuses it).
-ALWAYS_BLOCKED_MATCHES = frozenset({GUARD_TAMPER, PERSON_PROTECTED, STARTUP_ITEM})
+#: off (its self-protection), an agent touching what the person protected (File Shield), an
+#: agent writing a place something starts from by itself (as the agent sandbox refuses it) and an
+#: order from whoever manages this machine (an add-on's ``MANAGER_ORDER`` finding).
+ALWAYS_BLOCKED_MATCHES = frozenset({GUARD_TAMPER, PERSON_PROTECTED, STARTUP_ITEM, MANAGER_ORDER})
 from .paths.guard_settings import detect_guard_tamper
 from .paths.guard_secrets import builtin_patterns as blackbox_key_patterns
 from .detectors import (
@@ -82,6 +83,7 @@ __all__ = [
                              'GUARD_TAMPER',
                              'HOST_FILE_AND_SKILL_TOOLS',
                              'KIND_FLAG_ONLY',
+                             'MANAGER_ORDER',
                              'PERSON_PROTECTED',
                              'SENSITIVE_PATH_CATEGORIES',
                              'SHELL_TOOLS',
