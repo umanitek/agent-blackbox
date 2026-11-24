@@ -24,6 +24,7 @@ Usage::
     protected("swscan.apple.com")              # True
     enforce, spared = split(names, allow)      # names to refuse, names spared
     drop, spared_ips = split_ips(ips, allow)   # addresses to drop, addresses spared
+    never_dropped(allow)                       # every address the firewall never drops, sorted
 """
 
 from __future__ import annotations
@@ -68,10 +69,16 @@ def _canonical_ip(text: str) -> str:
         return ""
 
 
+def never_dropped(allow: Iterable[str] = ()) -> list[str]:
+    """Every address the Threat Firewall never drops: :data:`NEVER_BLOCK_IPS` and the addresses on
+    the person's *allow* list, canonical, sorted (the plan states them, KI-680)."""
+    return sorted(NEVER_BLOCK_IPS | {canonical for canonical in map(_canonical_ip, allow) if canonical})
+
+
 def split_ips(ips: Iterable[str], allow: Iterable[str] = ()) -> tuple[list[str], list[str]]:
     """``(to drop, spared)`` — *ips* minus :data:`NEVER_BLOCK_IPS` and the addresses on the person's
     *allow* list (compared in canonical form, ``2620:FE::FE`` is ``2620:fe::fe``), both sorted."""
-    spare = NEVER_BLOCK_IPS | {canonical for canonical in map(_canonical_ip, allow) if canonical}
+    spare = set(never_dropped(allow))
     drop, spared = [], []
     for ip in ips:
         (spared if _canonical_ip(ip) in spare else drop).append(ip)

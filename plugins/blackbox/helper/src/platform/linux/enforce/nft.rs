@@ -3,8 +3,9 @@
 //! IPv6 of each list; `flags interval` with `auto-merge`, so a network and an address inside it
 //! may both be listed) and only the rules of the protections that are on:
 //!
-//! - **Threat Firewall** — `threats4/6`: traffic to and from the verified graph's addresses dropped;
-//! - **Cut malicious connections** — `cut4/6`: dropped both ways, and their open sockets and
+//! - **Threat Firewall** — `threats4/6`: traffic to the verified graph's addresses REJECTED, from
+//!   them dropped;
+//! - **Cut malicious connections** — `cut4/6`: the same both ways, and their open sockets and
 //!   connection-tracking entries ended ([`kill_states`]);
 //! - **SSH lockdown** — `ssh_allow4/6`: SSH in (TCP 22) from anywhere but this machine and the
 //!   allowed sources gets a reset;
@@ -13,7 +14,21 @@
 //! - **Blocked addresses** — `remote_block4/6`: refused inbound entirely.
 //!
 //! Each apply replaces the whole table in ONE `nft -f -` transaction (create, delete, create:
-//! nothing is ever half-loaded), and an all-off filter deletes it. Coexistence: the chains hook
+//! nothing is ever half-loaded), and an all-off filter deletes it.
+//!
+//! **Reject out, drop in** (KI-680, Linux round L3: a listed address's SYN was dropped, so curl and
+//! Python hung to their own timeouts, 5–6 s, and the agent read a network fault). A packet THIS
+//! machine sends to a listed address is refused at once with an ICMP "administratively prohibited"
+//! ([`REFUSE_OUT`]: the program gets "No route to host" in milliseconds, as the agent guard's own
+//! rules do, LES-154); a packet a listed address sends here is dropped silently — answering it would
+//! tell the threat that this machine is there, and a reject could be reflected at someone else.
+//!
+//! **Counting** ([`dropped`]): every rule counts into a NAMED counter of the table ([`COUNTERS`]),
+//! read with `nft -j list counters table …` — a small answer, unlike the whole table with its
+//! tens of thousands of set elements. Replacing the table on each apply would reset them (KI-680:
+//! the report said 0 while nft had counted), so what they held is carried over first.
+//!
+//! Coexistence: the chains hook
 //! at priority `filter - 10` and only ever drop or reject — never accept — so another firewall's
 //! (ufw, firewalld, Docker's) refusals still hold. The table is Blackbox's alone: no system file
 //! is edited, and no other table is touched.
@@ -22,6 +37,7 @@ use std::collections::BTreeSet;
 use std::net::IpAddr;
 use std::path::Path;
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use serde_json::Value;
@@ -41,6 +57,13 @@ pub const REMOTE_PORTS: &str = "{ 22, 3389, 5900-5903, 21115-21119, 5938, 7070 }
 /// Loading a large threat set can take a moment; still bounded.
 const NFT_TIMEOUT: Duration = Duration::from_secs(60);
 pub const NOT_INSTALLED: &str = "the firewall needs nftables (the nft command): install the nftables package";
+
+/// What a refused outgoing packet gets (see the module doc): the same words as the agent guard's.
+pub const REFUSE_OUT: &str = "reject with icmpx admin-prohibited";
+/// The table's named counters, one per kind of rule.
+pub const COUNTERS: [&str; 7] = ["threats_out", "threats_in", "cut_out", "cut_in", "remote_block", "remote_lock", "ssh_lockdown"];
+/// What the counters held before the table was last replaced (reset by a replacement).
+static CARRIED: AtomicU64 = AtomicU64::new(0);
 
 /// The eight sets: (name, element type).
 const SETS: [(&str, &str); 8] = [
@@ -85,26 +108,29 @@ pub fn ruleset(filter: &Filter) -> String {
     for ((name, kind), elements) in SETS.iter().zip(lists) {
         text.push_str(&set_line(name, kind, elements));
     }
+    for name in COUNTERS {
+        text.push_str(&format!("\tcounter {name} {{ packets 0 bytes 0 }}\n"));
+    }
     let mut output = vec![];
     let mut input = vec![];
     if filter.remote_block.is_some() {
-        input.push("ip saddr @remote_block4 counter drop".to_string());
-        input.push("ip6 saddr @remote_block6 counter drop".to_string());
+        input.push("ip saddr @remote_block4 counter name remote_block drop".to_string());
+        input.push("ip6 saddr @remote_block6 counter name remote_block drop".to_string());
     }
     if filter.remote_lock {
-        input.push(format!("iif != \"lo\" tcp dport {REMOTE_PORTS} counter reject with tcp reset"));
+        input.push(format!("iif != \"lo\" tcp dport {REMOTE_PORTS} counter name remote_lock reject with tcp reset"));
     }
     for (on, set) in [(filter.threats.is_some(), "threats"), (filter.cut.is_some(), "cut")] {
         if on {
-            output.push(format!("ip daddr @{set}4 counter drop"));
-            output.push(format!("ip6 daddr @{set}6 counter drop"));
-            input.push(format!("ip saddr @{set}4 counter drop"));
-            input.push(format!("ip6 saddr @{set}6 counter drop"));
+            output.push(format!("ip daddr @{set}4 counter name {set}_out {REFUSE_OUT}"));
+            output.push(format!("ip6 daddr @{set}6 counter name {set}_out {REFUSE_OUT}"));
+            input.push(format!("ip saddr @{set}4 counter name {set}_in drop"));
+            input.push(format!("ip6 saddr @{set}6 counter name {set}_in drop"));
         }
     }
     if filter.ssh_allow.is_some() {
-        input.push("iif != \"lo\" tcp dport 22 ip saddr != @ssh_allow4 counter reject with tcp reset".to_string());
-        input.push("iif != \"lo\" tcp dport 22 ip6 saddr != @ssh_allow6 counter reject with tcp reset".to_string());
+        input.push("iif != \"lo\" tcp dport 22 ip saddr != @ssh_allow4 counter name ssh_lockdown reject with tcp reset".to_string());
+        input.push("iif != \"lo\" tcp dport 22 ip6 saddr != @ssh_allow6 counter name ssh_lockdown reject with tcp reset".to_string());
     }
     for (chain, hook, rules) in [("output", "output", output), ("input", "input", input)] {
         text.push_str(&format!("\tchain {chain} {{\n\t\ttype filter hook {hook} priority filter - 10; policy accept;\n"));
@@ -117,11 +143,15 @@ pub fn ruleset(filter: &Filter) -> String {
     text
 }
 
-/// Packets the table's rules counted (each rule's `counter`), from `nft -j list table` output.
+/// Packets the table's named counters hold, from `nft -j list counters table …` output (only
+/// Blackbox's table's counters count).
 pub fn parse_dropped(json: &str) -> u64 {
-    rules_of(json).iter().map(|rule| {
-        rule["expr"].as_array().into_iter().flatten().filter_map(|expr| expr["counter"]["packets"].as_u64()).sum::<u64>()
-    }).sum()
+    let parsed: Value = serde_json::from_str(json).unwrap_or(Value::Null);
+    parsed["nftables"].as_array().into_iter().flatten()
+        .filter_map(|item| item.get("counter"))
+        .filter(|counter| counter["table"] == "blackbox_netd" && COUNTERS.contains(&counter["name"].as_str().unwrap_or("")))
+        .filter_map(|counter| counter["packets"].as_u64())
+        .sum()
 }
 
 /// The rules in `nft -j list table` output (none when it is not JSON).
@@ -130,7 +160,7 @@ fn rules_of(json: &str) -> Vec<Value> {
     parsed["nftables"].as_array().into_iter().flatten().filter_map(|item| item.get("rule").cloned()).collect()
 }
 
-/// Whether `nft -j list table` output shows the table with at least one rule.
+/// Whether `nft -j list chain …` output (or the whole table's) holds at least one rule.
 pub fn parse_enforcing(json: &str) -> bool {
     !rules_of(json).is_empty()
 }
@@ -173,8 +203,10 @@ pub fn apply(filter: &Filter) -> Result<Option<String>, String> {
         if first(NFT_COMMANDS).is_none() {
             return Ok(None);
         }
+        carry_counts();
         return nft(&["-f", "-"], Some(&delete_script())).map(|_| None);
     }
+    carry_counts();
     nft(&["-f", "-"], Some(&ruleset(filter)))?;
     match enabled() {
         Some(true) => Ok(Some(TOKEN.to_string())),
@@ -183,19 +215,28 @@ pub fn apply(filter: &Filter) -> Result<Option<String>, String> {
     }
 }
 
-fn listing() -> Option<String> {
-    nft(&["-j", "list", "table", "inet", "blackbox_netd"], None).ok()
+/// The table's counters now (0 when it is not loaded).
+fn counted_now() -> u64 {
+    nft(&["-j", "list", "counters", "table", "inet", "blackbox_netd"], None).map(|json| parse_dropped(&json)).unwrap_or(0)
 }
 
-/// Whether the table is loaded with its rules (None when nftables cannot be asked).
+/// Keeps what the counters hold before a replacement resets them.
+fn carry_counts() {
+    CARRIED.fetch_add(counted_now(), Ordering::Relaxed);
+}
+
+/// Whether the table is loaded with its rules (None when nftables cannot be asked). Its two chains
+/// are listed, never the whole table: the sets' elements are not read every few seconds.
 pub fn enabled() -> Option<bool> {
     first(NFT_COMMANDS)?;
-    Some(listing().is_some_and(|json| parse_enforcing(&json)))
+    Some(["output", "input"].iter().any(|chain| {
+        nft(&["-j", "list", "chain", "inet", "blackbox_netd", chain], None).is_ok_and(|json| parse_enforcing(&json))
+    }))
 }
 
-/// Packets the table's rules dropped or refused so far.
+/// Packets the table's rules dropped or refused since the helper started (across replacements).
 pub fn dropped() -> u64 {
-    listing().map(|json| parse_dropped(&json)).unwrap_or(0)
+    CARRIED.load(Ordering::Relaxed) + counted_now()
 }
 
 /// Ends every open socket and connection-tracking entry to or from *ip*; answers how many.
@@ -232,8 +273,10 @@ mod tests {
     #[test]
     fn only_the_protections_that_are_on_have_rules() {
         let threats = ruleset(&Filter { threats: Some(vec![]), ..Default::default() });
-        assert!(threats.contains("ip daddr @threats4 counter drop") && threats.contains("ip6 saddr @threats6 counter drop"));
+        assert!(threats.contains("ip daddr @threats4 counter name threats_out reject with icmpx admin-prohibited")
+                && threats.contains("ip6 saddr @threats6 counter name threats_in drop"));
         assert!(!threats.contains("@cut4 counter") && !threats.contains("dport 22"));
+        assert_eq!(threats.matches("\tcounter ").count(), COUNTERS.len(), "every counter always exists");
         assert!(threats.starts_with("table inet blackbox_netd\ndelete table inet blackbox_netd\ntable inet blackbox_netd {\n"));
         assert_eq!(threats.matches("\tset ").count(), 8, "every set always exists");
         let rules = threats.lines().filter(|line| line.starts_with("\t\t") && !line.contains("type filter hook"));
@@ -243,7 +286,7 @@ mod tests {
     #[test]
     fn the_lock_and_blocks_come_before_ssh_lockdowns_allow_list_and_lists_split_by_family() {
         let text = ruleset(&every_protection());
-        let blocked = text.find("ip saddr @remote_block4 counter drop").unwrap();
+        let blocked = text.find("ip saddr @remote_block4 counter name remote_block drop").unwrap();
         let lock = text.find("iif != \"lo\" tcp dport { 22, 3389").unwrap();
         let ssh = text.find("ip saddr != @ssh_allow4").unwrap();
         assert!(blocked < lock && lock < ssh, "the lock wins over the SSH allow list");
@@ -254,12 +297,29 @@ mod tests {
         assert_eq!(delete_script(), "table inet blackbox_netd\ndelete table inet blackbox_netd\n");
     }
 
+    /// KI-680 (Linux round L3): a packet this machine sends to a listed address is refused at once,
+    /// never dropped (curl and Python hung 5–6 s); one a listed address sends here is dropped.
+    #[test]
+    fn a_listed_address_is_refused_out_at_once_and_dropped_in() {
+        let text = ruleset(&every_protection());
+        let output: Vec<&str> = text.lines().skip_while(|l| !l.contains("chain output")).take_while(|l| !l.contains("chain input")).collect();
+        let input: Vec<&str> = text.lines().skip_while(|l| !l.contains("chain input")).collect();
+        let refusing = |rules: &[&str]| rules.iter().filter(|l| l.contains("daddr @") || l.contains("saddr @")).all(|l| l.contains(REFUSE_OUT));
+        assert!(refusing(&output) && !output.iter().any(|l| l.ends_with(" drop")), "{output:?}");
+        assert!(input.iter().filter(|l| l.contains("saddr @threats") || l.contains("saddr @cut")).all(|l| l.ends_with(" drop")), "{input:?}");
+    }
+
     #[test]
     fn counters_listings_and_kills_parse() {
-        let listing = r#"{"nftables": [{"metainfo": {"version": "1.0.9"}}, {"table": {"family": "inet", "name": "blackbox_netd"}},
-            {"rule": {"chain": "output", "expr": [{"match": {}}, {"counter": {"packets": 4, "bytes": 240}}, {"drop": null}]}},
-            {"rule": {"chain": "input", "expr": [{"counter": {"packets": 3, "bytes": 180}}, {"drop": null}]}}]}"#;
-        assert_eq!(parse_dropped(listing), 7);
+        // `nft -j list counters table inet blackbox_netd` (libnftables-json(5): a counter object).
+        let counters = r#"{"nftables": [{"metainfo": {"version": "1.0.9", "release_name": "Old Doc Yak #3", "json_schema_version": 1}},
+            {"counter": {"family": "inet", "name": "threats_out", "table": "blackbox_netd", "handle": 9, "packets": 8, "bytes": 480}},
+            {"counter": {"family": "inet", "name": "threats_in", "table": "blackbox_netd", "handle": 10, "packets": 3, "bytes": 180}},
+            {"counter": {"family": "inet", "name": "threats_out", "table": "someone_else", "handle": 2, "packets": 99, "bytes": 1}}]}"#;
+        assert_eq!(parse_dropped(counters), 11, "only Blackbox's table's counters");
+        assert_eq!(parse_dropped("Error: No such file or directory"), 0);
+        let listing = r#"{"nftables": [{"metainfo": {"version": "1.0.9"}},
+            {"rule": {"chain": "output", "expr": [{"match": {}}, {"counter": "threats_out"}, {"reject": {"type": "icmpx", "expr": "admin-prohibited"}}]}}]}"#;
         assert!(parse_enforcing(listing));
         assert!(!parse_enforcing(r#"{"nftables": [{"table": {"name": "blackbox_netd"}}]}"#) && !parse_enforcing("Error"));
         let ss = "tcp ESTAB 0 0 10.0.0.5:41822 198.51.100.9:443\ntcp ESTAB 0 0 10.0.0.5:41830 198.51.100.9:443\n";
@@ -297,14 +357,18 @@ mod tests {
     }
 
     #[test]
-    fn a_threat_address_is_dropped_and_counted_in_a_private_network_namespace() {
+    fn a_threat_address_is_refused_at_once_and_counted_in_a_private_network_namespace() {
         let nft = first(NFT_COMMANDS).unwrap_or("nft");
         let filter = Filter { threats: Some(vec!["127.0.0.2".parse().unwrap()]), ..Default::default() };
-        // bash's /dev/tcp sends a SYN through the output chain; the drop leaves it to time out.
-        let script = format!("ip link set lo up; {nft} -f - && (timeout 2 bash -c 'echo > /dev/tcp/127.0.0.2/9' 2>/dev/null; \
-                              {nft} -j list table inet blackbox_netd)");
+        // bash's /dev/tcp sends a SYN through the output chain: refused, it fails at once (a drop
+        // would wait out the 5 s timeout and print nothing). Then the counters, as `dropped` reads them.
+        let script = format!("ip link set lo up; {nft} -f - && (start=$(date +%s%N); timeout 5 bash -c 'echo > /dev/tcp/127.0.0.2/9'; \
+                              echo \"RC=$? MS=$(( ($(date +%s%N) - start) / 1000000 ))\" >&2; \
+                              {nft} -j list counters table inet blackbox_netd)");
         let Some(done) = in_private_netns(&script, &ruleset(&filter)) else { return };
-        let listing = String::from_utf8_lossy(&done.stdout);
-        assert!(parse_dropped(&listing) >= 1, "the SYN to the threat address was dropped and counted: {listing}");
+        let (out, err) = (String::from_utf8_lossy(&done.stdout), String::from_utf8_lossy(&done.stderr));
+        let ms: u64 = err.split("MS=").nth(1).and_then(|rest| rest.trim().split_whitespace().next()?.parse().ok()).unwrap_or(u64::MAX);
+        assert!(err.contains("RC=1") && ms < 1000, "the connect failed at once, not by timeout (124): {err}");
+        assert!(parse_dropped(&out) >= 1, "the refused SYN was counted: {out}");
     }
 }

@@ -10,11 +10,18 @@ companion app) shows the same shield.
 
     {"version": "<sha256 of the content>", "unchanged": false, "graph_ready": true,
      "dns": {"enabled": true, "verified": [...], "lists": [...], "block": [...]},
-     "firewall": {"enabled": false, "ips": [...]},
+     "firewall": {"enabled": false, "ips": [...], "spared": [...], "never_block": [...]},
      "cut": {"enabled": true, "ips": [...]},          # malicious IPs connected right now: cut them
      "ssh": {"lockdown": false, "allow": ["192.168.1.0/24"]},
      "watch": true,                                    # watch SSH and the login files (shield on)
      "allow": [...]}
+
+The firewall part states what it spares (KI-680): ``spared`` — the verified graph's addresses it
+did NOT drop (a public resolver, the person's allow list) — and ``never_block`` — every address it
+never drops whatever the graph says (``never_block.NEVER_BLOCK_IPS`` and the allow list's
+addresses), so the person can see 1.1.1.1 is safe even when the graph does not list it at all
+(Linux round L3: the graph's SafeDep 1.1.1.1 entry was outside the verified scope, so ``spared`` was
+rightly empty and the plan said nothing about resolvers).
 
 ``"keep_verified": true`` (the graph's lists are unavailable or partial — the store is down, or
 not read yet after a restart) tells the helper to keep the verified domains and firewall addresses
@@ -141,6 +148,7 @@ def _build_plan(mode: ShieldMode, indicators: Optional[Any], cut_ips: tuple[str,
     verified, spared_verified = never_block.split(indicators.domains if dns_on and indicators else (), allowed)
     listed, _spared_lists = never_block.split(list_names, allowed)
     complete = bool(indicators is not None and getattr(indicators, "complete", False))
+    dropped = firewall_ips(mode, indicators.ips if indicators else ()) if firewall_on else frozenset()
     content = {
         "graph_ready": indicators is not None,
         "graph_complete": complete,
@@ -154,10 +162,12 @@ def _build_plan(mode: ShieldMode, indicators: Optional[Any], cut_ips: tuple[str,
                 "spared": spared_verified[:MAX_SPARED],
                 # Lock remote access: remote-control apps' relay domains refused too (remote_lock).
                 "block": sorted(set(_names(block)) | set(remote_lock.relay_domains(mode.enabled))) if dns_on else []},
-        "firewall": {"enabled": firewall_on, "ips": sorted(firewall_ips(mode, indicators.ips if indicators else ())) if firewall_on else [],
+        "firewall": {"enabled": firewall_on, "ips": sorted(dropped),
                      # Verified addresses spared (a public resolver, the allow list): reported, never silently dropped.
                      "spared": never_block.split_ips(public_only(indicators.ips if indicators else ()), allowed)[1][:MAX_SPARED]
-                     if firewall_on else []},
+                     if firewall_on else [],
+                     # The person's own block list is theirs: an address on it is dropped, so not "never".
+                     "never_block": [ip for ip in never_block.never_dropped(allowed) if ip not in dropped] if firewall_on else []},
         "cut": {"enabled": cut_on, "ips": never_block.split_ips(public_only(cut_ips), allowed)[0] if cut_on else []},
         "ssh": {"lockdown": ssh_on, "allow": sorted(mode_module.option(mode, mode_module.OPT_SSH_ALLOW)) if ssh_on else []},
         "watch": mode.enabled,

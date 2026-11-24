@@ -117,6 +117,19 @@ def test_the_firewall_never_drops_a_public_resolver_and_says_which_it_spared():
     assert on["firewall"]["spared"] == ["1.1.1.1", "2620:fe::fe", "8.8.8.8", "93.184.216.34"]
     assert on["cut"]["ips"] == ["45.130.148.102"]
     assert enforcement.firewall_ips(mode, listed) == frozenset({"1.0.164.165", "45.130.148.102", "9.9.9.9"})
+    assert "9.9.9.9" not in on["firewall"]["never_block"], "the person's own block list is theirs"
+
+
+def test_the_plan_states_the_resolvers_it_never_drops_even_when_the_graph_does_not_list_them():
+    """KI-680 (Linux round L3): the graph's SafeDep 1.1.1.1 entry was outside the verified scope, so
+    `spared` was rightly [] — and the plan said nothing at all about the resolvers it protects."""
+    found = SimpleNamespace(domains=frozenset(), ips=frozenset({"1.0.164.165"}))
+    on = enforcement.plan(_on(protections=(network_mode.FIREWALL,), allow=("2620:FE::FE", "203.0.113.9")), found)
+    assert on["firewall"]["spared"] == [] and on["firewall"]["ips"] == ["1.0.164.165"]
+    never = on["firewall"]["never_block"]
+    assert {"1.1.1.1", "1.0.0.1", "8.8.8.8", "9.9.9.9", "2606:4700:4700::1111", "203.0.113.9", "2620:fe::fe"} <= set(never)
+    assert never == sorted(never) and "1.0.164.165" not in never
+    assert enforcement.plan(_on(protections=(network_mode.DNS,)), found)["firewall"]["never_block"] == [], "firewall off: nothing to state"
 
 
 @pytest.mark.parametrize("body", [
