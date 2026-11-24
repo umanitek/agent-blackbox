@@ -52,7 +52,19 @@ notifications:
 
 ## Root (sudo)
 
-Blackbox does not refuse `sudo`: agents keep it. It makes it visible, twice:
+Agents keep `sudo` (the person's decision D7), with one line drawn (Linux round L1, 2026-11-24:
+with passwordless sudo, an agent wrote `/etc/cron.d`, `/etc/sudoers.d`, `/etc/profile.d` and
+enabled a root service of its own):
+
+- **A write as root to a place something starts from** (`/etc/cron.d`, `/etc/sudoers.d`,
+  `/etc/profile.d`, `/etc/systemd/system`, `/etc/ld.so.preload`, PAM …) or `systemctl enable` /
+  `link` of a system service is refused in every mode, like any persistence write.
+- **Any other write as root to the machine's own folders** (`/etc`, `/usr`, `/boot`, `/bin`,
+  `/lib`, `/var/spool`, root's home) — `sudo tee -a /etc/hosts`, `sudo cp x /usr/local/bin/git` —
+  is refused in Block mode and flagged in Audit mode (`fileaccess:<tool>:root-write`).
+- **Every other `sudo`** (`sudo apt install`, `sudo systemctl restart nginx`) runs, and is made
+  visible twice:
+
 
 1. **The request.** A command that asks for more than your own rights — `sudo`, `su`, `doas`, an
    administrator prompt, a change to the sudo rules, adding an account to the admin group, a
@@ -62,7 +74,8 @@ Blackbox does not refuse `sudo`: agents keep it. It makes it visible, twice:
    "running as root" while it lasts, and for about five minutes afterwards a note that `sudo`
    usually stays unlocked in that terminal.
 
-Limits: the process list is read about every 1.5 seconds, so a root command shorter than that can
+Limits: a program that writes as root without naming the place (`sudo make install`, a package
+manager) is only flagged. The process list is read about every 1.5 seconds, so a root command shorter than that can
 be missed (its request is still flagged); a root program that detaches from the agent's process
 tree is no longer attributed to it.
 

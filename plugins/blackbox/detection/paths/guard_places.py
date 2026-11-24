@@ -60,15 +60,16 @@ _STARTS_IN_PIECES = re.compile(
     r"\.ssh\b[^\n]{0,60}?(?:authorized_keys|\benvironment\b|['\"/]rc\b)|Launch(?:Agents|Daemons)\b|com\.apple\.loginitems"
     r"|backgroundtaskmanagement", re.IGNORECASE)
 
-#: The place sets a check can judge against (see :func:`judging`).
-OWN, STARTS, PROGRAMS = "own", "starts", "programs"
+#: The place sets a check can judge against (see :func:`judging`): ROOT is the machine's own folders
+#: (``kernel.persistence_places.ROOT_PLACES``), judged only for a privileged command.
+OWN, STARTS, PROGRAMS, ROOT = "own", "starts", "programs", "root"
 _SCOPE: contextvars.ContextVar[str] = contextvars.ContextVar("blackbox_guard_scope", default=OWN)
 
 
 @contextmanager
 def judging(scope: str) -> Iterator[None]:
     """Within the block, :func:`reaches`, :func:`holds`, :func:`inside` and :func:`guarded_places`
-    answer for the place set *scope* (:data:`OWN`, :data:`STARTS` or :data:`PROGRAMS`)."""
+    answer for the place set *scope* (:data:`OWN`, :data:`STARTS`, :data:`PROGRAMS` or :data:`ROOT`)."""
     token = _SCOPE.set(scope)
     try:
         yield
@@ -244,7 +245,8 @@ def reaches(word: str) -> bool:
 
 
 _PLACES = {OWN: Kept(lambda: _read_places(_all_places())), STARTS: Kept(lambda: _read_places(_starts_places())),
-           PROGRAMS: Kept(lambda: _read_places(_program_places()))}
+           PROGRAMS: Kept(lambda: _read_places(_program_places())),
+           ROOT: Kept(lambda: _read_places(persistence_places.ROOT_PLACES))}
 
 
 def holds(word: str) -> bool:

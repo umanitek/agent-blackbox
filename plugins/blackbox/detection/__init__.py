@@ -37,6 +37,7 @@ from .finding import FIELD_WALLET_SECRET_SENT, KIND_FLAG_ONLY, MANAGER_ORDER, PE
 from .elevation import ELEVATION_ID, detect_elevation
 from .paths.guard_settings import MATCHED as GUARD_TAMPER
 from .persistence_writes import MATCHED as STARTUP_ITEM, detect_persistence_write
+from .privileged_writes import MATCHED as ROOT_WRITE, detect_privileged_write
 from .paths.protected import PathTouch, mentions as protected_path_mentions, touches as protected_path_touches
 
 #: ``Finding.matched`` values refused in EVERY mode, Audit included: an agent switching Blackbox
@@ -85,6 +86,7 @@ __all__ = [
                              'KIND_FLAG_ONLY',
                              'MANAGER_ORDER',
                              'PERSON_PROTECTED',
+                             'ROOT_WRITE',
                              'SENSITIVE_PATH_CATEGORIES',
                              'SHELL_TOOLS',
                              'SKILL_DANGER_SHAPES',
@@ -112,6 +114,7 @@ __all__ = [
                              'detect_model_request_secrets',
                              'detect_own_wallet_keys',
                              'detect_persistence_write',
+                             'detect_privileged_write',
                              'detect_secret_exposure',
                              'detect_skill',
                              'discover_dependency_candidates',

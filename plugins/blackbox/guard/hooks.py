@@ -126,6 +126,8 @@ def _raw_findings(cfg: BlackboxConfig, rs: Any, tool_name: str, args: Any,
     raw += isolated("detect_guard_tamper", lambda: detection.detect_guard_tamper(tool_name, args, cfg))
     # Nothing an agent leaves may start by itself later, outside its checks (the sandbox's own list).
     raw += isolated("detect_persistence_write", lambda: detection.detect_persistence_write(tool_name, args))
+    # An agent's sudo write to the machine's own folders: refused in Block mode (the Linux sudo policy).
+    raw += isolated("detect_privileged_write", lambda: detection.detect_privileged_write(tool_name, args))
     # An agent asking for root is made visible (a flag, never a refusal: D7 leaves sudo alone).
     raw += isolated("detect_elevation", lambda: detection.detect_elevation(tool_name, args))
     # R14: curator-signed DISABLE / WARN, last-good list.

@@ -24,6 +24,11 @@ _ONLY_LOOK = {"crontab": frozenset({"-l", "-r"}), "at": frozenset({"-l", "-r", "
 _LOADS = {"launchctl": frozenset({"load", "bootstrap", "submit", "enable", "kickstart"}),
           "systemctl": frozenset({"enable", "link", "start", "restart", "edit", "daemon-reload", "reenable", "preset",
                                   "add-wants", "add-requires"})}
+#: A system unit's verbs that make it start by itself (at boot, or with another unit): needed root,
+#: and so sudo, until Linux round L1 — with passwordless sudo REAL Codex wrote a root unit and
+#: ``sudo systemctl enable``\ d it. Starting or restarting an existing system unit is not one.
+_SYSTEM_LOADS = frozenset({"enable", "link", "edit", "reenable", "preset", "preset-all", "add-wants", "add-requires",
+                           "set-default"})
 #: Linux (deep layers §3): ``systemd-run`` makes a transient unit that runs OUTSIDE the agent's
 #: session (only its help and version are looks); ``loginctl enable-linger`` keeps the person's
 #: units running with nobody logged in; a D-Bus call to systemd's ``StartTransientUnit`` is
@@ -88,8 +93,8 @@ def schedules(name: str, rest: list[str]) -> bool:
         return not (rest and rest[0] in _ONLY_LOOK[name])
     if name == "launchctl":
         return any(word.lower() in _LOADS[name] for word in rest)
-    if name in _LOADS:   # systemctl: a system unit needs root (sudo is judged on its own)
-        return any(word in _LOADS[name] for word in rest) and "--user" in rest
+    if name in _LOADS:   # systemctl: the person's units by every loading verb, a system unit by those that make it start
+        return any(word in (_LOADS[name] if "--user" in rest else _SYSTEM_LOADS) for word in rest)
     if name == "osascript":
         return any(_LOGIN_ITEM.search(word) for word in rest)
     if name == "sfltool":

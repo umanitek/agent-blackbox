@@ -114,6 +114,14 @@ LINUX_PERSISTENCE_FILES = (
 )
 #: :func:`places_of`'s answer for every OS at once (the hook judgement's).
 EVERY_SYSTEM = "*"
+#: The machine's own folders: its configuration, its programs and libraries, the boot files, the
+#: spools, root's home, Blackbox's root helper. A write there needs root, so an agent reaches them
+#: only through ``sudo`` / ``doas`` / ``pkexec`` / ``su -c`` (Linux round L1: with passwordless
+#: sudo, REAL agents wrote /etc/cron.d, /etc/sudoers.d, /etc/profile.d and enabled a root unit).
+#: In Block mode an agent's PRIVILEGED write to any of these is refused
+#: (``detection.privileged_writes``); other sudo stays a flag (D7).
+ROOT_PLACES = ("/etc", "/private/etc", "/boot", "/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/libx32",
+               "/var/spool", "/var/lib/blackbox", "/root", "/Library", "/System")
 
 #: Homebrew's prefixes and the folders it owns in each (``var`` left out on purpose, see the module
 #: doc). Linux's two (``/home/linuxbrew/.linuxbrew``, or ``~/.linuxbrew`` for one person) beside
@@ -291,6 +299,7 @@ __all__ = [
     "PERSISTENCE_FILES",
     "PERSISTENCE_FOLDERS",
     "PERSISTENCE_GLOBS",
+    "ROOT_PLACES",
     "SHARED_FILES",
     "SHARED_FOLDERS",
     "STARTUP_ITEM",
