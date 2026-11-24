@@ -1,5 +1,7 @@
-//! What the helper watches on Linux. Sees nothing until the observe readers land (build step 6);
-//! the daemon never runs it while [`super::SUPPORTED`] is false.
+//! What the helper watches on Linux: the system watch loop ([`super::system_guard`]: exposure,
+//! persistence, the run-later places, tampering, posture and the DNS tamper guard). SSH and remote
+//! sessions (journald, utmp) and File Shield's real-time watch (fanotify) are later build steps
+//! (11 and 10): until then their looks see nothing and ending a session answers [`NOT_YET`].
 
 use std::time::Duration;
 
@@ -16,7 +18,7 @@ pub struct LinuxObserver;
 impl Observer for LinuxObserver {
     const WATCH_EVERY: Duration = Duration::from_secs(60);
     const REMOTE_EVERY: Duration = Duration::from_secs(60);
-    const SYSTEM_WATCH_STACK: usize = 64 * 1024;
+    const SYSTEM_WATCH_STACK: usize = super::system_guard::STACK_BYTES;
 
     fn look(&self, _watching: bool) -> bool { false }
     fn look_remote(&self, _watching: bool) -> bool { false }
@@ -28,6 +30,8 @@ impl Observer for LinuxObserver {
     fn drain(&self) -> (Vec<Value>, Vec<Value>) { (vec![], vec![]) }
     fn requeue(&self, _watch: Vec<Value>, _remote: Vec<Value>) {}
     fn stop(&self) {}
-    fn run_system_watch(&self) {}
+    fn run_system_watch(&self) {
+        super::system_guard::run();
+    }
     fn run_file_watch(&self) {}
 }
