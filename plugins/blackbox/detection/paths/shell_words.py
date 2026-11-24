@@ -41,10 +41,26 @@ class ShellFileArg:
 
 #: The home folder named by a variable at the start of a path: ``$HOME``, ``${HOME}``, ``%USERPROFILE%``.
 _HOME_VARIABLE = re.compile(r"^(?:\$HOME(?![A-Za-z0-9_])|\$\{HOME\}|%USERPROFILE%)")
+#: Linux's ``/proc`` spellings of the root folder: a process's ``root`` link (``/proc/self/root``,
+#: ``/proc/thread-self/root``, ``/proc/<pid>/root``, a thread's ``/proc/<pid>/task/<tid>/root``), as
+#: often as it is repeated. Private security finding ``2026-11-24-linux-proc-self-root-home-reads-the-prot``
+#: (Linux round L1, High): REAL Claude Code read ``cat /proc/self/root$HOME/Documents/Secret/…``.
+_PROC_ROOT = re.compile(r"^(?:/+proc/+(?:self|thread-self|\d+)(?:/+task/+\d+)?/+root(?=/|\$|$))+")
+#: The acting process's own working folder through ``/proc`` (``/proc/self/cwd/x``): the folder the
+#: command runs in, which every caller joins a relative word onto. Another process's (``/proc/<pid>/cwd``)
+#: and the descriptor links (``/proc/<pid>/fd/N``, ``/dev/fd/N``) are links on the machine that the
+#: path checks follow where they exist (``protected._candidates``); a descriptor of the agent's own
+#: shell is opened by a redirect on the same line, which is read as the read it is.
+_PROC_CWD = re.compile(r"^/+proc/+(?:self|thread-self)(?:/+task/+\d+)?/+cwd(?:/+|$)")
 
 
 def _home_as_tilde(path: str) -> str:
-    """*path* with a leading home-folder variable written as ``~`` (see the module doc)."""
+    """*path* in the ONE spelling every path check reads: Linux's ``/proc`` aliases of the root
+    folder taken away (``/proc/self/root/home/me/x`` is ``/home/me/x``), the acting process's own
+    ``/proc/self/cwd/`` read as its working folder (a relative path), and a leading home-folder
+    variable written as ``~`` (see the module doc)."""
+    path = _PROC_ROOT.sub("", path, count=1) or ("/" if _PROC_ROOT.match(path) else path)
+    path = _PROC_CWD.sub("", path, count=1) or ("." if _PROC_CWD.match(path) else path)
     return _HOME_VARIABLE.sub("~", path, count=1)
 
 
