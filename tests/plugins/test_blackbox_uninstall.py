@@ -97,7 +97,7 @@ def test_the_plan_says_what_goes_and_what_stays(machine):
     lines = "\n".join(uninstall.describe(_plan(machine)))
     assert "remove Blackbox from the Hermes in" in lines and "blackbox-backup-" in lines
     assert str(machine / ".dkg") not in lines
-    assert "Your Hermes itself, other DKG nodes and Docker are not touched." in lines
+    assert "Your Hermes itself, other DKG nodes and Docker's other containers are not touched." in lines
 
 
 def test_uninstall_removes_blackbox_and_keeps_the_keys(machine):
@@ -489,3 +489,40 @@ def test_a_dashboard_and_node_a_root_unit_still_supervises_are_never_stopped_by_
     calls, report = _execute(plan, dashboard_pids=(4242,))
     assert not any(call[0] == "stop-dashboard" for call in calls) and signalled == []
     assert any(line.startswith("left running:") for line in report)
+
+
+def _node_store(machine: Path, *, managed: bool) -> None:
+    """The node's config.json as the installer writes it for a Blazegraph store (Linux round L2)."""
+    dkg = machine / ".hermes" / "blackbox" / "node" / ".dkg"
+    (dkg / "config.json").write_text(json.dumps({"name": "agent-blackbox", "store": {"backend": "blazegraph", "options": {
+        "url": "http://127.0.0.1:9999/bigdata/namespace/agent-blackbox/sparql", "managedByDkg": managed, "timeout": 900000}}}),
+        encoding="utf-8")
+
+
+def test_the_blazegraph_store_the_node_made_is_named_and_removed_with_its_volume(machine, monkeypatch):
+    """KI-676 (Linux round L2): after an uninstall the container dkg-blazegraph-agent-blackbox was
+    still Up on 127.0.0.1:9999 (restart unless-stopped: back at every boot) with its data volume,
+    and the plan never named it. Now it is named, removed with its volume and any too-small copy
+    the provisioner kept — while the node is stopped, before its config goes."""
+    from plugins.blackbox.setup import uninstall_data
+    _node_store(machine, managed=True)
+    monkeypatch.setattr(uninstall_data, "_docker_output",
+                        lambda _cmd: "dkg-blazegraph-agent-blackbox\ndkg-blazegraph-agent-blackbox-pre-4g-1763\nsomeone-else\n")
+    plan = _plan(machine, system="Linux")
+    assert plan.store == uninstall_data.ManagedStore("dkg-blazegraph-agent-blackbox", "dkg-blazegraph-agent-blackbox-data")
+    assert "remove its Blazegraph store: Docker container dkg-blazegraph-agent-blackbox and volume " \
+           "dkg-blazegraph-agent-blackbox-data" in "\n".join(uninstall.describe(plan))
+    calls, report = _execute(plan)
+    docker = [call for call in calls if call[:1] == ["docker"]]
+    assert docker == [["docker", "rm", "-f", "dkg-blazegraph-agent-blackbox"],
+                      ["docker", "rm", "-f", "dkg-blazegraph-agent-blackbox-pre-4g-1763"],
+                      ["docker", "volume", "rm", "-f", "dkg-blazegraph-agent-blackbox-data"]]
+    assert any("removed the Blazegraph store" in line for line in report)
+
+
+def test_an_operators_own_blazegraph_is_never_touched(machine):
+    _node_store(machine, managed=False)
+    plan = _plan(machine, system="Linux")
+    assert plan.store is None
+    calls, _ = _execute(plan)
+    assert not [call for call in calls if call[:1] == ["docker"]]

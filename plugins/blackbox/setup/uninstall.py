@@ -45,7 +45,7 @@ from .. import sync   # sync's public entry: the service names, which process is
 from ..kernel import addons, constants, system_helper, terminal_question, yaml_files
 from ..kernel.host_command import hermes_argv
 from . import addon_cleanup, install_manifest, platform as os_platform
-from .uninstall_data import _back_up, _delete_data
+from .uninstall_data import ManagedStore, _back_up, _delete_data, _remove_store, managed_store
 from .uninstall_outside import Runner, _remove_agent_hooks, _remove_from_agents, _remove_system_helper, _run_at_terminal
 
 #: Files a node needs to keep its identity and wallet (DKG home), and Blackbox's own reporter
@@ -94,6 +94,8 @@ class UninstallPlan:
     addons: tuple[Path, ...] = ()          # add-on folders beside the plugin (kernel.addons)
     #: What the installer made besides Blackbox (the Hermes host on a clean machine, KI-610).
     manifest: install_manifest.InstallManifest = field(default_factory=install_manifest.InstallManifest)
+    #: The node's Blackbox-managed Blazegraph store (Docker), when its config names one (KI-676).
+    store: Optional[ManagedStore] = None
     #: What the add-ons' manifests ask to have removed (read before their folders go), checked.
     addon_cleanup: addon_cleanup.CleanupPlan = field(default_factory=addon_cleanup.CleanupPlan)
 
@@ -152,7 +154,7 @@ def build_plan(*, purge: bool, keep_logs: bool, now: Optional[_dt.datetime] = No
     addon_folders = tuple(home / "plugins" / name for home in hermes_homes for name in addons.found(home / "plugins"))
     return UninstallPlan(
         system_helper=helper, agent_hooks=tuple(agent_hooks.hooked_agents()), addons=addon_folders,
-        system=system, hermes_homes=hermes_homes, blackbox_home=blackbox_home, dkg_home=dkg_home,
+        system=system, hermes_homes=hermes_homes, blackbox_home=blackbox_home, dkg_home=dkg_home, store=managed_store(dkg_home),
         key_files=tuple(p for p in keys if p.is_file()),
         backup_dir=None if purge else Path.home() / f"blackbox-backup-{stamp}",
         keep_logs=keep_logs, shim=shim, system_units=system_units, dashboard_port=dashboard_port,
@@ -183,6 +185,8 @@ def describe(plan: UninstallPlan) -> list[str]:
         lines.append(f"  - remove Blackbox from the Hermes in {home} (its other settings and comments stay)")
     if plan.dkg_home:
         lines.append(f"  - delete Blackbox's DKG node and its synced graph: {plan.dkg_home}")
+    if plan.store:
+        lines.append(f"  - remove its Blazegraph store: Docker container {plan.store.container} and volume {plan.store.volume}")
     lines.append(f"  - delete Blackbox's data: {plan.blackbox_home}")
     if plan.shim:
         lines.append(f"  - remove the blackbox command: {plan.shim}")
@@ -201,7 +205,7 @@ def describe(plan: UninstallPlan) -> list[str]:
             names = ", ".join(entry.name for entry in added[:install_manifest.MAX_NAMED])
             lines.append(f"  - {folder} stays either way: you added to it since the install ({names})")
     else:
-        lines.append("Your Hermes itself, other DKG nodes and Docker are not touched.")
+        lines.append("Your Hermes itself, other DKG nodes and Docker's other containers are not touched.")
     return lines + [f"Note: {n}" for n in plan.notes]
 
 
@@ -302,6 +306,7 @@ def execute(plan: UninstallPlan, *, run: Runner = _run,
     _stop_unsupervised_node(plan, report)
     _stop_notifier(plan, report)
     _back_up(plan, report)
+    _remove_store(plan, run, report)   # the node is stopped; its config (read at plan time) goes below
     hermes_installed = _remove_from_agents(plan, report)
     _remove_agent_hooks(plan, report)
     addon_cleanup.remove(plan.addon_cleanup, run, report)   # what a companion app left (its manifest, read above)
