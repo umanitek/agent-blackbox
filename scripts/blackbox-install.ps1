@@ -115,6 +115,26 @@ $DkgCatchupMaxConcurrentPeers = "1"
 $DkgStoreQueueWaitTimeoutMs = "300000"
 $script:DkgNodeOptions = ""
 $NodeMajor   = if ($env:BLACKBOX_NODE_MAJOR)  { [int]$env:BLACKBOX_NODE_MAJOR } else { 22 }
+# Node for this user only, from nodejs.org's zip (KI-656: winget's Node is a machine-wide MSI whose
+# administrator prompt nobody may be there to answer - the install waited on it forever). The zip
+# runs only when its bytes match the sha256 pinned here (from the release's SHASUMS256.txt); a new
+# Node release moves the version and both sums together.
+$NodeZipVersion = "22.21.1"
+$NodeZipSha256 = @{ "x64" = "3c624e9fbe07e3217552ec52a0f84e2bdc2e6ffa7348f3fdfb9fbf8f42e23fcf"
+                    "arm64" = "b9d7faacd0b540b8b46640dbc8f56f4205ff63b79dec700d4f03d36591b0318f" }
+$NodeZipArch = switch ($env:PROCESSOR_ARCHITECTURE) { "ARM64" { "arm64" } "AMD64" { "x64" } default { "" } }
+$NodeUserDir = if ($NodeZipArch -and $env:LOCALAPPDATA) {
+    Join-Path $env:LOCALAPPDATA "Programs\node-v$NodeZipVersion-win-$NodeZipArch"
+} else { "" }
+# An administrator prompt (UAC) this installer may cause is waited on at most this long, with a
+# line telling the person; then the step is stopped with the command to run as administrator.
+$ElevationTimeoutSeconds = if ($env:BLACKBOX_ELEVATION_TIMEOUT_SECONDS) { [int]$env:BLACKBOX_ELEVATION_TIMEOUT_SECONDS } else { 300 }
+$ElevationPollSeconds = 2
+# Windows ARM64: Visual Studio Build Tools (ARM64 C++ and Clang), which Hermes's setup compiles some
+# dependencies with (pm/native_build.py; cryptography has no ARM64 wheel in the lock). Installing
+# them needs an administrator, so without them the install stops BEFORE Hermes's setup, with this
+# command, unless BLACKBOX_ALLOW_ADMIN_PROMPT=1 lets Hermes ask (an elevation wait, watched below).
+$Arm64BuildToolsCommand = 'winget install --id Microsoft.VisualStudio.2022.BuildTools --override "--passive --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended --add Microsoft.VisualStudio.Component.VC.Tools.ARM64 --add Microsoft.VisualStudio.Component.VC.Llvm.Clang"'
 $DefaultContextGraphId = "0x37b1Fdfd134e2b17583bCBdD3034F91504cD9C70/agent-blackbox-vm"
 $ContextGraphId = if ($env:BLACKBOX_CONTEXT_GRAPH_ID) { $env:BLACKBOX_CONTEXT_GRAPH_ID } else { $DefaultContextGraphId }
 # DKG 10.0.21+ recovery speed-ups (KI-282), both off by default in the node. The exact
@@ -200,7 +220,10 @@ function Test-Git {
         Write-Ok "git $((git --version) -replace 'git version ','')"
     } else {
         Write-Err2 "git not found."
-        Write-Step "Install: winget install Git.Git   (or https://git-scm.com/download/win)"
+        # Per user, no administrator (round 7: winget's Git.Git asked for one even in user scope).
+        Write-Step "Install it for this user only (no administrator needed): MinGit, the portable Git -"
+        Write-Step "  download MinGit-<version>-$(if ($NodeZipArch -eq 'arm64') { 'arm64' } else { '64-bit' }).zip from https://github.com/git-for-windows/git/releases/latest,"
+        Write-Step "  unzip it to $env:LOCALAPPDATA\Programs\MinGit and add $env:LOCALAPPDATA\Programs\MinGit\cmd to your user PATH, then re-run."
         exit 1
     }
 }
@@ -227,7 +250,10 @@ function Resolve-Python {
         } catch { }
     }
     Write-Err2 "Python 3.11-3.13 not found."
-    Write-Step "Install: winget install Python.Python.3.11   (or https://python.org/downloads)"
+    # Per user, no administrator (round 7: winget's Python asked for one even in user scope).
+    $pyArch = if ($NodeZipArch -eq "arm64") { "arm64" } else { "amd64" }
+    Write-Step "Install it for this user only (no administrator needed), then re-run:"
+    Write-Step "  https://www.python.org/ftp/python/3.11.9/python-3.11.9-$pyArch.exe /quiet InstallAllUsers=0 PrependPath=1"
     exit 1
 }
 
@@ -244,25 +270,119 @@ function Test-NodeJs {
         return
     }
     if ($SkipDkg) { $script:HasNode = $false; return }
-    Write-Warn2 "Node.js $NodeMajor+ not found - installing it automatically (winget) ..."
-    if (Get-Command winget -ErrorAction SilentlyContinue) {
-        try {
-            winget install --id OpenJS.NodeJS.LTS --silent --accept-source-agreements --accept-package-agreements | Out-Null
-            # Refresh PATH so node/npm resolve in this session.
-            $env:Path = [System.Environment]::GetEnvironmentVariable('Path','Machine') + ';' +
-                        [System.Environment]::GetEnvironmentVariable('Path','User')
-        } catch { Write-Warn2 "winget Node install did not complete." }
-    } else {
-        Write-Warn2 "winget not available for automatic Node install."
-    }
-    if (Test-NodeOk) {
-        Write-Ok "Node.js $(node -v) installed"
+    Write-Warn2 "Node.js $NodeMajor+ not found - installing Node $NodeZipVersion for this user (no administrator needed) ..."
+    if (Install-NodeForUser) {
+        Write-Ok "Node.js $(node -v) installed in $NodeUserDir"
         $script:HasNode = $true
     } else {
         $script:HasNode = $false
-        Write-Step "Install Node ${NodeMajor} manually: winget install OpenJS.NodeJS.LTS (then re-run this installer)."
+        Write-Step "Install Node ${NodeMajor} for this user: unzip https://nodejs.org/dist/v$NodeZipVersion/node-v$NodeZipVersion-win-$(if ($NodeZipArch) { $NodeZipArch } else { 'x64' }).zip"
+        Write-Step "  into $env:LOCALAPPDATA\Programs and add its folder to your user PATH (then re-run this installer)."
         Write-Step "The Blackbox plugin still works; the DKG node is added once Node is present."
     }
+}
+
+# Node from nodejs.org's zip into %LOCALAPPDATA%\Programs, on the user PATH: no administrator, no
+# prompt (KI-656). $true when node now answers with the required major version. The zip is used
+# only when its sha256 is the pinned one; the folder and the PATH entry are in the install record
+# (a rollback removes them) and the manifest (uninstall takes the PATH entry off; the folder goes
+# with the host on the person's yes).
+function Install-NodeForUser {
+    if (-not $NodeUserDir) {
+        Write-Warn2 "No Node zip for this processor ($env:PROCESSOR_ARCHITECTURE)."
+        return $false
+    }
+    $node = Join-Path $NodeUserDir "node.exe"
+    if (-not (Test-Path -LiteralPath $node)) {
+        $name = Split-Path -Leaf $NodeUserDir
+        $zip = Join-Path ([IO.Path]::GetTempPath()) "$name.zip"
+        try {
+            Invoke-WebRequest -UseBasicParsing "https://nodejs.org/dist/v$NodeZipVersion/$name.zip" -OutFile $zip | Out-Null
+            $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $zip).Hash.ToLowerInvariant()
+            if ($actual -ne $NodeZipSha256[$NodeZipArch]) {
+                Write-Warn2 "The Node zip did not match its pinned checksum (expected $($NodeZipSha256[$NodeZipArch]), got $actual); not using it."
+                return $false
+            }
+            Expand-Archive -LiteralPath $zip -DestinationPath (Split-Path -Parent $NodeUserDir) -Force | Out-Null
+        } catch {
+            Write-Warn2 "Could not download Node for this user: $($_.Exception.Message)"
+            return $false
+        } finally {
+            Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
+        }
+    }
+    if (-not (Test-Path -LiteralPath $node)) { return $false }
+    $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+    if (@($userPath -split ';' | ForEach-Object { $_.Trim().TrimEnd('\') }) -notcontains $NodeUserDir.TrimEnd('\')) {
+        $newUserPath = if ([string]::IsNullOrWhiteSpace($userPath)) { $NodeUserDir } else { "$NodeUserDir;$userPath" }
+        [Environment]::SetEnvironmentVariable("Path", $newUserPath, "User")
+        $script:AddedNodePath = $NodeUserDir   # the install manifest and the rollback take it off again
+    }
+    $env:Path = "$NodeUserDir;$env:Path"
+    return (Test-NodeOk)
+}
+
+# True when this PowerShell runs as an administrator (False where Windows' identity API is absent).
+function Test-IsAdministrator {
+    try {
+        $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+        return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    } catch { return $false }
+}
+
+# Ends a process this installer started, with its children (Hermes's setup and what it ran).
+function Stop-ProcessTree([int]$Id) {
+    if (Get-Command taskkill.exe -ErrorAction SilentlyContinue) {
+        & taskkill.exe /PID $Id /T /F *> $null
+    } else {
+        Stop-Process -Id $Id -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# Waits for $Process (started by this installer) to end, watching for a Windows administrator
+# prompt (consent.exe, the UAC dialog) while it runs (KI-656/657: the install waited on one
+# forever). When a prompt appears, one line tells the person; when it is still unanswered after
+# $ElevationTimeoutSeconds, the process is stopped and the exact command to run as administrator
+# is printed. Returns $true when the process ended by itself (read its ExitCode), $false when stopped.
+function Wait-WithElevationWatch {
+    param([System.Diagnostics.Process]$Process, [string]$What, [string]$AdminCommand)
+    $promptSince = $null
+    while (-not $Process.WaitForExit($ElevationPollSeconds * 1000)) {
+        if (-not (Get-Process -Name consent -ErrorAction SilentlyContinue)) { $promptSince = $null; continue }
+        if (-not $promptSince) {
+            $promptSince = Get-Date
+            Write-Warn2 "Windows is asking for administrator permission for $What (a prompt on the screen). Answer it there; the installer waits at most $ElevationTimeoutSeconds s."
+        } elseif (((Get-Date) - $promptSince).TotalSeconds -ge $ElevationTimeoutSeconds) {
+            Stop-ProcessTree $Process.Id
+            $null = $Process.WaitForExit(10000)
+            Write-Err2 "Nobody answered the administrator prompt for $What within $ElevationTimeoutSeconds s, so that step was stopped."
+            Write-Step "Run this once in an Administrator PowerShell, then run this installer again:"
+            Write-Host "    $AdminCommand" -ForegroundColor Yellow
+            return $false
+        }
+    }
+    return $true
+}
+
+# Windows ARM64 only: Hermes's setup compiles some dependencies and needs Visual Studio Build Tools
+# (ARM64 C++ and Clang); installing them needs an administrator (KI-657). Asked with Hermes's own
+# discovery (scripts\windows-build-deps.ps1 in the checkout), BEFORE Hermes's setup starts. $true
+# when the build can go ahead without a prompt: not ARM64, the tools are there, this PowerShell is
+# elevated, or the person allowed the prompt (BLACKBOX_ALLOW_ADMIN_PROMPT=1).
+function Test-WindowsBuildToolsReady([string]$Repo) {
+    if ($env:PROCESSOR_ARCHITECTURE -ne "ARM64") { return $true }
+    $discovery = Join-Path $Repo "scripts\windows-build-deps.ps1"
+    if (-not (Test-Path -LiteralPath $discovery)) { return $true }   # an older Hermes: its own setup decides
+    . $discovery
+    $vs = Get-HermesArm64VisualStudio
+    if ($vs -and (Get-HermesClang -VisualStudio $vs)) { return $true }
+    if ((Test-IsAdministrator) -or $env:BLACKBOX_ALLOW_ADMIN_PROMPT -eq "1") { return $true }
+    Write-Err2 "This Windows ARM64 machine needs Visual Studio Build Tools (ARM64 C++ and Clang): Hermes compiles some of its"
+    Write-Err2 "dependencies (cryptography has no ARM64 Windows wheel), and only an administrator can install those tools."
+    Write-Step "Run this once in an Administrator PowerShell (it downloads several GB), then run this installer again:"
+    Write-Host "    $Arm64BuildToolsCommand" -ForegroundColor Yellow
+    Write-Step "Or set BLACKBOX_ALLOW_ADMIN_PROMPT=1 and re-run at the desktop to answer Windows' prompt yourself."
+    return $false
 }
 
 function Initialize-BlackboxDkgProcessEnvironment {
@@ -1286,8 +1406,15 @@ function Install-PythonEnvWithHermesSetup {
     Write-Step "Running Hermes's own setup (setup-hermes.ps1: pinned uv + Python, hash-verified dependencies) ..."
     Push-Location $RepoDir
     try {
-        & $shell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $RepoDir "setup-hermes.ps1")
-        if ($LASTEXITCODE -ne 0) { throw "Hermes's own setup (setup-hermes.ps1) failed (exit $LASTEXITCODE; its reason is above)" }
+        # A process of its own, watched: an administrator prompt it raises (Visual Studio Build Tools
+        # on ARM64) is said and timed out, never waited on forever (KI-657).
+        $setupArgs = @("-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", ('"' + (Join-Path $RepoDir "setup-hermes.ps1") + '"'))
+        $setup = Start-Process -FilePath $shell -ArgumentList $setupArgs -NoNewWindow -PassThru
+        $null = $setup.Handle   # Windows PowerShell 5.1 reads ExitCode only through an opened handle
+        if (-not (Wait-WithElevationWatch $setup "Hermes's setup" $Arm64BuildToolsCommand)) {
+            throw "Hermes's own setup waited on an unanswered administrator prompt and was stopped"
+        }
+        if ($setup.ExitCode -ne 0) { throw "Hermes's own setup (setup-hermes.ps1) failed (exit $($setup.ExitCode); its reason is above)" }
         # Single quotes only: Windows PowerShell 5.1 mangles double quotes inside a native argument.
         $env:BLACKBOX_PM_PROBE = "from pathlib import Path; from pm.environments import selected_venv; print(selected_venv(Path('.').resolve()))"
         $activate = (Join-Path $RepoDir "activate.ps1") -replace "'", "''"
@@ -1308,6 +1435,7 @@ function Install-PythonEnvWithHermesSetup {
 
 function Install-PythonEnv {
     Write-Heading "Installing Hermes + Blackbox (Python)"
+    if (-not (Test-WindowsBuildToolsReady $RepoDir)) { exit 1 }   # before anything waits on a prompt (KI-657)
     if (Test-HermesOwnSetup) {
         Install-PythonEnvWithHermesSetup
         & $VenvPython -c "import hermes_cli, fastapi, uvicorn" 2>$null
@@ -2233,7 +2361,7 @@ $StartupTaskNames = @($DkgTaskName, $DashboardTaskName)
 $BlackboxShimDir = Join-Path $HOME ".local\bin"   # the per-user `blackbox` command (Install-BlackboxCommand)
 
 function Get-InstallCreatedPaths {
-    @($DefaultRepoDir, $HermesHome, $BlackboxHome, (Join-Path $BlackboxShimDir "blackbox.cmd"))
+    @($DefaultRepoDir, $HermesHome, $BlackboxHome, (Join-Path $BlackboxShimDir "blackbox.cmd")) + @($NodeUserDir | Where-Object { $_ })
 }
 
 function Get-InstallRewrittenPaths {
@@ -2317,6 +2445,7 @@ function Undo-Install {
         }
     }
     if ($script:AddedUserPath) { Remove-UserPathEntry $script:AddedUserPath }
+    if ($script:AddedNodePath) { Remove-UserPathEntry $script:AddedNodePath }
     Undo-InstallCheckout $record
     foreach ($saved in @($record.Saved)) {
         if (-not (Test-InstallPathRemovable $saved.Path)) { continue }
@@ -2375,6 +2504,10 @@ function Get-InstallLeftovers($Record) {
             ForEach-Object { $_.Trim().TrimEnd('\') }) -contains $script:AddedUserPath.TrimEnd('\'))) {
         "$($script:AddedUserPath) (still on your PATH)"
     }
+    if ($script:AddedNodePath -and (@([Environment]::GetEnvironmentVariable("Path", "User") -split ';' |
+            ForEach-Object { $_.Trim().TrimEnd('\') }) -contains $script:AddedNodePath.TrimEnd('\'))) {
+        "$($script:AddedNodePath) (still on your PATH)"
+    }
 }
 
 # Takes $Entry off the user PATH (the one this run added), leaving every other entry as it is.
@@ -2391,7 +2524,7 @@ function Remove-UserPathEntry([string]$Entry) {
 # the person's yes), and the user-PATH entry it added (taken off on every uninstall).
 function Start-InstallManifest {
     $script:ManifestAbsent = @()
-    foreach ($path in @($DefaultRepoDir, $HermesHome)) {
+    foreach ($path in @($DefaultRepoDir, $HermesHome) + @($NodeUserDir | Where-Object { $_ })) {
         if (-not (Test-Path -LiteralPath $path)) { $script:ManifestAbsent += $path }
     }
 }
@@ -2407,6 +2540,7 @@ function Write-InstallManifest {
         if ($path -and (Test-Path -LiteralPath $path)) { $entries += "host`t$path" }
     }
     if ($script:AddedUserPath) { $entries += "user-path`t$($script:AddedUserPath)" }
+    if ($script:AddedNodePath) { $entries += "user-path`t$($script:AddedNodePath)" }
     # When the first install wrote it: what appears later where the person installs their own tools
     # (uv's tools and Pythons) is theirs, and uninstall keeps it (KI-654). Its own time is the stamp;
     # written once, so an upgrade run keeps the first.
