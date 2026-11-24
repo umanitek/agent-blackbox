@@ -34,6 +34,8 @@ STALE_AFTER_SECONDS = 60
 PROTOCOLS = ("tcp4", "tcp6", "udp4", "udp6")
 ITEM_KINDS = ("launch-agent", "launch-daemon", "user-agent", "cron", "periodic", "login-item", "profile",
               "system-extension", "kernel-extension",
+              # Linux's (helper platform/linux/observe/persistence.rs KINDS)
+              "systemd-unit", "user-unit", "autostart", "dbus-service", "session-start", "root-config",
               # what runs later (helper observe/run_later.rs): events only, never in the snapshot
               "shell-startup", "ssh-login", "at-job", "login-prefs", "path-program")
 PROXIES = ("http", "https", "socks", "auto-config", "auto-discovery")
@@ -142,6 +144,20 @@ def _posture(raw: Any) -> Optional[dict[str, Any]]:
     facts["guest"] = _text(raw.get("guest", ""), "guest", 8)
     # Whether sudo needs no password (only root reads the rules; a helper from before this says nothing).
     facts["passwordless_sudo"] = _choice(raw.get("passwordless_sudo", "unknown"), "passwordless_sudo", ("yes", "no", "unknown"))
+    if "disk_encryption" in raw:   # a Linux helper's facts (platform/linux/observe/posture.rs)
+        facts.update(_linux_posture(raw, updates))
+    return facts
+
+
+#: The facts only a Linux helper reports, and the values each may take.
+LINUX_FACTS = {"disk_encryption": STATES, "secure_boot": STATES, "autologin": STATES, "ssh_password_logins": ("yes", "no", "unknown")}
+
+
+def _linux_posture(raw: Mapping[str, Any], updates: Mapping[str, Any]) -> dict[str, Any]:
+    facts: dict[str, Any] = {"os": "linux"}
+    for key, allowed in LINUX_FACTS.items():
+        facts[key] = _choice(raw.get(key, "unknown"), key, allowed)
+    facts["updates_automatic"] = _choice(updates.get("automatic", "unknown"), "updates.automatic", STATES)
     return facts
 
 

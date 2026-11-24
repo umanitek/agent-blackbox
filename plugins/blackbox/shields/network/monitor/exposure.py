@@ -36,7 +36,11 @@ SERVICES = {22: "SSH (Remote Login)", 88: "Kerberos", 445: "File Sharing (SMB)",
             5353: "Bonjour", 5900: "Screen Sharing", 7000: "AirPlay Receiver"}
 ITEM_NAMES = {"launch-agent": "Launch agent (all users)", "launch-daemon": "Launch daemon (system)", "user-agent": "Launch agent (your account)",
               "cron": "Scheduled job (cron)", "periodic": "Scheduled job (periodic)", "login-item": "Login / background item",
-              "profile": "Configuration profile", "system-extension": "System extension", "kernel-extension": "Kernel extension"}
+              "profile": "Configuration profile", "system-extension": "System extension", "kernel-extension": "Kernel extension",
+              # Linux's
+              "systemd-unit": "systemd service (system)", "user-unit": "systemd service (your account)",
+              "autostart": "Desktop autostart entry", "dbus-service": "D-Bus service (starts on demand)",
+              "session-start": "Session start file", "root-config": "System configuration (root)"}
 # no-tmp: ok — a program RUN from a temporary folder is a risk signal here, not scratch space
 _RISKY_PLACES = re.compile(r"^(/tmp/|/private/tmp/|/private/var/folders/|/var/folders/|/Users/[^/]+/Downloads/)")
 _ORDER = {"critical": 0, "high": 1, "medium": 2, "checking": 3, "low": 4}

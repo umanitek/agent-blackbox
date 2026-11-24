@@ -22,7 +22,8 @@ PANES = {
     "lock": _SETTINGS + "com.apple.Lock-Screen-Settings.extension",
     "users": _SETTINGS + "com.apple.preferences.users",
 }
-WEIGHTS = {"filevault": 15, "firewall": 12, "stealth": 4, "gatekeeper": 10, "sip": 10, "updates": 8, "remote-login": 8,
+WEIGHTS = {"disk-encryption": 15, "linux-firewall": 12, "secure-boot": 6, "autologin": 6, "ssh-passwords": 6,
+           "filevault": 15, "firewall": 12, "stealth": 4, "gatekeeper": 10, "sip": 10, "updates": 8, "remote-login": 8,
            "screen-sharing": 8, "remote-management": 6, "file-sharing": 5, "airdrop": 5, "screen-lock": 6, "guest": 3,
            "passwordless-sudo": 8, "blackbox": 10}
 
@@ -43,9 +44,48 @@ def _updates(updates: Mapping[str, str]) -> str:
     return "ok"   # unset keys mean macOS's default: on
 
 
+def _linux_checks(facts: Mapping[str, Any], blackbox: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """A Linux machine's checks (its helper's facts, ``platform/linux/observe/posture.rs``). Report
+    only for now (design decision F8): no one-click fix, and no settings link — Linux desktops have
+    no one settings app. Linux round L1: macOS's checks (FileVault, Gatekeeper, SIP, AirDrop) were
+    all the posture page knew."""
+    remote_locked = bool(blackbox.get("remote_locked"))
+    protections = blackbox.get("running") and blackbox.get("dns_active") and blackbox.get("firewall_active")
+    sudo = {"yes": "bad", "no": "ok"}.get(str(facts.get("passwordless_sudo")), "unknown")
+    return [
+        _check("disk-encryption", "Disk encryption (LUKS)", _onoff(facts.get("disk_encryption", "unknown")),
+               "Encrypts your disk, so a lost or stolen machine cannot be read."),
+        _check("linux-firewall", "Firewall (ufw / firewalld)", _onoff(facts.get("firewall", "unknown")),
+               "Refuses incoming connections to programs you have not allowed."),
+        _check("secure-boot", "Secure Boot", _onoff(facts.get("secure_boot", "unknown")),
+               "Only a signed boot loader and kernel can start this machine."),
+        _check("updates", "Automatic security updates", _onoff(facts.get("updates_automatic", "unknown")),
+               "Security fixes arrive without waiting for you (unattended-upgrades, dnf-automatic)."),
+        _check("remote-login", "SSH logins", "ok" if not facts.get("remote_login") else ("warn" if remote_locked else "bad"),
+               "Lets anyone with a password or key log in to this machine over the network.",
+               detail="On, but only allowed sources can reach it (Blackbox's lock)." if facts.get("remote_login") and remote_locked else ""),
+        _check("ssh-passwords", "SSH refuses passwords", {"yes": "bad", "no": "ok"}.get(str(facts.get("ssh_password_logins")), "unknown"),
+               "With password logins on, anyone who guesses a password gets in; keys only is safer."),
+        _check("screen-sharing", "Screen sharing (VNC / RDP)", "bad" if facts.get("screen_sharing") else "ok",
+               "Lets someone see and control your screen from another machine."),
+        _check("file-sharing", "File sharing (SMB)", "warn" if facts.get("file_sharing") else "ok",
+               "Shares folders with other machines on the network."),
+        _check("autologin", "No automatic login", {"on": "bad", "off": "ok"}.get(str(facts.get("autologin")), "unknown"),
+               "Automatic login opens your session for anyone who turns the machine on."),
+        _check("passwordless-sudo", "A password is needed to become root", sudo,
+               "Without a password, any program on this machine — an AI agent included — becomes root without asking you.",
+               detail="A sudo rule here (the sudo rules file, or a file in its rules folder) lets commands run without a password. "
+                      "Remove it to be asked again." if sudo == "bad" else ""),
+        _check("blackbox", "Blackbox protections on", "ok" if protections else "warn",
+               "DNS Shield and the Threat Firewall stop known malicious sites and addresses for every program."),
+    ]
+
+
 def checks(facts: Mapping[str, Any], blackbox: Mapping[str, Any]) -> list[dict[str, Any]]:
-    """Every check for *facts*; *blackbox*: ``running``, ``dns_active``, ``firewall_active``,
-    ``remote_locked`` (Remote Login allowed only through Blackbox's lock)."""
+    """Every check for *facts* (a Linux helper's facts get Linux's checks); *blackbox*: ``running``,
+    ``dns_active``, ``firewall_active``, ``remote_locked`` (Remote Login allowed only through Blackbox's lock)."""
+    if facts.get("os") == "linux":
+        return _linux_checks(facts, blackbox)
     remote_locked = bool(blackbox.get("remote_locked"))
     airdrop_everyone = [entry["user"] for entry in facts.get("airdrop", []) if str(entry.get("mode", "")).lower().startswith("everyone")]
     lock = str(facts.get("screen_lock", "unknown"))

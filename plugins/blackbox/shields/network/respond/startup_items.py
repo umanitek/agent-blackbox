@@ -69,7 +69,12 @@ RUN_LATER_NAMES = {"shell-startup": "Shell startup file", "ssh-login": "SSH logi
 #: ``at`` job and a change to the login window's preferences were reported medium — each lets
 #: something in or start later with the person's rights, and nobody known made it.
 _QUIET = {"path-program": "info", "shell-startup": "info", "ssh-login": "high", "at-job": "high", "cron": "high",
-          "login-prefs": "high"}
+          "login-prefs": "high",
+          # Linux's kinds: there is no code signature to judge a Linux program by (phase 1), so a new
+          # or changed unit, autostart entry, D-Bus service, session file or root configuration
+          # whose writer is not known is high — never "critical" for every package an update installs.
+          "systemd-unit": "high", "user-unit": "high", "autostart": "high", "dbus-service": "high",
+          "session-start": "high", "root-config": "high"}
 
 
 @dataclass(frozen=True)
