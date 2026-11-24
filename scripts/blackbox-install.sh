@@ -1746,7 +1746,7 @@ _sha256_of() {
 install_nvm_verified() {
     local script actual
     script="$(mktemp "${TMPDIR:-/tmp}/blackbox-nvm-install.XXXXXX")" || return 1
-    if ! curl -fsSL "https://raw.githubusercontent.com/nvm-sh/nvm/${NVM_INSTALL_VERSION_PIN}/install.sh" -o "$script"; then
+    if ! curl -fsSL --max-time 120 "https://raw.githubusercontent.com/nvm-sh/nvm/${NVM_INSTALL_VERSION_PIN}/install.sh" -o "$script"; then
         rm -f "$script"
         return 1
     fi
@@ -2258,7 +2258,8 @@ run_hermes_setup() {
 fetch_pinned_dkg_tarball() {
     local dir="" file="" actual=""
     dir="$(mktemp -d "${TMPDIR:-/tmp}/blackbox-dkg-pack.XXXXXX")" || return 1
-    if ! file="$(npm pack "$BLACKBOX_DKG_PACKAGE" --pack-destination "$dir" --silent 2>/dev/null | tail -n 1)" ||
+    if ! file="$(run_with_timeout "$BLACKBOX_NPM_STEP_SECONDS" npm pack "$BLACKBOX_DKG_PACKAGE" --pack-destination "$dir" --silent \
+            $BLACKBOX_NPM_NETWORK_FLAGS 2>/dev/null | tail -n 1)" ||
         [ -z "$file" ] || [ ! -f "$dir/$file" ]; then
         rm -rf "$dir"
         warn "Could not download $BLACKBOX_DKG_PACKAGE from the npm registry." >&2
@@ -2328,8 +2329,15 @@ fs.writeFileSync(file, JSON.stringify(pkg, null, 2) + "\n");
 ' "$BLACKBOX_DKG_CLI_DIR/package.json" "$tarball" "${BLACKBOX_DKG_ALLOW_SCRIPTS[@]}"
     local install_spec="$BLACKBOX_DKG_PACKAGE"
     [ -n "$tarball" ] && install_spec="$tarball"
-    npm install --prefix "$BLACKBOX_DKG_CLI_DIR" --prefer-online "$install_spec" >"$npm_log" 2>&1
+    # Bounded (KI-665): with the network cut mid-install this npm waited 16 minutes with no output.
+    # npm's own fetch timeout and retries first, then a hard limit; either way the install fails
+    # and rolls back (all-or-nothing) instead of hanging.
+    # shellcheck disable=SC2086 # the flags are words on purpose
+    run_with_timeout "$BLACKBOX_NPM_STEP_SECONDS" npm install --prefix "$BLACKBOX_DKG_CLI_DIR" --prefer-online \
+        $BLACKBOX_NPM_NETWORK_FLAGS "$install_spec" >"$npm_log" 2>&1
     local npm_status=$?
+    [ "$npm_status" -eq 0 ] || ! grep -q "^blackbox: stopped after" "$npm_log" ||
+        warn "npm did not finish within ${BLACKBOX_NPM_STEP_SECONDS}s — is the network down? Nothing was kept."
     [ -n "$tarball" ] && rm -rf "$(dirname "$tarball")"
     if [ "$npm_status" -ne 0 ]; then
         if [ -n "$backup_dir" ]; then
@@ -3593,14 +3601,19 @@ install_record_note() {
     fi
 }
 
+# How long one npm network step (the DKG package's pack and install) may take, and npm's own
+# fetch limits (KI-665: a cut network hung `npm install` for 16 minutes with no timeout at all).
+BLACKBOX_NPM_STEP_SECONDS="${BLACKBOX_NPM_STEP_SECONDS:-600}"
+BLACKBOX_NPM_NETWORK_FLAGS="--fetch-timeout=60000 --fetch-retries=2 --fetch-retry-maxtimeout=30000"
+
 # Run a command, giving up after SECONDS (macOS has no timeout(1)). Returns its exit code,
-# or non-zero when it had to be stopped.
+# or non-zero when it had to be stopped (and then says so on stderr: "blackbox: stopped after …").
 run_with_timeout() {
     local seconds="$1" pid watcher rc
     shift
     "$@" &
     pid=$!
-    ( sleep "$seconds"; kill "$pid" 2>/dev/null ) &
+    ( sleep "$seconds"; kill "$pid" 2>/dev/null && echo "blackbox: stopped after ${seconds}s: $1" >&2 ) &
     watcher=$!
     wait "$pid"
     rc=$?
