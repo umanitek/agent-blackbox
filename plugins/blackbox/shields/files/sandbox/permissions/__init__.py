@@ -88,10 +88,12 @@ def _open(permission: str, scope: Scope, instance: str, what: str, pid: int, det
     return opened is not None
 
 
-def ask(permission: str, agent: str, instance: str, folder: str, what: str, pid: int = 0) -> bool:
-    """Opens a request for *permission* when it is on "ask" for *agent* in *folder*; True when one was opened."""
+def ask(permission: str, agent: str, instance: str, folder: str, what: str, pid: int = 0, even_on_allow: bool = False) -> bool:
+    """Opens a request for *permission* when it is on "ask" for *agent* in *folder* (*even_on_allow*:
+    on "allow" too — a broker that must not act unasked); True when one was opened."""
     settings = current()
-    if settings.mode(BY_ID[permission], agent, folder) is not Mode.ASK:
+    mode = settings.mode(BY_ID[permission], agent, folder)
+    if mode is not Mode.ASK and not (even_on_allow and mode is Mode.ALLOW):
         return False
     return _open(permission, _scope_of(settings, permission, agent, folder), instance, what, pid)
 

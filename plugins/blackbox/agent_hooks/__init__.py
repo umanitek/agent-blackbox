@@ -43,10 +43,11 @@ from .protect import config_edit, hook_watch, own_files
 from .protect import recorder
 from .protect.judge_here import JUDGE_HERE_FILE
 from .protect.sandbox_errors import RefusalSeen, on_sandbox_refusal
+from .protect.sandbox_run import answer_hidden_sockets_with
 from .protect.events import answer_event, note_error, read_state, record_event, write_state
 from ..kernel.agent_hosts import BY_ID, HOSTS, Host
 
-__all__ = ["KINDS", "AgentRow", "RefusalSeen", "answer_event", "hooked_agents", "keep_hooks", "note_error", "on_sandbox_refusal",
+__all__ = ["KINDS", "AgentRow", "RefusalSeen", "answer_event", "answer_hidden_sockets_with", "hooked_agents", "keep_hooks", "note_error", "on_sandbox_refusal",
            "owners", "present", "process_facts", "prompt_text", "record_event", "remove_all", "rows", "set_protection",
            "settle", "sweep", "tracking", "versions"]
 

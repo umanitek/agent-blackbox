@@ -19,6 +19,7 @@ Usage::
 
 from __future__ import annotations
 
+import fnmatch
 import os
 
 from ...permissions import Allowances
@@ -148,6 +149,19 @@ def _never(places: Places, home: str, runtime: str) -> list[str]:
     return lines
 
 
+def hides_socket(text: str, socket: str) -> bool:
+    """True when policy *text* (one a launcher applied) hides *socket*: a ``hide-socket`` line names
+    it, or a ``hide-socket-glob`` line matches it. WHY (KI-685): the dashboard judges a sandboxed
+    agent's "cannot connect to Docker" OUTSIDE the sandbox, where the socket is the live one; the
+    policy the run started with is what says the sandbox hid it."""
+    written = _escape(socket)   # compared as the policy writes it
+    for line in text.splitlines():
+        directive, _, path = line.partition(" ")
+        if (directive == "hide-socket" and path == written) or (directive == "hide-socket-glob" and fnmatch.fnmatchcase(written, path)):
+            return True
+    return False
+
+
 def render(places: Places, digest_line: str = "", allowances: Allowances = Allowances(), home: str = "",
            runtime: str = "") -> str:
     """The policy for *places* with the permissions *allowances* lets through: the permission lines,
@@ -163,4 +177,4 @@ def render(places: Places, digest_line: str = "", allowances: Allowances = Allow
 
 __all__ = ["BUS_SOCKETS", "CGROUP_TREE", "DEVICE_GLOBS", "DEVICE_PLACES", "DISPLAY_SOCKET_GLOBS", "DOCKER_SOCKETS", "DOCKER_SOCKET_GLOBS",
            "HEADER", "NEVER_MARK", "PROFILE_SUFFIX", "REACHABLE_ON_PURPOSE", "SANDBOX", "SESSION_SERVICE_SOCKETS",
-           "USER_MANAGER_FOLDERS", "permission_lines", "render", "runtime_dir"]
+           "USER_MANAGER_FOLDERS", "hides_socket", "permission_lines", "render", "runtime_dir"]

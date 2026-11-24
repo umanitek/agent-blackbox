@@ -104,6 +104,9 @@ def register(app: Any) -> None:
     approvals.SECTION_JUDGES[shields.PACKAGE_INSTALLS] = shields.package_installs_weakening
     approvals.SECTION_JUDGES[shields.AGENT_SANDBOX] = shields.agent_sandbox_weakening
     agent_hooks.on_sandbox_refusal(_ask_on_refusal)
+    # A sandboxed run's refused Docker connect is judged by the profile it started with: this
+    # process runs OUTSIDE the sandbox and sees the live socket, never the mask (KI-685).
+    agent_hooks.answer_hidden_sockets_with(shields.run_hides_socket)
     from fastapi import Request
     from fastapi.responses import JSONResponse, Response
     from starlette.concurrency import run_in_threadpool

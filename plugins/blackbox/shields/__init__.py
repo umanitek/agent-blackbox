@@ -80,7 +80,7 @@ __all__ = [
     "alerts", "all_shields", "allow_lists", "allows", "apply_sandbox_default", "attack_table",
     "browser_roots", "call_api", "check", "describe_change", "enter_hermes_process", "events", "get",
     "loaded_packs", "pack_logo", "package_installs_weakening", "permission_refused", "prompt_findings", "reload_registry",
-    "remove_sandbox_placeholders",
+    "remove_sandbox_placeholders", "run_hides_socket",
     "self_tests", "settings_validators", "settings_view", "shield_name", "snapshot", "statuses",
     "unlocked", "write_weakening",
 ]
@@ -98,6 +98,9 @@ AGENT_SANDBOX, agent_sandbox_weakening = files.sandbox.permissions.SECTION, file
 #: A sandbox refusal an agent's hook saw: asks the person when the permission it means is on "ask"
 #: (a refused signal: the stop broker, with the process it named).
 permission_refused = files.sandbox.on_refusal
+#: Whether the profile a sandboxed run started with hides an engine's socket (``<file>#<digest>``,
+#: the socket path): how a refused Docker connect is recognised from outside the sandbox (KI-685).
+run_hides_socket = files.sandbox.run_hides_socket
 
 #: The plugin's own shields, in registration order. Registering one is one line here; an add-on's
 #: shields and extensions join them on first use (:func:`_registry`).

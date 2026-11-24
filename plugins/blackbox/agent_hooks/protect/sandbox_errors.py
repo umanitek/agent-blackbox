@@ -54,9 +54,16 @@ from typing import Callable
 
 from ...kernel import persistence_places
 from ...kernel.os_layout import machine_words
+from . import sandbox_run
+from .sandbox_run import SandboxRun
 
 #: The kinds of refusal; only :data:`FILE` is left for the helper's deny-log watch to count.
 SETUID, APP_DRIVER, OPEN_APP, SIGNAL, NESTED, FILE = "setuid", "app-driver", "open-app", "signal", "nested", "file"
+#: Linux below 6.12 (the sandbox is its own PID namespace): a kill of a process the agent can not
+#: SEE answers "No such process" — maybe a process outside, maybe one that already ended. Never
+#: counted as a refusal (it may not be one); the stop broker asks the person only when such a
+#: process of theirs runs outside (KI-687).
+UNSEEN_SIGNAL = "signal-unseen"
 #: Blackbox's own stand-in already said it (counted, not said again); a shell startup file an
 #: installer tried to change (its lines are handed to the person); a place something starts from by
 #: itself (a launchd job, cron/at, an SSH login file, Homebrew's folders).
@@ -93,6 +100,8 @@ _WHY = {
     APP_DRIVER: "a program that drives another app would act outside the sandbox; do that step in your own terminal",
     OPEN_APP: "opening another app would run it outside the sandbox; open it yourself",
     SIGNAL: "an agent may stop only the programs it started itself, never one outside its sandbox",
+    UNSEEN_SIGNAL: ("inside the sandbox an agent sees only the programs it started itself; if that process runs outside "
+                    "it, Blackbox asks the person whether to stop it (stop-processes in Blackbox's sandbox permissions)"),
     NESTED: ("a tool that starts its own sandbox can not run inside Blackbox's; SwiftPM: use `swift build "
              "--disable-sandbox` (Blackbox's sandbox still covers it, nothing is lost); anything else: run it in "
              "your own terminal"),
@@ -112,7 +121,7 @@ _WHY = {
                   "own terminal"),
 }
 _WHAT = {SETUID: "{name}, a setuid program", APP_DRIVER: "{name}", OPEN_APP: "open",
-         SIGNAL: "a signal to a process outside the sandbox", NESTED: "a second sandbox", DOCKER: "Docker", TOOL_FOLDER: "{name}", LOCAL_PORT: f"a service on {THIS_MACHINE}", FILE: "{name}", STARTUP: "{name}",
+         SIGNAL: "a signal to a process outside the sandbox", UNSEEN_SIGNAL: "a signal to process {name}", NESTED: "a second sandbox", DOCKER: "Docker", TOOL_FOLDER: "{name}", LOCAL_PORT: f"a service on {THIS_MACHINE}", FILE: "{name}", STARTUP: "{name}",
          PERSISTENCE: "{name}", SYSTEM_SERVICES: "the session bus", DISPLAY: "the display"}
 #: zsh: ``(eval):1: operation not permitted: sudo``; bash: ``bash: /usr/bin/sudo: Operation not
 #: permitted``; sandbox-exec itself: ``execvp() of '/bin/ps' failed: Operation not permitted``.
@@ -122,6 +131,10 @@ _EXEC = re.compile(r"operation not permitted: (?P<z>\S+)\s*$|(?:^|\s)(?P<b>/\S+)
 _OPEN = re.compile(r"LSOpenURLs\w*\(\) failed.*?error -54|LSOpenURLsWithRole\(\) failed with error -54", re.IGNORECASE)
 _SIGNAL = re.compile(r"kill(?::\d+:?)? kill (?:-\S+ )?\d+ failed: operation not permitted|kill: \(\d+\) - operation not permitted"
                      r"|kill: \d+: operation not permitted", re.IGNORECASE)
+#: The same kill answered "No such process" (bash ``kill: (8240) - No such process``, zsh ``kill: kill
+#: 8240 failed: no such process``, dash / procps ``kill: 8240: No such process`` / ``kill: (8240): …``).
+_UNSEEN = re.compile(r"kill(?::\d+:?)? kill (?:-\S+ )?(?P<z>\d+) failed: no such process|kill: \((?P<b>\d+)\)(?: -|:) no such process"
+                     r"|kill: (?P<d>\d+): no such process", re.IGNORECASE)
 _NESTED = re.compile(r"sandbox_apply: operation not permitted", re.IGNORECASE)
 #: A container engine's socket refused (KI-646, security round 7: docker CLI 29 says ``permission
 #: denied while trying to connect to the docker API at unix:///…/docker.sock``, and the old matcher
@@ -154,12 +167,20 @@ def _is_mask(path: str) -> bool:
     return stat.S_ISREG(found.st_mode) and found.st_size == 0 and stat.S_IMODE(found.st_mode) == 0
 
 
-def _masked_socket(text: str) -> bool:
+def _hidden(socket: str, run: SandboxRun) -> bool:
+    judged = sandbox_run.hides(run, socket)
+    return _is_mask(socket) if judged is None else judged
+
+
+def _masked_socket(text: str, run: SandboxRun = SandboxRun()) -> bool:
     """True when a client's "cannot connect" names an engine socket the sandbox hid (KI-679, Linux
     round L3: inside, Docker's socket is the mask, so docker 29 says "Cannot connect to the Docker
     daemon at unix:///var/run/docker.sock. Is the docker daemon running?" — the not-started words —
-    and Docker on "ask" never asked). The socket path is the signal, not the wording."""
-    return any(_is_mask(match.group("at") or match.group("dial")) for match in _ENGINE_SOCKET.finditer(text))
+    and Docker on "ask" never asked). The socket path is the signal, not the wording. WHY the run's
+    profile decides (KI-685, Linux round L4): this runs in the dashboard, OUTSIDE the sandbox, where
+    the path is the live socket; the profile the launcher applied says whether it was hidden. The
+    path's own mode is read only when no profile is known (a check made inside the sandbox)."""
+    return any(_hidden(match.group("at") or match.group("dial"), run) for match in _ENGINE_SOCKET.finditer(text))
 
 
 #: A connect to this computer refused: ``connect to 127.0.0.1 port 5432 … Operation not permitted``,
@@ -273,18 +294,22 @@ def _exec_kind(word: str, text: str = "") -> Refusal:
     return Refusal(FILE, word)
 
 
-def refusals(output: str) -> list[Refusal]:
-    """The sandbox refusals a tool's *output* shows, each once, at most :data:`MAX_FOUND`."""
+def refusals(output: str, run: SandboxRun = SandboxRun()) -> list[Refusal]:
+    """The sandbox refusals a tool's *output* shows, each once, at most :data:`MAX_FOUND`. *run*: what
+    is known of the sandboxed run (its profile, its PID namespace)."""
     text = (output or "")[:MAX_READ_CHARS]
     found: list[Refusal] = []
     signal = _SIGNAL.search(text)
     if signal:   # the process it named: the last number in the line (zsh puts its line number first)
         found.append(Refusal(SIGNAL, (re.findall(r"\d+", signal.group(0)) or [""])[-1]))
+    unseen = _UNSEEN.search(text) if run.pid_namespace else None
+    if unseen and not signal:
+        found.append(Refusal(UNSEEN_SIGNAL, unseen.group("z") or unseen.group("b") or unseen.group("d") or ""))
     if _OPEN.search(text):
         found.append(Refusal(OPEN_APP))
     if _NESTED.search(text):
         found.append(Refusal(NESTED))
-    if _DOCKER.search(text) or _masked_socket(text):
+    if _DOCKER.search(text) or _masked_socket(text, run):
         found.append(Refusal(DOCKER))
     elif _LOCAL_PORT.search(text):
         found.append(Refusal(LOCAL_PORT))
@@ -324,8 +349,8 @@ def read_output_of(tool_name: str) -> bool:
 
 def counted(found: list[Refusal]) -> list[str]:
     """The identities of the refusals in *found* the post-call counts — every kind but a shell
-    startup file's — each once; [] for none (the instance pairs a file with the deny-log's line of it)."""
-    return list(dict.fromkeys(each.identity for each in found if each.kind != STARTUP))
+    startup file's and an unseen process's (:data:`UNSEEN_SIGNAL`: not proven a refusal) — each once; [] for none (the instance pairs a file with the deny-log's line of it)."""
+    return list(dict.fromkeys(each.identity for each in found if each.kind not in (STARTUP, UNSEEN_SIGNAL)))
 
 
 def note(found: list[Refusal]) -> str:

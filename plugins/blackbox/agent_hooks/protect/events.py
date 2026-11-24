@@ -162,6 +162,7 @@ def _identity(body: Mapping[str, Any]) -> dict[str, Any]:
     pid = body.get("pid")
     pid = pid if isinstance(pid, int) and not isinstance(pid, bool) and pid > 0 else 0
     sandbox_id = _text(body.get("sandbox_id"), 120)
+    reported = pid
     if pid and sandbox_id and body.get("sandboxed") is True:
         pid = host_pid(sandbox_id, pid)   # Linux below 6.12: the sandbox's own PID namespace
     return {"sub": _text(body.get("sub"), 200), "sub_type": _text(body.get("sub_type"), 80), "task": _text(body.get("task"), 200),
@@ -169,6 +170,8 @@ def _identity(body: Mapping[str, Any]) -> dict[str, Any]:
             "parent": _text(body.get("parent"), 200), "model": _text(body.get("model"), 80), "why": _text(body.get("why"), 40),
             "background": body.get("background") is True, "profile": _text(body.get("profile")),
             "entry": _text(body.get("entry"), 40), "pid": pid,
+            # Its own PID namespace (NSpid mapped the hook's pid to another): KI-687's "No such process".
+            "pid_namespace": pid != reported,
             "prompt_id": _text(body.get("prompt_id"), 80), "agent_turn": body.get("agent_turn") is True}
 
 
@@ -294,7 +297,8 @@ def judge(body: Any) -> tuple[dict[str, Any], Optional[Judged]]:
     blocked = verdict.get("decision") == "block"
     answer = {"decision": "block" if blocked else "allow", "message": verdict.get("message", "") if blocked else "",
               "findings": len(findings), "recorded": True}
-    refused = sandbox_errors.refusals(event["text"]) if event["event"] == "post_tool" and event["sandboxed"] is True \
+    run = sandbox_errors.SandboxRun(event["sandbox_profile"], event["pid_namespace"])
+    refused = sandbox_errors.refusals(event["text"], run) if event["event"] == "post_tool" and event["sandboxed"] is True \
         and sandbox_errors.read_output_of(event["tool_name"]) else []
     if refused and not blocked:   # the kernel refused part of the call: said to the agent, counted once each (KI-590, KI-637)
         if sandbox_errors.note(refused):

@@ -51,6 +51,10 @@ def startup_places(_home: str) -> tuple[list[str], list[str], list[str]]:
     return [], [], []
 
 
+def hides_socket(_text: str, _socket: str) -> bool:
+    return False
+
+
 def render(_places: Places, digest_line: str = "", allowances: object = None) -> str:
     return ""
 

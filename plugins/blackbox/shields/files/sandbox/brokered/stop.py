@@ -7,6 +7,13 @@ reads the refusal with the process id (``agent_hooks`` SIGNAL), and this broker 
 on "allow" Blackbox stops it at once; on "ask" the person is asked, and Blackbox stops it when they
 allow it (once, or always for this agent here).
 
+On Linux below 6.12 the sandbox is its own PID namespace, so a process outside is not even
+visible: the agent's ``kill 8240`` answers "No such process" (``signal-unseen``, KI-687). The
+broker then ASKS the person — even when the permission says allow — and only for a process of
+theirs that runs outside: the number may have been one of the agent's own that already ended, and
+outside it names someone else's program. The agent is told nothing either way (its note is the same
+whether the process exists or not), so no process outside is revealed to it.
+
 NEVER stopped, whatever the permission says (:func:`never`): process 1 and below, Blackbox itself
 (this process, its parent, anything running Blackbox's plugin or from its home), macOS's own
 programs, another user's processes, and another AI agent. The check is made again right before
@@ -29,6 +36,8 @@ from .. import permissions, platform
 from ..layout import CLI_AGENTS
 
 PERMISSION = "stop-processes"
+#: A kill of a process the agent could not see (``agent_hooks`` ``signal-unseen``): asked, never stopped at once.
+UNSEEN_KIND = "signal-unseen"
 _PLUGIN = os.path.realpath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 logger = logging.getLogger(__name__)
 
@@ -68,16 +77,18 @@ def _stop(pid: int, agent: str, folder: str) -> bool:
     return stopped
 
 
-def on_refused(pid: int, agent: str, instance: str, folder: str) -> str:
+def on_refused(pid: int, agent: str, instance: str, folder: str, unseen: bool = False) -> str:
     """The agent's kill of *pid* was refused: stop it now (allow), ask the person (ask), or nothing
-    (block, or a process that is never stopped). Answers what happened: ``stopped`` / ``asked`` /
-    ``refused``."""
+    (block, or a process that is never stopped). *unseen*: the agent could not see the process (its
+    own PID namespace) — asked even on allow, never stopped at once. Answers what happened:
+    ``stopped`` / ``asked`` / ``refused``."""
     if pid <= 0 or never(pid):
         return "refused"
     mode = permissions.decide(PERMISSION, agent, folder)
-    if mode is permissions.Mode.ALLOW:
+    if mode is permissions.Mode.ALLOW and not unseen:
         return "stopped" if _stop(pid, agent, folder) else "refused"
-    if mode is permissions.Mode.ASK and permissions.ask(PERMISSION, agent, instance, folder, f"stop {_name(pid)} (process {pid})", pid):
+    if mode is not permissions.Mode.BLOCK and permissions.ask(PERMISSION, agent, instance, folder, f"stop {_name(pid)} (process {pid})",
+                                                               pid, even_on_allow=unseen):
         return "asked"
     return "refused"
 
@@ -87,4 +98,4 @@ def act(request: permissions.PermissionRequest) -> None:
     _stop(request.pid, request.agent, request.project)
 
 
-__all__ = ["PERMISSION", "act", "never", "on_refused"]
+__all__ = ["PERMISSION", "UNSEEN_KIND", "act", "never", "on_refused"]

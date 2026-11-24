@@ -44,9 +44,14 @@ def digest(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:DIGEST_CHARS]
 
 
+def read_profile(path: str) -> str:
+    """A rendered profile's text ("" when unreadable), at most :data:`MAX_PROFILE_BYTES`."""
+    return read_small_text(path, MAX_PROFILE_BYTES) or ""
+
+
 def digest_of(path: str) -> str:
     """The digest a rendered profile's second line carries ("" when unreadable or none)."""
-    text = read_small_text(path, MAX_PROFILE_BYTES) or ""
+    text = read_profile(path)
     lines = text.splitlines()
     marker = lines[1].rsplit("sha256:", 1) if len(lines) > 1 else []
     return marker[1].strip() if len(marker) == 2 else ""
@@ -179,6 +184,7 @@ __all__ = [
     "project_file",
     "projects_dir",
     "projects_for",
+    "read_profile",
     "render_signed",
     "sync",
     "write_once",

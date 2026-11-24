@@ -83,6 +83,13 @@ def port_lines(allowances: Allowances) -> list[str]:
     return [PORTS_MARK, "(allow network-outbound\n  " + "\n  ".join(f'(remote ip "localhost:{port}")' for port in ports) + ")"]
 
 
+def hides_socket(text: str, socket: str) -> bool:
+    """True when profile *text* refuses connecting to *socket* by name (``path-literal``). On macOS a
+    refused connect says "operation not permitted", which ``agent_hooks`` reads on its own; this is
+    the same question the Linux module answers (KI-685)."""
+    return f"(remote unix-socket (path-literal {_quote(socket)}))" in text
+
+
 def _docker_lines(home: str) -> list[str]:
     sockets = [f"(remote unix-socket (path-literal {_quote(path.format(home=home))}))" for path in DOCKER_SOCKETS]
     sockets += [f"(remote unix-socket (regex {_glob_regex(glob.format(home=home))}))" for glob in DOCKER_SOCKET_GLOBS]
@@ -190,5 +197,5 @@ def _never(places: Places) -> list[str]:
 
 
 
-__all__ = ["APP_DRIVERS", "CFPREFSD_SERVICES", "CLOSE_PREFERENCES_THROUGH_CFPREFSD", "DOCKER_PORTS", "DOCKER_SOCKETS", "DOCKER_SOCKET_GLOBS", "LOCAL_SSH", "NEVER_MARK", "NEVER_PORTS", "PASTEBOARD", "PORTS_MARK", "PROFILE_SUFFIX", "SANDBOX_EXEC", "cfprefsd_lines", "permission_lines", "port_lines",
+__all__ = ["APP_DRIVERS", "CFPREFSD_SERVICES", "CLOSE_PREFERENCES_THROUGH_CFPREFSD", "DOCKER_PORTS", "DOCKER_SOCKETS", "DOCKER_SOCKET_GLOBS", "LOCAL_SSH", "NEVER_MARK", "NEVER_PORTS", "PASTEBOARD", "PORTS_MARK", "PROFILE_SUFFIX", "SANDBOX_EXEC", "cfprefsd_lines", "hides_socket", "permission_lines", "port_lines",
            "render"]

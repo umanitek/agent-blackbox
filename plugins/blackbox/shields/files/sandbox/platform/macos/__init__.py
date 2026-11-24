@@ -55,7 +55,7 @@ from .launchers import ONCE_MINUTES, ONCE_SUFFIX, PROJECT_INDEX, RUN_INFIX, comm
 from .applescript import run_script
 from .opener import find_app, is_driver, open_url, open_with
 from .processes import ProcessFacts, describe, is_system, terminate
-from .profile import APP_DRIVERS, LOCAL_SSH, PROFILE_SUFFIX, SANDBOX_EXEC, render
+from .profile import APP_DRIVERS, LOCAL_SSH, PROFILE_SUFFIX, SANDBOX_EXEC, hides_socket, render
 from .shims import BREW_PATHS, BREW_READ_ONLY, MANAGER_FOLDERS, brew_shim, broker_shims, manager_shims, open_shim, osascript_shim, spawn_brew, stop_group
 from .tools import PS, SETUID_NOTE, SETUID_TOOLS, TOOLS_FOLDER, refresh_tools
 
@@ -87,7 +87,7 @@ def unprepare(_state: Path) -> list[str]:
 
 __all__ = ["APPS", "APP_DRIVERS", "BREW_PATHS", "BREW_READ_ONLY", "ELECTRON_FLAGS", "LOCAL_SSH", "MANAGER_FOLDERS", "ONCE_MINUTES", "ONCE_SUFFIX",
            "PROFILE_SUFFIX", "PROJECT_INDEX", "PS", "RUN_INFIX", "SANDBOX_EXEC", "SETUID_NOTE", "SETUID_TOOLS",
-           "TOOLS_FOLDER", "ProcessFacts", "brew_shim", "broker_shims", "command_shim", "describe", "find_app", "is_driver",
+           "TOOLS_FOLDER", "ProcessFacts", "brew_shim", "broker_shims", "command_shim", "describe", "find_app", "hides_socket", "is_driver",
            "is_system", "launcher_script", "layers", "manager_shims", "network_rules", "open_app", "open_shim", "open_url", "open_with",
            "osascript_shim", "prepare", "refresh_tools", "render", "run_script", "shell_shim", "spawn_brew", "startup_places",
            "stop_group", "terminate", "unavailable", "unprepare"]

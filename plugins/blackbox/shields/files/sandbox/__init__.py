@@ -57,7 +57,7 @@ __all__ = ["CLI_AGENTS", "HERMES_CODE_LAUNCHER", "HERMES_LAUNCHER_ENV", "HERMES_
            "NOT_INSTALLED_NOTE", "SANDBOXED", "SHELLS_ONLY", "HermesCover", "Places", "act_on", "brokered",
            "canary_path", "chosen", "enter_hermes_process", "enter_hermes_session", "hermes_shell_dir", "home",
            "launcher_dir", "network_rules", "offer", "on_refusal", "open_app", "policy", "profile_path", "protection", "proven",
-           "remove_placeholders", "restorations", "self_protected_files", "status", "sync", "unavailable"]
+           "remove_placeholders", "restorations", "run_hides_socket", "self_protected_files", "status", "sync", "unavailable"]
 
 
 def unavailable() -> Optional[str]:
@@ -232,6 +232,19 @@ def stale_runs(runs: list[RunningAgent]) -> list[RunningAgent]:
     return stale
 
 
+def run_hides_socket(profile_ref: str, socket: str) -> bool:
+    """True when the profile a sandboxed run STARTED with hides *socket* (an engine's socket on
+    "ask" or "block"). *profile_ref* is the run's ``<file>#<digest>`` from its own hook; only a file
+    inside Blackbox's profiles folder that still carries that digest is read — the launcher applied
+    exactly that text. WHY (KI-685, Linux round L4): the dashboard judged the socket by lstat()
+    OUTSIDE the sandbox, where it is the live socket, so Docker on "ask" never asked."""
+    path, _, started = profile_ref.rpartition("#")
+    real = os.path.realpath(path) if path.startswith("/") else ""
+    if not started or not real.startswith(os.path.realpath(str(layout.profiles_dir())) + "/") or profiles.digest_of(real) != started:
+        return False
+    return platform.hides_socket(profiles.read_profile(real), socket)
+
+
 def stop_run(run: RunningAgent) -> bool:
     """Stops a sandboxed agent the person chose to restart (its own process, checked first: a live
     process of this user, not macOS's)."""
@@ -244,9 +257,11 @@ def stop_run(run: RunningAgent) -> bool:
 def on_refusal(kind: str, name: str, agent: str, instance: str, folder: str, pid: int = 0) -> None:
     """A sandbox refusal an agent's hook saw (``agent_hooks.RefusalSeen``): a refused signal goes
     to the stop broker with the process it named; any other kind may ask the person (its permission
-    on "ask")."""
-    if kind == permissions.catalogue.KIND_SIGNAL:
-        brokered.stop.on_refused(int(name) if name.isdigit() else 0, agent, instance, folder)
+    on "ask"). A kill of a process the agent could not see (``signal-unseen``: Linux below 6.12,
+    where the sandbox is its own PID namespace) goes to the broker too, which only ever ASKS for it."""
+    if kind in (permissions.catalogue.KIND_SIGNAL, brokered.stop.UNSEEN_KIND):
+        brokered.stop.on_refused(int(name) if name.isdigit() else 0, agent, instance, folder,
+                                 unseen=kind == brokered.stop.UNSEEN_KIND)
     else:
         permissions.refused(kind, agent, instance, folder, pid)
 
