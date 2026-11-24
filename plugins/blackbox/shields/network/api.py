@@ -73,6 +73,12 @@ def alerts(limit: int = MAX_ALERTS) -> list[dict[str, Any]]:
     return sorted(merged, key=lambda alert: -float(alert["ts"]))[:limit]
 
 
+def _syncing(context: ShieldContext) -> bool:
+    """True while this node is still downloading the threat graph — the ONE answer the overview and
+    the helper's plan both use (KI-683)."""
+    return (context.graph_sync_state() if context.graph_sync_state else "") == "syncing"
+
+
 def _graph_state(context: ShieldContext, indicators: Any) -> dict[str, Any]:
     """The threat graph as the overview reports it. *ready*: lists are in hand AND the graph can be
     read now; *keeping_last_lists*: the graph is down, so DNS Shield and the firewall keep the lists
@@ -83,7 +89,7 @@ def _graph_state(context: ShieldContext, indicators: Any) -> dict[str, Any]:
     # "complete" is the WHOLE graph: lists read from every asset this node holds AND the node no
     # longer downloading. WHY (KI-533, E2E full3): during a first sync it said complete with 8,820
     # of ~1.16 M domains, because every asset downloaded SO FAR had been read.
-    syncing = (context.graph_sync_state() if context.graph_sync_state else "") == "syncing"
+    syncing = _syncing(context)
     # *loading*: no lists read yet (a dashboard restart reads them in the background) — a page says
     # "loading", never "0 domains and 0 addresses" while protection is intact (KI-538).
     return {"ready": have and reachable is not False, "reachable": reachable, "loading": not have,
@@ -135,7 +141,7 @@ def enforcement_plan(context: ShieldContext, params: Mapping[str, str]) -> Any:
     a keyed helper obeys only a plan signed with its key, so an unsigned answer applies nothing."""
     current = mode_module.current()
     plan = enforcement.plan(current, context.network_indicators(), have=str(params.get("have") or "")[:64],
-                            cut_ips=_connected_threats(context, current))
+                            cut_ips=_connected_threats(context, current), syncing=_syncing(context))
     return helper_link.signed(plan, params)
 
 

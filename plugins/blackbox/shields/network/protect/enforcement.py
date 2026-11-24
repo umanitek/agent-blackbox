@@ -10,11 +10,18 @@ companion app) shows the same shield.
 
     {"version": "<sha256 of the content>", "unchanged": false, "graph_ready": true,
      "dns": {"enabled": true, "verified": [...], "lists": [...], "block": [...]},
-     "firewall": {"enabled": false, "ips": [...]},
+     "firewall": {"enabled": false, "ips": [...], "spared": [...], "never_block": [...]},
      "cut": {"enabled": true, "ips": [...]},          # malicious IPs connected right now: cut them
      "ssh": {"lockdown": false, "allow": ["192.168.1.0/24"]},
      "watch": true,                                    # watch SSH and the login files (shield on)
      "allow": [...]}
+
+The firewall part states what it spares (KI-680): ``spared`` — the verified graph's addresses it
+did NOT drop (a public resolver, the person's allow list) — and ``never_block`` — every address it
+never drops whatever the graph says (``never_block.NEVER_BLOCK_IPS`` and the allow list's
+addresses), so the person can see 1.1.1.1 is safe even when the graph does not list it at all
+(Linux round L3: the graph's SafeDep 1.1.1.1 entry was outside the verified scope, so ``spared`` was
+rightly empty and the plan said nothing about resolvers).
 
 ``"keep_verified": true`` (the graph's lists are unavailable or partial — the store is down, or
 not read yet after a restart) tells the helper to keep the verified domains and firewall addresses
@@ -94,21 +101,23 @@ _plan_cache: dict[str, Any] = {"key": None, "plan": None}
 MAX_SPARED = 200
 
 
-def plan(mode: ShieldMode, indicators: Optional[Any], have: str = "", cut_ips: Iterable[str] = ()) -> dict[str, Any]:
+def plan(mode: ShieldMode, indicators: Optional[Any], have: str = "", cut_ips: Iterable[str] = (),
+         syncing: bool = False) -> dict[str, Any]:
     """What the enforcer must apply now under *mode*, given the verified graph's *indicators*
     (``ruleset.network_indicators()``; None before the graph is synced) and *cut_ips* (the listed
     addresses this machine is connected to right now — the API reads them from the monitor only
-    while ``cut`` is on). Built once per change (:data:`_plan_cache`); ``have`` equal to its
-    version answers ``unchanged``."""
+    while ``cut`` is on). *syncing*: this node is still downloading the graph, so lists read from
+    every asset it holds so far are NOT the whole graph (KI-683). Built once per change
+    (:data:`_plan_cache`); ``have`` equal to its version answers ``unchanged``."""
     chosen_lists = tuple(sorted(mode_module.option(mode, mode_module.OPT_LISTS)))
     cut = tuple(sorted(set(cut_ips)))
     key = (json.dumps(mode.as_json(include_personal=True), sort_keys=True), id(indicators),
            getattr(indicators, "built_at", None), tuple((pack_id, blocklists.version(pack_id)) for pack_id in chosen_lists), cut,
-           remote_lock.version(mode.enabled))
+           remote_lock.version(mode.enabled), syncing)
     with _lock:
         cached = _plan_cache["plan"] if _plan_cache["key"] == key else None
     if cached is None:
-        cached = _build_plan(mode, indicators, cut)
+        cached = _build_plan(mode, indicators, cut, syncing)
         with _lock:
             _plan_cache["key"], _plan_cache["plan"] = key, cached
     if have and have == cached["version"]:
@@ -124,7 +133,7 @@ def firewall_ips(mode: ShieldMode, listed_ips: Iterable[str]) -> frozenset[str]:
     return frozenset(drop) | frozenset(_ips(mode_module.option(mode, mode_module.OPT_BLOCK)))
 
 
-def _build_plan(mode: ShieldMode, indicators: Optional[Any], cut_ips: tuple[str, ...] = ()) -> dict[str, Any]:
+def _build_plan(mode: ShieldMode, indicators: Optional[Any], cut_ips: tuple[str, ...] = (), syncing: bool = False) -> dict[str, Any]:
     protections = mode_module.protections(mode)
     dns_on, firewall_on = mode_module.DNS in protections, mode_module.FIREWALL in protections
     cut_on, ssh_on = mode_module.CUT in protections, mode_module.SSH_LOCKDOWN in protections
@@ -140,7 +149,11 @@ def _build_plan(mode: ShieldMode, indicators: Optional[Any], cut_ips: tuple[str,
     # entries are reported in the plan, so the person sees them.
     verified, spared_verified = never_block.split(indicators.domains if dns_on and indicators else (), allowed)
     listed, _spared_lists = never_block.split(list_names, allowed)
-    complete = bool(indicators is not None and getattr(indicators, "complete", False))
+    # Complete = every asset read AND the node done downloading (KI-683, Linux round L3: 5 minutes
+    # into a first sync the plan said complete with 30,694 of ~1.16 M domains and 1 address, which
+    # would have let the helper drop the lists it kept after a store reset).
+    complete = bool(indicators is not None and getattr(indicators, "complete", False)) and not syncing
+    dropped = firewall_ips(mode, indicators.ips if indicators else ()) if firewall_on else frozenset()
     content = {
         "graph_ready": indicators is not None,
         "graph_complete": complete,
@@ -154,10 +167,12 @@ def _build_plan(mode: ShieldMode, indicators: Optional[Any], cut_ips: tuple[str,
                 "spared": spared_verified[:MAX_SPARED],
                 # Lock remote access: remote-control apps' relay domains refused too (remote_lock).
                 "block": sorted(set(_names(block)) | set(remote_lock.relay_domains(mode.enabled))) if dns_on else []},
-        "firewall": {"enabled": firewall_on, "ips": sorted(firewall_ips(mode, indicators.ips if indicators else ())) if firewall_on else [],
+        "firewall": {"enabled": firewall_on, "ips": sorted(dropped),
                      # Verified addresses spared (a public resolver, the allow list): reported, never silently dropped.
                      "spared": never_block.split_ips(public_only(indicators.ips if indicators else ()), allowed)[1][:MAX_SPARED]
-                     if firewall_on else []},
+                     if firewall_on else [],
+                     # The person's own block list is theirs: an address on it is dropped, so not "never".
+                     "never_block": [ip for ip in never_block.never_dropped(allowed) if ip not in dropped] if firewall_on else []},
         "cut": {"enabled": cut_on, "ips": never_block.split_ips(public_only(cut_ips), allowed)[0] if cut_on else []},
         "ssh": {"lockdown": ssh_on, "allow": sorted(mode_module.option(mode, mode_module.OPT_SSH_ALLOW)) if ssh_on else []},
         "watch": mode.enabled,

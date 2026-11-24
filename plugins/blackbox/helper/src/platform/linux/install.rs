@@ -39,6 +39,14 @@ use crate::private_files;
 
 /// Blackbox's root-owned folder (the helper's home is inside it).
 pub const LIB: &str = "/var/lib/blackbox";
+/// [`LIB`]'s mode: root's, traverse only. WHY not 0700 (KI-678, Linux round L3): the person's
+/// dashboard must reach two things in it by name — the public receipt and `blackbox approve`'s
+/// root-written proof (`approvals/<uid>/<id>`, plugin `approvals/terminal.py`) — while nobody can
+/// list it or write in it; the helper's own state (`netd/`) and staging stay 0700. Set on EVERY
+/// install and upgrade, so a folder an older install left 0700 is put right.
+pub const LIB_MODE: u32 = 0o711;
+/// `blackbox approve`'s proofs (root-written, single-use), removed with the helper (KI-682).
+pub const APPROVALS: &str = "approvals";
 /// The public receipt (`sha256 <hex>`, 0644), readable without root.
 pub const RECEIPT_PATH: &str = "/var/lib/blackbox/netd-installed";
 /// The unit's name.
@@ -104,13 +112,19 @@ pub fn install_into(args: &InstallArgs, layout: &Layout, systemd: &dyn Systemd, 
     if args.team_id.is_some() {
         return Err("--team-id is a macOS signature check; Linux checks the SHA-256 only".into());
     }
-    private_files::ensure_dir(&layout.lib).map_err(|error| format!("{}: {error}", layout.lib.display()))?;
+    ensure_lib(&layout.lib).map_err(|error| format!("{}: {error}", layout.lib.display()))?;
     let staging = layout.lib.join(format!(".netd-staging-{}", std::process::id()));
     let _ = fs::remove_dir_all(&staging);
     private_files::ensure_dir(&staging).map_err(|error| format!("{}: {error}", staging.display()))?;
     let result = stage(&args.from, &args.sha256, &staging).and_then(|copy| install_checked(args, &copy, layout, systemd, put_back));
     let _ = fs::remove_dir_all(&staging);
     result
+}
+
+/// Makes *lib* (when missing) and sets it to [`LIB_MODE`], whatever it was.
+fn ensure_lib(lib: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(lib)?;
+    fs::set_permissions(lib, fs::Permissions::from_mode(LIB_MODE))
 }
 
 fn install_checked(args: &InstallArgs, copy: &Path, layout: &Layout, systemd: &dyn Systemd,
@@ -277,6 +291,7 @@ pub fn uninstall_from(layout: &Layout, systemd: &dyn Systemd, put_back: &dyn Fn(
         return Err(format!("the helper was stopped but not everything could be put back: {}", errors.join("; ")));
     }
     let _ = fs::remove_dir_all(&layout.home);
+    let _ = fs::remove_dir_all(layout.lib.join(APPROVALS));   // only root-written, single-use proofs
     let _ = fs::remove_file(layout.lib.join(MADE_FOLDERS));   // kept above on a failure: a second try reads it
     let _ = fs::remove_dir(&layout.lib);   // only when empty
     Ok(())
@@ -369,6 +384,25 @@ mod tests {
         install_into(&args_for(&dir, b"helper"), &there, &FakeSystemd::default(), &no_put_back).unwrap();
         uninstall_from(&there, &FakeSystemd::default(), &Vec::new).unwrap();
         assert!(dir.join("libexec/the-persons-tool").exists() && !dir.join("libexec/blackbox").exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// KI-678 / KI-682 (Linux round L3): an install over the 0700 folder an older install left
+    /// makes it 0711 (the person's dashboard reaches `approve`'s proof) with the helper's state
+    /// still 0700, and the uninstall takes `approvals/` with it.
+    #[test]
+    fn the_lib_folder_is_traverse_only_after_every_install_and_approvals_go_with_the_helper() {
+        let (dir, layout) = layout("lib-mode");
+        fs::create_dir_all(&layout.lib).unwrap();
+        fs::set_permissions(&layout.lib, fs::Permissions::from_mode(0o700)).unwrap();
+        install_into(&args_for(&dir, b"helper-1"), &layout, &FakeSystemd::default(), &no_put_back).unwrap();
+        assert_eq!(fs::metadata(&layout.lib).unwrap().permissions().mode() & 0o777, LIB_MODE);
+        assert_eq!(fs::metadata(&layout.home).unwrap().permissions().mode() & 0o777, 0o700, "the helper's state stays private");
+        let proof = layout.lib.join(APPROVALS).join("1000");
+        fs::create_dir_all(&proof).unwrap();
+        fs::write(proof.join("abc123"), "n0nce").unwrap();
+        uninstall_from(&layout, &FakeSystemd::default(), &Vec::new).unwrap();
+        assert!(!layout.lib.exists(), "nothing of Blackbox's is left in /var/lib");
         let _ = fs::remove_dir_all(&dir);
     }
 

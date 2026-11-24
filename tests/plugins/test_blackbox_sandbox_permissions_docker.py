@@ -12,7 +12,11 @@ Contracts (red on the base ed4152ceac: the Docker socket was open inside the san
   default, per project — F4);
 * the hook layer refuses mounting a protected item (or a folder holding one) into a container,
   and leaves other folders and named volumes alone;
-* every refusal kind the catalogue names is one the hook layer reads (LES-137: one definition each).
+* every refusal kind the catalogue names is one the hook layer reads (LES-137: one definition each);
+* KI-679 (Linux round L3, Ubuntu 24.04, docker 29.1.3, REAL sandboxed Claude Code): inside Linux's
+  sandbox Docker's socket is the sandbox's mask (an empty mode-0000 file), so the CLI says the
+  not-started words; a "cannot connect" naming a MASKED socket is Docker's refusal and asks, one naming
+  a real socket or nothing is still an engine that is not started.
 """
 
 from __future__ import annotations
@@ -123,6 +127,52 @@ NOT_DOCKER = [
     "docker: Error response from daemon: open /work/x: permission denied.",                          # inside the engine
     "ERROR: failed to solve: failed to read dockerfile: open Dockerfile: permission denied",
 ]
+
+
+#: Linux round L3, raw/bA-u24.log: a sandboxed Claude Code's `docker ps`, Docker on "ask" (KI-679).
+LINUX_HIDDEN = "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?"
+
+
+def _mask(path: Path) -> Path:
+    """What Linux's sandbox binds over a hidden socket (helper sandbox/system.rs Masks): empty, mode 0000."""
+    path.write_bytes(b"")
+    path.chmod(0)
+    return path
+
+
+def test_linuxs_hidden_socket_is_read_as_docker_from_l3s_exact_words(monkeypatch):
+    real_lstat = os.lstat
+    masked = os.lstat(_mask(Path(tempfile.mkdtemp()) / "docker.sock"))
+    monkeypatch.setattr(sandbox_errors.os, "lstat", lambda path: masked if str(path) == "/var/run/docker.sock" else real_lstat(path))
+    found = sandbox_errors.refusals(LINUX_HIDDEN)
+    assert [each.kind for each in found] == [sandbox_errors.DOCKER] and "Docker" in sandbox_errors.note(found)
+
+
+def test_the_socket_path_decides_between_a_hidden_socket_and_an_engine_not_started():
+    # A short folder: a unix socket's path is limited to ~104 bytes (macOS), and pytest's tmp_path is longer.
+    folder = Path(tempfile.mkdtemp(prefix="bb-sock-", dir="/tmp"))
+    hidden, served, gone = _mask(folder / "docker.sock"), folder / "podman.sock", folder / "none" / "docker.sock"
+    listener = socket.socket(socket.AF_UNIX)
+    listener.bind(str(served))
+    try:
+        for path, expected in ((hidden, [sandbox_errors.DOCKER]), (served, []), (gone, [])):
+            for words in (LINUX_HIDDEN.replace("/var/run/docker.sock", str(path)),
+                          f'error during connect: Get "http://docker/v1.47/version": dial unix {path}: connect: no such file or directory'):
+                kinds = [each.kind for each in sandbox_errors.refusals(words) if each.kind == sandbox_errors.DOCKER]
+                assert kinds == expected, (path, words)
+    finally:
+        listener.close()
+        for each in (hidden, served):
+            each.unlink()
+        folder.rmdir()
+
+
+def test_linuxs_hidden_socket_asks_the_person(home, entry, monkeypatch):
+    masked = os.lstat(_mask(home / "mask"))
+    monkeypatch.setattr(sandbox_errors, "_is_mask", lambda path: path == "/var/run/docker.sock" and bool(masked))
+    found = sandbox_errors.refusals(LINUX_HIDDEN)
+    assert permissions.refused(found[0].kind, "claude-code", "s-1", str(home / "work")) is True
+    assert [each.permission for each in requests.pending()] == ["docker"]
 
 
 @pytest.mark.parametrize("output", SOCKET_REFUSALS)
