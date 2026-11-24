@@ -117,7 +117,7 @@ EVERY_SYSTEM = "*"
 #: The machine's own folders: its configuration, its programs and libraries, the boot files, the
 #: spools, root's home, Blackbox's root helper. A write there needs root, so an agent reaches them
 #: only through ``sudo`` / ``doas`` / ``pkexec`` / ``su -c`` (Linux round L1: with passwordless
-#: sudo, REAL agents wrote /etc/cron.d, /etc/sudoers.d, /etc/profile.d and enabled a root unit).
+#: sudo, REAL agents wrote /etc/cron.d, sudo's rules folder, /etc/profile.d and enabled a root unit).
 #: In Block mode an agent's PRIVILEGED write to any of these is refused
 #: (``detection.privileged_writes``); other sudo stays a flag (D7).
 ROOT_PLACES = ("/etc", "/private/etc", "/boot", "/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/libx32",
