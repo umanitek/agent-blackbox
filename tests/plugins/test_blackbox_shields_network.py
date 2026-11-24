@@ -226,6 +226,27 @@ def test_a_graph_never_synced_yet_is_never_the_complete_graph(monkeypatch):
         assert (plan["graph_complete"], plan["keep_verified"], api.overview(context, {})["graph"]["complete"]) == (False, True, False), state
 
 
+def test_a_few_assets_read_before_the_nodes_first_pass_are_never_the_complete_graph(monkeypatch):
+    """KI-686, second half (fix wave L-W3, fresh Ubuntu 22.04 at e3d68a6e9a): 14 assets were compiled
+    before the node's first reconcile pass, the meter said ``unknown`` (no pass logged yet), and
+    "not syncing" let the overview and the plan say complete. Only a meter that says ``synced`` is done."""
+    from plugins.blackbox.ruleset.live.network_lists import NetworkIndicators
+    from plugins.blackbox.shields.network.protect import enforcement
+    monkeypatch.setattr(network_mode, "current", lambda: network_mode.build(enabled=True, protections=(network_mode.DNS, network_mode.FIREWALL)))
+    lists = NetworkIndicators(domains=frozenset(), ips=frozenset(), assets=14, read=14, complete=True, built_at=1.0)
+
+    def asked(state):
+        monkeypatch.setattr(enforcement, "_plan_cache", {"key": None, "plan": None})
+        context = ShieldContext(network_indicators=lambda: lists, network_indicators_now=lambda: lists, graph_reachable=lambda: True,
+                                graph_sync_state=lambda: state, ask_assistant=lambda message: AssistantAnswer(ok=True, answer="fine"))
+        plan = api.enforcement_plan(context, {})
+        return plan["graph_complete"], plan["keep_verified"], api.overview(context, {})["graph"]["complete"]
+
+    for state in ("unknown", "unavailable", "syncing"):
+        assert asked(state) == (False, True, False), state
+    assert asked("synced") == (True, False, True)
+
+
 def test_the_helpers_firewall_restored_event_is_taken_and_said_as_high():
     """KI-688: the helper loads the Threat Firewall's rules again when another program removed them
     and says so (``firewall-restored``); the report carrying it is taken, and the person is told."""

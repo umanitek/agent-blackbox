@@ -74,9 +74,17 @@ def alerts(limit: int = MAX_ALERTS) -> list[dict[str, Any]]:
 
 
 def _syncing(context: ShieldContext) -> bool:
-    """True while this node is still downloading the threat graph — the ONE answer the overview and
-    the helper's plan both use (KI-683)."""
+    """True while this node is still downloading the threat graph (the overview's ``syncing``)."""
     return (context.graph_sync_state() if context.graph_sync_state else "") == "syncing"
+
+
+def _not_done(context: ShieldContext) -> bool:
+    """True unless this node is KNOWN to be done downloading the threat graph — the ONE answer the
+    overview's ``complete`` and the helper's plan both use (KI-683). WHY "known" (KI-686, fix wave
+    L-W3 on a fresh 22.04 install): before the node's first reconcile pass the meter says
+    ``unknown``, which read as "not syncing", so a few assets read so far were called the complete
+    graph. Only ``synced`` is done; where no meter can be asked, the lists' own flag decides."""
+    return bool(context.graph_sync_state) and context.graph_sync_state() != "synced"
 
 
 def _graph_state(context: ShieldContext, indicators: Any) -> dict[str, Any]:
@@ -89,12 +97,12 @@ def _graph_state(context: ShieldContext, indicators: Any) -> dict[str, Any]:
     # "complete" is the WHOLE graph: lists read from every asset this node holds AND the node no
     # longer downloading. WHY (KI-533, E2E full3): during a first sync it said complete with 8,820
     # of ~1.16 M domains, because every asset downloaded SO FAR had been read.
-    syncing = _syncing(context)
+    syncing, done = _syncing(context), not _not_done(context)
     # *loading*: no lists read yet (a dashboard restart reads them in the background) — a page says
     # "loading", never "0 domains and 0 addresses" while protection is intact (KI-538).
     return {"ready": have and reachable is not False, "reachable": reachable, "loading": not have,
             "keeping_last_lists": have and reachable is False, "syncing": syncing,
-            "complete": bool(indicators and indicators.complete) and not syncing,
+            "complete": bool(indicators and indicators.complete) and done,
             "domains": len(indicators.domains) if indicators else 0,
             "ips": len(indicators.ips) if indicators else 0}
 
@@ -141,7 +149,7 @@ def enforcement_plan(context: ShieldContext, params: Mapping[str, str]) -> Any:
     a keyed helper obeys only a plan signed with its key, so an unsigned answer applies nothing."""
     current = mode_module.current()
     plan = enforcement.plan(current, context.network_indicators(), have=str(params.get("have") or "")[:64],
-                            cut_ips=_connected_threats(context, current), syncing=_syncing(context))
+                            cut_ips=_connected_threats(context, current), syncing=_not_done(context))
     return helper_link.signed(plan, params)
 
 
