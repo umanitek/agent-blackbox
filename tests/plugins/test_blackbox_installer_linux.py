@@ -123,6 +123,47 @@ def test_the_summary_says_the_services_do_not_start_at_boot(tmp_path):
 
 # ── KI-627: which Linux ─────────────────────────────────────────────────────────────────────
 
+#: What each C library's own tools say (Ubuntu 24.04's recorded in fix wave L-W1; musl's is
+#: `ldd`'s first line on Alpine, printed to stderr with exit 1).
+UBUNTU_LDD = "ldd (Ubuntu GLIBC 2.39-0ubuntu8.12) 2.39"
+MUSL_LDD = "musl libc (x86_64)"
+
+
+def _libc_tools(tmp_path: Path, ldd_says: str | None, *, glibc: bool) -> None:
+    """Stand-ins for ``getconf`` (answers GNU_LIBC_VERSION only on glibc) and ``ldd`` (absent when
+    *ldd_says* is None) first on _run's PATH."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    (bin_dir / "getconf").write_text("#!/bin/sh\n" + ('echo "glibc 2.39"\n' if glibc else "exit 1\n"), encoding="utf-8")
+    (bin_dir / "getconf").chmod(0o755)
+    ldd = bin_dir / "ldd"
+    ldd.unlink(missing_ok=True)
+    if ldd_says is not None:
+        ldd.write_text(f"#!/bin/sh\necho {shlex.quote(ldd_says)} >&2\nexit 1\n", encoding="utf-8")
+        ldd.chmod(0o755)
+
+
+def test_a_glibc_ubuntu_with_the_musl_package_installed_is_supported(tmp_path):
+    """KI-670 (Linux round L2): `apt install musl-tools` puts /lib/ld-musl-* beside glibc's loader,
+    and the installer stopped: "Ubuntu 24.04.5 LTS is not supported yet: it is a musl Linux"."""
+    (tmp_path / "os-release").write_text('ID=ubuntu\nID_LIKE=debian\nPRETTY_NAME="Ubuntu 24.04.5 LTS"\n', encoding="utf-8")
+    lib = tmp_path / "lib"
+    lib.mkdir()
+    for loader in ("ld-linux-aarch64.so.1", "ld-musl-aarch64.so.1"):
+        (lib / loader).write_text("", encoding="utf-8")
+    call = f'linux_distro_support {shlex.quote(str(tmp_path / "os-release"))} {shlex.quote(str(lib))}'
+    for ldd_says, glibc in ((UBUNTU_LDD, True), (UBUNTU_LDD, False), (None, False)):
+        _libc_tools(tmp_path, ldd_says, glibc=glibc)
+        done = _run(tmp_path, ["linux_distro_support"], call)
+        assert done.returncode == 0, done.stderr
+        assert done.stdout.split("\t")[0] == "supported", (ldd_says, glibc, done.stdout)
+
+
+def test_a_musl_linux_is_known_by_its_own_c_library_even_without_its_loader_file(tmp_path):
+    _libc_tools(tmp_path, MUSL_LDD, glibc=False)
+    done = _run(tmp_path, ["linux_libc"], f"linux_libc {shlex.quote(str(tmp_path / 'no-lib'))}")
+    assert done.stdout.strip() == "musl", done.stderr
+
 @pytest.mark.parametrize("release, musl, level", [
     ('NAME="Ubuntu"\nID=ubuntu\nID_LIKE=debian\nPRETTY_NAME="Ubuntu 24.04 LTS"\n', False, "supported"),
     ('ID=linuxmint\nID_LIKE="ubuntu debian"\nPRETTY_NAME="Linux Mint 22"\n', False, "supported"),
@@ -135,8 +176,8 @@ def test_each_linux_is_named_supported_untested_or_unsupported(tmp_path, release
     (tmp_path / "os-release").write_text(release, encoding="utf-8")
     lib = tmp_path / "lib"
     lib.mkdir()
-    if musl:
-        (lib / "ld-musl-x86_64.so.1").write_text("", encoding="utf-8")
+    (lib / ("ld-musl-x86_64.so.1" if musl else "ld-linux-x86-64.so.2")).write_text("", encoding="utf-8")
+    _libc_tools(tmp_path, MUSL_LDD if musl else UBUNTU_LDD, glibc=not musl)
     done = _run(tmp_path, ["linux_distro_support"], f'linux_distro_support {shlex.quote(str(tmp_path / "os-release"))} {shlex.quote(str(lib))}')
     assert done.returncode == 0, done.stderr
     assert done.stdout.split("\t")[0] == level

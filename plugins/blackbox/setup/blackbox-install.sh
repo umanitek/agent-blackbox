@@ -1791,8 +1791,8 @@ detect_os() {
 # `linux_distro_support [OS_RELEASE] [LIB_DIR]` prints "<level><TAB><name>" for this Linux (KI-627):
 # supported — Debian, Ubuntu and their derivatives (ID / ID_LIKE), what Blackbox is tested on;
 # untested — another glibc Linux (Fedora, Arch, openSUSE …): it may work, nobody has checked;
-# unsupported — a musl Linux (Alpine: its loader is LIB_DIR/ld-musl-*), where Hermes's pinned
-# Python and uv, built for glibc, are not expected to run.
+# unsupported — a musl Linux (Alpine), where Hermes's pinned Python and uv, built for glibc, are
+# not expected to run. Which C library the system runs comes from linux_libc, never from a file.
 linux_distro_support() {
     local release="${1:-/etc/os-release}" libdir="${2:-/lib}" id="" like="" name=""
     if [ -r "$release" ]; then
@@ -1801,7 +1801,7 @@ linux_distro_support() {
         name="$(sed -n 's/^PRETTY_NAME=//p' "$release" | tr -d '"' | head -1)"
     fi
     name="${name:-${id:-this Linux}}"
-    if compgen -G "$libdir/ld-musl-*" >/dev/null; then
+    if [ "$(linux_libc "$libdir")" = musl ]; then
         printf 'unsupported\t%s\n' "$name"
         return 0
     fi
@@ -1809,6 +1809,34 @@ linux_distro_support() {
         *" debian "*|*" ubuntu "*) printf 'supported\t%s\n' "$name" ;;
         *) printf 'untested\t%s\n' "$name" ;;
     esac
+}
+
+# `linux_libc [LIB_DIR]` prints the C library this system RUNS on: glibc, musl or unknown. Asked
+# of the system's own C library first — glibc answers `getconf GNU_LIBC_VERSION`, and `ldd
+# --version` names its library ("ldd (Ubuntu GLIBC 2.39-…) 2.39", musl's "musl libc (aarch64)").
+# WHY not a loader file: Debian's and Ubuntu's musl package (musl-tools, for static builds) puts
+# /lib/ld-musl-* beside glibc's loader, and the installer called such a glibc Ubuntu "a musl Linux"
+# (KI-670, Linux round L2). Only when neither tool answers do the loaders decide, and then a musl
+# loader counts only where no glibc loader is.
+linux_libc() {
+    local libdir="${1:-/lib}" said
+    if getconf GNU_LIBC_VERSION >/dev/null 2>&1; then
+        echo glibc
+        return 0
+    fi
+    said="$(ldd --version 2>&1 | head -2)" || true
+    case "$said" in
+        *musl*) echo musl; return 0 ;;
+        *GLIBC*|*"GNU libc"*|*"GNU C Library"*) echo glibc; return 0 ;;
+    esac
+    if compgen -G "$libdir/ld-linux*" >/dev/null || compgen -G "${libdir}64/ld-linux*" >/dev/null \
+        || compgen -G "$libdir/*-linux-gnu/ld-linux*" >/dev/null; then
+        echo glibc
+    elif compgen -G "$libdir/ld-musl-*" >/dev/null; then
+        echo musl
+    else
+        echo unknown
+    fi
 }
 
 # Says plainly where this Linux stands (linux_distro_support), before anything changes. An
