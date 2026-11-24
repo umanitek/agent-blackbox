@@ -11,6 +11,7 @@ mod enforcer;
 pub mod observe;
 mod observer;
 pub mod procfs;
+pub mod sandbox;
 pub mod sock_diag;
 pub mod sockets;
 

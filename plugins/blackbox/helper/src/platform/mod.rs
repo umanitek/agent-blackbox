@@ -49,6 +49,17 @@ use unsupported as os;
 /// helper can run here at all, and its `install` / `uninstall` subcommands.
 pub use os::{subcommand, SystemEnforcer, SystemObserver, HOME, SUPPORTED};
 
+/// The agent sandbox launcher's entry (`blackbox-sandbox`, Linux only: `linux/sandbox/`).
+#[cfg(target_os = "linux")]
+pub use linux::sandbox::main as sandbox_main;
+
+/// Elsewhere the launcher has nothing to do (macOS sandboxes agents with Seatbelt).
+#[cfg(not(target_os = "linux"))]
+pub fn sandbox_main(_args: Vec<std::ffi::OsString>) -> i32 {
+    eprintln!("blackbox-sandbox runs only on Linux");
+    2
+}
+
 /// Each network service's DNS servers as they were before DNS Shield pointed the system at its
 /// resolver (restored exactly; an empty list means "automatic").
 pub type SavedDns = BTreeMap<String, Vec<String>>;
