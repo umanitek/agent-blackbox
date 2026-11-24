@@ -7,10 +7,14 @@ is refused for a write by the hook judgement — the drift guard between the two
 schedulers (``systemd-run``, ``systemctl --user enable|start``, ``loginctl enable-linger``, a D-Bus
 ``StartTransientUnit``, ``gnome-extensions enable``, a desktop setting that runs a command) are
 refused while their looks stay allowed; each OS's sandbox list holds only its own OS's places;
-refusals name the kind of place; Linuxbrew's prefix counts where it is installed.
+refusals name the kind of place; Linuxbrew's prefix counts where it is installed; and the root
+helper's Linux watch (``helper/src/platform/linux/observe``) reads exactly the one list's places.
 """
 
 from __future__ import annotations
+
+import re
+from pathlib import Path
 
 import pytest
 
@@ -123,3 +127,48 @@ def test_linuxbrew_counts_where_it_is_installed(tmp_path):
     assert str(tmp_path / ".linuxbrew" / "bin") in folders
     assert places.homebrew_folders(("{home}/.linuxbrew",)) == [], "no home, no per-person prefix"
     assert places.describe(f"{tmp_path}/.linuxbrew/bin/x") == "Homebrew's programs"
+
+
+# --- Parity with the root helper's Linux watch (LES-137: one list, every layer reads it) ---------
+
+LINUX_OBSERVE = Path(__file__).resolve().parents[2] / "plugins/blackbox/helper/src/platform/linux/observe"
+#: Linux places the helper's watch leaves out on purpose — the hook judgement still refuses an
+#: agent's write there. WHY: apps install desktop launchers into ~/.local/share/applications and
+#: every settings change rewrites ~/.config/dconf/user, so watching them would alert on the
+#: person's own everyday changes.
+NOT_WATCHED = frozenset({"{home}/.local/share/applications", "{home}/.config/dconf/user"})
+
+
+def _rust_list(name: str, file: str) -> list[str]:
+    source = (LINUX_OBSERVE / file).read_text(encoding="utf-8")
+    body = re.search(rf"pub const {name}: &\[[^\]]*\] = &\[(.*?)\];", source, re.DOTALL).group(1)
+    pairs = re.findall(r'\("[^"]+",\s*"([^"]+)"\)', body)
+    return pairs or re.findall(r'"([^"]+)"', body)
+
+
+def _inside(path: str, places) -> bool:
+    return any(path == place or path.startswith(place.rstrip("/") + "/") for place in places)
+
+
+def test_every_place_the_helpers_linux_watch_reads_is_in_the_one_list():
+    folders = places.LINUX_PERSISTENCE_FOLDERS + places.SHARED_FOLDERS
+    files = places.LINUX_PERSISTENCE_FILES + places.SHARED_FILES
+    watched_folders = _rust_list("SYSTEM_FOLDERS", "persistence.rs") + _rust_list("AT_JOBS", "run_later.rs")
+    watched_folders += ["{home}/" + name for name in _rust_list("USER_FOLDERS", "persistence.rs")]
+    watched_files = _rust_list("SYSTEM_FILES", "persistence.rs")
+    watched_files += ["{home}/" + name for name in _rust_list("SSH_FILES", "run_later.rs") + _rust_list("SESSION_FILES", "run_later.rs")]
+    assert len(watched_folders) > 20 and len(watched_files) > 15, "the scan read the helper's lists"
+    assert [f for f in watched_folders if not _inside(f, folders)] == []
+    assert [f for f in watched_files if f not in files] == []
+    tools = ["{home}/" + name for name in _rust_list("USER_PROGRAM_FOLDERS", "run_later.rs")]
+    assert [f for f in tools if not _inside(f, places.USER_TOOL_FOLDERS)] == []
+    shells = _rust_list("SHELL_FILES", "run_later.rs")
+    assert set(places.shell_path.STARTUP_FILES) <= set(shells)
+
+
+def test_every_linux_place_in_the_one_list_is_watched_by_the_helper():
+    watched = _rust_list("SYSTEM_FOLDERS", "persistence.rs") + _rust_list("AT_JOBS", "run_later.rs") + _rust_list("SYSTEM_FILES", "persistence.rs")
+    watched += ["{home}/" + name for name in _rust_list("USER_FOLDERS", "persistence.rs") + _rust_list("SESSION_FILES", "run_later.rs")]
+    missing = [place for place in places.LINUX_PERSISTENCE_FOLDERS + places.LINUX_PERSISTENCE_FILES
+               if place not in watched and place not in NOT_WATCHED]
+    assert not missing, "watch these in helper/src/platform/linux/observe (or say why not in NOT_WATCHED):\n" + "\n".join(missing)

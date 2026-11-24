@@ -40,12 +40,14 @@ mod undo;
 // The system is reached only through the platform's two traits (platform/mod.rs).
 pub use platform::{Enforcer, Observer, SystemEnforcer, SystemObserver, HOME};
 
-/// The socket and interface records, and on macOS the native reader — a live
+/// The socket and interface records, and on macOS and Linux the native reader — a live
 /// traffic collector (an add-on) may read it as the person (fast tier). Elsewhere only the records exist.
 pub mod sockets {
     pub use crate::platform::sockets::{Iface, Socket};
     #[cfg(target_os = "macos")]
     pub use crate::platform::macos::sockets::{layouts_match, tcp_state_name, Reader};
+    #[cfg(target_os = "linux")]
+    pub use crate::platform::linux::sockets::Reader;
 }
 /// The helper's LaunchDaemon label (a companion app installs and checks the same service).
 #[cfg(target_os = "macos")]
