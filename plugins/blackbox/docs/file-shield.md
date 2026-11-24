@@ -202,7 +202,7 @@ What Layer 2 can not do, plainly:
 - A running agent keeps the protection it started with; restart it after you change the list or a
   permission. File Shield's page names each running agent that still has its old permissions and
   offers to stop it (you confirm).
-- Linux and Windows: not yet (Layer 1 only there).
+- Linux: the sandbox is ported (`blackbox-sandbox`: namespaces, seccomp, Landlock; hooks only where the kernel lacks them). Windows: not yet (Layer 1 only there). See `THREAT_MODEL.md` U3 and U4.
 
 ## Sandbox permissions
 
