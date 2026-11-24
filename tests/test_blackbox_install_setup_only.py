@@ -256,6 +256,11 @@ exit 1
 warn() {{ echo "WARN $*"; }}
 ok() {{ echo "OK $*"; }}
 step() {{ :; }}
+run_with_timeout() {{
+{_body("run_with_timeout")}
+}}
+BLACKBOX_NPM_STEP_SECONDS=60
+BLACKBOX_NPM_NETWORK_FLAGS=""
 fetch_pinned_dkg_tarball() {{
 {_body("fetch_pinned_dkg_tarball")}
 }}
@@ -376,6 +381,11 @@ def _install_with_npm(tmp_path: Path, *, npm_output: str, existing_package_json:
 warn() {{ echo "WARN $*"; }}
 ok() {{ echo "OK $*"; }}
 step() {{ :; }}
+run_with_timeout() {{
+{_body("run_with_timeout")}
+}}
+BLACKBOX_NPM_STEP_SECONDS=60
+BLACKBOX_NPM_NETWORK_FLAGS=""
 install_blackbox_dkg_package() {{
 {_body("install_blackbox_dkg_package")}
 }}
@@ -482,6 +492,11 @@ def _link_steps(tmp_path: Path, *, pm_checkout: bool, existing: str | None) -> P
 ok() {{ :; }}
 warn() {{ :; }}
 step() {{ :; }}
+run_with_timeout() {{
+{_body("run_with_timeout")}
+}}
+BLACKBOX_NPM_STEP_SECONDS=60
+BLACKBOX_NPM_NETWORK_FLAGS=""
 install_blackbox_shim() {{ :; }}
 release_old_hermes_link() {{
 {_body("release_old_hermes_link")}
@@ -547,6 +562,11 @@ exit 0
 warn() {{ echo "WARN $*"; }}
 ok() {{ echo "OK $*"; }}
 step() {{ echo "STEP $*"; }}
+run_with_timeout() {{
+{_body("run_with_timeout")}
+}}
+BLACKBOX_NPM_STEP_SECONDS=60
+BLACKBOX_NPM_NETWORK_FLAGS=""
 install_blackbox_dkg_package() {{
 {_body("install_blackbox_dkg_package")}
 }}

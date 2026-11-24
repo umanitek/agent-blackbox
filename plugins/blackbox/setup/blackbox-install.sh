@@ -3613,7 +3613,12 @@ run_with_timeout() {
     shift
     "$@" &
     pid=$!
-    ( sleep "$seconds"; kill "$pid" 2>/dev/null && echo "blackbox: stopped after ${seconds}s: $1" >&2 ) &
+    # The watcher takes its sleep down with it when it is stopped: a sleep left behind would keep a
+    # caller's $(…) or pipe open for the whole limit after the command had already finished.
+    ( trap 'kill "$sleeper" 2>/dev/null; exit 0' TERM
+      sleep "$seconds" >/dev/null 2>&1 & sleeper=$!
+      wait "$sleeper"
+      kill "$pid" 2>/dev/null && echo "blackbox: stopped after ${seconds}s: $1" >&2 ) >/dev/null &
     watcher=$!
     wait "$pid"
     rc=$?
