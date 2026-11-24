@@ -72,7 +72,7 @@ import os
 import sys
 from dataclasses import dataclass
 
-from .. import shell_path
+from .. import agent_hosts, shell_path
 from .schedules import schedules
 
 #: The places every OS has (OpenSSH's login files, the system cron table, XDG autostart, and fish's
@@ -157,14 +157,24 @@ def places_of(system: str | None = None) -> tuple[tuple[str, ...], tuple[str, ..
     return PERSISTENCE_FOLDERS, PERSISTENCE_FILES, PERSISTENCE_GLOBS
 
 
+def agent_code_folders(home: str) -> list[str]:
+    """Every agent's :attr:`~..agent_hosts.Host.code_folders` in *home* whose PARENT folder exists:
+    where the agent is installed, the folder is closed (an empty placeholder is made for a missing
+    one, as for every startup folder); where it is not, nothing is created in the person's home —
+    a placeholder ``~/.cline/hooks`` would make Cline look installed."""
+    root = home.rstrip("/")
+    folders = [os.path.join(root, folder) for host in agent_hosts.HOSTS for folder in host.code_folders]
+    return [folder for folder in folders if os.path.isdir(os.path.dirname(folder))]
+
+
 def startup_places(home: str, prefixes: tuple[str, ...] = HOMEBREW_PREFIXES,
                    system: str | None = None) -> tuple[list[str], list[str], list[str]]:
     """``(folders, files, globs)`` closed to writes inside the sandbox for the person at *home*, on
-    *system* (default this machine's; see :func:`places_of`)."""
+    *system* (default this machine's; see :func:`places_of`), the agents' code folders among them."""
     def fill(paths: tuple[str, ...]) -> list[str]:
         return [path.replace("{home}", home.rstrip("/")) for path in paths]
     folders, files, globs = places_of(system)
-    return fill(folders) + homebrew_folders(prefixes, home), fill(files), fill(globs)
+    return fill(folders) + homebrew_folders(prefixes, home) + agent_code_folders(home), fill(files), fill(globs)
 
 
 #: The program folders the person owns that are commonly on PATH: a program an agent leaves there
@@ -307,6 +317,7 @@ __all__ = [
     "USER_TOOL_FOLDERS",
     "USER_TOOL_GLOBS",
     "HookPlaces",
+    "agent_code_folders",
     "describe",
     "homebrew_folders",
     "hook_places",

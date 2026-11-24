@@ -280,3 +280,28 @@ def test_a_connect_the_helpers_rules_reject_reads_as_local_ports_and_ssh_auth_do
     for output in REAL_REJECTED_CONNECTS:
         assert [each.kind for each in sandbox_errors.refusals(output)] == [sandbox_errors.LOCAL_PORT], output
     assert sandbox_errors.LOCAL_PORT not in [each.kind for each in sandbox_errors.refusals("admin@127.0.0.1: Permission denied (publickey).")]
+
+
+def test_an_installed_agents_code_folders_are_closed_in_the_sandbox_and_by_the_hooks_and_nothing_is_made_for_others(tmp_path):
+    """KI-672 (Linux round L2): Blackbox's own files in OpenCode's plugin folder and Cline's Hooks
+    folder were read-only, but the FOLDERS were not — ``touch ~/.config/opencode/plugin/evil.js``
+    worked inside, and OpenCode runs every file there at its next start. One list (LES-137): the
+    sandbox's startup places and the hook judgement's both carry them."""
+    from plugins.blackbox.kernel import persistence_places
+    home = tmp_path / "home"
+    (home / ".config" / "opencode" / "plugin").mkdir(parents=True)
+    (home / "Documents" / "Cline" / "Hooks").mkdir(parents=True)
+    folders, files, globs = persistence_places.startup_places(str(home), system="linux")
+    code = [f"{home}/.config/opencode/plugin", f"{home}/.config/opencode/plugins", f"{home}/Documents/Cline/Hooks",
+            f"{home}/Documents/Cline/Plugins"]
+    assert set(code) <= set(folders)
+    assert f"{home}/.cline/hooks" not in folders, "Cline's own home is not there: nothing is made in it"
+    places = build([], [], [], str(home / "canary"), is_folder=lambda _path: True, startup=(folders, files, globs))
+    lines = _lines(profile.render(places, home=str(home), runtime=RECORDED_RUNTIME))
+    for folder in code:
+        assert f"startup-ro {folder}" in lines, folder
+    made_folders, made_files = placeholders.wanted(places, str(home))
+    assert f"{home}/.config/opencode/plugins" in made_folders and f"{home}/.cline/hooks" not in made_folders
+    assert f"{home}/.config/mimeapps.list" in made_files, "a missing mimeapps.list gets its empty, no-op placeholder"
+    starts = persistence_places.hook_places(str(home)).starts
+    assert set(code) <= set(starts), "the hooks refuse a write there too"

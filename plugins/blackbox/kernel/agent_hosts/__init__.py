@@ -167,6 +167,12 @@ class Host:
     #: the home folder, form)`` — the form names the template ``own_files`` writes
     #: (``cline-plugin``: Cline's SDK plugin; ``opencode-v2``: OpenCode 2's plugin).
     companions: tuple[tuple[str, str], ...] = ()
+    #: Folders (relative to home) whose EVERY file the agent loads and runs as its own code when it
+    #: starts — a hooks folder, a plugins folder. A file an agent adds there runs later inside this
+    #: agent (also one the person starts unsandboxed), so they are persistence places: the sandbox
+    #: keeps them read-only and the hooks refuse writes there (``persistence_places.agent_code_folders``;
+    #: KI-672, Linux round L2: ``touch ~/.config/opencode/plugin/evil.js`` worked inside).
+    code_folders: tuple[str, ...] = ()
     #: The time-limit field Blackbox writes in each hook entry, in the agent's own unit (None:
     #: the agent documents no such field, so none is written and its default applies).
     hook_timeout: Optional[HookTimeout] = None
@@ -269,14 +275,16 @@ HOSTS: tuple[Host, ...] = (
          prompt_additions=(r"\[SYSTEM\] This run is not complete until you call one of these terminal completion tools: "
                            r"[A-Za-z0-9_]+(?:, [A-Za-z0-9_]+)*\. Continue working if requirements are not met\."
                            r"(?: If the task is complete, call the appropriate terminal completion tool now\.)?",),
-         companions=(("Documents/Cline/Plugins/blackbox.js", "cline-plugin"),)),
+         companions=(("Documents/Cline/Plugins/blackbox.js", "cline-plugin"),),
+         code_folders=("Documents/Cline/Hooks", "Documents/Cline/Plugins", ".cline/hooks")),
     # OpenCode: version 1 loads plugin/blackbox.js (a function returning hooks by name); version 2
     # runs NO V1 plugin and loads plugins/<name>/index.js (a default export with id + setup that
     # registers ctx.tool.hook). Both files are written; each version reads only its own.
     Host("opencode", "OpenCode", "plugin", ".config/opencode/plugin/blackbox.js",
          {"tool.execute.before": "pre_tool", "tool.execute.after": "post_tool"},
          signs=(".config/opencode",), commands=("opencode",), programs=("opencode",), packages=("opencode-ai",),
-         companions=((".config/opencode/plugins/blackbox/index.js", "opencode-v2"),)),
+         companions=((".config/opencode/plugins/blackbox/index.js", "opencode-v2"),),
+         code_folders=(".config/opencode/plugin", ".config/opencode/plugins")),
 )
 
 BY_ID = {host.id: host for host in HOSTS}

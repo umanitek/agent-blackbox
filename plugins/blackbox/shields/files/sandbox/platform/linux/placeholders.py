@@ -28,8 +28,10 @@ from ...places import Places
 
 MANIFEST = "placeholders.json"
 #: Startup files, relative to home, whose empty form changes nothing.
+#: ``.config/mimeapps.list`` too (KI-672): an empty one names no default application, and a missing
+#: one could be CREATED inside to make the desktop open a file type or a link with an agent's program.
 NOOP_FILES = (".zshrc", ".zshenv", ".zprofile", ".zlogin", ".zlogout", ".bashrc", ".bash_logout", ".xprofile",
-              ".xsessionrc", ".pam_environment", ".ssh/authorized_keys", ".ssh/authorized_keys2")
+              ".xsessionrc", ".pam_environment", ".ssh/authorized_keys", ".ssh/authorized_keys2", ".config/mimeapps.list")
 MAX_MANIFEST_BYTES = 256 * 1024
 
 
