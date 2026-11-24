@@ -1455,7 +1455,11 @@ checkout_layout_patterns() {
     mkdir -p "$folder"
     if git -C "$repo" show "$rev:$BLACKBOX_CHECKOUT_LAYOUT_FILE" >"$folder/checkout_layout.py" 2>/dev/null &&
         git -C "$repo" show "$rev:$BLACKBOX_OS_LAYOUT_FILE" >"$folder/os_layout.py" 2>/dev/null; then
-        "$python" -I "$folder/checkout_layout.py" "$folder/os_layout.py" ${BLACKBOX_CHECKOUT_OS:+"$BLACKBOX_CHECKOUT_OS"} ||
+        # --repo/--rev: the commit's npm workspaces decide which left-out folders the TUI and the
+        # dashboard build from (KI-653). A commit whose layout predates them takes the short form.
+        "$python" -I "$folder/checkout_layout.py" "$folder/os_layout.py" ${BLACKBOX_CHECKOUT_OS:+"$BLACKBOX_CHECKOUT_OS"} \
+            --repo "$repo" --rev "$rev" 2>/dev/null ||
+            "$python" -I "$folder/checkout_layout.py" "$folder/os_layout.py" ${BLACKBOX_CHECKOUT_OS:+"$BLACKBOX_CHECKOUT_OS"} ||
             status=1
     else
         status=1

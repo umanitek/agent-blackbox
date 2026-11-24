@@ -1172,7 +1172,10 @@ function Get-CheckoutLayoutPatterns([string]$Repo, [string]$Rev) {
         $osLayout = Join-Path $folder "os_layout.py"
         if (-not (Save-GitBlob $Repo $Rev $CheckoutLayoutFile $layout)) { return $null }
         if (-not (Save-GitBlob $Repo $Rev $OsLayoutFile $osLayout)) { return $null }
-        $lines = @(& $script:PyExe @($script:PyArgs + @("-I", $layout, $osLayout)))
+        # --repo/--rev: the commit's npm workspaces decide which left-out folders the TUI and the
+        # dashboard build from (KI-653). A commit whose layout predates them takes the short form.
+        $lines = @(& $script:PyExe @($script:PyArgs + @("-I", $layout, $osLayout, "--repo", $Repo, "--rev", $Rev)) 2>$null)
+        if ($LASTEXITCODE -ne 0) { $lines = @(& $script:PyExe @($script:PyArgs + @("-I", $layout, $osLayout))) }
         if ($LASTEXITCODE -ne 0 -or $lines.Count -eq 0) { return $null }
         return $lines
     } finally {

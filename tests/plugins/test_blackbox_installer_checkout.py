@@ -9,10 +9,18 @@ below holds git's reading of them to that rule for every platform file in the re
 
 The clone tests run the installer's own functions against a LOCAL bare repository (no network):
 a fresh clone, an update that must keep the set, and an older installer's full checkout converted.
+
+KI-653 (security round 7, Linux check 7, High): the layout left out ``apps/`` whole, but ``ui-tui``
+and ``web`` build from ``@hermes/shared`` in ``apps/shared``, so ``hermes --tui`` and ``hermes
+dashboard`` failed on every installer-made checkout. The fixture now carries the repository's REAL
+``package.json`` files, and the test builds the npm workspace dependency closure on its own and
+asserts the slim checkout holds all of it.
 """
 
 from __future__ import annotations
 
+import glob
+import json
 import os
 import shutil
 import subprocess
@@ -38,6 +46,33 @@ FIXTURE_FILES = ("pyproject.toml", "setup-hermes.sh", "hermes_cli/__init__.py", 
                  "website/static/api/model-catalog.json", "docs/guide.md", "ui-tui/package.json", "web/package.json")
 
 
+#: The repository's real npm manifests (the workspace graph) and a source file of the shared one.
+REAL_MANIFESTS = sorted(path.relative_to(REPO_ROOT).as_posix() for path in [REPO_ROOT / "package.json"] + [
+    REPO_ROOT / folder / "package.json" for pattern in json.loads((REPO_ROOT / "package.json").read_text(encoding="utf-8"))["workspaces"]
+    for folder in glob.glob(pattern, root_dir=REPO_ROOT)] if path.is_file())
+
+
+def _workspace_closure() -> set[str]:
+    """The test's own reading of the npm workspace graph: every workspace folder a workspace the
+    checkout keeps (one outside the developer-only folders) builds from, by ``file:`` path or by
+    package name, followed to the end."""
+    manifests = {path.rsplit("/package.json", 1)[0] if "/" in path else "": json.loads((REPO_ROOT / path).read_text(encoding="utf-8"))
+                 for path in REAL_MANIFESTS}
+    manifests.pop("")
+    names = {manifest.get("name"): folder for folder, manifest in manifests.items()}
+    todo = [folder for folder in manifests if folder.split("/", 1)[0] not in checkout_layout.DEVELOPER_ONLY]
+    closure = set(todo)
+    while todo:
+        folder = todo.pop()
+        for field in ("dependencies", "devDependencies", "peerDependencies", "optionalDependencies"):
+            for name, spec in manifests[folder].get(field, {}).items():
+                target = os.path.normpath(os.path.join(folder, spec[5:])) if spec.startswith("file:") else names.get(name)
+                if target in manifests and target not in closure:
+                    closure.add(target)
+                    todo.append(target)
+    return closure
+
+
 def _excluded_by_os_layout(path: str, sys_platform: str) -> bool:
     """os_layout's own answer for one repository path: some ``platform/`` entry on it is another OS's."""
     parts = PurePosixPath(path).parts
@@ -48,7 +83,7 @@ def _excluded_by_os_layout(path: str, sys_platform: str) -> bool:
 def _expected(path: str, sys_platform: str) -> bool:
     """Whether *path* belongs in this machine's checkout (the layout module's documented set)."""
     top = path.split("/", 1)[0]
-    if path.startswith(tuple(f"{folder}/" for folder in checkout_layout.RUNTIME_INSIDE_DEVELOPER_ONLY)):
+    if path.startswith(tuple(f"{folder}/" for folder in (*checkout_layout.RUNTIME_INSIDE_DEVELOPER_ONLY, *_workspace_closure()))):
         return True
     if top in checkout_layout.DEVELOPER_ONLY:
         return False
@@ -75,8 +110,10 @@ def test_the_installers_way_in_prints_the_same_lines_from_the_two_files(tmp_path
     shutil.copy(PLUGIN / "setup" / "checkout_layout.py", tmp_path / "checkout_layout.py")
     for sys_platform in ("darwin", "linux", "win32"):
         done = subprocess.run([sys.executable, "-I", str(tmp_path / "checkout_layout.py"), str(tmp_path / "os_layout.py"),
-                               sys_platform], capture_output=True, text=True, timeout=60, check=True)
+                               sys_platform, "--repo", str(REPO_ROOT), "--rev", "HEAD"], capture_output=True, text=True,
+                              timeout=60, check=True)
         assert done.stdout.splitlines() == checkout_layout.patterns(sys_platform)
+        assert "/apps/shared/" in done.stdout.splitlines()
 
 
 def test_a_platform_entry_with_more_than_one_dot_belongs_to_its_os():
@@ -111,6 +148,9 @@ def origin(tmp_path_factory) -> Path:
     for name in FIXTURE_FILES:
         (work / name).parent.mkdir(parents=True, exist_ok=True)
         (work / name).write_text("{}\n" if name.endswith(".json") else "# fixture\n", encoding="utf-8")
+    for name in (*REAL_MANIFESTS, "apps/shared/src/index.ts"):
+        (work / name).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(REPO_ROOT / name, work / name)
     # The tree must carry every OS's files for the test to mean anything.
     for os_name in ("linux", "windows"):
         stub = work / "plugins" / "blackbox" / "shields" / "network" / "monitor" / "platform" / f"{os_name}.py"
@@ -152,8 +192,23 @@ def test_a_fresh_clone_holds_exactly_this_machines_set(origin, tmp_path, sys_pla
     others = {"darwin": ("windows", "linux"), "linux": ("macos", "windows"), "win32": ("macos", "linux")}[sys_platform]
     assert not [p for p in _present(dest) if any(f"/platform/{name}" in p for name in others)]
     assert "website/static/api/model-catalog.json" in _present(dest) and "pyproject.toml" in _present(dest)
-    assert not any(p.startswith(("tests/", "apps/", "website/docs/")) for p in _present(dest))
+    assert not any(p.startswith(("tests/", "apps/desktop/", "website/docs/")) for p in _present(dest))
     assert _git("config", "remote.origin.promisor", cwd=dest).strip() == "true"   # a partial (blobless) clone
+
+
+def test_the_slim_checkout_holds_every_workspace_the_tui_and_dashboard_build_from(origin, tmp_path):
+    """KI-653: the dependency closure of the kept workspaces (ui-tui, web, …) is in the checkout,
+    whole, read from the workspace definition — never a hand list."""
+    closure = _workspace_closure()
+    assert {"ui-tui", "web", "apps/shared"} <= closure   # the graph as it is today: the TUI and web import @hermes/shared
+    dest = tmp_path / "agent-blackbox"
+    assert _clone(origin, dest, "linux").returncode == 0
+    present = _present(dest)
+    for folder in closure:
+        assert f"{folder}/package.json" in present, folder
+    assert "apps/shared/src/index.ts" in present
+    assert checkout_layout.needed_workspaces(checkout_layout.FolderTree(str(REPO_ROOT))) == sorted(
+        folder for folder in closure if folder.split("/", 1)[0] in checkout_layout.DEVELOPER_ONLY)
 
 
 def test_the_plugin_imports_from_this_machines_checkout(origin, tmp_path):
