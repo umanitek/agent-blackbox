@@ -110,7 +110,7 @@ def _remove_store(plan: UninstallPlan, run: Callable[[Sequence[str]], int], repo
     if store is None:
         return
     output = run_output or _docker_output
-    backups = [name for name in _docker_names(output, ["ps", "-a", "--format", "{{.Names}}"])
+    backups = [name for name in _docker_names(output, ["container", "ls", "--all", "--format", "{{.Names}}"])
                if name.startswith(store.container + STORE_BACKUP_INFIX)]
     failed = [name for name in (store.container, *backups) if run(["docker", "rm", "-f", name]) != 0]
     if run(["docker", "volume", "rm", "-f", store.volume]) != 0:
