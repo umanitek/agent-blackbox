@@ -14,7 +14,7 @@ import json
 import logging
 from dataclasses import dataclass
 from typing import Any, Callable, Optional, TypedDict
-from .. import audit, detection, killlist, overrides, shields
+from .. import audit, detection, killlist, overrides, shields, watch
 from ..kernel import action_context, agent_hosts, config as config_mod, constants
 from ..kernel.config import BlackboxConfig
 from . import api_request, background, graph_rules
@@ -132,6 +132,7 @@ def _raw_findings(cfg: BlackboxConfig, rs: Any, tool_name: str, args: Any,
     raw += isolated("detect_elevation", lambda: detection.detect_elevation(tool_name, args))
     # R14: curator-signed DISABLE / WARN, last-good list.
     raw += isolated("kill_list", lambda: _kill_list_findings(rs, tool_name, args))
+    raw += isolated("watch", lambda: watch.check(tool_name, args, agent=action_context.acting_agent()))   # flag first, then block
     # KI-595: the manifests and lockfiles an install installs from, and packages a write adds to them.
     raw += isolated("dependency_files", lambda: dependency_files.before_call(cfg, rs, tool_name, args, notes))
     return raw

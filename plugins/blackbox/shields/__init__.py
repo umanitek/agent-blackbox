@@ -56,6 +56,7 @@ from .alerting import alerts
 from .json_records import JsonValue
 from .local_only import LOCAL_ONLY_SOURCE, LOCAL_ONLY_SOURCES
 from .local_only import local_only as _local_only
+from .network.lockdown import hosts_in   # the hosts a call names, as Network Shield reads them (watch rules)
 from .packs import TABLE_MAX_BYTES, ShieldData, load_shield_data, read_json_file
 from .self_test import SELF_TESTS, SelfTest
 from .shield_api import MAX_WRITE_BYTES as API_MAX_WRITE_BYTES
@@ -78,7 +79,7 @@ __all__ = [
     "ShieldAlert", "ShieldApi", "ShieldApiError", "ShieldContext", "ShieldEvent", "ShieldExtension",
     "ShieldMode", "ShieldStatus", "ShieldsSnapshot", "addon_routes", "agent_sandbox_weakening",
     "alerts", "all_shields", "allow_lists", "allows", "apply_sandbox_default", "attack_table",
-    "browser_roots", "call_api", "check", "describe_change", "enter_hermes_process", "events", "get",
+    "browser_roots", "call_api", "check", "describe_change", "enter_hermes_process", "events", "get", "hosts_in",
     "loaded_packs", "pack_logo", "package_installs_weakening", "permission_refused", "prompt_findings", "reload_registry",
     "remove_sandbox_placeholders",
     "self_tests", "settings_validators", "settings_view", "shield_name", "snapshot", "statuses",
