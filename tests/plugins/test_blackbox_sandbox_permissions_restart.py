@@ -92,6 +92,22 @@ def test_the_hook_reports_it_from_inside_only_and_the_instance_keeps_it(home, mo
     assert [each.profile for each in api_routes.sandboxed_runs()] == ["/x/claude-code.sb#abc"]
 
 
+def test_a_hook_inside_a_linux_pid_namespace_is_recorded_under_its_host_pid(home, monkeypatch):
+    """Linux deep layers step 15: below kernel 6.12 the sandbox is a PID namespace; the hook sends
+    the launcher's sandbox id and the dashboard records the HOST pid (``observe.host_pid``)."""
+    scope = "blackbox-agent-0123456789ab-5f3c.scope"
+    monkeypatch.setenv(runner.SANDBOX_PROFILE_ENV, "/x/claude-code.policy#abc")
+    monkeypatch.setenv(runner.SANDBOX_ID_ENV, scope)
+    monkeypatch.setattr(runner, "sandboxed", lambda: True)
+    body = runner.summary("claude-code", "session_start", {"session_id": "s", "cwd": str(home)})
+    assert body["sandbox_id"] == scope
+    monkeypatch.setattr(hook_events, "host_pid", lambda sandbox_id, pid: 7001 if (sandbox_id, pid) == (scope, 2) else pid)
+    assert hook_events._identity({**body, "pid": 2})["pid"] == 7001
+    assert hook_events._identity({**body, "pid": 2, "sandboxed": False})["pid"] == 2, "only a canary-proven hook is mapped"
+    monkeypatch.setattr(runner, "sandboxed", lambda: False)
+    assert "sandbox_id" not in runner.summary("claude-code", "session_start", {"session_id": "s"}), "only from inside"
+
+
 def test_the_launcher_and_the_hook_name_the_same_variable():
     assert f"{runner.SANDBOX_PROFILE_ENV}=" in launchers.pick_profile()
 

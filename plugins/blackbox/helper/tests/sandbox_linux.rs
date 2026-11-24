@@ -196,22 +196,37 @@ fn a_mask_can_not_be_unmounted_even_from_a_nested_namespace_and_nested_sandboxes
 }
 
 #[test]
-fn a_signal_to_a_process_outside_is_refused_with_landlock_scopes() {
+fn a_process_outside_can_not_be_signalled_or_seen() {
     if !namespaces_work() {
         return;
     }
     let out = Command::new(SANDBOX).arg("probe").output().unwrap();
     let probe: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    if probe["signals"] == "none" {
-        eprintln!("skipped: Landlock ABI {} has no signal scope (kernel below 6.12)", probe["landlock_abi"]);
-        return;
-    }
     let root = scratch("signal", &[]);
     let policy = policy(&root, "");
     let mut outside = Command::new("/bin/sleep").arg("30").spawn().unwrap();
-    assert_eq!(child(&policy, "kill", &outside.id().to_string()), libc::EPERM);
+    let refused = child(&policy, "kill", &outside.id().to_string());
+    // Landlock's scope answers EPERM (kernel 6.12+); in the PID namespace below it the process is not there (ESRCH).
+    assert!(refused == libc::EPERM || refused == libc::ESRCH, "errno {refused} ({})", probe["signals"]);
     assert!(outside.try_wait().unwrap().is_none(), "the outside process still runs");
+    if probe["signals"] == "pid-namespace" {
+        let listed = sh(&policy, &format!("test -e /proc/{} && echo SEEN; echo $$", outside.id()));
+        let all = text(&listed);
+        assert!(!all.contains("SEEN"), "an outside pid is not in the fresh /proc: {all}");
+    }
     let _ = outside.kill();
+}
+
+#[test]
+fn the_sandbox_id_names_the_scope_or_the_launch() {
+    if !namespaces_work() {
+        return;
+    }
+    let root = scratch("id", &[]);
+    let policy = policy(&root, "");
+    let all = text(&sh(&policy, "echo \"ID=$BLACKBOX_SANDBOX_ID\""));
+    let id = all.lines().find_map(|line| line.strip_prefix("ID=")).unwrap_or_default().to_string();
+    assert!(id.starts_with("blackbox-agent-0123456789ab-") || id.starts_with("noscope-"), "{all}");
 }
 
 #[test]

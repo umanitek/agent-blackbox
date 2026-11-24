@@ -40,6 +40,7 @@ from ... import audit, guard
 from ...kernel import constants
 from ...kernel.bounded_files import read_json_object, write_json_object
 from ...kernel.agent_hosts import BY_ID, DECISION_TOO_LATE, EVENTS
+from ..observe import host_pid
 from . import recorder, sandbox_errors
 from .own_prompt import persons_words
 from .runner import patch_files
@@ -159,11 +160,15 @@ def _answer_by(value: Any) -> float:
 def _identity(body: Mapping[str, Any]) -> dict[str, Any]:
     """Which instance the event belongs to (the runner's ``identity``), as bounded fields."""
     pid = body.get("pid")
+    pid = pid if isinstance(pid, int) and not isinstance(pid, bool) and pid > 0 else 0
+    sandbox_id = _text(body.get("sandbox_id"), 120)
+    if pid and sandbox_id and body.get("sandboxed") is True:
+        pid = host_pid(sandbox_id, pid)   # Linux below 6.12: the sandbox's own PID namespace
     return {"sub": _text(body.get("sub"), 200), "sub_type": _text(body.get("sub_type"), 80), "task": _text(body.get("task"), 200),
             "parents_named": body.get("parents_named") is True,
             "parent": _text(body.get("parent"), 200), "model": _text(body.get("model"), 80), "why": _text(body.get("why"), 40),
             "background": body.get("background") is True, "profile": _text(body.get("profile")),
-            "entry": _text(body.get("entry"), 40), "pid": pid if isinstance(pid, int) and not isinstance(pid, bool) and pid > 0 else 0,
+            "entry": _text(body.get("entry"), 40), "pid": pid,
             "prompt_id": _text(body.get("prompt_id"), 80), "agent_turn": body.get("agent_turn") is True}
 
 

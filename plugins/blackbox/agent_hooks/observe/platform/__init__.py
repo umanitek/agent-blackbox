@@ -20,6 +20,7 @@ Usage::
     platform.process_ancestry(1234, 12)  # [(pid, ppid, started, command)] up its parents; [] gone, None unreadable
     platform.process_path(1234)     # the executable it runs ("" when unreadable)
     platform.process_sandboxed(1234)   # the kernel runs it in a sandbox: True / False, None when unknown
+    platform.host_pid("blackbox-agent-…scope", 2)   # a PID-namespace pid as the host's (Linux below 6.12)
 """
 
 from __future__ import annotations
@@ -27,14 +28,14 @@ from __future__ import annotations
 import sys
 
 if sys.platform == "darwin":
-    from .macos import (process_ancestry, process_argv, process_cwd, process_environment, process_path, process_sandboxed,
+    from .macos import (host_pid, process_ancestry, process_argv, process_cwd, process_environment, process_path, process_sandboxed,
                         process_table, process_users, process_variable)
 elif sys.platform.startswith("linux"):
-    from .linux import (process_ancestry, process_argv, process_cwd, process_environment, process_path, process_sandboxed,
+    from .linux import (host_pid, process_ancestry, process_argv, process_cwd, process_environment, process_path, process_sandboxed,
                         process_table, process_users, process_variable)
 else:
-    from .unsupported import (process_ancestry, process_argv, process_cwd, process_environment, process_path, process_sandboxed,
+    from .unsupported import (host_pid, process_ancestry, process_argv, process_cwd, process_environment, process_path, process_sandboxed,
                               process_table, process_users, process_variable)
 
-__all__ = ["process_ancestry", "process_argv", "process_cwd", "process_environment", "process_path", "process_sandboxed",
+__all__ = ["host_pid", "process_ancestry", "process_argv", "process_cwd", "process_environment", "process_path", "process_sandboxed",
            "process_table", "process_users", "process_variable"]

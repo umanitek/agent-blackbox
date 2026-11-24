@@ -167,6 +167,12 @@ impl Masks {
     }
 }
 
+/// A fresh `/proc` for a new PID namespace (process 1 of it calls this): only the namespace's own
+/// processes are listed.
+pub fn mount_fresh_proc() -> Result<(), String> {
+    mount(Some("proc"), "/proc", Some("proc"), libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOEXEC, None)
+}
+
 /// `PR_SET_NO_NEW_PRIVS`: no setuid or file capability lifts this process or a child above the
 /// person (`sudo`, `su`, `pkexec` fail) — and the precondition of seccomp and Landlock.
 pub fn no_new_privileges() -> Result<(), String> {

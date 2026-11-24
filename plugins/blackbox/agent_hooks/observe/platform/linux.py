@@ -10,13 +10,15 @@ answer "" — such an agent's config home is learned from its first hook event i
 
 Every function takes ``proc_root`` (default ``/proc``) so a test hands it a fake tree.
 
-Not here yet (design step 15): turning a PID-namespace pid (an agent sandboxed on a kernel older
-than 6.12) into the host pid.
+An agent sandboxed on a kernel older than 6.12 runs in its own PID namespace, so its hooks report
+namespace pids; :func:`host_pid` turns one back into the host's, from the launcher's
+``BLACKBOX_SANDBOX_ID`` (its cgroup scope's name) and each process's ``NSpid``.
 """
 
 from __future__ import annotations
 
 import os
+import re
 import time
 
 PROC_ROOT = "/proc"
@@ -30,6 +32,9 @@ _PPID_INDEX, _STARTTIME_INDEX = 4 - 3, 22 - 3
 LSTART_FORMAT = "%a %b %d %H:%M:%S %Y"
 #: The cgroup scope Blackbox's agent sandbox runs each agent in (design §1.1 step 8).
 SANDBOX_SCOPE_MARK = "blackbox-agent-"
+#: The sandbox ids ``blackbox-sandbox`` exports: its scope's unit name, or ``noscope-<id>`` without one.
+SANDBOX_ID = re.compile(r"^(?:blackbox-agent-(?:[0-9a-f]{12}|nodigest)-[0-9a-f]{1,16}\.scope|noscope-[0-9a-f]{1,16})$")
+SANDBOX_ID_VARIABLE = "BLACKBOX_SANDBOX_ID"
 #: ``readlink`` of a deleted executable or folder ends with this.
 _DELETED = " (deleted)"
 
@@ -213,3 +218,21 @@ def process_sandboxed(pid: int, proc_root: str = PROC_ROOT) -> bool | None:
     restricted = status.get("NoNewPrivs") == "1" and status.get("Seccomp") == "2"
     own_mounts = _link(f"{proc_root}/{int(pid)}/ns/mnt")
     return bool(restricted and own_mounts and own_mounts != _link(f"{proc_root}/self/ns/mnt"))
+
+
+def host_pid(sandbox_id: str, pid: int, proc_root: str = PROC_ROOT) -> int:
+    """The host pid of process *pid* as seen inside the sandbox *sandbox_id* (a PID namespace's
+    number); *pid* itself when no process of that sandbox has it as its innermost pid (no PID
+    namespace: the number is the host's already) or when *sandbox_id* is not one the launcher makes."""
+    if pid <= 0 or not SANDBOX_ID.match(sandbox_id or ""):
+        return pid
+    scope = "/" + sandbox_id if sandbox_id.endswith(".scope") else ""
+    for candidate in _pids(proc_root):
+        levels = _status(proc_root, candidate).get("NSpid", "").split()
+        if len(levels) < 2 or levels[-1] != str(pid):
+            continue
+        if scope and any(line.endswith(scope) for line in _text(f"{proc_root}/{candidate}/cgroup").splitlines()):
+            return candidate
+        if not scope and process_variable(candidate, SANDBOX_ID_VARIABLE, proc_root) == sandbox_id:
+            return candidate
+    return pid

@@ -16,6 +16,7 @@ Usage::
     observe.launch_of(table, agent_pid)     # "headless" / "interactive" / "ide" / "sdk"
     observe.read_users()                    # {pid: (real uid, effective uid)}
     observe.descendants(table, pid)         # every process started (at any depth) by *pid*
+    observe.host_pid(sandbox_id, pid)       # a sandboxed hook's pid as the host's (Linux PID namespace)
 """
 
 from __future__ import annotations
@@ -34,8 +35,8 @@ from ..instances.model import Running
 from . import platform
 from .hooks_off import hooks_switched_off
 
-__all__ = ["Proc", "agent_of", "ancestry", "classify", "descendants", "hooks_switched_off", "launch_of", "read_table", "read_users",
-           "running"]
+__all__ = ["Proc", "agent_of", "ancestry", "classify", "descendants", "hooks_switched_off", "host_pid", "launch_of", "read_table",
+           "read_users", "running"]
 
 _LINE = re.compile(r"^\s*(\d+)\s+(\d+)\s+(\w{3} +\w{3} +\d+ +[\d:]+ +\d{4})\s+(.*)$")
 #: argv words that say an agent runs without a person at the keyboard, per agent.
@@ -82,6 +83,12 @@ def read_table() -> dict[int, Proc]:
             started = 0.0
         table[int(match.group(1))] = Proc(int(match.group(1)), int(match.group(2)), started, match.group(4)[:4000])
     return table
+
+
+def host_pid(sandbox_id: str, pid: int) -> int:
+    """*pid* as the host sees it: a hook inside Blackbox's sandbox on a Linux kernel below 6.12 runs
+    in the sandbox's own PID namespace and reports ITS numbers (``platform.host_pid``)."""
+    return platform.host_pid(sandbox_id, pid)
 
 
 def ancestry(pid: int) -> Optional[dict[int, Proc]]:

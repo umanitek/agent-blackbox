@@ -15,7 +15,10 @@
 //! 4. `PR_SET_NO_NEW_PRIVS` (no setuid: `sudo`, `su`, `pkexec` fail) and a seccomp filter
 //!    ([`filter`]: terminal injection, the kernel keyrings, bpf, perf, userfaultfd);
 //! 5. on Landlock ABI 6+ (kernel 6.12), Landlock's scopes: no signal to, no ptrace of and no
-//!    abstract unix socket of any process outside (Blackbox's dashboard and helper among them).
+//!    abstract unix socket of any process outside (Blackbox's dashboard and helper among them);
+//!    below 6.12, a PID namespace with a fresh `/proc` instead (no process outside is visible).
+//!    The hooks then see namespace pids: the launcher exports [`SANDBOX_ID`] (the scope's name)
+//!    and the plugin's Linux observer maps (id, pid) back to the host pid.
 //!
 //! Why not Landlock for the files: Landlock only ALLOWS paths, and a right on a folder covers
 //! everything below it — refusing `~/Documents/Taxes` while `~` stays usable would forbid creating
@@ -152,9 +155,18 @@ fn run(command: Run) -> i32 {
     };
     std::env::set_var(SANDBOX_ID, &unit);
     match enter(&policy) {
-        Ok(()) => exec(&command.program),
+        Ok(Entered::Exec) => exec(&command.program),
+        Ok(Entered::Ended(code)) => code,
         Err(why) => fail_open(&command.program, &why),
     }
+}
+
+/// What [`enter`] leaves the caller to do.
+enum Entered {
+    /// Exec the program in this process (everything is in place).
+    Exec,
+    /// A supervisor here saw the program end with this code (the PID-namespace path).
+    Ended(i32),
 }
 
 /// Starts this launcher again inside a new cgroup scope and supervises it; None when no scope
@@ -208,19 +220,61 @@ fn start_in_scope(command: &Run, unit: &str) -> Option<i32> {
     None
 }
 
-/// Steps 2–5 of the module doc, in this process: on success the caller execs the program. Only
-/// a namespace the machine refuses fails it (the agent then starts with the hooks only); a place
-/// that could not be closed is said on stderr and the rest still holds — a partial sandbox is
-/// always more than none.
-fn enter(policy: &Policy) -> Result<(), String> {
+/// Steps 2–5 of the module doc. Only a namespace the machine refuses fails it (the agent then
+/// starts with the hooks only); a place that could not be closed is said on stderr and the rest
+/// still holds — a partial sandbox is always more than none.
+///
+/// Kernels below 6.12 have no Landlock signal scope, so the agent gets its own PID namespace
+/// instead, with a fresh `/proc`: no process outside is visible, so none can be signalled, traced
+/// or read through `/proc/<pid>` (Debian's and Fedora's `ptrace_scope=0` would otherwise let an
+/// agent attach to the person's shell). Process 1 of that namespace is a small init (this
+/// launcher, [`supervisor::supervise`] reaping every orphan) — a program run as process 1 would
+/// ignore Ctrl-C.
+fn enter(policy: &Policy) -> Result<Entered, String> {
     let ids = Ids::current();
     let mounts = plan::build(policy, &SystemDisk);
     let abi = system::landlock_abi();
-    system::enter_namespaces(ids, libc::CLONE_NEWNS)?;
+    let pid_namespace = abi < probe::SCOPE_ABI;
+    system::enter_namespaces(ids, libc::CLONE_NEWNS | if pid_namespace { libc::CLONE_NEWPID } else { 0 })?;
     system::make_root_slave()?;
+    close_places(&mounts)?;
+    if !pid_namespace {
+        lock_and_restrict(ids, abi)?;
+        return Ok(Entered::Exec);
+    }
+    let blocked = supervisor::block();
+    // SAFETY: single-threaded; each side only makes the calls below.
+    let init = unsafe { libc::fork() };
+    if init < 0 {
+        supervisor::unblock(&blocked);
+        return Err("fork (PID namespace)".into());
+    }
+    if init > 0 {
+        return Ok(Entered::Ended(supervisor::supervise(init, false)));
+    }
+    // Process 1 of the new PID namespace.
+    if let Err(why) = system::mount_fresh_proc() {
+        eprintln!("blackbox: a fresh /proc could not be mounted ({why}); other programs stay visible to the agent");
+    }
+    if let Err(why) = lock_and_restrict(ids, abi) {
+        eprintln!("blackbox: the sandbox could not be locked ({why})");
+        unsafe { libc::_exit(126) };
+    }
+    // SAFETY: as above.
+    let program = unsafe { libc::fork() };
+    if program == 0 {
+        supervisor::unblock(&blocked);
+        return Ok(Entered::Exec);
+    }
+    let code = if program > 0 { supervisor::supervise(program, true) } else { 126 };
+    unsafe { libc::_exit(code) }
+}
+
+/// Step 2's mounts (see [`enter`]).
+fn close_places(mounts: &[plan::Mount]) -> Result<(), String> {
     let masks = Masks::create()?;
     let mut failed: Vec<String> = Vec::new();
-    for mount in &mounts {
+    for mount in mounts {
         let done = match mount.action {
             policy::Action::Hide => masks.cover(&mount.path, mount.kind),
             policy::Action::ReadOnly => system::bind_self(&mount.path).and_then(|()| system::remount_read_only(&mount.path)),
@@ -237,6 +291,12 @@ fn enter(policy: &Policy) -> Result<(), String> {
     if let Some(first) = failed.first() {
         eprintln!("blackbox: {} sandbox place(s) could not be closed ({first}); the rest of the sandbox holds", failed.len());
     }
+    Ok(())
+}
+
+/// Steps 3–5: the nested namespace that locks the mounts, no new privileges, Landlock's scopes
+/// (ABI 6+), the seccomp filter, no capabilities.
+fn lock_and_restrict(ids: Ids, abi: i64) -> Result<(), String> {
     system::enter_namespaces(ids, libc::CLONE_NEWNS)?;
     system::no_new_privileges()?;
     if abi >= probe::SCOPE_ABI {

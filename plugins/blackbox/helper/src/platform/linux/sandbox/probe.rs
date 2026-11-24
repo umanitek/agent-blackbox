@@ -4,7 +4,7 @@
 //!
 //! ```json
 //! {"format": 1, "kernel": "6.8.0-49-generic", "userns": true, "why": "",
-//!  "apparmor_userns_restricted": false, "landlock_abi": 4, "signals": "none",
+//!  "apparmor_userns_restricted": false, "landlock_abi": 4, "signals": "pid-namespace",
 //!  "abstract_sockets": "reachable", "seccomp": true, "scope": true, "helper_rules": false}
 //! ```
 //!
@@ -103,7 +103,7 @@ pub fn probe() -> Probe {
         why: reason(code, apparmor),
         apparmor_userns_restricted: apparmor,
         landlock_abi: abi,
-        signals: if scoped { "landlock-scope" } else { "none" }.into(),
+        signals: if scoped { "landlock-scope" } else { "pid-namespace" }.into(),
         abstract_sockets: if scoped { "landlock-scope" } else { "reachable" }.into(),
         seccomp: system::seccomp_available(),
         scope: user_manager && scope::SYSTEMD_RUN.iter().any(|path| Path::new(path).exists()),

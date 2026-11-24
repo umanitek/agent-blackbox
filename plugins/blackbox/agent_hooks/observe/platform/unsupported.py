@@ -37,3 +37,8 @@ def process_path(pid: int) -> str:
 
 def process_sandboxed(pid: int) -> bool | None:
     return None
+
+
+def host_pid(_sandbox_id: str, pid: int) -> int:
+    """No PID namespaces here: a hook's pid is the host's."""
+    return pid

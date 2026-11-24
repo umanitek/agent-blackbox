@@ -118,3 +118,28 @@ def test_a_sandbox_is_blackboxs_scope_or_nnp_seccomp_and_own_mounts(proc):
     assert linux.process_sandboxed(702, proc_root=proc) is False
     assert linux.process_sandboxed(500, proc_root=proc) is False
     assert linux.process_sandboxed(9999, proc_root=proc) is None
+
+
+SCOPE = "blackbox-agent-0123456789ab-5f3c.scope"
+
+
+def _in_sandbox(root: Path, pid: int, inner: int, *, cgroup: str = "", environ: list[str] | None = None) -> None:
+    _process(root, pid, 1, name="node", argv=["node"], cgroup=cgroup or f"0::/user.slice/user@501.service/blackbox-agents.slice/{SCOPE}\n",
+             environ=environ)
+    status = root / str(pid) / "status"
+    status.write_text(status.read_text(encoding="utf-8") + f"NSpid:\t{pid}\t{inner}\n", encoding="utf-8")
+
+
+def test_a_pid_namespace_pid_maps_back_to_the_host_pid_of_that_sandbox_only(proc):
+    """Linux deep layers step 15: below kernel 6.12 a sandboxed agent's hooks report pids of the
+    sandbox's own PID namespace; the scope (or, with no scope, the launcher's variable) says whose."""
+    root = Path(proc)
+    _in_sandbox(root, 7001, 2)
+    _in_sandbox(root, 7002, 2, cgroup="0::/user.slice/user@501.service/blackbox-agents.slice/blackbox-agent-ffffffffffff-1.scope\n")
+    _in_sandbox(root, 7003, 3, cgroup="0::/user.slice\n", environ=["BLACKBOX_SANDBOX_ID=noscope-ab12"])
+    assert linux.host_pid(SCOPE, 2, proc_root=proc) == 7001
+    assert linux.host_pid("blackbox-agent-ffffffffffff-1.scope", 2, proc_root=proc) == 7002
+    assert linux.host_pid("noscope-ab12", 3, proc_root=proc) == 7003
+    assert linux.host_pid(SCOPE, 500, proc_root=proc) == 500, "no PID namespace: the number is the host's"
+    for forged in ["../../etc", "user@501.service", "blackbox-agent-0123456789ab-5f3c.scope\n", ""]:
+        assert linux.host_pid(forged, 2, proc_root=proc) == 2, f"{forged!r} is not a launcher's id"

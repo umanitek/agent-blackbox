@@ -189,3 +189,8 @@ def process_sandboxed(pid: int) -> bool | None:
     except (OSError, ValueError, AttributeError, TypeError):
         return None
     return None if answer < 0 else answer > 0
+
+
+def host_pid(_sandbox_id: str, pid: int) -> int:
+    """No PID namespaces here: a hook's pid is the host's."""
+    return pid
