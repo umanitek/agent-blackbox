@@ -33,7 +33,7 @@ OPEN = ("The application /System/Applications/TextEdit.app cannot be opened for 
 KILL = "(eval):kill:1: kill 8240 failed: operation not permitted"
 BREW = "sandbox-exec: sandbox_apply: Operation not permitted\nError: Failure while executing; `/usr/bin/sandbox-exec -f …` exited with 71."
 ZSHRC = "(eval):1: operation not permitted: /Users/admin/.zshrc"
-SETUID = "macOS doesn't allow setuid programs inside the agent sandbox; run it in your own terminal"
+SETUID = sandbox_errors.SETUID_NOTE   # this OS's words (Linux: no new privileges)
 
 
 @pytest.fixture(autouse=True)

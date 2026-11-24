@@ -56,7 +56,7 @@ from .applescript import run_script
 from .opener import find_app, is_driver, open_url, open_with
 from .processes import ProcessFacts, describe, is_system, terminate
 from .profile import APP_DRIVERS, LOCAL_SSH, PROFILE_SUFFIX, SANDBOX_EXEC, render
-from .shims import BREW_READ_ONLY, brew_shim, broker_shims, manager_shims, open_shim, osascript_shim, spawn_brew, stop_group
+from .shims import BREW_PATHS, BREW_READ_ONLY, MANAGER_FOLDERS, brew_shim, broker_shims, manager_shims, open_shim, osascript_shim, spawn_brew, stop_group
 from .tools import PS, SETUID_NOTE, SETUID_TOOLS, TOOLS_FOLDER, refresh_tools
 
 
@@ -75,7 +75,7 @@ def prepare(_places: object, _home: str, _state: Path) -> list[str]:
     return []
 
 
-__all__ = ["APPS", "APP_DRIVERS", "BREW_READ_ONLY", "ELECTRON_FLAGS", "LOCAL_SSH", "ONCE_MINUTES", "ONCE_SUFFIX",
+__all__ = ["APPS", "APP_DRIVERS", "BREW_PATHS", "BREW_READ_ONLY", "ELECTRON_FLAGS", "LOCAL_SSH", "MANAGER_FOLDERS", "ONCE_MINUTES", "ONCE_SUFFIX",
            "PROFILE_SUFFIX", "PROJECT_INDEX", "PS", "RUN_INFIX", "SANDBOX_EXEC", "SETUID_NOTE", "SETUID_TOOLS",
            "TOOLS_FOLDER", "ProcessFacts", "brew_shim", "broker_shims", "command_shim", "describe", "find_app", "is_driver",
            "is_system", "launcher_script", "layers", "manager_shims", "open_app", "open_shim", "open_url", "open_with",

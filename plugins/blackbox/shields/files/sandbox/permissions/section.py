@@ -34,7 +34,7 @@ from typing import Any, Mapping, Optional
 from .....kernel import agent_hosts, constants
 from .....kernel.config import shield_entry
 from ... import mode as mode_module
-from .catalogue import BY_ID
+from .catalogue import BY_ID, THIS_MACHINE
 from .model import Access, FolderRule, Mode, Rule, Scope, Settings
 
 SECTION = "agent_sandbox"
@@ -92,7 +92,7 @@ def _rule(row: Any, errors: list[str], where: str) -> Optional[Rule]:
         errors.append(f"{where}: ports are at most {MAX_PORTS} numbers from 1 to 65535")
         return None
     if NEVER_PORT in ports:
-        errors.append(f"{where}: port {NEVER_PORT} (ssh into this Mac) is never reachable from the sandbox")
+        errors.append(f"{where}: port {NEVER_PORT} (ssh into {THIS_MACHINE}) is never reachable from the sandbox")
         return None
     scope = _scope(row, errors, where)
     return None if scope is None else Rule(permission.id, mode, scope, tuple(sorted(set(ports))))

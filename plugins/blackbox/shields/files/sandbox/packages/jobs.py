@@ -75,7 +75,7 @@ if TYPE_CHECKING:
     import subprocess
 
 #: Where Homebrew lives, newest layout first (Apple silicon, then Intel).
-BREW_PATHS = ("/opt/homebrew/bin/brew", "/usr/local/bin/brew")
+BREW_PATHS = platform.BREW_PATHS
 MAX_SECONDS = 30 * 60
 MAX_LINES = 4000
 MAX_LINE_CHARS = 2000
@@ -93,7 +93,9 @@ logger = logging.getLogger(__name__)
 
 def brew_path() -> str:
     """The Homebrew on this Mac ("" when none): a regular, executable file at a known place."""
-    return next((path for path in BREW_PATHS if os.path.isfile(path) and os.access(path, os.X_OK)), "")
+    home = os.path.expanduser("~")
+    paths = [path.replace("{home}", home) for path in BREW_PATHS]
+    return next((path for path in paths if os.path.isfile(path) and os.access(path, os.X_OK)), "")
 
 
 #: The person's own Homebrew preferences passed through to a brokered run (KI-613): each only turns
@@ -140,12 +142,18 @@ def argv(program: str, request: Request) -> list[str]:
     return [program, *request.words()]
 
 
+def _brew_bins(home: str) -> str:
+    """Homebrew's program folders on this OS, each followed by ``:`` (``/opt/homebrew/bin:`` on macOS)."""
+    folders = [os.path.dirname(path.replace("{home}", home)) for path in BREW_PATHS]
+    return "".join(f"{folder}:" for folder in dict.fromkeys(folders) if folder != "/usr/local/bin")
+
+
 def manager_environment(program: str) -> dict[str, str]:
     """The environment a global install runs with (``managers``): what the package manager needs,
     nothing the agent set — its own folder first on PATH so it finds its runtime (node, python)."""
     home = os.path.expanduser("~")
     return {"HOME": home, "USER": os.environ.get("USER", ""), "LOGNAME": os.environ.get("LOGNAME", os.environ.get("USER", "")),
-            "PATH": f"{os.path.dirname(program)}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin", "LANG": "en_US.UTF-8",
+            "PATH": f"{os.path.dirname(program)}:{_brew_bins(home)}/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin", "LANG": "en_US.UTF-8",
             **({"TMPDIR": os.environ["TMPDIR"]} if os.environ.get("TMPDIR") else {})}
 
 

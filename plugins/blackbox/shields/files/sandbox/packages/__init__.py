@@ -189,7 +189,7 @@ GLOBAL_PERMISSION = "global-installs"
 #: dashboard runs on a Homebrew KEG's node (``/opt/homebrew/opt/node@24/bin`` first on its PATH), so
 #: ``npm install -g`` ran that keg's npm and installed into ``Cellar/node@24/…/lib/node_modules`` —
 #: inside a folder only brew may change, and not on the person's PATH.
-MANAGER_PATHS = ("/opt/homebrew/bin", "/usr/local/bin", "{home}/.volta/bin", "{home}/.cargo/bin", "{home}/.local/bin", "/usr/bin")
+MANAGER_PATHS = platform.MANAGER_FOLDERS
 #: Homebrew's prefixes: a folder in one of their kegs (``<prefix>/Cellar/<formula>/…``,
 #: ``<prefix>/opt/<formula>/…``) is never where a global install's program is taken from.
 BREW_PREFIXES = persistence_places.HOMEBREW_PREFIXES

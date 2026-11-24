@@ -39,7 +39,7 @@ from .opener import find_app, is_driver, open_url, open_with
 from .probe import layers, unavailable
 from .processes import ProcessFacts, describe, is_system, terminate
 from .profile import PROFILE_SUFFIX, SANDBOX, render
-from .shims import BREW_READ_ONLY, brew_shim, broker_shims, manager_shims, open_shim, osascript_shim, spawn_brew, stop_group
+from .shims import BREW_PATHS, BREW_READ_ONLY, MANAGER_FOLDERS, brew_shim, broker_shims, manager_shims, open_shim, osascript_shim, spawn_brew, stop_group
 from .tools import SETUID_NOTE, SETUID_TOOLS, TOOLS_FOLDER, refresh_tools
 
 

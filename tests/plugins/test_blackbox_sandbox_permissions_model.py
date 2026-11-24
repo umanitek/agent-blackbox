@@ -17,6 +17,8 @@ Contracts (red on the base ed4152ceac: no ``agent_sandbox`` section, no permissi
 
 from __future__ import annotations
 
+import sys
+
 import pytest
 
 from plugins.blackbox import approvals, shields
@@ -90,8 +92,10 @@ def test_a_valid_section_is_kept_as_given(home):
 
 @pytest.mark.parametrize("row, words", [
     ({"permission": "applescript", "mode": "allow"}, "can be set to block, ask"),
-    ({"permission": "camera-mic", "mode": "block"}, "not controllable yet"),
-    ({"permission": "keychain", "mode": "block"}, "not controllable yet"),
+    pytest.param({"permission": "camera-mic", "mode": "block"}, "not controllable yet",
+                 marks=pytest.mark.skipif(sys.platform.startswith("linux"), reason="Linux hides the devices: controllable there")),
+    pytest.param({"permission": "keychain", "mode": "block"}, "not controllable yet",
+                 marks=pytest.mark.skipif(sys.platform.startswith("linux"), reason="Linux: blocked, said with its reason (F4)")),
     ({"permission": "docker", "mode": "allow", "ports": [22]}, "only local-ports takes ports"),
     ({"permission": "local-ports", "mode": "block", "ports": [70000]}, "ports are at most"),
     ({"permission": "local-ports", "mode": "block", "ports": list(range(1, 40))}, "ports are at most"),

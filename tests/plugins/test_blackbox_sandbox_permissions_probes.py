@@ -35,6 +35,7 @@ import pytest
 
 from plugins.blackbox.agent_hooks.protect import sandbox_errors
 from plugins.blackbox.kernel import config as config_mod
+from plugins.blackbox.kernel.os_layout import machine_words
 from plugins.blackbox.shields.files import mode as files_mode, sandbox
 from plugins.blackbox.shields.files.sandbox import permissions
 from plugins.blackbox.shields.files.sandbox.permissions import Mode, Rule, Settings, catalogue
@@ -139,7 +140,7 @@ def test_blocked_clipboard_fails_at_once_without_a_hang(home, entry):
 def test_port_22_can_never_be_listed():
     errors: list = []
     permissions.validate_section({"permissions": [{"permission": "local-ports", "mode": "block", "ports": [22]}]}, errors)
-    assert any("ssh into this Mac" in error for error in errors)
+    assert any(f"ssh into {machine_words()}" in error for error in errors)
 
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="the Seatbelt profile is rendered on macOS")

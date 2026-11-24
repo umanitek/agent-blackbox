@@ -21,6 +21,8 @@ ONCE_SUFFIX, RUN_INFIX, ONCE_MINUTES = ".once.txt", ".run.", 30
 SETUID_NOTE = ""
 TOOLS_FOLDER = "sandbox-tools"
 APPS: dict[str, tuple[str, str]] = {}
+MANAGER_FOLDERS: tuple[str, ...] = ()
+BREW_PATHS: tuple[str, ...] = ()
 
 
 def unavailable() -> Optional[str]:

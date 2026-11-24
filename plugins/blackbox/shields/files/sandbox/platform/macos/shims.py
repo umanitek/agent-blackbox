@@ -12,6 +12,12 @@ from __future__ import annotations
 
 from ..posix_scripts import BREW_READ_ONLY, MANAGER_PROGRAMS, brew_shim, manager_shims, quote_shell, spawn_brew, stop_group
 
+#: Where the broker looks for the person's package managers first (``{home}`` filled), in the
+#: order their shell finds them.
+MANAGER_FOLDERS = ("/opt/homebrew/bin", "/usr/local/bin", "{home}/.volta/bin", "{home}/.cargo/bin", "{home}/.local/bin", "/usr/bin")
+#: Where Homebrew's own program is.
+BREW_PATHS = ("/opt/homebrew/bin/brew", "/usr/local/bin/brew")
+
 
 def open_shim(tools: str, python: str, dashboard_url: str) -> str:
     """The ``open`` first on the sandboxed PATH (sandbox permissions ``open-links`` / ``open-apps``):
@@ -46,4 +52,4 @@ def broker_shims(tools: str, python: str, dashboard_url: str) -> dict[str, str]:
     return {"open": open_shim(tools, python, dashboard_url), "osascript": osascript_shim(tools, python, dashboard_url)}
 
 
-__all__ = ["BREW_READ_ONLY", "MANAGER_PROGRAMS", "brew_shim", "broker_shims", "manager_shims", "open_shim", "osascript_shim", "spawn_brew", "stop_group"]
+__all__ = ["BREW_PATHS", "BREW_READ_ONLY", "MANAGER_FOLDERS", "MANAGER_PROGRAMS", "brew_shim", "broker_shims", "manager_shims", "open_shim", "osascript_shim", "spawn_brew", "stop_group"]

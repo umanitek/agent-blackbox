@@ -10,7 +10,11 @@ hooks-only agents get folder rules and the persistence places only (F9).
 
 ``controllable`` is False where Blackbox can not yet prove the OS enforces it (probed on macOS
 27.2, 2026-11-23): such a permission is listed as "not controllable yet" and no rule for it is
-accepted, so the page never promises what the kernel does not do.
+accepted, so the page never promises what the kernel does not do. It is per OS: on Linux the
+camera and microphone ARE controllable (their devices and sound servers are hidden inside the
+sandbox), and the keychain is blocked whatever the rule (the session bus that reaches the keyring
+is hidden in phase 1, founder decision F4). The sentences name the machine as a person does on it
+(``kernel.os_layout.machine_words``: "this Mac", "this computer").
 
 Usage::
 
@@ -20,15 +24,28 @@ Usage::
 
 from __future__ import annotations
 
+import sys
+
+from .....kernel.os_layout import machine_words
 from .model import Mode, Never, Permission, Route
+
+LINUX = sys.platform.startswith("linux")
+#: "this Mac" / "this computer".
+THIS_MACHINE = machine_words()
 
 BLOCK_ASK_ALLOW = (Mode.BLOCK, Mode.ASK, Mode.ALLOW)
 BLOCK_ALLOW = (Mode.BLOCK, Mode.ALLOW)
 #: Why a permission is "not controllable yet": its OS check is not proven on a real service.
-UNPROVEN = "not controllable yet: Blackbox has not yet proven that macOS enforces it, so it is not offered"
+UNPROVEN = (f"not controllable yet: Blackbox has not yet proven that {'Linux' if LINUX else 'macOS'} enforces it, so it is "
+            "not offered")
+#: Linux, phase 1 (F4): the keyring is reached over the session bus, which the sandbox hides.
+KEYCHAIN_BLOCKED = ("blocked inside the sandbox on Linux for now: the session bus that reaches your keyring is hidden "
+                    "there (gh and git fall back to their own token files)")
 #: The refusal kinds (``agent_hooks`` sandbox errors) that mean an agent wanted a permission.
 KIND_DOCKER, KIND_LOCAL_PORT, KIND_TOOL_FOLDER = "docker", "local-port", "tool-folder"
 KIND_OPEN_APP, KIND_APP_DRIVER, KIND_SIGNAL = "open-app", "app-driver", "signal"
+#: Linux: the display server refused (the clipboard is the display there).
+KIND_DISPLAY = "display"
 
 PERMISSIONS: tuple[Permission, ...] = (
     Permission("homebrew", "Homebrew installs", "brew install, upgrade, reinstall and uninstall, done by Blackbox for the agent",
@@ -56,17 +73,19 @@ PERMISSIONS: tuple[Permission, ...] = (
     Permission("docker", "Docker", "docker and colima: the container engine's socket",
                "a container runs outside the sandbox and can mount any folder, protected ones too",
                Route.PROFILE, Mode.ASK, BLOCK_ASK_ALLOW, refusal_kinds=(KIND_DOCKER,)),
-    Permission("local-ports", "Services on this Mac", "connecting to programs listening on this Mac (databases, dev servers)",
-               "the agent can talk to anything listening on this Mac", Route.PROFILE, Mode.ALLOW, BLOCK_ALLOW,
+    Permission("local-ports", f"Services on {THIS_MACHINE}", f"connecting to programs listening on {THIS_MACHINE} (databases, dev servers)",
+               f"the agent can talk to anything listening on {THIS_MACHINE}", Route.PROFILE, Mode.ALLOW, BLOCK_ALLOW,
                refusal_kinds=(KIND_LOCAL_PORT,), ports=True),
     Permission("clipboard", "Clipboard", "pbpaste and reading what you last copied",
                "what you last copied may be a password or a key (blocking it also stops copy and paste inside an editor "
-               "opened in the sandbox)", Route.PROFILE, Mode.ALLOW, BLOCK_ALLOW),
+               "opened in the sandbox)", Route.PROFILE, Mode.ALLOW, BLOCK_ALLOW,
+               refusal_kinds=(KIND_DISPLAY,) if LINUX else ()),
     Permission("keychain", "Keychain", "security, git's keychain helper and agent sign-ins that use your keychain",
                "the agent can use keychain items that trust the tool it runs", Route.PROFILE, Mode.ALLOW, BLOCK_ALLOW,
-               controllable=False, note=UNPROVEN),
+               controllable=False, note=KEYCHAIN_BLOCKED if LINUX else UNPROVEN),
     Permission("camera-mic", "Camera and microphone", "recording from the camera or the microphone",
-               "the agent could record you", Route.PROFILE, Mode.BLOCK, BLOCK_ALLOW, controllable=False, note=UNPROVEN),
+               "the agent could record you", Route.PROFILE, Mode.BLOCK, BLOCK_ALLOW, controllable=LINUX,
+               note="" if LINUX else UNPROVEN),
 )
 BY_ID: dict[str, Permission] = {permission.id: permission for permission in PERMISSIONS}
 
@@ -75,19 +94,24 @@ NEVER: tuple[Never, ...] = (
     Never("blackbox", "Blackbox's own files", "its settings, keys, canary, rendered profiles and project index"),
     Never("settings", "Hermes' config.yaml and .env", "they hold every Blackbox setting"),
     Never("hooks", "Every agent's hook settings and your shell startup files", "they keep later agents inside the sandbox"),
-    Never("persistence", "Places something starts from by itself", "launchd jobs, login items, cron and at, ~/.ssh login "
-          "files, Homebrew's folders: a job left there runs outside the sandbox"),
+    Never("persistence", "Places something starts from by itself",
+          ("systemd units, autostart entries, cron and at, ~/.ssh login files, Homebrew's folders" if LINUX else
+           "launchd jobs, login items, cron and at, ~/.ssh login files, Homebrew's folders") + ": a job left there runs outside the sandbox"),
     Never("protected", "Your protected files and folders", "File Shield's list"),
-    Never("ssh-self", "ssh into this Mac", "a login runs outside the sandbox (F7); Seatbelt's localhost filter covers every "
-          "address of this Mac (probed on macOS 27.2)"),
+    Never("ssh-self", f"ssh into {THIS_MACHINE}", "a login runs outside the sandbox (F7); " + (
+          "the system protection helper refuses it per agent, to every address of this computer" if LINUX else
+          "Seatbelt's localhost filter covers every address of this Mac (probed on macOS 27.2)")),
     Never("signals", "Signals to programs outside the sandbox", "use Stopping your programs instead"),
-    Never("privilege", "sudo, setuid programs and new launchd jobs", "macOS does not run setuid programs inside a sandbox"),
+    Never("privilege", "sudo, setuid programs and new " + ("systemd" if LINUX else "launchd") + " jobs",
+          "the sandbox runs with no new privileges" if LINUX else "macOS does not run setuid programs inside a sandbox"),
     Never("dashboard", "Blocking Blackbox's dashboard port", "the sandbox's own tools talk to it"),
 )
 #: What Blackbox can not control from the sandbox at all (shown for information).
 NOT_CONTROLLABLE: tuple[Never, ...] = (
-    Never("screen", "Screen capture", "macOS asks you for the terminal app itself (Privacy & Security), not for the agent"),
-    Never("setuid", "setuid tools", "macOS never runs them inside a sandbox (sudo, top, crontab)"),
+    Never("screen", "Screen capture", "on X11 any program with the display can read the screen; Wayland asks you through "
+          "the desktop portal" if LINUX else "macOS asks you for the terminal app itself (Privacy & Security), not for the agent"),
+    Never("setuid", "setuid tools", "they run without their privileges inside the sandbox (sudo, su, pkexec, crontab)" if LINUX
+          else "macOS never runs them inside a sandbox (sudo, top, crontab)"),
 )
 
 
@@ -96,5 +120,6 @@ def profile_permissions() -> tuple[Permission, ...]:
     return tuple(each for each in PERMISSIONS if each.route is Route.PROFILE and each.controllable)
 
 
-__all__ = ["BLOCK_ALLOW", "BLOCK_ASK_ALLOW", "BY_ID", "KIND_APP_DRIVER", "KIND_DOCKER", "KIND_LOCAL_PORT", "KIND_OPEN_APP",
-           "KIND_SIGNAL", "KIND_TOOL_FOLDER", "NEVER", "NOT_CONTROLLABLE", "PERMISSIONS", "UNPROVEN", "profile_permissions"]
+__all__ = ["BLOCK_ALLOW", "BLOCK_ASK_ALLOW", "BY_ID", "KEYCHAIN_BLOCKED", "KIND_APP_DRIVER", "KIND_DISPLAY", "KIND_DOCKER",
+           "KIND_LOCAL_PORT", "KIND_OPEN_APP", "KIND_SIGNAL", "KIND_TOOL_FOLDER", "LINUX", "NEVER", "NOT_CONTROLLABLE", "PERMISSIONS",
+           "THIS_MACHINE", "UNPROVEN", "profile_permissions"]

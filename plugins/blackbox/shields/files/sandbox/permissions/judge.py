@@ -20,7 +20,7 @@ from __future__ import annotations
 from typing import Optional
 
 from .....kernel.agent_hosts import product_name
-from .catalogue import PERMISSIONS
+from .catalogue import PERMISSIONS, THIS_MACHINE
 from .model import Access, Mode, Scope, Settings
 
 #: Said for any change while the current setting can not be read.
@@ -54,7 +54,7 @@ def loosened(before: Optional[Settings], after: Settings) -> list[str]:
                 added = set(after.ports(permission.id, scope.agent, folder)) - set(before.ports(permission.id, scope.agent, folder))
                 if added:
                     reasons.append(f"Let {scope.words(product_name)} reach port{'s' if len(added) > 1 else ''} "
-                                   f"{', '.join(map(str, sorted(added)))} on this Mac")
+                                   f"{', '.join(map(str, sorted(added)))} on {THIS_MACHINE}")
     kept = {(each.path, each.scope): each.access for each in after.folders}
     for each in before.folders:
         access = kept.get((each.path, each.scope))

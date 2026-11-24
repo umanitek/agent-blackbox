@@ -25,6 +25,7 @@ import pytest
 
 from plugins.blackbox import approvals, audit, shields
 from plugins.blackbox.kernel import config as config_mod
+from plugins.blackbox.kernel.os_layout import machine_words
 from plugins.blackbox.shields.files import api, mode as files_mode, sandbox
 from plugins.blackbox.shields.files.sandbox import permissions
 
@@ -66,7 +67,8 @@ def test_the_read_lists_the_catalogue_the_never_list_and_the_agents(entry):
     docker = next(row for row in view["permissions"] if row["id"] == "docker")
     assert docker["mode"] == "ask" and docker["modes"] == ["block", "ask", "allow"] and docker["applies"] == "after restart"
     assert next(row for row in view["permissions"] if row["id"] == "homebrew")["applies"] == "now"
-    assert next(row for row in view["permissions"] if row["id"] == "camera-mic")["controllable"] is False
+    # Linux hides the camera's and the microphone's devices inside the sandbox; macOS has no proven check yet
+    assert next(row for row in view["permissions"] if row["id"] == "camera-mic")["controllable"] is sys.platform.startswith("linux")
     assert any(row["id"] == "ssh-self" for row in view["never"])
     assert [agent["id"] for agent in view["agents"]] == ["claude-code"]
 
@@ -123,6 +125,6 @@ def test_the_page_draws_the_list_and_posts_the_persons_choice(entry, tmp_path):
     applescript = text[text.index("AppleScript"):text.index("Stopping your programs")]
     assert "Allow" not in applescript and "Ask" in applescript   # only the modes it allows
     assert "Docker · Allow · claude-code in ~/work/shop" in "\n".join(drawn["hosts"]["permission-rules"])
-    assert "ssh into this Mac" in "\n".join(drawn["hosts"]["permission-never"])
+    assert f"ssh into {machine_words()}" in "\n".join(drawn["hosts"]["permission-never"])
     assert drawn["posts"][0] == ["permission-set", {"permission": "homebrew", "mode": "block"}]
     assert drawn["posts"][1] == ["permission-clear", {"permission": "docker", "agent": "claude-code", "project": "~/work/shop"}]

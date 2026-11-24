@@ -21,6 +21,7 @@ from ..... import audit
 from .....kernel import constants
 from ....shield_api import ShieldApiError, ShieldContext
 from ... import mode as mode_module
+from .....kernel.os_layout import machine_words
 from .. import platform
 from .asking import Asking, Planned, decide
 
@@ -70,7 +71,7 @@ def open_app(context: ShieldContext, body: Mapping[str, Any]) -> Planned:
         raise ShieldApiError(400, "a request carries the app and the files only")
     asked = Asking.of(context, body)
     app, files = parse(body.get("argv"), asked.folder)
-    name = os.path.basename(app)[:-4]
+    name = os.path.splitext(os.path.basename(app))[0]   # "Preview" (.app), "org.gnome.Evince" (.desktop)
     command = f"open -a {name} " + " ".join(files)
     decide(PERMISSION, asked, command)
 
@@ -78,7 +79,7 @@ def open_app(context: ShieldContext, body: Mapping[str, Any]) -> Planned:
         code = platform.open_with(app, files)
         audit.record_for(audit.SANDBOX_RECORDER, event="brokered_open", workspace=asked.folder,
                          detail={"what": "app", "app": name, "files": len(files), "agent": asked.agent, "exit": code})
-        return code, f"Opened in {name}." if code == 0 else "macOS could not open it."
+        return code, f"Opened in {name}." if code == 0 else f"{machine_words().capitalize()} could not open it."
     return Planned("open-app", command, asked, work)
 
 

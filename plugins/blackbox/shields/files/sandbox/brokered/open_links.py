@@ -18,6 +18,7 @@ from urllib.parse import urlsplit
 
 from ..... import audit
 from ....shield_api import ShieldApiError, ShieldContext
+from .....kernel.os_layout import machine_words
 from .. import platform
 from .asking import Asking, Planned, decide
 
@@ -63,7 +64,7 @@ def open_link(context: ShieldContext, body: Mapping[str, Any]) -> Planned:
         code = platform.open_url(url)
         audit.record_for(audit.SANDBOX_RECORDER, event="brokered_open", workspace=asked.folder,
                          detail={"what": "link", "host": urlsplit(url).hostname or "", "agent": asked.agent, "exit": code})
-        return code, "Opened in your browser." if code == 0 else "macOS could not open it."
+        return code, "Opened in your browser." if code == 0 else f"{machine_words().capitalize()} could not open it."
     return Planned("open-link", f"open {url}", asked, work, check=lambda: LISTED if listed(context, url) else "")
 
 

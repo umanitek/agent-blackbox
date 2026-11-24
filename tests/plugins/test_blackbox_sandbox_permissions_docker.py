@@ -165,6 +165,6 @@ def test_mounting_a_protected_item_into_a_container_is_refused(home):
 def test_every_catalogue_refusal_kind_is_one_the_hooks_read():
     hook_kinds = {sandbox_errors.SETUID, sandbox_errors.APP_DRIVER, sandbox_errors.OPEN_APP, sandbox_errors.SIGNAL,
                   sandbox_errors.NESTED, sandbox_errors.FILE, sandbox_errors.DOCKER, sandbox_errors.TOOL_FOLDER,
-                  sandbox_errors.LOCAL_PORT}
+                  sandbox_errors.LOCAL_PORT, sandbox_errors.DISPLAY, sandbox_errors.SYSTEM_SERVICES}
     named = {kind for each in catalogue.PERMISSIONS for kind in each.refusal_kinds}
     assert named <= hook_kinds

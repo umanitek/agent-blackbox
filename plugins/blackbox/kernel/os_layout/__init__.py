@@ -40,6 +40,11 @@ def os_folder(sys_platform: Optional[str] = None) -> str:
     return next((name for prefix, name in OS_FOLDERS.items() if here.startswith(prefix)), "")
 
 
+def machine_words(sys_platform: Optional[str] = None) -> str:
+    """How a sentence for a person names this machine: "this Mac" on macOS, "this computer" elsewhere."""
+    return "this Mac" if os_folder(sys_platform) == "macos" else "this computer"
+
+
 def _other_os_folders(sys_platform: Optional[str]) -> list[str]:
     here = os_folder(sys_platform)
     return [name for name in OS_FOLDERS.values() if name != here]
@@ -66,4 +71,4 @@ def other_os_patterns(root: str, sys_platform: Optional[str] = None) -> list[str
             for name in _other_os_folders(sys_platform) for suffix in ("", ".*")]
 
 
-__all__ = ["OS_FOLDERS", "PLATFORM_FOLDER", "os_folder", "other_os_entries", "other_os_patterns"]
+__all__ = ["OS_FOLDERS", "PLATFORM_FOLDER", "machine_words", "os_folder", "other_os_entries", "other_os_patterns"]
