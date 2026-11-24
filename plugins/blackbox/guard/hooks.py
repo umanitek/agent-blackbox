@@ -181,9 +181,9 @@ def _judge(tool_name: str, args: Any, cwd: str = "", agent: str = "") -> _Judgem
     command names by a relative path is the one there; a folder rule scoped to an agent is its own)."""
     cfg = _config()
     rs, graph_evidence = graph_rules.detection_rules(cfg, tool_name, args)
-    active = shields.snapshot()   # every shield's mode, read once for this call
     notes: list[str] = []
-    with action_context.working_in(cwd, agent):
+    with config_mod.one_entry_read(), action_context.working_in(cwd, agent):   # one read: shields and watch rules
+        active = shields.snapshot()   # every shield's mode, read once for this call
         findings = reporting._flag_worthy(cfg, _raw_findings(cfg, rs, tool_name, args, active, notes), active)
     return _Judgement(cfg, rs, graph_evidence, findings, _blocking(cfg, findings), notes)
 

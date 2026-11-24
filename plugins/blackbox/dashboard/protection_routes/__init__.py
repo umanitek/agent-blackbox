@@ -40,7 +40,7 @@ def register(app: Any, swr: Cache) -> None:
     approvals.SECTION_JUDGES[watch.SECTION] = watch.weakening
 
     @app.get("/api/protection")
-    def protection() -> Any:
+    def protection_view() -> Any:
         return JSONResponse({"tamper": audit.tamper_counts(), "log": asdict(audit.protection_log.verify()),
                              "rules": watch.view()}, headers=NO_CACHE)
 
