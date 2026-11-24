@@ -48,7 +48,7 @@ mod tests {
 
     #[test]
     fn a_desktop_entry_names_its_name_and_program() {
-        let entry = "[Desktop Entry]\nType=Application\nName=Updater\nExec=\"/home/amos/.cache/u\" --quiet\nX-GNOME-Autostart-enabled=true\n";
+        let entry = "Type=Application\nName=Updater\nExec=\"/home/amos/.cache/u\" --quiet\nX-GNOME-Autostart-enabled=true\n";
         assert_eq!(describe("u.desktop", entry), ("Updater".to_string(), "/home/amos/.cache/u".to_string()));
         assert!(is_described("x.timer") && is_described("x.desktop") && !is_described("x.wants"));
     }

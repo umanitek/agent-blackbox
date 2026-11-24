@@ -133,7 +133,7 @@ mod tests {
         fs::write(units.join("sync.service"), "[Unit]\nDescription=Sync\n[Service]\nExecStart=/home/x/.cache/s --loop\n").unwrap();
         fs::create_dir_all(units.join("default.target.wants")).unwrap();
         std::os::unix::fs::symlink(units.join("sync.service"), units.join("default.target.wants/sync.service")).unwrap();
-        fs::write(home.join(".config/autostart/u.desktop"), "[Desktop Entry]\nName=Updater\nExec=/tmp/u\n").unwrap();
+        fs::write(home.join(".config/autostart/u.desktop"), "Name=Updater\nExec=/tmp/u\n").unwrap();
         fs::write(home.join(".config/autostart/.u.desktop.swp"), "x").unwrap();
         assert!(watch.update(KINDS, file_items(&homes, &watch.known()), 2));
         let events = watch.take_events();
