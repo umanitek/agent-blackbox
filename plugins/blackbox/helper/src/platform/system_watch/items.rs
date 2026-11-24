@@ -5,6 +5,7 @@
 
 use std::collections::BTreeMap;
 use std::fs;
+use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::time::UNIX_EPOCH;
 
@@ -17,6 +18,8 @@ const MAX_PENDING: usize = 200;
 /// The most bytes read of one item (a bigger one is marked by size and time alone).
 pub const MAX_READ: u64 = 1024 * 1024;
 const FIELD: usize = 512;
+/// The most entries read from one program folder (Homebrew's `bin` holds about a thousand links).
+pub const MAX_PER_FOLDER: usize = 4000;
 
 
 /// One thing that starts by itself.
@@ -157,6 +160,34 @@ impl Persistence {
 
     pub fn reset(&mut self) {
         *self = Persistence::default();
+    }
+}
+
+/// A program entry's mark without reading or following it: size, mtime, mode and a link's target.
+pub fn entry_mark(path: &Path) -> Option<String> {
+    let meta = fs::symlink_metadata(path).ok()?;
+    let target = if meta.file_type().is_symlink() { fs::read_link(path).map(|t| t.display().to_string()).unwrap_or_default() } else { String::new() };
+    Some(format!("{}:{}:{:o}:{}", meta.len(), meta.mtime(), meta.mode(), target))
+}
+
+/// Every entry of program folder *folder* as a `path-program` item (marked, never followed).
+pub fn program_items(folder: &str, items: &mut Vec<Item>) {
+    let Ok(entries) = fs::read_dir(folder) else { return };
+    for entry in entries.flatten().take(MAX_PER_FOLDER) {
+        let path = entry.path();
+        let Some(mark) = entry_mark(&path) else { continue };
+        let label = entry.file_name().to_string_lossy().into_owned();
+        let program = fs::read_link(&path).map(|t| path.parent().unwrap_or(Path::new("/")).join(t).display().to_string())
+            .unwrap_or_else(|_| path.display().to_string());
+        items.push(Item { kind: "path-program", id: path.display().to_string(), label, program, mark });
+    }
+}
+
+/// File *path* as an item of *kind*, when it is a regular file.
+pub fn file_item(kind: &'static str, path: &str, items: &mut Vec<Item>) {
+    if let Some(mark) = mark_of(Path::new(path)) {
+        let label = Path::new(path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        items.push(Item { kind, id: path.to_string(), label, program: String::new(), mark });
     }
 }
 

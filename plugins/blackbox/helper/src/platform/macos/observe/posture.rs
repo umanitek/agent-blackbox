@@ -16,6 +16,8 @@ use std::time::Duration;
 use serde_json::{json, Value};
 
 use super::tamper::parse_firewall;
+// Reading sudo's rules is every OS's (platform/system_watch).
+pub use crate::platform::system_watch::sudoers::{passwordless_sudo, sudoers_skips_password};
 
 pub const POSTURE_EVERY: Duration = Duration::from_secs(60);
 const FIREWALL: &str = "/usr/libexec/ApplicationFirewall/socketfilterfw";
@@ -59,23 +61,6 @@ pub fn parse_screen_lock(text: &str) -> String {
     else { "unknown".into() }
 }
 
-/// True when *text* (a sudoers file) lets someone run commands as root without a password:
-/// a line that is not a comment and carries `NOPASSWD`.
-pub fn sudoers_skips_password(text: &str) -> bool {
-    text.lines().map(str::trim).any(|line| !line.starts_with('#') && line.to_ascii_uppercase().contains("NOPASSWD"))
-}
-
-/// Whether sudo needs no password on this Mac: "yes" | "no" | "unknown" (the rules could not be
-/// read). Only root can read them, which is why the helper answers this and not the plugin.
-fn passwordless_sudo() -> &'static str {
-    let Ok(main) = std::fs::read_to_string("/etc/sudoers") else { return "unknown" };
-    let mut texts = vec![main];
-    if let Ok(entries) = std::fs::read_dir("/etc/sudoers.d") {
-        texts.extend(entries.flatten().take(200).filter_map(|entry| std::fs::read_to_string(entry.path()).ok()));
-    }
-    if texts.iter().any(|text| sudoers_skips_password(text)) { "yes" } else { "no" }
-}
-
 /// The facts now. *listening* is the set of TCP ports reachable from the network (exposure).
 pub fn look(listening: &BTreeSet<u16>) -> Value {
     let ard_running = crate::command::output(Command::new("/usr/bin/pgrep").args(["-x", "ARDAgent"]), crate::command::TIMEOUT).map(|o| o.status.success()).unwrap_or(false);
@@ -115,14 +100,6 @@ mod tests {
         assert_eq!(parse_screen_lock("2026-11-21 sysadminctl[1:2] screenLock delay is immediate"), "immediate");
         assert_eq!(parse_screen_lock("screenLock delay is 300 seconds"), "300 seconds");
         assert_eq!(parse_screen_lock("screenLock is off"), "off");
-    }
-
-    #[test]
-    fn a_sudoers_line_without_a_password_is_seen_and_a_comment_is_not() {
-        assert!(sudoers_skips_password("root ALL=(ALL) ALL\nadmin ALL=(ALL) NOPASSWD: ALL\n"));
-        assert!(sudoers_skips_password("%admin ALL = (ALL) nopasswd: /usr/bin/true"));
-        assert!(!sudoers_skips_password("# admin ALL=(ALL) NOPASSWD: ALL\n%admin ALL=(ALL) ALL\n"));
-        assert!(!sudoers_skips_password(""));
     }
 
     #[test]

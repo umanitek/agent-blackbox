@@ -21,13 +21,12 @@
 //! item kinds `shell-startup`, `ssh-login`, `at-job`, `login-prefs` and `path-program`.
 
 use std::fs;
-use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
-use super::persistence::{mark_of, Item};
+use super::persistence::Item;
+// Marking an entry and a file, and listing a program folder, are every OS's (platform/system_watch).
+pub use crate::platform::system_watch::items::{entry_mark, file_item, program_items, MAX_PER_FOLDER};
 
-/// The most entries read from one program folder (Homebrew's `bin` holds about a thousand links).
-pub const MAX_PER_FOLDER: usize = 4000;
 /// The shell startup files of a user, under their home.
 pub const SHELL_FILES: &[&str] = &[".zshenv", ".zprofile", ".zshrc", ".zlogin", ".zlogout", ".bash_profile", ".bash_login",
                                    ".bashrc", ".profile", ".config/fish/config.fish"];
@@ -45,32 +44,6 @@ pub const LOGIN_PREFERENCES: &[&str] = &["com.apple.loginitems", "com.apple.LSSh
 /// Every user's home folder (`/Users/<name>`, not `Shared`, never a link to another home).
 pub fn homes() -> Vec<String> {
     crate::platform::macos::observe::persistence::user_homes(Path::new("/Users"))
-}
-
-/// A program entry's mark without reading or following it: size, mtime, mode and a link's target.
-pub fn entry_mark(path: &Path) -> Option<String> {
-    let meta = fs::symlink_metadata(path).ok()?;
-    let target = if meta.file_type().is_symlink() { fs::read_link(path).map(|t| t.display().to_string()).unwrap_or_default() } else { String::new() };
-    Some(format!("{}:{}:{:o}:{}", meta.len(), meta.mtime(), meta.mode(), target))
-}
-
-fn program_items(folder: &str, items: &mut Vec<Item>) {
-    let Ok(entries) = fs::read_dir(folder) else { return };
-    for entry in entries.flatten().take(MAX_PER_FOLDER) {
-        let path = entry.path();
-        let Some(mark) = entry_mark(&path) else { continue };
-        let label = entry.file_name().to_string_lossy().into_owned();
-        let program = fs::read_link(&path).map(|t| path.parent().unwrap_or(Path::new("/")).join(t).display().to_string())
-            .unwrap_or_else(|_| path.display().to_string());
-        items.push(Item { kind: "path-program", id: path.display().to_string(), label, program, mark });
-    }
-}
-
-fn file_item(kind: &'static str, path: &str, items: &mut Vec<Item>) {
-    if let Some(mark) = mark_of(Path::new(path)) {
-        let label = Path::new(path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        items.push(Item { kind, id: path.to_string(), label, program: String::new(), mark });
-    }
 }
 
 fn login_preference_items(folder: &str, items: &mut Vec<Item>) {
