@@ -306,7 +306,9 @@ mod tests {
         let launcher = layout.binary.with_file_name(SANDBOX_NAME);
         assert_eq!(fs::read(&launcher).unwrap(), b"new helper", "a copy of the checked bytes, no second download");
         assert_eq!(fs::metadata(&launcher).unwrap().permissions().mode() & 0o777, 0o755);
-        uninstall_from(&layout, &FakeSystemd::default(), &no_put_back).unwrap();
+        // An uninstall always puts DNS and the firewall back (KI-668: the test passed no_put_back,
+        // which panics by design — uninstall is exactly when it runs).
+        uninstall_from(&layout, &FakeSystemd::default(), &Vec::new).unwrap();
         assert!(!launcher.exists() && !layout.binary.exists());
         let _ = fs::remove_dir_all(&dir);
     }

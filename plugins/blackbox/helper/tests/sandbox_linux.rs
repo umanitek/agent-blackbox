@@ -6,7 +6,9 @@
 //!
 //! The probes that need a system call no shell tool makes (TIOCSTI, keyctl, umount, a nested
 //! namespace, a unix socket) run THIS test binary again inside the sandbox: [`child_probe`] does
-//! the one call named in `BB_SANDBOX_CHILD` and prints `RESULT:<errno>` (0 = it worked).
+//! the one call named in `BB_SANDBOX_CHILD` and prints `RESULT:<errno>` (0 = it worked). libtest
+//! prints its own words first on the same line (`test child_probe ... RESULT:0`, recorded on a real
+//! kernel: [`result_of`]'s test), so the result is read wherever it sits on a line (KI-668).
 #![cfg(target_os = "linux")]
 
 use std::fs;
@@ -66,8 +68,41 @@ fn child(policy: &Path, action: &str, argument: &str) -> i32 {
         .args(["--exact", "child_probe", "--nocapture", "--test-threads=1"])
         .env("BB_SANDBOX_CHILD", action).env("BB_SANDBOX_ARG", argument).output().unwrap();
     let all = text(&out);
-    let found = all.lines().find_map(|line| line.trim().strip_prefix("RESULT:")).unwrap_or_else(|| panic!("no result: {all}"));
-    found.trim().parse().unwrap()
+    result_of(&all).unwrap_or_else(|| panic!("no result: {all}"))
+}
+
+/// The errno a [`child_probe`] run printed, wherever libtest put it on its line.
+fn result_of(output: &str) -> Option<i32> {
+    let after = output.lines().find_map(|line| line.split_once("RESULT:").map(|(_, rest)| rest))?;
+    after.trim().split(|c: char| !(c.is_ascii_digit() || c == '-')).next()?.parse().ok()
+}
+
+/// Runs *call* in a forked child and returns its exit code: a user namespace can only be entered
+/// by a SINGLE-threaded process, and libtest runs every test in a thread of its own — unsharing in
+/// the test process itself gets EINVAL (KI-668: the nested-sandbox check failed for that alone).
+fn in_single_threaded_child(call: impl FnOnce() -> i32) -> i32 {
+    // SAFETY: the child only makes the calls in *call* and exits.
+    match unsafe { libc::fork() } {
+        0 => {
+            let code = call();
+            unsafe { libc::_exit(code) }
+        }
+        child if child > 0 => {
+            let mut status = 0;
+            unsafe { libc::waitpid(child, &mut status, 0) };
+            if libc::WIFEXITED(status) { libc::WEXITSTATUS(status) } else { -1 }
+        }
+        _ => errno(),
+    }
+}
+
+#[test]
+fn a_result_is_read_where_libtest_really_prints_it() {
+    // Captured from `child_probe` on Ubuntu 24.04 / kernel 7.0 (fix wave L-W1), byte for byte.
+    assert_eq!(result_of("\nrunning 1 test\ntest child_probe ... RESULT:0\n"), Some(0));
+    assert_eq!(result_of("running 1 test\ntest child_probe ... RESULT:1\n"), Some(1));
+    assert_eq!(result_of("RESULT:13\n"), Some(13));
+    assert_eq!(result_of("running 1 test\n"), None);
 }
 
 fn errno() -> i32 {
@@ -93,19 +128,18 @@ fn child_probe() {
             }
             "keyctl" => ok(libc::syscall(libc::SYS_keyctl, 0, -3i64, 0) >= 0),
             "umount" => ok(libc::umount2(c(&argument).as_ptr(), libc::MNT_DETACH) == 0),
-            "nested-umount" => {
+            "nested-umount" => in_single_threaded_child(|| {
+                let uid = libc::getuid();
                 if libc::unshare(libc::CLONE_NEWUSER | libc::CLONE_NEWNS) != 0 {
-                    errno()
-                } else {
-                    let _ = fs::write("/proc/self/setgroups", "deny");
-                    let uid = libc::getuid();
-                    let _ = fs::write("/proc/self/uid_map", format!("0 {uid} 1"));
-                    let umounted = libc::umount2(c(&argument).as_ptr(), libc::MNT_DETACH) == 0;
-                    let readable = fs::read(&argument).is_ok() || fs::read_dir(&argument).is_ok();
-                    if umounted && readable { 0 } else { libc::EPERM }
+                    return errno();
                 }
-            }
-            "nested-userns" => ok(libc::unshare(libc::CLONE_NEWUSER) == 0),
+                let _ = fs::write("/proc/self/setgroups", "deny");
+                let _ = fs::write("/proc/self/uid_map", format!("0 {uid} 1"));
+                let umounted = libc::umount2(c(&argument).as_ptr(), libc::MNT_DETACH) == 0;
+                let readable = fs::read(&argument).is_ok() || fs::read_dir(&argument).is_ok();
+                if umounted && readable { 0 } else { libc::EPERM }
+            }),
+            "nested-userns" => in_single_threaded_child(|| if libc::unshare(libc::CLONE_NEWUSER) == 0 { 0 } else { errno() }),
             "kill" => ok(libc::kill(argument.parse().unwrap(), libc::SIGTERM) == 0),
             "unix-socket" => {
                 let path = Path::new(&argument).join("rpc.sock");

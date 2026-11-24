@@ -325,7 +325,8 @@ mod tests {
         assert!(text.starts_with("table inet blackbox_agents\ndelete table inet blackbox_agents\n"));
         assert!(text.contains(&format!("socket cgroupv2 level 5 \"user.slice/u/user@1/blackbox-agents.slice/{UNIT}\" jump agent_0")));
         assert!(!text.contains("drop"), "a refusal is a reject (a dropped SYN leaves the connect hanging): {text}");
-        let chain = |index: usize| text.split(&format!("chain agent_{index} {{")).nth(1).unwrap().split('}').next().unwrap().to_string();
+        // A chain ends at the first line that is only `}` — never at the `}` of a port set (KI-668).
+        let chain = |index: usize| text.split(&format!("chain agent_{index} {{")).nth(1).unwrap().split("\n\t}").next().unwrap().to_string();
         let mine = chain(0);
         assert!(mine.contains(&format!("tcp dport 22 {REFUSE}")));
         assert!(mine.contains(&format!("tcp dport {{ 2375, 2376 }} {REFUSE}")));
