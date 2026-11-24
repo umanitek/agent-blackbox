@@ -286,13 +286,36 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
+    /// Whether *runtime* (`$XDG_RUNTIME_DIR`) holds a systemd user manager THIS user can reach: its
+    /// private socket is there and the folder is *uid*'s own. WHY the owner (KI-681, Linux round L3):
+    /// `sudo -E` keeps the person's XDG_RUNTIME_DIR, so root saw their manager's socket, ran
+    /// `systemd-run --user` at a manager it can not reach, and failed the test, not the product.
+    fn own_user_manager(runtime: Option<&Path>, uid: u32) -> bool {
+        use std::os::unix::fs::MetadataExt;
+        runtime.is_some_and(|dir| dir.join("systemd/private").exists() && fs::metadata(dir).is_ok_and(|meta| meta.uid() == uid))
+    }
+
+    #[test]
+    fn only_a_user_manager_of_ones_own_is_used() {
+        use std::os::unix::fs::MetadataExt;
+        let runtime = scratch("runtime");
+        fs::create_dir_all(runtime.join("systemd")).unwrap();
+        fs::write(runtime.join("systemd/private"), "").unwrap();
+        let mine = fs::metadata(&runtime).unwrap().uid();
+        assert!(own_user_manager(Some(&runtime), mine));
+        assert!(!own_user_manager(Some(&runtime), mine.wrapping_add(1)), "root under sudo -E with the person's folder");
+        assert!(!own_user_manager(Some(&runtime.join("nowhere")), mine) && !own_user_manager(None, mine));
+        let _ = fs::remove_dir_all(runtime);
+    }
+
     /// LES-153: a REAL scope, started the launcher's way ([`scope::systemd_run_argv`]), is found at the
-    /// path its own `/proc/<pid>/cgroup` names. Needs a person's systemd (a login session); without
-    /// one it says so.
+    /// path its own `/proc/<pid>/cgroup` names. Needs a systemd user manager of this user's own (a
+    /// login session); without one it says so.
     #[test]
     fn a_real_scope_started_the_launchers_way_is_found() {
         let systemd_run = scope::SYSTEMD_RUN.iter().find(|path| Path::new(path).exists());
-        let manager = std::env::var_os("XDG_RUNTIME_DIR").is_some_and(|dir| Path::new(&dir).join("systemd/private").exists());
+        // SAFETY: geteuid has no preconditions and can not fail.
+        let manager = own_user_manager(std::env::var_os("XDG_RUNTIME_DIR").as_deref().map(Path::new), unsafe { libc::geteuid() });
         let (Some(systemd_run), true) = (systemd_run, manager) else {
             eprintln!("skipped: no systemd user manager here");
             return;
