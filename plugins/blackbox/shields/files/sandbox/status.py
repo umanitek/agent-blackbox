@@ -44,6 +44,7 @@ def status(mode: ShieldMode) -> dict[str, Any]:
     folder = launcher_dir()
     return {
         "unavailable": platform.unavailable(),
+        "layers": platform.layers(),
         "profile": str(profile_path()) if profile_path().is_file() else "",
         "on_path": shell_path.present(),
         "restart_note": "An agent that is already running keeps the protection it started with — restart it after a change.",
@@ -57,7 +58,7 @@ def status(mode: ShieldMode) -> dict[str, Any]:
                       "launcher": all((hermes_shell_dir() / shell).is_file() for shell in HERMES_SHELLS),
                       **protection(agent_hosts.HERMES_ID, agent_hosts.HERMES_ID in picked)}],
         "coverage": shell_path.coverage(folder),
-        "apps": [{"id": app, "name": name, "installed": os.path.isdir(bundle), "note": APP_NOTE}
+        "apps": [{"id": app, "name": name, "installed": os.path.exists(bundle), "note": APP_NOTE}
                  for app, (name, bundle) in platform.APPS.items()],
     }
 

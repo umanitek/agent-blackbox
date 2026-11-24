@@ -154,6 +154,7 @@ def sync(mode: Optional[ShieldMode] = None) -> dict[str, Any]:
         write_if_changed(profile_path(), profiles.render_signed(rules, permissions.allowances(settings)), 0o644)
         profiles.sync(rules, chosen(mode), settings)   # each agent's own permissions on top (sandbox permissions)
         write_if_changed(canary_path(), CANARY_TEXT, 0o644)
+        platform.prepare(rules, str(Path.home()), home())   # Linux: placeholders for missing startup places (F1)
         platform.refresh_tools(str(launcher_dir()), bool(chosen(mode)))   # the setuid-free ps for the sandboxed PATH (KI-589)
         packages.install_shim(launcher_dir() / platform.TOOLS_FOLDER)        # brew installs through Blackbox (KI-593)
         brokered.install_shims(launcher_dir() / platform.TOOLS_FOLDER)       # open links / apps through Blackbox

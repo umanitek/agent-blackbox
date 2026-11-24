@@ -45,10 +45,8 @@ Usage::
 
 from __future__ import annotations
 
-
-from __future__ import annotations
-
 import os
+from pathlib import Path
 from typing import Optional
 
 from ......kernel.persistence_places import startup_places
@@ -67,10 +65,19 @@ def unavailable() -> Optional[str]:
     return None if os.access(SANDBOX_EXEC, os.X_OK) else "This Mac has no sandbox-exec, so agents can not be sandboxed."
 
 
+def layers() -> list[dict[str, str]]:
+    """Seatbelt is one layer: the status page shows none apart."""
+    return []
+
+
+def prepare(_places: object, _home: str, _state: Path) -> list[str]:
+    """Nothing to prepare: a Seatbelt rule covers a place that does not exist yet."""
+    return []
+
 
 __all__ = ["APPS", "APP_DRIVERS", "BREW_READ_ONLY", "ELECTRON_FLAGS", "LOCAL_SSH", "ONCE_MINUTES", "ONCE_SUFFIX",
            "PROFILE_SUFFIX", "PROJECT_INDEX", "PS", "RUN_INFIX", "SANDBOX_EXEC", "SETUID_NOTE", "SETUID_TOOLS",
            "TOOLS_FOLDER", "ProcessFacts", "brew_shim", "broker_shims", "command_shim", "describe", "find_app", "is_driver",
-           "is_system", "launcher_script", "manager_shims", "open_app", "open_shim", "open_url", "open_with",
-           "osascript_shim", "refresh_tools", "render", "run_script", "shell_shim", "spawn_brew", "startup_places",
+           "is_system", "launcher_script", "layers", "manager_shims", "open_app", "open_shim", "open_url", "open_with",
+           "osascript_shim", "prepare", "refresh_tools", "render", "run_script", "shell_shim", "spawn_brew", "startup_places",
            "stop_group", "terminate", "unavailable"]
