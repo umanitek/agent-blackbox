@@ -87,7 +87,7 @@ class GitTree:
         self.repo, self.rev = repo, rev
 
     def _git(self, *args: str) -> Optional[str]:
-        done = subprocess.run(["git", "-C", self.repo, *args], capture_output=True, text=True, encoding="utf-8",
+        done = subprocess.run(["git", "-C", self.repo, *args], capture_output=True, text=True, encoding="utf-8-sig",
                               timeout=GIT_TIMEOUT_SECONDS, check=False)
         return done.stdout if done.returncode == 0 else None
 
@@ -107,7 +107,7 @@ class FolderTree:
 
     def text(self, path: str) -> Optional[str]:
         file = self.root / path
-        return file.read_text(encoding="utf-8") if file.is_file() else None
+        return file.read_text(encoding="utf-8-sig") if file.is_file() else None   # a BOM from Windows tools is not JSON
 
     def folders(self, path: str) -> list[str]:
         folder = self.root / path
