@@ -6,6 +6,7 @@
 //! start and `install` / `uninstall` say why, so nothing half-works on a person's machine.
 //! Compiled only for Linux (`super`'s `#[cfg(target_os)]`).
 
+pub mod enforce;
 mod enforcer;
 pub mod observe;
 mod observer;
