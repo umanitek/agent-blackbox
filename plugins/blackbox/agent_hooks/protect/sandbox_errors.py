@@ -131,12 +131,37 @@ _NESTED = re.compile(r"sandbox_apply: operation not permitted", re.IGNORECASE)
 #: refusal — then the clients' own words for a refused connect (``… connect to the docker API|Docker
 #: daemon …``, Python's docker SDK ``Error while fetching server API version … PermissionError(1``).
 #: "Cannot connect to the Docker daemon … Is the docker daemon running?" alone is an engine that is
-#: not started, never the sandbox.
+#: not started — unless the socket it names is the sandbox's MASK (:func:`_masked_socket`, Linux).
 _REFUSED = r"(?:operation not permitted|permission denied)"
 _DOCKER = re.compile(
     rf"[\w./-]*(?:docker|podman)\.sock\b[^\n]{{0,300}}?{_REFUSED}"
     rf"|{_REFUSED}[^\n]{{0,60}}connect to the (?:docker|podman) (?:api|daemon|socket)"
     r"|(?:docker|podman)[^\n]{0,200}server API version[^\n]{0,200}PermissionError\(1,", re.IGNORECASE)
+#: The socket a client could not connect to, as docker / podman name it (``Cannot connect to the
+#: Docker daemon at unix:///var/run/docker.sock.``, Go's ``dial unix /run/docker.sock: connect: …``).
+_ENGINE_SOCKET = re.compile(r"cannot connect to the (?:docker|podman) (?:daemon|service|socket) at unix://(?P<at>/[^\s'\"]+?\.sock)\b"
+                            r"|dial unix (?P<dial>/[^\s'\"]+?(?:docker|podman)\.sock): connect:", re.IGNORECASE)
+
+
+def _is_mask(path: str) -> bool:
+    """True when *path* is what Linux's sandbox covers a hidden place with: an empty regular file of
+    mode 0000 (helper ``sandbox/system.rs`` ``Masks``) — never what an engine leaves (a socket, or
+    nothing at all when it is not started)."""
+    try:
+        found = os.lstat(path)
+    except OSError:
+        return False
+    return stat.S_ISREG(found.st_mode) and found.st_size == 0 and stat.S_IMODE(found.st_mode) == 0
+
+
+def _masked_socket(text: str) -> bool:
+    """True when a client's "cannot connect" names an engine socket the sandbox hid (KI-679, Linux
+    round L3: inside, Docker's socket is the mask, so docker 29 says "Cannot connect to the Docker
+    daemon at unix:///var/run/docker.sock. Is the docker daemon running?" — the not-started words —
+    and Docker on "ask" never asked). The socket path is the signal, not the wording."""
+    return any(_is_mask(match.group("at") or match.group("dial")) for match in _ENGINE_SOCKET.finditer(text))
+
+
 #: A connect to this computer refused: ``connect to 127.0.0.1 port 5432 … Operation not permitted``,
 #: curl's ``Immediate connect fail for 127.0.0.1: Operation not permitted``, ``dial tcp [::1]:3000: … operation not permitted``.
 #: On Linux the helper's per-agent rules REJECT (a dropped SYN would hang the connect): IPv4 says
@@ -259,7 +284,7 @@ def refusals(output: str) -> list[Refusal]:
         found.append(Refusal(OPEN_APP))
     if _NESTED.search(text):
         found.append(Refusal(NESTED))
-    if _DOCKER.search(text):
+    if _DOCKER.search(text) or _masked_socket(text):
         found.append(Refusal(DOCKER))
     elif _LOCAL_PORT.search(text):
         found.append(Refusal(LOCAL_PORT))
