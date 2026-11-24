@@ -103,6 +103,22 @@ def test_the_firewall_never_drops_a_non_public_address_from_the_graph():
     assert on["firewall"]["ips"] == ["192.168.1.50", "45.130.148.102"]
 
 
+def test_the_firewall_never_drops_a_public_resolver_and_says_which_it_spared():
+    """KI-674 (Linux round L2): the helper's plan carried 26,003 firewall IPs and the second was
+    1.1.1.1 — a verified-graph entry (source: SafeDep Threat Intelligence Data Hub, uncorrected) —
+    so `curl https://1.1.1.1/` failed at once, and a DoH client, VPN or WARP on Cloudflare lost DNS.
+    Public resolvers are spared and reported; the person's allow list spares too; their own block
+    list is theirs; a connection to one is never cut."""
+    listed = {"1.1.1.1", "8.8.8.8", "2620:fe::fe", "45.130.148.102", "1.0.164.165", "93.184.216.34"}
+    found = SimpleNamespace(domains=frozenset(), ips=frozenset(listed))
+    mode = _on(protections=(network_mode.FIREWALL, network_mode.CUT), allow=("93.184.216.34",), block=("9.9.9.9",))
+    on = enforcement.plan(mode, found, cut_ips=("1.1.1.1", "45.130.148.102"))
+    assert on["firewall"]["ips"] == ["1.0.164.165", "45.130.148.102", "9.9.9.9"], "the block list's own 9.9.9.9 stays"
+    assert on["firewall"]["spared"] == ["1.1.1.1", "2620:fe::fe", "8.8.8.8", "93.184.216.34"]
+    assert on["cut"]["ips"] == ["45.130.148.102"]
+    assert enforcement.firewall_ips(mode, listed) == frozenset({"1.0.164.165", "45.130.148.102", "9.9.9.9"})
+
+
 @pytest.mark.parametrize("body", [
     {"running": "yes", "dns_active": True, "firewall_active": False},
     {"running": True, "dns_active": True, "firewall_active": False, "blocks": [{"domain": "x x", "list": "verified"}]},
