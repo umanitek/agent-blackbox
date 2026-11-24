@@ -185,6 +185,28 @@ def test_a_first_sync_is_never_reported_as_the_complete_graph(monkeypatch):
     assert graph("synced")["complete"] is True and graph("synced")["syncing"] is False
 
 
+def test_the_helpers_plan_is_never_complete_while_the_graph_is_still_syncing(monkeypatch):
+    """KI-683 (Linux round L3, Ubuntu 22.04, ~5 min into a first sync): the overview said syncing,
+    complete false, 30,694 domains and 1 IP, while the helper's plan said graph_complete true and
+    keep_verified false — the helper was told a partial list was the whole truth, so it would drop the
+    lists it kept (after a store reset). The plan and the overview answer from ONE sync state."""
+    from plugins.blackbox.ruleset.live.network_lists import NetworkIndicators
+    from plugins.blackbox.shields.network.protect import enforcement
+    monkeypatch.setattr(enforcement, "_plan_cache", {"key": None, "plan": None})
+    monkeypatch.setattr(network_mode, "current", lambda: network_mode.build(enabled=True, protections=(network_mode.DNS, network_mode.FIREWALL)))
+    lists = NetworkIndicators(domains=frozenset({"bad.example"}), ips=frozenset({"1.0.164.165"}), assets=1, read=1, complete=True, built_at=1.0)
+
+    def asked(state):
+        context = ShieldContext(network_indicators=lambda: lists, network_indicators_now=lambda: lists, graph_reachable=lambda: True,
+                                graph_sync_state=lambda: state, ask_assistant=lambda message: AssistantAnswer(ok=True, answer="fine"))
+        return api.enforcement_plan(context, {}), api.overview(context, {})["graph"]["complete"]
+
+    plan, overview_complete = asked("syncing")
+    assert (plan["graph_complete"], plan["keep_verified"], overview_complete) == (False, True, False)
+    plan, overview_complete = asked("synced")
+    assert (plan["graph_complete"], plan["keep_verified"], overview_complete) == (True, False, True)
+
+
 def test_only_public_addresses_from_the_graph_are_ever_marked():
     """FIX-0222: a threat list's private or CGNAT address names someone else's network."""
     assert public_only({"45.130.148.102", "192.168.54.1", "100.106.194.93", "169.254.169.254", "0.0.0.0", "not-an-ip"}) == {"45.130.148.102"}

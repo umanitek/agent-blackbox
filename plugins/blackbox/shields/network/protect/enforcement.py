@@ -101,21 +101,23 @@ _plan_cache: dict[str, Any] = {"key": None, "plan": None}
 MAX_SPARED = 200
 
 
-def plan(mode: ShieldMode, indicators: Optional[Any], have: str = "", cut_ips: Iterable[str] = ()) -> dict[str, Any]:
+def plan(mode: ShieldMode, indicators: Optional[Any], have: str = "", cut_ips: Iterable[str] = (),
+         syncing: bool = False) -> dict[str, Any]:
     """What the enforcer must apply now under *mode*, given the verified graph's *indicators*
     (``ruleset.network_indicators()``; None before the graph is synced) and *cut_ips* (the listed
     addresses this machine is connected to right now — the API reads them from the monitor only
-    while ``cut`` is on). Built once per change (:data:`_plan_cache`); ``have`` equal to its
-    version answers ``unchanged``."""
+    while ``cut`` is on). *syncing*: this node is still downloading the graph, so lists read from
+    every asset it holds so far are NOT the whole graph (KI-683). Built once per change
+    (:data:`_plan_cache`); ``have`` equal to its version answers ``unchanged``."""
     chosen_lists = tuple(sorted(mode_module.option(mode, mode_module.OPT_LISTS)))
     cut = tuple(sorted(set(cut_ips)))
     key = (json.dumps(mode.as_json(include_personal=True), sort_keys=True), id(indicators),
            getattr(indicators, "built_at", None), tuple((pack_id, blocklists.version(pack_id)) for pack_id in chosen_lists), cut,
-           remote_lock.version(mode.enabled))
+           remote_lock.version(mode.enabled), syncing)
     with _lock:
         cached = _plan_cache["plan"] if _plan_cache["key"] == key else None
     if cached is None:
-        cached = _build_plan(mode, indicators, cut)
+        cached = _build_plan(mode, indicators, cut, syncing)
         with _lock:
             _plan_cache["key"], _plan_cache["plan"] = key, cached
     if have and have == cached["version"]:
@@ -131,7 +133,7 @@ def firewall_ips(mode: ShieldMode, listed_ips: Iterable[str]) -> frozenset[str]:
     return frozenset(drop) | frozenset(_ips(mode_module.option(mode, mode_module.OPT_BLOCK)))
 
 
-def _build_plan(mode: ShieldMode, indicators: Optional[Any], cut_ips: tuple[str, ...] = ()) -> dict[str, Any]:
+def _build_plan(mode: ShieldMode, indicators: Optional[Any], cut_ips: tuple[str, ...] = (), syncing: bool = False) -> dict[str, Any]:
     protections = mode_module.protections(mode)
     dns_on, firewall_on = mode_module.DNS in protections, mode_module.FIREWALL in protections
     cut_on, ssh_on = mode_module.CUT in protections, mode_module.SSH_LOCKDOWN in protections
@@ -147,7 +149,10 @@ def _build_plan(mode: ShieldMode, indicators: Optional[Any], cut_ips: tuple[str,
     # entries are reported in the plan, so the person sees them.
     verified, spared_verified = never_block.split(indicators.domains if dns_on and indicators else (), allowed)
     listed, _spared_lists = never_block.split(list_names, allowed)
-    complete = bool(indicators is not None and getattr(indicators, "complete", False))
+    # Complete = every asset read AND the node done downloading (KI-683, Linux round L3: 5 minutes
+    # into a first sync the plan said complete with 30,694 of ~1.16 M domains and 1 address, which
+    # would have let the helper drop the lists it kept after a store reset).
+    complete = bool(indicators is not None and getattr(indicators, "complete", False)) and not syncing
     dropped = firewall_ips(mode, indicators.ips if indicators else ()) if firewall_on else frozenset()
     content = {
         "graph_ready": indicators is not None,
