@@ -18,10 +18,16 @@
 //!
 //! **Reject out, drop in** (KI-680, Linux round L3: a listed address's SYN was dropped, so curl and
 //! Python hung to their own timeouts, 5–6 s, and the agent read a network fault). A packet THIS
-//! machine sends to a listed address is refused at once with an ICMP "administratively prohibited"
-//! ([`REFUSE_OUT`]: the program gets "No route to host" in milliseconds, as the agent guard's own
-//! rules do, LES-154); a packet a listed address sends here is dropped silently — answering it would
+//! machine sends to a listed address is refused at once: TCP with a reset ([`REFUSE_TCP`], the
+//! program reads "Connection refused"), anything else with an ICMP "administratively prohibited"
+//! ([`REFUSE_OTHER`]). WHY a reset for TCP, not the ICMP alone: measured with real nft on kernel 6.8
+//! (Ubuntu 22.04, a private network namespace), an ICMP reject failed a connect only after the first
+//! SYN retransmit (~1 s), a reset in 2 ms. A packet a listed address sends here is dropped silently — answering it would
 //! tell the threat that this machine is there, and a reject could be reflected at someone else.
+//! The inbound drop skips loopback ([`FROM_OUTSIDE`]): the reject's ICMP answer carries the listed
+//! address as its SOURCE and reaches this machine through `lo`, so an unqualified drop swallowed
+//! Blackbox's own refusal and the connect hung anyway (found by the netns test on Ubuntu 22.04,
+//! kernel 6.8). A packet from a listed address on the network never arrives on `lo`.
 //!
 //! **Counting** ([`dropped`]): every rule counts into a NAMED counter of the table ([`COUNTERS`]),
 //! read with `nft -j list counters table …` — a small answer, unlike the whole table with its
@@ -58,8 +64,12 @@ pub const REMOTE_PORTS: &str = "{ 22, 3389, 5900-5903, 21115-21119, 5938, 7070 }
 const NFT_TIMEOUT: Duration = Duration::from_secs(60);
 pub const NOT_INSTALLED: &str = "the firewall needs nftables (the nft command): install the nftables package";
 
-/// What a refused outgoing packet gets (see the module doc): the same words as the agent guard's.
-pub const REFUSE_OUT: &str = "reject with icmpx admin-prohibited";
+/// What a refused outgoing packet gets (see the module doc): TCP a reset, the rest an ICMP refusal.
+pub const REFUSE_TCP: &str = "meta l4proto tcp";
+pub const REFUSE_TCP_WITH: &str = "reject with tcp reset";
+pub const REFUSE_OTHER: &str = "reject with icmpx admin-prohibited";
+/// What the inbound threat / cut drops match first: not loopback (see the module doc).
+pub const FROM_OUTSIDE: &str = "iif != \"lo\"";
 /// The table's named counters, one per kind of rule.
 pub const COUNTERS: [&str; 7] = ["threats_out", "threats_in", "cut_out", "cut_in", "remote_block", "remote_lock", "ssh_lockdown"];
 /// What the counters held before the table was last replaced (reset by a replacement).
@@ -122,10 +132,12 @@ pub fn ruleset(filter: &Filter) -> String {
     }
     for (on, set) in [(filter.threats.is_some(), "threats"), (filter.cut.is_some(), "cut")] {
         if on {
-            output.push(format!("ip daddr @{set}4 counter name {set}_out {REFUSE_OUT}"));
-            output.push(format!("ip6 daddr @{set}6 counter name {set}_out {REFUSE_OUT}"));
-            input.push(format!("ip saddr @{set}4 counter name {set}_in drop"));
-            input.push(format!("ip6 saddr @{set}6 counter name {set}_in drop"));
+            for (family, version) in [("ip", 4), ("ip6", 6)] {
+                output.push(format!("{family} daddr @{set}{version} {REFUSE_TCP} counter name {set}_out {REFUSE_TCP_WITH}"));
+                output.push(format!("{family} daddr @{set}{version} counter name {set}_out {REFUSE_OTHER}"));
+            }
+            input.push(format!("{FROM_OUTSIDE} ip saddr @{set}4 counter name {set}_in drop"));
+            input.push(format!("{FROM_OUTSIDE} ip6 saddr @{set}6 counter name {set}_in drop"));
         }
     }
     if filter.ssh_allow.is_some() {
@@ -273,14 +285,15 @@ mod tests {
     #[test]
     fn only_the_protections_that_are_on_have_rules() {
         let threats = ruleset(&Filter { threats: Some(vec![]), ..Default::default() });
-        assert!(threats.contains("ip daddr @threats4 counter name threats_out reject with icmpx admin-prohibited")
-                && threats.contains("ip6 saddr @threats6 counter name threats_in drop"));
+        assert!(threats.contains("ip daddr @threats4 meta l4proto tcp counter name threats_out reject with tcp reset")
+                && threats.contains("ip daddr @threats4 counter name threats_out reject with icmpx admin-prohibited")
+                && threats.contains("iif != \"lo\" ip6 saddr @threats6 counter name threats_in drop"));
         assert!(!threats.contains("@cut4 counter") && !threats.contains("dport 22"));
         assert_eq!(threats.matches("\tcounter ").count(), COUNTERS.len(), "every counter always exists");
         assert!(threats.starts_with("table inet blackbox_netd\ndelete table inet blackbox_netd\ntable inet blackbox_netd {\n"));
         assert_eq!(threats.matches("\tset ").count(), 8, "every set always exists");
         let rules = threats.lines().filter(|line| line.starts_with("\t\t") && !line.contains("type filter hook"));
-        assert!(rules.clone().count() == 4 && rules.into_iter().all(|rule| !rule.contains("accept")), "our rules never accept");
+        assert!(rules.clone().count() == 6 && rules.into_iter().all(|rule| !rule.contains("accept")), "our rules never accept");
     }
 
     #[test]
@@ -304,9 +317,17 @@ mod tests {
         let text = ruleset(&every_protection());
         let output: Vec<&str> = text.lines().skip_while(|l| !l.contains("chain output")).take_while(|l| !l.contains("chain input")).collect();
         let input: Vec<&str> = text.lines().skip_while(|l| !l.contains("chain input")).collect();
-        let refusing = |rules: &[&str]| rules.iter().filter(|l| l.contains("daddr @") || l.contains("saddr @")).all(|l| l.contains(REFUSE_OUT));
-        assert!(refusing(&output) && !output.iter().any(|l| l.ends_with(" drop")), "{output:?}");
-        assert!(input.iter().filter(|l| l.contains("saddr @threats") || l.contains("saddr @cut")).all(|l| l.ends_with(" drop")), "{input:?}");
+        let listed_out: Vec<&&str> = output.iter().filter(|l| l.contains("daddr @")).collect();
+        assert_eq!(listed_out.len(), 8, "threats and cut, IPv4 and IPv6, TCP and the rest: {output:?}");
+        for pair in listed_out.chunks(2) {
+            assert!(pair[0].ends_with(&format!("{REFUSE_TCP} counter name {} {REFUSE_TCP_WITH}", pair[0].split("counter name ").nth(1).unwrap().split(' ').next().unwrap())),
+                    "TCP first, with a reset: {pair:?}");
+            assert!(pair[1].ends_with(REFUSE_OTHER), "then everything else: {pair:?}");
+        }
+        assert!(!output.iter().any(|l| l.ends_with(" drop")), "nothing this machine sends is dropped: {output:?}");
+        let listed_in: Vec<&&str> = input.iter().filter(|l| l.contains("saddr @threats") || l.contains("saddr @cut")).collect();
+        assert!(listed_in.len() == 4 && listed_in.iter().all(|l| l.ends_with(" drop") && l.starts_with(&format!("\t\t{FROM_OUTSIDE} "))),
+                "dropped in, but never Blackbox's own reject coming back through lo: {input:?}");
     }
 
     #[test]
