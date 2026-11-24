@@ -1,0 +1,8 @@
+LISTEN 0      4096   127.0.0.53%lo:53         0.0.0.0:*    users:(("systemd-resolve",pid=612,fd=14))
+LISTEN 0      128          0.0.0.0:22         0.0.0.0:*    users:(("sshd",pid=900,fd=3))
+LISTEN 0      511          0.0.0.0:8080       0.0.0.0:*    users:(("node",pid=3100,fd=22))
+LISTEN 0      2048       127.0.0.1:9700       0.0.0.0:*    users:(("python3",pid=4100,fd=6))
+LISTEN 0      128             [::]:22            [::]:*    users:(("sshd",pid=900,fd=4))
+LISTEN 0      4096           [::1]:631           [::]:*    users:(("cupsd",pid=700,fd=7))
+LISTEN 0      4096               *:9090             *:*    users:(("prometheus",pid=1500,fd=8),("prometheus",pid=1501,fd=8))
+LISTEN 0      5              [::]:5000           [::]:*

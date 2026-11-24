@@ -281,7 +281,9 @@ ACTING_PACKAGES = ("protect", "respond")
 STATE_CHANGING_COMMANDS = frozenset({
     "pfctl", "networksetup", "launchctl", "kill", "killall", "pkill", "rm", "rmdir", "mv", "sudo",
     "osascript", "systemsetup", "socketfilterfw", "dscl", "chmod", "chown", "shutdown", "reboot",
-    "csrutil", "spctl", "route", "ifconfig", "tccutil", "sysadminctl"})
+    "csrutil", "spctl", "route", "ifconfig", "tccutil", "sysadminctl",
+    # Linux (deep layers step 3: the monitor reads Linux too)
+    "nft", "iptables", "conntrack", "nmcli", "resolvectl", "systemctl", "ufw"})
 #: Module functions that change state: (module, function).
 STATE_CHANGING_FUNCTIONS = frozenset({
     ("os", "kill"), ("os", "killpg"), ("os", "remove"), ("os", "rename"), ("os", "replace"),
@@ -307,6 +309,11 @@ def _resolved_import(path: Path, node: ast.ImportFrom) -> str:
     return node.module or ""
 
 
+#: A path under the kernel's process file system is a table that is read (Linux's
+#: ``/proc/net/route``), never a command, whatever its last word.
+KERNEL_TABLES = "/proc/"
+
+
 def _changes_the_system(path: Path, source: str) -> list[str]:
     """What in *source* (the file at *path*, inside plugins/blackbox) acts instead of seeing."""
     where = path.relative_to(PLUGIN)
@@ -327,7 +334,7 @@ def _changes_the_system(path: Path, source: str) -> list[str]:
                     problems.append(f"{line}: uses ctypes")
                 if any(alias.name.endswith(f".network.{pkg}") or f".network.{pkg}." in alias.name for pkg in ACTING_PACKAGES):
                     problems.append(f"{line}: imports an acting package ({alias.name})")
-        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str) and not node.value.startswith(KERNEL_TABLES):
             words = node.value.split()
             if words and words[0].rsplit("/", 1)[-1] in STATE_CHANGING_COMMANDS:
                 problems.append(f"{line}: names a state-changing command ({words[0]})")
@@ -373,6 +380,7 @@ def test_the_monitor_guard_catches_each_way_of_acting():
         "from ..protect.posture_fix import plan_part": "acting package",
         "import ctypes": "ctypes",
         "run(['/sbin/pfctl', '-d'])": "pfctl",
+        "run(['/sbin/route', 'add', 'x'])": "route",
         "run(['sudo', 'x'])": "sudo",
         "run('launchctl bootout system/x')": "launchctl",
         "os.kill(1, 9)": "os.kill",
@@ -389,5 +397,5 @@ def test_the_monitor_guard_catches_each_way_of_acting():
     for source, expected in bad.items():
         problems = _changes_the_system(path, source)
         assert problems and expected in problems[0], (source, problems)
-    clean = "from ..mode import current\nfrom ...kernel import bounded_files\nopen(p, 'rb')\nrun(['/usr/sbin/lsof', '-i'])\n'a-b'.replace('-', '')\n"
+    clean = "from ..mode import current\nfrom ...kernel import bounded_files\nopen(p, 'rb')\nrun(['/usr/sbin/lsof', '-i'])\n'a-b'.replace('-', '')\nROUTES = '/proc/net/route'\n"
     assert _changes_the_system(path, clean) == []

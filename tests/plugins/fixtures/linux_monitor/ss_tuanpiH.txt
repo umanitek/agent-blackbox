@@ -1,0 +1,20 @@
+udp   UNCONN 0      0           127.0.0.54:53            0.0.0.0:*                                                                                     
+udp   UNCONN 0      0        127.0.0.53%lo:53            0.0.0.0:*                                                                                     
+udp   ESTAB  0      0       192.168.64.5:51023     142.250.74.46:443   users:(("firefox",pid=2300,fd=121))
+udp   UNCONN 0      0              0.0.0.0:5353          0.0.0.0:*     users:(("firefox",pid=2300,fd=90))
+tcp   LISTEN 0      4096        127.0.0.54:53            0.0.0.0:*                                                                                     
+	 cubic cwnd:10
+tcp   LISTEN 0      511            0.0.0.0:8080          0.0.0.0:*     users:(("node",pid=3100,fd=22))
+	 cubic cwnd:10
+tcp   ESTAB  0      0       192.168.64.5:8080      192.168.64.1:50112 users:(("node",pid=3100,fd=25))
+	 cubic wscale:6,7 rto:204 rtt:0.31/0.12 ato:40 mss:1448 pmtu:1500 rcvmss:536 advmss:1448 cwnd:10 bytes_sent:2048 bytes_acked:2048 bytes_received:512 segs_out:9 segs_in:11 data_segs_out:4 data_segs_in:3 send 373Mbps lastsnd:100 lastrcv:100 lastack:100 pacing_rate 746Mbps delivery_rate 113Mbps delivered:5 app_limited busy:4ms rcv_space:14480 rcv_ssthresh:64088 minrtt:0.2 snd_wnd:64256
+tcp   ESTAB  0      0       192.168.64.5:41822     140.82.112.4:443   users:(("git-remote-http",pid=3300,fd=5))
+	 cubic wscale:7,10 rto:232 rtt:30.1/2.4 ato:40 mss:1448 pmtu:1500 rcvmss:1448 advmss:1448 cwnd:10 bytes_sent:1820 bytes_acked:1821 bytes_received:58211 segs_out:30 segs_in:52 data_segs_out:6 data_segs_in:47 send 3.85Mbps lastsnd:12 lastrcv:8 lastack:8 pacing_rate 7.7Mbps delivery_rate 2.1Mbps delivered:7 rcv_space:56935 rcv_ssthresh:249672 minrtt:28.4 snd_wnd:65535
+tcp   ESTAB  0      0      [2001:db8::5]:44322 [2606:4700::1111]:443   users:(("firefox",pid=2300,fd=88))
+	 cubic wscale:8,7 rto:212 rtt:11.5/3.1 ato:40 mss:1428 pmtu:1500 rcvmss:1428 advmss:1428 cwnd:10 bytes_sent:900 bytes_acked:901 bytes_received:4400 segs_out:12 segs_in:14 data_segs_out:3 data_segs_in:6
+tcp   ESTAB  0      0    [::ffff:192.168.64.5]:22 [::ffff:192.168.64.1]:52814 
+	 cubic wscale:6,7 rto:204 rtt:0.5/0.25 bytes_sent:52341 bytes_acked:52341 bytes_received:9876
+tcp   ESTAB  0      0           127.0.0.1:9700         127.0.0.1:51530 users:(("python3",pid=4100,fd=7))
+	 cubic bytes_sent:300 bytes_acked:301 bytes_received:120
+tcp   TIME-WAIT 0   0       192.168.64.5:41800     140.82.112.4:443  
+	 cubic

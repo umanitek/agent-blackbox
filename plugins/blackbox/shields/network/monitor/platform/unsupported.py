@@ -1,5 +1,5 @@
 """An operating system without a port yet: nothing is run and nothing is seen; the traffic
-monitor says why, in one sentence for a person. A port adds ``windows.py`` or ``linux.py``."""
+monitor says why, in one sentence for a person. A port adds ``windows.py``."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ TIMEOUT_SECONDS = 5.0
 
 
 def traffic_unavailable() -> Optional[str]:
-    return "The network monitor reads macOS for now; Windows and Linux are coming."
+    return "The network monitor reads macOS and Linux for now; Windows is coming."
 
 
 def connection_table() -> Optional[str]:
