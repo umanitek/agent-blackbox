@@ -166,12 +166,10 @@ def _identity(body: Mapping[str, Any]) -> dict[str, Any]:
     if pid and sandbox_id and body.get("sandboxed") is True:
         pid = host_pid(sandbox_id, pid)   # Linux below 6.12: the sandbox's own PID namespace
     return {"sub": _text(body.get("sub"), 200), "sub_type": _text(body.get("sub_type"), 80), "task": _text(body.get("task"), 200),
-            "parents_named": body.get("parents_named") is True,
-            "parent": _text(body.get("parent"), 200), "model": _text(body.get("model"), 80), "why": _text(body.get("why"), 40),
-            "background": body.get("background") is True, "profile": _text(body.get("profile")),
-            "entry": _text(body.get("entry"), 40), "pid": pid,
-            # Its own PID namespace (NSpid mapped the hook's pid to another): KI-687's "No such process".
-            "pid_namespace": pid != reported,
+            "parents_named": body.get("parents_named") is True, "parent": _text(body.get("parent"), 200),
+            "model": _text(body.get("model"), 80), "why": _text(body.get("why"), 40), "background": body.get("background") is True,
+            "profile": _text(body.get("profile")), "entry": _text(body.get("entry"), 40), "pid": pid,
+            "pid_namespace": pid != reported,   # NSpid mapped the hook's pid to another: KI-687's "No such process"
             "prompt_id": _text(body.get("prompt_id"), 80), "agent_turn": body.get("agent_turn") is True}
 
 
@@ -333,6 +331,8 @@ def bookkeep(judged: Judged) -> None:
         detail["checked_chars"] = len(event["text"])   # the text itself is never recorded
     if decision and event["event"] != "pre_tool":
         detail["decision"] = decision
+    if decision == "block":   # which findings refused the call (not a too-late one: that action ran, LES-142)
+        detail["blocked"] = list(verdict.get("blocked") or [])
     if event["sub"] or event["event"] in ("subagent_start", "subagent_stop"):
         detail["sub_agent"] = hashlib.sha256(event["sub"].encode("utf-8")).hexdigest()[:12] if event["sub"] else ""
         detail["sub_agent_type"] = event["sub_type"]

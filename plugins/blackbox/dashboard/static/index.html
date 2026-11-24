@@ -881,7 +881,9 @@
   /* ---------- Shields: the "New" banner (static/shields.js) ---------- */
   .ts-banner { position: relative; overflow: hidden; margin-top: 28px; border: 1px solid color-mix(in srgb, var(--signal) 55%, transparent);
     border-radius: var(--radius); background: var(--panel); padding: 20px 56px 20px 22px; display: flex; flex-wrap: wrap; gap: 16px 28px; align-items: center; }
-  .ts-banner[hidden] { display: none; }   /* display:flex above would otherwise override [hidden] */
+  .ts-banner[hidden] { display: none; }
+  #tm-watch[hidden] { display: none; }
+  #tm-watch { text-decoration: none; margin-left: 6px; }   /* display:flex above would otherwise override [hidden] */
   .ts-glow { position: absolute; inset: -40% -10% auto auto; width: 340px; height: 340px; border-radius: 50%;
     background: radial-gradient(circle, color-mix(in srgb, var(--signal) 22%, transparent), transparent 65%); pointer-events: none; animation: tsGlow 6s ease-in-out infinite; }
   @keyframes tsGlow { 0%,100% { transform: translate(0,0); opacity: .8; } 50% { transform: translate(-30px,10px); opacity: 1; } }
@@ -3059,6 +3061,10 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/><path d="M8 9h8M8 13h5"/></svg>
             <span class="header-action-label">Assistant</span>
           </button>
+          <a class="gear-btn protection-link" id="protection-open" href="/protection" aria-label="Open Protection: tamper attempts, the protection log and watch rules" title="Protection">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></svg>
+            <span class="header-action-label">Protection</span>
+          </a>
           <a class="gear-btn docs-link" id="docs-open" href="/docs" aria-label="Open the Blackbox docs" title="Docs">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/><path d="M9 7h7M9 11h5"/></svg>
             <span class="header-action-label">Docs</span>
@@ -5805,7 +5811,7 @@
 	    $("tm-tags").innerHTML = modalTags(cat, topSev, false) + '<span class="m-tag">Category</span>';
 	    $("tm-id").textContent = "";
 	    var idrow = $("tm-idrow"); if (idrow) idrow.style.display = "none";
-	    var copyBtn = $("tm-copy"); if (copyBtn) { copyBtn.textContent = "Copy"; copyBtn.classList.remove("ok"); }
+	    var copyBtn = $("tm-copy"); if (copyBtn) { copyBtn.textContent = "Copy"; copyBtn.classList.remove("ok"); } var tmWatch = $("tm-watch"); if (tmWatch) tmWatch.hidden = true;
 	    $("tm-body").innerHTML =
 	      '<div class="modal-desc">' + esc(CAT_SUMMARY[cat] || CAT_SUMMARY.other) + '</div>' +
 	      gridHTML(rows) +
@@ -5904,7 +5910,7 @@
     $("tm-tags").innerHTML = modalTags(cat, sevClass(sev), false);
     $("tm-id").textContent = node.identifier || "";
     var idrow = $("tm-idrow"); if (idrow) idrow.style.display = "";
-    var copyBtn = $("tm-copy"); if (copyBtn) { copyBtn.textContent = "Copy"; copyBtn.classList.remove("ok"); }
+    var copyBtn = $("tm-copy"); if (copyBtn) { copyBtn.textContent = "Copy"; copyBtn.classList.remove("ok"); } var tmWatch = $("tm-watch"); if (tmWatch) tmWatch.hidden = true;
     overlay.classList.add("open");
     overlay.setAttribute("aria-hidden", "false");
 
@@ -6084,7 +6090,14 @@
     var id = f.identifier || "";
     $("tm-id").textContent = id;
     var idrow = $("tm-idrow"); if (idrow) idrow.style.display = id ? "" : "none";
-    var copyBtn = $("tm-copy"); if (copyBtn) { copyBtn.textContent = "Copy"; copyBtn.classList.remove("ok"); }
+    var copyBtn = $("tm-copy"); if (copyBtn) { copyBtn.textContent = "Copy"; copyBtn.classList.remove("ok"); } var tmWatch = $("tm-watch"); if (tmWatch) tmWatch.hidden = true;
+    // "Watch this": the host or package the finding names, pre-filled on the Protection page (watch.suggest).
+    if (tmWatch) postJSON("/api/protection/watch/suggest", { finding: f }).then(function (res) { return res.json(); }).then(function (d) {
+      var s = d && d.suggestion;
+      if (!s || TM.finding !== f) return;
+      tmWatch.href = "/protection?" + new URLSearchParams({ kind: s.kind, value: s.value, note: s.note || "" }).toString();
+      tmWatch.hidden = false;
+    }, function () {});
     // One paint from three parts, so re-renders replace the proof instead of stacking copies.
     var parts = { intel: "", proof: "" };
     var paint = function () { if (TM.finding === f) $("tm-body").innerHTML = findingBaseHTML(f) + parts.intel + parts.proof; };
@@ -8669,6 +8682,7 @@
     <div class="modal-id" id="tm-idrow">
       <code id="tm-id"></code>
       <button class="modal-copy" id="tm-copy">Copy</button>
+      <a class="modal-copy" id="tm-watch" href="/protection" hidden title="Watch the host or package this finding names: calls to it are counted, not blocked, until you block it">Watch this</a>
     </div>
     <div class="modal-body" id="tm-body"></div>
   </div>

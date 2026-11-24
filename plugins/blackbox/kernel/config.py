@@ -247,8 +247,9 @@ def dkg_home() -> Path:
 
 def raw_section(name: str) -> dict[str, Any]:
     """The saved Blackbox config section *name* as written ({} when absent or not a mapping), for
-    a package that owns and parses its own section (``notify.policy``)."""
-    section = _blackbox_entry().get(name)
+    a package that owns and parses its own section (``notify.policy``, ``watch``); inside
+    :func:`one_entry_read`, from that block's one read."""
+    section = shield_entry().get(name)
     return dict(section) if isinstance(section, dict) else {}
 
 
@@ -371,8 +372,12 @@ _ENTRY_MEMO: ContextVar[Optional[dict[str, Any]]] = ContextVar("blackbox_entry_m
 
 @contextmanager
 def one_entry_read() -> Iterator[None]:
-    """Within this block, :func:`shield_entry` reads the config ONCE and reuses it — the shields
-    snapshot every tool call takes reads it once for all shields, however many there are."""
+    """Within this block, :func:`shield_entry` (and :func:`raw_section`) read the config ONCE and
+    reuse it — the shields snapshot and the watch rules every tool call takes share one read,
+    however many shields there are. A block inside another reuses the outer one's read."""
+    if _ENTRY_MEMO.get() is not None:
+        yield
+        return
     token = _ENTRY_MEMO.set({})
     try:
         yield
