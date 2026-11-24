@@ -66,7 +66,8 @@ def approve(url: str, tty: TextIO, run: Run = _sudo) -> int:
             print("Left as it is: protection stays on.", file=tty)
             continue
         challenge = _call(url, "/api/approvals/terminal-challenge", token, {"id": held.get("id", "")})
-        folder, nonce, request_id = challenge.get("folder", ""), challenge.get("nonce", ""), str(held.get("id", ""))
+        # WHY the folder is this command's own constant, not the dashboard's answer: root runs it.
+        folder, nonce, request_id = str(terminal.ROOT_FOLDER), challenge.get("nonce", ""), str(held.get("id", ""))
         if not challenge.get("ok") or not terminal.REQUEST_ID.fullmatch(request_id):
             failed += 1
             print(f"Not confirmed: {challenge.get('error', 'the dashboard refused')}.", file=tty)
@@ -74,7 +75,7 @@ def approve(url: str, tty: TextIO, run: Run = _sudo) -> int:
         run(["-k"], tty)   # sudo asks for the password again, whatever this terminal had cached
         wrote = run(["/bin/sh", "-c", terminal.WRITE_PROOF, "sh", folder, request_id, nonce], tty) == 0
         ok = wrote and bool(_call(url, "/api/approvals/terminal-confirm", token, {"id": request_id}).get("ok"))
-        run(["-n", "rm", "-f", f"{folder}/{request_id}"], tty)
+        run(["-n", "/bin/sh", "-c", terminal.REMOVE_PROOF, "sh", folder, request_id], tty)
         run(["-k"], tty)
         failed += not ok
         print("Approved: the change is applied when the dashboard sends it again." if ok else "Not confirmed: protection stays on.", file=tty)

@@ -5,12 +5,21 @@ Linux round L1 (Ubuntu 24.04 server, core eb71c1d03c): turning Network Shield of
 and ``POST /api/approvals/confirm`` answered 403 "not confirmed" in 66 ms with no prompt at all —
 ``pkexec`` is not installed on a server, and no companion app runs on Linux. The person could only
 edit config.yaml by hand.
+
+KI-678 / KI-682 (Linux round L3, Ubuntu 24.04 and 22.04, core 6463038577): ``blackbox approve`` asked
+and sudo took the password, yet it always said "Not confirmed" — the helper's install had made
+``/var/lib/blackbox`` 0700, so the dashboard (the person) could not reach the proof root wrote, and
+the unit tests had used a temp folder. Here the REAL script sudo runs builds the installed layout
+(LES-155), over the helper's old 0700 folder, and every folder on the proof's path is checked by
+mode for a person who is not root; the uninstall-side cleanup leaves nothing.
 """
 
 from __future__ import annotations
 
 import io
 import os
+import stat
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -59,22 +68,85 @@ def test_a_challenge_is_one_time_and_only_roots_proof_approves(tmp_path):
     folder = tmp_path / "approvals"
     folder.mkdir()
     (folder / request_id).write_text(nonce, encoding="utf-8")   # written by the person, not root
+    (folder / str(os.getuid())).mkdir()
+    (folder / str(os.getuid()) / request_id).write_text(nonce, encoding="utf-8")
     assert not store.confirm_from_terminal(request_id, lambda rid, n: terminal.proved(folder, rid, n)), "a user's file is no proof"
     assert store.waiting() and store.waiting()[0].approved_at is None
 
 
-def test_roots_file_with_the_challenge_approves(monkeypatch, tmp_path):
+def _run_as_sudo(script: str, *args: str, sudo_uid: str | None = None) -> int:
+    """*script* exactly as ``blackbox approve`` hands it to sudo (``sh -c <script> sh …``), with sudo's SUDO_UID."""
+    env = {"PATH": "/usr/bin:/bin"}
+    if sudo_uid is not None:
+        env["SUDO_UID"] = sudo_uid
+    return subprocess.run(["/bin/sh", "-c", script, "sh", *args], env=env, check=False).returncode
+
+
+def _installed(tmp_path: Path) -> tuple[Path, Path]:
+    """The helper's folder as its OLD install left it (0700, netd/ inside: Linux round L3)."""
+    lib = tmp_path / "var-lib-blackbox"
+    (lib / "netd").mkdir(parents=True)
+    lib.chmod(0o700)
+    (lib / "netd").chmod(0o700)
+    return lib, lib / "approvals"
+
+
+def _a_person_can_reach(path: Path, top: Path) -> bool:
+    """Whether a user who is not the owner (the dashboard; root owns it all) can open *path*: every
+    folder from *top* down needs others' search bit, the file others' read bit."""
+    folders = [top, *[parent for parent in path.parents if top in parent.parents]]
+    return all(os.lstat(folder).st_mode & 0o001 for folder in folders) and bool(os.lstat(path).st_mode & 0o004)
+
+
+def test_the_proof_sudo_writes_is_reachable_by_the_person_on_the_installed_layout(monkeypatch, tmp_path):
+    lib, base = _installed(tmp_path)
     store, request_id = _store_with_one()
     nonce = store.challenge(request_id)
-    folder = tmp_path / "approvals"
-    folder.mkdir(mode=0o755)
-    (folder / request_id).write_text(nonce, encoding="utf-8")
+    assert _run_as_sudo(terminal.WRITE_PROOF, str(base), request_id, nonce, sudo_uid=str(os.getuid())) == 0
+    proof = base / str(os.getuid()) / request_id
+    for folder in (lib, base, proof.parent):
+        assert stat.S_IMODE(os.lstat(folder).st_mode) == terminal.FOLDER_MODE, folder
+    assert stat.S_IMODE(os.lstat(proof).st_mode) == 0o644 and proof.read_text(encoding="ascii") == nonce
+    assert stat.S_IMODE(os.lstat(lib / "netd").st_mode) == 0o700, "the helper's own folder stays private"
+    assert _a_person_can_reach(proof, lib), "the dashboard, running as the person, must reach the proof (KI-678)"
+    assert [entry.name for entry in proof.parent.iterdir()] == [request_id], "nothing half-written left beside it"
     real_lstat = os.lstat
     monkeypatch.setattr(terminal.os, "lstat", lambda path: _as_root(real_lstat(path)))
-    assert terminal.proved(folder, request_id, nonce) and not terminal.proved(folder, request_id, "other")
-    assert not terminal.proved(folder, "../etc", nonce), "an id is never a path"
-    assert store.confirm_from_terminal(request_id, lambda rid, n: terminal.proved(folder, rid, n))
+    assert terminal.proved(base, request_id, nonce) and not terminal.proved(base, request_id, "other")
+    assert not terminal.proved(base, "../etc", nonce), "an id is never a path"
+    assert not terminal.proved(base, request_id, nonce, uid=os.getuid() + 1), "another person's folder proves nothing for this one"
+    assert store.confirm_from_terminal(request_id, lambda rid, n: terminal.proved(base, rid, n))
     assert store.consume("/api/settings", b'{"x": 1}'), "the exact held change may now go through, once"
+    assert not store.confirm_from_terminal(request_id, lambda rid, n: terminal.proved(base, rid, n)), "single-use"
+
+
+def test_the_cleanup_leaves_nothing_but_the_helpers_own_folder(tmp_path):
+    lib, base = _installed(tmp_path)
+    uid = str(os.getuid())
+    assert _run_as_sudo(terminal.WRITE_PROOF, str(base), "abc123", "n0nce", sudo_uid=uid) == 0
+    assert _run_as_sudo(terminal.REMOVE_PROOF, str(base), "abc123", sudo_uid=uid) == 0
+    assert not base.exists() and sorted(entry.name for entry in lib.iterdir()) == ["netd"], "KI-682: no approvals/ left"
+    (lib / "netd").rmdir()   # a machine without the helper: its folder goes too
+    assert _run_as_sudo(terminal.WRITE_PROOF, str(base), "abc123", "n0nce", sudo_uid=uid) == 0
+    assert _run_as_sudo(terminal.REMOVE_PROOF, str(base), "abc123", sudo_uid=uid) == 0
+    assert not lib.exists()
+
+
+@pytest.mark.parametrize("sudo_uid", [None, "", "1000/../0", "root"])
+def test_the_person_is_named_only_by_sudos_own_uid(tmp_path, sudo_uid):
+    _lib, base = _installed(tmp_path)
+    assert _run_as_sudo(terminal.WRITE_PROOF, str(base), "abc123", "n0nce", sudo_uid=sudo_uid) != 0
+    assert not base.exists()
+
+
+def test_a_folder_others_may_write_proves_nothing(monkeypatch, tmp_path):
+    _lib, base = _installed(tmp_path)
+    assert _run_as_sudo(terminal.WRITE_PROOF, str(base), "abc123", "n0nce", sudo_uid=str(os.getuid())) == 0
+    real_lstat = os.lstat
+    monkeypatch.setattr(terminal.os, "lstat", lambda path: _as_root(real_lstat(path)))
+    assert terminal.proved(base, "abc123", "n0nce")
+    base.chmod(0o777)
+    assert not terminal.proved(base, "abc123", "n0nce")
 
 
 def _as_root(result: os.stat_result) -> os.stat_result:
@@ -98,6 +170,7 @@ def test_blackbox_approve_asks_on_the_terminal_and_proves_through_sudo(monkeypat
     code = approvals.approve_command.approve("http://127.0.0.1:9700", tty, run=lambda argv, _tty: calls.append(argv) or 0)
     assert code == 0 and posted[-1] == "/api/approvals/terminal-confirm"
     assert calls[0] == ["-k"] and calls[1][:2] == ["/bin/sh", "-c"] and calls[1][-3:] == ["/var/lib/blackbox/approvals", "abc123", "n0nce"]
+    assert calls[-2] == ["-n", "/bin/sh", "-c", terminal.REMOVE_PROOF, "sh", "/var/lib/blackbox/approvals", "abc123"]
     assert calls[-1] == ["-k"], "sudo forgets the password again"
 
 
