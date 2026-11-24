@@ -137,6 +137,35 @@ impl Helper {
         }
     }
 
+    /// Every plan cycle (every 3 s while the shield watches): when the firewall no longer holds the
+    /// rules last applied — another program (root) flushed, deleted or edited Blackbox's table — the
+    /// filter kept in memory is loaded again at once, in one transaction, and the restoration is
+    /// recorded (`firewall-restored`, HIGH in the plugin). WHY (KI-688, Linux round L4): nothing
+    /// looked; the rules came back only when the plan next changed, 90–150 s once the threat graph
+    /// was complete. The look is cheap (two chain listings, never the sets' elements) and keeps
+    /// its pace (LES-141); the plan is not fetched again for it (a complete one is ~45 MB).
+    pub(super) fn keep_filter_intact(&self) {
+        let Ok(filtered) = self.filtered.lock() else { return };
+        let Some(filter) = filtered.as_ref() else { return };
+        if self.enforcer.filter_intact(filter) != Some(false) {
+            return;
+        }
+        let token = self.state.lock().ok().and_then(|state| state.pf_token.clone());
+        match self.enforcer.apply_filter(filter, token) {
+            Ok(token) => {
+                if let Ok(mut state) = self.state.lock() {
+                    state.pf_token = token;
+                    state.save();
+                }
+                self.observer.record(json!({"kind": "firewall-restored", "ts": now()}));
+                self.wake.now();
+            }
+            Err(error) => {
+                *self.last_error.lock().unwrap() = Some(format!("the firewall's rules were removed and could not be loaded again: {error}"));
+            }
+        }
+    }
+
     /// Makes the firewall enforce the plan's threats, cut and SSH lockdown; kills the open connections to
     /// newly cut addresses and queues an event for each.
     pub(super) fn set_filter(&self, plan: &Plan) -> Option<String> {
@@ -164,6 +193,9 @@ impl Helper {
             remote_block: plan.remote_block(),
         };
         let result = self.enforcer.apply_filter(&filter, state.pf_token.clone());
+        if let Ok(mut filtered) = self.filtered.lock() {
+            *filtered = (result.is_ok() && !filter.is_off()).then(|| filter.clone());
+        }
         if let Ok(token) = &result {
             state.pf_token = token.clone();
             state.firewall_active = threats.map(|ips| !ips.is_empty()).unwrap_or(false);

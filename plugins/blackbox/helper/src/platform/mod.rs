@@ -135,6 +135,12 @@ pub trait Enforcer: Send + Sync {
     fn dropped(&self) -> u64;
     /// Whether the firewall is really enforcing (None when it cannot be read).
     fn filter_enabled(&self) -> Option<bool>;
+    /// Whether the firewall still holds the rules *filter* loaded (None when it cannot be read):
+    /// asked every plan cycle, so it must be cheap. By default not known (nothing is re-applied):
+    /// Linux answers it (KI-688); macOS's pf is reported through [`Enforcer::filter_enabled`].
+    fn filter_intact(&self, _filter: &Filter) -> Option<bool> {
+        None
+    }
     /// Ends the process serving one remote session (already checked by [`Observer::verify_end`]).
     fn end_session(&self, pid: u32) -> Result<(), String>;
     /// Reverses every posture fix the person asked for (only on their explicit choice).

@@ -55,6 +55,9 @@ struct Helper {
     /// The verified graph's lists last applied: what a `keep_verified` plan keeps (the graph's
     /// store being down never clears protection — [`crate::plan::Kept`]).
     kept: Mutex<crate::plan::Kept>,
+    /// The filter last applied (None while every firewall protection is off): what
+    /// [`Helper::keep_filter_intact`] loads again when another program removed or changed the rules.
+    filtered: Mutex<Option<platform::Filter>>,
     wake: Wake,
 }
 
@@ -145,6 +148,7 @@ pub fn run() -> Result<(), String> {
         observer: SystemObserver::default(),
         ended: Mutex::new(HashSet::new()),
         kept: Mutex::new(crate::plan::Kept::default()),
+        filtered: Mutex::new(None),
         wake: Wake::default(),
     });
 
@@ -197,6 +201,7 @@ pub fn run() -> Result<(), String> {
         }
         helper.follow_plan();
         helper.keep_dns_safe();
+        helper.keep_filter_intact();
         let every = if helper.watching.load(Ordering::SeqCst) { PLAN_EVERY_WATCHING } else { PLAN_EVERY };
         for _ in 0..(every.as_millis() / 200) {
             if STOPPING.load(Ordering::SeqCst) {

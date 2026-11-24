@@ -207,6 +207,36 @@ def test_the_helpers_plan_is_never_complete_while_the_graph_is_still_syncing(mon
     assert (plan["graph_complete"], plan["keep_verified"], overview_complete) == (True, False, True)
 
 
+def test_a_graph_never_synced_yet_is_never_the_complete_graph(monkeypatch):
+    """KI-686 (Linux round L4, fresh installs on 24.04 and 22.04): for 20–40 s after the install,
+    BEFORE the first sync started, the overview said complete and the helper's plan said
+    graph_complete true / keep_verified false — 0 of 0 assets read counted as "every asset read".
+    An empty scope is never the whole graph, in the lists, the overview and the plan alike."""
+    from plugins.blackbox.ruleset.live.network_lists import indicators_from
+    from plugins.blackbox.shields.network.protect import enforcement
+    monkeypatch.setattr(enforcement, "_plan_cache", {"key": None, "plan": None})
+    monkeypatch.setattr(network_mode, "current", lambda: network_mode.build(enabled=True, protections=(network_mode.DNS, network_mode.FIREWALL)))
+    empty = SimpleNamespace(assertion_graphs=frozenset(), suppressed_subjects=frozenset(), revoked_identifiers=frozenset())
+    lists = indicators_from({}, empty)
+    assert (lists.assets, lists.read, lists.complete) == (0, 0, False)
+    for state in ("synced", "unknown", "unavailable"):   # whatever the meter says before the first pass
+        context = ShieldContext(network_indicators=lambda: lists, network_indicators_now=lambda: lists, graph_reachable=lambda: True,
+                                graph_sync_state=lambda: state, ask_assistant=lambda message: AssistantAnswer(ok=True, answer="fine"))
+        plan = api.enforcement_plan(context, {})
+        assert (plan["graph_complete"], plan["keep_verified"], api.overview(context, {})["graph"]["complete"]) == (False, True, False), state
+
+
+def test_the_helpers_firewall_restored_event_is_taken_and_said_as_high():
+    """KI-688: the helper loads the Threat Firewall's rules again when another program removed them
+    and says so (``firewall-restored``); the report carrying it is taken, and the person is told."""
+    from plugins.blackbox.shields.network.monitor import watch
+    from plugins.blackbox.shields.network import notices
+    event = watch._event({"kind": "firewall-restored", "ts": 1795219000}, 1795219100.0)
+    assert event == {"kind": "firewall-restored", "ts": 1795219000.0}
+    assert watch.SEVERITY["firewall-restored"] == "high" and "put them back" in watch.text_of(event)
+    assert "firewall-restored" in notices.WORDS
+
+
 def test_only_public_addresses_from_the_graph_are_ever_marked():
     """FIX-0222: a threat list's private or CGNAT address names someone else's network."""
     assert public_only({"45.130.148.102", "192.168.54.1", "100.106.194.93", "169.254.169.254", "0.0.0.0", "not-an-ip"}) == {"45.130.148.102"}

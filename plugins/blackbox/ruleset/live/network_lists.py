@@ -61,7 +61,8 @@ class NetworkIndicators:
     """Every verified malicious domain and IP address read so far, normalised.
 
     *assets* is how many confirmed assets were in scope and *read* how many are in the lists;
-    *complete* is True when every one was read; *built_at* is unix seconds.
+    *complete* is True when every one of at least one was read (an empty scope is never complete,
+    KI-686); *built_at* is unix seconds.
     """
 
     domains: frozenset[str]
@@ -175,8 +176,12 @@ def indicators_from(assets: dict[str, Rows], scope: VerifiedScope) -> NetworkInd
     # Each frozenset is built straight from the rows: no second, mutable copy of 1 M names at once.
     domains, ips = frozenset(kept("domain")), frozenset(kept("ip"))
     read = sum(1 for graph in assets if graph in scope.assertion_graphs)
+    # An EMPTY scope is never the whole graph (KI-686, Linux round L4: on a fresh install, before the
+    # first sync started, 0 of 0 assets read said complete — the overview and the helper's plan both
+    # said "complete", so the helper would have been told to drop the lists it keeps).
     return NetworkIndicators(domains=domains, ips=ips, assets=len(scope.assertion_graphs),
-                             read=read, complete=read == len(scope.assertion_graphs), built_at=time.time())
+                             read=read, complete=bool(scope.assertion_graphs) and read == len(scope.assertion_graphs),
+                             built_at=time.time())
 
 
 def _without_indicators(scope: VerifiedScope) -> set[str]:

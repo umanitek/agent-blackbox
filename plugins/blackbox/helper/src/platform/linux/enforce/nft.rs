@@ -106,21 +106,8 @@ fn set_line(name: &str, kind: &str, elements: &[String]) -> String {
     format!("\tset {name} {{ type {kind}; flags interval; auto-merge;{elements} }}\n")
 }
 
-/// The whole table for *filter*, as one `nft -f` script (see the module doc).
-pub fn ruleset(filter: &Filter) -> String {
-    let (threats4, threats6) = split(&addresses(&filter.threats));
-    let (cut4, cut6) = split(&addresses(&filter.cut));
-    let (ssh4, ssh6) = split(filter.ssh_allow.as_deref().unwrap_or(&[]));
-    let (block4, block6) = split(&addresses(&filter.remote_block));
-    let lists = [&threats4, &threats6, &cut4, &cut6, &ssh4, &ssh6, &block4, &block6];
-    let mut text = reset_lines();
-    text.push_str(&format!("table {TABLE} {{\n"));
-    for ((name, kind), elements) in SETS.iter().zip(lists) {
-        text.push_str(&set_line(name, kind, elements));
-    }
-    for name in COUNTERS {
-        text.push_str(&format!("\tcounter {name} {{ packets 0 bytes 0 }}\n"));
-    }
+/// The rules of the two chains for *filter*: `(output, input)`.
+fn rules(filter: &Filter) -> (Vec<String>, Vec<String>) {
     let mut output = vec![];
     let mut input = vec![];
     if filter.remote_block.is_some() {
@@ -144,6 +131,25 @@ pub fn ruleset(filter: &Filter) -> String {
         input.push("iif != \"lo\" tcp dport 22 ip saddr != @ssh_allow4 counter name ssh_lockdown reject with tcp reset".to_string());
         input.push("iif != \"lo\" tcp dport 22 ip6 saddr != @ssh_allow6 counter name ssh_lockdown reject with tcp reset".to_string());
     }
+    (output, input)
+}
+
+/// The whole table for *filter*, as one `nft -f` script (see the module doc).
+pub fn ruleset(filter: &Filter) -> String {
+    let (threats4, threats6) = split(&addresses(&filter.threats));
+    let (cut4, cut6) = split(&addresses(&filter.cut));
+    let (ssh4, ssh6) = split(filter.ssh_allow.as_deref().unwrap_or(&[]));
+    let (block4, block6) = split(&addresses(&filter.remote_block));
+    let lists = [&threats4, &threats6, &cut4, &cut6, &ssh4, &ssh6, &block4, &block6];
+    let mut text = reset_lines();
+    text.push_str(&format!("table {TABLE} {{\n"));
+    for ((name, kind), elements) in SETS.iter().zip(lists) {
+        text.push_str(&set_line(name, kind, elements));
+    }
+    for name in COUNTERS {
+        text.push_str(&format!("\tcounter {name} {{ packets 0 bytes 0 }}\n"));
+    }
+    let (output, input) = rules(filter);
     for (chain, hook, rules) in [("output", "output", output), ("input", "input", input)] {
         text.push_str(&format!("\tchain {chain} {{\n\t\ttype filter hook {hook} priority filter - 10; policy accept;\n"));
         for rule in rules {
@@ -244,6 +250,25 @@ pub fn enabled() -> Option<bool> {
     Some(["output", "input"].iter().any(|chain| {
         nft(&["-j", "list", "chain", "inet", "blackbox_netd", chain], None).is_ok_and(|json| parse_enforcing(&json))
     }))
+}
+
+/// Whether each chain listing (`nft -j list chain …` output, None when it could not be read — the
+/// table or chain is gone) holds exactly the number of rules *filter* loads there.
+pub fn chains_intact(filter: &Filter, output: Option<&str>, input: Option<&str>) -> bool {
+    let (want_out, want_in) = rules(filter);
+    [(output, want_out.len()), (input, want_in.len())].iter()
+        .all(|(json, want)| json.is_some_and(|json| rules_of(json).len() == *want))
+}
+
+/// Whether the table still holds the rules *filter* loaded (None when nftables cannot be asked).
+/// Cheap enough for every plan cycle: the two chains are listed, never the sets' elements (KI-688,
+/// Linux round L4: after `nft flush table inet blackbox_netd` the rules came back only when the
+/// plan next CHANGED — 90–150 s once the threat graph was complete — because nothing looked).
+/// A flushed, deleted or edited chain (a rule removed, or one slipped in) reads as not intact.
+pub fn intact(filter: &Filter) -> Option<bool> {
+    first(NFT_COMMANDS)?;
+    let list = |chain: &str| nft(&["-j", "list", "chain", "inet", "blackbox_netd", chain], None).ok();
+    Some(chains_intact(filter, list("output").as_deref(), list("input").as_deref()))
 }
 
 /// Packets the table's rules dropped or refused since the helper started (across replacements).
@@ -391,5 +416,39 @@ mod tests {
         let ms: u64 = err.split("MS=").nth(1).and_then(|rest| rest.trim().split_whitespace().next()?.parse().ok()).unwrap_or(u64::MAX);
         assert!(err.contains("RC=1") && ms < 1000, "the connect failed at once, not by timeout (124): {err}");
         assert!(parse_dropped(&out) >= 1, "the refused SYN was counted: {out}");
+    }
+
+    #[test]
+    fn a_chain_listing_is_intact_only_with_exactly_the_rules_the_filter_loads() {
+        let filter = every_protection();
+        let (out, inp) = rules(&filter);
+        let listing = |count: usize| format!("{{\"nftables\": [{}]}}", vec!["{\"rule\": {}}"; count].join(","));
+        assert!(chains_intact(&filter, Some(&listing(out.len())), Some(&listing(inp.len()))));
+        assert!(!chains_intact(&filter, Some(&listing(0)), Some(&listing(0))), "a flushed table");
+        assert!(!chains_intact(&filter, None, Some(&listing(inp.len()))), "a deleted chain or table");
+        assert!(!chains_intact(&filter, Some(&listing(out.len() + 1)), Some(&listing(inp.len()))), "a rule slipped in");
+        assert!(!chains_intact(&filter, Some(&listing(out.len() - 1)), Some(&listing(inp.len()))), "a rule removed");
+    }
+
+    /// KI-688, real nft: a whole threat set the size of the complete graph's (28,216 addresses in
+    /// Linux round L4) is flushed by "root"; the chain listings say so, and ONE `nft -f` of the
+    /// filter puts every rule back — well inside the 30 s promise (measured, printed).
+    #[test]
+    fn a_flushed_table_with_a_complete_graphs_set_reads_as_not_intact_and_one_load_restores_it() {
+        let nft = first(NFT_COMMANDS).unwrap_or("nft");
+        let threats: Vec<IpAddr> = (0..28_216u32).map(|n| IpAddr::from([10, (n >> 16) as u8, (n >> 8) as u8, n as u8])).collect();
+        let filter = Filter { threats: Some(threats), cut: Some(vec![]), ..Default::default() };
+        let list = format!("echo ==; {nft} -j list chain inet blackbox_netd output; echo ==; {nft} -j list chain inet blackbox_netd input");
+        let script = format!("f=$(mktemp); cat > \"$f\"; {nft} -f \"$f\" && {nft} flush table inet blackbox_netd && {list}; \
+                              start=$(date +%s%N); {nft} -f \"$f\"; echo \"MS=$(( ($(date +%s%N) - start) / 1000000 ))\" >&2; {list}; rm -f \"$f\"");
+        let Some(done) = in_private_netns(&script, &ruleset(&filter)) else { return };
+        let (out, err) = (String::from_utf8_lossy(&done.stdout), String::from_utf8_lossy(&done.stderr));
+        let parts: Vec<&str> = out.split("==\n").collect();
+        assert_eq!(parts.len(), 5, "four listings: {out:.400} {err}");
+        assert!(!chains_intact(&filter, Some(parts[1]), Some(parts[2])), "a flushed table is not intact");
+        assert!(chains_intact(&filter, Some(parts[3]), Some(parts[4])), "one load restores every rule: {err}");
+        let ms: u64 = err.split("MS=").nth(1).and_then(|rest| rest.trim().split_whitespace().next()?.parse().ok()).unwrap_or(u64::MAX);
+        eprintln!("reloading the table with 28,216 addresses took {ms} ms");
+        assert!(ms < 10_000, "{err}");
     }
 }

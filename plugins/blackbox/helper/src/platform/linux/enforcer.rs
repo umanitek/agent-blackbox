@@ -59,6 +59,10 @@ impl Enforcer for LinuxEnforcer {
         nft::enabled()
     }
 
+    fn filter_intact(&self, filter: &Filter) -> Option<bool> {
+        nft::intact(filter)
+    }
+
     fn end_session(&self, _pid: u32) -> Result<(), String> { Err(NOT_YET.into()) }
     fn undo_hardening(&self) {}
 }
