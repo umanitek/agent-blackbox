@@ -16,7 +16,10 @@ version-1 plugin. Both are written with the main form; ``installed_commands`` li
 missing one is repaired by the sweep.
 
 **Undo:** Blackbox-owned hook files are removed when protection is switched off; a user's own
-file for the same event is never replaced or removed.
+file for the same event is never replaced or removed. Every folder Blackbox had to CREATE for them
+(``~/Documents/Cline`` on a machine where Cline never made it) is recorded (:data:`MADE_FOLDERS`)
+and taken back on removal when still empty — nothing else, nothing with the person's files in it
+(KI-689, Linux round L4: an uninstall left an empty ``~/Documents/Cline``).
 """
 
 from __future__ import annotations
@@ -25,11 +28,55 @@ import json
 import os
 from pathlib import Path
 
-from ...kernel.bounded_files import atomic_write
+from ...kernel import constants
+from ...kernel.bounded_files import atomic_write, read_json_object, write_json_object
 from .config_edit import MARK, EditResult
 from ...kernel.agent_hosts import Host
 
 Invocations = dict[str, tuple[list[str], str]]
+#: The folders Blackbox created for its hook files (in Blackbox's home), as ``{"folders": [...]}``.
+MADE_FOLDERS = "made-folders.json"
+
+
+def _made_path() -> Path:
+    return constants.blackbox_home() / "agent-hooks" / MADE_FOLDERS
+
+
+def _made() -> list[str]:
+    folders = (read_json_object(_made_path()) or {}).get("folders")
+    return [folder for folder in folders if isinstance(folder, str)] if isinstance(folders, list) else []
+
+
+def _make_folder(folder: Path, home: Path) -> None:
+    """Makes *folder* and every missing folder above it inside *home*, recording each one made."""
+    missing = []
+    here = folder
+    while not here.exists() and home in here.parents:
+        missing.append(here)
+        here = here.parent
+    folder.mkdir(parents=True, exist_ok=True)
+    if missing:
+        write_json_object(_made_path(), {"folders": list(dict.fromkeys(_made() + [str(each) for each in missing]))},
+                          what="the folders Blackbox made for agent hooks")
+
+
+def _remove_made(within: Path) -> None:
+    """Takes back each recorded folder at or under *within* that is empty now, deepest first."""
+    kept = []
+    for raw in sorted(_made(), key=lambda each: each.count("/"), reverse=True):
+        folder = Path(raw)
+        if folder != within and within not in folder.parents:
+            kept.append(raw)
+            continue
+        try:
+            if folder.is_dir() and not folder.is_symlink() and not any(folder.iterdir()):
+                folder.rmdir()
+            elif folder.exists():
+                kept.append(raw)
+        except OSError:
+            kept.append(raw)
+    if kept != _made():
+        write_json_object(_made_path(), {"folders": kept}, what="the folders Blackbox made for agent hooks")
 
 _OPENCODE_PLUGIN = """// Blackbox Agent Hooks — written by Blackbox ({mark}); removing Blackbox removes this file.
 // Asks Blackbox before every tool call (a verified threat is refused) and after it (an output
@@ -218,7 +265,7 @@ def _install_companions(host: Host, home: Path, invocations: Invocations) -> Non
         text = _COMPANION_TEXT[form].format(mark=MARK, before=json.dumps(by_kind.get("pre_tool", [])),
                                             after=json.dumps(by_kind.get("post_tool", [])),
                                             prompt=json.dumps(by_kind.get("prompt", [])))
-        target.parent.mkdir(parents=True, exist_ok=True)
+        _make_folder(target.parent, home)
         atomic_write(target, text)
 
 
@@ -230,23 +277,23 @@ def install(host: Host, home: Path, invocations: Invocations) -> EditResult:
             limit = host.hook_timeout
             hooks = {event: [{"type": "command", "bash": command, **({limit.key: limit.value(event)} if limit else {})}]
                      for event, (_argv, command) in invocations.items()}
-            target.parent.mkdir(parents=True, exist_ok=True)
+            _make_folder(target.parent, home)
             atomic_write(target, json.dumps({"version": 1, "hooks": hooks}, indent=2) + "\n")
             return EditResult(True, str(target))
         if host.style == "plugin":
             by_kind = _by_kind(host, invocations)
             text = _OPENCODE_PLUGIN.format(mark=MARK, before=json.dumps(by_kind.get("pre_tool", [])),
                                            after=json.dumps(by_kind.get("post_tool", [])))
-            target.parent.mkdir(parents=True, exist_ok=True)
+            _make_folder(target.parent, home)
             atomic_write(target, text)
             return EditResult(True, str(target))
-        return _install_scripts(target, invocations)
+        return _install_scripts(target, invocations, home)
     except OSError as exc:
         return EditResult(False, str(target), f"could not write: {exc.strerror or exc}")
 
 
-def _install_scripts(folder: Path, invocations: Invocations) -> EditResult:
-    folder.mkdir(parents=True, exist_ok=True)
+def _install_scripts(folder: Path, invocations: Invocations, home: Path) -> EditResult:
+    _make_folder(folder, home)
     left = []
     for event, (_argv, command) in invocations.items():
         script = folder / event
@@ -277,9 +324,18 @@ def uninstall(host: Host, home: Path) -> EditResult:
         elif _ours(target):
             target.unlink()
         _remove_if_empty(target if host.style == "scripts" else target.parent)
+        for place in [target, *host.companion_paths(home)]:
+            _remove_made(_top_made(place, home))
     except OSError as exc:
         return EditResult(False, str(target), f"could not remove: {exc.strerror or exc}")
     return EditResult(True, str(target))
+
+
+def _top_made(place: Path, home: Path) -> Path:
+    """The outermost recorded folder above (or at) *place* — what removal looks under — else *place*'s folder."""
+    made = set(_made())
+    above = [folder for folder in reversed(place.parents) if str(folder) in made and home in folder.parents]
+    return above[0] if above else place.parent
 
 
 def _remove_if_empty(folder: Path) -> None:

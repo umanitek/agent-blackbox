@@ -86,7 +86,11 @@ def policy(mode: ShieldMode) -> Places:
     own = (str(constants.blackbox_home()), str(_PLUGIN), *addon_places.of(_PLUGIN.parent))
     hooks, settings = own_places.hook_configs(), own_places.settings_files()   # Blackbox's settings live in Hermes' config (P0)
     startup = persistence_places.shell_startup_files(str(Path.home())) + hooks + settings   # the hook judgement reads the same list
-    holders = sorted({os.path.dirname(path) for path in hooks} - {str(Path.home())}) + own_places.holders([*own, *settings])
+    # Every folder above every hook place, not only the one holding it (security finding
+    # 2026-11-24, Linux round L4: with only ~/Documents/Cline/Hooks pinned, ``mv ~/Documents/Cline``
+    # walked Blackbox's Cline hooks away and a planted TaskStart took their place; ``mv
+    # ~/.config/opencode`` did the same to the OpenCode plugin). The ONE list every layer reads (LES-137).
+    holders = own_places.holders([*hooks, *own, *settings])
     return build(mode_module.protected(mode), blackbox_key_patterns(), own, str(canary_path()), is_folder=is_folder,
                  startup_files=startup, keep_in_place=holders,
                  no_write_globs=[addons.manifest_pattern(str(_PLUGIN.parent)), *own_places.settings_globs()],

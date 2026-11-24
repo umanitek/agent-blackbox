@@ -176,6 +176,22 @@ def test_cline_keeps_the_users_own_script_for_an_event(tmp_path):
     assert sorted(p.name for p in folder.iterdir()) == ["PreToolUse"]
 
 
+def test_removing_clines_hooks_takes_back_only_the_empty_folders_blackbox_made(tmp_path):
+    """KI-689 (Linux round L4): on a machine where Cline never made ~/Documents/Cline, the install made
+    it for Blackbox's hooks and plugin, and the uninstall left it behind, empty. Only folders Blackbox
+    made, and only while empty, are taken back; one the person already had, or put a file in, stays."""
+    cline = hosts.BY_ID["cline"]
+    invocations = {event: (["/py", "runner.py"], f"/py {config_edit.MARK} cline {kind} u") for event, kind in cline.events.items()}
+    (tmp_path / "Documents").mkdir()
+    assert own_files.install(cline, tmp_path, invocations).ok
+    assert own_files.uninstall(cline, tmp_path).ok
+    assert list((tmp_path / "Documents").iterdir()) == [], "the Cline folder Blackbox made is gone; Documents (the person's) stays"
+    assert own_files.install(cline, tmp_path, invocations).ok
+    (tmp_path / "Documents" / "Cline" / "notes.md").write_text("mine\n", encoding="utf-8")
+    assert own_files.uninstall(cline, tmp_path).ok
+    assert sorted(p.name for p in (tmp_path / "Documents" / "Cline").iterdir()) == ["notes.md"]
+
+
 def test_opencodes_plugin_runs_the_runner_and_throws_on_a_block(tmp_path):
     opencode = hosts.BY_ID["opencode"]
     invocations = {event: (["/py", f"/x/{config_edit.MARK}", "opencode", kind, "u"], "") for event, kind in opencode.events.items()}

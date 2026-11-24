@@ -8,9 +8,10 @@
   and every profile), which hold EVERY Blackbox setting (design review 2026-11-23, P0: a
   sandboxed script the hook can not read could have written ``file-shield: enabled: false``,
   emptied the sandboxed list or switched Block mode off). Never written, renamed or removed.
-* :func:`holders` — every folder above Blackbox's own places and those files: never renamed or
-  removed (``mv ~/.hermes ~/.h2`` would walk Blackbox's home out from under the profile, and the
-  launcher would fall back to hooks only).
+* :func:`holders` — every folder above Blackbox's own places, those files and every hook config:
+  never renamed or removed (``mv ~/.hermes ~/.h2`` would walk Blackbox's home out from under the
+  profile, and the launcher would fall back to hooks only; ``mv ~/Documents/Cline`` would walk
+  Blackbox's Cline hooks away and let a planted one take their place — Linux round L4).
 
 Usage::
 

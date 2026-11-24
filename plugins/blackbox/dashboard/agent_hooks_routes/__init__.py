@@ -12,7 +12,9 @@
 Both POSTs pass the app-wide browser boundary (the session token from ``GET /api/session``), so a
 web page cannot reach them. While "Protect new agents automatically" is on, a background sweep
 hooks a newly installed agent — or a config home a running agent uses — within
-:data:`OBSERVE_SECONDS` and repairs every hook every :data:`SWEEP_SECONDS` (``agent_hooks.sweep``). The instance views (live tree, history, one
+:data:`OBSERVE_SECONDS` and repairs every hook every :data:`SWEEP_SECONDS` (``agent_hooks.sweep``). Whatever that
+setting says, the hook watch (``agent_hooks.keep_hooks``) puts back a hook of Blackbox's removed or
+changed outside Blackbox, and records it as a HIGH finding, every :data:`OBSERVE_SECONDS`. The instance views (live tree, history, one
 instance, profiles) are in :mod:`.instances`.
 """
 
@@ -78,11 +80,16 @@ class _Sweeper:
         present = agent_hooks.present()
         # A config home learned since the last look (a hook event or a running agent named it)
         # is hooked now, not at the next full sweep.
+        swept = False
         if agent_hooks.tracking.new_profiles() or should_sweep(present, self.seen, time.monotonic() - self.last):
             agent_hooks.sweep()
             self.seen, self.last = present, time.monotonic()
-            return True
-        return False
+            swept = True
+        # Every look, whatever "Protect new agents automatically" says: a hook of Blackbox's that was
+        # removed or changed outside Blackbox is said (HIGH) and put back within OBSERVE_SECONDS
+        # (security finding 2026-11-24, Linux round L4: 90 s later nothing had been put back).
+        agent_hooks.keep_hooks()
+        return swept
 
 
 def _sweep_forever() -> None:

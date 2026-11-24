@@ -96,7 +96,8 @@ def build(items: Iterable[str], key_patterns: Iterable[str], own: Iterable[str],
     (folders, or ``folder/glob``), Blackbox's *own* places, the *canary* file and the shell
     *startup_files* (absolute; they need not exist — every agent's hook config is passed here too:
     closed to writes the same way), and *keep_in_place* (folders never renamed or removed: the
-    folders holding those configs, so ``mv ~/.claude …`` can not take the hook away), and
+    folders holding those configs AND every folder above them, so neither ``mv ~/.claude …`` nor
+    ``mv ~/Documents/Cline …`` can take a hook away), and
     *no_write_globs* (absolute ``*`` patterns never written: every add-on's manifest), *startup*
     (``(folders, files, globs)`` of the startup and PATH places, absolute). *is_folder* decides an item's kind (File
     Shield's own rule, so a not-yet-existing folder is a folder)."""

@@ -36,16 +36,17 @@ from typing import Any, Optional
 
 from ..kernel import constants
 from ..kernel.bounded_files import atomic_write
+from .. import audit
 from ..kernel.config import load_blackbox_config
 from . import owners, process_facts, profiles, prompt_text, tracking, versions
-from .protect import config_edit, own_files
+from .protect import config_edit, hook_watch, own_files
 from .protect import recorder
 from .protect.judge_here import JUDGE_HERE_FILE
 from .protect.sandbox_errors import RefusalSeen, on_sandbox_refusal
 from .protect.events import answer_event, note_error, read_state, record_event, write_state
 from ..kernel.agent_hosts import BY_ID, HOSTS, Host
 
-__all__ = ["KINDS", "AgentRow", "RefusalSeen", "answer_event", "hooked_agents", "note_error", "on_sandbox_refusal",
+__all__ = ["KINDS", "AgentRow", "RefusalSeen", "answer_event", "hooked_agents", "keep_hooks", "note_error", "on_sandbox_refusal",
            "owners", "present", "process_facts", "prompt_text", "record_event", "remove_all", "rows", "set_protection",
            "settle", "sweep", "tracking", "versions"]
 
@@ -160,10 +161,57 @@ def _variants(host: Host) -> list[Host]:
 
 
 def install(host: Host) -> config_edit.EditResult:
+    """Install Blackbox's hooks for *host* (one config home) and remember what was written, so the
+    hook watch (:func:`keep_hooks`) tells Blackbox's own install from a change made outside it."""
     invocations = _invocations(host)
     if host.style in _OWN_FILE_STYLES:
-        return own_files.install(host, _home(), invocations)
-    return config_edit.install(host, _home(), {event: command for event, (_argv, command) in invocations.items()})
+        result = own_files.install(host, _home(), invocations)
+    else:
+        result = config_edit.install(host, _home(), {event: command for event, (_argv, command) in invocations.items()})
+    _remember(host)
+    return result
+
+
+def _watch_key(host: Host) -> str:
+    return f"{host.id}:{host.config_path(_home())}"
+
+
+def _remember(host: Host) -> None:
+    hook_watch.remember(_watch_key(host), hook_watch.fingerprint(host, _home(), _editor(host).installed_commands(host, _home())))
+
+
+def keep_hooks() -> list[dict[str, Any]]:
+    """The hook watch, one look (cheap: a few small files per agent): for every agent the person
+    protects, Blackbox's hook that is gone or changed since Blackbox installed it is recorded as a
+    HIGH finding and put back where the path is safe (``protect.hook_watch``; a file that is not
+    Blackbox's in its place is moved aside, kept). A hook installed before this watch existed is
+    adopted as it is. Answers one ``{kind, restored, lost}`` per change found."""
+    state = read_state()["agents"]
+    done = []
+    for host in HOSTS:
+        if state.get(host.id, {}).get("disabled"):
+            continue
+        for variant in _variants(host):
+            key = _watch_key(variant)
+            now = hook_watch.fingerprint(variant, _home(), _editor(variant).installed_commands(variant, _home()))
+            if not hook_watch.known(key):
+                if now:
+                    hook_watch.remember(key, now)   # adopted: installed by a Blackbox before this watch
+                continue
+            lost = hook_watch.changed(key, now)
+            if not lost:
+                continue
+            restored, moved = False, []
+            if hook_watch.safe(_home(), lost):
+                moved = hook_watch.quarantine(lost)
+                restored = install(variant).ok and not hook_watch.changed(key, hook_watch.fingerprint(
+                    variant, _home(), _editor(variant).installed_commands(variant, _home())))
+            if not restored:
+                hook_watch.remember(key, now)   # said once; the next change is new again
+            audit.record_for(host.id, event="agent_hook_changed", findings=[hook_watch.finding(host.name, lost, restored, moved)],
+                             detail={"restored": restored, "moved_aside": moved, "decision": "flag"})
+            done.append({"kind": host.id, "restored": restored, "lost": lost})
+    return done
 
 
 def _runnable(host: Host, commands: list[str]) -> bool:
@@ -219,13 +267,20 @@ def set_protection(agent_id: str, enabled: bool) -> dict[str, Any]:
     host = BY_ID.get(agent_id)
     if host is None:
         return {"ok": False, "kind": agent_id, "error": "unknown agent"}
-    results = [install(variant) if enabled else _editor(variant).uninstall(variant, _home()) for variant in _variants(host)]
+    results = [install(variant) if enabled else _uninstall(variant) for variant in _variants(host)]
     result = next((item for item in results if not item.ok), results[0])   # the default home's, or the first failure
     if result.ok:
         state = read_state()
         state["agents"].setdefault(agent_id, {})["disabled"] = not enabled
         write_state(state)
     return {"ok": result.ok, "kind": agent_id, "target": result.path, "enabled": enabled, "note": result.error}
+
+
+def _uninstall(host: Host) -> config_edit.EditResult:
+    """Remove Blackbox's hooks for *host* and forget them (the hook watch no longer expects them)."""
+    result = _editor(host).uninstall(host, _home())
+    hook_watch.remember(_watch_key(host), {})
+    return result
 
 
 def present() -> frozenset[str]:
@@ -267,6 +322,6 @@ def remove_all() -> list[dict[str, Any]]:
         for variant in _variants(host):
             if not _editor(variant).installed_commands(variant, _home()):
                 continue
-            result = _editor(variant).uninstall(variant, _home())
+            result = _uninstall(variant)
             done.append({"kind": host.id, "name": host.name, "ok": result.ok, "target": result.path, "note": result.error})
     return done
