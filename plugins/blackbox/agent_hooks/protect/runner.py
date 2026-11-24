@@ -355,10 +355,10 @@ def _answer(url: str, event: str, body: dict) -> dict:
     the same judgement made here (:func:`judge_here`); {} when neither can be had (fail open)."""
     try:
         return ask(url, body)
-    except Exception:   # health: allow BLE001 -- the dashboard is down or slow: judge locally instead
-        pass
-    if event not in BLOCKING_EVENTS:
-        return {}
+    except Exception as down:   # health: allow BLE001 -- the dashboard is down or slow: judge locally instead
+        if event not in BLOCKING_EVENTS:
+            return {}
+        sys.stderr.write(f"Blackbox: the dashboard did not answer ({type(down).__name__}); judging here.\n")
     try:
         return judge_here(body)
     except Exception:   # health: allow BLE001 -- fail open: genuine breakage never stops the agent
