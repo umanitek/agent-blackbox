@@ -197,3 +197,53 @@ def test_a_process_is_described_from_proc(tmp_path):
     assert facts == processes.ProcessFacts(1000, "/usr/bin/node", "node server.js")
     assert processes.describe(4243, proc=str(tmp_path)) is None
     assert processes.is_system("/usr/lib/systemd/systemd") and not processes.is_system("/usr/bin/node")
+
+
+#: A real runtime folder (Ubuntu 24.04, kernel 7.0, systemd 255), recorded in fix wave L-W1 (LES-153:
+#: a real sample, never a list typed into the test).
+RUNTIME_FIXTURE = Path(__file__).parent / "fixtures" / "linux_sandbox" / "runtime_dir_ubuntu24.txt"
+RECORDED_RUNTIME = "/run/user/1000"
+
+
+def _recorded_sockets() -> list[str]:
+    rows = [line.split(" ", 2) for line in RUNTIME_FIXTURE.read_text(encoding="utf-8").splitlines() if line[:2] == "s "]
+    return [path for _kind, _mode, path in rows]
+
+
+def _covered(path: str, lines: list[str]) -> bool:
+    hidden = [line.split(" ", 1)[1] for line in lines if line.startswith(("hide-socket ", "hide-dir ", "hide-file "))]
+    return any(path == place or path.startswith(place.rstrip("/") + "/") for place in hidden)
+
+
+def test_every_socket_of_the_persons_own_systemd_is_hidden_by_the_never_list(places, tmp_path):
+    """Security Critical 2026-11-24-linux-sandbox-escape-systemd-s-private-u (Linux round L2):
+    ``$XDG_RUNTIME_DIR/systemd/private`` was not hidden, so ``systemd-run --user`` ran a command
+    OUTSIDE the sandbox. Every socket under a REAL runtime folder's ``systemd`` tree is hidden, and so
+    are the buses — after the never-list's mark, where no permission can lift it."""
+    lines = _lines(profile.render(places, home=str(tmp_path / "home"), runtime=RECORDED_RUNTIME))
+    never = lines[lines.index(profile.NEVER_MARK):]
+    systemd = [path for path in _recorded_sockets() if path.startswith(f"{RECORDED_RUNTIME}/systemd/")]
+    assert f"{RECORDED_RUNTIME}/systemd/private" in systemd and f"{RECORDED_RUNTIME}/systemd/notify" in systemd
+    for path in systemd + [f"{RECORDED_RUNTIME}/bus"]:
+        assert _covered(path, never), f"{path} is reachable from inside the sandbox"
+
+
+def test_every_socket_a_real_runtime_folder_has_is_hidden_behind_a_permission_or_reachable_on_purpose(places, tmp_path):
+    """The drift guard (LES-137): a socket a real machine has that nothing names fails here, so a new
+    session service is a decision, never a silent hole. Every permission refused is the strictest case."""
+    everything = Allowances(refused=frozenset({"docker", "local-ports", "clipboard", "camera-mic"}))
+    lines = _lines(profile.render(places, allowances=everything, home=str(tmp_path / "home"), runtime=RECORDED_RUNTIME))
+    on_purpose = tuple(place.replace("{runtime}", RECORDED_RUNTIME) + "/" for place in profile.REACHABLE_ON_PURPOSE)
+    unnamed = [path for path in _recorded_sockets() if not _covered(path, lines) and not path.startswith(on_purpose)]
+    assert unnamed == [], f"sockets no list names: {unnamed}"
+    allowed = _lines(profile.render(places, home=str(tmp_path / "home"), runtime=RECORDED_RUNTIME))
+    for always in (f"{RECORDED_RUNTIME}/snapd-session-agent.socket", f"{RECORDED_RUNTIME}/pk-debconf-socket"):
+        assert _covered(always, allowed), f"{always} is hidden whatever the permissions say"
+
+
+def test_the_cgroup_tree_is_read_only_so_an_agent_can_not_leave_its_scope(places, tmp_path):
+    """Fix wave L-W1: the person owns every cgroup of their own systemd, so from inside the sandbox
+    ``echo $$ > …/app.slice/x.scope/cgroup.procs`` moved the agent out of its scope — and out of the
+    helper's per-agent rules (security Critical 2026-11-24-linux-sandbox-the-helper-never-finds-an-)."""
+    lines = _lines(profile.render(places, home=str(tmp_path / "home"), runtime=RECORDED_RUNTIME))
+    assert "ro /sys/fs/cgroup" in lines[lines.index(profile.NEVER_MARK):]

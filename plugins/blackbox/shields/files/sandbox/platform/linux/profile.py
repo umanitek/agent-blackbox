@@ -47,6 +47,29 @@ DEVICE_PLACES = ("/dev/snd", "{runtime}/pipewire-0", "{runtime}/pulse/native")
 #: ``gio launch``, the desktop portal) and holds the keyring (F4: hidden in phase 1, so the
 #: keychain is blocked in effect); the system bus asks polkit, whose dialog the person may accept.
 BUS_SOCKETS = ("{runtime}/bus", "/run/dbus/system_bus_socket", "/var/run/dbus/system_bus_socket")
+#: The person's own systemd (the user manager) and the other session services that start or change
+#: things OUTSIDE the sandbox, hidden whole. ``{runtime}/systemd`` holds the manager's control
+#: sockets — ``private`` (what ``systemctl --user`` and ``systemd-run --user`` fall back to when the
+#: bus is hidden), ``notify`` and, on newer systemd, its varlink endpoints. Linux round L2 (kernel
+#: 7.0): through ``private`` a sandboxed agent ran ``systemd-run --user`` OUTSIDE and read a
+#: protected file, made a timer and restarted Blackbox's dashboard (security Critical
+#: 2026-11-24-linux-sandbox-escape-systemd-s-private-u). Also: the accessibility bus (a D-Bus bus that
+#: reads and drives every window), snapd's session agent (starts snap user services) and
+#: PackageKit's debconf socket. No agent's work needs any of them.
+USER_MANAGER_FOLDERS = ("{runtime}/systemd", "{runtime}/at-spi")
+SESSION_SERVICE_SOCKETS = ("{runtime}/snapd-session-agent.socket", "{runtime}/pk-debconf-socket")
+#: The cgroup tree, read-only: every cgroup of the person's own systemd is theirs to write, so an
+#: agent could move itself out of its scope (``echo $$ > …/app.slice/x.scope/cgroup.procs``, proven
+#: on kernel 7.0 in fix wave L-W1) — out of reach of the helper's per-agent network rules, which
+#: match the scope. Reading it (Node's memory limit, ``systemd-cgls``) still works.
+CGROUP_TREE = "/sys/fs/cgroup"
+#: The runtime folder's sockets that stay reachable ON PURPOSE, with why. The drift test fails on
+#: any socket a real machine has that is neither hidden by the never-list, nor behind a permission
+#: (Docker, the display, the camera and microphone), nor named here.
+REACHABLE_ON_PURPOSE = {
+    "{runtime}/gnupg": "gpg-agent: signs the agent's git commits and serves ssh keys for git pushes; the key files "
+                       "themselves stay hidden, and ssh back into this machine is refused by the helper's rules",
+}
 
 
 def runtime_dir() -> str:
@@ -105,7 +128,8 @@ def permission_lines(allowances: Allowances, home: str = "", runtime: str = "") 
 
 def _never(places: Places, home: str, runtime: str) -> list[str]:
     """The never-list: protected items and keys hidden, the canary hidden, Blackbox's own places,
-    the startup files and places read-only, the folders above an item pinned, the buses hidden."""
+    the startup files and places read-only, the folders above an item pinned, the buses, the user
+    manager and the session services hidden, the cgroup tree read-only."""
     lines = [_line("hide-dir", path) for path in places.denied_folders]
     lines += [_line("hide-file", path) for path in places.denied_files if path != places.canary]
     lines += [_line("hide-glob", glob) for glob in places.denied_globs]
@@ -118,7 +142,9 @@ def _never(places: Places, home: str, runtime: str) -> list[str]:
     lines += [_line("startup-ro-glob", glob) for glob in places.startup_globs]
     lines += [_line("pin", path) for path in places.no_rename]
     lines.append("bus refuse")
-    lines += _places("hide-socket", BUS_SOCKETS, home, runtime)
+    lines += _places("hide-socket", BUS_SOCKETS + SESSION_SERVICE_SOCKETS, home, runtime)
+    lines += _places("hide-dir", USER_MANAGER_FOLDERS, home, runtime)
+    lines.append(_line("ro", CGROUP_TREE))
     return lines
 
 
@@ -135,5 +161,6 @@ def render(places: Places, digest_line: str = "", allowances: Allowances = Allow
     return "\n".join(dict.fromkeys(lines)) + "\n"
 
 
-__all__ = ["BUS_SOCKETS", "DEVICE_GLOBS", "DEVICE_PLACES", "DISPLAY_SOCKET_GLOBS", "DOCKER_SOCKETS", "DOCKER_SOCKET_GLOBS",
-           "HEADER", "NEVER_MARK", "PROFILE_SUFFIX", "SANDBOX", "permission_lines", "render", "runtime_dir"]
+__all__ = ["BUS_SOCKETS", "CGROUP_TREE", "DEVICE_GLOBS", "DEVICE_PLACES", "DISPLAY_SOCKET_GLOBS", "DOCKER_SOCKETS", "DOCKER_SOCKET_GLOBS",
+           "HEADER", "NEVER_MARK", "PROFILE_SUFFIX", "REACHABLE_ON_PURPOSE", "SANDBOX", "SESSION_SERVICE_SOCKETS",
+           "USER_MANAGER_FOLDERS", "permission_lines", "render", "runtime_dir"]

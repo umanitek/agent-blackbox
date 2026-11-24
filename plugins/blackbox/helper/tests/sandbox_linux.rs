@@ -239,3 +239,33 @@ fn an_unreadable_policy_starts_the_program_with_the_hooks_only_line() {
     assert!(all.contains("ran"), "{all}");
     assert!(all.contains("blackbox: no sandbox profile — sh runs with Blackbox's hooks only"), "{all}");
 }
+
+/// Security Critical 2026-11-24-linux-sandbox-escape-systemd-s-private-u (Linux round L2, kernel
+/// 7.0): with the never-list's lines for the person's own systemd (the plugin's `profile.py`:
+/// `USER_MANAGER_FOLDERS`, the buses, `CGROUP_TREE`), nothing inside starts a unit or a timer
+/// outside, and the agent can not move itself out of its scope. Needs a REAL user manager (a login
+/// session or lingering): without one there is nothing to reach and it says so.
+#[test]
+fn the_persons_own_systemd_can_not_be_reached_and_the_scope_can_not_be_left() {
+    if !namespaces_work() {
+        return;
+    }
+    let Some(runtime) = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from).filter(|dir| dir.join("systemd/private").exists()) else {
+        eprintln!("skipped: no user manager here (no $XDG_RUNTIME_DIR/systemd/private)");
+        return;
+    };
+    let root = scratch("systemd", &[]);
+    let runtime = runtime.display();
+    let policy = policy(&root, &format!("bus refuse\nhide-socket {runtime}/bus\nhide-dir {runtime}/systemd\nro /sys/fs/cgroup\n"));
+    let outside = root.join("ran-outside");
+    let out = sh(&policy, &format!("systemd-run --user --quiet /bin/sh -c 'touch {0}'; echo RUN=$?; \
+                                    systemd-run --user --quiet --on-active=1h /bin/true; echo TIMER=$?; \
+                                    systemctl --user start dbus.socket; echo START=$?; \
+                                    here=$(cut -d: -f3 /proc/self/cgroup); mkdir \"/sys/fs/cgroup$here/../bb-escape-$$\"; echo LEAVE=$?",
+                                   outside.display()));
+    let all = text(&out);
+    for refused in ["RUN=", "TIMER=", "START=", "LEAVE="] {
+        assert!(all.contains(refused) && !all.contains(&format!("{refused}0")), "{refused} must fail inside: {all}");
+    }
+    assert!(!outside.exists(), "a command ran outside the sandbox: {all}");
+}
