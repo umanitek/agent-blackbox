@@ -6,5 +6,6 @@
 
 pub mod exposure;
 pub mod items;
+pub mod plan;
 pub mod sudoers;
 pub mod tamper;

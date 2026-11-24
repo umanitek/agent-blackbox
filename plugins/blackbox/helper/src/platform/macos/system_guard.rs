@@ -19,71 +19,21 @@
 use std::collections::BTreeSet;
 use std::sync::{Mutex, OnceLock};
 use std::thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::Instant;
 
-use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::enforce::{posture::Fixes, restore};
 use super::observe::{exposure, persistence, posture, run_later, tamper};
+use crate::platform::system_watch::plan::{cap_events, dns_active, due, now, Client, SystemPlan, PLAN_EVERY, REPORT_EVERY, RUN_LATER_CAP, TICK};
+pub use crate::platform::system_watch::plan::STACK_BYTES;
 
-/// The most run-later items kept (every PATH folder entry on this Mac).
-const RUN_LATER_CAP: usize = 20_000;
-/// The most events one report carries (the dashboard's `system_report.MAX_EVENTS_PER_REPORT`).
-const MAX_EVENTS_PER_REPORT: usize = 300;
 use crate::platform::macos::sockets::Reader;
-
-const PLAN_PATH: &str = "/api/shields/network-shield/api/system-plan";
-const REPORT_PATH: &str = "/api/shields/network-shield/api/system-report";
-pub const TICK: Duration = Duration::from_secs(1);
-pub const PLAN_EVERY: Duration = Duration::from_secs(2);
-pub const REPORT_EVERY: Duration = Duration::from_secs(10);
-const TIMEOUT: Duration = Duration::from_secs(10);
-/// The loop's thread stack (larger than Rust's 2 MiB default: the root-run looks are big).
-pub const STACK_BYTES: usize = 8 * 1024 * 1024;
-
-/// The small plan this loop follows (all off by default: an old plugin or none means off).
-#[derive(Debug, Default, Deserialize, PartialEq)]
-#[serde(default)]
-pub struct SystemPlan {
-    pub watch: bool,
-    pub posture_fixes: Vec<String>,
-    pub tamper_guard: bool,
-    pub posture_refresh: u64,
-}
 
 static FIXES: OnceLock<Mutex<Fixes>> = OnceLock::new();
 
 fn fixes() -> &'static Mutex<Fixes> {
     FIXES.get_or_init(|| Mutex::new(Fixes::load(std::path::Path::new(super::HOME).join("posture-fixes.json"))))
-}
-
-fn now() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
-}
-
-/// Whether DNS Shield is applied now (the plan / report loop's saved state).
-fn dns_active() -> bool {
-    std::fs::read_to_string(std::path::Path::new(super::HOME).join("state.json")).ok()
-        .and_then(|t| serde_json::from_str::<Value>(&t).ok()).and_then(|v| v["dns_active"].as_bool()).unwrap_or(false)
-}
-
-struct Client {
-    link: crate::link::Link,
-}
-
-impl Client {
-    /// The plan when the verified plugin answers; None keeps the last one (never undone for it).
-    fn plan(&mut self) -> Option<SystemPlan> {
-        match self.link.plan::<SystemPlan>(PLAN_PATH, "", TIMEOUT) {
-            crate::link::Fetched::Plan(plan) => Some(plan),
-            crate::link::Fetched::Refused(_) => None,
-        }
-    }
-
-    fn post(&mut self, body: &Value) {
-        let _ = self.link.post(REPORT_PATH, body, TIMEOUT);
-    }
 }
 
 /// Everything the loop remembers between ticks.
@@ -106,24 +56,20 @@ struct Watchers {
 }
 
 impl Watchers {
-    fn due(last: Option<Instant>, every: Duration) -> bool {
-        last.is_none_or(|at| at.elapsed() >= every)
-    }
-
     fn tick(&mut self, reader: &mut Reader, plan: &SystemPlan) -> bool {
         let at = now();
         let found = exposure::listeners(&reader.sockets(), &exposure::program_of);
         let ports: BTreeSet<u16> = found.iter().filter(|l| l.protocol.starts_with("tcp")).map(|l| l.port).collect();
         let mut happened = self.exposure.tick(found, at);
-        if Self::due(self.last_folders, persistence::FOLDERS_EVERY) {
+        if due(self.last_folders, persistence::FOLDERS_EVERY) {
             self.last_folders = Some(Instant::now());
             let kinds = ["launch-agent", "launch-daemon", "user-agent", "cron", "periodic"];
             happened |= self.persistence.update(&kinds, persistence::file_items(&self.persistence.known()), at);
             happened |= self.run_later.update_capped(run_later::KINDS, run_later::items(&run_later::homes()), at, RUN_LATER_CAP);
             self.run_later.baseline_done();
         }
-        if Self::due(self.last_commands, persistence::COMMANDS_EVERY) {
-            let with_kexts = Self::due(self.last_kexts, persistence::KEXTS_EVERY);
+        if due(self.last_commands, persistence::COMMANDS_EVERY) {
+            let with_kexts = due(self.last_kexts, persistence::KEXTS_EVERY);
             self.last_commands = Some(Instant::now());
             if with_kexts { self.last_kexts = Some(Instant::now()); }
             for (kind, items) in persistence::command_items(with_kexts) {
@@ -131,15 +77,15 @@ impl Watchers {
             }
             self.persistence.baseline_done();   // files and commands have both been looked at once
         }
-        if Self::due(self.last_tamper, tamper::TAMPER_EVERY) {
+        if due(self.last_tamper, tamper::TAMPER_EVERY) {
             self.last_tamper = Some(Instant::now());
             happened |= self.tamper.tick(tamper::look(), at);
-            if let Some(event) = restore::guard_dns(plan.tamper_guard, dns_active(), &self.tamper.dns_servers(), at) {
+            if let Some(event) = restore::guard_dns(plan.tamper_guard, dns_active(std::path::Path::new(super::HOME)), &self.tamper.dns_servers(), at) {
                 self.events.push(event);
                 happened = true;
             }
         }
-        if plan.posture_refresh != self.posture_refresh || Self::due(self.last_posture, posture::POSTURE_EVERY) {
+        if plan.posture_refresh != self.posture_refresh || due(self.last_posture, posture::POSTURE_EVERY) {
             self.posture_refresh = plan.posture_refresh;
             self.last_posture = Some(Instant::now());
             self.posture = posture::look(&ports);
@@ -156,11 +102,7 @@ impl Watchers {
         let at = now();
         events.extend(fix_events.into_iter().map(|mut e| { e["ts"] = json!(at); e }));
         events.extend(self.run_later.take_events());
-        if events.len() > MAX_EVENTS_PER_REPORT {
-            // The dashboard refuses a longer report: the rest (run-later changes last) go in the next one.
-            self.events = events.split_off(MAX_EVENTS_PER_REPORT);
-            self.events.truncate(MAX_EVENTS_PER_REPORT);   // bounded: a flood loses its oldest tail, never memory
-        }
+        self.events = cap_events(&mut events);
         json!({"watching": true, "at": at, "exposure": self.exposure.snapshot(), "persistence": self.persistence.snapshot(),
                "tamper": self.tamper.snapshot(), "posture": self.posture, "fixes": fixes().lock().map(|f| f.applied()).unwrap_or_default(),
                "events": events})
@@ -170,13 +112,13 @@ impl Watchers {
 /// The loop (started by the helper; runs until the process ends).
 pub fn run() {
     let Ok(link) = crate::link::Link::new(std::path::Path::new(super::HOME)) else { return };
-    let mut client = Client { link };
+    let mut client = Client::new(link);
     let mut reader = Reader::default();
     let mut watchers = Watchers::default();
     let mut plan = SystemPlan::default();
     let (mut last_plan, mut last_report): (Option<Instant>, Option<Instant>) = (None, None);
     loop {
-        if Watchers::due(last_plan, PLAN_EVERY) {
+        if due(last_plan, PLAN_EVERY) {
             last_plan = Some(Instant::now());
             // An unreachable plugin keeps the last plan: a dashboard restart must not undo and
             // re-apply fixes (that would switch the person's firewall off and on). Only an
@@ -191,7 +133,7 @@ pub fn run() {
             continue;
         }
         let happened = watchers.tick(&mut reader, &plan) || !fix_events.is_empty();
-        if happened || Watchers::due(last_report, REPORT_EVERY) {
+        if happened || due(last_report, REPORT_EVERY) {
             last_report = Some(Instant::now());
             let body = watchers.report(fix_events);
             client.post(&body);
@@ -205,19 +147,6 @@ pub fn run() {
 pub fn undo_hardening() {
     if let Ok(mut f) = fixes().lock() {
         let _ = f.undo_all();
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn an_empty_or_older_plan_means_off() {
-        let plan: SystemPlan = serde_json::from_str("{}").unwrap();
-        assert!(!plan.watch && plan.posture_fixes.is_empty() && !plan.tamper_guard);
-        let plan: SystemPlan = serde_json::from_str(r#"{"watch":true,"posture_fixes":["firewall-on"],"tamper_guard":true,"posture_refresh":3}"#).unwrap();
-        assert_eq!(plan, SystemPlan { watch: true, posture_fixes: vec!["firewall-on".into()], tamper_guard: true, posture_refresh: 3 });
     }
 }
 

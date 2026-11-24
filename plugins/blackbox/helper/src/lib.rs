@@ -33,6 +33,7 @@ pub mod last_plan;
 pub mod plan;
 pub mod private_files;
 pub mod safe_read;
+pub mod install_steps;
 mod daemon;
 mod state;
 mod undo;
