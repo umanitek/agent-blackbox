@@ -25,6 +25,8 @@ from ..kernel.config import load_blackbox_config
 from . import terminal
 
 TIMEOUT_SECONDS = 10
+#: How long the person has to type their sudo password.
+SUDO_SECONDS = 180
 Run = Callable[[list[str], TextIO], int]
 
 
@@ -41,7 +43,10 @@ def _call(url: str, path: str, token: str, body: dict[str, Any] | None = None) -
 
 
 def _sudo(argv: list[str], tty: TextIO) -> int:
-    return subprocess.run(["sudo", *argv], stdin=tty, check=False).returncode
+    try:
+        return subprocess.run(["sudo", *argv], stdin=tty, timeout=SUDO_SECONDS, check=False).returncode
+    except subprocess.TimeoutExpired:
+        return 1   # no password in time: nothing proved
 
 
 def approve(url: str, tty: TextIO, run: Run = _sudo) -> int:

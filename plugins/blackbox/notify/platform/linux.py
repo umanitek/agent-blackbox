@@ -40,7 +40,8 @@ def server_running() -> Optional[bool]:
         if not found:
             continue
         try:
-            done = subprocess.run([found, *args], capture_output=True, text=True, timeout=TIMEOUT_SECONDS, check=False)
+            done = subprocess.run([found, *args], capture_output=True, text=True, encoding="utf-8", errors="replace",
+                                  timeout=TIMEOUT_SECONDS, check=False)
         except (OSError, subprocess.SubprocessError):
             continue
         if done.returncode == 0:
@@ -51,7 +52,7 @@ def server_running() -> Optional[bool]:
 def status() -> NotifierStatus:
     if not _tool():
         return NotifierStatus("none", False, "unknown", "notify-send is not installed; the dashboard shows every notification.")
-    if not os.environ.get("DBUS_SESSION_BUS_ADDRESS") and not os.path.exists(f"/run/user/{os.getuid()}/bus"):
+    if not os.environ.get("DBUS_SESSION_BUS_ADDRESS") and not os.path.exists(f"/run/user/{os.getuid()}/bus"):   # windows-footgun: ok — the Linux module, imported only on Linux
         return NotifierStatus("fallback", False, "unknown", "This session has no desktop to show a notification on.")
     running = server_running()
     if running is None:
