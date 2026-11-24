@@ -155,6 +155,30 @@ def _read_until(master: int, wanted: bytes, seconds: float = 20.0) -> bytes:
     return seen
 
 
+def _drain_until_exit(master: int, child, seconds: float = 30.0) -> bytes:
+    """Everything the child writes to its terminal until it exits. WHY keep reading: a process
+    closing its terminal waits until what it wrote there is read (macOS drains a tty on close), so
+    a test that stops reading and waits could hang the child it waits for."""
+    import select
+    import time
+    seen, deadline = b"", time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        ready, _, _ = select.select([master], [], [], 0.1)
+        chunk = b""
+        if ready:
+            try:
+                chunk = os.read(master, 4096)
+            except OSError:   # Linux: the child closed its side
+                chunk = b""
+            seen += chunk
+        if child.poll() is not None and not chunk:   # exited, and nothing more to read
+            break
+    if child.poll() is None:
+        child.kill()
+    child.wait(timeout=5)
+    return seen
+
+
 @pytest.mark.skipif(os.name != "posix", reason="a pty")
 def test_blackbox_approve_opens_a_real_terminal_and_reads_the_answer_typed_there():
     """KI-673 (Linux round L2): in the person's own SSH terminal `blackbox approve` said "needs your
@@ -171,9 +195,9 @@ def test_blackbox_approve_opens_a_real_terminal_and_reads_the_answer_typed_there
         asked = _read_until(master, b"[y/N] ")
         assert b"Approve this change?" in asked, (asked, child.stdout.read() if child.poll() is not None else b"")
         os.write(master, b"y\n")
-        shown = _read_until(master, b"FD=")
-        assert child.wait(timeout=20) == 0, (shown, child.stdout.read())
-        assert b"ANSWER=y FD=True" in shown + _read_until(master, b"\n", 2)
+        shown = _drain_until_exit(master, child)
+        assert child.returncode == 0, (shown, child.stdout.read())
+        assert b"ANSWER=y FD=True" in shown
     finally:
         os.close(master)
         os.close(slave)
