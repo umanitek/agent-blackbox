@@ -47,14 +47,17 @@ impl Helper {
     /// Applies *plan*: the resolver's lists, DNS, the filter, watching; records the version.
     /// An incomplete plan (`keep_verified`) keeps the verified lists last applied first.
     fn apply_plan(&self, mut plan: Plan) {
-        if let Ok(mut kept) = self.kept.lock() {
+        if let Ok(kept) = self.kept.lock() {
             plan.keep_from(&kept);
-            *kept = plan.kept();
+        }
+        let lists = plan.take_blocklists();
+        if let Ok(mut kept) = self.kept.lock() {
+            *kept = plan.kept(&lists);   // the resolver's own set, shared: never a second copy (KI-675)
         }
         let plan = &plan;
         let mut errors = vec![];
-        if let Ok(mut lists) = self.resolver.lists.write() {
-            *lists = plan.blocklists();
+        if let Ok(mut current) = self.resolver.lists.write() {
+            *current = lists;
         }
         let dns_error = self.set_dns(plan.dns.enabled);
         let filter_error = self.set_filter(plan);

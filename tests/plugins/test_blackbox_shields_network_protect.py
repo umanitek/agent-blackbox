@@ -256,3 +256,15 @@ def test_a_complete_graph_replaces_the_helpers_lists():
     found = SimpleNamespace(domains=frozenset({"evil.example.com"}), ips=frozenset(), complete=True, built_at=4.0)
     plan = enforcement.plan(_on(protections=(network_mode.DNS, network_mode.FIREWALL)), found)
     assert plan["keep_verified"] is False and plan["graph_complete"] is True
+
+
+def test_the_plan_version_is_the_sha256_of_its_whole_sorted_json_hashed_in_chunks():
+    """KI-675: the version is hashed chunk by chunk (a complete graph's plan is ~45 MB of JSON, and
+    serialising it whole made a ~100 MB peak); the helper compares versions across plugin builds,
+    so the digest must be exactly the whole text's."""
+    import hashlib
+    import json
+    found = SimpleNamespace(domains=frozenset(f"d{index}.example" for index in range(500)), ips=frozenset({"45.130.148.102"}))
+    on = enforcement.plan(_on(protections=(network_mode.DNS, network_mode.FIREWALL)), found)
+    content = {key: value for key, value in on.items() if key not in ("version", "unchanged")}
+    assert on["version"] == hashlib.sha256(json.dumps(content, sort_keys=True).encode("utf-8")).hexdigest()

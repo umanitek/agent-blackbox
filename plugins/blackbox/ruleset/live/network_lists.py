@@ -33,6 +33,7 @@ Usage::
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import threading
 import time
@@ -71,8 +72,41 @@ class NetworkIndicators:
     built_at: float
 
 
-#: One asset's indicators: (subject, type, normalised value).
-Rows = tuple[tuple[str, str, str], ...]
+@dataclass(frozen=True)
+class Rows:
+    """One asset's indicators, kept compact for as long as the dashboard runs (KI-675): row *i* is
+    ``values[i]`` (its normalised value — the very string the lists hold, never a copy), of type
+    ``kinds[i]`` (:data:`DOMAIN_KIND` / :data:`IP_KIND`, one byte), and its subject is known only
+    by an 8-byte digest at ``subjects[8*i : 8*i+8]`` (:func:`subject_digest`) — the subject is
+    needed only to apply a curator correction, which names it.
+
+    WHY: kept as ``(subject, type, value)`` tuples, the cache of a complete graph (1.19 M rows,
+    Linux round L2) held about 240 MB; this form holds about 20 MB. A digest collision could only
+    make one more row look corrected — with 2^64 digests and a few thousand corrections, never in
+    practice.
+    """
+
+    values: tuple[str, ...] = ()
+    kinds: bytes = b""
+    subjects: bytes = b""
+
+    def __len__(self) -> int:
+        return len(self.values)
+
+    def __iter__(self):
+        for index, value in enumerate(self.values):
+            yield self.subjects[8 * index:8 * index + 8], KIND_NAMES[self.kinds[index]], value
+
+
+#: The one-byte kinds of :class:`Rows` and the type name each stands for.
+DOMAIN_KIND, IP_KIND = 0, 1
+KIND_NAMES = ("domain", "ip")
+EMPTY_ROWS = Rows()
+
+
+def subject_digest(subject: str) -> bytes:
+    """The 8 bytes :class:`Rows` knows a subject by."""
+    return hashlib.blake2b(subject.encode("utf-8"), digest_size=8).digest()
 
 _lock = threading.Lock()
 _built = threading.Event()
@@ -93,15 +127,19 @@ def _read_asset(store: Any, graph: str) -> Optional[Rows]:
     if not answer.known:
         logger.info("blackbox: verified network indicators not read (%s); the rest wait", answer.reason)
         return None
-    rows = []
+    values: list[str] = []
+    kinds = bytearray()
+    subjects = bytearray()
     for row in answer.rows or []:
         ioc_type = extract_binding(row.get("type")).strip().lower()
         if ioc_type not in NETWORK_TYPES:
             continue
         value = threat_ids.normalize_ioc_value(ioc_type, extract_binding(row.get("value")))
         if value:
-            rows.append((extract_binding(row.get("t")), ioc_type, value))
-    return tuple(rows)
+            values.append(value)
+            kinds.append(DOMAIN_KIND if ioc_type == "domain" else IP_KIND)
+            subjects += subject_digest(extract_binding(row.get("t")))
+    return Rows(tuple(values), bytes(kinds), bytes(subjects))
 
 
 def read_assets(store: Any, wanted: Iterable[str], known: dict[str, Rows],
@@ -123,17 +161,21 @@ def read_assets(store: Any, wanted: Iterable[str], known: dict[str, Rows],
 
 def indicators_from(assets: dict[str, Rows], scope: VerifiedScope) -> NetworkIndicators:
     """The lists from per-asset *assets*, with the scope's corrections and revocations applied."""
-    domains: set[str] = set()
-    ips: set[str] = set()
-    for graph, rows in assets.items():
-        if graph not in scope.assertion_graphs:
-            continue
-        for subject, ioc_type, value in rows:
-            if subject in scope.suppressed_subjects or threat_ids.ioc_identifier(ioc_type, value) in scope.revoked_identifiers:
+    suppressed = {subject_digest(subject) for subject in scope.suppressed_subjects}
+    revoked = scope.revoked_identifiers
+
+    def kept(kind: str):
+        for graph, rows in assets.items():
+            if graph not in scope.assertion_graphs:
                 continue
-            (domains if ioc_type == "domain" else ips).add(value)
+            for subject, ioc_type, value in rows:
+                if ioc_type == kind and subject not in suppressed and threat_ids.ioc_identifier(ioc_type, value) not in revoked:
+                    yield value
+
+    # Each frozenset is built straight from the rows: no second, mutable copy of 1 M names at once.
+    domains, ips = frozenset(kept("domain")), frozenset(kept("ip"))
     read = sum(1 for graph in assets if graph in scope.assertion_graphs)
-    return NetworkIndicators(domains=frozenset(domains), ips=frozenset(ips), assets=len(scope.assertion_graphs),
+    return NetworkIndicators(domains=domains, ips=ips, assets=len(scope.assertion_graphs),
                              read=read, complete=read == len(scope.assertion_graphs), built_at=time.time())
 
 
@@ -152,7 +194,7 @@ def _build(scope: VerifiedScope, store_factory: Callable[[str], Any]) -> None:
     try:
         with _lock:
             known = dict(_state["assets"])
-        empty = {graph: () for graph in _without_indicators(scope) if graph not in known}
+        empty = {graph: EMPTY_ROWS for graph in _without_indicators(scope) if graph not in known}
         assets = read_assets(store_factory(scope.store_url), scope.assertion_graphs, {**known, **empty})
         found = indicators_from(assets, scope)
         with _lock:

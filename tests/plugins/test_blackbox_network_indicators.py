@@ -131,3 +131,34 @@ def test_graph_reachable_asks_the_store_once_per_window_and_says_down_when_it_do
     assert len(asked) == 2 and "?s ?p ?o" not in asked[0]
     assert nl.graph_reachable(None) is None
 
+
+
+def test_the_per_asset_cache_keeps_a_row_in_a_few_bytes_beside_the_lists_own_names():
+    """KI-675 (Linux round L2): with the whole graph synced (1,158,241 domains, 28,216 IPs) the
+    dashboard was 1.06 GB; the per-asset cache alone held ~240 MB as (subject, type, value) tuples.
+    A row now costs its digest, its kind and one slot — its name is the very string the lists hold."""
+    import gc
+    import tracemalloc
+    count = 20_000
+    rows = [(_row(A1, f"urn:defender:signal:{index:024x}", "domain", f"host-{index}.example-{index % 7}.xyz"), "IocSignal")
+            for index in range(count)]
+    gc.collect()
+    tracemalloc.start()
+    assets = nl.read_assets(_Store(rows), [A1], {})
+    found = nl.indicators_from(assets, _scope(graphs=(A1,)))
+    gc.collect()
+    with_cache, _ = tracemalloc.get_traced_memory()
+    del assets
+    gc.collect()
+    lists_only, _ = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+    assert len(found.domains) == count
+    per_row = (with_cache - lists_only) / count
+    assert per_row < 40, f"the cache costs {per_row:.0f} bytes a row (the old tuples cost ~200)"
+
+
+def test_a_correction_still_finds_its_subject_through_the_compact_cache():
+    assets = nl.read_assets(_Store(ROWS), [A1, A2], {})
+    corrected = nl.indicators_from(assets, _scope(suppressed_subjects=frozenset({"urn:t:1", "urn:t:5"})))
+    assert "evil.example" not in corrected.domains and "203.0.113.9" not in corrected.ips
+    assert "phish.example.net" in corrected.domains and "45.130.148.102" in corrected.ips

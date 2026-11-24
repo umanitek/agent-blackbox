@@ -164,8 +164,17 @@ def _build_plan(mode: ShieldMode, indicators: Optional[Any], cut_ips: tuple[str,
         "remote": remote_lock.plan_part(mode.enabled),
         "allow": sorted(allowed),
     }
-    version = hashlib.sha256(json.dumps(content, sort_keys=True).encode("utf-8")).hexdigest()
-    return {"version": version, "unchanged": False, **content}
+    return {"version": _version(content), "unchanged": False, **content}
+
+
+def _version(content: Mapping[str, Any]) -> str:
+    """The SHA-256 of *content*'s sorted-key JSON text, hashed chunk by chunk. WHY: a complete graph's
+    plan is ~45 MB of JSON; serialising it whole (and encoding that copy) to hash it made a ~100 MB
+    peak in the dashboard on every plan change (KI-675). The digest is the same as of the whole text."""
+    digest = hashlib.sha256()
+    for chunk in json.JSONEncoder(sort_keys=True).iterencode(content):
+        digest.update(chunk.encode("utf-8"))
+    return digest.hexdigest()
 
 
 def _int(value: Any, field: str) -> int:

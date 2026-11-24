@@ -1345,7 +1345,9 @@ Environment overrides:
   BLACKBOX_HERMES_SETUP=reuse|always|never, BLACKBOX_AUTO_DASHBOARD=0|1,
   BLACKBOX_SYNC_MODE=background|wait,
   BLACKBOX_SYSTEM_PROTECTION=ask|yes|no, BLACKBOX_HELPER_PATH + BLACKBOX_HELPER_SHA256
-  (a local helper binary and its checksum), BLACKBOX_HELPER_RELEASE_URL
+  (a local helper binary and its checksum), BLACKBOX_HELPER_RELEASE_URL,
+  BLACKBOX_BLAZEGRAPH_HEAP=4g (the Blazegraph store's Java heap cap, e.g. 2g or 3072m;
+  at least 1g; used when the store's container is made)
 
 Installs Blackbox in audit mode. Hermes model/API setup reuses existing keys by
 default and never opens the setup wizard unless BLACKBOX_HERMES_SETUP=always.

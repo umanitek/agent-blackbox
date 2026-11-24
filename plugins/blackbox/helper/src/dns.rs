@@ -38,13 +38,19 @@ pub enum ListKind {
     Block,
 }
 
+/// A set of lower-case names, as compact as Rust holds one: `Box<str>` (16 bytes) instead of
+/// `String` (24), each the plan's own allocation reused (KI-675).
+pub type Names = HashSet<Box<str>>;
+
 /// The names to refuse, with the user's allow list on top — exactly as the plan states them.
+/// *verified* (the graph's: a complete one is over a million names) is shared, never copied: the
+/// helper's kept lists ([`crate::plan::Kept`]) point at the same set.
 #[derive(Default)]
 pub struct Blocklists {
-    pub verified: HashSet<String>,
-    pub lists: HashSet<String>,
-    pub block: HashSet<String>,
-    pub allow: HashSet<String>,
+    pub verified: std::sync::Arc<Names>,
+    pub lists: Names,
+    pub block: Names,
+    pub allow: Names,
 }
 
 impl Blocklists {
@@ -505,7 +511,7 @@ mod tests {
     #[test]
     fn verdict_matches_parent_domains_and_respects_allow() {
         let mut lists = Blocklists::default();
-        lists.verified.insert("evil.example".into());
+        std::sync::Arc::make_mut(&mut lists.verified).insert("evil.example".into());
         lists.lists.insert("ads.tracker.com".into());
         lists.block.insert("blocked.test".into());
         assert_eq!(lists.verdict("cdn.evil.example."), Some(ListKind::Verified));
@@ -520,7 +526,7 @@ mod tests {
     #[test]
     fn a_blocked_name_is_answered_locally_and_recorded() {
         let resolver = Resolver::new(vec![]);
-        resolver.lists.write().unwrap().verified.insert("evil.example".into());
+        std::sync::Arc::make_mut(&mut resolver.lists.write().unwrap().verified).insert("evil.example".into());
         let answer = resolver.answer(&query("www.evil.example"), false).unwrap();
         assert_eq!(answer[3] & 0x0f, RCODE_NXDOMAIN);
         assert_eq!(resolver.events.lock().unwrap()[0].domain, "www.evil.example");
