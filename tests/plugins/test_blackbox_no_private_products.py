@@ -65,9 +65,10 @@ FORBIDDEN: tuple[tuple[str, re.Pattern[str]], ...] = (
     # how the app's collector works inside
     ("collector internals", re.compile(r"250\s?ms[^\n]{0,40}collector|collector[^\n]{0,40}250\s?ms", re.IGNORECASE)),
     # the app by its short name: a capitalised word that is not one of the public apps of that
-    # name, not a wallet's "<word> app" label (a quoted or "·"-joined label) and not a folder path
+    # name, not a wallet's "<word> app" label (a quoted or "·"-joined label), not a folder path and
+    # not the freedesktop.org desktop-file group ``<word> Entry]`` (the XDG standard's own name)
     ("short name", re.compile(r"(?<![\w~/.])(?<!Hermes )(?<!Docker )(?<!Remote )(?<!Jump )(?<!Windows )"
-                              r"(?<!\")(?<!· )" + _APP + r"\b(?!/)")),
+                              r"(?<!\")(?<!· )" + _APP + r"\b(?!/)(?! Entry\])")),
 )
 
 
@@ -139,6 +140,7 @@ def test_each_forbidden_form_is_caught(sample):
     "cp notes.md ~/" + _APP,
     "the person's desktop session",
     "an add-on registered beside the plugin, or a companion app",
+    'group == "[' + _APP + ' Entry]"',   # the freedesktop.org desktop-file group (XDG's own name)
 ])
 def test_the_public_forms_are_left_alone(sample):
     assert not _mentions(sample), sample
