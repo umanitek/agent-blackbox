@@ -149,6 +149,15 @@ def test_a_hook_folder_turned_into_a_link_is_not_written_through_but_said(protec
     assert "could not put it back safely" in _findings()[0]["evidence"]
 
 
+def test_an_agent_the_person_removed_is_forgotten_not_re_created(protected, monkeypatch):
+    home = protected
+    monkeypatch.setattr(agent_hosts.shutil, "which", lambda *args, **kwargs: None)   # no opencode command here
+    import shutil
+    shutil.rmtree(home / ".config" / "opencode")
+    assert agent_hooks.keep_hooks() == [] and not (home / ".config" / "opencode").exists()
+    assert hook_watch.known(f"opencode:{agent_hosts.BY_ID['opencode'].config_path(home)}") == {}
+
+
 def test_blackboxs_own_install_and_stop_are_never_taken_for_tampering(protected):
     assert agent_hooks.set_protection("opencode", True)["ok"]      # an upgrade rewrites the files
     assert agent_hooks.set_protection("cline", False)["ok"]        # the person stops protecting it

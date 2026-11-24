@@ -186,11 +186,17 @@ def keep_hooks() -> list[dict[str, Any]]:
     protects, Blackbox's hook that is gone or changed since Blackbox installed it is recorded as a
     HIGH finding and put back where the path is safe (``protect.hook_watch``; a file that is not
     Blackbox's in its place is moved aside, kept). A hook installed before this watch existed is
-    adopted as it is. Answers one ``{kind, restored, lost}`` per change found."""
+    adopted as it is; an agent the person removed from this machine (no folder, no command) is
+    forgotten, never re-created. Answers one ``{kind, restored, lost}`` per change found."""
     state = read_state()["agents"]
     done = []
     for host in HOSTS:
         if state.get(host.id, {}).get("disabled"):
+            continue
+        if not host.installed(_home()):
+            for variant in _variants(host):
+                if hook_watch.known(_watch_key(variant)):
+                    hook_watch.remember(_watch_key(variant), {})
             continue
         for variant in _variants(host):
             key = _watch_key(variant)
