@@ -97,6 +97,9 @@ fn protections(state: &State, failures: &Failures) -> Value {
 
 /// How long the resolver has to answer its self-test.
 const DNS_SELF_TEST_TIMEOUT: Duration = Duration::from_secs(1);
+/// How long the forwarding proof waits: two upstreams tried in turn, each for the resolver's own
+/// upstream timeout (3 s), plus a margin.
+const DNS_FORWARD_PROOF_TIMEOUT: Duration = Duration::from_secs(7);
 
 /// The upstreams to forward to, in order of trust: what the person set (*saved*, after a
 /// restart), else what the system resolves with now, else what this network handed out by DHCP.

@@ -87,6 +87,11 @@ impl Helper {
                 return Some("DNS Shield stays off: Blackbox's resolver is not answering on 127.0.0.1:53".into());
             }
             *self.resolver.upstreams.write().unwrap() = upstreams;
+            // The way out proven too, BEFORE the Mac depends on it (KI-649: switched while forwarding
+            // did not work yet, nothing resolved for about a minute). The next plan cycle retries.
+            if !dns::forwards(dns::LISTEN, DNS_FORWARD_PROOF_TIMEOUT) {
+                return Some("DNS Shield stays off for now: Blackbox's resolver could not reach this network's DNS servers yet; it tries again".into());
+            }
             self.enforcer.point_dns_at_shield().map(|saved| {
                 for (service, servers) in saved {
                     state.saved_dns.entry(service).or_insert(servers);

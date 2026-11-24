@@ -401,6 +401,31 @@ pub fn self_test(address: &str, timeout: Duration) -> bool {
     matches!(socket.recv_from(&mut buffer), Ok((size, _)) if size >= 12 && buffer[..2] == id && buffer[2] & 0x80 != 0)
 }
 
+/// Whether a resolver on *address* relays a real query to its upstreams and gets their answer
+/// within *timeout* (KI-649). [`self_test`] is answered locally, so it proves only that the resolver
+/// listens: the Mac's DNS was switched before the way out worked, and nothing resolved for about a
+/// minute. The query is the root zone's name servers (`.`, type NS): any recursive resolver answers
+/// it on any network, so the proof names no site. Any answer but SERVFAIL (which is also what the
+/// resolver says when no upstream answered) counts.
+pub fn forwards(address: &str, timeout: Duration) -> bool {
+    let mut id = [0u8; 2];
+    if getrandom::getrandom(&mut id).is_err() {
+        return false;
+    }
+    let Ok(socket) = UdpSocket::bind("127.0.0.1:0") else { return false };
+    let mut query = vec![id[0], id[1], 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0];
+    query.extend_from_slice(&[0, 0, TYPE_NS, 0, 1]);   // the root name, NS, IN
+    if socket.set_read_timeout(Some(timeout)).is_err() || socket.send_to(&query, address).is_err() {
+        return false;
+    }
+    let mut buffer = [0u8; MAX_PACKET];
+    matches!(socket.recv_from(&mut buffer),
+             Ok((size, _)) if size >= HEADER && buffer[..2] == id && buffer[2] & 0x80 != 0 && buffer[3] & 0x0f != RCODE_SERVFAIL)
+}
+
+/// The NS record type (the forwarding proof's question).
+const TYPE_NS: u8 = 2;
+
 /// A minimal standard query (one question, type A, class IN) for *name* with *id*.
 pub fn query_packet(id: [u8; 2], name: &str) -> Vec<u8> {
     let mut packet = vec![id[0], id[1], 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0];
@@ -541,6 +566,40 @@ mod tests {
         assert_eq!(ErrorPace::wait_for(40), MAX_ERROR_WAIT, "a long run waits the most, never more");
         pace.ok();
         assert_eq!(ErrorPace::wait_for(pace.run + 1), Duration::ZERO, "a success starts over");
+    }
+
+    /// A resolver serving on a free port with *upstreams*, once it is alive.
+    fn serving(upstreams: Vec<SocketAddr>) -> String {
+        let port = std::net::UdpSocket::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        let address = format!("127.0.0.1:{port}");
+        let resolver = Resolver::new(upstreams);
+        let (serving, at) = (resolver.clone(), address.clone());
+        thread::spawn(move || serve_on(serving, &at));
+        for _ in 0..50 {
+            if resolver.alive.load(std::sync::atomic::Ordering::SeqCst) { break; }
+            thread::sleep(Duration::from_millis(20));
+        }
+        address
+    }
+
+    #[test]
+    fn the_forwarding_proof_needs_an_upstream_that_answers_not_just_a_listening_resolver() {
+        // KI-649: the self-test passes with no way out at all; the forwarding proof does not.
+        let closed = std::net::UdpSocket::bind("127.0.0.1:0").unwrap().local_addr().unwrap();   // dropped: nothing answers there
+        let lonely = serving(vec![closed]);
+        assert!(self_test(&lonely, Duration::from_secs(1)), "listening");
+        assert!(!forwards(&lonely, Duration::from_secs(4)), "but no upstream answered");
+        let upstream = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        let upstream_at = upstream.local_addr().unwrap();
+        thread::spawn(move || {
+            let mut buffer = [0u8; MAX_PACKET];
+            while let Ok((size, from)) = upstream.recv_from(&mut buffer) {
+                let mut answer = buffer[..size].to_vec();
+                answer[2] |= 0x80;   // a NOERROR answer to the same question
+                let _ = upstream.send_to(&answer, from);
+            }
+        });
+        assert!(forwards(&serving(vec![upstream_at]), Duration::from_secs(4)));
     }
 
     #[test]

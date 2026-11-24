@@ -45,7 +45,19 @@ pub fn point_dns_at_shield() -> Result<BTreeMap<String, Vec<String>>, String> {
         run(NETWORKSETUP, &["-setdnsservers", &service, "127.0.0.1"])?;
         saved.insert(service, current);
     }
+    flush_dns_caches();
     Ok(saved)
+}
+
+/// The commands that make macOS drop the answers it cached from the servers it used before
+/// (KI-649): the directory-service cache, and mDNSResponder (which re-reads its servers on HUP).
+pub const FLUSH_COMMANDS: [(&str, &[&str]); 2] = [("/usr/bin/dscacheutil", &["-flushcache"]), ("/usr/bin/killall", &["-HUP", "mDNSResponder"])];
+
+/// Runs [`FLUSH_COMMANDS`]; a failure only means old answers expire on their own.
+fn flush_dns_caches() {
+    for (program, args) in FLUSH_COMMANDS {
+        let _ = run(program, args);
+    }
 }
 
 /// Puts back what [`point_dns_at_shield`] saved. Errors are collected, never stop the rest.
@@ -62,6 +74,7 @@ pub fn restore_dns(saved: &BTreeMap<String, Vec<String>>) -> Vec<String> {
             errors.push(error);
         }
     }
+    flush_dns_caches();
     errors
 }
 
