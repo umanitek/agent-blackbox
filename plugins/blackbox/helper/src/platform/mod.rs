@@ -11,11 +11,12 @@
 //!   login files, and the system watch (exposure, startup items, tampering, posture). Observing
 //!   never changes the system.
 //!
-//! `macos/` implements them today; `unsupported.rs` is the fallback for an OS with no port yet
-//! (it refuses to run, so nothing half-works). Each build compiles only its own OS's folder
-//! (`#[cfg(target_os)]` below): a macOS build contains no other OS's code. Porting = add
-//! `windows/` or `linux/` with the same two types and point `os` at it; nothing outside
-//! `platform/` changes. The guard test `tests/platform_guard.rs` fails if a system tool is named
+//! `macos/` implements them; `linux/` is being ported (its `SUPPORTED` stays false until its
+//! firewall, DNS and install are in, so the helper refuses to start there meanwhile);
+//! `unsupported.rs` is the fallback for an OS with no port yet (it refuses to run, so nothing
+//! half-works). Each build compiles only its own OS's folder (`#[cfg(target_os)]` below): a macOS
+//! build contains no other OS's code. Porting = add `windows/` with the same two types and point
+//! `os` at it; nothing outside `platform/` changes. The guard test `tests/platform_guard.rs` fails if a system tool is named
 //! outside this folder.
 //!
 //! Pattern: **Strategy** (the two traits, one implementation per OS) behind a **Facade** (this
@@ -34,9 +35,13 @@ pub mod sockets;
 pub mod macos;
 #[cfg(target_os = "macos")]
 use macos as os;
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
+pub mod linux;
+#[cfg(target_os = "linux")]
+use linux as os;
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 mod unsupported;
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 use unsupported as os;
 
 /// This OS's implementations of the two traits, the helper's root-owned folder, whether the

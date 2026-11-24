@@ -2,14 +2,14 @@
 every system tool its root helper calls, lives in a ``platform/`` folder — one module or folder
 per operating system — so a port adds its own and nothing else changes.
 
-* Python, ``plugins/blackbox/shields/network``: outside ``platform/`` no code names a macOS tool
+* Python, ``plugins/blackbox/shields/network``: outside ``platform/`` no code names a macOS or Linux tool
   (a command in a string the code uses; docstrings and comments may still mention one), and no
   code starts a program (``subprocess``, ``os.system`` and the like).
 * Python, ``plugins/blackbox/shields/files/sandbox`` (File Shield's agent sandbox, Layer 2): the
   same — ``sandbox-exec`` and every program it starts live in its ``platform/`` modules.
 * Python, ``plugins/blackbox/notify`` (native notifications): the same — the system notifier of each
   operating system is reached only from ``notify/platform/``.
-* Rust, ``plugins/blackbox/helper/src``: outside ``platform/`` no code names a macOS tool. The
+* Rust, ``plugins/blackbox/helper/src``: outside ``platform/`` no code names a macOS or Linux tool. The
   crate's own ``tests/platform_guard.rs`` checks the same under ``cargo test``; this one runs in
   the Python suite, which is where CI's Blackbox lane runs.
 
@@ -36,12 +36,22 @@ MACOS_TOOLS = frozenset({
     "sfltool", "kmutil", "systemextensionsctl", "ipconfig", "route", "defaults", "tailscale", "Tailscale",
     "sandbox-exec", "pgrep",
 })
+#: Linux tools only a platform/ module may name (the Linux port, design step 1).
+LINUX_TOOLS = frozenset({"ss", "ip", "nft", "xdg-open", "gio", "systemd-run", "bwrap", "xclip", "wl-paste"})
+#: Every OS's tools: what shared code may not run.
+OS_TOOLS = MACOS_TOOLS | LINUX_TOOLS
 #: Rust: the same tools, as the names or paths code spells them, and the macOS APIs.
 RUST_MACOS_NAMES = (
     "pfctl", "networksetup", "launchctl", "scutil", "nettop", "codesign", "spctl", "osascript", "netstat",
     "/usr/bin/log", "socketfilterfw", "systemsetup", "fdesetup", "csrutil", "sysadminctl", "/usr/bin/defaults",
     "plutil", "sfltool", "kmutil", "systemextensionsctl", "ipconfig", "/sbin/route", "libproc", "proc_pidpath",
     "sysctlbyname", "/library/", "/system/library", "launchdaemons",
+)
+#: Rust: the Linux tools, paths and APIs only ``helper/src/platform/linux/`` may name (the crate's
+#: ``tests/platform_guard.rs`` ``LINUX_ONLY``).
+RUST_LINUX_NAMES = (
+    "nft", "resolvectl", "systemctl", "busctl", "nmcli", "apparmor_parser", "restorecon", "/proc/net",
+    "/etc/systemd", "fanotify", "landlock", "sock_diag", "/var/lib/blackbox",
 )
 #: Calls that start a program.
 PROGRAM_STARTERS = frozenset({
@@ -64,7 +74,7 @@ def _docstrings(tree: ast.AST) -> set[int]:
 
 
 def python_problems(source: str) -> list[str]:
-    """Where *source* names a macOS tool in a command string, or starts a program."""
+    """Where *source* names a macOS or Linux tool in a command string, or starts a program."""
     tree = ast.parse(source)
     docstrings = _docstrings(tree)
     # A string is a command when it is a program's path ("/usr/bin/nettop") or the first item of
@@ -77,7 +87,7 @@ def python_problems(source: str) -> list[str]:
         if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in docstrings:
             words = node.value.split()
             command = words[0] if words and ("/" in words[0] or id(node) in argv_heads) else ""
-            if command and command.rsplit("/", 1)[-1] in MACOS_TOOLS:
+            if command and command.rsplit("/", 1)[-1] in OS_TOOLS:
                 problems.append(f"{line}: names {command}")
         elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name):
             if (node.func.value.id, node.func.attr) in PROGRAM_STARTERS:
@@ -97,11 +107,11 @@ def _rust_code(line: str) -> str:
 
 
 def rust_problems(source: str) -> list[str]:
-    """Where Rust *source* names a macOS tool, path or API in code."""
+    """Where Rust *source* names a macOS or Linux tool, path or API in code."""
     problems = []
     for number, line in enumerate(source.splitlines(), start=1):
         code = _rust_code(line).lower()
-        problems += [f"{number}: names {name}" for name in RUST_MACOS_NAMES if name in code]
+        problems += [f"{number}: names {name}" for name in (*RUST_MACOS_NAMES, *RUST_LINUX_NAMES) if name in code]
     return problems
 
 
@@ -140,11 +150,11 @@ def test_the_notifier_runs_programs_only_from_its_platform_modules():
     assert not problems, "move these into notify/platform/:\n" + "\n".join(problems)
 
 
-def test_the_helper_names_macos_tools_only_under_src_platform():
+def test_the_helper_names_os_tools_only_under_src_platform():
     files = _outside_platform(HELPER_SRC, "*.rs")
     assert len(files) > 5 and (HELPER_SRC / PLATFORM / "mod.rs").is_file()
     problems = [f"{path.relative_to(ROOT)}:{problem}" for path in files for problem in rust_problems(path.read_text(encoding="utf-8"))]
-    assert not problems, "move these into helper/src/platform/macos/:\n" + "\n".join(problems)
+    assert not problems, "move these into helper/src/platform/<os>/:\n" + "\n".join(problems)
 
 
 def test_the_python_scanner_catches_a_tool_or_a_program_start_and_passes_plain_code():
@@ -154,6 +164,9 @@ def test_the_python_scanner_catches_a_tool_or_a_program_start_and_passes_plain_c
     assert python_problems("import os\nos.system('x')\n") == ["2: starts a program (os.system)"]
     assert python_problems('TOOLS = ("/Applications/Tailscale.app/Contents/MacOS/Tailscale",)\n') == [
         "1: names /Applications/Tailscale.app/Contents/MacOS/Tailscale"]
+    assert python_problems("run(['ss', '-tuanpiH'])\n") == ["1: names ss"]
+    assert python_problems('NFT = "/usr/sbin/nft"\n') == ["1: names /usr/sbin/nft"]
+    assert python_problems("run(['xdg-open', url])\n") == ["1: names xdg-open"]
     clean = '"""Reads ``nettop`` and ``codesign`` (a docstring may say so)."""\n# lsof too\nEXT = {"ps", "log"}\nLABEL = "Tailscale SSH"\n'
     assert python_problems(clean) == []
 
@@ -162,6 +175,8 @@ def test_the_rust_scanner_ignores_comments_and_catches_code():
     assert rust_problems('let out = Command::new("/sbin/pfctl").arg("-s");') == ["1: names pfctl"]
     assert rust_problems('pub const HOME: &str = "/Library/Application Support/Blackbox";') == ["1: names /library/"]
     assert rust_problems('let url = "http://127.0.0.1"; run("/usr/sbin/netstat");') == ["1: names netstat"]
+    assert rust_problems('run("/usr/sbin/nft", &["-f", "-"]);') == ["1: names nft"]
+    assert rust_problems('const UNIT: &str = "/etc/systemd/system/x.service";') == ["1: names /etc/systemd"]
     assert rust_problems("//! reads pfctl's answer\n    // netstat failing costs nothing\nfn one() -> u8 { 1 }") == []
 
 

@@ -4,10 +4,14 @@
 //!
 //! * `os_calls_stay_in_platform` — no system tool, path or API is named in code outside
 //!   `src/platform/` (comments may mention them; code may not). A new system call goes into
-//!   `platform/macos/` behind the `Enforcer` / `Observer` traits in `platform/mod.rs`, with the
-//!   matching method in `unsupported.rs` (later `windows/`, `linux/`).
+//!   `platform/<os>/` behind the `Enforcer` / `Observer` traits in `platform/mod.rs`, with the
+//!   matching method in every other OS folder and in `unsupported.rs`.
+//! * `each_os_folder_names_only_its_own_os` — `platform/linux/` names no macOS tool and
+//!   `platform/macos/` no Linux one (a copy-paste between ports would otherwise compile away
+//!   silently on the other OS).
 //! * `each_os_folder_is_compiled_only_for_its_os` — `platform/mod.rs` declares `macos` only under
-//!   `#[cfg(target_os = "macos")]` and the fallback only under the opposite.
+//!   `#[cfg(target_os = "macos")]`, `linux` only under `#[cfg(target_os = "linux")]`, and the
+//!   fallback only for every other OS.
 //!
 //! The scanner itself is tested by `the_scanner_*`, so a broken guard cannot pass silently.
 
@@ -35,12 +39,24 @@ fn code_of(line: &str) -> &str {
     line
 }
 
-/// Every (line number, name) in *text* whose code names a macOS-only tool, path or API.
+/// Names of Linux tools, paths and APIs that only `platform/linux/` may use (lower case: the
+/// scan lower-cases each line).
+const LINUX_ONLY: &[&str] = &[
+    "nft", "resolvectl", "systemctl", "busctl", "nmcli", "apparmor_parser", "restorecon", "/proc/net",
+    "/etc/systemd", "fanotify", "landlock", "sock_diag", "/var/lib/blackbox",
+];
+
+/// Every (line number, name) in *text* whose code names a macOS-only or Linux-only tool, path or API.
 fn violations(text: &str) -> Vec<(usize, &'static str)> {
+    violations_of(text, &[MACOS_ONLY, LINUX_ONLY])
+}
+
+/// Every (line number, name) in *text* whose code names one of *lists*' names.
+fn violations_of(text: &str, lists: &[&[&'static str]]) -> Vec<(usize, &'static str)> {
     let mut found = Vec::new();
     for (index, line) in text.lines().enumerate() {
         let code = code_of(line).to_ascii_lowercase();
-        for name in MACOS_ONLY {
+        for name in lists.iter().flat_map(|list| list.iter()) {
             if code.contains(name) {
                 found.push((index + 1, *name));
             }
@@ -78,7 +94,31 @@ fn os_calls_stay_in_platform() {
             problems.push(format!("{}:{line} names `{name}`", file.strip_prefix(&src).unwrap().display()));
         }
     }
-    assert!(problems.is_empty(), "system calls outside src/platform/ — move them into platform/macos/:\n{}", problems.join("\n"));
+    assert!(problems.is_empty(), "system calls outside src/platform/ — move them into platform/<os>/:\n{}", problems.join("\n"));
+}
+
+#[test]
+fn each_os_folder_names_only_its_own_os() {
+    let platform = source().join("platform");
+    let mut problems = Vec::new();
+    let mut scanned = 0;
+    for (folder, foreign) in [("linux", MACOS_ONLY), ("macos", LINUX_ONLY)] {
+        // WHY the check: an installer's sparse checkout carries only its own OS's folder.
+        if !platform.join(folder).is_dir() {
+            continue;
+        }
+        let mut files = Vec::new();
+        rust_files(&platform.join(folder), &mut files);
+        scanned += files.len();
+        for file in &files {
+            let text = std::fs::read_to_string(file).expect("source readable");
+            for (line, name) in violations_of(&text, &[foreign]) {
+                problems.push(format!("{}:{line} names `{name}`", file.strip_prefix(&platform).unwrap().display()));
+            }
+        }
+    }
+    assert!(scanned > 0, "the scan found an OS folder's sources");
+    assert!(problems.is_empty(), "another OS's tool inside an OS folder:\n{}", problems.join("\n"));
 }
 
 #[test]
@@ -87,7 +127,8 @@ fn each_os_folder_is_compiled_only_for_its_os() {
     let lines: Vec<&str> = text.lines().map(str::trim).collect();
     let declared_after = |declaration: &str| lines.windows(2).filter(|pair| pair[1] == declaration).map(|pair| pair[0]).collect::<Vec<_>>();
     assert_eq!(declared_after("pub mod macos;"), vec![r#"#[cfg(target_os = "macos")]"#]);
-    assert_eq!(declared_after("mod unsupported;"), vec![r#"#[cfg(not(target_os = "macos"))]"#]);
+    assert_eq!(declared_after("pub mod linux;"), vec![r#"#[cfg(target_os = "linux")]"#]);
+    assert_eq!(declared_after("mod unsupported;"), vec![r#"#[cfg(not(any(target_os = "macos", target_os = "linux")))]"#]);
 }
 
 #[test]
@@ -97,6 +138,9 @@ fn the_scanner_flags_a_system_call_in_code() {
     assert_eq!(violations(r#"pub const HOME: &str = "/Library/Application Support/Blackbox";"#), vec![(1, "/library/")]);
     let url_then_call = r#"let url = "http://127.0.0.1"; run("/sbin/pfctl");"#;
     assert_eq!(violations(url_then_call), vec![(1, "pfctl")], "a // inside a string is not a comment");
+    assert_eq!(violations(r#"run("/usr/sbin/nft", &["-f", "-"]);"#), vec![(1, "nft")]);
+    assert_eq!(violations(r#"let unit = "/etc/systemd/system/x.service";"#), vec![(1, "/etc/systemd")]);
+    assert_eq!(violations(r#"let fd = unsafe { libc::socket(libc::AF_NETLINK, 0, libc::NETLINK_SOCK_DIAG) };"#), vec![(1, "sock_diag")]);
 }
 
 #[test]
