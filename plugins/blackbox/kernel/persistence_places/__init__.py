@@ -17,9 +17,21 @@ installs go through Blackbox's broker (``packages``), which runs brew outside.
 * :data:`PERSISTENCE_GLOBS` — the login-items and login-window preference files (``LoginHook``,
   ``AutoLaunchedApplicationDictionary`` start a program at login);
 * :func:`homebrew_folders` — the folders Homebrew owns in its prefix (Apple silicon
-  ``/opt/homebrew``, Intel ``/usr/local`` when Homebrew is there): its programs, kegs, casks,
-  taps and links. ``var`` (a brew service's data and logs) stays writable: a database the agent
-  runs keeps working.
+  ``/opt/homebrew``, Intel ``/usr/local``, Linux's ``/home/linuxbrew/.linuxbrew`` or
+  ``~/.linuxbrew`` when Homebrew is there): its programs, kegs, casks, taps and links. ``var``
+  (a brew service's data and logs) stays writable: a database the agent runs keeps working.
+* :data:`LINUX_PERSISTENCE_FOLDERS` / :data:`LINUX_PERSISTENCE_FILES` — Linux's (Linux deep
+  layers §3): systemd units (the person's and the system's), session and desktop autostart,
+  D-Bus activation, cron and ``at`` spools, sudoers, PAM, udev, the dynamic loader, profile
+  scripts, the X session files, desktop and compositor start files.
+
+Which OS a place belongs to: the lists above whose name starts ``LINUX_`` are Linux's; the
+``PERSISTENCE_*`` lists are macOS's, and the entries in :data:`SHARED_FOLDERS` /
+:data:`SHARED_FILES` (OpenSSH's login files, ``/etc/crontab``, XDG autostart) are both's.
+:func:`places_of` answers one OS's, and the sandbox renders only its own OS's
+(:func:`startup_places`: the Linux sandbox cannot even mask a path that does not exist there);
+the hook judgement reads EVERY OS's (:func:`hook_places`): a write to another OS's startup place
+is never an agent's everyday work, so refusing it costs nothing and keeps one list.
 
 The hook judgement reads the SAME places (private security finding
 ``2026-11-23-hooks-only-an-agent-appends-an-ssh-key-t``, round 5, High: a hooks-only agent appended
@@ -44,11 +56,12 @@ NOTE: with Homebrew's node, npm's global prefix IS ``/opt/homebrew`` — ``npm i
 sandbox is refused there (Blackbox's global-installs broker does it instead).
 
 Paths use ``{home}`` for the person's home folder. Pure: no OS calls but ``os.path.isdir`` on the
-Homebrew prefixes.
+Homebrew prefixes (and ``sys.platform`` for the default OS).
 
 Usage::
 
-    folders, files, globs = startup_places("/Users/me")       # the sandbox profile's deny list
+    folders, files, globs = startup_places("/Users/me")       # this OS's: the sandbox profile's deny list
+    startup_places("/home/me", system="linux")               # Linux's
     places = hook_places("/Users/me")                         # the same, for the hook judgement
     describe("/Users/me/.ssh/authorized_keys")                # "an SSH login file"
 """
@@ -57,40 +70,87 @@ from __future__ import annotations
 
 import os
 import re
+import sys
 from dataclasses import dataclass
 
 from .. import shell_path
 
+#: The places every OS has (OpenSSH's login files, the system cron table, XDG autostart).
+SHARED_FOLDERS = ("{home}/.config/autostart",)
+SHARED_FILES = ("{home}/.ssh/rc", "{home}/.ssh/environment", "{home}/.ssh/authorized_keys", "{home}/.ssh/authorized_keys2",
+                "/etc/crontab")
+#: macOS's places (with the shared ones: the Seatbelt profile's whole list, unchanged in order).
 PERSISTENCE_FOLDERS = (
     "{home}/Library/LaunchAgents", "{home}/Library/LaunchDaemons", "/Library/LaunchAgents", "/Library/LaunchDaemons",
     "{home}/Library/Application Support/com.apple.backgroundtaskmanagementagent", "/private/var/db/com.apple.backgroundtaskmanagement",
-    "/usr/lib/cron", "/private/var/at", "/Library/StartupItems", "{home}/Library/StartupItems", "{home}/.config/autostart",
+    "/usr/lib/cron", "/private/var/at", "/Library/StartupItems", "{home}/Library/StartupItems", *SHARED_FOLDERS,
 )
-PERSISTENCE_FILES = ("{home}/.ssh/rc", "{home}/.ssh/environment", "{home}/.ssh/authorized_keys", "{home}/.ssh/authorized_keys2",
-                     "/etc/crontab")
+PERSISTENCE_FILES = SHARED_FILES
 PERSISTENCE_GLOBS = ("{home}/Library/Preferences/com.apple.loginitems*", "{home}/Library/Preferences/com.apple.LSSharedFileList*",
                      "{home}/Library/Preferences/com.apple.loginwindow*", "{home}/Library/Preferences/loginwindow*")
-#: Homebrew's prefixes and the folders it owns in each (``var`` left out on purpose, see the module doc).
-HOMEBREW_PREFIXES = ("/opt/homebrew", "/usr/local")
+#: Linux's places (design "Linux deep layers" §3): what systemd, the session, the desktop, cron /
+#: ``at``, sudo, PAM, udev, the dynamic loader and the login shells start or trust.
+LINUX_PERSISTENCE_FOLDERS = (
+    "{home}/.config/systemd/user", "{home}/.local/share/systemd/user", "/etc/systemd/system", "/etc/systemd/user",
+    "{home}/.config/environment.d", "/etc/xdg/autostart", "{home}/.local/share/dbus-1/services",
+    "/etc/cron.d", "/etc/cron.hourly", "/etc/cron.daily", "/etc/cron.weekly", "/etc/cron.monthly",
+    "/var/spool/cron", "/var/spool/cron/atjobs", "/var/spool/at",
+    "/etc/sudoers.d", "/etc/udev/rules.d", "/etc/ld.so.conf.d", "/etc/pam.d", "/etc/profile.d", "/etc/update-motd.d",
+    "/etc/NetworkManager/dispatcher.d", "/etc/apt/apt.conf.d", "/etc/modprobe.d", "/etc/init.d",
+    "{home}/.local/share/gnome-shell/extensions", "{home}/.config/plasma-workspace/env",
+    "{home}/.config/plasma-workspace/shutdown", "{home}/.config/autostart-scripts", "{home}/.local/share/applications",
+)
+LINUX_PERSISTENCE_FILES = (
+    "/etc/anacrontab", "/etc/sudoers", "/etc/ld.so.preload", "/etc/environment", "/etc/rc.local", "/etc/security/pam_env.conf",
+    "{home}/.xprofile", "{home}/.xsessionrc", "{home}/.xinitrc", "{home}/.xsession", "{home}/.pam_environment",
+    "{home}/.config/mimeapps.list", "{home}/.config/dconf/user", "{home}/.config/i3/config", "{home}/.config/sway/config",
+    "{home}/.config/hypr/hyprland.conf", "{home}/.config/openbox/autostart",
+)
+#: :func:`places_of`'s answer for every OS at once (the hook judgement's).
+EVERY_SYSTEM = "*"
+
+#: Homebrew's prefixes and the folders it owns in each (``var`` left out on purpose, see the module
+#: doc). Linux's two (``/home/linuxbrew/.linuxbrew``, or ``~/.linuxbrew`` for one person) beside
+#: the Mac's; a prefix counts only where Homebrew is installed (:func:`homebrew_folders`).
+HOMEBREW_PREFIXES = ("/opt/homebrew", "/usr/local", "/home/linuxbrew/.linuxbrew", "{home}/.linuxbrew")
 HOMEBREW_OWNED = ("bin", "sbin", "Cellar", "Caskroom", "Library", "opt", "etc", "lib", "share", "include", "Frameworks",
                   "Homebrew")
 
 
-def homebrew_folders(prefixes: tuple[str, ...] = HOMEBREW_PREFIXES) -> list[str]:
+def homebrew_folders(prefixes: tuple[str, ...] = HOMEBREW_PREFIXES, home: str = "") -> list[str]:
     """The folders Homebrew owns in each prefix where it is installed (``<prefix>/Homebrew`` or
-    ``<prefix>/bin/brew`` there)."""
+    ``<prefix>/bin/brew`` there). A ``{home}`` prefix is the person's at *home* (none without it)."""
     out = []
-    for prefix in prefixes:
+    for template in prefixes:
+        if "{home}" in template and not home:
+            continue
+        prefix = template.replace("{home}", home.rstrip("/"))
         if os.path.isdir(os.path.join(prefix, "Homebrew")) or os.path.exists(os.path.join(prefix, "bin", "brew")):
             out += [os.path.join(prefix, name) for name in HOMEBREW_OWNED]
     return out
 
 
-def startup_places(home: str, prefixes: tuple[str, ...] = HOMEBREW_PREFIXES) -> tuple[list[str], list[str], list[str]]:
-    """``(folders, files, globs)`` closed to writes inside the sandbox for the person at *home*."""
+def places_of(system: str | None = None) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
+    """``(folders, files, globs)`` templates of *system* (a ``sys.platform`` value; default this
+    machine's; :data:`EVERY_SYSTEM` for every OS's together). An OS with no list of its own reads
+    macOS's, as before Linux had one."""
+    here = sys.platform if system is None else system
+    if here == EVERY_SYSTEM:
+        return (tuple(dict.fromkeys(PERSISTENCE_FOLDERS + LINUX_PERSISTENCE_FOLDERS)),
+                tuple(dict.fromkeys(PERSISTENCE_FILES + LINUX_PERSISTENCE_FILES)), PERSISTENCE_GLOBS)
+    if here.startswith("linux"):
+        return LINUX_PERSISTENCE_FOLDERS + SHARED_FOLDERS, SHARED_FILES + LINUX_PERSISTENCE_FILES, ()
+    return PERSISTENCE_FOLDERS, PERSISTENCE_FILES, PERSISTENCE_GLOBS
+
+
+def startup_places(home: str, prefixes: tuple[str, ...] = HOMEBREW_PREFIXES,
+                   system: str | None = None) -> tuple[list[str], list[str], list[str]]:
+    """``(folders, files, globs)`` closed to writes inside the sandbox for the person at *home*, on
+    *system* (default this machine's; see :func:`places_of`)."""
     def fill(paths: tuple[str, ...]) -> list[str]:
         return [path.replace("{home}", home.rstrip("/")) for path in paths]
-    return fill(PERSISTENCE_FOLDERS) + homebrew_folders(prefixes), fill(PERSISTENCE_FILES), fill(PERSISTENCE_GLOBS)
+    folders, files, globs = places_of(system)
+    return fill(folders) + homebrew_folders(prefixes, home), fill(files), fill(globs)
 
 
 #: The program folders the person owns that are commonly on PATH: a program an agent leaves there
@@ -100,8 +160,9 @@ def startup_places(home: str, prefixes: tuple[str, ...] = HOMEBREW_PREFIXES) -> 
 #: (``helper/src/platform/macos/observe/run_later.rs`` ``USER_PROGRAM_FOLDERS``) watches a subset
 #: of them (a parity test holds that).
 USER_TOOL_FOLDERS = ("{home}/.local/bin", "{home}/.local/pipx", "{home}/.cargo/bin", "{home}/go/bin", "{home}/.bun/bin",
-                     "{home}/.npm-global", "{home}/.nvm/versions", "{home}/.deno/bin", "{home}/bin")
-USER_TOOL_GLOBS = ("{home}/Library/Python/*/bin", "{home}/.gem/ruby/*/bin")
+                     "{home}/.npm-global", "{home}/.nvm/versions", "{home}/.deno/bin", "{home}/bin",
+                     "{home}/.local/share/flatpak")
+USER_TOOL_GLOBS = ("{home}/Library/Python/*/bin", "{home}/.gem/ruby/*/bin", "{home}/.local/share/gem/ruby/*/bin")
 #: The most PATH folders read (a PATH is short; a huge one is not trusted further).
 MAX_PATH_FOLDERS = 64
 
@@ -149,10 +210,10 @@ class HookPlaces:
 
 
 def hook_places(home: str, prefixes: tuple[str, ...] = HOMEBREW_PREFIXES) -> HookPlaces:
-    """The places of :func:`startup_places` (and the shell startup files) for the person at *home*,
-    as the hook judgement reads them."""
-    folders, files, globs = startup_places(home, prefixes)
-    programs = tuple(homebrew_folders(prefixes))
+    """The places of :func:`startup_places` — EVERY OS's (see the module doc) — and the shell
+    startup files for the person at *home*, as the hook judgement reads them."""
+    folders, files, globs = startup_places(home, prefixes, EVERY_SYSTEM)
+    programs = tuple(homebrew_folders(prefixes, home))
     starts = [place for place in folders if place not in programs] + files + globs + shell_startup_files(home)
     return HookPlaces(starts=_with_real_spellings(starts), programs=_with_real_spellings(programs))
 
@@ -176,7 +237,21 @@ def _with_real_spellings(places: list[str] | tuple[str, ...]) -> tuple[str, ...]
 #: ``launchctl bootstrap gui/$UID <plist>`` loaded a job), so every word is read for it.
 _ONLY_LOOK = {"crontab": frozenset({"-l", "-r"}), "at": frozenset({"-l", "-r", "-c", "-d"}), "batch": frozenset()}
 _LOADS = {"launchctl": frozenset({"load", "bootstrap", "submit", "enable", "kickstart"}),
-          "systemctl": frozenset({"enable", "link"})}
+          "systemctl": frozenset({"enable", "link", "start", "restart", "edit", "daemon-reload", "reenable", "preset",
+                                  "add-wants", "add-requires"})}
+#: Linux (deep layers §3): ``systemd-run`` makes a transient unit that runs OUTSIDE the agent's
+#: session (only its help and version are looks); ``loginctl enable-linger`` keeps the person's
+#: units running with nobody logged in; a D-Bus call to systemd's ``StartTransientUnit`` is
+#: ``systemd-run`` by hand; ``gnome-extensions install|enable`` loads code into the desktop shell.
+_ONLY_HELP = frozenset({"-h", "--help", "--version"})
+_LINGER = frozenset({"enable-linger"})
+_BUS_CALLERS = frozenset({"busctl", "gdbus", "dbus-send"})
+_TRANSIENT_UNIT = "StartTransientUnit"
+_EXTENSION_CHANGES = frozenset({"install", "enable"})
+#: A desktop setting that runs something: a custom keyboard shortcut's command, an autostart
+#: entry, the shell's enabled extensions (``gsettings set …`` / ``dconf write|load …``).
+_SETTING_WRITES = {"gsettings": frozenset({"set"}), "dconf": frozenset({"write", "load"})}
+_RUNS_SETTING = re.compile(r"custom-keybinding|autostart|enabled-extensions", re.IGNORECASE)
 #: ``sfltool``'s verbs that add a login item or reset the record of them (the person's own
 #: approvals of what starts at login) — security round 6: ``sfltool add-item`` passed the hook.
 _SFLTOOL_CHANGES = frozenset({"add-item", "resetbtm"})
@@ -190,7 +265,8 @@ _LOGIN_DOMAIN = re.compile(r"(?:^|[/.])(?:loginwindow|loginitems)(?:\.plist)?$",
 #: Programs that run another program given as their words.
 _RUNS_ANOTHER = frozenset({"xargs", "parallel", "watch"})
 #: Every program :func:`schedules` judges.
-_SCHEDULERS = frozenset({*_ONLY_LOOK, *_LOADS, "osascript", "sfltool", "defaults"})
+_SCHEDULERS = frozenset({*_ONLY_LOOK, *_LOADS, "osascript", "sfltool", "defaults", "systemd-run", "loginctl",
+                         *_BUS_CALLERS, "gnome-extensions", *_SETTING_WRITES})
 
 
 def _program(word: str) -> str:
@@ -205,7 +281,12 @@ def schedules(name: str, rest: list[str]) -> bool:
     """True when command *name* (its program name, lower case) with words *rest* leaves a job that
     starts by itself later: ``crontab -``, ``at now + 1 hour``, ``launchctl submit …``,
     ``systemctl --user enable x``, ``osascript -e '… make login item …'``, ``sfltool add-item …``
-    (or ``resetbtm``), ``defaults write com.apple.loginwindow …`` / ``… loginitems …``."""
+    (or ``resetbtm``), ``defaults write com.apple.loginwindow …`` / ``… loginitems …``; on Linux
+    ``systemd-run …``, ``loginctl enable-linger``, ``busctl … StartTransientUnit …``,
+    ``gnome-extensions enable x``, ``gsettings set … custom-keybindings …``."""
+    linux = _linux_schedules(name, rest)
+    if linux is not None:
+        return linux
     if name in _RUNS_ANOTHER:   # ``xargs launchctl load``: the command it runs, with its words
         found = next((index for index, word in enumerate(rest) if _program(word) in _SCHEDULERS), None)
         return found is not None and schedules(_program(rest[found]), rest[found + 1:])
@@ -213,8 +294,8 @@ def schedules(name: str, rest: list[str]) -> bool:
         return not (rest and rest[0] in _ONLY_LOOK[name])
     if name == "launchctl":
         return any(word.lower() in _LOADS[name] for word in rest)
-    if name in _LOADS:
-        return any(word in _LOADS[name] for word in rest[:3]) and (name != "systemctl" or "--user" in rest)
+    if name in _LOADS:   # systemctl: a system unit needs root (sudo is judged on its own)
+        return any(word in _LOADS[name] for word in rest) and "--user" in rest
     if name == "osascript":
         return any(_LOGIN_ITEM.search(word) for word in rest)
     if name == "sfltool":
@@ -223,6 +304,22 @@ def schedules(name: str, rest: list[str]) -> bool:
         verb = next((at for at, word in enumerate(rest) if word.lower() in _DEFAULTS_WRITES), None)
         return verb is not None and any(_LOGIN_DOMAIN.search(word) for word in rest[verb + 1:verb + 4] if not word.startswith("-"))
     return False
+
+
+def _linux_schedules(name: str, rest: list[str]) -> bool | None:
+    """:func:`schedules` for Linux's schedulers; None for a program that is not one of them."""
+    if name == "systemd-run":
+        return not (rest and all(word in _ONLY_HELP for word in rest))
+    if name == "loginctl":
+        return any(word in _LINGER for word in rest)
+    if name in _BUS_CALLERS:
+        return any(_TRANSIENT_UNIT in word for word in rest)
+    if name == "gnome-extensions":
+        return bool(rest) and rest[0] in _EXTENSION_CHANGES
+    if name in _SETTING_WRITES:
+        verb = next((at for at, word in enumerate(rest) if word in _SETTING_WRITES[name]), None)
+        return verb is not None and any(_RUNS_SETTING.search(word) for word in rest[verb + 1:verb + 4])
+    return None
 
 
 #: The ``fileaccess`` category of an agent writing one of these places (``fileaccess:<tool>:startup-item``).
@@ -239,8 +336,21 @@ _KINDS = (
     ("/.ssh/", "an SSH login file"),
     ("LaunchAgents", "a launchd job"), ("LaunchDaemons", "a launchd job"),
     ("backgroundtaskmanagement", "a login item"), ("com.apple.loginitems", "a login item"),
-    ("LSSharedFileList", "a login item"), ("StartupItems", "a startup item"), ("autostart", "a startup item"),
+    ("LSSharedFileList", "a login item"), ("StartupItems", "a startup item"),
+    # Linux (deep layers §3)
+    ("/systemd/", "a systemd unit"), ("/.linuxbrew/", "Homebrew's programs"),
+    ("/xdg/autostart", "a desktop autostart entry"), ("/.config/autostart", "a desktop autostart entry"),
+    ("autostart-scripts", "a desktop autostart entry"), ("plasma-workspace", "a desktop autostart entry"),
+    ("gnome-shell/extensions", "a desktop autostart entry"), ("/openbox/autostart", "a desktop autostart entry"),
+    ("autostart", "a startup item"),
+    ("/atjobs", "a scheduled job (at)"), ("/spool/at", "a scheduled job (at)"),
     ("cron", "a scheduled job (cron)"), ("/var/at", "a scheduled job (at)"),
+    ("/environment.d", "a session start file"), ("/.xprofile", "a session start file"),
+    ("/.xsession", "a session start file"), ("/.xinitrc", "a session start file"), ("/.pam_environment", "a session start file"),
+    ("/dbus-1/services", "a session start file"), ("/.local/share/applications", "a session start file"),
+    ("/mimeapps.list", "a session start file"), ("/dconf/user", "a session start file"), ("/.config/i3/", "a session start file"),
+    ("/.config/sway/", "a session start file"), ("/.config/hypr/", "a session start file"),
+    ("/etc/", "a root configuration file"),
 )
 
 
@@ -258,12 +368,17 @@ def describe(path: str) -> str:
 
 
 __all__ = [
+    "EVERY_SYSTEM",
     "HOMEBREW_OWNED",
     "HOMEBREW_PREFIXES",
+    "LINUX_PERSISTENCE_FILES",
+    "LINUX_PERSISTENCE_FOLDERS",
     "MAX_PATH_FOLDERS",
     "PERSISTENCE_FILES",
     "PERSISTENCE_FOLDERS",
     "PERSISTENCE_GLOBS",
+    "SHARED_FILES",
+    "SHARED_FOLDERS",
     "STARTUP_ITEM",
     "USER_TOOL_FOLDERS",
     "USER_TOOL_GLOBS",
@@ -272,6 +387,7 @@ __all__ = [
     "homebrew_folders",
     "hook_places",
     "is_startup_item",
+    "places_of",
     "schedules",
     "shell_startup_files",
     "startup_places",
