@@ -26,11 +26,13 @@
 //! Blackbox's hooks only and one line on stderr — an agent always starts. The supervisor
 //! ([`supervisor`]) passes the agent's exit code and the signals sent to it.
 //!
-//! `blackbox-sandbox probe` prints what this machine allows ([`probe`]).
+//! `blackbox-sandbox probe` prints what this machine allows ([`probe`]). On Ubuntu 23.10+ the
+//! helper's install adds the AppArmor rule that lets the launcher make its namespaces ([`apparmor`]).
 //!
 //! Pattern: **Template Method** — [`run`] is the fixed order of steps; each step is a function of
 //! [`system`] (the kernel calls) fed by the pure planners.
 
+pub mod apparmor;
 pub mod filter;
 pub mod plan;
 pub mod policy;
