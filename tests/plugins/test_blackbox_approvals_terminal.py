@@ -117,3 +117,65 @@ def test_saying_no_proves_nothing(monkeypatch):
 @pytest.mark.parametrize("command", ["blackbox approve", "hermes blackbox approve", "echo y | blackbox approve"])
 def test_an_agent_may_not_run_blackbox_approve(command):
     assert guard_commands.switches_off(command)
+
+
+#: The child: a new session whose ONLY terminal is the pty (stdin/stdout are not it), then
+#: `blackbox approve`'s own entry with the dashboard part replaced by one question on the terminal.
+_CHILD = """
+import fcntl, os, sys, termios
+os.setsid()
+fd = os.open(sys.argv[1], os.O_RDWR)
+fcntl.ioctl(fd, termios.TIOCSCTTY, 0)
+from plugins.blackbox.approvals import approve_command as command
+def approve(url, tty):
+    print("Approve this change? [y/N] ", end="", file=tty, flush=True)
+    answer = tty.readline().strip()
+    print(f"ANSWER={answer} FD={tty.fileno() >= 0}", file=tty, flush=True)
+    return 0 if answer == "y" else 1
+command.approve = approve
+sys.exit(command.cmd_approve(None))
+"""
+
+
+def _read_until(master: int, wanted: bytes, seconds: float = 20.0) -> bytes:
+    import select
+    import time
+    seen, deadline = b"", time.monotonic() + seconds
+    while wanted not in seen and time.monotonic() < deadline:
+        ready, _, _ = select.select([master], [], [], max(0.0, deadline - time.monotonic()))
+        if not ready:
+            break
+        try:
+            chunk = os.read(master, 4096)
+        except OSError:   # Linux: the child closed its side
+            break
+        if not chunk:
+            break
+        seen += chunk
+    return seen
+
+
+@pytest.mark.skipif(os.name != "posix", reason="a pty")
+def test_blackbox_approve_opens_a_real_terminal_and_reads_the_answer_typed_there():
+    """KI-673 (Linux round L2): in the person's own SSH terminal `blackbox approve` said "needs your
+    own terminal" and exited 2 — ``open('/dev/tty', 'r+')`` raises "not seekable" on EVERY
+    terminal, and the fake tty of the tests above never opened one. Here a REAL pty is the child's
+    controlling terminal (LES-153), and what is typed there is the answer."""
+    import pty
+    import subprocess
+    import sys
+    master, slave = pty.openpty()
+    child = subprocess.Popen([sys.executable, "-c", _CHILD, os.ttyname(slave)], stdin=subprocess.DEVNULL,
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, cwd=Path(__file__).resolve().parents[2])
+    try:   # the slave stays open here until the end: closed before the child opens it, macOS ends the pty
+        asked = _read_until(master, b"[y/N] ")
+        assert b"Approve this change?" in asked, (asked, child.stdout.read() if child.poll() is not None else b"")
+        os.write(master, b"y\n")
+        shown = _read_until(master, b"FD=")
+        assert child.wait(timeout=20) == 0, (shown, child.stdout.read())
+        assert b"ANSWER=y FD=True" in shown + _read_until(master, b"\n", 2)
+    finally:
+        os.close(master)
+        os.close(slave)
+        if child.poll() is None:
+            child.kill()

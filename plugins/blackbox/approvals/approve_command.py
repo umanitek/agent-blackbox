@@ -15,6 +15,7 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import subprocess
 import urllib.error
@@ -80,9 +81,24 @@ def approve(url: str, tty: TextIO, run: Run = _sudo) -> int:
     return 1 if failed else 0
 
 
+#: The person's own terminal: never a pipe, so a script or an agent can not answer.
+TERMINAL = "/dev/tty"
+
+
+def open_terminal(path: str = TERMINAL) -> TextIO:
+    """*path* open for reading AND writing as text, with a real descriptor (sudo reads the password
+    from it). WHY not ``open(path, "r+")``: Python's text read-write mode needs a SEEKABLE file and
+    a terminal is not one — it raised "File or stream is not seekable" on every terminal, so
+    ``blackbox approve`` always said it had none (KI-673, Linux round L2). An unbuffered binary
+    handle under a text wrapper reads a line as the terminal hands it over and writes at once.
+    Raises OSError when there is no terminal."""
+    raw = open(path, "r+b", buffering=0)   # the caller closes the wrapper, and with it this handle
+    return io.TextIOWrapper(raw, encoding="utf-8", errors="replace", line_buffering=True, write_through=True)
+
+
 def cmd_approve(_args: argparse.Namespace) -> int:
     try:
-        tty = open("/dev/tty", "r+", encoding="utf-8")   # the person's own terminal, never a pipe
+        tty = open_terminal()
     except OSError:
         print("blackbox approve needs your own terminal (it asks you there, and sudo asks for your password).")
         return 2
