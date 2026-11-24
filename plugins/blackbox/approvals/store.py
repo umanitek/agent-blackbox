@@ -89,6 +89,7 @@ class Approvals:
         self._key: Optional[bytes] = None
         self._held: OrderedDict[str, Held] = OrderedDict()
         self._prompted: set[str] = set()   # requests that already raised the system prompt
+        self._challenges: dict[str, str] = {}   # request id -> its terminal challenge (``challenge``)
 
     # ------------------------------------------------------------------ pairing
 
@@ -166,6 +167,23 @@ class Approvals:
                 return False
             held.approved_at = self._clock()
             return True
+
+    def challenge(self, request_id: str) -> Optional[str]:
+        """A one-time challenge for confirming *request_id* from the person's own terminal
+        (:mod:`.terminal`): claims its one prompt, like :meth:`mark_prompted`. None when it was
+        already asked, or is unknown."""
+        if not self.mark_prompted(request_id):
+            return None
+        with self._lock:
+            nonce = secrets.token_hex(16)
+            self._challenges[str(request_id)] = nonce
+            return nonce
+
+    def confirm_from_terminal(self, request_id: str, proved: Callable[[str, str], bool]) -> bool:
+        """Approve *request_id* when *proved(request_id, its challenge)* — root wrote the challenge."""
+        with self._lock:
+            nonce = self._challenges.pop(str(request_id), "")
+        return bool(nonce) and proved(str(request_id), nonce) and self.approve_confirmed(request_id)
 
     def mark_prompted(self, request_id: str) -> bool:
         """Claim the one system prompt *request_id* may raise (False: already asked, or unknown)."""

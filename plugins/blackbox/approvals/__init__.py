@@ -16,7 +16,8 @@ Usage::
 
 from __future__ import annotations
 
-from . import system_prompt
+from . import system_prompt, terminal
+from .approve_command import add_approve_parser
 from .store import Approvals, Held, answer_message, pair_message, sign
 from .weakening import SECTION_JUDGES, Current, gated, reasons
 
@@ -24,4 +25,4 @@ from .weakening import SECTION_JUDGES, Current, gated, reasons
 STORE = Approvals()
 
 
-__all__ = ["SECTION_JUDGES", "STORE", "Approvals", "Current", "Held", "answer_message", "gated", "pair_message", "reasons", "sign", "system_prompt"]
+__all__ = ["SECTION_JUDGES", "STORE", "Approvals", "Current", "Held", "add_approve_parser", "answer_message", "gated", "pair_message", "reasons", "sign", "system_prompt", "terminal"]

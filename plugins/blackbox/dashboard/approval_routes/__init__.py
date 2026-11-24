@@ -37,6 +37,14 @@ MAX_BODY_BYTES = 256 * 1024
 #: The answer to a change that waits for the person's approval.
 HELD_STATUS = 428
 NOT_PAIRED = "Turning protection down needs your confirmation: confirm it with your password, or in a paired companion app."
+def not_paired() -> str:
+    """What a held change says with no companion app: on a Linux machine without a password
+    dialog, how to confirm it from the person's own terminal (KI-659)."""
+    if approvals.terminal.needed():
+        return f"Turning protection down needs your confirmation: {approvals.terminal.HOW}, or confirm it in a paired companion app."
+    return NOT_PAIRED
+
+
 ASK = "Waiting for your confirmation in your companion app (or confirm it with your password)."
 #: The page script (served at ``/approvals.js``; it lives with the dashboard's other static files).
 SCRIPT = Path(__file__).resolve().parents[1] / "static" / "approvals.js"
@@ -71,7 +79,7 @@ class Gate:
             await self.app(scope, _replay(body, False), send)
             return
         held = self.store.hold(route, body, reasons)
-        message = ASK if self.store.paired() else NOT_PAIRED
+        message = ASK if self.store.paired() else not_paired()
         await _json(send, HELD_STATUS, {"ok": False, "approval": held.as_json(), "errors": [message, *reasons]})
 
 
@@ -127,6 +135,7 @@ def register(app: Any, _swr: Any = None, store: Approvals | None = None) -> None
     @app.get("/api/companion/approvals")
     def approvals_waiting() -> Any:
         return JSONResponse({"paired": store.paired(), "confirm_here": approvals.system_prompt.available(),
+                             "confirm_in_terminal": approvals.terminal.needed(),
                              "waiting": [held.as_json() for held in store.waiting()]}, headers={"Cache-Control": "no-store"})
 
     @app.get("/approvals.js")
@@ -144,6 +153,8 @@ def register(app: Any, _swr: Any = None, store: Approvals | None = None) -> None
             return JSONResponse({"ok": False, "error": "not confirmed: protection stays on"}, status_code=403)
         return JSONResponse({"ok": store.approve_confirmed(held.id)})
 
+    _register_terminal(app, store)
+
     @app.post("/api/companion/approvals/pair")
     async def approvals_pair(request: Request) -> Any:
         body = await _small_json(request)
@@ -155,6 +166,30 @@ def register(app: Any, _swr: Any = None, store: Approvals | None = None) -> None
         body = await _small_json(request)
         ok = store.answer(str(body.get("id") or ""), body.get("approve") is True, str(body.get("proof") or ""))
         return JSONResponse({"ok": ok}, status_code=200 if ok else 403)
+
+
+def _register_terminal(app: Any, store: Approvals) -> None:
+    """``blackbox approve``'s two routes (KI-659): a one-time challenge for one held request, then
+    its approval only when root wrote the challenge (``approvals.terminal.proved``)."""
+    from fastapi import Request
+    from fastapi.responses import JSONResponse
+
+    @app.post("/api/approvals/terminal-challenge")
+    async def approvals_terminal_challenge(request: Request) -> Any:
+        """``blackbox approve``'s first step: a one-time challenge for one held request (KI-659)."""
+        body = await _small_json(request)
+        nonce = store.challenge(str(body.get("id") or ""))
+        if nonce is None:
+            return JSONResponse({"ok": False, "error": "nothing to confirm (unknown, expired or already asked)"}, status_code=409)
+        return JSONResponse({"ok": True, "nonce": nonce, "folder": str(approvals.terminal.ROOT_FOLDER)})
+
+    @app.post("/api/approvals/terminal-confirm")
+    async def approvals_terminal_confirm(request: Request) -> Any:
+        """Its second step: approved only when root wrote the challenge (``terminal.proved``)."""
+        body = await _small_json(request)
+        folder = approvals.terminal.ROOT_FOLDER
+        ok = store.confirm_from_terminal(str(body.get("id") or ""), lambda rid, nonce: approvals.terminal.proved(folder, rid, nonce))
+        return JSONResponse({"ok": ok} if ok else {"ok": False, "error": "not confirmed: protection stays on"}, status_code=200 if ok else 403)
 
 
 async def _small_json(request: Any) -> dict[str, Any]:

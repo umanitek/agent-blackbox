@@ -39,7 +39,7 @@ _DYNAMIC = re.compile(r"\$\(|`")
 _SWITCH_OFF = re.compile(
     r"\bplugins?\s+(?:disable|remove|uninstall|rm|delete)\b(?P<plugin>[^|;&\n]*)"
     r"|\bconfig\s+(?:set|unset|edit|delete|remove)\b[^|;&\n]*(?:blackbox|plugins)"
-    r"|\bblackbox\s+(?:detach|uninstall|settings|rules\s+(?:unblock|allow|override|remove))\b"
+    r"|\bblackbox\s+(?:detach|uninstall|settings|approve|rules\s+(?:unblock|allow|override|remove))\b"
     r"|\bblackbox\s+(?:attach|setup)\b[^|;&\n]*--no-(?:auto|protect)"
     r"|\b(?:pip3?|uv\s+pip|uv\s+tool|pipx)\s+uninstall\b[^|;&\n]*hermes", re.IGNORECASE)
 _SERVICE_JOB = re.compile(
