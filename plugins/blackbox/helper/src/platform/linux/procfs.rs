@@ -168,8 +168,10 @@ pub fn boot_time(root: &Path) -> u64 {
 pub fn ifaces(proc: &Path, sys_net: &Path) -> Vec<Iface> {
     let Some(table) = text(&proc.join("net").join("dev"), SMALL) else { return Vec::new() };
     let flags_of = |name: &str| -> Option<u32> {
-        let raw = text(&sys_net.join(name).join("flags"), 64)?;
-        u32::from_str_radix(raw.trim().trim_start_matches("0x"), 16).ok()
+        let raw = crate::safe_read::read_attribute(&sys_net.join(name).join("flags"), 64)?;
+        let raw = String::from_utf8_lossy(&raw);
+        let word = raw.split(|c: char| c.is_whitespace() || c == '\0').next()?;
+        u32::from_str_radix(word.trim_start_matches("0x"), 16).ok()
     };
     parse_net_dev(&table, &flags_of)
 }
