@@ -138,10 +138,22 @@ def uninstall(host: Host, home: Path) -> EditResult:
     else:
         data.pop("hooks")
     try:
+        if _made_by_blackbox(path, host, data):
+            path.unlink()   # KI-664: Blackbox made this file for its hooks alone; nothing of the person's is in it
+            return EditResult(True, str(path))
         _put_back(path, data)
     except OSError as exc:
         return EditResult(False, str(path), f"could not write the config: {exc.strerror or exc}")
     return EditResult(True, str(path))
+
+
+def _made_by_blackbox(path: Path, host: Host, data: dict[str, Any]) -> bool:
+    """True when the config at *path* is one Blackbox created (no backup of a person's original
+    was taken at install) and what is left without Blackbox's entries is only what Blackbox's
+    install added (*host*'s extra keys) — L1: ~/.codex/hooks.json and ~/.gemini/settings.json
+    were left as ``{}``."""
+    backup = path.with_name(path.name + BACKUP_SUFFIX)
+    return not backup.exists() and all(key in host.extra and value == host.extra[key] for key, value in data.items())
 
 
 def _put_back(path: Path, data: dict[str, Any]) -> None:

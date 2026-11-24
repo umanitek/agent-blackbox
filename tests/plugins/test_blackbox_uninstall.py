@@ -171,7 +171,7 @@ def test_linux_user_services_go_and_system_units_are_named_with_their_root_comma
     system_unit.write_text("[Unit]", encoding="utf-8")
     plan = dataclasses.replace(_plan(machine, system="Linux"), system_units=(system_unit,))
     calls, report = _execute(plan)
-    assert not list(user_units.iterdir())
+    assert not user_units.exists(), "emptied, the folders Blackbox's units lived in go too (KI-664)"
     assert ["systemctl", "--user", "disable", "--now", "blackbox-dkg.service"] in calls
     assert any(r.startswith("needs root: sudo systemctl disable --now blackbox-dkg.service") for r in report)
     assert system_unit.exists()

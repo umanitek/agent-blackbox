@@ -276,9 +276,20 @@ def uninstall(host: Host, home: Path) -> EditResult:
                     (target / event).unlink()
         elif _ours(target):
             target.unlink()
+        _remove_if_empty(target if host.style == "scripts" else target.parent)
     except OSError as exc:
         return EditResult(False, str(target), f"could not remove: {exc.strerror or exc}")
     return EditResult(True, str(target))
+
+
+def _remove_if_empty(folder: Path) -> None:
+    """*folder* (the agent's hook or plugin folder Blackbox's file was in) removed when nothing is
+    left in it — KI-664 (Linux round L1): an uninstall left an empty ~/.config/opencode/plugin and
+    ~/Documents/Cline/Hooks. ``rmdir`` refuses a folder with anything of the person's in it."""
+    try:
+        folder.rmdir()
+    except OSError:
+        pass   # missing, or not empty: left as it is
 
 
 def installed_commands(host: Host, home: Path) -> list[str]:

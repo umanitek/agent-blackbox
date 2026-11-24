@@ -45,7 +45,24 @@ def stop_login_services(names: ServiceNames, system_units: tuple[Path, ...], run
             report.append(f"removed login service {unit}")
     if removed:
         run(["systemctl", "--user", "daemon-reload"])
+        _remove_empty_unit_folders(user_dir)
     _stop_system_units(system_units, run, report)
+
+
+def _remove_empty_unit_folders(user_dir: Path) -> None:
+    """The `*.target.wants` folders enabling left, then ``~/.config/systemd/user`` and
+    ``~/.config/systemd`` — each only when EMPTY (``rmdir`` refuses anything else: the person's own
+    units stay). KI-664 (Linux round L1): an uninstall left an empty ~/.config/systemd behind."""
+    for wants in sorted(user_dir.glob("*.wants")) if user_dir.is_dir() else []:
+        try:
+            wants.rmdir()
+        except OSError:
+            continue
+    for folder in (user_dir, user_dir.parent):
+        try:
+            folder.rmdir()
+        except OSError:   # missing, or holds something of the person's
+            return
 
 
 def _is_root() -> bool:
