@@ -36,6 +36,7 @@ from typing import Any, Optional, TypedDict
 from ..kernel import constants, threat_ids
 from ..kernel.bounded_files import file_lock, read_json_object, write_json_object
 from ..kernel.persistence_places import STARTUP_ITEM
+from . import protection_log
 
 #: The record of a refusal the operating system's sandbox made (its findings are refusals by nature).
 KERNEL_REFUSAL_EVENT = "sandbox_deny"
@@ -82,6 +83,8 @@ def note(event: str, findings: Optional[list[dict[str, Any]]], detail: Optional[
             entry = counts.get(name) or {"count": 0, "last_at": 0.0, "last_agent": ""}
             counts[name] = {"count": int(entry["count"]) + 1, "last_at": now, "last_agent": agent or "hermes"}
         write_json_object(_path(), counts, what="Blackbox's tamper counts")
+    for name in hits:   # each refusal also goes into the hash-chained log (audit.protection_log)
+        protection_log.append("tamper", name, agent=agent or "hermes")
 
 
 def _read() -> dict[str, TamperCount]:

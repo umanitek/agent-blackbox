@@ -38,6 +38,7 @@ from .findings import (
 )
 from .private_ka import node_is_local, write_private_audit_ka
 from .profile_logs import fold_profile_logs
+from . import protection_log
 from .tamper import TamperCount, tamper_counts
 from .local_graph import local_audit_graph
 from .log_store import in_sandbox_run, sandbox_run
@@ -69,6 +70,7 @@ __all__ = [
     "mark_reported",
     "node_is_local",
     "previously_accepted",
+    "protection_log",
     "read_audit",
     "read_file_access",
     "read_findings",
