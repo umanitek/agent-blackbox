@@ -24,18 +24,18 @@ import sys
 
 if sys.platform == "darwin":
     from .macos import delete_keychain_item, delete_preferences, disable_linger, manual_removal, \
-        remove_user_path_entry, stop_login_services
+        remove_user_path_entry, stop_login_services, system_package_removal
 elif sys.platform.startswith("linux"):
     from .linux import delete_keychain_item, delete_preferences, disable_linger, manual_removal, \
-        remove_user_path_entry, stop_login_services
+        remove_user_path_entry, stop_login_services, system_package_removal
 elif sys.platform == "win32":
     from .windows import delete_keychain_item, delete_preferences, disable_linger, manual_removal, \
-        remove_user_path_entry, stop_login_services
+        remove_user_path_entry, stop_login_services, system_package_removal
 else:
     from .unsupported import delete_keychain_item, delete_preferences, disable_linger, manual_removal, \
-        remove_user_path_entry, stop_login_services
+        remove_user_path_entry, stop_login_services, system_package_removal
 
 from .contract import ServiceNames
 
 __all__ = ["ServiceNames", "delete_keychain_item", "delete_preferences", "disable_linger", "manual_removal",
-           "remove_user_path_entry", "stop_login_services"]
+           "remove_user_path_entry", "stop_login_services", "system_package_removal"]

@@ -160,7 +160,7 @@ def test_a_look_at_hermes_sessions_never_recreates_a_deleted_blackbox_home(home)
 
 # ── KI-610 / KI-611: a clean Mac — no Hermes before; Blackbox's installer set up the host ──────────
 INSTALL_SH = Path(__file__).resolve().parents[2] / "scripts" / "blackbox-install.sh"
-MANIFEST_FUNCTIONS = ("install_path_exists", "install_host_paths", "install_own_dirs", "install_startup_files",
+MANIFEST_FUNCTIONS = ("install_path_exists", "system_package_installed", "system_packages_absent", "install_host_paths", "install_own_dirs", "install_startup_files",
                       "install_manifest_begin", "install_manifest_write")
 #: The block Hermes's own setup appended to ~/.zshrc in round 5 (the person's lines above it stay).
 HERMES_PATH_BLOCK = '\n# Hermes Agent — ensure ~/.local/bin is on PATH\nexport PATH="$HOME/.local/bin:$PATH"\n'

@@ -81,7 +81,8 @@ def test_an_unsupported_processor_stops_before_anything_changes(machine):
     assert f"Unsupported processor: {machine}" in done.stdout
 
 
-ROLLBACK = ("ok", "warn", "install_path_exists", "install_path_removable", "rollback_leftovers")
+ROLLBACK = ("ok", "warn", "install_path_exists", "install_path_removable", "system_package_installed",
+            "system_package_removal", "rollback_leftovers")
 
 
 def test_a_rollback_that_could_not_remove_something_names_it(tmp_path):
@@ -99,3 +100,33 @@ def test_a_rollback_that_could_not_remove_something_names_it(tmp_path):
     assert done.stdout.splitlines() == [str(stuck)]
     stuck.rmdir()
     assert _run("rollback_leftovers", ROLLBACK, prelude).stdout == ""
+
+
+def test_a_rollback_names_a_system_package_this_attempt_installed(tmp_path):
+    """KI-651 (security round 7, Linux check 5): the rollback said "Nothing … was left behind" while
+    the apt package libatomic1 (installed with sudo for nvm's Node) stayed. It stays — other
+    programs may use it — but it is named, with the command that removes it."""
+    record = tmp_path / "record"
+    record.mkdir()
+    (record / "absent").write_text("", encoding="utf-8")
+    (record / "saved").write_text("", encoding="utf-8")
+    (record / "packages-absent").write_text("libatomic1\nlibatomic\n", encoding="utf-8")
+    fake = ('dpkg-query() { for a; do :; done; [ "$a" = libatomic1 ] && printf "install ok installed"; }; rpm() { return 1; }; '
+            'apt-get() { :; }')
+    prelude = (f'HOME="{tmp_path}/home"; BLACKBOX_PROTECTED_ROOTS="/Users /home"; INSTALL_RECORD_DIR="{record}"; '
+               f'BLACKBOX_INSTALL_ROOT="{tmp_path}/none"; {fake}')
+    done = _run("rollback_leftovers", ROLLBACK, prelude)
+    assert done.returncode == 0, done.stderr
+    [line] = done.stdout.splitlines()
+    assert line.startswith("libatomic1 (a system package installed during this attempt; kept")
+    assert line.endswith("remove it with: sudo apt-get remove libatomic1)")
+
+
+def test_the_caches_an_install_creates_are_rolled_back_and_listed_with_the_host(tmp_path):
+    """KI-651 / KI-650: ~/.npm (the DKG package's npm) and ~/.cache/uv (Hermes's setup) were left
+    by a rollback and by uninstall; made by this run, they are this run's to take away."""
+    prelude = f'HOME="{tmp_path}"; BLACKBOX_INSTALL_ROOT=r; HERMES_HOME=h; BLACKBOX_HOME=b'
+    created = _run("install_created_paths", ("install_created_paths",), prelude).stdout.splitlines()
+    host = _run("install_host_paths", ("install_host_paths",), prelude).stdout.splitlines()
+    for cache in (f"{tmp_path}/.npm", f"{tmp_path}/.cache/uv"):
+        assert cache in created and cache in host

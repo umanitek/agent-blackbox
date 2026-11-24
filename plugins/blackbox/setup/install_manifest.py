@@ -25,6 +25,9 @@ their first change, which of those places did not exist, and on success write
   ``blackbox`` command: taken off it on every uninstall;
 * ``system-helper <LaunchDaemon>`` (macOS) — the system protection helper this install added:
   uninstall removes it through itself (accepted only for the helper's own LaunchDaemon);
+* ``system-package <name>`` (Linux) — a system package added during the install with sudo
+  (``libatomic1`` for nvm's Node): never removed (other programs may need it, and it needs an
+  administrator), only named on every uninstall with the command that removes it (KI-651);
 * ``notifier <folder>`` (macOS) — Blackbox's own notifier (``Blackbox.app``): removed on every
   uninstall (KI-629: both optional components are in the one list).
 
@@ -56,6 +59,7 @@ from __future__ import annotations
 
 import getpass
 import os
+import re
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -77,6 +81,8 @@ STAMP = "installed-at"
 MAX_ENTRIES = 200
 MAX_BLOCK_BYTES = 64 * 1024
 MAX_MANIFEST_BYTES = 256 * 1024
+#: A system package's name as Debian and RPM spell them (nothing a shell would read as more).
+PACKAGE_NAME = re.compile(r"[a-z0-9][a-z0-9.+-]{0,63}")
 #: The most of the person's additions named in one report line.
 MAX_NAMED = 5
 
@@ -93,6 +99,7 @@ class InstallManifest:
     user_path: tuple[Path, ...] = ()              # Windows: folders added to the user PATH
     system_helper: bool = False                   # macOS: the install added the system protection helper
     notifier: tuple[Path, ...] = ()               # macOS: the notifier folder it added
+    system_packages: tuple[str, ...] = ()         # Linux: system packages added during the install
     installed_at: float = 0.0                     # when the first install finished (epoch seconds; 0: no manifest)
 
     @property
@@ -130,10 +137,14 @@ def read(blackbox_home: Path, home: Path | None = None, user: str | None = None)
     text = read_small_text(str(folder / MANIFEST), MAX_MANIFEST_BYTES) or ""
     found: dict[str, list] = {"own-dir": [], "host": [], "host-dir": [], "host-append": [], "user-path": [], "notifier": []}
     linger_user, helper = "", False
+    packages: list[str] = []
     for line in text.splitlines()[:MAX_ENTRIES]:
         parts = line.split("\t")
         if len(parts) >= 2 and parts[0] == "own-linger":
             linger_user = _linger_user(parts[1], user) or linger_user
+            continue
+        if len(parts) >= 2 and parts[0] == "system-package":
+            packages += [parts[1]] if PACKAGE_NAME.fullmatch(parts[1]) and parts[1] not in packages else []
             continue
         if len(parts) >= 2 and parts[0] == "system-helper":
             helper = helper or parts[1] == str(system_helper_paths.LAUNCH_DAEMON)   # the helper's own path only
@@ -157,7 +168,8 @@ def read(blackbox_home: Path, home: Path | None = None, user: str | None = None)
     stamps = [folder / STAMP, folder / MANIFEST]   # a manifest from before the stamp: its own time
     installed_at = next((stamp.stat().st_mtime for stamp in stamps if stamp.is_file()), 0.0)
     return InstallManifest(unique["own-dir"], unique["host"], unique["host-dir"], unique["host-append"],
-                           linger_user, unique["user-path"], helper, unique["notifier"], installed_at)
+                           linger_user, unique["user-path"], helper, unique["notifier"],
+                           installed_at=installed_at, system_packages=tuple(packages))
 
 
 def host_removal(manifest: InstallManifest, home: Path | None = None) -> HostRemoval:
@@ -226,6 +238,11 @@ def restore_system_settings(manifest: InstallManifest, run: Runner, report: list
     for folder in manifest.user_path:
         if platform.remove_user_path_entry(str(folder)):
             report.append(f"took {folder} off your PATH again (the installer had added it)")
+    for package in manifest.system_packages:
+        command = platform.system_package_removal(package)
+        if command:
+            report.append(f"kept the system package {package} the install added (other programs may use it); "
+                          f"to remove it: {command}")
 
 
 def _take_out(target: Path, block: str, report: list[str]) -> None:

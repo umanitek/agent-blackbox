@@ -3482,8 +3482,33 @@ BLACKBOX_PROTECTED_ROOTS="/Users /home /root /usr /etc /var /opt /tmp /private /
 # Paths removed on rollback only when this run created them; when they already existed
 # they are left exactly as they are (their changed files are in install_rewritten_files).
 install_created_paths() {
+    # ~/.npm and ~/.cache/uv: the caches npm (the DKG node's package) and uv (Hermes's setup) make
+    # when they were not there (KI-651: a rollback left them and said nothing was left).
     printf '%s\n' "$BLACKBOX_INSTALL_ROOT" "$HERMES_HOME" "$BLACKBOX_HOME" "$HOME/.nvm" \
-        "$HOME/.local/bin/hermes" "$HOME/.local/bin/blackbox"
+        "$HOME/.local/bin/hermes" "$HOME/.local/bin/blackbox" "$HOME/.npm" "$HOME/.cache/uv"
+}
+
+# System packages an install may add with sudo (Hermes's setup: libatomic for nvm's Node on a
+# minimal Linux). They are not taken away again — other programs may need them, and removing one
+# needs an administrator — but they are named: by a rollback, and by `blackbox uninstall` through
+# the manifest's `system-package` lines (KI-651).
+BLACKBOX_SYSTEM_PACKAGES="libatomic1 libatomic"
+
+# Whether the system package $1 is installed (dpkg or rpm; false where neither exists).
+system_package_installed() {
+    if command -v dpkg-query >/dev/null 2>&1 &&
+        dpkg-query -W -f='${Status}' "$1" 2>/dev/null | grep -q 'install ok installed'; then
+        return 0
+    fi
+    command -v rpm >/dev/null 2>&1 && rpm -q "$1" >/dev/null 2>&1
+}
+
+# The packages of BLACKBOX_SYSTEM_PACKAGES not installed now, one per line.
+system_packages_absent() {
+    local name
+    for name in $BLACKBOX_SYSTEM_PACKAGES; do
+        system_package_installed "$name" || printf '%s\n' "$name"
+    done
 }
 
 # Files (and the small plugin folder) this run may rewrite: copied before the first change
@@ -3582,6 +3607,7 @@ install_record_begin() {
     : >"$INSTALL_RECORD_DIR/started-pids"
     while IFS= read -r path; do install_record_note "$path" created; done < <(install_created_paths)
     while IFS= read -r path; do install_record_note "$path" rewritten; done < <(install_rewritten_files)
+    system_packages_absent >"$INSTALL_RECORD_DIR/packages-absent"
     blackbox_store_docker_objects >"$INSTALL_RECORD_DIR/docker-before" || true
     if [ -d "$BLACKBOX_USER_BIN_DIR" ]; then
         ls -A "$BLACKBOX_USER_BIN_DIR" >"$INSTALL_RECORD_DIR/user-bin-before"
@@ -3618,6 +3644,11 @@ install_record_begin() {
 # up (host / host-dir) and the lines it appended to shell startup files (host-append, byte for
 # byte). Only what did NOT exist before this run is listed: a Hermes the person had is never in it.
 # Kept across upgrades: each run adds what it made.
+# The command that removes system package $1 (said, never run: it needs an administrator).
+system_package_removal() {
+    if command -v apt-get >/dev/null 2>&1; then printf 'sudo apt-get remove %s' "$1"; else printf 'sudo dnf remove %s' "$1"; fi
+}
+
 install_host_paths() {
     # ~/.nvm: the Node the DKG node runs on, when ensure_node had to install it (nvm's own lines in
     # the shell startup files are caught as an append below).
@@ -3625,7 +3656,8 @@ install_host_paths() {
         "$HOME/.local/bin/hermes" "$HOME/.local/bin/hermes-acp" "$HOME/.local/bin/hermes-agent" \
         "$HOME/.local/bin/uv" "$HOME/.local/bin/uvx" "$HOME/.local/share/uv" \
         "$HOME/.config/openui/telemetry.json" "$HOME/.npm/_prebuilds" "$HOME/.nvm" \
-        "$HOME/.local/state/hermes"   # Hermes's gateway locks (KI-654: left behind on Linux)
+        "$HOME/.local/state/hermes" \
+        "$HOME/.npm" "$HOME/.cache/uv"   # Hermes's gateway locks (KI-654); npm's and uv's caches (KI-650/651)
 }
 
 install_own_dirs() {
@@ -3657,6 +3689,9 @@ install_manifest_begin() {
     done < <(install_own_dirs)
     # The optional components this run may add (KI-629): uninstall removes exactly these.
     install_path_exists "$BLACKBOX_HELPER_DAEMON" || printf 'system-helper\t%s\n' "$BLACKBOX_HELPER_DAEMON" >>"$INSTALL_RECORD_DIR/made"
+    while IFS= read -r path; do
+        printf 'system-package\t%s\n' "$path" >>"$INSTALL_RECORD_DIR/made"
+    done < <(system_packages_absent)
     install_path_exists "$BLACKBOX_HOME/notifier" || printf 'notifier\t%s\n' "$BLACKBOX_HOME/notifier" >>"$INSTALL_RECORD_DIR/made"
     # Linux: lingering (ensure_user_lingering) is a system setting; when this run turns it on,
     # uninstall turns it off again. Written only if it is on at the end (install_manifest_write).
@@ -3681,7 +3716,11 @@ install_manifest_write() {
     # Its own time is the stamp (to the nanosecond); written once, so an upgrade run keeps the first.
     [ -e "$folder/installed-at" ] || : >"$folder/installed-at"
     while IFS="$(printf '\t')" read -r kind path; do
-        install_path_exists "$path" || continue
+        if [ "$kind" = system-package ]; then
+            system_package_installed "$path" || continue   # added by this install: named by uninstall
+        else
+            install_path_exists "$path" || continue
+        fi
         grep -qxF "$kind	$path" "$folder/manifest.tsv" || printf '%s\t%s\n' "$kind" "$path" >>"$folder/manifest.tsv"
     done <"$INSTALL_RECORD_DIR/made"
     while IFS= read -r path; do
@@ -3772,6 +3811,11 @@ rollback_leftovers() {
     if [ -e "$INSTALL_RECORD_DIR/helper-was-absent" ] && install_path_exists "$BLACKBOX_HELPER_DAEMON"; then
         printf '%s (the system protection helper)\n' "$BLACKBOX_HELPER_DAEMON"
     fi
+    while IFS= read -r path; do
+        [ -n "$path" ] && system_package_installed "$path" &&
+            printf '%s (a system package installed during this attempt; kept, other programs may use it — remove it with: %s)\n' \
+                "$path" "$(system_package_removal "$path")"
+    done < <(cat "$INSTALL_RECORD_DIR/packages-absent" 2>/dev/null)
     if [ -s "$INSTALL_RECORD_DIR/repo-head" ] && [ -d "$BLACKBOX_INSTALL_ROOT/.git" ]; then
         before="$(cat "$INSTALL_RECORD_DIR/repo-head")"
         [ "$(git -C "$BLACKBOX_INSTALL_ROOT" rev-parse -q --verify HEAD 2>/dev/null)" = "$before" ] ||

@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Callable, Sequence
 
 from .contract import ServiceNames
-from .unsupported import disable_linger, manual_removal, remove_user_path_entry
+from .unsupported import disable_linger, manual_removal, remove_user_path_entry, system_package_removal
 
 SECURITY = "/usr/bin/security"
 DEFAULTS = "/usr/bin/defaults"
@@ -50,4 +50,4 @@ def stop_login_services(names: ServiceNames, _system_units: tuple[Path, ...], ru
 
 
 __all__ = ["delete_keychain_item", "delete_preferences", "disable_linger", "manual_removal", "remove_user_path_entry",
-           "stop_login_services"]
+           "stop_login_services", "system_package_removal"]

@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Sequence
 
 from .contract import Runner, ServiceNames
-from .unsupported import delete_keychain_item, delete_preferences, disable_linger
+from .unsupported import delete_keychain_item, delete_preferences, disable_linger, system_package_removal
 
 ENVIRONMENT_KEY = "Environment"
 PATH_VALUE = "Path"
@@ -72,4 +72,4 @@ def manual_removal(paths: Sequence[Path], empty_dirs: Sequence[Path]) -> tuple[s
 
 
 __all__ = ["delete_keychain_item", "delete_preferences", "disable_linger", "manual_removal", "remove_user_path_entry",
-           "stop_login_services"]
+           "stop_login_services", "system_package_removal"]

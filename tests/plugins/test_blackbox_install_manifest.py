@@ -30,7 +30,7 @@ from plugins.blackbox.setup import install_manifest
 from plugins.blackbox.setup.platform import linux as linux_platform
 
 INSTALL_SH = Path(__file__).resolve().parents[2] / "scripts" / "blackbox-install.sh"
-FUNCTIONS = ("install_path_exists", "install_host_paths", "install_own_dirs", "install_startup_files",
+FUNCTIONS = ("install_path_exists", "system_package_installed", "system_packages_absent", "install_host_paths", "install_own_dirs", "install_startup_files",
              "install_manifest_begin", "install_manifest_write")
 
 
@@ -299,3 +299,36 @@ def test_nvm_the_person_had_before_the_install_is_never_listed(machine):
     (home / ".hermes" / "blackbox").mkdir(parents=True)
     _shell(home, record, linger_dir, fake_bin, "install_manifest_write")
     assert home / ".nvm" not in install_manifest.read(home / ".hermes" / "blackbox", home=home).host
+
+
+def test_a_system_package_the_install_added_is_named_by_every_uninstall_never_removed(machine, monkeypatch):
+    """KI-651 / KI-654 (security round 7, Linux): libatomic1 stayed after uninstall and nothing said
+    so. It is not removed (other programs may need it; removal needs an administrator) — it is
+    listed in the manifest and named with the command that removes it."""
+    home, record, linger_dir, fake_bin = machine
+    state = home.parent / "dpkg-installed"
+    (fake_bin / "dpkg-query").write_text(f'#!/bin/sh\nfor a; do :; done; [ "$a" = libatomic1 ] && [ -e "{state}" ] && printf "install ok installed"\n',
+                                         encoding="utf-8")
+    (fake_bin / "dpkg-query").chmod(0o755)
+    packages = re.search(r"^BLACKBOX_SYSTEM_PACKAGES=.*$", INSTALL_SH.read_text(encoding="utf-8"), re.MULTILINE)
+    assert packages is not None   # the installer's own list
+    _shell(home, record, linger_dir, fake_bin, f"{packages.group(0)}; install_manifest_begin")
+    state.write_text("", encoding="utf-8")                      # Hermes's setup installed it with sudo
+    (home / ".hermes" / "blackbox").mkdir(parents=True)
+    _shell(home, record, linger_dir, fake_bin, f"{packages.group(0)}; install_manifest_write")
+    manifest = install_manifest.read(home / ".hermes" / "blackbox", home=home)
+    assert manifest.system_packages == ("libatomic1",)
+    monkeypatch.setattr(install_manifest, "platform", linux_platform)
+    monkeypatch.setattr(linux_platform.shutil, "which", lambda name: "/usr/bin/apt-get" if name == "apt-get" else None)
+    ran: list[list[str]] = []
+    report: list[str] = []
+    install_manifest.restore_system_settings(manifest, lambda argv: ran.append(list(argv)) or 0, report)
+    assert ran == []
+    assert any("kept the system package libatomic1" in line and "sudo apt-get remove libatomic1" in line for line in report)
+
+
+def test_a_planted_system_package_name_is_refused(tmp_path):
+    folder = tmp_path / "bb" / install_manifest.FOLDER
+    folder.mkdir(parents=True)
+    (folder / install_manifest.MANIFEST).write_text("system-package\tlibatomic1; rm -rf ~\nsystem-package\tLIBX\n", encoding="utf-8")
+    assert install_manifest.read(tmp_path / "bb", home=tmp_path, user="alice").system_packages == ()

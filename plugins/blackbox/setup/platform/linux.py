@@ -10,6 +10,7 @@ Usage::
 from __future__ import annotations
 
 import os
+import shutil
 from pathlib import Path
 from typing import Callable, Sequence
 
@@ -18,6 +19,12 @@ from .unsupported import delete_keychain_item, delete_preferences, manual_remova
 
 LOGINCTL = "loginctl"
 Runner = Callable[[Sequence[str]], int]
+
+
+def system_package_removal(name: str) -> str:
+    """The command that removes the system package *name* (said to the person, never run: it needs
+    an administrator) — apt where it exists, else dnf."""
+    return f"sudo apt-get remove {name}" if shutil.which("apt-get") else f"sudo dnf remove {name}"
 
 
 def disable_linger(user: str, run: Runner) -> bool:
@@ -64,4 +71,4 @@ def _stop_system_units(system_units: tuple[Path, ...], run: Runner, report: list
 
 
 __all__ = ["delete_keychain_item", "delete_preferences", "disable_linger", "manual_removal", "remove_user_path_entry",
-           "stop_login_services"]
+           "stop_login_services", "system_package_removal"]

@@ -30,6 +30,10 @@ def disable_linger(_user: str, _run: Runner) -> bool:
     return False
 
 
+def system_package_removal(_name: str) -> str:
+    return ""   # no system packages an install adds on this system
+
+
 def stop_login_services(_names, _system_units, _run: Runner, _report: list[str]) -> None:
     """No login services Blackbox registers on this system."""
 
