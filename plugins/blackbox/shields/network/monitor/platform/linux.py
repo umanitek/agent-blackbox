@@ -207,29 +207,43 @@ def _nettop_endpoint(address: str, port: str, family: str) -> str:
     return f"{address}{'.' if family == '6' else ':'}{port}"
 
 
+def _socket_row(socket: _Socket) -> tuple[str, int, int]:
+    """(nettop's socket row, bytes in, bytes out) of one socket."""
+    local_ip, local_port = _endpoint(socket.local)
+    remote_ip, remote_port = _endpoint(socket.peer)
+    family = _family(local_ip + remote_ip)
+    protocol = "quic" if socket.netid == "udp" and remote_port == str(QUIC_PORT) else socket.netid
+    bytes_in = socket.counters.get("bytes_received", 0)
+    bytes_out = socket.counters.get("bytes_sent", socket.counters.get("bytes_acked", 0))
+    state = NETTOP_STATES.get(socket.state, "") if socket.netid == "tcp" else ""
+    row = (f"{protocol}{family} {_nettop_endpoint(local_ip, local_port, family)}<->"
+           f"{_nettop_endpoint(remote_ip, remote_port, family)},{state},{bytes_in},{bytes_out},")
+    return row, bytes_in, bytes_out
+
+
 def render_connections(text: str) -> str:
     """``ss -tuanpiH`` output as ``nettop -L 1 -x -n -J state,bytes_in,bytes_out`` CSV: per
     process (its first named owner) a ``name.pid,,in,out,`` row, then each socket's
-    ``tcp4 local<->remote,State,in,out,`` row. An unconnected UDP socket and a socket with no
-    process this user may see are left out (nettop's parser would skip them too)."""
+    ``tcp4 local<->remote,State,in,out,`` row. An unconnected UDP socket, and any other socket
+    with no process this user may see, is left out — except a listening TCP socket with no
+    visible owner (another user's server): its row comes first, before any process row, so the
+    parser learns the port is served (a connection to it is inbound) without attributing it."""
+    served: list[str] = []
     rows: dict[int, tuple[str, list[str], list[int]]] = {}
     for socket in _sockets(text):
-        if not socket.users or (socket.netid == "udp" and socket.state == "UNCONN"):
+        if socket.netid == "udp" and socket.state == "UNCONN":
             continue
-        local_ip, local_port = _endpoint(socket.local)
-        remote_ip, remote_port = _endpoint(socket.peer)
-        family = _family(local_ip + remote_ip)
-        protocol = "quic" if socket.netid == "udp" and remote_port == str(QUIC_PORT) else socket.netid
-        bytes_in = socket.counters.get("bytes_received", 0)
-        bytes_out = socket.counters.get("bytes_sent", socket.counters.get("bytes_acked", 0))
-        state = NETTOP_STATES.get(socket.state, "") if socket.netid == "tcp" else ""
+        if not socket.users:
+            if socket.netid == "tcp" and socket.state == "LISTEN":
+                served.append(_socket_row(socket)[0])
+            continue
+        row, bytes_in, bytes_out = _socket_row(socket)
         name, pid = socket.users[0]
         _name, lines, totals = rows.setdefault(pid, (name, [], [0, 0]))
-        lines.append(f"{protocol}{family} {_nettop_endpoint(local_ip, local_port, family)}<->"
-                     f"{_nettop_endpoint(remote_ip, remote_port, family)},{state},{bytes_in},{bytes_out},")
+        lines.append(row)
         totals[0] += bytes_in
         totals[1] += bytes_out
-    out = [NETTOP_HEADER]
+    out = [NETTOP_HEADER, *served]
     for pid, (name, lines, totals) in sorted(rows.items()):
         out.append(f"{name.replace(',', ' ')}.{pid},,{totals[0]},{totals[1]},")
         out.extend(lines)

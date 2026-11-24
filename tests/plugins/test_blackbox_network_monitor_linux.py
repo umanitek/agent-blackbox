@@ -98,3 +98,14 @@ def test_the_routing_table_is_read_from_the_kernels_tables(tmp_path):
     (tmp_path / "net" / "route").write_text(_fixture("proc_net_route.txt"), encoding="utf-8")
     assert gateways.parse(linux.routing_table(proc_root=str(tmp_path))) == frozenset({"192.168.64.1"})
     assert linux.routing_table(proc_root=str(tmp_path / "none")) == ""
+
+
+def test_a_connection_to_a_port_another_user_serves_is_inbound_and_the_listener_is_not_attributed():
+    """Peer review of 035d09bba9: unprivileged, ss names no process for another user's listening
+    socket; its port must still mark connections to it as inbound."""
+    text = ("tcp   LISTEN 0      4096         0.0.0.0:8443        0.0.0.0:*\n"
+            "tcp   ESTAB  0      0       198.51.100.7:8443   203.0.113.98:40000 users:((\"worker\",pid=900,fd=9))\n")
+    processes = nettop.parse(linux.render_connections(text))
+    assert [process.pid for process in processes] == [900], "the unowned listener is attributed to no process"
+    (connection,) = processes[0].connections
+    assert (connection.direction, connection.local_port, connection.remote_ip) == ("in", 8443, "203.0.113.98")
