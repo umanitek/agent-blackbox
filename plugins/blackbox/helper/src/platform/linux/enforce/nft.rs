@@ -265,10 +265,29 @@ pub fn chains_intact(filter: &Filter, output: Option<&str>, input: Option<&str>)
 /// Linux round L4: after `nft flush table inet blackbox_netd` the rules came back only when the
 /// plan next CHANGED — 90–150 s once the threat graph was complete — because nothing looked).
 /// A flushed, deleted or edited chain (a rule removed, or one slipped in) reads as not intact.
+/// A set emptied with its rules left in place (`nft flush set inet blackbox_netd threats4`) reads as
+/// not intact too: one element of each set that should hold some is looked up (`nft get element`,
+/// one lookup, never a listing of the set — KI-690).
 pub fn intact(filter: &Filter) -> Option<bool> {
     first(NFT_COMMANDS)?;
     let list = |chain: &str| nft(&["-j", "list", "chain", "inet", "blackbox_netd", chain], None).ok();
-    Some(chains_intact(filter, list("output").as_deref(), list("input").as_deref()))
+    if !chains_intact(filter, list("output").as_deref(), list("input").as_deref()) {
+        return Some(false);
+    }
+    Some(canaries(filter).iter().all(|(set, element)| {
+        nft(&["get", "element", "inet", "blackbox_netd", set, &format!("{{ {element} }}")], None).is_ok()
+    }))
+}
+
+/// One element each set of *filter* should hold, `(set, element)`: the first (the set's own
+/// order), for every set that is not empty.
+pub fn canaries(filter: &Filter) -> Vec<(&'static str, String)> {
+    let (threats4, threats6) = split(&addresses(&filter.threats));
+    let (cut4, cut6) = split(&addresses(&filter.cut));
+    let (ssh4, ssh6) = split(filter.ssh_allow.as_deref().unwrap_or(&[]));
+    let (block4, block6) = split(&addresses(&filter.remote_block));
+    let lists = [threats4, threats6, cut4, cut6, ssh4, ssh6, block4, block6];
+    SETS.iter().zip(lists).filter_map(|((name, _kind), elements)| elements.into_iter().next().map(|first| (*name, first))).collect()
 }
 
 /// Packets the table's rules dropped or refused since the helper started (across replacements).
@@ -296,6 +315,14 @@ pub fn kill_states(ip: &IpAddr) -> Result<u64, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn one_element_of_each_set_that_holds_some_is_looked_up() {
+        assert_eq!(canaries(&every_protection()), vec![
+            ("threats4", "203.0.113.7".to_string()), ("threats6", "2001:db8::7".to_string()), ("cut4", "198.51.100.9".to_string()),
+            ("ssh_allow4", "192.168.1.0/24".to_string()), ("ssh_allow6", "fd00::/8".to_string())]);
+        assert!(canaries(&Filter::default()).is_empty(), "nothing on: nothing to look up");
+    }
 
     fn every_protection() -> Filter {
         Filter {
