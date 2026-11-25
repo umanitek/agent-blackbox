@@ -294,3 +294,19 @@ def test_the_helper_watches_the_login_preferences_of_the_one_list():
     watched = set(re.findall(r'"([^"]+)"', re.search(r"LOGIN_PREFERENCES: &\[&str\] = &\[([^\]]*)\]", source).group(1)))
     listed = {glob.rsplit("/", 1)[-1].rstrip("*") for glob in persistence_places.PERSISTENCE_GLOBS if "/Library/Preferences/" in glob}
     assert watched == listed, (watched, listed)
+
+
+def test_a_program_an_agents_global_install_put_on_the_path_names_the_agent(home):
+    """KI-698 (macOS round R8, REAL Claude Code haiku, hooks only): ``npm install -g cowsay@1.6.0``
+    linked /opt/homebrew/bin/cowsay; the alert was "info … New program on your PATH" with no
+    writer — the command names the package, never the path. The link names the package: evidence.
+    The person's own install at the same time of an unrelated program stays unattributed."""
+    now = time.time()
+    rows = [_agent_call(home, "npm install -g cowsay@1.6.0", now - 20)]
+    cowsay = _event("path-program", "/opt/homebrew/bin/cowsay", now, program="/opt/homebrew/lib/node_modules/cowsay/cli.js",
+                    written=now - 18)
+    jq = _event("path-program", "/opt/homebrew/bin/jq", now, program="/opt/homebrew/Cellar/jq/1.8/bin/jq", written=now - 18)
+    alerts = {alert["text"].split("“")[1].split("”")[0]: alert for alert in startup_items.startup_alerts([cowsay, jq], rows)}
+    assert alerts["cowsay"]["severity"] == "critical" and alerts["cowsay"]["agent"] == "claude-code"
+    assert "written by Claude Code in s4-own" in alerts["cowsay"]["text"]
+    assert alerts["jq"]["severity"] == "info" and "agent" not in alerts["jq"]

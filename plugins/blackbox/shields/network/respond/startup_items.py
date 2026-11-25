@@ -45,6 +45,7 @@ import os
 from dataclasses import dataclass
 from typing import Any, Mapping, Optional, Sequence
 
+from ....detection import parse_dependency_installs
 from ....kernel.agent_hosts import BY_ID
 from ..monitor import exposure
 
@@ -128,6 +129,24 @@ def _call_end(row: Mapping[str, Any], rows: Sequence[Mapping[str, Any]]) -> Opti
     return min((float(end.get("ts") or 0) for end in ends), default=start + CALL_SECONDS)
 
 
+def _installs_it(event: Mapping[str, Any], args: Any) -> bool:
+    """True when the tool call with *args* is a package install that put *event*'s program on the
+    PATH: the program, or the file its link points to, is named for a package the command installs.
+
+    WHY (KI-698, macOS round R8): a hooks-only Claude Code's ``npm install -g cowsay@1.6.0`` linked
+    ``/opt/homebrew/bin/cowsay`` and the alert said only "New program on your PATH", info, no writer:
+    the command names a package, never the path npm writes. The link (``…/node_modules/cowsay/…``,
+    pipx's ``venvs/ruff/…``, Homebrew's ``Cellar/jq/…``) names it, and is the evidence."""
+    if event.get("item_kind") != "path-program" or not isinstance(args, Mapping) or not isinstance(args.get("command"), str):
+        return False
+    names = {str(found.get("name") or "").lower() for found in parse_dependency_installs(args["command"])} - {""}
+    if not names:
+        return False
+    path, target = str(event.get("id") or ""), str(event.get("program") or "")
+    parts = {os.path.basename(path).lower(), *(part.lower() for part in target.split("/") if part)}
+    return any(name in parts or name.rsplit("/", 1)[-1] in parts for name in names)
+
+
 def _naming_calls(event: Mapping[str, Any], rows: Sequence[Mapping[str, Any]]) -> list[tuple[Mapping[str, Any], float]]:
     """The agents' tool calls that RAN in the window before *event* and name its path, each with
     when it ended, newest first."""
@@ -142,7 +161,7 @@ def _naming_calls(event: Mapping[str, Any], rows: Sequence[Mapping[str, Any]]) -
             continue
         args = _detail(row).get("args")
         text = json.dumps(args, ensure_ascii=False) if args is not None else ""
-        if not (text and any(form in text for form in forms)):
+        if not (text and (any(form in text for form in forms) or _installs_it(event, args))):
             continue
         end = _call_end(row, rows)
         if end is not None:
