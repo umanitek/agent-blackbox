@@ -111,6 +111,42 @@ pub fn apply(filter: &Filter, token: Option<String>) -> Result<Option<String>, S
     }
 }
 
+/// Whether pf still enforces what *filter* loaded (None when pf can not be asked): pf enabled, the
+/// anchor holding as many rules as [`rules`] gives, and each table that should hold addresses still
+/// holding one of them (its first, asked with `pfctl -T test`: one lookup, the table never listed).
+/// Asked every plan cycle (LES-141: three or four pfctl calls, never a 28k-address listing).
+/// WHY (KI-695, macOS round R8): after a root `pfctl -a … -F all`, a table flush or `pfctl -d` the
+/// firewall never came back (17 min) and the overview still said "active" — nothing looked.
+pub fn intact(filter: &Filter) -> Option<bool> {
+    if filter.is_off() {
+        return Some(true);
+    }
+    if !enabled()? {
+        return Some(false);
+    }
+    let listed = run(&["-a", ANCHOR, "-s", "rules"], None).ok()?;
+    if rule_count(&listed) != rule_count(&rules(filter)) {
+        return Some(false);
+    }
+    Some(canaries(filter).iter().all(|(table, entry)| run(&["-a", ANCHOR, "-t", table, "-T", "test", entry], None).is_ok()))
+}
+
+/// The rules (not the table lines) in a ruleset text: `pfctl -s rules` output or [`rules`]. A rule
+/// written with a list (`port { 22 5900 … }`) counts once per item: pf loads, and lists, one rule each.
+pub fn rule_count(text: &str) -> usize {
+    text.lines().map(str::trim_start).filter(|line| line.starts_with("block") || line.starts_with("pass"))
+        .map(|line| line.split('{').skip(1).map(|list| list.split('}').next().unwrap_or("").split([' ', ',']).filter(|item| !item.is_empty()).count().max(1)).product::<usize>())
+        .sum()
+}
+
+/// One entry each table of *filter* should hold, `(table, entry)`: its first, for a table not empty.
+pub fn canaries(filter: &Filter) -> Vec<(&'static str, String)> {
+    let first = |list: &Option<Vec<IpAddr>>| list.as_ref().and_then(|ips| ips.first()).map(IpAddr::to_string);
+    [(THREATS, first(&filter.threats)), (CUT, first(&filter.cut)),
+     (SSH_ALLOW, filter.ssh_allow.as_ref().and_then(|list| list.first().cloned())), (REMOTE_BLOCK, first(&filter.remote_block))]
+        .into_iter().filter_map(|(table, entry)| entry.map(|entry| (table, entry))).collect()
+}
+
 /// Whether pf must be (re-)enabled: no token of ours, or pf seen disabled despite one.
 pub fn needs_enable(token: Option<&str>, status: Option<bool>) -> bool {
     token.is_none() || status == Some(false)
@@ -208,6 +244,25 @@ mod tests {
         assert!(text.contains("pass in quick on lo0 proto tcp to any port { 22 5900 3283 445 3031 }"), "this Mac itself still reaches them");
         assert!(!Filter { remote_lock: true, ..Default::default() }.is_off());
         assert!(!rules(&Filter::default()).contains("port { 22"), "off: no lock rules");
+    }
+
+    #[test]
+    fn the_intact_check_counts_rules_and_asks_one_entry_per_table() {
+        let filter = Filter { threats: Some(vec!["203.0.113.7".parse().unwrap(), "203.0.113.8".parse().unwrap()]),
+                              cut: Some(vec![]), ssh_allow: Some(vec!["192.168.1.0/24".into()]), ..Default::default() };
+        // What `pfctl -a … -s rules` prints for that filter (pf's own spelling of each rule).
+        let listed = "block drop out quick to <bb_threats>\nblock drop in quick from <bb_threats>\n\
+                      block drop out quick to <bb_cut>\nblock drop in quick from <bb_cut>\n\
+                      pass in quick on lo0 proto tcp from any to any port = 22 flags S/SA keep state\n\
+                      pass in quick proto tcp from <bb_ssh_allow> to any port = 22 flags S/SA keep state\n\
+                      block return in quick proto tcp from any to any port = 22\n";
+        assert_eq!(rule_count(listed), rule_count(&rules(&filter)), "an intact anchor");
+        assert_eq!(rule_count(""), 0, "a flushed anchor (`pfctl -a … -F all`) holds none");
+        let locked = rules(&Filter { remote_lock: true, ..Default::default() });
+        assert_eq!(rule_count(&locked), 10, "each port of the lock's list is a rule of its own, as pf lists them");
+        assert_eq!(canaries(&filter), vec![("bb_threats", "203.0.113.7".to_string()), ("bb_ssh_allow", "192.168.1.0/24".to_string())],
+                   "an empty table has nothing to ask; each other one its first entry");
+        assert_eq!(intact(&Filter::default()), Some(true), "nothing on: nothing to keep");
     }
 
     #[test]

@@ -53,6 +53,10 @@ impl Enforcer for MacEnforcer {
         pf::enabled()
     }
 
+    fn filter_intact(&self, filter: &Filter) -> Option<bool> {
+        pf::intact(filter)
+    }
+
     fn end_session(&self, pid: u32) -> Result<(), String> {
         sessions::end(pid)
     }

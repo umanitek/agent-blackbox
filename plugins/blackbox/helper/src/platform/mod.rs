@@ -137,7 +137,7 @@ pub trait Enforcer: Send + Sync {
     fn filter_enabled(&self) -> Option<bool>;
     /// Whether the firewall still holds the rules *filter* loaded (None when it cannot be read):
     /// asked every plan cycle, so it must be cheap. By default not known (nothing is re-applied):
-    /// Linux answers it (KI-688); macOS's pf is reported through [`Enforcer::filter_enabled`].
+    /// Linux answers it (KI-688, KI-690) and macOS too (KI-695).
     fn filter_intact(&self, _filter: &Filter) -> Option<bool> {
         None
     }

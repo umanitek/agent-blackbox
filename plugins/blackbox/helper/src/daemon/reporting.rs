@@ -18,9 +18,13 @@ impl Helper {
             .collect();
         let snapshot = if self.watching.load(Ordering::SeqCst) { self.observer.watch_snapshot() } else { None };
         let pf_on = state.firewall_active || state.cut_active || state.ssh_lockdown_active || state.remote_lock_active;
+        // What is really enforced (KI-695): a filter another root program flushed, emptied or
+        // switched off is not "active" until it is loaded again (`keep_filter_intact`).
+        let intact = self.filtered.lock().ok().and_then(|filtered| filtered.as_ref().map(|filter| self.enforcer.filter_intact(filter)))
+            .flatten() != Some(false);
         let remote = if self.watching.load(Ordering::SeqCst) { self.observer.remote_snapshot() } else { None };
         json!({
-            "running": true, "dns_active": state.dns_active, "firewall_active": state.firewall_active,
+            "running": true, "dns_active": state.dns_active, "firewall_active": state.firewall_active && intact,
             "cut_active": state.cut_active, "ssh_lockdown_active": state.ssh_lockdown_active,
             "version": state.version, "queries": self.resolver.queries.load(std::sync::atomic::Ordering::Relaxed),
             // What the person needs to trust the screen: whether the link is authenticated and the
