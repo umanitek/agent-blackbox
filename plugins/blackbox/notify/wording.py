@@ -67,6 +67,23 @@ def _where(project: str) -> str:
     return f" in {project}" if project else ""
 
 
+def _about_the_agent(identifier: str, key: str, name: str, subject: str, project: str, row: Mapping[str, Any],
+                     common: dict[str, Any]) -> Notice:
+    """The notice of a finding about the agent itself: a program it runs as root, a run Blackbox
+    does not see, a request for root."""
+    if identifier == ROOT_ID:
+        return Notice(id=key, kind="running-as-root", level="critical", title=f"{name} is running a program as root",
+                      body=f"A program {name} started{_where(project)} is running with administrator (root) rights. "
+                           "Open Blackbox to see which.", **common)
+    if identifier == UNGUARDED_ID:
+        return Notice(id=key, kind="unguarded-run", level="critical", title=f"{name} is running without Blackbox{_where(project)}",
+                      body=f"Blackbox sees none of what this {name} session does: "
+                           f"{str(row.get('evidence') or 'it sent no hook event')[:300]}. Open Blackbox to see it.", **common)
+    return Notice(id=key, kind="elevation-request", level="warning", title=f"{name} asked for administrator rights",
+                  body=f"{subject}{_where(project)} ran a command that asks for root (sudo). Blackbox let it run and recorded it.",
+                  **common)
+
+
 def finding(row: Mapping[str, Any]) -> Optional[Notice]:
     """The notice for one audit finding row (``audit.read_findings``); None for a row with no identifier."""
     identifier = str(row.get("identifier") or "")
@@ -83,18 +100,8 @@ def finding(row: Mapping[str, Any]) -> Optional[Notice]:
     detail = " — ".join(part for part in (str(row.get("title") or ""), str(row.get("evidence") or "")) if part)[:400]
     common = dict(ts=ts, category="security", agent=agent, agent_name=name, instance=instance, project=project, detail=detail)
     key = f"finding:{identifier}:{ts:.6f}:{row.get('tool_call_id') or ''}"
-    if identifier == ROOT_ID:
-        return Notice(id=key, kind="running-as-root", level="critical", title=f"{name} is running a program as root",
-                      body=f"A program {name} started{_where(project)} is running with administrator (root) rights. "
-                           "Open Blackbox to see which.", **common)
-    if identifier == UNGUARDED_ID:
-        return Notice(id=key, kind="unguarded-run", level="critical", title=f"{name} is running without Blackbox{_where(project)}",
-                      body=f"Blackbox sees none of what this {name} session does: "
-                           f"{str(row.get('evidence') or 'it sent no hook event')[:300]}. Open Blackbox to see it.", **common)
-    if identifier == ELEVATION_ID:
-        return Notice(id=key, kind="elevation-request", level="warning", title=f"{name} asked for administrator rights",
-                      body=f"{subject}{_where(project)} ran a command that asks for root (sudo). Blackbox let it run and recorded it.",
-                      **common)
+    if identifier in (ROOT_ID, UNGUARDED_ID, ELEVATION_ID):
+        return _about_the_agent(identifier, key, name, subject, project, row, common)
     what = WHAT.get(str(row.get("category") or ""), "did something Blackbox watches for")
     why = WHY.get(str(row.get("source") or ""), "a Blackbox rule covers it")
     if persistence_places.is_startup_item(identifier):
