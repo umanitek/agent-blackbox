@@ -248,3 +248,5 @@ fd9498122e5135106ce388f8106a5912a6f76a2c:tests/agent/test_mid_turn_compaction_tu
 2e7fb2cde5171ac6e72ae1551632bf658c5a3502:tests/gateway/test_local_session_info_fields.py:generic-api-key:23
 cdf5732af67c9c1784ba4857191c499c3f3b741e:hermes_cli/left_core_migration.py:generic-api-key:191
 3551045907580e25a766d01bc56eb0ee41115d0d:docs/gateway-classic-cli.md:generic-api-key:36
+# Reviewed 2026-11-25: a made-up test nonce ("0123456789ab…"), replaced by a named constant in a later commit.
+c4c0df494f51a2d7a3eeb9353c3bad51bb866252:tests/plugins/test_blackbox_shields_network_helper_link.py:generic-api-key:55

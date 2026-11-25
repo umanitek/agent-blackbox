@@ -38,7 +38,27 @@ that the two version fields agree.
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-11-25
+
 ### Added
+
+- **Linux gets the same deep protection as macOS.** On Linux (tested on Ubuntu 24.04 and 22.04)
+  Blackbox now runs agents inside its own sandbox (your private keys, Blackbox's settings,
+  startup places and the system stay closed to them), the Threat Firewall (nftables: listed
+  addresses are refused at once), DNS Shield (systemd-resolved, NetworkManager or
+  `/etc/resolv.conf`, put back exactly on uninstall), the startup watch and the system protection
+  helper as a systemd service. `blackbox approve` confirms a weakening change with your own
+  password, as on macOS. Docker and stopping one of your programs ask you, as on macOS.
+- **The Protection page.** One page shows every refused attempt to switch Blackbox off or get
+  around it, counted by kind; a protection log whose entries are chained, so an edit, a cut or a
+  rewind of the record shows; and watch-first rules — watch a host or a package, see how often
+  agents reach for it, then block it with one click (taking a block off asks you first). A
+  finding offers "Watch this". `docs/THREAT_MODEL.md` says what Blackbox defends against and how.
+- **Blackbox's own hooks are watched.** If one of Blackbox's hooks or plugins in an agent's folders
+  is removed or changed outside a Blackbox install, Blackbox raises a high-severity alert and puts
+  it back within seconds; a file found in its place is kept aside, never deleted. A new hook or
+  plugin that is not Blackbox's in those folders is reported too. "Stop protecting" an agent turns
+  this off for it.
 
 - **Sandbox permissions.** What an AI agent inside Blackbox's sandbox may do beyond your files is
   now a list you control — block, ask each time, or allow, for every agent, one agent, one project
@@ -147,6 +167,20 @@ that the two version fields agree.
 
 ### Security
 
+- **An agent cannot switch off its own hooks.** A write that would turn hooks off or remove
+  Blackbox's hook entries in an agent's settings — Claude Code's user or project
+  `settings.json` / `settings.local.json`, another project's, Codex's or Gemini CLI's project
+  settings — is refused by every route (edit, shell, copy, script). Ordinary edits of those files
+  still work. A Claude Code session that starts without Blackbox is reported as high severity,
+  naming the folder.
+- **The folders that hold the agents' hooks cannot be moved away inside the sandbox.** Every folder
+  above a hook or plugin place, up to your home folder, is locked, on macOS and Linux.
+- **DNS Shield and the Threat Firewall repair themselves.** They are checked every few seconds;
+  if they were switched off, flushed or lost at a restart they come back within seconds with a
+  high-severity alert, and the dashboard shows what is really in effect, not what was saved.
+- **Signals to Blackbox's own processes are refused by number as well as by name** (`sudo kill
+  -9 <pid>` of the helper).
+
 - **The Docker socket is closed inside the agent sandbox** unless you allow Docker for that agent:
   a container runs outside the sandbox, so `docker run -v <protected folder>:/x` could read a
   protected item (KI-622). Mounting a protected item into a container is refused by the hooks too.
@@ -246,6 +280,17 @@ that the two version fields agree.
   the account — and a short note says when it is done.
 
 ### Fixed
+
+- A global install of a package you only watch is no longer refused as a threat.
+- A program an agent puts on your PATH with `npm -g` is reported naming the agent.
+- A new DNS block applies within seconds (was up to three minutes), without a "plan could not be
+  read" message meanwhile.
+- A refusal by the sandbox is counted for the agent that tried, not for "agent-sandbox".
+- A script deleting under Blackbox's folder is no longer also counted as a startup-item attempt.
+- An agent you removed no longer shows as available; Linux says "this machine", not "this Mac".
+- An upgrade over a running install no longer fails with "File exists".
+- Uninstall removes the empty folders the installer created, and nothing of yours.
+- Before the first threat-graph sync, the dashboard no longer says the graph is complete.
 
 - **Codex can edit a package.json with its own patch tool again.** A Codex `apply_patch` of any
   package.json was refused as a change to Blackbox's own settings; a listed package added that way is
@@ -623,7 +668,8 @@ The first version in the Hermes plugin catalog (commit `7d697683`, added by Herm
 in NousResearch/hermes-agent#140529). Its `plugin.yaml` said 1.0.0 while Blackbox's own code and
 dashboard reported 1.1.0; 1.1.0 is therefore skipped, so no two different builds share a number.
 
-[Unreleased]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.5.0...main
+[Unreleased]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.6.0...main
+[1.6.0]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.5.0...blackbox-v1.6.0
 [1.5.0]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.4.1...blackbox-v1.5.0
 [1.4.1]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.4.0...blackbox-v1.4.1
 [1.4.0]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.3.0...blackbox-v1.4.0
