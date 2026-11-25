@@ -174,7 +174,8 @@ def file_report(context: ShieldContext, body: Mapping[str, Any]) -> dict[str, An
         raise ShieldApiError(400, "a file report carries a list of events")
     current = mode_module.current()
     kept = changes.record(events_in, current, self_protected=sandbox.self_protected_files(current),
-                          owner_of_pid=context.owner_of_pid)
+                          owner_of_pid=context.owner_of_pid,
+                          sandboxed_agents=(lambda: [run.agent for run in context.sandboxed_runs()]) if context.sandboxed_runs else None)
     return {"kept": len(kept)}
 
 

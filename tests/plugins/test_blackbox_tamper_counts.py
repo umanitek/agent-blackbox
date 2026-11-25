@@ -92,7 +92,7 @@ def test_a_kernel_refusal_seen_in_a_tool_output_counts_where_the_helper_does_not
     on_refusal("file", str(hook.parent), "codex", "s1", str(tmp_path))          # the pinned folder above it
     on_refusal("persistence", str(tmp_path / "home/.config/systemd/user/x.service"), "codex", "s1", str(tmp_path))
     counts = audit.tamper_counts()
-    assert counts["self-protection-kernel"]["count"] == 2 and counts["self-protection-kernel"]["last_agent"] == audit.SANDBOX_RECORDER
+    assert counts["self-protection-kernel"]["count"] == 2 and counts["self-protection-kernel"]["last_agent"] == "codex"
     assert counts["startup-item"]["count"] == 1
     assert audit.protection_log.verify().seq == 3 and audit.protection_log.verify().state == "ok"
 
@@ -125,3 +125,27 @@ def test_only_the_macos_helper_reports_the_sandboxs_refusals():
     from plugins.blackbox.shields.files.sandbox.platform import linux
     assert macos.HELPER_REPORTS_REFUSALS is True
     assert linux.HELPER_REPORTS_REFUSALS is False and unsupported.HELPER_REPORTS_REFUSALS is False
+
+
+def test_a_kernel_refusal_the_helper_reports_counts_for_the_agent_it_belongs_to(monkeypatch, tmp_path):
+    """KI-697 (macOS round R8): REAL sandboxed Claude Code and Codex runs had their kernel refusals of
+    hook folders and ~/.hermes/config.yaml counted with last_agent "agent-sandbox", so the Protection
+    page could not say which agent tried. The refused program is usually gone when the helper's
+    report arrives; while only ONE agent runs inside the sandbox, that agent is named — two at once,
+    or none, and the refusal stays unattributed (never guessed, KI-598)."""
+    import time
+    from plugins.blackbox.shields.files import changes
+    from plugins.blackbox.shields.shield_api import InstanceRef
+    hook = str(tmp_path / ".claude" / "settings.json")
+
+    def report(**kwargs):
+        changes.record([{"path": hook, "kind": "denied", "program": "python3.14", "ts": int(time.time()), "pid": 4242}],
+                       None, self_protected=(hook,), **kwargs)
+    monkeypatch.setattr(changes, "_scope", lambda _path, _mode: None)
+    report(owner_of_pid=lambda _pid: None, sandboxed_agents=lambda: ["claude-code", "claude-code"])
+    assert audit.tamper_counts()["self-protection-kernel"]["last_agent"] == "claude-code"
+    report(owner_of_pid=lambda _pid: InstanceRef("codex", "i1", "", ""), sandboxed_agents=lambda: ["claude-code"])
+    assert audit.tamper_counts()["self-protection-kernel"]["last_agent"] == "codex"
+    report(owner_of_pid=lambda _pid: None, sandboxed_agents=lambda: ["claude-code", "codex"])
+    counts = audit.tamper_counts()["self-protection-kernel"]
+    assert counts["count"] == 3 and counts["last_agent"] == audit.SANDBOX_RECORDER

@@ -30,7 +30,7 @@ import os
 import threading
 import time
 from dataclasses import dataclass
-from typing import Any, Callable, Optional, Sequence
+from typing import Any, Callable, Iterable, Optional, Sequence
 
 from ...kernel import constants
 from ...kernel.bounded_files import atomic_write, read_small_text
@@ -139,13 +139,17 @@ def _pid_of(event: Any) -> int:
 
 
 def record(events: Sequence[Any], mode: ShieldMode, now: Optional[float] = None,
-           self_protected: Sequence[str] = (), owner_of_pid: Optional[Callable[[int], Any]] = None) -> list[FileChange]:
+           self_protected: Sequence[str] = (), owner_of_pid: Optional[Callable[[int], Any]] = None,
+           sandboxed_agents: Optional[Callable[[], Iterable[str]]] = None) -> list[FileChange]:
     """Keeps the events inside the current items and folders; answers the ones kept. Refuses a
     report with a malformed event (nothing kept) or more than :data:`MAX_PER_REPORT` events.
     *self_protected*: the files the sandbox keeps closed for Blackbox (``sandbox.self_protected_files``)
     — a refusal naming one is recorded as a self-protection hit (KI-581), not kept as a change.
     *owner_of_pid*: the agent tracker's ``pid -> InstanceRef | None``; a refusal whose pid it knows
-    NOW (the refused process, or its agent, may still run) is recorded on that instance (KI-598)."""
+    NOW (the refused process, or its agent, may still run) is recorded on that instance (KI-598).
+    *sandboxed_agents*: the agents running inside the sandbox now (``ShieldContext.sandboxed_runs``):
+    a self-protection refusal whose process is already gone names the agent when only ONE agent runs
+    there (KI-697) — the agent, never an instance (that stays unattributed, KI-598)."""
     now = time.time() if now is None else now
     if len(events) > MAX_PER_REPORT:
         raise ShieldApiError(400, f"a file report carries at most {MAX_PER_REPORT} events")
@@ -171,8 +175,19 @@ def record(events: Sequence[Any], mode: ShieldMode, now: Optional[float] = None,
             _save()
             _cond.notify_all()
     _record_hits([change for change in kept if change.kind == DENIED], hit_owners)
-    _record_self_hits(self_denials)
+    _record_self_hits(self_denials, _only_agent(sandboxed_agents) if any(owner is None for *_rest, owner in self_denials) else "")
     return kept
+
+
+def _only_agent(sandboxed_agents: Optional[Callable[[], Iterable[str]]]) -> str:
+    """The one agent running inside the sandbox now, "" when none or several (or not known)."""
+    if sandboxed_agents is None:
+        return ""
+    try:
+        agents = {str(agent) for agent in sandboxed_agents() if agent}
+    except Exception:   # health: allow BLE001 -- a refusal is still recorded; it then names no agent
+        return ""
+    return agents.pop() if len(agents) == 1 else ""
 
 
 def _owner(owner_of_pid: Optional[Callable[[int], Any]], pid: int) -> Any:
@@ -195,16 +210,18 @@ def _inside_any(path: str, places: Sequence[str]) -> bool:
     return any(_under(path, place) for place in places)
 
 
-def _record_self_hits(denials: list[tuple[str, str, Any]]) -> None:
-    """Each sandbox refusal of a write to a file kept closed for Blackbox, as a self-protection hit."""
+def _record_self_hits(denials: list[tuple[str, str, Any]], only_agent: str = "") -> None:
+    """Each sandbox refusal of a write to a file kept closed for Blackbox, as a self-protection hit
+    (named for its owner's agent, else *only_agent*: the one agent inside the sandbox then)."""
     if not denials:
         return
     from ... import audit
     from .protect import SANDBOX_AGENT, sandbox_self_hit
     for path, program, owner in denials:
+        named = _owned(owner) or ({"agent": only_agent} if only_agent else {})
         audit.record_for(SANDBOX_AGENT, event="sandbox_deny", findings=[sandbox_self_hit(path, program).to_dict()],
                          detail={"decision": "block", "tool_name": program, "tool_call_id": f"sandbox-self:{time.time():.6f}:{path}",
-                                 **_owned(owner)})
+                                 **named})
 
 
 #: The refusal kinds an agent's hook reads from a tool's output (``agent_hooks``' sandbox words): a
@@ -239,7 +256,9 @@ def record_seen_refusal(kind: str, path: str, agent: str, instance: str, self_pr
         finding = sandbox_self_hit(path, agent)
     else:
         return False
-    audit.record_for(SANDBOX_AGENT, event="sandbox_deny", findings=[finding.to_dict()],
+    # The hook that read it knows the agent (KI-697): recorded under it, as its other refusals are.
+    recorder = agent if agent and agent.replace("-", "").isalnum() else SANDBOX_AGENT
+    audit.record_for(recorder, event="sandbox_deny", findings=[finding.to_dict()],
                      detail={"decision": "block", "tool_name": agent[:MAX_PROGRAM_CHARS] or "program",
                              "tool_call_id": f"sandbox-seen:{time.time():.6f}:{path}", "session_id": instance, "agent": agent})
     return True

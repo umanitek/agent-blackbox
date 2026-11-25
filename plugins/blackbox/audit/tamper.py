@@ -68,6 +68,14 @@ def category(finding: dict[str, Any], event: str) -> Optional[str]:
     return None
 
 
+def acting_agent(framework: str, detail: Optional[dict[str, Any]], not_agents: frozenset[str]) -> str:
+    """The agent a record's refusal is counted for: the recorder, or — for a recorder that is not
+    an agent (*not_agents*: the sandbox's) — the agent the record names (KI-697: kernel refusals
+    were counted for "agent-sandbox", so the Protection page could not say which agent tried)."""
+    named = str((detail or {}).get("agent") or "") if framework in not_agents else ""
+    return named[:64] if named and named.replace("-", "").replace("_", "").isalnum() else framework
+
+
 def note(event: str, findings: Optional[list[dict[str, Any]]], detail: Optional[dict[str, Any]],
          agent: str) -> None:
     """Count every refused tamper finding of one audit record (the audit log calls this for each)."""

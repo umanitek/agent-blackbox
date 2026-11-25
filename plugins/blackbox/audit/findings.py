@@ -297,7 +297,7 @@ def _record(event: str, findings: Optional[list[dict[str, Any]]], detail: Option
         log_store._append_jsonl(log_store._home() / f"audit{suffix}.jsonl", base)
         for finding in findings or []:
             log_store._append_jsonl(log_store._home() / f"findings{suffix}.jsonl", {**base, "finding": _finding_summary(finding)})
-        tamper.note(event, findings, detail, framework)   # every refusal passes here, whoever made it
+        tamper.note(event, findings, detail, tamper.acting_agent(framework, detail, NOT_AGENTS))   # every refusal passes here, whoever made it
     except Exception as exc:  # pragma: no cover - fail open  # health: allow BLE001 -- recording never stops the hook (moved from record)
         logger.debug("blackbox: audit record failed: %s", exc)
 
