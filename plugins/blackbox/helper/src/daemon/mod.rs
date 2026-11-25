@@ -207,9 +207,13 @@ pub fn run() -> Result<(), String> {
             helper.stop();
             return Ok(());
         }
-        helper.follow_plan();
+        // What is in effect first, then the plan. WHY the order (fix wave W12, macOS VM after a helper
+        // restart: DNS Shield came back 50 s later; Linux round L5: the firewall ~60 s after boot):
+        // reading the plan can wait on a busy or starting dashboard for up to PLAN_TIMEOUT, and the
+        // checks that put the last applied plan back must not wait behind it.
         helper.keep_dns_safe();
         helper.keep_filter_intact();
+        helper.follow_plan();
         let every = if helper.watching.load(Ordering::SeqCst) { PLAN_EVERY_WATCHING } else { PLAN_EVERY };
         for _ in 0..(every.as_millis() / 200) {
             if STOPPING.load(Ordering::SeqCst) {
