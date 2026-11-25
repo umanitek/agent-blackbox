@@ -141,8 +141,17 @@ def _decide(context: ShieldContext, body: Mapping[str, Any], request: jobs.Reque
     return owner
 
 
+#: A finding of the person's watch list (``watch.CATEGORY``; shields can not import ``watch``, which
+#: builds on shields — a test holds the two equal) and a finding that only flags. WHY (KI-699, macOS
+#: round R8): a package only on the WATCH list was refused here as "a threat rule lists this
+#: package", breaking watch-first (watch, count, then decide). A watch rule only counts; one the
+#: person promoted to block refuses through the verdict's own decision, as any blocking rule does.
+WATCH_CATEGORY, FLAG_ONLY = "watch", "flag-only"
+
+
 def _listed(context: ShieldContext, request: jobs.Request) -> list[str]:
-    """The names a threat rule matches as a package action; every name when it can not be asked."""
+    """The names a threat rule — or a blocking rule — matches as a package action; every name when
+    it can not be asked."""
     if request.verb == "uninstall":
         return []
     judge = context.tool_call_verdict
@@ -155,7 +164,8 @@ def _listed(context: ShieldContext, request: jobs.Request) -> list[str]:
         except Exception:   # health: allow BLE001 -- the verdict could not be asked: fail closed
             listed.append(name)
             continue
-        rules = [found for found in verdict.get("findings") or [] if found.get("source") != HEURISTIC]
+        rules = [found for found in verdict.get("findings") or [] if found.get("source") != HEURISTIC
+                 and found.get("category") != WATCH_CATEGORY and found.get("kind") != FLAG_ONLY]
         if verdict.get("decision") == "block" or rules:
             listed.append(name)
     return listed

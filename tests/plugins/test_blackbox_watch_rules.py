@@ -123,3 +123,23 @@ def test_a_blocking_watch_rule_is_named_as_the_persons_rule_not_self_protection(
     found = watch.check("terminal", {"command": "curl https://files.example.top/x"})
     text = reporting.blackbox_block_message(found)
     assert "it was refused by your watch rule" in text and "self-protection" not in text
+
+
+def test_the_global_install_broker_installs_a_package_that_is_only_watched(monkeypatch):
+    """KI-699 (macOS round R8): with npm:is-odd only on the WATCH list, a sandboxed Claude Code's
+    ``npm install -g is-odd`` was flagged by the hook ("counted, not blocked") and then refused by the
+    broker as "a threat rule lists this package". Asked through the REAL verdict, a watch rule only
+    counts; promoted to block (Block mode), it refuses."""
+    from plugins.blackbox.shields.files.sandbox import packages
+    from plugins.blackbox.shields.shield_api import ShieldContext
+    context = ShieldContext(network_indicators=lambda: None, ask_assistant=lambda message: None,
+                            tool_call_verdict=lambda tool, args: guard.tool_call_verdict(tool, args, agent="claude-code"))
+    from plugins.blackbox.shields.files.sandbox.packages import managers
+    request = managers.parse("npm", ["install", "-g", "is-odd"])
+    _block_mode(True)
+    assert watch.add("package", "npm:is-odd")["ok"]
+    assert packages._listed(context, request) == []
+    assert _rule("npm:is-odd")["hits"] == 1
+    assert watch.promote(_rule("npm:is-odd")["rule_id"])["ok"]
+    assert packages._listed(context, request) == ["is-odd"]
+    assert packages.WATCH_CATEGORY == watch.CATEGORY   # the broker's word for a watch finding is the watch's own
