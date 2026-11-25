@@ -64,6 +64,7 @@ impl Helper {
         if let Ok(mut current) = self.resolver.lists.write() {
             *current = lists;
         }
+        self.dns_wanted.store(plan.dns.enabled, Ordering::SeqCst);
         let dns_error = self.set_dns(plan.dns.enabled);
         let filter_error = self.set_filter(plan);
         *self.failures.lock().unwrap() = Failures { dns: dns_error.clone(), filter: filter_error.clone() };
@@ -125,7 +126,19 @@ impl Helper {
     /// servers), and if the resolver died, put the Mac's own DNS back at once and say so — the
     /// next plan turns it on again only when the resolver answers.
     pub(super) fn keep_dns_safe(&self) {
-        if !self.state.lock().map(|state| state.dns_active).unwrap_or(false) {
+        let active = self.state.lock().map(|state| state.dns_active).unwrap_or(false);
+        if !active && self.dns_wanted.load(Ordering::SeqCst) {
+            // The plan wants DNS Shield on and it is not: switching it on failed (a boot before the
+            // resolver or the network answered), or the service's stop at shutdown put the system's
+            // DNS back. An unchanged plan is never applied again, so this is where it is retried
+            // (security finding 2026-11-25-linux-dns-shield-is-silently-off-after-a, Linux round L5).
+            match self.set_dns(true) {
+                None => self.observer.record(json!({"kind": "dns-shield-restored", "ts": now()})),
+                Some(error) => *self.last_error.lock().unwrap() = Some(error),
+            }
+            return;
+        }
+        if !active {
             return;
         }
         if !self.resolver_answers() {

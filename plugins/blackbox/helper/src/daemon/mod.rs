@@ -58,6 +58,9 @@ struct Helper {
     /// The filter last applied (None while every firewall protection is off): what
     /// [`Helper::keep_filter_intact`] loads again when another program removed or changed the rules.
     filtered: Mutex<Option<platform::Filter>>,
+    /// Whether the plan last applied wants DNS Shield on: what [`Helper::keep_dns_safe`] keeps true
+    /// in effect, also when switching it on failed (a boot before the resolver answered).
+    dns_wanted: AtomicBool,
     wake: Wake,
 }
 
@@ -157,6 +160,7 @@ pub fn run() -> Result<(), String> {
         ended: Mutex::new(HashSet::new()),
         kept: Mutex::new(crate::plan::Kept::default()),
         filtered: Mutex::new(None),
+        dns_wanted: AtomicBool::new(false),
         wake: Wake::default(),
     });
 
