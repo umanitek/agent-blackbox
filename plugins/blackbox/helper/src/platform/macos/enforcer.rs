@@ -57,6 +57,10 @@ impl Enforcer for MacEnforcer {
         pf::intact(filter)
     }
 
+    fn dns_in_effect(&self) -> Option<bool> {
+        system::shield_in_effect()
+    }
+
     fn end_session(&self, pid: u32) -> Result<(), String> {
         sessions::end(pid)
     }

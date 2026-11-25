@@ -258,6 +258,18 @@ def test_the_helpers_firewall_restored_event_is_taken_and_said_as_high():
     assert "firewall-restored" in notices.WORDS
 
 
+def test_the_helpers_dns_shield_restored_event_is_taken_and_said_as_high():
+    """Security finding 2026-11-25-linux-dns-shield-is-silently-off-after-a (Linux round L5; macOS too,
+    fix wave W12 on bb-w12-a): after a restart the system used the router's DNS while dns_active said
+    true. The helper now checks what is IN EFFECT and points DNS back; the person is told, HIGH."""
+    from plugins.blackbox.shields.network.monitor import watch
+    from plugins.blackbox.shields.network import notices
+    event = watch._event({"kind": "dns-shield-restored", "ts": 1795219000}, 1795219100.0)
+    assert event == {"kind": "dns-shield-restored", "ts": 1795219000.0}
+    assert watch.SEVERITY["dns-shield-restored"] == "high" and "pointed it back" in watch.text_of(event)
+    assert "dns-shield-restored" in notices.WORDS
+
+
 def test_only_public_addresses_from_the_graph_are_ever_marked():
     """FIX-0222: a threat list's private or CGNAT address names someone else's network."""
     assert public_only({"45.130.148.102", "192.168.54.1", "100.106.194.93", "169.254.169.254", "0.0.0.0", "not-an-ip"}) == {"45.130.148.102"}

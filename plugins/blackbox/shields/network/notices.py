@@ -33,6 +33,7 @@ WORDS: dict[str, tuple[str, str]] = {
     "remote-end-refused": ("A remote session could not be ended", SEE),
     "file-changed": ("A login file changed", "A file that controls who can sign in to this Mac changed. " + SEE),
     "firewall-restored": ("Threat Firewall put back", "Something removed the Threat Firewall's rules; Blackbox put them back. " + SEE),
+    "dns-shield-restored": ("DNS Shield put back", "This machine's DNS had stopped going through DNS Shield; Blackbox pointed it back. " + SEE),
     "connection-cut": ("Malicious connection cut", "Blackbox ended a connection to an address on the threat list. " + SEE),
     "connection-seen": ("Connection to a listed threat",
                         "A program on this Mac is talking to an address on the threat list. " + SEE),

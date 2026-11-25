@@ -141,6 +141,11 @@ pub trait Enforcer: Send + Sync {
     fn filter_intact(&self, _filter: &Filter) -> Option<bool> {
         None
     }
+    /// Whether the system's DNS really points at Blackbox's resolver now (None when it cannot be
+    /// read): what is IN EFFECT, never the saved state — asked every plan cycle, so it must be cheap.
+    fn dns_in_effect(&self) -> Option<bool> {
+        None
+    }
     /// Ends the process serving one remote session (already checked by [`Observer::verify_end`]).
     fn end_session(&self, pid: u32) -> Result<(), String>;
     /// Reverses every posture fix the person asked for (only on their explicit choice).

@@ -24,7 +24,7 @@ impl Helper {
             .flatten() != Some(false);
         let remote = if self.watching.load(Ordering::SeqCst) { self.observer.remote_snapshot() } else { None };
         json!({
-            "running": true, "dns_active": state.dns_active, "firewall_active": state.firewall_active && intact,
+            "running": true, "dns_active": state.dns_active && self.enforcer.dns_in_effect() != Some(false), "firewall_active": state.firewall_active && intact,
             "cut_active": state.cut_active, "ssh_lockdown_active": state.ssh_lockdown_active,
             "version": state.version, "queries": self.resolver.queries.load(std::sync::atomic::Ordering::Relaxed),
             // What the person needs to trust the screen: whether the link is authenticated and the

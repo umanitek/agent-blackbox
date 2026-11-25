@@ -63,6 +63,10 @@ impl Enforcer for LinuxEnforcer {
         nft::intact(filter)
     }
 
+    fn dns_in_effect(&self) -> Option<bool> {
+        Some(!dns::drifted(&dns::read_view()))
+    }
+
     fn end_session(&self, _pid: u32) -> Result<(), String> { Err(NOT_YET.into()) }
     fn undo_hardening(&self) {}
 }

@@ -124,6 +124,19 @@ pub fn parse_dhcp_dns(text: &str) -> Vec<SocketAddr> {
         .map(|ip| SocketAddr::new(ip, 53)).collect()
 }
 
+/// Whether DNS Shield is in effect now: the Mac's first general resolver (`scutil --dns`, what the
+/// system really asks) is Blackbox's. None when scutil can not be read.
+pub fn shield_in_effect() -> Option<bool> {
+    run(SCUTIL, &["--dns"]).ok().map(|text| first_nameserver(&text).as_deref() == Some(super::restore::RESOLVER))
+}
+
+/// The first `nameserver[0]` of the general configuration (before "DNS configuration (for scoped
+/// queries)"), "" when none is set.
+pub fn first_nameserver(scutil: &str) -> Option<String> {
+    let general = scutil.split("for scoped queries").next().unwrap_or("");
+    general.lines().find_map(|line| line.trim().strip_prefix("nameserver[0] :").map(|ip| ip.trim().to_string()))
+}
+
 /// Reads the Mac's current resolvers. Call before pointing DNS at the Shield.
 pub fn current_upstreams() -> Vec<SocketAddr> {
     upstreams_from_scutil(&run(SCUTIL, &["--dns"]).unwrap_or_default())
@@ -139,6 +152,18 @@ pub fn upstreams_from_saved(saved: &BTreeMap<String, Vec<String>>) -> Vec<Socket
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_shield_is_in_effect_only_when_the_general_resolver_is_ours() {
+        // bb-w12-a (W12): Ethernet had no DNS servers set, scutil showed the router, state said dns_active.
+        let router = "DNS configuration\n\nresolver #1\n  search domain[0] : localdomain\n  nameserver[0] : 192.168.64.1\n\
+                      \nDNS configuration (for scoped queries)\n\nresolver #1\n  nameserver[0] : 192.168.64.1\n";
+        assert_eq!(first_nameserver(router).as_deref(), Some("192.168.64.1"));
+        let ours = "DNS configuration\n\nresolver #1\n  nameserver[0] : 127.0.0.1\n\nDNS configuration (for scoped queries)\n\
+                    \nresolver #1\n  nameserver[0] : 192.168.64.1\n";
+        assert_eq!(first_nameserver(ours).as_deref(), Some("127.0.0.1"), "a scoped resolver below does not count");
+        assert_eq!(first_nameserver("DNS configuration\n\nresolver #1\n  domain : local\n"), None);
+    }
 
     #[test]
     fn services_skip_the_header_and_disabled_ones() {

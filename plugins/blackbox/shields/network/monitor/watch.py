@@ -55,7 +55,10 @@ _SYSTEM_FILES = {"/etc/hosts": "hosts file", "/private/etc/hosts": "hosts file",
 _SHA_PREFIX = re.compile(r"^[0-9a-f]{0,16}$")
 #: ``firewall-restored``: another program removed or changed the Threat Firewall's rules and the
 #: helper loaded them again at once (KI-688).
-KINDS = ("ssh-session-new", "ssh-session-ended", "file-changed", "connection-cut", "remote-login-changed", "firewall-restored")
+#: ``dns-shield-restored``: the system's DNS did not point at DNS Shield's resolver while it was on (a
+#: reboot, a network change, another program) and the helper pointed it there again (fix wave W12).
+KINDS = ("ssh-session-new", "ssh-session-ended", "file-changed", "connection-cut", "remote-login-changed", "firewall-restored",
+         "dns-shield-restored")
 #: Not from the helper: a connection a live collector saw (:func:`observed`).
 SEEN = "connection-seen"
 #: One sighting per process and address in this long (the collector reports every reading).
@@ -64,7 +67,8 @@ MAX_PROGRAM_CHARS = 64
 _PROGRAM = re.compile(r"^[^/\x00-\x1f]{1,64}$")
 CHANGES = ("added", "removed", "modified")
 SEVERITY = {"ssh-session-new": "high", "ssh-session-ended": "info", "file-changed": "medium",
-            "connection-cut": "high", "remote-login-changed": "medium", "firewall-restored": "high", SEEN: "high"}
+            "connection-cut": "high", "remote-login-changed": "medium", "firewall-restored": "high", "dns-shield-restored": "high",
+            SEEN: "high"}
 
 _lock = threading.Lock()
 
@@ -121,7 +125,7 @@ def _event(item: Any, now: float) -> dict[str, Any]:
         raise _refuse(f"each event has a kind: {', '.join(KINDS)}")
     kind = item["kind"]
     event: dict[str, Any] = {"kind": kind, "ts": _ts(item.get("ts", int(now)), now)}
-    if kind == "firewall-restored":   # its kind and time are the whole event
+    if kind in ("firewall-restored", "dns-shield-restored"):   # its kind and time are the whole event
         return event
     if kind in ("ssh-session-new", "ssh-session-ended"):
         event.update(remote_ip=_ip(item.get("remote_ip")), remote_port=_whole(item.get("remote_port", 0), "remote_port", 65535))
@@ -227,6 +231,9 @@ def text_of(event: Mapping[str, Any]) -> str:
                 f"{event.get('remote_port')}, which the verified threat graph lists as malicious.")
     if kind == "firewall-restored":
         return "Something removed or changed the Threat Firewall's rules; Blackbox put them back at once."
+    if kind == "dns-shield-restored":
+        return ("DNS Shield was not in effect: this machine's DNS no longer went to Blackbox's resolver (after a restart, a "
+                "network change or another program). Blackbox pointed it back at once.")
     if kind == "remote-login-changed":
         return "Remote Login (SSH) was switched on." if event.get("on") else "Remote Login (SSH) was switched off."
     change = {"added": "appeared", "removed": "was removed", "modified": "changed"}.get(str(event.get("change")), "changed")

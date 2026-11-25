@@ -134,10 +134,39 @@ impl Helper {
             *self.last_error.lock().unwrap() = Some(format!("DNS Shield's resolver stopped answering; the Mac's own DNS was put back {error}").trim().to_string());
             return;
         }
+        self.keep_dns_in_effect();
         let now = self.enforcer.dhcp_upstreams();
         if !now.is_empty() {
             if let Ok(mut upstreams) = self.resolver.upstreams.write() {
                 if *upstreams != now { *upstreams = now; }
+            }
+        }
+    }
+
+    /// While DNS Shield is on: when the system's DNS does not really point at the resolver (a
+    /// reboot dropped the resolver drop-in, a network change or another program reset it), DNS is
+    /// pointed at it again at once and the restoration recorded (`dns-shield-restored`, HIGH in the
+    /// plugin). The servers saved when DNS Shield was switched on stay the ones put back later.
+    /// WHY (security finding 2026-11-25-linux-dns-shield-is-silently-off-after-a, Linux round L5,
+    /// and the same on macOS, fix wave W12): only the SAVED state was trusted — after a reboot the
+    /// machine used the router's DNS, listed domains resolved, and dns_active said true for minutes.
+    fn keep_dns_in_effect(&self) {
+        if self.enforcer.dns_in_effect() != Some(false) {
+            return;
+        }
+        match self.enforcer.point_dns_at_shield() {
+            Ok(saved) => {
+                if let Ok(mut state) = self.state.lock() {
+                    for (service, servers) in saved {
+                        state.saved_dns.entry(service).or_insert(servers);
+                    }
+                    state.save();
+                }
+                self.observer.record(json!({"kind": "dns-shield-restored", "ts": now()}));
+                self.wake.now();
+            }
+            Err(error) => {
+                *self.last_error.lock().unwrap() = Some(format!("DNS Shield was not in effect and could not be put back: {error}"));
             }
         }
     }
