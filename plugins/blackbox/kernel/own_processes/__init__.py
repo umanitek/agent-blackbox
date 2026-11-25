@@ -73,10 +73,13 @@ def _read() -> tuple[OwnProcess, ...]:
     for process in psutil.process_iter(["pid", "name", "cmdline"]):
         try:
             argv = process.info.get("cmdline") or []
-            ours = is_own(argv) or (process.info["pid"] == node and any("dkg" in word for word in argv[:4]))
+            # WHY the name too (KI-700, macOS round R8): the system protection helper runs as root,
+            # whose command line the person's processes may not read (psutil answers None), so
+            # ``sudo kill -9 <helper pid>`` named nothing ours; its program name stays readable.
+            named = process.info.get("name") or ""
+            ours = is_own(argv) or named in _OWN_PROGRAMS or (process.info["pid"] == node and any("dkg" in word for word in argv[:4]))
             if ours:
-                found.append(OwnProcess(process.info["pid"], os.getpgid(process.info["pid"]), process.info.get("name") or "",
-                                        " ".join(argv)[:2000]))
+                found.append(OwnProcess(process.info["pid"], os.getpgid(process.info["pid"]), named, " ".join(argv)[:2000] or named))
         except (psutil.Error, OSError):   # gone, or another user's: not something to protect here
             continue
     return tuple(found)

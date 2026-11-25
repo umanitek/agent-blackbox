@@ -179,3 +179,22 @@ def test_genuine_breakage_still_fails_open(home, tmp_path):
                           capture_output=True, text=True, timeout=60, check=False)
     assert done.returncode == 0 and "deny" not in done.stdout
     shutil.rmtree(folder)
+
+
+def test_the_root_helper_whose_command_line_can_not_be_read_is_still_blackboxs(home, monkeypatch):
+    """KI-700 (macOS round R8): Claude Code's REAL runner allowed ``sudo kill -9 <helper pid>`` while
+    it refused the dashboard's pid — the helper runs as root, psutil could not read its command
+    line, so its pid named nothing of Blackbox's. Its program name is readable, and is enough."""
+    import psutil
+
+    class Root:
+        def __init__(self, pid, name):
+            self.info = {"pid": pid, "name": name, "cmdline": None}   # another user's: argv unreadable
+    monkeypatch.setattr(psutil, "process_iter", lambda _attrs: [Root(66, "blackbox-netd"), Root(67, "syslogd")])
+    monkeypatch.setattr(os, "getpgid", lambda pid: pid)
+    found = own_processes._read()
+    assert [(each.pid, each.name) for each in found] == [(66, "blackbox-netd")]
+    monkeypatch.setattr(own_processes, "running", lambda: found)
+    for command in ("sudo kill -9 66", "sudo kill 66", "kill -TERM 66"):
+        assert _verdict(command)["decision"] == "block", command
+    assert _verdict("sudo kill -9 67")["decision"] != "block"
