@@ -10,6 +10,11 @@ The map is plugins/blackbox/ARCHITECTURE.md; these tests hold the code to it:
 * SIZE — files over 400 lines, folders over 15 files and functions over 50
   lines are failures unless listed in architecture_baseline.json, whose
   numbers may only shrink (lower them in the commit that shrinks the code).
+* MONITOR NEVER CHANGES THE SYSTEM — Network Shield's ``monitor/`` and its other
+  detection-only modules (``SEE_ONLY``) import nothing from ``protect/`` or
+  ``respond/``, name no state-changing command (pfctl, networksetup, launchctl,
+  kill, rm, sudo, osascript, systemsetup, …), and call nothing that deletes,
+  moves or writes files, kills processes, or reaches C (``ctypes``).
 
 Stdlib only; reads source text, never imports the plugin.
 """
@@ -263,3 +268,134 @@ def test_no_folder_exceeds_the_file_alarm():
         if count > MAX_FOLDER_FILES:
             crowded.append(f"{folder.relative_to(PLUGIN)}: {count} files (> {MAX_FOLDER_FILES}; add a submodule)")
     assert not crowded, "\n".join(crowded)
+
+
+# ------------------------------------------------------------------ monitor never changes the system
+
+NETWORK = PLUGIN / "shields" / "network"
+#: Network Shield's see-only code: all of monitor/, plus the detection-only modules beside it.
+SEE_ONLY_FILES = ("system.py", "addresses.py")
+#: The packages that act (see-only code must not reach them).
+ACTING_PACKAGES = ("protect", "respond")
+#: Programs that change the Mac, named anywhere in see-only code (by name or path).
+STATE_CHANGING_COMMANDS = frozenset({
+    "pfctl", "networksetup", "launchctl", "kill", "killall", "pkill", "rm", "rmdir", "mv", "sudo",
+    "osascript", "systemsetup", "socketfilterfw", "dscl", "chmod", "chown", "shutdown", "reboot",
+    "csrutil", "spctl", "route", "ifconfig", "tccutil", "sysadminctl",
+    # Linux (deep layers step 3: the monitor reads Linux too)
+    "nft", "iptables", "conntrack", "nmcli", "resolvectl", "systemctl", "ufw"})
+#: Module functions that change state: (module, function).
+STATE_CHANGING_FUNCTIONS = frozenset({
+    ("os", "kill"), ("os", "killpg"), ("os", "remove"), ("os", "rename"), ("os", "replace"),
+    ("os", "unlink"), ("os", "rmdir"), ("os", "removedirs"), ("os", "chmod"), ("os", "chown"),
+    ("os", "system"), ("os", "truncate"), ("shutil", "rmtree"), ("shutil", "move"), ("shutil", "copy"),
+    ("shutil", "copy2"), ("shutil", "copyfile"), ("shutil", "copytree"), ("shutil", "chown")})
+#: Path methods that change files (any call of these attribute names counts).
+STATE_CHANGING_METHODS = frozenset({"unlink", "rename", "write_text", "write_bytes", "rmdir", "touch",
+                                    "chmod", "symlink_to", "hardlink_to"})
+WRITE_MODE = re.compile(r"[wax+]")
+
+
+def _see_only_files() -> list[Path]:
+    return sorted([*NETWORK.glob("monitor/**/*.py"), *(NETWORK / name for name in SEE_ONLY_FILES)])
+
+
+def _resolved_import(path: Path, node: ast.ImportFrom) -> str:
+    """The dotted path, relative to plugins/blackbox, that a ``from … import`` names."""
+    base = list(path.relative_to(PLUGIN).with_suffix("").parts)[:-1]
+    if node.level:
+        base = base[: len(base) - (node.level - 1)] if node.level > 1 else base
+        return ".".join([*base, *(node.module.split(".") if node.module else [])])
+    return node.module or ""
+
+
+#: A path under the kernel's process file system is a table that is read (Linux's
+#: ``/proc/net/route``), never a command, whatever its last word.
+KERNEL_TABLES = "/proc/"
+
+
+def _changes_the_system(path: Path, source: str) -> list[str]:
+    """What in *source* (the file at *path*, inside plugins/blackbox) acts instead of seeing."""
+    where = path.relative_to(PLUGIN)
+    acting = tuple(f"shields.network.{name}" for name in ACTING_PACKAGES)
+    problems = []
+    for node in ast.walk(ast.parse(source)):
+        line = f"{where}:{getattr(node, 'lineno', 0)}"
+        if isinstance(node, ast.ImportFrom):
+            target = _resolved_import(path, node)
+            names = [target, *(f"{target}.{alias.name}" for alias in node.names)]
+            if any(name == pkg or name.startswith(pkg + ".") for name in names for pkg in acting):
+                problems.append(f"{line}: imports an acting package ({target})")
+            if node.module and node.module.split(".")[0] == "ctypes":
+                problems.append(f"{line}: uses ctypes")
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name.split(".")[0] == "ctypes":
+                    problems.append(f"{line}: uses ctypes")
+                if any(alias.name.endswith(f".network.{pkg}") or f".network.{pkg}." in alias.name for pkg in ACTING_PACKAGES):
+                    problems.append(f"{line}: imports an acting package ({alias.name})")
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str) and not node.value.startswith(KERNEL_TABLES):
+            words = node.value.split()
+            if words and words[0].rsplit("/", 1)[-1] in STATE_CHANGING_COMMANDS:
+                problems.append(f"{line}: names a state-changing command ({words[0]})")
+        elif isinstance(node, ast.Call):
+            func = node.func
+            if isinstance(func, ast.Attribute):
+                owner = func.value.id if isinstance(func.value, ast.Name) else ""
+                if (owner, func.attr) in STATE_CHANGING_FUNCTIONS:
+                    problems.append(f"{line}: calls {owner}.{func.attr}")
+                elif func.attr in STATE_CHANGING_METHODS:
+                    problems.append(f"{line}: calls .{func.attr}()")
+                elif func.attr == "open" and owner not in ("os",):
+                    problems += _write_mode(line, node, mode_at=0)
+            elif isinstance(func, ast.Name) and func.id == "open":
+                problems += _write_mode(line, node, mode_at=1)
+    return problems
+
+
+def _write_mode(line: str, call: ast.Call, *, mode_at: int) -> list[str]:
+    """A problem when *call* (``open(path, mode)`` or ``path.open(mode)``) opens for writing."""
+    mode = call.args[mode_at] if len(call.args) > mode_at else next(
+        (kw.value for kw in call.keywords if kw.arg == "mode"), None)
+    if mode is None:
+        return []
+    if not (isinstance(mode, ast.Constant) and isinstance(mode.value, str)):
+        return [f"{line}: opens a file with a mode it does not spell out"]
+    return [f"{line}: opens a file to write ({mode.value!r})"] if WRITE_MODE.search(mode.value) else []
+
+
+def test_network_monitor_never_changes_the_system():
+    files = _see_only_files()
+    assert any("monitor" in p.parts for p in files) and all(p.is_file() for p in files)
+    problems = [problem for path in files for problem in _changes_the_system(path, path.read_text(encoding="utf-8"))]
+    assert not problems, "see-only code must not act:\n" + "\n".join(problems)
+
+
+def test_the_monitor_guard_catches_each_way_of_acting():
+    """Self-test: each forbidden form is caught, and plain reading is not."""
+    path = NETWORK / "monitor" / "example.py"
+    bad = {
+        "from ..protect import enforcement": "acting package",
+        "from .. import respond": "acting package",
+        "from ..protect.posture_fix import plan_part": "acting package",
+        "import ctypes": "ctypes",
+        "run(['/sbin/pfctl', '-d'])": "pfctl",
+        "run(['/sbin/route', 'add', 'x'])": "route",
+        "run(['sudo', 'x'])": "sudo",
+        "run('launchctl bootout system/x')": "launchctl",
+        "os.kill(1, 9)": "os.kill",
+        "os.remove(p)": "os.remove",
+        "shutil.rmtree(p)": "shutil.rmtree",
+        "shutil.move(a, b)": "shutil.move",
+        "p.unlink()": ".unlink",
+        "p.rename(q)": ".rename",
+        "p.write_text('x', encoding='utf-8')": ".write_text",
+        "open(p, 'w', encoding='utf-8')": "to write",
+        "open(p, mode='ab')": "to write",
+        "p.open('r+', encoding='utf-8')": "to write",
+    }
+    for source, expected in bad.items():
+        problems = _changes_the_system(path, source)
+        assert problems and expected in problems[0], (source, problems)
+    clean = "from ..mode import current\nfrom ...kernel import bounded_files\nopen(p, 'rb')\nrun(['/usr/sbin/lsof', '-i'])\n'a-b'.replace('-', '')\nROUTES = '/proc/net/route'\n"
+    assert _changes_the_system(path, clean) == []

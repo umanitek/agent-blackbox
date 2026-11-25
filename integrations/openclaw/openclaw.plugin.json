@@ -36,6 +36,11 @@
         "default": "http://127.0.0.1:9320",
         "description": "Blackbox-managed local DKG node HTTP URL (override with $BLACKBOX_DKG_DAEMON_URL). Uses a non-default port so it does not collide with a user's own DKG node."
       },
+      "dashboardUrl": {
+        "type": "string",
+        "default": "http://127.0.0.1:9700",
+        "description": "Blackbox's local service (its dashboard, loopback only; override with $BLACKBOX_DASHBOARD_URL). Before each tool call the plugin asks it for Blackbox's verdict — the same checks a Hermes agent gets: the verified threat graph, the protected paths, Trader Shield, local overrides. If it does not answer within 1.5 s the plugin's built-in checks decide. Set to an empty string to never ask."
+      },
       "dkgHome": {
         "type": "string",
         "default": "~/.hermes/blackbox/dkg",
@@ -94,8 +99,7 @@
       "protectedPaths": {
         "type": "array",
         "items": { "type": "string" },
-        "default": [],
-        "description": "User-defined protected path patterns (globs / directory prefixes; '~' expands to home). Access to a matching path by a file tool is flagged locally as a critical 'custom' finding — it always flags, blocks in block mode, and is NEVER shared to the community graph. Also accepted under the snake_case key 'protected_paths'. Capped at 100 patterns."
+                "description": "Protected path patterns (globs / directory prefixes; '~' expands to home). Reading, copying or archiving a matching path — through a file tool, a code tool or a shell command — is flagged locally as a critical 'custom' finding: it always flags, blocks in block mode, and is NEVER shared to the community graph. Left out, the built-in list applies (~/.ssh/*, .env, .env.*, *.pem, *.key, *.p12, ~/.aws/credentials); an empty list protects nothing. No default is declared here on purpose: a declared empty default is handed to the plugin as the operator's choice and switched the built-in list off. Also accepted under the snake_case key 'protected_paths'. Capped at 100 patterns."
       }
     },
     "$defs": {

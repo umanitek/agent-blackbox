@@ -38,6 +38,227 @@ that the two version fields agree.
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-11-25
+
+### Added
+
+- **Linux gets the same deep protection as macOS.** On Linux (tested on Ubuntu 24.04 and 22.04)
+  Blackbox now runs agents inside its own sandbox (your private keys, Blackbox's settings,
+  startup places and the system stay closed to them), the Threat Firewall (nftables: listed
+  addresses are refused at once), DNS Shield (systemd-resolved, NetworkManager or
+  `/etc/resolv.conf`, put back exactly on uninstall), the startup watch and the system protection
+  helper as a systemd service. `blackbox approve` confirms a weakening change with your own
+  password, as on macOS. Docker and stopping one of your programs ask you, as on macOS.
+- **The Protection page.** One page shows every refused attempt to switch Blackbox off or get
+  around it, counted by kind; a protection log whose entries are chained, so an edit, a cut or a
+  rewind of the record shows; and watch-first rules — watch a host or a package, see how often
+  agents reach for it, then block it with one click (taking a block off asks you first). A
+  finding offers "Watch this". `docs/THREAT_MODEL.md` says what Blackbox defends against and how.
+- **Blackbox's own hooks are watched.** If one of Blackbox's hooks or plugins in an agent's folders
+  is removed or changed outside a Blackbox install, Blackbox raises a high-severity alert and puts
+  it back within seconds; a file found in its place is kept aside, never deleted. A new hook or
+  plugin that is not Blackbox's in those folders is reported too. "Stop protecting" an agent turns
+  this off for it.
+
+- **Sandbox permissions.** What an AI agent inside Blackbox's sandbox may do beyond your files is
+  now a list you control — block, ask each time, or allow, for every agent, one agent, one project
+  folder or one agent in one project: Homebrew and global installs (`npm i -g`, `pipx`, `pip
+  --user`, `cargo`, `gem`, `uv tool`, done by Blackbox, names only and threat-checked), opening web
+  links and opening files in apps, one AppleScript you read first, stopping a stray program, Docker,
+  services on this Mac and the clipboard. On "ask" you answer Allow once / Always for this agent
+  here / Keep blocked. Turning one up asks you first. File Shield's page lists them, the rules you
+  set and what is never unlocked, and names a running agent that still needs a restart.
+
+- **Native notifications from Blackbox itself.** Blackbox now tells you through your system's own
+  notifications which AI agent did what and whether it was allowed, flagged or stopped — safe to
+  read on a locked screen. Security notices are on; agents starting and ending, and a one-line
+  session summary, are opt-in. Mute an agent, set quiet hours, cap how many a minute. On macOS
+  they appear under Blackbox's own name once its notifier is installed; a companion app, while it
+  runs, delivers instead. See `docs/notifications.md` and the dashboard's Notifications page.
+- **An agent asking for root, and a program it started running as root, are flagged and shown.**
+  `sudo` is not refused; it is made visible on the agent's instance, in the findings and in a
+  notification.
+- Turning protection down needs your confirmation: Audit instead of Block, a shield, detection or agent switched off, a protected path removed, an address unblocked or remote access unlocked waits until you confirm it, with your computer's password prompt on the dashboard or in a paired companion app's dialog. Strengthening applies at once.
+- Coding-agent protection is in the core: Claude Code, Codex, Cursor, Gemini CLI, GitHub Copilot CLI, Windsurf (Devin), Cline and OpenCode are protected through their own hooks (`agent_hooks`; `/api/agent-hooks`), with prompt-injection checks on prompts and tool outputs and self-protection of each agent's hook config — with the plugin alone.
+- `guard.text_verdict`: a prompt or a tool's output checked for prompt injection with the same rules as a tool call (only a verified pattern blocks, in Block mode) — for runtimes that are not Hermes, such as a coding agent's own hooks.
+
+- **Network Shield, the second shield.** Switch it on (Settings → Shields) and Blackbox keeps AI
+  agents to the hosts you allow (agent network lockdown) and away from the ones you block, shows
+  this machine's system status (CPU on every core, memory, disks, each network interface) and
+  what talks to the internet right now (download and upload — this machine's own local traffic
+  kept apart — the apps online and their connections, each checked against the verified threat
+  graph). With the **system protection helper** (a small root helper the installer offers, or a
+  companion app installs) it also runs DNS Shield, the Threat Firewall, cutting malicious
+  connections, SSH lockdown and watch, Lock remote access, the exposure and posture checks — each
+  shown active only while the helper reports it; without the helper they say "needs the system
+  protection helper". An add-on may add richer views on top.
+- Add-ons: a package installed beside the plugin that declares itself with a `blackbox-addon.json`
+  manifest can add shields and more to a shield through one documented extension point; a broken
+  add-on never stops Blackbox.
+
+- **Every agent protected, now and later, on one yes.** The installer asks once (Enter is yes):
+  "Protect every agent, now and later, automatically?" — every Hermes profile and OpenClaw
+  workspace on the machine is protected, and so is each one added later, within a minute, with the
+  same rules and settings and its findings labelled with its name on the dashboard. Hermes Desktop's
+  setup page has the same switch (on), `blackbox setup --protect-new-agents` / `--no-…` answer it
+  for scripts, and `blackbox attach --all --auto` / `--no-auto` is the command behind all of them.
+  An agent you switch off stays off. Change it any time: Settings → Agents.
+- The dashboard says "New agent protected: Hermes · coder" when one is protected by itself, and
+  shows one slim line naming any agent on the machine that is not protected, with Protect and
+  "Protect every agent, now and later".
+
+### Fixed
+- `blackbox uninstall` also removes the system protection helper, first — your DNS and firewall
+  go back to how they were before it (macOS asks for your admin password once).
+- Self-protection covers add-ons: each add-on folder beside the plugin (one that carries the `blackbox-addon.json` manifest, `kernel.addons.MANIFEST`) is guarded in every Hermes home like the plugin's own, and an add-on can declare its other places (`Registrar.protect_places`) — before, an agent could delete an add-on and silently remove the protection it brings.
+
+- **OpenClaw 2026.11.6 and later load Blackbox again.** That OpenClaw release could fail to load
+  the Blackbox plugin on a busy machine ("Plugin preparation callback timed out") and then refused
+  to run the agent at all. The OpenClaw plugin now ships as one bundled file, which loads.
+- **OpenClaw: protected files are protected in shell commands too.** A protected file read, copied
+  or archived through OpenClaw's `exec` tool (`cat ~/.ssh/id_rsa`, `cp -r ~/.ssh …`, `tar … ~`,
+  a one-line script, `find … -exec cat`) is now flagged, and blocked in Block mode, as it is in
+  Hermes. Before, only OpenClaw's file tools were checked.
+- **OpenClaw: your protected-path list and block level now apply there.** Under OpenClaw the
+  built-in protected paths (`~/.ssh/*`, `.env`, `*.pem`, …) were switched off by an empty default,
+  and the list and block level you set in the dashboard never reached OpenClaw agents. Both now
+  follow your Blackbox settings.
+- **OpenClaw agents are now judged by the same checks as Hermes agents.** Before each tool call
+  the OpenClaw plugin asks the Blackbox on your machine for its verdict, so packages and addresses
+  from the verified threat graph, Trader Shield's wallet key stores and your local overrides apply
+  to OpenClaw too (a verified malicious package installed through OpenClaw used to go through).
+  If Blackbox's service is not running, the plugin's own built-in checks still decide.
+- **A protected file reached as `$HOME/…` is protected like `~/…`.** `cat $HOME/.ssh/id_rsa`
+  (also `${HOME}` and `%USERPROFILE%`) went through where `cat ~/.ssh/id_rsa` was blocked — in
+  Hermes and OpenClaw alike. The home folder is now read the same however a command spells it.
+- **A refused action retried another way is still caught.** After a protected file was refused,
+  an agent could reach it by a bare name after `cd`, with `dd`, `awk`, `sed`, `sort`, `vim` or
+  `open`, through `< file`, `echo file | xargs cat`, a variable holding the folder, an upload
+  (`curl -d @file`, `-F`, `-T`), `file://`, or by wrapping the command in `sh -c '…'`, `bash -c`
+  or `eval`. A package fetched with `npx`, `bunx`, `pnpm dlx`, `yarn dlx` or `pipx run`, or
+  installed inside `sh -c`, is now checked like any install.
+- OpenClaw findings on the dashboard say whether the action was blocked or flagged, and which
+  OpenClaw profile and agent it came from ("OpenClaw · work / research").
+
+### Changed
+
+- **Agents run inside Blackbox's sandbox by default.** On install, upgrade and `blackbox attach`
+  every agent Blackbox finds is picked for the agent sandbox (macOS), File Shield engaged. An agent
+  you took out of the sandbox stays out, upgrades included; taking one out still asks you first; a
+  File Shield you turned off stays off.
+- **Uninstall asks whether to remove the Hermes host Blackbox's installer set up.** On a machine
+  that had no Hermes before, `blackbox uninstall` asks once (`--remove-host` when not at a terminal)
+  and removes exactly what the installer put there — your own lines in `~/.zshrc` stay byte for
+  byte. Kept, the host no longer loads Blackbox. A second uninstall says Blackbox is not installed
+  and changes nothing; an add-on's companion app can name the caches, Keychain item and preferences
+  it leaves, and they go too.
+- **The persistence watch reports each change once, and names an agent only with evidence.** The
+  same entry seen through a linked home folder, or `at`'s own bookkeeping files, no longer raise
+  extra alerts; an agent is named as the writer only when the file was written while its command
+  ran ("writer unknown" otherwise). A new program on your PATH is titled as one.
+- The installer says what macOS really answered about Blackbox's notifications (allowed, waiting for
+  your OK in the banner, or off — with where to turn them on).
+- Installs Blackbox makes for a sandboxed agent keep your own `HOMEBREW_NO_AUTO_UPDATE`,
+  `HOMEBREW_NO_INSTALL_CLEANUP` and similar "turn it off" Homebrew settings.
+- Trader Shield protects a wallet type added in a later Blackbox version without a new save:
+  a saved wallet list keeps the wallets you left unticked off, and guards every wallet it was
+  never offered (before, those stayed off until you saved Settings again).
+
+
+### Security
+
+- **An agent cannot switch off its own hooks.** A write that would turn hooks off or remove
+  Blackbox's hook entries in an agent's settings — Claude Code's user or project
+  `settings.json` / `settings.local.json`, another project's, Codex's or Gemini CLI's project
+  settings — is refused by every route (edit, shell, copy, script). Ordinary edits of those files
+  still work. A Claude Code session that starts without Blackbox is reported as high severity,
+  naming the folder.
+- **The folders that hold the agents' hooks cannot be moved away inside the sandbox.** Every folder
+  above a hook or plugin place, up to your home folder, is locked, on macOS and Linux.
+- **DNS Shield and the Threat Firewall repair themselves.** They are checked every few seconds;
+  if they were switched off, flushed or lost at a restart they come back within seconds with a
+  high-severity alert, and the dashboard shows what is really in effect, not what was saved.
+- **Signals to Blackbox's own processes are refused by number as well as by name** (`sudo kill
+  -9 <pid>` of the helper).
+
+- **The Docker socket is closed inside the agent sandbox** unless you allow Docker for that agent:
+  a container runs outside the sandbox, so `docker run -v <protected folder>:/x` could read a
+  protected item (KI-622). Mounting a protected item into a container is refused by the hooks too.
+- **Your own program folders (`~/.local/bin`, `~/.cargo/bin`, `~/bin` …) are closed to writes inside
+  the sandbox** by default: a program an agent left there would run outside it the next time you
+  typed its name. Global installs now go through Blackbox.
+
+- **No AI agent can leave something that starts by itself later — sandboxed or not.** An agent
+  checked only by its hooks could add a key to `~/.ssh/authorized_keys`, write a launchd job, a
+  cron or `at` job, a line in your shell startup files or a program in Homebrew's folders. Blackbox
+  now refuses those writes for every agent in every mode, by any route, from the same list the agent
+  sandbox closes; reading them stays allowed. Programs an agent writes into your own PATH folders
+  (`~/.local/bin`, npm's global prefix, pipx) stay allowed and raise a critical alert naming the agent.
+- **The agent sandbox keeps Blackbox's settings closed.** Inside the sandbox nothing can change,
+  rename or remove Hermes's `config.yaml` and `.env` (every profile), where Blackbox's settings live,
+  nor move Blackbox's home away.
+- **Installs from lockfiles and manifests, and transitive dependencies, are checked (KI-595).**
+  Blackbox used to check only the package names written in an install command, so `npm ci`,
+  `npm install`, `uv sync`, `pip install -r`, `poetry install`, `cargo build`, `bundle install` and
+  the packages a named install pulls in were never checked against the threat graph. Now the files
+  they install from (npm/pnpm/yarn/bun lockfiles, package.json, requirements files, uv.lock,
+  poetry.lock, Pipfile(.lock), pyproject.toml, Cargo.lock, Gemfile.lock) are read — bounded,
+  offline, cached — and every package is judged in the usual tiers: verified blocks naming the
+  package, version, file and chain, community flags. After a named install, the packages it added
+  to its lockfile are checked; a verified one that landed is a critical alert with the removal
+  command. Writes that add a listed package to these files are judged at the write. A file that
+  cannot be read lets the install through with a note on the session. See "What Blackbox checks
+  for packages" in the README and the dashboard's Docs page.
+- **The agent sandbox reaches more launches and cannot be turned against Blackbox.** The sandbox
+  launchers are now first on PATH for zsh started without a terminal too (`zsh -c`, a zsh script,
+  an SSH command); File Shield's page lists which ways of starting an agent are covered and says
+  for each agent whether it is "sandboxed (kernel-enforced)" or "hooks only". Inside the sandbox an
+  agent can no longer change any agent's hook config or signal a process outside it. The Hermes
+  agent can be picked: its terminal tool's shells then run inside the sandbox. A refusal the
+  sandbox made now shows on the agent's session as refused.
+- **A script an agent writes is judged by what it says.** File Shield now reads a script an agent
+  writes (through a file tool, a heredoc or `echo … >`) and refuses it when it names a protected
+  item — also when its path is joined from pieces such as `Path.home().joinpath(…)` — and reads it
+  again when the agent runs it. A program that hides what it opens still needs the sandbox.
+- **File Shield judges the command an interpreter is told to run.** A protected file read through
+  inline code (`python3 -c`, `node -e`, `ruby -e`, `perl -e`, `osascript -e`), a command
+  substitution, a decode spelled out on the command line, `eval`, or a wrapper such as `env`,
+  `nohup` or `timeout` is now refused like the plain read. A command beside a protected item that
+  builds what it opens while it runs is flagged and says why; every flagged action now shows its
+  reason.
+- **Gemini CLI's hooks now really run.** Blackbox wrote each hook's time limit in seconds, but
+  Gemini CLI reads it in milliseconds, so every hook was cut off and Gemini ran without Blackbox.
+  Each agent now gets its limit in its own unit, the sweep rewrites a config written the old way,
+  and the Agents page and the agent's profile say so when a hook is written but would not run.
+- **An agent cannot switch Blackbox off, in any mode.** An action that would change Blackbox's
+  settings, rules, logs or program files, stop its services, use its control page, or start an
+  agent with Blackbox's own variables changed is now refused in Audit mode too (before, Audit mode
+  only flagged it, so an agent could turn the guard off and carry on). Everything else in Audit
+  mode is still only flagged. You change Blackbox as before: the dashboard, the `blackbox`
+  commands you type, or your own editor.
+- The rule that protects Blackbox itself was rebuilt after an attack pass of 240 attempts: it now
+  covers OpenClaw's config and plugin files, the service definitions, the `blackbox` command,
+  wildcards, parent folders, other tools that run commands, scripts written first and run later,
+  base64-wrapped commands, and a change hidden in the middle of a very long command. Reading
+  Blackbox's files and status stays allowed.
+- While Blackbox's service is not answering, an OpenClaw agent is refused anything that touches
+  Blackbox itself until the service is back.
+- **The system protection helper is hardened and lives in the core** (`plugins/blackbox/helper`,
+  one helper for Blackbox and any companion app). It obeys only plans signed with its own install
+  key (another program on port 9700 cannot drive it) and reports only to Blackbox; the firewall is
+  checked really on after every change and after a restart; DNS Shield switches only to a resolver
+  that answers, puts your DNS back if it stops, follows the network you are on and never sends your
+  lookups to a public resolver you did not choose; it never follows links or hangs on special
+  files in your folders; it installs only a binary whose checksum was verified first; its records
+  are private to the system; and stopping, repairing or removing it never turns your Mac's own
+  hardening back off unless you choose that. The installer offers it at the end (`--system-protection`,
+  `--no-system-protection`, `--remove-system-protection [--undo-hardening]`); no means nothing is installed.
+- **Blackbox signs the helper's plans and checks its reports.** With the key the helper gives
+  the person who installed it, Network Shield signs every plan for that one request and refuses a
+  report that the helper did not sign. Network Shield's card shows the helper's health: whether
+  it is paired (and how to fix it if not), an older helper, the macOS packet filter off, DNS
+  Shield's resolver not answering, and the last problem it reported.
+
 ## [1.5.0] - 2026-11-19
 
 ### Added
@@ -60,6 +281,38 @@ that the two version fields agree.
 
 ### Fixed
 
+- A global install of a package you only watch is no longer refused as a threat.
+- A program an agent puts on your PATH with `npm -g` is reported naming the agent.
+- A new DNS block applies within seconds (was up to three minutes), without a "plan could not be
+  read" message meanwhile.
+- A refusal by the sandbox is counted for the agent that tried, not for "agent-sandbox".
+- A script deleting under Blackbox's folder is no longer also counted as a startup-item attempt.
+- An agent you removed no longer shows as available; Linux says "this machine", not "this Mac".
+- An upgrade over a running install no longer fails with "File exists".
+- Uninstall removes the empty folders the installer created, and nothing of yours.
+- Before the first threat-graph sync, the dashboard no longer says the graph is complete.
+
+- **Codex can edit a package.json with its own patch tool again.** A Codex `apply_patch` of any
+  package.json was refused as a change to Blackbox's own settings; a listed package added that way is
+  now refused for what it is.
+- **Cline's first message is checked.** Cline's start event carries no task text; Blackbox's Cline
+  plugin now reads the task from the first run (CLI, SDK, Kanban). In the IDE extensions, which run
+  hook scripts only, the first message is still not checked.
+- **Refusals the sandbox makes are counted where they were missed:** a launchd job, an SSH key or a
+  program in Homebrew's folders refused inside the sandbox, and a protected file the Hermes agent's
+  `execute_code` was refused, now show on the session as refused.
+- A 2,000-package lockfile is checked with half the store queries it took before.
+
+- **Each agent session tells the truth about itself.** Claude Code and Gemini CLI sessions now show
+  their model (from the command line, then from the session's transcript — the model's name only);
+  one prompt is counted once even when sub-agents report back; a sub-agent's task no longer counts
+  as a prompt of its session; a headless Cline run shows as headless; a session whose hooks a
+  `--settings` flag or a project setting switched off says exactly which; OpenCode sub-agents end
+  when their task returns or their session's process leaves.
+- **The Hermes agent's sessions show where they run.** Each session now shows its project folder
+  (not the Hermes home), its process, whether it was started headless, its model and how many
+  prompts it was given; two projects are two lanes, every child of one delegated task is that
+  session's sub-agent, and the history can be filtered to the Hermes agent.
 - Every Hermes profile is protected the same way. A profile other than the main one — Blackbox's
   own assistant included — used to keep its own Blackbox folder: no verified threat rules (only
   the general patterns), its own copy of the settings (dashboard changes and Block mode never
@@ -188,13 +441,13 @@ that the two version fields agree.
 - **The Playground's sandbox lane shows other members' tests safely.** Their text is cleaned and
   defanged like the Community graph's, a threat's category comes from its identifier, and a test can no
   longer break the threat window by filling its sources with text.
-- **Desktop's status bar counts every action of the day.** On a day with more than 100 findings the
+- **Hermes Desktop's status bar counts every action of the day.** On a day with more than 100 findings the
   count stopped at the newest 100; it now counts everything from the last 24 hours.
 - **An older finding shows the same trust everywhere.** A recorded finding that does not say whether it
   came from a verified rule now reads the same in the findings list and the Local activity view.
 - **The dashboard links a threat's references only when they are web addresses.** Anything else is
-  shown as plain text, as Desktop already did.
-- **Desktop says the first sync is done only when verified rules have arrived.** Community reports that
+  shown as plain text, as Hermes Desktop already did.
+- **Hermes Desktop says the first sync is done only when verified rules have arrived.** Community reports that
   Blackbox can match against were counted as verified rules, so the setup page could call the first sync
   finished too early.
 - **A sync failure is no longer hidden by an older catch-up job.** The dashboard's sync activity read a
@@ -219,10 +472,10 @@ that the two version fields agree.
   phase, percentage and asset counts, refreshed every few seconds: "First sync in progress" before
   any rule, then "Still syncing" with how many verified rules already protect, or "Sync stopped
   making progress" with what to do. The empty verified map says why it is empty.
-- **The Blackbox assistant in Desktop.** The chat button in the page header opens the dashboard's
+- **The Blackbox assistant in Hermes Desktop.** The chat button in the page header opens the dashboard's
   assistant beside the page: its three example questions, a running conversation kept on this
   computer (New chat starts over), and progress messages while it works.
-- **Docs and the Playground in Desktop.** The book button opens the dashboard's documentation in
+- **Docs and the Playground in Hermes Desktop.** The book button opens the dashboard's documentation in
   your browser. With Sandbox mode on, the Overview holds the Playground: send a listed threat of
   each kind through the real check, and run every wallet test Trader Shield has for this machine
   (one at a time or Run all), each with its result.
@@ -233,8 +486,8 @@ that the two version fields agree.
   address, sent by a script or a messaging tool) is blocked even with Trader Shield off — a
   wallet secret has no right destination. Writing or reading one on the machine stays Trader
   Shield's to watch.
-- The Desktop page refreshes every 4 seconds, as the dashboard does (was 10 to 30).
-- The Desktop page opens with your connected agents, then the stats, then Trader Shield as the
+- The Hermes Desktop page refreshes every 4 seconds, as the dashboard does (was 10 to 30).
+- The Hermes Desktop page opens with your connected agents, then the stats, then Trader Shield as the
   dashboard's "Engage Trader Shield" card (one line once it is on). A new **Shields** tab turns each
   shield on or off (turning off asks first) and holds what it protects, its events and its settings.
 - A shield's recent events are clickable, as on the dashboard: each opens the shield's events window
@@ -245,14 +498,14 @@ that the two version fields agree.
 
 ### Fixed
 
-- The Desktop page's "Open findings" card opens Threats detected, as the bell does (it was
+- The Hermes Desktop page's "Open findings" card opens Threats detected, as the bell does (it was
   a count you could not click through).
 - An agent can no longer stop Blackbox's own services: unloading or stopping its login
   services, killing its dashboard or node by name, or killing whatever holds their ports is
   treated like editing Blackbox's settings (ordinary process commands stay allowed).
-- The Desktop Shields tab no longer ticks Trader Shield's checks while the shield is off — each
+- The Hermes Desktop Shields tab no longer ticks Trader Shield's checks while the shield is off — each
   shows "off — engage Trader Shield to watch this".
-- The Desktop "Threats detected" table fits beside the sidebar: the outcome sits under the
+- The Hermes Desktop "Threats detected" table fits beside the sidebar: the outcome sits under the
   severity and long reasons wrap instead of squeezing every column.
 - On a Mac the installer hands the dashboard to its login service at once, so a crashed
   dashboard is restarted from the first day (it used to run unsupervised until the next login).
@@ -264,14 +517,14 @@ that the two version fields agree.
   re-checks the assets it already holds, and that re-check is no longer counted as data still to
   download (a fresh Mac fell from 100% to 51% of a "1,842-asset" graph that has 971).
 - In the minute after a reboot, while the DKG node reopens its store, the page says "the DKG node is
-  starting" (and Desktop's header "Node starting") instead of a red "my node is stale — run
+  starting" (and Hermes Desktop's header "Node starting") instead of a red "my node is stale — run
   `blackbox sync --wait`".
 - The Blackbox assistant looks threats up instead of reading a whole graph tier into the model: its
   answers are faster, and its own request no longer trips Blackbox's prompt-injection alert on the
   attack phrases quoted in threat names.
 - Turning on Trader Shield, or saving its settings, no longer tells you to restart your agent: a
   running agent picks the change up at once (README and the Trader Shield page updated too).
-- Desktop: a long package name in Threats detected, or the graph on a Retina screen, no longer
+- Hermes Desktop: a long package name in Threats detected, or the graph on a Retina screen, no longer
   pushes the page sideways past the window; the tabs line up with the header once the first sync
   is done; the first-sync note is not shown twice; the "recording, not blocking" notice waits until
   setup has finished instead of covering the setup page; "Watching" (audit mode) is amber like the
@@ -280,40 +533,40 @@ that the two version fields agree.
   a click on the button's edge did anything), and Escape closes that window.
 - The Trader Shield page no longer says "Not engaged" for the first moments after the dashboard
   starts: it shows "Checking this machine…" until the dashboard knows, then the real state.
-- Threat graph labels stay readable in the dashboard and in Desktop: hub names and threat counts
+- Threat graph labels stay readable in the dashboard and in Hermes Desktop: hub names and threat counts
   sit on a small plate above the dots, two labels never land on each other, and on a phone they
   keep a readable size instead of shrinking to a few pixels.
 - Layout and sizing: the umanitek logo at the foot of the dashboard shows on the light theme; the
   tier tabs show "970,000" like the cards; the Trader Shield card has no empty fourth column and
   its header wraps on a phone; the Trader Shield page's headline fits in four lines on a laptop
   and its picture no longer runs into the status box on a phone; the docs search box and figure
-  labels fit on a phone; Desktop's five summary cards sit 3 + 2 beside Hermes' sidebar instead of
+  labels fit on a phone; Hermes Desktop's five summary cards sit 3 + 2 beside Hermes' sidebar instead of
   five squeezed columns, and its wordmark reads BLACKB●X.
 - A fresh dashboard no longer says "UNPROTECTED: run `blackbox sync --wait`" while setup's own first
   sync is running: its health check reads the sync meter before judging the first sync.
 - On a fresh install the first sync of the verified threat graph starts within seconds of setup
   finishing. It could wait an hour: setup's own compile left an empty ruleset that the dashboard
   took for a finished one.
-- The Blackbox assistant answers again, in the dashboard and in Desktop. On Hermes 0.23 every
+- The Blackbox assistant answers again, in the dashboard and in Hermes Desktop. On Hermes 0.23 every
   question failed with "No such file or directory: '/usr/local/sbin/-c'": it re-ran Hermes by the
   name of the running program, which Hermes' new launcher reports as `-c`.
 - The assistant's own Hermes profile no longer appears in Connected agents as an idle agent.
-- One slow request (an assistant answer) no longer freezes the Desktop page: it used to empty
+- One slow request (an assistant answer) no longer freezes the Hermes Desktop page: it used to empty
   every card until the answer came back.
 - A question to the assistant that starts with a dash ("-v", "--why") is asked as written
   instead of failing, and when the assistant cannot start, the page says so in plain words
   instead of showing the system's error text.
-- Desktop's assistant shows `code` and **bold** in its answers as formatting, not as symbols.
-- Desktop no longer says "0 connected agents" above an agent it protects: like the dashboard, it
+- Hermes Desktop's assistant shows `code` and **bold** in its answers as formatting, not as symbols.
+- Hermes Desktop no longer says "0 connected agents" above an agent it protects: like the dashboard, it
   counts only agents active right now and shows nothing when none is.
-- Desktop's assistant: "New chat" while an answer is on its way really starts a new chat (the old
+- Hermes Desktop's assistant: "New chat" while an answer is on its way really starts a new chat (the old
   answer no longer comes back), closing and reopening the assistant mid-answer keeps that answer,
   and answers keep their paragraph breaks.
-- A long Desktop request (an assistant answer, a Playground test) no longer gives up after one
+- A long Hermes Desktop request (an assistant answer, a Playground test) no longer gives up after one
   failed check while it is still running, and Playground "Run all" stops when you leave the page.
-- Desktop's threat bell counts the same threats the findings list shows, and clicking it before
+- Hermes Desktop's threat bell counts the same threats the findings list shows, and clicking it before
   the list has loaded no longer marks every threat as new again.
-- A Shield's list setting in Desktop (addresses, names) can be typed one entry per line; Enter and
+- A Shield's list setting in Hermes Desktop (addresses, names) can be typed one entry per line; Enter and
   commas no longer vanish as you type them.
 
 ## [1.3.0] - 2026-11-06
@@ -332,10 +585,10 @@ that the two version fields agree.
   - **Settings:** the mode (Audit or Block; switching to Audit asks you to confirm), what
     Blackbox checks and from which severity, protected paths, Trader Shield (wallets, your
     addresses) and community sharing (with its consent step).
-- **A shield in Desktop's status bar** shows the mode — Audit in amber, Block in green — and what
-  was caught today; Desktop says once, with a Turn on blocking button, when Blackbox is recording
+- **A shield in Hermes Desktop's status bar** shows the mode — Audit in amber, Block in green — and what
+  was caught today; Hermes Desktop says once, with a Turn on blocking button, when Blackbox is recording
   but not blocking.
-- **Live alerts in Desktop** the moment Blackbox flags or blocks something an agent tried to do:
+- **Live alerts in Hermes Desktop** the moment Blackbox flags or blocks something an agent tried to do:
   the finding, its severity, the tool and whether it was blocked — never the command or file
   contents. An action that matches several rules is one alert.
 
@@ -357,7 +610,7 @@ that the two version fields agree.
 - **Hermes Desktop support.** The one-line installer puts Blackbox into the Hermes that is already
   on the machine (such as Hermes Desktop's) instead of installing a second Hermes. When Blackbox
   was installed first and Hermes Desktop afterwards, re-running the installer moves Blackbox onto
-  Desktop's Hermes — the DKG node, its keys and its synced graph move with it — and retires the
+  Hermes Desktop's Hermes — the DKG node, its keys and its synced graph move with it — and retires the
   Hermes it installed earlier.
 - **`blackbox uninstall`** removes Blackbox and nothing else: its services, its DKG node, its data
   and the plugin. Node and wallet keys are kept in a private backup folder unless `--purge` is
@@ -415,7 +668,8 @@ The first version in the Hermes plugin catalog (commit `7d697683`, added by Herm
 in NousResearch/hermes-agent#140529). Its `plugin.yaml` said 1.0.0 while Blackbox's own code and
 dashboard reported 1.1.0; 1.1.0 is therefore skipped, so no two different builds share a number.
 
-[Unreleased]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.5.0...main
+[Unreleased]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.6.0...main
+[1.6.0]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.5.0...blackbox-v1.6.0
 [1.5.0]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.4.1...blackbox-v1.5.0
 [1.4.1]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.4.0...blackbox-v1.4.1
 [1.4.0]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.3.0...blackbox-v1.4.0

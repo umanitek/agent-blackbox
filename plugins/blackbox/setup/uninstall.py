@@ -42,8 +42,11 @@ from pathlib import Path
 from typing import Callable, Optional, Sequence
 
 from .. import sync   # sync's public entry: the service names, which process is our node
-from ..kernel import constants, terminal_question, yaml_files
+from ..kernel import addons, constants, system_helper, terminal_question, yaml_files
 from ..kernel.host_command import hermes_argv
+from . import addon_cleanup, install_manifest, platform as os_platform
+from .uninstall_data import ManagedStore, _back_up, _delete_data, _remove_store, managed_store
+from .uninstall_outside import Runner, _remove_agent_hooks, _remove_from_agents, _remove_system_helper, _run_at_terminal
 
 #: Files a node needs to keep its identity and wallet (DKG home), and Blackbox's own reporter
 #: identity and sharing consent ($BLACKBOX_HOME). Moved to the backup unless --purge.
@@ -54,8 +57,8 @@ DKG_HOME_MARKER = "blackbox-process-limits.json"
 SHIM_MARKER = "managed-by: agent-blackbox-installer"
 # The services to remove: the names the installers register, owned by sync (one place to rename).
 LAUNCHD_LABELS, SYSTEMD_UNITS, WINDOWS_TASKS = sync.LAUNCHD_LABELS, sync.SYSTEMD_UNITS, sync.WINDOWS_TASKS
+SERVICE_NAMES = os_platform.ServiceNames(LAUNCHD_LABELS, SYSTEMD_UNITS, WINDOWS_TASKS)
 
-Runner = Callable[[Sequence[str]], int]
 
 
 def _run(command: Sequence[str]) -> int:
@@ -86,6 +89,15 @@ class UninstallPlan:
     system_units: tuple[Path, ...]     # Linux /etc/systemd/system units (need root)
     dashboard_port: int = constants.DEFAULT_DASHBOARD_PORT   # where a directly started dashboard would be listening
     notes: tuple[str, ...] = field(default_factory=tuple)
+    system_helper: Optional[Path] = None   # the system protection helper (macOS), when installed
+    agent_hooks: tuple[str, ...] = ()      # coding agents whose config holds Blackbox's hooks
+    addons: tuple[Path, ...] = ()          # add-on folders beside the plugin (kernel.addons)
+    #: What the installer made besides Blackbox (the Hermes host on a clean machine, KI-610).
+    manifest: install_manifest.InstallManifest = field(default_factory=install_manifest.InstallManifest)
+    #: The node's Blackbox-managed Blazegraph store (Docker), when its config names one (KI-676).
+    store: Optional[ManagedStore] = None
+    #: What the add-ons' manifests ask to have removed (read before their folders go), checked.
+    addon_cleanup: addon_cleanup.CleanupPlan = field(default_factory=addon_cleanup.CleanupPlan)
 
 
 def _configured_dkg_home(home: Path) -> Optional[Path]:
@@ -133,63 +145,117 @@ def build_plan(*, purge: bool, keep_logs: bool, now: Optional[_dt.datetime] = No
     shim = next((p for p in (shim_dir / "blackbox", shim_dir / "blackbox.cmd")
                  if p.is_file() and SHIM_MARKER in p.read_text(encoding="utf-8-sig", errors="ignore")), None)
     system_units = tuple(p for p in (sync.SYSTEM_UNIT_DIR / u for u in SYSTEMD_UNITS) if p.exists())
+    system = platform.system()
+    manifest = install_manifest.read(blackbox_home)
+    # The helper as found, or as the install manifest names it (KI-629: one list of what was added).
+    helper = system_helper.BINARY if system in ("Darwin", "Linux") and (
+        system_helper.BINARY.exists() or system_helper.SERVICE.exists() or manifest.system_helper) else None
+    from .. import agent_hooks   # agent_hooks' public entry
+    addon_folders = tuple(home / "plugins" / name for home in hermes_homes for name in addons.found(home / "plugins"))
     return UninstallPlan(
-        system=platform.system(), hermes_homes=hermes_homes, blackbox_home=blackbox_home, dkg_home=dkg_home,
+        system_helper=helper, agent_hooks=tuple(agent_hooks.hooked_agents()), addons=addon_folders,
+        system=system, hermes_homes=hermes_homes, blackbox_home=blackbox_home, dkg_home=dkg_home, store=managed_store(dkg_home),
         key_files=tuple(p for p in keys if p.is_file()),
         backup_dir=None if purge else Path.home() / f"blackbox-backup-{stamp}",
         keep_logs=keep_logs, shim=shim, system_units=system_units, dashboard_port=dashboard_port,
-        notes=tuple(notes))
+        notes=tuple(notes), manifest=manifest, addon_cleanup=addon_cleanup.cleanup_for(addon_folders))
+
+
+def installed(plan: UninstallPlan) -> bool:
+    """True when *plan* finds any of Blackbox on this machine (KI-611: a second uninstall must
+    change nothing and say so)."""
+    return bool(plan.hermes_homes or plan.blackbox_home.exists() or plan.dkg_home or plan.shim or plan.system_helper
+                or plan.agent_hooks or plan.addons or plan.system_units
+                or any((Path.home() / "Library" / "LaunchAgents" / f"{label}.plist").exists() for label in LAUNCHD_LABELS))
 
 
 def describe(plan: UninstallPlan) -> list[str]:
     """The lines shown before anything changes."""
-    lines = ["Blackbox uninstall will:",
-             "  - stop and remove Blackbox's login services (node, dashboard)"]
+    lines = ["Blackbox uninstall will:"]
+    if plan.system_helper:
+        asks = "macOS asks for your admin password" if plan.system == "Darwin" else "sudo asks for your password"
+        lines.append(f"  - remove the system protection helper and put DNS and the firewall back ({asks})")
+    lines.append("  - stop and remove Blackbox's login services (node, dashboard)")
+    if plan.agent_hooks:
+        lines.append(f"  - take Blackbox's hooks out of {', '.join(plan.agent_hooks)} (their other settings stay)")
+    for folder in plan.addons:
+        lines.append(f"  - remove the add-on {folder}")
+    lines += addon_cleanup.describe(plan.addon_cleanup)
     for home in plan.hermes_homes:
         lines.append(f"  - remove Blackbox from the Hermes in {home} (its other settings and comments stay)")
     if plan.dkg_home:
         lines.append(f"  - delete Blackbox's DKG node and its synced graph: {plan.dkg_home}")
+    if plan.store:
+        lines.append(f"  - remove its Blazegraph store: Docker container {plan.store.container} and volume {plan.store.volume}")
     lines.append(f"  - delete Blackbox's data: {plan.blackbox_home}")
     if plan.shim:
         lines.append(f"  - remove the blackbox command: {plan.shim}")
+    if plan.manifest.linger_user:
+        lines.append(f"  - turn systemd lingering off for {plan.manifest.linger_user} again (the installer turned it on)")
+    for folder in plan.manifest.user_path:
+        lines.append(f"  - take {folder} off your PATH again (the installer added it)")
     if plan.backup_dir is None:
         lines.append("  - DELETE the node's wallet and identity keys and the reporter key (--purge)")
     elif plan.key_files or plan.keep_logs:
         what = "keys" + (" and the local audit record" if plan.keep_logs else "")
         lines.append(f"  - keep the {what} in {plan.backup_dir}")
-    lines.append("Your Hermes itself, other DKG nodes and Docker are not touched.")
+    if plan.manifest.has_host:
+        lines.append("Blackbox's installer also set up the Hermes host it runs in: you are asked whether to remove it too.")
+        for folder, added in install_manifest.host_removal(plan.manifest).kept:   # KI-654
+            names = ", ".join(entry.name for entry in added[:install_manifest.MAX_NAMED])
+            lines.append(f"  - {folder} stays either way: you added to it since the install ({names})")
+    else:
+        lines.append("Your Hermes itself, other DKG nodes and Docker's other containers are not touched.")
     return lines + [f"Note: {n}" for n in plan.notes]
 
 
+def host_question(plan: UninstallPlan) -> str:
+    """The question asked when the installer set up the Hermes host (KI-610)."""
+    size = install_manifest.human_size(install_manifest.host_size(plan.manifest))
+    return f"Blackbox also set up the Hermes host it runs in ({size}). Remove it too? [y/N] "
+
+
+def host_kept_note(plan: UninstallPlan) -> list[str]:
+    """The lines said when the host stays (KI-630): what was kept, and the exact commands that
+    remove it later — the ``blackbox`` command and the install manifest go with Blackbox, so
+    ``--remove-host`` can not run again. Worked out after the uninstall ran (Hermes may have
+    rewritten one of its own commands meanwhile). Printing beats leaving a remover behind: an
+    uninstall leaves nothing of Blackbox's, and the commands are the manifest itself, spelled out."""
+    home = str(Path.home())
+    listed = ", ".join(str(path).replace(home, "~", 1) for path in plan.manifest.host)
+    kept = install_manifest.kept_host(plan.manifest)
+    lines = [f"Kept the Hermes host Blackbox's installer set up ({listed})."]
+    commands = os_platform.manual_removal(kept.paths, kept.empty_dirs)
+    if commands:
+        lines.append("To remove it later (the blackbox command is gone with Blackbox), run:")
+        lines += [f"    {command}" for command in commands]
+    for target, block in kept.appended:
+        empty = install_manifest.empty_lines_above(target, block)
+        above = "" if not empty else " and the empty line just above them" if empty == 1 else f" and the {empty} empty lines just above them"
+        lines.append(f"and delete these lines the installer added to {target}{above} (your own lines there stay):")
+        lines += [f"    {line}" for line in block.strip("\n").splitlines()]
+    return lines
+
+
 def _stop_services(plan: UninstallPlan, run: Runner, report: list[str]) -> None:
-    if plan.system == "Darwin":
-        # Only reached on macOS; getattr keeps the module importable where os has no getuid (Windows).
-        uid = getattr(os, "getuid", lambda: 0)()
-        for label in LAUNCHD_LABELS:
-            run(["launchctl", "bootout", f"gui/{uid}/{label}"])
-            plist = Path.home() / "Library" / "LaunchAgents" / f"{label}.plist"
-            if plist.exists():
-                plist.unlink()
-                report.append(f"removed login service {label}")
-    elif plan.system == "Linux":
-        user_dir = Path.home() / ".config" / "systemd" / "user"
-        removed = False
-        for unit in SYSTEMD_UNITS:
-            if (user_dir / unit).exists():
-                run(["systemctl", "--user", "disable", "--now", unit])
-                (user_dir / unit).unlink()
-                removed = True
-                report.append(f"removed login service {unit}")
-        if removed:
-            run(["systemctl", "--user", "daemon-reload"])
-        for unit in plan.system_units:
-            report.append(f"needs root: sudo systemctl disable --now {unit.name} && sudo rm {unit} "
-                          "&& sudo systemctl daemon-reload")
-    elif plan.system == "Windows":
-        for task in WINDOWS_TASKS:
-            run(["schtasks", "/End", "/TN", task])
-            if run(["schtasks", "/Delete", "/TN", task, "/F"]) == 0:
-                report.append(f"removed scheduled task {task}")
+    """Blackbox's login services, through this system's own tools (``setup/platform/<os>``)."""
+    os_platform.stop_login_services(SERVICE_NAMES, plan.system_units, run, report)
+
+
+def _stop_notifier(plan: UninstallPlan, report: list[str]) -> None:
+    """Blackbox's own notifier ended and removed before its folder goes (KI-635: a ``request``
+    instance and its launchd job kept running from the deleted folder)."""
+    from .. import notify   # late, as setup/notifier.py: the notifier's packages load only for this step
+    had = (plan.blackbox_home / "notifier").exists()
+    notify.remove_notifier()
+    if had:
+        report.append("stopped and removed Blackbox's notifier")
+
+
+def _supervised(plan: UninstallPlan) -> bool:
+    """True while a root unit still supervises the dashboard and the node (KI-507): stopping them
+    by pid would only see systemd start them again, so they are left to the unit's own stop."""
+    return plan.system == "Linux" and any(unit.exists() for unit in plan.system_units)
 
 
 def _stop_dashboard_on(port: int) -> list[int]:
@@ -200,6 +266,9 @@ def _stop_dashboard_on(port: int) -> list[int]:
 def _stop_running_dashboard(plan: UninstallPlan, stop: Callable[[int], list[int]], report: list[str]) -> None:
     """A dashboard setup started directly (its service takes over at the next login): stopped
     before the data goes, or it re-creates $BLACKBOX_HOME (seen live 2026-11-03)."""
+    if _supervised(plan):
+        report.append("left running: Blackbox's dashboard and node run under the root units above; they stop with them")
+        return
     for pid in stop(plan.dashboard_port):
         report.append(f"stopped Blackbox's dashboard (pid {pid})")
 
@@ -207,7 +276,7 @@ def _stop_running_dashboard(plan: UninstallPlan, stop: Callable[[int], list[int]
 def _stop_unsupervised_node(plan: UninstallPlan, report: list[str]) -> None:
     """A node Blackbox started without its service: only the pid in Blackbox's own DKG home."""
     pid_file = plan.dkg_home / "daemon.pid" if plan.dkg_home else None
-    if not pid_file or not pid_file.is_file():
+    if not pid_file or not pid_file.is_file() or _supervised(plan):
         return
     from ..kernel.config import load_blackbox_config
     try:
@@ -222,92 +291,32 @@ def _stop_unsupervised_node(plan: UninstallPlan, report: list[str]) -> None:
         pass
 
 
-def _back_up(plan: UninstallPlan, report: list[str]) -> None:
-    if plan.backup_dir is None:
-        return
-    keys = plan.backup_dir / "keys"
-    keys.mkdir(parents=True, exist_ok=True)
-    os.chmod(plan.backup_dir, 0o700)
-    for src in plan.key_files:
-        dest = keys / ("node-" + src.name if plan.dkg_home and src.parent == plan.dkg_home else src.name)
-        shutil.copy2(src, dest)
-        os.chmod(dest, 0o600)
-    if plan.keep_logs and plan.blackbox_home.is_dir():
-        logs = plan.backup_dir / "audit-record"
-        logs.mkdir(exist_ok=True)
-        for item in plan.blackbox_home.iterdir():
-            if item.suffix == ".jsonl" or item.name == "sandbox":
-                (shutil.copytree if item.is_dir() else shutil.copy2)(item, logs / item.name)
-    (plan.backup_dir / "README.txt").write_text(_BACKUP_README, encoding="utf-8")
-    report.append(f"kept your keys in {plan.backup_dir}")
-
-
-_BACKUP_README = """\
-Kept by `blackbox uninstall` (delete this folder when you no longer need it).
-
-keys/node-*               your Blackbox DKG node's identity and operational wallet
-                          (agent-keystore.json, wallets.json, wallets.key, auth.token, config.json)
-keys/reporter_key.pem     the key that signed your community threat reports
-keys/sharing_consent.json your community-sharing consent record
-audit-record/             your local audit record, if you ran uninstall with --keep-logs
-
-To use the same node identity again after reinstalling Blackbox: stop the Blackbox DKG node,
-copy keys/node-<name> back into its DKG home (dropping the "node-" prefix), copy
-reporter_key.pem and sharing_consent.json into ~/.hermes/blackbox, then start the node.
-These files are secrets: keep this folder private.
-"""
-
-
-@yaml_files.edits_config
-def _remove_from_agents(plan: UninstallPlan, report: list[str]) -> list[Path]:
-    """Detach every agent; returns the Hermes homes where Hermes itself installed the plugin."""
-    from ..attach import detach_all, detach_hermes, is_managed_blackbox_chat_profile   # attach's public entry
-    detach_all(hermes=True, openclaw=True, remove_files=False, dry_run=False)
-    hermes_installed: list[Path] = []
-    for home in plan.hermes_homes:
-        if is_managed_blackbox_chat_profile(home):   # the sweep leaves Blackbox's own chat profile alone
-            detach_hermes(home)
-        config = home / "config.yaml"
-        data = yaml_files.load_yaml(config)   # an unreadable config has no entry to remove: never written
-        plugins = data.get("plugins")
-        entries = plugins.get("entries") if isinstance(plugins, dict) else None   # hand-edited: nothing to remove
-        if isinstance(entries, dict) and "blackbox" in entries:
-            del entries["blackbox"]
-            yaml_files.dump_yaml(config, data)
-        metadata = home / "plugins" / ".install-metadata.json"
-        if metadata.is_file() and '"blackbox"' in metadata.read_text(encoding="utf-8-sig", errors="ignore"):
-            hermes_installed.append(home)
-        elif (home / "plugins" / "blackbox").is_dir():
-            shutil.rmtree(home / "plugins" / "blackbox", ignore_errors=True)
-        report.append(f"removed Blackbox from the Hermes in {home}")
-    return hermes_installed
-
-
-def _delete_data(plan: UninstallPlan, report: list[str]) -> None:
-    targets = [plan.blackbox_home]
-    if plan.dkg_home and plan.blackbox_home not in plan.dkg_home.parents:
-        targets.append(plan.dkg_home)
-    for target in targets:
-        if target.exists():
-            shutil.rmtree(target, ignore_errors=True)
-            report.append(f"deleted {target}")
-    if plan.shim:
-        plan.shim.unlink(missing_ok=True)
-        report.append(f"removed {plan.shim}")
-
-
 def execute(plan: UninstallPlan, *, run: Runner = _run,
-            stop_dashboard: Callable[[int], list[int]] = _stop_dashboard_on) -> list[str]:
-    """Carry out *plan*; returns what was done (and what needs root), in order. *run* and
-    *stop_dashboard* are the two ways it reaches running processes (tests pass fakes)."""
+            stop_dashboard: Callable[[int], list[int]] = _stop_dashboard_on,
+            run_as_admin: Runner = _run_at_terminal, remove_host: bool = False) -> list[str]:
+    """Carry out *plan*; returns what was done (and what needs root), in order. *run*,
+    *stop_dashboard* and *run_as_admin* (sudo, at the terminal) are the ways it reaches running
+    processes (tests pass fakes). *remove_host*: also remove the Hermes host the installer set up
+    (exactly what its manifest lists), last."""
     remove_plugin = hermes_argv("plugins", "remove", "blackbox")   # the Hermes running this, never another on PATH
     report: list[str] = []
+    _remove_system_helper(plan, run_as_admin, report)   # first: DNS back before anything else stops
     _stop_services(plan, run, report)
     _stop_running_dashboard(plan, stop_dashboard, report)
     _stop_unsupervised_node(plan, report)
+    _stop_notifier(plan, report)
     _back_up(plan, report)
+    _remove_store(plan, run, report)   # the node is stopped; its config (read at plan time) goes below
     hermes_installed = _remove_from_agents(plan, report)
+    _remove_agent_hooks(plan, report)
+    addon_cleanup.remove(plan.addon_cleanup, run, report)   # what a companion app left (its manifest, read above)
     _delete_data(plan, report)
+    install_manifest.remove_components(plan.manifest, report)   # the notifier it added (KI-629)
+    install_manifest.remove_own_dirs(plan.manifest, report)   # e.g. an empty ~/Library/LaunchAgents it made (KI-611)
+    install_manifest.restore_system_settings(plan.manifest, run, report)   # lingering (Linux), user PATH (Windows)
+    if remove_host and plan.manifest.has_host:   # the host goes as a whole: no plugin to remove from it first
+        install_manifest.remove_host(plan.manifest, report)
+        return report
     for home in hermes_installed:   # last: this removes the code that is running
         env_home = str(home)
         code = run(["env", f"HERMES_HOME={env_home}", *remove_plugin]) \
@@ -319,6 +328,9 @@ def execute(plan: UninstallPlan, *, run: Runner = _run,
 
 def cmd_uninstall(args: argparse.Namespace) -> int:
     plan = build_plan(purge=args.purge, keep_logs=args.keep_logs)
+    if not installed(plan):
+        print("Blackbox is not installed here: nothing to remove.")
+        return 0
     for line in describe(plan):
         print(line)
     if args.dry_run:
@@ -331,8 +343,14 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
         if answer.strip().lower() not in ("y", "yes"):
             print("Nothing removed.")
             return 0
-    for line in execute(plan):
+    remove_host = bool(getattr(args, "remove_host", False))
+    if plan.manifest.has_host and not remove_host and not args.yes:
+        answer = terminal_question.ask(host_question(plan))
+        remove_host = (answer or "").strip().lower() in ("y", "yes")
+    for line in execute(plan, remove_host=remove_host):
         print(f"  {line}")
+    if plan.manifest.has_host and not remove_host:
+        print("\n".join(host_kept_note(plan)))
     print("Blackbox is uninstalled." + (f" Your keys are in {plan.backup_dir}" if plan.backup_dir and plan.key_files else ""))
     return 0
 
@@ -343,5 +361,7 @@ def add_uninstall_parser(sub: argparse._SubParsersAction) -> None:
     parser.add_argument("--purge", action="store_true", help="Also delete the node's keys and the reporter key: a clean uninstall")
     parser.add_argument("--keep-logs", action="store_true", help="Keep the local audit record in the backup folder")
     parser.add_argument("--dry-run", action="store_true", help="Show what would be removed; change nothing")
-    parser.add_argument("--yes", "-y", action="store_true", help="Do not ask")
+    parser.add_argument("--yes", "-y", action="store_true", help="Do not ask (the Hermes host stays unless --remove-host)")
+    parser.add_argument("--remove-host", action="store_true",
+                        help="Also remove the Hermes host Blackbox's installer set up (only what it installed)")
     parser.set_defaults(func=cmd_uninstall)

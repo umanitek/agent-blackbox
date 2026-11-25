@@ -30,7 +30,7 @@ from .progress import read_durable_progress, read_recovery_backlog
 from .snapshot_readiness import defaults as snapshot_defaults, validate_requested_profile as validate_snapshot_profile
 
 __all__ = ["LAUNCHD_LABELS", "SYSTEMD_UNITS", "SYSTEM_UNIT_DIR", "WINDOWS_TASKS", "cmd_sync", "is_node_process", "node_starting", "progress", "read_durable_progress", "read_recovery_backlog",
-           "snapshot_defaults", "state", "validate_snapshot_profile"]
+           "snapshot_defaults", "state", "validate_snapshot_profile", "write_node_profile"]
 
 
 def node_starting(cfg) -> bool:
@@ -53,11 +53,30 @@ def is_node_process(cfg, pid: int) -> bool:
 def cmd_sync(args: argparse.Namespace) -> int:
     """``blackbox sync``. On a machine with no DKG node for Blackbox — a Hermes plugin-catalog
     install brings the plugin only — it says how to install one instead of waiting on a node that
-    is not there (exit 2 with ``--wait``); otherwise :func:`.command.cmd_sync`."""
+    is not there (exit 2 with ``--wait``); otherwise :func:`.command.cmd_sync`.
+    ``--node-profile-only``: :func:`write_node_profile` and nothing else."""
     cfg = load_blackbox_config()
+    if getattr(args, "node_profile_only", False):
+        return write_node_profile(cfg)
     if not health.node_installed(cfg, DkgClient.for_config(cfg).reachable()):
         print("Blackbox setup has not run, so there is no DKG node and no threat graph to sync. "
               f"To {health.NODE_INSTALL_HINT}.")
         return 2 if getattr(args, "wait", False) else 0
     node_service.trim_error_log(Path(cfg.dkg_home))   # every sync, the dashboard's included
     return _sync_with_node(args)
+
+
+def write_node_profile(cfg) -> int:
+    """The managed DKG node's sync profile into its config.json — the profile every sync checks
+    before a transfer — and nothing else: no transfer, no restart. The installer runs it
+    (``blackbox sync --node-profile-only``) before the node's service first starts the node, so
+    the first sync after an install finds it right and restarts nothing (KI-541, E2E full5
+    2026-11-22). 0 when written or already right; 2 when this machine has no managed node."""
+    from . import managed_node
+
+    if not managed_node._uses_managed_dkg(cfg, argparse.Namespace(wait=True)) or not (Path(cfg.dkg_home) / "config.json").is_file():
+        print("No Blackbox-managed DKG node here; nothing to write.")
+        return 2
+    changed = managed_node._set_persisted_dkg_sync_state(cfg)
+    print("DKG node sync profile written." if changed else "DKG node sync profile already current.")
+    return 0

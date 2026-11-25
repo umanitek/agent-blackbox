@@ -9,11 +9,13 @@ copy is stale (version change or any newer shipped file).
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 import shutil
 from pathlib import Path
 from typing import Optional
-from ..kernel import constants
+from ..kernel import constants, os_layout
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +25,7 @@ _INSTALL_STAMP_MARKER = ".blackbox-install-stamp"
 
 # Files/dirs never copied into a target home's plugins/blackbox/ — build
 # artifacts and the plugin's own tests have no business in a runtime home.
-_COPY_EXCLUDE_DIRS = {"__pycache__", "tests", ".pytest_cache", "node_modules"}
+_COPY_EXCLUDE_DIRS = {"__pycache__", "tests", ".pytest_cache", "node_modules", "target"}   # target: the helper crate's build output
 _COPY_EXCLUDE_SUFFIXES = (".pyc", ".pyo")
 
 # The OpenClaw JS plugin is bundled inside an installed copy under this name so
@@ -124,28 +126,46 @@ def _needs_copy(dest: Path) -> bool:
         return False
 
 
-def _copy_ignore(_dir: str, names: list[str]) -> list[str]:
-    return [n for n in names if n in _COPY_EXCLUDE_DIRS or n.endswith(_COPY_EXCLUDE_SUFFIXES)]
+def _copy_ignore(folder: str, names: list[str]) -> list[str]:
+    # Another operating system's platform/ modules are left out too (kernel.os_layout): a Mac's
+    # copy holds no Windows or Linux files.
+    skipped = [n for n in names if n in _COPY_EXCLUDE_DIRS or n.endswith(_COPY_EXCLUDE_SUFFIXES)]
+    return skipped + [n for n in os_layout.other_os_entries(folder, names) if n not in skipped]
 
 
 def copy_plugin_tree(src: Path, dest: Path) -> None:
-    """Copy the plugin tree from *src* to *dest*, excluding pycache/tests.
+    """Copy the plugin tree from *src* to *dest*, excluding pycache/tests and other operating
+    systems' platform modules.
 
     Replaces any existing copy so a version bump fully refreshes the files, and
     bundles the OpenClaw JS plugin so an installed copy can still point OpenClaw
     at it (an installed ``plugins/blackbox`` has no sibling ``integrations/``).
     """
-    if dest.exists():
-        shutil.rmtree(dest)
-    shutil.copytree(src, dest, ignore=_copy_ignore)
-    _bundle_openclaw_plugin(src, dest)
-    (dest / _INSTALL_STAMP_MARKER).write_text(constants.__version__, encoding="utf-8")
+    # Built beside, then swapped in by two renames — the installer's own refresh (KI-644). WHY here
+    # too (fix wave W12, macOS VM: an upgrade over a running install failed in `blackbox attach` with
+    # "[Errno 17] File exists: …/plugins/blackbox/shields"): the running dashboard and hooks import
+    # from the copy and write fresh __pycache__ folders while rmtree + copytree replace it in place.
+    # A rename is atomic and does not care what runs from the folder. The aside folder sits beside
+    # the plugins folder, never inside it (Hermes would scan it as a plugin).
+    aside = dest.parent.parent / ".blackbox-attach-copy"
+    staged, old_copy = aside / f"new-{os.getpid()}", aside / f"old-{os.getpid()}"
+    shutil.rmtree(staged, ignore_errors=True)
+    shutil.rmtree(old_copy, ignore_errors=True)
+    aside.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(src, staged, ignore=_copy_ignore)
+    _bundle_openclaw_plugin(src, staged)
+    (staged / _INSTALL_STAMP_MARKER).write_text(constants.__version__, encoding="utf-8")
     source_root = _source_checkout_root(src)
     if source_root is not None:
         try:
-            (dest / _SOURCE_ROOT_MARKER).write_text(str(source_root), encoding="utf-8")
+            (staged / _SOURCE_ROOT_MARKER).write_text(str(source_root), encoding="utf-8")
         except OSError:
             pass
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if dest.exists() or dest.is_symlink():
+        os.rename(dest, old_copy)
+    os.rename(staged, dest)
+    shutil.rmtree(aside, ignore_errors=True)
 
 
 def _source_checkout_root(src: Path) -> Optional[Path]:
@@ -188,8 +208,9 @@ def _bundle_openclaw_plugin(src: Path, dest: Path) -> None:
 
 
 def _openclaw_ignore(_dir: str, names: list[str]) -> list[str]:
-    """Exclude deps/build/test dirs from the bundled OpenClaw plugin."""
-    skip = {"node_modules", "dist", ".turbo", "test", "tests", "__pycache__"}
+    """Exclude deps/test dirs from the bundled OpenClaw plugin. ``dist`` is KEPT: since
+    2026-11-20 it holds the one file OpenClaw loads (``dist/index.js``, built from ``src/``)."""
+    skip = {"node_modules", ".turbo", "test", "tests", "__pycache__"}
     return [n for n in names if n in skip or n.endswith((".pyc", ".log", ".tsbuildinfo"))]
 
 
@@ -209,8 +230,17 @@ def _bundled_openclaw_dir() -> Path:
 
 
 def _is_openclaw_plugin_dir(path: Path) -> bool:
-    """True when *path* is the OpenClaw plugin (identified by its manifest)."""
+    """True when *path* is the OpenClaw plugin (identified by its manifest) AND every entry
+    file its ``package.json`` names is there — a copy without its entry (one made before
+    ``dist`` was shipped) would be wired into OpenClaw only to fail there, and OpenClaw then
+    refuses to run the agent; better reported as "OpenClaw not protected"."""
     try:
-        return (path / "openclaw.plugin.json").is_file()
+        if not (path / "openclaw.plugin.json").is_file():
+            return False
+        package = path / "package.json"
+        if not package.is_file():
+            return True
+        entries = (json.loads(package.read_text(encoding="utf-8-sig")).get("openclaw") or {}).get("extensions") or []
+        return all((path / str(entry)).is_file() for entry in entries)
     except Exception:
         return False

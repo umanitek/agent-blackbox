@@ -119,6 +119,9 @@ def _enable_in(data: dict[str, Any]) -> None:
         plugins["enabled"] = enabled
     if "blackbox" not in enabled:
         enabled.append("blackbox")
+    disabled = plugins.get("disabled")
+    if isinstance(disabled, list) and "blackbox" in disabled:   # an uninstall that kept a bundling Hermes (KI-610)
+        plugins["disabled"] = [name for name in disabled if name != "blackbox"]
 
 @declined.remembers("hermes", switched_off=False)
 @yaml_files.edits_config

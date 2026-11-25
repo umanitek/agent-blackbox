@@ -14,13 +14,14 @@ Config, under ``plugins.entries.blackbox``::
         wallets: [metamask]          # which wallets (default: every supported one)
         offered: [metamask, …]       # written by the save, never by the operator: every wallet
                                      # Settings offered then, so a wallet added in a later version
-                                     # is told apart from one the operator left unticked
+                                     # is told apart from one the operator left unticked — and is
+                                     # protected without a save (2026-11-19, below)
         addresses: ["0x…"]           # the operator's OWN public addresses (optional, opt-in):
                                      # a raw 64-hex key that opens one of them is recognised
 
 Which wallets exist is data, not code: the shield's packs (``shields/trader/wallets/``),
 handed in once by :func:`use_packs`; ``supported`` ones may be chosen, ``planned`` ones
-are shown as coming soon.
+are loaded but never shown (launch-first: nothing is promised before it ships).
 
 An install saved before shields keeps the three legacy keys ``wallet_protection`` /
 ``protected_wallets`` / ``wallet_addresses``; :func:`from_entry` still reads them (so it
@@ -158,39 +159,37 @@ def from_entry(entry: Mapping[str, Any]) -> ShieldMode:
     """The mode as the ``blackbox`` config entry states it (defaults when absent).
 
     ``shields.trader`` when present; otherwise the three legacy keys, so an install that
-    never saved since shields arrived stays engaged."""
+    never saved since shields arrived stays engaged. A saved list guards the wallets ticked
+    in it PLUS every supported wallet it was never offered (:func:`added_since_saved`)."""
     section = _saved_section(entry)
-    chosen = _wallet_list(section[WALLETS]) if WALLETS in section else None
+    chosen = None
+    if WALLETS in section:
+        chosen = _wallet_list(section[WALLETS]) + added_since_saved(section)
     return build(enabled=section.get("enabled") is True, wallets=chosen,
                  addresses=_address_list(section.get(ADDRESSES)))
 
 
-def newly_supported(mode: ShieldMode, entry: Optional[Mapping[str, Any]] = None) -> tuple[str, ...]:
-    """Supported wallet ids *mode* leaves out that Settings did NOT offer when the list was
-    saved — wallets this version added since, which the operator has never been asked about.
-    A wallet the operator left unticked was offered, so it is never named here.
-
-    *entry* is the ``blackbox`` config entry (default: read now). Empty when no list was
-    saved: every supported wallet is then chosen, so none can be missing."""
-    if entry is None:
-        from ...kernel.config import _blackbox_entry   # the one reader of plugins.entries.blackbox
-
-        entry = _blackbox_entry()
-    section = _saved_section(entry)
+def added_since_saved(section: Mapping[str, Any]) -> tuple[str, ...]:
+    """Supported wallet ids a saved ``shields.trader`` *section* was never offered — wallets a
+    later version added, which the operator has never been asked about. They are guarded like
+    the ticked ones (Amos, 2026-11-19: "always protected moving forward"; this settles KI-411 —
+    before, a saved list left every wallet added later unprotected until the next save, LES-053).
+    A wallet the operator left unticked WAS offered, so it is never named here and stays off.
+    Empty when no list was saved: every supported wallet is then chosen already."""
     if WALLETS not in section:
         return ()
     raw = section.get(OFFERED)
     offered = ({str(item or "").strip().lower() for item in raw} if isinstance(raw, list)
                else set(OFFERED_BEFORE_RECORDING))
-    chosen = set(wallets(mode))
-    return tuple(wallet for wallet in supported_wallets() if wallet not in chosen and wallet not in offered)
+    ticked = set(_wallet_list(section[WALLETS]))
+    return tuple(wallet for wallet in supported_wallets() if wallet not in ticked and wallet not in offered)
 
 
 def current() -> ShieldMode:
     """The mode in force now, read from the Hermes config like every other setting."""
-    from ...kernel.config import _blackbox_entry   # the one reader of plugins.entries.blackbox
+    from ...kernel.config import shield_entry   # plugins.entries.blackbox, once per shields snapshot
 
-    return from_entry(_blackbox_entry())
+    return from_entry(shield_entry())
 
 
 def validate(payload: Mapping[str, Any]) -> tuple[str, dict[str, Any], list[str], tuple[str, ...]]:

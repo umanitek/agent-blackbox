@@ -201,7 +201,7 @@ def test_lane_text_is_sanitized_and_cannot_fill_a_list_shaped_key(monkeypatch):
 
 def test_the_routes_read_the_lane_through_the_dashboards_cache(monkeypatch):
     """read_lane (a node query of up to 4000 rows) ran on every /api/playground hit — every 5 s
-    per tab and every 4 s from Desktop (LES-040). The routes now read it through the
+    per tab and every 4 s from Hermes Desktop (LES-040). The routes now read it through the
     dashboard's stale-while-revalidate cache, under one key per graph."""
     from fastapi import FastAPI
     from fastapi.testclient import TestClient

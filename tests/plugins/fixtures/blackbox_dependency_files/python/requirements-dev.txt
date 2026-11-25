@@ -1,0 +1,2 @@
+evil_pkg==0.1.0 ; python_version >= "3.8"
+-c constraints.txt

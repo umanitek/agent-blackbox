@@ -1,5 +1,6 @@
 """Make ``tests/plugins`` importable for shared helpers (e.g. ``_blackbox_loader``)."""
 
+import os
 import sys
 from pathlib import Path
 
@@ -12,6 +13,16 @@ import pytest
 from plugins.blackbox.community import consent as _consent_module
 
 _REAL_IN_FORCE = _consent_module.in_force
+
+
+@pytest.fixture(autouse=True)
+def _no_system_protection_helper(monkeypatch, tmp_path):
+    """Network Shield asks whether the system protection helper's LaunchDaemon is installed
+    (/Library/LaunchDaemons/…). Tests never read the real machine: the helper is absent unless a
+    test installs its own (``helper.SERVICE`` pointed at a file it creates)."""
+    from plugins.blackbox.shields.network import helper
+    monkeypatch.setattr(helper, "SERVICE", tmp_path / "no-helper" / "ai.umanitek.blackbox.netd.plist")
+    yield
 
 
 @pytest.fixture(autouse=True)
@@ -132,3 +143,55 @@ def real_report_queue():
     """Keep the real background report queue for one test (undoes the autouse inline stub)."""
     from plugins.blackbox.guard import report_queue
     return report_queue.REPORTS
+
+
+@pytest.fixture(autouse=True)
+def _no_real_notifications(monkeypatch):
+    """A test that starts the dashboard app also starts the notification pump (``notify.PUMP``),
+    and a real tick would read this machine's processes and could show a real notification on
+    the developer's screen. The pump does not start and the system notifier shows nothing unless
+    a test injects its own."""
+    from plugins.blackbox import notify
+    for module in (notify, sys.modules.get("hermes_plugins.blackbox.notify")):
+        if module is None:
+            continue
+        nothing = module.Delivery("not-shown", "a test never shows a notification")
+        monkeypatch.setattr(module.Pump, "start", lambda self: None)
+        monkeypatch.setattr(module.platform, "send", lambda *args, **kwargs: nothing)
+        monkeypatch.setattr(module.platform, "request", lambda: module.platform.status())     # macOS never asks from a test
+        monkeypatch.setattr(module.platform, "open_settings", lambda: False)
+    yield
+
+
+# ---- never the real home (2026-11-22) -----------------------------------------------------------
+# A Blackbox test that wrote to the developer's real ~/.hermes/blackbox (File Shield state, a
+# ruleset) and a test dashboard that showed real notifications on the founder's Mac: every
+# Blackbox test runs with HOME pointed at its own temporary folder, and a test run that creates
+# the real ~/.hermes/blackbox fails.
+
+_REAL_HOME = Path.home()
+_REAL_BLACKBOX = _REAL_HOME / ".hermes" / "blackbox"
+_BLACKBOX_EXISTED = {"before": _REAL_BLACKBOX.exists()}
+
+
+def pytest_configure(config):
+    """Before any test module is imported (several read ``~`` at import): a run of Blackbox test
+    files gets HOME — and any Hermes/Blackbox/DKG home still inside the real one — in a temporary
+    folder of its own. ``scripts/run_tests.sh`` runs one file per process, so this is per file."""
+    if not any(Path(str(arg).split("::")[0]).name.startswith("test_blackbox_") for arg in config.args):
+        return
+    import tempfile
+    home = Path(tempfile.mkdtemp(prefix="blackbox-test-home-"))
+    os.environ["HOME"] = str(home)
+    for name in ("HERMES_HOME", "BLACKBOX_HOME", "BLACKBOX_DKG_HOME"):
+        value = os.environ.get(name, "")
+        inside = bool(value) and Path(value).expanduser().resolve().is_relative_to(_REAL_HOME.resolve())
+        if inside or (name == "HERMES_HOME" and not value):
+            os.environ[name] = str(home / (".hermes" if name == "HERMES_HOME" else name.lower()))
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """Fail the run when its tests created Blackbox's home inside the developer's real home."""
+    if not _BLACKBOX_EXISTED["before"] and _REAL_BLACKBOX.exists():
+        session.exitstatus = 1
+        print(f"\nBLACKBOX TEST GUARD: a test created {_REAL_BLACKBOX} — tests must never write to the real home.")

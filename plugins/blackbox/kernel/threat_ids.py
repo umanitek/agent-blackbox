@@ -202,6 +202,16 @@ def escalation_identifier(tool_name: str, arg_shape: str) -> str:
     return f"escalation:{tool_name.strip().lower()}:{arg_shape.strip().lower()}"
 
 
+#: The ``fileaccess`` category of Blackbox's self-protection: an agent changing, removing or
+#: switching off Blackbox, or reading its keys — worded as that, never as "a sensitive file".
+SELF_PROTECTION = "blackbox-settings"
+
+
+def is_self_protection(identifier: str) -> bool:
+    """True for a finding of Blackbox's self-protection (``fileaccess:<tool>:blackbox-settings``)."""
+    return identifier.startswith("fileaccess:") and identifier.endswith(":" + SELF_PROTECTION)
+
+
 def fileaccess_identifier(tool_name: str, category: str) -> str:
     """``fileaccess:{tool}:{category}`` — e.g. ``fileaccess:read_file:ssh-private-key``.
 

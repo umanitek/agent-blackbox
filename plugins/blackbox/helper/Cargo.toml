@@ -1,0 +1,51 @@
+[package]
+name = "blackbox-helper"
+version = "0.1.0"
+edition = "2021"
+description = "Blackbox's root helper (blackbox-netd): applies Network Shield's plan — DNS Shield, the Threat Firewall, lockdowns — and observes what needs root"
+license = "MIT"
+publish = false
+build = "build.rs"
+
+[lib]
+name = "blackbox_helper"
+path = "src/lib.rs"
+
+[[bin]]
+name = "blackbox-netd"
+path = "src/bin/blackbox-netd.rs"
+
+# The agent sandbox launcher (Linux; elsewhere it only says so): user + mount namespaces,
+# seccomp and Landlock scopes around each agent — src/platform/linux/sandbox/.
+[[bin]]
+name = "blackbox-sandbox"
+path = "src/bin/blackbox-sandbox.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# rustls so the build needs no OpenSSL.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "blocking"] }
+sha2 = "0.10"
+hex = "0.4"
+# The authenticated link to the plugin (link.rs): HMAC-SHA256 with the per-install key, and the
+# random nonce each plan request carries.
+hmac = "=0.12.1"
+getrandom = "=0.2.17"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+# The process table the macOS observer reads (platform/macos/observe/remote_procs.rs): only the
+# macOS build pulls it in.
+[target.'cfg(target_os = "macos")'.dependencies]
+sysinfo = { version = "=0.40.1", default-features = false, features = ["system", "user"] }
+
+[build-dependencies]
+cc = "=1.11.3"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

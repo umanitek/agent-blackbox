@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Blackbox Protection</title>
+<script>
+  // The dashboard's own appearance setting (same key), applied before paint.
+  (function () {
+    var preference = "system";
+    try {
+      var saved = localStorage.getItem("blackbox.dashboard.theme.v1");
+      if (saved === "light" || saved === "dark" || saved === "system") preference = saved;
+    } catch (_) {}
+    var resolved = preference === "system"
+      ? (window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark")
+      : preference;
+    document.documentElement.setAttribute("data-theme", resolved);
+    document.documentElement.style.colorScheme = resolved;
+  })();
+</script>
+<link rel="stylesheet" href="/docs/assets/docs.css" />
+<style>
+  .pr-wrap { max-width: 860px; margin: 0 auto; padding: 24px max(16px, env(safe-area-inset-left, 0px)) 64px; display: grid; gap: 24px; }
+  .pr-card { border: 1px solid var(--border, #2a2d34); border-radius: 12px; padding: 18px 20px; display: grid; gap: 12px; min-width: 0; }
+  .pr-muted { opacity: .75; }
+  .pr-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
+  .pr-tile { border: 1px solid var(--border, #2a2d34); border-radius: 10px; padding: 12px 14px; }
+  .pr-tile b { display: block; font-size: 26px; font-variant-numeric: tabular-nums; }
+  .pr-tile small { opacity: .75; }
+  .pr-log[data-state="ok"], .pr-log[data-state="empty"] { border-left: 3px solid #2f855a; padding-left: 12px; }
+  .pr-log[data-state="broken"], .pr-log[data-state="rewound"], .pr-log[data-state="drift"] { border-left: 3px solid #c2352b; padding-left: 12px; }
+  .pr-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+  .pr-rule { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; border-left: 3px solid var(--border, #2a2d34); padding: 2px 0 2px 12px; }
+  .pr-rule[data-state="enforce"] { border-left-color: #c2352b; }
+  .pr-rule .pr-what { flex: 1 1 220px; min-width: 0; overflow-wrap: anywhere; }
+  .pr-rule small { display: block; opacity: .7; }
+  .pr-form { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  button.pr { font: inherit; padding: 6px 14px; border-radius: 8px; border: 1px solid var(--border, #2a2d34); background: transparent; color: inherit; cursor: pointer; }
+  input.pr, select.pr { font: inherit; padding: 5px 8px; border-radius: 8px; border: 1px solid var(--border, #2a2d34); background: transparent; color: inherit; min-width: 0; }
+  input.pr.pr-value { flex: 1 1 220px; }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <a class="wordmark" href="/" aria-label="Back to the Blackbox dashboard"><span class="dot" aria-hidden="true"></span>BLACKBOX<span class="sub">Protection</span></a>
+  <a class="back" href="/">Dashboard</a>
+</header>
+<main class="pr-wrap">
+  <section class="pr-card" aria-labelledby="pr-tamper-h">
+    <h2 id="pr-tamper-h">Attempts to switch Blackbox off</h2>
+    <p class="pr-muted">Every refused attempt by an agent to turn Blackbox off, change its settings or get around it, counted. An agent can not reset these counts.</p>
+    <div id="pr-tamper" class="pr-tiles"><p class="pr-muted">Reading…</p></div>
+  </section>
+  <section class="pr-card" aria-labelledby="pr-log-h">
+    <h2 id="pr-log-h">Protection log</h2>
+    <p id="pr-log" class="pr-log pr-muted">Reading…</p>
+  </section>
+  <section class="pr-card" aria-labelledby="pr-watch-h">
+    <h2 id="pr-watch-h">Watch rules</h2>
+    <p class="pr-muted">Watch a website or a package first: calls that reach it are counted, never blocked. When you have seen enough, block it; it keeps its count. Stopping a block waits for your confirmation.</p>
+    <form id="pr-add" class="pr-form">
+      <select class="pr" id="pr-kind" aria-label="Kind"><option value="host">Website or host</option><option value="package">Package</option></select>
+      <input class="pr pr-value" id="pr-value" placeholder="files.example.com or npm:left-pad" aria-label="What to watch" autocomplete="off" />
+      <input class="pr" id="pr-note" placeholder="Note (optional)" aria-label="Note" maxlength="200" />
+      <button class="pr" type="submit">Watch</button>
+      <span id="pr-add-result" class="pr-muted" aria-live="polite"></span>
+    </form>
+    <ul id="pr-rules" class="pr-list"><li class="pr-muted">Reading…</li></ul>
+  </section>
+</main>
+<script src="/approvals.js"></script>
+<script src="/protection.js"></script>
+</body>
+</html>

@@ -182,14 +182,32 @@ def expected_node_settings(cfg: BlackboxConfig) -> dict[str, str]:
     re-running the installer writes it into the unit.
     """
     expected = node_sync_settings(cfg)
-    if not _runs_under_a_service(cfg, _daemon_pid(cfg)):
+    pid = _daemon_pid(cfg)
+    if not _runs_under_a_service(cfg, pid):
         return expected
-    missing = sorted(name for name in _DKG_ENV_ONLY_SETTINGS if name in expected)
-    if missing:
+    # A restart through the service starts the node with the SERVICE's environment again, so a
+    # setting the service pins there (an environment value outranks config.json) can not be
+    # changed by restarting — counting it restarted the node on every sync (KI-541, E2E full5
+    # 2026-11-22: the LaunchAgent pins sync-on-connect for KI-044 while the snapshot profile asks
+    # for it off). Env-only switches the unit lacks are the same case (KI-059/KI-065).
+    pinned = _service_environment(pid)
+    skipped = sorted(name for name in expected
+                     if name in _DKG_ENV_ONLY_SETTINGS or (name in pinned and pinned[name] != expected[name]))
+    if skipped:
         logger.warning(
-            "blackbox: the DKG node runs under a service unit; %s can only be set in the unit's "
-            "environment — re-run the Blackbox installer to update the unit", ", ".join(missing))
-    return {name: value for name, value in expected.items() if name not in _DKG_ENV_ONLY_SETTINGS}
+            "blackbox: the DKG node runs under a service unit; %s can only be changed in the unit's "
+            "environment — re-run the Blackbox installer to update the unit", ", ".join(skipped))
+    return {name: value for name, value in expected.items() if name not in skipped}
+
+
+def _service_environment(pid: Optional[int]) -> dict[str, str]:
+    """The environment the service started the node *pid* with ({} when it can not be read)."""
+    if pid is None:
+        return {}
+    try:
+        return dict(psutil.Process(pid).environ())
+    except (OSError, psutil.Error):
+        return {}
 
 
 def _runs_under_a_service(cfg: BlackboxConfig, pid: Optional[int]) -> bool:

@@ -1,6 +1,6 @@
 """Getting Blackbox ready from Hermes Desktop (desktop/readiness.py, KI-476/KI-475), 2026-11-07.
 
-A judge-path test on a fresh Mac (Tart VM bb-judge-2) found the Desktop page all "—" after a catalog
+A judge-path test on a fresh Mac (Tart VM bb-judge-2) found the Hermes Desktop page all "—" after a catalog
 install, with no word that setup had not run and no way to run it, and the dashboard's first banner
 saying "UNPROTECTED: run blackbox sync --wait" while setup's own first sync was running. These tests
 hold the fix:
@@ -9,7 +9,7 @@ hold the fix:
 - setup's steps read from the installer's own section headings, in the order it prints them;
 - one owned setup run: a second start is refused, its end is read from the process or, after a
   Hermes restart, from its log — and a real child process is run once end to end;
-- the start is refused server-side once setup is done; the routes answer for Desktop and the
+- the start is refused server-side once setup is done; the routes answer for Hermes Desktop and the
   tamper rule flags an agent aimed at the setup route;
 - the health check reads the sync meter before judging the first sync (KI-475).
 """
@@ -177,7 +177,7 @@ def test_a_real_setup_process_runs_to_its_end_and_is_read_back(tmp_path):
 
 
 def test_setup_runs_in_its_own_folder_not_the_folder_of_hermes(tmp_path, monkeypatch):
-    """Judge-path test, bb-judge-3 (2026-11-07): setup started from Desktop inherited the gateway's
+    """Judge-path test, bb-judge-3 (2026-11-07): setup started from Hermes Desktop inherited the gateway's
     folder, Hermes' checkout, whose .npmrc (min-release-age=14) made npm refuse the pinned DKG
     release ("No matching version found ... with a date before ..."), and setup rolled back."""
     hermes_checkout = tmp_path / "hermes-agent"
@@ -199,15 +199,26 @@ def test_the_setup_command_is_this_hermes(monkeypatch):
 def test_setup_is_refused_once_it_is_running_or_done(monkeypatch, stage):
     started = []
     monkeypatch.setattr(desktop, "readiness_status", lambda: {"stage": stage})
-    monkeypatch.setattr(desktop.readiness_mod, "start_setup", lambda: started.append(1) or {"started": True})
+    monkeypatch.setattr(desktop.readiness_mod, "start_setup", lambda **kw: started.append(1) or {"started": True})
     assert desktop.start_setup()["started"] is False and started == []
 
 
 @pytest.mark.parametrize("stage", ["setup-needed", "setup-failed", "starting"])
 def test_setup_starts_when_the_page_offers_it(monkeypatch, stage):
     monkeypatch.setattr(desktop, "readiness_status", lambda: {"stage": stage})
-    monkeypatch.setattr(desktop.readiness_mod, "start_setup", lambda: {"started": True})
+    monkeypatch.setattr(desktop.readiness_mod, "start_setup", lambda **kw: {"started": True})
     assert desktop.start_setup() == {"started": True}
+
+
+@pytest.mark.parametrize("answer, flag", [(True, ["--protect-new-agents"]), (False, ["--no-protect-new-agents"]), (None, [])])
+def test_the_pages_protect_every_agent_switch_reaches_the_setup_command(monkeypatch, answer, flag):
+    # 2026-11-19: the setup page's "Protect every agent, now and later" (on by default, seen
+    # before Set up — the person's yes, KI-429) becomes setup's flag, then BLACKBOX_AUTO_ATTACH.
+    commands = []
+    monkeypatch.setattr(desktop, "readiness_status", lambda: {"stage": "setup-needed"})
+    monkeypatch.setattr(readiness.RUN, "start", lambda command: commands.append(command) or {"started": True})
+    assert desktop.start_setup(answer) == {"started": True}
+    assert commands == [[sys.executable, "-m", "hermes_cli.main", "blackbox", "setup", *flag]]
 
 
 class _Answer:
@@ -267,9 +278,13 @@ def _load_plugin_api() -> types.ModuleType:
 def test_the_desktop_routes_reach_readiness_and_setup(monkeypatch):
     api = _load_plugin_api()
     monkeypatch.setattr(desktop, "readiness_status", lambda: {"stage": "setup-needed"})
-    monkeypatch.setattr(desktop, "start_setup", lambda: {"started": True})
+    asked = []
+    monkeypatch.setattr(desktop, "start_setup", lambda protect=None: asked.append(protect) or {"started": True})
     assert api.readiness() == {"available": True, "stage": "setup-needed"}
     assert api.setup() == {"available": True, "started": True}
+    assert api.setup({"protectNewAgents": True}) == {"available": True, "started": True}
+    assert api.setup({"protectNewAgents": "yes"}) == {"available": True, "started": True}   # only a real boolean counts
+    assert asked == [None, True, None]
 
 
 def test_an_agent_aimed_at_the_setup_route_is_flagged():
@@ -323,7 +338,7 @@ def test_an_unreadable_ruleset_is_unknown_not_zero(monkeypatch):
 
 
 def test_the_readiness_poll_counts_the_rules_once_per_reading_and_keeps_readings_apart(tmp_path, monkeypatch):
-    """Desktop polls readiness every 2 s; the rule count (a ruleset load) ran on every poll,
+    """Hermes Desktop polls readiness every 2 s; the rule count (a ruleset load) ran on every poll,
     before the 1.5 s cache was even asked, and the cache ignored what it was built for, so a
     caller with another setup run got this one's reading."""
     from plugins.blackbox.desktop import readiness

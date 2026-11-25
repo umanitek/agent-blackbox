@@ -1,15 +1,15 @@
 """Hermes Desktop's door to the Blackbox dashboard's own API (Proxy pattern).
 
-The Desktop page shows every dashboard panel natively, from the same JSON the dashboard's web
-page reads. Rather than copy the dashboard's logic, the Desktop routes (``/api/plugins/blackbox/
-dash/<path>``, which Hermes answers only for Desktop's own credential) forward an allowlisted set
+The Hermes Desktop page shows every dashboard panel natively, from the same JSON the dashboard's web
+page reads. Rather than copy the dashboard's logic, the Hermes Desktop routes (``/api/plugins/blackbox/
+dash/<path>``, which Hermes answers only for Hermes Desktop's own credential) forward an allowlisted set
 of the dashboard's API routes to the dashboard already running on this machine's loopback, and
 return its answer unchanged.
 
 The dashboard's browser boundary stays as it is: a loopback request with the dashboard's Host
 header and no Origin is the same request its own page makes, and a change carries the
 dashboard's per-process change token, read from its ``/api/session`` on loopback (and read again
-once when the dashboard restarts and answers 403). Embedding the dashboard page in Desktop instead
+once when the dashboard restarts and answers 403). Embedding the dashboard page in Hermes Desktop instead
 would need it to accept an opaque origin, which is what a hostile site's sandboxed frame sends.
 
 Usage::
@@ -35,13 +35,13 @@ from ..kernel import local_http
 
 logger = logging.getLogger(__name__)
 
-#: Dashboard routes the Desktop page may read (GET).
+#: Dashboard routes the Hermes Desktop page may read (GET).
 READ_ROUTES = re.compile(
     r"api/(?:agents|attach-targets|audit|community-statements|community-stats|findings|graph|graph-status|health"
     r"|local-activity|playground(?:/(?:graph|local|threat|wallets))?|reports|settings|shields(?:/[a-z0-9_-]{1,40}/events)?"
     r"|threat|threat-proof|trust|verified-sync|docs)"
     r"|shields/[a-z0-9_-]{1,40}/(?:content|attacks|graph)\.json")
-#: Dashboard routes the Desktop page may change through (POST).
+#: Dashboard routes the Hermes Desktop page may change through (POST).
 WRITE_ROUTES = re.compile(r"api/(?:settings|agents/protection|agents/rescan|sync|playground/run|playground/wallets/run|blackbox-chat)")
 #: Changes that do real work before they answer: an assistant turn (up to 240 s on the dashboard) and a
 #: Playground test (up to ~90 s waiting for its share). Everything else answers within _TIMEOUT_S.
@@ -70,19 +70,19 @@ class DashboardLink:
 
     @staticmethod
     def allowed(method: str, path: str) -> bool:
-        """True when *method* *path* is a dashboard route the Desktop page may use."""
+        """True when *method* *path* is a dashboard route the Hermes Desktop page may use."""
         routes = READ_ROUTES if method == "GET" else WRITE_ROUTES if method == "POST" else None
         return bool(routes and routes.fullmatch(path.strip("/")))
 
     def forward(self, method: str, path: str, query: str = "", body: Any = None) -> LinkAnswer:
         """Send *method* *path*?*query* (with JSON *body* for POST) to the dashboard and return its answer.
 
-        404 for a route the Desktop page may not use; 503 ``{"dashboardDown": true}`` when no
+        404 for a route the Hermes Desktop page may not use; 503 ``{"dashboardDown": true}`` when no
         dashboard answers on loopback. Never raises."""
         method = method.upper()
         path = path.strip("/")
         if ".." in path or not self.allowed(method, path):
-            return LinkAnswer(404, {"error": "not a dashboard route the Desktop page uses"})
+            return LinkAnswer(404, {"error": "not a dashboard route the Hermes Desktop page uses"})
         answer = self._send(method, path, query, body)
         if answer.status == 403 and method == "POST":
             with self._lock:
@@ -121,7 +121,7 @@ class DashboardLink:
         except urllib.error.HTTPError as error:
             return LinkAnswer(error.code, _json(error.read(_MAX_BODY_BYTES)) or {"error": error.reason})
         except (urllib.error.URLError, OSError, TimeoutError) as error:
-            logger.debug("blackbox: dashboard not reachable for Desktop: %s", error)
+            logger.debug("blackbox: dashboard not reachable for Hermes Desktop: %s", error)
             return LinkAnswer(503, {"error": "the Blackbox dashboard is not running", "dashboardDown": True})
 
 

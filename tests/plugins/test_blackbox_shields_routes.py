@@ -25,7 +25,7 @@ FOREIGN = "https://attacker.example"
 #: The route prefixes a shield owns (its API, its pages, the campaign aliases).
 PREFIXES = ("/api/shields", "/shields", "/trader-shield")
 #: A registered value for each path parameter, so every walked route is a real request.
-PARAMETERS = {"shield_id": "trader", "pack_id": "metamask"}
+PARAMETERS = {"shield_id": "trader", "pack_id": "metamask", "name": "status"}
 ALIASES = {"/trader-shield": "/shields/trader",
            "/trader-shield/attacks.json": "/shields/trader/attacks.json",
            "/trader-shield/graph.json": "/shields/trader/graph.json"}
@@ -110,10 +110,10 @@ def test_a_pack_without_a_logo_is_404(app, pack_id):
 def test_an_unavailable_pack_serves_no_logo_even_when_it_carries_one(app, monkeypatch):
     # A pack demoted to unavailable (say, a duplicate id) keeps its validated logo record;
     # the route still refuses it, because an unavailable pack is never shown.
-    data = shields._DATA["trader"]
+    data = shields._registry()["data"]["trader"]
     demoted = tuple(dataclasses.replace(pack, status="unavailable") if pack.id == "metamask" else pack
                     for pack in data.packs)
-    monkeypatch.setitem(shields._DATA, "trader", dataclasses.replace(data, packs=demoted))
+    monkeypatch.setitem(shields._registry()["data"], "trader", dataclasses.replace(data, packs=demoted))
     assert shields.pack_logo("trader", "metamask") is None
     with TestClient(app, base_url=LOCAL) as client:
         assert client.get("/shields/trader/packs/metamask/logo.svg").status_code == 404

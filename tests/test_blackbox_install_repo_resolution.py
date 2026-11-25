@@ -10,16 +10,14 @@ from pathlib import Path
 
 import pytest
 
+from tests.plugins._blackbox_installer_shell import functions_with_callees
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 INSTALL_SH = REPO_ROOT / "scripts" / "blackbox-install.sh"
 INSTALL_PS1 = REPO_ROOT / "scripts" / "blackbox-install.ps1"
-
-
-def _shell_function(text: str, name: str) -> str:
-    match = re.search(rf"{name}\(\) \{{.*?\n\}}", text, re.DOTALL)
-    assert match is not None, f"{name}() not found"
-    return match.group(0)
+#: The output helpers each test program defines itself (quiet, or errors to stderr).
+STUBBED = ("step", "ok", "warn", "err")
 
 
 def test_shell_installer_defaults_to_invocation_directory() -> None:
@@ -119,14 +117,7 @@ def test_shell_installer_replaces_incomplete_checkout_with_real_clone(
     )
 
     text = INSTALL_SH.read_text(encoding="utf-8")
-    functions = "\n".join(
-        _shell_function(text, name)
-        for name in (
-            "blackbox_repo_is_valid",
-            "move_broken_blackbox_repo_aside",
-            "resolve_repo",
-        )
-    )
+    functions = functions_with_callees(text, ["resolve_repo"], provided=STUBBED)
     script = f"""
 set -euo pipefail
 step() {{ :; }}
@@ -159,14 +150,9 @@ def _commit_all(repo: Path, message: str) -> None:
 
 def _resolve_repo(install_dir: Path, source: Path, branch: str) -> subprocess.CompletedProcess:
     text = INSTALL_SH.read_text(encoding="utf-8")
-    functions = "\n".join(_shell_function(text, name)
-                          for name in ("blackbox_repo_is_valid", "move_broken_blackbox_repo_aside",
-                                       "blackbox_head_in_branch", "resolve_repo"))
-    depth = re.search(r"^BLACKBOX_HISTORY_CHECK_DEPTH=\S+", text, re.MULTILINE)
-    assert depth is not None
+    functions = functions_with_callees(text, ["resolve_repo"], provided=STUBBED)
     script = f"""
 set -euo pipefail
-{depth.group(0)}
 step() {{ :; }}
 ok() {{ :; }}
 warn() {{ :; }}

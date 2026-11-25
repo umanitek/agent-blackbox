@@ -19,7 +19,7 @@ from typing import Dict, Mapping, Optional
 import pytest
 
 INSTALLER = Path(__file__).resolve().parents[2] / "scripts" / "blackbox-install.sh"
-HELPERS = ("have_systemd", "can_write_system_units", "install_node_unit", "valid_service_port")
+HELPERS = ("have_systemd", "systemd_unavailable", "can_write_system_units", "install_node_unit", "valid_service_port")
 REGISTRARS = ("register_curator_service", "register_curate_watch", "register_lab_tunnel", "register_key_console")
 UNITS = ("blackbox-curator", "blackbox-curate-watch", "blackbox-lab-tunnel", "blackbox-console")
 CONSOLE_HARDENING = ("User=blackbox-console", "Group=blackbox-console", "NoNewPrivileges=yes", "ProtectSystem=strict",
@@ -73,6 +73,7 @@ useradd() {{ echo "$*" >> "{useradd}"; }}
 {hide}
 HERMES_HOME="$HOME/.hermes"; BLACKBOX_HOME="$HERMES_HOME/blackbox"; HERMES_BIN="/opt/venv/bin/hermes"
 BLACKBOX_SYSTEMD_DIR="{system_dir}"; BLACKBOX_PTRACE_SCOPE_FILE="{ptrace_file}"
+BLACKBOX_SYSTEMD_RUNTIME_DIR="{tmp_path}"   # systemd runs here (KI-626: the installer checks)
 {"".join(_function(name) for name in HELPERS)}
 {_function(call)}
 {call}

@@ -88,13 +88,6 @@
             "text": "ghost: chosen but unavailable — no such pack",
             "sub": "",
             "logo": ""
-          },
-          {
-            "icon": "!",
-            "state": "warn",
-            "text": "new since you last saved: Solana CLI, Rabby, Coinbase Wallet, Trust Wallet, OKX Wallet, Keplr, Solflare",
-            "sub": "",
-            "logo": ""
           }
         ]
       }
@@ -114,6 +107,128 @@
       "secret:token-approval-unchecked-spender",
       "*:crypto-wallet",
       "*:macos-keychain"
+    ]
+  },
+  {
+    "shield_id": "network-shield",
+    "mode": {
+      "enabled": false,
+      "protections": [
+        "lockdown"
+      ],
+      "lists": [],
+      "allow": [],
+      "block": [],
+      "agent_hosts": [
+        "github[.]com",
+        "githubusercontent[.]com",
+        "gitlab[.]com",
+        "bitbucket[.]org",
+        "npmjs[.]org",
+        "npmjs[.]com",
+        "yarnpkg[.]com",
+        "pypi[.]org",
+        "pythonhosted[.]org",
+        "crates[.]io",
+        "rubygems[.]org",
+        "golang[.]org",
+        "proxy[.]golang[.]org",
+        "anthropic[.]com",
+        "openai[.]com",
+        "googleapis[.]com",
+        "openrouter[.]ai"
+      ],
+      "ssh_allow": []
+    },
+    "blocking": false,
+    "sections": [
+      {
+        "title": "Protections",
+        "help": "What Network Shield runs on this machine.",
+        "rows": [
+          {
+            "icon": "↓",
+            "state": "needs-helper",
+            "text": "DNS Shield needs the system protection helper",
+            "sub": "Refuses the verified threat graph's malicious domains (and the lists you chose) for every app. Install it with Blackbox's installer (system protection), or from a companion app that offers it.",
+            "logo": ""
+          },
+          {
+            "icon": "↓",
+            "state": "needs-helper",
+            "text": "Threat Firewall needs the system protection helper",
+            "sub": "Drops traffic to and from the verified threat graph's malicious IP addresses. Install it with Blackbox's installer (system protection), or from a companion app that offers it.",
+            "logo": ""
+          },
+          {
+            "icon": "○",
+            "state": "off",
+            "text": "Agent network lockdown is off",
+            "sub": "AI agents may reach any host.",
+            "logo": ""
+          },
+          {
+            "icon": "↓",
+            "state": "needs-helper",
+            "text": "Cut malicious connections needs the system protection helper",
+            "sub": "Ends connections already open to listed addresses. Install it with Blackbox's installer (system protection), or from a companion app that offers it.",
+            "logo": ""
+          },
+          {
+            "icon": "↓",
+            "state": "needs-helper",
+            "text": "SSH lockdown needs the system protection helper",
+            "sub": "Only the addresses or networks you allow may SSH in. Install it with Blackbox's installer (system protection), or from a companion app that offers it.",
+            "logo": ""
+          }
+        ]
+      },
+      {
+        "title": "System protection helper",
+        "help": "The small root helper that applies DNS Shield, the Threat Firewall, cutting and SSH lockdown.",
+        "rows": [
+          {
+            "icon": "↓",
+            "state": "needs-helper",
+            "text": "System protection helper not installed",
+            "sub": "Install it with Blackbox's installer (system protection), or from a companion app that offers it.",
+            "logo": ""
+          }
+        ]
+      }
+    ],
+    "name": "Network Shield",
+    "tagline": "See and stop the malicious ones — for every app on this machine and every AI agent.",
+    "beta": true,
+    "page": "/shields/network-shield",
+    "claims": [
+      "network:agent-lockdown",
+      "network:blocked-host",
+      "network:listed-host"
+    ]
+  },
+  {
+    "shield_id": "file-shield",
+    "mode": {
+      "enabled": false,
+      "protected": [],
+      "folders": [
+        "~/Downloads"
+      ],
+      "sandboxed": [],
+      "sandbox_declined": []
+    },
+    "blocking": false,
+    "sections": [],
+    "name": "File Shield",
+    "tagline": "Keep every AI agent away from the files and folders you protect — and see new files arrive.",
+    "beta": true,
+    "page": "/shields/file-shield",
+    "claims": [
+      "files:file-hit",
+      "files:folder-hit",
+      "files:protected-mention",
+      "files:unseen-route"
     ]
   }
 ]

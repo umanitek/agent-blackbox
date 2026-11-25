@@ -1,0 +1,18 @@
+{
+  "lockfileVersion": 1,
+  "workspaces": {
+    "": {
+      "name": "shop",
+      "dependencies": {
+        "express": "^4.18.2",
+      },
+    },
+  },
+  "packages": {
+    "bad-pkg": ["bad-pkg@1.2.3", "", {}, "sha512-CCCC"],
+
+    "body-parser": ["body-parser@1.20.1", "", { "dependencies": { "bad-pkg": "^1.2.0" } }, "sha512-BBBB"],
+
+    "express": ["express@4.18.2", "", { "dependencies": { "body-parser": "1.20.1" } }, "sha512-AAAA"],
+  }
+}

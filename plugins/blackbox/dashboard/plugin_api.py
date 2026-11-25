@@ -1,6 +1,6 @@
 """Blackbox's routes for Hermes Desktop: ``/api/plugins/blackbox/status``, ``/mode`` and the dashboard link.
 
-Hermes mounts this file for the Desktop half (``desktop/plugin.js``, ``ctx.rest('/status')``) when
+Hermes mounts this file for the Hermes Desktop half (``desktop/plugin.js``, ``ctx.rest('/status')``) when
 the plugin is enabled. Hermes imports it on its own, as ``hermes_dashboard_plugin_blackbox``, outside
 Blackbox's package, so relative imports cannot work here. It finds the Blackbox package Hermes
 already loaded in this process (the one whose folder holds this file) and reads everything through
@@ -9,10 +9,10 @@ The routes read protection status (never evidence or commands), and
 ``POST /mode`` switches between audit and block, ``GET /readiness`` says where the machine is between
 plugin install and synced and ``POST /setup`` starts ``hermes blackbox setup`` (``desktop.readiness``), and ``/dash/<path>`` forwards an allowlisted set
 of the running dashboard's own API (threat graph, Trader Shield, agents, community, settings) so the
-Desktop page shows every panel without a second copy of its logic (``desktop.dashboard_link``);
-``POST /dash-call/<path>`` + ``GET /dash-call/<id>`` run the calls that outlast Desktop's 30 s request
+Hermes Desktop page shows every panel without a second copy of its logic (``desktop.dashboard_link``);
+``POST /dash-call/<path>`` + ``GET /dash-call/<id>`` run the calls that outlast Hermes Desktop's 30 s request
 limit in the background (``desktop.long_calls``). Hermes refuses every request here that does not
-carry Desktop's own credential (401), so an agent's ``curl`` cannot reach the switch; Blackbox's
+carry Hermes Desktop's own credential (401), so an agent's ``curl`` cannot reach the switch; Blackbox's
 tamper rule also flags any agent command aimed at these routes.
 
 Data shapes are documented on ``desktop.status_payload``.
@@ -34,7 +34,7 @@ from starlette.concurrency import run_in_threadpool
 router = APIRouter()
 
 PLUGIN_DIR = Path(__file__).resolve().parents[1]
-_OWN_COPY = "hermes_blackbox_desktop_backend"   # the name this file loads the package under, if it must
+_OWN_COPY = "hermes_blackbox_ui_backend"   # the name this file loads the package under, if it must
 _desktop: Optional[ModuleType] = None
 
 
@@ -75,7 +75,7 @@ def _unavailable(exc: Exception) -> dict[str, Any]:
 def status() -> Any:
     try:
         return {"available": True, **_desktop_module().status_payload()}
-    except Exception as exc:   # health: allow BLE001 -- the Desktop page shows "unavailable", never an HTML 500
+    except Exception as exc:   # health: allow BLE001 -- the Hermes Desktop page shows "unavailable", never an HTML 500
         return _unavailable(exc)
 
 
@@ -83,7 +83,7 @@ def status() -> Any:
 def mode(body: dict[str, Any] = Body(default={})) -> Any:
     try:
         return {"available": True, **_desktop_module().set_mode(str(body.get("mode") or ""))}
-    except Exception as exc:   # health: allow BLE001 -- the Desktop page shows "unavailable", never an HTML 500
+    except Exception as exc:   # health: allow BLE001 -- the Hermes Desktop page shows "unavailable", never an HTML 500
         return _unavailable(exc)
 
 
@@ -91,15 +91,19 @@ def mode(body: dict[str, Any] = Body(default={})) -> Any:
 def readiness() -> Any:
     try:
         return {"available": True, **_desktop_module().readiness_status()}
-    except Exception as exc:   # health: allow BLE001 -- the Desktop page shows "unavailable", never an HTML 500
+    except Exception as exc:   # health: allow BLE001 -- the Hermes Desktop page shows "unavailable", never an HTML 500
         return _unavailable(exc)
 
 
 @router.post("/setup")
-def setup() -> Any:
+def setup(body: dict[str, Any] = Body(default={})) -> Any:
+    # protectNewAgents: the page's "protect every agent, now and later" switch (on by default
+    # there — the operator sees it before clicking Set up: their yes, KI-429). Only a real
+    # boolean counts; anything else is "not asked" and setup protects only this Hermes home.
+    protect = body.get("protectNewAgents") if isinstance(body, dict) else None
     try:
-        return {"available": True, **_desktop_module().start_setup()}
-    except Exception as exc:   # health: allow BLE001 -- the Desktop page shows "unavailable", never an HTML 500
+        return {"available": True, **_desktop_module().start_setup(protect if isinstance(protect, bool) else None)}
+    except Exception as exc:   # health: allow BLE001 -- the Hermes Desktop page shows "unavailable", never an HTML 500
         return _unavailable(exc)
 
 
@@ -114,10 +118,10 @@ async def _answer(call: Callable[[], Any]) -> Any:
     """Run a blocking dashboard *call* on a worker thread and send its LinkAnswer.
 
     WHY a thread: these routes run on Hermes' own event loop, so a blocking request made here
-    froze every Desktop request (the whole page went blank while one assistant turn ran)."""
+    froze every Hermes Desktop request (the whole page went blank while one assistant turn ran)."""
     try:
         answer = await run_in_threadpool(call)
-    except Exception as exc:   # health: allow BLE001 -- the Desktop page shows "unavailable", never an HTML 500
+    except Exception as exc:   # health: allow BLE001 -- the Hermes Desktop page shows "unavailable", never an HTML 500
         return _unavailable(exc)
     return JSONResponse(answer.body, status_code=answer.status)
 
@@ -129,7 +133,7 @@ async def _forward(request: Request, path: str) -> Any:
 
 @router.post("/dash-call/{path:path}")
 async def dash_call_start(request: Request, path: str) -> Any:
-    """Start a dashboard call that outlasts Desktop's 30 s limit (an assistant turn, a Playground test)."""
+    """Start a dashboard call that outlasts Hermes Desktop's 30 s limit (an assistant turn, a Playground test)."""
     body = await _json_body(request)
     return await _answer(lambda: _desktop_module().long_calls().start(path, body))
 

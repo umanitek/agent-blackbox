@@ -7,6 +7,9 @@ Hermes calls these hooks around every tool call and model request:
 * :func:`on_pre_api_request` — scan the untrusted part of a model request.
 * :func:`on_session_start` / :func:`on_session_end` — per-session context.
 * :func:`blackbox_block_message` — the text shown when a call is blocked.
+* :func:`tool_call_verdict` / :func:`text_verdict` — the same checks for a runtime that is not
+  Hermes: one tool call, or text it is about to send or read (a prompt, a tool's output);
+  :func:`after_tool_call_verdict` — the after-call check (what an install added), likewise.
 * :func:`reports_settled` — wait until the report follow-up of earlier calls is done
   (the Playground and tests; a hook never waits for it); :func:`collecting_shares` — the
   community shares started inside a block, so the Playground waits for its own only.
@@ -24,14 +27,18 @@ Usage (the plugin's composition root)::
 from __future__ import annotations
 
 from .hooks import (
+    after_tool_call_verdict,
     blackbox_block_message,
     on_post_tool_call,
     on_pre_api_request,
     on_pre_tool_call,
     on_session_end,
     on_session_start,
+    tool_call_verdict,
+    ToolCallVerdict,
 )
 from . import report_queue
+from .text_verdict import text_verdict
 from .reporting import collecting_shares
 
 
@@ -42,6 +49,8 @@ def reports_settled(timeout_s: float) -> bool:
 
 
 __all__ = [
+    "ToolCallVerdict",
+    "after_tool_call_verdict",
     "blackbox_block_message",
     "collecting_shares",
     "on_post_tool_call",
@@ -50,4 +59,6 @@ __all__ = [
     "on_session_end",
     "on_session_start",
     "reports_settled",
+    "text_verdict",
+    "tool_call_verdict",
 ]

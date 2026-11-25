@@ -186,8 +186,9 @@ def _with_extra_supported_pack(monkeypatch, home):
     monkeypatch.setattr(trader_mode, "_packs", packs)
 
 
-#: Saved when only the first five were offered: the six promoted on 2026-10-16 are new to that save.
-NEW_SINCE_THE_FIRST_FIVE = "new since you last saved: Rabby, Coinbase Wallet, Trust Wallet, OKX Wallet, Keplr, Solflare"
+#: The six wallets promoted on 2026-10-16 plus the test's promoted Rabby: never offered to a save
+#: made when only the first five existed.
+ADDED_AFTER_THE_FIRST_FIVE = ("rabby", "coinbase-wallet", "trust-wallet", "okx-wallet", "keplr", "solflare")
 
 
 def _attention(active):
@@ -195,33 +196,43 @@ def _attention(active):
         section.title for section in _card(active).sections] else []
 
 
-def test_wallets_the_operator_left_unticked_are_never_called_new(home, monkeypatch):
-    # The trader bench, 2026-10-15: MetaMask + Phantom saved out of the five offered; the card
-    # said "new since you last saved: Exodus, Electrum, Solana CLI" for wallets just unticked.
+def _guarded_after_save(monkeypatch, **saved):
+    _saved(monkeypatch, enabled=True, **saved)
+    return trader_mode.wallets(trader_mode.current())
+
+
+def test_wallets_the_operator_left_unticked_stay_off(home, monkeypatch):
+    # The trader bench, 2026-10-15: MetaMask + Phantom saved out of the five offered — the three
+    # left unticked were a choice, and stay unguarded.
     _config(monkeypatch)
-    _saved(monkeypatch, enabled=True, wallets=["metamask", "phantom"], offered=list(trader_mode.supported_wallets()))
-    assert _attention(trader_mode.build(enabled=True, wallets=("metamask", "phantom"))) == []
+    guarded = _guarded_after_save(monkeypatch, wallets=["metamask", "phantom"], offered=list(trader_mode.supported_wallets()))
+    assert guarded == ("metamask", "phantom")
+    assert _attention(trader_mode.current()) == []
 
 
-def test_a_wallet_added_after_the_save_is_named(home, monkeypatch):
+def test_a_wallet_added_after_the_save_is_guarded_without_a_new_save(home, monkeypatch):
+    # KI-411 / LES-053, settled 2026-11-19 (Amos: "always protected moving forward").
     _config(monkeypatch)
     _with_extra_supported_pack(monkeypatch, home)
-    _saved(monkeypatch, enabled=True, wallets=["metamask"],
-           offered=["metamask", "phantom", "exodus", "electrum", "solana-cli"])
-    assert _attention(trader_mode.build(enabled=True, wallets=("metamask",))) == [NEW_SINCE_THE_FIRST_FIVE]
+    guarded = _guarded_after_save(monkeypatch, wallets=["metamask"],
+                                  offered=["metamask", "phantom", "exodus", "electrum", "solana-cli"])
+    assert "metamask" in guarded and set(ADDED_AFTER_THE_FIRST_FIVE) <= set(guarded)
+    assert not {"phantom", "exodus", "electrum", "solana-cli"} & set(guarded)   # offered and unticked
+    assert _attention(trader_mode.current()) == []
 
 
 def test_a_save_from_before_offered_was_recorded_counts_the_first_five_as_offered(home, monkeypatch):
     _config(monkeypatch)
     _with_extra_supported_pack(monkeypatch, home)
-    _saved(monkeypatch, enabled=True, wallets=["metamask", "phantom"])   # no "offered": saved by an older version
-    assert _attention(trader_mode.build(enabled=True, wallets=("metamask", "phantom"))) == [NEW_SINCE_THE_FIRST_FIVE]
+    guarded = _guarded_after_save(monkeypatch, wallets=["metamask", "phantom"])   # no "offered": an older version's save
+    assert set(guarded) == {"metamask", "phantom", *ADDED_AFTER_THE_FIRST_FIVE}
 
 
 def test_never_saved_means_every_supported_wallet_and_nothing_needs_attention(home, monkeypatch):
     _config(monkeypatch)
     _with_extra_supported_pack(monkeypatch, home)
     _saved(monkeypatch, enabled=True)   # no wallets list: every supported wallet is chosen
+    assert trader_mode.wallets(trader_mode.current()) == tuple(trader_mode.supported_wallets())
     assert _attention(trader_mode.build(enabled=True)) == []
 
 
@@ -340,7 +351,7 @@ def test_the_captured_payload_has_every_section_and_no_address(home, monkeypatch
 
 
 def test_an_off_shield_does_not_tick_its_own_checks(home, monkeypatch):
-    """2026-11-08 (bb-test-4): with Trader Shield off, Desktop's Shields tab still ticked "Seed phrases
+    """2026-11-08 (bb-test-4): with Trader Shield off, Hermes Desktop's Shields tab still ticked "Seed phrases
     — checker on" while a seed phrase went out unchecked. Off, its own checks read "not protected";
     protected files are a built-in rule and stay on."""
     _config(monkeypatch, mode="block")
@@ -368,3 +379,12 @@ def test_the_browser_comes_from_the_browser_folder_not_from_words_in_the_users_n
     assert found["browser"] == "Chrome"
     assert trader_status.browser_of(str(home / ".config" / "google-chrome" / "Default")) == "Chrome"
     detectors.EXISTING_STORES.reset()
+
+
+# --- E2E B1 (2026-11-21): a card's links are defanged like any other text -----------------------
+
+def test_a_cards_free_text_is_defanged_and_no_field_is_kept_as_a_link():
+    from plugins.blackbox.dashboard.shields_routes import sanitised
+    card = {"offer": {"text": "Get it at https://evil.example/x", "open_url": "https://evil.example/open"}}
+    served = sanitised(card)["offer"]
+    assert "hxxp" in served["text"] and "hxxp" in served["open_url"]

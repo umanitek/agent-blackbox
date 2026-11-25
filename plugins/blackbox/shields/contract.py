@@ -24,33 +24,18 @@ Usage::
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional, Protocol
 
 from ..detection import Finding
 from ..kernel.settings import ShieldSettings
 
-#: The JSON values a record's ``as_json()`` answers with.
-JsonValue = None | bool | int | float | str | list["JsonValue"] | dict[str, "JsonValue"]
+from .json_records import JsonValue, _plain, _record_json
+from .event_records import EventFact, SessionSummary, ShieldEvent, TimelineStep
+from .shield_api import ShieldApi
 
-
-def _plain(value: Any) -> JsonValue:
-    """*value* as plain JSON: records by their ``as_json()``, paths as text, tuples as lists."""
-    if hasattr(value, "as_json"):
-        return value.as_json()
-    if isinstance(value, Path):
-        return value.as_posix()
-    if isinstance(value, Mapping):
-        return {str(key): _plain(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple, frozenset, set)):
-        return [_plain(item) for item in value]
-    return value
-
-
-def _record_json(record: Any) -> dict[str, JsonValue]:
-    """Every field of the dataclass *record*, as plain JSON."""
-    return {item.name: _plain(getattr(record, item.name)) for item in fields(record)}
+__all__ = ["EventFact", "JsonValue", "SessionSummary", "ShieldEvent", "TimelineStep"]
 
 
 class PackDetector(Protocol):
@@ -126,78 +111,6 @@ class ShieldStatus:
 
 
 @dataclass(frozen=True)
-class TimelineStep:
-    """One step of the session around an event (model call, tool call, file read …)."""
-
-    type: str
-    ts: float
-    tool: str
-    label: str
-    result: str = ""
-    threats: tuple[str, ...] = ()
-    threat_titles: tuple[str, ...] = ()
-    this: bool = False
-
-    def as_json(self) -> dict[str, JsonValue]:
-        return _record_json(self)
-
-
-@dataclass(frozen=True)
-class SessionSummary:
-    """The agent session an event happened in."""
-
-    id: str
-    agent: str
-    model: str
-    start: str
-    end: str
-    status: str
-    steps: int
-
-    def as_json(self) -> dict[str, JsonValue]:
-        return _record_json(self)
-
-
-@dataclass(frozen=True)
-class EventFact:
-    """One labelled fact of an event; *mono* shows the value in a fixed-width font."""
-
-    label: str
-    value: str
-    mono: bool = False
-
-    def as_json(self) -> dict[str, JsonValue]:
-        return _record_json(self)
-
-
-@dataclass(frozen=True)
-class ShieldEvent:
-    """One event of a shield's local report: the story, what to do, the facts and the timeline.
-
-    *story* is HTML-safe text with a few bold spans; the shield writes it, the page
-    renders it as given (no shield prose in JavaScript).
-    """
-
-    ts: float
-    identifier: str
-    title: str
-    severity: str
-    outcome: str
-    tool: str
-    command: str
-    asked: str
-    logo: str
-    story: str
-    session: SessionSummary
-    what_to_do: tuple[str, ...] = ()
-    facts: tuple[EventFact, ...] = ()
-    timeline: tuple[TimelineStep, ...] = ()
-
-    def as_json(self) -> dict[str, JsonValue]:
-        return _record_json(self)
-
-
-@dataclass(frozen=True)
 class AttackRow:
     """One row of a shield's tested attack table; *targets* are pack or capability ids."""
 
@@ -252,14 +165,29 @@ class FindingKind:
         return _record_json(self)
 
 
+#: A multi-pick option's statuses. Only the UNPICKABLE ones are drawn greyed out; a
+#: ``not installed`` choice stays pickable (the person may choose an agent before installing it)
+#: and is drawn with that note (BB-SHIELDS-001: an empty status was drawn as "not available").
+OPTION_SUPPORTED = "supported"
+OPTION_NOT_INSTALLED = "not installed"
+OPTION_UNAVAILABLE = "unavailable"
+OPTION_NEEDS_HELPER = "needs-helper"
+OPTION_PLANNED = "planned"
+UNPICKABLE_OPTION_STATUSES = frozenset({OPTION_UNAVAILABLE, OPTION_NEEDS_HELPER, OPTION_PLANNED})
+
+
 @dataclass(frozen=True)
 class SettingOption:
-    """One choice of a multi-pick setting: a pack id, its name, status and logo URL."""
+    """One choice of a multi-pick setting: an id, its name, its status (one of the
+    ``OPTION_*`` constants above), a logo URL, and *note* — the sentence that says why, shown
+    beside a choice that is not plainly ``supported`` (for example the reason this machine can
+    not sandbox an agent)."""
 
     id: str
     name: str
     status: str
     logo: str = ""
+    note: str = ""
 
     def as_json(self) -> dict[str, JsonValue]:
         return _record_json(self)
@@ -281,6 +209,9 @@ class SettingField:
     help: str = ""
     options: tuple[SettingOption, ...] = ()
     pattern: str = ""
+    #: True when each picked option guards that choice's own key places (Trader's wallets):
+    #: the Protected files list then shows "<name> · everywhere it keeps its keys" for it.
+    guards_key_places: bool = False
 
     def as_json(self) -> dict[str, JsonValue]:
         return _record_json(self)
@@ -345,6 +276,29 @@ class BrowserRoot:
 
 
 @dataclass(frozen=True)
+class ShieldAlert:
+    """One thing a shield wants the person told now (``Shield.alerts``; ``notify`` shows it).
+
+    *title* and *text* are LOCK-SCREEN SAFE (no path, address, user name or command); *detail* is
+    the full sentence for inside the app. *key* is stable for the thing reported. *finding*: the
+    identifier of the audit finding this alert already speaks for ("" = none), so that finding is
+    not announced a second time. *agent*: the agent id it is about ("" = none). *category*: which
+    of the person's notification switches covers it (``notify.CATEGORIES``): ``security`` for
+    anything stopped, flagged or worth a look; ``watched`` for news from a watched folder."""
+
+    key: str
+    kind: str
+    ts: float
+    severity: str
+    title: str
+    text: str
+    detail: str = ""
+    agent: str = ""
+    finding: str = ""
+    category: str = "security"
+
+
+@dataclass(frozen=True)
 class Shield:
     """One shield: metadata plus the callables that make it work (Strategy; no base class).
 
@@ -374,6 +328,21 @@ class Shield:
     detectors: tuple[PackDetector, ...] = ()
     browser_roots: Optional[Path] = None
     use_data: Optional[Callable[[tuple[Pack, ...], tuple[BrowserRoot, ...]], None]] = None
+    #: Named endpoints beyond the card and the events (:mod:`.shield_api`); None = none.
+    api: Optional[ShieldApi] = None
+    #: The list options that are ALLOW-lists: adding an entry turns protection down (who may
+    #: SSH in, hosts an agent may reach, names never blocked). Every other list option is a
+    #: protecting list, where REMOVING an entry turns protection down. Read by ``approvals``.
+    allow_lists: frozenset[str] = frozenset()
+    #: ``prompt_check(text, mode) -> findings`` for a prompt the person sends an agent (flags only:
+    #: a prompt touches nothing; the tool call it leads to is what is refused). None = none.
+    prompt_check: Optional[Callable[[str, ShieldMode], list[Finding]]] = None
+    #: ``describe_change(option, values, added) -> sentence`` for the person's approval dialog when a
+    #: list change turns protection down (KI-538: never internal ids); None = a plain sentence
+    #: built from the shield's name.
+    describe_change: Optional[Callable[[str, list[str], bool], str]] = None
+    #: ``alerts() -> [ShieldAlert]``, newest first: what the notifier may tell the person. None = none.
+    alerts: Optional[Callable[[], list[ShieldAlert]]] = None
 
     @property
     def folder(self) -> Path:

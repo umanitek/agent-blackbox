@@ -1,6 +1,6 @@
 """Dashboard calls that outlast Hermes Desktop's 30-second request limit (Asynchronous Request-Reply).
 
-Desktop drops any plugin request after 30 s ("Timed out connecting to Hermes backend after
+Hermes Desktop drops any plugin request after 30 s ("Timed out connecting to Hermes backend after
 30000ms"), but an assistant turn can take up to 120 s and a Playground test up to ~90 s. So for
 those routes (``dashboard_link.LONG_ROUTES``) the page does not wait on one request: it starts the
 call here, gets an id back at once, and asks for the result until it is done. Each call runs on
@@ -59,7 +59,7 @@ class LongCalls:
         answered directly); 429 while ``MAX_RUNNING`` calls are still running."""
         path = path.strip("/")
         if not (LONG_ROUTES.fullmatch(path) and DashboardLink.allowed("POST", path)):
-            return LinkAnswer(404, {"error": "not a long dashboard call the Desktop page uses"})
+            return LinkAnswer(404, {"error": "not a long dashboard call the Hermes Desktop page uses"})
         with self._lock:
             self._forget_expired()
             if sum(1 for call in self._calls.values() if call.answer is None) >= MAX_RUNNING:
@@ -67,7 +67,7 @@ class LongCalls:
             call_id = secrets.token_hex(12)
             self._calls[call_id] = _Call(started=self._clock())
             self._trim()
-        threading.Thread(target=self._run, args=(call_id, path, body), name="blackbox-desktop-call", daemon=True).start()
+        threading.Thread(target=self._run, args=(call_id, path, body), name="blackbox-hermes-ui-call", daemon=True).start()
         return LinkAnswer(202, {"call_id": call_id, "running": True})
 
     def result(self, call_id: str) -> LinkAnswer:

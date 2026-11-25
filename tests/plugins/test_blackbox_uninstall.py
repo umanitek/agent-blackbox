@@ -1,9 +1,9 @@
 """`blackbox uninstall` removes Blackbox from a machine and nothing else (2026-11-03).
 
 Until now there was no way out but `detach`. The machine below is the Hermes Desktop install
-proven live that day: Desktop's Hermes home with a commented config and Hermes's own record of
+proven live that day: Hermes Desktop's Hermes home with a commented config and Hermes's own record of
 the plugin, Blackbox's node (marker, wallet and identity files, pid file) and reporter key, our
-`blackbox` launcher beside Desktop's `hermes`, a Foreman-style node in ~/.dkg that must survive,
+`blackbox` launcher beside Hermes Desktop's `hermes`, a Foreman-style node in ~/.dkg that must survive,
 and the two login services. Service commands are recorded, never run.
 """
 
@@ -20,6 +20,7 @@ from pathlib import Path
 import pytest
 
 from plugins.blackbox.setup import uninstall
+from plugins.blackbox.setup.platform import linux as platform_linux, macos as platform_macos, windows as platform_windows
 
 CONFIG = """\
 # Hermes Agent CLI Configuration
@@ -34,6 +35,13 @@ plugins:
       mode: audit
       dkg_home: {dkg_home}
 """
+
+
+@pytest.fixture(autouse=True)
+def os_services(monkeypatch):
+    """The login services are removed through ``setup/platform/<os>``; these plans are macOS's
+    unless a test says otherwise (``_on``), whatever machine runs the suite."""
+    monkeypatch.setattr(uninstall, "os_platform", platform_macos)
 
 
 @pytest.fixture()
@@ -72,14 +80,16 @@ def _plan(machine: Path, *, system: str = "Darwin", **kw) -> uninstall.Uninstall
     return dataclasses.replace(plan, system=system)
 
 
-def _execute(plan: uninstall.UninstallPlan, *, dashboard_pids: tuple[int, ...] = ()):
+def _execute(plan: uninstall.UninstallPlan, *, dashboard_pids: tuple[int, ...] = (), admin_code: int = 0):
     calls: list[list[str]] = []
 
     def stop_dashboard(port: int) -> list[int]:
         calls.append(["stop-dashboard", str(port), str(plan.blackbox_home.exists())])
         return list(dashboard_pids)
 
-    report = uninstall.execute(plan, run=lambda cmd: calls.append(list(cmd)) or 0, stop_dashboard=stop_dashboard)
+    # run_as_admin is ALWAYS a fake here: a test must never reach a real sudo.
+    report = uninstall.execute(plan, run=lambda cmd: calls.append(list(cmd)) or 0, stop_dashboard=stop_dashboard,
+                               run_as_admin=lambda cmd: calls.append(["ADMIN", *cmd]) or admin_code)
     return calls, report
 
 
@@ -87,7 +97,7 @@ def test_the_plan_says_what_goes_and_what_stays(machine):
     lines = "\n".join(uninstall.describe(_plan(machine)))
     assert "remove Blackbox from the Hermes in" in lines and "blackbox-backup-" in lines
     assert str(machine / ".dkg") not in lines
-    assert "Your Hermes itself, other DKG nodes and Docker are not touched." in lines
+    assert "Your Hermes itself, other DKG nodes and Docker's other containers are not touched." in lines
 
 
 def test_uninstall_removes_blackbox_and_keeps_the_keys(machine):
@@ -150,7 +160,8 @@ def test_a_blackbox_command_we_did_not_write_is_left_alone(machine):
     assert shim.exists()
 
 
-def test_linux_user_services_go_and_system_units_are_named_with_their_root_commands(machine, tmp_path):
+def test_linux_user_services_go_and_system_units_are_named_with_their_root_commands(machine, tmp_path, monkeypatch):
+    monkeypatch.setattr(uninstall, "os_platform", platform_linux)
     user_units = machine / ".config" / "systemd" / "user"
     user_units.mkdir(parents=True)
     for unit in uninstall.SYSTEMD_UNITS:
@@ -160,13 +171,14 @@ def test_linux_user_services_go_and_system_units_are_named_with_their_root_comma
     system_unit.write_text("[Unit]", encoding="utf-8")
     plan = dataclasses.replace(_plan(machine, system="Linux"), system_units=(system_unit,))
     calls, report = _execute(plan)
-    assert not list(user_units.iterdir())
+    assert not user_units.exists(), "emptied, the folders Blackbox's units lived in go too (KI-664)"
     assert ["systemctl", "--user", "disable", "--now", "blackbox-dkg.service"] in calls
     assert any(r.startswith("needs root: sudo systemctl disable --now blackbox-dkg.service") for r in report)
     assert system_unit.exists()
 
 
-def test_windows_tasks_are_ended_and_deleted(machine):
+def test_windows_tasks_are_ended_and_deleted(machine, monkeypatch):
+    monkeypatch.setattr(uninstall, "os_platform", platform_windows)
     calls, _ = _execute(_plan(machine, system="Windows"))
     for task in uninstall.WINDOWS_TASKS:
         assert ["schtasks", "/Delete", "/TN", task, "/F"] in calls
@@ -313,7 +325,204 @@ def test_under_a_pipe_the_question_goes_to_the_terminal(machine, monkeypatch, an
 
     monkeypatch.setattr(uninstall.terminal_question, "open", lambda *a, **k: Terminal(answer), raising=False)
     executed = []
-    monkeypatch.setattr(uninstall, "execute", lambda plan: executed.append(plan) or [])   # only the decision is tested
+    monkeypatch.setattr(uninstall, "execute", lambda plan, **kwargs: executed.append(plan) or [])   # only the decision is tested
     args = argparse.Namespace(purge=False, keep_logs=False, dry_run=False, yes=False)
     assert uninstall.cmd_uninstall(args) == 0
     assert bool(executed) is removed
+
+
+# ------------------------------------------------------------------ the system protection helper
+
+
+def test_uninstall_removes_the_system_protection_helper_first(machine, tmp_path):
+    helper = tmp_path / "blackbox-netd"
+    helper.write_text("#!/bin/sh\n", encoding="utf-8")
+    plan = dataclasses.replace(_plan(machine), system_helper=helper)
+    assert "remove the system protection helper" in "\n".join(uninstall.describe(plan))
+    calls, report = _execute(plan)
+    assert calls[0] == ["ADMIN", "sudo", str(helper), "uninstall"], "DNS goes back before anything else stops"
+    assert report[0].startswith("removed the system protection helper")
+
+
+def test_a_failed_helper_removal_says_how_to_finish_it(machine, tmp_path):
+    helper = tmp_path / "blackbox-netd"
+    helper.write_text("#!/bin/sh\n", encoding="utf-8")
+    _calls, report = _execute(dataclasses.replace(_plan(machine), system_helper=helper), admin_code=1)
+    assert any(line.startswith("needs root:") and "uninstall" in line for line in report)
+
+
+def test_no_helper_no_admin_step(machine):
+    calls, _ = _execute(dataclasses.replace(_plan(machine), system_helper=None))
+    assert not any(call and call[0] == "ADMIN" for call in calls)
+
+
+def test_a_helper_the_person_cannot_see_is_still_removed_by_its_own_uninstall(machine, tmp_path):
+    """E2E 2026-11-21: the helper's folder is root-only, so its program looks missing to the person.
+    Uninstall must still run the helper's own uninstall (which puts DNS and the firewall back)."""
+    unseen = tmp_path / "root-only" / "blackbox-netd"          # does not exist as the person sees it
+    calls, report = _execute(dataclasses.replace(_plan(machine), system_helper=unseen))
+    assert calls[0] == ["ADMIN", "sudo", str(unseen), "uninstall"]
+    assert report[0].startswith("removed the system protection helper")
+
+
+def test_the_manual_fallback_is_the_helpers_own_uninstall_never_a_bootout(machine, tmp_path):
+    unseen = tmp_path / "root-only" / "blackbox-netd"
+    _calls, report = _execute(dataclasses.replace(_plan(machine), system_helper=unseen), admin_code=1)
+    text = "\n".join(report)
+    assert f"sudo '{unseen}' uninstall" in text
+    assert "bootout" not in text and "rm /Library/LaunchDaemons" not in text
+
+
+# ------------------------------------------------------------------ coding agents' hooks and add-ons
+
+
+def _claude_settings(machine: Path, blackbox_command: str) -> Path:
+    settings = machine / ".claude" / "settings.json"
+    settings.parent.mkdir(parents=True, exist_ok=True)
+    mine = {"type": "command", "command": "echo my own hook"}
+    ours = {"type": "command", "command": blackbox_command}
+    settings.write_text(json.dumps({"theme": "dark", "hooks": {"PreToolUse": [
+        {"matcher": "*", "hooks": [mine]}, {"matcher": "*", "hooks": [ours]}]}}), encoding="utf-8")
+    return settings
+
+
+def test_uninstall_takes_blackboxs_hooks_out_of_coding_agents_and_keeps_the_persons(machine):
+    """E2E 2026-11-21: after uninstall every agent still ran ~/.hermes/blackbox/agent-hooks/runner.py,
+    which uninstall had deleted. Only Blackbox's entries go; the person's own hook and settings stay."""
+    from plugins.blackbox.agent_hooks.protect import config_edit
+    runner = machine / ".hermes" / "blackbox" / "agent-hooks" / "runner.py"
+    settings = _claude_settings(machine, f"/usr/bin/python3 {runner} claude-code pre_tool {config_edit.MARK}")
+    plan = _plan(machine)
+    assert "Claude Code" in "\n".join(uninstall.describe(plan))
+    _calls, report = _execute(plan)
+    data = json.loads(settings.read_text(encoding="utf-8"))
+    commands = [hook["command"] for group in data.get("hooks", {}).get("PreToolUse", []) for hook in group["hooks"]]
+    assert commands == ["echo my own hook"] and data["theme"] == "dark"
+    assert any("took Blackbox's hooks out of Claude Code" in line for line in report)
+
+
+def test_uninstall_removes_the_add_on_beside_the_plugin_and_no_other_plugin(machine):
+    addon = machine / ".hermes" / "plugins" / "example_addon"
+    addon.mkdir(parents=True)
+    (addon / "__init__.py").write_text("", encoding="utf-8")
+    (addon / "blackbox-addon.json").write_text('{"extends": "blackbox"}', encoding="utf-8")
+    other = machine / ".hermes" / "plugins" / "someone_elses_plugin"
+    other.mkdir(parents=True)
+    (other / "__init__.py").write_text("", encoding="utf-8")
+    plan = _plan(machine)
+    assert f"remove the add-on {addon}" in "\n".join(uninstall.describe(plan))
+    assert plan.addons == (addon,)
+    _execute(plan)
+    assert not addon.exists() and other.exists()
+
+
+def test_once_the_helper_is_gone_its_pairing_key_and_empty_folders_go_too(machine, tmp_path):
+    """E2E recheck 2026-11-21: after uninstall ~/Library/Application Support/Blackbox/helper was
+    left behind. The key goes once the helper is removed; a folder goes only when left empty."""
+    folder = machine / "Library" / "Application Support" / "Blackbox" / "helper"
+    folder.mkdir(parents=True)
+    (folder / "plan.key").write_bytes(b"\x07" * 32)
+    helper = tmp_path / "blackbox-netd"
+    _calls, report = _execute(dataclasses.replace(_plan(machine), system_helper=helper))
+    assert not folder.parent.exists(), "key, its folder and the empty Blackbox folder are gone"
+    assert any("pairing key" in line for line in report)
+
+
+def test_a_helper_that_could_not_be_removed_keeps_its_key_and_a_companion_apps_files_stay(machine, tmp_path):
+    folder = machine / "Library" / "Application Support" / "Blackbox" / "helper"
+    folder.mkdir(parents=True)
+    (folder / "plan.key").write_bytes(b"\x07" * 32)
+    (folder.parent / "engine").write_text("a companion app's", encoding="utf-8")
+    helper = tmp_path / "blackbox-netd"
+    _execute(dataclasses.replace(_plan(machine), system_helper=helper), admin_code=1)
+    assert (folder / "plan.key").exists(), "the still-installed helper needs its key"
+    _execute(dataclasses.replace(_plan(machine), system_helper=helper))
+    assert not folder.exists() and (folder.parent / "engine").exists(), "a non-empty folder is never removed"
+
+
+@pytest.mark.skipif(sys.platform != "darwin" or not os.access("/usr/bin/sandbox-exec", os.X_OK),
+                    reason="the agent sandbox runs on macOS")
+def test_uninstall_clears_the_hermes_agents_execute_code_launcher(machine):
+    """A Hermes process that still holds Blackbox's launcher setting after an uninstall starts
+    execute_code's Python directly again: the launcher goes with Blackbox's home, and Hermes's hook
+    point ignores a launcher that is not there (fail-open; round-3 execute_code finding)."""
+    from plugins.blackbox.shields.files import mode as files_mode, sandbox
+    from tools import code_kernel
+
+    picked = files_mode.build(enabled=True, protected=("~/Documents",), sandboxed=("hermes",))
+    sandbox.sync(picked)
+    env = {"PATH": "/usr/bin:/bin"}
+    assert sandbox.enter_hermes_process(picked, env).execute_code is True
+    assert code_kernel.interpreter_launcher(env) != []
+    _execute(_plan(machine))
+    assert not (sandbox.hermes_shell_dir() / sandbox.HERMES_CODE_LAUNCHER).exists()
+    assert code_kernel.interpreter_launcher(env) == []
+
+
+def _system_unit(tmp_path):
+    unit = tmp_path / "etc" / "blackbox-dkg.service"
+    unit.parent.mkdir(exist_ok=True)
+    unit.write_text("[Unit]", encoding="utf-8")
+    return unit
+
+
+def test_run_as_root_the_linux_system_units_are_stopped_and_removed(machine, tmp_path, monkeypatch):
+    """KI-506: run as root, the root units in /etc/systemd/system were still left enabled."""
+    unit = _system_unit(tmp_path)
+    monkeypatch.setattr(uninstall, "os_platform", platform_linux)
+    monkeypatch.setattr(platform_linux, "_is_root", lambda: True)
+    plan = dataclasses.replace(_plan(machine, system="Linux"), system_units=(unit,))
+    calls, report = _execute(plan)
+    assert ["systemctl", "disable", "--now", "blackbox-dkg.service"] in calls and ["systemctl", "daemon-reload"] in calls
+    assert not unit.exists() and "removed system service blackbox-dkg.service" in report
+    assert not any(line.startswith("needs root") for line in report)
+
+
+def test_a_dashboard_and_node_a_root_unit_still_supervises_are_never_stopped_by_pid(machine, tmp_path, monkeypatch):
+    """KI-507: with the root units left (not root), stopping by pid only saw systemd start them again."""
+    unit = _system_unit(tmp_path)
+    monkeypatch.setattr(uninstall, "os_platform", platform_linux)
+    monkeypatch.setattr(platform_linux, "_is_root", lambda: False)
+    signalled = []
+    monkeypatch.setattr(uninstall.os, "kill", lambda pid, sig: signalled.append(pid))
+    plan = dataclasses.replace(_plan(machine, system="Linux"), system_units=(unit,))
+    calls, report = _execute(plan, dashboard_pids=(4242,))
+    assert not any(call[0] == "stop-dashboard" for call in calls) and signalled == []
+    assert any(line.startswith("left running:") for line in report)
+
+
+def _node_store(machine: Path, *, managed: bool) -> None:
+    """The node's config.json as the installer writes it for a Blazegraph store (Linux round L2)."""
+    dkg = machine / ".hermes" / "blackbox" / "node" / ".dkg"
+    (dkg / "config.json").write_text(json.dumps({"name": "agent-blackbox", "store": {"backend": "blazegraph", "options": {
+        "url": "http://127.0.0.1:9999/bigdata/namespace/agent-blackbox/sparql", "managedByDkg": managed, "timeout": 900000}}}),
+        encoding="utf-8")
+
+
+def test_the_blazegraph_store_the_node_made_is_named_and_removed_with_its_volume(machine, monkeypatch):
+    """KI-676 (Linux round L2): after an uninstall the container dkg-blazegraph-agent-blackbox was
+    still Up on 127.0.0.1:9999 (restart unless-stopped: back at every boot) with its data volume,
+    and the plan never named it. Now it is named, removed with its volume and any too-small copy
+    the provisioner kept — while the node is stopped, before its config goes."""
+    from plugins.blackbox.setup import uninstall_data
+    _node_store(machine, managed=True)
+    monkeypatch.setattr(uninstall_data, "_docker_output",
+                        lambda _cmd: "dkg-blazegraph-agent-blackbox\ndkg-blazegraph-agent-blackbox-pre-4g-1763\nsomeone-else\n")
+    plan = _plan(machine, system="Linux")
+    assert plan.store == uninstall_data.ManagedStore("dkg-blazegraph-agent-blackbox", "dkg-blazegraph-agent-blackbox-data")
+    assert "remove its Blazegraph store: Docker container dkg-blazegraph-agent-blackbox and volume " \
+           "dkg-blazegraph-agent-blackbox-data" in "\n".join(uninstall.describe(plan))
+    calls, report = _execute(plan)
+    docker = [call for call in calls if call[:1] == ["docker"]]
+    assert docker == [["docker", "rm", "-f", "dkg-blazegraph-agent-blackbox"],
+                      ["docker", "rm", "-f", "dkg-blazegraph-agent-blackbox-pre-4g-1763"],
+                      ["docker", "volume", "rm", "-f", "dkg-blazegraph-agent-blackbox-data"]]
+    assert any("removed the Blazegraph store" in line for line in report)
+
+
+def test_an_operators_own_blazegraph_is_never_touched(machine):
+    _node_store(machine, managed=False)
+    plan = _plan(machine, system="Linux")
+    assert plan.store is None
+    calls, _ = _execute(plan)
+    assert not [call for call in calls if call[:1] == ["docker"]]

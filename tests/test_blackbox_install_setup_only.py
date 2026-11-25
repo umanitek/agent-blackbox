@@ -25,7 +25,8 @@ import pytest
 
 INSTALL_SH = Path(__file__).resolve().parents[1] / "scripts" / "blackbox-install.sh"
 
-HERMES_STEPS = ["check_git", "check_python", "resolve_repo", "drop_stale_hermes_install_record", "release_old_hermes_link", "install_python_env", "link_hermes",
+HERMES_STEPS = ["check_git", "check_python", "resolve_repo", "drop_stale_hermes_install_record", "release_old_hermes_link", "install_python_env",
+                "narrow_checkout_after_setup", "link_hermes",
                 "refresh_blackbox_plugin_copy", "run_hermes_setup"]
 
 
@@ -57,9 +58,12 @@ main
 def test_curl_install_runs_every_step_in_the_same_order_as_before():
     steps = _main_steps(setup_only=False)
 
-    assert steps[:13] == ["banner", "detect_os", "install_record_begin", "preflight_install", "check_git", "check_python", "ensure_node", "resolve_repo",
+    assert steps[:15] == ["banner", "detect_os", "check_install_user",   # KI-625: root refused before any change
+                          "install_record_begin", "preflight_install", "check_git", "check_python", "ensure_node", "resolve_repo",
                           "drop_stale_hermes_install_record",   # KI-467: a fresh clone drops a gone checkout's record
-                          "release_old_hermes_link", "install_python_env", "link_hermes", "refresh_blackbox_plugin_copy"]
+                          "release_old_hermes_link", "install_python_env",
+                          "narrow_checkout_after_setup",   # FIX-0414: a checkout cloned whole before Python existed
+                          "link_hermes", "refresh_blackbox_plugin_copy"]
     assert steps.index("run_hermes_setup") < steps.index("install_dkg")
 
 
@@ -68,10 +72,10 @@ def test_setup_only_skips_the_hermes_steps_and_keeps_everything_after():
     setup = _main_steps(setup_only=True)
 
     assert not set(HERMES_STEPS) & set(setup)
-    assert setup[:6] == ["banner", "detect_os", "install_record_begin", "preflight_install", "ensure_node",
-                         "use_running_hermes"]
+    assert setup[:7] == ["banner", "detect_os", "check_install_user", "install_record_begin", "preflight_install",
+                         "ensure_node", "use_running_hermes"]
     after_hermes = curl[curl.index("run_hermes_setup") + 1:]
-    assert setup[6:] == after_hermes
+    assert setup[7:] == after_hermes
 
 
 def _use_running_hermes(tmp_path: Path, *, hermes_on_path: bool, inner_bin: Path | None = None) -> tuple[subprocess.CompletedProcess, Path]:
@@ -192,7 +196,8 @@ def test_no_step_after_hermes_reads_the_checkout_directly():
     hermes_steps = "".join(_body(step) for step in ("resolve_repo", "drop_stale_hermes_install_record",
                                                     "blackbox_head_in_branch", "install_python_env",
                                                     "use_hermes_selected_venv", "ensure_web_extra", "minimal_python_env",
-                                                    "refresh_blackbox_plugin_copy", "reuse_existing_hermes_api_keys"))
+                                                    "refresh_blackbox_plugin_copy", "reuse_existing_hermes_api_keys",
+                                                    "narrow_checkout_after_setup"))
     # blackbox_head_in_branch is part of resolve_repo's update (KI-417): it may read the checkout
     # only while resolve_repo stays its one caller.
     callers = [line.strip() for line in lines if "blackbox_head_in_branch" in line and "()" not in line
@@ -251,6 +256,11 @@ exit 1
 warn() {{ echo "WARN $*"; }}
 ok() {{ echo "OK $*"; }}
 step() {{ :; }}
+run_with_timeout() {{
+{_body("run_with_timeout")}
+}}
+BLACKBOX_NPM_STEP_SECONDS=60
+BLACKBOX_NPM_NETWORK_FLAGS=""
 fetch_pinned_dkg_tarball() {{
 {_body("fetch_pinned_dkg_tarball")}
 }}
@@ -371,6 +381,11 @@ def _install_with_npm(tmp_path: Path, *, npm_output: str, existing_package_json:
 warn() {{ echo "WARN $*"; }}
 ok() {{ echo "OK $*"; }}
 step() {{ :; }}
+run_with_timeout() {{
+{_body("run_with_timeout")}
+}}
+BLACKBOX_NPM_STEP_SECONDS=60
+BLACKBOX_NPM_NETWORK_FLAGS=""
 install_blackbox_dkg_package() {{
 {_body("install_blackbox_dkg_package")}
 }}
@@ -477,6 +492,11 @@ def _link_steps(tmp_path: Path, *, pm_checkout: bool, existing: str | None) -> P
 ok() {{ :; }}
 warn() {{ :; }}
 step() {{ :; }}
+run_with_timeout() {{
+{_body("run_with_timeout")}
+}}
+BLACKBOX_NPM_STEP_SECONDS=60
+BLACKBOX_NPM_NETWORK_FLAGS=""
 install_blackbox_shim() {{ :; }}
 release_old_hermes_link() {{
 {_body("release_old_hermes_link")}
@@ -542,6 +562,11 @@ exit 0
 warn() {{ echo "WARN $*"; }}
 ok() {{ echo "OK $*"; }}
 step() {{ echo "STEP $*"; }}
+run_with_timeout() {{
+{_body("run_with_timeout")}
+}}
+BLACKBOX_NPM_STEP_SECONDS=60
+BLACKBOX_NPM_NETWORK_FLAGS=""
 install_blackbox_dkg_package() {{
 {_body("install_blackbox_dkg_package")}
 }}
