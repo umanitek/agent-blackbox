@@ -60,3 +60,14 @@ def test_an_open_editor_with_no_agent_activity_is_not_called_an_unseen_run(machi
     """Cursor's app runs its hooks only when its agent acts: an open editor is not a finding."""
     tracking.live()
     assert [row["framework"] for row in _unguarded()] == ["claude-code"]
+
+
+def test_the_persons_notice_says_which_agent_runs_unseen_and_why(machine):
+    """VM bb-w12-a (REAL Claude Code in a project the person switched off): the finding's notice read
+    "tried a dangerous command. Flagged, not stopped" — it says the run is unseen, and why."""
+    from plugins.blackbox.notify import wording
+    tracking.live()
+    notice = wording.finding(_unguarded()[0])
+    assert notice.level == "critical" and notice.title == "Claude Code is running without Blackbox in s8-dah"
+    assert "disableAllHooks" in notice.body and "Flagged" not in notice.body
+    assert wording.UNGUARDED_ID == unguarded.UNGUARDED_ID

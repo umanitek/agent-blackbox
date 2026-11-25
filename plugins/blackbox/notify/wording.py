@@ -26,6 +26,8 @@ from .model import Notice
 
 ELEVATION_ID = "agent:elevation-request"
 ROOT_ID = "agent:running-as-root"
+#: An agent run with no Blackbox session (``agent_hooks.unguarded.UNGUARDED_ID``; notify does not import agent_hooks).
+UNGUARDED_ID = "agent:unguarded-run"
 #: What a finding of each category is, in the person's words.
 WHAT = {
     "injection": "met a prompt-injection attempt", "escalation": "tried a dangerous command",
@@ -85,6 +87,10 @@ def finding(row: Mapping[str, Any]) -> Optional[Notice]:
         return Notice(id=key, kind="running-as-root", level="critical", title=f"{name} is running a program as root",
                       body=f"A program {name} started{_where(project)} is running with administrator (root) rights. "
                            "Open Blackbox to see which.", **common)
+    if identifier == UNGUARDED_ID:
+        return Notice(id=key, kind="unguarded-run", level="critical", title=f"{name} is running without Blackbox{_where(project)}",
+                      body=f"Blackbox sees none of what this {name} session does: "
+                           f"{str(row.get('evidence') or 'it sent no hook event')[:300]}. Open Blackbox to see it.", **common)
     if identifier == ELEVATION_ID:
         return Notice(id=key, kind="elevation-request", level="warning", title=f"{name} asked for administrator rights",
                       body=f"{subject}{_where(project)} ran a command that asks for root (sudo). Blackbox let it run and recorded it.",
