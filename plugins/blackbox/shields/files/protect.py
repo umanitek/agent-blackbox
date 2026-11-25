@@ -36,6 +36,7 @@ from ... import audit
 from ...detection import (KIND_FLAG_ONLY, PERSON_PROTECTED, SHELL_TOOLS, Finding, builds_hidden_command, command_from_args,
                            protected_path_mentions, protected_path_touches, script_files as written)
 from ...kernel import threat_ids
+from ...kernel.persistence_places import STARTUP_ITEM
 from ..contract import FindingKind, ShieldMode
 from . import mode as mode_module, mounts
 
@@ -257,6 +258,18 @@ def sandbox_self_hit(path: str, program: str) -> Finding:
         tool_name=(program or "program")[:64], matched=threat_ids.SELF_PROTECTION,
         evidence=f"sandbox {path} — kept closed for Blackbox"[:400], confirmed=False, source="custom",
         fields={"path": path[:400], "route": "self", "program": program[:64]})
+
+
+def sandbox_startup_hit(path: str, program: str) -> Finding:
+    """The finding for a refusal the OS sandbox made of a write to a place something starts from by
+    itself (a systemd unit, an autostart entry): counted as ``startup-item`` tamper, like the hook's
+    refusal of the same write (``detection.persistence_writes``) — the kernel already refused."""
+    return Finding(
+        identifier=threat_ids.fileaccess_identifier("sandbox", STARTUP_ITEM), category="fileaccess",
+        severity="critical", title=f"Blackbox's sandbox stopped {program or 'a program'} writing {path}, a place something starts from by itself",
+        tool_name=(program or "program")[:64], matched=STARTUP_ITEM,
+        evidence=f"sandbox {path} — a startup place"[:400], confirmed=False, source="custom",
+        fields={"path": path[:400], "route": "startup", "program": program[:64]})
 
 
 def prompt_check(text: str, mode: ShieldMode) -> list[Finding]:

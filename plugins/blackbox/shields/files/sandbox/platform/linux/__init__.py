@@ -59,10 +59,14 @@ def unprepare(state: Path) -> list[str]:
     return placeholders.remove(state / placeholders.MANIFEST)
 
 
+#: Whether this machine's helper reports the sandbox's refusals itself: the kernel keeps no denial log the helper reads: a refusal shows only in the tool's output (KI-693).
+HELPER_REPORTS_REFUSALS = False
+
 __all__ = [
     "APPS",
     "BREW_READ_ONLY",
     "ELECTRON_FLAGS",
+    "HELPER_REPORTS_REFUSALS",
     "ONCE_MINUTES",
     "ONCE_SUFFIX",
     "PROFILE_SUFFIX",

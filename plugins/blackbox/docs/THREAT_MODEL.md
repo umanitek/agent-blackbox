@@ -100,7 +100,9 @@ folder (`audit.tamper_counts`) and shown on the dashboard's Protection page:
 
 - **self-protection**: a hook refused a change to Blackbox, a read of its keys, or a signal to its
   programs;
-- **self-protection-kernel**: the operating system's sandbox refused it;
+- **self-protection-kernel**: the operating system's sandbox refused it (on macOS from the kernel's
+  denial log, which the helper reads; on Linux from the refusal the sandboxed program printed, which
+  the agent's hook reads, `shields/files/changes.py` `record_seen_refusal`);
 - **startup-item**: a hook refused something that would start by itself later.
 
 Each refusal counted is also an entry in the protection log (T11). An agent cannot reset either:
@@ -381,7 +383,8 @@ or that an organisation's add-on handed in.
 - **Refusal:** a rule in `watch` never refuses: the call is flagged and counted per rule and agent.
   A rule the person promotes to `enforce` refuses the call in Block mode. Its hits stay with it,
   because a rule's id comes from what it names. An organisation's rules only watch and cannot be
-  promoted on the machine; an older set of them cannot replace a newer one. Taking an enforced rule
+  promoted on the machine; an older set of them cannot replace a newer one. A refusal by a promoted rule says
+  it was the person's watch rule, not self-protection. Taking an enforced rule
   off, or moving it back to watch, is a weakening change (T10). The watch list is in Blackbox's
   settings, so an agent cannot edit it (T1).
 - **Counted by:** each rule's hits (`$BLACKBOX_HOME/watch/hits.json`), shown on the Protection page.

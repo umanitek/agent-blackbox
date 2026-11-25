@@ -53,7 +53,7 @@ from .layout import CLI_AGENTS, agent_profile, canary_path, chosen, hermes_shell
 from .places import Places, build, canonical
 from .status import HOOKS_ONLY, NOT_INSTALLED_NOTE, SANDBOXED, SHELLS_ONLY, offer, protection, status
 
-__all__ = ["CLI_AGENTS", "HERMES_CODE_LAUNCHER", "HERMES_LAUNCHER_ENV", "HERMES_SHELLS", "HOOKS_ONLY",
+__all__ = ["CLI_AGENTS", "HELPER_REPORTS_REFUSALS", "HERMES_CODE_LAUNCHER", "HERMES_LAUNCHER_ENV", "HERMES_SHELLS", "HOOKS_ONLY",
            "NOT_INSTALLED_NOTE", "SANDBOXED", "SHELLS_ONLY", "HermesCover", "Places", "act_on", "brokered",
            "canary_path", "chosen", "enter_hermes_process", "enter_hermes_session", "hermes_shell_dir", "home",
            "launcher_dir", "network_rules", "offer", "on_refusal", "open_app", "policy", "profile_path", "protection", "proven",
@@ -252,6 +252,10 @@ def stop_run(run: RunningAgent) -> bool:
     if facts is None or facts.uid != getattr(os, "getuid", lambda: -1)() or platform.is_system(facts.path):
         return False
     return platform.terminate(run.pid)
+
+
+#: Whether this machine's helper reports the sandbox's refusals itself (macOS: its denial log; KI-693).
+HELPER_REPORTS_REFUSALS = platform.HELPER_REPORTS_REFUSALS
 
 
 def on_refusal(kind: str, name: str, agent: str, instance: str, folder: str, pid: int = 0) -> None:

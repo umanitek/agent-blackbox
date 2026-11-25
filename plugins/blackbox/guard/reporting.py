@@ -15,7 +15,7 @@ import functools
 import logging
 import threading
 from typing import Any, Iterator, Optional
-from .. import audit, desktop, detection, shields
+from .. import audit, desktop, detection, shields, watch
 from .. import community
 from ..kernel import identity
 from ..kernel.config import BlackboxConfig
@@ -176,6 +176,10 @@ _SELF_PROTECTION = "Blackbox's self-protection"
 
 def _rule_name(finding: detection.Finding) -> str:
     """The plain name of the local rule behind *finding* (never "the threat graph")."""
+    if finding.category == watch.CATEGORY:
+        # WHY before "custom" (KI-696): a watch rule's finding is a custom one, and every custom
+        # finding not named below used to read as self-protection — the person's own rule is not.
+        return "your watch rule"
     if finding.source == "custom":
         return _LOCAL_RULE_NAMES.get(finding.matched, _SELF_PROTECTION)
     return _LOCAL_RULE_NAMES.get(finding.source, "a local Blackbox rule")

@@ -26,14 +26,14 @@ from typing import Any, Mapping, Optional, TypedDict
 
 from .. import shields
 from ..detection import KIND_FLAG_ONLY, Finding, parse_dependency_installs
-from ..kernel import config, settings
+from ..kernel import config, settings, threat_ids
 from . import rules as rules_module
 from . import state
 from .rules import ENFORCE, HOST, PACKAGE, SECTION, WATCH, WatchRule, normalise, rule_id
 from .state import Hits, hits, organisation_rules, set_organisation_rules
 
 __all__ = [
-    "ENFORCE", "HOST", "PACKAGE", "SECTION", "WATCH", "Hits", "RuleView", "WatchRule", "add", "all_rules",
+    "CATEGORY", "ENFORCE", "HOST", "PACKAGE", "SECTION", "WATCH", "Hits", "RuleView", "WatchRule", "add", "all_rules",
     "check", "hits", "normalise", "organisation_rules", "person_rules", "promote", "rule_id",
     "set_organisation_rules", "suggest", "validate", "view", "weakening",
 ]
@@ -165,15 +165,42 @@ def weakening(proposed: Any) -> list[str]:
             if rule.state == ENFORCE and (rule.rule_id not in wanted or wanted[rule.rule_id].state != ENFORCE)]
 
 
-def suggest(finding: Mapping[str, Any]) -> Optional[dict[str, str]]:
-    """A watch rule pre-filled from *finding* (a ``Finding.to_dict()`` row): the host or package it
-    names, to watch before blocking; None when it names neither."""
+def _url_host(text: str) -> str:
+    """The host of a ``scheme://host/…`` URL in *text* ("" when it is not one)."""
+    return text.split("://", 1)[1].split("/", 1)[0].split("@")[-1].rsplit(":", 1)[0] if "://" in text else ""
+
+
+def _named_by(finding: Mapping[str, Any]) -> list[tuple[str, Any]]:
+    """Every (kind, value) *finding* may name, most precise first.
+
+    WHY the identifier comes first (KI-694/KI-702): the findings feed (``GET /api/findings``) keeps
+    a row's identifier but not always its ``matched`` or ``fields``, and that row is what the
+    dashboard's "Watch this" link sends. The identifier names the threat in one canonical form
+    (``dep:<ecosystem>:<name>@<version>``, ``ioc:<type>:<value>``) on every row."""
+    identifier = str(finding.get("identifier") or "")
     fields = finding.get("fields") if isinstance(finding.get("fields"), Mapping) else {}
     matched = str(finding.get("matched") or "")
-    url_host = matched.split("://", 1)[1].split("/", 1)[0].split("@")[-1].rsplit(":", 1)[0] if "://" in matched else ""
-    candidates = [(PACKAGE, f"{fields.get('ecosystem')}:{fields.get('package_name')}"), (HOST, fields.get("host")),
-                  (HOST, url_host), (HOST, matched)]
-    for kind, value in candidates:
+    named: list[tuple[str, Any]] = []
+    dependency = threat_ids.parse_dependency_identifier(identifier)
+    if dependency:
+        named.append((PACKAGE, f"{dependency[0]}:{dependency[1]}"))
+    ioc = threat_ids.parse_ioc_identifier(identifier)
+    if ioc and ioc[0] in ("domain", "ip"):
+        named.append((HOST, ioc[1]))
+    elif ioc and ioc[0] == "url":
+        named.append((HOST, _url_host(ioc[1])))
+    named += [(PACKAGE, f"{fields.get('ecosystem')}:{fields.get('package_name')}"), (HOST, fields.get("host")),
+              (HOST, _url_host(matched)), (HOST, matched)]
+    return named
+
+
+def suggest(finding: Mapping[str, Any]) -> Optional[dict[str, str]]:
+    """A watch rule pre-filled from *finding* (a row of the findings feed, or a ``Finding.to_dict()``):
+    the host or package it names, to watch before blocking; None when it names neither, or when it
+    is a watch rule's own finding (that rule already exists)."""
+    if str(finding.get("identifier") or "").startswith(f"{CATEGORY}:"):
+        return None
+    for kind, value in _named_by(finding):
         normalised = normalise(kind, value)
         if normalised:
             title = str(finding.get("title") or "")[:120]
