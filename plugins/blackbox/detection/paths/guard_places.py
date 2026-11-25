@@ -296,6 +296,10 @@ def names_in_pieces(text: str) -> bool:
     return bool(pieces and pieces.search(text or ""))
 
 
+#: What follows a home or root literal used as the FIRST piece of a longer path: ``+ x``, or (out of
+#: ``expanduser('~')``) ``, x`` inside a join, ``/ x`` on a Path (KI-692: ``os.path.join(os.path.
+#: expanduser('~'), *parts)`` read as the home folder itself, which holds every startup place).
+_PREFIX_USE = re.compile(r"\s*(?:\)\s*)?(?:\+|,|/)")
 #: The most argument words joined into one path a script may build (``"~/." + argv[1] + "/" + argv[2]``).
 _MAX_JOINED_ARGS = 3
 
@@ -310,15 +314,20 @@ def code_names(path: str, code: str, argv: tuple[str, ...] = ()) -> bool:
     home or root folder used only as the first piece of a path built at run time (``"~/." + x``,
     ``"/" + y``) says nothing of where the path ends: what the run-time pieces name is judged by
     the arguments a script is run with (*argv*: each run of up to :data:`_MAX_JOINED_ARGS` of them
-    joined onto the prefix), not by its separator."""
+    joined onto the prefix), not by its separator — for Blackbox's own places only when the script is
+    run with arguments (without, the pieces may well name Blackbox: refused, as before)."""
     if not reaches(path):
         return False
     bare = os.path.normpath(os.path.expanduser(path))
     if bare not in (os.sep, os.path.normpath(os.path.expanduser("~"))):
         return scope() == OWN or not holds(path)
     uses = list(re.finditer(rf"""(['"]){re.escape(path)}\1""", code))
-    if not uses or any(not re.match(r"\s*\+", code[use.end():]) for use in uses):
+    if not uses or any(not _PREFIX_USE.match(code[use.end():]) for use in uses):
         return True                     # the folder itself (``rmtree(expanduser("~"))``)
     words = [word for word in argv if word and not word.startswith("-")]
+    if scope() == OWN and not words:
+        # Blackbox's own places: a path built under the home from pieces this rule can not join
+        # (``'.her' + 'mes'``) may well be Blackbox's — refused unless its arguments say otherwise.
+        return True
     joined = ["/".join(words[start:start + size]) for size in range(1, _MAX_JOINED_ARGS + 1) for start in range(len(words) - size + 1)]
     return any(reaches(path + tail) for tail in joined)
