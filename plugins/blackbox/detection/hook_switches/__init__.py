@@ -180,9 +180,22 @@ def _code_spells_a_switch(tool: str, args: Any) -> bool:
     return bool(_SWITCH_OFF.search(text)) and bool(guard_settings._CODE_WRITES.search(text))
 
 
+def _anchored(tool_name: str, args: Any) -> Any:
+    """*args* with a file tool's relative path joined onto the folder the agent works in. WHY: Codex's
+    ``apply_patch`` names its files relative to the project (each is judged as a ``write_file`` of
+    that name: ``.codex/config.toml``), and a project-level switch file is only ever named that way."""
+    access = action_parsing.file_access_arg(tool_name, args) if isinstance(args, dict) else None
+    folder = action_context.working_folder()
+    if access is None or not folder or os.path.isabs(os.path.expanduser(str(access["path"]))):
+        return args
+    key = next((key for key, value in args.items() if value == access["path"]), None)
+    return {**args, key: os.path.join(folder, str(access["path"]))} if key else args
+
+
 def _judged(tool_name: str, args: Any) -> str:
     """What the call does to a hooks-off switch, as a finding's evidence; "" for nothing."""
     tool = (tool_name or "").strip().lower()
+    args = _anchored(tool_name, args)
     with guard_places.judging(guard_places.HOOKS):
         tool, how = guard_settings.tampering(tool_name, args)
     if how not in ("write", "code", "command"):

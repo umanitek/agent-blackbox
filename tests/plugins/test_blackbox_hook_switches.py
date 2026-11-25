@@ -101,6 +101,9 @@ def test_every_write_route_that_switches_hooks_off_is_refused(project):
         ("terminal", {"command": "apply_patch <<'PATCH'\n*** Begin Patch\n*** Add File: .codex/config.toml\n+[features]\n"
                                  "+hooks = false\n*** End Patch\nPATCH"}),
         ("write_file", {"path": str(project / ".gemini" / "settings.json"), "content": '{"hooksConfig": {"enabled": false}}'}),
+        # Codex's own apply_patch tool: each file it names (relative to the project) judged as a write (VM bb-w12-a).
+        ("write_file", {"path": ".codex/config.toml", "patch": "*** Begin Patch\n*** Add File: .codex/config.toml\n+[features]\n"
+                                                              "+hooks = false\n*** End Patch"}),
     ]
     missed = [args for tool, args in routes if not _refused(tool, args, project)]
     assert not missed, "\n".join(map(str, missed))
