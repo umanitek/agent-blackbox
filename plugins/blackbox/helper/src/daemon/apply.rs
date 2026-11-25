@@ -22,6 +22,11 @@ impl Helper {
             }
         };
         if plan.unchanged {
+            // The plan was read: a failure to read it earlier is over (KI-701, macOS round R8: the
+            // overview said "the plan could not be read" for minutes after the plan was read again,
+            // because only a CHANGED plan cleared it). What the last apply could not do still shows.
+            let failures = self.failures.lock().map(|f| f.clone()).unwrap_or_default();
+            *self.last_error.lock().unwrap() = failures.still_failing();
             return;
         }
         let complete = !plan.keep_verified;

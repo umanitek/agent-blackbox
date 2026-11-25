@@ -57,7 +57,7 @@ import json
 import threading
 import time
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Optional
+from typing import Any, Iterable, Mapping, NamedTuple, Optional
 
 from ....kernel import constants
 from ....kernel.bounded_files import read_json_object, write_json_object
@@ -133,6 +133,39 @@ def firewall_ips(mode: ShieldMode, listed_ips: Iterable[str]) -> frozenset[str]:
     return frozenset(drop) | frozenset(_ips(mode_module.option(mode, mode_module.OPT_BLOCK)))
 
 
+class _GraphPart(NamedTuple):
+    """The verified graph's share of a plan under one allow list: the domains refused and spared,
+    the addresses dropped (before the person's own block list) and spared."""
+
+    verified: list[str]
+    spared_verified: list[str]
+    dropped: frozenset[str]
+    spared_ips: list[str]
+
+
+_graph_cache: dict[str, Any] = {"key": None, "part": None}
+
+
+def _graph_part(indicators: Optional[Any], allowed: set[str], dns_on: bool, firewall_on: bool) -> _GraphPart:
+    """:class:`_GraphPart` for *indicators*, worked out once per graph build and allow list.
+
+    WHY kept (KI-701, macOS round R8): a person's new DNS block reached DNS Shield only 1–3 minutes
+    later. Every settings change rebuilt the whole plan, and with a complete graph that means judging
+    ~1.16 M verified domains against the never-block list again — a block-list change does not
+    change that part. Only the person's own lists are worked out again now."""
+    key = (id(indicators), getattr(indicators, "built_at", None), tuple(sorted(allowed)), dns_on, firewall_on)
+    with _lock:
+        if _graph_cache["key"] == key:
+            return _graph_cache["part"]
+    verified, spared_verified = never_block.split(indicators.domains if dns_on and indicators else (), allowed)
+    ips = public_only(indicators.ips if indicators else ()) if firewall_on else []
+    drop, spared_ips = never_block.split_ips(ips, allowed)
+    part = _GraphPart(verified, spared_verified, frozenset(drop), list(spared_ips))
+    with _lock:
+        _graph_cache["key"], _graph_cache["part"] = key, part
+    return part
+
+
 def _build_plan(mode: ShieldMode, indicators: Optional[Any], cut_ips: tuple[str, ...] = (), syncing: bool = False) -> dict[str, Any]:
     protections = mode_module.protections(mode)
     dns_on, firewall_on = mode_module.DNS in protections, mode_module.FIREWALL in protections
@@ -147,13 +180,14 @@ def _build_plan(mode: ShieldMode, indicators: Optional[Any], cut_ips: tuple[str,
                 list_names |= blocklists.domains(pack)
     # Never refused, whatever a list or the graph says (never_block; finding 13). Spared VERIFIED
     # entries are reported in the plan, so the person sees them.
-    verified, spared_verified = never_block.split(indicators.domains if dns_on and indicators else (), allowed)
+    graph = _graph_part(indicators, allowed, dns_on, firewall_on)
+    verified, spared_verified = graph.verified, graph.spared_verified
     listed, _spared_lists = never_block.split(list_names, allowed)
     # Complete = every asset read AND the node done downloading (KI-683, Linux round L3: 5 minutes
     # into a first sync the plan said complete with 30,694 of ~1.16 M domains and 1 address, which
     # would have let the helper drop the lists it kept after a store reset).
     complete = bool(indicators is not None and getattr(indicators, "complete", False)) and not syncing
-    dropped = firewall_ips(mode, indicators.ips if indicators else ()) if firewall_on else frozenset()
+    dropped = graph.dropped | frozenset(_ips(block)) if firewall_on else frozenset()
     content = {
         "graph_ready": indicators is not None,
         "graph_complete": complete,
@@ -169,8 +203,7 @@ def _build_plan(mode: ShieldMode, indicators: Optional[Any], cut_ips: tuple[str,
                 "block": sorted(set(_names(block)) | set(remote_lock.relay_domains(mode.enabled))) if dns_on else []},
         "firewall": {"enabled": firewall_on, "ips": sorted(dropped),
                      # Verified addresses spared (a public resolver, the allow list): reported, never silently dropped.
-                     "spared": never_block.split_ips(public_only(indicators.ips if indicators else ()), allowed)[1][:MAX_SPARED]
-                     if firewall_on else [],
+                     "spared": graph.spared_ips[:MAX_SPARED] if firewall_on else [],
                      # The person's own block list is theirs: an address on it is dropped, so not "never".
                      "never_block": [ip for ip in never_block.never_dropped(allowed) if ip not in dropped] if firewall_on else []},
         "cut": {"enabled": cut_on, "ips": never_block.split_ips(public_only(cut_ips), allowed)[0] if cut_on else []},

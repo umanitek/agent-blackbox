@@ -83,6 +83,14 @@ struct Failures {
     filter: Option<String>,
 }
 
+impl Failures {
+    /// What the last apply could not do, as the report's `last_error` (None when it all applied).
+    fn still_failing(&self) -> Option<String> {
+        let left: Vec<&str> = [self.dns.as_deref(), self.filter.as_deref()].into_iter().flatten().collect();
+        (!left.is_empty()).then(|| left.join("; "))
+    }
+}
+
 /// Per protection: whether it is applied now and, if its last apply failed, why — so the screen
 /// never shows "on" for a protection that did not take (security finding).
 fn protections(state: &State, failures: &Failures) -> Value {
@@ -226,6 +234,15 @@ mod tests {
         assert_eq!(report["dns"]["error"], "no DNS server known");
         assert_eq!(report["firewall"]["applied"], true);
         assert!(report["firewall"]["error"].is_null());
+    }
+
+
+    #[test]
+    fn a_plan_read_again_clears_the_read_failure_but_not_what_did_not_apply() {
+        // KI-701: an unchanged plan read after a failed read left "the plan could not be read".
+        assert_eq!(Failures::default().still_failing(), None);
+        let failures = Failures { dns: None, filter: Some("pf did not stay enabled".into()) };
+        assert_eq!(failures.still_failing().as_deref(), Some("pf did not stay enabled"));
     }
 
 

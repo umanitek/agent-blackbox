@@ -70,3 +70,28 @@ def test_a_list_download_follows_a_redirect_only_to_https_on_an_allowed_host(tar
             handler.redirect_request(request, None, 302, "Found", {}, target)
     else:
         assert handler.redirect_request(request, None, 302, "Found", {}, target).full_url == target
+
+
+def test_a_persons_new_block_is_in_the_next_plan_without_judging_the_graph_again(monkeypatch):
+    """KI-701 (macOS round R8): a new DNS block reached DNS Shield 1–3 min later — every settings
+    change judged all ~1.16 M verified domains against the never-block list again. The graph's
+    share is worked out once per graph build and allow list; the person's block is in the next plan."""
+    monkeypatch.setattr(enforcement, "_graph_cache", {"key": None, "part": None})
+    monkeypatch.setattr(network_mode, "list_packs", lambda: ())
+    indicators = SimpleNamespace(domains=frozenset({"evil.example", "bad.example"}), ips=frozenset({"45.33.32.156"}),
+                                 complete=True, built_at=1.0)
+    judged, real = [], never_block.split
+
+    def split(names, allow=()):
+        names = list(names)
+        judged.append(len(names))
+        return real(names, allow)
+    monkeypatch.setattr(never_block, "split", split)
+    before = enforcement.plan(network_mode.build(enabled=True, protections=(network_mode.DNS, network_mode.FIREWALL)), indicators)
+    graph_reads = judged.count(2)
+    after = enforcement.plan(network_mode.build(enabled=True, protections=(network_mode.DNS, network_mode.FIREWALL),
+                                                block=("example.net", "198.51.100.4")), indicators)
+    assert judged.count(2) == graph_reads == 1, "the graph's domains were judged once"
+    assert "example.net" in after["dns"]["block"] and "198.51.100.4" in after["firewall"]["ips"]
+    assert "45.33.32.156" in after["firewall"]["ips"] and after["dns"]["verified"] == before["dns"]["verified"]
+    assert after["version"] != before["version"]
