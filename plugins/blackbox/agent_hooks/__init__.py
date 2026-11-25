@@ -39,7 +39,7 @@ from ..kernel.bounded_files import atomic_write
 from .. import audit
 from ..kernel.config import load_blackbox_config
 from . import owners, process_facts, profiles, prompt_text, tracking, versions
-from .protect import config_edit, hook_watch, own_files
+from .protect import config_edit, foreign_hooks, hook_watch, own_files
 from .protect import recorder
 from .protect.judge_here import JUDGE_HERE_FILE
 from .protect.sandbox_errors import RefusalSeen, on_sandbox_refusal
@@ -179,6 +179,8 @@ def _watch_key(host: Host) -> str:
 
 def _remember(host: Host) -> None:
     hook_watch.remember(_watch_key(host), hook_watch.fingerprint(host, _home(), _editor(host).installed_commands(host, _home())))
+    if host.code_folders:
+        foreign_hooks.remember(host, _home())
 
 
 def keep_hooks() -> list[dict[str, Any]]:
@@ -198,6 +200,9 @@ def keep_hooks() -> list[dict[str, Any]]:
                 if hook_watch.known(_watch_key(variant)):
                     hook_watch.remember(_watch_key(variant), {})
             continue
+        # Not only Blackbox's own: a program added or changed in the agent's hook or plugin folders —
+        # looked at BEFORE a restoration, whose install records the folders as they are then.
+        added = foreign_hooks.look(host, _home()) if host.code_folders else []
         for variant in _variants(host):
             key = _watch_key(variant)
             now = hook_watch.fingerprint(variant, _home(), _editor(variant).installed_commands(variant, _home()))
@@ -215,9 +220,13 @@ def keep_hooks() -> list[dict[str, Any]]:
                     variant, _home(), _editor(variant).installed_commands(variant, _home())))
             if not restored:
                 hook_watch.remember(key, now)   # said once; the next change is new again
-            audit.record_for(host.id, event="agent_hook_changed", findings=[hook_watch.finding(host.name, lost, restored, moved)],
+            still = tuple(foreign_hooks.still_loaded(host, _home()))
+            audit.record_for(host.id, event="agent_hook_changed", findings=[hook_watch.finding(host.name, lost, restored, moved, still)],
                              detail={"restored": restored, "moved_aside": moved, "decision": "flag"})
-            done.append({"kind": host.id, "restored": restored, "lost": lost})
+            done.append({"kind": host.id, "restored": restored and not still, "lost": lost})
+        for found in added:
+            audit.record_for(host.id, event="agent_hook_added", findings=[found], detail={"decision": "flag"})
+            done.append({"kind": host.id, "restored": False, "lost": [found["fields"]["path"]]})
     return done
 
 

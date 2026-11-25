@@ -22,7 +22,7 @@ from pathlib import Path
 import pytest
 
 from plugins.blackbox import agent_hooks, audit
-from plugins.blackbox.agent_hooks.protect import config_edit, hook_watch
+from plugins.blackbox.agent_hooks.protect import config_edit, foreign_hooks, hook_watch
 from plugins.blackbox.detection.paths.guard_settings import detect_guard_tamper
 from plugins.blackbox.kernel import agent_hosts
 from plugins.blackbox.shields.files import changes, mode as files_mode, sandbox
@@ -129,7 +129,13 @@ def test_a_hook_moved_away_and_replaced_outside_blackbox_is_put_back_and_said(pr
     plugin.parent.mkdir(parents=True)
     (plugin.parent / "x.js").write_text("// planted\n", encoding="utf-8")
     done = agent_hooks.keep_hooks()
-    assert {row["kind"] for row in done} == {"cline", "opencode"} and all(row["restored"] for row in done), done
+    # Security finding 2026-11-25-linux-hook-watch-puts-blackbox-s-hook-ba (L5): the planted x.js stays
+    # loaded beside OpenCode's restored plugin, so that one is NOT "restored", and x.js is its own finding.
+    restored = {row["kind"]: row["restored"] for row in done if row["lost"] != [str(plugin.parent / "x.js")]}
+    assert restored == {"cline": True, "opencode": False}, done
+    added = [row for row in audit.read_findings(limit=50) if row.get("identifier") == foreign_hooks.FOREIGN_HOOK_ID]
+    assert len(added) == 1 and added[0]["fields"]["path"] == str(plugin.parent / "x.js") and (plugin.parent / "x.js").exists()
+    assert "x.js" in next(row["evidence"] for row in _findings() if "OpenCode" in row["evidence"])
     assert (cline_hooks / "TaskStart").read_text(encoding="utf-8") == ours
     assert config_edit.MARK in plugin.read_text(encoding="utf-8")
     replaced = list((home / ".hermes" / "blackbox" / "agent-hooks" / "replaced").iterdir())
@@ -162,3 +168,37 @@ def test_blackboxs_own_install_and_stop_are_never_taken_for_tampering(protected)
     assert agent_hooks.set_protection("opencode", True)["ok"]      # an upgrade rewrites the files
     assert agent_hooks.set_protection("cline", False)["ok"]        # the person stops protecting it
     assert agent_hooks.keep_hooks() == [] and _findings() == []
+
+
+def _added() -> list[dict]:
+    return [row for row in audit.read_findings(limit=50) if row.get("identifier") == foreign_hooks.FOREIGN_HOOK_ID]
+
+
+def test_a_lone_foreign_plugin_or_an_extra_hook_is_said_kept_and_names_its_writer(protected):
+    """Security finding 2026-11-25-linux-hook-watch-puts-blackbox-s-hook-ba (Linux round L5): a lone
+    planted OpenCode plugin, or an extra Cline hook beside Blackbox's, raised nothing. Each is one HIGH
+    finding, the writer named from an allowed tool call that wrote it; nothing is deleted."""
+    home = protected
+    plugin_dir = agent_hosts.BY_ID["opencode"].config_path(home).parent
+    hooks = agent_hosts.BY_ID["cline"].config_path(home)
+    audit.record_for("codex", event="pre_tool_call", detail={"decision": "", "tool_name": "terminal",
+                     "args": {"command": f"printf x > {plugin_dir}/evil.js"}})
+    (plugin_dir / "evil.js").write_text("export default {}\n", encoding="utf-8")
+    (hooks / "PreCompact").write_text("#!/bin/sh\n", encoding="utf-8")
+    done = agent_hooks.keep_hooks()
+    assert {row["kind"] for row in done} == {"opencode", "cline"}
+    added = {row["fields"]["path"]: row for row in _added()}
+    assert set(added) == {str(plugin_dir / "evil.js"), str(hooks / "PreCompact")}
+    assert added[str(plugin_dir / "evil.js")]["fields"]["writer"] == "codex" and "written by codex" in added[str(plugin_dir / "evil.js")]["evidence"]
+    assert added[str(hooks / "PreCompact")]["fields"]["writer"] == "" and added[str(hooks / "PreCompact")]["severity"] == "high"
+    assert (plugin_dir / "evil.js").exists() and (hooks / "PreCompact").exists(), "alert and keep, never delete"
+    assert agent_hooks.keep_hooks() == [], "said once"
+
+
+def test_the_persons_own_plugins_from_before_blackbox_are_not_alerts(home):
+    """A plugin the person had before Blackbox installed is theirs: no finding, and it keeps loading."""
+    plugin_dir = agent_hosts.BY_ID["opencode"].config_path(home).parent
+    plugin_dir.mkdir(parents=True)
+    (plugin_dir / "mine.js").write_text("export default {}\n", encoding="utf-8")
+    assert agent_hooks.set_protection("opencode", True)["ok"]
+    assert agent_hooks.keep_hooks() == [] and _added() == [] and (plugin_dir / "mine.js").exists()

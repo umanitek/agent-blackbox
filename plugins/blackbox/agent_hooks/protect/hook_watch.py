@@ -166,13 +166,19 @@ def quarantine(paths: list[str]) -> list[str]:
     return moved
 
 
-def finding(agent: str, lost: list[str], restored: bool, moved: list[str]) -> dict[str, Any]:
-    """The HIGH finding for *agent*'s changed hook (*lost*: the paths, ``commands`` for config entries)."""
+def finding(agent: str, lost: list[str], restored: bool, moved: list[str], still: tuple[str, ...] = ()) -> dict[str, Any]:
+    """The HIGH finding for *agent*'s changed hook (*lost*: the paths, ``commands`` for config entries).
+    *still*: the names of files not Blackbox's still loaded from the agent's hook folders — while
+    one is, the finding is not "restored" (security finding 2026-11-25, Linux round L5: Blackbox's
+    OpenCode plugin was put back and the alert said so while a planted ``x.js`` stayed loaded)."""
     names = [os.path.basename(path) if path != COMMANDS_KEY else "its config's Blackbox entries" for path in lost]
     outcome = "Blackbox put its hook back" if restored else "Blackbox could not put it back safely: protect the agent again"
+    if still:
+        outcome += f", but {', '.join(still)[:160]} — not Blackbox's — is still loaded beside it: check it is yours"
     return {"identifier": HOOK_CHANGED_ID, "category": "self-protection", "severity": "high", "title": TITLE,
-            "tool_name": "", "evidence": f"{agent}: {', '.join(names)[:200]} — {outcome}", "confirmed": False,
-            "source": "custom", "fields": {"agent": agent, "restored": restored, "moved_aside": len(moved)}}
+            "tool_name": "", "evidence": f"{agent}: {', '.join(names)[:200]} — {outcome}"[:400], "confirmed": False,
+            "source": "custom", "fields": {"agent": agent, "restored": restored and not still, "moved_aside": len(moved),
+                                           "foreign_loaded": list(still)[:20]}}
 
 
 __all__ = ["COMMANDS_KEY", "HOOK_CHANGED_ID", "TITLE", "changed", "finding", "fingerprint", "known", "own_paths",
