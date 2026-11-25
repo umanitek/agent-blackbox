@@ -433,7 +433,7 @@ def test_unix_installer_uses_isolated_blackbox_dkg_node() -> None:
     assert 'BLACKBOX_DKG_HOME="$BLACKBOX_INSTALL_ROOT/.dkg"' in text
     assert 'BLACKBOX_DKG_CLI_DIR="$BLACKBOX_INSTALL_ROOT/dkg"' in text
     assert 'BLACKBOX_DKG_BIN="$BLACKBOX_DKG_CLI_DIR/node_modules/.bin/dkg"' in text
-    assert 'BLACKBOX_DKG_DEFAULT_PACKAGE="@origintrail-official/dkg@10.0.26"' in text
+    assert 'BLACKBOX_DKG_DEFAULT_PACKAGE="@origintrail-official/dkg@10.1.2"' in text
     assert 'BLACKBOX_DKG_PACKAGE="${BLACKBOX_DKG_PACKAGE:-$BLACKBOX_DKG_DEFAULT_PACKAGE}"' in text
     assert 'BLACKBOX_DKG_DAEMON_URL="http://127.0.0.1:$BLACKBOX_DKG_PORT"' in text
     assert 'npm install --prefix "$BLACKBOX_DKG_CLI_DIR"' in text
@@ -665,7 +665,7 @@ def test_windows_installer_uses_isolated_blackbox_dkg_node() -> None:
     assert '$DkgHome     = Join-Path $DefaultRepoDir ".dkg"' in text
     assert '$DkgCliDir   = Join-Path $DefaultRepoDir "dkg"' in text
     assert r'$DkgBin      = Join-Path $DkgCliDir "node_modules\.bin\dkg.cmd"' in text
-    assert "@origintrail-official/dkg@10.0.26" in text
+    assert "@origintrail-official/dkg@10.1.2" in text
     assert '$DkgDaemonUrl = "http://127.0.0.1:$DkgPort"' in text
     assert "npm install --prefix $DkgCliDir --prefer-online $installSpec" in text
     assert "BLACKBOX_DKG_REPO_URL" not in text

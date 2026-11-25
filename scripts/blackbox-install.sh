@@ -82,8 +82,8 @@ BLACKBOX_DKG_BIN="$BLACKBOX_DKG_CLI_DIR/node_modules/.bin/dkg"
 # have (`npm view <package> dist.integrity`). The hash is checked on the tarball npm will
 # install, never on the registry's own claim about it. Another BLACKBOX_DKG_PACKAGE needs
 # its own BLACKBOX_DKG_INTEGRITY, or BLACKBOX_DKG_INTEGRITY=unpinned to skip the check knowingly.
-BLACKBOX_DKG_DEFAULT_PACKAGE="@origintrail-official/dkg@10.0.26"
-BLACKBOX_DKG_DEFAULT_INTEGRITY="sha512-QlCW/5UvL2UHaR2QGAemQzvu+ZtBKfefwuitoX2hGr/XZAgkFXsln1NHitzftQM99qTrlKBq8CFfDSfDFAbMHg=="
+BLACKBOX_DKG_DEFAULT_PACKAGE="@origintrail-official/dkg@10.1.2"
+BLACKBOX_DKG_DEFAULT_INTEGRITY="sha512-CC+d2hs7B7f3/arQryX1MMnCo5JGL2+22dxSkE2cWKW3EAMaxkVKZLG/DW/+VsBT8QMz6GGBX75OF8DvugFC5A=="
 BLACKBOX_DKG_PACKAGE="${BLACKBOX_DKG_PACKAGE:-$BLACKBOX_DKG_DEFAULT_PACKAGE}"
 BLACKBOX_DKG_INTEGRITY="${BLACKBOX_DKG_INTEGRITY:-}"
 if [ -z "$BLACKBOX_DKG_INTEGRITY" ] && [ "$BLACKBOX_DKG_PACKAGE" = "$BLACKBOX_DKG_DEFAULT_PACKAGE" ]; then

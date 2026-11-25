@@ -32,8 +32,8 @@ from pathlib import Path
 from ..kernel import constants
 
 #: The DKG node release a plugin-catalog setup installs, and the npm integrity hash it must have.
-DKG_PACKAGE = "@origintrail-official/dkg@10.0.26"
-DKG_INTEGRITY = "sha512-QlCW/5UvL2UHaR2QGAemQzvu+ZtBKfefwuitoX2hGr/XZAgkFXsln1NHitzftQM99qTrlKBq8CFfDSfDFAbMHg=="
+DKG_PACKAGE = "@origintrail-official/dkg@10.1.2"
+DKG_INTEGRITY = "sha512-CC+d2hs7B7f3/arQryX1MMnCo5JGL2+22dxSkE2cWKW3EAMaxkVKZLG/DW/+VsBT8QMz6GGBX75OF8DvugFC5A=="
 
 HERE = Path(__file__).resolve().parent
 PLUGIN_DIR = HERE.parent

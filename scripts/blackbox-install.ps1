@@ -83,8 +83,8 @@ $DkgCliDir   = Join-Path $DefaultRepoDir "dkg"
 $DkgBin      = Join-Path $DkgCliDir "node_modules\.bin\dkg.cmd"
 # The DKG release this Blackbox installs and the sha512 the downloaded tarball must have; another
 # package needs its own BLACKBOX_DKG_INTEGRITY, or "unpinned" to skip the check knowingly (see the .sh).
-$DkgDefaultPackage = "@origintrail-official/dkg@10.0.26"
-$DkgDefaultIntegrity = "sha512-QlCW/5UvL2UHaR2QGAemQzvu+ZtBKfefwuitoX2hGr/XZAgkFXsln1NHitzftQM99qTrlKBq8CFfDSfDFAbMHg=="
+$DkgDefaultPackage = "@origintrail-official/dkg@10.1.2"
+$DkgDefaultIntegrity = "sha512-CC+d2hs7B7f3/arQryX1MMnCo5JGL2+22dxSkE2cWKW3EAMaxkVKZLG/DW/+VsBT8QMz6GGBX75OF8DvugFC5A=="
 $DkgPackage  = if ($env:BLACKBOX_DKG_PACKAGE) { $env:BLACKBOX_DKG_PACKAGE } else { $DkgDefaultPackage }
 $DkgIntegrity = if ($env:BLACKBOX_DKG_INTEGRITY) { $env:BLACKBOX_DKG_INTEGRITY } elseif ($DkgPackage -eq $DkgDefaultPackage) { $DkgDefaultIntegrity } else { "" }
 # Packages whose install scripts the DKG node needs; npm 12 runs only those listed under
