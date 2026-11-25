@@ -166,6 +166,30 @@ def test_copy_plugin_tree_records_source_checkout(tmp_path, monkeypatch):
     assert (dest / ".blackbox-source-root").read_text(encoding="utf-8") == str(repo)
 
 
+def test_copy_plugin_tree_replaces_a_copy_a_running_process_writes_into(tmp_path, monkeypatch):
+    """Fix wave W12 (macOS VM, an upgrade over a running install): `blackbox attach` failed with
+    "[Errno 17] File exists: …/plugins/blackbox/shields" — the running dashboard wrote a fresh
+    __pycache__ into the copy while rmtree + copytree replaced it in place (KI-644's race, in the
+    attach path). The copy is built aside and swapped in by rename: the writer can not break it."""
+    src = tmp_path / "src"
+    (src / "shields").mkdir(parents=True)
+    (src / "shields" / "new.py").write_text("NEW = 1\n", encoding="utf-8")
+    dest = tmp_path / ".hermes" / "plugins" / "blackbox"
+    (dest / "shields").mkdir(parents=True)
+    (dest / "shields" / "old.py").write_text("OLD = 1\n", encoding="utf-8")
+    real_copytree = attach_plugin_copy.shutil.copytree
+
+    def copytree_while_a_process_imports(*args, **kwargs):
+        (dest / "shields" / "__pycache__").mkdir(parents=True, exist_ok=True)   # the running dashboard's import
+        return real_copytree(*args, **kwargs)
+    monkeypatch.setattr(attach_plugin_copy.shutil, "copytree", copytree_while_a_process_imports)
+    monkeypatch.setattr(attach_plugin_copy, "_bundle_openclaw_plugin", lambda _src, _dest: None)
+    attach_plugin_copy.copy_plugin_tree(src, dest)
+    assert (dest / "shields" / "new.py").is_file() and not (dest / "shields" / "old.py").exists()
+    assert sorted(path.name for path in dest.parent.iterdir()) == ["blackbox"]   # nothing left inside plugins/
+    assert not (tmp_path / ".hermes" / ".blackbox-attach-copy").exists()
+
+
 def test_attach_hermes_is_idempotent(fake_env):
     home = fake_env["hermes_default"]
     attach.attach_hermes(home)

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import shutil
 from pathlib import Path
 from typing import Optional
@@ -140,17 +141,31 @@ def copy_plugin_tree(src: Path, dest: Path) -> None:
     bundles the OpenClaw JS plugin so an installed copy can still point OpenClaw
     at it (an installed ``plugins/blackbox`` has no sibling ``integrations/``).
     """
-    if dest.exists():
-        shutil.rmtree(dest)
-    shutil.copytree(src, dest, ignore=_copy_ignore)
-    _bundle_openclaw_plugin(src, dest)
-    (dest / _INSTALL_STAMP_MARKER).write_text(constants.__version__, encoding="utf-8")
+    # Built beside, then swapped in by two renames — the installer's own refresh (KI-644). WHY here
+    # too (fix wave W12, macOS VM: an upgrade over a running install failed in `blackbox attach` with
+    # "[Errno 17] File exists: …/plugins/blackbox/shields"): the running dashboard and hooks import
+    # from the copy and write fresh __pycache__ folders while rmtree + copytree replace it in place.
+    # A rename is atomic and does not care what runs from the folder. The aside folder sits beside
+    # the plugins folder, never inside it (Hermes would scan it as a plugin).
+    aside = dest.parent.parent / ".blackbox-attach-copy"
+    staged, old_copy = aside / f"new-{os.getpid()}", aside / f"old-{os.getpid()}"
+    shutil.rmtree(staged, ignore_errors=True)
+    shutil.rmtree(old_copy, ignore_errors=True)
+    aside.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(src, staged, ignore=_copy_ignore)
+    _bundle_openclaw_plugin(src, staged)
+    (staged / _INSTALL_STAMP_MARKER).write_text(constants.__version__, encoding="utf-8")
     source_root = _source_checkout_root(src)
     if source_root is not None:
         try:
-            (dest / _SOURCE_ROOT_MARKER).write_text(str(source_root), encoding="utf-8")
+            (staged / _SOURCE_ROOT_MARKER).write_text(str(source_root), encoding="utf-8")
         except OSError:
             pass
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if dest.exists() or dest.is_symlink():
+        os.rename(dest, old_copy)
+    os.rename(staged, dest)
+    shutil.rmtree(aside, ignore_errors=True)
 
 
 def _source_checkout_root(src: Path) -> Optional[Path]:
