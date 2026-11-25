@@ -20,6 +20,8 @@ PROJECT_INDEX = "projects.idx"
 ONCE_SUFFIX, RUN_INFIX, ONCE_MINUTES = ".once.txt", ".run.", 30
 SETUID_NOTE = ""
 TOOLS_FOLDER = "sandbox-tools"
+#: Whether this machine's helper reports the sandbox's refusals itself: no sandbox here (KI-693).
+HELPER_REPORTS_REFUSALS = False
 APPS: dict[str, tuple[str, str]] = {}
 MANAGER_FOLDERS: tuple[str, ...] = ()
 BREW_PATHS: tuple[str, ...] = ()

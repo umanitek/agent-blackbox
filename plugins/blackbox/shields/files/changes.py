@@ -207,6 +207,44 @@ def _record_self_hits(denials: list[tuple[str, str, Any]]) -> None:
                                  **_owned(owner)})
 
 
+#: The refusal kinds an agent's hook reads from a tool's output (``agent_hooks``' sandbox words): a
+#: file the kernel would not open or write, a shell startup file, a place something starts from.
+SEEN_FILE, SEEN_STARTUP_FILE, SEEN_PERSISTENCE = "file", "startup", "persistence"
+
+
+def _pinned_above(folder: str, place: str) -> bool:
+    """True when *folder* is a folder above *place* the sandbox pins (moving it would move the file),
+    below the person's home: the home and everything above it are never Blackbox's alone."""
+    homes = {os.path.expanduser("~").rstrip("/"), os.path.realpath(os.path.expanduser("~")).rstrip("/")}
+    return folder != place and _under(place, folder) and any(_under(folder, home) and folder != home for home in homes)
+
+
+def record_seen_refusal(kind: str, path: str, agent: str, instance: str, self_protected: Sequence[str]) -> bool:
+    """Record one sandbox refusal an agent's hook read from a tool's output as tamper, when it was
+    one: a write to a place something starts from (``startup-item``), or to a file kept closed for
+    Blackbox (*self_protected*) or a folder above one (``self-protection-kernel``). True when recorded.
+
+    WHY (KI-693): only the macOS helper reads the kernel's own denial log (:func:`record`); on Linux
+    the tool's output is the only sign of a refusal, so without this every refusal the sandbox made
+    — the layer that stops what the hook could not judge — went uncounted. The caller calls it only
+    where the helper does not report refusals (``sandbox.HELPER_REPORTS_REFUSALS``): never twice."""
+    path = os.path.normpath(path) if path.startswith("/") else ""
+    if not path:
+        return False
+    from ... import audit
+    from .protect import SANDBOX_AGENT, sandbox_self_hit, sandbox_startup_hit
+    if kind == SEEN_PERSISTENCE:
+        finding = sandbox_startup_hit(path, agent)
+    elif kind in (SEEN_FILE, SEEN_STARTUP_FILE) and any(_under(path, place) or _pinned_above(path, place) for place in self_protected):
+        finding = sandbox_self_hit(path, agent)
+    else:
+        return False
+    audit.record_for(SANDBOX_AGENT, event="sandbox_deny", findings=[finding.to_dict()],
+                     detail={"decision": "block", "tool_name": agent[:MAX_PROGRAM_CHARS] or "program",
+                             "tool_call_id": f"sandbox-seen:{time.time():.6f}:{path}", "session_id": instance, "agent": agent})
+    return True
+
+
 def _record_hits(denials: list[FileChange], owners: Optional[dict[int, Any]] = None) -> None:
     """Each sandbox refusal as a File Shield hit, in the same local findings the hooks write."""
     if not denials:

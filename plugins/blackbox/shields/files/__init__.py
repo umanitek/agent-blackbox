@@ -42,7 +42,7 @@ from . import alerts, api, changes, events, folder_rules, mode, protect, sandbox
 #: What another package (an add-on) may use: the shield, its mode (watched folders,
 #: protected items), its real-time changes, its events and :mod:`.watched` (where a watched
 #: folder's scan reports what it found — File Shield words the notification).
-__all__ = ["CAPABILITIES", "FILES", "FINDING_KINDS", "changes", "events", "mode", "protect", "sandbox", "watched"]
+__all__ = ["CAPABILITIES", "FILES", "FINDING_KINDS", "changes", "events", "mode", "on_refusal", "protect", "sandbox", "watched"]
 
 HERE = Path(__file__).resolve().parent
 FINDING_KINDS = protect.FINDING_KINDS
@@ -76,6 +76,16 @@ def allows(_finding: Mapping[str, Any], current: ShieldMode) -> bool:
 def detect(tool_name: str, args: Any, current: ShieldMode) -> list[Finding]:
     """File Shield's findings for one tool call: a protected item, else a folder rule."""
     return protect.detect(tool_name, args, current) or folder_rules.detect(tool_name, args)
+
+
+def on_refusal(kind: str, name: str, agent: str, instance: str, folder: str, pid: int = 0) -> None:
+    """A sandbox refusal an agent's hook saw in a tool's output (``agent_hooks.RefusalSeen``): the
+    sandbox's answer to it (:func:`.sandbox.on_refusal`), and, where the helper does not report the
+    sandbox's refusals itself, the tamper record of a refused write to Blackbox's or a startup place
+    (:func:`.changes.record_seen_refusal`, KI-693)."""
+    sandbox.on_refusal(kind, name, agent, instance, folder, pid)
+    if not sandbox.HELPER_REPORTS_REFUSALS:
+        changes.record_seen_refusal(kind, name, agent, instance, sandbox.self_protected_files(mode.current()))
 
 
 def describe_change(option: str, values: list[str], added: bool) -> str:

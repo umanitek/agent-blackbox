@@ -4,7 +4,8 @@ Contracts (2026-11-24): a refusal of self-protection is counted per category, wi
 agent, whichever route recorded it (the Hermes hook, another agent's hooks, the operating system's
 sandbox); a finding that only flagged is never counted; a refused write to a startup place counts
 under its own category; the counts survive a restart (they are on disk); and an agent trying to
-reset them is itself refused by self-protection.
+reset them is itself refused by self-protection. Where the helper does not report the sandbox's
+refusals (Linux), a refusal an agent's hook read from a tool's output is counted instead (KI-693).
 """
 
 from __future__ import annotations
@@ -70,3 +71,57 @@ def test_another_agents_refused_hook_call_counts(monkeypatch, tmp_path):
         "tool_input": {"command": "launchctl bootout gui/501/ai.umanitek.blackbox-dashboard"}}))
     assert "block" in str(answer)
     assert audit.tamper_counts()["self-protection"]["last_agent"] == "codex"
+
+
+def _seen(monkeypatch, tmp_path, *, helper_reports: bool):
+    """files.on_refusal with this machine's helper reporting (macOS) or not (Linux), one file kept
+    closed for Blackbox, and the sandbox's own answer to a refusal left out."""
+    from plugins.blackbox.shields import files
+    hook = tmp_path / "home" / ".claude" / "settings.json"
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(files.sandbox, "HELPER_REPORTS_REFUSALS", helper_reports)
+    monkeypatch.setattr(files.sandbox, "self_protected_files", lambda _mode: (str(hook),))
+    monkeypatch.setattr(files.sandbox, "on_refusal", lambda *_a, **_k: None)
+    return files.on_refusal, hook
+
+
+def test_a_kernel_refusal_seen_in_a_tool_output_counts_where_the_helper_does_not_report_it(monkeypatch, tmp_path):
+    """KI-693: on Linux a sandboxed Codex's 5 kernel refusals left the counts and the log unchanged."""
+    on_refusal, hook = _seen(monkeypatch, tmp_path, helper_reports=False)
+    on_refusal("file", str(hook), "codex", "s1", str(tmp_path))
+    on_refusal("file", str(hook.parent), "codex", "s1", str(tmp_path))          # the pinned folder above it
+    on_refusal("persistence", str(tmp_path / "home/.config/systemd/user/x.service"), "codex", "s1", str(tmp_path))
+    counts = audit.tamper_counts()
+    assert counts["self-protection-kernel"]["count"] == 2 and counts["self-protection-kernel"]["last_agent"] == audit.SANDBOX_RECORDER
+    assert counts["startup-item"]["count"] == 1
+    assert audit.protection_log.verify().seq == 3 and audit.protection_log.verify().state == "ok"
+
+
+def test_a_seen_refusal_of_anything_else_or_on_a_reporting_helper_is_not_counted(monkeypatch, tmp_path):
+    """The person's own files and their home are not Blackbox's; on macOS the helper's denial log
+    already counted the refusal (:func:`changes.record`), so the hook's reading never counts twice."""
+    on_refusal, hook = _seen(monkeypatch, tmp_path, helper_reports=False)
+    on_refusal("file", str(tmp_path / "home" / "notes.txt"), "codex", "s1", str(tmp_path))
+    on_refusal("file", str(tmp_path / "home"), "codex", "s1", str(tmp_path))
+    on_refusal("signal", "4242", "codex", "s1", str(tmp_path))
+    assert audit.tamper_counts() == {}
+    on_refusal, hook = _seen(monkeypatch, tmp_path, helper_reports=True)
+    on_refusal("file", str(hook), "codex", "s1", str(tmp_path))
+    assert audit.tamper_counts() == {}
+
+
+def test_the_seen_refusal_kinds_are_the_hooks_own_words():
+    """Drift guard: the kinds :func:`changes.record_seen_refusal` keys on are the ones the agents'
+    hooks read from a tool's output (``agent_hooks.protect.sandbox_errors``)."""
+    from plugins.blackbox.agent_hooks.protect import sandbox_errors
+    from plugins.blackbox.shields.files import changes
+    assert (changes.SEEN_FILE, changes.SEEN_STARTUP_FILE, changes.SEEN_PERSISTENCE) == (
+        sandbox_errors.FILE, sandbox_errors.STARTUP, sandbox_errors.PERSISTENCE)
+
+
+def test_only_the_macos_helper_reports_the_sandboxs_refusals():
+    """LES-160: the per-OS answer is explicit on every OS, never a silent default."""
+    from plugins.blackbox.shields.files.sandbox.platform import macos, unsupported
+    from plugins.blackbox.shields.files.sandbox.platform import linux
+    assert macos.HELPER_REPORTS_REFUSALS is True
+    assert linux.HELPER_REPORTS_REFUSALS is False and unsupported.HELPER_REPORTS_REFUSALS is False

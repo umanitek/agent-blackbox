@@ -97,8 +97,9 @@ PACKAGE_INSTALLS, package_installs_weakening = files.sandbox.packages.SECTION, f
 #: ``agent_sandbox``: the sandbox permissions per agent and project; loosening them waits (approvals).
 AGENT_SANDBOX, agent_sandbox_weakening = files.sandbox.permissions.SECTION, files.sandbox.permissions.section_weakening
 #: A sandbox refusal an agent's hook saw: asks the person when the permission it means is on "ask"
-#: (a refused signal: the stop broker, with the process it named).
-permission_refused = files.sandbox.on_refusal
+#: (a refused signal: the stop broker, with the process it named); where the helper does not report
+#: refusals (Linux), a refused write to Blackbox's or a startup place is counted as tamper (KI-693).
+permission_refused = files.on_refusal
 #: Whether the profile a sandboxed run started with hides an engine's socket (``<file>#<digest>``,
 #: the socket path): how a refused Docker connect is recognised from outside the sandbox (KI-685).
 run_hides_socket = files.sandbox.run_hides_socket
