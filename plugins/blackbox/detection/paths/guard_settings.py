@@ -41,8 +41,6 @@ Usage::
 
 from __future__ import annotations
 
-import base64
-import binascii
 import os
 import re
 from typing import Any, Optional
@@ -90,7 +88,6 @@ _CODE_SCRIPT = re.compile(r"\.(?:py|js|mjs|rb|pl)$", re.IGNORECASE)
 _SHEBANG, _SHELLS = re.compile(r"\A#!\s*(\S+)(?:\s+(\S+))?"), frozenset({"sh", "bash", "zsh", "dash", "ksh", "fish"})
 #: Code that runs a command: its quoted command lines (``execSync('rm -rf ~')``) are judged as shell.
 _RUNS_COMMANDS = re.compile(r"subprocess|os\.system|Popen|os\.exec|child_process|execSync|spawn|\bsystem\(|\bexec\(|%x|`", re.IGNORECASE)
-_BASE64_WORD = re.compile(r"(?<![A-Za-z0-9+/=])[A-Za-z0-9+/]{24,}={0,2}(?![A-Za-z0-9+/=])")
 #: Tools that drive a browser: pointed at the dashboard they would press its switches.
 _BROWSER_TOOL = re.compile(r"browser|navigate|computer|click|open_url", re.IGNORECASE)
 #: A command longer than this is refused unread: no model writes one in a single call, and a
@@ -133,17 +130,7 @@ def _ports() -> tuple[int, ...]:
     return _PORTS.get(guard_places._machine())
 
 
-def _decoded(text: str) -> str:
-    """*text* with every base64 word that decodes to readable text added on its own line."""
-    extra = []
-    for word in _BASE64_WORD.findall(text):
-        try:
-            plain = base64.b64decode(word + "=" * (-len(word) % 4), validate=True).decode("utf-8")
-        except (binascii.Error, UnicodeDecodeError, ValueError):
-            continue
-        if plain.isprintable() or "\n" in plain:
-            extra.append(plain)
-    return "\n".join([text, *extra]) if extra else text
+_decoded = shell_files.with_base64_decoded
 
 
 def _says_it(line: str, ports: tuple[int, ...]) -> bool:

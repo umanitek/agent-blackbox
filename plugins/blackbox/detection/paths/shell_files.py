@@ -51,8 +51,11 @@ Pure and deterministic; reads no files.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import functools
 import itertools
+import re
 from dataclasses import replace
 
 # The words of a command (shell_words) and the paths in script code (shell_scripts) live in their
@@ -61,7 +64,7 @@ from .shell_scripts import _HEREDOC, _INTERPRETERS, _paths_in_code, _script_args
 from .shell_words import (ShellFileArg, _SEPARATORS, _home_as_tilde, _is_anchored, _looks_like_path,
                           _segment_end, _split, _with_variables, _words)
 
-__all__ = ["_HEREDOC", "_INTERPRETERS", "_SEPARATORS", "ShellFileArg", "_split", "_words", "code_file_args", "shell_file_args"]
+__all__ = ["_HEREDOC", "_INTERPRETERS", "_SEPARATORS", "ShellFileArg", "_split", "_words", "code_file_args", "shell_file_args", "with_base64_decoded"]
 
 #: Commands that read a file's contents.
 _READ_COMMANDS = frozenset({
@@ -361,3 +364,19 @@ def _from_folder(arg: ShellFileArg, folder: str) -> ShellFileArg:
         path = folder if relative in (".", "") else folder.rstrip("/") + "/" + relative
     path = _home_as_tilde(path)
     return arg if path == arg.path else replace(arg, path=path)
+
+
+_BASE64_WORD = re.compile(r"(?<![A-Za-z0-9+/=])[A-Za-z0-9+/]{24,}={0,2}(?![A-Za-z0-9+/=])")
+
+
+def with_base64_decoded(text: str) -> str:
+    """*text* with every base64 word that decodes to readable text added on its own line."""
+    extra = []
+    for word in _BASE64_WORD.findall(text):
+        try:
+            plain = base64.b64decode(word + "=" * (-len(word) % 4), validate=True).decode("utf-8")
+        except (binascii.Error, UnicodeDecodeError, ValueError):
+            continue
+        if plain.isprintable() or "\n" in plain:
+            extra.append(plain)
+    return "\n".join([text, *extra]) if extra else text
