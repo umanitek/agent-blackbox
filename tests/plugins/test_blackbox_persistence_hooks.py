@@ -184,3 +184,22 @@ def test_every_launchctl_load_verb_and_job_command_is_refused_however_it_is_wrap
                                      "launchctl unload pl.plist", "bash -lc \"launchctl list | grep ai.x\"", "xargs -n1 echo < f"])
 def test_launchctl_reads_and_removals_stay_allowed(machine, command):
     assert not _refused("terminal", {"command": command}), command
+
+
+def test_a_script_is_tagged_only_with_the_places_it_really_touches(machine):
+    """KI-692 (VM bb-prot-1124 and macOS round R8, REAL Claude Code / Gemini CLI / Codex runners): a
+    script in an ordinary folder deleting ``"~/.hermes/" + sys.argv[1] + "/" + sys.argv[2]`` was
+    refused as blackbox-settings (right) AND startup-item (wrong: the ``"/"`` separator read as the
+    root folder, which holds every startup place); a copied script building ``"~/." + sys.argv[2] +
+    "/" + sys.argv[3]`` run with ``ssh authorized_keys`` was refused as startup-item (right) AND
+    blackbox-settings (wrong: its code lines, read as shell, named the home folder)."""
+    home, _brew, _use = machine
+    (home / "prot").mkdir()
+    rmtree = 'import os, shutil, sys\nshutil.rmtree(os.path.expanduser("~/.hermes/" + sys.argv[1] + "/" + sys.argv[2]))\n'
+    verdict = guard.tool_call_verdict("write_file", {"path": str(home / "prot" / "k.py"), "content": rmtree})
+    assert {f["matched"] for f in verdict["findings"]} == {"blackbox-settings"}, verdict["findings"]
+    copier = 'import os, shutil, sys\nshutil.copy(sys.argv[1], os.path.expanduser("~/." + sys.argv[2] + "/" + sys.argv[3]))\n'
+    (home / "prot" / "k.py").write_text(copier, encoding="utf-8")
+    verdict = guard.tool_call_verdict("terminal", {"command": f"cd {home}/prot && cp k.py k2.py && python3 {home}/prot/k.py key.pub ssh authorized_keys"})
+    assert {f["matched"] for f in verdict["findings"]} == {STARTUP_ITEM}, verdict["findings"]
+    assert verdict["decision"] == "block"

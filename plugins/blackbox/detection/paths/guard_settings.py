@@ -151,7 +151,7 @@ def _read_closely(line: str, folder: str, ports: tuple[int, ...]) -> tuple[bool,
         return True, folder
     if _HANDS_ON.search(line):
         inner = shell_shapes.with_nested_commands(line, 1).split("\n")[1:]
-        if any(_text_tampers(command) for command in inner) or any(_code_tampers(code) for code in _inline_code(line)):
+        if any(_text_tampers(command) for command in inner) or any(_code_tampers(code, argv) for code, argv in shell_files.inline_runs(line)):
             return True, folder
     return guard_paths.line_changes_a_place(line, folder)
 
@@ -213,9 +213,9 @@ def _text_tampers(text: str) -> bool:
         return True
     # Code over several lines: after an interpreter's ``-c "…"`` (found by splitting the whole
     # command, when it is short enough to split), or on a heredoc.
-    spread = _inline_code(text) if "\n" in text and len(text) <= MAX_READ_CLOSELY and _HANDS_ON.search(text) else []
-    heredocs = [found.group("body") for found in shell_files._HEREDOC.finditer(text)] if "<<" in text else []
-    return any(_code_tampers(code) for code in spread + heredocs)
+    spread = shell_files.inline_runs(text) if "\n" in text and len(text) <= MAX_READ_CLOSELY and _HANDS_ON.search(text) else []
+    heredocs = [(found.group("body"), ()) for found in shell_files._HEREDOC.finditer(text)] if "<<" in text else []
+    return any(_code_tampers(code, argv) for code, argv in spread + heredocs)
 
 
 def _script_kind(path: str, text: str) -> str:
@@ -242,13 +242,10 @@ def script_tampers(path: str, text: str) -> bool:
 
 def _inline_code(command: str) -> list[str]:
     """Code handed to an interpreter after ``-c`` / ``-e`` on the command line."""
-    words = shell_files._words(command)
-    return [words[index + 1] for index, word in enumerate(words[:-1])
-            if word in ("-c", "-e", "--eval", "-r", "-E", "-p", "--print") and index > 0
-            and words[index - 1].rsplit("/", 1)[-1].lower() in shell_files._INTERPRETERS]
+    return [code for code, _argv in shell_files.inline_runs(command)]
 
 
-def _code_tampers(code: str) -> bool:
+def _code_tampers(code: str, argv: tuple[str, ...] = ()) -> bool:
     """True when *code* talks to the control API other than by a plain read, sets Blackbox's
     environment, or names a guarded place (whole or in pieces) and writes, deletes or runs anything —
     in Homebrew's program folders only a write counts (running a program there is everyday work)."""
@@ -256,7 +253,7 @@ def _code_tampers(code: str) -> bool:
             guard_commands.uses_control_api(code, _ports()) and (
             guard_commands._WRITES_OVER_HTTP.search(code) or guard_commands._DESKTOP_ROUTE.search(code)))):
         return True
-    names = any(guard_places.reaches(arg.path) for arg in shell_files.code_file_args(code)) or guard_places.names_in_pieces(code)
+    names = any(guard_places.code_names(arg.path, code, argv) for arg in shell_files.code_file_args(code)) or guard_places.names_in_pieces(code)
     acts = _CODE_WRITES if guard_places.scope() == guard_places.PROGRAMS else _CODE_ACTS
     return names and bool(acts.search(code))
 
@@ -363,12 +360,26 @@ def tampering(tool_name: str, args: Any) -> tuple[str, str]:
     return tool, "page" if _other_tool_tampers(tool, args) else ""
 
 
+def _run_tampers(run: script_files.ScriptRun, call: dict[str, str]) -> str:
+    """How one script a command runs would change Blackbox (an ``_EVIDENCE`` key, "" for none): a
+    shell script as its command lines; code as code, with the arguments it is run with.
+
+    WHY (KI-692, R8): a copied script building ``"~/." + sys.argv[2] + …``, run with ``ssh
+    authorized_keys``, was refused as Blackbox's settings: its lines, read as shell, named the home."""
+    if script_files.language_of(run) == "shell":
+        return tampering("terminal", call)[1]
+    text = run.text or ""
+    runs_commands = bool(_RUNS_COMMANDS.search(text)) and any(
+        " " in literal.group(2) and _text_tampers(literal.group(2)) for literal in _LITERAL.finditer(text))
+    return "code" if _code_tampers(text, run.argv) or runs_commands else ""
+
+
 def _script_tampering(tool: str, args: Any) -> str:
     """Evidence when a script this shell call runs would itself be refused (``python3 c.py hermes yaml``
     building ``~/.hermes/config.yaml``), by the one script judgement (LES-137); "" for none."""
     if tool not in shell_shapes.SHELL_TOOLS:
         return ""
-    hit = script_files.judge_runs(shell_shapes.command_from_args(tool, args), lambda _run, call: tampering("terminal", call)[1])
+    hit = script_files.judge_runs(shell_shapes.command_from_args(tool, args), _run_tampers)
     return f"a script it runs ({os.path.basename(hit[0].path)}): {_EVIDENCE[hit[1]]}" if hit else ""
 
 

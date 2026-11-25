@@ -64,7 +64,7 @@ from .shell_scripts import _HEREDOC, _INTERPRETERS, _paths_in_code, _script_args
 from .shell_words import (ShellFileArg, _SEPARATORS, _home_as_tilde, _is_anchored, _looks_like_path,
                           _segment_end, _split, _with_variables, _words)
 
-__all__ = ["_HEREDOC", "_INTERPRETERS", "_SEPARATORS", "ShellFileArg", "_split", "_words", "code_file_args", "shell_file_args", "with_base64_decoded"]
+__all__ = ["_HEREDOC", "_INTERPRETERS", "_SEPARATORS", "ShellFileArg", "_split", "_words", "code_file_args", "inline_runs", "shell_file_args", "with_base64_decoded"]
 
 #: Commands that read a file's contents.
 _READ_COMMANDS = frozenset({
@@ -364,6 +364,24 @@ def _from_folder(arg: ShellFileArg, folder: str) -> ShellFileArg:
         path = folder if relative in (".", "") else folder.rstrip("/") + "/" + relative
     path = _home_as_tilde(path)
     return arg if path == arg.path else replace(arg, path=path)
+
+
+def inline_runs(command: str) -> list[tuple[str, tuple[str, ...]]]:
+    """``(code, arguments)`` for each piece of code handed to an interpreter after ``-c`` / ``-e``
+    on the command line, with the words after it up to the line's next separator (its ``sys.argv``)."""
+    words = _words(command)
+    out = []
+    for index, word in enumerate(words[:-1]):
+        if word in ("-c", "-e", "--eval", "-r", "-E", "-p", "--print") and index > 0 \
+                and words[index - 1].rsplit("/", 1)[-1].lower() in _INTERPRETERS:
+            rest = words[index + 2:]
+            ends = next((at for at, each in enumerate(rest) if each in _ARGV_ENDS or each.startswith((">", "<"))), len(rest))
+            out.append((words[index + 1], tuple(rest[:ends])))
+    return out
+
+
+#: The words that end a command's arguments.
+_ARGV_ENDS = frozenset({";", "|", "||", "&&", "&"})
 
 
 _BASE64_WORD = re.compile(r"(?<![A-Za-z0-9+/=])[A-Za-z0-9+/]{24,}={0,2}(?![A-Za-z0-9+/=])")

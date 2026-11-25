@@ -331,6 +331,11 @@ def as_call(path: str, content: str, argv: tuple[str, ...] = (), runner: str = "
     return {"command": " ".join([language, _INLINE[language], shlex.quote(text), *map(shlex.quote, args)])}
 
 
+def language_of(run: ScriptRun) -> str:
+    """How *run*'s text is read (:func:`_language`): ``shell``, or the language of its code."""
+    return _language(run.path, run.runner, run.text or "")
+
+
 Verdict = TypeVar("Verdict")
 
 

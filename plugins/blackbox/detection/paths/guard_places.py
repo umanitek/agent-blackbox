@@ -295,3 +295,30 @@ def names_in_pieces(text: str) -> bool:
     pieces = {OWN: _IN_PIECES, STARTS: _STARTS_IN_PIECES, HOOKS: _HOOKS_IN_PIECES}.get(_SCOPE.get())
     return bool(pieces and pieces.search(text or ""))
 
+
+#: The most argument words joined into one path a script may build (``"~/." + argv[1] + "/" + argv[2]``).
+_MAX_JOINED_ARGS = 3
+
+
+def code_names(path: str, code: str, argv: tuple[str, ...] = ()) -> bool:
+    """True when the path literal *path* in *code* names a place of the set being judged.
+
+    WHY two exceptions (KI-692, macOS round R8: a script deleting ``"~/.hermes/" + sys.argv[1]`` was
+    also tagged startup-item, a copied SSH-key script ``"~/." + sys.argv[2] + "/" + …`` also
+    blackbox-settings): a folder that only HOLDS a place is no startup place — deleting or writing
+    in it leaves nothing that starts by itself (the shell rule's own, ``guard_paths``) —, and the
+    home or root folder used only as the first piece of a path built at run time (``"~/." + x``,
+    ``"/" + y``) says nothing of where the path ends: what the run-time pieces name is judged by
+    the arguments a script is run with (*argv*: each run of up to :data:`_MAX_JOINED_ARGS` of them
+    joined onto the prefix), not by its separator."""
+    if not reaches(path):
+        return False
+    bare = os.path.normpath(os.path.expanduser(path))
+    if bare not in (os.sep, os.path.normpath(os.path.expanduser("~"))):
+        return scope() == OWN or not holds(path)
+    uses = list(re.finditer(rf"""(['"]){re.escape(path)}\1""", code))
+    if not uses or any(not re.match(r"\s*\+", code[use.end():]) for use in uses):
+        return True                     # the folder itself (``rmtree(expanduser("~"))``)
+    words = [word for word in argv if word and not word.startswith("-")]
+    joined = ["/".join(words[start:start + size]) for size in range(1, _MAX_JOINED_ARGS + 1) for start in range(len(words) - size + 1)]
+    return any(reaches(path + tail) for tail in joined)
