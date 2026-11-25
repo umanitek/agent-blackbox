@@ -6,13 +6,14 @@ use). The rule of the day let 93 through in Block mode and every one in Audit mo
 finding only flags. The rule was rebuilt (``detection/paths/guard_settings.py``: anything that
 names a guarded place and does more than read it) and its findings now block in every mode.
 
-Each attack in the catalogue is a test here, in both modes, beside ordinary work that must not
-be taken for one. Nothing is executed: the cases are text handed to the judgement.
+Each attack in the catalogue is a test in both modes, in the topic files that split this one
+(KI-691): test_blackbox_self_protection_places / _commands / _disguised. Here: ordinary work that
+must not be taken for one, Audit mode, odd arguments, long commands, the cost and the OpenClaw
+stand-in. Nothing is executed: the cases are text handed to the judgement.
 """
 
 from __future__ import annotations
 
-import json
 import re
 import shutil
 import subprocess
@@ -21,7 +22,9 @@ from pathlib import Path
 import pytest
 
 from _blackbox_loader import load_blackbox
-from _blackbox_self_protection_cases import ALLOWED, ATTACKS
+from _blackbox_self_protection_cases import ALLOWED
+from _blackbox_self_protection_machine import REPO, make_machine
+from _blackbox_self_protection_machine import here as _here, own_findings as _own_findings
 
 guard = load_blackbox("guard")
 hooks = load_blackbox("guard.hooks")
@@ -30,59 +33,11 @@ config_mod = load_blackbox("kernel.config")
 ruleset_mod = load_blackbox("ruleset")
 guard_settings = load_blackbox("detection.paths.guard_settings")
 
-REPO = str(Path(__file__).resolve().parents[2])
-OWN_RULE = "blackbox-settings"
-CONFIG = "plugins:\n  enabled:\n    - blackbox\n  entries:\n    blackbox:\n      mode: block\n      block_severity: critical\n"
-OPENCLAW = {"plugins": {"allow": ["blackbox"], "entries": {"blackbox": {"enabled": True, "config": {"mode": "block"}}}}}
-ATTACK_CASES = [pytest.param(tool, args, id=f"{surface}-{number}")
-                for surface, cases in ATTACKS.items() for number, (tool, args) in enumerate(cases)]
-
-
-def _here(value):
-    """*value* with ``@SRC@`` replaced by this checkout, through strings, lists and dicts."""
-    if isinstance(value, str):
-        return value.replace("@SRC@", REPO)
-    if isinstance(value, dict):
-        return {key: _here(item) for key, item in value.items()}
-    return [_here(item) for item in value] if isinstance(value, list) else value
-
 
 @pytest.fixture
 def machine(monkeypatch, tmp_path):
-    """A home folder with Hermes (main + one profile), two OpenClaw profiles and Blackbox's data
-    folder; returns ``use(mode)`` which sets the mode the hook judges in."""
-    hermes = tmp_path / ".hermes"
-    for folder in (hermes / "blackbox", hermes / "plugins" / "blackbox" / "guard", hermes / "profiles" / "coder"):
-        folder.mkdir(parents=True)
-    for config in (hermes / "config.yaml", hermes / "profiles" / "coder" / "config.yaml"):
-        config.write_text(CONFIG, encoding="utf-8")
-    for profile in (".openclaw", ".openclaw-work"):
-        (tmp_path / profile).mkdir()
-        (tmp_path / profile / "openclaw.json").write_text(json.dumps(OPENCLAW), encoding="utf-8")
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("HERMES_HOME", str(hermes))
-    monkeypatch.delenv("BLACKBOX_HOME", raising=False)
-    monkeypatch.delenv("OPENCLAW_CONFIG_PATH", raising=False)
-    monkeypatch.setattr(ruleset_mod, "get", lambda cfg=None: ruleset_mod.Ruleset())
-    monkeypatch.setattr(guard_background, "_spawn_llm_review", lambda *a, **k: None)
-
-    def use(mode: str) -> None:
-        monkeypatch.setattr(hooks, "_config", lambda: config_mod.BlackboxConfig(mode=mode, report=False))
-    return use
-
-
-def _own_findings(verdict) -> list[str]:
-    return [finding["identifier"] for finding in verdict["findings"] if finding["matched"] == OWN_RULE]
-
-
-@pytest.mark.parametrize("mode", ["audit", "block"])
-@pytest.mark.parametrize("tool,args", ATTACK_CASES)
-def test_an_attack_on_blackbox_itself_is_refused_in_every_mode(machine, mode, tool, args):
-    machine(mode)
-    verdict = guard.tool_call_verdict(tool, _here(args))
-    assert verdict["decision"] == "block", verdict
-    assert set(_own_findings(verdict)) <= set(verdict["blocked"]) and _own_findings(verdict)
-    assert "Blackbox blocked" in verdict["message"]
+    """The shared machine (:func:`_blackbox_self_protection_machine.make_machine`); returns ``use(mode)``."""
+    return make_machine(monkeypatch, tmp_path)
 
 
 @pytest.mark.parametrize("tool,args", [pytest.param(tool, args, id=f"ordinary-{number}") for number, (tool, args) in enumerate(ALLOWED)])
