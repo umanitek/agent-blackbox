@@ -124,6 +124,8 @@ def _raw_findings(cfg: BlackboxConfig, rs: Any, tool_name: str, args: Any,
     raw += shields.check(tool_name, args, active)
     # KI-473: an agent never switches its guard off.
     raw += isolated("detect_guard_tamper", lambda: detection.detect_guard_tamper(tool_name, args, cfg))
+    # Nor switches any agent's hooks off, its own or another's, user-level or in a project (R8, High).
+    raw += isolated("detect_hook_switch_off", lambda: detection.detect_hook_switch_off(tool_name, args))
     # Nothing an agent leaves may start by itself later, outside its checks (the sandbox's own list).
     raw += isolated("detect_persistence_write", lambda: detection.detect_persistence_write(tool_name, args))
     # An agent's sudo write to the machine's own folders: refused in Block mode (the Linux sudo policy).

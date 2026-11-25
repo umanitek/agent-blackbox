@@ -35,6 +35,7 @@ from .osv import DEPENDENCY_ECOSYSTEMS, advisory_kind
 from .reviewer_setup import cmd_setup_llm
 from .finding import FIELD_WALLET_SECRET_SENT, KIND_FLAG_ONLY, MANAGER_ORDER, PERSON_PROTECTED
 from .elevation import ELEVATION_ID, detect_elevation
+from .hook_switches import detect_hook_switch_off
 from .paths.guard_settings import MATCHED as GUARD_TAMPER
 from .persistence_writes import MATCHED as STARTUP_ITEM, detect_persistence_write
 from .privileged_writes import MATCHED as ROOT_WRITE, detect_privileged_write
@@ -109,6 +110,7 @@ __all__ = [
                              'detect_escalation',
                              'detect_fileaccess',
                              'detect_guard_tamper',
+                             'detect_hook_switch_off',
                              'detect_injection',
                              'detect_ioc',
                              'detect_model_request_secrets',

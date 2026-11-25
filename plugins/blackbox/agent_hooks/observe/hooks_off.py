@@ -40,6 +40,16 @@ def _settings_value(text: str) -> object:
         return None
 
 
+def _file_value(name: str, text: str) -> object:
+    """A settings file's text as the agent reads it: TOML for a ``.toml`` (Codex), else JSON."""
+    if not name.endswith(".toml"):
+        return _settings_value(text)
+    try:
+        return tomllib.loads(text)
+    except (tomllib.TOMLDecodeError, ValueError):
+        return None
+
+
 def _inline_json(given: str, option: str, command: str) -> object:
     """The JSON text given to *option*: *given* itself, or — when the words came from ``ps``'s
     joined line, which drops the quotes — the JSON value that starts right after *option* in
@@ -110,7 +120,7 @@ def hooks_switched_off(host: Host, args: list[str], pid: int, command: str = "")
     folder = platform.process_cwd(pid) if host.project_files else ""
     for relative in host.project_files if folder else ():
         text = read_small_text(str(Path(folder) / relative), MAX_SETTINGS_BYTES)
-        found = _off_in(_settings_value(text), host) if text else ""
+        found = _off_in(_file_value(relative, text), host) if text else ""
         if found:
             return f"{Path(folder) / relative} sets {found}, which switches every hook off in that project"
     return ""

@@ -24,6 +24,7 @@ import os
 import re
 
 from . import guard_landing, guard_places, shell_files
+from ...kernel import agent_hosts
 
 #: The folder a command is taken to start in when no ``cd`` has said otherwise.
 START_FOLDER = "~"
@@ -67,7 +68,9 @@ _OWN_COMMANDS = frozenset({"hermes", "blackbox"})
 #: What a line must hold to be able to name a place: a home or variable sign, a wildcard, an
 #: absolute path, a ``cd`` or ``git``, or the first folder of a guarded place written relatively.
 _CAN_NAME_A_PLACE = re.compile(
-    r"[~$*?\[`]|(?:^|[\s=:'\"(<>])/|\b(?:cd|pushd|git)\b|\.(?:hermes|openclaw|config|local)\b|Library|blackbox|integrations",
+    r"[~$*?\[`]|(?:^|[\s=:'\"(<>])/|\b(?:cd|pushd|git)\b|\.(?:hermes|openclaw|config|local)\b|Library|blackbox|integrations"
+    # An agent's settings folder named relative to the folder it works in (``> .claude/settings.local.json``).
+    + "".join(sorted({rf"|(?<![\w.]){re.escape(entry.path.split('/')[0])}/" for entry in agent_hosts.hook_switches.switch_files()})),
     re.IGNORECASE)
 
 

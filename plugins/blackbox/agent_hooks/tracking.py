@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any, Mapping, Optional
 
 from ..kernel.agent_hosts import BY_ID, HERMES_ID, HOSTS
-from . import hermes_sessions, observe, profiles, prompt_text, root_watch
+from . import hermes_sessions, observe, profiles, prompt_text, root_watch, unguarded
 from .instances import kernel_refusals, links, record, store, sub_key, views
 from .instances.model import Profile, Running
 from .protect import config_edit, own_files
@@ -245,6 +245,7 @@ def live() -> dict[str, Any]:
     views.close_stale(table.keys() if table else None, read_at=_seen["read_at"])
     prompt_text.expire()
     tree = views.live(running, [asdict(row) for row in profile_rows()])
+    unguarded.report(tree["unprotected"])   # each agent run with no Blackbox session: one HIGH finding (R8)
     tree["prompt_text"] = asdict(prompt_text.status())
     return tree
 

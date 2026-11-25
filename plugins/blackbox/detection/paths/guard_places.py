@@ -60,9 +60,16 @@ _STARTS_IN_PIECES = re.compile(
     r"\.ssh\b[^\n]{0,60}?(?:authorized_keys|\benvironment\b|['\"/]rc\b)|Launch(?:Agents|Daemons)\b|com\.apple\.loginitems"
     r"|backgroundtaskmanagement", re.IGNORECASE)
 
+#: Text that spells an agent's hooks-off switch file in pieces (``Path(".claude") / "settings.json"``).
+_HOOKS_IN_PIECES = re.compile("|".join(
+    r"['\"/\s,+()]{1,8}".join(re.escape(part) for part in entry.path.split("/"))
+    for entry in agent_hosts.hook_switches.switch_files()))
+
 #: The place sets a check can judge against (see :func:`judging`): ROOT is the machine's own folders
-#: (``kernel.persistence_places.ROOT_PLACES``), judged only for a privileged command.
-OWN, STARTS, PROGRAMS, ROOT = "own", "starts", "programs", "root"
+#: (``kernel.persistence_places.ROOT_PLACES``), judged only for a privileged command; HOOKS every
+#: file an agent reads a hooks-off switch from, user-level and in any project folder
+#: (``kernel.agent_hosts.hook_switches``, judged by ``detection.hook_switches``).
+OWN, STARTS, PROGRAMS, ROOT, HOOKS = "own", "starts", "programs", "root", "hooks"
 _SCOPE: contextvars.ContextVar[str] = contextvars.ContextVar("blackbox_guard_scope", default=OWN)
 
 
@@ -153,6 +160,11 @@ def _starts_places() -> tuple[str, ...]:
 
 def _program_places() -> tuple[str, ...]:
     return persistence_places.hook_places(os.path.expanduser("~"), persistence_places.HOMEBREW_PREFIXES).programs
+
+
+def _hook_switch_places() -> tuple[str, ...]:
+    switches = agent_hosts.hook_switches
+    return tuple(dict.fromkeys([*switches.user_paths(os.path.expanduser("~")), *switches.project_patterns()]))
 
 
 def _read_places(places: tuple[str, ...]) -> tuple[tuple[str, ...], tuple[str, ...], re.Pattern[str]]:
@@ -246,7 +258,7 @@ def reaches(word: str) -> bool:
 
 _PLACES = {OWN: Kept(lambda: _read_places(_all_places())), STARTS: Kept(lambda: _read_places(_starts_places())),
            PROGRAMS: Kept(lambda: _read_places(_program_places())),
-           ROOT: Kept(lambda: _read_places(persistence_places.ROOT_PLACES))}
+           ROOT: Kept(lambda: _read_places(persistence_places.ROOT_PLACES)), HOOKS: Kept(lambda: _read_places(_hook_switch_places()))}
 
 
 def holds(word: str) -> bool:
@@ -280,5 +292,6 @@ def is_source_checkout(folder: str) -> bool:
 
 def names_in_pieces(text: str) -> bool:
     """True when *text* spells a guarded place in pieces a path check cannot join."""
-    pieces = {OWN: _IN_PIECES, STARTS: _STARTS_IN_PIECES}.get(_SCOPE.get())
+    pieces = {OWN: _IN_PIECES, STARTS: _STARTS_IN_PIECES, HOOKS: _HOOKS_IN_PIECES}.get(_SCOPE.get())
     return bool(pieces and pieces.search(text or ""))
+

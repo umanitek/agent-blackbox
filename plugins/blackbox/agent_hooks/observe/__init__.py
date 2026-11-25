@@ -263,7 +263,7 @@ def running(table: Mapping[int, Proc]) -> list[Running]:
         skipped = next((reason for (agent, flag), reason in _SKIPS.items() if agent == host.id and flag in words), "")
         skipped = skipped or hooks_switched_off(host, _split(words)[1], proc.pid, proc.command)
         out.append(Running(proc.pid, proc.ppid, host.id, _launch(host, words), _profile(host, proc.pid), skipped, proc.started,
-                           tuple(permission_risks.from_command(host.id, _split(words)[1]))))
+                           tuple(permission_risks.from_command(host.id, _split(words)[1])), platform.process_cwd(proc.pid)[:500]))
     return out
 
 

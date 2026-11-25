@@ -111,6 +111,7 @@ class Running:
     hooks_skipped: str = ""        # why this run cannot be hooked (e.g. "--bare"), else ""
     started: float = 0.0
     skips_prompts: tuple[str, ...] = ()   # its flags that skip the person's permission prompts (permission_risks)
+    folder: str = ""               # the folder it works in (its project), "" when it can not be read
 
 
 @dataclass(frozen=True)

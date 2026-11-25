@@ -42,7 +42,10 @@ def hook_configs() -> list[str]:
         target = host.config_path(user)
         out += [str(target / event) for event in host.events] if host.style == "scripts" else [str(target)]
         out += [str(path) for path in host.companion_paths(user)]
-    return out
+    # The user-level files that switch an agent's hooks off (security finding 2026-11-25, R8): the
+    # ONE list the hook judgement and the hook watch read too (LES-137).
+    out += agent_hosts.hook_switches.sandbox_closed(str(user))
+    return list(dict.fromkeys(out))
 
 
 def settings_files() -> list[str]:

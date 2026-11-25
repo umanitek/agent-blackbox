@@ -213,6 +213,9 @@ HOSTS: tuple[Host, ...] = (
          trust_note="Codex asks you to review new hooks once: run codex, type /hooks and trust Blackbox's.",
          home_env="CODEX_HOME", home_config="hooks.json", programs=("codex",), packages=("@openai/codex",),
          switches=(("config.toml", "features.hooks", False), ("config.toml", "features.codex_hooks", False)),
+         # A trusted project's own config.toml is read over the user's (developers.openai.com/codex/config):
+         # its [features] switch turns hooks off there (security finding 2026-11-25, macOS round R8).
+         project_files=(".codex/config.toml",),
          run_settings=(("-c", "key=value"), ("--config", "key=value")),
          hook_timeout=HookTimeout("timeout", caps=(("SessionEnd", 3),))),
     # Cursor (2026-11-22): the generic preToolUse / postToolUse fire for EVERY tool (Shell, Read,
@@ -229,7 +232,10 @@ HOSTS: tuple[Host, ...] = (
           "AfterTool": "post_tool", "AfterAgent": "turn_end", "SessionEnd": "stop", "Notification": "attention"},
          signs=(".gemini",), commands=("gemini",), matcher=".*",
          home_env="GEMINI_CLI_HOME", home_config=".gemini/settings.json", programs=("gemini",), packages=("@google/gemini-cli",),
-         switches=(("settings.json", "hooksConfig.enabled", False),), project_files=(".gemini/settings.json",),
+         # ``hooks.enabled``: the switch's place before it moved to ``hooksConfig`` — an older Gemini CLI
+         # still reads it, and Blackbox refuses an agent writing either (security finding 2026-11-25).
+         switches=(("settings.json", "hooksConfig.enabled", False), ("settings.json", "hooks.enabled", False)),
+         project_files=(".gemini/settings.json",),
          hook_timeout=HookTimeout("timeout", per_second=1000)),
     Host("copilot-cli", "GitHub Copilot CLI", "own-json", ".copilot/hooks/blackbox.json",
          {"sessionStart": "session_start", "userPromptSubmitted": "prompt", "preToolUse": "pre_tool",
@@ -289,10 +295,12 @@ HOSTS: tuple[Host, ...] = (
 
 BY_ID = {host.id: host for host in HOSTS}
 
+from . import hook_switches  # last: it reads HOSTS: the one list of hooks-off switch files (LES-137)
+
 
 def host(agent_id: str) -> Optional[Host]:
     return BY_ID.get(agent_id)
 
 
 __all__ = ["BY_ID", "DECISION_TOO_LATE", "EVENTS", "HERMES_ID", "HERMES_NAME", "HOOK_WAIT_FLOOR_SECONDS", "HOOK_WAIT_SECONDS", "HOSTS", "PROTECTION_HOOKS", "PROTECTION_SANDBOXED", "PROTECTION_SHELLS",
-           "TOOL_KINDS", "USER_BIN_DIRS", "HookTimeout", "Host", "host", "product_name"]
+           "TOOL_KINDS", "USER_BIN_DIRS", "HookTimeout", "Host", "hook_switches", "host", "product_name"]

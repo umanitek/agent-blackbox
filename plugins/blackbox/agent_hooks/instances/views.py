@@ -130,7 +130,7 @@ def _unprotected(running: Iterable[Running], sessions: Iterable[Instance]) -> li
             continue
         host = BY_ID.get(proc.agent)
         out.append({"pid": proc.pid, "agent": proc.agent, "name": host.name if host else proc.agent, "launch": proc.launch,
-                    "profile": proc.profile, "started": proc.started, "status": "unprotected",
+                    "profile": proc.profile, "started": proc.started, "status": "unprotected", "folder": proc.folder,
                     "reason": proc.hooks_skipped or "Blackbox has seen no hook event from this process."})
     return out
 
