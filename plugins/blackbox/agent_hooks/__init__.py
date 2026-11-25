@@ -238,7 +238,7 @@ def _state_of(host: Host, hooked: bool, runnable: bool, record: dict[str, Any], 
     if record.get("disabled"):
         return "off", "You stopped protecting it."
     if not hooked:
-        return "available", "Found on this Mac; Blackbox's hooks are not installed."
+        return "available", "Found on this machine; Blackbox's hooks are not installed."
     if not runnable:
         return "degraded", "The hook cannot run: the Python or the runner it names is gone. Protect it again."
     if invalid:

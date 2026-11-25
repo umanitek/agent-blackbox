@@ -282,6 +282,26 @@ def test_an_agent_installed_outside_the_services_path_is_found(tmp_path, monkeyp
     assert {row.id: row.state for row in agent_hooks.rows()}.get("claude-code") == "available"
 
 
+def test_blackboxs_own_launcher_is_not_taken_for_the_agent(tmp_path, monkeypatch):
+    """KI-703 (Linux round L5): with Claude Code removed, Blackbox's sandbox launcher ``agent-bin/claude``
+    was still on PATH and the agent showed "available — Found on this Mac" (on Linux)."""
+    monkeypatch.setattr(agent_hooks, "_home", lambda: tmp_path)
+    monkeypatch.setenv("BLACKBOX_HOME", str(tmp_path / ".hermes" / "blackbox"))
+    launcher = tmp_path / ".hermes" / "blackbox" / "agent-bin" / "claude"
+    launcher.parent.mkdir(parents=True)
+    launcher.write_text("#!/bin/sh\n", encoding="utf-8")
+    launcher.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{launcher.parent}:/usr/bin:/bin")
+    assert {row.id: row.state for row in agent_hooks.rows()}.get("claude-code") in (None, "not-installed", "missing")
+    real = tmp_path / "bin2" / "claude"
+    real.parent.mkdir()
+    real.write_text("#!/bin/sh\n", encoding="utf-8")
+    real.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{launcher.parent}:{real.parent}:/usr/bin:/bin")
+    row = {row.id: row for row in agent_hooks.rows()}["claude-code"]
+    assert row.state == "available" and "Mac" not in row.detail
+
+
 # ---------------------------------------------------------------- the Python a hook runs (E2E 2026-11-21)
 
 def test_a_hook_names_blackboxs_launcher_never_a_versioned_hermes_environment(monkeypatch, tmp_path):

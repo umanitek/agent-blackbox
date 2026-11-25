@@ -35,6 +35,7 @@ docs.cline.bot, opencode.ai/docs/plugins.
 
 from __future__ import annotations
 
+import os
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -189,8 +190,19 @@ class Host:
         if any((home / sign).exists() or Path(sign).exists() for sign in self.signs):
             return True
         folders = [str(home / folder) for folder in USER_BIN_DIRS]
-        return any(shutil.which(command) or any(shutil.which(command, path=folder) for folder in folders)
+        return any(_real_command(command) or any(shutil.which(command, path=folder) for folder in folders)
                    for command in self.commands)
+
+
+def _real_command(command: str) -> Optional[str]:
+    """Where *command* is on PATH, Blackbox's own folders (its agent launchers) left out. WHY (KI-703,
+    Linux round L5): with the agent removed, Blackbox's sandbox launcher of the same name was still on
+    PATH, and the agent was shown "available"."""
+    from .. import constants   # late: constants reads the environment
+    own = os.path.normpath(str(constants.blackbox_home()))   # as PATH spells it (no file is touched to resolve it)
+    path = os.pathsep.join(folder for folder in os.environ.get("PATH", "").split(os.pathsep)
+                           if folder and not (os.path.normpath(folder) + os.sep).startswith(own + os.sep))
+    return shutil.which(command, path=path) if path else None
 
 
 _CLAUDE_EVENTS = {"SessionStart": "session_start", "UserPromptSubmit": "prompt", "PreToolUse": "pre_tool",
