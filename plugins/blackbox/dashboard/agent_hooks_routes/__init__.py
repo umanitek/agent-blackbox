@@ -89,6 +89,9 @@ class _Sweeper:
         # removed or changed outside Blackbox is said (HIGH) and put back within OBSERVE_SECONDS
         # (security finding 2026-11-24, Linux round L4: 90 s later nothing had been put back).
         agent_hooks.keep_hooks()
+        # The threat graph not answering is said once per episode (L8, BB-LINUX-PENDING-7227a5's silent part).
+        from .. import sync_meter
+        sync_meter.lookup_alarm.check()
         return swept
 
 

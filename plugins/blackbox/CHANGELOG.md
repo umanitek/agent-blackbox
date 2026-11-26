@@ -138,6 +138,11 @@ that the two version fields agree.
   it is reported as a high-severity finding. A call refused because it could not be checked in
   time is recorded too.
 
+- **Blackbox says when the threat graph cannot answer.** When the graph store is stopped or
+  stuck, one high-severity finding (and notice) says that packages are not being checked against
+  the threat graph, once per outage; `blackbox status` says the same. What Blackbox lets through
+  meanwhile is unchanged.
+
 - **Inline code that prints `'/'` is no longer refused.** `node -e "console.log('/')"` or
   `python3 -c "print('/')"` was refused as a change to Blackbox's own settings, because the root
   folder in the code was read as a command. A folder cannot be run, so it is no longer counted.

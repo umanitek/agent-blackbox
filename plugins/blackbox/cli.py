@@ -196,7 +196,8 @@ def _verified_lookups_text(rs: Any) -> str:
     where = f"live against {scope.store_url} ({len(scope.assertion_graphs)} verified assets)"
     if not state.degraded:
         return where
-    answering = "answering from the LOCAL INDEX" if scope.fallback == "index" else "verified checks PAUSED (actions pass unchecked)"
+    answering = ("answering from the LOCAL INDEX" if scope.fallback == "index"
+                 else "verified checks PAUSED: packages are not being checked against the threat graph")
     return f"{where} — DEGRADED: {state.problem()} — {answering}"
 
 
