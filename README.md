@@ -18,21 +18,59 @@ community threat intelligence, and flags or blocks it before damage is done.
 
 | | |
 |---|---|
-| **Protects** | a Hermes agent out of the box; OpenClaw workspaces via a bundled bridge (see [Hosts](#hosts)) |
+| **Protects** | Hermes, Claude Code, Codex, Gemini CLI, Cline, OpenCode, Cursor, Copilot CLI, Windsurf and OpenClaw on macOS and Linux (see [Supported agents](#supported-agents)) |
 | **Catches** | prompt injection, dangerous commands, sensitive-file access, secret exposure, malicious packages, unsafe skills, known-bad indicators |
 | **Learns from** | Umanitek's **verified graph** (may block) and the open **community graph** (flags only) on the OriginTrail DKG |
 | **Shows** | every finding in a local dashboard and audit trail |
 | **Shares** | signed, privacy-safe threat statements with the community graph — opt-in: off until you turn it on (`blackbox report --enable-sharing`) |
 
-_This README documents the mainline as of 2026-10-14. The file inventory below is generated from the code (`scripts/blackbox-readme-inventory.py`)._
+_This README documents Agent Blackbox 1.6.2 (2026-11-26). The file inventory below is generated from the code (`scripts/blackbox-readme-inventory.py`)._
 
-**Contents:** [How it works](#how-it-works) · [Install](#install) · [Commands](#commands) ·
+**Contents:** [Supported agents](#supported-agents) · [How it works](#how-it-works) · [Install](#install) · [Commands](#commands) ·
 [What it catches](#what-it-catches) · [The three tiers of intelligence](#the-three-tiers-of-intelligence) ·
 [The community graph](#the-community-graph) · [Architecture](#architecture) · [File structure](#file-structure) · [Hosts](#hosts) ·
 [Dashboard](#dashboard) · [Configuration](#configuration) · [Privacy and your rights](#privacy-and-your-rights) ·
 [About Umanitek](#about-umanitek) · [Legal](#legal) · [License](#license)
 
 ---
+
+## Supported agents
+
+Blackbox protects the AI agents you already use, on **macOS** and **Linux** (tested on Ubuntu 24.04
+and 22.04). Every agent reports to the same local guard on your machine, gets the same verdicts from
+the same threat graph, and shows up in the same dashboard, labelled with its name and its sub-agents.
+
+| Agent | How Blackbox protects it | Kernel sandbox (macOS · Linux) | Tested with the real agent |
+|---|---|---|---|
+| **Hermes** | the Blackbox plugin itself: every tool call, model request and session | ✅ terminal tool and `execute_code` | ✅ macOS and Linux test rounds |
+| **Claude Code** | its own hooks: tool calls, prompts, tool output, sessions and sub-agents | ✅ | ✅ macOS and Linux test rounds |
+| **Codex CLI** | its own hooks (tool output with an injection is replaced) | ✅ | ✅ macOS and Linux test rounds. Codex runs the hooks only after you approve them once in Codex (`/hooks`); until then Blackbox shows Codex as **not protected** |
+| **Gemini CLI** | its own hooks (tool output with an injection is replaced) | ✅ | ✅ macOS and Linux test rounds |
+| **Cline** | hook scripts, or its SDK plugin for the CLI | ✅ | ✅ macOS and Linux test rounds |
+| **OpenCode** | its plugin hooks (tool output with an injection is replaced) | ✅ | ✅ macOS and Linux test rounds |
+| **OpenClaw** | a bundled bridge plugin that asks Blackbox for each verdict | — | parity-tested with the Python side; live validation pending |
+| **Cursor** | its hooks, including refusing to read an injected file | launcher available, not yet proven | hooks built from the official docs; not yet in a real-agent test round |
+| **GitHub Copilot CLI** | its hooks (tool calls refused; prompts and output recorded) | launcher available, not yet proven | hooks built from the official docs; not yet in a real-agent test round |
+| **Windsurf (Devin)** | its hooks, including refusing to read an injected file | launcher available, not yet proven | hooks built from the official docs; not yet in a real-agent test round. No Linux CLI |
+
+**What every agent gets.** It cannot read the files you protect (`~/.ssh`, `.env`, keys, wallets),
+install a package the verified graph lists as malicious, switch off its own hooks, leave something
+that starts by itself later, or stop or change Blackbox. In **Audit** mode threats are flagged; in
+**Block** mode a verified threat is refused. Self-protection is enforced in both modes. **Docker** and
+**stopping one of your own programs** ask you first.
+
+**Two layers.** The **hooks** let Blackbox judge each action an agent announces. The **kernel sandbox**
+(Seatbelt on macOS; Blackbox's own namespace sandbox, seccomp and Landlock on Linux) also refuses what
+an agent tries without announcing it: a script that hides what it opens, or a program it wrote
+earlier. The sandbox is on by default. You can take an agent out of it in Settings, and taking one out
+asks you first.
+
+**Every session is tracked.** Sessions, the sub-agents they spawn, resumed sessions and an agent
+running without Blackbox (a HIGH finding) all appear on the dashboard's Agents page.
+
+Per-agent detail, with what each agent's hooks can enforce, the official docs they follow and the
+recorded test runs: [`plugins/blackbox/docs/agent-compat/`](plugins/blackbox/docs/agent-compat/README.md) and its
+[coverage matrix](plugins/blackbox/docs/agent-compat/coverage-matrix.md).
 
 ## How it works
 
@@ -665,65 +703,111 @@ plugins/blackbox/
 
 ### Inside the plugin: module sizes
 
-326 Python files, 54,526 lines, counted from the code on 2026-10-14 (`scripts/blackbox-readme-inventory.py`).
+671 Python files, 103,640 lines, counted from the code on 2026-11-26 (`scripts/blackbox-readme-inventory.py`).
 
 | Module | Files | Lines | Share of the code |
 |---|---:|---:|---|
-| `curate/` | 83 | 13,834 | `████████████████████` |
-| `community/` | 68 | 10,188 | `███████████████` |
-| `kernel/` | 41 | 7,179 | `██████████` |
-| `ruleset/` | 29 | 5,182 | `███████` |
-| `detection/` | 33 | 4,634 | `███████` |
-| `dashboard/` | 18 | 3,910 | `██████` |
-| `sync/` | 11 | 2,789 | `████` |
-| `shields/` | 9 | 2,013 | `███` |
-| `audit/` | 8 | 1,396 | `██` |
-| `attach/` | 8 | 1,238 | `██` |
-| `guard/` | 6 | 924 | `█` |
-| `killlist/` | 5 | 504 | `█` |
-| `chat/` | 2 | 287 | `█` |
-| `overrides/` | 3 | 184 | `█` |
+| `shields/` | 132 | 17,656 | `████████████████████` |
+| `curate/` | 87 | 14,760 | `█████████████████` |
+| `kernel/` | 77 | 11,295 | `█████████████` |
+| `community/` | 71 | 10,643 | `████████████` |
+| `detection/` | 60 | 10,171 | `████████████` |
+| `agent_hooks/` | 44 | 8,422 | `██████████` |
+| `dashboard/` | 37 | 6,549 | `███████` |
+| `ruleset/` | 38 | 6,375 | `███████` |
+| `sync/` | 20 | 3,220 | `████` |
+| `setup/` | 18 | 2,480 | `███` |
+| `guard/` | 15 | 1,959 | `██` |
+| `audit/` | 12 | 1,936 | `██` |
+| `attach/` | 11 | 1,874 | `██` |
+| `notify/` | 12 | 1,614 | `██` |
+| `desktop/` | 4 | 848 | `█` |
+| `approvals/` | 6 | 774 | `█` |
+| `playground/` | 5 | 608 | `█` |
+| `killlist/` | 5 | 500 | `█` |
+| `watch/` | 3 | 405 | `█` |
+| `model_connect/` | 3 | 393 | `█` |
+| `chat/` | 2 | 378 | `█` |
+| `semantic/` | 4 | 278 | `█` |
+| `overrides/` | 3 | 181 | `█` |
 
 ### Every file, by module
 
 Click a module to open its file list.
 
 <details>
-<summary><b><code>guard/</code></b> · 6 files · 924 lines · The hooks. Every tool call and model request passes here first.</summary>
+<summary><b><code>guard/</code></b> · 15 files · 1,959 lines · The hooks. Every tool call and model request passes here first.</summary>
 
 | File | What it does |
 |---|---|
 | `__init__.py` | Guard — the CHECK hot path: intercept every action the agent is about to take |
+| `activity.py` | The visibility trail of a Hermes tool call: what the agent touched, flagged or not |
+| `api_request.py` | What the model-request hook reads: the turn's untrusted text, and the per-turn dedupe |
 | `background.py` | Background work the hooks start but never wait for |
+| `dependency_files.py` | The dependency-file checks in the hooks (KI-595): before a call, after it, and the session notes |
+| `graph_rules.py` | Resolve per-action graph rules and preserve explicit degraded-read evidence |
 | `hooks.py` | The five Hermes hook entry points — every tool call and model request passes here |
+| `host_process.py` | What the Hermes agent's audit trail says about the process a session runs in (KI-572) |
 | `injection_sites.py` | The site a verified prompt injection was found on, as its own finding (threat-profiles D8) |
+| `report_queue.py` | Report follow-up runs after the hook has answered, one finding set at a time |
 | `reporting.py` | What happens to findings once detection fires: filter, record, share |
+| `semantic_review.py` | Profile-bound, capacity-bounded semantic advisory work |
 | `session_context.py` | Bounded per-session conversation memory used as finding context |
+| `startup.py` | Blackbox's start inside Hermes: the hooks are Hermes's in microseconds, the guard loads beside them |
+| `text_verdict.py` | Prompt-injection check of TEXT an agent is about to send or read — for a runtime that is not |
 
 </details>
 
 <details>
-<summary><b><code>detection/</code></b> · 33 files · 4,634 lines · Is this action a threat? Pure functions, no I/O on the hot path.</summary>
+<summary><b><code>detection/</code></b> · 60 files · 10,171 lines · Is this action a threat? Pure functions, no I/O on the hot path.</summary>
 
 | File | What it does |
 |---|---|
 | `__init__.py` | Detection — the CHECK hot path: is this tool call / model request a threat? |
 | `action_parsing.py` | Action parsing: what a tool call DOES, extracted from its arguments |
-| `app_wallets.py` | Wallets that live in an app's own folder — desktop wallets and the Solana command line |
 | `content_scanners.py` | Content scanners: what is IN the text an agent is about to act on |
 | `detectors.py` | Pure, testable matcher over a :class:`~plugins.blackbox.ruleset.Ruleset` |
+| `elevation.py` | An AI agent ASKING for root: ``sudo`` and every other way a tool call reaches for more than |
 | `finding.py` | The detection result type, shared by every detector |
-| `firefox_extensions.py` | Which Firefox add-on owns an extension storage folder — read from Firefox's own map |
+| `hidden_commands.py` | The commands a command line runs that its own words do not show — read so every check sees them |
+| `hook_switches/__init__.py` | An agent may not switch off an agent's hooks — its own or another's, user-level or in any |
 | `injection_detection.py` | Prompt-injection detection: graph patterns, built-in heuristics, and the |
 | `ioc_detection.py` | Indicator-of-compromise detection: known-bad domains, URLs, IPs, hashes, |
+| `manifests/__init__.py` | Dependency files: what an install installs when its command names no package (KI-595) |
+| `manifests/cargo_gem.py` | Rust's Cargo.lock and Ruby's Gemfile.lock (KI-595) |
+| `manifests/checks.py` | The three dependency-file checks the guard runs (KI-595) — the package's Facade |
+| `manifests/commands.py` | Which installs a shell command runs, and in which folder (KI-595) |
+| `manifests/model.py` | The shapes every dependency-file reader returns (KI-595) |
+| `manifests/npm_json.py` | npm's JSON dependency files: package-lock.json (v1, v2, v3), npm-shrinkwrap.json, |
+| `manifests/npm_text.py` | The JavaScript lockfiles that are not npm's JSON: pnpm-lock.yaml, yarn.lock (classic v1 |
+| `manifests/patches.py` | A dependency file as Codex's ``apply_patch`` will leave it — so a patch is judged like an edit (KI-602) |
+| `manifests/python_files.py` | Python's dependency files: requirements*.txt, uv.lock, poetry.lock, Pipfile.lock, Pipfile and |
+| `manifests/registry.py` | Which file an install reads, which reader reads it, and the cache that makes a repeat free (KI-595) |
+| `manifests/verdicts.py` | A dependency file's packages, judged by the SAME ruleset lookup a named install uses (KI-595) |
 | `osv.py` | Client-side OSV vulnerability lookup for dependency auto-discovery |
 | `paths/__init__.py` | Which paths an action touches, and which of them the operator protects |
+| `paths/config_sections.py` | The part of another program's config file that is Blackbox's: the ``blackbox:`` entry of a |
+| `paths/guard_commands.py` | Commands and requests that switch Blackbox off, stop it, reconfigure it or go round it — |
+| `paths/guard_landing.py` | Where a copy, move, link or unpacked archive LANDS — so a write into the home folder is not |
+| `paths/guard_patch.py` | Codex's ``apply_patch`` heredoc, read as the patch it is — the files it adds, changes, deletes |
+| `paths/guard_paths.py` | Does a command line do more to a guarded place than read it? (Blackbox's own protection.) |
+| `paths/guard_places.py` | What of Blackbox an agent may not change — the places, and whether a word names one |
+| `paths/guard_secrets.py` | Blackbox's own keys: protected paths built in, refused in every mode (Blackbox's protection) |
+| `paths/guard_settings.py` | Blackbox's own core: an agent must not switch off, reconfigure, edit or stop the guard that |
+| `paths/guard_startup.py` | The agent sandbox's PATH block in a shell startup file, as the self-protection guard judges an |
 | `paths/keychain.py` | The macOS keychain: saved passwords and the browsers' master keys |
 | `paths/protected.py` | The user's protected paths: a file an agent must not touch unless the operator says so |
 | `paths/shell_files.py` | Which files a shell command reads, copies or packs up — the shell channel's file view |
+| `paths/shell_scripts.py` | Paths inside script code a command hands to an interpreter — part of the shell file view |
+| `paths/shell_words.py` | A shell command line as words, and one path among them — the base the shell file view stands on |
+| `persistence_writes.py` | The places something starts from by itself — an agent may not write them, in ANY mode |
+| `privileged_writes.py` | An agent writing the machine's own folders as root — refused in Block mode, flagged in Audit |
 | `reviewer.py` | Optional LLM reviewer for prompt-injection (opt-in, fail-open) |
 | `reviewer_setup/__init__.py` | ``blackbox setup-llm`` — configure the opt-in LLM second-opinion reviewer |
 | `reviewer_setup/discovery.py` | Find an LLM reviewer key the operator already gave Hermes: its model config + a key variable |
+| `script_files/__init__.py` | The script files a command writes and runs, read so a hook can judge a script by what it says |
+| `script_files/fed.py` | The scripts a command FEEDS its runner instead of naming a file it opens — read off its words |
+| `script_files/shell_writes.py` | The files a shell command writes, read off its words: heredocs, ``echo`` / ``printf`` into a |
 | `secrets_handled/__init__.py` | Secrets an agent handles or sends (:mod:`.exposure`) |
 | `secrets_handled/exposure.py` | Secrets an agent handles or sends: API keys, wallet secrets, exchange keys |
 | `secrets_handled/sending.py` | How a secret leaves the machine: commands that send, web addresses, network-calling scripts |
@@ -739,12 +823,11 @@ Click a module to open its file list.
 | `transactions/chains.py` | Which chain a transaction is for, as far as the call itself says |
 | `transactions/permits.py` | Approvals by signature: EIP-712 typed data whose primary type is a permit |
 | `transactions/script_forms.py` | Approvals written as script code: ethers, web3.py and viem |
-| `wallet_files.py` | Crypto wallet key stores an agent must never read — browser wallets (MetaMask, |
 
 </details>
 
 <details>
-<summary><b><code>ruleset/</code></b> · 29 files · 5,182 lines · Compiles graph rows into O(1) lookups and keeps them fresh.</summary>
+<summary><b><code>ruleset/</code></b> · 38 files · 6,375 lines · Compiles graph rows into O(1) lookups and keeps them fresh.</summary>
 
 | File | What it does |
 |---|---|
@@ -752,7 +835,14 @@ Click a module to open its file list.
 | `anchors.py` | Legacy anchors — what the verified graph held before curator envelopes |
 | `community_tier.py` | The community tier of a ruleset: merging community reports in, and making |
 | `compiler.py` | The compiled ruleset and how rows become one |
-| `curator_tier.py` | The curator overlay on the verified ruleset — revocations (Refine R2) |
+| `curator_tier.py` | The curator overlay on the verified ruleset — revocations (Refine R2) and promoted reports |
+| `direct/__init__.py` | Public direct graph read surface |
+| `direct/client.py` | Local-only DKG transport for security decisions. No proxy, redirect or silent empty fallback |
+| `direct/community.py` | Persist only the existing community read model beside action-scoped public reads |
+| `direct/queries.py` | Bounded candidate reads, scoped to owner-pinned, confirmed VM partitions |
+| `direct/reader.py` | Action-scoped detection reads from local DKG; no exported graph cache |
+| `direct/semantic.py` | Vector candidates followed by authoritative, owner-pinned VM hydration |
+| `direct/view.py` | Bounded browsing and readiness over local confirmed VM; no rules export |
 | `disk_cache.py` | The on-disk ruleset cache (``ruleset.json``) and its lock-file path |
 | `errors.py` | Ruleset refresh outcomes callers branch on (raised by :mod:`.refresh_cycle`) |
 | `fetching.py` | Paged reads of the verified graph from the local DKG node |
@@ -766,8 +856,10 @@ Click a module to open its file list.
 | `live/fallback_index.py` | The optional on-disk fallback for live lookups — OFF by default, last resort |
 | `live/health.py` | What the live lookups could and could not answer — the record every surface reads |
 | `live/lookup.py` | Exact verified-rule lookups against the node's local store |
+| `live/network_lists.py` | The verified graph's malicious domains and IP addresses, in full — what Network Shield enforces |
+| `live/promoted.py` | Promoted community reports as verified rules (the one-graph flow, ``kernel.signing.promotion_statement``) |
 | `live/scope.py` | The verified scope: what a live lookup is allowed to believe |
-| `locks.py` | Cross-process refresh locking (fcntl on POSIX, msvcrt on Windows) |
+| `locks.py` | One ruleset refresh at a time, across threads and across agent processes |
 | `memory_cache.py` | The process's in-memory ruleset generation, kept in step with the disk cache |
 | `partitions/__init__.py` | Verified partitions: the row builder, refresh progress, download totals |
 | `partitions/growth_watch.py` | Notice, within seconds, that the node holds a verified asset the last refresh did not read |
@@ -781,46 +873,171 @@ Click a module to open its file list.
 </details>
 
 <details>
-<summary><b><code>shields/</code></b> · 9 files · 2,013 lines · Opt-in protection packs; Trader Shield's wallets and browser folders as data.</summary>
+<summary><b><code>shields/</code></b> · 132 files · 17,656 lines · Opt-in protection packs; Trader Shield's wallets and browser folders as data.</summary>
 
 | File | What it does |
 |---|---|
 | `__init__.py` | Shields — named, opt-in protection packs; this is the registry and the only public entry |
+| `alerting.py` | Every engaged shield's alerts in one list — what ``notify`` turns into notifications |
+| `change_words.py` | The words the person's approval dialog shows for a shield's settings change (KI-538, E2E full4 |
 | `contract.py` | What every shield provides, and the typed records it answers with |
+| `event_records.py` | The records of a shield's events report (moved out of ``contract.py`` unchanged) |
+| `extensions.py` | Add-ons: how an installed add-on extends the shields — the **Extension point** (Plugin) pattern |
+| `files/__init__.py` | File Shield — the third shield: files and folders the person protects from every AI agent, |
+| `files/alerts.py` | File Shield's alerts: what a Mac notification may say about the shield, newest first |
+| `files/api.py` | File Shield's endpoints — ``/api/shields/file-shield/api/<name>`` (Facade over the shield) |
+| `files/changes.py` | File Shield's real-time file changes, as the system protection helper reports them |
+| `files/events.py` | File Shield's events report: what it refused, and what changed in protected and watched places |
+| `files/folder_rules.py` | The person's folder rules inside Blackbox's guard: the hook layer refuses what the sandbox refuses (F9) |
+| `files/mode.py` | File Shield's setting: on or off, the files and folders the person protected from every AI |
+| `files/mounts.py` | The host folders a container command mounts (``docker run -v ~/Documents/Taxes:/x …``) |
+| `files/protect.py` | File Shield inside Blackbox's guard: no AI agent touches an item the person protected |
+| `files/sandbox/__init__.py` | File Shield, Layer 2: AI agents run inside an operating-system sandbox built from the person's |
+| `files/sandbox/addon_places.py` | The add-on places the agent sandbox keeps closed to writes, as it keeps the plugin's own |
+| `files/sandbox/brokered/__init__.py` | Brokered actions: what a sandboxed agent may ask Blackbox to do OUTSIDE the sandbox, each under |
+| `files/sandbox/brokered/applescript.py` | ``applescript``: one AppleScript a sandboxed agent asks Blackbox to run outside the sandbox |
+| `files/sandbox/brokered/asking.py` | Who asked a broker, and the sandbox permission's answer for them — shared by every brokered |
+| `files/sandbox/brokered/open_apps.py` | ``open-app``: a sandboxed agent's ``open -a App file …`` or ``open <folder>`` (sandbox permission |
+| `files/sandbox/brokered/open_links.py` | ``open-link``: a sandboxed agent's ``open https://…`` (sandbox permission ``open-links``; a |
+| `files/sandbox/brokered/stop.py` | Stopping a program for a sandboxed agent (sandbox permission ``stop-processes``, ask by default) |
+| `files/sandbox/defaults.py` | The agent sandbox by default: every agent found here is picked, unless the person took it out |
+| `files/sandbox/hermes.py` | The Hermes agent inside the agent sandbox: its terminal tool's shells and its ``execute_code`` |
+| `files/sandbox/layout.py` | Where the agent sandbox's files live, which agents it can start, and how its files are written |
+| `files/sandbox/own_places.py` | Blackbox's own files the agent sandbox keeps closed to writes, worked out from the agent catalogue |
+| `files/sandbox/packages/__init__.py` | Homebrew for sandboxed agents: Blackbox installs for them (founder decision, 2026-11-23, KI-593) |
+| `files/sandbox/packages/client.py` | The ``brew`` a sandboxed agent runs: it asks Blackbox to install, and prints what Homebrew says |
+| `files/sandbox/packages/jobs.py` | The brew runs Blackbox makes for sandboxed agents: a fixed argv, a clean environment, bounded output |
+| `files/sandbox/packages/managers.py` | Global installs for sandboxed agents (``global-installs``, founder decision F1): ``npm i -g``, |
+| `files/sandbox/packages/request.py` | What a sandboxed agent may ask Blackbox to install with Homebrew: one validated request |
+| `files/sandbox/permissions/__init__.py` | Sandbox permissions: named abilities the person unlocks or locks for AI agents inside Blackbox's |
+| `files/sandbox/permissions/answers.py` | The person's answer to a permission request (``permission-requests`` / ``permission-answer``) |
+| `files/sandbox/permissions/api.py` | The sandbox permissions' endpoints, merged into File Shield's (``/api/shields/file-shield/api/<name>``) |
+| `files/sandbox/permissions/catalogue.py` | The catalogue of sandbox permissions: every ability the person can unlock or lock per agent and |
+| `files/sandbox/permissions/grants.py` | Allow once, for a permission a BROKER enforces: a grant bound to one permission, one scope and |
+| `files/sandbox/permissions/judge.py` | Which change of the sandbox permissions turns protection DOWN — and so waits for the person |
+| `files/sandbox/permissions/model.py` | The typed records of sandbox permissions (no I/O here) |
+| `files/sandbox/permissions/requests.py` | Permission requests: an agent inside the sandbox wanted a permission it does not have, and the |
+| `files/sandbox/permissions/section.py` | The person's sandbox permissions in the config: ``plugins.entries.blackbox.agent_sandbox`` |
+| `files/sandbox/places.py` | What an agent sandbox refuses, worked out once for every operating system (no OS calls here) |
+| `files/sandbox/platform/__init__.py` | The operating-system seam of the agent sandbox: one module per OS (per-OS structure, Amos |
+| `files/sandbox/platform/linux/__init__.py` | Layer 2 on Linux: the agent sandbox is ``blackbox-sandbox`` (the helper crate's second program, |
+| `files/sandbox/platform/linux/apps.py` | GUI editors (Cursor, Windsurf) relaunched inside the sandbox on Linux (D10, KI-534). An Electron |
+| `files/sandbox/platform/linux/launchers.py` | The shell launchers on Linux: the POSIX ports' shared scripts (``platform/posix_scripts.py``) with |
+| `files/sandbox/platform/linux/network.py` | The per-agent network rules a Linux policy asks of the root helper (design "Linux deep layers" |
+| `files/sandbox/platform/linux/opener.py` | Opening a web link or a file in an app FOR a sandboxed agent, outside the sandbox (sandbox |
+| `files/sandbox/platform/linux/placeholders.py` | Empty placeholders for the startup places that do not exist yet (design "Linux deep layers" |
+| `files/sandbox/platform/linux/probe.py` | What this machine lets the agent sandbox do, from ``blackbox-sandbox probe`` (its JSON: the |
+| `files/sandbox/platform/linux/processes.py` | What a process is, and stopping one, for the ``stop-processes`` broker (outside the sandbox), read |
+| `files/sandbox/platform/linux/profile.py` | The Linux policy text for one :class:`~...places.Places` policy: the line-oriented file |
+| `files/sandbox/platform/linux/shims.py` | The shims first on the sandboxed PATH on Linux: ``brew`` (Linuxbrew) and the package managers — |
+| `files/sandbox/platform/linux/tools.py` | The sandbox's own tools on Linux, first on the SANDBOXED PATH only: a stand-in that says why for |
+| `files/sandbox/platform/macos/__init__.py` | Layer 2 on macOS: the agent sandbox is a Seatbelt profile, run with ``/usr/bin/sandbox-exec`` |
+| `files/sandbox/platform/macos/applescript.py` | Running one AppleScript FOR a sandboxed agent, outside the sandbox (sandbox permission |
+| `files/sandbox/platform/macos/apps.py` | GUI editors (Cursor, Windsurf) relaunched inside the profile (D10, KI-534; see the package doc) |
+| `files/sandbox/platform/macos/launchers.py` | The shell launchers that start a program inside the profile: one per command-line agent (first on |
+| `files/sandbox/platform/macos/opener.py` | Opening a web link or a file in an app FOR a sandboxed agent, outside the sandbox (sandbox |
+| `files/sandbox/platform/macos/processes.py` | What a process is, and stopping one, for the ``stop-processes`` broker (outside the sandbox) |
+| `files/sandbox/platform/macos/profile.py` | The Seatbelt profile text for one :class:`~..places.Places` policy (see the package doc for what |
+| `files/sandbox/platform/macos/shims.py` | The ``open`` and ``osascript`` stand-ins first on the sandboxed PATH; the ``brew`` shim (KI-593), |
+| `files/sandbox/platform/macos/tools.py` | The sandbox's own tools, first on the SANDBOXED PATH only: a setuid-free ``ps`` and a stand-in that |
+| `files/sandbox/platform/posix_scripts.py` | The POSIX shell text every Unix port of the agent sandbox shares (macOS and Linux): the |
+| `files/sandbox/platform/unsupported.py` | An operating system without an agent sandbox yet: nothing is sandboxed, and the shield says so |
+| `files/sandbox/profiles.py` | One Seatbelt profile per sandboxed agent, and one per project that has its own rules: the shared |
+| `files/sandbox/status.py` | What the agent sandbox's card and a companion app show: whether agents can be sandboxed here, |
+| `files/status.py` | File Shield's dashboard card: what it protects, whether agents were refused, and whether the |
+| `files/watched.py` | What a watched folder's scan found, reported by whoever scans it, worded by File Shield |
+| `helper_link.py` | The plugin's side of the system protection helper's authentication (helper/PLAN.md) |
+| `json_records.py` | How every shield record becomes plain JSON (moved out of ``contract.py`` unchanged) |
+| `local_only.py` | Which source a shield finding carries so it never leaves the machine |
+| `network/__init__.py` | Network Shield — the second shield: this machine's network watched and guarded, and AI agents |
+| `network/addresses.py` | Which addresses a threat list may act on here: the publicly routable ones (FIX-0222) |
+| `network/api.py` | Network Shield's API — the core: what the shield decides, detects and is told |
+| `network/events.py` | Network Shield's events report: what it refused, told in plain words |
+| `network/helper.py` | Whether the system protection helper is on this machine — what DNS Shield, the Threat Firewall, |
+| `network/lockdown.py` | Agent network lockdown and the block list, inside Blackbox's own guard |
+| `network/mode.py` | Network Shield's setting: on or off, which protections, which public lists, and the lists the |
+| `network/monitor/__init__.py` | Network Shield's monitor: which apps and AI agents talk to which servers, live |
+| `network/monitor/exposure.py` | Exposure and startup items, for a person: every service the network can reach and everything |
+| `network/monitor/gateways.py` | This machine's default gateways — the router every connection from outside the network comes |
+| `network/monitor/listening.py` | Which processes wait for incoming connections, and on which addresses |
+| `network/monitor/nettop.py` | Reads per-process connections and byte counts from macOS ``nettop`` (no admin rights needed) |
+| `network/monitor/platform/__init__.py` | The operating-system seam of Network Shield's monitor: every program the monitor runs to see |
+| `network/monitor/platform/linux.py` | Linux: the programs Network Shield's monitor runs to see this machine, their answers rendered |
+| `network/monitor/platform/macos.py` | macOS: the programs Network Shield's monitor runs to see this Mac. Read-only, unprivileged, |
+| `network/monitor/platform/unsupported.py` | An operating system without a port yet: nothing is run and nothing is seen; the traffic |
+| `network/monitor/posture.py` | The security posture check: the helper's raw facts (``netd/observe/posture.rs``) turned into |
+| `network/monitor/processes.py` | Which processes belong to an AI agent, and which are Blackbox's own |
+| `network/monitor/records.py` | The network monitor's records: one connection, one process with its connections, one reading |
+| `network/monitor/remote_access/__init__.py` | Remote access — who is in this machine right now, and how (MONITOR: read-only) |
+| `network/monitor/remote_access/catalog.py` | Remote-control apps and tunnels on this machine — the ways in that do NOT arrive on a port |
+| `network/monitor/remote_access/names.py` | Names for the addresses people come in from: the Tailscale machine name of a tailnet address |
+| `network/monitor/remote_access/records.py` | What the root helper reports about remote access — validated strictly, kept bounded, read back |
+| `network/monitor/resolved.py` | Which name a remote address was looked up as — from DNS Shield's own resolver (KI-588 c) |
+| `network/monitor/signature.py` | Who signed a program, and which app it belongs to — read from the program itself |
+| `network/monitor/system_report.py` | The root helper's system report — exposure, persistence, tampering and posture — validated and |
+| `network/monitor/watch.py` | What Network Shield's enforcer watches and reports: SSH into this machine, the files that decide |
+| `network/notices.py` | Network Shield's alerts as the notifier may show them: a fixed, LOCK-SCREEN-SAFE sentence per |
+| `network/protect/__init__.py` | Network Shield — PROTECT (act): what changes the system, every part reversible |
+| `network/protect/blocklists.py` | Network Shield's public block lists: the ``dns-blocklist`` pack kind and its downloader |
+| `network/protect/connection_state.py` | Per connection: whether the Threat Firewall is dropping it and whether it was cut (KI-588 d) |
+| `network/protect/enforcement.py` | The contract between Network Shield (the policy) and its enforcer (the native root helper) |
+| `network/protect/listed.py` | Public block lists, inside Blackbox's guard: an AI agent reaching a domain on a list the user |
+| `network/protect/never_block.py` | Names DNS Shield never refuses, whatever a list or the verified graph says (review 2026-11-21, finding 13) |
+| `network/protect/posture_fix.py` | Posture fixes the person asked for — the few safe one-click changes the root helper can make |
+| `network/protect/remote_lock.py` | Lock remote access, block who keeps guessing, and end a session — Network Shield's remote-access |
+| `network/protect/tamper_guard.py` | The DNS tamper guard (opt-in, off by default): while Network Shield's DNS Shield is on, a change |
+| `network/protect/weakening.py` | Which of Network Shield's own writes turn protection DOWN — they then wait for the person |
+| `network/respond/__init__.py` | Network Shield — RESPOND: alerts, stories, the assistant's analysis and the security review |
+| `network/respond/events.py` | Network Shield's events report: what it refused, told in plain words |
+| `network/respond/sessions.py` | The remote-access actions a person takes from the Remote access page (RESPOND) — each one |
+| `network/respond/startup_items.py` | The persistence watch's events for a person: who wrote each new startup item, how loud to be, |
+| `network/respond/system_alerts.py` | The system watch's events as alerts for a person: a sentence and a severity each (newest first) |
+| `network/status.py` | Network Shield's dashboard card: each protection, where it runs, and whether it is working |
+| `network/system.py` | System status: this machine's CPU, memory, disks and network interfaces, live |
+| `network/system_api.py` | Network Shield's system watch endpoints — exposure, startup items, tampering and the posture |
 | `packs.py` | One loader for any shield's pack folders and its ``browsers.json`` (validate, then use) |
+| `self_test.py` | A shield's sandbox self-tests: what an agent could attempt on THIS machine, for the Playground |
+| `shield_api.py` | A shield's own API: named endpoints beyond the card and the events report |
 | `trader/__init__.py` | Trader Shield — opt-in protection for people who hold crypto: wallet key stores, seed |
 | `trader/detectors/__init__.py` | Trader Shield's detector table: which pack kinds it serves and how each kind's block is checked |
 | `trader/detectors/app_folder.py` | Trader Shield's ``desktop-app`` and ``cli-key-file`` kinds: wallets that live in an app's own folder |
 | `trader/detectors/browser_extension.py` | Trader Shield's ``browser-extension`` kind: a browser wallet's key store, found in a path |
 | `trader/detectors/firefox_map.py` | Which Firefox add-on owns an extension storage folder — read from Firefox's own map (Trader Shield) |
+| `trader/detectors/own_keys.py` | Trader Shield's own-address check: a raw private key that opens one of the operator's OWN addresses |
+| `trader/events.py` | Trader Shield's full events report: every event it claims, with the session around it (local only) |
+| `trader/kinds.py` | Trader Shield's finding kinds — THE one list of what the shield emits or claims |
 | `trader/mode.py` | Trader Shield's setting: an opt-in mode, the wallets the operator chose, their own addresses |
+| `trader/self_tests.py` | Trader Shield's sandbox self-tests: every wallet found on THIS machine, attempted for real |
+| `trader/status.py` | Trader Shield's dashboard card: what it found to protect on this machine, what it always |
 
 </details>
 
 <details>
-<summary><b><code>community/</code></b> · 68 files · 10,188 lines · Everything about the community graph: write, sign, read, verify, stage.</summary>
+<summary><b><code>community/</code></b> · 71 files · 10,643 lines · Everything about the community graph: write, sign, read, verify, stage.</summary>
 
 | File | What it does |
 |---|---|
-| `__init__.py` | Community — the shared community threat graph |
+| `__init__.py` | Community — what every protected agent shares and learns from |
 | `aggregation.py` | Aggregating verified community reports into community rules |
 | `allowlist/__init__.py` | Allowlist, warninglist and canaries (Refine R9, plan §06) |
 | `allowlist/canaries.py` | Canaries — planted identifiers that only a scraper or a liar would report (R9) |
 | `allowlist/tables.py` | The allowlist and warninglist tables (R9) — immutable after load |
 | `allowlist/verdicts.py` | The allowlist verdict on one threat identifier (R9, plan §06, look-alike rule inverted) |
-| `consent.py` | Whether this machine may share with the community graph — the ONE gate |
+| `consent.py` | Whether this machine may share with the community — the ONE gate |
 | `digest.py` | The seen-again counter — a weekly sighting digest per reporter (Refine R2b) |
-| `graph_stats.py` | Graph-wide statistics over the community graph — the dashboard's read model |
+| `graph_stats.py` | Statistics over the community's reports — the dashboard's read model |
 | `keep_alive/__init__.py` | Keep-alive (Refine R5): each author keeps its own live reports on the network |
 | `keep_alive/epochs.py` | Epoch naming for keep-alive copies (R5) — pure |
 | `keep_alive/publisher.py` | The keep-alive publish step and the two hooks that feed it (R5) |
 | `keep_alive/store.py` | The live-reports memory — what this node must keep alive on the network (R5) |
-| `membership.py` | Community-graph membership — subscribe and join at most once, on the node's word |
+| `membership/__init__.py` | Community membership — the verified graph's subscription WITH shared memory, on the node's word |
+| `membership/join_status.py` | Where this node stands with the community's graph, as the node's own listing says |
+| `membership/readiness.py` | Whether this node already added the verified graph's shared memory (2026-10-22, KI-449) |
 | `pool/__init__.py` | Pool — the confirmed pool and how it is handed on (Community Curation C8) |
 | `pool/bundle.py` | The export bundle — the confirmed pool as one file a stranger can check (Community Curation C8, plan §08) |
 | `pool/confirmed.py` | The confirmed pool — a VIEW over signed statements (Community Curation C8; plan §05, §08) |
-| `pulse.py` | The community pulse — "did the community graph change?" between full refreshes (R16, KI-202) |
-| `reader.py` | Reading the community graph: fetch, verify, and the three-state read |
+| `pulse.py` | The community pulse — "did the community change?" between full refreshes (R16, KI-202) |
+| `reader.py` | Reading the community: fetch, verify, and the three-state read |
 | `report_builder.py` | Report quads: a finding -> the privacy-safe statements shared to the community graph |
 | `report_cli/__init__.py` | The reporter's command line: `blackbox report` and its verbs |
 | `report_cli/report_command.py` | ``blackbox report`` — file, dispute and review this node's community reports |
@@ -866,6 +1083,7 @@ Click a module to open its file list.
 | `trust/manifest_history.py` | The verified authority's manifest HISTORY, and which list was in force on a day (trust-and-threat-lab §03.4, F-050) |
 | `trust/manifests.py` | Which key manifest a reader acts on (reader policy, Refine R7b) |
 | `trust/migrations.py` | Which graph migration a reader follows (reader policy, T2) |
+| `trust/ordered_policy.py` | The freeze, ceiling and sticky rules a reader applies to ordered root-signed statements |
 | `trust/panel.py` | The trust layer as one read model (Community Curation C10, plan §11 TRACK) |
 | `trust/raising_budget.py` | The reader's daily cap on what the community curators can RAISE (Community Curation C3) |
 | `trust/trust_store.py` | The reader's own copy of the trust statements it verified (Community Curation C3) |
@@ -874,58 +1092,92 @@ Click a module to open its file list.
 </details>
 
 <details>
-<summary><b><code>sync/</code></b> · 11 files · 2,789 lines · Runs the local DKG node and catches up the verified graph.</summary>
+<summary><b><code>sync/</code></b> · 20 files · 3,220 lines · Runs the local DKG node and catches up the verified graph.</summary>
 
 | File | What it does |
 |---|---|
 | `__init__.py` | Sync — keeping this node's copy of the verified threat graph current |
 | `catchup_job.py` | Reading the node's durable catch-up job: denied, which job, and its status |
 | `command.py` | ``blackbox sync`` — bring this node's copy of the verified graph up to date |
+| `core_snapshot.py` | One owned DKG snapshot job, with explicit configured-core or independent RPC trust |
+| `direct_preflight.py` | Validate direct graph mode before any sync side effect |
 | `managed_node.py` | The managed local DKG node: its sync settings, process and restarts |
 | `native.py` | The native route for Umanitek's default public graph (DKG 10.0.21+) |
 | `node_process.py` | Which running process is this installation's managed DKG node |
 | `node_profile.py` | The managed DKG node's sync profile: which sync settings it should run with |
+| `node_service.py` | The service manager registered to supervise this install's DKG node, and how to go through it |
+| `platform/__init__.py` | The operating-system seam of ``sync.node_service``: how the service registered for this install's |
+| `platform/linux.py` | Linux: the node's systemd unit (``blackbox-dkg``, system or user scope), found by its |
+| `platform/macos.py` | macOS: the node's LaunchAgent (``ai.umanitek.blackbox-dkg``), found by its registration and |
+| `platform/model.py` | What every ``sync/platform/<os>`` module shares: the names of the services the installers |
+| `platform/unsupported.py` | Any other system (Windows: the node's sign-in task is the installer's alone): no service this |
 | `process_limits.py` | The DKG node's process limits: settings it can only get from its environment |
 | `progress.py` | Read durable-sync progress emitted by the managed DKG daemon |
-| `side_subscriptions.py` | The graphs a sync keeps subscribed BESIDE the configured verified graph |
+| `side_subscriptions.py` | The graph a sync keeps subscribed BESIDE the configured verified graph |
+| `snapshot_readiness.py` | Read-only admission for a new snapshot default; never remove a protection tier |
 | `state.py` | Cross-process status for the authoritative Blackbox graph transfer |
 
 </details>
 
 <details>
-<summary><b><code>audit/</code></b> · 8 files · 1,396 lines · What Blackbox saw, kept locally and redacted.</summary>
+<summary><b><code>audit/</code></b> · 12 files · 1,936 lines · What Blackbox saw, kept locally and redacted.</summary>
 
 | File | What it does |
 |---|---|
 | `__init__.py` | Audit — the RECORD flow: what Blackbox saw, kept locally and redacted |
 | `activity.py` | The merged local activity timeline the dashboard shows |
+| `finding_display.py` | Which finding rows are ONE threat on screen, and which row stands for it |
 | `findings.py` | Recording and reading findings (what Blackbox flagged or blocked) |
 | `local_graph.py` | This machine's own private graph for the local audit record |
 | `log_store.py` | The local JSONL log files under ``$BLACKBOX_HOME`` and their size cap |
 | `private_ka.py` | The private working-memory audit record kept in the local DKG node |
+| `profile_logs.py` | Fold the logs a Hermes profile kept in its own Blackbox folder into the shared ones (2026-11-19) |
+| `protection_log.py` | The protection log: a hash-chained, append-only record of what Blackbox's protection refused |
 | `redaction.py` | Redaction for anything written to the local audit logs |
 | `share_ledger.py` | Outbound-report bookkeeping: the share ledger, per-threat cooldown, daily cap |
+| `tamper.py` | Tamper counts: how often something tried to switch Blackbox off or get around it, and was refused |
 
 </details>
 
 <details>
-<summary><b><code>dashboard/</code></b> · 18 files · 3,910 lines · The loopback web UI and its API.</summary>
+<summary><b><code>dashboard/</code></b> · 37 files · 6,549 lines · The loopback web UI and its API.</summary>
 
 | File | What it does |
 |---|---|
 | `__init__.py` | Dashboard — the local web UI (FastAPI, loopback-only, 127.0.0.1:9700) |
+| `agent_coverage_routes/__init__.py` | Every agent protected, now and later — what the dashboard shows of it (2026-11-19) |
+| `agent_hooks_routes/__init__.py` | The coding agents Blackbox protects through their own hooks (``agent_hooks``), over HTTP |
+| `agent_hooks_routes/instances.py` | Every instance of every coding agent, over HTTP (``agent_hooks.tracking``) — what a |
+| `approval_routes/__init__.py` | The gate in front of every route that can turn protection down, and the app's approval routes |
+| `assistant/__init__.py` | The dashboard assistant's helpers: reading what ``blackbox chat`` printed (POST /api/blackbox-chat) |
+| `assistant/runner.py` | One Blackbox assistant turn (``blackbox chat`` in the managed profile) — the one runner |
+| `assistant/state_brief.py` | A short, fresh snapshot of Blackbox's state handed to the assistant with every question (2026-11-19) |
 | `command.py` | ``blackbox dashboard`` — start the local dashboard (replacing a stale one on the port) |
 | `community_routes.py` | The dashboard's community endpoints — statistics, the reports board, statements |
+| `direct_reads/__init__.py` | Response shaping for the direct graph backend |
+| `docs_routes/__init__.py` | The dashboard's Docs page: everything Blackbox does, explained where every install can read it |
+| `docs_routes/agent_registry.py` | The platform map and test registry of the coding agents Blackbox protects — one data file |
+| `docs_routes/payload.py` | What the dashboard's Docs page shows that comes from the product itself |
+| `docs_routes/record_test.py` | Record one test run in the agent registry — the command a VM test run ends with |
 | `graph_pages.py` | The dashboard's graph pages: how a tier's threats become one page |
+| `guard_routes/__init__.py` | The verdict a runtime that is not Hermes asks for before each tool call (2026-11-20) |
 | `lifecycle.py` | Startup and shutdown hooks for the dashboard app, without FastAPI's deprecated ``on_event`` |
+| `model_connect_routes/__init__.py` | The dashboard's "Connect your agent's AI model" panel and its routes (2026-11-19) |
 | `network_sync.py` | The command line the dashboard runs for its verified-graph sync |
 | `node_probe.py` | The dashboard's probes of the local DKG node: is it answering, and how is its sync |
+| `notify_routes/__init__.py` | Native notifications over HTTP (``notify``): the ONE feed both deliverers read, the policy, |
+| `playground_routes/__init__.py` | The dashboard's Playground: sandbox mode's panel and its two API routes (2026-10-21) |
+| `plugin_api.py` | Blackbox's routes for Hermes Desktop: ``/api/plugins/blackbox/status``, ``/mode`` and the dashboard link |
+| `protection_routes/__init__.py` | The Protection page over HTTP: what agents tried against Blackbox, whether its record of that is |
 | `pulse_driver.py` | The community pulse keeps beating while the dashboard runs, browser or not (KI-283) |
 | `safe_payloads.py` | Making community- and graph-derived values safe to serve (the dashboard's one sanitizer) |
 | `server.py` | Standalone Blackbox dashboard — a tiny FastAPI app bound to loopback |
-| `shields_routes/__init__.py` | The dashboard's side of shields: what the settings routes add for every registered shield |
+| `shields_routes/__init__.py` | The dashboard's side of shields: the settings each shield adds, and ``GET /api/shields`` |
+| `shields_routes/api_routes.py` | ``GET`` / ``POST /api/shields/{shield_id}/api/{name}`` — a shield's own endpoints |
 | `sync_labels.py` | Sync-state presentation for ``GET /api/graph-status`` (the ``sync_progress`` labels) |
-| `sync_meter.py` | The dashboard's verified-sync meter — how much of Umanitek's verified threat |
+| `sync_meter/__init__.py` | The dashboard's verified-sync meter — how much of Umanitek's verified threat |
+| `sync_meter/lookup_alarm.py` | The finding that says the threat graph cannot answer — never silent, never a flood |
+| `sync_meter/progress.py` | Is the verified sync moving, and which step is it on? (2026-10-22) |
 | `sync_timing.py` | When the dashboard's ruleset worker runs its first refresh (KI-205) |
 | `threat_detail_fields.py` | Predicate IRI -> the field name the dashboard's single-threat view shows it under |
 | `trust_routes.py` | The dashboard's trust panel endpoint (Community Curation C10) |
@@ -933,23 +1185,26 @@ Click a module to open its file list.
 </details>
 
 <details>
-<summary><b><code>attach/</code></b> · 8 files · 1,238 lines · Finds every local agent and wires protection into it.</summary>
+<summary><b><code>attach/</code></b> · 11 files · 1,874 lines · Finds every local agent and wires protection into it.</summary>
 
 | File | What it does |
 |---|---|
-| `__init__.py` | Attach — wire Blackbox protection into every agent on this machine |
+| `__init__.py` | Attach — wire Blackbox protection into the agents the operator chooses on this machine |
 | `command.py` | ``blackbox attach`` / ``blackbox detach`` — and the report rows they print |
+| `coverage.py` | Which agents on this machine Blackbox protects, and which new ones it just protected (2026-11-19) |
+| `declined.py` | The agents the operator switched protection OFF for — so no automatic sweep switches it back on |
 | `hermes_homes.py` | Protecting Hermes agents: discover homes, enable/disable Blackbox in each |
 | `openclaw_bridge.py` | Protecting OpenClaw workspaces through the bundled JS bridge plugin |
 | `openclaw_discovery.py` | Finding OpenClaw workspaces and reading their config and version |
 | `openclaw_json5.py` | A minimal JSON5 -> JSON converter for OpenClaw's config files |
 | `plugin_copy.py` | Copying the plugin into an agent home, and finding where it came from |
-| `sweep.py` | Attach / detach everything this machine has, in one call |
+| `report.py` | What one attach or detach of one agent reports — the shape every caller reads |
+| `sweep.py` | Attach / detach everything this machine has, in one call — and which targets an |
 
 </details>
 
 <details>
-<summary><b><code>overrides/</code></b> · 3 files · 184 lines · The operator's local release valve.</summary>
+<summary><b><code>overrides/</code></b> · 3 files · 181 lines · The operator's local release valve.</summary>
 
 | File | What it does |
 |---|---|
@@ -960,7 +1215,7 @@ Click a module to open its file list.
 </details>
 
 <details>
-<summary><b><code>killlist/</code></b> · 5 files · 504 lines · Curator-signed disable or warn for installed skills and MCP servers.</summary>
+<summary><b><code>killlist/</code></b> · 5 files · 500 lines · Curator-signed disable or warn for installed skills and MCP servers.</summary>
 
 | File | What it does |
 |---|---|
@@ -973,14 +1228,13 @@ Click a module to open its file list.
 </details>
 
 <details>
-<summary><b><code>curate/</code></b> · 83 files · 13,834 lines · The curator node's tooling.</summary>
+<summary><b><code>curate/</code></b> · 87 files · 14,760 lines · The curator node's tooling.</summary>
 
 | File | What it does |
 |---|---|
 | `__init__.py` | ``curate`` — the curator node's tooling (Community Graph Refine, R6; Community Curation) |
 | `catalog_import.py` | Threat-catalog import helpers (curator side) — currently UNUSED |
 | `commands.py` | ``blackbox curate`` — the curator's CLI (Refine R6, curator tooling lite) |
-| `consent.py` | Consent for outward curator writes, made mechanical (Refine R6, plan §09) |
 | `console/__init__.py` | Console — the curator node's key console: a small web app over the existing ``curate`` verbs |
 | `console/app.py` | The key console web app and its three server-side gates (trust-and-threat-lab C2, §03.1) |
 | `console/commands.py` | ``blackbox curate console`` — run the key console (trust-and-threat-lab C3, §03.2) |
@@ -1010,18 +1264,24 @@ Click a module to open its file list.
 | `ladder/outcomes.py` | Crediting reporters from the public record (Community Curation C6) |
 | `node_ui_views.py` | Saved queries for the DKG node's own UI — the curator's read side (Refine R6, decision 26) |
 | `parser.py` | The ``blackbox curate`` argument parser — every verb and its options |
-| `promotion.py` | Promotion — a threat enters the verified tier (Refine R6; scope: dependency, kind=malware) |
-| `proposal.py` | Curator proposals and their two-key lifecycle (Refine R6) |
+| `promotion.py` | Promotion — a community report enters the verified tier (Refine R6, the one-graph flow) |
+| `proposals/__init__.py` | Two-key proposals between curator nodes (Refine R6) — one seam of the curator tooling |
+| `proposals/consent.py` | Consent for outward curator writes, made mechanical (Refine R6, plan §09) |
+| `proposals/proposal.py` | Curator proposals and their two-key lifecycle (Refine R6) |
+| `proposals/transport.py` | Proposals travel between curator nodes by private point-to-point message (Refine R6) |
 | `publishing/__init__.py` | Publishing — the last step of every curator verb: number it, check its |
 | `publishing/batch.py` | The batch publisher — beat step 8 on the wallet node (trust-and-threat-lab §03.4, D27) |
 | `publishing/commands.py` | ``blackbox curate correct`` and ``blackbox curate never-flag`` — signed corrections (trust-and-threat-lab P5, §03.4) |
-| `publishing/errors.py` | The errors the publishing step raises when it refuses |
+| `publishing/errors.py` | The errors the publishing step raises when it refuses, and the curator CLI's one boundary |
 | `publishing/ledger.py` | The publish ledger — every verified-graph batch as a state machine (pattern: State) |
 | `publishing/never_flag.py` | The never-flag batch: exact known-good addresses, published as corrections (trust-and-threat-lab P5, §03.4) |
+| `publishing/node_writers.py` | The node side of the paid publishes — one call per publish-ledger step (pattern: Adapter over the DKG routes) |
 | `publishing/precheck.py` | The batch-time pre-check: the last look at the verified graph before a PAID publish |
 | `publishing/publish.py` | Publishing an APPROVED curator proposal: quorum check, consent, the write, the read-back |
-| `publishing/row_builders.py` | Row builders — the quads a quorum-signed promotion is written as (§03.4) |
+| `publishing/reports.py` | A member-asset promotion's report reaches Verified Memory before its batch (§03.4, ``strategies``) |
+| `publishing/row_builders.py` | Row builders — the quads a quorum-signed promotion is written as (§03.4; the curator-asset way) |
 | `publishing/sequences.py` | Sequence numbers for curator statements — which number the next one takes |
+| `publishing/strategies.py` | How a promotion reaches Verified Memory — one Strategy per way (the one-graph flow) |
 | `queue.py` | The curator's queue — the delta view and its lanes (Refine R6, plan §09) |
 | `service/__init__.py` | Service — the curator node's own routine work (Community Curation C9, plan §07) |
 | `service/beat.py` | One beat of the curator service (Community Curation C9, plan §07) |
@@ -1049,7 +1309,6 @@ Click a module to open its file list.
 | `sources/scamsniffer.py` | ScamSniffer scam-database as a source — LOOK-UP ONLY (§03.3, F-004, D20) |
 | `sources/urlscan.py` | urlscan.io as a source — the level-3 "visit", bought not built (§03.5, F-012, D22) |
 | `sources/withdrawal.py` | The source-withdrawal watcher and the 180-day address expiry (§03.3, F-007, F-022) |
-| `transport.py` | Proposals travel between curator nodes by private point-to-point message (Refine R6) |
 | `upkeep/__init__.py` | Upkeep — keeping an authority's word alive on the network (Community Curation C5) |
 | `upkeep/heartbeat.py` | The curator heartbeat — "this key is alive" (Community Curation C5) |
 | `upkeep/published.py` | What this curator node published in the community graph and must keep alive |
@@ -1064,7 +1323,7 @@ Click a module to open its file list.
 </details>
 
 <details>
-<summary><b><code>chat/</code></b> · 2 files · 287 lines · The Blackbox operator chat.</summary>
+<summary><b><code>chat/</code></b> · 2 files · 378 lines · The Blackbox operator chat.</summary>
 
 | File | What it does |
 |---|---|
@@ -1074,14 +1333,32 @@ Click a module to open its file list.
 </details>
 
 <details>
-<summary><b><code>kernel/</code></b> · 41 files · 7,179 lines · Shared infrastructure owned by no feature. Depends on nothing.</summary>
+<summary><b><code>kernel/</code></b> · 77 files · 11,295 lines · Shared infrastructure owned by no feature. Depends on nothing.</summary>
 
 | File | What it does |
 |---|---|
 | `__init__.py` | Kernel — shared infrastructure owned by no feature |
+| `action_context/__init__.py` | The working folder and the agent of the action being judged: ambient, scoped values (Context Object) |
+| `addons/__init__.py` | Add-ons beside the plugin, and the places they ask the guard to protect from agents |
+| `agent_hosts/__init__.py` | The coding agents Blackbox can protect through their own hooks — one record each (data, not code) |
+| `agent_hosts/hook_switches.py` | Every file an agent reads a hooks-off switch from — the ONE list every layer reads (LES-137) |
 | `bounded_files/__init__.py` | Reading a small settings file safely on the hot path — one bounded reader |
+| `bounded_files/atomic_write.py` | Write a small file so a reader never sees a torn one — the one implementation |
+| `bounded_files/json_files.py` | Read a small JSON state file — the one reader for "an object, or nothing" |
+| `bounded_files/jsonl.py` | Line-per-record log files (JSONL) — the one append and the one read |
+| `bounded_files/locking.py` | One cross-process file lock — the platform branches, written once |
+| `bounded_files/probe_stamp.py` | One shared "last probe" time across every Blackbox process on this machine |
 | `browser_boundary/__init__.py` | The browser boundary two web apps share (KI-028 / LES-006) |
+| `code_signing/__init__.py` | Whether a program's code signature is REAL — verified, not just displayed (read-only) |
+| `code_signing/platform/__init__.py` | The operating-system seam of :mod:`kernel.code_signing`: the commands that ask the system who |
+| `code_signing/platform/macos.py` | macOS: who signed a program, asked of ``codesign`` and Gatekeeper's ``spctl`` (see |
+| `code_signing/platform/unsupported.py` | Any system but macOS: there is no ``codesign`` to ask, so nothing is run and every answer is |
 | `config.py` | Blackbox configuration loading |
+| `config_values/__init__.py` | Configuration value coercion and local path defaults |
+| `config_values/entry_snapshot.py` | The saved Blackbox entry as Hermes last merged it, kept for a short process that has not loaded |
+| `config_values/saved_entry.py` | Blackbox's saved settings entry (``plugins.entries.blackbox`` in the main Hermes ``config.yaml``) |
+| `config_values/schema.py` | What a Blackbox setting may hold — one schema, used when config is READ and when it is SAVED |
+| `config_values/semantic.py` | Opt-in, local-only semantic review settings |
 | `constants.py` | Static constants for the Agent Blackbox plugin |
 | `crypto_secrets/__init__.py` | Crypto secrets — wallet secrets recognised in text by their own structure |
 | `crypto_secrets/base58.py` | Base58 — the Bitcoin alphabet many wallets write keys in (Solana keys, Bitcoin WIF, xprv) |
@@ -1098,27 +1375,216 @@ Click a module to open its file list.
 | `dkg_version.py` | DKG runtime compatibility required by Blackbox recovery |
 | `health/__init__.py` | Operator health — ONE health item for both surfaces (Refine R10, plan §12 alarms) |
 | `health/community_authority.py` | Operator alarms about the COMMUNITY authority (Community Curation C10, plan §11 OBSERVE) |
+| `health/days.py` | Day arithmetic every age and silence rule shares |
+| `health/inputs.py` | The facts the operator-health rules read — :class:`HealthInputs`, one frozen record |
 | `health/manifest_watch.py` | The manifest watcher's health items (trust-and-threat-lab W1, F-003) |
+| `host_command/__init__.py` | The command that starts THIS Hermes again, for every child ``hermes …`` process |
+| `host_command/agent_model.py` | Does a Hermes agent have an AI model it can use? Hermes answers; Blackbox only asks (2026-11-19) |
+| `host_command/hermes_root.py` | The machine's MAIN Hermes home — where the one Blackbox for every profile lives (2026-11-19) |
 | `host_secrets/__init__.py` | Reading a credential the way Hermes hands it out — the one route for secrets |
 | `identity.py` | This node's reporting identity — the agent address it speaks for |
+| `local_http/__init__.py` | Blackbox's HTTP transport rules, in one place |
 | `node_routes.py` | Node routes the curator uses that the hot path never does (Refine R6) |
+| `os_layout/__init__.py` | Which operating system a file of the plugin belongs to, so a copy carries only this machine's |
+| `own_processes/__init__.py` | Blackbox's own running programs — the ones self-protection refuses an agent's signal to |
+| `persistence_places/__init__.py` | The places from which something starts by itself, or is run by the person later — kept closed |
+| `persistence_places/schedules.py` | The commands that leave a job in a persistence place without naming its file — the half of |
 | `public_suffix/__init__.py` | The Public Suffix List — registrable domains and shared-hosting suffixes (R9) |
 | `rdf_terms.py` | N-Triples terms and quads, with the DKG's literal-size limits enforced |
 | `redaction.py` | Redaction — THE one implementation that scrubs secret values out of text |
 | `reporter_key.py` | This node's reporter key — the private key that signs its community reports |
 | `settings.py` | Read/write the user-tunable Blackbox detection policy |
+| `shell_path/__init__.py` | A folder Blackbox puts FIRST on the person's PATH, through one marked block in their shell |
 | `signing/__init__.py` | Signing — the one envelope every signed Blackbox statement uses |
 | `signing/authority.py` | The two trust authorities — who may say what, and in which graph |
 | `signing/envelope.py` | Signed statements — the one envelope every signed Blackbox statement uses |
 | `signing/graph_migration.py` | The graph migration statement — the authority may name a successor graph |
 | `signing/key_manifest.py` | The curator key manifest — which keys may sign what, per environment (Refine R7a) |
+| `signing/promotion_statement.py` | What a promotion names — ONE community report — and the member-asset promotion statement |
 | `signing/statement_order.py` | Curator statement types and which statement about a threat is current (Refine R7a) |
 | `signing/trust_anchors.py` | Trust anchors — which root keys this node trusts, per authority |
+| `snapshot_config/__init__.py` | Explicit trust configuration for the public core snapshot sync capability |
 | `sparql_text.py` | SPARQL helpers shared by every reader of the graph |
 | `store/__init__.py` | Store — read-only SPARQL access to the DKG node's LOCAL triple store |
 | `store/client.py` | The read-only SPARQL client for the node's local store |
+| `system_helper/__init__.py` | Where the system protection helper (``blackbox-netd``) is installed on this machine — one |
+| `system_helper/platform/__init__.py` | The operating-system seam of :mod:`kernel.system_helper`: where this OS's helper lives — one |
+| `system_helper/platform/linux.py` | Linux's system protection helper (``helper/src/platform/linux/install.rs`` writes these): its |
+| `system_helper/platform/macos.py` | macOS's system protection helper: its root-only folder, its program, its LaunchDaemon (system |
+| `terminal_question/__init__.py` | Asking the operator a question at their terminal — the one way every Blackbox command does it |
 | `threat_ids.py` | Deterministic threat identifiers and URIs — the shared naming vocabulary |
 | `yaml_files.py` | YAML config files (Hermes ``config.yaml`` and friends), read and written safely |
+
+</details>
+
+<details>
+<summary><b><code>agent_hooks/</code></b> · 44 files · 8,422 lines</summary>
+
+| File | What it does |
+|---|---|
+| `__init__.py` | Agent Hooks: Blackbox protects the coding agents on this machine through their own hooks |
+| `hermes_load.py` | The back-stop for a Hermes that started WITHOUT Blackbox: its plugin did not load, or its guard |
+| `hermes_sessions.py` | The Hermes agent — Blackbox's own host — in the instance tree, beside the coding agents |
+| `instances/__init__.py` | Every instance of every coding agent: live, and kept as history |
+| `instances/kernel_refusals.py` | A refusal the OS sandbox made, shown on the agent instance whose program it stopped (KI-568) |
+| `instances/links.py` | Which session a sub-agent belongs to when its agent reports it as a session of its own |
+| `instances/model.py` | The records of the agent-instance view: what ran, inside what, and what it did |
+| `instances/refusals.py` | ONE count of what an instance was refused — each refusal once, whichever way it was seen (KI-637) |
+| `instances/store.py` | Where instances live: in memory for the live view, on disk for history |
+| `instances/views.py` | What the dashboard and a companion app read: the live tree, the history and one instance |
+| `observe/__init__.py` | Which coding-agent processes run on this machine right now — whether or not Blackbox has a |
+| `observe/hook_trust.py` | Whether an agent will RUN Blackbox's hooks: its own trust record, read the way it reads it |
+| `observe/hooks_off.py` | Why an agent's hooks are switched off for one run — read from what the agent itself reads: |
+| `observe/launched.py` | Whether an agent process was started by Blackbox's own sandbox launcher — the one signal that |
+| `observe/platform/__init__.py` | The operating-system seam of the agent observer: what it reads to see which agent |
+| `observe/platform/linux.py` | Linux: the process list and one process's environment, read straight from ``/proc`` |
+| `observe/platform/macos.py` | macOS: the process list and one process's environment (read-only) |
+| `observe/platform/unsupported.py` | An operating system without a port yet: no process can be read, so nothing is observed |
+| `owners.py` | Which agent instance owns something: a recorded finding, or a running process (KI-588) |
+| `permission_risks.py` | Which settings and command-line flags make a coding agent act WITHOUT asking its person |
+| `process_facts.py` | What a running process IS: its program, who signed it (verified) and whether it runs sandboxed |
+| `profile_detail.py` | What one agent profile is ACTUALLY operating under, read from the real files on this machine — |
+| `profiles.py` | Every PROFILE of every coding agent — each config home Blackbox must have its hooks in — and |
+| `prompt_text.py` | Prompt text in the agent history — OFF unless the person turned it on |
+| `protect/__init__.py` | Coding-agent protection — PROTECT (act): hooks installed into each agent's own config |
+| `protect/answers.py` | What the hook runner prints for each agent, in that agent's own documented hook format |
+| `protect/config_edit.py` | Blackbox's entries in an agent's JSON hook config — added and removed without touching the user's |
+| `protect/events.py` | One hook event from a coding agent: recorded, and — before a tool runs — judged |
+| `protect/foreign_hooks.py` | Every program an agent loads from its hook and plugin folders, watched — not only Blackbox's own |
+| `protect/hook_watch.py` | Blackbox's own hooks, watched: a hook of Blackbox's that disappears or changes OUTSIDE a Blackbox |
+| `protect/identity.py` | Which instance and which agent a hook event belongs to — the runner's sibling (standard |
+| `protect/judge_here.py` | The hook runner's answer IN TIME: the dashboard first, then the installed plugin's own |
+| `protect/own_files.py` | Hooks that are files of Blackbox's own: Copilot CLI's hooks file, Cline's per-event scripts, |
+| `protect/own_prompt.py` | The person's words in a prompt an agent's hook reports: the agent's OWN text set aside |
+| `protect/recorder.py` | The bookkeeping of hook events, done after the agent has its answer (KI-552) |
+| `protect/runner.py` | The hook command every protected coding agent runs: one payload in, Blackbox's answer out |
+| `protect/sandbox_errors.py` | The OS sandbox's refusals as an agent sees them, read from a tool's output (KI-590) |
+| `protect/sandbox_run.py` | What is known of the sandboxed run a tool's output came from, for judging its refusals OUTSIDE |
+| `protect/spool/__init__.py` | The hook spool: events a coding agent's hook could not hand to the dashboard, recorded once the |
+| `protect/tool_shapes.py` | Tool calls that need more than a rename to become the guard's — the runner's sibling |
+| `root_watch.py` | An AI agent's programs running as root — the FACT, seen in the process list (read-only) |
+| `tracking.py` | Tracking: every hook event becomes part of an instance, and the live view knows which agent |
+| `unguarded.py` | The back-stop for an agent run Blackbox does not see: one HIGH finding per agent process that |
+| `versions.py` | Which version of each coding agent is installed here, and where its program is |
+
+</details>
+
+<details>
+<summary><b><code>approvals/</code></b> · 6 files · 774 lines</summary>
+
+| File | What it does |
+|---|---|
+| `__init__.py` | Turning protection DOWN needs the person's confirmation: anything that would switch Blackbox |
+| `approve_command.py` | ``blackbox approve`` — confirm held changes from the person's own terminal (KI-659, design F9) |
+| `store.py` | Pending approvals of changes that turn protection DOWN, and the paired companion app's key |
+| `system_prompt.py` | Confirming a held change WITHOUT a paired companion app: the operating system asks for the user's |
+| `terminal.py` | Confirming a held change from the person's OWN terminal, where the system draws no password |
+| `weakening.py` | Which changes turn protection DOWN — those wait for the person's approval |
+
+</details>
+
+<details>
+<summary><b><code>desktop/</code></b> · 4 files · 848 lines</summary>
+
+| File | What it does |
+|---|---|
+| `__init__.py` | Blackbox inside Hermes Desktop: what the Hermes Desktop half shows, and the live alert it hears |
+| `dashboard_link.py` | Hermes Desktop's door to the Blackbox dashboard's own API (Proxy pattern) |
+| `long_calls.py` | Dashboard calls that outlast Hermes Desktop's 30-second request limit (Asynchronous Request-Reply) |
+| `readiness.py` | Getting Blackbox ready from Hermes Desktop: where this machine is, from plugin install to synced |
+
+</details>
+
+<details>
+<summary><b><code>model_connect/</code></b> · 3 files · 393 lines</summary>
+
+| File | What it does |
+|---|---|
+| `__init__.py` | Connect the protected agent to an AI model from the Blackbox dashboard (2026-11-19) |
+| `settings.py` | The agent's model choice, read and changed through Hermes' own commands (2026-11-19) |
+| `sign_in.py` | The free Nous account sign-in, run by Hermes itself in a child process (2026-11-19) |
+
+</details>
+
+<details>
+<summary><b><code>notify/</code></b> · 12 files · 1,614 lines</summary>
+
+| File | What it does |
+|---|---|
+| `__init__.py` | Native notifications: Blackbox tells the person what their AI agents are doing — which agent, |
+| `deliver.py` | One deliverer at a time: the plugin's own native notifier, or a companion app |
+| `feed.py` | The notifications feed: every notice Blackbox raised, in order — what the notifier and a |
+| `model.py` | One notification, as Blackbox words it for the person |
+| `platform/__init__.py` | The operating-system seam of the notifier: how a notice reaches the system's own notification |
+| `platform/linux.py` | Linux: the desktop's own notifier through ``notify-send`` (libnotify), when it is installed |
+| `platform/macos/__init__.py` | macOS: Blackbox's own notifier app, and the system's script notifier as the fallback |
+| `platform/macos/session.py` | macOS: is the person at this Mac — and can they see a banner right now? |
+| `platform/unsupported.py` | An operating system without a notifier yet: nothing is shown, and that is said plainly |
+| `policy.py` | What the person wants to be told: the notification policy (``notifications.*`` in config.yaml) |
+| `sources.py` | Where notices come from: three things Blackbox already records, read and compared each tick |
+| `wording.py` | How a notification is worded: WHICH agent, WHAT it did in plain words, and Blackbox's VERDICT |
+
+</details>
+
+<details>
+<summary><b><code>playground/</code></b> · 5 files · 608 lines</summary>
+
+| File | What it does |
+|---|---|
+| `__init__.py` | The Playground: sandbox mode's test bench, built into the product (2026-10-21) |
+| `graph.py` | The sandbox lane drawn as the dashboard's Community graph (2026-10-21) |
+| `lane.py` | Read the graph's ``sandbox`` lane: the test statements every member has shared there |
+| `runner.py` | Run one sandbox test: the protected agent ATTEMPTS a listed threat, through the real check |
+| `wallets.py` | Wallet tests: every shield's self-tests for this machine, run through the real check, local only |
+
+</details>
+
+<details>
+<summary><b><code>semantic/</code></b> · 4 files · 278 lines</summary>
+
+| File | What it does |
+|---|---|
+| `__init__.py` | Opt-in graph retrieval and local advisory review, independent of regex hits |
+| `command.py` | Explicit local index maintenance; never a network sync or rules export |
+| `readiness.py` | Explicit preparation and point-in-time residency, without a stale profile cache |
+| `reviewer.py` | Local evidence-grounded review. Similarity is never a blocking verdict |
+
+</details>
+
+<details>
+<summary><b><code>setup/</code></b> · 18 files · 2,480 lines</summary>
+
+| File | What it does |
+|---|---|
+| `__init__.py` | ``blackbox setup`` — the full Blackbox install after a Hermes plugin-catalog install |
+| `addon_cleanup.py` | What an add-on asks ``blackbox uninstall`` to remove for it: the files, Keychain items and |
+| `blackbox-dkg-runtime-fingerprint.py` | Compute and atomically record the DKG runtime loaded by Blackbox |
+| `checkout_layout.py` | What the installer's checkout of the repository holds on this machine: Hermes (the host) and the |
+| `host_removal.py` | Which parts of the Hermes host an install set up may go, and which stay because the person has |
+| `install_manifest.py` | What Blackbox's installer put on this machine besides Blackbox itself — the install manifest — and |
+| `notifier.py` | ``blackbox notifications`` — the plugin's own native notifier, from the command line |
+| `platform/__init__.py` | The operating-system seam of ``blackbox uninstall``: what only the system's own tools can remove |
+| `platform/contract.py` | What every ``setup/platform/<os>`` module is given: the runner it reaches the system through |
+| `platform/linux.py` | Linux: systemd lingering turned off again for the person (``loginctl disable-linger``) when |
+| `platform/macos.py` | macOS: a Keychain item through ``security delete-generic-password`` and a preferences domain |
+| `platform/unsupported.py` | What a system does not have: no Keychain or preferences domains, no systemd lingering, no |
+| `platform/windows.py` | Windows: the folder Blackbox's installer put on the person's own PATH (``HKCU\Environment``, |
+| `sync_defaults.py` | Load the installed plugin's default gate from either installer layout |
+| `sync_profile.py` | Admit compatible fresh defaults and preserve existing trust and protection settings |
+| `uninstall.py` | ``blackbox uninstall`` — remove Blackbox from this machine, and nothing else |
+| `uninstall_data.py` | ``blackbox uninstall``'s steps on Blackbox's own data: the keys kept in a backup folder, the |
+| `uninstall_outside.py` | What ``blackbox uninstall`` removes OUTSIDE Blackbox's own folders: the system protection helper |
+
+</details>
+
+<details>
+<summary><b><code>watch/</code></b> · 3 files · 405 lines</summary>
+
+| File | What it does |
+|---|---|
+| `__init__.py` | Watch rules: watch a host or a package first, see how often agents reach for it, then block it |
+| `rules.py` | Watch rules as data: what one rule names, its id, its state, and the section it is saved in |
+| `state.py` | What watch rules leave on disk: each rule's hits, and the rules an organisation's add-on handed in |
 
 </details>
 

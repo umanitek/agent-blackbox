@@ -11,13 +11,13 @@ and flags or blocks it before anything happens.
 
 | | |
 |---|---|
-| **Protects** | Hermes agents (this plugin); OpenClaw workspaces through a bundled bridge |
+| **Protects** | Hermes (this plugin), Claude Code, Codex, Gemini CLI, Cline, OpenCode, Cursor, Copilot CLI, Windsurf and OpenClaw on macOS and Linux (see [Supported agents](#supported-agents)) |
 | **Catches** | prompt injection, dangerous commands, sensitive-file access, secret exposure, malicious packages, unsafe skills, known-bad domains and wallets, attempts on crypto wallets and keys |
 | **Learns from** | Umanitek's verified threat graph (may block) and an open community graph (flags only), both on the OriginTrail Decentralized Knowledge Graph (DKG) |
 | **Shows** | every finding in a local dashboard and audit trail |
 | **Shares** | privacy-safe, signed threat reports with the community graph — opt-in: off until you turn it on |
 
-Contents: [How it works](#how-it-works) · [Install](#install) ·
+Contents: [Supported agents](#supported-agents) · [How it works](#how-it-works) · [Install](#install) ·
 [What Blackbox does on your machine](#what-blackbox-does-on-your-machine) ·
 [First steps](#first-steps) · [What it catches](#what-it-catches) ·
 [Trader Shield](#trader-shield-crypto-wallets-and-keys) ·
@@ -26,6 +26,44 @@ Contents: [How it works](#how-it-works) · [Install](#install) ·
 [In Hermes Desktop](#in-hermes-desktop) · [Dashboard](#dashboard) · [Configuration](#configuration) ·
 [Files it keeps](#files-it-keeps) · [Privacy and your rights](#privacy-and-your-rights) ·
 [Inside the plugin](#inside-the-plugin) · [Troubleshooting](#troubleshooting)
+
+## Supported agents
+
+Blackbox protects the AI agents you already use, on **macOS** and **Linux** (tested on Ubuntu 24.04
+and 22.04). Every agent reports to the same local guard on your machine, gets the same verdicts from
+the same threat graph, and shows up in the same dashboard, labelled with its name and its sub-agents.
+
+| Agent | How Blackbox protects it | Kernel sandbox (macOS · Linux) | Tested with the real agent |
+|---|---|---|---|
+| **Hermes** | the Blackbox plugin itself: every tool call, model request and session | ✅ terminal tool and `execute_code` | ✅ macOS and Linux test rounds |
+| **Claude Code** | its own hooks: tool calls, prompts, tool output, sessions and sub-agents | ✅ | ✅ macOS and Linux test rounds |
+| **Codex CLI** | its own hooks (tool output with an injection is replaced) | ✅ | ✅ macOS and Linux test rounds. Codex runs the hooks only after you approve them once in Codex (`/hooks`); until then Blackbox shows Codex as **not protected** |
+| **Gemini CLI** | its own hooks (tool output with an injection is replaced) | ✅ | ✅ macOS and Linux test rounds |
+| **Cline** | hook scripts, or its SDK plugin for the CLI | ✅ | ✅ macOS and Linux test rounds |
+| **OpenCode** | its plugin hooks (tool output with an injection is replaced) | ✅ | ✅ macOS and Linux test rounds |
+| **OpenClaw** | a bundled bridge plugin that asks Blackbox for each verdict | — | parity-tested with the Python side; live validation pending |
+| **Cursor** | its hooks, including refusing to read an injected file | launcher available, not yet proven | hooks built from the official docs; not yet in a real-agent test round |
+| **GitHub Copilot CLI** | its hooks (tool calls refused; prompts and output recorded) | launcher available, not yet proven | hooks built from the official docs; not yet in a real-agent test round |
+| **Windsurf (Devin)** | its hooks, including refusing to read an injected file | launcher available, not yet proven | hooks built from the official docs; not yet in a real-agent test round. No Linux CLI |
+
+**What every agent gets.** It cannot read the files you protect (`~/.ssh`, `.env`, keys, wallets),
+install a package the verified graph lists as malicious, switch off its own hooks, leave something
+that starts by itself later, or stop or change Blackbox. In **Audit** mode threats are flagged; in
+**Block** mode a verified threat is refused. Self-protection is enforced in both modes. **Docker** and
+**stopping one of your own programs** ask you first.
+
+**Two layers.** The **hooks** let Blackbox judge each action an agent announces. The **kernel sandbox**
+(Seatbelt on macOS; Blackbox's own namespace sandbox, seccomp and Landlock on Linux) also refuses what
+an agent tries without announcing it: a script that hides what it opens, or a program it wrote
+earlier. The sandbox is on by default. You can take an agent out of it in Settings, and taking one out
+asks you first.
+
+**Every session is tracked.** Sessions, the sub-agents they spawn, resumed sessions and an agent
+running without Blackbox (a HIGH finding) all appear on the dashboard's Agents page.
+
+Per-agent detail, with what each agent's hooks can enforce, the official docs they follow and the
+recorded test runs: [`docs/agent-compat/`](docs/agent-compat/README.md) and its
+[coverage matrix](docs/agent-compat/coverage-matrix.md).
 
 ## How it works
 
