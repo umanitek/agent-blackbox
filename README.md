@@ -18,18 +18,26 @@ community threat intelligence, and flags or blocks it before damage is done.
 
 | | |
 |---|---|
-| **Protects** | Hermes, Claude Code, Codex, Gemini CLI, Cline, OpenCode, Cursor, Copilot CLI, Windsurf and OpenClaw on macOS and Linux (see [Supported agents](#supported-agents)) |
-| **Catches** | prompt injection, dangerous commands, sensitive-file access, secret exposure, malicious packages, unsafe skills, known-bad indicators |
-| **Learns from** | Umanitek's **verified graph** (may block) and the open **community graph** (flags only) on the OriginTrail DKG |
-| **Shows** | every finding in a local dashboard and audit trail |
-| **Shares** | signed, privacy-safe threat statements with the community graph — opt-in: off until you turn it on (`blackbox report --enable-sharing`) |
+| **Protects** | Hermes, Claude Code, Codex, Gemini CLI, Cline, OpenCode, Cursor, Copilot CLI, Windsurf and OpenClaw (see [Supported agents](#supported-agents)) |
+| **Runs on** | macOS and Linux with full protection (hooks, agent sandbox, shields); Windows with the hooks only |
+| **Catches** | prompt injection, dangerous commands, sensitive-file access, secret exposure, malicious packages, unsafe skills, known-bad indicators, attempts to switch Blackbox off |
+| **Learns from** | Umanitek's **verified graph** (may block) and the **community's reports** (flags only) on the OriginTrail DKG |
+| **Shows** | every finding in a local dashboard, an audit trail and your system's notifications |
+| **Shares** | signed, privacy-safe threat statements with the community — opt-in: off until you turn it on (`blackbox report --enable-sharing`) |
 
-_This README documents Agent Blackbox 1.6.2 (2026-11-26). The file inventory below is generated from the code (`scripts/blackbox-readme-inventory.py`)._
+_This README documents Agent Blackbox 1.6.2 (2026-11-26) · [CHANGELOG](plugins/blackbox/CHANGELOG.md) ·
+the full user guide is the [plugin README](plugins/blackbox/README.md). The file inventory below is
+generated from the code (`scripts/blackbox-readme-inventory.py`)._
 
-**Contents:** [Supported agents](#supported-agents) · [How it works](#how-it-works) · [Install](#install) · [Commands](#commands) ·
+**Contents:** [Supported agents](#supported-agents) ·
+[What Blackbox covers — and what it doesn't yet](#what-blackbox-covers--and-what-it-doesnt-yet) ·
+[Install](#install) · [Upgrade and uninstall](#upgrade-and-uninstall) · [How it works](#how-it-works) ·
+[The protection layers](#the-protection-layers) · [Shields](#shields) · [Commands](#commands) ·
 [What it catches](#what-it-catches) · [The three tiers of intelligence](#the-three-tiers-of-intelligence) ·
-[The community graph](#the-community-graph) · [Architecture](#architecture) · [File structure](#file-structure) · [Hosts](#hosts) ·
-[Dashboard](#dashboard) · [Configuration](#configuration) · [Privacy and your rights](#privacy-and-your-rights) ·
+[The community graph](#the-community-graph) · [Dashboard](#dashboard) ·
+[How Blackbox is tested](#how-blackbox-is-tested) · [Troubleshooting](#troubleshooting) ·
+[Versions](#versions) · [Architecture](#architecture) · [File structure](#file-structure) ·
+[Configuration](#configuration) · [Privacy and your rights](#privacy-and-your-rights) ·
 [About Umanitek](#about-umanitek) · [Legal](#legal) · [License](#license)
 
 ---
@@ -40,11 +48,11 @@ Blackbox protects the AI agents you already use, on **macOS** and **Linux** (tes
 and 22.04). Every agent reports to the same local guard on your machine, gets the same verdicts from
 the same threat graph, and shows up in the same dashboard, labelled with its name and its sub-agents.
 
-| Agent | How Blackbox protects it | Kernel sandbox (macOS · Linux) | Tested with the real agent |
+| Agent | How Blackbox protects it | Agent sandbox (macOS · Linux) | Tested with the real agent |
 |---|---|---|---|
 | **Hermes** | the Blackbox plugin itself: every tool call, model request and session | ✅ terminal tool and `execute_code` | ✅ macOS and Linux test rounds |
 | **Claude Code** | its own hooks: tool calls, prompts, tool output, sessions and sub-agents | ✅ | ✅ macOS and Linux test rounds |
-| **Codex CLI** | its own hooks (tool output with an injection is replaced) | ✅ | ✅ macOS and Linux test rounds. Codex runs the hooks only after you approve them once in Codex (`/hooks`); until then Blackbox shows Codex as **not protected** |
+| **Codex CLI** | its own hooks (tool output with an injection is replaced) | ✅ | ✅ macOS and Linux test rounds. Needs your `/hooks` approval once (below) |
 | **Gemini CLI** | its own hooks (tool output with an injection is replaced) | ✅ | ✅ macOS and Linux test rounds |
 | **Cline** | hook scripts, or its SDK plugin for the CLI | ✅ | ✅ macOS and Linux test rounds |
 | **OpenCode** | its plugin hooks (tool output with an injection is replaced) | ✅ | ✅ macOS and Linux test rounds |
@@ -53,84 +61,93 @@ the same threat graph, and shows up in the same dashboard, labelled with its nam
 | **GitHub Copilot CLI** | its hooks (tool calls refused; prompts and output recorded) | launcher available, not yet proven | hooks built from the official docs; not yet in a real-agent test round |
 | **Windsurf (Devin)** | its hooks, including refusing to read an injected file | launcher available, not yet proven | hooks built from the official docs; not yet in a real-agent test round. No Linux CLI |
 
-**What every agent gets.** It cannot read the files you protect (`~/.ssh`, `.env`, keys, wallets),
-install a package the verified graph lists as malicious, switch off its own hooks, leave something
-that starts by itself later, or stop or change Blackbox. In **Audit** mode threats are flagged; in
-**Block** mode a verified threat is refused. Self-protection is enforced in both modes. **Docker** and
-**stopping one of your own programs** ask you first.
+**Codex: one step from you.** Codex runs a hook only after you trust it: run `codex`, type `/hooks`
+and trust Blackbox's hooks. Until then Blackbox shows Codex as **not protected**, and a Codex run
+with untrusted hooks is a HIGH finding. Blackbox never approves them for you.
 
-**Two layers.** The **hooks** let Blackbox judge each action an agent announces. The **kernel sandbox**
-(Seatbelt on macOS; Blackbox's own namespace sandbox, seccomp and Landlock on Linux) also refuses what
-an agent tries without announcing it: a script that hides what it opens, or a program it wrote
-earlier. The sandbox is on by default. You can take an agent out of it in Settings, and taking one out
-asks you first.
+**What every agent gets.** It cannot read the files you protect (`~/.ssh`, `.env`, keys, wallets),
+install a package the verified graph lists as malicious (Block mode), switch off its own hooks,
+leave something that starts by itself later, or stop or change Blackbox. In **Audit** mode threats
+are flagged; in **Block** mode a verified threat is refused. Self-protection, your protected files
+and the startup places are enforced in both modes. **Docker** and **stopping one of your own
+programs** ask you first.
+
+**Inside the sandbox when started by name.** Blackbox puts a launcher for each agent first on your
+PATH, so `claude`, `codex`, `gemini`, `cline`, `opencode`, `copilot` or `cursor-agent` typed in a
+terminal (or run by `zsh -c`, a zsh script, an SSH command, an IDE's terminal) starts inside the
+sandbox. An agent started another way — a `/bin/sh` script outside a terminal, a launchd job, an
+app with its own PATH, a full path — keeps the hooks only. File Shield's page shows each agent as
+"sandboxed (kernel-enforced)" or "hooks only".
 
 **Every session is tracked.** Sessions, the sub-agents they spawn, resumed sessions and an agent
-running without Blackbox (a HIGH finding) all appear on the dashboard's Agents page.
+running without Blackbox (a HIGH finding) all appear on the dashboard's Agents views.
 
 Per-agent detail, with what each agent's hooks can enforce, the official docs they follow and the
 recorded test runs: [`plugins/blackbox/docs/agent-compat/`](plugins/blackbox/docs/agent-compat/README.md) and its
 [coverage matrix](plugins/blackbox/docs/agent-compat/coverage-matrix.md).
 
-## How it works
+## What Blackbox covers — and what it doesn't yet
 
-```mermaid
-flowchart LR
-    A[Agent is about to act<br/>prompt · tool call · command · file · package · skill] --> B[Blackbox hook]
-    B --> C[Name the action<br/>deterministic identifier]
-    C --> D{Check}
-    D -->|verified graph match| E[FLAG or BLOCK]
-    D -->|community graph match| F[FLAG only]
-    D -->|built-in heuristic| G[FLAG]
-    D -->|clean| H[Allow]
-    E & F & G --> I[Record locally<br/>dashboard + audit trail]
-    G -->|sharing on| J[Share a signed report<br/>to the community graph]
-```
+| ✅ Covered today | ⏳ Not yet |
+|---|---|
+| **macOS:** hooks, the agent sandbox (Seatbelt, on by default), sandbox permissions, File, Network and Trader Shield, DNS Shield and the Threat Firewall (with the helper), approvals by your password, native notifications | **Windows deep protection:** Windows has the hooks, detection, dependency checks and the dashboard; no agent sandbox, no system protection helper, no Network Shield enforcement, no native notifications yet |
+| **Linux** (Ubuntu 24.04, 22.04 tested): the same, built on namespaces, seccomp, Landlock, nftables and systemd | **The Linux system protection helper is not published as a download yet:** a Linux install runs on the hooks until you build the helper from source; the Linux sandbox, DNS Shield and Threat Firewall come with it |
+| **Proven with the real agents** on macOS and Linux: Hermes, Claude Code, Codex, Gemini CLI, Cline, OpenCode | **Not yet in a real-agent round:** Cursor, GitHub Copilot CLI and Windsurf (built from their official docs); OpenClaw is parity-tested, live validation pending |
+| **Self-protection in every mode:** an agent cannot switch off its hooks, change Blackbox, stop its services or signal its processes, or leave startup items | **Codex** is protected only after you approve its hooks once (`/hooks`) |
+| **Packages** checked against the threat graph, including lockfiles and transitive dependencies | **While the threat graph cannot answer** (its store stopped or starting), packages are **not checked against it**: actions pass, and one HIGH finding per outage says so |
+| **Prompt injection** checked on prompts and on tool output | **The first sync is heavy:** about half an hour of download and CPU (at low priority); until it ends only the built-in rules protect |
+| **Weakening changes wait for you;** a session running without Blackbox is a HIGH finding | **Known-bad only:** packages and indicators must be listed; new malware is the sandbox's job. Hooks alone cannot judge code decided at run time |
 
-| Step | What happens | Where |
-|---|---|---|
-| **Watch** | Five Hermes hooks (`pre_tool_call`, `post_tool_call`, `pre_api_request`, session start and end) see the prompt, tool call, command, file, package or skill before the agent acts | `plugins/blackbox/guard` |
-| **Name** | The action becomes a deterministic identifier such as `dep:npm:evil@1.0.0` or `ioc:domain:evil.example`, so every node names one threat the same way | `kernel/threat_ids.py` |
-| **Check** | The identifier is looked up in the compiled ruleset: verified rules, community rules, built-in heuristics | `detection/`, `ruleset/` |
-| **Respond** | Audit mode records. Block mode stops verified threats at or above `block_severity`, plus your protected paths and secret exfiltration | `guard/hooks.py` |
-| **Record** | Every finding is written to the local audit trail and shown live in the dashboard | `audit/`, `dashboard/` |
-| **Share** | Unless you turned sharing off, a signed privacy-safe statement goes to the community graph | `community/` |
-
-Everything is local and offline on the hot path, in microseconds. A Blackbox fault never breaks the
-agent: every boundary fails open.
+The full, per-OS list: [plugin README](plugins/blackbox/README.md#what-blackbox-covers--and-what-it-doesnt-yet)
+and the [threat model](plugins/blackbox/docs/THREAT_MODEL.md) ("Residual risks", "Open gaps").
 
 ---
 
 ## Install
 
-Docker is required for the default Blazegraph store. On macOS the installer starts Docker Desktop
-automatically when it is installed but stopped. On Linux, start Docker Engine first. To install
-without Docker, download the script and run it with `--store oxigraph`.
+**macOS and Linux**
 
 ```bash
 curl -fsSL blackbox.umanitek.ai | bash
 ```
 
-Windows PowerShell ([installer source](scripts/blackbox-install.ps1)):
+**Windows PowerShell** ([installer source](scripts/blackbox-install.ps1); hooks only, see above)
 
 ```powershell
 iwr -useb blackbox-w.umanitek.ai | iex
 ```
 
+**Already running Hermes?** `hermes plugins install blackbox`, then `hermes blackbox setup`.
+
 | The installer sets up | Detail |
 |---|---|
-| Hermes (the host runtime) + the Blackbox plugin | `blackbox` becomes a shortcut for `hermes blackbox` |
-| A local DKG node | `http://127.0.0.1:9320`, isolated home, no funds needed to read |
-| The verified graph subscription | Umanitek's curated threat graph (`context_graph_id`) |
-| The community graph pair | from `BLACKBOX_COMMUNITY_GRAPH_ID` + `BLACKBOX_COMMUNITY_GRAPH_PEER_ID` when set |
-| `blackbox attach` | wires every Hermes home and OpenClaw workspace on the machine |
-| The dashboard | started at `http://127.0.0.1:9700`, loopback only |
+| Hermes (the host runtime) + the Blackbox plugin | `blackbox` becomes a shortcut for `hermes blackbox`; a Hermes you already have is reused |
+| Blackbox's own DKG node | `@origintrail-official/dkg` **10.1.2**, checked against its published sha512, on DKG mainnet (`mainnet-base`), at `http://127.0.0.1:9320` in its own home; reading needs no funds |
+| The node's store | Blazegraph in Docker when Docker works; otherwise **Oxigraph**, which needs no Docker (`--store oxigraph`) |
+| The verified threat graph | Umanitek's curated graph; the first sync runs in the background (about half an hour) |
+| Your agents | **"Protect every agent, now and later?"** (yes at Enter); each agent found starts inside the sandbox |
+| The mode | **Audit**, unless you say yes to "Turn on Block mode now?" |
+| The dashboard | `http://127.0.0.1:9700`, this computer only, started at login |
+| The system protection helper (optional) | **"Turn on system protection?"** — a small root helper for DNS Shield and the Threat Firewall; add it later from the dashboard's Network Shield or with `--system-protection` |
+
+Needs: Python 3.11–3.13; Docker only for the Blazegraph store. Linux needs systemd and nftables;
+on Ubuntu 23.10+ the helper adds one AppArmor rule for the sandbox launcher. Hermes 0.21.7+,
+OpenClaw 2026.6.11+. Every option, prompt and platform detail: [plugin README → Install](plugins/blackbox/README.md#install).
 
 <details>
 <summary><b>Manual install</b> - prefer not to pipe a script into bash?</summary>
 <br>
 
-The installer only automates the steps below (idempotent, no sudo). Run them yourself:
+Download the script, read it, then run it:
+
+```bash
+curl -fsSL blackbox.umanitek.ai -o blackbox-install.sh
+less blackbox-install.sh
+bash blackbox-install.sh          # --help lists every option
+```
+
+Or do the core steps yourself (the installer also sets up the services, the store, the sandbox and
+the helper, and rolls back on failure):
 
 ```bash
 # 1. Get the code
@@ -151,9 +168,9 @@ exec "$(dirname "$0")/hermes" blackbox "$@"
 EOF
 chmod 755 ~/.local/bin/blackbox
 
-# 4. Official npm DKG node (required for first-run protection)
+# 4. Blackbox's DKG node: the release the installer pins
 mkdir -p dkg
-npm install --prefix dkg --prefer-online @origintrail-official/dkg@latest
+npm install --prefix dkg @origintrail-official/dkg@10.1.2
 export BLACKBOX_DKG_HOME="$PWD/.dkg"
 export BLACKBOX_DKG_BIN="$PWD/dkg/node_modules/.bin/dkg"
 export BLACKBOX_DKG_PORT=9320
@@ -163,21 +180,93 @@ DKG_HOME="$BLACKBOX_DKG_HOME" "$BLACKBOX_DKG_BIN" hermes setup --network mainnet
   --daemon-url "$BLACKBOX_DKG_DAEMON_URL" \
   --no-fund   # joining and reading do not require funds
 
-# 5. Enable Agent Blackbox and protect every local agent
+# 5. Enable Agent Blackbox and protect your agents
 hermes plugins enable blackbox
-blackbox attach
+blackbox attach --all
 blackbox sync --wait --require-rules
 ```
 
-Or download the script, read it, then run it:
+</details>
 
-```bash
-curl -fsSL blackbox.umanitek.ai -o blackbox-install.sh
-less blackbox-install.sh
-bash blackbox-install.sh
+## Upgrade and uninstall
+
+**Upgrade:** run the one-line install again (catalog installs: `hermes plugins update blackbox`).
+It keeps your node's identity and synced graph, your settings, reporter key and sharing choice, and
+the agents you protected or took out of the sandbox.
+
+**Uninstall:** `blackbox uninstall` (`--dry-run` shows what it would do first).
+
+| It removes | It keeps |
+|---|---|
+| the login services, Blackbox in every agent, its data, its node and store, the `blackbox` command, the plugin | your Hermes (unless Blackbox's installer put it there: it asks; `--remove-host` without a terminal), other DKG nodes, Docker |
+| the system protection helper, first: **DNS and the firewall go back exactly as they were** | **your node's keys and reporter key**, in `~/blackbox-backup-<time>/` (`--purge` deletes them; `--keep-logs` keeps the audit record there too) |
+
+## How it works
+
+```mermaid
+flowchart LR
+    A[Agent is about to act<br/>prompt · tool call · command · file · package · skill] --> B[Blackbox hook]
+    B --> C[Name the action<br/>deterministic identifier]
+    C --> D{Check}
+    D -->|verified graph match| E[FLAG or BLOCK]
+    D -->|community match| F[FLAG only]
+    D -->|built-in heuristic| G[FLAG]
+    D -->|clean| H[Allow]
+    E & F & G --> I[Record locally<br/>dashboard + audit trail]
+    G -->|sharing on| J[Share a signed report<br/>to the community]
 ```
 
-</details>
+| Step | What happens | Where |
+|---|---|---|
+| **Watch** | Five Hermes hooks (`pre_tool_call`, `post_tool_call`, `pre_api_request`, session start and end), and each coding agent's own hooks, see the prompt, tool call, command, file, package or skill before the agent acts | `plugins/blackbox/guard`, `agent_hooks/` |
+| **Name** | The action becomes a deterministic identifier such as `dep:npm:evil@1.0.0` or `ioc:domain:evil.example`, so every node names one threat the same way | `kernel/threat_ids.py` |
+| **Check** | The identifier is looked up in the compiled ruleset: verified rules, community rules, built-in heuristics | `detection/`, `ruleset/` |
+| **Respond** | Audit mode records. Block mode stops verified threats at or above `block_severity`, plus your protected paths and secret exfiltration | `guard/hooks.py` |
+| **Record** | Every finding is written to the local audit trail and shown live in the dashboard | `audit/`, `dashboard/` |
+| **Share** | Only with sharing on: a signed privacy-safe statement goes to the community | `community/` |
+
+Everything is local and offline on the hot path, in microseconds. A Blackbox fault never breaks the
+agent: every boundary fails open.
+
+## The protection layers
+
+| Layer | What it does |
+|---|---|
+| **1. Hooks** | judge every action an agent announces: the command, the path, the code, the package, the prompt, the tool's output. Every agent, every OS |
+| **2. Agent sandbox** (on by default) | the operating system refuses what the agent, and everything it starts, actually does. macOS: Seatbelt. Linux: Blackbox's own namespace sandbox with seccomp, Landlock or a PID namespace, and an AppArmor rule on Ubuntu |
+| **System protection helper** (optional, root) | DNS Shield, the Threat Firewall and real-time file watching; on Linux also the sandbox launcher |
+
+**What the sandbox closes:** your protected files and keys; Blackbox's own files and settings
+(Hermes's `config.yaml` and `.env`); startup places (launchd, systemd, cron, `at`, `~/.ssh` login
+files, Homebrew's folders); shell startup files; your own PATH folders; every agent's hook settings
+and the folders above them; the Docker socket; `sudo` and setuid programs; signals to programs
+outside it.
+
+**Sandbox permissions.** What an agent may do beyond that is yours to set — **block**, **ask** or
+**allow**, per agent and per project: Homebrew and global installs (done by Blackbox, threat-checked),
+opening links and files in apps, AppleScript, stopping a program, Docker, local services, the
+clipboard. Turning one up asks you first.
+
+**Self-protection, in every mode.** An agent cannot switch off its hooks, change Blackbox, stop its
+services or signal its processes (by name or by pid), or leave startup items. The **hook watch**
+puts Blackbox's hooks back within seconds and reports foreign ones. Hermes starting without
+Blackbox (the **Hermes load watch**), and any session running without Blackbox, is a HIGH finding.
+
+**Approvals.** A change that turns protection down waits for your own password prompt (macOS, a
+Linux desktop's polkit, or `blackbox approve` in your terminal on a Linux server). Strengthening
+applies at once.
+
+Detail for each: [plugin README → The protection layers](plugins/blackbox/README.md#the-protection-layers).
+
+## Shields
+
+| Shield | What it protects | Needs the helper for |
+|---|---|---|
+| **File Shield** | the files and folders you choose, from every agent, by every route, in every mode | real-time watching |
+| **Network Shield** | agent network lockdown (allowed hosts only), your block list, live system and connection status; **DNS Shield** (malicious domains refused for every app), the **Threat Firewall** (pf on macOS, nftables on Linux), cutting malicious connections, SSH lockdown — each repairs itself within seconds with a HIGH alert | DNS Shield, the Threat Firewall, cutting connections, SSH lockdown |
+| **Trader Shield** | wallets (11 supported), seed phrases, private keys, exchange API keys, drainer approvals | — |
+
+Detail: [plugin README → Shields](plugins/blackbox/README.md#shields).
 
 ---
 
@@ -188,11 +277,16 @@ bash blackbox-install.sh
 | Command | What it does |
 |---|---|
 | `hermes` | start your agent; local protection is already active |
-| `blackbox status` | config, node health, ruleset and findings counts, operator alarms |
+| `blackbox setup` | finish a plugin-catalog install (`--store oxigraph`, `--protect-new-agents` / `--no-protect-new-agents`) |
+| `blackbox status` | config, node health, verified lookups, ruleset and findings counts, operator alarms, protected agents (Codex's `/hooks` state included) |
 | `blackbox sync --wait` | pull the latest verified threat graph now |
 | `blackbox dashboard` | live dashboard at `http://127.0.0.1:9700` |
+| `blackbox attach <home>` / `--all` / `--auto` / `--no-auto` | protect the agents you name / every one found / every one added later / stop that |
+| `blackbox detach` | remove Blackbox from every local agent (`--dry-run` first) |
+| `blackbox approve` | confirm a held weakening change from your own terminal (sudo asks for your password) |
+| `blackbox notifications status` / `test` / `setup` | what shows Blackbox's notifications, send a test, install its own notifier |
+| `blackbox uninstall` | remove Blackbox (`--dry-run`, `--purge`, `--keep-logs`, `--remove-host`) |
 | `blackbox chat` | a Blackbox-focused operator chat (not counted as a protected agent) |
-| `blackbox attach` / `detach` | protect every local agent at once / turn it off |
 | `blackbox setup-llm` | optional second-opinion LLM reviewer for prompt injection (flags only, verdicts stay local) |
 
 ### Community graph (sharing is opt-in)
@@ -277,15 +371,28 @@ In the default audit mode every one is flagged and logged, nothing is stopped. S
 | Dangerous command | `escalation:<tool>:<arg shape>` | `escalation:terminal:remote-script-pipe` | verified rules block |
 | Sensitive file access | `fileaccess:<tool>:<category>` | `fileaccess:read_file:ssh-private-key` | verified rules block |
 | Suspicious skill | `skill:<name>@<version>` (registry) · `skill:artifact:<sha256>:<shape>` (local) | `skill:sneaky-skill@1.0.0` | verified rules block |
-| Known-bad indicator | `ioc:<type>:<value>`, types `domain` `url` `ip` `hash` `wallet` `contract` | `ioc:domain:evil.example` | flags only in this version |
+| Known-bad indicator | `ioc:<type>:<value>`, types `domain` `url` `ip` `hash` `wallet` `contract` | `ioc:domain:evil.example` | flags in tool calls; DNS Shield and the Threat Firewall refuse listed domains and addresses machine-wide |
 | Secret exposure | `secret:<type>` | records the type of secret, never its value | blocks at `block_severity`; a secret sent off-box is rated critical |
-| Your protected paths | local rule | `~/.ssh/*`, `**/.env` | blocks |
+| Your protected paths | local rule | `~/.ssh/*`, `**/.env` | blocks, in every mode |
+| Root | `agent:elevation-request`, `agent:running-as-root` | `sudo …` | not refused: flagged, shown on the agent, notified |
 
 A block needs three things: `mode: block`, a severity at or above `block_severity` (default
 `critical`), and a trusted source (a verified rule, your own protected path, or a secret finding).
 Community and heuristic findings never block. Secret and protected-path findings never leave the
 machine. If a historical skill report names no affected version, Blackbox flags every version as a
 medium, alert-only risk.
+
+**Packages** are checked by the names an install command writes, and by the lockfiles and manifests
+an install reads (npm, pnpm, yarn, bun, pip requirements, uv, poetry, Pipfile, pyproject, Cargo,
+Gemfile), down the whole dependency tree; a block names the package, version, file and chain.
+Prompt injection is checked on prompts and on tool output. Detail and limits:
+[plugin README → What it catches](plugins/blackbox/README.md#what-it-catches).
+
+**When the threat graph cannot answer** (its store stopped, starting or stuck), `blackbox status`
+says `DEGRADED: verified rules cannot be looked up`, and one HIGH finding per outage says
+"Threat graph unavailable — packages are not being checked against it". Meanwhile what the graph
+would have judged passes (Blackbox never breaks the agent); protected files, secrets,
+self-protection, the startup places and the sandbox keep working.
 
 ---
 
@@ -298,19 +405,33 @@ medium, alert-only risk.
 | Tier | Who writes it | Where it lives | Enforcement | Shown as |
 |---|---|---|---|---|
 | **Verified** | Umanitek's curator only | the verified graph (`context_graph_id`), DKG verifiable memory | FLAG, and BLOCK in block mode | Verifiable |
-| **Community** | every protected node with sharing on, under its own signature | the community graph (`community_graph_id`), DKG shared working memory | FLAG only, never block | Community |
+| **Community** | every protected node with sharing on, under its own signature | the same graph's shared memory (sub-graph `reports`) | FLAG only, never block | Community |
 | **Local** | this machine (heuristics, protected paths, secret exposure) | the local audit trail | FLAG; protected paths and secret exfiltration BLOCK in block mode | Local |
 
 Threats should not have to be rediscovered one agent at a time: a verified rule protects every node
-the moment it syncs, and a community report warns every node within about half a minute.
+the moment it syncs, and a community report warns every node within about half a minute. Local
+overrides (`blackbox rules unblock`) may only lower a verified rule from block to flag; nothing
+local can raise enforcement.
 
 ---
 
 ## The community graph
 
-The verified graph is reviewed intelligence. The community graph is its scouting network: an open
-graph on the DKG that any node contributes to and learns from, so threats surface before a reviewer
-has seen them.
+The verified rules are reviewed intelligence. The community's reports are their scouting network:
+every node can contribute and learn from them, so threats surface before a reviewer has seen them.
+They live in the verified graph's shared memory (sub-graph `reports`), never block, and leave your
+machine only if you turn sharing on.
+
+**Joining.** Every node asks to join once, within seconds of starting, whether or not sharing is on;
+the graph's owner admits it. Admission lets a node's shares be kept; it never lets a node publish
+verified rules.
+
+**Sandbox mode and the Playground.** Switch on sandbox mode (under Community sharing in Settings)
+and every share goes to the graph's `sandbox` lane instead. The dashboard's Playground then sends a
+real listed threat (a package, a domain, an IP or a URL) through the real check to prove the whole
+path — membership, signing, the owner keeping the share, delivery to the other members — with no
+consequence: no rule, flag or real log ever sees a test. It also runs Trader Shield's self-tests
+for the wallets on this machine. Switch sandbox mode off and the next finding is real again.
 
 ### What happens when an agent catches something
 
@@ -349,7 +470,8 @@ Measured on five mainnet nodes: a report filed on one node is on the others with
 There is no field for prompt text, commands, paths or file contents. A report that does not fit the
 schema is never built. Secret, LLM-reviewer and custom-rule findings never leave at all.
 
-### Who said it
+<details>
+<summary><b>Who said it</b></summary>
 
 | Rule | Why |
 |---|---|
@@ -358,7 +480,10 @@ schema is never built. Secret, LLM-reviewer and custom-rule findings never leave
 | One subject per reporter and threat | two reporters of one threat are two signers by construction |
 | Unsigned, foreign-network or future-dated rows are dropped | forged traffic shows up as a drop count, not as a threat |
 
-### Who is trusted: two authorities
+</details>
+
+<details>
+<summary><b>Who is trusted: two authorities</b></summary>
 
 A report only moves enforcement when someone accountable stands behind it. Two separate authorities
 can do that. Each has its own root key, its own three curator keys (any two must sign), and its own
@@ -433,7 +558,10 @@ established itself.
 | deferring a corroborated threat with no evidence yet, and lapsing the deferral after 30 days | granting partner status, collapsing several keys into one cluster |
 | listing, renewing or delisting a reporter when its own ledger calls for it | pausing intake, anything with a root key |
 
-### Stages: what every reader computes from the same inputs
+</details>
+
+<details>
+<summary><b>Stages: what every reader computes from the same inputs</b></summary>
 
 ```mermaid
 stateDiagram-v2
@@ -478,7 +606,10 @@ Three rules hold at every stage. Enforcement never falls as evidence grows. Redu
 through: counted disputes decay a flag to monitor, and a signed retraction withdraws its author's
 voice. A failed read keeps the last good state instead of wiping the tier.
 
-### How it stays alive and honest
+</details>
+
+<details>
+<summary><b>How it stays alive and honest</b></summary>
 
 | Mechanism | Setting | What it does |
 |---|---|---|
@@ -490,19 +621,95 @@ voice. A failed read keeps the last good state instead of wiping the tier.
 | Daily cap | `daily_report_limit` (100) | bounds outbound reports; never "no cap" |
 | Shadow mode | `community_shadow: false` | computes stages exactly but enforces only MONITOR, logging what would have flagged |
 
-### Finding the graph
+</details>
 
-The community graph is a public, unregistered DKG graph: no join step, no approval. A fresh node
-cannot discover it on its own, so the graph id and its owner's peer id travel as a pair.
+---
 
-```mermaid
-flowchart LR
-    I[Installer or config:<br/>community_graph_id + community_graph_peer_id] --> P[First pulse]
-    P --> C[Dial the owner by peer id<br/>DHT-resolved, ~5 s]
-    C --> S[Subscribe with shared memory]
-    S --> R[Catch-up replays the graph<br/>~20 s]
-    R --> D[Community tier live<br/>under 80 s from install]
-```
+## Dashboard
+
+`blackbox dashboard` serves `http://127.0.0.1:9700` on loopback only. It refuses other hosts and
+foreign origins, and every change needs a per-process session token, so another page in your
+browser cannot alter settings.
+
+| Where | Shows |
+|---|---|
+| **Overview** | open findings, verified threats synced, the last sync, community sharing; one slim line naming any agent that is not protected, with **Protect** |
+| **Agents** | **Running now** (every live session and sub-agent, sandboxed or hooks only), each instance's page, **History** and **Profiles** |
+| **Threats detected** · **Activity** | the live findings feed; everything the protected agents did (the audit trail). A finding offers "Watch this" |
+| **Threat graph** | the Verifiable, Community and Local tiers, and the verified graph's sync progress |
+| **Shields** | File Shield (protected items, the sandbox, its permissions and launch coverage), Network Shield, Trader Shield |
+| **Protection** | refused attempts to switch Blackbox off, counted by kind; the **protection log**, chained so an edit, a cut or a rewind shows; **watch-first rules** (watch a host or package, then block it in one click) |
+| **Notifications** · **Settings** · **Docs** | what you are told; mode, categories, protected paths, shields, agents, sharing; every shield and its tested attacks |
+| **Playground** | in sandbox mode only (see [The community graph](#the-community-graph)) |
+
+**Notifications.** Blackbox also tells you through your system's own notifications which agent did
+what and whether it was allowed, flagged or stopped — never a path, command or prompt, so they are
+safe on a locked screen. Security notices are on; the rest are opt-in. macOS and Linux
+(`notify-send`); on Windows the dashboard's Notifications page.
+
+**Operator alarms** (also in `blackbox status`)
+
+| Class | Examples | What to do |
+|---|---|---|
+| ACTION | the threat ruleset is empty; my node is stale; verified rules cannot be looked up; community rows signed for another network or graph; curator key manifest stale | the alarm names the command, usually `blackbox sync --wait` |
+| SECURITY | two trusted curator manifests disagree; future-dated community rows ignored; the newest kill list was refused | usually nothing: the bad input is already ignored |
+| INFO | the DKG node is starting; community reports could not be read (last good tier kept); community ingest paused by the curator; curators quiet, away or backlogged; the trust lookup was cut short; confirmations or listings held by this node's daily cap | nothing: verified rules still enforce |
+
+Every page in detail: [plugin README → Dashboard](plugins/blackbox/README.md#dashboard).
+
+---
+
+## How Blackbox is tested
+
+Blackbox is tested in repeated **security rounds** on clean macOS and Linux (Ubuntu 24.04 and 22.04)
+virtual machines, with the real agents: Claude Code, Codex, Gemini CLI, Cline, OpenCode and Hermes.
+Each round asks the agents to do what an attacker would want, by every route they can find:
+
+| Attack family | What is tried |
+|---|---|
+| Reading secrets | protected files, SSH keys, cloud credentials, wallets, Blackbox's own keys |
+| Switching Blackbox off | removing or disabling hooks, changing its settings, stopping its services, signalling its processes |
+| Persistence | leaving a job, login item, shell line or program that runs later |
+| Sandbox escapes | getting a program to act outside the agent sandbox |
+| Malicious packages | installs by name, through lockfiles and through transitive dependencies |
+| Network tampering | switching off or flushing DNS Shield and the Threat Firewall |
+| Covering tracks | editing, cutting or rewinding the audit trail and the protection log |
+
+What gets through is fixed in waves and proven again on a real machine in the next round. Every
+claim in the [threat model](plugins/blackbox/docs/THREAT_MODEL.md) points to the test in this
+repository that checks it, or says why none can. **Found a way around a protection?** Report it
+privately (see the threat model's
+[reporting section](plugins/blackbox/docs/THREAT_MODEL.md#reporting-a-vulnerability)), never in a
+public issue or pull request.
+
+---
+
+## Troubleshooting
+
+Start with `blackbox status`: every alarm names what to do.
+
+| Problem | What to do |
+|---|---|
+| `DEGRADED: verified rules cannot be looked up`, or the first sync is slow | right after an install the store is still starting and the first sync still running (about half an hour, longer on a slow machine); follow it on the dashboard's Threat graph panel. Stuck? `blackbox sync --wait --timeout 180`, and include the peer ID and DKG log it shows when you report it |
+| "Needs the system protection helper" | install it from the dashboard's Network Shield, or re-run the installer with `--system-protection`. On Linux, build it first: [plugin README → The system protection helper](plugins/blackbox/README.md#the-system-protection-helper) |
+| Codex shows **not protected** | run `codex`, type `/hooks` and trust Blackbox's hooks |
+| An agent is not shown as protected, or shows "hooks only" | press **Protect** on the dashboard's line, or `blackbox attach --all`; open a new terminal and start the agent by name so its sandbox launcher is used; restart a running agent |
+| Port 9320 or 9700 taken, or another DKG node on the machine | Blackbox's node lives in its own home and never touches another (its Oxigraph store never takes 7878). Re-run the installer with `BLACKBOX_DKG_PORT=…` or `BLACKBOX_DASHBOARD_PORT=…` |
+| Minimal Linux: Node.js fails on `libatomic` | `sudo apt install libatomic1` (or `sudo dnf install libatomic`), then run the installer again |
+| Logs | the DKG node: `.dkg/daemon.log` in the install folder; the installer: `~/.hermes/logs/`; Linux services: `journalctl --user -u blackbox-dashboard`, `journalctl -u blackbox-netd`; the macOS helper: `/Library/Application Support/Blackbox/netd/netd.log` |
+| Anything else | run the one-line install again: it is safe to re-run, keeps your identity, graph and choices, and repairs what is missing (catalog installs: `hermes blackbox setup`) |
+
+---
+
+## Versions
+
+| | |
+|---|---|
+| Current | **1.6.2** (2026-11-26), the same in `plugins/blackbox/plugin.yaml`, `kernel/constants.py` and the [CHANGELOG](plugins/blackbox/CHANGELOG.md) |
+| How versions work | [Semantic Versioning](https://semver.org/): a **patch** is fixes only, a **minor** adds behaviour that works with everything before, a **major** needs a change from you or another Blackbox node |
+| Tags | `blackbox-vX.Y.Z` (clear of Hermes's own `vX.Y.Z` tags in this repository) |
+| DKG node | new installs use `@origintrail-official/dkg` 10.1.2, checked against its published sha512 |
+| Host | Hermes 0.21.7 or later; OpenClaw 2026.6.11 or later |
 
 ---
 
@@ -525,42 +732,49 @@ flowchart TB
         SY[sync<br/>keeps the node current] --> NO
     end
     VG[Verified graph<br/>Umanitek's curator writes] -->|syncs down, read only| NO
-    NO <-->|signed statements| CG[Community graph<br/>every sharing node writes]
+    NO <-->|signed statements| CG[Community reports<br/>the graph's shared memory]
 ```
 
-Two graphs live on one isolated local DKG node, so Blackbox never replaces or modifies another DKG
+One graph lives on one isolated local DKG node, so Blackbox never replaces or modifies another DKG
 installation.
 
-| Graph | Config key | DKG memory tier | Who writes | Power |
+| Tier of the graph | Config key | DKG memory tier | Who writes | Power |
 |---|---|---|---|---|
-| Verified | `context_graph_id` | verifiable memory | Umanitek's curator only | may block |
-| Community | `community_graph_id` | shared working memory | every sharing node, signed | flags only |
+| Verified rules | `context_graph_id` | verifiable memory | Umanitek's curators only | may block |
+| Community reports | the same graph, sub-graph `reports` | shared memory | every admitted node with sharing on, signed | flags only |
 
-**Modules** (`plugins/blackbox/`, fourteen feature modules and one kernel)
+**Modules** (`plugins/blackbox/`: feature modules around one kernel; the main ones below, every one in `ARCHITECTURE.md`)
 
 | Module | Owns | May depend on |
 |---|---|---|
 | `guard` | the five Hermes hooks, the flag/block decision, automatic sharing, the kill-list check | `kernel`, `attach`, `audit`, `community`, `detection`, `ruleset`, `killlist`, `overrides`, `shields` |
 | `detection` | pure detectors, action parsing, content scanners, protected paths, secret and token-approval checks, OSV lookups, the optional LLM reviewer | `kernel`, `attach` |
-| `shields` | opt-in protection packs ([how they are built](plugins/blackbox/shields/README.md)): the registry, the shield contract and pack loader; Trader Shield's wallets and browser folders as data, its setting, card, events and page | `kernel`, `detection`, `audit` |
+| `shields` | File Shield (with the agent sandbox and its permissions), Network Shield (`monitor/` read-only, `protect/`, `respond/`) and Trader Shield ([how they are built](plugins/blackbox/shields/README.md)): the registry, the shield contract, the add-on extension point | `kernel`, `detection`, `audit` |
 | `ruleset` | compiling verified, community and curator tiers into O(1) lookups; refresh; the pulse | `kernel`, `community`, `killlist` |
 | `community` | report schema, builder, signer, consent, share gate, stages, statements, keep-alive, retry, reputation, allowlist, shadow, membership, `blackbox report` | `kernel`, `audit`, `detection` |
 | `sync` | the managed DKG node and the verified-graph catch-up; `blackbox sync` | `kernel`, `ruleset`, `community` |
 | `audit` | local findings and activity logs, the share ledger, the private audit record | `kernel` |
-| `setup` | `blackbox setup`: the full install after a Hermes plugin-catalog install (the bundled installer in setup-only mode, the pinned DKG release) | `kernel` |
+| `setup` | `blackbox setup` (the bundled installer in setup-only mode, the pinned DKG release) and `blackbox uninstall` | `kernel` |
 | `dashboard` | the loopback web UI and its API | `kernel`, `attach`, `audit`, `community`, `detection`, `ruleset`, `sync`, `shields` |
 | `attach` | finding and wiring Hermes homes and OpenClaw workspaces | `kernel` |
 | `overrides` | the local release valve, `blackbox rules` | `kernel` |
 | `killlist` | the curators' signed kill list for skills and MCP servers | `kernel`, `detection` |
 | `curate` | the curator node's tooling | `kernel`, `audit`, `community`, `detection`, `killlist` |
 | `chat` | `blackbox chat` | `kernel`, `attach` |
+| `agent_hooks` | protecting the coding agents through their own hooks; the Hermes load watch | `kernel`, `audit`, `guard` |
+| `approvals` | weakening changes wait for the person's own proof | `kernel`, `shields` |
+| `watch` | watch-first rules | `kernel`, `detection`, `shields` |
+| `notify` | native notifications | `kernel`, `audit`, `shields`, `agent_hooks` |
+| `playground` | sandbox mode's test bench | `kernel`, `audit`, `ruleset`, `guard`, `shields` |
+| `helper/` | the system protection helper (Rust; OS code only under `src/platform/<os>/`) | its own crate |
 | `kernel` | config, constants and ontology IRIs, the DKG client, signing, redaction, wallet-secret recognition, credentials through Hermes, threat identifiers, identity | nothing |
 
 The map is `plugins/blackbox/ARCHITECTURE.md`. Three guards in the test suite keep it true: the map
 matches the disk, imports point one way (modules to kernel, never the reverse), and file and function
 sizes may only shrink.
 
-### The one-graph trial on a DKG devnet
+<details>
+<summary><b>The one-graph trial on a DKG devnet</b></summary>
 
 `scripts/blackbox-one-graph-trial.py` runs the one-graph flow end to end on a local OriginTrail DKG
 devnet. It drives Blackbox's own code, one process per Blackbox installation, the way separate
@@ -610,6 +824,8 @@ uv run scripts/blackbox-one-graph-trial.py run --dkg-repo ~/dkg --start-devnet -
 - Each role's Blackbox home, and the output of every call it made, are kept under `actors/` in the run
   folder.
 
+</details>
+
 ---
 
 ## File structure
@@ -623,14 +839,14 @@ agent-blackbox/
 │
 │  ◆ = Agent Blackbox (the product)        ○ = inherited Hermes host runtime
 │
-├── ◆ plugins/blackbox/                 the product: Python plugin, 326 files, 54,526 lines
-├── ◆ integrations/openclaw/            the OpenClaw bridge: TypeScript, 21 source files, 5,408 lines
+├── ◆ plugins/blackbox/                 the product: Python plugin, 671 files, 103,640 lines, + the Rust helper
+├── ◆ integrations/openclaw/            the OpenClaw bridge: TypeScript, 24 source files, 6,531 lines
 ├── ◆ scripts/blackbox-install.sh       what `curl blackbox.umanitek.ai | bash` runs
 ├── ◆ scripts/blackbox-install.ps1      the same installer for Windows
 ├── ◆ scripts/blackbox-*                node store launcher, runtime fingerprint, curator helpers
 ├── ◆ scripts/sync_blackbox_plugin.py   refresh the installed plugin copy after editing the source
-├── ◆ tests/plugins/test_blackbox_*.py  166 test files
-├── ◆ tests/test_blackbox_*.py          7 test files: installers and dashboard chat
+├── ◆ tests/plugins/test_blackbox_*.py  393 test files
+├── ◆ tests/test_blackbox_*.py          31 test files: installers, uninstall and dashboard chat
 ├── ◆ tests/parity/                     fixtures that hold Python and TypeScript to the same output
 ├── ◆ docs/  legal/                     README images, terms of service, privacy policy
 ├── ◆ README.md  .gitleaksignore        this file, reviewed secret-scan exceptions
@@ -659,8 +875,14 @@ plugins/blackbox/
 │   ├── transactions/                token approvals, permits, calldata, chains
 │   ├── secrets_handled/             secrets read, exposed or sent off the machine
 │   └── reviewer_setup/              `blackbox setup-llm`
-├── shields/             opt-in protection packs
+├── agent_hooks/         ① WATCH     the coding agents' own hooks, the Hermes load watch
+├── shields/             protection packs
+│   ├── files/                       File Shield, the agent sandbox and its permissions
+│   ├── network/                     Network Shield: monitor/ (read-only), protect/, respond/
 │   └── trader/                      Trader Shield: its setting, wallet packs, browser roots, detectors
+├── helper/              the system protection helper (Rust): DNS Shield, firewall, Linux sandbox
+├── approvals/           weakening changes wait for the person
+├── watch/  notify/      watch-first rules; native notifications
 ├── ruleset/             ②           the compiled lookups detection reads
 ├── audit/               ③ RECORD    local logs, share ledger
 ├── community/           ④ SHARE     build, sign, send, read, verify, stage
@@ -674,6 +896,8 @@ plugins/blackbox/
 │   └── shadow/                      measure-only mode
 │
 ├── sync/                the local DKG node and the verified-graph catch-up
+├── setup/               `blackbox setup`, `blackbox uninstall`
+├── playground/          sandbox mode's test bench
 ├── dashboard/           the loopback web UI
 ├── attach/              find and wire every local agent
 ├── overrides/           `blackbox rules`: the local release valve
@@ -696,7 +920,7 @@ plugins/blackbox/
 │   ├── health/                      operator alarms
 │   └── public_suffix/               vendored Public Suffix List
 │
-└── docs/                reporter terms, impact assessment, controller map
+└── docs/                threat model, agent-compat, File Shield, notifications, reporter terms, impact assessment, controller map
 ```
 
 <!-- blackbox-inventory:start -->
@@ -1593,11 +1817,14 @@ Click a module to open its file list.
 ### The OpenClaw bridge
 
 <details>
-<summary><b><code>integrations/openclaw/</code></b> · 21 source files · 5,408 lines · the TypeScript mirror of the hot path and the share path</summary>
+<summary><b><code>integrations/openclaw/</code></b> · 24 source files · 6,531 lines · the OpenClaw plugin: asks Blackbox for each verdict, and mirrors the hot path and the share path</summary>
 
 | File | What it does | Mirrors |
 |---|---|---|
 | `src/index.ts` | The OpenClaw plugin entry: hooks, flag or block, sharing | `guard/` |
+| `src/verdictClient.ts` | Asks the Blackbox on this machine for each tool call's verdict (`POST /api/guard/verdict`) | `guard/` |
+| `src/selfProtection.ts` | The stricter stand-in that guards Blackbox itself while its service cannot be asked | `detection/paths/guard_settings.py` |
+| `src/shellFiles.ts` | Which files a shell command reads, copies or packs up | `detection/paths/shell_files.py` |
 | `src/detection.ts` | Ruleset-driven matcher, a faithful port of the Python detectors | `detection/` |
 | `src/ruleset.ts` | Graph-synced rule cache | `ruleset/` |
 | `src/quads.ts` | Identifier and report builders | `kernel/threat_ids.py`, `community/report_builder.py` |
@@ -1606,7 +1833,7 @@ Click a module to open its file list.
 | `src/signing.ts` | The signed envelope | `kernel/signing/envelope.py` |
 | `src/reporterKey.ts` | Reads the reporter key | `kernel/reporter_key.py` |
 | `src/consent.ts` | Reads the sharing consent record | `community/consent.py` |
-| `src/membership.ts` | Dial the owner, subscribe | `community/membership.py` |
+| `src/membership.ts` | Join the graph, subscribe | `community/membership/` |
 | `src/redact.ts` | Secret redaction | `kernel/redaction.py` |
 | `src/dkgClient.ts` | Client for the local DKG node | `kernel/dkg_client.py` |
 | `src/config.ts` | Config resolution | `kernel/config.py` |
@@ -1625,13 +1852,18 @@ Click a module to open its file list.
 
 ### What Blackbox writes on your machine
 
-Everything lives in `$BLACKBOX_HOME`, by default `~/.hermes/blackbox/`. The folder is one of the
-default protected paths, so an agent reaching into it is flagged, and blocked in block mode.
+Everything lives in `$BLACKBOX_HOME`, by default `~/.hermes/blackbox/`. The folder is guarded by
+self-protection: no agent can change it, in any mode.
 
 | File | Holds | Written by |
 |---|---|---|
 | `ruleset.json` | the compiled threat ruleset detection reads | `ruleset/` |
 | `findings.jsonl`, `audit.jsonl` | what was flagged or blocked; every checked action, redacted | `audit/` |
+| `protection-log.jsonl`, `protection-log.head.json` | the chained protection log and its head | `audit/protection_log.py` |
+| `tamper-counts.json` | the Protection page's counts of refused attempts | `audit/tamper.py` |
+| `watch/` | watch-first rules' hit counts | `watch/` |
+| `notifications/`, `notifier/` | the notification feed; the notifier app (macOS) | `notify/`, `setup/` |
+| `sandbox/` | sandbox mode's test findings and ledger | `playground/` |
 | `file_access.jsonl`, `dependencies.jsonl` | sensitive-file reads and package installs seen | `audit/` |
 | `reporter_key.pem` | the private key that signs your community statements | `kernel/reporter_key.py` |
 | `sharing_consent.json` | your sharing choice (written when you turn sharing off or back on) | `community/consent.py` |
@@ -1658,7 +1890,7 @@ default protected paths, so an agent reaching into it is flagged, and blocked in
 | what a report contains | `community/report_schema.py`, `community/report_builder.py` |
 | stages, thresholds, the partner rule | `community/stages.py` |
 | how long a community statement lives | `community/statements/lifetimes.py` |
-| how a node finds the community graph | `community/membership.py` |
+| how a node joins the graph | `community/membership/` |
 | a default, a config key, a closed vocabulary | `kernel/config.py`, `kernel/constants.py` |
 | a dashboard panel | `dashboard/static/index.html`, `dashboard/server.py`, `dashboard/community_routes.py` |
 | a `blackbox` command | `cli.py`, then the module's `command.py` |
@@ -1666,49 +1898,6 @@ default protected paths, so an agent reaching into it is flagged, and blocked in
 | secret redaction | `kernel/redaction.py` |
 | the installer | `scripts/blackbox-install.sh`, `scripts/blackbox-install.ps1` |
 | where a module is allowed to import from | `plugins/blackbox/ARCHITECTURE.md`, `tests/plugins/test_blackbox_architecture.py` |
-
----
-
-## Hosts
-
-| Host | How it is protected | Status in this version |
-|---|---|---|
-| **Hermes** | the Python plugin runs inside the agent; `blackbox` is `hermes blackbox` | shipped and validated on mainnet nodes |
-| **OpenClaw** | `blackbox attach` installs the TypeScript bridge (`integrations/openclaw`) into each workspace: same signed reports, same graph, same consent record and reporter key, held in parity with the Python side by cross-runtime tests (identifiers, redaction, signing, report quads) | tested, not yet validated on a live OpenClaw agent |
-
-Validating the live OpenClaw path belongs to the planned restructure into one Blackbox core with thin
-per-host adapters.
-
----
-
-## Dashboard
-
-`blackbox dashboard` serves `http://127.0.0.1:9700` on loopback only. Every change needs a
-per-process session token, so another page in your browser cannot alter settings.
-
-| Panel | Shows |
-|---|---|
-| Connected agents | the local agents Blackbox protects; "Manage local agents" attaches or detaches |
-| Community graph: connected agents | every reporter the node has verified, with report counts |
-| Community graph: statements | retractions, disputes and curator statements the node could verify: who, when, why |
-| Trust | both curator authorities (manifest state, expiry, each key's last heartbeat), the trusted reporters and who listed them, the confirmed pool with the evidence the curators checked |
-| My reports | what this node shared, the share outcome, each report's current stage and reason |
-| Threat graph | Verifiable, Community and Local tiers side by side, with a compact and an explore view |
-| Threats detected | the live findings feed, newest or most severe first |
-| Agent activity | everything the protected agents did, or threats only |
-| Sync status | verified-graph progress, or a plain "not subscribed" line when the node does not follow a graph |
-| Settings (gear icon) | categories and minimum severities, protected paths (globs such as `~/.ssh/*`, `**/.env`), audit or block mode, community sharing |
-
-Community panels refresh on their own when the graph changes. Settings save to `config.yaml` and
-apply to every agent.
-
-**Operator alarms** (also in `blackbox status`)
-
-| Class | Examples | What to do |
-|---|---|---|
-| ACTION | the threat ruleset is empty; my node is stale; community rows signed for another network or graph; curator key manifest stale | the alarm names the command, usually `blackbox sync --wait` |
-| SECURITY | two trusted curator manifests disagree; future-dated community rows ignored; the newest kill list was refused | usually nothing: the bad input is already ignored |
-| INFO | community graph could not be read (last good tier kept); community ingest paused by the curator; curators quiet, away or backlogged; community curators silent; community key manifest stale or about to expire; the trust lookup was cut short; confirmations or listings held by this node's daily cap | nothing: verified rules still enforce |
 
 ---
 
@@ -1722,27 +1911,28 @@ environment override, for example `BLACKBOX_MODE` or `BLACKBOX_REPORT`.
 | `mode` | `audit` | `audit` or `block` |
 | `dkg_url` | `http://127.0.0.1:9320` | Blackbox-managed local DKG node |
 | `dkg_home` | `<agent-blackbox>/.dkg` | isolated DKG node config, token, pid and cache |
-| `context_graph_id` | `0x37b1Fdfd…/agent-blackbox-vm` | the verified threat graph |
+| `context_graph_id` | `0x37b1Fdfd…/agent-blackbox-vm` | the verified threat graph; the community's reports live in its shared memory |
 | `graph_peer_id` | bundled publisher peer | authoritative source for the verified graph |
-| `community_graph_id` | `0x37b1Fdfd…/agent-blackbox-community` | the community graph this node reads and writes; empty keeps every community path off |
-| `community_graph_peer_id` | `""` | peer id of the node that owns the community graph; dialled before the first subscribe; ships as a pair with the graph id |
 | `report` | `false` | share privacy-safe reports to the community graph (opt-in; `blackbox report --enable-sharing` turns it on, `--disable-sharing` off) |
 | `report_min_severity` | `high` | lowest severity a built-in discovery candidate must reach to be flagged or shared |
 | `daily_report_limit` | `100` | cap on outbound reports per day; never "no cap" |
 | `community_poll_interval` | `20` | seconds between community-graph pulses (0 off) |
 | `community_keepalive_epoch_days` | `10` | re-publish cadence for your own reports (0 off) |
 | `community_shadow` | `false` | compute stages, enforce only monitor, log what would have flagged |
+| `community_sandbox` | `false` | sandbox mode: shares go to the `sandbox` lane, for the Playground |
 | `sync_interval` | `3600` | seconds between verified-graph refreshes |
 | `block_severity` | `critical` | lowest severity a verified threat must reach to be blocked in block mode |
 | `dashboard_port` | `9700` | the loopback dashboard port |
 | `discover` / `osv_lookup` | `true` | built-in discovery heuristics / OSV dependency lookups off the hot path |
 | `detection.<category>.enabled` | `true` | turn a whole category on or off (`injection`, `escalation`, `dependency`, `fileaccess`, `skill`) |
 | `detection.<category>.min_severity` | `info` | quiet a category below this level |
-| `protected_paths` | `[]` | your own files and folders: they block in block mode and never leave the machine |
+| `protected_paths` | `~/.ssh/*`, `.env`, `.env.*`, `*.pem`, `*.key`, `*.p12`, `~/.aws/credentials`, Blackbox's own folders | files and folders that block in block mode and never leave the machine |
+| `auto_attach` | `false` | protect agents added later on their own ("protect every agent" turns it on) |
+| `notifications` | security on | what you are told ([notifications](plugins/blackbox/docs/notifications.md)) |
 
-Full options, including the LLM reviewer, in the [plugin README](plugins/blackbox/README.md). The
-installer also accepts `BLACKBOX_COMMUNITY_GRAPH_ID` and `BLACKBOX_COMMUNITY_GRAPH_PEER_ID` (set as a
-pair) and writes them into the config.
+Full options, including the shields and the LLM reviewer, in the [plugin README](plugins/blackbox/README.md#configuration).
+The settings `community_graph_id` and `community_graph_peer_id` (and their `BLACKBOX_COMMUNITY_GRAPH_*`
+variables) of the October 2026 separate community graph are ignored since there is one graph.
 
 ---
 
