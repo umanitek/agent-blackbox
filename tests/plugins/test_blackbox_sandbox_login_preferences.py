@@ -124,7 +124,9 @@ def test_the_rendered_profile_refuses_a_login_domain_write_and_keeps_others_work
 
 
 def test_the_login_windows_preference_files_are_persistence_places(tmp_path):
-    _folders, _files, globs = persistence_places.startup_places(str(tmp_path))
+    # macOS's list, whatever OS runs the test (Linux has no login window; its own list is checked
+    # in test_blackbox_persistence_hooks.py)
+    _folders, _files, globs = persistence_places.startup_places(str(tmp_path), system="darwin")
     assert f"{tmp_path}/Library/Preferences/com.apple.loginwindow*" in globs
     assert f"{tmp_path}/Library/Preferences/loginwindow*" in globs
 

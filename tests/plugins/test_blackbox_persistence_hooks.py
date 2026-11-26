@@ -140,18 +140,21 @@ def test_a_program_in_a_path_folder_the_person_owns_stays_writable(machine):
                                                 " && chmod +x ~/.local/bin/r5test-local-h"})
 
 
-def test_every_place_the_sandbox_closes_is_refused_by_the_hook_too(machine, monkeypatch):
-    """The drift guard: the Seatbelt profile's startup places and shell startup files — the very
-    list the profile is rendered from — are each refused for a write through the hook."""
+@pytest.mark.parametrize("system, anchor", [("darwin", "/Library/LaunchAgents"), ("linux", "/.config/systemd/user")])
+def test_every_place_the_sandbox_closes_is_refused_by_the_hook_too(machine, monkeypatch, system, anchor):
+    """The drift guard: each OS's sandbox profile's startup places (the Seatbelt profile on macOS,
+    ``blackbox-sandbox``'s on Linux) and shell startup files — the very list the profile is rendered
+    from — are each refused for a write through the hook, whatever OS runs the test (the hook judges
+    every OS's places)."""
     _home, brew, _use = machine
     monkeypatch.setattr(sandbox.platform, "startup_places",
-                        lambda folder: persistence_places.startup_places(folder, (str(brew),)))
+                        lambda folder: persistence_places.startup_places(folder, (str(brew),), system=system))
     places = sandbox.policy(load_blackbox("shields.files.mode").build(enabled=True, sandboxed=("claude-code",)))
     targets = [folder + "/r5test-item" for folder in places.startup_folders]
     targets += [path for path in places.startup_files]
     targets += [glob.replace("*", "-r5test.plist") for glob in places.startup_globs]
     targets += [path for path in places.no_write_files if path.rsplit("/", 1)[-1] in persistence_places.shell_path.STARTUP_FILES]
-    assert any(path.endswith("/.ssh/authorized_keys") for path in targets) and any("LaunchAgents" in path for path in targets)
+    assert any(path.endswith("/.ssh/authorized_keys") for path in targets) and any(anchor in path for path in targets)
     missed = [path for path in targets if not _refused("terminal", {"command": f"echo x >> '{path}'"})
               or not _refused("write_file", {"path": path, "content": "x"})]
     assert not missed, "\n".join(missed)
