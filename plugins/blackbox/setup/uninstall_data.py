@@ -131,7 +131,8 @@ def _docker_output(command: Sequence[str]) -> str:
 
 
 def _delete_data(plan: UninstallPlan, report: list[str]) -> None:
-    targets = [plan.blackbox_home]
+    from ..agent_hooks import spool_folder   # late: uninstall only
+    targets = [plan.blackbox_home, spool_folder()]   # hook events still waiting for a dashboard that is gone
     if plan.dkg_home and plan.blackbox_home not in plan.dkg_home.parents:
         targets.append(plan.dkg_home)
     for target in targets:

@@ -56,7 +56,8 @@ def _finding(row: Mapping[str, Any]) -> dict[str, Any]:
 
 #: The launch kinds an agent's hooks fire from at its start. WHY: an editor app (``ide``: Cursor,
 #: Windsurf) runs its hooks only when its agent acts, so an open editor with no hook event is not
-#: an unseen run — unless its settings switched the hooks off.
+#: an unseen run — unless its settings switched the hooks off. The same holds for a server an agent
+#: leaves running for its sessions (``background``: Codex's managed app-server daemon, L8).
 _STARTS_HOOKED = frozenset({"headless", "sdk", "interactive"})
 
 

@@ -97,6 +97,7 @@ def _cmd_attach(args: argparse.Namespace) -> int:
     added = shields.apply_sandbox_default()
     if added:
         print(f"  agent sandbox: {', '.join(added)} will start inside Blackbox's sandbox (turn off per agent in Settings)")
+    _print_coding_agents(only_unseen=True)
     return code
 
 
@@ -195,7 +196,8 @@ def _verified_lookups_text(rs: Any) -> str:
     where = f"live against {scope.store_url} ({len(scope.assertion_graphs)} verified assets)"
     if not state.degraded:
         return where
-    answering = "answering from the LOCAL INDEX" if scope.fallback == "index" else "verified checks PAUSED (actions pass unchecked)"
+    answering = ("answering from the LOCAL INDEX" if scope.fallback == "index"
+                 else "verified checks PAUSED: packages are not being checked against the threat graph")
     return f"{where} — DEGRADED: {state.problem()} — {answering}"
 
 
@@ -250,15 +252,24 @@ def _print_attached_targets() -> None:
 _UNSEEN_STATES = frozenset({"trust-required", "degraded"})
 
 
-def _print_coding_agents() -> None:
+def _print_coding_agents(only_unseen: bool = False) -> None:
     """Each coding agent on this machine with its honest state (``agent_hooks.rows``); an agent
     whose hooks do not run — Codex until the person trusts them (L7) — is said NOT protected,
-    with the step. Fail-open: status never crashes on an agent's config."""
-    from . import agent_hooks   # late: only status reads the agents
+    with the step. *only_unseen* (``blackbox attach``, L8 BB-LINUX-PENDING-61d736: it said "all
+    protected" while Codex's hooks waited for the person's trust): just those, under a heading.
+    Fail-open: neither command crashes on an agent's config."""
+    from . import agent_hooks   # late: only status and attach read the agents
     try:
         rows = agent_hooks.rows()
     except Exception:   # health: allow BLE001 -- status never crashes on an agent's config; logged with its traceback
         logger.debug("blackbox status: coding agents skipped", exc_info=True)
+        return
+    if only_unseen:
+        rows = [row for row in rows if row.state in _UNSEEN_STATES]
+        if rows:
+            print("  NOT protected yet — Blackbox's hooks are in place but do not run until you act:")
+            for row in rows:
+                print(f"      - !! {row.name}: {row.state} — {row.detail}")
         return
     print(f"  coding agents:     {len(rows)}")
     for row in rows:

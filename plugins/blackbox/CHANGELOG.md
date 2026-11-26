@@ -38,6 +38,44 @@ that the two version fields agree.
 
 ## [Unreleased]
 
+## [1.6.1] - 2026-11-26
+
+### Security
+
+- **A command the shell decodes onto Blackbox's own folder is refused.** For an agent checked only
+  by its hooks (outside the sandbox), self-protection read what a command hides after `-c` or
+  `eval`, but not a path the shell itself decodes: `~/$'.\x68ermes'`, `~/$(printf …)`,
+  `printf '\x2f' | xargs rm -rf`, `rm -rf \/` could reach Blackbox's files. Every closely read
+  command line is now judged for what it decodes to.
+- **A refusal is recorded even while the dashboard is stopped.** An agent running in Blackbox's
+  sandbox could not write Blackbox's records itself, so with the dashboard stopped its refused
+  actions left no record. They now wait in a small private folder (`~/.cache/blackbox/hook-spool`)
+  and are recorded, judged again, as soon as the dashboard runs; on Linux each refusal is also
+  noted in the system journal, and a note removed before the dashboard read it is a high-severity
+  finding.
+- **Blackbox says when the threat graph cannot answer.** When the graph store is stopped or stuck,
+  one high-severity finding (and notice) per outage says packages are not being checked against
+  the threat graph, also for an outage that ended before the dashboard looked; `blackbox status`
+  says the same. What Blackbox lets through meanwhile is unchanged.
+
+### Fixed
+
+- **Inline code that prints `'/'` is no longer refused.** `node -e "console.log('/')"` or
+  `python3 -c "print('/')"` was refused as a change to Blackbox's own settings.
+- **Short Hermes sessions on a busy computer are recorded.** A session that ended while Blackbox
+  was still starting lost its start and model requests; its end now waits for Blackbox, or a
+  finding says it was not fully recorded.
+- **An upgrade no longer reports old "Hermes started without Blackbox" lines as new.**
+- **An agent's hook decides faster while the dashboard is stopped** (it no longer loads Hermes's
+  whole settings module, the report command or the wallet-key library to start).
+- **`blackbox attach` says when Codex is not protected yet**, naming the `/hooks` step.
+- **Codex's own background server is no longer reported as "running without Blackbox"**, unless
+  Codex would not run Blackbox's hooks.
+- **Linux notices no longer call your computer "this Mac".**
+- **The "protect new agents automatically" switch is never shown as off before it is read.**
+- A test of the hook's time budget no longer depends on how long the test process has run (it
+  failed once on a slow CI runner).
+
 ## [1.6.0] - 2026-11-25
 
 ### Added
@@ -716,7 +754,8 @@ The first version in the Hermes plugin catalog (commit `7d697683`, added by Herm
 in NousResearch/hermes-agent#140529). Its `plugin.yaml` said 1.0.0 while Blackbox's own code and
 dashboard reported 1.1.0; 1.1.0 is therefore skipped, so no two different builds share a number.
 
-[Unreleased]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.6.0...main
+[Unreleased]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.6.1...main
+[1.6.1]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.6.0...blackbox-v1.6.1
 [1.6.0]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.5.0...blackbox-v1.6.0
 [1.5.0]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.4.1...blackbox-v1.5.0
 [1.4.1]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.4.0...blackbox-v1.4.1

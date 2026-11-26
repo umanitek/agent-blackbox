@@ -26,7 +26,7 @@ from ..kernel.agent_hosts import BY_ID, HERMES_ID, HOSTS
 from . import hermes_load, hermes_sessions, observe, profiles, prompt_text, root_watch, unguarded
 from .instances import kernel_refusals, links, record, store, sub_key, views
 from .instances.model import Profile, Running
-from .protect import config_edit, own_files
+from .protect import config_edit, own_files, spool
 from .protect.events import session_key as key_of_session
 
 logger = logging.getLogger(__name__)
@@ -84,6 +84,7 @@ def observe_now() -> None:
     table, _running = _snapshot(max_age=0.0)
     hermes_sessions.catch_up()   # the Hermes agent's own sessions, from its guard's audit trail
     hermes_load.catch_up()       # a Hermes that started without Blackbox, from Hermes's own log
+    spool.replay()               # hook events spooled while the dashboard was away (L8, BB-LINUX-PENDING-e6e905)
     views.close_stale(table.keys() if table else None, read_at=_seen["read_at"])
 
 

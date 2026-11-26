@@ -20,7 +20,7 @@ import json
 import logging
 import threading
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Optional
 
@@ -42,13 +42,20 @@ class LookupState:
     """``state`` — ``ok`` / ``degraded`` / ``unknown`` (never recorded);
     ``reason`` — the store's reason while degraded; ``since`` — epoch seconds the
     current state began; ``failures`` — lookups that could not tell since it began;
-    ``last_at`` — epoch seconds of the last lookup recorded."""
+    ``last_at`` — epoch seconds of the last lookup recorded; ``ended_*`` — the last degraded
+    episode that is over (its start, end, reason and failures; ``ended_since`` 0.0: none), kept so
+    an outage that began and ended while no dashboard looked is still said once (L8,
+    BB-LINUX-PENDING-7227a5: the store was OOM-killed mid-run and was back before the dashboard)."""
 
     state: str = UNKNOWN
     reason: str = ""
     since: float = 0.0
     failures: int = 0
     last_at: float = 0.0
+    ended_since: float = 0.0
+    ended_until: float = 0.0
+    ended_reason: str = ""
+    ended_failures: int = 0
 
     @property
     def degraded(self) -> bool:
@@ -86,15 +93,16 @@ class LookupHealth:
                 if current.state == OK:
                     self._state = current   # kept: the hot path never re-reads the file in steady state
                     return                                   # steady state: nothing to write
-                self._state = LookupState(OK, "", now, 0, now)
+                ended = (current.since, now, current.reason, current.failures) if current.degraded else \
+                    (current.ended_since, current.ended_until, current.ended_reason, current.ended_failures)
+                self._state = LookupState(OK, "", now, 0, now, *ended)
                 self._write(now, force=True)
                 return
             if current.degraded:
-                self._state = LookupState(DEGRADED, reason or current.reason, current.since,
-                                          current.failures + 1, now)
+                self._state = replace(current, reason=reason or current.reason, failures=current.failures + 1, last_at=now)
                 self._write(now, force=False)
             else:
-                self._state = LookupState(DEGRADED, reason, now, 1, now)
+                self._state = replace(current, state=DEGRADED, reason=reason, since=now, failures=1, last_at=now)
                 self._write(now, force=True)
                 logger.warning("blackbox: verified lookups degraded — %s; actions pass unchecked by the "
                                "verified graph until the store answers again", reason or "store did not answer")
@@ -109,7 +117,9 @@ class LookupHealth:
             data: dict[str, Any] = json.loads(self._file().read_text(encoding="utf-8-sig"))
             return LookupState(str(data.get("state", UNKNOWN)), str(data.get("reason", "")),
                                float(data.get("since", 0.0)), int(data.get("failures", 0)),
-                               float(data.get("last_at", 0.0)))
+                               float(data.get("last_at", 0.0)), float(data.get("ended_since", 0.0)),
+                               float(data.get("ended_until", 0.0)), str(data.get("ended_reason", "")),
+                               int(data.get("ended_failures", 0)))
         except (OSError, ValueError, TypeError):
             return LookupState()
 

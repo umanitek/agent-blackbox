@@ -27,6 +27,9 @@ MAY_REPLACE = {
     "kernel/bounded_files/atomic_write.py",
     "sync/process_limits.py",
     "setup/blackbox-dkg-runtime-fingerprint.py",
+    # The hook runner's own copy is standard library only (it runs before, or without, the plugin
+    # loading): its spool file is written whole by O_EXCL + rename there (L8, BB-LINUX-PENDING-e6e905).
+    "agent_hooks/protect/judge_here.py",
 }
 
 

@@ -22,6 +22,7 @@ import logging
 from typing import Any, Optional
 
 from .. import constants, yaml_files
+from . import entry_snapshot
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +55,11 @@ def _read_now() -> Optional[dict[str, Any]]:
         except yaml_files.UnreadableYaml as exc:
             logger.debug("blackbox: %s", exc)
             return None
+    config_path = root / "config.yaml"
+    kept = entry_snapshot.read(config_path)   # a hook's own process: Hermes's merge, without its import (L8)
+    if kept is not None:
+        return kept
+    key = entry_snapshot.signature(config_path)
     try:
         cfg = _hermes_config()
     except Exception as exc:  # health: allow BLE001 -- an unreadable config is answered below, never raised
@@ -63,8 +69,9 @@ def _read_now() -> Optional[dict[str, Any]]:
     entry = copy.deepcopy(yaml_files.blackbox_entry(cfg))
     # Hermes' stand-in for an unreadable file: its last-known-good copy (it holds the entry: the
     # person's settings, read before) or its defaults (no entry: nothing was read).
-    if type(cfg).__name__ == "FailedConfigRead" and not entry:
-        return None
+    if type(cfg).__name__ == "FailedConfigRead":
+        return entry or None
+    entry_snapshot.keep(key, config_path, entry)
     return entry
 
 

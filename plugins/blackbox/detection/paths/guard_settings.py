@@ -146,13 +146,14 @@ def _says_it(line: str, ports: tuple[int, ...]) -> bool:
 
 def _read_closely(line: str, folder: str, ports: tuple[int, ...]) -> tuple[bool, str]:
     """``(tampers, folder)`` for a line that can name a place or run code: its variables put in,
-    the commands it hands to another shell, the code it hands to an interpreter, then its paths."""
+    the commands it hides (another shell's, the shell's own decodes), its inline code, then its paths."""
     if "$" in line and _says_it(" ".join(shell_files._with_variables(shell_files._words(line))), ports):
         return True, folder
-    if _HANDS_ON.search(line):
-        inner = shell_shapes.with_nested_commands(line, 1).split("\n")[1:]
-        if any(_text_tampers(command) for command in inner) or any(_code_tampers(code, argv) for code, argv in shell_files.inline_runs(line)):
-            return True, folder
+    # WHY every line, not only after ``-c`` (L-W5): the shell decodes ``~/$'.\x68ermes'`` before ``rm`` runs.
+    inner = shell_shapes.with_nested_commands(line, 1).split("\n")[1:]
+    if any(_text_tampers(command) for command in inner) or (_HANDS_ON.search(line) and any(
+            _code_tampers(code, argv) for code, argv in shell_files.inline_runs(line))):
+        return True, folder
     return guard_paths.line_changes_a_place(line, folder)
 
 

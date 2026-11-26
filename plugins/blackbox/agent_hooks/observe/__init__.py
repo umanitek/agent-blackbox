@@ -53,6 +53,15 @@ _MODEL_OPTIONS = {"claude-code": ("--model",), "gemini-cli": ("-m", "--model"), 
                   "copilot-cli": ("--model",), "cursor": ("--model",), "opencode": ("-m", "--model"), "cline": ("-m", "--model"),
                   "devin": ("--model",)}
 _SERVER = {"codex": ("app-server", "mcp-server", "mcp"), "opencode": ("serve",), "claude-code": ("mcp",)}
+#: The flag of a server an agent starts for its own sessions and leaves running after they end
+#: (``background``), and the words that name it. WHY (Linux round L8, BB-LINUX-PENDING-d53bcb):
+#: Codex 0.172's TUI starts ``~/.codex/packages/app-server-daemon/…/codex app-server --listen unix://
+#: --managed-daemon`` and its ``codex app-server daemon pid-update-loop``; once the TUI exits they
+#: belong to init and, sending no hook event while idle, were flagged HIGH "running without
+#: Blackbox". Every turn the daemon serves runs Codex's hooks, so idle it is like an open editor: it
+#: is named unseen only for a reason its hooks would not run — trust missing, hooks switched off —
+#: which is read from Codex's own config, never from these words (a run that names them gains nothing).
+_DAEMON_WORDS = {"codex": ("--managed-daemon", "daemon")}
 #: Runs whose hooks the agent itself skips (documented): the reason shown to the person.
 _SKIPS = {("claude-code", "--bare"): "started with --bare, which skips every hook"}
 #: Runtimes that run an agent's script — the script (or ``-m`` module) is then the program. Any
@@ -173,7 +182,7 @@ def classify(command: str) -> Optional[Host]:
 def _launch(host: Host, words: list[str]) -> str:
     program, rest = _split(words)
     if any(word in _SERVER.get(host.id, ()) for word in rest[:2]):
-        return "sdk"
+        return "background" if any(word in _DAEMON_WORDS.get(host.id, ()) for word in rest[:3] + rest[-1:]) else "sdk"
     if any(word in _HEADLESS.get(host.id, ()) for word in rest):
         return "headless"
     return "ide" if PurePath(program).name in ("Cursor", "Windsurf") else "interactive"
@@ -230,7 +239,8 @@ def model_of(table: Mapping[int, Proc], pid: int) -> str:
 def launch_of(table: Mapping[int, Proc], pid: int) -> str:
     """How the agent process *pid* was started, read from its command line: ``headless``
     (``claude -p``, ``codex exec``, ``gemini -p``, ``opencode run``…), ``sdk`` (``codex
-    app-server``, ``opencode serve``), ``ide`` (the Cursor / Windsurf app) or ``interactive``;
+    app-server``, ``opencode serve``), ``background`` (a server it leaves running for its sessions:
+    ``codex app-server --managed-daemon``), ``ide`` (the Cursor / Windsurf app) or ``interactive``;
     "" when *pid* is not an agent process in *table*."""
     proc = table.get(pid)
     host = classify(proc.command) if proc is not None else None

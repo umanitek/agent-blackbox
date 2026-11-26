@@ -41,6 +41,7 @@ from typing import Any, Callable, Optional
 from ... import ruleset
 from ...kernel.dkg_client import DkgClient
 from ...sync import read_recovery_backlog
+from . import lookup_alarm   # the finding when the threat graph cannot answer (L8)
 from .progress import STALL_SECONDS, WATCH, SyncProgress, SyncProgressWatch, sync_phase
 
 logger = logging.getLogger(__name__)
@@ -323,5 +324,5 @@ def first_sync_state() -> str:
 
 
 __all__ = ["STALL_SECONDS", "WATCH", "GraphSizeAnchor", "SyncMeter", "SyncProgress", "SyncProgressWatch",
-           "build_sync_meter", "current_state", "first_sync_state", "lookup_status", "read_sync_meter", "register_sync_meter_routes", "sync_phase",
+           "build_sync_meter", "current_state", "first_sync_state", "lookup_alarm", "lookup_status", "read_sync_meter", "register_sync_meter_routes", "sync_phase",
            "verified_graph_still_arriving"]
