@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any, Mapping, Optional
 
 from ..kernel.agent_hosts import BY_ID, HERMES_ID, HOSTS
-from . import hermes_sessions, observe, profiles, prompt_text, root_watch, unguarded
+from . import hermes_load, hermes_sessions, observe, profiles, prompt_text, root_watch, unguarded
 from .instances import kernel_refusals, links, record, store, sub_key, views
 from .instances.model import Profile, Running
 from .protect import config_edit, own_files
@@ -83,6 +83,7 @@ def observe_now() -> None:
     that went quiet are closed here as well, so the history is right with nobody watching (KI-549)."""
     table, _running = _snapshot(max_age=0.0)
     hermes_sessions.catch_up()   # the Hermes agent's own sessions, from its guard's audit trail
+    hermes_load.catch_up()       # a Hermes that started without Blackbox, from Hermes's own log
     views.close_stale(table.keys() if table else None, read_at=_seen["read_at"])
 
 
