@@ -14,16 +14,20 @@ from __future__ import annotations
 
 import hashlib
 
+from ...kernel.os_layout import machine_words
 from ..contract import ShieldAlert
 from . import api
 from .monitor import system_report
 
 TITLE = "Network Shield"
+#: This machine as a person names it ("this Mac", "this computer"). WHY (Linux round L8,
+#: BB-LINUX-PENDING-b23ba7): the passwordless-sudo notice told a Linux user "Any program on this Mac".
+HERE = machine_words()
 SEE = "Open Blackbox to see the details."
 #: kind → (what happened, what to do), both safe on a lock screen.
 WORDS: dict[str, tuple[str, str]] = {
-    "ssh-session-new": ("Someone signed in remotely", "A new SSH session started on this Mac. Open Blackbox to see who."),
-    "remote-session-new": ("Someone connected remotely", "A new remote session started on this Mac. Open Blackbox to see who."),
+    "ssh-session-new": ("Someone signed in remotely", f"A new SSH session started on {HERE}. Open Blackbox to see who."),
+    "remote-session-new": ("Someone connected remotely", f"A new remote session started on {HERE}. Open Blackbox to see who."),
     "ssh-session-ended": ("A remote session ended", SEE),
     "remote-session-ended": ("A remote session ended", SEE),
     "remote-auth-failed": ("Failed sign-in attempt", "Someone failed to sign in remotely. Open Blackbox to see from where."),
@@ -31,15 +35,15 @@ WORDS: dict[str, tuple[str, str]] = {
     "remote-service-changed": ("Remote access setting changed", SEE),
     "remote-login-changed": ("Remote Login switched", SEE),
     "remote-end-refused": ("A remote session could not be ended", SEE),
-    "file-changed": ("A login file changed", "A file that controls who can sign in to this Mac changed. " + SEE),
+    "file-changed": ("A login file changed", f"A file that controls who can sign in to {HERE} changed. " + SEE),
     "firewall-restored": ("Threat Firewall put back", "Something removed the Threat Firewall's rules; Blackbox put them back. " + SEE),
     "dns-shield-restored": ("DNS Shield put back", "This machine's DNS had stopped going through DNS Shield; Blackbox pointed it back. " + SEE),
     "connection-cut": ("Malicious connection cut", "Blackbox ended a connection to an address on the threat list. " + SEE),
     "connection-seen": ("Connection to a listed threat",
-                        "A program on this Mac is talking to an address on the threat list. " + SEE),
+                        f"A program on {HERE} is talking to an address on the threat list. " + SEE),
     "listener-new": ("A program is accepting connections", "A program started listening for connections from the network. " + SEE),
     "listener-closed": ("A program stopped accepting connections", SEE),
-    "persistence-new": ("New startup item", "Something set itself to run when this Mac starts. " + SEE),
+    "persistence-new": ("New startup item", f"Something set itself to run when {HERE} starts. " + SEE),
     "persistence-changed": ("A startup item changed", SEE),
     "persistence-removed": ("A startup item was removed", SEE),
     "dns-changed": ("DNS settings changed", SEE),
@@ -73,8 +77,8 @@ def _standing() -> list[ShieldAlert]:
         return []
     return [ShieldAlert(key="network:passwordless-sudo", kind="passwordless-sudo", ts=float(snapshot.get("at") or 0), severity="high",
                         title=f"{TITLE} · sudo needs no password",
-                        text="Any program on this Mac — an AI agent included — can become root without asking you. " + SEE,
-                        detail="A sudo rule on this Mac lets commands run without a password.")]
+                        text=f"Any program on {HERE} — an AI agent included — can become root without asking you. " + SEE,
+                        detail=f"A sudo rule on {HERE} lets commands run without a password.")]
 
 
 def shield_alerts() -> list[ShieldAlert]:

@@ -28,7 +28,7 @@ import time
 from pathlib import Path
 from typing import Any, Iterable, TypedDict
 
-from ..kernel.config import load_blackbox_config
+from ..kernel.config import load_blackbox_config, settings_known
 from . import declined, hermes_homes, openclaw_discovery
 from .sweep import Target, is_attached, set_protection
 
@@ -123,7 +123,10 @@ def _discovered() -> list[Target]:
 
 def coverage() -> dict[str, Any]:
     """``{"auto_attach", "unprotected", "recent"}`` — the switch, every discovered agent Blackbox
-    does not protect that the operator did NOT switch off, and the recent automatic protections."""
+    does not protect that the operator did NOT switch off, and the recent automatic protections.
+    ``auto_attach`` is None while the saved settings are not read yet (L8, BB-LINUX-PENDING-525349:
+    right after an upgrade it read false for a moment — the default, not the person's choice)."""
     unprotected = [_agent(kind, target) for kind, target in _discovered()
                    if not is_attached(kind, target) and not declined.is_declined(kind, target)]
-    return {"auto_attach": load_blackbox_config().auto_attach, "unprotected": unprotected, "recent": RECENT.recent()}
+    auto_attach = load_blackbox_config().auto_attach if settings_known() else None
+    return {"auto_attach": auto_attach, "unprotected": unprotected, "recent": RECENT.recent()}

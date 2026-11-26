@@ -141,6 +141,18 @@ def test_coverage_lists_unprotected_agents_but_never_one_switched_off(machine, c
     assert [agent["label"] for agent in view["unprotected"]] == ["Hermes · work"]
 
 
+def test_the_switch_is_unknown_never_off_while_the_settings_are_not_read(machine):
+    """Linux round L8 (BB-LINUX-PENDING-525349): right after an upgrade ``/api/agent-coverage`` read
+    ``auto_attach: false`` for a moment — the default answered before the person's settings were read."""
+    saved_entry = load_blackbox("kernel.config_values.saved_entry")
+    saved_entry.forget()
+    (machine / "config.yaml").write_text("plugins: [unclosed\n", encoding="utf-8")   # an installer mid-write
+    assert config_mod.settings_known() is False
+    assert attach.coverage()["auto_attach"] is None
+    (machine / "config.yaml").write_text(yaml.safe_dump({"plugins": {"entries": {"blackbox": {"auto_attach": True}}}}), encoding="utf-8")
+    assert attach.coverage()["auto_attach"] is True
+
+
 def test_the_sweep_notes_only_agents_it_newly_protected(machine, capsys):
     _attach(capsys, str(machine))
     before = {item["seq"] for item in coverage.RECENT.recent()}

@@ -39,6 +39,10 @@ def _table(*rows):
     ("/opt/homebrew/bin/claude -p hello", "headless"),
     ("/opt/homebrew/bin/claude --resume abc", "interactive"),
     ("/opt/homebrew/bin/codex app-server", "sdk"),
+    ("/home/me/.codex/packages/app-server-daemon/releases/0.172.0-aarch64-unknown-linux-musl/bin/codex app-server "
+     "--listen unix:// --analytics-default-enabled --managed-daemon", "background"),
+    ("/home/me/.codex/packages/app-server-daemon/releases/0.172.0-aarch64-unknown-linux-musl/bin/codex app-server daemon "
+     "pid-update-loop", "background"),
     ("/usr/local/bin/node /usr/local/bin/opencode run fix it", "headless"),
     ("/Applications/Cursor.app/Contents/MacOS/Cursor", "ide"),
 ])

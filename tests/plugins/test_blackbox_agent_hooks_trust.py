@@ -16,6 +16,8 @@ writes the trust itself.
 
 from __future__ import annotations
 
+import argparse
+
 import json
 from pathlib import Path
 
@@ -194,6 +196,22 @@ def test_status_says_codex_is_not_protected_and_how_to_fix_it(capsys):
     assert line.strip().startswith("- !! Codex: trust-required") and "NOT protected" in line and "/hooks" in line
 
 
+def test_attach_says_codex_is_not_protected_until_the_person_trusts_its_hooks(capsys, monkeypatch, _home):
+    """Linux round L8 (BB-LINUX-PENDING-61d736): ``blackbox attach`` (the installer runs it) said
+    "All 1 agent(s) found are protected" while Codex's hooks waited for the person's trust."""
+    _protect()
+    monkeypatch.setattr(cli.attach, "cmd_attach", lambda args: 0)
+    monkeypatch.setattr(cli.shields, "apply_sandbox_default", list)
+    assert cli._cmd_attach(argparse.Namespace()) == 0
+    out = capsys.readouterr().out
+    assert "NOT protected yet" in out
+    line = next(line for line in out.splitlines() if "Codex" in line)
+    assert "trust-required" in line and "/hooks" in line
+    _trust_all(_home / ".codex" / "hooks.json")
+    cli._cmd_attach(argparse.Namespace())
+    assert "Codex" not in capsys.readouterr().out          # trusted: nothing to say
+
+
 # ------------------------------------------------------------- a run while untrusted is a HIGH finding
 
 _RUN = "/usr/local/bin/codex exec --json --skip-git-repo-check Run exactly: ls"
@@ -216,3 +234,23 @@ def test_a_trusted_codex_run_and_a_bypassed_run_are_not_named_unseen():
     (agent_hooks._home() / ".codex" / "config.toml").unlink()
     [row] = observe.running({4242: observe.Proc(4242, 1, 0.0, _RUN.replace("exec", "exec --dangerously-bypass-hook-trust"))})
     assert row.hooks_skipped == ""   # Codex runs enabled hooks for this run; its events prove it
+
+
+#: What the real Codex 0.172.0 TUI left running on bb-l7-u24 after it exited (2026-11-26), verbatim.
+_DAEMON = ("/home/admin/.codex/packages/app-server-daemon/releases/0.172.0-aarch64-unknown-linux-musl/bin/codex app-server "
+           "--listen unix:// --analytics-default-enabled --managed-daemon")
+
+
+def test_codexs_idle_managed_daemon_is_not_an_unseen_run_while_its_hooks_would_run(monkeypatch):
+    """Linux round L8 (BB-LINUX-PENDING-d53bcb): after a trusted TUI session ended, its daemon (then a
+    child of init, no hook event while idle) was flagged HIGH. Idle, it is not unseen; untrusted, it is."""
+    monkeypatch.setattr(views, "GRACE_SECONDS", 0.0)
+    _trust_all(_protect())
+    [row] = observe.running({5151: observe.Proc(5151, 1, 0.0, _DAEMON)})
+    assert row.launch == "background" and row.hooks_skipped == ""
+    assert unguarded.report(views.live([row])["unprotected"]) == 0
+    (agent_hooks._home() / ".codex" / "config.toml").unlink()           # the trust taken away
+    [row] = observe.running({5151: observe.Proc(5151, 1, 0.0, _DAEMON)})
+    assert "/hooks" in row.hooks_skipped
+    assert unguarded.report(views.live([row])["unprotected"]) == 1      # its turns would run unseen: reported
+

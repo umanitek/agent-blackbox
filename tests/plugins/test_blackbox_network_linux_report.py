@@ -60,3 +60,24 @@ def test_macos_reports_read_as_before():
     now = time.time()
     report = system_report.validate({"watching": True, "at": now, "posture": {"filevault": "on", "sip": "on"}}, now)
     assert "os" not in report["posture"] and posture.checks(report["posture"], {})[0]["id"] == "filevault"
+
+
+def test_a_linux_notice_never_calls_the_machine_a_mac(monkeypatch):
+    """Linux round L8 (BB-LINUX-PENDING-b23ba7): with passwordless sudo the notice said "Any program
+    on this Mac" on Ubuntu. Every notice names the machine by ``kernel.os_layout.machine_words``."""
+    import importlib
+    import sys
+
+    from plugins.blackbox.shields.network import notices
+    monkeypatch.setattr(sys, "platform", "linux")
+    linux = importlib.reload(notices)
+    try:
+        monkeypatch.setattr(linux.system_report, "snapshot", lambda: {"posture": {"passwordless_sudo": "yes"}, "at": 1})
+        monkeypatch.setattr(linux.api, "alerts", list)
+        [sudo] = linux.shield_alerts()
+        assert "this computer" in sudo.text and "this computer" in sudo.detail
+        said = [sudo.text, sudo.detail] + [text for kind, (_title, text) in linux.WORDS.items() if kind != "firewall-changed"]
+        assert not [text for text in said if "Mac" in text]
+    finally:
+        monkeypatch.undo()
+        importlib.reload(notices)

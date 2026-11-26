@@ -109,6 +109,15 @@ that the two version fields agree.
 
 ### Fixed
 
+- **`blackbox attach` says when Codex is not protected yet.** It said every agent was protected
+  while Codex's hooks waited for you to trust them; it now names Codex and the `/hooks` step.
+- **Linux notices no longer call your computer "this Mac".**
+- **The "protect new agents automatically" switch is never shown as off before it is read.**
+  Right after an upgrade the agent-coverage answer said "off" for a moment.
+- **Codex's own background server is no longer reported as "running without Blackbox".** After a
+  Codex session ends, Codex keeps its app-server daemon running; idle, it sends no hook event. It
+  is still reported when Codex would not run Blackbox's hooks (not trusted, or switched off).
+
 - **An agent's hook decides faster while the dashboard is stopped.** A hook that has to check a
   call itself no longer loads Hermes's whole settings module, nor Blackbox's report command or
   the wallet-key library, just to start: about half of its start-up work on a test machine.

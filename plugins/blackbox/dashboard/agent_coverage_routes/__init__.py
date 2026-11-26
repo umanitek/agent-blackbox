@@ -41,7 +41,7 @@ def register(app: Any, swr: Cache) -> None:
 
     def view() -> dict[str, Any]:
         return swr(f"agent-coverage-{current['generation']}", attach.coverage,
-                   {"auto_attach": False, "unprotected": [], "recent": []}, ttl=TTL_SECONDS)
+                   {"auto_attach": None, "unprotected": [], "recent": []}, ttl=TTL_SECONDS)   # None: not read yet, never "off"
 
     @app.get("/agent-coverage.js")
     def agent_coverage_script() -> Any:

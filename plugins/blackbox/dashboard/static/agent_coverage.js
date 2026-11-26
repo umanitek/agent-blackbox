@@ -2,7 +2,7 @@
  * Every agent protected, now and later (2026-11-19) — the line above Connected agents and the
  * "New agent protected" note.
  *
- * Reads GET /api/agent-coverage ({auto_attach, unprotected, recent}) every few seconds:
+ * Reads GET /api/agent-coverage ({auto_attach: true | false | null while unread, unprotected, recent}) every few seconds:
  *  - #agent-coverage-root shows ONE slim line while any agent on this machine is unprotected
  *    (an agent the operator switched off is never listed — that was a choice): who, a "Protect"
  *    for each, and "Protect every agent, now and later" (POST /api/agent-coverage/protect-all,
@@ -92,7 +92,7 @@
     var lead = el("span");
     lead.appendChild(el("b", "", missing.length === 1 ? "1 agent on this machine is not protected." :
       missing.length + " agents on this machine are not protected."));
-    lead.appendChild(document.createTextNode(data.auto_attach ? " Protecting it now…" :
+    lead.appendChild(document.createTextNode(data.auto_attach === true ? " Protecting it now…" :
       " Blackbox does not see what they do until you protect them."));
     text.appendChild(lead);
     var names = el("div", "ac-names");
@@ -107,7 +107,7 @@
     });
     text.appendChild(names);
     bar.appendChild(text);
-    if (!data.auto_attach) {
+    if (data.auto_attach === false) {   // null: the setting is not read yet — offer nothing on a guess
       var all = el("button", "ac-main", working ? "Protecting…" : "Protect every agent, now and later");
       all.type = "button"; all.disabled = working;
       all.title = "Protects these agents and every Hermes profile or OpenClaw workspace added later (Settings → Agents)";

@@ -192,10 +192,14 @@ def _blackbox_entry() -> dict[str, Any]:
 MODE_STARTING = "starting"
 
 
+def settings_known() -> bool:
+    """True once the saved settings were read here (before, every field is a default — never the person's choice)."""
+    return saved_entry.known(_blackbox_entry())
+
+
 def mode_answer(cfg: BlackboxConfig) -> str:
-    """*cfg*'s mode for a status answer — or :data:`MODE_STARTING` while the saved settings could
-    not be read yet (never the default presented as the person's choice, KI-PENDING-b28f8f)."""
-    return cfg.mode if saved_entry.known(_blackbox_entry()) else MODE_STARTING
+    """*cfg*'s mode for a status answer, or :data:`MODE_STARTING` before :func:`settings_known` (KI-PENDING-b28f8f)."""
+    return cfg.mode if settings_known() else MODE_STARTING
 
 
 #: The separate community graph's settings (2026-10-12 to 2026-10-16), config keys and environment
