@@ -109,6 +109,10 @@ that the two version fields agree.
 
 ### Fixed
 
+- **An agent's hook decides faster while the dashboard is stopped.** A hook that has to check a
+  call itself no longer loads Hermes's whole settings module, nor Blackbox's report command or
+  the wallet-key library, just to start: about half of its start-up work on a test machine.
+
 - **Short Hermes sessions on a busy computer are recorded.** When a Hermes session ended while
   Blackbox was still starting, its start and model requests were lost without a word. The end of
   the session (and Hermes's exit) now waits for Blackbox to record them; if it still cannot, a

@@ -73,7 +73,6 @@ from .sighting import injection_host_identifier, sighting_fields
 from .membership import (ADMISSION_TEXT, JOIN_STATE_TEXT, Admission, JoinState, MembershipStatus,
                          ensure_community_subscription, ensure_report_lane, read_join_state,
                          read_membership_status)
-from .report_cli import add_report_parser, cmd_report, print_community_status
 from .sharing import ALREADY_SEALED_REPLY, NEVER_SHARED_SOURCES, CommunitySharePolicy, spawn_community_share
 from .graph_stats import community_agents, contributing_agent_count, most_reported_threats, reports_signed_by
 from .verification import ReportVerifier, VerifiedReport, verify_report_rows
@@ -195,3 +194,18 @@ __all__ = [
     "verified_manifest_history",
     "verify_report_rows",
 ]
+
+
+#: The ``blackbox report`` command's names, loaded on first use (:func:`__getattr__`).
+_REPORT_CLI = frozenset({"add_report_parser", "cmd_report", "print_community_status"})
+
+
+def __getattr__(name: str):
+    """The report command's functions, imported when first asked for. WHY (Linux round L8, the hook
+    budget): every guard verdict imports this package (through the ruleset's scope), and the CLI
+    module and what it pulls in were a twentieth of a hook's own judgement on the loaded VM."""
+    if name in _REPORT_CLI:
+        from . import report_cli
+        return getattr(report_cli, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
