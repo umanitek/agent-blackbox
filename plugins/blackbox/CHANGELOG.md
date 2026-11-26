@@ -38,12 +38,21 @@ that the two version fields agree.
 
 ## [Unreleased]
 
-## [1.6.1] - 2026-11-26
-
 ### Changed
 
 - **New installs use DKG node 10.1.2** (was 10.0.26), checked against its published sha512
   before it is installed (#64).
+
+### Fixed
+
+- **A Playground test always answers, and says where its share is.** A test now answers within two
+  minutes. A slow node refuses it with the reason, and a share the node has not confirmed reads
+  "still sending" instead of "not sent". In sandbox mode the Threat sharing tile shows the last
+  test share instead of "nothing shared yet".
+- **Dashboard layout:** "No coding agent is running right now" lines up with its card, and a
+  threat-graph type holding only sandbox tests reads "1 TEST", not "0 THREATS + 1 TEST".
+
+## [1.6.1] - 2026-11-26
 
 ### Security
 
@@ -65,10 +74,6 @@ that the two version fields agree.
 
 ### Fixed
 
-- **A Playground test always answers, and says where its share is.** A test now answers within two
-  minutes. A slow node refuses it with the reason, and a share the node has not confirmed reads
-  "still sending" instead of "not sent". In sandbox mode the Threat sharing tile shows the last
-  test share instead of "nothing shared yet".
 - **Inline code that prints `'/'` is no longer refused.** `node -e "console.log('/')"` or
   `python3 -c "print('/')"` was refused as a change to Blackbox's own settings.
 - **Short Hermes sessions on a busy computer are recorded.** A session that ended while Blackbox
@@ -82,8 +87,6 @@ that the two version fields agree.
   Codex would not run Blackbox's hooks.
 - **Linux notices no longer call your computer "this Mac".**
 - **The "protect new agents automatically" switch is never shown as off before it is read.**
-- **Dashboard layout:** "No coding agent is running right now" lines up with its card, and a
-  threat-graph type holding only sandbox tests reads "1 TEST", not "0 THREATS + 1 TEST".
 - A test of the hook's time budget no longer depends on how long the test process has run (it
   failed once on a slow CI runner).
 
