@@ -22,6 +22,8 @@ SETUID_NOTE = ""
 TOOLS_FOLDER = "sandbox-tools"
 #: Whether this machine's helper reports the sandbox's refusals itself: no sandbox here (KI-693).
 HELPER_REPORTS_REFUSALS = False
+#: How a sentence names this operating system (no port: the plain words).
+SYSTEM_NAME = "the operating system"
 APPS: dict[str, tuple[str, str]] = {}
 MANAGER_FOLDERS: tuple[str, ...] = ()
 BREW_PATHS: tuple[str, ...] = ()

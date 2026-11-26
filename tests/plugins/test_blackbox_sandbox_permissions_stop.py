@@ -14,6 +14,7 @@ dev server or a port holder from inside the sandbox):
 
 from __future__ import annotations
 
+import importlib
 import os
 import subprocess
 import sys
@@ -54,14 +55,34 @@ def _facts(monkeypatch, uid=None, path="/opt/homebrew/bin/node", args="node serv
     return stopped
 
 
-@pytest.mark.parametrize("change, why", [
-    ({"uid": 0}, "another user"), ({"path": "/System/Library/CoreServices/Finder.app/Contents/MacOS/Finder"}, "macOS"),
-    ({"path": "/usr/libexec/sshd-session"}, "macOS"), ({"args": "claude --resume"}, "another AI agent"),
-    ({"path": "/usr/local/bin/codex"}, "another AI agent"),
+def _on(monkeypatch, system: str) -> None:
+    """Judge as on *system* ("macos" / "linux"), whatever OS runs the test: that OS's own programs
+    and the name a sentence gives it (``platform/<os>/processes.py``)."""
+    processes = importlib.import_module(f"plugins.blackbox.shields.files.sandbox.platform.{system}.processes")
+    monkeypatch.setattr(sandbox_platform, "is_system", processes.is_system)
+    monkeypatch.setattr(sandbox_platform, "SYSTEM_NAME", processes.SYSTEM_NAME)
+
+
+@pytest.mark.parametrize("system, change, why", [
+    ("macos", {"uid": 0}, "another user"),
+    ("macos", {"path": "/System/Library/CoreServices/Finder.app/Contents/MacOS/Finder"}, "part of macOS"),
+    ("macos", {"path": "/usr/libexec/sshd-session"}, "part of macOS"), ("macos", {"args": "claude --resume"}, "another AI agent"),
+    ("macos", {"path": "/usr/local/bin/codex"}, "another AI agent"),
+    ("linux", {"uid": 0}, "another user"), ("linux", {"path": "/usr/lib/systemd/systemd"}, "part of Linux"),
+    ("linux", {"path": "/usr/libexec/sshd-session"}, "part of Linux"), ("linux", {"path": "/usr/bin/gnome-shell"}, "part of Linux"),
+    ("linux", {"args": "claude --resume"}, "another AI agent"),
 ])
-def test_what_is_never_stopped(monkeypatch, change, why):
+def test_what_is_never_stopped(monkeypatch, system, change, why):
+    _on(monkeypatch, system)
     _facts(monkeypatch, **change)
     assert why in stop.never(4242)
+
+
+def test_a_linux_machine_is_never_called_macos(monkeypatch):
+    """CI on Linux (PR #63): the refusal named macOS on a Linux machine."""
+    _on(monkeypatch, "linux")
+    _facts(monkeypatch, path="/usr/sbin/sshd")
+    assert stop.never(4242) == "it is part of Linux" and "macOS" not in stop.never(1)
 
 
 def test_blackbox_itself_and_process_one_are_never_stopped(monkeypatch, tmp_path):

@@ -16,6 +16,8 @@ from dataclasses import dataclass
 from typing import Optional
 
 PROC = "/proc"
+#: How a sentence names this operating system ("it is part of Linux").
+SYSTEM_NAME = "Linux"
 #: Where the system's own programs live: never stopped for an agent (with process 1, which the
 #: broker refuses by number).
 SYSTEM_PREFIXES = ("/usr/lib/systemd/", "/lib/systemd/", "/usr/libexec/", "/usr/sbin/", "/sbin/", "/usr/lib/xorg/",

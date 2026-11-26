@@ -16,6 +16,8 @@ from typing import Optional
 
 PS = "/bin/ps"
 TIMEOUT_SECONDS = 5
+#: How a sentence names this operating system ("it is part of macOS").
+SYSTEM_NAME = "macOS"
 #: Where macOS's own programs live: never stopped for an agent.
 SYSTEM_PREFIXES = ("/System/", "/usr/libexec/", "/usr/sbin/", "/sbin/", "/Library/Apple/", "/Library/Application Support/Apple/")
 
@@ -59,4 +61,4 @@ def terminate(pid: int) -> bool:
     return True
 
 
-__all__ = ["SYSTEM_PREFIXES", "ProcessFacts", "describe", "is_system", "terminate"]
+__all__ = ["SYSTEM_NAME", "SYSTEM_PREFIXES", "ProcessFacts", "describe", "is_system", "terminate"]

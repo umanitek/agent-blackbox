@@ -15,8 +15,8 @@ outside it names someone else's program. The agent is told nothing either way (i
 whether the process exists or not), so no process outside is revealed to it.
 
 NEVER stopped, whatever the permission says (:func:`never`): process 1 and below, Blackbox itself
-(this process, its parent, anything running Blackbox's plugin or from its home), macOS's own
-programs, another user's processes, and another AI agent. The check is made again right before
+(this process, its parent, anything running Blackbox's plugin or from its home), the operating
+system's own programs (``platform.is_system``, named by ``platform.SYSTEM_NAME``), another user's processes, and another AI agent. The check is made again right before
 the signal: a process id can be reused.
 
 Usage::
@@ -45,14 +45,14 @@ logger = logging.getLogger(__name__)
 def never(pid: int) -> str:
     """Why *pid* is never stopped for an agent ("" when it may be)."""
     if pid <= 1 or pid in (os.getpid(), os.getppid()):
-        return "it is part of macOS or of Blackbox"
+        return f"it is part of {platform.SYSTEM_NAME} or of Blackbox"
     facts = platform.describe(pid)
     if facts is None:
         return "it is not running"
     if facts.uid != getattr(os, "getuid", lambda: -1)():
         return "it belongs to another user"
     if platform.is_system(facts.path):
-        return "it is part of macOS"
+        return f"it is part of {platform.SYSTEM_NAME}"
     own = (_PLUGIN, os.path.realpath(str(constants.blackbox_home())))
     if any(place in facts.args or facts.path.startswith(place) for place in own) or "blackbox" in os.path.basename(facts.path).lower():
         return "it is part of Blackbox"
