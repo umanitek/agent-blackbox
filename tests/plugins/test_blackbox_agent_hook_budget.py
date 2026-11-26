@@ -58,6 +58,10 @@ def machine(tmp_path, monkeypatch):
 
 def _run(monkeypatch, capsys, url: str, payload: dict) -> tuple[int, str, float]:
     monkeypatch.setattr(runner.sys, "stdin", type("In", (), {"buffer": type("B", (), {"read": lambda self, n: json.dumps(payload).encode()})()})())
+    # WHY: the runner counts its budget from its own process start (a real hook is a fresh process
+    # per call). Here it runs inside the long-lived test worker, whose age would eat the dashboard's
+    # share on a slow runner (CI, PR #65: waited 3.06 s instead of 4 s), so it starts "now" as a hook would.
+    monkeypatch.setattr(runner, "process_age", lambda: 0.0)
     began = time.monotonic()
     code = runner.main(["runner.py", "gemini-cli", "pre_tool", url])
     return code, capsys.readouterr().out, time.monotonic() - began
