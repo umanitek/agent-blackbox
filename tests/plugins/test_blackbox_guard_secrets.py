@@ -9,8 +9,10 @@ Blackbox's data folders may not be read. Listing a data folder stays ordinary wo
 
 from __future__ import annotations
 
+import importlib.util
 import os
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -22,6 +24,19 @@ guard_background = load_blackbox("guard.background")
 config_mod = load_blackbox("kernel.config")
 ruleset_mod = load_blackbox("ruleset")
 guard_secrets = load_blackbox("detection.paths.guard_secrets")
+system_helper = load_blackbox("kernel.system_helper")
+
+_HELPER_PLATFORM = Path(__file__).resolve().parents[2] / "plugins" / "blackbox" / "kernel" / "system_helper" / "platform"
+
+
+def _helper_places(system: str):
+    """That OS's helper places (``kernel/system_helper/platform/<os>.py``), whatever OS runs the test:
+    the commands below spell the macOS key folder, so the guard is judged on a faked Mac, and the
+    Linux key folder has its own test (CI runs on Linux, where the facade reads ``linux.py``)."""
+    spec = importlib.util.spec_from_file_location(f"guard_secrets_helper_{system}", _HELPER_PLATFORM / f"{system}.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 KEY_FOLDER = "~/Library/Application Support/Blackbox/helper"
 OWN_RULE = "blackbox-settings"
@@ -29,6 +44,7 @@ OWN_RULE = "blackbox-settings"
 
 @pytest.fixture
 def machine(monkeypatch, tmp_path):
+    monkeypatch.setattr(system_helper, "user_key_folder", _helper_places("macos").user_key_folder)
     hermes = tmp_path / ".hermes"
     (hermes / "blackbox").mkdir(parents=True)
     (hermes / "blackbox" / "reporter.key").write_text("k", encoding="utf-8")
@@ -106,6 +122,24 @@ def test_ordinary_work_near_blackbox_is_not_refused(machine, tool, args):
 
 def test_the_key_folder_is_also_guarded_against_change(machine):
     assert _refused("terminal", {"command": "mv ~/Library/Application\\ Support/Blackbox/helper /tmp/x"})
+
+
+@pytest.mark.parametrize("tool,args", [
+    ("terminal", {"command": "cat ~/.config/blackbox/helper/plan.key"}),
+    ("terminal", {"command": "cp -r ~/.config/blackbox/helper /tmp/k"}),
+    ("terminal", {"command": "tar czf /tmp/c.tgz ~/.config"}),
+    ("read_file", {"path": "~/.config/blackbox/helper/plan.key"}),
+    ("terminal", {"command": "mv ~/.config/blackbox/helper /tmp/x"}),
+])
+def test_on_linux_the_key_folder_under_xdg_config_is_guarded_alike(machine, monkeypatch, tool, args):
+    """Linux keeps the helper's key in ``$XDG_CONFIG_HOME/blackbox/helper`` (``platform/linux.py``):
+    the same refusal, by every tool, whatever OS runs the test."""
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    monkeypatch.setattr(system_helper, "user_key_folder", _helper_places("linux").user_key_folder)
+    folder = machine / ".config" / "blackbox" / "helper"
+    folder.mkdir(parents=True)
+    (folder / "plan.key").write_bytes(b"\x07" * 32)
+    assert _refused(tool, args)
 
 
 @pytest.mark.parametrize("command", ["tar -czf /tmp/b.tgz ~/.hermes", "grep -rn mode ~/.hermes/"])
