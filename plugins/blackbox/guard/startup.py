@@ -31,6 +31,13 @@ What a hook does while the guard is still loading (the security argument):
   the call is queued with its context and run on the start thread IN ORDER before the guard is
   called ready — so a session's start (which puts its shells in the sandbox) is applied before
   that session's first tool call is judged, and no prompt goes unscanned.
+* What was queued is never lost silently (Linux round L8, BB-LINUX-PENDING-15778e: under load
+  0 of 10 short Hermes sessions were recorded — the session ended, Hermes exited, and the start
+  thread, a daemon, died with the queue). The session's END waits for the guard like a tool call
+  does (up to :func:`wait_seconds`, so its record is made before Hermes may exit), and so does
+  Hermes's exit while calls are still queued (``atexit``). A start that still did not finish is
+  said in Hermes's log as :data:`LOST_LINE`, which the watcher (``agent_hooks.hermes_load``)
+  turns into a finding — as is a full queue.
 
 Usage (the plugin's composition root only)::
 
@@ -43,6 +50,7 @@ Usage (the plugin's composition root only)::
 
 from __future__ import annotations
 
+import atexit
 import contextlib
 import contextvars
 import logging
@@ -69,6 +77,8 @@ GIVE_UP_SECONDS = 300.0
 MAX_QUEUED = 512
 #: The words Blackbox's watcher looks for in Hermes's log (``agent_hooks.hermes_load``).
 BROKEN_LINE = "Blackbox could not start in this Hermes"
+#: …and the words it looks for when early hook calls of a session could not be recorded.
+LOST_LINE = "Blackbox could not record this Hermes session"
 NOT_CHECKED_MESSAGE = ("Blackbox is still starting on this busy computer and has not checked this action yet, "
                        "so it was not run. Try it again in a moment.")
 _GATED = ("pre_tool_call", "post_tool_call", "pre_api_request", "on_session_start", "on_session_end")
@@ -101,6 +111,7 @@ class _Start:
         self.reason = ""
         self.queue: deque[tuple[str, tuple, dict, contextvars.Context]] = deque()
         self.dropped = 0
+        self.lost_said = False
 
     def begin(self) -> None:
         """Start loading the guard on its own thread (once; later calls do nothing)."""
@@ -132,7 +143,8 @@ class _Start:
                     self.hooks, self.state = hooks, READY
                     self.settled.set()
                     if self.dropped:
-                        logger.warning("blackbox: %d early hook call(s) were not replayed (queue full)", self.dropped)
+                        logger.warning("%s: %d early hook call(s) were not recorded (more than %d arrived while it started).",
+                                       LOST_LINE, self.dropped, MAX_QUEUED)
                     return
                 name, args, kwargs, context = self.queue.popleft()
             try:
@@ -149,6 +161,18 @@ class _Start:
         # Said before any waiting call is let go, so the log line is never later than the first pass.
         logger.error("%s: %s. Its tool calls pass UNCHECKED until Hermes is restarted.", BROKEN_LINE, reason)
         self.settled.set()
+
+    def flush(self, wait: float) -> None:
+        """Wait up to *wait* seconds for the queued calls to be recorded (the guard to be up);
+        still starting after that, say in Hermes's log how many were not — once."""
+        if self.thread is None or self.settled.wait(max(0.0, wait)):
+            return
+        with self.lock:
+            unrecorded, already = len(self.queue) + self.dropped, self.lost_said
+            self.lost_said = True
+        if unrecorded and not already:
+            logger.warning("%s: Hermes ended before Blackbox had started (a very busy computer); %d early hook call(s) "
+                           "(the session's start, model requests, tool results) were not recorded.", LOST_LINE, unrecorded)
 
     def ready_hooks(self, wait: float) -> Any:
         """The guard once it is READY (waiting up to *wait* seconds), else None."""
@@ -214,14 +238,24 @@ def _observer(name: str) -> Callable[..., None]:
         hooks = START.hooks_or_queue(name, args, kwargs)
         if hooks is not None:
             getattr(hooks, _GUARD_NAMES[name])(*args, **kwargs)
+        elif name == "on_session_end":
+            START.flush(wait_seconds())   # queued: recorded before Hermes may exit
     gate.__name__ = gate.__qualname__ = name
     gate.__doc__ = f"Hermes's ``{name}``: the guard's, or queued while the guard loads."
     return gate
 
 
+def _at_exit() -> None:
+    """Hermes is exiting while hook calls are still queued: give the start its chance to record them."""
+    if START.state == STARTING and START.queue:
+        START.flush(wait_seconds())
+
+
+atexit.register(_at_exit)   # runs while the start thread (a daemon) still runs: daemons stop after atexit
+
 #: Hermes's hook name → the gate Blackbox registers for it.
 HERMES_HOOKS: dict[str, Callable[..., Any]] = {name: pre_tool_call if name == "pre_tool_call" else _observer(name)
                                                for name in _GATED}
 
-__all__ = ["BROKEN_LINE", "FAILED", "HERMES_HOOKS", "NOT_CHECKED_MESSAGE", "READY", "START", "STARTING", "loading",
+__all__ = ["BROKEN_LINE", "FAILED", "HERMES_HOOKS", "LOST_LINE", "NOT_CHECKED_MESSAGE", "READY", "START", "STARTING", "loading",
            "wait_seconds"]

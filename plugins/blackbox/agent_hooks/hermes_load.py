@@ -12,13 +12,20 @@ and above, every home: the main one and each profile) for the lines Hermes and t
 when that happens:
 
 * Hermes: ``Failed to load plugin 'blackbox': <reason>``;
-* the guard (``guard.startup.BROKEN_LINE``): ``Blackbox could not start in this Hermes: <reason>``.
+* the guard (``guard.startup.BROKEN_LINE``): ``Blackbox could not start in this Hermes: <reason>``;
+* the guard (``guard.startup.LOST_LINE``): ``Blackbox could not record this Hermes session: …`` —
+  Hermes ended before the guard was up and early hook calls went unrecorded (Linux round L8,
+  BB-LINUX-PENDING-15778e): one MEDIUM finding (:data:`UNRECORDED_ID`), never silent.
 
 Read incrementally (a byte cursor per log in ``agent-hooks/hermes-load-cursor.json``, a new file
-after rotation read from its start); the first look at a log reads only its last
-:data:`FIRST_LOOK_BYTES` and reports only lines younger than :data:`FIRST_LOOK_SECONDS`. Each line
-is reported once, also across a cursor lost with a restart (its id is looked for among the newest
-findings). WHAT IT CANNOT SEE: a plugin the person disabled (their choice, shown by ``attach``),
+after rotation read from its start). Each line is reported once, also across a cursor lost with a
+restart (its id is looked for among the newest findings). The FIRST look at a log is a baseline
+(Linux round L8, BB-LINUX-PENDING-d3b0c1: after an upgrade the new detector reported the old
+log's 19 and 34 drops as HIGH findings dated now): it reads only the last
+:data:`FIRST_LOOK_BYTES`, ignores every line older than this Blackbox's install (the installer's
+``install-manifest/manifest.tsv``, rewritten by every install and upgrade; no install known:
+every line), and reports what remains — drops since the install that no look has seen — as ONE
+finding that counts them. WHAT IT CANNOT SEE: a plugin the person disabled (their choice, shown by ``attach``),
 or a log an unguarded agent rewrote — an agent runs as the person, so this is a back-stop beside
 the fast start, not a boundary.
 
@@ -48,15 +55,20 @@ logger = logging.getLogger(__name__)
 PLUGIN_NAME = "blackbox"
 #: The guard's own line when it cannot start (``guard.startup.BROKEN_LINE``; agent_hooks does not import guard).
 BROKEN_LINE = "Blackbox could not start in this Hermes"
+#: The guard's line when Hermes ended before it could record a session (``guard.startup.LOST_LINE``).
+LOST_LINE = "Blackbox could not record this Hermes session"
 _LINE = re.compile(
     r"^(?P<at>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\S*\s+\w+\s+\S+:\s+"
-    rf"(?:Failed to load plugin '{PLUGIN_NAME}': (?P<load>.*)|{re.escape(BROKEN_LINE)}: (?P<start>.*))$")
+    rf"(?:Failed to load plugin '{PLUGIN_NAME}': (?P<load>.*)|{re.escape(BROKEN_LINE)}: (?P<start>.*)"
+    rf"|{re.escape(LOST_LINE)}: (?P<lost>.*))$")
+#: A Hermes session whose early hook calls were not recorded.
+UNRECORDED_ID = "agent:hermes-session-unrecorded"
 MATCHED = "hermes-without-blackbox"
 #: The most read from one log in one look, and on the first look at it (its end only).
 MAX_READ_BYTES = 512 * 1024
 FIRST_LOOK_BYTES = 256 * 1024
-#: On the first look at a log, older lines are history, not news.
-FIRST_LOOK_SECONDS = 24 * 3600
+#: The installer's manifest, rewritten by every successful install or upgrade: its time is the install's.
+INSTALL_MANIFEST = ("install-manifest", "manifest.tsv")
 #: Profiles looked at besides the main home.
 MAX_PROFILES = 32
 RECENT_SCANNED = 500
@@ -113,7 +125,15 @@ def _call_id(path: Path, line: str) -> str:
     return "hermes-load:" + hashlib.sha256(f"{path}\n{line}".encode("utf-8", "replace")).hexdigest()[:24]
 
 
-def _finding(home: str, reason: str, stamp: str) -> dict[str, Any]:
+def _finding(home: str, reason: str, stamp: str, lost: bool = False) -> dict[str, Any]:
+    if lost:
+        return {"identifier": UNRECORDED_ID, "category": "escalation", "severity": "medium",
+                "title": f"A {HERMES_NAME} session was not fully recorded"[:200], "tool_name": HERMES_ID, "matched": MATCHED,
+                "evidence": f"{stamp}: {reason}"[:300], "confirmed": False, "source": "custom", "kind": "flag-only",
+                "advice": (f"{HERMES_NAME} ended while Blackbox was still starting on a very busy computer, so the start of "
+                           "that session (and what it asked the model) is missing from Blackbox's history. Its tool calls "
+                           "were still checked."),
+                "fields": {"agent": HERMES_ID, "folder": home[:400]}}
     return {"identifier": UNGUARDED_ID, "category": "escalation", "severity": "high",
             "title": f"{HERMES_NAME} started without Blackbox"[:200], "tool_name": HERMES_ID, "matched": MATCHED,
             "evidence": f"{stamp}: {reason}"[:300], "confirmed": False, "source": "custom", "kind": "flag-only",
@@ -122,16 +142,39 @@ def _finding(home: str, reason: str, stamp: str) -> dict[str, Any]:
             "fields": {"agent": HERMES_ID, "folder": home[:400]}}
 
 
-def _matches(path: Path, text: str, first: bool, now: float) -> Iterable[tuple[str, str, str]]:
-    """(call id, reason, stamp) for each line of *text* that says Hermes runs without Blackbox."""
+def _installed_at() -> float:
+    """When this Blackbox was installed or last upgraded (its manifest's time); 0.0 when unknown."""
+    try:
+        return constants.blackbox_home().joinpath(*INSTALL_MANIFEST).stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+#: One matching line: (call id, reason, stamp, a lost session's line?).
+Match = tuple[str, str, str, bool]
+
+
+def _matches(path: Path, text: str, first: bool) -> Iterable[Match]:
+    """Each line of *text* that says Hermes runs without Blackbox or lost a session's record; on the
+    first look at a log only those after this Blackbox's install (none when that is unknown)."""
+    since = _installed_at() if first else 0.0
     for line in text.splitlines():
         found = _LINE.match(line.strip())
-        if found is None:
+        if found is None or (first and (not since or _when(found["at"]) < since)):
             continue
-        if first and now - _when(found["at"]) > FIRST_LOOK_SECONDS:
-            continue
-        reason = found["load"] if found["load"] is not None else f"its guard did not start ({found['start']})"
-        yield _call_id(path, line.strip()), reason.strip(), found["at"]
+        lost = found["lost"] is not None
+        reason = found["load"] if found["load"] is not None else found["lost"] if lost else f"its guard did not start ({found['start']})"
+        yield _call_id(path, line.strip()), reason.strip(), found["at"], lost
+
+
+def _summary(matches: list[Match]) -> list[Match]:
+    """A first look's matches as ONE: the earliest, counted (BB-LINUX-PENDING-d3b0c1 — never a burst)."""
+    if len(matches) <= 1:
+        return matches
+    _first_id, reason, stamp, _lost = matches[0]
+    joined = "hermes-load:" + hashlib.sha256("\n".join(match[0] for match in matches).encode("utf-8")).hexdigest()[:24]
+    return [(joined, f"{len(matches)} times since Blackbox was installed, last at {matches[-1][2]}; first: {reason}",
+             stamp, all(match[3] for match in matches))]
 
 
 def catch_up() -> int:
@@ -143,26 +186,26 @@ def catch_up() -> int:
     try:
         with _lock:
             cursor = read_json_object(_cursor_path()) or {}
-            fresh: list[tuple[str, str, str, str]] = []
-            now = time.time()
+            fresh: list[tuple[str, str, str, bool, str]] = []
             for path in logs():
                 text, entry, first = _new_lines(path, cursor)
                 if entry is None:
                     continue
                 cursor[str(path)] = entry
                 home = str(path.parent.parent)
-                fresh += [(call_id, reason, stamp, home) for call_id, reason, stamp in _matches(path, text, first, now)
+                found = list(_matches(path, text, first))
+                fresh += [(call_id, reason, stamp, lost, home) for call_id, reason, stamp, lost in (_summary(found) if first else found)
                           if call_id not in _reported]
             write_json_object(_cursor_path(), cursor, what="the Hermes load-log cursor")
             if not fresh:
                 return 0
             known = {str(found.get("tool_call_id") or "") for found in audit.read_findings(limit=RECENT_SCANNED)}
             recorded = 0
-            for call_id, reason, stamp, home in fresh:
+            for call_id, reason, stamp, lost, home in fresh:
                 _reported.add(call_id)
                 if call_id in known:
                     continue
-                audit.record_for(HERMES_ID, event="unguarded_run", workspace=home, findings=[_finding(home, reason, stamp)],
+                audit.record_for(HERMES_ID, event="unguarded_run", workspace=home, findings=[_finding(home, reason, stamp, lost)],
                                  detail={"decision": "flag", "tool_name": HERMES_ID, "tool_call_id": call_id,
                                          "agent": HERMES_ID, "workspace": home})
                 recorded += 1
@@ -172,4 +215,4 @@ def catch_up() -> int:
         return 0
 
 
-__all__ = ["BROKEN_LINE", "MATCHED", "PLUGIN_NAME", "catch_up", "logs"]
+__all__ = ["BROKEN_LINE", "LOST_LINE", "MATCHED", "PLUGIN_NAME", "UNRECORDED_ID", "catch_up", "logs"]

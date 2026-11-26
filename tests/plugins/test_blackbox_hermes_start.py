@@ -210,7 +210,10 @@ def hermes_logs(monkeypatch, tmp_path):
     (root / "logs").mkdir(parents=True)
     (root / "profiles" / "work" / "logs").mkdir(parents=True)
     monkeypatch.setattr(constants, "hermes_root", lambda: root)
-    constants.blackbox_home().mkdir(parents=True, exist_ok=True)   # an installed Blackbox
+    manifest = constants.blackbox_home().joinpath(*hermes_load.INSTALL_MANIFEST)   # an installed Blackbox, an hour ago
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text("", encoding="utf-8")
+    os.utime(manifest, (time.time() - 3600, time.time() - 3600))
     hermes_load._reported.clear()
     yield root
     hermes_load._reported.clear()
@@ -255,3 +258,81 @@ def test_old_history_on_the_first_look_is_not_news(hermes_logs):
         f"{_stamp(3 * 86400)} WARNING hermes_cli.plugins: Failed to load plugin 'blackbox': load timed out after 10s\n",
         encoding="utf-8")
     assert hermes_load.catch_up() == 0 and _without_blackbox() == []
+
+
+def test_an_upgrade_never_reports_the_old_logs_drops_as_news(hermes_logs):
+    """Linux round L8 (BB-LINUX-PENDING-d3b0c1): the first look after an upgrade reported the old
+    log's 19 (u24) and 34 (u22) drops as HIGH findings dated now. Lines from before this install
+    are history; the drops since the install that no look has seen are ONE finding that counts them."""
+    lines = [f"{_stamp(7200 - minute)} WARNING hermes_cli.plugins: Failed to load plugin 'blackbox': load timed out after 10s"
+             for minute in range(19)]                                           # before the install (an hour ago)
+    lines += [f"{_stamp(600 - minute)} WARNING hermes_cli.plugins: Failed to load plugin 'blackbox': dictionary changed size "
+              "during iteration" for minute in range(3)]                         # after it, before the first look
+    (hermes_logs / "logs" / "errors.log").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    assert hermes_load.catch_up() == 1
+    found, = _without_blackbox()
+    assert found["evidence"].split(": ", 1)[1].startswith("3 times since Blackbox was installed")
+    assert hermes_load.catch_up() == 0
+
+
+def test_without_a_known_install_the_first_look_is_only_a_baseline(hermes_logs):
+    constants.blackbox_home().joinpath(*hermes_load.INSTALL_MANIFEST).unlink()
+    log = hermes_logs / "logs" / "errors.log"
+    log.write_text(f"{_stamp()} WARNING hermes_cli.plugins: Failed to load plugin 'blackbox': load timed out after 10s\n",
+                   encoding="utf-8")
+    assert hermes_load.catch_up() == 0
+    with log.open("a", encoding="utf-8") as handle:                     # after the baseline: news
+        handle.write(f"{_stamp()} WARNING hermes_cli.plugins: Failed to load plugin 'blackbox': load timed out after 10s\n")
+    assert hermes_load.catch_up() == 1
+
+
+# --- a session that ends before the guard is up (Linux round L8, BB-LINUX-PENDING-15778e) ------
+
+def test_a_session_that_ends_before_the_guard_is_up_is_still_recorded(monkeypatch, slow_start):
+    """Under load 0 of 10 short Hermes sessions were recorded: the session ended, Hermes exited and
+    the queued calls died with the start thread. The session's end now waits for them."""
+    fake, release, _start = slow_start
+    monkeypatch.setattr(startup, "wait_seconds", lambda: 10.0)
+    startup.HERMES_HOOKS["on_session_start"](session_id="s9", model="m")
+    threading.Timer(0.2, release).start()
+    startup.HERMES_HOOKS["on_session_end"](session_id="s9")
+    assert [name for name, _ in fake.calls] == ["on_session_start", "on_session_end"]
+
+
+def test_a_session_whose_calls_could_not_be_recorded_is_said_and_becomes_a_finding(slow_start, caplog, hermes_logs):
+    _fake, _release, _start = slow_start                 # never released: a guard still loading when Hermes ends
+    caplog.set_level("WARNING")
+    startup.HERMES_HOOKS["on_session_start"](session_id="s10", model="m")
+    startup.HERMES_HOOKS["on_session_end"](session_id="s10")
+    assert startup.LOST_LINE in caplog.text and "2 early hook call(s)" in caplog.text
+    assert startup.LOST_LINE == hermes_load.LOST_LINE
+    line = next(record for record in caplog.records if startup.LOST_LINE in record.getMessage())
+    (hermes_logs / "logs" / "errors.log").write_text(f"{_stamp()} WARNING {line.name}: {line.getMessage()}\n", encoding="utf-8")
+    hermes_load.catch_up()
+    rows = [row for row in audit.read_findings(limit=50) if row.get("identifier") == hermes_load.UNRECORDED_ID]
+    assert rows and rows[0]["severity"] == "medium"
+
+
+EXIT_PROBE = textwrap.dedent("""
+    import sys, threading, time
+    sys.path.insert(0, sys.argv[1])
+    from plugins.blackbox.guard import startup
+    class Guard:
+        def __getattr__(self, name):
+            return lambda **kwargs: open(sys.argv[2], "a", encoding="utf-8").write(name + "\\n")
+    def run():
+        time.sleep(1.0)                      # a guard that is slow to import on a busy machine
+        startup.START._drain(Guard())
+    startup.START._run = run
+    startup.wait_seconds = lambda: 10.0
+    startup.HERMES_HOOKS["on_session_start"](session_id="s11")
+    # Hermes exits here, with the start thread (a daemon) still loading and the call queued.
+""")
+
+
+def test_hermes_exiting_while_calls_are_queued_still_records_them(tmp_path):
+    out = tmp_path / "calls.txt"
+    subprocess.run([sys.executable, "-c", EXIT_PROBE, str(REPO), str(out)], timeout=60, check=True,
+                   env={**os.environ, "HOME": str(tmp_path), "BLACKBOX_HOME": str(tmp_path / "bb")})
+    assert out.read_text(encoding="utf-8").split() == ["on_session_start"]
+

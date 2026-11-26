@@ -109,6 +109,14 @@ that the two version fields agree.
 
 ### Fixed
 
+- **Short Hermes sessions on a busy computer are recorded.** When a Hermes session ended while
+  Blackbox was still starting, its start and model requests were lost without a word. The end of
+  the session (and Hermes's exit) now waits for Blackbox to record them; if it still cannot, a
+  finding says that session was not fully recorded.
+- **An upgrade no longer reports old "Hermes started without Blackbox" lines as new.** The first
+  look at Hermes's log after an install reports only what happened since that install, as one
+  finding that counts it.
+
 - **A refusal is recorded even while the dashboard is stopped.** An agent running in
   Blackbox's sandbox could not write Blackbox's records itself, so with the dashboard stopped its
   refused actions left no record or session. Such events now wait in a small private folder
