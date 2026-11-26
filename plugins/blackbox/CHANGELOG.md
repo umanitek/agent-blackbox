@@ -109,6 +109,12 @@ that the two version fields agree.
 
 ### Fixed
 
+- **Inline code that prints `'/'` is no longer refused.** `node -e "console.log('/')"` or
+  `python3 -c "print('/')"` was refused as a change to Blackbox's own settings, because the root
+  folder in the code was read as a command. A folder cannot be run, so it is no longer counted.
+  A command the shell itself decodes onto Blackbox's folder (`~/$'.\x68ermes'`,
+  `$(printf …)`, `printf '\x2f' | xargs rm -rf`, `rm -rf \/`) is now refused like the plain one.
+
 - **Setup no longer writes into the app bundle of a Hermes it runs from.** When Hermes runs from
   an application bundle, setup added its `blackbox` shortcut beside it, which broke the bundle's
   signature seal. The shortcut is left out there; `hermes blackbox` does the same.

@@ -66,9 +66,10 @@ _UNQUOTED = re.compile(r"\\[nrt0]|['\"`;()]")
 #: places they name — ``blackbox attach <profile>`` ADDS protection and must stay possible.
 _OWN_COMMANDS = frozenset({"hermes", "blackbox"})
 #: What a line must hold to be able to name a place: a home or variable sign, a wildcard, an
-#: absolute path, a ``cd`` or ``git``, or the first folder of a guarded place written relatively.
+#: absolute path (``\\/`` too), a ``cd`` or ``git``, the first folder of a guarded place written
+#: relatively, or a decode the shell does first (``printf '\\x2f' | xargs rm -rf`` shows no path).
 _CAN_NAME_A_PLACE = re.compile(
-    r"[~$*?\[`]|(?:^|[\s=:'\"(<>])/|\b(?:cd|pushd|git)\b|\.(?:hermes|openclaw|config|local)\b|Library|blackbox|integrations"
+    r"[~$*?\[`]|(?:^|[\s=:'\"(<>])\\?/|\b(?:cd|pushd|git|printf|base64|base32|xxd)\b|\.(?:hermes|openclaw|config|local)\b|Library|blackbox|integrations"
     # An agent's settings folder named relative to the folder it works in (``> .claude/settings.local.json``).
     + "".join(sorted({rf"|(?<![\w.]){re.escape(entry.path.split('/')[0])}/" for entry in agent_hosts.hook_switches.switch_files()})),
     re.IGNORECASE)
@@ -80,16 +81,47 @@ def worth_reading(line: str, folder: str) -> bool:
     return bool(_CAN_NAME_A_PLACE.search(line)) or (folder != START_FOLDER and guard_places.reaches(folder))
 
 
-def _command_of(segment: list[str]) -> tuple[str, list[str]]:
-    """The command one simple command runs and its other words, past ``NAME=value`` words and
-    wrappers (``sudo``, ``env``, ``nohup``…)."""
+def _program_at(segment: list[str]) -> int:
+    """Where in one simple command its program word stands, past ``NAME=value`` words and wrappers
+    (``sudo``, ``env``, ``nohup``…); ``len(segment)`` when it has none."""
     index = 0
     while index < len(segment) and (re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", segment[index])
                                     or segment[index].rsplit("/", 1)[-1].lower() in _WRAPPERS):
         index += 1
+    return index
+
+
+def _command_of(segment: list[str]) -> tuple[str, list[str]]:
+    """The command one simple command runs and its other words (see :func:`_program_at`)."""
+    index = _program_at(segment)
     if index >= len(segment):
         return "", []
     return segment[index].rsplit("/", 1)[-1].lower(), segment[index + 1:]
+
+
+#: A program word whose value the shell decides at run time: a variable, a wildcard, a substitution.
+_DECIDED_LATER = re.compile(r"[$*?\[`{]")
+
+
+def _without_a_run_folder(segment: list[str], folder: str) -> list[str]:
+    """*segment* without its program word when that word is a folder that only HOLDS a guarded
+    place (``/``, ``~``, ``~/Documents``).
+
+    WHY (L8, BB-LINUX-PENDING-8cb925): every string literal of inline code is also read as a
+    command line (``hidden_commands``), so ``python3 -c "print('/')"`` gave the line ``/`` — a
+    "command" whose program is the root folder, which holds every guarded place, and which was
+    refused as a change to Blackbox. A folder cannot be run: the shell answers "is a directory"
+    and nothing happens, so its name in the program's position reaches nothing. Only a word the
+    line spells out in full is dropped (no variable or wildcard: ``~/.hermes/*`` runs the first
+    FILE it matches); every other word of the segment is still judged, and a guarded place itself
+    (``holds`` is False for it) or a word inside one is never dropped."""
+    index = _program_at(segment)
+    if index >= len(segment):
+        return segment
+    word = segment[index]
+    if _DECIDED_LATER.search(word) or not guard_places.holds(_place(word, folder)):
+        return segment
+    return segment[:index] + segment[index + 1:]
 
 
 def _place(word: str, folder: str) -> str:
@@ -226,7 +258,7 @@ def _segment_changes_a_place(name: str, rest: list[str], segment: list[str], fol
     if name in _OWN_COMMANDS:
         return False
     own = guard_places.scope() == guard_places.OWN
-    named = _named_places(segment if own else rest, folder)
+    named = _named_places(_without_a_run_folder(segment, folder) if own else rest, folder)
     if guard_places.inside(folder) and rest:
         named = NAMES_ONE
     if named == NAMES_NOTHING or (named == HOLDS_ONE and not own):
