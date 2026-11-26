@@ -33,8 +33,6 @@ import threading
 from dataclasses import dataclass
 from typing import AbstractSet, Callable, Iterable, Optional
 
-from cryptography.hazmat.primitives.asymmetric import ec
-from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +106,10 @@ def address_of(private_key: bytes) -> Optional[str]:
     number = int.from_bytes(private_key, "big")
     if len(private_key) != 32 or not 0 < number < _CURVE_ORDER:
         return None
+    # Imported here, not at load (L8, the hook budget): every audit redaction imports this module,
+    # and only a value shaped like a key ever reaches this line.
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
     public = ec.derive_private_key(number, ec.SECP256K1()).public_key()
     point = public.public_bytes(Encoding.X962, PublicFormat.UncompressedPoint)[1:]   # drop the 0x04 prefix
     return "0x" + keccak256(point)[-20:].hex()

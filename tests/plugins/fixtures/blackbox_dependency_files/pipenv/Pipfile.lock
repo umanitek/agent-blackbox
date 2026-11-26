@@ -1,0 +1,9 @@
+{
+    "_meta": {"hash": {"sha256": "abcd"}, "pipfile-spec": 6, "requires": {}, "sources": []},
+    "default": {
+        "requests": {"hashes": ["sha256:aaaa"], "index": "pypi", "version": "==2.32.3"},
+        "evil-pkg": {"hashes": ["sha256:bbbb"], "version": "==0.1.0"},
+        "thing": {"git": "https://github.com/someone/thing.git", "ref": "abc"}
+    },
+    "develop": {}
+}

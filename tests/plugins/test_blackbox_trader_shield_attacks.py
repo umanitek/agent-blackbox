@@ -43,6 +43,9 @@ from plugins.blackbox.kernel import config as config_mod
 from plugins.blackbox.kernel import crypto_secrets, threat_ids
 from plugins.blackbox.kernel.crypto_secrets import seed_phrase
 from plugins.blackbox.ruleset import Ruleset
+from plugins.blackbox.shields.files import mode as files_mode
+from plugins.blackbox.shields.network import mode as network_mode
+from plugins.blackbox.shields.network.protect import blocklists as network_blocklists
 from plugins.blackbox.shields.trader import detectors, mode as trader_mode
 
 #: blocked / flagged / missed (a gap); allowed = a harmless look-alike that must raise nothing.
@@ -102,6 +105,8 @@ def _posix_place(templates, home: Path) -> Path:
 
 def _materialise(pack, home: Path, key_file_text: str) -> Path:
     """Lay one store of *pack* out under *home*, from its manifest; answers the store."""
+    if pack.kind == "dns-blocklist":
+        return home   # a public block list keeps nothing in the home folder (its copy: the shield's setup)
     if pack.kind == "browser-extension":
         extension = pack.data["stores"]["chromium"][0]
         profile = home.joinpath(*CHROME_PROFILE)
@@ -135,8 +140,31 @@ def _trader_setup(monkeypatch, chosen: tuple[str, ...], values: dict[str, str]) 
     monkeypatch.setattr(trader_mode, "current", lambda: own)
 
 
-#: How each shield is switched on for its table (its option names are its own).
-SETUPS = {"trader": _trader_setup}
+def _network_setup(monkeypatch, chosen: tuple[str, ...], _values: dict[str, str]) -> None:
+    """Network Shield on with DNS Shield, one host on the block list, and every supported public list chosen and
+    already downloaded (holding one tracker domain). Agent lockdown is off here: a row turns it
+    on for itself (``"lockdown": true``, :func:`_scenario_setting`), so the other shields' rows,
+    which name real hosts, are judged without it."""
+    on = network_mode.build(enabled=True, protections=(network_mode.DNS,), lists=chosen, block=("blocked-by-you-blackbox-test.com",))
+    monkeypatch.setattr(network_mode, "current", lambda: on)
+    monkeypatch.setattr(network_blocklists, "_memory", {})
+    for pack in network_mode.list_packs():
+        if pack.id in chosen:
+            cached = network_blocklists._cache_path(pack)
+            cached.parent.mkdir(parents=True, exist_ok=True)
+            cached.write_text("# test copy\nlisted-tracker-blackbox-test.com\n", encoding="utf-8")
+
+
+def _files_setup(monkeypatch, _chosen: tuple[str, ...], values: dict[str, str]) -> None:
+    """File Shield on with ~/Documents/BlackboxVault protected (laid out, with one file in it)."""
+    vault = Path(values["@HOME@"]) / "Documents" / "BlackboxVault"
+    vault.mkdir(parents=True, exist_ok=True)
+    (vault / "notes.txt").write_text("private", encoding="utf-8")
+    on = files_mode.build(enabled=True, protected=("~/Documents/BlackboxVault",))
+    monkeypatch.setattr(files_mode, "current", lambda: on)
+
+
+SETUPS = {"trader": _trader_setup, "network-shield": _network_setup, "file-shield": _files_setup}
 
 
 def _shell_path(path: Path, home: Path) -> str:
@@ -160,6 +188,7 @@ def _values(home: Path, stores: dict[str, Path], solana: bytes) -> dict[str, str
     # KI-378: the same 12 words spelled to slip past a word matcher.
     values.update({"@SEED12ZW@": "\u200b|".join(seed12.split()), "@SEED12CAMEL@": "".join(w.capitalize() for w in seed12.split())})
     values["@FILLER@"] = "lorem ipsum " * 5000   # KI-376: 60,000 characters of padding
+    values["@HOME@"] = str(home)   # File Shield's rows name the protected folder by its full path
     # One @<PACK>FILE@ per extension store laid out (e.g. @RABBYFILE@), so a new wallet pack's
     # vault row needs no new placeholder here.
     values.update({"@" + re.sub(r"[^A-Z0-9]", "", pack.upper()) + "FILE@": str(store / "000003.log")
@@ -222,6 +251,12 @@ def _scenario_setting(attack, monkeypatch):
     if listed:
         rules = {threat_ids.ioc_identifier("wallet", listed["wallet"]): {"source": listed["source"], "severity": "critical"}}
         monkeypatch.setattr(ruleset_mod, "get", lambda cfg=None: Ruleset(ioc=rules))
+    if attack.get("lockdown"):   # Network Shield's agent lockdown, for this row only
+        current = network_mode.current()
+        locked = network_mode.build(enabled=True, protections=(*network_mode.protections(current), network_mode.LOCKDOWN),
+                                    lists=network_mode.option(current, network_mode.OPT_LISTS),
+                                    block=network_mode.option(current, network_mode.OPT_BLOCK))
+        monkeypatch.setattr(network_mode, "current", lambda: locked)
     severity = attack.get("block_severity") or TABLES[attack.get("shield", "trader")].table["tested_severity"]
     config = _block_config(severity)
     monkeypatch.setattr(hooks, "_config", lambda: config)
@@ -320,7 +355,8 @@ def _blocked_targets(shield_id: str, group: str = "") -> set[str]:
 @pytest.mark.parametrize("shield_id", SHIELD_IDS)
 def test_every_supported_pack_has_earned_it_with_a_blocked_vault_row(shield_id):
     supported = {pack.id for pack in _supported(shield_id)}
-    assert supported <= _blocked_targets(shield_id, "vault"), sorted(supported - _blocked_targets(shield_id, "vault"))
+    group = TABLES[shield_id].table.get("pack_group", "vault")   # the group whose rows prove a pack (Trader: vault)
+    assert supported <= _blocked_targets(shield_id, group), sorted(supported - _blocked_targets(shield_id, group))
 
 
 @pytest.mark.parametrize("shield_id", SHIELD_IDS)

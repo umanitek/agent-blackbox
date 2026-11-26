@@ -1,0 +1,1593 @@
+{
+ "schema": 1,
+ "updated": "2026-11-22",
+ "blackbox": "1.5.0",
+ "layers": {
+  "hooks": "Layer 1 — the agent's own hooks: every action the agent reports is judged before it runs, including the packages an install takes from lockfiles and manifests (their transitive dependencies included; see What Blackbox checks for packages).",
+  "sandbox": "Layer 2 — the agent sandbox (macOS): the kernel refuses protected files to the agent and everything it starts.",
+  "os": "Layer 3 — operating-system file authorisation for every process. Not built yet."
+ },
+ "statuses": {
+  "tested": "run on a real machine, with the date and how",
+  "covered-untested": "built and covered by automated tests, not yet run in the real product",
+  "not-covered": "Blackbox does not protect this, and why"
+ },
+ "agents": [
+  {
+   "id": "claude-code",
+   "name": "Claude Code",
+   "sources": [
+    {
+     "url": "https://code.claude.com/docs/en/hooks",
+     "read": "2026-11-22"
+    },
+    {
+     "url": "https://code.claude.com/docs/en/settings",
+     "read": "2026-11-22"
+    },
+    {
+     "url": "https://code.claude.com/docs/en/headless",
+     "read": "2026-11-22"
+    },
+    {
+     "url": "https://code.claude.com/docs/en/sub-agents",
+     "read": "2026-11-22"
+    }
+   ],
+   "processes": "One `claude` process per session (a native binary). Sub-agents (the Agent tool), agent-team teammates and skills run INSIDE that process; tools run as child processes. `claude -p` and the Agent SDK start the same binary without a terminal.",
+   "home_env": "CLAUDE_CONFIG_DIR",
+   "profiles": {
+    "macos": "~/.claude (settings.json, projects/ transcripts) and ~/.claude.json",
+    "linux": "~/.claude",
+    "windows": "%USERPROFILE%\\.claude"
+   },
+   "scopes": [
+    {
+     "scope": "user",
+     "where": "~/.claude/settings.json",
+     "hooked": true
+    },
+    {
+     "scope": "another config home",
+     "where": "$CLAUDE_CONFIG_DIR/settings.json",
+     "hooked": true,
+     "note": "found from a hook event or a running agent process of the same user (its environment is readable; a path with spaces is read whole), then hooked"
+    },
+    {
+     "scope": "project",
+     "where": "PROJECT/.claude/settings.json and settings.local.json",
+     "hooked": false,
+     "note": "hooks merge across levels, so the user-level hooks still run; a project's disableAllHooks is reported"
+    },
+    {
+     "scope": "command line",
+     "where": "--settings FILE-OR-JSON",
+     "hooked": false,
+     "note": "cannot remove user hooks, but --settings '{\"disableAllHooks\": true}' switches every hook off for that run: the process then shows as unprotected"
+    },
+    {
+     "scope": "managed",
+     "where": "managed-settings.json, MDM or server-managed",
+     "hooked": false,
+     "note": "allowManagedHooksOnly blocks Blackbox's hooks: reported"
+    }
+   ],
+   "launch_modes": [
+    {
+     "mode": "interactive",
+     "how": "claude",
+     "hooks_run": true
+    },
+    {
+     "mode": "headless",
+     "how": "claude -p",
+     "hooks_run": true
+    },
+    {
+     "mode": "headless, bare",
+     "how": "claude --bare -p",
+     "hooks_run": false,
+     "note": "--bare skips every hook by design; Blackbox shows the process as unprotected. The sandbox launcher still applies."
+    },
+    {
+     "mode": "sdk",
+     "how": "Claude Agent SDK",
+     "hooks_run": true,
+     "note": "runs the same binary; --bare is recommended by the vendor for SDK calls and skips hooks"
+    },
+    {
+     "mode": "ide",
+     "how": "VS Code / JetBrains extension, desktop app",
+     "hooks_run": true,
+     "note": "uses the same user settings"
+    },
+    {
+     "mode": "sub-agent",
+     "how": "Agent tool, agent teams, --agent",
+     "hooks_run": true,
+     "note": "user hooks fire inside sub-agents with agent_id and agent_type"
+    },
+    {
+     "mode": "cloud",
+     "how": "Claude Code on the web",
+     "hooks_run": false,
+     "note": "cloud sessions do not read the local ~/.claude/settings.json"
+    }
+   ],
+   "events": [
+    {
+     "event": "SessionStart",
+     "kind": "session_start",
+     "hooked": true
+    },
+    {
+     "event": "UserPromptSubmit",
+     "kind": "prompt",
+     "hooked": true
+    },
+    {
+     "event": "PreToolUse",
+     "kind": "pre_tool",
+     "hooked": true
+    },
+    {
+     "event": "PostToolUse",
+     "kind": "post_tool",
+     "hooked": true
+    },
+    {
+     "event": "PostToolUseFailure",
+     "kind": "post_tool",
+     "hooked": true
+    },
+    {
+     "event": "Stop",
+     "kind": "turn_end",
+     "hooked": true
+    },
+    {
+     "event": "SessionEnd",
+     "kind": "stop",
+     "hooked": true
+    },
+    {
+     "event": "SubagentStart",
+     "kind": "subagent_start",
+     "hooked": true
+    },
+    {
+     "event": "SubagentStop",
+     "kind": "subagent_stop",
+     "hooked": true
+    },
+    {
+     "event": "ConfigChange",
+     "kind": "config_change",
+     "hooked": true
+    },
+    {
+     "event": "Notification",
+     "kind": "attention",
+     "hooked": true
+    },
+    {
+     "event": "PermissionRequest, PermissionDenied, PostToolBatch, TaskCreated, TaskCompleted, StopFailure, TeammateIdle, PreCompact, PostCompact, CwdChanged, DirectoryAdded, FileChanged, WorktreeCreate, WorktreeRemove, PreModelSwitch, PostModelSwitch, Setup, InstructionsLoaded, UserPromptExpansion, MessageDisplay, Elicitation, ElicitationResult",
+     "hooked": false,
+     "why": "not needed to judge an action or follow an instance"
+    }
+   ],
+   "sub_agents": "Tracked: SubagentStart/SubagentStop carry agent_id and agent_type, and every tool call a sub-agent makes carries them too. The built-in web-fetch sub-agent runs SubagentStart/Stop hooks from managed settings only; its WebFetch tool call is still judged.",
+   "not_covered": [
+    "`claude --bare` and `--settings '{\"disableAllHooks\": true}'` run without hooks (shown as unprotected; the sandbox layer still applies when the launcher is used).",
+    "A program the agent compiles and runs is seen by the sandbox layer, not by hooks.",
+    "Sessions that run in the vendor's cloud never touch this machine's hooks."
+   ],
+   "coverage": [
+    {
+     "os": "macos",
+     "launch": "interactive",
+     "layer": "hooks",
+     "status": "tested",
+     "agent_version": "2.1.330",
+     "date": "2026-11-22",
+     "blackbox": "1.5.0",
+     "how": "test VM (macOS 26, bb-recheck2): the agent's own configured hook command run with the payloads of its hook reference; refusals in Block and Audit mode",
+     "result": "pass",
+     "os_version": "macOS 26.6.2"
+    },
+    {
+     "os": "macos",
+     "launch": "sub-agent",
+     "layer": "hooks",
+     "status": "covered-untested",
+     "why": "covered by tests with the documented payloads; not yet run inside a signed-in session"
+    },
+    {
+     "os": "macos",
+     "launch": "headless",
+     "layer": "hooks",
+     "status": "tested",
+     "agent_version": "2.1.330",
+     "os_version": "macOS 26.6.2",
+     "date": "2026-11-22",
+     "blackbox": "1.5.0",
+     "how": "test VM, REAL claude -p with a hosted model (haiku): sessions, two at once, 5 parallel sub-agents with their tasks and exact counts, nested and sequential sub-agents, a 12-call loop and --resume in one instance, --bare and disableAllHooks shown unprotected, File Shield and self-protection refusals on the right session or sub-agent, sudo flagged; the model is not shown (Claude Code's hooks carry none, KI-566) and background sub-agent results count as prompts (KI-567)",
+     "result": "partial"
+    },
+    {
+     "os": "macos",
+     "launch": "sdk",
+     "layer": "hooks",
+     "status": "covered-untested"
+    },
+    {
+     "os": "macos",
+     "launch": "ide",
+     "layer": "hooks",
+     "status": "covered-untested"
+    },
+    {
+     "os": "macos",
+     "launch": "headless, bare",
+     "layer": "hooks",
+     "status": "not-covered",
+     "why": "the agent skips hooks"
+    },
+    {
+     "os": "macos",
+     "launch": "cloud",
+     "layer": "hooks",
+     "status": "not-covered",
+     "why": "runs off this machine"
+    },
+    {
+     "os": "macos",
+     "launch": "interactive",
+     "layer": "sandbox",
+     "status": "tested",
+     "agent_version": "2.1.330",
+     "date": "2026-11-22",
+     "blackbox": "1.5.0",
+     "how": "test VM: the launcher's Seatbelt sandbox; a script written then run, python, a grandchild, links, osascript and open -a all refused by the kernel",
+     "result": "pass",
+     "os_version": "macOS 26.6.2"
+    },
+    {
+     "os": "macos",
+     "launch": "interactive",
+     "layer": "os",
+     "status": "not-covered",
+     "why": "needs Apple's Endpoint Security entitlement (not requested yet)"
+    },
+    {
+     "os": "macos",
+     "launch": "headless",
+     "layer": "sandbox",
+     "status": "tested",
+     "agent_version": "2.1.330",
+     "os_version": "macOS 26.6.2",
+     "date": "2026-11-22",
+     "blackbox": "1.5.0",
+     "how": "test VM, REAL claude -p (haiku) through the agent sandbox launcher: a script reading a protected file was refused by the kernel and the session is marked sandboxed; the kernel refusal is not yet recorded in Blackbox (KI-568)",
+     "result": "partial"
+    }
+   ]
+  },
+  {
+   "id": "codex",
+   "name": "Codex",
+   "sources": [
+    {
+     "url": "https://developers.openai.com/codex/hooks",
+     "read": "2026-11-22"
+    },
+    {
+     "url": "https://developers.openai.com/codex/config-advanced",
+     "read": "2026-11-22"
+    }
+   ],
+   "processes": "One `codex` process per session (CLI or `codex exec`); the desktop app and IDE extension talk to `codex app-server`. Sub-agents run inside the session and report with the PARENT session id plus agent_id.",
+   "home_env": "CODEX_HOME",
+   "profiles": {
+    "macos": "~/.codex (config.toml, hooks.json, sessions)",
+    "linux": "~/.codex",
+    "windows": "%USERPROFILE%\\.codex"
+   },
+   "scopes": [
+    {
+     "scope": "user",
+     "where": "$CODEX_HOME/hooks.json",
+     "hooked": true,
+     "note": "Codex runs a new or changed hook only after the person trusts it once (/hooks): shown as trust-required"
+    },
+    {
+     "scope": "profile",
+     "where": "--profile NAME → $CODEX_HOME/NAME.config.toml",
+     "hooked": true,
+     "note": "a config layer over the same home, so the same hooks.json applies"
+    },
+    {
+     "scope": "project",
+     "where": "PROJECT/.codex/hooks.json (trusted projects only)",
+     "hooked": false,
+     "note": "adds hooks; cannot remove the user's"
+    },
+    {
+     "scope": "system / managed",
+     "where": "/etc/codex/hooks.json, requirements.toml",
+     "hooked": false,
+     "note": "allow_managed_hooks_only skips Blackbox's hooks; [features].hooks = false switches hooks off: both reported"
+    }
+   ],
+   "launch_modes": [
+    {
+     "mode": "interactive",
+     "how": "codex",
+     "hooks_run": true
+    },
+    {
+     "mode": "headless",
+     "how": "codex exec",
+     "hooks_run": true
+    },
+    {
+     "mode": "sdk",
+     "how": "codex app-server (desktop app, IDE extension)",
+     "hooks_run": true
+    },
+    {
+     "mode": "sub-agent",
+     "how": "spawn_agent",
+     "hooks_run": true,
+     "note": "SubagentStart/SubagentStop; SessionEnd does not run for sub-agents"
+    },
+    {
+     "mode": "cloud",
+     "how": "Codex Cloud",
+     "hooks_run": false,
+     "note": "cloud orchestration runs only an organisation's MCP hooks"
+    }
+   ],
+   "events": [
+    {
+     "event": "SessionStart",
+     "kind": "session_start",
+     "hooked": true
+    },
+    {
+     "event": "UserPromptSubmit",
+     "kind": "prompt",
+     "hooked": true
+    },
+    {
+     "event": "PreToolUse",
+     "kind": "pre_tool",
+     "hooked": true
+    },
+    {
+     "event": "PostToolUse",
+     "kind": "post_tool",
+     "hooked": true
+    },
+    {
+     "event": "Stop",
+     "kind": "turn_end",
+     "hooked": true
+    },
+    {
+     "event": "SessionEnd",
+     "kind": "stop",
+     "hooked": true
+    },
+    {
+     "event": "SubagentStart",
+     "kind": "subagent_start",
+     "hooked": true
+    },
+    {
+     "event": "SubagentStop",
+     "kind": "subagent_stop",
+     "hooked": true
+    },
+    {
+     "event": "PermissionRequest, PreCompact, PostCompact, Interrupt, PreModelRequest, PostModelRequest",
+     "hooked": false,
+     "why": "not needed to judge an action or follow an instance"
+    }
+   ],
+   "sub_agents": "Tracked: SubagentStart/SubagentStop carry the parent session id, agent_id and agent_type. Seen 2026-11-22 (Codex 0.171.0, codex exec): spawn_agent fired NO sub-agent hook event. A spawned agent whose events carry its own thread id is linked to the session that called spawn_agent by process ancestry (the same codex process) and order (the oldest spawn not yet claimed); one whose events carry the parent's session id and no agent_id cannot be told apart from its session: its actions are checked and counted in the session.",
+   "not_covered": [
+    "Hosted tools (for example WebSearch) do not pass through Codex's hook path.",
+    "Until the person trusts Blackbox's hooks in Codex (/hooks), Codex skips them.",
+    "A program the agent compiles and runs is seen by the sandbox layer, not by hooks.",
+    "Sessions that run in the vendor's cloud never touch this machine's hooks."
+   ],
+   "coverage": [
+    {
+     "os": "macos",
+     "launch": "interactive",
+     "layer": "hooks",
+     "status": "tested",
+     "agent_version": "0.171.0",
+     "date": "2026-11-22",
+     "blackbox": "1.5.0",
+     "how": "test VM (macOS 26, bb-recheck2): the agent's own configured hook command run with the payloads of its hook reference; refusals in Block and Audit mode",
+     "result": "pass",
+     "os_version": "macOS 26.6.2"
+    },
+    {
+     "os": "macos",
+     "launch": "headless",
+     "layer": "hooks",
+     "status": "tested",
+     "agent_version": "0.171.0",
+     "os_version": "macOS 26.6.2",
+     "date": "2026-11-22",
+     "blackbox": "1.5.0",
+     "how": "test VM, REAL codex exec with OpenAI models (gpt-5-nano, gpt-5.4-nano) and --dangerously-bypass-hook-trust: sessions with the model, two at once, a 12-call loop, File Shield and self-protection refusals, sudo flagged; the sub-agent's task text is not shown yet",
+     "result": "pass"
+    },
+    {
+     "os": "macos",
+     "launch": "sdk",
+     "layer": "hooks",
+     "status": "covered-untested"
+    },
+    {
+     "os": "macos",
+     "launch": "sub-agent",
+     "layer": "hooks",
+     "status": "tested",
+     "agent_version": "0.171.0",
+     "os_version": "macOS 26.6.2",
+     "date": "2026-11-22",
+     "blackbox": "1.5.0",
+     "how": "test VM, REAL codex exec (gpt-5.4-nano): three spawn_agent sub-agents in parallel, each its own instance under the session with its model and exact counts (KI-557 fixed); task text not shown yet",
+     "result": "pass"
+    },
+    {
+     "os": "macos",
+     "launch": "cloud",
+     "layer": "hooks",
+     "status": "not-covered",
+     "why": "runs off this machine"
+    },
+    {
+     "os": "macos",
+     "launch": "interactive",
+     "layer": "sandbox",
+     "status": "covered-untested",
+     "why": "the launcher is written; refusals were proven with Claude Code's launcher"
+    },
+    {
+     "os": "macos",
+     "launch": "interactive",
+     "layer": "os",
+     "status": "not-covered",
+     "why": "needs Apple's Endpoint Security entitlement (not requested yet)"
+    }
+   ]
+  },
+  {
+   "id": "cursor",
+   "name": "Cursor",
+   "sources": [
+    {
+     "url": "https://cursor.com/docs/agent/hooks",
+     "read": "2026-11-22"
+    }
+   ],
+   "processes": "The Cursor app (Electron) runs agent chats inside its own processes; `cursor-agent` is the CLI. Sub-agents (the Task tool) run inside the conversation. Cloud agents run on Cursor's machines.",
+   "home_env": "",
+   "profiles": {
+    "macos": "~/.cursor (hooks.json) and ~/Library/Application Support/Cursor",
+    "linux": "~/.cursor",
+    "windows": "%USERPROFILE%\\.cursor"
+   },
+   "scopes": [
+    {
+     "scope": "user",
+     "where": "~/.cursor/hooks.json",
+     "hooked": true
+    },
+    {
+     "scope": "project",
+     "where": "PROJECT/.cursor/hooks.json",
+     "hooked": false,
+     "note": "all sources run and a deny from any wins, so the user hooks still decide"
+    },
+    {
+     "scope": "enterprise / team",
+     "where": "/Library/Application Support/Cursor/hooks.json, dashboard",
+     "hooked": false,
+     "note": "run before the user's; cannot remove them"
+    }
+   ],
+   "launch_modes": [
+    {
+     "mode": "ide",
+     "how": "Cursor app, Agent chat",
+     "hooks_run": true
+    },
+    {
+     "mode": "headless",
+     "how": "cursor-agent -p",
+     "hooks_run": true
+    },
+    {
+     "mode": "sub-agent",
+     "how": "Task tool",
+     "hooks_run": true,
+     "note": "subagentStart names subagent_id and the parent conversation; subagentStop names only the type"
+    },
+    {
+     "mode": "background",
+     "how": "background agent on this machine",
+     "hooks_run": true,
+     "note": "sessionStart says is_background_agent"
+    },
+    {
+     "mode": "cloud",
+     "how": "Cloud agents",
+     "hooks_run": false,
+     "note": "user-level hooks are not available in cloud agents; only project, team and enterprise hooks run there"
+    },
+    {
+     "mode": "tab",
+     "how": "inline Tab completions",
+     "hooks_run": false,
+     "note": "beforeTabFileRead / afterTabFileEdit exist; Blackbox does not hook Tab"
+    }
+   ],
+   "events": [
+    {
+     "event": "preToolUse",
+     "kind": "pre_tool",
+     "hooked": true
+    },
+    {
+     "event": "beforeReadFile",
+     "kind": "pre_tool",
+     "hooked": true
+    },
+    {
+     "event": "postToolUse",
+     "kind": "post_tool",
+     "hooked": true
+    },
+    {
+     "event": "beforeSubmitPrompt",
+     "kind": "prompt",
+     "hooked": true
+    },
+    {
+     "event": "stop",
+     "kind": "turn_end",
+     "hooked": true
+    },
+    {
+     "event": "sessionStart",
+     "kind": "session_start",
+     "hooked": true
+    },
+    {
+     "event": "sessionEnd",
+     "kind": "stop",
+     "hooked": true
+    },
+    {
+     "event": "subagentStart",
+     "kind": "subagent_start",
+     "hooked": true
+    },
+    {
+     "event": "subagentStop",
+     "kind": "subagent_stop",
+     "hooked": true
+    },
+    {
+     "event": "beforeShellExecution, beforeMCPExecution, afterShellExecution, afterMCPExecution, afterFileEdit, postToolUseFailure, preCompact, afterAgentResponse, afterAgentThought, beforeTabFileRead, afterTabFileEdit, workspaceOpen",
+     "hooked": false,
+     "why": "the generic preToolUse / postToolUse already fire for every tool; Tab is not an agent"
+    }
+   ],
+   "sub_agents": "Tracked: subagentStart / subagentStop.",
+   "not_covered": [
+    "Cloud agents and Tab completions.",
+    "The generic tool hooks (2026-11-22) are covered by tests with the documented payloads but not yet run inside a signed-in Cursor.",
+    "A program the agent compiles and runs is seen by the sandbox layer, not by hooks.",
+    "Sessions that run in the vendor's cloud never touch this machine's hooks."
+   ],
+   "coverage": [
+    {
+     "os": "macos",
+     "launch": "ide",
+     "layer": "hooks",
+     "status": "covered-untested",
+     "why": "the shell, MCP and read hooks were run on the test VM (2026-11-21); the generic tool hooks that replace them are not yet"
+    },
+    {
+     "os": "macos",
+     "launch": "sub-agent",
+     "layer": "hooks",
+     "status": "covered-untested"
+    },
+    {
+     "os": "macos",
+     "launch": "cloud",
+     "layer": "hooks",
+     "status": "not-covered",
+     "why": "runs off this machine; user hooks are not loaded"
+    },
+    {
+     "os": "macos",
+     "launch": "ide",
+     "layer": "sandbox",
+     "status": "tested",
+     "agent_version": "3.31.15",
+     "date": "2026-11-22",
+     "blackbox": "1.5.0",
+     "how": "test VM: Open Cursor protected starts Cursor inside the sandbox and it stays up; reading a protected file from inside was not exercised (sign-in screen)",
+     "result": "partial",
+     "os_version": "macOS 26.6.2"
+    },
+    {
+     "os": "macos",
+     "launch": "ide",
+     "layer": "os",
+     "status": "not-covered",
+     "why": "needs Apple's Endpoint Security entitlement (not requested yet)"
+    }
+   ]
+  },
+  {
+   "id": "gemini-cli",
+   "name": "Gemini CLI",
+   "sources": [
+    {
+     "url": "https://geminicli.com/docs/hooks/reference/",
+     "read": "2026-11-22"
+    },
+    {
+     "url": "https://geminicli.com/docs/reference/configuration/",
+     "read": "2026-11-22"
+    }
+   ],
+   "processes": "One `gemini` process (Node) per session; `gemini -p` runs headless. Sub-agents run inside the session and have no hook events of their own.",
+   "home_env": "GEMINI_CLI_HOME",
+   "profiles": {
+    "macos": "~/.gemini (settings.json); system: /Library/Application Support/GeminiCli/settings.json",
+    "linux": "~/.gemini; /etc/gemini-cli/settings.json",
+    "windows": "%USERPROFILE%\\.gemini"
+   },
+   "scopes": [
+    {
+     "scope": "user",
+     "where": "~/.gemini/settings.json",
+     "hooked": true
+    },
+    {
+     "scope": "another home",
+     "where": "$GEMINI_CLI_HOME/.gemini/settings.json",
+     "hooked": true
+    },
+    {
+     "scope": "project",
+     "where": "PROJECT/.gemini/settings.json",
+     "hooked": false,
+     "note": "hook lists are joined, not replaced; hooksConfig.enabled = false there switches hooks off: reported"
+    },
+    {
+     "scope": "system",
+     "where": "system settings.json and system-defaults.json",
+     "hooked": false,
+     "note": "read-only for Blackbox"
+    }
+   ],
+   "launch_modes": [
+    {
+     "mode": "interactive",
+     "how": "gemini",
+     "hooks_run": true
+    },
+    {
+     "mode": "headless",
+     "how": "gemini -p",
+     "hooks_run": true
+    },
+    {
+     "mode": "sub-agent",
+     "how": "sub-agents (experimental)",
+     "hooks_run": true,
+     "note": "their tool calls pass BeforeTool like any other; there is no sub-agent start or stop event, so they are not separate instances"
+    }
+   ],
+   "events": [
+    {
+     "event": "SessionStart",
+     "kind": "session_start",
+     "hooked": true
+    },
+    {
+     "event": "BeforeAgent",
+     "kind": "prompt",
+     "hooked": true
+    },
+    {
+     "event": "BeforeTool",
+     "kind": "pre_tool",
+     "hooked": true
+    },
+    {
+     "event": "AfterTool",
+     "kind": "post_tool",
+     "hooked": true
+    },
+    {
+     "event": "AfterAgent",
+     "kind": "turn_end",
+     "hooked": true
+    },
+    {
+     "event": "SessionEnd",
+     "kind": "stop",
+     "hooked": true
+    },
+    {
+     "event": "Notification",
+     "kind": "attention",
+     "hooked": true
+    },
+    {
+     "event": "BeforeModel, BeforeToolSelection, AfterModel, PreCompress",
+     "hooked": false,
+     "why": "not needed to judge an action or follow an instance"
+    }
+   ],
+   "sub_agents": "Not separate instances: Gemini CLI documents no sub-agent hook event. Their tool calls are judged inside the session.",
+   "not_covered": [
+    "hooksConfig.enabled = false or a hook named in hooksConfig.disabled switches Blackbox's hooks off (reported).",
+    "A program the agent compiles and runs is seen by the sandbox layer, not by hooks.",
+    "Sessions that run in the vendor's cloud never touch this machine's hooks."
+   ],
+   "coverage": [
+    {
+     "os": "macos",
+     "launch": "interactive",
+     "layer": "hooks",
+     "status": "tested",
+     "agent_version": "0.70.0",
+     "date": "2026-11-22",
+     "blackbox": "1.5.0",
+     "how": "test VM (macOS 26, bb-recheck2): the agent's own configured hook command run with the payloads of its hook reference; refusals in Block and Audit mode",
+     "result": "pass",
+     "os_version": "macOS 26.6.2"
+    },
+    {
+     "os": "macos",
+     "launch": "headless",
+     "layer": "hooks",
+     "status": "tested",
+     "agent_version": "0.70.0",
+     "os_version": "macOS 26.6.2",
+     "date": "2026-11-22",
+     "blackbox": "1.5.0",
+     "how": "test VM, REAL gemini -p with a hosted model (gemini-3.5-flash-lite, free tier): fail on a stock install, see KI-570; Gemini's invoke_agent sub-agents have no hook event and count on the session",
+     "result": "fail"
+    },
+    {
+     "os": "macos",
+     "launch": "interactive",
+     "layer": "sandbox",
+     "status": "covered-untested",
+     "why": "the launcher is written; refusals were proven with Claude Code's launcher"
+    },
+    {
+     "os": "macos",
+     "launch": "interactive",
+     "layer": "os",
+     "status": "not-covered",
+     "why": "needs Apple's Endpoint Security entitlement (not requested yet)"
+    }
+   ]
+  },
+  {
+   "id": "copilot-cli",
+   "name": "GitHub Copilot CLI",
+   "sources": [
+    {
+     "url": "https://docs.github.com/en/copilot/reference/hooks-configuration",
+     "read": "2026-11-22"
+    }
+   ],
+   "processes": "One `copilot` process per session. Sub-agents run inside it. The Copilot cloud agent runs in GitHub's sandbox.",
+   "home_env": "COPILOT_HOME",
+   "profiles": {
+    "macos": "~/.copilot (hooks/*.json, settings.json)",
+    "linux": "~/.copilot",
+    "windows": "%USERPROFILE%\\.copilot"
+   },
+   "scopes": [
+    {
+     "scope": "user",
+     "where": "$COPILOT_HOME/hooks/blackbox.json",
+     "hooked": true
+    },
+    {
+     "scope": "repository",
+     "where": "REPO/.github/hooks/*.json",
+     "hooked": false,
+     "note": "adds hooks; the only source in a cloud agent job"
+    }
+   ],
+   "launch_modes": [
+    {
+     "mode": "interactive",
+     "how": "copilot",
+     "hooks_run": true
+    },
+    {
+     "mode": "headless",
+     "how": "copilot -p",
+     "hooks_run": true
+    },
+    {
+     "mode": "sub-agent",
+     "how": "sub-agents",
+     "hooks_run": true,
+     "note": "hooks inside a sub-agent carry agentId and agentType"
+    },
+    {
+     "mode": "cloud",
+     "how": "Copilot cloud agent",
+     "hooks_run": false,
+     "note": "the sandbox has no user-level hook files"
+    }
+   ],
+   "events": [
+    {
+     "event": "sessionStart",
+     "kind": "session_start",
+     "hooked": true
+    },
+    {
+     "event": "userPromptSubmitted",
+     "kind": "prompt",
+     "hooked": true
+    },
+    {
+     "event": "preToolUse",
+     "kind": "pre_tool",
+     "hooked": true
+    },
+    {
+     "event": "postToolUse",
+     "kind": "post_tool",
+     "hooked": true
+    },
+    {
+     "event": "agentStop",
+     "kind": "turn_end",
+     "hooked": true
+    },
+    {
+     "event": "sessionEnd",
+     "kind": "stop",
+     "hooked": true
+    },
+    {
+     "event": "subagentStart",
+     "kind": "subagent_start",
+     "hooked": true
+    },
+    {
+     "event": "subagentStop",
+     "kind": "subagent_stop",
+     "hooked": true
+    },
+    {
+     "event": "permissionRequest, postToolUseFailure, errorOccurred",
+     "hooked": false,
+     "why": "not needed to judge an action or follow an instance"
+    }
+   ],
+   "sub_agents": "Tracked: subagentStart / subagentStop and agentId on hooks inside a sub-agent.",
+   "not_covered": [
+    "Its prompt hook cannot refuse a prompt (recorded only).",
+    "A program the agent compiles and runs is seen by the sandbox layer, not by hooks.",
+    "Sessions that run in the vendor's cloud never touch this machine's hooks."
+   ],
+   "coverage": [
+    {
+     "os": "macos",
+     "launch": "interactive",
+     "layer": "hooks",
+     "status": "covered-untested",
+     "why": "hooked automatically on the test VM within 6 s; its hook command has not been run with payloads there"
+    },
+    {
+     "os": "macos",
+     "launch": "cloud",
+     "layer": "hooks",
+     "status": "not-covered",
+     "why": "runs off this machine"
+    },
+    {
+     "os": "macos",
+     "launch": "interactive",
+     "layer": "os",
+     "status": "not-covered",
+     "why": "needs Apple's Endpoint Security entitlement (not requested yet)"
+    }
+   ]
+  },
+  {
+   "id": "windsurf",
+   "name": "Windsurf (Devin)",
+   "sources": [
+    {
+     "url": "https://docs.windsurf.com/windsurf/cascade/hooks",
+     "read": "2026-11-22"
+    }
+   ],
+   "processes": "The Windsurf app (now shipped as Devin.app) runs Cascade inside its own processes.",
+   "home_env": "",
+   "profiles": {
+    "macos": "~/.codeium/windsurf (hooks.json)",
+    "linux": "~/.codeium/windsurf",
+    "windows": "%USERPROFILE%\\.codeium\\windsurf"
+   },
+   "scopes": [
+    {
+     "scope": "user",
+     "where": "~/.codeium/windsurf/hooks.json",
+     "hooked": true,
+     "note": "the Cascade hooks file documented before the move to Devin; the current pages describe Devin's own hooks (see Devin)"
+    }
+   ],
+   "launch_modes": [
+    {
+     "mode": "ide",
+     "how": "Windsurf / Devin app",
+     "hooks_run": true
+    }
+   ],
+   "events": [
+    {
+     "event": "pre_run_command",
+     "kind": "pre_tool",
+     "hooked": true
+    },
+    {
+     "event": "pre_read_code",
+     "kind": "pre_tool",
+     "hooked": true
+    },
+    {
+     "event": "pre_write_code",
+     "kind": "pre_tool",
+     "hooked": true
+    },
+    {
+     "event": "pre_mcp_tool_use",
+     "kind": "pre_tool",
+     "hooked": true
+    },
+    {
+     "event": "post_run_command",
+     "kind": "post_tool",
+     "hooked": true
+    },
+    {
+     "event": "pre_user_prompt",
+     "kind": "prompt",
+     "hooked": true
+    }
+   ],
+   "sub_agents": "Not tracked: the Cascade hooks have no session or sub-agent events.",
+   "not_covered": [
+    "The vendor's docs now redirect to Devin Local; whether the app still reads the Cascade hooks file is unverified.",
+    "No session start or end event: an instance ends by going quiet or by its process leaving.",
+    "A program the agent compiles and runs is seen by the sandbox layer, not by hooks.",
+    "Sessions that run in the vendor's cloud never touch this machine's hooks."
+   ],
+   "coverage": [
+    {
+     "os": "macos",
+     "launch": "ide",
+     "layer": "hooks",
+     "status": "covered-untested",
+     "why": "written against the Cascade hooks reference; not run in the app"
+    },
+    {
+     "os": "macos",
+     "launch": "ide",
+     "layer": "os",
+     "status": "not-covered",
+     "why": "needs Apple's Endpoint Security entitlement (not requested yet)"
+    }
+   ]
+  },
+  {
+   "id": "devin",
+   "name": "Devin",
+   "sources": [
+    {
+     "url": "https://docs.devin.ai/cli/extensibility/hooks/overview.md",
+     "read": "2026-11-22"
+    },
+    {
+     "url": "https://docs.devin.ai/cli/extensibility/hooks/lifecycle-hooks.md",
+     "read": "2026-11-22"
+    },
+    {
+     "url": "https://docs.devin.ai/cli/subagents.md",
+     "read": "2026-11-22"
+    }
+   ],
+   "processes": "One `devin` process per CLI session; Devin Local is the desktop app. Sub-agents run as their own agent sessions (run_subagent), in the foreground or background.",
+   "home_env": "",
+   "profiles": {
+    "macos": "~/.config/devin/config.json (hooks key)",
+    "linux": "~/.config/devin/config.json",
+    "windows": "%APPDATA%\\devin\\config.json"
+   },
+   "scopes": [
+    {
+     "scope": "user",
+     "where": "~/.config/devin/config.json",
+     "hooked": true
+    },
+    {
+     "scope": "Claude Code's files",
+     "where": "~/.claude/settings.json, ~/.claude.json",
+     "hooked": true,
+     "note": "Devin reads them by default (read_config_from.claude); such an event is counted as Devin's, once"
+    },
+    {
+     "scope": "project",
+     "where": "PROJECT/.devin/hooks.v1.json, .devin/config.json, .claude/settings.json",
+     "hooked": false,
+     "note": "adds hooks"
+    }
+   ],
+   "launch_modes": [
+    {
+     "mode": "interactive",
+     "how": "devin",
+     "hooks_run": true
+    },
+    {
+     "mode": "ide",
+     "how": "Devin Local",
+     "hooks_run": true,
+     "note": "not in Restricted Mode: hooks neither load nor run there"
+    },
+    {
+     "mode": "sub-agent",
+     "how": "run_subagent",
+     "hooks_run": true,
+     "note": "no sub-agent start or stop event is documented; a sub-agent is its own session"
+    },
+    {
+     "mode": "cloud",
+     "how": "Devin cloud sessions",
+     "hooks_run": false,
+     "note": "SessionEnd is not fired in cloud sessions; this machine's hooks do not run there"
+    }
+   ],
+   "events": [
+    {
+     "event": "SessionStart",
+     "kind": "session_start",
+     "hooked": true
+    },
+    {
+     "event": "UserPromptSubmit",
+     "kind": "prompt",
+     "hooked": true
+    },
+    {
+     "event": "PreToolUse",
+     "kind": "pre_tool",
+     "hooked": true
+    },
+    {
+     "event": "PostToolUse",
+     "kind": "post_tool",
+     "hooked": true
+    },
+    {
+     "event": "Stop",
+     "kind": "turn_end",
+     "hooked": true
+    },
+    {
+     "event": "SessionEnd",
+     "kind": "stop",
+     "hooked": true
+    },
+    {
+     "event": "PermissionRequest, PostCompaction",
+     "hooked": false,
+     "why": "not needed to judge an action or follow an instance"
+    }
+   ],
+   "sub_agents": "Each sub-agent is its own session; no parent link is documented in the hook payload.",
+   "not_covered": [
+    "New on 2026-11-22 and never run in Devin: written from the vendor's reference only.",
+    "A program the agent compiles and runs is seen by the sandbox layer, not by hooks.",
+    "Sessions that run in the vendor's cloud never touch this machine's hooks."
+   ],
+   "coverage": [
+    {
+     "os": "macos",
+     "launch": "interactive",
+     "layer": "hooks",
+     "status": "covered-untested",
+     "why": "written from the reference; Devin is not installed on the test machines"
+    },
+    {
+     "os": "macos",
+     "launch": "interactive",
+     "layer": "os",
+     "status": "not-covered",
+     "why": "needs Apple's Endpoint Security entitlement (not requested yet)"
+    }
+   ]
+  },
+  {
+   "id": "cline",
+   "name": "Cline",
+   "sources": [
+    {
+     "url": "https://docs.cline.bot/customization/hooks.md",
+     "read": "2026-11-22"
+    },
+    {
+     "url": "https://docs.cline.bot/customization/plugins.md",
+     "read": "2026-11-22"
+    },
+    {
+     "url": "https://docs.cline.bot/sdk/plugins.md",
+     "read": "2026-11-22"
+    },
+    {
+     "url": "https://docs.cline.bot/sdk/guides/writing-plugins.md",
+     "read": "2026-11-22"
+    },
+    {
+     "url": "https://docs.cline.bot/getting-started/config.md",
+     "read": "2026-11-22"
+    }
+   ],
+   "processes": "The `cline` CLI (TUI, headless, and a background hub), the SDK (`ClineCore`), Kanban and the VS Code / JetBrains extensions. Agents a session spawns (`spawn_agent`, teams) run inside it and name their parent on every hook event. SDK plugins run in a worker thread of the host.",
+   "home_env": "",
+   "profiles": {
+    "macos": "~/.cline (data/settings, hooks/, plugins/; moved by CLINE_DIR or --config) and ~/Documents/Cline (Hooks/, Plugins/ — read whatever CLINE_DIR says)",
+    "linux": "~/.cline and ~/Documents/Cline",
+    "windows": "%USERPROFILE%\\.cline and Documents\\Cline"
+   },
+   "scopes": [
+    {
+     "scope": "user, hook scripts",
+     "where": "~/Documents/Cline/Hooks/EVENT",
+     "hooked": true,
+     "note": "run by the IDE extensions and — checked in the SDK 3.0.75 itself — by the CLI and SDK too; a script of the person's own for an event is kept"
+    },
+    {
+     "scope": "user, SDK plugin",
+     "where": "~/Documents/Cline/Plugins/blackbox.js",
+     "hooked": true,
+     "note": "CLI, SDK and Kanban only (the docs say plugins do not apply to the IDE extensions yet); loaded for every profile"
+    },
+    {
+     "scope": "another profile",
+     "where": "CLINE_DIR/hooks and CLINE_DIR/plugins",
+     "hooked": false,
+     "note": "not needed: ~/Documents/Cline is searched for every profile"
+    },
+    {
+     "scope": "project",
+     "where": "PROJECT/.cline/hooks, PROJECT/.clinerules/hooks, PROJECT/.cline/plugins",
+     "hooked": false,
+     "note": "adds hooks and plugins; cannot remove the user-level ones"
+    }
+   ],
+   "launch_modes": [
+    {
+     "mode": "ide",
+     "how": "VS Code / JetBrains extension",
+     "hooks_run": true,
+     "note": "hook scripts, with Settings → Enable Hooks on"
+    },
+    {
+     "mode": "interactive",
+     "how": "cline (TUI)",
+     "hooks_run": true,
+     "note": "hook scripts and the SDK plugin"
+    },
+    {
+     "mode": "headless",
+     "how": "cline \"task\" / cline --json",
+     "hooks_run": true,
+     "note": "hook scripts and the SDK plugin"
+    },
+    {
+     "mode": "sdk",
+     "how": "ClineCore / Agent with pluginPaths",
+     "hooks_run": true,
+     "note": "a host that passes its own plugin policy can switch plugins off; the hook scripts still run"
+    },
+    {
+     "mode": "cloud",
+     "how": "Cline Cloud Agents",
+     "hooks_run": false,
+     "note": "runs in the vendor's sandbox"
+    }
+   ],
+   "events": [
+    {
+     "event": "TaskStart",
+     "kind": "session_start",
+     "hooked": true
+    },
+    {
+     "event": "TaskResume",
+     "kind": "session_start",
+     "hooked": true
+    },
+    {
+     "event": "UserPromptSubmit",
+     "kind": "prompt",
+     "hooked": true
+    },
+    {
+     "event": "PreToolUse",
+     "kind": "pre_tool",
+     "hooked": true
+    },
+    {
+     "event": "PostToolUse",
+     "kind": "post_tool",
+     "hooked": true
+    },
+    {
+     "event": "TaskComplete",
+     "kind": "turn_end",
+     "hooked": true
+    },
+    {
+     "event": "TaskCancel",
+     "kind": "turn_end",
+     "hooked": true
+    },
+    {
+     "event": "SessionShutdown",
+     "kind": "stop",
+     "hooked": true
+    },
+    {
+     "event": "TaskError",
+     "kind": "",
+     "hooked": false,
+     "why": "carries nothing Blackbox judges"
+    },
+    {
+     "event": "PreCompact",
+     "kind": "",
+     "hooked": false,
+     "why": "carries nothing Blackbox judges"
+    },
+    {
+     "event": "plugin beforeRun",
+     "kind": "prompt",
+     "hooked": false,
+     "why": "not a hook event of its own: Blackbox's SDK plugin sends the task Cline starts with in UserPromptSubmit's form (KI-617: TaskStart carries no task text)"
+    },
+    {
+     "event": "plugin beforeTool / afterTool",
+     "kind": "pre_tool / post_tool",
+     "hooked": false,
+     "why": "not a hook event of its own: Blackbox's SDK plugin reports the same calls as PreToolUse / PostToolUse, and one call is answered once"
+    }
+   ],
+   "sub_agents": "Tracked: every event names agent_id and parent_agent_id, so an agent a session spawned is its own instance under that session.",
+   "not_covered": [
+    "The task Cline starts with (its first message): Cline 3.0.75's TaskStart hook payload carries no task text, and UserPromptSubmit fires only for later messages. Blackbox's SDK plugin reads it from the first run's messages (beforeRun) in the CLI, SDK and Kanban; in the IDE extensions (hook scripts only) the first message is NOT checked (KI-617).",
+    "Not run with a model yet: the CLI needs a sign-in. The SDK's own loader loaded Blackbox's plugin and found its hook scripts; a real session is still to be run.",
+    "The IDE extensions run the hook scripts only, and only with Enable Hooks on — Blackbox cannot see that switch.",
+    "A host built on the SDK can switch plugins off for a session; the hook scripts still report its tool calls.",
+    "A program the agent compiles and runs is seen by the sandbox layer, not by hooks.",
+    "Sessions that run in the vendor's cloud never touch this machine's hooks."
+   ],
+   "coverage": [
+    {
+     "os": "macos",
+     "launch": "sdk",
+     "layer": "hooks",
+     "status": "tested",
+     "agent_version": "3.0.75",
+     "os_version": "macOS 27.2.1",
+     "date": "2026-11-22",
+     "blackbox": "1.5.0",
+     "how": "the Cline SDK's own loader (discoverPluginModulePaths, loadAgentPluginsFromPathsWithDiagnostics, listHookConfigFiles) on Blackbox's installed files: the plugin loaded with no failure, all 8 hook scripts were found, and beforeTool returned skip for a refused call. No model run.",
+     "result": "partial"
+    },
+    {
+     "os": "macos",
+     "launch": "interactive",
+     "layer": "hooks",
+     "status": "covered-untested",
+     "why": "built and loaded by the SDK; not run in a signed-in CLI session"
+    },
+    {
+     "os": "macos",
+     "launch": "ide",
+     "layer": "hooks",
+     "status": "covered-untested",
+     "why": "hook scripts; not run in the extension"
+    },
+    {
+     "os": "macos",
+     "launch": "cloud",
+     "layer": "hooks",
+     "status": "not-covered",
+     "why": "local hooks never run in the vendor's cloud"
+    },
+    {
+     "os": "macos",
+     "launch": "interactive",
+     "layer": "os",
+     "status": "not-covered",
+     "why": "needs Apple's Endpoint Security entitlement (not requested yet)"
+    },
+    {
+     "os": "macos",
+     "launch": "headless",
+     "layer": "hooks",
+     "status": "tested",
+     "agent_version": "3.0.75",
+     "os_version": "macOS 26.6.2",
+     "date": "2026-11-22",
+     "blackbox": "1.5.0",
+     "how": "test VM, REAL cline -P gemini (gemini-3.5-flash-lite): sessions, two at once, a 12-call loop, File Shield and self-protection refusals, sudo flagged; every prompt is flagged and the launch mode shows interactive (KI-573)",
+     "result": "partial"
+    }
+   ]
+  },
+  {
+   "id": "opencode",
+   "name": "OpenCode",
+   "sources": [
+    {
+     "url": "https://opencode.ai/docs/plugins/",
+     "read": "2026-11-22"
+    },
+    {
+     "url": "https://opencode.ai/docs/build/plugins/server/",
+     "read": "2026-11-22"
+    },
+    {
+     "url": "https://opencode.ai/docs/build/plugins/migrate-v1/",
+     "read": "2026-11-22"
+    }
+   ],
+   "processes": "One `opencode` process (TUI) or `opencode serve`; agents and sub-agents run inside it.",
+   "home_env": "",
+   "profiles": {
+    "macos": "~/.config/opencode (opencode.jsonc, plugins/)",
+    "linux": "~/.config/opencode",
+    "windows": "%USERPROFILE%\\.config\\opencode"
+   },
+   "scopes": [
+    {
+     "scope": "user, version 1",
+     "where": "~/.config/opencode/plugin/blackbox.js",
+     "hooked": true,
+     "note": "a function returning tool.execute.before / after; OpenCode 1.19.6 lists it among its loaded plugins"
+    },
+    {
+     "scope": "user, version 2",
+     "where": "~/.config/opencode/plugins/blackbox/index.js",
+     "hooked": true,
+     "note": "a default export with id and setup(ctx) registering ctx.tool.hook; version 2 runs no version-1 plugin"
+    },
+    {
+     "scope": "project",
+     "where": "PROJECT/.opencode/plugins/",
+     "hooked": false,
+     "note": "adds plugins"
+    }
+   ],
+   "launch_modes": [
+    {
+     "mode": "interactive",
+     "how": "opencode",
+     "hooks_run": true
+    },
+    {
+     "mode": "headless",
+     "how": "opencode run",
+     "hooks_run": true
+    },
+    {
+     "mode": "sdk",
+     "how": "opencode serve / acp",
+     "hooks_run": true
+    },
+    {
+     "mode": "headless, pure",
+     "how": "opencode --pure",
+     "hooks_run": false,
+     "note": "--pure runs without external plugins, Blackbox's included"
+    }
+   ],
+   "events": [
+    {
+     "event": "tool.execute.before",
+     "kind": "pre_tool",
+     "hooked": true
+    },
+    {
+     "event": "tool.execute.after",
+     "kind": "post_tool",
+     "hooked": true
+    }
+   ],
+   "sub_agents": "Tracked: a sub-agent (the task tool) runs as a child session. OpenCode 1's plugin names the child's parent (OpenCode's session.created event, or one question to OpenCode per session) with every call, so the child is shown under its session with the task call's description and type. OpenCode 2's plugin names no parent: a new session whose first event is a tool call, in the same opencode process as a session with an unclaimed task call, is linked to that call (by process and order).",
+   "not_covered": [
+    "`opencode --pure` runs without external plugins: nothing Blackbox installs is loaded.",
+    "OpenCode 2 is not on npm's `latest` yet (1.19.6 is): the version-2 plugin is built against @opencode/plugin 2.3.2 and run under Node with its documented events, not in OpenCode 2 itself.",
+    "No prompt or session events.",
+    "A program the agent compiles and runs is seen by the sandbox layer, not by hooks.",
+    "Sessions that run in the vendor's cloud never touch this machine's hooks."
+   ],
+   "coverage": [
+    {
+     "os": "macos",
+     "launch": "interactive",
+     "layer": "hooks",
+     "status": "tested",
+     "agent_version": "1.19.6",
+     "os_version": "macOS 27.2.1",
+     "date": "2026-11-22",
+     "blackbox": "1.5.0",
+     "how": "OpenCode 1.19.6 with both of Blackbox's plugin files in place: `opencode debug config` lists the version-1 plugin among its loaded plugins and reports no error for the version-2 folder. No model run.",
+     "result": "partial"
+    },
+    {
+     "os": "macos",
+     "launch": "interactive, version 2",
+     "layer": "hooks",
+     "status": "covered-untested",
+     "why": "the version-2 plugin is run under Node with the documented events; OpenCode 2 itself is not released on npm's latest tag"
+    },
+    {
+     "os": "macos",
+     "launch": "headless, pure",
+     "layer": "hooks",
+     "status": "not-covered",
+     "why": "--pure loads no external plugin"
+    },
+    {
+     "os": "macos",
+     "launch": "interactive",
+     "layer": "os",
+     "status": "not-covered",
+     "why": "needs Apple's Endpoint Security entitlement (not requested yet)"
+    },
+    {
+     "os": "macos",
+     "launch": "headless",
+     "layer": "hooks",
+     "status": "tested",
+     "agent_version": "1.19.6",
+     "os_version": "macOS 26.6.2",
+     "date": "2026-11-22",
+     "blackbox": "1.5.0",
+     "how": "test VM, REAL opencode run with a hosted model (gemini-3.5-flash-lite): sessions with launch mode, two at once, a 12-call loop, task-tool sub-agents linked under the session with their task and counts (KI-555 fixed) but closed only by the quiet limit (KI-574), File Shield and self-protection refusals, sudo flagged",
+     "result": "partial"
+    }
+   ]
+  },
+  {
+   "id": "hermes",
+   "name": "Hermes agent",
+   "sources": [
+    {
+     "url": "https://github.com/NousResearch/hermes-agent",
+     "read": "2026-11-22"
+    }
+   ],
+   "processes": "One Hermes process per run (CLI, gateway or a profile's service). A task it delegates (delegate_task) runs as a child agent inside that process with a session of its own. Blackbox is a plugin loaded into it: its hooks are called in-process, never through a command Blackbox installs.",
+   "home_env": "HERMES_HOME",
+   "profiles": {
+    "macos": "~/.hermes and each profile's home (hermes -p NAME)",
+    "linux": "~/.hermes and each profile's home",
+    "windows": "%LOCALAPPDATA%\\hermes"
+   },
+   "scopes": [
+    {
+     "scope": "every profile",
+     "where": "the Blackbox plugin in each Hermes home (blackbox attach)",
+     "hooked": true,
+     "note": "one set of Blackbox settings in the main Hermes home protects every profile"
+    }
+   ],
+   "launch_modes": [
+    {
+     "mode": "interactive",
+     "how": "hermes",
+     "hooks_run": true
+    },
+    {
+     "mode": "gateway",
+     "how": "hermes gateway (messaging platforms)",
+     "hooks_run": true
+    }
+   ],
+   "events": [
+    {
+     "event": "on_session_start",
+     "kind": "session_start",
+     "hooked": true
+    },
+    {
+     "event": "pre_tool_call",
+     "kind": "pre_tool",
+     "hooked": true
+    },
+    {
+     "event": "post_tool_call",
+     "kind": "post_tool",
+     "hooked": true
+    },
+    {
+     "event": "on_session_end",
+     "kind": "stop",
+     "hooked": true
+    },
+    {
+     "event": "pre_api_request",
+     "kind": "prompt",
+     "hooked": true,
+     "why": "checked for prompt injection by the guard; the first model call of each turn is the session's prompt (counted, never kept) and names the model"
+    }
+   ],
+   "sub_agents": "Tracked from the existing hook data: every session that first appears in the same Hermes home within two minutes of a delegate_task call, in the same process, is recorded as that call's sub-agent (its tool calls and its end); one call may start several.",
+   "not_covered": [
+    "A plugin that is not loaded (Blackbox removed from a profile) sees nothing of that profile.",
+    "Hermes sessions that run on another machine never touch this machine's plugin."
+   ],
+   "coverage": [
+    {
+     "os": "macos",
+     "launch": "interactive",
+     "layer": "hooks",
+     "status": "covered-untested",
+     "why": "the plugin's own Hermes hooks, recorded in the instance tree, are covered by tests; the real run on the test VM did not complete (the local model was too slow for Hermes' prompt, 2026-11-22)"
+    },
+    {
+     "os": "macos",
+     "launch": "sub-agent",
+     "layer": "hooks",
+     "status": "covered-untested",
+     "why": "a delegated task is linked to its session by tests with the guard's own hook calls; not yet run with a hosted model"
+    },
+    {
+     "os": "macos",
+     "launch": "headless",
+     "layer": "hooks",
+     "status": "tested",
+     "agent_version": "2026.9.24",
+     "os_version": "macOS 26.6.2",
+     "date": "2026-11-22",
+     "blackbox": "1.5.0",
+     "how": "test VM, REAL hermes chat -q with hosted free models (OpenRouter nemotron-3.5-lightning:free, Gemini flash-lite): sessions, two at once, a 12-call loop, File Shield and self-protection refusals, sudo flagged, delegate_task children; sessions show the Hermes home instead of the project folder, no model or prompts, and one delegated child shows as its own session (KI-572)",
+     "result": "partial"
+    }
+   ]
+  }
+ ]
+}

@@ -1,10 +1,10 @@
 """Dashboard calls that outlast Hermes Desktop's 30 s request limit (desktop/long_calls.py), 2026-11-07.
 
-Desktop drops a plugin request after 30 s, and an assistant turn or a Playground test can take
+Hermes Desktop drops a plugin request after 30 s, and an assistant turn or a Playground test can take
 longer, so those calls start in the background and are read back by id. Checked here: only the
 long routes start; a call answers "running" until the dashboard answers, then hands back that
 answer unchanged; at most MAX_RUNNING run at once; records expire and are trimmed without
-dropping a running one; a fault in the call still ends it. And the Desktop routes run every
+dropping a running one; a fault in the call still ends it. And the Hermes Desktop routes run every
 dashboard call off Hermes' event loop — a blocking call there blanked the whole page while one
 assistant turn ran.
 """
@@ -134,7 +134,7 @@ def test_a_fault_in_the_call_still_ends_it():
     assert "RuntimeError" in answer.body["error"]
 
 
-# --------------------------------------------------------------------------- the Desktop routes
+# --------------------------------------------------------------------------- the Hermes Desktop routes
 
 
 def _client() -> TestClient:

@@ -1,0 +1,8 @@
+{
+  "id": "oisd-small",
+  "name": "OISD small",
+  "kind": "dns-blocklist",
+  "status": "planned",
+  "order": 20,
+  "source": "https://oisd.nl"
+}

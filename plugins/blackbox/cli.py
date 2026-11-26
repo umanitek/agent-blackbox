@@ -14,7 +14,8 @@ import argparse
 import logging
 from typing import Any
 import time
-from . import attach, audit, community, ruleset, sync
+from . import attach, audit, community, ruleset, shields, sync
+from .approvals import add_approve_parser
 from .kernel import health
 from .kernel.config import load_blackbox_config, reads_graph_directly
 from .kernel.dkg_client import DkgClient, DkgError
@@ -60,7 +61,8 @@ def setup_cli(parser: argparse.ArgumentParser) -> None:
     add_setup_parser(sub)   # the full install after a Hermes plugin-catalog install
     _add_sync_parser(sub)
 
-    add_attach_parsers(sub)
+    _add_attach_parsers(sub)
+    add_approve_parser(sub)   # confirm held changes from the person's own terminal (KI-659)
     add_report_parser(sub, compiled_community=lambda cfg: ruleset.peek(cfg).community)
     add_curate_parser(sub, compiled_ruleset=lambda cfg: ruleset.peek(cfg))
     dash = sub.add_parser("dashboard", help="Start the local Blackbox dashboard")
@@ -76,13 +78,27 @@ def setup_cli(parser: argparse.ArgumentParser) -> None:
     setup_llm.add_argument("--api-key", help="Use this key (other programs can see it; prefer BLACKBOX_LLM_API_KEY)")
     setup_llm.add_argument("--auto", action="store_true",
                            help="Reuse the key Hermes already has for its provider (asks on a terminal; else changes nothing)")
-    setup_llm.add_argument(
-        "--configure",
-        action="store_true",
-        help="Prompt for provider, API key, and model even when reusable config exists",
-    )
+    setup_llm.add_argument("--configure", action="store_true",
+                           help="Prompt for provider, API key, and model even when reusable config exists")
     setup_llm.add_argument("--disable", action="store_true", help="Turn the LLM reviewer off and exit")
     setup_llm.set_defaults(func=cmd_setup_llm)
+
+
+def _add_attach_parsers(sub) -> None:
+    add_attach_parsers(sub)
+    sub.choices["attach"].set_defaults(func=_cmd_attach)
+
+
+def _cmd_attach(args: argparse.Namespace) -> int:
+    """``blackbox attach`` (the installer runs it on install and upgrade), then File Shield's agent
+    sandbox default: every agent found here picked unless the person took it out (gated off until
+    the system-level VM test passes — ``shields`` ``sandbox.defaults``)."""
+    code = attach.cmd_attach(args)
+    added = shields.apply_sandbox_default()
+    if added:
+        print(f"  agent sandbox: {', '.join(added)} will start inside Blackbox's sandbox (turn off per agent in Settings)")
+    _print_coding_agents(only_unseen=True)
+    return code
 
 
 def _cmd_dashboard(args: argparse.Namespace) -> int:
@@ -109,6 +125,12 @@ def _add_sync_parser(sub) -> None:
         "--require-rules",
         action="store_true",
         help="Return non-zero if the refreshed ruleset is empty (used by installers)",
+    )
+    sync.add_argument(
+        "--node-profile-only",
+        action="store_true",
+        help="Write the managed DKG node's sync profile into its config.json and exit: no transfer, "
+             "no restart (used by installers before the node's service first starts it)",
     )
     sync.set_defaults(func=cmd_sync)
 
@@ -161,6 +183,7 @@ def _cmd_status(args: argparse.Namespace) -> int:
     print(f"  findings logged:   {audit.count_findings()}")
     print(f"  dashboard:         http://127.0.0.1:{cfg.dashboard_port}")
     _print_attached_targets()
+    _print_coding_agents()
     return 0
 
 
@@ -173,7 +196,8 @@ def _verified_lookups_text(rs: Any) -> str:
     where = f"live against {scope.store_url} ({len(scope.assertion_graphs)} verified assets)"
     if not state.degraded:
         return where
-    answering = "answering from the LOCAL INDEX" if scope.fallback == "index" else "verified checks PAUSED (actions pass unchecked)"
+    answering = ("answering from the LOCAL INDEX" if scope.fallback == "index"
+                 else "verified checks PAUSED: packages are not being checked against the threat graph")
     return f"{where} — DEGRADED: {state.problem()} — {answering}"
 
 
@@ -222,3 +246,32 @@ def _print_attached_targets() -> None:
     print(f"  attached (openclaw): {len(attached_openclaw)}")
     for path in attached_openclaw:
         print(f"      - {path}")
+
+
+#: Coding-agent states where Blackbox's hooks are installed but do NOT run (said loudly).
+_UNSEEN_STATES = frozenset({"trust-required", "degraded"})
+
+
+def _print_coding_agents(only_unseen: bool = False) -> None:
+    """Each coding agent on this machine with its honest state (``agent_hooks.rows``); an agent
+    whose hooks do not run — Codex until the person trusts them (L7) — is said NOT protected,
+    with the step. *only_unseen* (``blackbox attach``, L8 BB-LINUX-PENDING-61d736: it said "all
+    protected" while Codex's hooks waited for the person's trust): just those, under a heading.
+    Fail-open: neither command crashes on an agent's config."""
+    from . import agent_hooks   # late: only status and attach read the agents
+    try:
+        rows = agent_hooks.rows()
+    except Exception:   # health: allow BLE001 -- status never crashes on an agent's config; logged with its traceback
+        logger.debug("blackbox status: coding agents skipped", exc_info=True)
+        return
+    if only_unseen:
+        rows = [row for row in rows if row.state in _UNSEEN_STATES]
+        if rows:
+            print("  NOT protected yet — Blackbox's hooks are in place but do not run until you act:")
+            for row in rows:
+                print(f"      - !! {row.name}: {row.state} — {row.detail}")
+        return
+    print(f"  coding agents:     {len(rows)}")
+    for row in rows:
+        mark = "!! " if row.state in _UNSEEN_STATES else ""
+        print(f"      - {mark}{row.name}: {row.state} — {row.detail}")

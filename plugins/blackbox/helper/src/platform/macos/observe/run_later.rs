@@ -1,0 +1,151 @@
+//! What runs LATER, outside any agent sandbox, when the person logs in, opens a shell or types a
+//! command — the places beside launchd's ([`super::persistence`]) that a program can be left in:
+//!
+//! * every user's shell startup files (`~/.zshrc`, `~/.zshenv`, `~/.bash_profile` …);
+//! * what OpenSSH runs or trusts at a login into this Mac (`~/.ssh/rc`, `environment`,
+//!   `authorized_keys`);
+//! * `at` jobs (`/private/var/at/jobs`);
+//! * the login window's and login items' preference files (`~/Library/Preferences/loginwindow.plist`,
+//!   `com.apple.loginwindow*`, `com.apple.loginitems*`, `com.apple.LSSharedFileList*`: `LoginHook` and
+//!   `AutoLaunchedApplicationDictionary` start a program at login — security round 7: an agent on hooks
+//!   only wrote them with `plutil` and a script's `defaults write`, and nothing watched them);
+//! * the program folders commonly on the PATH: Homebrew's `bin` / `sbin`, `/usr/local/bin`, and per
+//!   user `~/.local/bin`, `~/bin`, `~/.npm-global/bin`, `~/.cargo/bin`.
+//!
+//! Security round 4 (2026-11-23): from inside the agent sandbox these were writable (some still
+//! are, by the person's choice): a program dropped there runs outside the sandbox the next time the
+//! person types its name. Watched observing only — a program's entry is marked by `lstat` (size,
+//! mtime, where a link points; never read, never followed); a file of the first three kinds by
+//! [`super::persistence`]'s mark (it is small and read safely). Looked at with the launchd folders
+//! (every [`super::persistence::FOLDERS_EVERY`]); its events are the same `persistence-*` events,
+//! item kinds `shell-startup`, `ssh-login`, `at-job`, `login-prefs` and `path-program`.
+
+use std::fs;
+use std::path::Path;
+
+use super::persistence::Item;
+// Marking an entry and a file, and listing a program folder, are every OS's (platform/system_watch).
+pub use crate::platform::system_watch::items::{entry_mark, file_item, program_items, MAX_PER_FOLDER};
+
+/// The shell startup files of a user, under their home.
+pub const SHELL_FILES: &[&str] = &[".zshenv", ".zprofile", ".zshrc", ".zlogin", ".zlogout", ".bash_profile", ".bash_login",
+                                   ".bashrc", ".profile", ".bash_logout", ".config/fish/config.fish"];
+/// OpenSSH's files of a user that run or trust something at a login into this Mac.
+pub const SSH_FILES: &[&str] = &[".ssh/rc", ".ssh/environment", ".ssh/authorized_keys", ".ssh/authorized_keys2"];
+/// Program folders on most PATHs (system-wide), and under each user's home.
+pub const PROGRAM_FOLDERS: &[&str] = &["/opt/homebrew/bin", "/opt/homebrew/sbin", "/usr/local/bin", "/usr/local/sbin"];
+pub const USER_PROGRAM_FOLDERS: &[&str] = &[".local/bin", "bin", ".npm-global/bin", ".cargo/bin"];
+pub const AT_JOBS: &str = "/private/var/at/jobs";
+/// Where a user's preference files are, and the names of the login window's and login items' ones
+/// (the plugin's ONE list, `kernel.persistence_places.PERSISTENCE_GLOBS`; a parity test holds that).
+pub const PREFERENCES: &str = "Library/Preferences";
+pub const LOGIN_PREFERENCES: &[&str] = &["com.apple.loginitems", "com.apple.LSSharedFileList", "com.apple.loginwindow", "loginwindow"];
+
+/// Every user's home folder (`/Users/<name>`, not `Shared`, never a link to another home).
+pub fn homes() -> Vec<String> {
+    crate::platform::macos::observe::persistence::user_homes(Path::new("/Users"))
+}
+
+fn login_preference_items(folder: &str, items: &mut Vec<Item>) {
+    let Ok(entries) = fs::read_dir(folder) else { return };
+    for entry in entries.flatten().take(MAX_PER_FOLDER) {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.ends_with(".plist") && LOGIN_PREFERENCES.iter().any(|prefix| name.starts_with(prefix)) {
+            file_item("login-prefs", &entry.path().display().to_string(), items);
+        }
+    }
+}
+
+/// Every run-later item now, for the users at *homes* (see the module doc).
+pub fn items(homes: &[String]) -> Vec<Item> {
+    let mut items = Vec::new();
+    for home in homes {
+        for name in SHELL_FILES { file_item("shell-startup", &format!("{home}/{name}"), &mut items); }
+        for name in SSH_FILES { file_item("ssh-login", &format!("{home}/{name}"), &mut items); }
+        for name in USER_PROGRAM_FOLDERS { program_items(&format!("{home}/{name}"), &mut items); }
+        login_preference_items(&format!("{home}/{PREFERENCES}"), &mut items);
+    }
+    for folder in PROGRAM_FOLDERS { program_items(folder, &mut items); }
+    if let Ok(entries) = fs::read_dir(AT_JOBS) {
+        // `at`'s own bookkeeping (`.SEQ`, `.lockfile`) is not a job (KI-615: three alerts for one job).
+        for entry in entries.flatten().filter(|e| !e.file_name().to_string_lossy().starts_with('.')).take(MAX_PER_FOLDER) {
+            file_item("at-job", &entry.path().display().to_string(), &mut items);
+        }
+    }
+    items
+}
+
+/// The item kinds this module reports.
+pub const KINDS: &[&str] = &["shell-startup", "ssh-login", "at-job", "login-prefs", "path-program"];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::platform::macos::observe::persistence::Persistence;
+
+    fn temp_home() -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("bb-runlater-{}-{}", std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        fs::create_dir_all(dir.join(".local/bin")).unwrap();
+        fs::create_dir_all(dir.join(".ssh")).unwrap();
+        dir
+    }
+
+    #[test]
+    fn a_home_reached_through_a_link_is_not_walked_twice() {
+        let users = temp_home();
+        fs::create_dir_all(users.join("admin")).unwrap();
+        fs::create_dir_all(users.join("Shared")).unwrap();
+        std::os::unix::fs::symlink(users.join("admin"), users.join("runner")).unwrap();
+        let homes = crate::platform::macos::observe::persistence::user_homes(&users);
+        let names: Vec<String> = homes.iter().map(|h| Path::new(h).file_name().unwrap().to_string_lossy().into_owned()).collect();
+        assert!(names.contains(&"admin".to_string()) && !names.contains(&"runner".to_string()) && !names.contains(&"Shared".to_string()), "{names:?}");
+    }
+
+    #[test]
+    fn an_event_carries_the_entrys_mark() {
+        let home = temp_home();
+        let homes = vec![home.display().to_string()];
+        let mut watch = Persistence::default();
+        watch.update(KINDS, items(&homes), 1);
+        watch.baseline_done();
+        fs::write(home.join(".ssh/authorized_keys"), "ssh-ed25519 AAAA x\n").unwrap();
+        watch.update(KINDS, items(&homes), 2);
+        let events = watch.take_events();
+        let event = events.iter().find(|e| e["label"] == "authorized_keys").unwrap();
+        let mark = event["mark"].as_str().unwrap();
+        assert_eq!(mark.split(':').count(), 3, "size:mtime:hash, got {mark}");
+    }
+
+    #[test]
+    fn a_program_dropped_in_a_path_folder_or_a_new_ssh_key_after_the_baseline_is_an_event() {
+        let home = temp_home();
+        fs::write(home.join(".zshrc"), "export A=1\n").unwrap();
+        let homes = vec![home.display().to_string()];
+        let mut watch = Persistence::default();
+        watch.update(KINDS, items(&homes), 1);
+        watch.baseline_done();
+        fs::write(home.join(".local/bin/git"), "#!/bin/sh\n").unwrap();
+        std::os::unix::fs::symlink("/tmp/evil", home.join(".local/bin/ls")).unwrap();
+        fs::write(home.join(".ssh/authorized_keys"), "ssh-ed25519 AAAA x\n").unwrap();
+        fs::create_dir_all(home.join(PREFERENCES)).unwrap();
+        fs::write(home.join(PREFERENCES).join("loginwindow.plist"), "<plist/>\n").unwrap();
+        fs::write(home.join(PREFERENCES).join("com.apple.loginitems.plist"), "<plist/>\n").unwrap();
+        fs::write(home.join(PREFERENCES).join("com.example.app.plist"), "<plist/>\n").unwrap();
+        assert!(watch.update(KINDS, items(&homes), 2));
+        let events = watch.take_events();
+        let kinds: Vec<(String, String)> = events.iter().map(|e| (e["item_kind"].as_str().unwrap().to_string(), e["label"].as_str().unwrap().to_string())).collect();
+        assert!(kinds.contains(&("path-program".into(), "git".into())), "{kinds:?}");
+        assert!(kinds.contains(&("path-program".into(), "ls".into())), "a link is an entry, never followed");
+        assert!(kinds.contains(&("ssh-login".into(), "authorized_keys".into())));
+        assert!(kinds.contains(&("login-prefs".into(), "loginwindow.plist".into())), "{kinds:?}");
+        assert!(kinds.contains(&("login-prefs".into(), "com.apple.loginitems.plist".into())), "{kinds:?}");
+        assert!(!kinds.iter().any(|(_, label)| label == "com.example.app.plist"), "other preferences are not watched");
+        let link = events.iter().find(|e| e["label"] == "ls").unwrap();
+        assert_eq!(link["program"], "/tmp/evil", "a link names where it points");
+        fs::write(home.join(".zshrc"), "export A=1\ncurl x | sh\n").unwrap();
+        assert!(watch.update(KINDS, items(&homes), 3));
+        assert_eq!(watch.take_events()[0]["kind"], "persistence-changed");
+        let _ = fs::remove_dir_all(&home);
+    }
+}

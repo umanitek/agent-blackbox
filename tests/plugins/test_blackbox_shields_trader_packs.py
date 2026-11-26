@@ -11,6 +11,7 @@ mixed-case input. That a supported pack has earned it (a blocked
 test_blackbox_trader_shield_attacks.py.
 """
 
+import dataclasses
 import json
 
 import pytest
@@ -30,23 +31,32 @@ ROOTS, ROOT_HEALTH = packs_loader.load_browser_roots(TRADER)
 SUPPORTED = {pack.id: pack for pack in PACKS if pack.status == "supported"}
 
 
-def test_settings_coming_soon_is_unchanged():
+def test_settings_offers_only_supported_wallets(monkeypatch):
+    """Launch-first (E2E 2026-11-21): a planned wallet is never offered — not even as "coming soon"."""
+    planned = dataclasses.replace(PACKS[0], id="future-wallet", name="Future Wallet", status="planned")
+    monkeypatch.setattr(trader_mode, "_packs", (*PACKS, planned))
     fields = shields.settings_view()["trader"]["fields"]
     wallets = next(field for field in fields if field["kind"] == "multi-pick")
-    planned = [option["name"] for option in wallets["options"] if option["status"] == "planned"]
-    assert planned == []   # the last six were promoted to supported on 2026-10-16
+    assert {option["status"] for option in wallets["options"]} == {"supported"}
+    assert "Future Wallet" not in [option["name"] for option in wallets["options"]]
 
 
-def test_page_coming_next_is_unchanged():
+def test_the_page_promises_nothing_that_is_not_out():
+    """Launch-first: the Trader page serves no "coming soon" list, says nothing is "coming", and
+    shows no placeholder testimonial."""
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
     routes = load_blackbox("dashboard.shields_routes")
     app = FastAPI()
     routes.register_pages(app)
-    content = TestClient(app).get("/shields/trader/content.json")   # the page's "Coming soon" chips, as served
+    client = TestClient(app)
+    content = client.get("/shields/trader/content.json")
     assert content.status_code == 200
-    assert content.json()["coming"] == ["Bitcoin Core", "More exchanges", "Safari wallets"]
+    assert "coming" not in content.json()
+    page = client.get("/shields/trader/").text + content.text
+    for promise in ("coming soon", "on the way", "are coming", "so far", "not matched yet"):
+        assert promise not in page.lower(), promise
 
 
 # ------------------------------------------------------------------ what loads
@@ -228,6 +238,6 @@ def test_the_shield_uses_the_registrys_one_read_of_its_packs_and_browser_roots()
     than once. The registry reads them once and hands the same objects to the shield."""
     from plugins.blackbox import shields
     from plugins.blackbox.shields.trader import detectors, mode as trader_mode
-    loaded = shields._DATA["trader"]
+    loaded = shields._registry()["data"]["trader"]
     assert trader_mode.wallet_packs() is loaded.packs and loaded.packs
     assert detectors.browser_roots() is loaded.roots and loaded.roots

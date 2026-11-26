@@ -28,10 +28,10 @@ def discover_hermes_homes(*, include_managed: bool = False) -> list[Path]:
     Blackbox's own chat profile (:func:`is_managed_blackbox_chat_profile`) is left out — it is
     not an agent to defend — unless *include_managed* (uninstall: Blackbox must leave it too).
 
-    Includes the resolved default home, ``~/.hermes``, every existing
-    ``~/.hermes/profiles/*/`` directory, and (on Windows) ``%LOCALAPPDATA%/hermes``.
-    The canonical default is always included even if not yet created; results are
-    de-duplicated preserving order.
+    The resolved default home (``$HERMES_HOME``, else ``~/.hermes``) even before it exists, then,
+    only when they exist, ``~/.hermes``, each ``~/.hermes/profiles/*/`` and (Windows)
+    ``%LOCALAPPDATA%/hermes``; de-duplicated, in order. WHY only existing ones: a missing home is
+    not an agent — listing it made "protect every agent" create ~/.hermes on a Mac without Hermes.
     """
     homes: list[Path] = []
 
@@ -45,15 +45,15 @@ def discover_hermes_homes(*, include_managed: bool = False) -> list[Path]:
         if resolved not in homes:
             homes.append(resolved)
 
-    # The canonical default (honours profile switching / $HERMES_HOME) — always
-    # included even if the directory does not exist yet.
+    # The canonical default (honours profile switching / $HERMES_HOME).
     try:
         _add(constants.hermes_home())
     except Exception:  # pragma: no cover - defensive
         pass
 
     default_dot = Path.home() / ".hermes"
-    _add(default_dot)
+    if default_dot.is_dir():
+        _add(default_dot)
 
     # Every existing profile directory under the default home.
     profiles_dir = default_dot / "profiles"
@@ -68,7 +68,7 @@ def discover_hermes_homes(*, include_managed: bool = False) -> list[Path]:
     # Windows: %LOCALAPPDATA%/hermes.
     if os.name == "nt":
         local_appdata = os.environ.get("LOCALAPPDATA")
-        if local_appdata:
+        if local_appdata and (Path(local_appdata) / "hermes").is_dir():
             _add(Path(local_appdata) / "hermes")
 
     return homes
@@ -119,6 +119,9 @@ def _enable_in(data: dict[str, Any]) -> None:
         plugins["enabled"] = enabled
     if "blackbox" not in enabled:
         enabled.append("blackbox")
+    disabled = plugins.get("disabled")
+    if isinstance(disabled, list) and "blackbox" in disabled:   # an uninstall that kept a bundling Hermes (KI-610)
+        plugins["disabled"] = [name for name in disabled if name != "blackbox"]
 
 @declined.remembers("hermes", switched_off=False)
 @yaml_files.edits_config

@@ -8,6 +8,7 @@ functions in a sandbox HOME, break the install on purpose, and check what is lef
 
 from __future__ import annotations
 
+import itertools
 import json
 import os
 import pty
@@ -61,7 +62,11 @@ def _function(name: str) -> str:
 # the Mac that ran this suite (2026-10-17). Ordinary tools are linked in one by one; every
 # tool that can touch the machine's services is a stub that only records its call.
 _ORDINARY_TOOLS = ("awk", "cat", "chmod", "cksum", "cp", "cut", "dirname", "grep", "head", "ls", "mkdir",
-                   "mktemp", "ps", "rm", "sed", "sleep", "sort", "tail", "touch", "tr", "id", "wc", "date")
+                   "mktemp", "ps", "rm", "sed", "sleep", "sort", "tail", "touch", "tr", "id", "wc", "date",
+                   # rollback_leftovers compares each restored file with its copy (diff) and the
+                   # checkout layout with the one before (cmp): without them every file read as
+                   # "not restored" (fix wave 7).
+                   "diff", "cmp")
 _SERVICE_TOOLS = ("launchctl", "systemctl", "loginctl", "osascript", "docker", "pgrep", "open")
 
 
@@ -103,6 +108,10 @@ BLACKBOX_DKG_CLI_DIR="$BLACKBOX_INSTALL_ROOT/dkg"
 BLACKBOX_DKG_BIN="$BLACKBOX_DKG_CLI_DIR/node_modules/.bin/dkg"
 BLACKBOX_SYSTEMD_DIR="$HOME/system-units"
 BLACKBOX_LINGER_DIR="$HOME/linger"
+BLACKBOX_HELPER_HOME="$HOME/helper"
+BLACKBOX_HELPER_DAEMON="$HOME/LaunchDaemons/netd.plist"
+BLACKBOX_HELPER_PROGRAM="$BLACKBOX_HELPER_HOME/blackbox-netd"
+sudo_with_tty() {{ echo "sudo $*" >>"$HOME/calls"; rm -f "$BLACKBOX_HELPER_DAEMON"; }}
 step() {{ echo "step: $1"; }}
 ok() {{ echo "ok: $1"; }}
 warn() {{ echo "warn: $1"; }}
@@ -117,9 +126,24 @@ blackbox_dkg() {{ echo "dkg $*" >>"$HOME/calls"; }}
 """
 
 
+_SCRIPT_NUMBERS = itertools.count()
+
+
+def _bash(directory: Path, script: str) -> list[str]:
+    """The argv that runs *script* from a file in *directory* (outside any home under test).
+
+    WHY a file, not ``bash -c <script>``: these scripts carry whole installer sections (tens of
+    KB). Started through the test runner on a Mac, a ``bash -c`` with such an argument took ~12 s
+    before its first command ran (measured: the same text as a file, 0.01 s), which put this
+    file at the runner's 300 s limit. bash runs a file exactly as it runs -c text."""
+    path = directory / f"under-test-{next(_SCRIPT_NUMBERS)}.sh"
+    path.write_text(script, encoding="utf-8")
+    return ["bash", str(path)]
+
+
 def _run(paths: dict[str, Path], body: str, **kwargs) -> subprocess.CompletedProcess[str]:
     _isolated_bin(paths["bin"], paths["service_calls"])
-    return subprocess.run(["bash", "-c", _script(paths, body)], capture_output=True, text=True,
+    return subprocess.run(_bash(paths["home"].parent, _script(paths, body)), capture_output=True, text=True,
                           check=False, timeout=60, **kwargs)
 
 
@@ -201,7 +225,7 @@ install_record_commit
 #: the test below): a tiny launcher resets SIGINT, then becomes bash (no preexec_fn).
 _WITH_DEFAULT_SIGINT = [sys.executable, "-c",
                         "import os, signal, sys; signal.signal(signal.SIGINT, signal.SIG_DFL); "
-                        "os.execvp('bash', ['bash', '-c', sys.argv[1]])"]
+                        "os.execvp('bash', ['bash', sys.argv[1]])"]
 
 
 def test_ctrl_c_rolls_the_install_back(tmp_path: Path) -> None:
@@ -214,12 +238,12 @@ def test_ctrl_c_rolls_the_install_back(tmp_path: Path) -> None:
     paths = _sandbox(tmp_path)
     ready = tmp_path / "ready"
     _isolated_bin(paths["bin"], paths["service_calls"])
-    process = subprocess.Popen([*_WITH_DEFAULT_SIGINT, _script(paths, f"""
+    process = subprocess.Popen([*_WITH_DEFAULT_SIGINT, _bash(tmp_path, _script(paths, f"""
 install_record_begin
 mkdir -p "$BLACKBOX_INSTALL_ROOT"
 touch {shlex.quote(str(ready))}
 while :; do sleep 0.1; done
-""")], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
+"""))[1]], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
     try:
         assert wait_until(ready.exists, timeout=180), "the installer never reached its ready point"
         os.killpg(process.pid, signal.SIGINT)
@@ -265,7 +289,9 @@ false
 """)
 
     calls = (paths["home"] / "calls").read_text(encoding="utf-8").splitlines()
-    assert calls == ["dkg-control restart"]
+    # reload, not restart: the service must run the RESTORED definition, not the failed attempt's
+    # that launchd still holds (E2E recheck 2026-11-21: exit 127, node down after rollback).
+    assert calls == ["dkg-control reload"]
 
 
 def test_rollback_removes_only_the_docker_store_this_run_created(tmp_path: Path) -> None:
@@ -337,7 +363,7 @@ BLACKBOX_DEFAULT_CONTEXT_GRAPH_ID=graph
 BLACKBOX_DKG_ALREADY_RUNNING={'true' if running else 'false'}
 ensure_blackbox_dkg_config
 """
-    result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=False, timeout=60)
+    result = subprocess.run(_bash(tmp_path, script), capture_output=True, text=True, check=False, timeout=60)
     assert result.returncode == 0, result.stdout + result.stderr
     return json.loads((home / "config.json").read_text(encoding="utf-8"))["store"]
 
@@ -432,7 +458,7 @@ BLACKBOX_INSTALL_ROOT={shlex.quote(str(install_root))}
 BLACKBOX_DKG_HOME="$BLACKBOX_INSTALL_ROOT/.dkg"
 {body}
 """
-    return subprocess.run(["bash", "-c", script], stdin=subprocess.DEVNULL, capture_output=True, text=True,
+    return subprocess.run(_bash(tmp_path, script), stdin=subprocess.DEVNULL, capture_output=True, text=True,
                           check=False, timeout=60, start_new_session=True)
 
 
@@ -478,7 +504,7 @@ preflight_network; echo continued""", docker_works=True)
     assert "Cannot reach the npm registry" in result.stdout
 
 
-def _verify(tmp_path: Path, *, hermes_ok: bool, plugin_ok: bool) -> subprocess.CompletedProcess[str]:
+def _verify(tmp_path: Path, *, hermes_ok: bool, plugin_ok: bool, node: str = "") -> subprocess.CompletedProcess[str]:
     hermes = tmp_path / "hermes"
     hermes.write_text(f"""#!/bin/sh
 case "$1" in
@@ -491,16 +517,18 @@ esac
 set -euo pipefail
 ok() {{ echo "ok: $1"; }}
 err() {{ echo "err: $1"; }}
+warn() {{ echo "warn: $1"; }}
 heading() {{ :; }}
 {_function("verify_install")}
+{node}
 HERMES_BIN={shlex.quote(str(hermes))}
 BLACKBOX_INSTALL_INCOMPLETE=false
-SKIP_DKG=true
+SKIP_DKG=${{SKIP_DKG:-true}}
 BLACKBOX_AUTO_DASHBOARD=0
 verify_install
 echo committed
 """
-    return subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=False, timeout=60)
+    return subprocess.run(_bash(tmp_path, script), capture_output=True, text=True, check=False, timeout=60)
 
 
 def test_the_install_is_kept_only_when_every_part_answers(tmp_path: Path) -> None:
@@ -511,6 +539,29 @@ def test_the_install_is_kept_only_when_every_part_answers(tmp_path: Path) -> Non
     assert no_plugin.returncode == 1
     assert "Hermes loads the Blackbox plugin — NOT working" in no_plugin.stdout
     assert "committed" not in no_plugin.stdout
+
+
+# A node that answers and stores, under or outside its launchd service.
+_NODE_ANSWERING = """
+SKIP_DKG=false
+BLACKBOX_DKG_DAEMON_URL=http://127.0.0.1:9320
+blackbox_dkg_answers() {{ return 0; }}
+blackbox_store_answers() {{ return 0; }}
+blackbox_dkg_supervisor() {{ echo launchd; }}
+blackbox_dkg_owned_by() {{ return {owned}; }}
+"""
+
+
+def test_a_node_that_answers_outside_its_service_is_kept_with_a_warning_not_rolled_back(tmp_path: Path) -> None:
+    """KI-527 (E2E recheck 2026-11-22): the handover's own fallback started the node directly so
+    protection never drops, then the final check failed "runs under its launchd service" and rolled
+    the whole install back — stopping the answering node and leaving nothing running."""
+    outside = _verify(tmp_path, hermes_ok=True, plugin_ok=True, node=_NODE_ANSWERING.format(owned=1))
+    assert outside.returncode == 0 and "committed" in outside.stdout
+    assert "runs outside its launchd service" in outside.stdout
+    assert "NOT working" not in outside.stdout
+    under = _verify(tmp_path, hermes_ok=True, plugin_ok=True, node=_NODE_ANSWERING.format(owned=0))
+    assert under.returncode == 0 and "ok: DKG node runs under its launchd service" in under.stdout
 
 
 def test_main_commits_only_after_the_final_check() -> None:
@@ -581,7 +632,7 @@ PATH={shlex.quote(str(bin_dir))}
 require_docker_for_blazegraph
 echo "opened=${{BLACKBOX_OPENED_DOCKER_DESKTOP:-false}}" >>{shlex.quote(str(calls))}
 """
-    subprocess.run(["bash", "-c", script], check=False, timeout=60)
+    subprocess.run(_bash(tmp_path, script), check=False, timeout=60)
     return calls.read_text(encoding="utf-8").splitlines()
 
 
@@ -608,3 +659,90 @@ def test_the_sandbox_reaches_no_real_service_manager(tmp_path: Path) -> None:
     assert all(path.startswith(str(paths["bin"])) for path in resolved), resolved
     for path in resolved:
         assert not Path(path).is_symlink()
+
+
+def _no_docker(tmp_path: Path, backend: str) -> list[str]:
+    """require_docker_for_blazegraph on a machine with no Docker at all, for a *backend* choice."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    said = tmp_path / "said"
+    _isolated_bin(bin_dir, tmp_path / "service-calls")
+    script = f"""
+step() {{ echo "step $*" >>{shlex.quote(str(said))}; }}
+ok() {{ :; }}
+warn() {{ :; }}
+err() {{ echo "err $*" >>{shlex.quote(str(said))}; }}
+heading() {{ :; }}
+docker_setup_hint() {{ echo "hint" >>{shlex.quote(str(said))}; }}
+{_function("require_docker_for_blazegraph")}
+OS=macos
+HOME={shlex.quote(str(tmp_path))}
+PATH={shlex.quote(str(bin_dir))}
+BLACKBOX_DKG_STORE_BACKEND={backend}
+require_docker_for_blazegraph || true
+"""
+    subprocess.run(_bash(tmp_path, script), check=False, timeout=60)
+    return said.read_text(encoding="utf-8").splitlines() if said.exists() else []
+
+
+def test_no_docker_on_the_default_store_path_is_a_neutral_line_not_a_failure(tmp_path: Path) -> None:
+    """E2E 2026-11-21: the default install printed a red "✗ Docker Desktop is not installed" and
+    then went on fine with Oxigraph — it read as a failed install."""
+    said = _no_docker(tmp_path, "auto")
+    assert "hint" not in said and not any(line.startswith("err") for line in said)
+    assert any("Oxigraph" in line for line in said)
+
+
+def test_an_explicit_blazegraph_choice_without_docker_still_says_how_to_get_it(tmp_path: Path) -> None:
+    assert "hint" in _no_docker(tmp_path, "blazegraph")
+
+
+def test_rollback_takes_away_the_service_launchers_this_run_wrote_and_restores_older_ones(tmp_path: Path) -> None:
+    """E2E recheck 2026-11-21: a failed update left ~/.hermes/blackbox/bin/"Blackbox" and
+    "Blackbox Node" behind while it said nothing was left behind."""
+    paths = _sandbox(tmp_path)
+    launchers = paths["hermes"] / "blackbox" / "bin"
+    launchers.mkdir(parents=True)
+    (launchers / "Blackbox").write_text("#!/bin/sh\n# the previous install's\n", encoding="utf-8")
+
+    _run(paths, """
+install_record_begin
+printf 'new\\n' >"$BLACKBOX_HOME/bin/Blackbox"
+printf 'new\\n' >"$BLACKBOX_HOME/bin/Blackbox Node"
+false
+""")
+
+    assert sorted(p.name for p in launchers.iterdir()) == ["Blackbox"]
+    assert "the previous install's" in (launchers / "Blackbox").read_text(encoding="utf-8")
+
+
+def test_a_failed_install_uninstalls_the_system_helper_it_added_and_keeps_one_that_was_there(tmp_path: Path) -> None:
+    """KI-629: the helper and the notifier are inside the all-or-nothing install. A later failure
+    uninstalls a helper THIS run added (through itself) and takes its new notifier away; a helper
+    the person had is never touched."""
+    paths = _sandbox(tmp_path)
+    result = _run(paths, """
+install_record_begin
+mkdir -p "$HOME/LaunchDaemons" "$BLACKBOX_HOME/notifier/Blackbox.app"
+echo plist >"$BLACKBOX_HELPER_DAEMON"
+false
+""")
+    assert result.returncode != 0
+    assert "Nothing from this install attempt was left behind." in result.stdout, result.stderr
+    assert f"sudo {paths['home']}/helper/blackbox-netd uninstall" in (paths["home"] / "calls").read_text(encoding="utf-8")
+    assert not (paths["hermes"] / "blackbox" / "notifier").exists()
+
+    (tmp_path / "kept").mkdir()
+    kept = _sandbox(tmp_path / "kept")
+    (kept["home"] / "LaunchDaemons").mkdir()
+    (kept["home"] / "LaunchDaemons" / "netd.plist").write_text("theirs", encoding="utf-8")
+    result = _run(kept, "install_record_begin\nfalse\n")
+    assert result.returncode != 0
+    assert (kept["home"] / "LaunchDaemons" / "netd.plist").read_text(encoding="utf-8") == "theirs"
+    assert "sudo" not in ((kept["home"] / "calls").read_text(encoding="utf-8") if (kept["home"] / "calls").exists() else "")
+
+
+def test_main_runs_the_helper_and_the_notifier_before_the_final_check_and_the_commit() -> None:
+    main = _function("main")
+    assert main.index("offer_system_protection") < main.index("verify_install") < main.index("install_record_commit")
+    assert main.index("install_native_notifier") < main.index("verify_install")

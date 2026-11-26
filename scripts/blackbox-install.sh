@@ -31,14 +31,33 @@ REPO_BRANCH="${BLACKBOX_REPO_BRANCH:-main}"
 BLACKBOX_SETUP_ONLY="${BLACKBOX_SETUP_ONLY:-false}"
 REPO_DIR=""   # set by resolve_repo; setup-only mode has no checkout
 HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
+# The Hermes this installer put here earlier (an Agent Blackbox checkout behind ~/.local/bin/hermes).
+our_installed_hermes_dir() {
+    local launcher="$HOME/.local/bin/hermes" dir=""
+    [ -x "$launcher" ] || return 1
+    dir="$("$launcher" --version 2>/dev/null | sed -n 's/^Install directory: *//p' | head -n 1)"
+    [ -n "$dir" ] && [ -f "$dir/plugins/blackbox/plugin.yaml" ] || return 1
+    printf '%s\n' "$dir"
+}
+
+# The checkout an earlier run of this installer installed ("" = none): a re-run installs THERE.
+BLACKBOX_INSTALLED_CHECKOUT=""
+if [ "$BLACKBOX_SETUP_ONLY" != true ]; then
+    BLACKBOX_INSTALLED_CHECKOUT="$(our_installed_hermes_dir || true)"
+fi
 # Keep the managed npm DKG package and node state inside the Agent Blackbox
-# checkout. For a local script this is the current repository; for curl | bash
-# the default is ./agent-blackbox beneath the directory where the user invoked
-# the installer. BLACKBOX_INSTALL_DIR remains the explicit override.
+# checkout. For a local script this is the current repository; when Blackbox is
+# already installed it is that install's checkout, wherever this script runs
+# from (KI-577: run from another folder, it cloned a second copy there and then
+# failed in Hermes's launcher step); for a first curl | bash install the default
+# is ./agent-blackbox beneath the directory where the user invoked the
+# installer. BLACKBOX_INSTALL_DIR remains the explicit override.
 if [ -n "${BLACKBOX_INSTALL_DIR:-}" ]; then
     BLACKBOX_INSTALL_ROOT="$BLACKBOX_INSTALL_DIR"
 elif [ -f "$PWD/pyproject.toml" ] && [ -d "$PWD/plugins/blackbox" ]; then
     BLACKBOX_INSTALL_ROOT="$PWD"
+elif [ -n "$BLACKBOX_INSTALLED_CHECKOUT" ]; then
+    BLACKBOX_INSTALL_ROOT="$BLACKBOX_INSTALLED_CHECKOUT"
 else
     BLACKBOX_INSTALL_ROOT="$PWD/agent-blackbox"
 fi
@@ -54,6 +73,10 @@ fi
 DKG_NETWORK="${BLACKBOX_DKG_NETWORK:-mainnet-base}"   # a valid dkg mainnet (mainnet-base | mainnet-gnosis). Base uses ETH for gas. No testnet.
 BLACKBOX_HOME="${BLACKBOX_HOME:-$HERMES_HOME/blackbox}"
 BLACKBOX_SYSTEMD_DIR=/etc/systemd/system   # where system units go (node service units below)
+# Present only while systemd runs as the init system (sd_booted(3)): a container, or WSL2 without
+# [boot] systemd=true, has the systemctl command but no running systemd (KI-626).
+BLACKBOX_SYSTEMD_RUNTIME_DIR=/run/systemd/system
+BLACKBOX_BOOT_SERVICES=""   # "none" when this Linux cannot start Blackbox's services at boot (protection_summary)
 BLACKBOX_DKG_LAUNCHD_LABEL=ai.umanitek.blackbox-dkg   # the node's LaunchAgent on macOS (register_boot_service)
 # The system folders every service PATH carries after its own tools. /usr/sbin is not optional: the
 # DKG node runs `lsof` to see who holds its store's LOCK and refuses to start when it cannot, and
@@ -297,22 +320,33 @@ blackbox_dkg_supervisor() {
     return 0
 }
 
-# `blackbox_dkg_control start|stop|restart` — through the supervising service when there is
+# `blackbox_dkg_control start|stop|restart|reload` — through the supervising service when there is
 # one. A supervised node stopped or started with `dkg stop`/`dkg start` behind the service's
 # back makes the two fight: the service's node exits "failed", the service restarts it, and
 # the unit's ExecStartPre `dkg stop` (the orphan guard) kills the copy the installer just
 # started — the unit flaps, and the catch-up that follows fails "Daemon already running"
 # (KI-414). The plugin restarts through the service for the same reason (FIX-0014). A stop
 # through the service stays stopped (systemd does not restart a requested stop; launchd's
-# job is unloaded) until the matching start.
+# job is unloaded) until the matching start. `reload` makes the service re-read its definition
+# first: `restart` (kickstart) runs the definition launchd already HOLDS, so after a rollback
+# put the previous plist back it would keep running the failed attempt's (E2E recheck
+# 2026-11-21: exit 127, node down).
 blackbox_dkg_control() {
     local action="$1" target
     case "$(blackbox_dkg_supervisor)" in
-        systemd) systemctl "$action" blackbox-dkg ;;
-        systemd-user) systemctl --user "$action" blackbox-dkg ;;
+        systemd | systemd-user)
+            local -a systemctl_cmd=(systemctl)
+            [ "$(blackbox_dkg_supervisor)" = systemd-user ] && systemctl_cmd+=(--user)
+            if [ "$action" = reload ]; then
+                "${systemctl_cmd[@]}" daemon-reload || return 1
+                action=restart
+            fi
+            "${systemctl_cmd[@]}" "$action" blackbox-dkg
+            ;;
         launchd)
             target="gui/$(id -u)/$BLACKBOX_DKG_LAUNCHD_LABEL"
             case "$action" in
+                reload) blackbox_launchd_reload "$BLACKBOX_DKG_LAUNCHD_LABEL" ;;
                 stop) launchctl bootout "$target" 2>/dev/null || true ;;
                 start | restart)
                     if launchctl print "$target" >/dev/null 2>&1; then
@@ -328,7 +362,7 @@ blackbox_dkg_control() {
             esac
             ;;
         *)
-            if [ "$action" = restart ]; then
+            if [ "$action" = restart ] || [ "$action" = reload ]; then
                 blackbox_dkg stop && blackbox_dkg start
             else
                 blackbox_dkg "$action"
@@ -343,6 +377,10 @@ blackbox_dkg_control() {
 # installers and by Blackbox itself (sync/managed_node.py); the handover wait follows it.
 BLACKBOX_DKG_RUNTIME_WAIT_SECONDS="${BLACKBOX_DKG_RUNTIME_WAIT_SECONDS:-300}"
 BLACKBOX_DKG_HANDOVER_WAIT_SECONDS="${BLACKBOX_DKG_HANDOVER_WAIT_SECONDS:-$BLACKBOX_DKG_RUNTIME_WAIT_SECONDS}"
+# A node that answers but is not the service's is given this long to be the service's own starting
+# up, then stopped as a stray (at most this many times) during the handover (KI-529).
+BLACKBOX_DKG_HANDOVER_STRAY_GRACE_SECONDS="${BLACKBOX_DKG_HANDOVER_STRAY_GRACE_SECONDS:-10}"
+BLACKBOX_DKG_HANDOVER_STRAY_STOPS="${BLACKBOX_DKG_HANDOVER_STRAY_STOPS:-3}"
 
 # The pid of the process the node's service runs (`dkg start --foreground`, the DKG CLI's own
 # supervisor), or nothing when the service is not running it.
@@ -361,19 +399,58 @@ blackbox_dkg_service_pid() {
     printf '%s' "$pid"
 }
 
-# Whether the running node is the one the service *supervisor* runs. The node daemon writes its
-# own pid to daemon.pid; under `dkg start --foreground` it is a child of the process the service
-# started, so either that process or its parent is the service's.
+# The pid of the process serving the node's API port, or "" when that can not be read (no lsof,
+# or nothing listens). WHY (KI-533, E2E full4 2026-11-22): the node answers before it writes
+# daemon.pid, so judging by daemon.pid took the service's own, still-starting copy for a stray and
+# stopped it three times on a fresh install (launchd started the node 4x in a minute).
+blackbox_dkg_serving_pid() {
+    local port
+    port="$(printf '%s' "$BLACKBOX_DKG_DAEMON_URL" | sed -nE 's#^[a-z]+://[^/:]+:([0-9]+).*#\1#p')"
+    [ -n "$port" ] && command -v lsof >/dev/null 2>&1 || return 0
+    lsof -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null | head -n 1 | tr -dc '0-9'
+}
+
+# Whether process $1 is $2 or runs under it (its parent, grandparent … at most 6 levels): the node
+# daemon runs under the CLI the service started (`dkg start --foreground` -> daemon-foreground).
+blackbox_dkg_descends_from() {
+    local pid="$1" ancestor="$2" level=0
+    while [ -n "$pid" ] && [ "$pid" != 0 ] && [ "$pid" != 1 ] && [ "$level" -lt 6 ]; do
+        [ "$pid" = "$ancestor" ] && return 0
+        pid="$(ps -o ppid= -p "$pid" 2>/dev/null | tr -dc '0-9')"
+        level=$((level + 1))
+    done
+    return 1
+}
+
+# The pid serving the node: the API port's listener, else the pid the daemon wrote ("" = unknown).
+blackbox_dkg_node_pid() {
+    local pid
+    pid="$(blackbox_dkg_serving_pid)"
+    [ -n "$pid" ] || { [ -f "$BLACKBOX_DKG_HOME/daemon.pid" ] && pid="$(tr -dc '0-9' <"$BLACKBOX_DKG_HOME/daemon.pid")"; }
+    printf '%s' "$pid"
+}
+
+# Whether the running node is the one the service *supervisor* runs: the process serving it is the
+# service's own process or runs under it.
 blackbox_dkg_owned_by() {
-    local service_pid node_pid parent_pid
+    local service_pid node_pid
     service_pid="$(blackbox_dkg_service_pid "$1")"
     [ -n "$service_pid" ] || return 1
-    [ -f "$BLACKBOX_DKG_HOME/daemon.pid" ] || return 1
-    node_pid="$(tr -dc '0-9' <"$BLACKBOX_DKG_HOME/daemon.pid")"
+    node_pid="$(blackbox_dkg_node_pid)"
     [ -n "$node_pid" ] || return 1
-    [ "$node_pid" = "$service_pid" ] && return 0
-    parent_pid="$(ps -o ppid= -p "$node_pid" 2>/dev/null | tr -dc '0-9')"
-    [ "$parent_pid" = "$service_pid" ]
+    blackbox_dkg_descends_from "$node_pid" "$service_pid"
+}
+
+# Whether a copy of the node that is NOT the service's is serving: a known serving pid that does
+# not run under the service. Unknown (still starting, nothing readable) is never a stray.
+blackbox_dkg_stray() {
+    local service_pid node_pid
+    blackbox_dkg_answers || return 1
+    node_pid="$(blackbox_dkg_node_pid)"
+    [ -n "$node_pid" ] || return 1
+    service_pid="$(blackbox_dkg_service_pid "$1")"
+    [ -n "$service_pid" ] && blackbox_dkg_descends_from "$node_pid" "$service_pid" && return 1
+    return 0
 }
 
 # Where launchd keeps the node's error output: launchd has no journal, so without this a node
@@ -393,8 +470,25 @@ blackbox_dkg_answers() {
 # Hand it over: stop the installer's copy, start the node through its service, and confirm the
 # service's process is the one serving. If the service does not take it, the node is started
 # again directly so protection never drops, and the run says so.
+# Stops this install's own unsupervised node copy (`dkg stop` acts only on this DKG home's
+# daemon.pid) and waits until that process is gone, at most BLACKBOX_DKG_STOP_WAIT_SECONDS.
+# WHY (KI-533, E2E full3 2026-11-22): `dkg stop` returns before the daemon exits; a service copy
+# started in that window exits "Daemon already running" and launchd relaunches it.
+BLACKBOX_DKG_STOP_WAIT_SECONDS="${BLACKBOX_DKG_STOP_WAIT_SECONDS:-30}"
+blackbox_dkg_stop_and_wait() {
+    local pid waited=0
+    pid="$(tr -dc '0-9' <"$BLACKBOX_DKG_HOME/daemon.pid" 2>/dev/null || true)"
+    blackbox_dkg stop >/dev/null 2>&1 || true
+    [ -n "$pid" ] || return 0
+    while kill -0 "$pid" 2>/dev/null && [ "$waited" -lt "$BLACKBOX_DKG_STOP_WAIT_SECONDS" ]; do
+        sleep 1
+        waited=$((waited + 1))
+    done
+    return 0
+}
+
 hand_dkg_node_to_service() {
-    local supervisor waited=0
+    local supervisor waited=0 since_restart=0 stray_stops=0
     supervisor="$(blackbox_dkg_supervisor)"
     [ -n "$supervisor" ] || return 0
     if blackbox_dkg_owned_by "$supervisor" && blackbox_dkg_answers; then
@@ -402,12 +496,30 @@ hand_dkg_node_to_service() {
         return 0
     fi
     step "Handing the DKG node to its $supervisor service ..."
-    blackbox_dkg stop >/dev/null 2>&1 || true   # the installer's own, unsupervised copy
-    blackbox_dkg_control restart >/dev/null 2>&1 || true
+    # The service already runs its node, still starting (it answers after it opens its store): wait
+    # for it — stopping it here and restarting it was a second, needless start (KI-541).
+    if [ -z "$(blackbox_dkg_service_pid "$supervisor")" ] || blackbox_dkg_stray "$supervisor"; then
+        blackbox_dkg_stop_and_wait   # the installer's own, unsupervised copy
+        blackbox_dkg_control restart >/dev/null 2>&1 || true
+    fi
     while [ "$waited" -lt "$BLACKBOX_DKG_HANDOVER_WAIT_SECONDS" ]; do
         if blackbox_dkg_owned_by "$supervisor" && blackbox_dkg_answers; then
             ok "The DKG node now runs under its $supervisor service"
             return 0
+        fi
+        # A node that answers but is not the service's is a stray copy of THIS install's node —
+        # e.g. one something restarted behind the service while it was coming up (KI-529). The
+        # service's copy cannot start while it lives ("Daemon already running"), so stop it
+        # (`dkg stop` acts only on the daemon.pid in this install's DKG home, never another
+        # program) and start the node through the service again — a bounded number of times.
+        since_restart=$((since_restart + 1))
+        if [ "$since_restart" -ge "$BLACKBOX_DKG_HANDOVER_STRAY_GRACE_SECONDS" ] \
+            && [ "$stray_stops" -lt "$BLACKBOX_DKG_HANDOVER_STRAY_STOPS" ] && blackbox_dkg_stray "$supervisor"; then
+            step "Another copy of the DKG node is running outside its $supervisor service; stopping it"
+            blackbox_dkg_stop_and_wait
+            blackbox_dkg_control restart >/dev/null 2>&1 || true
+            stray_stops=$((stray_stops + 1))
+            since_restart=0
         fi
         sleep 1
         waited=$((waited + 1))
@@ -489,9 +601,56 @@ record_blackbox_dkg_runtime_fingerprint() {
     return 0
 }
 
+# Why the node did not come up, from what its service recorded: launchd's last exit status and
+# the last lines of the node's error log (E2E recheck 2026-11-21: "did not activate … within
+# 300s" hid "env: node: No such file or directory"). Prints nothing it cannot read.
+BLACKBOX_DKG_ERROR_LINES=8
+explain_dkg_not_ready() {
+    local log status
+    if [ "$(blackbox_dkg_supervisor)" = launchd ]; then
+        status="$(launchctl print "gui/$(id -u)/$BLACKBOX_DKG_LAUNCHD_LABEL" 2>/dev/null |
+            awk -F'= ' '/last exit (code|status)/ { print $2; exit }')"
+        [ -n "$status" ] && step "The node's service last exited with: $status"
+    fi
+    log="$(blackbox_dkg_launchd_error_log)"
+    if [ -s "$log" ]; then
+        step "The node's last errors ($log):"
+        tail -n "$BLACKBOX_DKG_ERROR_LINES" "$log" | sed 's/^/    /'
+    fi
+    return 0
+}
+
+# How the node's start is waited for (KI-520/521, E2E recheck 2026-11-21: an update of a synced
+# install failed on a fixed 300 s wait — the node needed ~6 min to reopen a store holding the
+# whole graph — and rolled back a working install). DECISION: the wait follows the node's real
+# progress, not a bigger number. Up to BLACKBOX_DKG_RUNTIME_WAIT_SECONDS it waits as before; past
+# that it keeps waiting only while the node is ALIVE under the same pid and its daemon.log keeps
+# advancing (a line within BLACKBOX_DKG_STALL_SECONDS), never past BLACKBOX_DKG_LOAD_CEILING_SECONDS.
+# A node that died, or was restarted by its service (a crash loop), fails at once — with its
+# cause (explain_dkg_not_ready). An update is NOT committed while the node is still loading: the
+# install is kept only once the new build is proven running; reopening the existing store is
+# local work, not the network sync "no sync wait" is about, and Network Shield keeps its last
+# lists meanwhile (keep_verified).
+BLACKBOX_DKG_STALL_SECONDS="${BLACKBOX_DKG_STALL_SECONDS:-180}"
+BLACKBOX_DKG_LOAD_CEILING_SECONDS="${BLACKBOX_DKG_LOAD_CEILING_SECONDS:-1800}"
+BLACKBOX_DKG_WAIT_SLICE_SECONDS="${BLACKBOX_DKG_WAIT_SLICE_SECONDS:-15}"
+
+# The pid in the node's daemon.pid when that process is alive, else nothing.
+blackbox_dkg_live_pid() {
+    local pid=""
+    [ -f "$BLACKBOX_DKG_HOME/daemon.pid" ] && pid="$(tr -dc '0-9' <"$BLACKBOX_DKG_HOME/daemon.pid")"
+    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && printf '%s' "$pid"
+    return 0
+}
+
+# The size of the node's daemon.log (0 when there is none): it grows while the node is working.
+blackbox_dkg_log_size() {
+    local log="$BLACKBOX_DKG_HOME/daemon.log"
+    [ -f "$log" ] && wc -c <"$log" | tr -dc '0-9' || printf '0'
+}
 wait_for_blackbox_dkg_runtime() {
     local verifier="$(blackbox_helper blackbox-dkg-runtime-fingerprint.py)"
-    local expected_commit
+    local expected_commit started now pid first_pid="" size last_size progress why=""
     if ! expected_commit="$("$VENV_DIR/bin/python" "$verifier" commit \
         "$BLACKBOX_DKG_CLI_DIR")"; then
         BLACKBOX_INSTALL_INCOMPLETE=true
@@ -499,15 +658,38 @@ wait_for_blackbox_dkg_runtime() {
         warn "Could not resolve the published DKG build commit."
         return 1
     fi
-    step "Waiting for the DKG node to answer (up to ${BLACKBOX_DKG_RUNTIME_WAIT_SECONDS}s; a synced node takes about 2 minutes) ..."
-    if ! "$VENV_DIR/bin/python" "$verifier" wait \
-        "$BLACKBOX_DKG_DAEMON_URL" "$expected_commit" "$BLACKBOX_DKG_RUNTIME_WAIT_SECONDS" >/dev/null; then
-        BLACKBOX_INSTALL_INCOMPLETE=true
-        BLACKBOX_THREAT_GRAPH_INCOMPLETE=true
-        warn "The DKG daemon did not activate npm build ${expected_commit:0:12} within ${BLACKBOX_DKG_RUNTIME_WAIT_SECONDS}s."
-        step "A node holding a large graph can need longer: re-run with BLACKBOX_DKG_RUNTIME_WAIT_SECONDS=600"
-        return 1
-    fi
+    step "Waiting for the DKG node to answer (a synced node reopens its threat graph in a few minutes) ..."
+    started="$(date +%s)"; progress="$started"; last_size="$(blackbox_dkg_log_size)"
+    while ! "$VENV_DIR/bin/python" "$verifier" wait \
+        "$BLACKBOX_DKG_DAEMON_URL" "$expected_commit" "$BLACKBOX_DKG_WAIT_SLICE_SECONDS" >/dev/null 2>&1; do
+        now="$(date +%s)"
+        pid="$(blackbox_dkg_live_pid)"
+        size="$(blackbox_dkg_log_size)"
+        [ "$size" != "$last_size" ] && { progress="$now"; last_size="$size"; }
+        if [ -n "$pid" ] && [ -z "$first_pid" ]; then
+            first_pid="$pid"
+        elif [ -n "$first_pid" ] && [ "$pid" != "$first_pid" ]; then
+            why="the node stopped${pid:+ and its service started it again (pid $first_pid → $pid)}"
+        fi
+        if [ -z "$why" ] && [ $((now - started)) -ge "$BLACKBOX_DKG_RUNTIME_WAIT_SECONDS" ]; then
+            if [ -z "$pid" ]; then
+                why="the node is not running"
+            elif [ $((now - progress)) -ge "$BLACKBOX_DKG_STALL_SECONDS" ]; then
+                why="the node has written nothing for $((now - progress))s"
+            elif [ $((now - started)) -ge "$BLACKBOX_DKG_LOAD_CEILING_SECONDS" ]; then
+                why="it was still starting after $((now - started))s"
+            else
+                step "  … the node is still loading its threat graph ($((now - started))s, pid $pid); Network Shield keeps its last lists meanwhile"
+            fi
+        fi
+        if [ -n "$why" ]; then
+            BLACKBOX_INSTALL_INCOMPLETE=true
+            BLACKBOX_THREAT_GRAPH_INCOMPLETE=true
+            warn "The DKG daemon did not activate npm build ${expected_commit:0:12}: $why."
+            explain_dkg_not_ready
+            return 1
+        fi
+    done
     ok "DKG daemon is ready on npm build ${expected_commit:0:12}"
 }
 
@@ -712,7 +894,15 @@ require_docker_for_blazegraph() {
     fi
     if ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
         BLACKBOX_DOCKER_REQUIRED=true
-        docker_setup_hint
+        # With the store left to Blackbox ("auto"), no Docker is not a failure: the caller offers
+        # the Oxigraph store, and shows how to get Docker only if the person declines it. A red
+        # "✗ Docker Desktop is not installed" on that default path read as a failed install
+        # (E2E 2026-11-21).
+        if [ "$BLACKBOX_DKG_STORE_BACKEND" = "auto" ]; then
+            step "Docker is not running here; Blackbox can use its Oxigraph store instead (no Docker needed)."
+        else
+            docker_setup_hint
+        fi
         return 1
     fi
     ok "Docker engine is ready for Blazegraph"
@@ -720,8 +910,8 @@ require_docker_for_blazegraph() {
 
 # Whether Docker can run the Blazegraph store RIGHT NOW (its engine answers). Setup-only mode
 # (`hermes blackbox setup`) uses this to pick its store: a Docker Desktop that is installed but not
-# running is not started for it, because Oxigraph needs no Docker and opening someone's Docker
-# Desktop is not ours to do (2026-11-03: setup on Hermes Desktop launched it and waited 120 s).
+# running is not started for it, because Oxigraph needs no Docker and opening someone's
+# Docker Desktop is not ours to do (2026-11-03: setup on Hermes Desktop launched it and waited 120 s).
 # The Windows installer's setup-only check already asked only "is it running".
 blackbox_docker_available() {
     command -v docker >/dev/null 2>&1 || return 1
@@ -784,7 +974,7 @@ provision_blackbox_store() {
     local existing_state namespace existing_backend existing_url existing_managed
     local provisioned parsed
 
-    existing_state="$($VENV_DIR/bin/python - "$BLACKBOX_DKG_HOME" <<'PYEOF'
+    existing_state="$("$VENV_DIR/bin/python" - "$BLACKBOX_DKG_HOME" <<'PYEOF'
 import json
 import sys
 from pathlib import Path
@@ -890,6 +1080,7 @@ PYEOF
             use_blackbox_oxigraph
             return 0
         fi
+        [ "$BLACKBOX_DKG_STORE_BACKEND" = "auto" ] && docker_setup_hint   # declined Oxigraph: how to get Docker
         return 2
     fi
     if [ ! -f "$helper" ]; then
@@ -912,7 +1103,7 @@ PYEOF
         warn "Could not provision Blazegraph."
         return 1
     fi
-    parsed="$($VENV_DIR/bin/python - "$provisioned" <<'PYEOF'
+    parsed="$("$VENV_DIR/bin/python" - "$provisioned" <<'PYEOF'
 import json
 import sys
 
@@ -1132,6 +1323,12 @@ Usage: blackbox-install.sh [OPTIONS]
 Options:
   --skip-dkg     Skip local DKG node setup; exits incomplete
   --store MODE   Store backend: auto, blazegraph, or oxigraph (default: auto; fallback asks first)
+  --system-protection     macOS: install the system protection helper (DNS Shield + Threat
+                          Firewall) at the end without asking (needs your admin password)
+  --no-system-protection  macOS: do not install or offer it (the dashboard offers it later)
+  --remove-system-protection [--undo-hardening]
+                          Only remove the helper: DNS and the firewall go back exactly as they
+                          were; posture hardening stays unless --undo-hardening
   -h, --help     Show this help
 
 Environment overrides:
@@ -1146,7 +1343,11 @@ Environment overrides:
   BLACKBOX_LLM_PROVIDER,
   BLACKBOX_LLM_MODEL, BLACKBOX_LLM_KEY_SOURCE=hermes|new, BLACKBOX_LLM_API_KEY,
   BLACKBOX_HERMES_SETUP=reuse|always|never, BLACKBOX_AUTO_DASHBOARD=0|1,
-  BLACKBOX_SYNC_MODE=background|wait
+  BLACKBOX_SYNC_MODE=background|wait,
+  BLACKBOX_SYSTEM_PROTECTION=ask|yes|no, BLACKBOX_HELPER_PATH + BLACKBOX_HELPER_SHA256
+  (a local helper binary and its checksum), BLACKBOX_HELPER_RELEASE_URL,
+  BLACKBOX_BLAZEGRAPH_HEAP=4g (the Blazegraph store's Java heap cap, e.g. 2g or 3072m;
+  at least 1g; used when the store's container is made)
 
 Installs Blackbox in audit mode. Hermes model/API setup reuses existing keys by
 default and never opens the setup wizard unless BLACKBOX_HERMES_SETUP=always.
@@ -1162,9 +1363,15 @@ EOF
 
 # ── Arg parsing ─────────────────────────────────────────────────────────────
 SKIP_DKG=false
+BLACKBOX_REMOVE_SYSTEM_PROTECTION=false
+BLACKBOX_UNDO_HARDENING=false
 while [ $# -gt 0 ]; do
     case "$1" in
         --skip-dkg) SKIP_DKG=true; shift ;;
+        --system-protection) BLACKBOX_SYSTEM_PROTECTION=yes; shift ;;
+        --no-system-protection) BLACKBOX_SYSTEM_PROTECTION=no; shift ;;
+        --remove-system-protection) BLACKBOX_REMOVE_SYSTEM_PROTECTION=true; shift ;;
+        --undo-hardening) BLACKBOX_UNDO_HARDENING=true; shift ;;
         --store)
             [ $# -ge 2 ] || { err "--store requires auto, blazegraph, or oxigraph"; exit 1; }
             BLACKBOX_DKG_STORE_BACKEND="$(printf '%s' "$2" | tr '[:upper:]' '[:lower:]')"
@@ -1215,6 +1422,100 @@ blackbox_head_in_branch() {
     git -C "$REPO_DIR" merge-base --is-ancestor HEAD "$remote" 2>/dev/null
 }
 
+# ── Only what this machine needs: a partial clone with a sparse checkout ────
+# The clone downloads Hermes and the plugin without the test suites, the docs site, the sources
+# of Hermes's own desktop app (apps/) or another operating system's files (929 MB / 138k files on
+# a clean Mac in security round 5, most of it never read). The set is printed by the plugin's own
+# setup/checkout_layout.py from kernel/os_layout — the ONE definition a plugin copy uses too
+# (LES-137) — read straight from the commit with `git show`, so nothing has to be checked out
+# first. The patterns live in .git/info/sparse-checkout (git's classic non-cone form), so every
+# later fetch + reset, the installer's and `hermes update`'s, keeps the same set. A developer's
+# own checkout (the script run from a clone) is never narrowed.
+BLACKBOX_CHECKOUT_LAYOUT_FILE="plugins/blackbox/setup/checkout_layout.py"
+BLACKBOX_OS_LAYOUT_FILE="plugins/blackbox/kernel/os_layout/__init__.py"
+
+# A Python that can run those two standard-library files (3.8+): Hermes's environment once it
+# exists, else this machine's. Prints its path.
+checkout_layout_python() {
+    local candidate
+    for candidate in "${VENV_DIR:+$VENV_DIR/bin/python}" "${PY:-}" python3; do
+        [ -n "$candidate" ] || continue
+        if "$candidate" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 8) else 1)' >/dev/null 2>&1; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# `checkout_layout_patterns REPO REV` prints this machine's sparse-checkout lines, computed by
+# the layout files of commit REV (a revision before this change has none: returns 1).
+checkout_layout_patterns() {
+    local repo="$1" rev="$2" python folder status=0
+    python="$(checkout_layout_python)" || return 1
+    folder="$repo/.git/blackbox-checkout-layout"
+    mkdir -p "$folder"
+    if git -C "$repo" show "$rev:$BLACKBOX_CHECKOUT_LAYOUT_FILE" >"$folder/checkout_layout.py" 2>/dev/null &&
+        git -C "$repo" show "$rev:$BLACKBOX_OS_LAYOUT_FILE" >"$folder/os_layout.py" 2>/dev/null; then
+        # --repo/--rev: the commit's npm workspaces decide which left-out folders the TUI and the
+        # dashboard build from (KI-653). A commit whose layout predates them takes the short form.
+        "$python" -I "$folder/checkout_layout.py" "$folder/os_layout.py" ${BLACKBOX_CHECKOUT_OS:+"$BLACKBOX_CHECKOUT_OS"} \
+            --repo "$repo" --rev "$rev" 2>/dev/null ||
+            "$python" -I "$folder/checkout_layout.py" "$folder/os_layout.py" ${BLACKBOX_CHECKOUT_OS:+"$BLACKBOX_CHECKOUT_OS"} ||
+            status=1
+    else
+        status=1
+    fi
+    rm -rf "$folder"
+    return "$status"
+}
+
+# `apply_checkout_layout REPO REV` narrows REPO's working tree to the set REV's layout names.
+# Files with local changes stay (git says which); returns 1, changing nothing, when the set
+# cannot be worked out (no Python yet, or REV predates the layout).
+apply_checkout_layout() {
+    local repo="$1" rev="$2" patterns
+    patterns="$(checkout_layout_patterns "$repo" "$rev")" && [ -n "$patterns" ] || return 1
+    mkdir -p "$repo/.git/info"
+    printf '%s\n' "$patterns" >"$repo/.git/info/sparse-checkout"
+    git -C "$repo" config core.sparseCheckout true
+    git -C "$repo" config core.sparseCheckoutCone false
+    # An index exists once anything is checked out: re-apply the set to it (`reapply` is git
+    # 2.27+; read-tree does the same on older ones). A fresh --no-checkout clone has none yet:
+    # its first checkout applies the set.
+    if [ -f "$repo/.git/index" ]; then
+        git -C "$repo" sparse-checkout reapply 2>/dev/null || git -C "$repo" read-tree -mu HEAD
+    fi
+}
+
+# `clone_this_machines_checkout URL BRANCH DIR` — a blobless, depth-1 clone holding only this
+# machine's set. Without a Python yet to work the set out, the whole tree is checked out and
+# narrowed after Hermes's setup (narrow_checkout_after_setup).
+clone_this_machines_checkout() {
+    local url="$1" branch="$2" dir="$3"
+    git clone --depth 1 --filter=blob:none --no-checkout --branch "$branch" "$url" "$dir"
+    if apply_checkout_layout "$dir" HEAD; then
+        BLACKBOX_CHECKOUT_NARROWED=true
+    else
+        step "No Python 3.8+ on this machine yet: downloading the whole checkout; it is narrowed to this machine's files after Hermes's setup."
+    fi
+    git -C "$dir" checkout -q "$branch"
+}
+
+# After Hermes's setup (its Python exists now): narrow a checkout this installer cloned whole —
+# a first install without a Python, or one made by an installer before the sparse checkout.
+narrow_checkout_after_setup() {
+    [ "${BLACKBOX_CHECKOUT_MANAGED:-false}" = true ] && [ "${BLACKBOX_CHECKOUT_NARROWED:-false}" != true ] || return 0
+    if apply_checkout_layout "$REPO_DIR" HEAD; then
+        BLACKBOX_CHECKOUT_NARROWED=true
+        ok "Checkout narrowed to what this machine runs ($(checkout_file_count "$REPO_DIR") files)"
+    fi
+}
+
+checkout_file_count() {
+    git -C "$1" ls-files -t 2>/dev/null | grep -vc '^S ' || true
+}
+
 resolve_repo() {
     local script_src="${BASH_SOURCE[0]:-}"
     if [ -n "$script_src" ] && [ -f "$script_src" ]; then
@@ -1255,6 +1556,13 @@ resolve_repo() {
             err "Could not fetch $REPO_BRANCH from $REPO_URL."
             return 1
         fi
+        BLACKBOX_CHECKOUT_MANAGED=true
+        # This machine's set, from the commit being installed, BEFORE the tree moves to it: an
+        # earlier installer's full checkout is converted here, and the move then brings only
+        # what this machine needs (files with local changes stay, as git says).
+        if apply_checkout_layout "$REPO_DIR" "refs/remotes/origin/$REPO_BRANCH"; then
+            BLACKBOX_CHECKOUT_NARROWED=true
+        fi
         if ! git -C "$REPO_DIR" checkout "$REPO_BRANCH"; then
             err "Could not switch $REPO_DIR to $REPO_BRANCH (git's reason is above)."
             return 1
@@ -1281,8 +1589,9 @@ resolve_repo() {
             return 1
         fi
     else
-        step "Cloning $REPO_URL → $REPO_DIR"
-        git clone --depth 1 --branch "$REPO_BRANCH" "$REPO_URL" "$REPO_DIR"
+        step "Cloning $REPO_URL → $REPO_DIR (only what this machine runs)"
+        BLACKBOX_CHECKOUT_MANAGED=true
+        clone_this_machines_checkout "$REPO_URL" "$REPO_BRANCH" "$REPO_DIR"
         BLACKBOX_FRESH_CLONE=true
     fi
     if ! blackbox_repo_is_valid "$REPO_DIR"; then
@@ -1340,6 +1649,37 @@ _node_ok() {
     [ "${maj:-0}" -ge "$NODE_MAJOR" ] 2>/dev/null
 }
 
+# Folders a Node may be installed in that a non-login shell (an SSH command, launchd) does not
+# have on its PATH: Homebrew's (Apple silicon and Intel) and its keg-only versions (node@24 is
+# not linked). E2E recheck 2026-11-21: an update over SSH missed Homebrew's node@24, installed a
+# second Node with nvm, and the node's service failed on it.
+BLACKBOX_NODE_PLACES="${BLACKBOX_NODE_PLACES:-/opt/homebrew/bin /usr/local/bin /opt/homebrew/opt/node/bin /usr/local/opt/node/bin}"
+BLACKBOX_NODE_KEG_ROOTS="${BLACKBOX_NODE_KEG_ROOTS:-/opt/homebrew/opt /usr/local/opt}"
+_installed_node_dirs() {
+    local dir root
+    for dir in $BLACKBOX_NODE_PLACES; do printf '%s\n' "$dir"; done
+    for root in $BLACKBOX_NODE_KEG_ROOTS; do
+        for dir in "$root"/node@*/bin; do
+            [ -d "$dir" ] && printf '%s\n' "$dir"
+        done
+    done | sort -t@ -k2 -rn      # the newest keg-only version first (node@24 before node@22)
+}
+
+# Puts the first folder holding a Node of at least NODE_MAJOR on PATH; fails when there is none.
+_use_installed_node() {
+    local dir
+    while IFS= read -r dir; do
+        [ -x "$dir/node" ] || continue
+        PATH="$dir:$PATH"
+        if _node_ok; then
+            export PATH
+            return 0
+        fi
+        PATH="${PATH#"$dir:"}"
+    done < <(_installed_node_dirs)
+    return 1
+}
+
 ensure_node() {
     if _node_ok; then
         ok "Node.js $(node -v) + npm $(npm -v 2>/dev/null || echo '?')"
@@ -1348,6 +1688,11 @@ ensure_node() {
     fi
     if [ "$SKIP_DKG" = true ]; then
         HAS_NODE=false
+        return 0
+    fi
+    if _use_installed_node; then
+        ok "Node.js $(node -v) (already on this machine, $(dirname "$(command -v node)")) + npm $(npm -v 2>/dev/null || echo '?')"
+        HAS_NODE=true
         return 0
     fi
     # nvm is the portable path on both macOS and Linux and needs no sudo.
@@ -1403,7 +1748,7 @@ _sha256_of() {
 install_nvm_verified() {
     local script actual
     script="$(mktemp "${TMPDIR:-/tmp}/blackbox-nvm-install.XXXXXX")" || return 1
-    if ! curl -fsSL "https://raw.githubusercontent.com/nvm-sh/nvm/${NVM_INSTALL_VERSION_PIN}/install.sh" -o "$script"; then
+    if ! curl -fsSL --max-time 120 "https://raw.githubusercontent.com/nvm-sh/nvm/${NVM_INSTALL_VERSION_PIN}/install.sh" -o "$script"; then
         rm -f "$script"
         return 1
     fi
@@ -1435,7 +1780,109 @@ detect_os() {
         Linux*)  OS="linux" ;;
         *) err "Unsupported OS: $(uname -s). Blackbox supports macOS and Linux (use blackbox-install.ps1 on Windows)."; exit 1 ;;
     esac
+    # Hermes's setup ships its tools for these two only (setup-hermes.sh, pm/lock.json): stop here,
+    # before anything changes, rather than half-way through its setup.
+    case "$ARCH" in
+        x86_64|amd64|arm64|aarch64) ;;
+        *) err "Unsupported processor: $ARCH. Blackbox (and the Hermes it runs in) needs x86_64 or arm64."; exit 1 ;;
+    esac
     ok "Detected $OS ($ARCH)"
+    [ "$OS" != linux ] || check_linux_distro
+}
+
+# `linux_distro_support [OS_RELEASE] [LIB_DIR]` prints "<level><TAB><name>" for this Linux (KI-627):
+# supported — Debian, Ubuntu and their derivatives (ID / ID_LIKE), what Blackbox is tested on;
+# untested — another glibc Linux (Fedora, Arch, openSUSE …): it may work, nobody has checked;
+# unsupported — a musl Linux (Alpine), where Hermes's pinned Python and uv, built for glibc, are
+# not expected to run. Which C library the system runs comes from linux_libc, never from a file.
+linux_distro_support() {
+    local release="${1:-/etc/os-release}" libdir="${2:-/lib}" id="" like="" name=""
+    if [ -r "$release" ]; then
+        id="$(sed -n 's/^ID=//p' "$release" | tr -d '"' | head -1)"
+        like="$(sed -n 's/^ID_LIKE=//p' "$release" | tr -d '"' | head -1)"
+        name="$(sed -n 's/^PRETTY_NAME=//p' "$release" | tr -d '"' | head -1)"
+    fi
+    name="${name:-${id:-this Linux}}"
+    if [ "$(linux_libc "$libdir")" = musl ]; then
+        printf 'unsupported\t%s\n' "$name"
+        return 0
+    fi
+    case " $id $like " in
+        *" debian "*|*" ubuntu "*) printf 'supported\t%s\n' "$name" ;;
+        *) printf 'untested\t%s\n' "$name" ;;
+    esac
+}
+
+# `linux_libc [LIB_DIR]` prints the C library this system RUNS on: glibc, musl or unknown. Asked
+# of the system's own C library first — glibc answers `getconf GNU_LIBC_VERSION`, and `ldd
+# --version` names its library ("ldd (Ubuntu GLIBC 2.39-…) 2.39", musl's "musl libc (aarch64)").
+# WHY not a loader file: Debian's and Ubuntu's musl package (musl-tools, for static builds) puts
+# /lib/ld-musl-* beside glibc's loader, and the installer called such a glibc Ubuntu "a musl Linux"
+# (KI-670, Linux round L2). Only when neither tool answers do the loaders decide, and then a musl
+# loader counts only where no glibc loader is.
+linux_libc() {
+    local libdir="${1:-/lib}" said
+    if getconf GNU_LIBC_VERSION >/dev/null 2>&1; then
+        echo glibc
+        return 0
+    fi
+    said="$(ldd --version 2>&1 | head -2)" || true
+    case "$said" in
+        *musl*) echo musl; return 0 ;;
+        *GLIBC*|*"GNU libc"*|*"GNU C Library"*) echo glibc; return 0 ;;
+    esac
+    if compgen -G "$libdir/ld-linux*" >/dev/null || compgen -G "${libdir}64/ld-linux*" >/dev/null \
+        || compgen -G "$libdir/*-linux-gnu/ld-linux*" >/dev/null; then
+        echo glibc
+    elif compgen -G "$libdir/ld-musl-*" >/dev/null; then
+        echo musl
+    else
+        echo unknown
+    fi
+}
+
+# Says plainly where this Linux stands (linux_distro_support), before anything changes. An
+# unsupported one stops here, unless BLACKBOX_ALLOW_UNSUPPORTED_DISTRO=1 asks to try anyway.
+check_linux_distro() {
+    local support level name
+    support="$(linux_distro_support)"
+    level="${support%%$'\t'*}"
+    name="${support#*$'\t'}"
+    case "$level" in
+        supported) ok "$name: supported" ;;
+        untested)
+            warn "$name has not been tested with Blackbox yet (it is tested on Ubuntu and Debian)."
+            step "The install may work. If a step fails, everything this run changed is put back."
+            ;;
+        *)
+            if [ "${BLACKBOX_ALLOW_UNSUPPORTED_DISTRO:-}" = 1 ]; then
+                warn "$name is not supported (a musl Linux); trying anyway (BLACKBOX_ALLOW_UNSUPPORTED_DISTRO=1)."
+                return 0
+            fi
+            err "$name is not supported yet: it is a musl Linux, and the Python and uv that Hermes pins are built for glibc."
+            step "Use a glibc Linux (Ubuntu or Debian are tested), or set BLACKBOX_ALLOW_UNSUPPORTED_DISTRO=1 to try anyway."
+            exit 1
+            ;;
+    esac
+}
+
+# An install as root — under sudo, or from a root shell — would run the DKG node, the dashboard and
+# Blackbox's checks as root, with root's home, beside agents the person runs as themselves (KI-625).
+# Refused before anything changes. A machine meant to run Blackbox as root (a single-user server or
+# a container) says so with BLACKBOX_ALLOW_ROOT=1.
+check_install_user() {
+    [ "$(id -u)" = 0 ] || return 0
+    if [ "${BLACKBOX_ALLOW_ROOT:-}" = 1 ]; then
+        warn "Installing as root (BLACKBOX_ALLOW_ROOT=1): Blackbox's node and dashboard run as root, with root's home ($HOME)."
+        return 0
+    fi
+    if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != root ]; then
+        err "Run the installer as $SUDO_USER, without sudo: under sudo, Blackbox's node and dashboard would run as root, not as you."
+    else
+        err "Blackbox installs for the person who runs the AI agents, not for root: as root, its node and dashboard would run with root's rights."
+        step "Run it as that user (make one with: adduser <name>), or set BLACKBOX_ALLOW_ROOT=1 on a machine meant to run it as root (a single-user server, a container)."
+    fi
+    exit 1
 }
 
 # ── Python venv + editable install (reuse setup-hermes.sh when present) ──────
@@ -1625,12 +2072,27 @@ use_running_hermes() {
         on_path="$(command -v hermes 2>/dev/null || true)"
         link_dir="$(dirname "${on_path:-$HERMES_BIN}")"
     fi
-    if [ -w "$link_dir" ]; then
+    if inside_app_bundle "$link_dir"; then
+        # WHY: an app bundle is sealed by its signature; one file added there breaks the seal
+        # ("a sealed resource is missing or invalid") and a read-only, translocated copy refuses
+        # the write. The command is only a shortcut for `hermes blackbox`.
+        step "Hermes runs from an app bundle; the blackbox command was not added there. Use: hermes blackbox"
+    elif [ -w "$link_dir" ]; then
         install_blackbox_shim "$link_dir"
     else
         warn "Cannot write $link_dir: the blackbox command was not added; use: hermes blackbox"
     fi
     export PATH="$VENV_DIR/bin:$PATH"
+}
+
+# True when *dir* (links resolved) lies inside a macOS app bundle (`….app/Contents/…`).
+inside_app_bundle() {
+    local real
+    real="$(cd "$1" 2>/dev/null && pwd -P)" || return 1
+    case "$real/" in
+        *.app/Contents/*) return 0 ;;
+    esac
+    return 1
 }
 
 # Earlier runs of this installer linked ~/.local/bin/hermes to a Hermes Python environment.
@@ -1674,6 +2136,7 @@ refresh_blackbox_plugin_copy() {
     heading "Installing Blackbox plugin copy"
     step "Refreshing $HERMES_HOME/plugins/blackbox from this checkout..."
     if "$VENV_DIR/bin/python" - "$REPO_DIR" "$HERMES_HOME" <<'PYEOF'
+import importlib.util
 import os
 import shutil
 import sys
@@ -1684,28 +2147,44 @@ home = Path(sys.argv[2]).expanduser()
 src = repo / "plugins" / "blackbox"
 dest = home / "plugins" / "blackbox"
 openclaw_src = repo / "integrations" / "openclaw"
-openclaw_dest = dest / "_openclaw"
 
 if not src.is_dir():
     raise SystemExit(f"missing Blackbox plugin source: {src}")
 
-def ignore_runtime(_dir, names):
+# Another operating system's platform/ modules stay out of the copy: the plugin's one rule
+# (kernel/os_layout), loaded by path because the plugin is not importable here.
+layout_spec = importlib.util.spec_from_file_location("blackbox_os_layout", src / "kernel" / "os_layout" / "__init__.py")
+os_layout = importlib.util.module_from_spec(layout_spec)
+layout_spec.loader.exec_module(os_layout)
+
+def ignore_runtime(folder, names):
     skip_dirs = {"__pycache__", "tests", ".pytest_cache", "node_modules"}
-    return [n for n in names if n in skip_dirs or n.endswith((".pyc", ".pyo"))]
+    skipped = [n for n in names if n in skip_dirs or n.endswith((".pyc", ".pyo"))]
+    return skipped + [n for n in os_layout.other_os_entries(folder, names) if n not in skipped]
 
 def ignore_openclaw(_dir, names):
     skip_dirs = {"node_modules", "dist", ".turbo", "test", "tests", "__pycache__"}
     return [n for n in names if n in skip_dirs or n.endswith((".pyc", ".log", ".tsbuildinfo"))]
 
+# Built beside, then swapped in by two renames (KI-644, security round 7): deleting the old copy in
+# place raced the RUNNING dashboard and hooks, which write fresh __pycache__ folders into it while
+# rmtree walks it ("Directory not empty"), and a failed refresh left a copy mixing two commits. A
+# rename is atomic and does not care what runs from the folder; the old copy is removed afterwards,
+# best effort, OUTSIDE plugins/ (Hermes never sees it as a plugin). Fails before the swap: the old
+# copy stays whole.
+aside = home / ".blackbox-plugin-refresh"
+staged, old_copy = aside / f"new-{os.getpid()}", aside / f"old-{os.getpid()}"
+shutil.rmtree(aside, ignore_errors=True)
+aside.mkdir(parents=True, exist_ok=True)
 home.joinpath("plugins").mkdir(parents=True, exist_ok=True)
-if dest.exists():
-    shutil.rmtree(dest)
-shutil.copytree(src, dest, ignore=ignore_runtime)
+shutil.copytree(src, staged, ignore=ignore_runtime)
 if openclaw_src.is_dir():
-    if openclaw_dest.exists():
-        shutil.rmtree(openclaw_dest)
-    shutil.copytree(openclaw_src, openclaw_dest, ignore=ignore_openclaw)
-(dest / ".blackbox-source-root").write_text(str(repo), encoding="utf-8")
+    shutil.copytree(openclaw_src, staged / "_openclaw", ignore=ignore_openclaw)
+(staged / ".blackbox-source-root").write_text(str(repo), encoding="utf-8")
+if dest.exists() or dest.is_symlink():
+    os.rename(dest, old_copy)
+os.rename(staged, dest)
+shutil.rmtree(aside, ignore_errors=True)
 PYEOF
     then
         ok "Blackbox plugin copy refreshed"
@@ -1824,7 +2303,8 @@ run_hermes_setup() {
 fetch_pinned_dkg_tarball() {
     local dir="" file="" actual=""
     dir="$(mktemp -d "${TMPDIR:-/tmp}/blackbox-dkg-pack.XXXXXX")" || return 1
-    if ! file="$(npm pack "$BLACKBOX_DKG_PACKAGE" --pack-destination "$dir" --silent 2>/dev/null | tail -n 1)" ||
+    if ! file="$(run_with_timeout "$BLACKBOX_NPM_STEP_SECONDS" npm pack "$BLACKBOX_DKG_PACKAGE" --pack-destination "$dir" --silent \
+            $BLACKBOX_NPM_NETWORK_FLAGS 2>/dev/null | tail -n 1)" ||
         [ -z "$file" ] || [ ! -f "$dir/$file" ]; then
         rm -rf "$dir"
         warn "Could not download $BLACKBOX_DKG_PACKAGE from the npm registry." >&2
@@ -1894,8 +2374,15 @@ fs.writeFileSync(file, JSON.stringify(pkg, null, 2) + "\n");
 ' "$BLACKBOX_DKG_CLI_DIR/package.json" "$tarball" "${BLACKBOX_DKG_ALLOW_SCRIPTS[@]}"
     local install_spec="$BLACKBOX_DKG_PACKAGE"
     [ -n "$tarball" ] && install_spec="$tarball"
-    npm install --prefix "$BLACKBOX_DKG_CLI_DIR" --prefer-online "$install_spec" >"$npm_log" 2>&1
+    # Bounded (KI-665): with the network cut mid-install this npm waited 16 minutes with no output.
+    # npm's own fetch timeout and retries first, then a hard limit; either way the install fails
+    # and rolls back (all-or-nothing) instead of hanging.
+    # shellcheck disable=SC2086 # the flags are words on purpose
+    run_with_timeout "$BLACKBOX_NPM_STEP_SECONDS" npm install --prefix "$BLACKBOX_DKG_CLI_DIR" --prefer-online \
+        $BLACKBOX_NPM_NETWORK_FLAGS "$install_spec" >"$npm_log" 2>&1
     local npm_status=$?
+    [ "$npm_status" -eq 0 ] || ! grep -q "^blackbox: stopped after" "$npm_log" ||
+        warn "npm did not finish within ${BLACKBOX_NPM_STEP_SECONDS}s — is the network down? Nothing was kept."
     [ -n "$tarball" ] && rm -rf "$(dirname "$tarball")"
     if [ "$npm_status" -ne 0 ]; then
         if [ -n "$backup_dir" ]; then
@@ -2096,9 +2583,10 @@ sync_ruleset() {
             return 0
             ;;
     esac
-    ok "The first threat-graph sync runs in the background (about 30 minutes)"
+    # Nothing has synced yet: the dashboard starts the first sync once it runs (start_dashboard),
+    # so this is said as what happens next, not as a check mark (KI-609's lesson).
+    step "The first threat-graph sync starts with the dashboard and runs in the background (about 30 minutes)."
     step "Follow it on the dashboard: http://127.0.0.1:${BLACKBOX_DASHBOARD_PORT:-9700}"
-    ok "DKG native reconciliation enabled; one in-flight slot; zero queue"
 }
 
 dkg_manual_hint() {
@@ -2299,7 +2787,7 @@ else:
     print("  already configured — no changes")
 PYEOF
     then
-        ok "Config defaults written (audit mode — blocking is opt-in)"
+        ok "Config defaults written"   # the mode is chosen and reported next (configure_blackbox_mode)
     else
         warn "Could not write config automatically. Run 'blackbox status' to verify configuration."
     fi
@@ -2416,10 +2904,66 @@ configure_blackbox_mode() {
 # ── Protect agents (best-effort, non-fatal) ─────────────────────────────────
 # Blackbox protects the Hermes home this installer set up ($HERMES_HOME). Every
 # other Hermes profile or OpenClaw workspace is its own trust and credential
-# boundary, so it is attached only when the operator says so: `blackbox attach`
-# lists the ones not yet protected and asks [y/N] on the terminal (/dev/tty, so
-# it works under `curl | bash`); with no terminal it attaches none of them.
-# Scripted installs that want every agent protected set BLACKBOX_ATTACH_ALL=1.
+# boundary, so Blackbox joins them only with the operator's yes (Hermes catalog
+# review, KI-429 / LES-067: never a silent default). That yes is asked ONCE
+# (Amos, 2026-11-19: "every new profile and every new instance, automatically"):
+# protect every agent here now AND every one added later (`auto_attach: true`, kept
+# by the dashboard's sweep within a minute of a new agent appearing). Enter, or no
+# answer in time, is yes — the question is on screen; no terminal at all (a script)
+# asks nothing and protects only $HERMES_HOME. BLACKBOX_AUTO_ATTACH=1/0 answers it
+# for scripts and for `blackbox setup` (Hermes Desktop's switch); an earlier yes is kept on
+# a re-run. BLACKBOX_ATTACH_ALL=1 still protects every agent here now, once.
+BLACKBOX_AUTO_ATTACH_PROMPT_SECONDS="${BLACKBOX_AUTO_ATTACH_PROMPT_SECONDS:-30}"
+
+# Prints the saved plugins.entries.blackbox.auto_attach ("true"/"false"). Read only:
+# the one writer is `blackbox attach --auto / --no-auto` (shared with Windows and setup).
+saved_auto_attach() {
+    "$VENV_DIR/bin/python" - "$HERMES_HOME/config.yaml" <<'PYEOF'
+import sys, os
+try:
+    try:
+        import hermes_yaml as yaml  # Hermes 0.21.7+
+    except ImportError:
+        import yaml
+    with open(sys.argv[1], encoding="utf-8-sig") as f:
+        data = yaml.safe_load(f) or {}
+except Exception:
+    data = {}
+entry = ((data.get("plugins") or {}).get("entries") or {}).get("blackbox") or {}
+print("true" if entry.get("auto_attach") is True else "false")
+PYEOF
+}
+
+# 0 = protect every agent, now and later; 1 = not asked or declined.
+ask_protect_every_agent() {
+    local answer=""
+    if ! { exec 9<>/dev/tty; } 2>/dev/null; then
+        return 1
+    fi
+    step "Each Hermes profile and OpenClaw workspace is a separate agent. Blackbox can protect"
+    step "all of them — the ones on this machine now and every one you add later — with the"
+    step "same rules and settings, each one's findings labelled on the dashboard."
+    printf "Protect every agent, now and later, automatically? [Y/n] (yes in %ss) " "$BLACKBOX_AUTO_ATTACH_PROMPT_SECONDS" >&9
+    IFS= read -r -t "$BLACKBOX_AUTO_ATTACH_PROMPT_SECONDS" answer <&9 || answer=""
+    printf '\n' >&9
+    exec 9>&-
+    case "$answer" in
+        n|N|no|NO|No) return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
+# "true", "false" or "" (ask): the answer BLACKBOX_AUTO_ATTACH or an earlier yes gives.
+auto_attach_answer() {
+    case "$(printf '%s' "${BLACKBOX_AUTO_ATTACH:-}" | tr '[:upper:]' '[:lower:]')" in
+        1|true|yes|on) echo true; return 0 ;;
+        0|false|no|off) echo false; return 0 ;;
+    esac
+    if [ "$(saved_auto_attach 2>/dev/null)" = true ]; then
+        echo true
+    fi
+}
+
 attach_all_agents() {
     heading "Protecting your agents"
     step "Protecting the Hermes home at $HERMES_HOME (blackbox attach) ..."
@@ -2429,14 +2973,29 @@ attach_all_agents() {
         warn "Could not protect $HERMES_HOME (this is non-fatal)."
         step "Re-run anytime with:  blackbox attach $HERMES_HOME"
     fi
+    local every
+    every="$(auto_attach_answer)"
+    if [ -z "$every" ]; then
+        if ask_protect_every_agent; then every=true; else every=false; fi
+    fi
+    if [ "$every" = true ]; then
+        step "Protecting every Hermes profile and OpenClaw workspace, now and later ..."
+        if "$HERMES_BIN" blackbox attach --all --auto; then
+            ok "Every agent you add later is protected automatically (switch: dashboard Settings → Agents)"
+        else
+            warn "Could not protect every agent (this is non-fatal). Turn it on in the dashboard: Settings → Agents."
+        fi
+        return 0
+    fi
     case "$(printf '%s' "${BLACKBOX_ATTACH_ALL:-}" | tr '[:upper:]' '[:lower:]')" in
         1|true|yes)
             step "BLACKBOX_ATTACH_ALL is set: protecting every Hermes home + OpenClaw workspace found ..."
             "$HERMES_BIN" blackbox attach --all || warn "Could not protect every agent (this is non-fatal)."
             return 0 ;;
     esac
-    step "Looking for other agents on this machine (Hermes profiles, OpenClaw workspaces) ..."
-    "$HERMES_BIN" blackbox attach || step "Protect others later with:  blackbox attach <home>   (or --all)"
+    # Answered no (or no terminal): change nothing more — the question is asked once only.
+    step "Other agents stay unprotected until you switch them on (dashboard: Connected agents)."
+    step "Protect every agent, now and later:  blackbox attach --all --auto   (or dashboard: Settings → Agents)"
 }
 
 # ── Optional: configure the LLM prompt-injection reviewer ───────────────────
@@ -2515,6 +3074,34 @@ blackbox_dashboard_supervisor() {
     return 0
 }
 
+# Waits (at most BLACKBOX_LAUNCHD_GONE_TRIES seconds) until launchd no longer knows TARGET.
+BLACKBOX_LAUNCHD_GONE_TRIES=10
+blackbox_launchd_wait_gone() {
+    local target="$1" tries=0
+    while launchctl print "$target" >/dev/null 2>&1 && [ "$tries" -lt "$BLACKBOX_LAUNCHD_GONE_TRIES" ]; do
+        sleep 1
+        tries=$((tries + 1))
+    done
+    return 0
+}
+
+# `blackbox_launchd_reload LABEL` — make launchd re-read the LaunchAgent LABEL from its plist
+# file (rewritten, or restored by a rollback) and start it: bootout, wait until launchd has let
+# go, bootstrap, once more after a second if launchd still refused. bootout returns before the
+# service has gone; a bootstrap then fails ("5: Input/output error") and leaves it unloaded
+# (LES-086, KI-513). One implementation for every Blackbox LaunchAgent.
+blackbox_launchd_reload() {
+    local label="$1" target plist
+    target="gui/$(id -u)/$label"
+    plist="$HOME/Library/LaunchAgents/$label.plist"
+    launchctl bootout "$target" 2>/dev/null || true
+    blackbox_launchd_wait_gone "$target"
+    launchctl bootstrap "gui/$(id -u)" "$plist" || {
+        sleep 1
+        launchctl bootstrap "gui/$(id -u)" "$plist"
+    }
+}
+
 # `blackbox_dashboard_control restart|reload <supervisor>` — restart the dashboard through its
 # service; `reload` first makes the service re-read its (rewritten or restored) definition.
 blackbox_dashboard_control() {
@@ -2529,8 +3116,7 @@ blackbox_dashboard_control() {
         launchd)
             target="gui/$(id -u)/$BLACKBOX_DASHBOARD_LAUNCHD_LABEL"
             if [ "$action" = reload ]; then
-                launchctl bootout "$target" 2>/dev/null || true
-                launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/$BLACKBOX_DASHBOARD_LAUNCHD_LABEL.plist"
+                blackbox_launchd_reload "$BLACKBOX_DASHBOARD_LAUNCHD_LABEL"
             else
                 launchctl kickstart -k "$target"
             fi
@@ -2627,6 +3213,95 @@ print_sharing_notice() {
 EOF
 }
 
+# ── What protects THIS machine, said per operating system ─────────────────────
+# Every line is either checked in this run (verify_install: Hermes loads the plugin, the node and
+# the dashboard answer) or part of the plugin itself on every system; a macOS-only protection is
+# never implied on Linux. Today only macOS has platform code for the root helper, the kernel
+# sandbox and Network Shield's enforcement (per-OS structure, 2026-11-21): elsewhere each is said
+# to be not available yet, by name.
+BLACKBOX_NOT_YET="not available on this OS yet"
+protection_summary() {
+    local os_name dashboard="running (checked above)"
+    case "$BLACKBOX_AUTO_DASHBOARD" in
+        0|false|never|no) dashboard="installed, not started (start it: blackbox dashboard)" ;;
+    esac
+    case "$OS" in
+        macos) os_name="macOS" ;;
+        linux) os_name="Linux" ;;
+        *) os_name="$OS" ;;
+    esac
+    echo ""
+    echo "  Protection on this machine ($os_name):"
+    echo "    Agent hooks (every tool call checked):   on — Hermes loads Blackbox (checked above)"
+    echo "    Threat detection + dependency checks:    on"
+    echo "    Dashboard + agent tracking:              $dashboard"
+    if [ "$BLACKBOX_BOOT_SERVICES" = none ]; then
+        echo "    Start at boot (node, dashboard):         not set up — no running systemd (start them as shown above)"
+    fi
+    if [ "$OS" != macos ] && [ "$OS" != linux ]; then
+        echo "    Root system-protection helper:           $BLACKBOX_NOT_YET"
+        echo "    Kernel sandbox for agents:               $BLACKBOX_NOT_YET"
+        echo "    Network Shield enforcement (DNS, firewall): $BLACKBOX_NOT_YET"
+        return 0
+    fi
+    if [ "$OS" = linux ]; then
+        linux_protection_summary
+        return 0
+    fi
+    case "$BLACKBOX_SYSTEM_PROTECTION_STATE" in
+        installed) echo "    Root system-protection helper:           installed" ;;
+        kept) echo "    Root system-protection helper:           the one you had (its upgrade did not finish)" ;;
+        failed) echo "    Root system-protection helper:           not installed (it failed — the dashboard's Network Shield offers it again)" ;;
+        *) echo "    Root system-protection helper:           not installed (the dashboard's Network Shield offers it)" ;;
+    esac
+    echo "    Kernel sandbox for agents:               available — choose agents in the dashboard's File Shield"
+    case "$BLACKBOX_SYSTEM_PROTECTION_STATE" in
+        installed|kept) echo "    Network Shield enforcement (DNS, firewall): available — switch on DNS Shield and the Threat Firewall" ;;
+        *) echo "    Network Shield enforcement (DNS, firewall): needs the helper above" ;;
+    esac
+}
+
+# Linux's lines, from what the machine says NOW (never from what this run hoped): the helper is
+# running when systemd reports its unit active; the agent sandbox is available when its launcher
+# (installed with the helper) proves namespaces work here (`blackbox-sandbox probe`).
+linux_protection_summary() {
+    local helper network
+    if systemctl is-active --quiet blackbox-netd.service 2>/dev/null; then
+        helper="installed and running"
+        network="available — switch on DNS Shield and the Threat Firewall"
+    else
+        case "$BLACKBOX_SYSTEM_PROTECTION_STATE" in
+            installed|kept) helper="installed, but systemd does not show it running (journalctl -u blackbox-netd)" ;;
+            failed) helper="not installed (it failed — the dashboard's Network Shield offers it again)" ;;
+            unavailable) helper="no published helper for this machine in this release yet" ;;
+            *) helper="not installed (the dashboard's Network Shield offers it)" ;;
+        esac
+        network="needs the helper above"
+    fi
+    echo "    Root system-protection helper:           $helper"
+    echo "    Kernel sandbox for agents:               $(linux_sandbox_summary)"
+    echo "    Network Shield enforcement (DNS, firewall): $network"
+}
+
+BLACKBOX_SANDBOX_LAUNCHER="${BLACKBOX_SANDBOX_LAUNCHER:-/usr/local/libexec/blackbox/blackbox-sandbox}"
+
+# The agent sandbox's line on Linux (KI-671: it said "not available on this OS yet" right after the
+# launcher was installed).
+linux_sandbox_summary() {
+    local probe why
+    if [ ! -x "$BLACKBOX_SANDBOX_LAUNCHER" ]; then
+        echo "comes with the system protection helper (not installed)"
+        return 0
+    fi
+    probe="$("$BLACKBOX_SANDBOX_LAUNCHER" probe 2>/dev/null)"
+    case "$probe" in
+        *'"userns":true'*) echo "on — your agents start inside it (turn it off per agent in File Shield)" ;;
+        *)
+            why="$(printf '%s' "$probe" | sed -n 's/.*"why":"\([^"]*\)".*/\1/p')"
+            echo "not available here: ${why:-its launcher could not check this machine} (the hooks still protect your files)" ;;
+    esac
+}
+
 # ── Guided next steps (short — everything above already ran) ─────────────────
 # Printed only after the final check passed and the install was kept: an install that is not
 # complete never reaches here (it is rolled back), so there is one outcome to describe.
@@ -2655,6 +3330,7 @@ ${path_note}
 ${graph_note}
   Docs:        $docs_url
 EOF
+    protection_summary
     print_sharing_notice
     echo ""
 }
@@ -2729,10 +3405,27 @@ BLACKBOX_NPM_REGISTRY_PING="https://registry.npmjs.org/-/ping"
 
 preflight_install() {
     heading "Checking this machine can take the whole install"
+    preflight_one_checkout
     preflight_disk
     preflight_network
     preflight_store_choice
     ok "Pre-flight passed; installing"
+}
+
+# One Blackbox checkout per machine. The hermes command an earlier install published runs that
+# checkout, and Hermes's own setup will not hand it to a second copy ("launcher publication
+# failed"), so an install that would make a second copy stops HERE with the real reason (KI-577)
+# — before anything is cloned or changed. Setup-only mode has no checkout of its own.
+preflight_one_checkout() {
+    [ "$BLACKBOX_SETUP_ONLY" != true ] && [ -n "$BLACKBOX_INSTALLED_CHECKOUT" ] || return 0
+    local installed target
+    installed="$(cd "$BLACKBOX_INSTALLED_CHECKOUT" 2>/dev/null && pwd -P)"
+    target="$(cd "$BLACKBOX_INSTALL_ROOT" 2>/dev/null && pwd -P || true)"
+    [ -n "$installed" ] && [ "$installed" = "$target" ] && return 0
+    err "Blackbox is already installed from $BLACKBOX_INSTALLED_CHECKOUT; this run would install a second copy at $BLACKBOX_INSTALL_ROOT."
+    step "To install into it again, run: $BLACKBOX_INSTALLED_CHECKOUT/scripts/blackbox-install.sh (or the one-line installer without BLACKBOX_INSTALL_DIR)."
+    step "To install somewhere else, remove the existing install first: blackbox uninstall"
+    exit 1
 }
 
 # Free kilobytes on the filesystem that holds PATH (or its nearest existing parent).
@@ -2800,6 +3493,7 @@ preflight_store_choice() {
         ok "Store: DKG-managed Oxigraph (no Docker needed)"
         return 0
     fi
+    [ "$BLACKBOX_DKG_STORE_BACKEND" = "auto" ] && docker_setup_hint   # declined Oxigraph: how to get Docker
     err "Stopped before installing anything: the Blazegraph store needs a working Docker."
     exit 1
 }
@@ -2832,7 +3526,17 @@ verify_install() {
         verify_part "DKG node answers at $BLACKBOX_DKG_DAEMON_URL" blackbox_dkg_answers
         verify_part "DKG store answers" blackbox_store_answers
         supervisor="$(blackbox_dkg_supervisor)"
-        [ -z "$supervisor" ] || verify_part "DKG node runs under its $supervisor service" blackbox_dkg_owned_by "$supervisor"
+        # Supervision is checked but never undoes the install (KI-527): a node that answers is
+        # protecting the machine, and rolling back would stop it and leave nothing running. A
+        # node outside its service is said plainly; Blackbox's next node restart goes through
+        # the service and moves it there (sync/node_service, KI-529).
+        if [ -n "$supervisor" ]; then
+            if blackbox_dkg_owned_by "$supervisor"; then
+                ok "DKG node runs under its $supervisor service"
+            else
+                warn "The DKG node answers but runs outside its $supervisor service until its next restart."
+            fi
+        fi
     fi
     case "$BLACKBOX_AUTO_DASHBOARD" in
         0|false|never|no) ;;
@@ -2876,8 +3580,33 @@ BLACKBOX_PROTECTED_ROOTS="/Users /home /root /usr /etc /var /opt /tmp /private /
 # Paths removed on rollback only when this run created them; when they already existed
 # they are left exactly as they are (their changed files are in install_rewritten_files).
 install_created_paths() {
+    # ~/.npm and ~/.cache/uv: the caches npm (the DKG node's package) and uv (Hermes's setup) make
+    # when they were not there (KI-651: a rollback left them and said nothing was left).
     printf '%s\n' "$BLACKBOX_INSTALL_ROOT" "$HERMES_HOME" "$BLACKBOX_HOME" "$HOME/.nvm" \
-        "$HOME/.local/bin/hermes" "$HOME/.local/bin/blackbox"
+        "$HOME/.local/bin/hermes" "$HOME/.local/bin/blackbox" "$HOME/.npm" "$HOME/.cache/uv"
+}
+
+# System packages an install may add with sudo (Hermes's setup: libatomic for nvm's Node on a
+# minimal Linux). They are not taken away again — other programs may need them, and removing one
+# needs an administrator — but they are named: by a rollback, and by `blackbox uninstall` through
+# the manifest's `system-package` lines (KI-651).
+BLACKBOX_SYSTEM_PACKAGES="libatomic1 libatomic"
+
+# Whether the system package $1 is installed (dpkg or rpm; false where neither exists).
+system_package_installed() {
+    if command -v dpkg-query >/dev/null 2>&1 &&
+        dpkg-query -W -f='${Status}' "$1" 2>/dev/null | grep -q 'install ok installed'; then
+        return 0
+    fi
+    command -v rpm >/dev/null 2>&1 && rpm -q "$1" >/dev/null 2>&1
+}
+
+# The packages of BLACKBOX_SYSTEM_PACKAGES not installed now, one per line.
+system_packages_absent() {
+    local name
+    for name in $BLACKBOX_SYSTEM_PACKAGES; do
+        system_package_installed "$name" || printf '%s\n' "$name"
+    done
 }
 
 # Files (and the small plugin folder) this run may rewrite: copied before the first change
@@ -2887,7 +3616,9 @@ install_rewritten_files() {
     printf '%s\n' "$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile" \
         "$HERMES_HOME/config.yaml" "$HERMES_HOME/.env" "$HERMES_HOME/plugins/blackbox" \
         "$BLACKBOX_DKG_HOME/config.json" \
-        "$BLACKBOX_DKG_CLI_DIR/package.json" "$BLACKBOX_DKG_CLI_DIR/package-lock.json"
+        "$BLACKBOX_DKG_CLI_DIR/package.json" "$BLACKBOX_DKG_CLI_DIR/package-lock.json" \
+        "$BLACKBOX_HOME/bin/Blackbox" "$BLACKBOX_HOME/bin/Blackbox Node" \
+        "$BLACKBOX_HOME/notifier"   # write_service_launcher; install_native_notifier (its Blackbox.app)
     for label in $BLACKBOX_LAUNCHD_LABELS; do
         printf '%s\n' "$HOME/Library/LaunchAgents/$label.plist"
     done
@@ -2935,14 +3666,24 @@ install_record_note() {
     fi
 }
 
+# How long one npm network step (the DKG package's pack and install) may take, and npm's own
+# fetch limits (KI-665: a cut network hung `npm install` for 16 minutes with no timeout at all).
+BLACKBOX_NPM_STEP_SECONDS="${BLACKBOX_NPM_STEP_SECONDS:-600}"
+BLACKBOX_NPM_NETWORK_FLAGS="--fetch-timeout=60000 --fetch-retries=2 --fetch-retry-maxtimeout=30000"
+
 # Run a command, giving up after SECONDS (macOS has no timeout(1)). Returns its exit code,
-# or non-zero when it had to be stopped.
+# or non-zero when it had to be stopped (and then says so on stderr: "blackbox: stopped after …").
 run_with_timeout() {
     local seconds="$1" pid watcher rc
     shift
     "$@" &
     pid=$!
-    ( sleep "$seconds"; kill "$pid" 2>/dev/null ) &
+    # The watcher takes its sleep down with it when it is stopped: a sleep left behind would keep a
+    # caller's $(…) or pipe open for the whole limit after the command had already finished.
+    ( trap 'kill "$sleeper" 2>/dev/null; exit 0' TERM
+      sleep "$seconds" >/dev/null 2>&1 & sleeper=$!
+      wait "$sleeper"
+      kill "$pid" 2>/dev/null && echo "blackbox: stopped after ${seconds}s: $1" >&2 ) >/dev/null &
     watcher=$!
     wait "$pid"
     rc=$?
@@ -2974,12 +3715,20 @@ install_record_begin() {
     : >"$INSTALL_RECORD_DIR/started-pids"
     while IFS= read -r path; do install_record_note "$path" created; done < <(install_created_paths)
     while IFS= read -r path; do install_record_note "$path" rewritten; done < <(install_rewritten_files)
+    system_packages_absent >"$INSTALL_RECORD_DIR/packages-absent"
     blackbox_store_docker_objects >"$INSTALL_RECORD_DIR/docker-before" || true
     if [ -d "$BLACKBOX_USER_BIN_DIR" ]; then
         ls -A "$BLACKBOX_USER_BIN_DIR" >"$INSTALL_RECORD_DIR/user-bin-before"
     fi
     if [ -d "$BLACKBOX_INSTALL_ROOT/.git" ]; then
         git -C "$BLACKBOX_INSTALL_ROOT" rev-parse -q --verify HEAD >"$INSTALL_RECORD_DIR/repo-head" 2>/dev/null || true
+        # The checkout's file set as it is (an upgrade may narrow it: apply_checkout_layout).
+        if [ "$(git -C "$BLACKBOX_INSTALL_ROOT" config --bool core.sparseCheckout 2>/dev/null)" = true ] &&
+            [ -f "$BLACKBOX_INSTALL_ROOT/.git/info/sparse-checkout" ]; then
+            cp "$BLACKBOX_INSTALL_ROOT/.git/info/sparse-checkout" "$INSTALL_RECORD_DIR/sparse-before"
+        else
+            : >"$INSTALL_RECORD_DIR/sparse-was-off"
+        fi
     fi
     # Blackbox's own node, not whatever else answers on its port (a foreign node is moved off).
     if blackbox_has_dkg_state && blackbox_dkg_answers 2>/dev/null; then
@@ -2988,9 +3737,118 @@ install_record_begin() {
     if [ -n "${USER:-}" ] && [ -e "$BLACKBOX_LINGER_DIR/$USER" ]; then
         : >"$INSTALL_RECORD_DIR/linger-was-on"
     fi
+    # The system protection helper is root's (a LaunchDaemon): it is not copied, only noted, and
+    # one this run installs is uninstalled through itself on rollback (rollback_system_protection).
+    install_path_exists "$BLACKBOX_HELPER_DAEMON" || : >"$INSTALL_RECORD_DIR/helper-was-absent"
+    install_manifest_begin
     trap install_record_on_exit EXIT
     trap 'exit 130' INT
     trap 'exit 143' TERM
+}
+
+# ── The install manifest: what this installer put on the machine besides Blackbox (KI-610/611) ──
+# `blackbox uninstall` (setup/install_manifest.py) takes exactly this away: folders made for
+# Blackbox's services when empty (own-dir), and on the person's yes the Hermes host this run set
+# up (host / host-dir) and the lines it appended to shell startup files (host-append, byte for
+# byte). Only what did NOT exist before this run is listed: a Hermes the person had is never in it.
+# Kept across upgrades: each run adds what it made.
+# The command that removes system package $1 (said, never run: it needs an administrator).
+system_package_removal() {
+    if command -v apt-get >/dev/null 2>&1; then printf 'sudo apt-get remove %s' "$1"; else printf 'sudo dnf remove %s' "$1"; fi
+}
+
+install_host_paths() {
+    # ~/.nvm: the Node the DKG node runs on, when ensure_node had to install it (nvm's own lines in
+    # the shell startup files are caught as an append below).
+    printf '%s\n' "$BLACKBOX_INSTALL_ROOT" "$HERMES_HOME" \
+        "$HOME/.local/bin/hermes" "$HOME/.local/bin/hermes-acp" "$HOME/.local/bin/hermes-agent" \
+        "$HOME/.local/bin/uv" "$HOME/.local/bin/uvx" "$HOME/.local/share/uv" \
+        "$HOME/.config/openui/telemetry.json" "$HOME/.npm/_prebuilds" "$HOME/.nvm" \
+        "$HOME/.local/state/hermes" \
+        "$HOME/.npm" "$HOME/.cache/uv"   # Hermes's gateway locks (KI-654); npm's and uv's caches (KI-650/651)
+}
+
+install_own_dirs() {
+    # ~/.config/systemd too: made around the user units' folder, removed when empty (KI-654).
+    printf '%s\n' "$HOME/Library/LaunchAgents" "$HOME/.config/systemd/user" "$HOME/.config/systemd"
+}
+
+install_startup_files() {
+    printf '%s\n' "$HOME/.zshrc" "$HOME/.zshenv" "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile"
+}
+
+# Before the first change: each missing host path (and each missing folder above it, inside the
+# home), each missing own folder, and a copy of each shell startup file as it is.
+install_manifest_begin() {
+    local path parent key
+    mkdir -p "$INSTALL_RECORD_DIR/startup"
+    : >"$INSTALL_RECORD_DIR/made"
+    while IFS= read -r path; do
+        install_path_exists "$path" && continue
+        printf 'host\t%s\n' "$path" >>"$INSTALL_RECORD_DIR/made"
+        parent="$(dirname "$path")"
+        while [ "$parent" != "$HOME" ] && [ "$parent" != "/" ] && ! install_path_exists "$parent"; do
+            printf 'host-dir\t%s\n' "$parent" >>"$INSTALL_RECORD_DIR/made"
+            parent="$(dirname "$parent")"
+        done
+    done < <(install_host_paths)
+    while IFS= read -r path; do
+        install_path_exists "$path" || printf 'own-dir\t%s\n' "$path" >>"$INSTALL_RECORD_DIR/made"
+    done < <(install_own_dirs)
+    # The optional components this run may add (KI-629): uninstall removes exactly these.
+    install_path_exists "$BLACKBOX_HELPER_DAEMON" || printf 'system-helper\t%s\n' "$BLACKBOX_HELPER_DAEMON" >>"$INSTALL_RECORD_DIR/made"
+    while IFS= read -r path; do
+        printf 'system-package\t%s\n' "$path" >>"$INSTALL_RECORD_DIR/made"
+    done < <(system_packages_absent)
+    install_path_exists "$BLACKBOX_HOME/notifier" || printf 'notifier\t%s\n' "$BLACKBOX_HOME/notifier" >>"$INSTALL_RECORD_DIR/made"
+    # Linux: lingering (ensure_user_lingering) is a system setting; when this run turns it on,
+    # uninstall turns it off again. Written only if it is on at the end (install_manifest_write).
+    path="$BLACKBOX_LINGER_DIR/$(id -un)"
+    if command -v loginctl >/dev/null 2>&1 && ! install_path_exists "$path"; then
+        printf 'own-linger\t%s\n' "$path" >>"$INSTALL_RECORD_DIR/made"
+    fi
+    while IFS= read -r path; do
+        key="$(printf '%s' "$path" | cksum | cut -d' ' -f1)"
+        if [ -f "$path" ]; then cp -p "$path" "$INSTALL_RECORD_DIR/startup/$key"; fi
+    done < <(install_startup_files)
+}
+
+# On success: what exists now of what was missing, and the exact text added to each startup file.
+install_manifest_write() {
+    local folder="$BLACKBOX_HOME/install-manifest" kind path key before size block
+    [ -n "$INSTALL_RECORD_DIR" ] && [ -d "$BLACKBOX_HOME" ] || return 0
+    mkdir -p "$folder/blocks"
+    touch "$folder/manifest.tsv"
+    # When the first install wrote it: what appears later in a folder the person installs their own
+    # tools into (~/.nvm's global npm packages) is theirs, and uninstall keeps it (KI-654).
+    # Its own time is the stamp (to the nanosecond); written once, so an upgrade run keeps the first.
+    [ -e "$folder/installed-at" ] || : >"$folder/installed-at"
+    while IFS="$(printf '\t')" read -r kind path; do
+        if [ "$kind" = system-package ]; then
+            system_package_installed "$path" || continue   # added by this install: named by uninstall
+        else
+            install_path_exists "$path" || continue
+        fi
+        grep -qxF "$kind	$path" "$folder/manifest.tsv" || printf '%s\t%s\n' "$kind" "$path" >>"$folder/manifest.tsv"
+    done <"$INSTALL_RECORD_DIR/made"
+    while IFS= read -r path; do
+        [ -f "$path" ] || continue
+        key="$(printf '%s' "$path" | cksum | cut -d' ' -f1)"
+        before="$INSTALL_RECORD_DIR/startup/$key"
+        block="$folder/blocks/$key.$(date +%s)"
+        if [ ! -f "$before" ]; then
+            cp "$path" "$block"                              # the file is new: all of it is the installer's
+        else
+            size="$(wc -c <"$before" | tr -d ' ')"
+            head -c "$size" "$path" | cmp -s - "$before" || continue   # not a plain append: left alone
+            tail -c +"$((size + 1))" "$path" >"$block"
+        fi
+        if [ -s "$block" ]; then
+            printf 'host-append\t%s\t%s\n' "$path" "$(basename "$block")" >>"$folder/manifest.tsv"
+        else
+            rm -f "$block"
+        fi
+    done < <(install_startup_files)
 }
 
 # A process this run started outside any service (the dashboard before its service exists, a
@@ -3001,6 +3859,7 @@ install_record_started_pid() {
 }
 
 install_record_commit() {
+    install_manifest_write || true   # the uninstall's list; a failure here never undoes a good install
     INSTALL_RECORD_COMMITTED=true
     trap - EXIT INT TERM
     [ -n "$INSTALL_RECORD_DIR" ] && rm -rf "$INSTALL_RECORD_DIR"
@@ -3022,16 +3881,65 @@ install_record_on_exit() {
 rollback_install() {
     echo ""
     err "Blackbox was not installed. Putting this machine back the way it was ..."
+    rollback_system_protection   # first: the helper puts DNS and the firewall back before anything stops
     rollback_stop_started
     rollback_services
     rollback_docker_store
     rollback_docker_desktop
     rollback_files
     rollback_repo_head
+    rollback_checkout_layout
     rollback_restart_previous
     rollback_restart_dashboard
-    ok "Nothing from this install attempt was left behind."
+    # Said only after looking (KI-609's lesson: a check mark is a check, never an assumption).
+    local left
+    left="$(rollback_leftovers)"
+    if [ -z "$left" ]; then
+        ok "Nothing from this install attempt was left behind."
+    else
+        warn "Not everything could be put back; still here:"
+        printf '%s\n' "$left" | sed 's/^/    /' >&2
+    fi
     step "Fix the reason shown above, then run the installer again."
+}
+
+# What the rollback could not undo, one line each (nothing when the machine is as it was): a
+# path this run created that is still there, a rewritten file that differs from its copy, a
+# checkout on another commit than before.
+rollback_leftovers() {
+    local path copy before
+    while IFS= read -r path; do
+        [ -n "$path" ] && install_path_removable "$path" && install_path_exists "$path" && printf '%s\n' "$path"
+    done <"$INSTALL_RECORD_DIR/absent"
+    while IFS="$(printf '\t')" read -r path copy; do
+        if [ -n "$path" ] && install_path_removable "$path" && ! diff -rq "$copy" "$path" >/dev/null 2>&1; then
+            printf '%s (not restored)\n' "$path"
+        fi
+    done <"$INSTALL_RECORD_DIR/saved"
+    if [ -e "$INSTALL_RECORD_DIR/helper-was-absent" ] && install_path_exists "$BLACKBOX_HELPER_DAEMON"; then
+        printf '%s (the system protection helper)\n' "$BLACKBOX_HELPER_DAEMON"
+    fi
+    while IFS= read -r path; do
+        [ -n "$path" ] && system_package_installed "$path" &&
+            printf '%s (a system package installed during this attempt; kept, other programs may use it — remove it with: %s)\n' \
+                "$path" "$(system_package_removal "$path")"
+    done < <(cat "$INSTALL_RECORD_DIR/packages-absent" 2>/dev/null)
+    if [ -s "$INSTALL_RECORD_DIR/repo-head" ] && [ -d "$BLACKBOX_INSTALL_ROOT/.git" ]; then
+        before="$(cat "$INSTALL_RECORD_DIR/repo-head")"
+        [ "$(git -C "$BLACKBOX_INSTALL_ROOT" rev-parse -q --verify HEAD 2>/dev/null)" = "$before" ] ||
+            printf '%s (not back on %s)\n' "$BLACKBOX_INSTALL_ROOT" "${before:0:12}"
+    fi
+    return 0
+}
+
+# A system protection helper this run installed is uninstalled through itself (it restores DNS and
+# the firewall from its own saved state); one that was there before is left as it is.
+rollback_system_protection() {
+    [ -e "$INSTALL_RECORD_DIR/helper-was-absent" ] && install_path_exists "$BLACKBOX_HELPER_DAEMON" || return 0
+    sudo_with_tty "$BLACKBOX_HELPER_PROGRAM" uninstall >/dev/null 2>&1 ||
+        warn "Could not remove the system protection helper; remove it with: sudo '$BLACKBOX_HELPER_PROGRAM' uninstall"
+    forget_sudo
+    return 0
 }
 
 rollback_stop_started() {
@@ -3101,15 +4009,32 @@ rollback_docker_desktop() {
 }
 
 # Put back every rewritten file, then remove every path that did not exist, deepest first.
+# Puts the saved *copy* back at *path*. A folder is moved aside first by one rename and the copy put
+# in its place before the old one is deleted (KI-644, security round 7): `rm -rf` of the plugin copy
+# raced the running dashboard's fresh __pycache__ folders, failed, and `cp` then filled the survivor —
+# a copy mixing two commits, "(not restored)". The aside is beside the copy's parent folder, never
+# inside it (plugins/ holds only plugins).
+rollback_put_back() {
+    local path="$1" copy="$2" aside=""
+    if [ -d "$path" ] && [ ! -L "$path" ]; then
+        aside="$(dirname "$(dirname "$path")")/.blackbox-rollback-$$-$(basename "$path")"
+        rm -rf "$aside" 2>/dev/null
+        mv "$path" "$aside" 2>/dev/null || aside=""
+    fi
+    [ -z "$aside" ] && rm -rf "$path"
+    mkdir -p "$(dirname "$path")"
+    cp -pRP "$copy" "$path" || warn "Could not restore $path (a copy is in $copy)."
+    [ -n "$aside" ] && rm -rf "$aside" 2>/dev/null
+    return 0
+}
+
 rollback_files() {
     local path copy
     while IFS="$(printf '\t')" read -r path copy; do
         if [ -z "$path" ] || ! install_path_removable "$path"; then
             continue
         fi
-        rm -rf "$path"
-        mkdir -p "$(dirname "$path")"
-        cp -pRP "$copy" "$path" || warn "Could not restore $path (a copy is in $copy)."
+        rollback_put_back "$path" "$copy"
     done <"$INSTALL_RECORD_DIR/saved"
     # New commands in a command folder that already existed (a folder this run created is
     # in the absent list and goes as a whole).
@@ -3137,10 +4062,29 @@ rollback_repo_head() {
     return 0
 }
 
-# An upgrade whose node was running before runs again on its restored settings.
+# An existing checkout this run narrowed (apply_checkout_layout) gets back the file set it had.
+rollback_checkout_layout() {
+    local repo="$BLACKBOX_INSTALL_ROOT"
+    [ -d "$repo/.git" ] || return 0
+    if [ -f "$INSTALL_RECORD_DIR/sparse-before" ]; then
+        cmp -s "$INSTALL_RECORD_DIR/sparse-before" "$repo/.git/info/sparse-checkout" && return 0
+        cp "$INSTALL_RECORD_DIR/sparse-before" "$repo/.git/info/sparse-checkout"
+        git -C "$repo" sparse-checkout reapply >/dev/null 2>&1 || git -C "$repo" read-tree -mu HEAD >/dev/null 2>&1 ||
+            warn "Could not give $repo back the files it had."
+    elif [ -e "$INSTALL_RECORD_DIR/sparse-was-off" ] &&
+        [ "$(git -C "$repo" config --bool core.sparseCheckout 2>/dev/null)" = true ]; then
+        git -C "$repo" sparse-checkout disable >/dev/null 2>&1 ||
+            { git -C "$repo" config core.sparseCheckout false && git -C "$repo" read-tree -mu HEAD >/dev/null 2>&1; } ||
+            warn "Could not give $repo back the files it had."
+    fi
+    return 0
+}
+
+# An upgrade whose node was running before runs again on its restored settings: its service
+# re-reads the definition rollback_files put back (a restart would run the failed attempt's).
 rollback_restart_previous() {
     [ -e "$INSTALL_RECORD_DIR/node-was-running" ] || return 0
-    blackbox_dkg_control restart >/dev/null 2>&1 || blackbox_dkg start >/dev/null 2>&1 ||
+    blackbox_dkg_control reload >/dev/null 2>&1 || blackbox_dkg start >/dev/null 2>&1 ||
         warn "Could not restart the Blackbox DKG node that was running before."
     return 0
 }
@@ -3151,6 +4095,13 @@ rollback_restart_previous() {
 rollback_restart_dashboard() {
     local supervisor
     supervisor="$(blackbox_dashboard_supervisor)"
+    # An upgrade stops the dashboard (bootout) before it replaces the code, so a run that fails
+    # after that finds the LaunchAgent unloaded: still the person's service — its file is back
+    # (rollback_files) — so it is loaded again, never left off (KI-513).
+    if [ -z "$supervisor" ] && [ "$(uname -s 2>/dev/null)" = Darwin ] && command -v launchctl >/dev/null 2>&1 &&
+        [ -f "$HOME/Library/LaunchAgents/$BLACKBOX_DASHBOARD_LAUNCHD_LABEL.plist" ]; then
+        supervisor=launchd
+    fi
     [ -n "$supervisor" ] || return 0
     blackbox_dashboard_control reload "$supervisor" >/dev/null 2>&1 ||
         warn "Could not restart the Blackbox dashboard; restart its $supervisor service."
@@ -3185,11 +4136,22 @@ register_boot_service() {
     local node_bin_dir
     node_bin_dir="$(dirname "$(command -v node)")"
     secure_dkg_token_perms
+    # One profile, written once (KI-541, E2E full5 2026-11-22): the node's sync switches in its
+    # config.json are written by the plugin's own profile code — the same code every later sync
+    # checks — BEFORE the service first starts the node. Written later by the first sync, they
+    # changed under a running node and the sync restarted it right after the install.
+    if [ -n "${HERMES_BIN:-}" ] && ! "$HERMES_BIN" blackbox sync --node-profile-only >/dev/null 2>&1; then
+        warn "Could not write the DKG node's sync profile now; the first sync writes it (one node restart)."
+    fi
     case "$(uname -s)" in
         Linux)
-            if ! command -v systemctl >/dev/null 2>&1; then
-                warn "systemd not found — the DKG node will NOT auto-start after a reboot."
-                warn "Start it manually after reboots: DKG_HOME=\"$BLACKBOX_DKG_HOME\" \"$BLACKBOX_DKG_BIN\" start"
+            local reason
+            if reason="$(linux_services_unavailable)"; then
+                warn "No boot services on this Linux: $reason."
+                warn "Blackbox's DKG node and dashboard will NOT start at boot, or restart if they stop."
+                step "After a restart, start them yourself:"
+                echo "    DKG_HOME=\"$BLACKBOX_DKG_HOME\" \"$BLACKBOX_DKG_BIN\" start && blackbox dashboard"
+                BLACKBOX_BOOT_SERVICES=none
                 return 0
             fi
             local unit=/etc/systemd/system/blackbox-dkg.service
@@ -3225,6 +4187,12 @@ Environment=DKG_VM_RECOVERY_PREFETCH_ENABLED=$BLACKBOX_DKG_VM_RECOVERY_PREFETCH_
 # omits the verified graph and Blackbox reads it as "not subscribed".
 Environment="NODE_OPTIONS=$BLACKBOX_DKG_NODE_OPTIONS"
 Environment=DKG_STORE_QUEUE_LIMIT=$BLACKBOX_DKG_STORE_QUEUE_LIMIT
+# NOT niced (Linux round L7, BB-LINUX-PENDING-88f30f): the node runs the DKG-managed Oxigraph store
+# as its child, and the hook's verified-graph lookup asks that store with a 2 s limit - a lower
+# priority would make a busy machine's lookups "could not tell". The sync work is lowered instead
+# (dashboard/network_sync.py). Under that load the start-pre's \`dkg stop\` overran systemd's 90 s
+# and the node restart-looped ("start-pre operation timed out", L7): while it is down no lookup answers.
+TimeoutStartSec=300
 # Clear any orphaned daemon before starting: DKG CLI commands auto-spawn a
 # detached daemon when none is running; that orphan holds daemon.pid and
 # would crash-loop this unit forever ("Daemon already running", KI-045).
@@ -3253,14 +4221,15 @@ UNIT
             ;;
         Darwin)
             local plist="$HOME/Library/LaunchAgents/$BLACKBOX_DKG_LAUNCHD_LABEL.plist"
+            local written="$plist.new.$$"
             mkdir -p "$HOME/Library/LaunchAgents"
-            cat > "$plist" <<PLIST
+            cat > "$written" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
   <key>Label</key><string>$BLACKBOX_DKG_LAUNCHD_LABEL</string>
   <key>ProgramArguments</key><array>
-    <string>$BLACKBOX_DKG_BIN</string><string>start</string><string>--foreground</string>
+    <string>$(xml_escape "$(write_service_launcher "Blackbox Node" "$BLACKBOX_DKG_BIN")")</string><string>start</string><string>--foreground</string>
   </array>
   <key>EnvironmentVariables</key><dict>
     <key>PATH</key><string>$(xml_escape "$node_bin_dir:$BLACKBOX_SERVICE_SYSTEM_PATH")</string>
@@ -3276,11 +4245,28 @@ UNIT
   <key>StandardErrorPath</key><string>$(xml_escape "$(blackbox_dkg_launchd_error_log)")</string>
 </dict></plist>
 PLIST
-            : >"$(blackbox_dkg_launchd_error_log)" 2>/dev/null || true   # this registration's errors only
-            launchctl unload "$plist" >/dev/null 2>&1 || true
-            launchctl load "$plist" >/dev/null 2>&1 \
-                && ok "LaunchAgent registered — the node survives reboots" \
-                || warn "could not load the LaunchAgent; load manually: launchctl load $plist"
+            # One owner, one start (KI-533, E2E full3): an unchanged definition that launchd already
+            # holds is left alone — reloading it restarted the node for nothing — and a changed one is
+            # reloaded through blackbox_launchd_reload, which waits for launchd to let the old job go
+            # (LES-086). `unload` + `load` back to back started the new job while the old node still
+            # ran: it exited "Daemon already running" and launchd relaunched it again and again.
+            if [ -f "$plist" ] && cmp -s "$written" "$plist" \
+                && launchctl print "gui/$(id -u)/$BLACKBOX_DKG_LAUNCHD_LABEL" >/dev/null 2>&1; then
+                rm -f "$written"
+                ok "LaunchAgent already registered and unchanged — the node keeps running"
+            else
+                mv -f "$written" "$plist"
+                : >"$(blackbox_dkg_launchd_error_log)" 2>/dev/null || true   # this registration's errors only
+                # Single start (KI-541): loading the job starts the node (RunAtLoad). While the
+                # installer's own unsupervised copy still runs, that start exits "Daemon already
+                # running" and launchd retries — so the installer's copy goes first, and is gone.
+                if blackbox_dkg_answers && ! blackbox_dkg_owned_by launchd; then
+                    blackbox_dkg_stop_and_wait
+                fi
+                blackbox_launchd_reload "$BLACKBOX_DKG_LAUNCHD_LABEL" >/dev/null 2>&1 \
+                    && ok "LaunchAgent registered — the node survives reboots" \
+                    || warn "could not load the LaunchAgent; load manually: launchctl bootstrap gui/$(id -u) $plist"
+            fi
             ;;
         *)
             warn "Unknown OS — boot persistence not configured; start the node manually after reboots."
@@ -3298,6 +4284,30 @@ PLIST
 # Disable anytime:
 #   Linux:  systemctl disable --now blackbox-dashboard
 #   macOS:  launchctl unload ~/Library/LaunchAgents/ai.umanitek.blackbox-dashboard.plist
+
+# A launcher in Blackbox's data folder that a LaunchAgent names instead of a program inside
+# Hermes's VERSIONED environment (E2E 2026-11-21): macOS lists a login item by the program it
+# runs, so the services show as "Blackbox" and "Blackbox Node" rather than "hermes" and "dkg";
+# and an update that prunes an old environment never leaves a service pointing at nothing —
+# the launcher runs the program recorded now, else Hermes's own launcher.
+# Usage: write_service_launcher "Blackbox" "$HERMES_BIN" "$HOME/.local/bin/hermes"  → prints its path
+write_service_launcher() {
+    local name="$1" dir="$BLACKBOX_HOME/bin" launcher program
+    shift
+    mkdir -p "$dir"
+    launcher="$dir/$name"
+    {
+        printf '#!/bin/sh\n# %s: started by launchd for Agent Blackbox. Rewritten by the installer.\n' "$name"
+        printf 'for program in'
+        for program in "$@"; do printf " '%s'" "$(printf '%s' "$program" | sed "s/'/'\\\\''/g")"; done
+        printf '; do\n    [ -x "$program" ] && exec "$program" "$@"\ndone\n'
+        printf 'echo "%s: no program to start was found" >&2\nexit 1\n' "$name"
+    } > "$launcher.tmp"
+    chmod 755 "$launcher.tmp"
+    mv -f "$launcher.tmp" "$launcher"
+    printf '%s\n' "$launcher"
+}
+
 register_dashboard_service() {
     case "$BLACKBOX_AUTO_DASHBOARD" in
         0|false|never|no) return 0 ;;
@@ -3310,7 +4320,7 @@ register_dashboard_service() {
     node_bin_dir="$(dirname "$(command -v node)")"
     case "$(uname -s)" in
         Linux)
-            command -v systemctl >/dev/null 2>&1 || return 0   # register_boot_service already warned
+            linux_services_unavailable >/dev/null && return 0   # register_boot_service already said so
             local unit=/etc/systemd/system/blackbox-dashboard.service before="" start_action=start
             local -a systemctl_cmd=(systemctl)
             if [ ! -w /etc/systemd/system ] && [ "$(id -u)" != 0 ]; then
@@ -3331,7 +4341,9 @@ Environment=HOME=$HOME
 Environment=HERMES_HOME=$HERMES_HOME
 Environment=PATH=$HOME/.local/bin:$node_bin_dir:$BLACKBOX_SERVICE_SYSTEM_PATH
 ExecStart=$HERMES_BIN blackbox dashboard
-Restart=on-failure
+# always, not on-failure: a SIGTERM (kill's default) is a clean exit for systemd, and Linux round
+# L1's agent stopped the dashboard that way for good. `systemctl --user stop` still stops it.
+Restart=always
 RestartSec=10
 
 [Install]
@@ -3366,14 +4378,14 @@ DASHUNIT
 <plist version="1.0"><dict>
   <key>Label</key><string>ai.umanitek.blackbox-dashboard</string>
   <key>ProgramArguments</key><array>
-    <string>$HERMES_BIN</string><string>blackbox</string><string>dashboard</string>
+    <string>$(xml_escape "$(write_service_launcher "Blackbox" "$HERMES_BIN" "$HOME/.local/bin/hermes")")</string><string>blackbox</string><string>dashboard</string>
   </array>
   <key>EnvironmentVariables</key><dict>
     <key>PATH</key><string>$(xml_escape "$HOME/.local/bin:$node_bin_dir:$BLACKBOX_SERVICE_SYSTEM_PATH")</string>
     <key>HERMES_HOME</key><string>$HERMES_HOME</string>
   </dict>
   <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <key>KeepAlive</key><true/>
 </dict></plist>
 DASHPLIST
             if [ "$(blackbox_dashboard_supervisor)" != launchd ]; then
@@ -3424,7 +4436,32 @@ secure_dkg_token_perms() {
 # these units exist only on the Ubuntu curator nodes and benches.
 # ---------------------------------------------------------------------------
 have_systemd() {
-    [ "$(uname -s)" = Linux ] && command -v systemctl >/dev/null 2>&1
+    [ "$(uname -s)" = Linux ] && ! systemd_unavailable >/dev/null
+}
+
+# Why systemd cannot supervise anything here (printed; returns 0), or nothing (returns 1): it must
+# be installed AND running as the init system — a container, or WSL2 without systemd=true, has
+# the systemctl command but no running systemd (KI-626).
+systemd_unavailable() {
+    if ! command -v systemctl >/dev/null 2>&1; then
+        echo "systemd is not installed"
+    elif [ ! -d "$BLACKBOX_SYSTEMD_RUNTIME_DIR" ]; then
+        echo "systemd is not running (a container, or WSL2 without [boot] systemd=true in /etc/wsl.conf)"
+    else
+        return 1
+    fi
+    return 0
+}
+
+# The same for Blackbox's own node and dashboard, which become USER units when this user cannot
+# write system ones: then the user's own systemd manager must answer too.
+linux_services_unavailable() {
+    systemd_unavailable && return 0
+    if ! can_write_system_units && ! systemctl --user show-environment >/dev/null 2>&1; then
+        echo "your user's systemd manager does not answer (no login session for ${USER:-this user})"
+        return 0
+    fi
+    return 1
 }
 
 # A system unit when this user may write one, otherwise a user unit.
@@ -3769,8 +4806,8 @@ install_into_existing_hermes() {
         warn "--skip-dkg is not used when installing into an existing Hermes; setup installs Blackbox's DKG node."
     fi
     # The list is captured first: `hermes plugins list | grep -q` under pipefail fails when grep
-    # stops early and Hermes, still printing its table, dies of SIGPIPE (2026-11-03, Hermes
-    # Desktop). The plugin's folder counts too: it is what Hermes's "already exists" refusal checks.
+    # stops early and Hermes, still printing its table, dies of SIGPIPE (2026-11-03,
+    # Hermes Desktop). The plugin's folder counts too: it is what Hermes's "already exists" refusal checks.
     local listed=""
     listed="$("$hermes" plugins list 2>/dev/null || true)"
     if [ -d "$HERMES_HOME/plugins/blackbox" ] ||
@@ -3834,15 +4871,6 @@ other_hermes_in_home() {
     printf '%s\n' "$dir/.hermes/bin/hermes"
 }
 
-# The Hermes this installer put here earlier (an Agent Blackbox checkout behind ~/.local/bin/hermes).
-our_installed_hermes_dir() {
-    local launcher="$HOME/.local/bin/hermes" dir=""
-    [ -x "$launcher" ] || return 1
-    dir="$("$launcher" --version 2>/dev/null | sed -n 's/^Install directory: *//p' | head -n 1)"
-    [ -n "$dir" ] && [ -f "$dir/plugins/blackbox/plugin.yaml" ] || return 1
-    printf '%s\n' "$dir"
-}
-
 # Stops Blackbox's dashboard: through its supervisor, then one setup started directly on its port —
 # only a process whose own command line ends in "blackbox dashboard" (the plugin's ownership rule,
 # dashboard/command.py); anything else on the port is left alone.
@@ -3893,7 +4921,7 @@ retire_services_pointing_into() {
 
 # Blackbox was installed first (with its own Hermes) and the user then installed Hermes Desktop:
 # two Hermes programs now share one ~/.hermes, the `hermes` command runs ours and the app runs
-# Desktop's (found 2026-11-03). Blackbox moves onto that Hermes, so there is one Hermes again:
+# Hermes Desktop's (found 2026-11-03). Blackbox moves onto that Hermes, so there is one Hermes again:
 # the node (its identity, keys and synced graph) moves to where `hermes blackbox setup` keeps it,
 # the hermes command runs that Hermes, Blackbox is installed into it and set up, and only then is
 # the Hermes this installer put here retired (its checkout and its environment record). Never returns.
@@ -3944,10 +4972,374 @@ move_onto_existing_hermes() {
     exit 0
 }
 
+# ── System protection: the root helper (blackbox-netd), opt-in (2026-11-21) ──────────────────
+# DNS Shield and the Threat Firewall (and cutting connections, SSH lockdown, Lock remote access)
+# need a small root helper. It is offered at the END of the install, after everything else is
+# committed: declining — or any failure here — leaves nothing of it on the machine, and the
+# dashboard's Network Shield switch offers the install again later. On macOS it is a LaunchDaemon;
+# on Linux a systemd unit (helper/src/platform/linux/install.rs), installed with one `sudo` that is
+# forgotten again at once (`sudo -k`: an agent started from this terminal later must not inherit it).
+#
+# The binary is the prebuilt one for this Mac's architecture from the release, checked against
+# the SHA-256 committed in this checkout (plugins/blackbox/helper/release-manifest.txt — the
+# trust anchor is the repository, not the download server), then installed by the helper's own
+# `install` subcommand, which checks it again on a root-only copy before it starts anything.
+# Tests (and a locally built helper) pass BLACKBOX_HELPER_PATH + BLACKBOX_HELPER_SHA256 instead.
+BLACKBOX_SYSTEM_PROTECTION="${BLACKBOX_SYSTEM_PROTECTION:-ask}"   # ask | yes | no
+BLACKBOX_SYSTEM_PROTECTION_PROMPT_SECONDS="${BLACKBOX_SYSTEM_PROTECTION_PROMPT_SECONDS:-60}"
+BLACKBOX_HELPER_PATH="${BLACKBOX_HELPER_PATH:-}"
+BLACKBOX_HELPER_SHA256="${BLACKBOX_HELPER_SHA256:-}"
+# Where the helper lives, per OS (the plugin's kernel/system_helper/platform/<os>.py names the same):
+# its root-only folder, its program, its service definition (BLACKBOX_HELPER_DAEMON: a LaunchDaemon
+# or a systemd unit), and its public receipt ("sha256 <hex>" of the installed program, written by
+# its own install: the helper's folder is root-only, so this is how an up-to-date helper is told
+# apart). BLACKBOX_HELPER_KEY_DIR is the plugin's copy of the helper's plan key — ONE place per
+# person, whichever Blackbox (this install or a companion app) serves the dashboard (helper/PLAN.md).
+case "$(uname -s 2>/dev/null)" in
+    Linux*)
+        BLACKBOX_HELPER_HOME="/var/lib/blackbox/netd"
+        BLACKBOX_HELPER_PROGRAM="/usr/local/libexec/blackbox/blackbox-netd"
+        BLACKBOX_HELPER_DAEMON="/etc/systemd/system/blackbox-netd.service"
+        BLACKBOX_HELPER_RECEIPT="/var/lib/blackbox/netd-installed"
+        BLACKBOX_HELPER_KEY_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/blackbox/helper"
+        BLACKBOX_ADMIN_PROMPT="sudo asks for your password once" ;;
+    *)
+        BLACKBOX_HELPER_HOME="/Library/Application Support/Blackbox/netd"
+        BLACKBOX_HELPER_PROGRAM="$BLACKBOX_HELPER_HOME/blackbox-netd"
+        BLACKBOX_HELPER_DAEMON="/Library/LaunchDaemons/ai.umanitek.blackbox.netd.plist"
+        BLACKBOX_HELPER_RECEIPT="/Library/Application Support/Blackbox/netd-installed"
+        BLACKBOX_HELPER_KEY_DIR="$HOME/Library/Application Support/Blackbox/helper"
+        BLACKBOX_ADMIN_PROMPT="macOS asks for your admin password" ;;
+esac
+BLACKBOX_SYSTEM_PROTECTION_STATE=""   # installed | kept | declined | failed | unavailable | unsupported (for next_steps)
+
+helper_manifest_file() {
+    local candidate
+    for candidate in "${REPO_DIR:-}/plugins/blackbox/helper/release-manifest.txt" \
+        "$HERMES_HOME/plugins/blackbox/helper/release-manifest.txt"; do
+        [ -f "$candidate" ] && { printf '%s\n' "$candidate"; return 0; }
+    done
+    return 1
+}
+
+# The release's binary name for this machine: blackbox-netd-<darwin|linux>-<arm64|x86_64>.
+helper_asset_name() {
+    local system arch
+    case "$(uname -s)" in
+        Darwin*) system=darwin ;;
+        Linux*) system=linux ;;
+        *) return 1 ;;
+    esac
+    case "$(uname -m)" in
+        arm64|aarch64) arch=arm64 ;;
+        x86_64|amd64) arch=x86_64 ;;
+        *) return 1 ;;
+    esac
+    printf 'blackbox-netd-%s-%s\n' "$system" "$arch"
+}
+
+# "<field> <asset>" lookups in the manifest: `version 0.1.0` and `<sha256>  <asset>` lines.
+helper_manifest_version() { awk '$1 == "version" { print $2; exit }' "$1"; }
+helper_manifest_sha256() {
+    awk -v asset="$2" '$2 == asset && $1 ~ /^[0-9a-f]{64}$/ { print $1; exit }' "$1"
+}
+
+sha256_of() { if command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1"; else sha256sum "$1"; fi | awk '{ print $1 }'; }
+
+# The SHA-256 of the helper installed on this Mac (empty when there is none, or it predates receipts).
+helper_installed_sha() {
+    awk '$1 == "sha256" { print tolower($2); exit }' "$BLACKBOX_HELPER_RECEIPT" 2>/dev/null || true
+}
+
+# The SHA-256 of the helper this install carries: the local binary's, else the manifest's for this Mac.
+helper_expected_sha() {
+    local manifest asset
+    if [ -n "$BLACKBOX_HELPER_PATH" ]; then
+        printf '%s\n' "$BLACKBOX_HELPER_SHA256" | tr '[:upper:]' '[:lower:]'
+        return 0
+    fi
+    manifest="$(helper_manifest_file)" && asset="$(helper_asset_name)" && helper_manifest_sha256 "$manifest" "$asset"
+    return 0
+}
+
+# Answers yes (0) or no (1) for system protection: the flag / env first, else a prompt on a real
+# terminal (no terminal, or no answer in time: no — a root install never happens unattended).
+want_system_protection() {
+    local answer=""
+    case "$(printf '%s' "$BLACKBOX_SYSTEM_PROTECTION" | tr '[:upper:]' '[:lower:]')" in
+        yes|y|1|true|on) return 0 ;;
+        no|n|0|false|off) return 1 ;;
+    esac
+    if ! { exec 9<>/dev/tty; } 2>/dev/null; then
+        return 1
+    fi
+    step "Turn on system protection? DNS Shield blocks known-bad domains for the whole machine and the"
+    step "Threat Firewall blocks known-bad addresses. A small helper runs as root to do it, so $BLACKBOX_ADMIN_PROMPT."
+    step "Skip it now and the dashboard's Network Shield offers it later."
+    printf "Turn on system protection? DNS Shield + Threat Firewall (needs your admin password) [Y/n] (no in %ss) " \
+        "$BLACKBOX_SYSTEM_PROTECTION_PROMPT_SECONDS" >&9
+    if ! IFS= read -r -t "$BLACKBOX_SYSTEM_PROTECTION_PROMPT_SECONDS" answer <&9; then
+        printf '\n' >&9
+        exec 9>&-
+        return 1
+    fi
+    printf '\n' >&9
+    exec 9>&-
+    case "$answer" in
+        n|N|no|NO|No) return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
+# Puts the verified helper binary at "$1" (a private temporary folder); prints its SHA-256.
+fetch_helper_binary() {
+    local folder="$1" manifest asset version expected url
+    if [ -n "$BLACKBOX_HELPER_PATH" ]; then
+        [ -f "$BLACKBOX_HELPER_PATH" ] && [ ! -L "$BLACKBOX_HELPER_PATH" ] || {
+            err "BLACKBOX_HELPER_PATH is not a regular file: $BLACKBOX_HELPER_PATH" >&2; return 1; }
+        printf '%s' "$BLACKBOX_HELPER_SHA256" | grep -Eq '^[0-9a-fA-F]{64}$' || {
+            err "BLACKBOX_HELPER_PATH needs BLACKBOX_HELPER_SHA256 (its 64-character SHA-256)" >&2; return 1; }
+        cp "$BLACKBOX_HELPER_PATH" "$folder/blackbox-netd"
+        expected="$(printf '%s' "$BLACKBOX_HELPER_SHA256" | tr '[:upper:]' '[:lower:]')"
+    else
+        manifest="$(helper_manifest_file)" || { err "This checkout has no helper release manifest." >&2; return 1; }
+        asset="$(helper_asset_name)" || { err "No system protection helper for $(uname -m)." >&2; return 1; }
+        version="$(helper_manifest_version "$manifest")"
+        expected="$(helper_manifest_sha256 "$manifest" "$asset")"
+        [ -n "$version" ] && [ -n "$expected" ] || { err "The helper release manifest names no $asset." >&2; return 1; }
+        url="${BLACKBOX_HELPER_RELEASE_URL:-${REPO_URL%.git}/releases/download/blackbox-helper-v$version}/$asset"
+        step "Downloading the system protection helper ($asset, v$version)" >&2
+        if ! curl -fsSL --proto '=https' --tlsv1.2 --max-time 120 -o "$folder/blackbox-netd" "$url"; then
+            err "Could not download $url" >&2
+            return 1
+        fi
+    fi
+    if [ "$(sha256_of "$folder/blackbox-netd")" != "$expected" ]; then
+        err "The helper's checksum does not match the manifest: nothing was installed." >&2
+        return 1
+    fi
+    chmod 755 "$folder/blackbox-netd"
+    printf '%s\n' "$expected"
+}
+
+# sudo with the terminal for its password prompt (under `curl | bash` stdin is the pipe); with no
+# terminal, only an already-cached sudo works (-n never hangs waiting for a password).
+sudo_with_tty() {
+    if { exec 9<>/dev/tty; } 2>/dev/null; then
+        exec 9>&-
+        # shellcheck disable=SC2024 # the redirect is meant to be the person's own terminal
+        sudo "$@" </dev/tty
+    else
+        sudo -n "$@"
+    fi
+}
+
+# `install_system_protection [upgrade]` — with "upgrade", a helper is already installed: a failure
+# leaves it in place (the helper's own install puts it back and starts it again), never removes it.
+install_system_protection() {
+    local mode="${1:-}" folder sha owner
+    folder="$(mktemp -d "${TMPDIR:-/tmp}/blackbox-helper.XXXXXX")" || return 1
+    chmod 700 "$folder"
+    if ! sha="$(fetch_helper_binary "$folder")"; then
+        rm -rf "$folder"
+        return 1
+    fi
+    owner="$(id -u)"
+    step "Installing the system protection helper ($BLACKBOX_ADMIN_PROMPT)"
+    # The binary runs as root only after its checksum matched above; `install` checks it again on
+    # a root-only copy before anything on the machine changes.
+    if sudo_with_tty "$folder/blackbox-netd" install --from "$folder/blackbox-netd" --sha256 "$sha" \
+        --key-for "$BLACKBOX_HELPER_KEY_DIR" --owner "$owner"; then
+        forget_sudo
+        rm -rf "$folder"
+        ok "System protection is installed. Turn on DNS Shield and the Threat Firewall in the dashboard's Network Shield."
+        return 0
+    fi
+    # A first install that failed must not leave a half-installed helper. An upgrade that failed
+    # must not take away the protection the person already had (E2E 2026-11-21).
+    if [ "$mode" != upgrade ]; then
+        sudo_with_tty "$folder/blackbox-netd" uninstall >/dev/null 2>&1 || true
+    fi
+    forget_sudo
+    rm -rf "$folder"
+    return 1
+}
+
+# Forgets the password sudo just took (`sudo -k`): WHY — sudo keeps it for minutes per terminal, and
+# an AI agent started from this terminal right after the install would inherit root without asking
+# (Linux round L1: with sudo cached or passwordless, agents wrote /etc).
+forget_sudo() { sudo -k >/dev/null 2>&1 || true; }
+
+# Blackbox's own notifier (macOS): notifications appear under Blackbox's name. The archive is the
+# release's blackbox-notify-darwin.zip checked against the SHA-256 in this checkout's helper
+# manifest (the same trust anchor as the helper), or a locally built one a test or a developer
+# names with BLACKBOX_NOTIFIER_PATH + BLACKBOX_NOTIFIER_SHA256. Without one, notifications still
+# work through macOS's own script notifier. Every system runs `blackbox notifications setup`: it
+# marks this as an installed Blackbox whose notices reach the screen (a test or a developer's
+# dashboard never does). This step never fails an install.
+install_native_notifier() {
+    local folder archive expected manifest version url
+    [ -n "${HERMES_BIN:-}" ] || return 0
+    if [ "$OS" != "macos" ]; then
+        "$HERMES_BIN" blackbox notifications setup >/dev/null 2>&1 || true
+        return 0
+    fi
+    if [ -n "${BLACKBOX_NOTIFIER_PATH:-}" ]; then
+        archive="$BLACKBOX_NOTIFIER_PATH"
+        expected="$(printf '%s' "${BLACKBOX_NOTIFIER_SHA256:-}" | tr '[:upper:]' '[:lower:]')"
+    elif manifest="$(helper_manifest_file)" && expected="$(helper_manifest_sha256 "$manifest" blackbox-notify-darwin.zip)" \
+        && [ -n "$expected" ]; then
+        version="$(helper_manifest_version "$manifest")"
+        folder="$(mktemp -d "${TMPDIR:-/tmp}/blackbox-notifier.XXXXXX")" || return 0
+        archive="$folder/blackbox-notify-darwin.zip"
+        url="${BLACKBOX_HELPER_RELEASE_URL:-${REPO_URL%.git}/releases/download/blackbox-helper-v$version}/blackbox-notify-darwin.zip"
+        if ! curl -fsSL --proto '=https' --tlsv1.2 --max-time 120 -o "$archive" "$url"; then
+            rm -rf "$folder"
+            step "Notifications will use macOS's own notifier (Blackbox's notifier could not be downloaded)."
+            "$HERMES_BIN" blackbox notifications setup >/dev/null 2>&1 || true
+            return 0
+        fi
+    else
+        step "Notifications use macOS's own notifier (this release carries no Blackbox notifier yet)."
+        "$HERMES_BIN" blackbox notifications setup >/dev/null 2>&1 || true
+        return 0
+    fi
+    step "Blackbox tells you when an AI agent is stopped, asks for root or needs you. macOS may ask once to allow it."
+    if "$HERMES_BIN" blackbox notifications setup --from "$archive" --sha256 "$expected"; then
+        report_notification_permission
+    else
+        warn "Blackbox's own notifier was not installed; notifications use macOS's own notifier (this is non-fatal)."
+    fi
+    [ -n "${folder:-}" ] && rm -rf "$folder"
+    return 0
+}
+
+# What macOS says NOW about Blackbox's notifications, never a check mark it has not earned (KI-609:
+# "✓ notifications are set up" was printed while the permission read denied and the banner was
+# still unanswered). Read from `blackbox notifications status` ("permission: <state>").
+report_notification_permission() {
+    local permission
+    permission="$("$HERMES_BIN" blackbox notifications status 2>/dev/null | awk -F'permission: ' 'NF > 1 { print $2; exit }' | awk '{ print $1 }')"
+    case "$permission" in
+        authorized) ok "Blackbox's notifications are set up" ;;
+        denied) warn "Blackbox's notifications are off — turn them on in System Settings > Notifications > Blackbox." ;;
+        not-determined) step "Notifications: waiting for your OK in the macOS banner (top right of your screen) — choose Allow." ;;
+        *) step "Notifications: macOS has not said yet whether Blackbox may notify you — check later with 'blackbox notifications status'." ;;
+    esac
+}
+
+offer_system_protection() {
+    if [ "$OS" != "macos" ] && [ "$OS" != "linux" ]; then
+        BLACKBOX_SYSTEM_PROTECTION_STATE="unsupported"
+        return 0
+    fi
+    heading "System protection (optional)"
+    if [ -f "$BLACKBOX_HELPER_DAEMON" ]; then
+        upgrade_system_protection
+        sandbox_default_after_helper
+        return 0
+    fi
+    if ! want_system_protection; then
+        step "Skipped. The dashboard's Network Shield offers system protection whenever you want it."
+        BLACKBOX_SYSTEM_PROTECTION_STATE="declined"
+        return 0
+    fi
+    if ! helper_release_exists; then
+        step "This Blackbox release carries no published system protection helper for $(uname -s) $(uname -m) yet."
+        step "Blackbox itself is installed and working; a locally built helper installs with BLACKBOX_HELPER_PATH + BLACKBOX_HELPER_SHA256."
+        BLACKBOX_SYSTEM_PROTECTION_STATE="unavailable"
+        return 0
+    fi
+    if install_system_protection; then
+        BLACKBOX_SYSTEM_PROTECTION_STATE="installed"
+    else
+        warn "System protection was not installed (Blackbox itself is installed and working)."
+        warn "Try again later from the dashboard's Network Shield, or rerun with --system-protection."
+        BLACKBOX_SYSTEM_PROTECTION_STATE="failed"
+    fi
+    sandbox_default_after_helper
+    return 0
+}
+
+# KI-671 (Linux round L2): on Linux the agent sandbox's launcher comes WITH the system protection
+# helper, but the attach step — which applies "every agent starts inside the sandbox" — runs before
+# this one, found no launcher and picked nothing, so a fresh install left every agent hooks-only.
+# Once the helper is in, `blackbox attach` applies the default again (it only ever adds agents the
+# person has not taken out). macOS's sandbox needs no helper: nothing to do there.
+sandbox_default_after_helper() {
+    [ "$OS" = linux ] || return 0
+    case "$BLACKBOX_SYSTEM_PROTECTION_STATE" in installed|kept) ;; *) return 0 ;; esac
+    step "Starting your agents inside Blackbox's sandbox, now that its launcher is installed ..."
+    if "$HERMES_BIN" blackbox attach "$HERMES_HOME"; then
+        ok "Your agents start inside Blackbox's sandbox (turn it off per agent in the dashboard's File Shield)"
+    else
+        warn "Could not switch the sandbox on for your agents (non-fatal). Run: blackbox attach"
+    fi
+}
+
+# True when there is a helper to install: a local one named by BLACKBOX_HELPER_PATH, or a release
+# asset for this machine with its SHA-256 in the manifest committed in this checkout.
+helper_release_exists() {
+    local manifest asset
+    [ -n "$BLACKBOX_HELPER_PATH" ] && return 0
+    manifest="$(helper_manifest_file)" && asset="$(helper_asset_name)" && [ -n "$(helper_manifest_sha256 "$manifest" "$asset")" ]
+}
+
+# A helper is installed: keep it when it is the one this install carries (or the person said no
+# this time), else upgrade it in place. The person chose system protection when it was installed,
+# so an upgrade asks only for the admin password.
+upgrade_system_protection() {
+    local expected installed
+    expected="$(helper_expected_sha)"
+    installed="$(helper_installed_sha)"
+    BLACKBOX_SYSTEM_PROTECTION_STATE="installed"
+    case "$(printf '%s' "$BLACKBOX_SYSTEM_PROTECTION" | tr '[:upper:]' '[:lower:]')" in
+        no|n|0|false|off) ok "The system protection helper is installed (left as it is)."; return 0 ;;
+    esac
+    if [ -z "$expected" ] || [ "$expected" = "$installed" ]; then
+        ok "The system protection helper is installed and up to date."
+        return 0
+    fi
+    step "This Blackbox carries a newer system protection helper; upgrading it ($BLACKBOX_ADMIN_PROMPT)."
+    if install_system_protection upgrade; then
+        ok "The system protection helper is upgraded."
+    else
+        warn "The system protection helper could not be upgraded; the one you had is still installed and running."
+        BLACKBOX_SYSTEM_PROTECTION_STATE="kept"
+    fi
+}
+
+# --remove-system-protection [--undo-hardening]: the helper puts the Mac's DNS and firewall back
+# from its own saved state (even if it had stopped), then removes itself. Posture hardening it
+# applied (macOS firewall on, guest off, …) stays unless --undo-hardening is given.
+remove_system_protection() {
+    local helper="$BLACKBOX_HELPER_PROGRAM"
+    if [ ! -f "$BLACKBOX_HELPER_DAEMON" ] && [ ! -e "$helper" ]; then
+        ok "The system protection helper is not installed."
+        return 0
+    fi
+    if [ ! -x "$helper" ]; then
+        err "The helper's files are damaged ($helper missing); remove $BLACKBOX_HELPER_DAEMON by hand."
+        return 1
+    fi
+    local args=(uninstall)
+    [ "$BLACKBOX_UNDO_HARDENING" = true ] && args+=(--undo-hardening)
+    step "Removing the system protection helper ($BLACKBOX_ADMIN_PROMPT)"
+    if sudo_with_tty "$helper" "${args[@]}"; then
+        forget_sudo
+        rm -f "$BLACKBOX_HELPER_KEY_DIR/plan.key"
+        ok "System protection removed; DNS and the firewall are as they were before it."
+        return 0
+    fi
+    err "The helper could not put everything back; run this again, or see $BLACKBOX_HELPER_HOME/netd.log."
+    return 1
+}
+
 main() {
     banner
     heading "Checking your system"
     detect_os
+    check_install_user
     if [ "$BLACKBOX_SETUP_ONLY" != true ] && ! install_uses_local_checkout; then
         local existing_hermes=""
         local ours_dir=""
@@ -3976,6 +5368,7 @@ main() {
         drop_stale_hermes_install_record
         release_old_hermes_link
         install_python_env
+        narrow_checkout_after_setup
         link_hermes
         refresh_blackbox_plugin_copy
         run_hermes_setup
@@ -3986,17 +5379,30 @@ main() {
     attach_all_agents
     setup_llm
     sync_ruleset
-    start_dashboard
+    # The node's service first, then the dashboard (KI-529). The dashboard's first sync restarts
+    # the node; launched before the LaunchAgent / unit existed, it could only restart it directly,
+    # behind the service, and the handover below then met a second copy it could not stop. With
+    # the service registered and holding the node, every restart goes through it.
     register_boot_service
+    start_dashboard
     register_dashboard_service
     register_curator_service
     register_curate_watch
     register_lab_tunnel
     register_key_console
+    # Inside the all-or-nothing install (KI-629): each is optional and never fails the install by
+    # itself, but a later failure takes the helper and the notifier this run added away again,
+    # and the manifest names both for `blackbox uninstall`.
+    offer_system_protection
+    install_native_notifier
     verify_install
     install_record_commit
     next_steps
     offer_model_connect
 }
 
+if [ "$BLACKBOX_REMOVE_SYSTEM_PROTECTION" = true ]; then
+    remove_system_protection
+    exit $?
+fi
 main "$@"

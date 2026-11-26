@@ -39,6 +39,11 @@ export interface BlackboxConfig {
   mode: "audit" | "block";
   contextGraphId: string;
   dkgUrl: string;
+  /**
+   * Where Blackbox's local service answers (its dashboard, loopback only). The plugin asks it for
+   * the verdict on each tool call (see verdictClient.ts); "" = never ask, use the built-in checks.
+   */
+  dashboardUrl: string;
   dkgHome: string;
   syncInterval: number; // seconds
   /**
@@ -128,6 +133,7 @@ const DEFAULTS: BlackboxConfig = {
   mode: "audit",
   contextGraphId: "0x37b1Fdfd134e2b17583bCBdD3034F91504cD9C70/agent-blackbox-vm",
   dkgUrl: DEFAULT_DKG_URL,
+  dashboardUrl: "http://127.0.0.1:9700",
   dkgHome: "",
   syncInterval: 300,
   report: false,
@@ -162,6 +168,17 @@ function bool(value: unknown): boolean | undefined {
     if (["false", "0", "no", "off"].includes(v)) return false;
   }
   return undefined;
+}
+
+/**
+ * Where Blackbox's local service answers: `$BLACKBOX_DASHBOARD_URL`, else the plugin config's
+ * `dashboardUrl` / `dashboard_url`, else the default. An EMPTY string in the config is a choice
+ * ("never ask the service") and is kept, not replaced by the default.
+ */
+function dashboardUrl(pluginConfig: Record<string, unknown>): string {
+  const configured = pluginConfig.dashboardUrl ?? pluginConfig.dashboard_url;
+  const chosen = str(process.env.BLACKBOX_DASHBOARD_URL) ?? (typeof configured === "string" ? configured.trim() : DEFAULTS.dashboardUrl);
+  return chosen.replace(/\/+$/, "");
 }
 
 function envDkgUrl(): string | undefined {
@@ -278,6 +295,7 @@ export function resolveConfig(pluginConfig: Record<string, unknown> = {}): Black
       str(pluginConfig.dkg_url)?.replace(/\/+$/, "") ??
       str(pluginConfig.daemonUrl)?.replace(/\/+$/, "") ??
       DEFAULTS.dkgUrl,
+    dashboardUrl: dashboardUrl(pluginConfig),
     dkgHome:
       str(env.BLACKBOX_DKG_HOME) ??
       str(pluginConfig.dkgHome) ??

@@ -59,10 +59,13 @@ def _revision() -> str:
     return f"plugin-{constants.__version__}"
 
 
-def setup_environment(base: dict[str, str] | None = None) -> dict[str, str]:
+def setup_environment(base: dict[str, str] | None = None, *,
+                      protect_new_agents: bool | None = None) -> dict[str, str]:
     """The environment the installer runs with: setup-only mode in this Hermes, pinned DKG.
 
     *base* defaults to this process's environment; the keys set here always win.
+    *protect_new_agents* (``--protect-new-agents`` / ``--no-…``, Hermes Desktop's switch) answers the
+    installer's one question as ``BLACKBOX_AUTO_ATTACH`` — setup has no terminal to ask on.
     """
     env = dict(os.environ if base is None else base)
     env.update({
@@ -77,6 +80,8 @@ def setup_environment(base: dict[str, str] | None = None) -> dict[str, str]:
         "BLACKBOX_DKG_PACKAGE": DKG_PACKAGE,
         "BLACKBOX_DKG_INTEGRITY": DKG_INTEGRITY,
     })
+    if protect_new_agents is not None:
+        env["BLACKBOX_AUTO_ATTACH"] = "1" if protect_new_agents else "0"
     return env
 
 
@@ -102,15 +107,19 @@ def cmd_setup(args: argparse.Namespace) -> int:
     print(f"Blackbox setup: the DKG node ({DKG_PACKAGE}), the verified graph and its community reports, every local agent, "
           "the dashboard. This takes a few minutes.")
     # The installer asks its questions on the terminal itself (/dev/tty), never on stdin.
-    completed = subprocess.run(_installer_command(store), env=setup_environment(), stdin=subprocess.DEVNULL, check=False)
+    protect = getattr(args, "setup_protect_new_agents", None)
+    completed = subprocess.run(   # health: allow HX006 -- the installer IS the setup: it ends by itself (rollback on failure, no sync wait)
+        _installer_command(store), env=setup_environment(protect_new_agents=protect), stdin=subprocess.DEVNULL, check=False)
     return completed.returncode
 
 
 def add_setup_parser(sub: argparse._SubParsersAction) -> None:
     """Register ``blackbox setup`` (and its reverse, ``blackbox uninstall``) on the `blackbox`
     command's sub-parsers."""
+    from .notifier import add_notifications_parser
     from .uninstall import add_uninstall_parser
     add_uninstall_parser(sub)
+    add_notifications_parser(sub)
     parser = sub.add_parser("setup", help="Finish a plugin-catalog install: DKG node, threat graphs, agents, dashboard")
     parser.add_argument("--store", choices=STORES, default=None,
                         help="the node's store: auto (default), blazegraph (Docker) or oxigraph (no Docker)")
@@ -118,6 +127,11 @@ def add_setup_parser(sub: argparse._SubParsersAction) -> None:
     parser.add_argument("--trusted-core-peer", action="append", help="Explicit trusted core peer; repeat for up to four cores")
     parser.add_argument("--dkg-core-chain-cache", action="store_true",
                         help="Lower RPC usage by using the DKG Core chain cache (official chains in the selected mainnet or testnet)")
+    new_agents = parser.add_mutually_exclusive_group()
+    new_agents.add_argument("--protect-new-agents", dest="setup_protect_new_agents", action="store_const", const=True,
+                            default=None, help="Protect every Hermes profile and OpenClaw workspace, now and every one added later")
+    new_agents.add_argument("--no-protect-new-agents", dest="setup_protect_new_agents", action="store_const", const=False,
+                            help="Protect only this Hermes home (switch on later: Settings → Agents)")
     parser.add_argument("--registered-cores", action="store_true",
                         help="Legacy Base-only registered-core policy; use --dkg-core-chain-cache for all official chains")
     parser.set_defaults(func=cmd_setup)

@@ -190,11 +190,15 @@ _SHELL_INSTALL_PATTERNS = (
     re.compile(r"\b(?:python(?:3)?\s+-m\s+)?pip3?\s+install\b", re.IGNORECASE),
     re.compile(r"\buv\s+pip\s+install\b", re.IGNORECASE),
     re.compile(r"\buv\s+add\b", re.IGNORECASE),
+    re.compile(r"\buv\s+tool\s+(?:install|run)\b", re.IGNORECASE),   # KI-663: `uv tool install six==1.17.0`
     re.compile(r"\buvx\b", re.IGNORECASE),
     re.compile(r"\bnpm\s+(?:install|i|add)\b", re.IGNORECASE),
     re.compile(r"\bpnpm\s+add\b", re.IGNORECASE),
     re.compile(r"\byarn\s+add\b", re.IGNORECASE),
     re.compile(r"\bbun\s+add\b", re.IGNORECASE),
+    re.compile(r"\b(?:npx|bunx)\b", re.IGNORECASE),              # download a package and run it
+    re.compile(r"\b(?:pnpm|yarn)\s+dlx\b", re.IGNORECASE),
+    re.compile(r"\bpipx\s+(?:run|install)\b", re.IGNORECASE),
     re.compile(r"\bcargo\s+add\b", re.IGNORECASE),
     re.compile(r"\bgem\s+install\b", re.IGNORECASE),
     re.compile(r"\bbrew\s+install\b", re.IGNORECASE),
@@ -245,15 +249,26 @@ _MANAGER_SPECS = {
     ("pip3", "install"): ("pypi", 2),
     ("uv", "pip"): ("pypi", 3),  # `uv pip install <pkg>`
     ("uv", "add"): ("pypi", 2),
+    ("uv", "tool"): ("pypi", 3),  # `uv tool install|run <pkg>` (KI-663)
     ("uvx",): ("pypi", 1),
     ("npm", None): ("npm", 2),  # npm install|i|add
     ("pnpm", "add"): ("npm", 2),
     ("yarn", "add"): ("npm", 2),
     ("bun", "add"): ("npm", 2),
+    ("npx",): ("npm", 1),            # these fetch a package and run it: an install by another name
+    ("bunx",): ("npm", 1),
+    ("pnpm", "dlx"): ("npm", 2),
+    ("yarn", "dlx"): ("npm", 2),
+    ("pipx", "run"): ("pypi", 2),
+    ("pipx", "install"): ("pypi", 2),
     ("cargo", "add"): ("cargo", 2),
     ("gem", "install"): ("rubygems", 2),
     ("brew", "install"): ("homebrew", 2),
 }
+
+
+#: Runners whose first word is the package and every later word that package's own argument.
+_RUNS_ITS_FIRST_WORD = frozenset({"npx", "bunx"})
 
 
 #: cat-family commands whose following path args are file reads.
@@ -273,6 +288,11 @@ def parse_downloads(command: str) -> list[str]:
     if not command or not re.search(r"\b(?:curl|wget)\b", command, re.IGNORECASE):
         return []
     return list(dict.fromkeys(re.findall(r"https?://[^\s;'\"|&>]+", command)))
+
+
+def _third(tokens: list[str], i: int) -> str:
+    """The word two after *i* (``uv tool install`` → ``install``), lower case, or ""."""
+    return tokens[i + 2].lower() if i + 2 < len(tokens) else ""
 
 
 def parse_dependency_installs(command: str) -> list[dict[str, str]]:
@@ -295,7 +315,7 @@ def parse_dependency_installs(command: str) -> list[dict[str, str]]:
         if (tok, "pip") in _MANAGER_SPECS and nxt == "pip":
             ecosystem, skip = _MANAGER_SPECS[(tok, "pip")]
             start = i + skip
-        elif (tok, nxt) in _MANAGER_SPECS:
+        elif (tok, nxt) in _MANAGER_SPECS and (nxt != "tool" or _third(tokens, i) in ("install", "run")):
             ecosystem, skip = _MANAGER_SPECS[(tok, nxt)]
             start = i + skip
         elif (tok,) in _MANAGER_SPECS:
@@ -320,6 +340,8 @@ def parse_dependency_installs(command: str) -> list[dict[str, str]]:
                 if key not in seen:
                     seen.add(key)
                     out.append({"ecosystem": ecosystem, **parsed})
+                if tok in _RUNS_ITS_FIRST_WORD or nxt in ("dlx", "run") or (nxt == "tool" and _third(tokens, i) == "run"):
+                    break   # `npx pkg arg…`: only the first word is a package, the rest are its arguments
             j += 1
         i = j
     return out

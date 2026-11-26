@@ -41,6 +41,7 @@ from typing import Any, Callable, Optional
 from ... import ruleset
 from ...kernel.dkg_client import DkgClient
 from ...sync import read_recovery_backlog
+from . import lookup_alarm   # the finding when the threat graph cannot answer (L8)
 from .progress import STALL_SECONDS, WATCH, SyncProgress, SyncProgressWatch, sync_phase
 
 logger = logging.getLogger(__name__)
@@ -296,6 +297,19 @@ class _ReaderHolder:
 _READER = _ReaderHolder()
 
 
+def current_state() -> str:
+    """The meter's ``state`` now (``synced`` / ``syncing`` / ``unknown`` / ``unavailable``), from the
+    cached reading (at most one node query per :data:`CACHE_SECONDS`); ``unavailable`` before the
+    dashboard registered the meter or when it cannot be read. Shield pages ask this."""
+    if _READER.handler is None:
+        return "unavailable"
+    try:
+        return str(_READER.handler().get("state") or "unavailable")
+    except Exception as exc:   # health: allow BLE001 -- a page never breaks on the meter
+        logger.debug("blackbox: sync meter unreadable for a shield page: %s", exc)
+        return "unavailable"
+
+
 def first_sync_state() -> str:
     """:meth:`SyncProgressWatch.first_sync` for the health checks, after one meter reading when this
     process has not read the meter yet — the first health poll of a fresh dashboard comes before the
@@ -310,5 +324,5 @@ def first_sync_state() -> str:
 
 
 __all__ = ["STALL_SECONDS", "WATCH", "GraphSizeAnchor", "SyncMeter", "SyncProgress", "SyncProgressWatch",
-           "build_sync_meter", "first_sync_state", "lookup_status", "read_sync_meter", "register_sync_meter_routes", "sync_phase",
+           "build_sync_meter", "current_state", "first_sync_state", "lookup_alarm", "lookup_status", "read_sync_meter", "register_sync_meter_routes", "sync_phase",
            "verified_graph_still_arriving"]

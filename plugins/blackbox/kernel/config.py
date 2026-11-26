@@ -11,13 +11,16 @@ from __future__ import annotations
 
 import logging
 import os
+from pathlib import Path
+from contextlib import contextmanager
+from contextvars import ContextVar
 from .snapshot_config import SnapshotSyncConfig, snapshot_fields
 
 from dataclasses import dataclass, field
-from typing import Any, Mapping
+from typing import Any, Iterator, Mapping, Optional
 
 from . import constants, yaml_files
-from .config_values import schema
+from .config_values import saved_entry, schema
 from .config_values.semantic import SemanticConfig, semantic_config
 from .host_secrets import read_host_secret
 
@@ -180,23 +183,23 @@ class BlackboxConfig:
 
 
 def _blackbox_entry() -> dict[str, Any]:
-    """Return the ``plugins.entries.blackbox`` mapping, or ``{}`` on any error.
+    """Return the ``plugins.entries.blackbox`` mapping (:mod:`.config_values.saved_entry`: the last
+    good one while the file cannot be read; empty before any good read)."""
+    return saved_entry.read()
 
-    Read from the machine's MAIN Hermes config (:func:`constants.hermes_root`) even while a named
-    profile runs: one set of Blackbox settings protects every profile, and what the dashboard
-    saves reaches them all (a profile used to keep the copy made when it was created).
-    """
-    root = constants.hermes_root()
-    if root != constants.hermes_home():
-        return yaml_files.blackbox_entry(yaml_files.load_yaml(root / "config.yaml"))
-    try:
-        from hermes_cli.config import load_config
 
-        cfg = load_config()
-    except Exception as exc:  # pragma: no cover - defensive
-        logger.debug("blackbox: config load failed (%s); using defaults", exc)
-        return {}
-    return yaml_files.blackbox_entry(cfg)
+#: What a status route says for the mode before the saved settings were ever read in this process.
+MODE_STARTING = "starting"
+
+
+def settings_known() -> bool:
+    """True once the saved settings were read here (before, every field is a default — never the person's choice)."""
+    return saved_entry.known(_blackbox_entry())
+
+
+def mode_answer(cfg: BlackboxConfig) -> str:
+    """*cfg*'s mode for a status answer, or :data:`MODE_STARTING` before :func:`settings_known` (KI-PENDING-b28f8f)."""
+    return cfg.mode if settings_known() else MODE_STARTING
 
 
 #: The separate community graph's settings (2026-10-12 to 2026-10-16), config keys and environment
@@ -218,6 +221,66 @@ def reads_graph_directly(cfg: Any) -> bool:
     read from the node's store for each call instead of the compiled local file. Accepts any
     object; one without the field (a partial config in a test) means the compiled file."""
     return getattr(cfg, "detection_backend", schema.DetectionBackend.LEGACY_CACHE) == schema.DetectionBackend.DKG
+
+
+def _configured_dkg_home(entry: Mapping[str, Any]) -> str:
+    """The ``dkg_home`` the person's config names, or "" (a legacy shared default counts as none)."""
+    configured = str(entry.get("dkg_home") or entry.get("dkgHome") or "").strip()
+    if _is_default_dkg_home(configured):
+        logger.info("blackbox: switching shared default dkg_home %s -> %s", configured, constants.blackbox_dkg_home())
+        return ""
+    return configured
+
+
+def _resolve_dkg_home(entry: Mapping[str, Any]) -> str:
+    """Blackbox's DKG node home: the config's ``dkg_home``, else ``BLACKBOX_DKG_HOME``, else the default."""
+    return str(_configured_dkg_home(entry) or _first_env("BLACKBOX_DKG_HOME") or constants.blackbox_dkg_home()).strip()
+
+
+def dkg_home() -> Path:
+    """Where THIS install's DKG node keeps its state (``daemon.pid``, ``config.json``, the store).
+
+    Cheap — reads only the Blackbox config entry, never credentials — so a page can ask on every
+    read. Use this, not :func:`constants.blackbox_dkg_home`: the installer puts the node beside the
+    install (``<install root>/.dkg``) and records it as ``dkg_home``; the constant is only the
+    fallback when nothing was recorded (E2E recheck 2026-11-21: the node's own port was rated high
+    because its pid file was looked for in the fallback folder).
+    """
+    return Path(_resolve_dkg_home(_blackbox_entry())).expanduser()
+
+
+def raw_section(name: str) -> dict[str, Any]:
+    """The saved Blackbox config section *name* as written ({} when absent or not a mapping), for
+    a package that owns and parses its own section (``notify.policy``, ``watch``); inside
+    :func:`one_entry_read`, from that block's one read."""
+    section = shield_entry().get(name)
+    return dict(section) if isinstance(section, dict) else {}
+
+
+#: The longest quiet limit an agent instance may be given (a day).
+QUIET_MINUTES_MAX = 1440
+
+
+@dataclass(frozen=True)
+class AgentActivity:
+    """The agent history's settings (``agent_activity.*`` in config.yaml): how many days an
+    ended agent instance stays in the history, whether the TEXT of prompts is kept in it (off by
+    default — a privacy choice the person confirms), and after how many quiet minutes an
+    instance with no process to follow counts as ended."""
+
+    history_days: int = 30
+    record_prompt_text: bool = False
+    quiet_minutes: int = 30
+
+
+def agent_activity(entry: Mapping[str, Any] | None = None) -> AgentActivity:
+    """The saved (or a proposed *entry*'s) agent-activity settings. Cheap, like :func:`dkg_home`:
+    it reads only the Blackbox config entry."""
+    section = (_blackbox_entry() if entry is None else entry).get("agent_activity")
+    section = section if isinstance(section, dict) else {}
+    return AgentActivity(history_days=min(365, max(1, _as_int(section.get("history_days", 30), 30))),
+                         record_prompt_text=_as_bool(section.get("record_prompt_text", False), False),
+                         quiet_minutes=min(QUIET_MINUTES_MAX, max(1, _as_int(section.get("quiet_minutes", 30), 30))))
 
 
 def load_blackbox_config(*, entry: dict[str, Any] | None = None) -> BlackboxConfig:
@@ -244,14 +307,9 @@ def load_blackbox_config(*, entry: dict[str, Any] | None = None) -> BlackboxConf
     if context_graph_id in constants.LEGACY_CONTEXT_GRAPH_IDS:
         logger.info("blackbox: switching legacy context_graph_id %s -> %s", context_graph_id, constants.DEFAULT_CONTEXT_GRAPH_ID)
         context_graph_id = constants.DEFAULT_CONTEXT_GRAPH_ID
-    default_dkg_home = str(constants.blackbox_dkg_home())
-    dkg_home_env = _first_env("BLACKBOX_DKG_HOME")
-    configured_dkg_home = entry.get("dkg_home") or entry.get("dkgHome")
+    configured_dkg_home = _configured_dkg_home(entry)
     configured_dkg_url = entry.get("dkg_url") or entry.get("dkgUrl")
-    if _is_default_dkg_home(configured_dkg_home):
-        logger.info("blackbox: switching shared default dkg_home %s -> %s", configured_dkg_home, default_dkg_home)
-        configured_dkg_home = ""
-    dkg_home = str(configured_dkg_home or dkg_home_env or default_dkg_home).strip()
+    dkg_home = str(configured_dkg_home or _first_env("BLACKBOX_DKG_HOME") or constants.blackbox_dkg_home()).strip()
     dkg_bin = str(entry.get("dkg_bin") or entry.get("dkgBin") or _first_env("BLACKBOX_DKG_BIN")
                   or constants.blackbox_dkg_bin()).strip()
     dkg_url_env = _first_env("BLACKBOX_DKG_DAEMON_URL", "BLACKBOX_DKG_URL")
@@ -310,3 +368,33 @@ def _normalize_protected_paths(raw: Any) -> tuple[str, ...]:
     if not isinstance(raw, (list, tuple)):
         return ()
     return tuple(schema.path_list(raw)[:schema.MAX_PROTECTED_PATHS])
+
+
+#: The ``blackbox`` entry read once for the duration of :func:`one_entry_read` (None outside it).
+_ENTRY_MEMO: ContextVar[Optional[dict[str, Any]]] = ContextVar("blackbox_entry_memo", default=None)
+
+
+@contextmanager
+def one_entry_read() -> Iterator[None]:
+    """Within this block, :func:`shield_entry` (and :func:`raw_section`) read the config ONCE and
+    reuse it — the shields snapshot and the watch rules every tool call takes share one read,
+    however many shields there are. A block inside another reuses the outer one's read."""
+    if _ENTRY_MEMO.get() is not None:
+        yield
+        return
+    token = _ENTRY_MEMO.set({})
+    try:
+        yield
+    finally:
+        _ENTRY_MEMO.reset(token)
+
+
+def shield_entry() -> dict[str, Any]:
+    """The ``plugins.entries.blackbox`` mapping a shield's mode reads (:func:`_blackbox_entry`,
+    looked up at call time); one read per :func:`one_entry_read` block."""
+    memo = _ENTRY_MEMO.get()
+    if memo is None:
+        return _blackbox_entry()
+    if "entry" not in memo:
+        memo["entry"] = _blackbox_entry()
+    return memo["entry"]

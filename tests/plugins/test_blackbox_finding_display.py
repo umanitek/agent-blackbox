@@ -2,7 +2,7 @@
 
 The dashboard's findingDisplayKey / findingRepresentativeRank (index.html) are run in node on
 the same rows as the Python port: the keys and ranks must be equal, so the served values group
-exactly as the page always did. Desktop and the dashboard both group on what they are served.
+exactly as the page always did. Hermes Desktop and the dashboard both group on what they are served.
 """
 
 from __future__ import annotations

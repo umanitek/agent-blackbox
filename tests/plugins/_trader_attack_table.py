@@ -25,7 +25,7 @@ from typing import Any
 from plugins.blackbox import shields
 
 #: Scenario fields: they belong to the tests and never ship in a shield's table.
-SCENARIO_FIELDS = frozenset({"tool", "hook", "args", "graph", "block_severity"})
+SCENARIO_FIELDS = frozenset({"tool", "hook", "args", "graph", "block_severity", "lockdown"})
 
 
 @dataclass(frozen=True)

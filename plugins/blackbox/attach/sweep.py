@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Optional
 
 from ..kernel import yaml_files
 from ..kernel.config import load_blackbox_config
@@ -27,6 +27,7 @@ from . import declined
 from . import hermes_homes
 from . import openclaw_bridge
 from . import openclaw_discovery
+from .report import AttachReport
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +100,15 @@ def attach_named(paths: Iterable[str | Path], *, hermes: bool = True, openclaw: 
 
 #: One discovered target: (kind, path) with kind ``"hermes"`` or ``"openclaw"``.
 Target = tuple[str, str]
+
+
+def set_protection(kind: str, target: str, enabled: bool) -> Optional[AttachReport]:
+    """Switch protection of one agent on or off — THE dispatch by agent kind ("hermes" /
+    "openclaw") the dashboard's rescan and its protection route share; None for a kind
+    Blackbox does not know."""
+    switch = {"hermes": (hermes_homes.detach_hermes, hermes_homes.attach_hermes),
+              "openclaw": (openclaw_bridge.detach_openclaw, openclaw_bridge.attach_openclaw)}.get(str(kind).lower())
+    return switch[bool(enabled)](Path(target)) if switch else None
 
 
 def is_attached(kind: str, target: str | Path) -> bool:

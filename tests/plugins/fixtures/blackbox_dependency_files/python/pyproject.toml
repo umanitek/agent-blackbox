@@ -1,0 +1,10 @@
+[project]
+name = "shop"
+version = "1.0.0"
+dependencies = [
+  "requests>=2.31",
+  "evil-pkg==0.1.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]

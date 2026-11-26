@@ -1,7 +1,7 @@
 """Which finding rows are ONE threat on screen, and which row stands for it.
 
 Several detectors can record the same threat in the same agent turn (one record each); the
-dashboard's findings list, its alerts and Desktop's Threats page show it once, choosing the
+dashboard's findings list, its alerts and Hermes Desktop's Threats page show it once, choosing the
 record with the strongest source, then the highest severity. That rule was written in
 JavaScript twice (dashboard/static/index.html, desktop/plugin.js) and the copies drifted
 (raw vs known category, case of the user role). It is defined here, served with every

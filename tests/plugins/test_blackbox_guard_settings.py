@@ -3,8 +3,9 @@
 A text-only probe of the hook in block mode found every way an agent could set Blackbox to audit
 mode or remove it unchecked: ``sed -i`` on Hermes's ``config.yaml``, the patch tool changing
 ``mode: block`` to ``mode: audit`` inside Blackbox's section, an overwrite, ``hermes plugins disable
-blackbox``. ``detect_guard_tamper`` is a built-in rule (source ``custom``: flags in audit, blocks in
-block mode, never shared); reading, backing up and editing unrelated settings stay allowed.
+blackbox``. ``detect_guard_tamper`` is a built-in rule (source ``custom``, never shared; since
+2026-11-20 it blocks in every mode — test_blackbox_self_protection.py); reading, backing up and
+editing unrelated settings stay allowed.
 """
 
 from __future__ import annotations
@@ -103,7 +104,7 @@ def test_the_rule_runs_in_the_tool_call_hook():
     """guard/hooks.py gathers it with every call's findings, beside the protected-path rule."""
     from pathlib import Path
     hooks = (Path(__file__).resolve().parents[2] / "plugins" / "blackbox" / "guard" / "hooks.py").read_text(encoding="utf-8")
-    assert "detection.detect_guard_tamper(tool_name, args)" in hooks
+    assert "detection.detect_guard_tamper(tool_name, args, cfg)" in hooks
 
 
 # 2026-11-08, fresh Mac (bb-test-4): an agent could stop Blackbox's own services. The guard runs in

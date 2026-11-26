@@ -23,12 +23,14 @@ Safety:
 from __future__ import annotations
 
 import logging
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Optional, Sequence
 
 from ...kernel import constants
-from ...kernel import crypto_secrets
+from ...kernel import crypto_secrets, threat_ids
 from ...kernel.dkg_client import extract_binding
 from ...kernel.sparql_text import sparql_string_literal as literal
 from ...kernel.store import StoreClient
@@ -45,6 +47,10 @@ COULD_NOT_TELL = "could-not-tell"
 
 #: Values per query. A 50-value IOC batch answered in 17 ms on the bench.
 CHUNK = 200
+#: Queries of one lookup asked at once (the store answers them side by side). WHY (security round
+#: 4 timing, 2026-11-23): a 2,000-package lockfile is ~20 queries; asked one after another they were
+#: 40 of the 67 ms a cold check took on a 4-CPU VM (target < 50 ms).
+PARALLEL_QUERIES = 4
 #: The most values one call looks up — the content scanner's own candidate cap.
 MAX_VALUES = 4000
 #: Rows per query: candidates × ~15 triples each, with headroom.
@@ -78,6 +84,19 @@ class LookupAnswer:
         return self.outcome != COULD_NOT_TELL
 
 
+_POOL: Optional[ThreadPoolExecutor] = None
+_POOL_LOCK = threading.Lock()
+
+
+def _pool() -> ThreadPoolExecutor:
+    """The one small pool every lookup in this process shares (made on first use)."""
+    global _POOL
+    with _POOL_LOCK:
+        if _POOL is None:
+            _POOL = ThreadPoolExecutor(max_workers=PARALLEL_QUERIES, thread_name_prefix="blackbox-store-lookup")
+        return _POOL
+
+
 class VerifiedLookup:
     """Exact lookups for one scope against one store. Stateless; build one per
     ruleset generation (:func:`compiler.Ruleset.live_lookup`)."""
@@ -92,13 +111,25 @@ class VerifiedLookup:
 
     def dependencies(self, candidates: Sequence[DependencyCandidate]) -> LookupAnswer:
         """Public dependency rules for exactly these ``(ecosystem, name, version)``
-        triples; pass ``"*"`` as the version for a whole-package rule."""
+        triples; pass ``"*"`` as the version for a whole-package rule.
+
+        The store is asked once per PACKAGE (``(name, ecosystem)``), every version it lists for it
+        coming back, and only the asked-for keys are kept. WHY (KI-619, security round 5): a
+        lockfile's check asks each package twice — its version and ``"*"`` — so a 2,000-package
+        lockfile was 4,000 values in 20 queries, the bulk of its ~64 ms cold check on a 4-CPU VM
+        (target < 50 ms); per package it is 2,000 values in 10."""
         tuples: list[tuple[str, str, str]] = []
+        wanted: set[str] = set()
         for ecosystem, name, version in candidates[:MAX_VALUES]:
             ecosystem = ecosystem.strip().lower()
+            wanted.add(threat_ids.dependency_key(ecosystem, name, version))
             for spelling in self.scope.spellings(ecosystem, name):
                 tuples.append((spelling, ecosystem, version.strip()))
-        return self._run(tuples, _dependency_sparql, "dependency")
+        packages = list(dict.fromkeys((pkg, eco) for pkg, eco, _version in tuples))
+        answer = self._run(packages, _dependency_sparql, "dependency", fallback_items=tuples)
+        rules = {key: rule for key, rule in answer.rules.items() if key in wanted}
+        outcome = answer.outcome if not answer.known else HIT if rules else CLEAN
+        return LookupAnswer(rules, outcome, answer.reason)
 
     def iocs(self, identifiers: Sequence[str]) -> LookupAnswer:
         """Public IOC rules among these ``ioc:type:value`` identifiers (already
@@ -109,7 +140,8 @@ class VerifiedLookup:
         values = list(dict.fromkeys(_stored_spellings(identifiers[:MAX_VALUES])))
         return self._run(values, _ioc_sparql, "ioc")
 
-    def _run(self, items: Sequence[Any], build_query: Any, category: str) -> LookupAnswer:
+    def _run(self, items: Sequence[Any], build_query: Any, category: str,
+             fallback_items: Optional[Sequence[Any]] = None) -> LookupAnswer:
         if not items:
             return LookupAnswer({}, CLEAN)
         skipped = None if not self.scope.ready else self._while_degraded()   # not-ready is its own answer, recorded as before
@@ -119,7 +151,7 @@ class VerifiedLookup:
             answer = self._ask(items, build_query, category)
             self.health.record(answer.known, answer.reason)    # the STORE's health, whatever answers next
         if not answer.known and self.fallback is not None:
-            return self._from_fallback(items, category, answer)
+            return self._from_fallback(items if fallback_items is None else fallback_items, category, answer)
         return answer
 
     def _while_degraded(self) -> Optional[LookupAnswer]:
@@ -146,8 +178,9 @@ class VerifiedLookup:
         if not self.scope.ready:
             return LookupAnswer({}, COULD_NOT_TELL, "verified scope not ready")
         rules: dict[str, dict[str, Any]] = {}
-        for start in range(0, len(items), CHUNK):
-            answer = self.store.select(build_query(items[start:start + CHUNK]))
+        queries = [build_query(items[start:start + CHUNK]) for start in range(0, len(items), CHUNK)]
+        answers = _pool().map(self.store.select, queries) if len(queries) > 1 else map(self.store.select, queries)
+        for answer in answers:   # in query order: the first could-not-tell is the answer, as before
             if not answer.known:
                 return LookupAnswer(rules, COULD_NOT_TELL, answer.reason)
             rules.update(self._rules_from(answer.rows or [], category))
@@ -203,12 +236,14 @@ def _stored_spellings(identifiers: Sequence[str]) -> list[str]:
     return out
 
 
-def _dependency_sparql(tuples: Sequence[tuple[str, str, str]]) -> str:
-    values = " ".join(f"({literal(pkg)} {literal(eco)} {literal(ver)})" for pkg, eco, ver in tuples)
+def _dependency_sparql(packages: Sequence[tuple[str, str]]) -> str:
+    """Every rule of these ``(package, ecosystem)`` pairs, whatever version it names (the caller
+    keeps the versions it asked for)."""
+    values = " ".join(f"({literal(pkg)} {literal(eco)})" for pkg, eco in packages)
     return f"""SELECT ?g ?t ?p ?o WHERE {{
-  VALUES (?pkg ?eco ?ver) {{ {values} }}
+  VALUES (?pkg ?eco) {{ {values} }}
   GRAPH ?g {{
-    ?t <{_DP}package> ?pkg ; <{_DP}ecosystem> ?eco ; <{_DP}version> ?ver .
+    ?t <{_DP}package> ?pkg ; <{_DP}ecosystem> ?eco .
     ?t ?p ?o .
   }}
 }} LIMIT {ROW_LIMIT}"""

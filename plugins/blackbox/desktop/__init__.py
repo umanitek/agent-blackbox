@@ -1,4 +1,4 @@
-"""Blackbox inside Hermes Desktop: what the Desktop half shows, and the live alert it hears.
+"""Blackbox inside Hermes Desktop: what the Hermes Desktop half shows, and the live alert it hears.
 
 Hermes Desktop loads a plugin's ``desktop/plugin.js`` (this folder) as a native part of the app
 and reaches the plugin's backend through ``/api/plugins/blackbox/…`` (``dashboard/plugin_api.py``).
@@ -6,16 +6,16 @@ This module is the one door both use — a Facade over the config, the ruleset a
 
 - :func:`status_payload` — protection at a glance for the status bar and the page header (the page's
   findings list reads the dashboard's own findings, through :func:`dashboard_link`);
-- :func:`dashboard_link` — the one :class:`~.dashboard_link.DashboardLink` the Desktop routes forward
+- :func:`dashboard_link` — the one :class:`~.dashboard_link.DashboardLink` the Hermes Desktop routes forward
   the dashboard's own API through (every other panel: threat graph, Trader Shield, agents, settings);
-- :func:`long_calls` — the assistant turn and Playground tests, which outlast Desktop's 30 s request
+- :func:`long_calls` — the assistant turn and Playground tests, which outlast Hermes Desktop's 30 s request
   limit: started in the background and read back by id (``long_calls.py``);
 - :func:`readiness_status` / :func:`start_setup` — where the machine is between plugin install and synced, and
   the page's "Set up Blackbox" button (``readiness.py``: one owned ``hermes blackbox setup`` run);
 - :func:`set_mode` — the page's Audit / Block switch, saved through the dashboard's own checked path
-  (``kernel.settings.write_settings``); reached only through Desktop's authenticated route;
+  (``kernel.settings.write_settings``); reached only through Hermes Desktop's authenticated route;
 - :func:`announce_findings` — called by the hook right after findings are recorded; pushes one
-  ``plugin.blackbox.finding`` event per checked action to every connected Desktop window (Observer).
+  ``plugin.blackbox.finding`` event per checked action to every connected Hermes Desktop window (Observer).
 
 One action is one alert and one row: several rules can match the same tool call (the built-in
 ``.env`` rule and a protected path, KI-469), and a person reacts to the action, so the page shows
@@ -26,7 +26,7 @@ flagged — and never the evidence, the command, its arguments or any matched te
 local log, which the page reads from the dashboard on this machine only.
 
 Fail-open throughout: a Hermes without plugin events, a ruleset that cannot load, or an unreadable
-log gives a calm answer, never an exception into the hook or the Desktop app.
+log gives a calm answer, never an exception into the hook or the Hermes Desktop app.
 
     from plugins.blackbox import desktop
     desktop.status_payload()            # {"mode": "audit", "blockSeverity": …, "today": {...}, "dashboardUrl": …}
@@ -43,7 +43,7 @@ from collections.abc import Mapping, Sequence
 
 from .. import audit, ruleset
 from ..kernel import settings
-from ..kernel.config import load_blackbox_config
+from ..kernel.config import load_blackbox_config, mode_answer
 from ..kernel.constants import SEVERITY_RANK
 from . import readiness as readiness_mod
 from .dashboard_link import DashboardLink
@@ -58,7 +58,7 @@ _DAY_SECONDS = 86_400
 
 
 class FindingAlert(TypedDict):
-    """One checked action as the Desktop alert and list show it: its most severe finding, and how
+    """One checked action as the Hermes Desktop alert and list show it: its most severe finding, and how
     many more findings the same action matched. No evidence, command or matched text."""
 
     time: float
@@ -104,21 +104,21 @@ def _broadcast() -> Any:
 
 
 def announce_findings(event: str, findings: Sequence[Mapping[str, Any]], detail: Mapping[str, Any]) -> None:
-    """Tell every connected Desktop window about *findings* just recorded for *event*. Fail-open."""
+    """Tell every connected Hermes Desktop window about *findings* just recorded for *event*. Fail-open."""
     broadcast = _broadcast() if findings else None
     if broadcast is None:
         return
     try:
         broadcast(PLUGIN_ID, FINDING_EVENT, dict(_alert(findings, detail or {}, time.time(), audit.in_sandbox_run())))
-    except Exception as exc:   # health: allow BLE001 -- the hook boundary is fail-open: a Desktop alert must never break the agent's tool call
-        logger.warning("blackbox: Desktop alert not sent: %s", exc)
+    except Exception as exc:   # health: allow BLE001 -- the hook boundary is fail-open: a Hermes Desktop alert must never break the agent's tool call
+        logger.warning("blackbox: Hermes Desktop alert not sent: %s", exc)
 
 
 def _rows(limit: int) -> list[dict[str, Any]]:
     try:
         return audit.read_findings(limit=limit)
     except Exception as exc:   # health: allow BLE001 -- an unreadable log is an empty list on the page, never an error
-        logger.warning("blackbox: findings unreadable for Desktop: %s", exc)
+        logger.warning("blackbox: findings unreadable for Hermes Desktop: %s", exc)
         return []
 
 
@@ -128,7 +128,7 @@ def _rows_since(since: float) -> list[dict[str, Any]]:
     try:
         rows = _rows(audit.count_findings())   # both read the one cached parse of the logs
     except Exception as exc:   # health: allow BLE001 -- an unreadable log counts as empty on the page
-        logger.warning("blackbox: findings unreadable for Desktop: %s", exc)
+        logger.warning("blackbox: findings unreadable for Hermes Desktop: %s", exc)
         return []
     newer = next((index for index, row in enumerate(rows) if float(row.get("ts") or 0) < since), len(rows))
     return rows[:newer]
@@ -161,7 +161,7 @@ def status_payload() -> dict[str, Any]:
     since = time.time() - _DAY_SECONDS
     today = [action for action in _actions(_rows_since(since)) if action["time"] >= since]
     return {
-        "mode": cfg.mode,
+        "mode": mode_answer(cfg),   # "starting" until the saved settings were read, never a guessed "audit"
         "blockSeverity": cfg.block_severity,
         "today": {
             "findings": len(today),
@@ -203,7 +203,7 @@ def dashboard_link() -> DashboardLink:
 
 
 def long_calls() -> LongCalls:
-    """The dashboard calls that outlast Desktop's 30 s request limit (``long_calls.py``), on the same link."""
+    """The dashboard calls that outlast Hermes Desktop's 30 s request limit (``long_calls.py``), on the same link."""
     return _links.calls(int(load_blackbox_config().dashboard_port))
 
 
@@ -211,7 +211,7 @@ MODES = ("audit", "block")
 
 
 def set_mode(mode: str) -> dict[str, Any]:
-    """Switch Blackbox to *mode* (``audit`` or ``block``) for the person at the Desktop page.
+    """Switch Blackbox to *mode* (``audit`` or ``block``) for the person at the Hermes Desktop page.
 
     Returns ``{"ok": bool, "mode": <the mode now in force>, "errors": [...]}``; nothing is written on
     an unknown mode. The same validate-then-persist path as the dashboard's Settings, so the config
@@ -235,7 +235,7 @@ def _verified_rules(cfg: Any) -> Optional[int]:
     try:
         return ruleset.get(cfg).verified_rule_count()
     except Exception as exc:   # health: allow BLE001 -- a ruleset that cannot load reads as "unknown", never an error
-        logger.warning("blackbox: ruleset unreadable for Desktop: %s", exc)
+        logger.warning("blackbox: ruleset unreadable for Hermes Desktop: %s", exc)
         return None
 
 
@@ -245,13 +245,15 @@ def readiness_status() -> dict[str, Any]:
     return readiness_mod.readiness_payload(lambda: _verified_rules(load_blackbox_config()), dashboard_link())
 
 
-def start_setup() -> dict[str, Any]:
-    """Start ``hermes blackbox setup`` for the person at the Desktop page. Refused while a run is
-    going or once setup is done (``{"started": False, "reason": ...}``)."""
+def start_setup(protect_new_agents: Optional[bool] = None) -> dict[str, Any]:
+    """Start ``hermes blackbox setup`` for the person at the Hermes Desktop page. Refused while a run is
+    going or once setup is done (``{"started": False, "reason": ...}``). *protect_new_agents* is
+    the page's switch: True protects every agent now and later, False only this Hermes home,
+    None (not asked) the same as False."""
     stage = readiness_status().get("stage")
     if stage not in _SETUP_STAGES:
         return {"started": False, "reason": f"nothing to set up (Blackbox is {stage})"}
-    return readiness_mod.start_setup()
+    return readiness_mod.start_setup(protect_new_agents=protect_new_agents)
 
 
 __all__ = ["FINDING_EVENT", "MODES", "PLUGIN_ID", "FindingAlert", "announce_findings", "findings_payload", "long_calls", "readiness_status",

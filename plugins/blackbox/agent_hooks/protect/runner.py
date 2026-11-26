@@ -1,0 +1,383 @@
+"""The hook command every protected coding agent runs: one payload in, Blackbox's answer out.
+
+Installed (copied to ``$BLACKBOX_HOME/agent-hooks/runner.py``) and named in each agent's own hook
+config as ``<python> <runner.py> <agent> <event> <dashboard url>``. It reads the agent's JSON on
+stdin, turns it into ONE shape — ``{agent, event, session, cwd, tool_name, args}`` — and asks the
+local Blackbox dashboard (``POST /api/agent-hooks/event``), which records the event and answers
+with the same guard a Hermes agent gets: before a tool runs, the tool-call verdict (threats and
+self-protection); for a prompt about to be sent and a tool's output about to reach the model, the
+prompt-injection verdict of the verified threat graph (``guard.text_verdict``). Each answer goes
+back in the agent's own documented format (:mod:`.answers`: ``deny_output``, ``prompt_output``,
+``post_output``; docs/agent-compat/ has the per-agent references).
+
+Standard library only and import-free of the plugin, so it starts in a few tens of milliseconds
+under any Python: the judgement itself lives in the dashboard, which holds the compiled rules in
+memory. WHEN THE DASHBOARD DOES NOT ANSWER (stopped, killed, hung, restarting) the runner judges
+the call itself, locally and offline (:func:`judge_here`): it loads the installed plugin's own
+judgement (``events.record_event`` — the same guard, ruleset file and local checks) from the
+folder ``agent_hooks`` named in :data:`JUDGE_HERE_FILE`, so stopping the dashboard no longer
+switches the hooks off (private security finding ``2026-11-24-linux-an-agent-stops-blackbox-s-dashboar``,
+Linux round L1: an agent killed the dashboard and then read a protected file). The dashboard and that judgement
+share ONE deadline (:mod:`.judge_here`: ``BUDGET_SECONDS``, inside the 10 s each agent waits): a tool call
+not judged by then is refused, never left for the agent to run once it stops waiting, and a locally
+judged event is recorded after the answer (Linux round L7). FAIL-OPEN for
+genuine breakage still holds: when that judgement cannot run either (no plugin, an import error),
+the agent continues — Blackbox never makes an agent unusable. The prompt and the tool output go only to the
+LOCAL dashboard (127.0.0.1) to be checked; they are never recorded or shared — the records keep
+their length, and a finding keeps only the matched phrase as its local evidence (as for Hermes).
+
+Usage (what an agent runs)::
+
+    python3 runner.py claude-code pre_tool http://127.0.0.1:9700 < payload.json
+
+**Undo:** stateless — it answers one hook call; with protection off it is no longer named in
+any agent's config. Fail-open: any error lets the agent continue.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import stat
+import sys
+import time
+from pathlib import Path
+
+# The runner is run as a script from Blackbox's data folder (its sibling is beside it there) and
+# imported as a module by the plugin and its tests.
+if __package__:
+    from .answers import allow_output, deny_output, note_output, post_output, prompt_output
+    from .judge_here import BLOCKING_EVENTS, TIMEOUT_SECONDS, Verdict, answer_in_time, keep, process_age
+    from .identity import AGENT_TURN_MARKS, MODEL_EVENTS, effective_agent, identity, transcript_model, workspace
+    from .tool_shapes import cline_tool
+else:
+    from answers import allow_output, deny_output, note_output, post_output, prompt_output
+    from judge_here import BLOCKING_EVENTS, TIMEOUT_SECONDS, Verdict, answer_in_time, keep, process_age
+    from identity import AGENT_TURN_MARKS, MODEL_EVENTS, effective_agent, identity, transcript_model, workspace
+    from tool_shapes import cline_tool
+
+#: The most of stdin read (a write tool's whole file can be in the payload).
+MAX_INPUT_BYTES = 1024 * 1024
+#: The most text (a prompt, a tool's output, a file about to be read) sent for the injection check.
+MAX_TEXT_CHARS = 256 * 1024
+#: Events whose TEXT is checked for prompt injection.
+TEXT_EVENTS = frozenset({"prompt", "post_tool"})
+SHELL_NAMES = frozenset({"bash", "shell", "run_shell_command", "run_terminal_cmd", "execute_command", "exec", "terminal", "command"})
+READ_NAMES = frozenset({"read", "read_file", "view", "readfile", "read_many_files"})
+WRITE_NAMES = frozenset({"write", "write_file", "edit", "multiedit", "replace", "write_to_file", "replace_in_file", "create_file",
+                         "str_replace_editor", "create", "notebookedit", "notebook_edit", "edit_file"})
+#: Where each agent's tools carry a file path, and a file's new text (Claude, Codex, Cursor,
+#: Gemini, Copilot, Windsurf, Cline, OpenCode — each spells them its own way).
+PATH_KEYS = ("file_path", "path", "absolute_path", "target_file", "notebook_path", "filePath", "filepath")
+CONTENT_KEYS = ("content", "new_string", "new_str", "file_text", "newString", "new_source", "diff")
+#: Codex's patch tool: every file it adds, updates, deletes or moves to.
+PATCH_FILE = re.compile(r"^\*\*\* (?:Add|Update|Delete) File: (.+)$|^\*\*\* Move to: (.+)$", re.MULTILINE)
+
+
+def _first(mapping: object, *keys: str) -> object:
+    if not isinstance(mapping, dict):
+        return None
+    for key in keys:
+        if mapping.get(key) not in (None, ""):
+            return mapping[key]
+    return None
+
+
+def _command_text(command: object) -> str:
+    """A shell command as one line. Codex can send an argv list — ``["bash", "-lc", "npm i x"]``:
+    the script after ``-c`` / ``-lc`` is the command; any other list is joined."""
+    if isinstance(command, list):
+        parts = [str(part) for part in command]
+        if len(parts) >= 3 and parts[1] in ("-c", "-lc", "-ic"):
+            return parts[2]
+        return " ".join(parts)
+    return str(command or "")
+
+
+def _canonical(tool_name: str, args: object) -> tuple[str, object]:
+    """The guard's own vocabulary: ``terminal`` / ``read_file`` / ``write_file``, else as given."""
+    name = (tool_name or "").strip()
+    lowered = name.lower()
+    if isinstance(args, str) and args.lstrip().startswith("{"):
+        try:
+            args = json.loads(args)
+        except ValueError:
+            pass
+    if lowered in SHELL_NAMES:
+        command = _first(args, "command", "cmd", "command_line") if isinstance(args, dict) else args
+        return "terminal", {"command": _command_text(command)}
+    if lowered == "apply_patch":
+        return "apply_patch", {"patch": _patch_text(args)[:200_000]}
+    if lowered in READ_NAMES:
+        return "read_file", {"path": str(_first(args, *PATH_KEYS) or "")}
+    if lowered in WRITE_NAMES:
+        path = _first(args, *PATH_KEYS)
+        content = _first(args, *CONTENT_KEYS)
+        canonical = {"path": str(path or ""), "content": str(content or "")[:200_000]}
+        return "write_file", {**canonical, **_edit_shape(args)}
+    return name or "tool", args
+
+
+#: An edit tool's replaced text, under each agent's spelling (KI-539: an edit is judged on what the
+#: file becomes, so the guard must see the old text as well as the new — not a whole-file write).
+OLD_KEYS = ("old_string", "old_str", "oldString")
+
+
+def _edit_shape(args: object) -> dict:
+    """The replacements an edit tool asks for, kept as the guard reads them: ``old_string`` /
+    ``new_string`` / ``replace_all``, or ``edits`` for a multi-edit; {} for a whole-file write."""
+    if not isinstance(args, dict):
+        return {}
+    def pair(item: dict) -> dict:
+        old, new = _first(item, *OLD_KEYS), _first(item, "new_string", "new_str", "newString")
+        if not isinstance(old, str) or (new is not None and not isinstance(new, str)):
+            return {}
+        return {"old_string": old[:200_000], "new_string": str(new or "")[:200_000],
+                "replace_all": bool(item.get("replace_all") or item.get("replaceAll"))}
+    if isinstance(args.get("edits"), list):
+        edits = [pair(item) for item in args["edits"][:100] if isinstance(item, dict)]
+        return {"edits": edits} if edits and all(edits) else {}
+    return pair(args)
+
+
+def _patch_text(args: object) -> str:
+    """The patch Codex's ``apply_patch`` carries: as ``input`` / ``patch`` text, or inside its argv."""
+    if isinstance(args, dict):
+        for key in ("input", "patch", "command", "cmd"):
+            value = args.get(key)
+            if isinstance(value, str) and value:
+                return value
+            if isinstance(value, list):
+                return "\n".join(str(part) for part in value)
+    return str(args or "") if not isinstance(args, dict) else ""
+
+
+def patch_files(patch: str) -> list[str]:
+    """Every file path an ``apply_patch`` patch touches (added, updated, deleted or moved to)."""
+    return [(match.group(1) or match.group(2)).strip() for match in PATCH_FILE.finditer(patch or "")][:200]
+
+
+def _text(value: object) -> str:
+    """Any value as text for the injection check (a dict or list as compact JSON), bounded."""
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        try:
+            value = json.dumps(value, ensure_ascii=False)
+        except (TypeError, ValueError):
+            value = str(value)
+    return value[:MAX_TEXT_CHARS]
+
+
+def prompt_text(agent: str, payload: dict) -> str:
+    """The user's prompt in *agent*'s payload (Windsurf nests it in ``tool_info``, Cline in its
+    event) — as the agent sent it: the dashboard sets the agent's own wrapper and boilerplate
+    aside (``protect.own_prompt``, from the agent catalogue)."""
+    nested = payload.get("tool_info") if agent == "windsurf" else payload.get("userPromptSubmit") if agent == "cline" else None
+    return _text(_first(nested, "user_prompt", "prompt") if isinstance(nested, dict)
+                 else _first(payload, "prompt", "user_prompt", "message"))
+
+
+#: Where Cline's TaskStart carries the task the person started it with (its first message never
+#: reaches UserPromptSubmit — KI-604): ``taskStart.task`` / ``.initialTask`` / ``.prompt``, or the
+#: same keys inside ``taskStart.taskMetadata``.
+TASK_KEYS = ("task", "initialTask", "initial_task", "prompt", "text")
+
+
+def task_text(agent: str, payload: dict) -> str:
+    """The person's FIRST message of a Cline task, from its TaskStart event ("" for any other)."""
+    if agent != "cline":
+        return ""
+    start = payload.get("taskStart") if isinstance(payload.get("taskStart"), dict) else {}
+    meta = start.get("taskMetadata") if isinstance(start.get("taskMetadata"), dict) else {}
+    found = _first(start, *TASK_KEYS) or _first(meta, *TASK_KEYS)
+    return _text(found) if isinstance(found, str) else ""
+
+
+def output_text(agent: str, payload: dict) -> str:
+    """The tool's output in *agent*'s post-tool payload — what the model is about to read."""
+    if agent == "cline":
+        return _text(_first(payload.get("postToolUse") or {}, "result", "output", "response"))
+    if agent == "windsurf":
+        return _text(_first(payload.get("tool_info") or {}, "output", "stdout", "response", "result"))
+    if agent == "copilot-cli":
+        result = payload.get("toolResult")
+        return _text(_first(result, "textResultForLlm", "text") if isinstance(result, dict) else result)
+    # A failed call's output: Claude Code's PostToolUseFailure carries it as ``error`` (KI-599).
+    return _text(_first(payload, "tool_response", "tool_output", "output", "result_json", "result", "response", "error"))
+
+
+def read_text(agent: str, payload: dict) -> str:
+    """A file's text that the agent is about to READ, when its pre-read hook can refuse the read:
+    Cursor sends it (``beforeReadFile`` ``content``); Windsurf sends only the path, so the file is
+    read here (bounded, a regular file only)."""
+    if agent == "cursor" and "file_path" in payload and "tool_name" not in payload:
+        return _text(payload.get("content"))
+    if agent == "windsurf" and str(payload.get("agent_action_name") or "") == "pre_read_code":
+        path = str((payload.get("tool_info") or {}).get("file_path") or "")
+        try:
+            info = os.stat(path)
+            if stat.S_ISREG(info.st_mode):
+                with open(path, encoding="utf-8-sig", errors="replace") as handle:
+                    return handle.read(MAX_TEXT_CHARS)
+        except OSError:
+            return ""
+    return ""
+
+
+def _tool(agent: str, payload: dict) -> tuple[str, object]:
+    """The tool call inside one agent's payload (each agent names the fields its own way)."""
+    if agent == "cursor":
+        if "command" in payload:                       # beforeShellExecution
+            return _canonical("terminal", {"command": payload.get("command")})
+        if "file_path" in payload and "tool_name" not in payload:   # beforeReadFile
+            return _canonical("read_file", {"path": payload.get("file_path")})
+    if agent == "windsurf":
+        info = payload.get("tool_info") if isinstance(payload.get("tool_info"), dict) else {}
+        if "command_line" in info:
+            return _canonical("terminal", {"command": info.get("command_line")})
+        if "mcp_tool_name" in info:
+            return _canonical(str(info.get("mcp_tool_name")), info.get("mcp_tool_arguments"))
+        if "file_path" in info:
+            action = str(payload.get("agent_action_name") or "")
+            if "write" not in action:
+                return _canonical("read_file", {"path": info.get("file_path")})
+            # The edits Windsurf is about to make: judged on what the file becomes (KI-602).
+            edits = info.get("edits") if isinstance(info.get("edits"), list) else None
+            return _canonical("write_file", {"path": info.get("file_path"), **({"edits": edits} if edits else {})})
+    if agent == "cline":
+        call = payload.get("preToolUse") or payload.get("postToolUse") or {}
+        name = str(_first(call, "toolName", "tool") or "")
+        # The CLI sends the call's real input beside ``parameters`` (which holds each value as text).
+        raw = payload["tool_call"].get("input") if isinstance(payload.get("tool_call"), dict) else None
+        args = raw if raw not in (None, "") else _first(call, "parameters", "params")
+        return cline_tool(name, args) or _canonical(name, args)
+    if agent == "copilot-cli":
+        return _canonical(str(payload.get("toolName") or ""), payload.get("toolArgs"))
+    if agent == "opencode":
+        return _canonical(str(payload.get("tool") or ""), payload.get("args"))
+    return _canonical(str(_first(payload, "tool_name", "toolName") or ""), _first(payload, "tool_input", "tool_args", "input", "arguments"))
+
+
+def _call_id(payload: dict) -> str:
+    """The agent's own id for this tool call (Cline nests it: ``tool_call.id``). WHY it matters:
+    an agent that reports one call through two hook forms is answered once, by this id."""
+    call = _first(payload, "tool_use_id", "toolCallId", "callID", "call_id", "execution_id")
+    if not call and isinstance(payload.get("tool_call"), dict):
+        call = payload["tool_call"].get("id")
+    return str(call or "")[:200]
+
+
+def _session(payload: dict) -> str:
+    value = _first(payload, "session_id", "sessionId", "sessionID", "conversation_id", "trajectory_id", "taskId", "thread_id")
+    return str(value or "")[:200]
+
+
+#: Blackbox's home at run time. WHY: this runner is a COPY installed at
+#: ``$BLACKBOX_HOME/agent-hooks/runner.py``, so its grandparent folder is that home — not the plugin
+#: source tree. Files below it are created at run time, never shipped as package data.
+INSTALLED_HOME = Path(__file__).resolve().parent.parent
+
+#: The launcher's record of the profile an agent started in (``<file>#<sha256 prefix>``).
+SANDBOX_PROFILE_ENV = "BLACKBOX_SANDBOX_PROFILE"
+MAX_PROFILE_CHARS = 600
+#: The Linux launcher's id of the sandbox an agent runs in (its cgroup scope's name).
+SANDBOX_ID_ENV = "BLACKBOX_SANDBOX_ID"
+MAX_SANDBOX_ID_CHARS = 120
+#: File Shield's sandbox canary (``shields/files/sandbox``), written into Blackbox's home at run time.
+CANARY = INSTALLED_HOME / "sandbox" / "canary"
+
+
+def sandboxed() -> bool:
+    """True when this hook (so the agent that started it) runs inside Blackbox's OS sandbox: only a
+    sandboxed process is refused the canary — a variable could be faked, the kernel's refusal can not."""
+    try:
+        with open(CANARY, encoding="utf-8-sig") as handle:
+            handle.read(1)
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+
+
+def summary(agent: str, event: str, payload: dict) -> dict:
+    """The one shape the dashboard checks: the tool call, and the TEXT to check for injection (a
+    prompt, a tool's output, a file about to be read). The text is checked, never recorded."""
+    body = {"agent": agent, "event": event, "session": _session(payload),
+            "cwd": workspace(payload, _first)[:500],
+            "sandboxed": sandboxed(), **identity(agent, payload, _first)}
+    if body["sandboxed"]:   # the profile its launcher chose, "<file>#<digest>": a changed permission needs a restart
+        body["sandbox_profile"] = os.environ.get(SANDBOX_PROFILE_ENV, "")[:MAX_PROFILE_CHARS]
+        # Linux below 6.12: the sandbox is a PID namespace, so "pid" is ITS number; the dashboard
+        # maps it back with this id (the launcher's scope name).
+        body["sandbox_id"] = os.environ.get(SANDBOX_ID_ENV, "")[:MAX_SANDBOX_ID_CHARS]
+    if not body["model"] and event in MODEL_EVENTS:   # the payload names none: its transcript does (KI-566)
+        body["model"] = transcript_model(payload)
+    if event in ("pre_tool", "post_tool"):
+        body["tool_name"], body["args"] = _tool(agent, payload)
+        body["tool_call_id"] = _call_id(payload)
+    if event == "pre_tool":
+        body["text"] = read_text(agent, payload)
+    if event == "post_tool":
+        body["text"] = output_text(agent, payload)
+    if event == "session_start":
+        body["text"] = task_text(agent, payload)   # checked like a prompt, never kept (KI-604)
+    if event == "prompt":
+        body["text"] = prompt_text(agent, payload)
+        body["prompt_chars"] = len(body["text"])
+        # One person's prompt is counted once (KI-567): its id, and whether the agent itself sent
+        # this turn (Claude Code delivers a background sub-agent's result as a new turn).
+        body["prompt_id"] = str(payload.get("prompt_id") or "")[:80]
+        body["agent_turn"] = body["text"].lstrip().startswith(AGENT_TURN_MARKS)
+    return body
+
+
+def main(argv: list, detach: bool = False) -> int:
+    """Answer one hook call. *detach*: record a locally judged event in a child process after the
+    answer (the installed script); in-process callers (tests) record it here, after the answer."""
+    started = time.time() - process_age()   # the agent's wait began when it started this process
+    if len(argv) < 4:
+        return 0
+    agent, event, url = effective_agent(argv[1]), argv[2], argv[3].rstrip("/")
+    if not agent:
+        return 0   # Devin's own hook reports this action
+    payload: dict = {}
+    try:
+        raw = sys.stdin.buffer.read(MAX_INPUT_BYTES)
+        payload = json.loads(raw.decode("utf-8", "replace") or "{}")
+        payload = payload if isinstance(payload, dict) else {}
+        body = summary(agent, event, payload)
+    except Exception:   # health: allow BLE001 -- fail open: the agent continues without Blackbox's answer
+        body = {}
+    verdict = answer_in_time(url, event, body, started) if body else Verdict({})
+    code = _respond(agent, event, payload, verdict.answer)
+    keep(verdict, body, detach)   # what the dashboard did not record: here, or spooled for it
+    if verdict.late:   # the unfinished judgement holds the interpreter: end without waiting for it
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(code)
+    return code
+
+
+def _respond(agent: str, event: str, payload: dict, answer: dict) -> int:
+    """Write *answer* in *agent*'s own format; the exit code the agent reads."""
+    if event in BLOCKING_EVENTS and answer.get("decision") == "block":
+        reason = str(answer.get("message") or "Blocked by Blackbox: this action matches a verified threat.")[:1000]
+        out, code = (prompt_output if event == "prompt" else post_output if event == "post_tool" else deny_output)(agent, reason)
+        if out:
+            sys.stdout.write(out)
+        sys.stderr.write(reason + "\n")
+        return code
+    note = str(answer.get("note") or "")[:1000] if event == "post_tool" else ""
+    out = note_output(agent, note, str(payload.get("hook_event_name") or "")) if note else allow_output(agent, event)
+    if note:   # the OS sandbox refused part of the call: said beside the output, never refusing it (KI-590)
+        sys.stderr.write(note + "\n")
+    if out:
+        sys.stdout.write(out)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv, detach=True))

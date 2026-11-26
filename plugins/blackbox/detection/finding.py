@@ -17,6 +17,17 @@ from typing import Any, Optional
 #: approval a trading bot sends every day (KI-385). The hook's blocking rule reads it.
 KIND_FLAG_ONLY = "flag-only"
 
+#: ``Finding.matched`` of a finding on an item the PERSON protected (File Shield's protected files
+#: and folders): their own explicit rule, refused in every mode like Blackbox's self-protection.
+PERSON_PROTECTED = "person-protected"
+
+#: ``Finding.matched`` of a finding an add-on raises for an ORDER from whoever manages this machine
+#: (an organisation's admins approved it: cut a host off, refuse a host, keep agents off the
+#: network, pause them). Their explicit order, refused in every mode like the person's own
+#: protection: in Audit mode an agent otherwise went straight through orders the machine held
+#: (a drill on real servers, 2026-11-23).
+MANAGER_ORDER = "manager-order"
+
 #: ``Finding.fields`` key set on a wallet secret (seed phrase, private key) that a call SENDS
 #: off the machine. A wallet secret has no right destination, so this one is a built-in rule:
 #: it counts whether or not Trader Shield is on (KI-488) — the shield claims every other
@@ -62,6 +73,9 @@ class Finding:
     kind: Optional[str] = None
     fields: dict[str, Any] = field(default_factory=dict)
     rule_subject: str = ""
+    #: What the agent can do instead, shown under the finding in a refusal (``""``: nothing to add).
+    #: Written by Blackbox for its own built-in rules; never holds a path, prompt or secret.
+    advice: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -78,6 +92,7 @@ class Finding:
             "kind": self.kind,
             "fields": dict(self.fields),
             "rule_subject": self.rule_subject,
+            "advice": self.advice,
         }
 
 

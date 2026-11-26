@@ -1,0 +1,97 @@
+"""The sandbox's own tools, first on the SANDBOXED PATH only: a setuid-free ``ps`` and a stand-in that
+says why for each setuid tool (KI-589; see the package doc).
+
+Usage::
+
+    refresh_tools(launchers)        # <launchers>/sandbox-tools made current for this macOS
+    tools_dir(launchers)            # where they live
+"""
+
+from __future__ import annotations
+
+import os
+import shutil
+import stat
+import subprocess
+from pathlib import Path
+from platform import mac_ver
+
+from ......kernel.bounded_files import atomic_write, read_small_text
+from ..posix_scripts import standin
+
+TIMEOUT_SECONDS = 5.0
+#: The folder beside the launchers whose programs come first on the SANDBOXED PATH only (never the
+#: person's own PATH): the setuid-free ``ps`` and the stand-ins for setuid tools.
+TOOLS_FOLDER = "sandbox-tools"
+#: ``ps`` without its setuid bit runs inside the sandbox with the agent's own rights (KI-589). The
+#: copy is signed ad hoc: macOS 27 kills a plain copy of a platform binary (probed 2026-11-22, exit
+#: 137), macOS 26 ran one. A copy that still does not run is removed (the stand-in says why).
+PS = "/bin/ps"
+CODESIGN = "/usr/bin/codesign"
+#: Setuid tools that need root to work at all (``top`` reads every process through a root-only
+#: library, ``crontab`` the root-owned tables): each existing one gets a stand-in saying why.
+SETUID_TOOLS = ("/usr/bin/top", "/usr/bin/crontab", "/usr/bin/sudo", "/usr/bin/su", "/usr/bin/at", "/usr/bin/atq",
+                "/usr/bin/atrm", "/usr/bin/batch", "/usr/bin/login", "/usr/bin/newgrp", "/usr/bin/quota")
+SETUID_NOTE = "macOS doesn't allow setuid programs inside the agent sandbox; run it in your own terminal"
+_TOOLS_STAMP = ".macos"
+
+
+def tools_dir(launchers: str) -> str:
+    return os.path.join(launchers, TOOLS_FOLDER)
+
+
+def _stamp() -> str:
+    """What the tool copies were made from: this macOS and the ``ps`` it ships."""
+    try:
+        found = os.stat(PS)
+    except OSError:
+        return ""
+    return f"{mac_ver()[0]} {os.uname().version} {found.st_size} {found.st_mtime_ns}\n"
+
+
+def refresh_tools(launchers: str, wanted: bool = True) -> bool:
+    """Makes ``<launchers>/sandbox-tools`` hold a setuid-free copy of ``ps`` and a stand-in for each
+    setuid tool here (:data:`SETUID_TOOLS`), again whenever macOS (or its ``ps``) changed; removes
+    the folder when no agent is sandboxed (*wanted* False). Answers True when it wrote them.
+    Fail-open: a Mac without ``/bin/ps`` or a read-only folder keeps none."""
+    folder, stamp = tools_dir(launchers), _stamp()
+    if not wanted:
+        shutil.rmtree(folder, ignore_errors=True)
+        return False
+    marker = os.path.join(folder, _TOOLS_STAMP)
+    if stamp and read_small_text(marker, len(stamp) + 1) == stamp and os.access(os.path.join(folder, "ps"), os.X_OK):
+        return False
+    try:
+        os.makedirs(folder, exist_ok=True)
+        if stamp:
+            _copy_ps(os.path.join(folder, "ps"))
+        for tool in SETUID_TOOLS:
+            standin = os.path.join(folder, os.path.basename(tool))
+            if os.path.exists(tool) and os.stat(tool).st_mode & (stat.S_ISUID | stat.S_ISGID):
+                atomic_write(Path(standin), _standin(os.path.basename(tool)), mode=0o755)
+        atomic_write(Path(marker), stamp, mode=0o644)
+    except OSError:
+        return False
+    return True
+
+
+def _copy_ps(target: str) -> None:
+    """A copy of ``ps`` at *target* without the setuid bit (copyfile copies bytes only), signed ad
+    hoc, kept only when it runs."""
+    shutil.copyfile(PS, target)
+    os.chmod(target, 0o755)
+    try:
+        subprocess.run([CODESIGN, "--force", "--sign", "-", target], capture_output=True, timeout=TIMEOUT_SECONDS, check=False)
+        runs = subprocess.run([target, "-p", str(os.getpid()), "-o", "pid="], capture_output=True,
+                              timeout=TIMEOUT_SECONDS, check=False).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        runs = False
+    if not runs:
+        atomic_write(Path(target), _standin("ps"), mode=0o755)
+
+
+def _standin(name: str) -> str:
+    return standin(name, SETUID_NOTE)
+
+
+__all__ = ["CODESIGN", "PS", "SETUID_NOTE", "SETUID_TOOLS", "TIMEOUT_SECONDS", "TOOLS_FOLDER", "refresh_tools", "tools_dir"]

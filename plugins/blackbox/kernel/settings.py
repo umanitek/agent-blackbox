@@ -17,12 +17,13 @@ and falls back to a plain YAML read-modify-write for standalone installs.
 from __future__ import annotations
 
 import logging
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Callable, Iterable, NamedTuple
 
 from . import constants
 from . import yaml_files
-from .config import load_blackbox_config
+from .config import DEFAULT_PROTECTED_PATHS, MODE_STARTING, agent_activity, load_blackbox_config, mode_answer
 from .config_values import schema
 from .config_values.schema import DETECTION_CATEGORIES, MAX_PROTECTED_PATHS
 
@@ -53,24 +54,32 @@ SettingsValidator = Callable[[dict[str, Any]], tuple[Any, ...]]
 
 #: Marks a superseded key in the updates for :func:`_apply` to delete.
 _SUPERSEDED = object()
+#: Sections another package owns: ``{key: validate(raw, errors) -> section}``, deep-merged like ``llm``.
+SECTION_VALIDATORS: dict[str, Callable[[Any, list[str]], dict[str, Any]]] = {}
 
 
 def read_settings() -> dict[str, Any]:
     """Return the current settings as a JSON-friendly, fully-defaulted dict."""
     cfg = load_blackbox_config()
-    categories = {
-        cat: cfg.category_setting(cat) for cat in DETECTION_CATEGORIES
-    }
+    categories = {cat: cfg.category_setting(cat) for cat in DETECTION_CATEGORIES}
+    mode = mode_answer(cfg)
     return {
-        "mode": cfg.mode,
+        "mode": mode,   # "starting" until the saved settings were read (KI-PENDING-b28f8f): never a guessed Audit
+        "starting": mode == MODE_STARTING,
         "block_severity": cfg.block_severity,
         "report": cfg.report,
         "community_sandbox": cfg.community_sandbox,
         "report_min_severity": cfg.report_min_severity,
         "discover": cfg.discover,
         "osv_lookup": cfg.osv_lookup,
+        "auto_attach": cfg.auto_attach,
+        "agent_activity": asdict(agent_activity()),
         "categories": categories,
         "protected_paths": list(cfg.protected_paths),
+        # What "Reset to defaults" restores. WHY it is served: an explicit empty list is kept as
+        # given (a person who clears the list keeps it cleared), so a reset that sent [] would
+        # strip ~/.ssh/*, .env, *.pem … — a reset must never leave the machine less protected.
+        "default_protected_paths": list(DEFAULT_PROTECTED_PATHS),
         "llm": {
             "enabled": cfg.llm_enabled,
             "provider": cfg.llm_provider,
@@ -116,7 +125,7 @@ def _validate(payload: dict[str, Any], *, sharing_consent: bool = False) -> tupl
             else:
                 errors.append(f"invalid {key}: {payload[key]!r}")
 
-    for key in ("discover", "osv_lookup", "report", "community_sandbox"):
+    for key in ("discover", "osv_lookup", "auto_attach", "report", "community_sandbox"):
         # `report` (KI-005): the community-sharing switch is a real settings
         # key now — validate-then-persist like every other boolean.
         if key in payload:
@@ -139,12 +148,35 @@ def _validate(payload: dict[str, Any], *, sharing_consent: bool = False) -> tupl
         else:
             errors.append(f"protected_paths must be a list of up to {MAX_PROTECTED_PATHS} paths")
 
-    if "llm" in payload:
-        llm = _validate_llm(payload["llm"], errors)
-        if llm:
-            updates["llm"] = llm
+    for key, validate in (("llm", _validate_llm), ("agent_activity", _validate_activity), *SECTION_VALIDATORS.items()):
+        section = validate(payload[key], errors) if key in payload else {}
+        if section:
+            updates[key] = section
 
     return updates, errors
+
+
+def _validate_activity(raw: Any, errors: list[str]) -> dict[str, Any]:
+    """``agent_activity``: ``history_days`` (1–365), ``record_prompt_text`` (a boolean) and
+    ``quiet_minutes`` (1–1440: when an instance with no process to follow counts as ended)."""
+    if not isinstance(raw, dict):
+        errors.append("agent_activity must be an object")
+        return {}
+    out: dict[str, Any] = {}
+    for key, unit, highest in (("history_days", "days", 365), ("quiet_minutes", "minutes", 1440)):
+        value = raw.get(key)
+        if value is None:
+            continue
+        if isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= highest:
+            out[key] = value
+        else:
+            errors.append(f"agent_activity.{key} must be a number of {unit} from 1 to {highest}")
+    if "record_prompt_text" in raw:
+        if isinstance(raw["record_prompt_text"], bool):
+            out["record_prompt_text"] = raw["record_prompt_text"]
+        else:
+            errors.append("agent_activity.record_prompt_text must be a boolean")
+    return out
 
 
 def _validate_llm(raw: Any, errors: list[str]) -> dict[str, Any]:
@@ -182,6 +214,13 @@ def _validate_llm(raw: Any, errors: list[str]) -> dict[str, Any]:
         else:
             errors.append(f"invalid llm.api_key_env: {raw['api_key_env']!r}")
     return llm
+
+
+def settings_problems(payload: dict[str, Any], validators: Iterable[SettingsValidator] = ()) -> list[str]:
+    """What :func:`write_settings` would refuse in *payload* (empty: it is valid), writing nothing.
+    Sharing consent is not judged here: that is the caller's (``write_settings(sharing_consent=)``)."""
+    errors = _validate(payload, sharing_consent=True)[1]
+    return errors + _shield_updates(payload, validators)[1]
 
 
 def write_settings(payload: dict[str, Any], *, sharing_consent: bool = False,
@@ -318,7 +357,7 @@ def _dig(root: dict[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:
 def _apply(entry: dict[str, Any], updates: dict[str, Any]) -> None:
     """Apply validated *updates* onto the blackbox config *entry* in place.
 
-    ``detection``, ``shields`` and ``llm`` are deep-merged (so setting the model never
+    ``detection``, ``shields``, ``llm`` and ``agent_activity`` are deep-merged (so setting the model never
     drops the key, tuning one category never drops another, and saving one shield never
     touches another's section); a key marked superseded is deleted; every other key is
     a straight overwrite.
@@ -328,11 +367,11 @@ def _apply(entry: dict[str, Any], updates: dict[str, Any]) -> None:
             entry.pop(key, None)
         elif key in ("detection", "shields") and isinstance(value, dict):
             _merge_per_id(entry, key, value)
-        elif key == "llm" and isinstance(value, dict):
-            existing = entry.get("llm")
+        elif (key in ("llm", "agent_activity") or key in SECTION_VALIDATORS) and isinstance(value, dict):
+            existing = entry.get(key)
             if not isinstance(existing, dict):
                 existing = {}
-                entry["llm"] = existing
+                entry[key] = existing
             existing.update(value)
             for cleared in [name for name, setting in value.items() if setting is None]:
                 existing.pop(cleared, None)   # KI-371: a replaced key copy is removed, not left behind

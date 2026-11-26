@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Blackbox Notifications</title>
+<script>
+  // The dashboard's own appearance setting (same key), applied before paint.
+  (function () {
+    var preference = "system";
+    try {
+      var saved = localStorage.getItem("blackbox.dashboard.theme.v1");
+      if (saved === "light" || saved === "dark" || saved === "system") preference = saved;
+    } catch (_) {}
+    var resolved = preference === "system"
+      ? (window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark")
+      : preference;
+    document.documentElement.setAttribute("data-theme", resolved);
+    document.documentElement.style.colorScheme = resolved;
+  })();
+</script>
+<link rel="stylesheet" href="/docs/assets/docs.css" />
+<style>
+  .nt-wrap { max-width: 860px; margin: 0 auto; padding: 24px max(16px, env(safe-area-inset-left, 0px)) 64px; display: grid; gap: 24px; }
+  .nt-card { border: 1px solid var(--border, #2a2d34); border-radius: 12px; padding: 18px 20px; display: grid; gap: 12px; }
+  .nt-row { display: flex; gap: 12px; align-items: flex-start; }
+  .nt-row input[type="checkbox"] { margin-top: 4px; }
+  .nt-row small, .nt-muted { opacity: .75; }
+  .nt-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+  .nt-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+  .nt-item { border-left: 3px solid var(--border, #2a2d34); padding: 2px 0 2px 12px; }
+  .nt-item[data-level="critical"] { border-left-color: #c2352b; }
+  .nt-item[data-level="warning"] { border-left-color: #b7791f; }
+  .nt-item time, .nt-held { font-size: 12px; opacity: .7; }
+  .nt-actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  button.nt { font: inherit; padding: 6px 14px; border-radius: 8px; border: 1px solid var(--border, #2a2d34); background: transparent; color: inherit; cursor: pointer; }
+  input.nt, select.nt { font: inherit; padding: 5px 8px; border-radius: 8px; border: 1px solid var(--border, #2a2d34); background: transparent; color: inherit; }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <a class="wordmark" href="/" aria-label="Back to the Blackbox dashboard"><span class="dot" aria-hidden="true"></span>BLACKBOX<span class="sub">Notifications</span></a>
+  <a class="back" href="/">Dashboard</a>
+</header>
+<main class="nt-wrap">
+  <section class="nt-card" aria-labelledby="nt-how">
+    <h2 id="nt-how">How Blackbox notifies you</h2>
+    <p id="nt-notifier" class="nt-muted">Reading…</p>
+    <div class="nt-actions"><button class="nt" id="nt-test" type="button">Send a test notification</button><button class="nt" id="nt-settings" type="button" hidden>Open Notification settings</button><span id="nt-test-result" class="nt-muted" aria-live="polite"></span></div>
+  </section>
+  <section class="nt-card" aria-labelledby="nt-what">
+    <h2 id="nt-what">What you are told</h2>
+    <label class="nt-row"><input type="checkbox" id="nt-enabled" /><span><b>Notifications</b><br /><small>Off: Blackbox shows nothing outside this dashboard.</small></span></label>
+    <label class="nt-row"><input type="checkbox" id="nt-security" /><span><b>Security</b><br /><small>An AI agent was stopped or flagged, asked for or is running with administrator (root) rights, runs without Blackbox, or a shield raised an alert.</small></span></label>
+    <label class="nt-row"><input type="checkbox" id="nt-lifecycle" /><span><b>Agents starting and ending</b><br /><small>An agent or sub-agent started, ended, or is waiting for you.</small></span></label>
+    <label class="nt-row"><input type="checkbox" id="nt-digest" /><span><b>Session summary</b><br /><small>One line when a session ends: how many actions were checked and how many refused.</small></span></label>
+    <label class="nt-row"><input type="checkbox" id="nt-watched" /><span><b>New files in watched folders</b><br /><small>File Shield's scan found a new file in a folder you watch. A known-bad file is always a security notice.</small></span></label>
+    <label class="nt-row"><input type="checkbox" id="nt-details" /><span><b>Show details in notifications</b><br /><small>Off: a notification never shows a path, a command or an address — safe on a locked screen. On: the finding's own short description is added.</small></span></label>
+    <div class="nt-grid">
+      <label>Quiet hours <input class="nt" id="nt-quiet" placeholder="22:00-07:00" inputmode="numeric" size="12" /><br /><small class="nt-muted">Only critical security notices are shown then. Empty = none.</small></label>
+      <label>At most per minute <input class="nt" id="nt-rate" type="number" min="1" max="60" size="4" /><br /><small class="nt-muted">For each source (your AI agents, the shields, agents starting and ending): more than this are counted into one summary.</small></label>
+      <label>Summary every (minutes) <input class="nt" id="nt-digest-minutes" type="number" min="0" max="720" size="4" /><br /><small class="nt-muted">0 = only when a session ends.</small></label>
+    </div>
+    <div class="nt-actions"><button class="nt" id="nt-save" type="button">Save</button><span id="nt-save-result" class="nt-muted" aria-live="polite"></span></div>
+    <p class="nt-muted">Turning Security off waits for your confirmation, like any change that makes Blackbox tell you less.</p>
+  </section>
+  <section class="nt-card" aria-labelledby="nt-history">
+    <h2 id="nt-history">History</h2>
+    <ul id="nt-list" class="nt-list"><li class="nt-muted">Reading…</li></ul>
+  </section>
+</main>
+<script src="/approvals.js"></script>
+<script src="/notifications.js"></script>
+</body>
+</html>

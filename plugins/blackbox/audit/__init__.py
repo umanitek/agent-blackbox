@@ -27,14 +27,19 @@ from .findings import (
     blocked_counts_by_identifier,
     local_active_frameworks,
     local_frameworks,
+    NOT_AGENTS,
+    SANDBOX_RECORDER,
     read_file_access,
     read_findings,
     record,
     record_dependency,
+    record_for,
     record_file_access,
 )
 from .private_ka import node_is_local, write_private_audit_ka
 from .profile_logs import fold_profile_logs
+from . import protection_log
+from .tamper import TamperCount, tamper_counts
 from .local_graph import local_audit_graph
 from .log_store import in_sandbox_run, sandbox_run
 from .redaction import redact, sanitize_text
@@ -49,6 +54,9 @@ from .share_ledger import (
 )
 
 __all__ = [
+    "NOT_AGENTS",
+    "SANDBOX_RECORDER",
+    "TamperCount",
     "allow_report",
     "blocked_counts_by_identifier",
     "count_audit",
@@ -62,6 +70,7 @@ __all__ = [
     "mark_reported",
     "node_is_local",
     "previously_accepted",
+    "protection_log",
     "read_audit",
     "read_file_access",
     "read_findings",
@@ -71,9 +80,11 @@ __all__ = [
     "record",
     "record_dependency",
     "record_file_access",
+    "record_for",
     "record_share_outcome",
     "redact",
     "sandbox_run",
     "sanitize_text",
+    "tamper_counts",
     "write_private_audit_ka",
 ]

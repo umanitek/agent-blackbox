@@ -777,7 +777,7 @@ def test_the_worker_refreshes_soon_when_nothing_was_ever_compiled():
 def test_the_worker_refreshes_soon_when_setup_compiled_an_empty_ruleset():
     """Judge-path test, bb-judge-2 (2026-11-07): setup compiles once before the node holds any graph,
     so a fresh home has a timestamp and no rules; the dashboard took that for "compiled" and put the
-    first sync an hour away — the Desktop page sat on "Finding the graph" with nothing asking for it."""
+    first sync an hour away — the Hermes Desktop page sat on "Finding the graph" with nothing asking for it."""
     from plugins.blackbox.dashboard import sync_timing
     from plugins.blackbox.kernel.config import BlackboxConfig
     from plugins.blackbox.ruleset import compiler

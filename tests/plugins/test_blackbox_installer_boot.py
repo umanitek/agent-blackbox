@@ -27,8 +27,9 @@ def test_boot_service_function_exists_and_runs_in_main():
     assert "register_boot_service()" in src
     main_body = src.split("main() {", 1)[1]
     assert "register_boot_service" in main_body
-    # Runs after the dashboard is up, before the closing guidance.
-    assert main_body.index("start_dashboard") < main_body.index("register_boot_service")
+    # Runs BEFORE the dashboard starts (KI-529): the dashboard's first sync restarts the node, and
+    # only a node already held by its service is restarted through it instead of behind it.
+    assert main_body.index("register_boot_service") < main_body.index("start_dashboard")
     assert main_body.index("register_boot_service") < main_body.index("next_steps")
 
 
@@ -121,7 +122,7 @@ def test_dashboard_unit_starts_after_the_node_and_runs_the_dashboard():
     assert "After=network-online.target blackbox-dkg.service" in unit
     assert "ExecStart=$HERMES_BIN blackbox dashboard" in unit
     assert "Environment=HERMES_HOME=$HERMES_HOME" in unit
-    assert "Restart=on-failure" in unit
+    assert "Restart=always" in unit   # Linux round L1: on-failure left a SIGTERM'd dashboard down
 
 
 def test_dashboard_service_respects_auto_dashboard_off():
@@ -254,7 +255,7 @@ _NODE_SETTINGS = {
 def _installed_dkg_bin(tmp_path) -> str:
     """A stand-in node binary: register_boot_service registers nothing for a missing one."""
     dkg = tmp_path / "dkg" / "node_modules" / ".bin" / "dkg"
-    dkg.parent.mkdir(parents=True)
+    dkg.parent.mkdir(parents=True, exist_ok=True)
     dkg.write_text("#!/bin/sh\nexit 0\n")
     dkg.chmod(0o755)
     return str(dkg)
@@ -268,16 +269,17 @@ def _installer_constant(name: str) -> str:
     return match.group(0)
 
 
-def _register_boot_service(tmp_path, os_name: str):
-    """Run the real register_boot_service in a sandbox shaped like *os_name*."""
+def _register_boot_service(tmp_path, os_name: str, launchctl: str = "exit 0", extra: tuple[str, ...] = ()):
+    """Run the real register_boot_service in a sandbox shaped like *os_name* (*launchctl*: the
+    stub's body)."""
     import shutil
     import subprocess
     if shutil.which("bash") is None:
         pytest.skip("needs bash")
     stubs = tmp_path / "bin"
-    stubs.mkdir()
+    stubs.mkdir(exist_ok=True)
     for name, body in (("uname", f"echo {os_name}"), ("node", "exit 0"), ("systemctl", "exit 0"),
-                       ("launchctl", "exit 0")):
+                       ("launchctl", launchctl), ("sleep", "exit 0")):
         (stubs / name).write_text(f"#!/bin/sh\n{body}\n")
         (stubs / name).chmod(0o755)
     script = "\n".join([
@@ -285,13 +287,17 @@ def _register_boot_service(tmp_path, os_name: str):
         "ok() { :; }", "warn() { echo \"WARN $*\"; }", "step() { :; }", "heading() { :; }",
         "secure_dkg_token_perms() { :; }", "id() { echo 1000; }",
         "hand_dkg_node_to_service() { :; }", "ensure_user_lingering() { :; }",   # own tests: test_blackbox_install_node_handover.py, _user_linger.py
+        "blackbox_dkg_answers() { return 1; }", "blackbox_dkg_owned_by() { return 1; }", "blackbox_dkg_stop_and_wait() { :; }",
+        *extra,
         f"HOME={tmp_path}",
         *(f"{key}='{value}'" for key, value in _NODE_SETTINGS.items()),
         f"BLACKBOX_DKG_BIN='{_installed_dkg_bin(tmp_path)}'",
         _installer_constant("BLACKBOX_DKG_LAUNCHD_LABEL"),   # the script's own top-level value
         _installer_constant("BLACKBOX_SERVICE_SYSTEM_PATH"),
+        _installer_constant("BLACKBOX_LAUNCHD_GONE_TRIES"),
         _top_level_function("xml_escape"),
         _top_level_function("blackbox_dkg_launchd_error_log"), _top_level_function("register_boot_service"),
+        _top_level_function("blackbox_launchd_wait_gone"), _top_level_function("blackbox_launchd_reload"),
         "register_boot_service",
     ])
     result = subprocess.run(["bash", "-c", script], capture_output=True, text=True,
@@ -366,3 +372,43 @@ def test_a_plist_value_is_escaped_as_xml_text(tmp_path):
 
     plist = plistlib.loads((tmp_path / "Library" / "LaunchAgents" / "ai.umanitek.blackbox-dkg.plist").read_bytes())
     assert plist["EnvironmentVariables"]["DKG_HOME"] == "/srv/a&b<c>/.dkg"
+
+
+def test_an_unchanged_login_item_is_left_running_and_a_changed_one_is_reloaded_once(tmp_path):
+    """KI-533 (E2E full3, 2026-11-22): every run did `launchctl unload` + `load` back to back — the new
+    job started while the old node still ran, exited "Daemon already running", and launchd
+    relaunched the node 4 times in 90 s. An unchanged definition launchd holds is left alone; a
+    changed one is reloaded once, through the reload that waits for the old job to go."""
+    calls = tmp_path / "launchctl-calls"
+    loaded = tmp_path / "loaded"   # whether launchd holds the job (the stub's state)
+    stub = (f'echo "$1" >> {calls}\n'
+            f'case "$1" in print) [ -f {loaded} ] || exit 113; exit 0;; '
+            f'bootout) rm -f {loaded}; exit 0;; bootstrap) : > {loaded}; exit 0;; esac\nexit 0')
+    _register_boot_service(tmp_path, "Darwin", launchctl=stub)
+    first = calls.read_text().split()
+    assert "unload" not in first and "load" not in first
+    assert first.index("bootout") < first.index("bootstrap")
+    calls.write_text("")
+    _register_boot_service(tmp_path, "Darwin", launchctl=stub)
+    again = calls.read_text().split()
+    assert "bootout" not in again and "bootstrap" not in again and "unload" not in again, again
+
+
+def test_the_installer_s_own_node_is_gone_before_launchd_starts_the_node_once(tmp_path):
+    """KI-541 (E2E full5 2026-11-22): loading the LaunchAgent starts the node (RunAtLoad) while the
+    installer's own copy still served — launchd's start exited "Daemon already running" and was
+    retried. The installer's copy is stopped first; the node profile is written before any start."""
+    calls = tmp_path / "calls"
+    calls.write_text("")
+    hermes = tmp_path / "bin" / "hermes"
+    hermes.parent.mkdir(exist_ok=True)
+    hermes.write_text(f'#!/bin/sh\necho "hermes $*" >> {calls}\n')
+    hermes.chmod(0o755)
+    stub = f'echo "launchctl $1" >> {calls}\ncase "$1" in print) exit 113;; esac\nexit 0'
+    _register_boot_service(tmp_path, "Darwin", launchctl=stub, extra=(
+        f"HERMES_BIN={hermes}",
+        "blackbox_dkg_answers() { return 0; }",            # the installer's own copy serves
+        f'blackbox_dkg_stop_and_wait() {{ echo "stop installer copy" >> {calls}; }}'))
+    lines = calls.read_text().splitlines()
+    assert lines[0] == "hermes blackbox sync --node-profile-only", lines
+    assert lines.index("stop installer copy") < lines.index("launchctl bootstrap"), lines

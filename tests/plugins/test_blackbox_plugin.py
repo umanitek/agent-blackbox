@@ -438,20 +438,14 @@ def test_managed_dkg_sync_environment_keeps_native_reconciliation_enabled(
 def test_managed_dkg_sync_environment_honors_persisted_bootstrap_mode(
     tmp_path, monkeypatch
 ):
-    (tmp_path / "config.json").write_text(
-        json.dumps(
-            {
-                "syncOnConnectEnabled": False,
-                "syncReconcilerEnabled": False,
-                "durableSyncEnabled": True,
-                "syncGlobalMaxInflight": 1,
-                "syncGlobalQueueLimit": 1,
-            }
-        ),
-        encoding="utf-8",
-    )
+    persisted = {"syncOnConnectEnabled": False, "syncReconcilerEnabled": False, "durableSyncEnabled": True,
+                 "syncGlobalMaxInflight": 1, "syncGlobalQueueLimit": 1}
+    (tmp_path / "config.json").write_text(json.dumps(persisted), encoding="utf-8")
     cfg = config_mod.BlackboxConfig(dkg_home=str(tmp_path))
     monkeypatch.setattr(managed_node, "_node_runtime_matches_dkg", lambda *_args: True)
+    # Which Node runs the node is another test's subject; looking for it here read the developer's
+    # own PATH (a `node` under the real ~/.hermes/tools) and tripped the real-home guard.
+    monkeypatch.setattr(managed_node, "_managed_dkg_node_executable", lambda _cfg: None)
 
     env = managed_node._dkg_sync_environment(cfg)
 

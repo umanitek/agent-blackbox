@@ -379,21 +379,20 @@
   <!-- Can / cannot -->
   <section aria-label="Can and can't">
     <div class="eyebrow">Straight answers</div>
-    <h2>What it does today, and what's on the way</h2>
+    <h2>What it does today, and what it doesn't</h2>
     <div class="grid2">
       <div class="card"><span class="k" style="color:var(--ok)">It can</span><ul class="list can" id="can"></ul></div>
-      <div class="card"><span class="k" style="color:var(--signal)">On the way</span><ul class="list cannot" id="cannot"></ul></div>
+      <div class="card"><span class="k" style="color:var(--signal)">It doesn't</span><ul class="list cannot" id="cannot"></ul></div>
     </div>
-    <div class="card"><span class="k">Coming soon</span><div class="chips" id="coming"></div>
-      <p class="muted" style="font-size:13.5px">This page is updated as each one ships. <span class="mono" id="version"></span></p></div>
+    <p class="muted" style="font-size:13.5px"><span class="mono" id="version"></span></p>
   </section>
 
   <!-- Testimonial -->
-  <section aria-label="From traders">
+  <section aria-label="From traders" id="from-traders" hidden>
     <div class="eyebrow">From traders</div>
     <div class="quote pending" id="quote">
-      <blockquote id="quote-text">A trader's write-up on Trader Shield will appear here.</blockquote>
-      <div class="who" id="quote-who">Coming soon</div>
+      <blockquote id="quote-text"></blockquote>
+      <div class="who" id="quote-who"></div>
     </div>
   </section>
 
@@ -435,8 +434,8 @@
   page.then(function (c) {
     document.getElementById("can").innerHTML = (c.can || []).map(item).join("");
     document.getElementById("cannot").innerHTML = (c.cannot || []).map(item).join("");
-    document.getElementById("coming").innerHTML = (c.coming || []).map(function (x) { return '<span class="chip">' + esc(x) + "</span>"; }).join("");
-    if (!c.testimonial) return;
+    if (!c.testimonial) return;   // launch-first: no placeholder — the section shows only a real write-up
+    document.getElementById("from-traders").hidden = false;
     document.getElementById("quote").classList.remove("pending");
     document.getElementById("quote-text").textContent = c.testimonial.text;
     var who = document.getElementById("quote-who");

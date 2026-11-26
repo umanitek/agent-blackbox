@@ -18,6 +18,8 @@ import pytest
 
 from plugins.blackbox.kernel.config import BlackboxConfig
 from plugins.blackbox.sync import managed_node, node_process
+from plugins.blackbox.sync import node_service
+from plugins.blackbox.sync.platform import linux as sync_linux
 
 STALE, WORKER, SUPERVISOR, FOREIGN = 6436, 6046, 6045, 7777
 
@@ -114,6 +116,8 @@ def test_a_restart_with_a_stale_pidfile_goes_through_systemd(cfg, monkeypatch):
         return argparse.Namespace(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(managed_node, "_systemd_unit_of", lambda pid: "blackbox-dkg.service" if pid == WORKER else None)
+
+    monkeypatch.setattr(node_service, "os_platform", sync_linux)   # a unit found in a cgroup is systemd's (Linux)
     monkeypatch.setattr(managed_node, "_dkg_sync_environment", lambda _cfg: {})
     monkeypatch.setattr(managed_node.subprocess, "run", run)
     monkeypatch.setattr(managed_node, "_wait_for_managed_dkg_ready", lambda _cfg, _detail: None)
