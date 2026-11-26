@@ -34,7 +34,17 @@ KINDS = ("package", "domain", "ip", "url")
 SESSION_ID = "blackbox-sandbox"   # every sandbox test runs under this agent session
 _TRIES = 12                        # random windows of the live tier to look in
 _WINDOW = 40                       # rules per window
-_SHARE_WAIT_S = 90.0               # the share thread's node round trip (seal → share → poll)
+#: The whole wait for this test's shares, ONE deadline (2026-11-26, dev node: a wait of 90 s for the
+#: follow-up plus 90 s per share made a two-finding domain test answer after ~3 minutes while the
+#: button said "up to 90 s"). A share still in flight at the deadline is reported as PENDING.
+_SHARE_WAIT_S = 90.0
+#: The longest the pick may read the live rules: a busy node answers each query just inside its
+#: own timeout, and twelve windows of two queries each could otherwise hold the request ~4 min.
+_PICK_BUDGET_S = 30.0
+#: The longest one test may take, end to end; the dashboard's own wait is a little longer.
+RUN_BUDGET_S = _PICK_BUDGET_S + _SHARE_WAIT_S
+#: ``TestResult.shared`` while this test's share is still on its way at the deadline.
+PENDING = "pending"
 
 
 class PlaygroundRefused(Exception):
@@ -56,8 +66,9 @@ class TestResult:
     """The outcome of one sandbox test, as the dashboard shows it.
 
     ``decision`` is ``blocked`` or ``flagged``; ``shared`` is the sandbox share
-    ledger's outcome (``accepted``, ``already-shared``, ``failed``…) or ``""``
-    when nothing was sent (sharing off or the gate refused).
+    ledger's outcome (``accepted``, ``already-shared``, ``failed``…), :data:`PENDING`
+    when the share was still on its way at the deadline (the ledger gets its row
+    when the node answers), or ``""`` when nothing was sent (the gate refused).
     """
 
     kind: str
@@ -102,14 +113,12 @@ def run_test(kind: str, cfg: Optional[BlackboxConfig] = None) -> TestResult:
         raise PlaygroundRefused(f"Unknown test kind {kind!r}; pick one of {', '.join(KINDS)}.")
     cfg = cfg or load_blackbox_config()
     require_sandbox(cfg)
-    attempt = _pick(ruleset.get(cfg), kind)
+    attempt = _pick(ruleset.get(cfg), kind, time.monotonic() + _PICK_BUDGET_S)
     started = time.time()
     with audit.sandbox_run(), guard.collecting_shares() as shares:
         verdict, check_ms, _task = check_in_sandbox(attempt.tool, attempt.args, started)
-        guard.reports_settled(_SHARE_WAIT_S)   # the follow-up that starts the share runs after the hook
-        for worker in list(shares):   # this test's own shares, never another agent's
-            worker.join(_SHARE_WAIT_S)
-        shared = _share_outcome(attempt.identifier)
+        done = _await_shares(shares, time.monotonic() + _SHARE_WAIT_S)
+        shared = _share_outcome(attempt.identifier) or ("" if done else PENDING)
     blocked = bool(verdict) and verdict.get("action") == "block"
     return TestResult(kind=kind, identifier=attempt.identifier, command=_command_text(attempt),
                       severity=attempt.severity, decision="blocked" if blocked else "flagged",
@@ -137,20 +146,34 @@ def sandbox_audit(limit: int = 200) -> list[dict[str, Any]]:
         return audit.read_audit(limit=limit)
 
 
-def _pick(rules: Any, kind: str) -> Attempt:
+def _await_shares(shares: list[Any], deadline: float) -> bool:
+    """Wait until *deadline* (``time.monotonic()``) for the report follow-up, which starts the share
+    after the hook, and then for this test's own share threads (never another agent's); True when
+    nothing of this test is still on its way."""
+    settled = guard.reports_settled(max(0.0, deadline - time.monotonic()))
+    for worker in list(shares):
+        worker.join(max(0.0, deadline - time.monotonic()))
+    return settled and not any(worker.is_alive() for worker in shares)
+
+
+def _pick(rules: Any, kind: str, deadline: float) -> Attempt:
     if kind == "package":
-        return _pick_package(rules)
-    return _pick_ioc(rules, kind)
+        return _pick_package(rules, deadline)
+    return _pick_ioc(rules, kind, deadline)
 
 
-def _windows(rules: Any, category: str, ecosystem: str = "") -> Iterator[list[dict[str, Any]]]:
-    """Random windows of the live verified tier (plain paging stops at the browse depth)."""
+def _windows(rules: Any, category: str, ecosystem: str = "", deadline: float = float("inf")) -> Iterator[list[dict[str, Any]]]:
+    """Random windows of the live verified tier (plain paging stops at the browse depth), until
+    *deadline* (``time.monotonic()``): past it the test is refused with the reason, never left waiting."""
     scope = rules.verified_scope
     counts = scope.verified_counts if scope else {}
     total = int(counts.get(f"dependency:{ecosystem}" if ecosystem else category, 0))
     reach = min(total, ruleset.live.browse.MAX_DEPTH) - _WINDOW
     rng = random.SystemRandom()
     for _ in range(_TRIES):
+        if time.monotonic() > deadline:
+            raise PlaygroundRefused("This node's verified rules are answering slowly (the node is busy); "
+                                    "try again in a minute.")
         page = rules.live_browse(category=category, ecosystem=ecosystem, offset=rng.randrange(max(1, reach)),
                                  limit=_WINDOW)
         if page is None or not page.known:
@@ -158,8 +181,8 @@ def _windows(rules: Any, category: str, ecosystem: str = "") -> Iterator[list[di
         yield rng.sample(page.entries, len(page.entries))
 
 
-def _pick_package(rules: Any) -> Attempt:
-    for entries in _windows(rules, "dependency", "npm"):
+def _pick_package(rules: Any, deadline: float = float("inf")) -> Attempt:
+    for entries in _windows(rules, "dependency", "npm", deadline):
         for entry in entries:
             name, _, version = entry["identifier"].split(":", 2)[2].rpartition("@")
             if version == "*" or not name:
@@ -171,8 +194,8 @@ def _pick_package(rules: Any) -> Attempt:
     raise PlaygroundRefused("No listed malware package was found in this sample; try again.")
 
 
-def _pick_ioc(rules: Any, ioc_type: str) -> Attempt:
-    for entries in _windows(rules, "ioc"):
+def _pick_ioc(rules: Any, ioc_type: str, deadline: float = float("inf")) -> Attempt:
+    for entries in _windows(rules, "ioc", deadline=deadline):
         for entry in entries:
             identifier = entry["identifier"]
             if not identifier.startswith(f"ioc:{ioc_type}:"):

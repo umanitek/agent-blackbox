@@ -4351,10 +4351,13 @@
     renderSandboxCommunityTile();   // sandbox mode: count the lane the graph draws instead
     renderMemberLine(s);
     $("stat-sharing-state").textContent = sharing;
-    var last = s.last_share;
+    // Sandbox mode: the shares go to the sandbox lane's own ledger, so the tile names that one first.
+    var last = s.sandbox ? s.sandbox_last_share : s.last_share;
     $("stat-sharing-meta").textContent = last
-      ? "last share " + fmtAgo(last.ts) + " \u00b7 " + (last.outcome || (last.ok ? "accepted" : "failed"))
-      : (s.sharing_enabled ? "on \u00b7 nothing shared yet" : "off \u00b7 opt in from settings");
+      ? (s.sandbox ? "sandbox \u00b7 last test share " : "last share ") + fmtAgo(last.ts) + " \u00b7 " +
+        (last.outcome || (last.ok ? "accepted" : "failed"))
+      : (s.sandbox ? "sandbox \u00b7 no test shared yet"
+        : (s.sharing_enabled ? "on \u00b7 nothing shared yet" : "off \u00b7 opt in from settings"));
   }
 
   function loadCommunityStats() {

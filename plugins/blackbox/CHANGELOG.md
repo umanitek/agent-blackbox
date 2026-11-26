@@ -60,6 +60,10 @@ that the two version fields agree.
 
 ### Fixed
 
+- **A Playground test always answers, and says where its share is.** A test now answers within two
+  minutes. A slow node refuses it with the reason, and a share the node has not confirmed reads
+  "still sending" instead of "not sent". In sandbox mode the Threat sharing tile shows the last
+  test share instead of "nothing shared yet".
 - **Inline code that prints `'/'` is no longer refused.** `node -e "console.log('/')"` or
   `python3 -c "print('/')"` was refused as a change to Blackbox's own settings.
 - **Short Hermes sessions on a busy computer are recorded.** A session that ended while Blackbox

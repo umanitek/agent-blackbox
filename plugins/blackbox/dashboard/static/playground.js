@@ -29,6 +29,10 @@
   "use strict";
   var POLL_MS = 5000;
   var MIN_SPIN_MS = 600;   // how long a single wallet test's spinner stays up at least
+  // One test answers within the server's run_budget_s (/api/playground); the panel waits that plus
+  // this margin, then says so instead of spinning forever (dev node 2026-11-26: a test sat on
+  // "Asking Blackbox…" with no answer and nothing said why).
+  var RUN_MARGIN_S = 15, runBudgetS = 120;
   var KIND_LABELS = { "package": "Malware package", "domain": "Malicious domain", "ip": "C2 server address", "url": "Payload link" };
   var root = null, badge = null, ribbon = null, timer = null, busy = "", firstSeen = {}, lastResult = null, lastError = "";
   var lastMode = null, lastLaneSignature = "";
@@ -426,7 +430,18 @@
     return box;
   }
 
+  function askingLabel() {
+    return "Asking Blackbox\u2026 (up to " + Math.round(runBudgetS) + " s)";
+  }
+
+  // The share part of the last result, in words: "pending" means the node had not answered yet.
+  function shareText(shared) {
+    if (shared === "pending") return "share still sending (the node has not confirmed it yet; it lands in the sharing tile when it does)";
+    return "share " + (shared || "not sent");
+  }
+
   function draw(state) {
+    if (state.run_budget_s) runBudgetS = state.run_budget_s;
     root.innerHTML = "";
     var panel = el("section", "pg-panel");
     panel.setAttribute("aria-label", "Sandbox Playground");
@@ -439,11 +454,11 @@
     // With sharing off these tests cannot run, so no dead buttons are drawn (they read as "loading").
     (state.sharing ? (state.kinds || []) : []).forEach(function (kind) {
       var button = el("button");
-      setLabel(button, busy === kind ? "Asking Blackbox… (up to 90 s)" : "Send: " + (KIND_LABELS[kind] || kind), busy === kind);
+      setLabel(button, busy === kind ? askingLabel() : "Send: " + (KIND_LABELS[kind] || kind), busy === kind);
       button.type = "button";
       button.disabled = !!busy || !state.sharing;
       button.addEventListener("click", function () {
-        setLabel(button, "Asking Blackbox… (up to 90 s)", true);
+        setLabel(button, askingLabel(), true);
         button.disabled = true;
         run(kind);
       });
@@ -453,7 +468,7 @@
     if (lastError) panel.appendChild(el("p", "pg-error", lastError));
     if (lastResult) {
       panel.appendChild(el("p", "", "Last test: " + lastResult.decision.toUpperCase() + " " + lastResult.identifier +
-        " in " + (lastResult.check_ms / 1000).toFixed(1) + " s · share " + (lastResult.shared || "not sent")));
+        " in " + (lastResult.check_ms / 1000).toFixed(1) + " s \u00b7 " + shareText(lastResult.shared)));
     }
     var cols = el("div", "pg-cols");
     var mine = el("div");
@@ -486,16 +501,23 @@
   function run(kind) {
     busy = kind; lastError = "";
     refresh();
+    var waitS = runBudgetS + RUN_MARGIN_S;
+    var stop = typeof AbortController === "function" ? new AbortController() : null;
+    var giveUp = window.setTimeout(function () { if (stop) stop.abort(); }, waitS * 1000);
     token().then(function (tok) {
       return fetch("/api/playground/run", {
-        method: "POST", cache: "no-store",
+        method: "POST", cache: "no-store", signal: stop ? stop.signal : undefined,
         headers: { "Content-Type": "application/json", "Accept": "application/json", "X-Blackbox-Token": tok },
         body: JSON.stringify({ kind: kind })
       });
     }).then(function (r) { return r.json(); }).then(function (body) {
       if (body && body.ok) lastResult = body.result; else lastError = (body && body.error) || "The test did not run.";
-    }).catch(function (err) { lastError = err && err.message ? err.message : "The test did not run."; })
-      .then(function () { busy = ""; return refresh(); });
+    }).catch(function (err) {
+      lastError = err && err.name === "AbortError"
+        ? "No answer from the dashboard in " + Math.round(waitS) + " s. If the test reached it, it still lands under " +
+          "This node's tests; if nothing appears there, the request never got through (check the connection to this dashboard)."
+        : (err && err.message ? err.message : "The test did not run.");
+    }).then(function () { window.clearTimeout(giveUp); busy = ""; return refresh(); });
   }
 
   function start() {

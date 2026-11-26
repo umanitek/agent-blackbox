@@ -56,6 +56,7 @@ def state_payload(lane_of: LaneReader = _read_now) -> dict[str, Any]:
         "sharing": cfg.community_enabled,
         "graph": cfg.context_graph_id,
         "kinds": list(playground.KINDS),
+        "run_budget_s": playground.RUN_BUDGET_S,   # the panel's own wait for one test is a little longer
         "tests": playground.recent_tests(limit=20) if cfg.community_sandbox else [],
         "lane": _safe_lane(view.to_dict()) if view is not None else {"graph": cfg.context_graph_id, "readable": False,
                                                                      "agents": 0, "entries": []},
