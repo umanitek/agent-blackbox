@@ -974,7 +974,7 @@ provision_blackbox_store() {
     local existing_state namespace existing_backend existing_url existing_managed
     local provisioned parsed
 
-    existing_state="$($VENV_DIR/bin/python - "$BLACKBOX_DKG_HOME" <<'PYEOF'
+    existing_state="$("$VENV_DIR/bin/python" - "$BLACKBOX_DKG_HOME" <<'PYEOF'
 import json
 import sys
 from pathlib import Path
@@ -1103,7 +1103,7 @@ PYEOF
         warn "Could not provision Blazegraph."
         return 1
     fi
-    parsed="$($VENV_DIR/bin/python - "$provisioned" <<'PYEOF'
+    parsed="$("$VENV_DIR/bin/python" - "$provisioned" <<'PYEOF'
 import json
 import sys
 

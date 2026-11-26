@@ -109,6 +109,10 @@ that the two version fields agree.
 
 ### Fixed
 
+- **Setup no longer loses the store's settings when Blackbox sits in a folder whose name has a
+  space.** The installer split such a path, could not read the existing node's store settings,
+  and went on with an empty store name.
+
 - **No false "running without Blackbox" alert when the sandbox starts an agent.** An agent started
   through Blackbox's sandbox launcher can take longer than 20 s to send its first hook event on a
   busy machine. Such a run now gets up to 90 s. A run whose hooks are switched off is still
