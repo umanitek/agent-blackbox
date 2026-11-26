@@ -23,7 +23,7 @@ import pytest
 
 from plugins.blackbox.agent_hooks import hermes_sessions
 from plugins.blackbox.agent_hooks.instances import store
-from plugins.blackbox.agent_hooks.protect import answers, events as hook_events, runner, sandbox_errors
+from plugins.blackbox.agent_hooks.protect import answers, events as hook_events, judge_here, runner, sandbox_errors
 
 SUDO = "(eval):1: operation not permitted: sudo"
 OSASCRIPT = "(eval):1: operation not permitted: osascript"
@@ -113,7 +113,7 @@ def test_the_note_goes_beside_the_output_in_each_agents_own_format(agent, field)
 
 
 def test_the_runner_prints_the_note_and_never_refuses_the_output(monkeypatch, capsys):
-    monkeypatch.setattr(runner, "ask", lambda _url, _body: {"decision": "allow", "note": "Blackbox's sandbox refused this (kill)."})
+    monkeypatch.setattr(judge_here, "ask", lambda _url, _body, _deadline=0.0: {"decision": "allow", "note": "Blackbox's sandbox refused this (kill)."})
     monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(json.dumps({"session_id": "s", "tool_name": "Bash",
                                                                                "tool_response": KILL}).encode("utf-8"))))
     assert runner.main(["runner.py", "claude-code", "post_tool", "http://127.0.0.1:9"]) == 0

@@ -20,7 +20,7 @@ import pytest
 from plugins.blackbox import agent_hooks, audit, guard
 from plugins.blackbox.agent_hooks import observe, tracking
 from plugins.blackbox.agent_hooks.instances import store
-from plugins.blackbox.agent_hooks.protect import events, runner
+from plugins.blackbox.agent_hooks.protect import events, judge_here, runner
 from plugins.blackbox.kernel.agent_hosts import DECISION_TOO_LATE
 from plugins.blackbox.notify import wording
 
@@ -99,7 +99,7 @@ def test_the_runner_says_when_it_stops_waiting(monkeypatch):
             return Answer({"token": "t"})
         sent.append(json.loads(request.data))
         return Answer({"decision": "allow"})
-    monkeypatch.setattr(runner.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(judge_here.urllib.request, "urlopen", urlopen)
     before = time.time()
-    runner.ask("http://127.0.0.1:9", {"agent": "codex", "event": "pre_tool"})
+    judge_here.ask("http://127.0.0.1:9", {"agent": "codex", "event": "pre_tool"})
     assert before + runner.TIMEOUT_SECONDS - 0.5 <= sent[0]["answer_by"] <= time.time() + runner.TIMEOUT_SECONDS + 0.01

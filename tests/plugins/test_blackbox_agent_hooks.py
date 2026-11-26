@@ -20,7 +20,7 @@ import pytest
 
 from plugins.blackbox import audit
 from plugins.blackbox import agent_hooks
-from plugins.blackbox.agent_hooks.protect import config_edit, events, own_files, runner
+from plugins.blackbox.agent_hooks.protect import config_edit, events, judge_here, own_files, runner
 from plugins.blackbox.kernel import agent_hosts as hosts
 
 CLAUDE = hosts.BY_ID["claude-code"]
@@ -111,7 +111,7 @@ def test_the_runner_asks_a_real_dashboard_with_its_token():
     server = HTTPServer(("127.0.0.1", 0), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
-        answer = runner.ask(f"http://127.0.0.1:{server.server_port}", {"agent": "cursor", "event": "pre_tool"})
+        answer = judge_here.ask(f"http://127.0.0.1:{server.server_port}", {"agent": "cursor", "event": "pre_tool"})
     finally:
         server.shutdown()
     assert answer["decision"] == "block" and seen["token"] == "tok" and seen["body"]["agent"] == "cursor"
@@ -123,7 +123,7 @@ class _Stdin:
 
 
 def _run(monkeypatch, agent, answer):
-    monkeypatch.setattr(runner, "ask", lambda url, body: answer)
+    monkeypatch.setattr(judge_here, "ask", lambda url, body, deadline=0.0: answer)
     monkeypatch.setattr("sys.stdin", _Stdin(json.dumps({"tool_name": "Bash", "tool_input": {"command": "x"}})))
     out = io.StringIO()
     monkeypatch.setattr("sys.stdout", out)

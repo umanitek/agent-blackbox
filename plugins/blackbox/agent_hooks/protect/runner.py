@@ -17,7 +17,10 @@ the call itself, locally and offline (:func:`judge_here`): it loads the installe
 judgement (``events.record_event`` — the same guard, ruleset file and local checks) from the
 folder ``agent_hooks`` named in :data:`JUDGE_HERE_FILE`, so stopping the dashboard no longer
 switches the hooks off (private security finding ``2026-11-24-linux-an-agent-stops-blackbox-s-dashboar``,
-Linux round L1: an agent killed the dashboard and then read a protected file). FAIL-OPEN for
+Linux round L1: an agent killed the dashboard and then read a protected file). The dashboard and that judgement
+share ONE deadline (:mod:`.judge_here`: ``BUDGET_SECONDS``, inside the 10 s each agent waits): a tool call
+not judged by then is refused, never left for the agent to run once it stops waiting, and a locally
+judged event is recorded after the answer (Linux round L7). FAIL-OPEN for
 genuine breakage still holds: when that judgement cannot run either (no plugin, an import error),
 the agent continues — Blackbox never makes an agent unusable. The prompt and the tool output go only to the
 LOCAL dashboard (127.0.0.1) to be checked; they are never recorded or shared — the records keep
@@ -39,20 +42,19 @@ import re
 import stat
 import sys
 import time
-import urllib.request
 from pathlib import Path
 
 # The runner is run as a script from Blackbox's data folder (its sibling is beside it there) and
 # imported as a module by the plugin and its tests.
 if __package__:
     from .answers import allow_output, deny_output, note_output, post_output, prompt_output
+    from .judge_here import BLOCKING_EVENTS, TIMEOUT_SECONDS, Verdict, answer_in_time, record_detached
     from .identity import AGENT_TURN_MARKS, MODEL_EVENTS, effective_agent, identity, transcript_model, workspace
-    from .judge_here import judge_here
     from .tool_shapes import cline_tool
 else:
     from answers import allow_output, deny_output, note_output, post_output, prompt_output
+    from judge_here import BLOCKING_EVENTS, TIMEOUT_SECONDS, Verdict, answer_in_time, record_detached
     from identity import AGENT_TURN_MARKS, MODEL_EVENTS, effective_agent, identity, transcript_model, workspace
-    from judge_here import judge_here
     from tool_shapes import cline_tool
 
 #: The most of stdin read (a write tool's whole file can be in the payload).
@@ -61,10 +63,6 @@ MAX_INPUT_BYTES = 1024 * 1024
 MAX_TEXT_CHARS = 256 * 1024
 #: Events whose TEXT is checked for prompt injection.
 TEXT_EVENTS = frozenset({"prompt", "post_tool"})
-#: How long one answer may take before the agent continues without it.
-TIMEOUT_SECONDS = 2.5
-#: Events whose answer can stop the action.
-BLOCKING_EVENTS = frozenset({"pre_tool", "prompt", "post_tool"})
 SHELL_NAMES = frozenset({"bash", "shell", "run_shell_command", "run_terminal_cmd", "execute_command", "exec", "terminal", "command"})
 READ_NAMES = frozenset({"read", "read_file", "view", "readfile", "read_many_files"})
 WRITE_NAMES = frozenset({"write", "write_file", "edit", "multiedit", "replace", "write_to_file", "replace_in_file", "create_file",
@@ -336,36 +334,10 @@ def summary(agent: str, event: str, payload: dict) -> dict:
     return body
 
 
-def ask(url: str, body: dict) -> dict:
-    """POST *body* to the dashboard with its session token; {} when it cannot answer."""
-    with urllib.request.urlopen(f"{url}/api/session", timeout=TIMEOUT_SECONDS) as response:
-        token = json.loads(response.read(65536)).get("token", "")
-    # When this hook stops waiting: an answer after it reaches nobody, and the dashboard records
-    # it as decided too late, never as stopped (KI-PENDING-f5765e).
-    body = {**body, "answer_by": round(time.time() + TIMEOUT_SECONDS, 3)}
-    request = urllib.request.Request(f"{url}/api/agent-hooks/event", data=json.dumps(body).encode("utf-8"), method="POST",
-                                     headers={"content-type": "application/json", "X-Blackbox-Token": token})
-    with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:
-        answer = json.loads(response.read(65536))
-    return answer if isinstance(answer, dict) else {}
-
-
-def _answer(url: str, event: str, body: dict) -> dict:
-    """The dashboard's answer, or — when it does not answer and the event can stop the action —
-    the same judgement made here (:func:`judge_here`); {} when neither can be had (fail open)."""
-    try:
-        return ask(url, body)
-    except Exception as down:   # health: allow BLE001 -- the dashboard is down or slow: judge locally instead
-        if event not in BLOCKING_EVENTS:
-            return {}
-        sys.stderr.write(f"Blackbox: the dashboard did not answer ({type(down).__name__}); judging here.\n")
-    try:
-        return judge_here(body)
-    except Exception:   # health: allow BLE001 -- fail open: genuine breakage never stops the agent
-        return {}
-
-
-def main(argv: list) -> int:
+def main(argv: list, detach: bool = False) -> int:
+    """Answer one hook call. *detach*: record a locally judged event in a child process after the
+    answer (the installed script); in-process callers (tests) record it here, after the answer."""
+    started = time.time()
     if len(argv) < 4:
         return 0
     agent, event, url = effective_agent(argv[1]), argv[2], argv[3].rstrip("/")
@@ -379,7 +351,19 @@ def main(argv: list) -> int:
         body = summary(agent, event, payload)
     except Exception:   # health: allow BLE001 -- fail open: the agent continues without Blackbox's answer
         body = {}
-    answer = _answer(url, event, body) if body else {}
+    verdict = answer_in_time(url, event, body, started) if body else Verdict({})
+    code = _respond(agent, event, payload, verdict.answer)
+    if verdict.late:   # the unfinished judgement holds the interpreter: end without waiting for it
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(code)
+    if verdict.record is not None:
+        (record_detached if detach else lambda record: record())(verdict.record)
+    return code
+
+
+def _respond(agent: str, event: str, payload: dict, answer: dict) -> int:
+    """Write *answer* in *agent*'s own format; the exit code the agent reads."""
     if event in BLOCKING_EVENTS and answer.get("decision") == "block":
         reason = str(answer.get("message") or "Blocked by Blackbox: this action matches a verified threat.")[:1000]
         out, code = (prompt_output if event == "prompt" else post_output if event == "post_tool" else deny_output)(agent, reason)
@@ -397,4 +381,4 @@ def main(argv: list) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv))
+    sys.exit(main(sys.argv, detach=True))
