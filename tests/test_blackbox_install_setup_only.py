@@ -317,7 +317,7 @@ def test_unpinned_is_a_knowing_opt_out(tmp_path):
 
 def test_the_default_package_carries_the_default_pin():
     text = INSTALL_SH.read_text(encoding="utf-8")
-    assert 'BLACKBOX_DKG_DEFAULT_PACKAGE="@origintrail-official/dkg@10.0.26"' in text
+    assert 'BLACKBOX_DKG_DEFAULT_PACKAGE="@origintrail-official/dkg@10.1.2"' in text
     assert 'BLACKBOX_DKG_DEFAULT_INTEGRITY="sha512-' in text and "UNSET" not in text
     assert 'BLACKBOX_DKG_INTEGRITY="$BLACKBOX_DKG_DEFAULT_INTEGRITY"' in text
 
