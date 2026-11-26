@@ -99,6 +99,25 @@ NOT_CHECKED_IN_TIME = ("Blackbox could not check this action in time (this compu
 RECORD_SECONDS = 120
 
 
+#: The kernel's record of this process (its start time, field 22) and the time since boot, where the
+#: system keeps them as files (Linux); elsewhere the budget counts from the runner's own start.
+_SELF_STAT, _UPTIME = "/proc/self/stat", "/proc/uptime"
+
+
+def process_age() -> float:
+    """Seconds since this process started (0.0 where that can not be read). WHY (bb-l7-u24, load
+    10): the interpreter's own start took up to 5 s there, and the agent's 10 s wait began before
+    it — a budget counted from ``main()`` answered at 11.8 s, after the agent had stopped waiting."""
+    try:
+        with open(_SELF_STAT, "rb") as handle:
+            fields = handle.read(4096).rsplit(b")", 1)[1].split()
+        with open(_UPTIME, "rb") as handle:
+            up = float(handle.read(256).split()[0])
+        return max(0.0, up - int(fields[19]) / os.sysconf("SC_CLK_TCK"))
+    except (OSError, ValueError, IndexError):
+        return 0.0
+
+
 def _left(deadline: float) -> float:
     """Seconds until *deadline*; raises TimeoutError once it passed (no request is started late)."""
     left = deadline - time.time()
@@ -203,4 +222,4 @@ def record_detached(record) -> None:
 
 
 __all__ = ["BLOCKING_EVENTS", "BUDGET_SECONDS", "JUDGE_HERE_FILE", "NOT_CHECKED_IN_TIME", "RECORD_SECONDS", "TIMEOUT_SECONDS", "Verdict",
-           "answer_in_time", "ask", "judge_here", "record_detached"]
+           "answer_in_time", "ask", "judge_here", "process_age", "record_detached"]

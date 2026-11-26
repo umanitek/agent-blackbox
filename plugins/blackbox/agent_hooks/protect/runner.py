@@ -48,12 +48,12 @@ from pathlib import Path
 # imported as a module by the plugin and its tests.
 if __package__:
     from .answers import allow_output, deny_output, note_output, post_output, prompt_output
-    from .judge_here import BLOCKING_EVENTS, TIMEOUT_SECONDS, Verdict, answer_in_time, record_detached
+    from .judge_here import BLOCKING_EVENTS, TIMEOUT_SECONDS, Verdict, answer_in_time, process_age, record_detached
     from .identity import AGENT_TURN_MARKS, MODEL_EVENTS, effective_agent, identity, transcript_model, workspace
     from .tool_shapes import cline_tool
 else:
     from answers import allow_output, deny_output, note_output, post_output, prompt_output
-    from judge_here import BLOCKING_EVENTS, TIMEOUT_SECONDS, Verdict, answer_in_time, record_detached
+    from judge_here import BLOCKING_EVENTS, TIMEOUT_SECONDS, Verdict, answer_in_time, process_age, record_detached
     from identity import AGENT_TURN_MARKS, MODEL_EVENTS, effective_agent, identity, transcript_model, workspace
     from tool_shapes import cline_tool
 
@@ -337,7 +337,7 @@ def summary(agent: str, event: str, payload: dict) -> dict:
 def main(argv: list, detach: bool = False) -> int:
     """Answer one hook call. *detach*: record a locally judged event in a child process after the
     answer (the installed script); in-process callers (tests) record it here, after the answer."""
-    started = time.time()
+    started = time.time() - process_age()   # the agent's wait began when it started this process
     if len(argv) < 4:
         return 0
     agent, event, url = effective_agent(argv[1]), argv[2], argv[3].rstrip("/")

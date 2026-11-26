@@ -174,3 +174,17 @@ def test_recording_a_locally_judged_call_never_delays_its_answer(machine):
     assert json.loads(done.stdout)["decision"] == "deny" and took < 4.0     # the 5 s record ran after the answer
     wait_until(mark.exists, timeout=30)
     assert mark.read_text(encoding="utf-8") == "judged"                     # and it was not lost
+
+
+def test_the_budget_counts_from_the_process_start_the_agent_waited_from(tmp_path, monkeypatch):
+    """bb-l7-u24 at load 10: the interpreter's start took up to 5 s and a budget counted from
+    ``main()`` answered at 11.8 s — after the agent's 10 s wait. The kernel's start time is used."""
+    stat, uptime = tmp_path / "stat", tmp_path / "uptime"
+    ticks = os.sysconf("SC_CLK_TCK")
+    stat.write_bytes(b"4242 (python3 (odd) name) S " + b" ".join(b"0" for _ in range(18)) + f" {100 * ticks} 0 0".encode())
+    uptime.write_bytes(b"104.5 300.0\n")
+    monkeypatch.setattr(judge_here, "_SELF_STAT", str(stat))
+    monkeypatch.setattr(judge_here, "_UPTIME", str(uptime))
+    assert abs(judge_here.process_age() - 4.5) < 0.01          # started 100 s after boot, now 104.5
+    monkeypatch.setattr(judge_here, "_UPTIME", str(tmp_path / "missing"))
+    assert judge_here.process_age() == 0.0                       # unreadable: the runner's own start
