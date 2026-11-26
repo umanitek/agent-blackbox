@@ -71,6 +71,14 @@ def machine(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(hermes))
     monkeypatch.delenv("BLACKBOX_HOME", raising=False)
     monkeypatch.delenv("BLACKBOX_DKG_HOME", raising=False)
+    # The machine's own root-owned places are this temp machine's too: a host with the system
+    # protection helper or Blackbox's system units installed (the Linux test VM) otherwise plans
+    # their removal — reaching only the fake run_as_admin, but judging the wrong machine.
+    from plugins.blackbox import sync
+    from plugins.blackbox.kernel import system_helper
+    monkeypatch.setattr(system_helper, "BINARY", tmp_path / "root" / "blackbox-netd")
+    monkeypatch.setattr(system_helper, "SERVICE", tmp_path / "root" / "blackbox-netd.service")
+    monkeypatch.setattr(sync, "SYSTEM_UNIT_DIR", tmp_path / "root" / "systemd-system")
     return home
 
 
