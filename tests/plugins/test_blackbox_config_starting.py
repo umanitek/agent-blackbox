@@ -55,10 +55,10 @@ def test_hermes_stand_in_for_an_unreadable_file_is_not_the_persons_settings(monk
     from hermes_cli.config_read_errors import FailedConfigRead
 
     monkeypatch.setattr(config.constants, "hermes_root", config.constants.hermes_home)
-    monkeypatch.setattr(hermes_config, "load_config", lambda: FailedConfigRead({"plugins": {}}, error=ValueError("torn")))
+    monkeypatch.setattr(hermes_config, "load_config_readonly", lambda: FailedConfigRead({"plugins": {}}, error=ValueError("torn")))
     assert config.mode_answer(config.load_blackbox_config()) == "starting"
     last_good = {"plugins": {"entries": {"blackbox": {"mode": "block"}}}}   # Hermes' last-known-good copy
-    monkeypatch.setattr(hermes_config, "load_config", lambda: FailedConfigRead(last_good, error=ValueError("torn")))
+    monkeypatch.setattr(hermes_config, "load_config_readonly", lambda: FailedConfigRead(last_good, error=ValueError("torn")))
     assert config.mode_answer(config.load_blackbox_config()) == "block"
 
 

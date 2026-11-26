@@ -4172,6 +4172,12 @@ Environment=DKG_VM_RECOVERY_PREFETCH_ENABLED=$BLACKBOX_DKG_VM_RECOVERY_PREFETCH_
 # omits the verified graph and Blackbox reads it as "not subscribed".
 Environment="NODE_OPTIONS=$BLACKBOX_DKG_NODE_OPTIONS"
 Environment=DKG_STORE_QUEUE_LIMIT=$BLACKBOX_DKG_STORE_QUEUE_LIMIT
+# NOT niced (Linux round L7, BB-LINUX-PENDING-88f30f): the node runs the DKG-managed Oxigraph store
+# as its child, and the hook's verified-graph lookup asks that store with a 2 s limit - a lower
+# priority would make a busy machine's lookups "could not tell". The sync work is lowered instead
+# (dashboard/network_sync.py). Under that load the start-pre's \`dkg stop\` overran systemd's 90 s
+# and the node restart-looped ("start-pre operation timed out", L7): while it is down no lookup answers.
+TimeoutStartSec=300
 # Clear any orphaned daemon before starting: DKG CLI commands auto-spawn a
 # detached daemon when none is running; that orphan holds daemon.pid and
 # would crash-loop this unit forever ("Daemon already running", KI-045).

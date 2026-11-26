@@ -17,6 +17,7 @@ Pattern: a small **Memento** — the last good read kept for the failures after 
 
 from __future__ import annotations
 
+import copy
 import logging
 from typing import Any, Optional
 
@@ -32,6 +33,18 @@ class UnreadEntry(dict):
     before in this process: defaults stand in, and they are not the person's settings."""
 
 
+def _hermes_config() -> Any:
+    """Hermes's merged config (config.yaml + managed scope, cached on the files' signature). WHY the
+    read-only form (Linux round L7, BB-LINUX-PENDING-88f30f): ``load_config`` deep-copies the WHOLE
+    config on every call and this read runs on most dashboard requests and every hook judgement —
+    profiled on the busy VM it was about a tenth of the dashboard's CPU. Hermes older than
+    ``load_config_readonly`` falls back to ``load_config``."""
+    from hermes_cli import config as hermes_config
+
+    reader = getattr(hermes_config, "load_config_readonly", None) or hermes_config.load_config
+    return reader()
+
+
 def _read_now() -> Optional[dict[str, Any]]:
     """The entry as saved now, or None when the config cannot be read."""
     root = constants.hermes_root()
@@ -42,13 +55,12 @@ def _read_now() -> Optional[dict[str, Any]]:
             logger.debug("blackbox: %s", exc)
             return None
     try:
-        from hermes_cli.config import load_config
-
-        cfg = load_config()
+        cfg = _hermes_config()
     except Exception as exc:  # health: allow BLE001 -- an unreadable config is answered below, never raised
         logger.debug("blackbox: config load failed (%s)", exc)
         return None
-    entry = yaml_files.blackbox_entry(cfg)
+    # Only Blackbox's own entry is copied: the read-only config is Hermes's cached object.
+    entry = copy.deepcopy(yaml_files.blackbox_entry(cfg))
     # Hermes' stand-in for an unreadable file: its last-known-good copy (it holds the entry: the
     # person's settings, read before) or its defaults (no entry: nothing was read).
     if type(cfg).__name__ == "FailedConfigRead" and not entry:
