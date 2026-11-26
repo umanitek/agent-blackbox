@@ -79,15 +79,18 @@ def _judged(events, body: dict) -> tuple:
 #: Events whose answer can stop the action.
 BLOCKING_EVENTS = frozenset({"pre_tool", "prompt", "post_tool"})
 #: How long the dashboard may take to answer (its two requests together) before the runner judges
-#: the call itself.
-TIMEOUT_SECONDS = 2.5
+#: the call itself. WHY 4 s: the dashboard holds the rules warm and answered in 0.1-3.3 s at load 12
+#: on the L7 VM, while a fresh process's own judgement needs 8 s and more there (~700 modules to
+#: import) — so a SLOW dashboard is worth waiting for, and an ABSENT one (connection refused, at
+#: once) leaves the whole budget to the local judgement.
+TIMEOUT_SECONDS = 4.0
 #: The whole hook's time, from its start to its answer. WHY (Linux round L7, BB-LINUX-PENDING-7582d0):
 #: every agent is told to wait 10 s for Blackbox (``kernel.agent_hosts.HOOK_WAIT_SECONDS``), and an
 #: agent that stops waiting RUNS the call — on the busy VM the dashboard did not answer, the local
 #: judgement then took 15 s, Gemini CLI gave up at 10 s and installed a graph-listed package. The
 #: runner now answers by this deadline whatever happens; the rest of the 10 s is the interpreter's
-#: start and exit on a busy machine.
-BUDGET_SECONDS = 8.0
+#: start and exit on a busy machine (a whole run took up to 2.5 s more than its budget at load 12 on the L7 VM).
+BUDGET_SECONDS = 6.5
 #: What the agent is told when a call could not be judged inside :data:`BUDGET_SECONDS`: refused,
 #: never passed unjudged (the same rule Hermes keeps for its own timed-out ``pre_tool_call``).
 NOT_CHECKED_IN_TIME = ("Blackbox could not check this action in time (this computer is very busy), so it was refused. "

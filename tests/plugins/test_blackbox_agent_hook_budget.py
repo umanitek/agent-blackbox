@@ -5,7 +5,7 @@ Linux round L7 (BB-LINUX-PENDING-7582d0, Medium): on the busy VM Gemini CLI said
 after 10000ms" — the dashboard did not answer, the runner's own judgement (the plugin's, with the
 same verified-graph lookup) then took 15 s, and Gemini, which RUNS a call once it stops waiting,
 installed the graph-listed ``easy-day-js@1.11.21``. Every agent is told to wait 10 s; the runner
-now answers by ``BUDGET_SECONDS`` (8 s): the dashboard first, then its own judgement, a tool call
+now answers by ``BUDGET_SECONDS`` (6.5 s): the dashboard first, then its own judgement, a tool call
 not judged by then refused — and a locally judged event is recorded after the answer, off the
 critical path.
 """
