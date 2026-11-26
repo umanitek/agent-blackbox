@@ -131,8 +131,9 @@ def judge(body):
     return {"decision": "block", "message": "refused by the judgement"}, "judged"
 def bookkeep(judged):
     threading.Event().wait(5)   # recording that takes long: the agent must not wait for it
-    with open(os.environ["RECORDED_MARK"], "w", encoding="utf-8") as mark:
+    with open(os.environ["RECORDED_MARK"] + ".part", "w", encoding="utf-8") as mark:
         mark.write(judged)
+    os.replace(os.environ["RECORDED_MARK"] + ".part", os.environ["RECORDED_MARK"])   # whole, never half
 '''
 
 

@@ -250,7 +250,8 @@ def test_dashboard_automatic_sync_runs_canonical_verified_cli(monkeypatch):
         "public": 7,
         "community": 0,
     }
-    assert calls[0][0] == [
+    # The canonical CLI, run at a lower priority where `nice` / `ionice` exist (L-W4, network_sync).
+    assert calls[0][0][-9:] == [
         sys.executable,
         "-m",
         "hermes_cli.main",
