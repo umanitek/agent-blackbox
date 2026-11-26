@@ -109,6 +109,10 @@ that the two version fields agree.
 
 ### Fixed
 
+- **"Protect every agent" no longer creates a Hermes home that is not there.** On a machine
+  where Blackbox runs in its own home and Hermes was never installed, it created `~/.hermes` with a
+  copy of the plugin. Only homes that exist are protected (plus the one Blackbox runs in).
+
 - **Setup no longer loses the store's settings when Blackbox sits in a folder whose name has a
   space.** The installer split such a path, could not read the existing node's store settings,
   and went on with an empty store name.

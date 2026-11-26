@@ -106,6 +106,31 @@ def test_discover_hermes_homes_skips_managed_blackbox_chat_profile(fake_env, nam
     assert blackbox not in homes
 
 
+def test_discover_hermes_homes_never_lists_a_missing_dot_hermes(tmp_path, monkeypatch):
+    """Clean-Mac install 2026-11-26: Blackbox ran in its own home, Hermes was never installed, and
+    "protect every agent" created ~/.hermes with a plugin copy. A missing home is not an agent
+    (FIX-PENDING-f96873)."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr("pathlib.Path.home", lambda: home)
+    own = tmp_path / "Application Support" / "Blackbox" / "hermes"
+    monkeypatch.setenv("HERMES_HOME", str(own))
+
+    assert attach.discover_hermes_homes() == [own], "only the home Blackbox runs in"
+    report = attach.attach_all(hermes=True, openclaw=False, dry_run=True)
+    assert all(".hermes" not in str(row) for row in report["hermes"]), report
+    assert not (home / ".hermes").exists()
+
+
+def test_discover_hermes_homes_lists_dot_hermes_once_it_exists(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    (home / ".hermes").mkdir(parents=True)
+    monkeypatch.setattr("pathlib.Path.home", lambda: home)
+    own = tmp_path / "own"
+    monkeypatch.setenv("HERMES_HOME", str(own))
+    assert attach.discover_hermes_homes() == [own, home / ".hermes"]
+
+
 def test_discover_hermes_homes_deduplicates(fake_env):
     homes = attach.discover_hermes_homes()
     assert len(homes) == len(set(homes))
