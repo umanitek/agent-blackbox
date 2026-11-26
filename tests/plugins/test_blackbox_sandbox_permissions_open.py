@@ -52,6 +52,10 @@ def setting(monkeypatch, tmp_path):
     for app in ("Preview", "Terminal"):
         (real / "Applications" / f"{app}.app").mkdir(parents=True)
     monkeypatch.setattr(opener, "APP_FOLDERS", ("{home}/Applications",))
+    # macOS's app finder (Preview.app, Terminal.app), whatever OS runs the test: the Linux runner's
+    # facade otherwise reads .desktop entries and finds neither (PR #63's Linux CI)
+    monkeypatch.setattr(sandbox_platform, "find_app", opener.find_app)
+    monkeypatch.setattr(sandbox_platform, "is_driver", opener.is_driver)
     state: dict = {"shields": {"file-shield": {"enabled": True, "protected": ["~/Vault"]}}}
     monkeypatch.setattr(config_mod, "_blackbox_entry", lambda: state)
     opened: list = []

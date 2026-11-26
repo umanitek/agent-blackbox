@@ -54,7 +54,13 @@ def _run(tmp_path: Path, *, choice: str, helper: bytes | None = None, sha: str =
     hermes = bin_dir / "hermes"
     hermes.write_text(f'#!/bin/sh\nprintf "%s\\n" "$*" >> "{tmp_path}/hermes-calls"\n', encoding="utf-8")
     hermes.chmod(0o755)
-    for tool in ("awk", "cat", "chmod", "cp", "grep", "id", "mktemp", "rm", "shasum", "tr", "uname"):
+    # uname answers as the machine *os_name* names, whatever OS runs the test: the helper's asset is
+    # picked by it (PR #63's Linux CI looked up a linux asset in a darwin-only manifest)
+    uname = bin_dir / "uname"
+    uname.write_text(f'#!/bin/sh\ncase "$1" in -s) echo {"Linux" if os_name == "linux" else "Darwin"} ;; '
+                     f'-m) echo arm64 ;; *) echo {"Linux" if os_name == "linux" else "Darwin"} ;; esac\n', encoding="utf-8")
+    uname.chmod(0o755)
+    for tool in ("awk", "cat", "chmod", "cp", "grep", "id", "mktemp", "rm", "shasum", "tr"):
         for folder in ("/bin", "/usr/bin"):
             if Path(folder, tool).exists():
                 (bin_dir / tool).symlink_to(Path(folder, tool))

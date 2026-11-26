@@ -17,6 +17,7 @@ from fastapi.testclient import TestClient
 
 from plugins.blackbox.kernel.browser_boundary import LOOPBACK_HOSTS, BrowserBoundary
 from plugins.blackbox.approvals import store as store_mod, system_prompt, weakening
+from plugins.blackbox.approvals import terminal as approvals_terminal
 from plugins.blackbox.approvals.store import Approvals, answer_message, pair_message, sign
 from plugins.blackbox.dashboard import approval_routes as gate
 
@@ -30,8 +31,11 @@ CURRENT = weakening.Current(
 
 
 @pytest.fixture
-def dashboard():
-    """A dashboard as the plugin builds it: the token boundary, then the add-on's routes."""
+def dashboard(monkeypatch):
+    """A dashboard as the plugin builds it: the token boundary, then the add-on's routes. The machine
+    is one WITH a password dialog, whatever runs the test (a Linux CI runner has none, and its
+    held message then names ``blackbox approve`` — test_blackbox_approvals_terminal.py's case)."""
+    monkeypatch.setattr(approvals_terminal, "needed", lambda: False)
     app, applied, approvals = FastAPI(), [], Approvals()
     BrowserBoundary(LOOPBACK_HOSTS, lambda _request: TOKEN).install(app)
 

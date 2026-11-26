@@ -151,8 +151,10 @@ def origin(tmp_path_factory) -> Path:
     for name in (*REAL_MANIFESTS, "apps/shared/src/index.ts"):
         (work / name).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(REPO_ROOT / name, work / name)
-    # The tree must carry every OS's files for the test to mean anything.
-    for os_name in ("linux", "windows"):
+    # The tree must carry every OS's files for the test to mean anything. Every OS but THIS
+    # machine's gets a file that refuses to import, so a checkout that kept one fails the import test
+    # on any host (PR #63's Linux CI: the stub replaced the runner's own linux.py).
+    for os_name in (name for name in os_layout.OS_FOLDERS.values() if name != os_layout.os_folder()):
         stub = work / "plugins" / "blackbox" / "shields" / "network" / "monitor" / "platform" / f"{os_name}.py"
         stub.write_text("raise ImportError('another OS')\n", encoding="utf-8")
     _git("init", "-q", cwd=work)

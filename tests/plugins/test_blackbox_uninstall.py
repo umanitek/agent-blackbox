@@ -416,20 +416,41 @@ def test_uninstall_removes_the_add_on_beside_the_plugin_and_no_other_plugin(mach
     assert not addon.exists() and other.exists()
 
 
-def test_once_the_helper_is_gone_its_pairing_key_and_empty_folders_go_too(machine, tmp_path):
+#: Each OS's key folder for the helper's pairing key (``kernel/system_helper/platform/<os>.py``).
+KEY_FOLDERS = [("macos", "Library/Application Support/Blackbox/helper"), ("linux", ".config/blackbox/helper")]
+
+
+def _key_folder(machine: Path, monkeypatch, system: str, relative: str) -> Path:
+    """Uninstall as on *system*, whatever OS runs the test: that OS's key folder (PR #63's Linux CI
+    pinned the macOS one, which a Linux runner's facade never names)."""
+    import importlib
+    from plugins.blackbox.kernel import system_helper
+    places = importlib.import_module(f"plugins.blackbox.kernel.system_helper.platform.{system}")
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    monkeypatch.setattr(system_helper, "user_key_folder", places.user_key_folder)
+    folder = machine / relative
+    assert system_helper.user_key_folder() == folder
+    return folder
+
+
+@pytest.mark.parametrize("system, relative", KEY_FOLDERS)
+def test_once_the_helper_is_gone_its_pairing_key_and_empty_folders_go_too(machine, tmp_path, monkeypatch, system, relative):
     """E2E recheck 2026-11-21: after uninstall ~/Library/Application Support/Blackbox/helper was
     left behind. The key goes once the helper is removed; a folder goes only when left empty."""
-    folder = machine / "Library" / "Application Support" / "Blackbox" / "helper"
+    folder = _key_folder(machine, monkeypatch, system, relative)
     folder.mkdir(parents=True)
     (folder / "plan.key").write_bytes(b"\x07" * 32)
     helper = tmp_path / "blackbox-netd"
     _calls, report = _execute(dataclasses.replace(_plan(machine), system_helper=helper))
     assert not folder.parent.exists(), "key, its folder and the empty Blackbox folder are gone"
+    assert folder.parent.parent.is_dir(), "the folder above Blackbox's own is never removed"
     assert any("pairing key" in line for line in report)
 
 
-def test_a_helper_that_could_not_be_removed_keeps_its_key_and_a_companion_apps_files_stay(machine, tmp_path):
-    folder = machine / "Library" / "Application Support" / "Blackbox" / "helper"
+@pytest.mark.parametrize("system, relative", KEY_FOLDERS)
+def test_a_helper_that_could_not_be_removed_keeps_its_key_and_a_companion_apps_files_stay(machine, tmp_path, monkeypatch,
+                                                                                          system, relative):
+    folder = _key_folder(machine, monkeypatch, system, relative)
     folder.mkdir(parents=True)
     (folder / "plan.key").write_bytes(b"\x07" * 32)
     (folder.parent / "engine").write_text("a companion app's", encoding="utf-8")

@@ -327,7 +327,15 @@ def test_two_requests_inside_two_seconds_call_the_producer_once(home, monkeypatc
 
 
 def _every_section_setup(home, monkeypatch):
-    """Found wallets, every watched rule, and both health rows."""
+    """Found wallets, every watched rule, and both health rows — on a Mac, whatever OS runs the test:
+    the captured payload names macOS's way to install the helper (``system_helper.INSTALL_HOW``,
+    one per OS; PR #63's Linux CI drew Linux's)."""
+    import importlib
+    from plugins.blackbox.kernel import system_helper
+    from plugins.blackbox.shields.network import status as network_status
+    how = importlib.import_module("plugins.blackbox.kernel.system_helper.platform.macos").INSTALL_HOW
+    monkeypatch.setattr(system_helper, "INSTALL_HOW", how)
+    monkeypatch.setattr(network_status, "HELPER_HOW", how)
     _config(monkeypatch, "block")
     stores = [(normalize_path(f"~/.config/google-chrome/Default/local extension settings/{METAMASK_CHROME}"),
                Owner("metamask", "MetaMask")),

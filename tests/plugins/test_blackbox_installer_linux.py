@@ -30,6 +30,19 @@ TEXT = INSTALL_SH.read_text(encoding="utf-8")
 PROVIDED = ("step", "ok", "warn", "err", "heading", "BLACKBOX_SYSTEMD_RUNTIME_DIR", "BLACKBOX_SYSTEMD_DIR")
 
 
+def _system_tools_without_systemctl(tmp_path: Path) -> Path:
+    """The system's own programs (/usr/bin, /bin) minus ``systemctl``: "systemd is not installed" is
+    judged on any host — a Linux runner has a real /usr/bin/systemctl (PR #63's Linux CI)."""
+    tools = tmp_path / "system-tools"
+    tools.mkdir(exist_ok=True)
+    for folder in (Path("/usr/bin"), Path("/bin")):
+        for program in folder.iterdir() if folder.is_dir() else ():
+            link = tools / program.name
+            if program.name != "systemctl" and not link.exists() and not link.is_symlink():
+                link.symlink_to(program)
+    return tools
+
+
 def _run(tmp_path: Path, names: list[str], call: str, *, uid: int = 1000, env: str = "",
          systemctl: str | None = "exit 0", runtime: bool = True) -> subprocess.CompletedProcess[str]:
     bin_dir = tmp_path / "bin"
@@ -44,9 +57,10 @@ def _run(tmp_path: Path, names: list[str], call: str, *, uid: int = 1000, env: s
     runtime_dir = tmp_path / "run-systemd"
     if runtime:
         runtime_dir.mkdir(exist_ok=True)
+    search = f"{bin_dir}:/usr/bin:/bin" if systemctl is not None else f"{bin_dir}:{_system_tools_without_systemctl(tmp_path)}"
     script = f"""
 set -euo pipefail
-PATH={shlex.quote(str(bin_dir))}:/usr/bin:/bin
+PATH={shlex.quote(search)}
 step() {{ echo "step: $*"; }}
 ok() {{ echo "ok: $*"; }}
 warn() {{ echo "warn: $*"; }}
