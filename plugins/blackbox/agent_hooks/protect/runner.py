@@ -48,12 +48,12 @@ from pathlib import Path
 # imported as a module by the plugin and its tests.
 if __package__:
     from .answers import allow_output, deny_output, note_output, post_output, prompt_output
-    from .judge_here import BLOCKING_EVENTS, TIMEOUT_SECONDS, Verdict, answer_in_time, process_age, record_detached
+    from .judge_here import BLOCKING_EVENTS, TIMEOUT_SECONDS, Verdict, answer_in_time, keep, process_age
     from .identity import AGENT_TURN_MARKS, MODEL_EVENTS, effective_agent, identity, transcript_model, workspace
     from .tool_shapes import cline_tool
 else:
     from answers import allow_output, deny_output, note_output, post_output, prompt_output
-    from judge_here import BLOCKING_EVENTS, TIMEOUT_SECONDS, Verdict, answer_in_time, process_age, record_detached
+    from judge_here import BLOCKING_EVENTS, TIMEOUT_SECONDS, Verdict, answer_in_time, keep, process_age
     from identity import AGENT_TURN_MARKS, MODEL_EVENTS, effective_agent, identity, transcript_model, workspace
     from tool_shapes import cline_tool
 
@@ -353,12 +353,11 @@ def main(argv: list, detach: bool = False) -> int:
         body = {}
     verdict = answer_in_time(url, event, body, started) if body else Verdict({})
     code = _respond(agent, event, payload, verdict.answer)
+    keep(verdict, body, detach)   # what the dashboard did not record: here, or spooled for it
     if verdict.late:   # the unfinished judgement holds the interpreter: end without waiting for it
         sys.stdout.flush()
         sys.stderr.flush()
         os._exit(code)
-    if verdict.record is not None:
-        (record_detached if detach else lambda record: record())(verdict.record)
     return code
 
 

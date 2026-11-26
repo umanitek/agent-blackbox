@@ -1,5 +1,6 @@
 """Linux: the process list and one process's environment, read straight from ``/proc``
-(read-only; no program is run, so a hook's ancestry costs a few file reads).
+(read-only; no program is run for them, so a hook's ancestry costs a few file reads) — and
+Blackbox's own marks in the person's system journal (:func:`journal_marks`, ``journalctl``).
 
 Each function answers in the macOS module's shapes (see the facade, ``platform/__init__``), so the
 observer parses one format: :func:`process_table` prints ``ps -o lstart`` dates, computed from the
@@ -17,8 +18,10 @@ namespace pids; :func:`host_pid` turns one back into the host's, from the launch
 
 from __future__ import annotations
 
+import json
 import os
 import re
+import subprocess
 import time
 
 PROC_ROOT = "/proc"
@@ -236,3 +239,32 @@ def host_pid(sandbox_id: str, pid: int, proc_root: str = PROC_ROOT) -> int:
         if not scope and process_variable(candidate, SANDBOX_ID_VARIABLE, proc_root) == sandbox_id:
             return candidate
     return pid
+
+
+#: The most journal marks read in one look, and how long ``journalctl`` may take.
+MAX_JOURNAL_MARKS, JOURNAL_SECONDS = 500, 10.0
+_JOURNAL_FIELD = re.compile(r"^(?:BLACKBOX_[A-Z_]{1,40}|_PID|_SYSTEMD_USER_UNIT|_SYSTEMD_CGROUP|__REALTIME_TIMESTAMP)$")
+
+
+def journal_marks(tag: str, cursor_file: str) -> list[dict[str, str]] | None:
+    """The person's journal entries tagged *tag* written since the last call that used *cursor_file*
+    (``journalctl --cursor-file`` keeps the place), oldest first, each as its ``BLACKBOX_*`` fields
+    and the journal's own trusted ones (``_PID``, the unit, the time); None when the journal can
+    not be read here. At most :data:`MAX_JOURNAL_MARKS` per call."""
+    try:
+        done = subprocess.run(["journalctl", "--user", "--quiet", "--no-pager", "--output=json", f"--identifier={tag}",
+                               f"--cursor-file={cursor_file}", f"--lines={MAX_JOURNAL_MARKS}"],
+                              capture_output=True, text=True, timeout=JOURNAL_SECONDS, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if done.returncode != 0:
+        return None
+    marks = []
+    for line in done.stdout.splitlines():
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(entry, dict):
+            marks.append({key: str(value)[:600] for key, value in entry.items() if _JOURNAL_FIELD.match(key) and isinstance(value, str)})
+    return marks

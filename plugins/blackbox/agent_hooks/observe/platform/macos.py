@@ -194,3 +194,8 @@ def process_sandboxed(pid: int) -> bool | None:
 def host_pid(_sandbox_id: str, pid: int) -> int:
     """No PID namespaces here: a hook's pid is the host's."""
     return pid
+
+
+def journal_marks(_tag: str, _cursor_file: str) -> list[dict[str, str]] | None:
+    """No system journal of that kind here: None (the caller's spool files are the record)."""
+    return None

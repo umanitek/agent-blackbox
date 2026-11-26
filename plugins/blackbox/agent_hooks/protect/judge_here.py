@@ -55,8 +55,7 @@ def judge_here(body: dict) -> tuple:
         return _judged(events, body)
     import importlib
     import types
-    with open(Path(__file__).with_name(JUDGE_HERE_FILE), encoding="utf-8-sig") as handle:
-        where = json.loads(handle.read(65536))
+    where = _where()
     plugin = Path(str(where.get("plugin") or ""))
     if not (plugin / "agent_hooks" / "protect" / "events.py").is_file():
         return {}, None
@@ -68,6 +67,16 @@ def judge_here(body: dict) -> tuple:
     package.__package__ = _HERE_PACKAGE
     sys.modules.setdefault(_HERE_PACKAGE, package)
     return _judged(importlib.import_module(_HERE_PACKAGE + ".agent_hooks.protect.events"), body)
+
+
+def _where() -> dict:
+    """What :data:`JUDGE_HERE_FILE` says (``{}`` when it can not be read)."""
+    try:
+        with open(Path(__file__).with_name(JUDGE_HERE_FILE), encoding="utf-8-sig") as handle:
+            where = json.loads(handle.read(65536))
+    except (OSError, ValueError):
+        return {}
+    return where if isinstance(where, dict) else {}
 
 
 def _judged(events, body: dict) -> tuple:
@@ -145,10 +154,11 @@ def ask(url: str, body: dict, deadline: float = 0.0) -> dict:
 class Verdict:
     """The local judgement's outcome: *answer* (as the dashboard's), *record* (what is left to
     record, run after the agent has its answer), *late* (the judgement did not finish in time —
-    the process then ends without waiting for it)."""
+    the process then ends without waiting for it), *unrecorded* (the dashboard did not answer, so
+    nothing recorded the event yet: :func:`keep` does)."""
 
-    def __init__(self, answer: dict, record=None, late: bool = False) -> None:
-        self.answer, self.record, self.late = answer, record, late
+    def __init__(self, answer: dict, record=None, late: bool = False, unrecorded: bool = False) -> None:
+        self.answer, self.record, self.late, self.unrecorded = answer, record, late, unrecorded
 
 
 def _judge_in_time(event: str, body: dict, deadline: float) -> Verdict:
@@ -170,12 +180,12 @@ def _judge_in_time(event: str, body: dict, deadline: float) -> Verdict:
     if not outcome:
         sys.stderr.write("Blackbox: the check did not finish in time on this busy computer.\n")
         if event == "pre_tool":
-            return Verdict({"decision": "block", "message": NOT_CHECKED_IN_TIME}, late=True)
-        return Verdict({}, late=True)
+            return Verdict({"decision": "block", "message": NOT_CHECKED_IN_TIME}, late=True, unrecorded=True)
+        return Verdict({}, late=True, unrecorded=True)
     if isinstance(outcome[0], BaseException):
-        return Verdict({})   # fail open: genuine breakage never stops the agent
+        return Verdict({}, unrecorded=True)   # fail open: genuine breakage never stops the agent
     answer, record = outcome[0]
-    return Verdict(answer, record)
+    return Verdict(answer, record, unrecorded=True)
 
 
 def answer_in_time(url: str, event: str, body: dict, started: float = 0.0) -> Verdict:
@@ -187,9 +197,114 @@ def answer_in_time(url: str, event: str, body: dict, started: float = 0.0) -> Ve
         return Verdict(ask(url, body, min(started + TIMEOUT_SECONDS, started + BUDGET_SECONDS)))
     except Exception as down:   # health: allow BLE001 -- the dashboard is down or slow: judge locally instead
         if event not in BLOCKING_EVENTS:
-            return Verdict({})
+            return Verdict({}, unrecorded=True)
         sys.stderr.write(f"Blackbox: the dashboard did not answer ({type(down).__name__}); judging here.\n")
     return _judge_in_time(event, body, started + BUDGET_SECONDS)
+
+
+#: :data:`JUDGE_HERE_FILE`'s key naming the spool folder (``agent_hooks.protect.spool``).
+SPOOL_KEY = "spool"
+#: The most events that wait in the spool; past it a refusal still leaves its journal mark.
+MAX_SPOOLED = 2000
+#: The largest spooled event (a write tool's whole file can be in it): past it its text is dropped.
+MAX_SPOOLED_BYTES = 512 * 1024
+#: The system journal's socket (Linux, systemd) and the tag of Blackbox's marks in it.
+JOURNAL_SOCKET, JOURNAL_TAG = "/run/systemd/journal/socket", "blackbox-hook"
+#: A journal mark's spool name when the event could not be written to the spool (full, no disk).
+UNSPOOLED = "unspooled"
+#: Events whose text is the person's own words: never written to the spool.
+_PERSONS_WORDS = frozenset({"prompt", "session_start"})
+
+
+def keep(verdict: Verdict, body: dict, detach: bool = False) -> None:
+    """After the answer: record what the dashboard did not (it did not answer in time).
+
+    WHY (Linux round L8, BB-LINUX-PENDING-e6e905, Medium): with the dashboard stopped, a SANDBOXED
+    agent's refusal left no row, finding or session. Inside the sandbox Blackbox's data folder is
+    read-only (``EROFS``), and below Linux 6.12 the sandbox is a PID namespace whose processes the
+    kernel kills when the agent ends — so the detached recorder could neither write nor outlive
+    it. Now: the detached recorder (:func:`record_detached`) only where this process may write
+    Blackbox's data folder; everywhere else the event goes, before this process ends, into the
+    spool the dashboard replays (``agent_hooks.protect.spool.replay``) — a 0600 file in a folder
+    the sandbox leaves writable — and a refusal also into the system journal (Linux), which the
+    agent can neither change nor delete: a spooled refusal removed before the dashboard read it is
+    then itself reported. A call refused unjudged (:data:`NOT_CHECKED_IN_TIME`) is kept the same way."""
+    if not verdict.unrecorded or not body or verdict.answer.get("recorded") is False:
+        return
+    home, spool = _homes()
+    if verdict.record is not None and not verdict.late and (not spool or _may_write(home)):
+        (record_detached if detach else _now)(verdict.record)
+        return
+    decided = str(verdict.answer.get("decision") or "allow")
+    name = _spooled(spool, body, decided, verdict.late) if spool else ""
+    if decided == "block":
+        _journal_mark(name, body, verdict)
+
+
+def _may_write(folder: str) -> bool:
+    """True when this process may write *folder* (or, before it exists, the folder it would be made
+    in). ``access`` answers False on a read-only mount (``EROFS``) — the sandbox's — whatever the modes say."""
+    path = os.path.abspath(folder or "/")
+    while not os.path.exists(path) and os.path.dirname(path) != path:
+        path = os.path.dirname(path)
+    return os.access(path, os.W_OK)
+
+
+def _now(record) -> None:
+    record()
+
+
+def _homes() -> tuple:
+    """``(Blackbox's data folder, the spool folder)`` this runner records into ("" when unknown)."""
+    if __package__:
+        from . import spool
+        from ...kernel import constants
+        return str(constants.blackbox_home()), str(spool.folder())
+    where = _where()
+    return str(where.get("blackbox_home") or ""), str(where.get(SPOOL_KEY) or "")
+
+
+def _spooled(folder: str, body: dict, decided: str, late: bool) -> str:
+    """Write one event into the spool *folder* (whole or not at all); its name, "" when not written."""
+    import secrets
+    body = {**body, "text": ""} if body.get("event") in _PERSONS_WORDS else body
+    entry = {"body": body, "decided": decided, "late": late, "at": time.time()}
+    raw = json.dumps(entry, default=str)
+    if len(raw) > MAX_SPOOLED_BYTES:
+        entry["body"] = {**body, "text": "", "args": {"dropped": "too long to keep"}}
+        raw = json.dumps(entry, default=str)
+    try:
+        os.makedirs(folder, mode=0o700, exist_ok=True)
+        if len(os.listdir(folder)) >= MAX_SPOOLED:
+            return ""
+        name = f"{time.time_ns()}-{os.getpid()}-{secrets.token_hex(4)}"
+        part = os.path.join(folder, name + ".part")
+        handle = os.open(part, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+        with os.fdopen(handle, "w", encoding="utf-8") as out:
+            out.write(raw)
+        os.replace(part, os.path.join(folder, name + ".json"))   # the replay never reads half an event
+        return name
+    except OSError:
+        return ""
+
+
+def _journal_mark(name: str, body: dict, verdict: Verdict) -> None:
+    """A refusal's line in the system journal (Linux; nothing where there is none): agent, event,
+    tool and the spool name — never the call's arguments or text."""
+    if not os.path.exists(JOURNAL_SOCKET):
+        return
+    fields = {"MESSAGE": f"Blackbox refused a {body.get('agent')} action ({'not checked in time' if verdict.late else 'judged here'})",
+              "SYSLOG_IDENTIFIER": JOURNAL_TAG, "PRIORITY": "5", "BLACKBOX_SPOOL_ID": name or UNSPOOLED,
+              "BLACKBOX_AGENT": body.get("agent"), "BLACKBOX_EVENT": body.get("event"), "BLACKBOX_TOOL": body.get("tool_name"),
+              "BLACKBOX_SESSION": body.get("session"), "BLACKBOX_LATE": "1" if verdict.late else "0"}
+    lines = "".join(f"{key}={str(value or '').replace(chr(10), ' ')[:300]}\n" for key, value in fields.items())
+    try:
+        import socket
+        with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as journal:
+            journal.settimeout(0.5)
+            journal.sendto(lines.encode("utf-8", "replace"), JOURNAL_SOCKET)
+    except OSError:
+        pass   # no journal here: the spool file is the record
 
 
 def record_detached(record) -> None:
@@ -221,5 +336,6 @@ def record_detached(record) -> None:
         os._exit(0)
 
 
-__all__ = ["BLOCKING_EVENTS", "BUDGET_SECONDS", "JUDGE_HERE_FILE", "NOT_CHECKED_IN_TIME", "RECORD_SECONDS", "TIMEOUT_SECONDS", "Verdict",
-           "answer_in_time", "ask", "judge_here", "process_age", "record_detached"]
+__all__ = ["BLOCKING_EVENTS", "BUDGET_SECONDS", "JOURNAL_SOCKET", "JOURNAL_TAG", "JUDGE_HERE_FILE", "MAX_SPOOLED", "NOT_CHECKED_IN_TIME",
+           "RECORD_SECONDS", "SPOOL_KEY", "TIMEOUT_SECONDS", "UNSPOOLED", "Verdict", "answer_in_time", "ask", "judge_here", "keep", "process_age",
+           "record_detached"]

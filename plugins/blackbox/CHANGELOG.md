@@ -109,6 +109,14 @@ that the two version fields agree.
 
 ### Fixed
 
+- **A refusal is recorded even while the dashboard is stopped.** An agent running in
+  Blackbox's sandbox could not write Blackbox's records itself, so with the dashboard stopped its
+  refused actions left no record or session. Such events now wait in a small private folder
+  (`~/.cache/blackbox/hook-spool`) and are recorded as soon as the dashboard runs again; on Linux
+  each refusal is also noted in the system journal, and a note removed before the dashboard read
+  it is reported as a high-severity finding. A call refused because it could not be checked in
+  time is recorded too.
+
 - **Inline code that prints `'/'` is no longer refused.** `node -e "console.log('/')"` or
   `python3 -c "print('/')"` was refused as a change to Blackbox's own settings, because the root
   folder in the code was read as a command. A folder cannot be run, so it is no longer counted.
