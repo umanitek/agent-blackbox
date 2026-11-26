@@ -1,0 +1,7 @@
+# production pins
+requests==2.32.3 \
+    --hash=sha256:aaaa
+-r requirements-dev.txt
+Flask>=3.0  # a range
+git+https://github.com/someone/thing.git#egg=thing
+./local-package

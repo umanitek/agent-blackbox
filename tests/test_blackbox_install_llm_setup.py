@@ -326,7 +326,9 @@ def test_unix_installer_hands_the_first_sync_to_the_dashboard() -> None:
     """The install does not wait for the ~30-minute first sync (Amos, 2026-10-17): a slow
     network must not fail — and, all or nothing, roll back — a working install. The
     dashboard's own sync worker runs the same controlled sync."""
-    sync_body = _extract_function_body("sync_ruleset")
+    # What the function runs, without its comments (which may name the step that follows it).
+    sync_body = "\n".join(line for line in _extract_function_body("sync_ruleset").splitlines()
+                           if not line.lstrip().startswith("#"))
 
     assert "start_dashboard" not in sync_body   # main starts it right after, once (a second launch replaced the first)
     assert "blackbox sync --wait" not in sync_body.replace('echo "    blackbox sync --wait --require-rules"', "")
@@ -1214,7 +1216,7 @@ def test_installers_offer_both_store_backends_and_actionable_docker_setup() -> N
     assert "Docker.DockerDesktop" in windows
     assert "docker info" in unix and "docker info" in windows
     assert "Continue with Oxigraph? [Y/n]" in unix   # yes by default (Amos, 2026-10-17)
-    assert "Continue with Oxigraph instead? [y/N]" in windows   # Windows parity: next installer change
+    assert "Continue with Oxigraph? [Y/n]" in windows   # Windows parity (KI-436)
     assert "confirm_oxigraph_fallback" in unix
     assert "Confirm-OxigraphFallback" in windows
     assert "Installation stopped before changing the DKG store" in unix

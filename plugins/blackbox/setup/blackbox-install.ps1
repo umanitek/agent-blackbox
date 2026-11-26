@@ -58,9 +58,15 @@ if ($env:BLACKBOX_INSTALL_DIR) {
 } else {
     $DefaultRepoDir = Join-Path ([string](Get-Location)) "agent-blackbox"
 }
+# The Agent Blackbox checkout this script runs from (scripts\blackbox-install.ps1 in it), or $null:
+# the ONE place the script's own path is read. Run as `iwr … | iex` there is no script path
+# ($PSCommandPath is empty) and Split-Path on it is a terminating error under
+# $ErrorActionPreference = "Stop" (KI-655), so every function asks this variable instead.
+$InstallerCheckoutDir = $null
 if ($PSCommandPath) {
     $candidateRepoDir = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
     if ((Test-Path "$candidateRepoDir\pyproject.toml") -and (Test-Path "$candidateRepoDir\plugins\blackbox")) {
+        $InstallerCheckoutDir = $candidateRepoDir
         $DefaultRepoDir = $candidateRepoDir
     }
 }
@@ -73,6 +79,13 @@ $DkgStoreUrl = if ($env:BLACKBOX_DKG_STORE_URL) { $env:BLACKBOX_DKG_STORE_URL } 
 # How long a restarted DKG node may take to answer again: a node holding the whole verified graph
 # spends ~100 s reopening its store, so a fixed 90 s failed every update of a synced install (KI-457).
 $DkgRuntimeWaitSeconds = if ($env:BLACKBOX_DKG_RUNTIME_WAIT_SECONDS) { [int]$env:BLACKBOX_DKG_RUNTIME_WAIT_SECONDS } else { 300 }
+# Past that budget the wait follows the node's REAL progress, as the macOS/Linux installer does
+# (FIX-0268, KI-520/521): it keeps waiting while the same node process runs and its daemon.log grows,
+# and fails when the log has been silent this long, or at the overall ceiling; one wait slice is
+# how long each "is it answering yet?" question waits.
+$DkgStallSeconds = if ($env:BLACKBOX_DKG_STALL_SECONDS) { [int]$env:BLACKBOX_DKG_STALL_SECONDS } else { 180 }
+$DkgLoadCeilingSeconds = if ($env:BLACKBOX_DKG_LOAD_CEILING_SECONDS) { [int]$env:BLACKBOX_DKG_LOAD_CEILING_SECONDS } else { 1800 }
+$DkgWaitSliceSeconds = if ($env:BLACKBOX_DKG_WAIT_SLICE_SECONDS) { [int]$env:BLACKBOX_DKG_WAIT_SLICE_SECONDS } else { 15 }
 $DkgStoreManagedByDkg = $false
 $script:DkgStoreNamespace = "agent-blackbox"
 $script:DkgSelectedStoreBackend = ""
@@ -102,6 +115,26 @@ $DkgCatchupMaxConcurrentPeers = "1"
 $DkgStoreQueueWaitTimeoutMs = "300000"
 $script:DkgNodeOptions = ""
 $NodeMajor   = if ($env:BLACKBOX_NODE_MAJOR)  { [int]$env:BLACKBOX_NODE_MAJOR } else { 22 }
+# Node for this user only, from nodejs.org's zip (KI-656: winget's Node is a machine-wide MSI whose
+# administrator prompt nobody may be there to answer - the install waited on it forever). The zip
+# runs only when its bytes match the sha256 pinned here (from the release's SHASUMS256.txt); a new
+# Node release moves the version and both sums together.
+$NodeZipVersion = "22.21.1"
+$NodeZipSha256 = @{ "x64" = "3c624e9fbe07e3217552ec52a0f84e2bdc2e6ffa7348f3fdfb9fbf8f42e23fcf"
+                    "arm64" = "b9d7faacd0b540b8b46640dbc8f56f4205ff63b79dec700d4f03d36591b0318f" }
+$NodeZipArch = switch ($env:PROCESSOR_ARCHITECTURE) { "ARM64" { "arm64" } "AMD64" { "x64" } default { "" } }
+$NodeUserDir = if ($NodeZipArch -and $env:LOCALAPPDATA) {
+    Join-Path $env:LOCALAPPDATA "Programs\node-v$NodeZipVersion-win-$NodeZipArch"
+} else { "" }
+# An administrator prompt (UAC) this installer may cause is waited on at most this long, with a
+# line telling the person; then the step is stopped with the command to run as administrator.
+$ElevationTimeoutSeconds = if ($env:BLACKBOX_ELEVATION_TIMEOUT_SECONDS) { [int]$env:BLACKBOX_ELEVATION_TIMEOUT_SECONDS } else { 300 }
+$ElevationPollSeconds = 2
+# Windows ARM64: Visual Studio Build Tools (ARM64 C++ and Clang), which Hermes's setup compiles some
+# dependencies with (pm/native_build.py; cryptography has no ARM64 wheel in the lock). Installing
+# them needs an administrator, so without them the install stops BEFORE Hermes's setup, with this
+# command, unless BLACKBOX_ALLOW_ADMIN_PROMPT=1 lets Hermes ask (an elevation wait, watched below).
+$Arm64BuildToolsCommand = 'winget install --id Microsoft.VisualStudio.2022.BuildTools --override "--passive --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended --add Microsoft.VisualStudio.Component.VC.Tools.ARM64 --add Microsoft.VisualStudio.Component.VC.Llvm.Clang"'
 $DefaultContextGraphId = "0x37b1Fdfd134e2b17583bCBdD3034F91504cD9C70/agent-blackbox-vm"
 $ContextGraphId = if ($env:BLACKBOX_CONTEXT_GRAPH_ID) { $env:BLACKBOX_CONTEXT_GRAPH_ID } else { $DefaultContextGraphId }
 # DKG 10.0.21+ recovery speed-ups (KI-282), both off by default in the node. The exact
@@ -147,7 +180,7 @@ Usage: blackbox-install.ps1 [-SkipDkg] [-StoreBackend auto|blazegraph|oxigraph] 
 
 Options:
   -SkipDkg          Skip DKG setup; plugin installs but first-run protection is incomplete
-  -StoreBackend     Store backend (default: auto; Blazegraph preferred, Oxigraph fallback asks first)
+  -StoreBackend     Store backend (default: auto; Blazegraph preferred, Oxigraph when Docker cannot run it)
   -Help             Show this help and exit
 
 The DKG node bootstraps on mainnet. The default context graph is public, and
@@ -167,7 +200,7 @@ Blackbox uses its own DKG home and port by default:
   DKG home: $DkgHome
   DKG CLI:  $DkgBin
   DKG URL:  $DkgDaemonUrl
-  Store:    auto (Blazegraph preferred; Oxigraph requires confirmation)
+  Store:    auto (Blazegraph preferred; Oxigraph without Docker, asked with yes as default)
 
 Note: Run the Hermes agent under WSL2 on Windows for best results.
 This installer is idempotent. If DKG setup or the first ruleset sync cannot
@@ -187,7 +220,10 @@ function Test-Git {
         Write-Ok "git $((git --version) -replace 'git version ','')"
     } else {
         Write-Err2 "git not found."
-        Write-Step "Install: winget install Git.Git   (or https://git-scm.com/download/win)"
+        # Per user, no administrator (round 7: winget's Git.Git asked for one even in user scope).
+        Write-Step "Install it for this user only (no administrator needed): MinGit, the portable Git -"
+        Write-Step "  download MinGit-<version>-$(if ($NodeZipArch -eq 'arm64') { 'arm64' } else { '64-bit' }).zip from https://github.com/git-for-windows/git/releases/latest,"
+        Write-Step "  unzip it to $env:LOCALAPPDATA\Programs\MinGit and add $env:LOCALAPPDATA\Programs\MinGit\cmd to your user PATH, then re-run."
         exit 1
     }
 }
@@ -214,7 +250,10 @@ function Resolve-Python {
         } catch { }
     }
     Write-Err2 "Python 3.11-3.13 not found."
-    Write-Step "Install: winget install Python.Python.3.11   (or https://python.org/downloads)"
+    # Per user, no administrator (round 7: winget's Python asked for one even in user scope).
+    $pyArch = if ($NodeZipArch -eq "arm64") { "arm64" } else { "amd64" }
+    Write-Step "Install it for this user only (no administrator needed), then re-run:"
+    Write-Step "  https://www.python.org/ftp/python/3.11.9/python-3.11.9-$pyArch.exe /quiet InstallAllUsers=0 PrependPath=1"
     exit 1
 }
 
@@ -231,25 +270,119 @@ function Test-NodeJs {
         return
     }
     if ($SkipDkg) { $script:HasNode = $false; return }
-    Write-Warn2 "Node.js $NodeMajor+ not found - installing it automatically (winget) ..."
-    if (Get-Command winget -ErrorAction SilentlyContinue) {
-        try {
-            winget install --id OpenJS.NodeJS.LTS --silent --accept-source-agreements --accept-package-agreements | Out-Null
-            # Refresh PATH so node/npm resolve in this session.
-            $env:Path = [System.Environment]::GetEnvironmentVariable('Path','Machine') + ';' +
-                        [System.Environment]::GetEnvironmentVariable('Path','User')
-        } catch { Write-Warn2 "winget Node install did not complete." }
-    } else {
-        Write-Warn2 "winget not available for automatic Node install."
-    }
-    if (Test-NodeOk) {
-        Write-Ok "Node.js $(node -v) installed"
+    Write-Warn2 "Node.js $NodeMajor+ not found - installing Node $NodeZipVersion for this user (no administrator needed) ..."
+    if (Install-NodeForUser) {
+        Write-Ok "Node.js $(node -v) installed in $NodeUserDir"
         $script:HasNode = $true
     } else {
         $script:HasNode = $false
-        Write-Step "Install Node ${NodeMajor} manually: winget install OpenJS.NodeJS.LTS (then re-run this installer)."
+        Write-Step "Install Node ${NodeMajor} for this user: unzip https://nodejs.org/dist/v$NodeZipVersion/node-v$NodeZipVersion-win-$(if ($NodeZipArch) { $NodeZipArch } else { 'x64' }).zip"
+        Write-Step "  into $env:LOCALAPPDATA\Programs and add its folder to your user PATH (then re-run this installer)."
         Write-Step "The Blackbox plugin still works; the DKG node is added once Node is present."
     }
+}
+
+# Node from nodejs.org's zip into %LOCALAPPDATA%\Programs, on the user PATH: no administrator, no
+# prompt (KI-656). $true when node now answers with the required major version. The zip is used
+# only when its sha256 is the pinned one; the folder and the PATH entry are in the install record
+# (a rollback removes them) and the manifest (uninstall takes the PATH entry off; the folder goes
+# with the host on the person's yes).
+function Install-NodeForUser {
+    if (-not $NodeUserDir) {
+        Write-Warn2 "No Node zip for this processor ($env:PROCESSOR_ARCHITECTURE)."
+        return $false
+    }
+    $node = Join-Path $NodeUserDir "node.exe"
+    if (-not (Test-Path -LiteralPath $node)) {
+        $name = Split-Path -Leaf $NodeUserDir
+        $zip = Join-Path ([IO.Path]::GetTempPath()) "$name.zip"
+        try {
+            Invoke-WebRequest -UseBasicParsing "https://nodejs.org/dist/v$NodeZipVersion/$name.zip" -OutFile $zip | Out-Null
+            $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $zip).Hash.ToLowerInvariant()
+            if ($actual -ne $NodeZipSha256[$NodeZipArch]) {
+                Write-Warn2 "The Node zip did not match its pinned checksum (expected $($NodeZipSha256[$NodeZipArch]), got $actual); not using it."
+                return $false
+            }
+            Expand-Archive -LiteralPath $zip -DestinationPath (Split-Path -Parent $NodeUserDir) -Force | Out-Null
+        } catch {
+            Write-Warn2 "Could not download Node for this user: $($_.Exception.Message)"
+            return $false
+        } finally {
+            Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
+        }
+    }
+    if (-not (Test-Path -LiteralPath $node)) { return $false }
+    $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+    if (@($userPath -split ';' | ForEach-Object { $_.Trim().TrimEnd('\') }) -notcontains $NodeUserDir.TrimEnd('\')) {
+        $newUserPath = if ([string]::IsNullOrWhiteSpace($userPath)) { $NodeUserDir } else { "$NodeUserDir;$userPath" }
+        [Environment]::SetEnvironmentVariable("Path", $newUserPath, "User")
+        $script:AddedNodePath = $NodeUserDir   # the install manifest and the rollback take it off again
+    }
+    $env:Path = "$NodeUserDir;$env:Path"
+    return (Test-NodeOk)
+}
+
+# True when this PowerShell runs as an administrator (False where Windows' identity API is absent).
+function Test-IsAdministrator {
+    try {
+        $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+        return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    } catch { return $false }
+}
+
+# Ends a process this installer started, with its children (Hermes's setup and what it ran).
+function Stop-ProcessTree([int]$Id) {
+    if (Get-Command taskkill.exe -ErrorAction SilentlyContinue) {
+        & taskkill.exe /PID $Id /T /F *> $null
+    } else {
+        Stop-Process -Id $Id -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# Waits for $Process (started by this installer) to end, watching for a Windows administrator
+# prompt (consent.exe, the UAC dialog) while it runs (KI-656/657: the install waited on one
+# forever). When a prompt appears, one line tells the person; when it is still unanswered after
+# $ElevationTimeoutSeconds, the process is stopped and the exact command to run as administrator
+# is printed. Returns $true when the process ended by itself (read its ExitCode), $false when stopped.
+function Wait-WithElevationWatch {
+    param([System.Diagnostics.Process]$Process, [string]$What, [string]$AdminCommand)
+    $promptSince = $null
+    while (-not $Process.WaitForExit($ElevationPollSeconds * 1000)) {
+        if (-not (Get-Process -Name consent -ErrorAction SilentlyContinue)) { $promptSince = $null; continue }
+        if (-not $promptSince) {
+            $promptSince = Get-Date
+            Write-Warn2 "Windows is asking for administrator permission for $What (a prompt on the screen). Answer it there; the installer waits at most $ElevationTimeoutSeconds s."
+        } elseif (((Get-Date) - $promptSince).TotalSeconds -ge $ElevationTimeoutSeconds) {
+            Stop-ProcessTree $Process.Id
+            $null = $Process.WaitForExit(10000)
+            Write-Err2 "Nobody answered the administrator prompt for $What within $ElevationTimeoutSeconds s, so that step was stopped."
+            Write-Step "Run this once in an Administrator PowerShell, then run this installer again:"
+            Write-Host "    $AdminCommand" -ForegroundColor Yellow
+            return $false
+        }
+    }
+    return $true
+}
+
+# Windows ARM64 only: Hermes's setup compiles some dependencies and needs Visual Studio Build Tools
+# (ARM64 C++ and Clang); installing them needs an administrator (KI-657). Asked with Hermes's own
+# discovery (scripts\windows-build-deps.ps1 in the checkout), BEFORE Hermes's setup starts. $true
+# when the build can go ahead without a prompt: not ARM64, the tools are there, this PowerShell is
+# elevated, or the person allowed the prompt (BLACKBOX_ALLOW_ADMIN_PROMPT=1).
+function Test-WindowsBuildToolsReady([string]$Repo) {
+    if ($env:PROCESSOR_ARCHITECTURE -ne "ARM64") { return $true }
+    $discovery = Join-Path $Repo "scripts\windows-build-deps.ps1"
+    if (-not (Test-Path -LiteralPath $discovery)) { return $true }   # an older Hermes: its own setup decides
+    . $discovery
+    $vs = Get-HermesArm64VisualStudio
+    if ($vs -and (Get-HermesClang -VisualStudio $vs)) { return $true }
+    if ((Test-IsAdministrator) -or $env:BLACKBOX_ALLOW_ADMIN_PROMPT -eq "1") { return $true }
+    Write-Err2 "This Windows ARM64 machine needs Visual Studio Build Tools (ARM64 C++ and Clang): Hermes compiles some of its"
+    Write-Err2 "dependencies (cryptography has no ARM64 Windows wheel), and only an administrator can install those tools."
+    Write-Step "Run this once in an Administrator PowerShell (it downloads several GB), then run this installer again:"
+    Write-Host "    $Arm64BuildToolsCommand" -ForegroundColor Yellow
+    Write-Step "Or set BLACKBOX_ALLOW_ADMIN_PROMPT=1 and re-run at the desktop to answer Windows' prompt yourself."
+    return $false
 }
 
 function Initialize-BlackboxDkgProcessEnvironment {
@@ -479,15 +612,55 @@ function Wait-BlackboxDkgRuntime {
         Write-Warn2 "Could not resolve the published DKG build commit."
         return $false
     }
-    Write-Step "Waiting for the DKG node to answer (up to $($DkgRuntimeWaitSeconds)s; a synced node takes about 2 minutes) ..."
-    $null = & $script:VenvPython $verifier wait $DkgDaemonUrl $expectedCommit $DkgRuntimeWaitSeconds
-    if ($LASTEXITCODE -ne 0) {
-        $script:InstallIncomplete = $true
-        Write-Warn2 "The DKG daemon did not activate npm build $($expectedCommit.Substring(0, 12)) within $($DkgRuntimeWaitSeconds)s."
-        return $false
+    Write-Step "Waiting for the DKG node to answer (a synced node reopens its threat graph in a few minutes) ..."
+    $started = Get-Date; $progress = $started; $lastSize = Get-BlackboxDkgLogSize; $firstPid = $null; $why = ""
+    while ($true) {
+        $null = & $script:VenvPython $verifier wait $DkgDaemonUrl $expectedCommit $DkgWaitSliceSeconds
+        if ($LASTEXITCODE -eq 0) { break }
+        $now = Get-Date
+        $nodePid = Get-BlackboxDkgLivePid
+        $size = Get-BlackboxDkgLogSize
+        if ($size -ne $lastSize) { $progress = $now; $lastSize = $size }
+        if ($nodePid -and -not $firstPid) {
+            $firstPid = $nodePid
+        } elseif ($firstPid -and $nodePid -ne $firstPid) {
+            $why = if ($nodePid) { "the node stopped and was started again (pid $firstPid -> $nodePid)" } else { "the node stopped" }
+        }
+        $elapsed = [int]($now - $started).TotalSeconds
+        if (-not $why -and $elapsed -ge $DkgRuntimeWaitSeconds) {
+            $silent = [int]($now - $progress).TotalSeconds
+            if (-not $nodePid) { $why = "the node is not running" }
+            elseif ($silent -ge $DkgStallSeconds) { $why = "the node has written nothing for $($silent)s" }
+            elseif ($elapsed -ge $DkgLoadCeilingSeconds) { $why = "it was still starting after $($elapsed)s" }
+            else { Write-Step "  ... the node is still loading its threat graph ($($elapsed)s, pid $nodePid); Network Shield keeps its last lists meanwhile" }
+        }
+        if ($why) {
+            $script:InstallIncomplete = $true
+            Write-Warn2 "The DKG daemon did not activate npm build $($expectedCommit.Substring(0, 12)): $why."
+            $log = Join-Path $DkgHome "daemon.log"
+            if (Test-Path $log) { Get-Content -Path $log -Tail 15 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "    $_" } }
+            return $false
+        }
     }
     Write-Ok "DKG daemon is ready on npm build $($expectedCommit.Substring(0, 12))"
     return $true
+}
+
+# The DKG node's pid when that process is running, else $null (daemon.pid in Blackbox's node home).
+function Get-BlackboxDkgLivePid {
+    $pidPath = Join-Path $DkgHome "daemon.pid"
+    if (-not (Test-Path $pidPath)) { return $null }
+    $text = (Get-Content -Path $pidPath -Raw -ErrorAction SilentlyContinue) -replace '[^0-9]', ''
+    if (-not $text) { return $null }
+    if (Get-Process -Id ([int]$text) -ErrorAction SilentlyContinue) { return [int]$text }
+    return $null
+}
+
+# The size of the node's daemon.log (0 when there is none): it grows while the node is working.
+function Get-BlackboxDkgLogSize {
+    $log = Join-Path $DkgHome "daemon.log"
+    if (Test-Path $log) { return (Get-Item -Path $log).Length }
+    return 0
 }
 
 function Move-LegacyBlackboxDkgHome {
@@ -568,6 +741,25 @@ function Select-BlackboxDkgPort {
         }
     }
     return $false
+}
+
+# The DKG-managed Oxigraph store listens on its own loopback port, 7878 unless the node's
+# config.json names one (store.options.port). Another DKG node on this machine very likely holds
+# 7878 already, and two stores cannot share a port: Blackbox's node would fail to start its store.
+# So a Blackbox node whose config names no port gets the first free one from 7879 (KI-436; the
+# .sh's choose_blackbox_oxigraph_port), written into its config. Returns the port to write, or ""
+# to leave the config as it is (a configured port is kept by the writer; a Blackbox node already
+# running holds its port itself); $null when no port in the range is free.
+# The search starts ABOVE 7878: "free" is only what this moment shows, and another node's store is
+# briefly down whenever that node restarts (a Mac install took 7878 in such a gap, 2026-10-22).
+$OxigraphFirstPort = 7879
+$OxigraphLastPort = 7978
+function Select-BlackboxOxigraphPort {
+    if ($script:DkgAlreadyRunning) { return "" }
+    for ($candidate = $OxigraphFirstPort; $candidate -le $OxigraphLastPort; $candidate++) {
+        if (-not (Test-PortInUse $candidate)) { return "$candidate" }
+    }
+    return $null
 }
 
 function Test-BlackboxDkgPort {
@@ -665,21 +857,58 @@ function Use-BlackboxOxigraph {
     Write-Warn2 "Using the DKG-managed Oxigraph store (no Docker container required)."
 }
 
+# Docker cannot run the Blazegraph store (not installed, its engine not answering, or the store's
+# container failing to start - KI-313/KI-398): the install falls back to the DKG-managed Oxigraph
+# store and never dead-ends (Amos, 2026-10-17; confirm_oxigraph_fallback in the .sh, KI-436). A
+# person at a terminal is still asked, with yes as the default - Enter, or no answer within
+# BLACKBOX_STORE_PROMPT_SECONDS, takes Oxigraph; only an explicit "n" stops the install (and the
+# install record then removes everything this run did). With no terminal - an agent, a script, a
+# server, -NonInteractive - Oxigraph is chosen automatically and the run says why.
+$StorePromptSeconds = if ($env:BLACKBOX_STORE_PROMPT_SECONDS) { [int]$env:BLACKBOX_STORE_PROMPT_SECONDS } else { 30 }
+
+# Whether a person can answer at this console: an interactive host whose input is the keyboard.
+function Test-InteractiveConsole {
+    if (-not [Environment]::UserInteractive) { return $false }
+    if ([Environment]::GetCommandLineArgs() -match '^-NonI') { return $false }
+    try { return -not [Console]::IsInputRedirected } catch { return $false }
+}
+
+# The line typed within $Seconds ("" when nothing was entered in time). Read-Host has no
+# timeout, so keys are read one by one until Enter or the deadline.
+function Read-AnswerWithin([int]$Seconds) {
+    $deadline = [DateTime]::UtcNow.AddSeconds($Seconds)
+    $typed = ""
+    while ([DateTime]::UtcNow -lt $deadline) {
+        if (-not [Console]::KeyAvailable) { Start-Sleep -Milliseconds 100; continue }
+        $key = [Console]::ReadKey($true)
+        if ($key.Key -eq [ConsoleKey]::Enter) { Write-Host ""; return $typed }
+        if ($key.Key -eq [ConsoleKey]::Backspace) {
+            if ($typed.Length -gt 0) { $typed = $typed.Substring(0, $typed.Length - 1); Write-Host -NoNewline "`b `b" }
+            continue
+        }
+        $typed += $key.KeyChar
+        Write-Host -NoNewline $key.KeyChar
+    }
+    Write-Host ""
+    return ""
+}
+
 function Confirm-OxigraphFallback {
     param([string]$Reason)
     Write-Warn2 $Reason
-    Write-Step "Recommended default: stop here, install/start or repair Docker, then re-run Blackbox with Blazegraph."
-    Write-Step "Alternative: type y to continue now with the DKG-managed Oxigraph store."
-    try {
-        $answer = Read-Host "Continue with Oxigraph instead? [y/N]"
-    } catch {
-        Write-Warn2 "No interactive terminal is available, so Oxigraph was not selected."
-        Write-Step "To choose it explicitly, re-run with: -StoreBackend oxigraph"
+    if (-not (Test-InteractiveConsole)) {
+        Write-Step "No terminal to ask, so Blackbox uses the DKG-managed Oxigraph store (no Docker needed)."
+        Write-Step "To move to Blazegraph later: make Docker work, then re-run the installer with -StoreBackend blazegraph"
+        return $true
+    }
+    Write-Step "Blackbox can continue with the DKG-managed Oxigraph store, which needs no Docker."
+    Write-Host -NoNewline "Continue with Oxigraph? [Y/n] (yes in ${StorePromptSeconds}s) "
+    $answer = Read-AnswerWithin $StorePromptSeconds
+    if ($answer.Trim() -match '^(n|no)$') {
+        Write-Step "Stopping without installing. Make Docker work, then re-run the installer."
         return $false
     }
-    if ($answer -match '^(y|yes)$') { return $true }
-    Write-Step "Keeping Blazegraph as the default. Set up Docker and re-run the installer."
-    return $false
+    return $true
 }
 
 function Get-BlackboxStoreDescription {
@@ -865,12 +1094,17 @@ from pathlib import Path
 home = Path(sys.argv[1]).expanduser()
 api_port = int(sys.argv[2])
 store_backend = sys.argv[3]
-store_url = sys.argv[4]
+# "-" stands for "none": Windows PowerShell 5.1 drops an empty argument to a native program,
+# which would shift every argument after it (the Oxigraph port included).
+store_url = "" if sys.argv[4] == "-" else sys.argv[4]
 store_managed = sys.argv[5].lower() == "true"
 context_graph_id = sys.argv[6]
 # Absent (an older caller): no graph is treated as the default, so the
 # steady profile stays exactly as before.
 default_context_graph_id = sys.argv[7] if len(sys.argv) > 7 else ""
+# The free port the installer chose for a DKG-managed Oxigraph store; used only when the
+# config names none (empty = keep the config as it is).
+oxigraph_port = int(sys.argv[8]) if len(sys.argv) > 8 and sys.argv[8].isdigit() else 0
 # Sync slots for this machine (sync/process_limits.sync_slots): 10/20 from 8 GB, 4/8 below.
 sync_inflight = int(sys.argv[9]) if len(sys.argv) > 9 and sys.argv[9] else 10
 sync_queue = int(sys.argv[10]) if len(sys.argv) > 10 and sys.argv[10] else 20
@@ -955,9 +1189,12 @@ if store_backend == "blazegraph":
     }
 elif store_backend == "oxigraph-server":
     previous_options = store.get("options") if previous_backend == store_backend else None
+    options = dict(previous_options) if isinstance(previous_options, dict) else {}
+    if oxigraph_port and "port" not in options:
+        options["port"] = oxigraph_port
     data["store"] = {"backend": "oxigraph-server"}
-    if isinstance(previous_options, dict) and previous_options:
-        data["store"]["options"] = previous_options
+    if options:
+        data["store"]["options"] = options
 else:
     raise SystemExit(f"unsupported store backend: {store_backend}")
 rendered = json.dumps(data, indent=2) + "\n"
@@ -976,10 +1213,21 @@ if not token_path.exists():
     changed = True
 print("switched" if switched else ("changed" if changed else "unchanged"))
 '@
+    $oxigraphPort = ""
+    if ($script:DkgSelectedStoreBackend -eq "oxigraph-server") {
+        $oxigraphPort = Select-BlackboxOxigraphPort
+        if ($null -eq $oxigraphPort) {
+            Write-Err2 "No free port for the Oxigraph store in $OxigraphFirstPort-$OxigraphLastPort."
+            exit 1
+        }
+    }
     $writerFile = Join-Path $env:TEMP "blackbox_dkg_config.py"
     Set-Content -Path $writerFile -Value $writer -Encoding UTF8
     try {
-        $configState = & $VenvPython $writerFile $DkgHome $DkgPort $script:DkgSelectedStoreBackend $DkgStoreUrl $DkgStoreManagedByDkg $ContextGraphId $DefaultContextGraphId "" "$DkgSyncGlobalMaxInflight" "$DkgSyncGlobalQueueLimit"
+        # Never an empty argument (see the writer): "-" for no store URL, "0" for no port to write.
+        $storeUrlArgument = if ($DkgStoreUrl) { $DkgStoreUrl } else { "-" }
+        $oxigraphPortArgument = if ($oxigraphPort) { $oxigraphPort } else { "0" }
+        $configState = & $VenvPython $writerFile $DkgHome $DkgPort $script:DkgSelectedStoreBackend $storeUrlArgument $DkgStoreManagedByDkg $ContextGraphId $DefaultContextGraphId $oxigraphPortArgument "$DkgSyncGlobalMaxInflight" "$DkgSyncGlobalQueueLimit"
         if ($LASTEXITCODE -ne 0) { throw "dkg config exit $LASTEXITCODE" }
         $configResult = $configState | Select-Object -Last 1
         if ($configResult -eq "switched") {
@@ -1018,15 +1266,72 @@ function Move-BrokenBlackboxRepoAside {
     Write-Step "Preserved it at $backup"
 }
 
+# ── Only what this machine needs: a partial clone with a sparse checkout ────
+# The same set as blackbox-install.sh (see there): printed by the plugin's setup/checkout_layout.py
+# from kernel/os_layout — the one definition a plugin copy uses too (LES-137) — both read straight
+# from the commit, so nothing is checked out first. The lines live in .git/info/sparse-checkout, so
+# every later fetch + reset keeps the set. A developer's own checkout is never narrowed.
+$CheckoutLayoutFile = "plugins/blackbox/setup/checkout_layout.py"
+$OsLayoutFile = "plugins/blackbox/kernel/os_layout/__init__.py"
+
+# One file of commit $Rev written byte for byte (Start-Process hands git a file; a PowerShell
+# redirect would re-encode it). Returns $true when git found it.
+function Save-GitBlob([string]$Repo, [string]$Rev, [string]$Path, [string]$Destination) {
+    Push-Location $Repo
+    try {
+        $run = Start-Process -FilePath "git" -ArgumentList @("show", "${Rev}:$Path") -NoNewWindow -Wait -PassThru `
+            -RedirectStandardOutput $Destination -RedirectStandardError (Join-Path (Split-Path -Parent $Destination) "git.err")
+        return ($run.ExitCode -eq 0)
+    } finally {
+        Pop-Location
+    }
+}
+
+# This machine's sparse-checkout lines from commit $Rev's layout files; $null when they cannot be
+# worked out (no Python, or a commit from before the layout).
+function Get-CheckoutLayoutPatterns([string]$Repo, [string]$Rev) {
+    if (-not $script:PyExe) { return $null }
+    $folder = Join-Path $Repo ".git\blackbox-checkout-layout"
+    New-Item -ItemType Directory -Force -Path $folder | Out-Null
+    try {
+        $layout = Join-Path $folder "checkout_layout.py"
+        $osLayout = Join-Path $folder "os_layout.py"
+        if (-not (Save-GitBlob $Repo $Rev $CheckoutLayoutFile $layout)) { return $null }
+        if (-not (Save-GitBlob $Repo $Rev $OsLayoutFile $osLayout)) { return $null }
+        # --repo/--rev: the commit's npm workspaces decide which left-out folders the TUI and the
+        # dashboard build from (KI-653). A commit whose layout predates them takes the short form.
+        $lines = @(& $script:PyExe @($script:PyArgs + @("-I", $layout, $osLayout, "--repo", $Repo, "--rev", $Rev)) 2>$null)
+        if ($LASTEXITCODE -ne 0) { $lines = @(& $script:PyExe @($script:PyArgs + @("-I", $layout, $osLayout))) }
+        if ($LASTEXITCODE -ne 0 -or $lines.Count -eq 0) { return $null }
+        return $lines
+    } finally {
+        Remove-Item $folder -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# Narrows $Repo's working tree to the set commit $Rev's layout names (files with local changes
+# stay, as git says). $false, changing nothing, when the set cannot be worked out.
+function Set-CheckoutLayout([string]$Repo, [string]$Rev) {
+    $lines = Get-CheckoutLayoutPatterns $Repo $Rev
+    if (-not $lines) { return $false }
+    New-Item -ItemType Directory -Force -Path (Join-Path $Repo ".git\info") | Out-Null
+    [IO.File]::WriteAllText((Join-Path $Repo ".git\info\sparse-checkout"), (($lines -join "`n") + "`n"),
+        (New-Object Text.UTF8Encoding $false))
+    & git -C $Repo config core.sparseCheckout true
+    & git -C $Repo config core.sparseCheckoutCone false
+    # A fresh --no-checkout clone has no index yet: its first checkout applies the set.
+    if (Test-Path (Join-Path $Repo ".git\index")) {
+        & git -C $Repo sparse-checkout reapply 2>$null
+        if ($LASTEXITCODE -ne 0) { & git -C $Repo read-tree -mu HEAD }
+    }
+    return $true
+}
+
 function Resolve-Repo {
-    $scriptDir = Split-Path -Parent $PSCommandPath
-    if ($scriptDir) {
-        $d = Split-Path -Parent $scriptDir
-        if ((Test-Path "$d\pyproject.toml") -and (Test-Path "$d\plugins\blackbox")) {
-            $script:RepoDir = $d
-            Write-Step "Using existing checkout at $RepoDir"
-            return
-        }
+    if ($InstallerCheckoutDir) {
+        $script:RepoDir = $InstallerCheckoutDir
+        Write-Step "Using existing checkout at $RepoDir"
+        return
     }
     if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
         Write-Err2 "git is required to download Blackbox. Install git and re-run."
@@ -1047,6 +1352,9 @@ function Resolve-Repo {
         $fetchedBefore = (& git -C $RepoDir rev-parse -q --verify "refs/remotes/origin/$RepoBranch" 2>$null)
         & git -C $RepoDir fetch --depth 1 origin $RepoBranch
         if ($LASTEXITCODE -ne 0) { throw "Could not fetch $RepoBranch from $RepoUrl" }
+        # This machine's set from the commit being installed, BEFORE the tree moves to it: an
+        # earlier installer's full checkout is converted here.
+        $null = Set-CheckoutLayout $RepoDir "refs/remotes/origin/$RepoBranch"
         & git -C $RepoDir checkout $RepoBranch
         if ($LASTEXITCODE -ne 0) { throw "Could not switch $RepoDir to $RepoBranch (git's reason is above)" }
         # A depth-1 fetch brings the new tip without its parent, so `pull --ff-only`
@@ -1067,9 +1375,14 @@ function Resolve-Repo {
             }
         }
     } else {
-        Write-Step "Cloning $RepoUrl -> $RepoDir"
-        & git clone --depth 1 --branch $RepoBranch $RepoUrl $RepoDir
+        Write-Step "Cloning $RepoUrl -> $RepoDir (only what this machine runs)"
+        & git clone --depth 1 --filter=blob:none --no-checkout --branch $RepoBranch $RepoUrl $RepoDir
         if ($LASTEXITCODE -ne 0) { throw "Could not clone $RepoUrl into $RepoDir" }
+        if (-not (Set-CheckoutLayout $RepoDir "HEAD")) {
+            Write-Step "This machine's file set could not be worked out; downloading the whole checkout."
+        }
+        & git -C $RepoDir checkout -q $RepoBranch
+        if ($LASTEXITCODE -ne 0) { throw "Could not check out $RepoBranch in $RepoDir (git's reason is above)" }
     }
     if (-not (Test-BlackboxRepoCheckout $RepoDir)) {
         throw "$RepoDir is not a complete Agent Blackbox Python project"
@@ -1077,25 +1390,83 @@ function Resolve-Repo {
     Write-Ok "Repo ready at $RepoDir"
 }
 
-# ── Python venv + editable install ──────────────────────────────────────────
+# ── Python: Hermes's own setup (pm), or a venv + editable install for an older Hermes ──────────
+# KI-623: a Hermes with pm (0.21.7+: setup-hermes.ps1 and pm\lock.json) is set up by its OWN Windows
+# setup, as the .sh runs setup-hermes.sh: the pinned uv and Python, the hash-verified uv.lock, the
+# environment pm records. Where that environment is, pm says (pm.environments.selected_venv, asked
+# inside activate.ps1's environment - the .sh asks through scripts/run-in-hermes-env). Only a
+# checkout without pm keeps the older venv + `pip install -e`.
+function Test-HermesOwnSetup {
+    (Test-Path -LiteralPath (Join-Path $RepoDir "setup-hermes.ps1")) -and (Test-Path -LiteralPath (Join-Path $RepoDir "pm\lock.json")) -and
+        (Test-Path -LiteralPath (Join-Path $RepoDir "activate.ps1"))
+}
+
+function Install-PythonEnvWithHermesSetup {
+    $shell = (Get-Process -Id $PID).Path
+    Write-Step "Running Hermes's own setup (setup-hermes.ps1: pinned uv + Python, hash-verified dependencies) ..."
+    Push-Location $RepoDir
+    try {
+        # A process of its own, watched: an administrator prompt it raises (Visual Studio Build Tools
+        # on ARM64) is said and timed out, never waited on forever (KI-657).
+        $setupArgs = @("-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", ('"' + (Join-Path $RepoDir "setup-hermes.ps1") + '"'))
+        $setup = Start-Process -FilePath $shell -ArgumentList $setupArgs -NoNewWindow -PassThru
+        $null = $setup.Handle   # Windows PowerShell 5.1 reads ExitCode only through an opened handle
+        if (-not (Wait-WithElevationWatch $setup "Hermes's setup" $Arm64BuildToolsCommand)) {
+            throw "Hermes's own setup waited on an unanswered administrator prompt and was stopped"
+        }
+        if ($setup.ExitCode -ne 0) { throw "Hermes's own setup (setup-hermes.ps1) failed (exit $($setup.ExitCode); its reason is above)" }
+        # Single quotes only: Windows PowerShell 5.1 mangles double quotes inside a native argument.
+        $env:BLACKBOX_PM_PROBE = "from pathlib import Path; from pm.environments import selected_venv; print(selected_venv(Path('.').resolve()))"
+        $activate = (Join-Path $RepoDir "activate.ps1") -replace "'", "''"
+        $lines = @(& $shell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '$activate' *> `$null; python -c `$env:BLACKBOX_PM_PROBE")
+        if ($LASTEXITCODE -ne 0) { throw "Hermes's environment could not be found (pm.environments.selected_venv)" }
+    } finally {
+        Remove-Item env:BLACKBOX_PM_PROBE -ErrorAction SilentlyContinue
+        Pop-Location
+    }
+    $selected = [string]($lines | Where-Object { $_ } | Select-Object -Last 1)
+    if (-not $selected -or -not (Test-Path -LiteralPath (Join-Path $selected.Trim() "Scripts\python.exe"))) {
+        throw "Hermes's setup finished but its environment has no python.exe ($selected)"
+    }
+    $script:VenvDir = $selected.Trim()
+    $script:VenvPython = Join-Path $VenvDir "Scripts\python.exe"
+    Write-Step "Hermes environment: $VenvDir"
+}
+
 function Install-PythonEnv {
     Write-Heading "Installing Hermes + Blackbox (Python)"
+    if (-not (Test-WindowsBuildToolsReady $RepoDir)) { exit 1 }   # before anything waits on a prompt (KI-657)
+    if (Test-HermesOwnSetup) {
+        Install-PythonEnvWithHermesSetup
+        & $VenvPython -c "import hermes_cli, fastapi, uvicorn" 2>$null
+        if ($LASTEXITCODE -ne 0) { throw "Hermes's environment does not import hermes_cli, fastapi and uvicorn" }
+        $script:HermesBin = Join-Path $VenvDir "Scripts\hermes.exe"
+        Write-Ok "Hermes + Blackbox installed through Hermes's own setup"
+        return
+    }
     $script:VenvDir = "$RepoDir\venv"
     $script:VenvPython = "$VenvDir\Scripts\python.exe"
     if (-not (Test-Path $VenvDir)) {
         Write-Step "Creating virtual environment ..."
         & $script:PyExe @($script:PyArgs + @("-m", "venv", $VenvDir))
+        if ($LASTEXITCODE -ne 0) { throw "Could not create the Python environment at $VenvDir (Python's reason is above)" }
     } else {
         Write-Step "Reusing existing venv at $VenvDir"
     }
     Write-Step "Upgrading pip and installing Hermes + Agent Blackbox (web extras, editable) ..."
     & $VenvPython -m pip install --upgrade pip | Out-Null
+    # A native command's failure does not stop PowerShell: its exit code is read, so the line below
+    # is said only after pip really installed everything (KI-609's lesson).
     Push-Location $RepoDir
     try {
         & $VenvPython -m pip install -e ".[web]"
+        $pipExit = $LASTEXITCODE
     } finally {
         Pop-Location
     }
+    if ($pipExit -ne 0) { throw "pip could not install Hermes + Blackbox (exit $pipExit; its reason is above)" }
+    & $VenvPython -c "import hermes_cli, fastapi, uvicorn" 2>$null
+    if ($LASTEXITCODE -ne 0) { throw "Hermes + Blackbox were installed but do not import (hermes_cli, fastapi, uvicorn)" }
     Write-Ok "Blackbox installed (editable, with dashboard extras)"
     $script:HermesBin = "$VenvDir\Scripts\hermes.exe"
 }
@@ -1122,7 +1493,7 @@ function Use-RunningHermes {
 }
 
 function Install-BlackboxCommand {
-    $shimDir = Join-Path $HOME ".local\bin"
+    $shimDir = $BlackboxShimDir
     $shimPath = Join-Path $shimDir "blackbox.cmd"
     New-Item -ItemType Directory -Force -Path $shimDir | Out-Null
 
@@ -1152,6 +1523,7 @@ exit /b %ERRORLEVEL%
                 "$shimDir;$userPath"
             }
             [Environment]::SetEnvironmentVariable("Path", $newUserPath, "User")
+            $script:AddedUserPath = $shimDir   # the install manifest: uninstall takes it off again
             Write-Ok "Added $shimDir to the user PATH"
         } catch {
             Write-Warn2 "Could not add $shimDir to the user PATH automatically: $_"
@@ -1406,23 +1778,56 @@ function Install-Dkg {
     }
 }
 
-# Pull the verified ruleset now so detection is live immediately after install.
+# The first verified threat-graph sync is NOT part of the install (Amos, 2026-10-17; sync_ruleset
+# in the .sh, KI-436): it takes about half an hour and depends on the network, so waiting for it
+# would turn a slow connection into a failed install - and, all or nothing, roll back a working
+# one. The dashboard's own sync worker (started once the install is kept: Start-BlackboxDashboard)
+# starts it about ten seconds after the dashboard starts, runs the same controlled
+# `blackbox sync --wait --require-rules`, keeps the graph current and shows the progress.
+$AutoDashboard = if ($env:BLACKBOX_AUTO_DASHBOARD) { $env:BLACKBOX_AUTO_DASHBOARD } else { "1" }
+$DashboardOffPattern = '^(0|false|never|no)$'
+$DashboardTaskName = "Agent Blackbox dashboard"
+$DashboardUrl = "http://127.0.0.1:9700"
+
 function Sync-Ruleset {
     if (-not $script:DkgReady) { return }
-    Write-Heading "Syncing the threat ruleset"
-    Write-Step "Requesting one controlled verified graph catch-up ..."
-    $out = & $script:HermesBin blackbox sync --wait --timeout $CatchupTimeout --require-rules 2>&1
-    $code = $LASTEXITCODE
-    if ($out) { $out | ForEach-Object { Write-Host $_ } }
-    if ($code -eq 0) {
-        Write-Ok "Ruleset synced - Blackbox is watching with the latest threats"
-    } else {
-        $script:InstallIncomplete = $true
-        Write-Err2 "Initial verified threat-graph sync did not complete."
-        Write-Step "A partial verified ruleset may already be active, but setup is incomplete until the curator snapshot settles."
-        Write-Step "Retry the full sync with: blackbox sync --wait --require-rules"
+    Write-Heading "Threat graph"
+    if ($AutoDashboard -match $DashboardOffPattern) {
+        Write-Step "The dashboard is off, so nothing syncs the threat graph yet. Start the first sync with:"
+        Write-Host "    blackbox sync --wait --require-rules"
+        return
     }
-    Write-Ok "DKG native reconciliation enabled; one in-flight slot; zero queue"
+    # Nothing has synced yet: said as what happens next, not as a check mark (KI-609's lesson).
+    Write-Step "The first threat-graph sync starts with the dashboard and runs in the background (about 30 minutes)."
+    Write-Step "Follow it on the dashboard: $DashboardUrl"
+}
+
+# The dashboard started now, once the install is kept (so a rollback never has to stop it), and
+# with it the first threat-graph sync: through its sign-in task when there is one, else as a
+# hidden process (the .sh's start_dashboard). Off with BLACKBOX_AUTO_DASHBOARD=0.
+function Start-BlackboxDashboard {
+    if ($AutoDashboard -match $DashboardOffPattern) {
+        Write-Step "Dashboard auto-start disabled (BLACKBOX_AUTO_DASHBOARD=$AutoDashboard)."
+        return
+    }
+    if ($script:DashboardTaskRegistered) {
+        try {
+            Start-ScheduledTask -TaskName $DashboardTaskName -ErrorAction Stop
+            $script:DashboardStarted = $true
+            Write-Ok "Dashboard starting at $DashboardUrl (task '$DashboardTaskName')"
+            return
+        } catch {
+            Write-Warn2 "Could not start the dashboard task: $($_.Exception.Message)"
+        }
+    }
+    if (-not ($script:HermesBin -and (Test-Path $script:HermesBin))) {
+        Write-Step "Start the dashboard (and with it the first threat-graph sync) with: blackbox dashboard"
+        return
+    }
+    $env:HERMES_HOME = $HermesHome
+    Start-Process -FilePath $script:HermesBin -ArgumentList @("blackbox", "dashboard") -WindowStyle Hidden
+    $script:DashboardStarted = $true
+    Write-Ok "Dashboard starting at $DashboardUrl"
 }
 
 function Show-DkgManualHint {
@@ -1622,7 +2027,7 @@ print("  configured: " + ", ".join(added) if added else "  already configured - 
     try {
         & $VenvPython $configFile "$HermesHome\config.yaml" $DkgDaemonUrl $DkgHome $DkgBin $ContextGraphId $GraphPeerId $(if ($env:BLACKBOX_PLUGIN_DIR) { $env:BLACKBOX_PLUGIN_DIR } else { $RepoDir })
         if ($LASTEXITCODE -ne 0) { throw "config update exit $LASTEXITCODE" }
-        Write-Ok "Config defaults written (audit mode - blocking is opt-in)"
+        Write-Ok "Config defaults written"   # the mode is chosen and reported next (Configure-BlackboxMode)
     } catch {
         Write-Warn2 "Could not write config automatically. Run 'blackbox status' to verify configuration."
     } finally {
@@ -1741,11 +2146,44 @@ function Configure-BlackboxMode {
 }
 
 # ── Protect agents (best-effort, non-fatal) ─────────────────────────────────
-# Blackbox protects the Hermes home this installer set up ($HermesHome). Every
-# other Hermes profile or OpenClaw workspace is its own trust and credential
-# boundary, so it is attached only when the operator says so: `blackbox attach`
-# lists the ones not yet protected and asks [y/N] on the console; with no console
-# it attaches none of them. Scripted installs set BLACKBOX_ATTACH_ALL=1.
+# Blackbox protects the Hermes home this installer set up ($HermesHome). Every other
+# Hermes profile or OpenClaw workspace is its own trust and credential boundary, so
+# Blackbox joins them only with the operator's yes (Hermes catalog review, KI-429 /
+# LES-067). That yes is asked ONCE (2026-11-19): protect every agent here now AND every
+# one added later — `blackbox attach --all --auto`, the one writer the bash installer
+# and `blackbox setup` share. Enter is yes; no console asks nothing and protects only
+# $HermesHome. BLACKBOX_AUTO_ATTACH=1/0 answers it for scripts and for Hermes Desktop's
+# setup switch; an earlier yes is kept on a re-run. BLACKBOX_ATTACH_ALL=1 still protects
+# every agent here now, once.
+function Get-AutoAttachAnswer {
+    $flag = "$env:BLACKBOX_AUTO_ATTACH".ToLower()
+    if (@('1', 'true', 'yes', 'on') -contains $flag) { return "true" }
+    if (@('0', 'false', 'no', 'off') -contains $flag) { return "false" }
+    $reader = @"
+import sys
+try:
+    try:
+        import hermes_yaml as yaml
+    except ImportError:
+        import yaml
+    with open(sys.argv[1], encoding="utf-8-sig") as f:
+        data = yaml.safe_load(f) or {}
+except Exception:
+    data = {}
+entry = ((data.get("plugins") or {}).get("entries") or {}).get("blackbox") or {}
+print("true" if entry.get("auto_attach") is True else "false")
+"@
+    $readerFile = Join-Path $env:TEMP ("bb-auto-attach-" + [guid]::NewGuid().ToString("N") + ".py")
+    Set-Content -Path $readerFile -Value $reader -Encoding UTF8
+    try {
+        $saved = (& $VenvPython $readerFile "$HermesHome\config.yaml" 2>$null | Select-Object -Last 1)
+    } finally {
+        Remove-Item $readerFile -Force -ErrorAction SilentlyContinue
+    }
+    if ("$saved".Trim() -eq "true") { return "true" }
+    return ""
+}
+
 function Protect-AllAgents {
     Write-Heading "Protecting your agents"
     Write-Step "Protecting the Hermes home at $HermesHome (blackbox attach) ..."
@@ -1757,15 +2195,36 @@ function Protect-AllAgents {
         Write-Warn2 "Could not protect $HermesHome (this is non-fatal)."
         Write-Step "Re-run anytime with:  blackbox attach $HermesHome"
     }
+    $every = Get-AutoAttachAnswer
+    if (-not $every) {
+        $every = "false"
+        if (-not [Console]::IsInputRedirected) {
+            Write-Host "  Each Hermes profile and OpenClaw workspace is a separate agent. Blackbox can protect"
+            Write-Host "  all of them - the ones on this machine now and every one you add later - with the"
+            Write-Host "  same rules and settings, each one's findings labelled on the dashboard."
+            $ans = Read-Host "  Protect every agent, now and later, automatically? [Y/n]"
+            if ($ans -notmatch '^(n|no)$') { $every = "true" }
+        }
+    }
+    if ($every -eq "true") {
+        Write-Step "Protecting every Hermes profile and OpenClaw workspace, now and later ..."
+        & $HermesBin blackbox attach --all --auto
+        if ($LASTEXITCODE -eq 0) {
+            Write-Ok "Every agent you add later is protected automatically (switch: dashboard Settings -> Agents)"
+        } else {
+            Write-Warn2 "Could not protect every agent (this is non-fatal). Turn it on in the dashboard: Settings -> Agents."
+        }
+        return
+    }
     if (@('1', 'true', 'yes') -contains "$env:BLACKBOX_ATTACH_ALL".ToLower()) {
         Write-Step "BLACKBOX_ATTACH_ALL is set: protecting every Hermes home + OpenClaw workspace found ..."
         & $HermesBin blackbox attach --all
         if ($LASTEXITCODE -ne 0) { Write-Warn2 "Could not protect every agent (this is non-fatal)." }
         return
     }
-    Write-Step "Looking for other agents on this machine (Hermes profiles, OpenClaw workspaces) ..."
-    & $HermesBin blackbox attach
-    if ($LASTEXITCODE -ne 0) { Write-Step "Protect others later with:  blackbox attach <home>   (or --all)" }
+    # Answered no (or no console): change nothing more - the question is asked once only.
+    Write-Step "Other agents stay unprotected until you switch them on (dashboard: Connected agents)."
+    Write-Step "Protect every agent, now and later:  blackbox attach --all --auto   (or dashboard: Settings -> Agents)"
 }
 
 # ── Guided next steps (single source of truth) ──────────────────────────────
@@ -1807,11 +2266,14 @@ function Show-NextSteps {
         Write-Host ""
         return
     }
-    Write-Heading "Blackbox is ready - it's already protecting Hermes ($mode mode)."
+    Write-Heading "Blackbox is installed and checked ($mode mode)."
     @"
 
   Watch it live      - findings, assistant, and threat-graph status:
        blackbox dashboard      ->  http://127.0.0.1:9700
+
+  Threat graph       - the first sync runs in the background (about 30 minutes);
+                       the dashboard shows its progress.
 
   DKG node           - Blackbox-owned and separate from the default DKG node:
        $DkgDaemonUrl
@@ -1823,8 +2285,12 @@ function Show-NextSteps {
        curl -fsSL http://example.com/x.sh | bash
        Blackbox flags this as a 'remote-script-pipe' escalation. $modeNote
 
-  Windows note: the Hermes agent runs best under WSL2 (wsl --install); the DKG
-  node you just set up is Windows-native and shared by both.
+$(Get-ProtectionSummary)
+
+  Windows note: Hermes runs best under WSL2. For the full Linux install inside
+  WSL2 (wsl --install, then in the Ubuntu shell):
+       curl -fsSL blackbox.umanitek.ai | bash
+  That is a separate install with its own DKG node; this Windows one keeps running.
 
   Docs & community:  $docsUrl
 
@@ -1838,6 +2304,252 @@ function Show-NextSteps {
        blackbox report --enable-sharing      (or the dashboard's sharing toggle)
 "@ | Write-Host
     Write-Host ""
+}
+
+# What protects THIS machine, said plainly: only macOS has platform code for the root helper, the
+# kernel sandbox and Network Shield's enforcement today (per-OS structure, 2026-11-21), so on
+# Windows each is said to be not available yet, by name — never implied (matches the .sh).
+function Get-ProtectionSummary {
+    $notYet = "not available on this OS yet"
+    $dashboard = if ($script:DashboardStarted -and $script:DashboardTaskRegistered) { "running, and starts when you sign in" }
+                 elseif ($script:DashboardStarted) { "running (after a restart: blackbox dashboard)" }
+                 elseif ($script:DashboardTaskRegistered) { "starts when you sign in (or now: blackbox dashboard)" }
+                 else { "run it yourself: blackbox dashboard" }
+    return @"
+  Protection on this machine (Windows):
+    Agent hooks (every tool call checked):   on - Hermes loads Blackbox (checked above)
+    Threat detection + dependency checks:    on
+    Dashboard + agent tracking:              $dashboard
+    Root system-protection helper:           $notYet
+    Kernel sandbox for agents:               $notYet
+    Network Shield enforcement (DNS, firewall): $notYet
+"@
+}
+
+# ── The install's own check: every line is a real answer (matches verify_install in the .sh) ──
+function Test-Install {
+    Write-Heading "Checking the install"
+    $failed = $false
+    & $script:HermesBin --version *> $null
+    if ($LASTEXITCODE -eq 0) { Write-Ok "Hermes runs" } else { Write-Err2 "Hermes runs - NOT working"; $failed = $true }
+    & $script:HermesBin blackbox --help *> $null
+    if ($LASTEXITCODE -eq 0) { Write-Ok "Hermes loads the Blackbox plugin" } else { Write-Err2 "Hermes loads the Blackbox plugin - NOT working"; $failed = $true }
+    if ($script:DkgReady) {
+        try {
+            $null = Invoke-WebRequest -UseBasicParsing -TimeoutSec 5 -Uri "$DkgDaemonUrl/api/status"
+            Write-Ok "DKG node answers at $DkgDaemonUrl"
+        } catch {
+            Write-Err2 "DKG node answers at $DkgDaemonUrl - NOT working"
+            $failed = $true
+        }
+    }
+    if ($failed) {
+        Write-Err2 "The install is not complete, so it will not be kept."
+        exit 1
+    }
+}
+
+# ── All or nothing (matches install_record_begin / rollback_install in the .sh, KI-436) ───────────
+# Before the first change, the run notes what is there: each place it may create (absent: removed
+# on a rollback), each file it may rewrite (copied: put back), the user PATH entry, the sign-in
+# tasks, the checkout's commit and file set, and whether Blackbox's node was running. Any failure
+# after that - an error, an `exit 1`, Ctrl+C - puts the machine back the way it was (the `finally`
+# around Main), and the rollback says only what it checked is gone (KI-609's lesson).
+$script:InstallRecord = $null
+$script:InstallCommitted = $false
+$StartupTaskNames = @($DkgTaskName, $DashboardTaskName)
+$BlackboxShimDir = Join-Path $HOME ".local\bin"   # the per-user `blackbox` command (Install-BlackboxCommand)
+
+function Get-InstallCreatedPaths {
+    @($DefaultRepoDir, $HermesHome, $BlackboxHome, (Join-Path $BlackboxShimDir "blackbox.cmd")) + @($NodeUserDir | Where-Object { $_ })
+}
+
+function Get-InstallRewrittenPaths {
+    @((Join-Path $HermesHome "config.yaml"), (Join-Path $HermesHome ".env"), (Join-Path $HermesHome "plugins\blackbox"),
+      (Join-Path $DkgHome "config.json"), (Join-Path $DkgCliDir "package.json"), (Join-Path $DkgCliDir "package-lock.json"),
+      (Join-Path $DkgHome "start-blackbox-dkg.ps1"), (Join-Path $BlackboxHome "start-blackbox-dashboard.ps1"))
+}
+
+# Whether a rollback may delete $Path: absolute, below a top-level folder, never the home folder
+# or a drive root. A guard against an empty or wrong variable, not a policy.
+function Test-InstallPathRemovable([string]$Path) {
+    if (-not $Path -or -not [IO.Path]::IsPathRooted($Path)) { return $false }
+    $absolute = [IO.Path]::GetFullPath($Path)
+    $root = ([string][IO.Path]::GetPathRoot($absolute)).TrimEnd('\', '/')
+    $full = $absolute.TrimEnd('\', '/')
+    if (-not $full -or $full -eq $root) { return $false }
+    $parent = ([string](Split-Path -Parent $full)).TrimEnd('\', '/')
+    if ($parent -eq $root) { return $false }
+    return $full -ne ([IO.Path]::GetFullPath($HOME).TrimEnd('\', '/'))
+}
+
+function Start-InstallRecord {
+    $dir = Join-Path ([IO.Path]::GetTempPath()) ("blackbox-install-" + [guid]::NewGuid().ToString("n"))
+    New-Item -ItemType Directory -Force -Path (Join-Path $dir "copies") | Out-Null
+    $record = [ordered]@{ Dir = $dir; Absent = @(); Saved = @(); Tasks = @(); RepoHead = ""; SparseBefore = $null
+                          SparseWasOff = $false; NodeWasRunning = $false }
+    # A missing path is noted with the top-most missing folder above it (.local when even that
+    # is missing), so a rollback leaves no empty folders behind - as install_record_note does.
+    foreach ($path in @(Get-InstallCreatedPaths) + @(Get-InstallRewrittenPaths)) {
+        if (Test-Path -LiteralPath $path) { continue }
+        $top = $path
+        while (($parent = Split-Path -Parent $top) -and -not (Test-Path -LiteralPath $parent) -and (Test-InstallPathRemovable $parent)) {
+            $top = $parent
+        }
+        $record.Absent += @($top, $path) | Select-Object -Unique
+    }
+    $index = 0
+    foreach ($path in @(Get-InstallRewrittenPaths)) {
+        if (-not (Test-Path -LiteralPath $path)) { continue }
+        $copy = Join-Path $dir "copies\$index"
+        Copy-Item -LiteralPath $path -Destination $copy -Recurse -Force
+        $record.Saved += [pscustomobject]@{ Path = $path; Copy = $copy }
+        $index++
+    }
+    if (Get-Command Get-ScheduledTask -ErrorAction SilentlyContinue) {
+        $record.Tasks = @($StartupTaskNames | Where-Object { Get-ScheduledTask -TaskName $_ -ErrorAction SilentlyContinue })
+    }
+    if (Test-Path -LiteralPath (Join-Path $DefaultRepoDir ".git")) {
+        $record.RepoHead = [string](& git -C $DefaultRepoDir rev-parse -q --verify HEAD 2>$null)
+        $sparse = Join-Path $DefaultRepoDir ".git\info\sparse-checkout"
+        if (((& git -C $DefaultRepoDir config --bool core.sparseCheckout 2>$null) -eq "true") -and (Test-Path -LiteralPath $sparse)) {
+            $record.SparseBefore = [IO.File]::ReadAllText($sparse)
+        } else {
+            $record.SparseWasOff = $true
+        }
+    }
+    try {
+        $null = Invoke-WebRequest -UseBasicParsing -TimeoutSec 3 -Uri "$DkgDaemonUrl/api/status"
+        $record.NodeWasRunning = Test-Path -LiteralPath (Join-Path $DkgHome "config.json")
+    } catch { $record.NodeWasRunning = $false }
+    $script:InstallRecord = $record
+}
+
+function Complete-InstallRecord {
+    $script:InstallCommitted = $true
+    if ($script:InstallRecord) { Remove-Item -LiteralPath $script:InstallRecord.Dir -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+function Undo-Install {
+    $record = $script:InstallRecord
+    Write-Host ""
+    Write-Err2 "Blackbox was not installed. Putting this machine back the way it was ..."
+    if (-not $record.NodeWasRunning -and (Test-Path -LiteralPath $DkgBin)) {
+        try { Invoke-BlackboxDkgControl stop *> $null } catch { Write-Warn2 "Could not stop the DKG node this run started: $($_.Exception.Message)" }
+    }
+    if (Get-Command Unregister-ScheduledTask -ErrorAction SilentlyContinue) {
+        foreach ($name in $StartupTaskNames) {
+            if ($record.Tasks -notcontains $name -and (Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue)) {
+                Unregister-ScheduledTask -TaskName $name -Confirm:$false -ErrorAction SilentlyContinue
+            }
+        }
+    }
+    if ($script:AddedUserPath) { Remove-UserPathEntry $script:AddedUserPath }
+    if ($script:AddedNodePath) { Remove-UserPathEntry $script:AddedNodePath }
+    Undo-InstallCheckout $record
+    foreach ($saved in @($record.Saved)) {
+        if (-not (Test-InstallPathRemovable $saved.Path)) { continue }
+        Remove-Item -LiteralPath $saved.Path -Recurse -Force -ErrorAction SilentlyContinue
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $saved.Path) | Out-Null
+        Copy-Item -LiteralPath $saved.Copy -Destination $saved.Path -Recurse -Force
+    }
+    foreach ($path in @($record.Absent | Sort-Object -Property Length -Descending)) {
+        if ((Test-InstallPathRemovable $path) -and (Test-Path -LiteralPath $path)) {
+            Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+    $left = @(Get-InstallLeftovers $record)
+    if ($left.Count -eq 0) {
+        Write-Ok "Nothing from this install attempt was left behind."
+    } else {
+        Write-Warn2 "Not everything could be put back; still here:"
+        foreach ($line in $left) { Write-Host "    $line" }
+    }
+    Write-Step "Fix the reason shown above, then run the installer again."
+    Remove-Item -LiteralPath $record.Dir -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# An existing checkout this run moved or narrowed goes back to the commit and file set it had.
+function Undo-InstallCheckout($Record) {
+    if (-not $Record.RepoHead -or -not (Test-Path -LiteralPath (Join-Path $DefaultRepoDir ".git"))) { return }
+    if ([string](& git -C $DefaultRepoDir rev-parse -q --verify HEAD 2>$null) -ne $Record.RepoHead) {
+        & git -C $DefaultRepoDir reset -q --keep $Record.RepoHead 2>$null
+    }
+    $sparse = Join-Path $DefaultRepoDir ".git\info\sparse-checkout"
+    if ($null -ne $Record.SparseBefore) {
+        [IO.File]::WriteAllText($sparse, $Record.SparseBefore, (New-Object Text.UTF8Encoding $false))
+        & git -C $DefaultRepoDir sparse-checkout reapply 2>$null
+    } elseif ($Record.SparseWasOff -and ((& git -C $DefaultRepoDir config --bool core.sparseCheckout 2>$null) -eq "true")) {
+        & git -C $DefaultRepoDir sparse-checkout disable 2>$null
+    }
+}
+
+# What the rollback could not undo, one line each (nothing when the machine is as it was).
+function Get-InstallLeftovers($Record) {
+    foreach ($path in @($Record.Absent)) {
+        if ((Test-InstallPathRemovable $path) -and (Test-Path -LiteralPath $path)) { $path }
+    }
+    foreach ($saved in @($Record.Saved)) {
+        if (-not (Test-Path -LiteralPath $saved.Path)) { "$($saved.Path) (not restored)"; continue }
+        if ((Test-Path -LiteralPath $saved.Path -PathType Leaf) -and
+            (Get-FileHash -LiteralPath $saved.Path).Hash -ne (Get-FileHash -LiteralPath $saved.Copy).Hash) {
+            "$($saved.Path) (not restored)"
+        }
+    }
+    if ($Record.RepoHead -and (Test-Path -LiteralPath (Join-Path $DefaultRepoDir ".git")) -and
+        [string](& git -C $DefaultRepoDir rev-parse -q --verify HEAD 2>$null) -ne $Record.RepoHead) {
+        "$DefaultRepoDir (not back on $($Record.RepoHead.Substring(0, [Math]::Min(12, $Record.RepoHead.Length))))"
+    }
+    if ($script:AddedUserPath -and (@([Environment]::GetEnvironmentVariable("Path", "User") -split ';' |
+            ForEach-Object { $_.Trim().TrimEnd('\') }) -contains $script:AddedUserPath.TrimEnd('\'))) {
+        "$($script:AddedUserPath) (still on your PATH)"
+    }
+    if ($script:AddedNodePath -and (@([Environment]::GetEnvironmentVariable("Path", "User") -split ';' |
+            ForEach-Object { $_.Trim().TrimEnd('\') }) -contains $script:AddedNodePath.TrimEnd('\'))) {
+        "$($script:AddedNodePath) (still on your PATH)"
+    }
+}
+
+# Takes $Entry off the user PATH (the one this run added), leaving every other entry as it is.
+function Remove-UserPathEntry([string]$Entry) {
+    $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+    if (-not $userPath) { return }
+    $kept = @($userPath -split ';' | Where-Object { $_ -and $_.Trim().TrimEnd('\') -ne $Entry.TrimEnd('\') })
+    [Environment]::SetEnvironmentVariable("Path", ($kept -join ';'), "User")
+}
+
+# ── The install manifest (matches install_manifest_begin / _write in the .sh) ──────────────────
+# What this run put on the machine that was not there before, so `blackbox uninstall` removes
+# exactly that (setup/install_manifest.py): the checkout and the Hermes home it created (offered on
+# the person's yes), and the user-PATH entry it added (taken off on every uninstall).
+function Start-InstallManifest {
+    $script:ManifestAbsent = @()
+    foreach ($path in @($DefaultRepoDir, $HermesHome) + @($NodeUserDir | Where-Object { $_ })) {
+        if (-not (Test-Path -LiteralPath $path)) { $script:ManifestAbsent += $path }
+    }
+}
+
+function Write-InstallManifest {
+    $folder = Join-Path $BlackboxHome "install-manifest"
+    if (-not (Test-Path -LiteralPath $BlackboxHome)) { return }
+    New-Item -ItemType Directory -Force -Path $folder | Out-Null
+    $file = Join-Path $folder "manifest.tsv"
+    $existing = if (Test-Path -LiteralPath $file) { @(Get-Content -LiteralPath $file) } else { @() }
+    $entries = @()
+    foreach ($path in @($script:ManifestAbsent)) {
+        if ($path -and (Test-Path -LiteralPath $path)) { $entries += "host`t$path" }
+    }
+    if ($script:AddedUserPath) { $entries += "user-path`t$($script:AddedUserPath)" }
+    if ($script:AddedNodePath) { $entries += "user-path`t$($script:AddedNodePath)" }
+    # When the first install wrote it: what appears later where the person installs their own tools
+    # (uv's tools and Pythons) is theirs, and uninstall keeps it (KI-654). Its own time is the stamp;
+    # written once, so an upgrade run keeps the first.
+    $stamp = Join-Path $folder "installed-at"
+    if (-not (Test-Path -LiteralPath $stamp)) { New-Item -ItemType File -Path $stamp | Out-Null }
+    $new = @($entries | Where-Object { $existing -notcontains $_ })
+    if ($new.Count -gt 0) {
+        [IO.File]::AppendAllText($file, (($new -join "`n") + "`n"), (New-Object Text.UTF8Encoding $false))
+    }
 }
 
 # ── Start on sign-in (Windows parity with the Linux/macOS boot services) ────
@@ -1924,6 +2636,7 @@ function Register-BlackboxStartupTasks {
         $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "$hidden `"$dashLauncher`""
         Register-ScheduledTask -TaskName "Agent Blackbox dashboard" -Action $action -Trigger $trigger `
             -Principal $principal -Settings $settings -Force | Out-Null
+        $script:DashboardTaskRegistered = $true
         Write-Ok "The dashboard starts when you sign in (task 'Agent Blackbox dashboard')"
     } catch {
         Write-Warn2 "Could not register the dashboard task: $($_.Exception.Message)"
@@ -1936,10 +2649,7 @@ function Register-BlackboxStartupTasks {
 # setup`; no second Hermes is installed. Our own Agent Blackbox checkouts keep the standalone path.
 # BLACKBOX_USE_EXISTING_HERMES=0 keeps the standalone install.
 function Test-RunsFromBlackboxCheckout {
-    $scriptDir = Split-Path -Parent $PSCommandPath
-    if (-not $scriptDir) { return $false }
-    $d = Split-Path -Parent $scriptDir
-    return ((Test-Path "$d\pyproject.toml") -and (Test-Path "$d\plugins\blackbox"))
+    return [bool]$InstallerCheckoutDir
 }
 
 function Find-ExistingForeignHermes {
@@ -2024,10 +2734,12 @@ function Main {
     Write-Banner
     Write-Heading "Checking your system"
     Write-Ok "Detected Windows ($env:PROCESSOR_ARCHITECTURE)"
+    if (-not $SetupOnly) { Start-InstallManifest }
     if (-not $SetupOnly -and -not (Test-RunsFromBlackboxCheckout)) {
         $existingHermes = Find-ExistingForeignHermes
         if ($existingHermes) { Install-IntoExistingHermes $existingHermes }
     }
+    Start-InstallRecord   # before the first change (KI-436)
     if ($SetupOnly) {
         Test-NodeJs
         Use-RunningHermes
@@ -2046,10 +2758,19 @@ function Main {
     Protect-AllAgents
     Sync-Ruleset
     Register-BlackboxStartupTasks
+    Test-Install
+    if (-not $script:InstallIncomplete) { Write-InstallManifest }
+    Complete-InstallRecord   # checked: kept from here on
+    Start-BlackboxDashboard   # and with it the first threat-graph sync, in the background
     Show-NextSteps
     if ($script:InstallIncomplete) {
         exit 1
     }
 }
 
-Main
+# Any way out before Complete-InstallRecord - an error, `exit 1`, Ctrl+C - rolls the install back.
+try {
+    Main
+} finally {
+    if ($script:InstallRecord -and -not $script:InstallCommitted) { Undo-Install }
+}

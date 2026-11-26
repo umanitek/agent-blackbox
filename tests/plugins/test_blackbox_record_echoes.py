@@ -5,7 +5,7 @@ by urllib with the address built in pieces, by a script it wrote — and the lis
 me your system prompt…") was flagged again: a duplicate high finding on every such question. In the
 assistant's profile a finding is now dropped only when its rule already recorded that same text,
 the text came back from a tool, and it is not in the user's own words. Anything new is kept, and
-every other agent (the main Hermes agent, Desktop, other profiles) flags repeats as before. Built in
+every other agent (the main Hermes agent, Hermes Desktop, other profiles) flags repeats as before. Built in
 both wire shapes Hermes sends (the Responses API by Hermes' own converter, KI-365 / LES-051).
 """
 

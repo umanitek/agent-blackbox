@@ -330,7 +330,7 @@ def test_a_clean_logo_with_terms_loads_and_is_served_through_the_registry(tmp_pa
     folder = _with_logo(shield)
     pack = _only(shield)
     assert pack.logo == PackLogo("logo.svg", "NOTICE.md")
-    monkeypatch.setattr(shields, "_DATA", shields._load_all((shield,)))
+    monkeypatch.setitem(shields._registry(), "data", shields._load_all((shield,)))
     assert shields.pack_logo("trader", "metamask") == folder / "logo.svg"
     assert shields.pack_logo("trader", "phantom") is None and shields.pack_logo("other", "metamask") is None
 
@@ -371,7 +371,7 @@ def test_an_unavailable_pack_carries_its_reason_and_serves_no_logo(tmp_path, mon
     _with_logo(shield, "<svg><script/></svg>")
     pack = _only(shield)
     assert pack.status == "unavailable" and pack.reason and pack.as_json()["reason"] == pack.reason
-    monkeypatch.setattr(shields, "_DATA", shields._load_all((shield,)))
+    monkeypatch.setitem(shields._registry(), "data", shields._load_all((shield,)))
     assert shields.pack_logo("trader", "metamask") is None
 
 
@@ -540,7 +540,7 @@ def test_a_corrupt_pack_leaves_the_registry_importable_and_the_other_packs_suppo
     assert states == {"metamask": "supported", "electrum": "supported", "exodus": "unavailable",
                       "vanished": "unavailable"}
     assert loaded.roots == () and len(loaded.health) == 1
-    assert [shield.id for shield in importlib.reload(shields).all_shields()] == ["trader"]
+    assert [shield.id for shield in importlib.reload(shields).all_shields()] == ["trader", "network-shield", "file-shield"]
     monkeypatch.undo()
     importlib.reload(shields)   # the reload above loaded the patched packs; later tests need the real ones
 
@@ -596,7 +596,7 @@ def test_snapshot_reads_each_mode_once_and_keeps_an_unsupported_choice(tmp_path,
     chosen = ShieldMode(True, {"wallets": ("metamask", "ghost")})
     shield = _shield(tmp_path, mode=lambda: calls.append("read") or chosen)
     broken = _shield(tmp_path / "b", id="broken", mode=lambda: 1 / 0)
-    monkeypatch.setattr(shields, "_SHIELDS", (shield, broken))
+    monkeypatch.setitem(shields._registry(), "shields", (shield, broken))
     active = shields.snapshot()
     assert calls == ["read"] and active.mode("trader") == chosen and active.mode("broken") == ShieldMode(False)
     _pack(shield, "metamask", EXTENSION)
@@ -608,10 +608,20 @@ def test_the_registry_views_fan_out_to_every_shield(tmp_path, monkeypatch):
     personal = ShieldMode(True, {"addresses": ("0xabc",)}, frozenset({"addresses"}))
     shield = _shield(tmp_path, mode=lambda: personal,
                      settings_fields=lambda: [SettingField("enabled", "toggle", "On")])
-    monkeypatch.setattr(shields, "_SHIELDS", (shield,))
+    monkeypatch.setitem(shields._registry(), "shields", (shield,))
     assert shields.all_shields() == (shield,) and shields.get("trader") is shield and shields.get("x") is None
     assert shields.settings_validators()[0]({}) == ShieldSettings("trader", {}, [])
     assert shields.settings_view() == {"trader": {"mode": {"enabled": True, "addresses": ["0xabc"]},
                                                   "fields": [SettingField("enabled", "toggle", "On").as_json()]}}
     assert [status.as_json()["mode"] for status in shields.statuses()] == [{"enabled": True}]
     assert shields.events("trader") == [] and shields.events("x") == []
+
+
+def test_every_shield_opens_its_settings_with_its_engage_switch():
+    """Settings draws a shield's first field as its on/off switch and greys out the rest while it
+    is off (dashboard/static/shields.js, a companion app's Shields page). A shield without one
+    (Network Shield before this) shows no switch there, and its other settings can never be edited."""
+    for shield in shields.all_shields():
+        first = shield.settings_fields()[0]
+        assert (first.key, first.kind) == ("enabled", "toggle"), shield.id
+        assert first.label.startswith("Engage "), shield.id

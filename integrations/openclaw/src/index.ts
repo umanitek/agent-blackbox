@@ -51,7 +51,9 @@ import {
   parseShellReads,
 } from "./detection.js";
 import { DkgClient, DkgError } from "./dkgClient.js";
-import { recordEvent, recordFinding, type ConvTurn, type FindingContext } from "./audit.js";
+import { recordEvent, recordFinding, type ConvTurn, type FindingContext, type FindingOutcome } from "./audit.js";
+import { VerdictClient, type RemoteFinding } from "./verdictClient.js";
+import { OUTAGE_MESSAGE, OWN_RULE, ownCoreTouched } from "./selfProtection.js";
 import { BlackboxConfig, categoryAllows, resolveConfig } from "./config.js";
 import { RulesetCache } from "./ruleset.js";
 import {
@@ -78,6 +80,8 @@ let registeredApis = new WeakSet<object>();
 interface BlackboxRuntime {
   cfg: BlackboxConfig;
   client: DkgClient;
+  /** Asks the Blackbox on this machine for its verdict on a tool call (null = use the built-in checks). */
+  verdicts: VerdictClient;
   ruleset: RulesetCache;
   /** Cached reporter agent address, resolved lazily from the node (never the token). */
   reporterAddress?: string;
@@ -120,6 +124,20 @@ interface AuditHookContext {
   modelProviderId?: string;
   modelId?: string;
   channelId?: string;
+  agentId?: string;
+}
+
+/**
+ * Which agent of this OpenClaw profile is acting: the hook's own `agentId`, else the middle of
+ * an `agent:<id>:<session>` session key. "" when OpenClaw does not say.
+ */
+function agentOf(event: unknown, ctx: AuditHookContext = {}): string {
+  const fromEvent = (event as { agentId?: unknown; sessionKey?: unknown } | null | undefined) ?? {};
+  if (typeof ctx.agentId === "string" && ctx.agentId) return ctx.agentId;
+  if (typeof fromEvent.agentId === "string" && fromEvent.agentId) return fromEvent.agentId;
+  const key = typeof fromEvent.sessionKey === "string" ? fromEvent.sessionKey : ctx.sessionKey ?? "";
+  const parts = key.split(":");
+  return parts[0] === "agent" && parts[1] ? parts[1] : "";
 }
 
 function sessionRefOf(event: unknown, ctx: AuditHookContext = {}): string {
@@ -461,13 +479,87 @@ function observe(
   finding: Finding,
   toolName?: string,
   context?: FindingContext,
+  outcome: FindingOutcome = {},
 ): void {
   try {
-    recordFinding(rt.cfg.blackboxHome, event, finding, toolName, context);
+    recordFinding(rt.cfg.blackboxHome, event, finding, toolName, context, outcome);
   } catch {
     /* fail-open — local logging must never break the loop */
   }
   void reportSighting(rt, finding, event, toolName);
+}
+
+// --- Judging a tool call -----------------------------------------------------
+
+const REMOTE_SOURCES: ReadonlySet<string> = new Set(["public", "community", "heuristic", "custom"]);
+const SEVERITIES: ReadonlySet<string> = new Set(Object.keys(SEVERITY_RANK));
+
+/**
+ * A finding Blackbox's own service returned, in this plugin's shape. A source this plugin does
+ * not know (a shield's "secret", a reviewer's) becomes "custom": recorded locally, never shared.
+ */
+function findingFromRemote(remote: RemoteFinding, toolName: string): Finding {
+  const source = REMOTE_SOURCES.has(remote.source ?? "") ? (remote.source as Finding["source"]) : "custom";
+  return {
+    identifier: remote.identifier,
+    category: remote.category as Finding["category"],
+    severity: (SEVERITIES.has(remote.severity) ? remote.severity : "high") as BlackboxSeverity,
+    title: remote.title,
+    toolName: remote.tool_name ?? toolName,
+    matched: String(remote.matched ?? ""),
+    evidence: String(remote.evidence ?? ""),
+    confirmed: remote.confirmed === true,
+    source,
+    ...(remote.kind ? { kind: remote.kind } : {}),
+    fields: (remote.fields ?? {}) as Finding["fields"],
+  };
+}
+
+/** What the checks make of one tool call: the findings to flag, the ones that block, and what to tell the agent. */
+interface Judged {
+  findings: Finding[];
+  blocking: Finding[];
+  message: string;
+}
+
+/**
+ * Judge one tool call. Blackbox's own service is asked first — the same judgement a Hermes agent
+ * gets (verified threat graph, shields, local overrides). When it cannot answer in time, the
+ * plugin's built-in checks decide: detectAll + the protected paths, then policy (flagWorthy) and
+ * the block rule (meetsBlock), as before — plus the stand-in that keeps Blackbox's own core shut.
+ */
+async function judgeToolCall(rt: BlackboxRuntime, toolName: string, params: Record<string, unknown>, ruleset: Ruleset): Promise<Judged> {
+  const remote = await rt.verdicts.ask(toolName, params);
+  if (remote) {
+    const findings = remote.findings.map((row) => findingFromRemote(row, toolName));
+    const blocked = new Set(remote.blocked);
+    return { findings, blocking: findings.filter((f) => blocked.has(f.identifier)), message: remote.message };
+  }
+  const raw = detectAll(toolName, params, ruleset, rt.cfg.discover);
+  raw.push(...detectCustomFileAccess(toolName, params, rt.cfg.protectedPaths));
+  const findings = flagWorthy(rt.cfg, raw);
+  const blocking = rt.cfg.mode === "block" ? findings.filter((f) => meetsBlock(f, rt.cfg)) : [];
+  // Blackbox's own core is refused in every mode. The full rule is the service's; while it is
+  // not answering, the stricter stand-in applies so an outage is not a window (selfProtection.ts).
+  const touched = ownCoreTouched(toolName, params, rt.cfg.dashboardUrl);
+  if (!touched) return { findings, blocking, message: "" };
+  const own = ownCoreFinding(toolName, touched);
+  return { findings: [...findings, own], blocking: [...blocking, own], message: OUTAGE_MESSAGE };
+}
+
+function ownCoreFinding(toolName: string, evidence: string): Finding {
+  return {
+    identifier: `fileaccess:${(toolName || "tool").trim().toLowerCase()}:${OWN_RULE}`,
+    category: "fileaccess",
+    severity: "critical",
+    title: "Change to Blackbox's own settings",
+    toolName,
+    matched: OWN_RULE,
+    evidence,
+    confirmed: false,
+    source: "custom",
+    fields: {},
+  };
 }
 
 // --- Hook handlers ---------------------------------------------------------
@@ -481,6 +573,7 @@ function makeBeforeToolCall(rt: BlackboxRuntime) {
       const ruleset: Ruleset = rt.ruleset.get();
       const params = (event.params ?? {}) as Record<string, unknown>;
       recordEvent(rt.cfg.blackboxHome, "pre_tool_call", {
+        agent: agentOf(event, hookCtx),
         session_id: sessionRefOf(event, hookCtx),
         run_id: event.runId ?? hookCtx.runId,
         tool_call_id: event.toolCallId,
@@ -488,12 +581,8 @@ function makeBeforeToolCall(rt: BlackboxRuntime) {
         args: params,
       });
       recordToolActivity(rt, event, hookCtx, params);
-      // detectAll (+ discovery layer when enabled) + custom protected-path rules,
-      // then flagWorthy applies policy. Mirrors Python detect_all +
-      // detect_custom_fileaccess + _flag_worthy.
-      const raw = detectAll(event.toolName, params, ruleset, rt.cfg.discover);
-      raw.push(...detectCustomFileAccess(event.toolName, params, rt.cfg.protectedPaths));
-      const findings: Finding[] = flagWorthy(rt.cfg, raw);
+      const judged = await judgeToolCall(rt, event.toolName, params, ruleset);
+      const findings = judged.findings;
 
       // OSV auto-discovery runs OFF the blocking path so a network lookup never
       // delays the tool call. Fail-open.
@@ -518,14 +607,16 @@ function makeBeforeToolCall(rt: BlackboxRuntime) {
       if (inputText.trim()) ctx.input = inputText;
       const context = ctx.turns || ctx.input ? ctx : undefined;
 
-      // Record locally + report every finding (fire-and-forget; never blocks).
-      for (const f of findings) observe(rt, "before_tool_call", f, event.toolName, context);
-
-      if (rt.cfg.mode === "block") {
-        const blocking = findings.filter((f) => meetsBlock(f, rt.cfg));
-        if (blocking.length > 0) {
-          return { block: true, blockReason: blockMessage(blocking) };
-        }
+      // Record locally + report every finding (fire-and-forget; never blocks), each with what
+      // was done about it and which agent of this profile did it.
+      const agent = agentOf(event, hookCtx);
+      const sessionId = sessionRefOf(event, hookCtx);
+      for (const f of findings) {
+        const decision = judged.blocking.includes(f) ? "block" : "flag";
+        observe(rt, "before_tool_call", f, event.toolName, context, { decision, agent, sessionId });
+      }
+      if (judged.blocking.length > 0) {
+        return { block: true, blockReason: judged.message || blockMessage(judged.blocking) };
       }
       return;
     } catch (err) {
@@ -698,6 +789,7 @@ function buildRuntime(api: OpenClawPluginApi): BlackboxRuntime {
   return {
     cfg,
     client,
+    verdicts: new VerdictClient(cfg.dashboardUrl),
     ruleset,
     log,
     dailyReports: { date: today(), count: 0 },
@@ -752,4 +844,6 @@ export default definePluginEntry({
 });
 
 export { resolveConfig } from "./config.js";
+// For the parity test that runs through the shipped bundle (tests/plugins/test_blackbox_openclaw_bundle.py).
+export { detectCustomFileAccess } from "./detection.js";
 export type { BlackboxConfig } from "./config.js";

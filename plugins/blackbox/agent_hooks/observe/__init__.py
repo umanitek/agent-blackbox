@@ -1,0 +1,323 @@
+"""Which coding-agent processes run on this machine right now — whether or not Blackbox has a
+hook in them. READ-ONLY: the observer lists and classifies; it never signals or stops a process.
+
+WHY: a hook only reports the instances that run it. An agent started in a way that skips hooks
+(Claude Code ``--bare``), from a config home Blackbox has not hooked yet (``CLAUDE_CONFIG_DIR``,
+``CODEX_HOME``…), or before its hooks were trusted would otherwise be invisible. The observer
+shows it as "running, not protected" and tells :mod:`..profiles` about the config home it uses.
+
+Usage::
+
+    from . import observe
+    table = observe.read_table()            # {pid: Proc}
+    observe.ancestry(hook_parent_pid)       # {pid: Proc} of that process and its parents only (cheap)
+    observe.running(table)                  # [Running] — one per agent process tree root
+    observe.agent_of(table, hook_parent_pid)  # the agent process a hook was run by
+    observe.launch_of(table, agent_pid)     # "headless" / "interactive" / "ide" / "sdk"
+    observe.read_users()                    # {pid: (real uid, effective uid)}
+    observe.descendants(table, pid)         # every process started (at any depth) by *pid*
+    observe.host_pid(sandbox_id, pid)       # a sandboxed hook's pid as the host's (Linux PID namespace)
+"""
+
+from __future__ import annotations
+
+import re
+import shlex
+import time
+from dataclasses import dataclass
+from functools import lru_cache
+from pathlib import Path, PurePath
+from typing import Mapping, Optional
+
+from ...kernel.agent_hosts import HOSTS, Host
+from .. import permission_risks
+from ..instances.model import Running
+from .. import profiles
+from . import hook_trust, platform
+from .hooks_off import hooks_switched_off
+from .launched import launched_by_blackbox
+
+__all__ = ["Proc", "agent_of", "ancestry", "classify", "descendants", "hooks_switched_off", "host_pid", "launch_of", "read_table",
+           "read_users", "running"]
+
+_LINE = re.compile(r"^\s*(\d+)\s+(\d+)\s+(\w{3} +\w{3} +\d+ +[\d:]+ +\d{4})\s+(.*)$")
+#: argv words that say an agent runs without a person at the keyboard, per agent.
+_HEADLESS = {"claude-code": ("-p", "--print"), "gemini-cli": ("-p", "--prompt"), "codex": ("exec", "e"),
+             "copilot-cli": ("-p", "--prompt"), "cursor": ("-p", "--print"), "opencode": ("run",), "devin": ("-p",),
+             # Cline CLI (docs.cline.bot/cli/cli-reference, 2026-11-22): --json is its headless output mode
+             # (KI-573: a real `cline -P gemini -m … --json` run was shown "interactive").
+             "cline": ("--json",)}
+#: The option each agent's command line names its model with (KI-566: Claude Code's and Gemini
+#: CLI's hook payloads name none; the command line the person gave does).
+_MODEL_OPTIONS = {"claude-code": ("--model",), "gemini-cli": ("-m", "--model"), "codex": ("-m", "--model"),
+                  "copilot-cli": ("--model",), "cursor": ("--model",), "opencode": ("-m", "--model"), "cline": ("-m", "--model"),
+                  "devin": ("--model",)}
+_SERVER = {"codex": ("app-server", "mcp-server", "mcp"), "opencode": ("serve",), "claude-code": ("mcp",)}
+#: Runs whose hooks the agent itself skips (documented): the reason shown to the person.
+_SKIPS = {("claude-code", "--bare"): "started with --bare, which skips every hook"}
+#: Runtimes that run an agent's script — the script (or ``-m`` module) is then the program. Any
+#: spelling a runtime is installed under: ``python3.14``, macOS's framework ``Python``, ``nodejs``.
+_RUNTIME = re.compile(r"^(?:node(?:js)?|bun|deno|tsx|pypy3?|[Pp]ython(?:\d+(?:\.\d+)*)?)$")
+#: A runtime's options that run inline code (no program), and those that take a value.
+_INLINE = frozenset({"-c", "-e", "--eval", "-p", "--print"})
+_VALUED = frozenset({"-X", "-W", "-r", "--require", "--import", "--loader", "--env-file", "--config"})
+MAX_ANCESTORS = 12
+
+
+@dataclass(frozen=True)
+class Proc:
+    pid: int
+    ppid: int
+    started: float
+    command: str
+
+
+def read_table() -> dict[int, Proc]:
+    """Every process on this machine, by pid ({} when the list cannot be read)."""
+    table = {}
+    for line in platform.process_table().splitlines():
+        match = _LINE.match(line)
+        if not match:
+            continue
+        try:
+            started = time.mktime(time.strptime(" ".join(match.group(3).split()), "%a %b %d %H:%M:%S %Y"))
+        except ValueError:
+            started = 0.0
+        table[int(match.group(1))] = Proc(int(match.group(1)), int(match.group(2)), started, match.group(4)[:4000])
+    return table
+
+
+def host_pid(sandbox_id: str, pid: int) -> int:
+    """*pid* as the host sees it: a hook inside Blackbox's sandbox on a Linux kernel below 6.12 runs
+    in the sandbox's own PID namespace and reports ITS numbers (``platform.host_pid``)."""
+    return platform.host_pid(sandbox_id, pid)
+
+
+def ancestry(pid: int) -> Optional[dict[int, Proc]]:
+    """*pid* and its parents (up to :data:`MAX_ANCESTORS`), by pid — the part of the process list
+    :func:`agent_of` and :func:`launch_of` walk, read from the kernel in microseconds instead of
+    listing every process. {} when *pid* is gone; None when this system cannot answer that way
+    (callers then read the whole list)."""
+    chain = platform.process_ancestry(pid, MAX_ANCESTORS)
+    if chain is None:
+        return None
+    return {pid_: Proc(pid_, ppid, started, command[:4000]) for pid_, ppid, started, command in chain}
+
+
+def _words(command: str) -> list[str]:
+    try:
+        return shlex.split(command)[:40]
+    except ValueError:
+        return command.split()[:40]
+
+
+def _argv(proc: Proc) -> list[str]:
+    """*proc*'s arguments, each word whole: the kernel's record when it is the SAME command line
+    the process list showed (a reused pid answers another one), else the line split as a shell
+    would — which loses the quotes ``ps`` never printed."""
+    exact = platform.process_argv(proc.pid)
+    if exact and " ".join(exact)[:4000] == proc.command:
+        return exact[:40]
+    return _words(proc.command)
+
+
+def _split(words: list[str]) -> tuple[str, list[str]]:
+    """``(program, its arguments)`` of a command line: argv[0], or — for a runtime — the script
+    it runs (past the runtime's own options) or the module after ``-m``. ``("", [])`` when a
+    runtime runs inline code (``-c`` / ``-e``) or nothing."""
+    if not words or not _RUNTIME.match(PurePath(words[0]).name):
+        return (words[0], words[1:]) if words else ("", [])
+    skip = False
+    for position, word in enumerate(words[1:], start=1):
+        if skip:
+            skip = False
+        elif word == "-m" and position + 1 < len(words):
+            return words[position + 1], words[position + 2:]
+        elif word in _INLINE:
+            return "", []
+        elif word in _VALUED:
+            skip = True   # the option's value is not the script
+        elif not word.startswith("-"):
+            return word, words[position + 1:]
+    return "", []
+
+
+@lru_cache(maxsize=2048)
+def _real_path(program: str) -> str:
+    """*program*'s real file (links followed); "" when it is not a path to a file."""
+    if "/" not in program:
+        return ""
+    try:
+        return str(Path(program).resolve())
+    except (OSError, RuntimeError):
+        return ""
+
+
+def classify(command: str) -> Optional[Host]:
+    """The agent a command line is, judged by its PROGRAM (:func:`_split`: argv[0], or the script
+    or module a runtime runs): its file name — as run and as its real file — against each
+    agent's ``programs``, and its real path against each agent's ``packages`` (an npm-installed
+    agent's ``…/node_modules/@openai/codex/bin/codex.js``). Never a substring of the line, so
+    ``vim claude.md`` is not Claude Code."""
+    program, _args = _split(_words(command))
+    if not program:
+        return None
+    real = _real_path(program)
+    names = {PurePath(program).name, PurePath(real).name if real else ""} - {""}
+    for host in HOSTS:
+        if names & set(host.programs) or any(f"/node_modules/{package}/" in real for package in host.packages):
+            return host
+    return None
+
+
+def _launch(host: Host, words: list[str]) -> str:
+    program, rest = _split(words)
+    if any(word in _SERVER.get(host.id, ()) for word in rest[:2]):
+        return "sdk"
+    if any(word in _HEADLESS.get(host.id, ()) for word in rest):
+        return "headless"
+    return "ide" if PurePath(program).name in ("Cursor", "Windsurf") else "interactive"
+
+
+#: Programs that start another program with its arguments unchanged — Blackbox's own sandbox
+#: launcher runs ``sandbox-exec -f <profile> <agent> <its arguments>`` — and their options that
+#: take a value.
+_WRAPPERS = {"sandbox-exec": frozenset({"-f", "-p", "-n", "-D"})}
+
+
+def _unwrapped(words: list[str]) -> list[str]:
+    """*words* past a wrapper (:data:`_WRAPPERS`) and its options: the program it runs and that
+    program's arguments; *words* unchanged when argv[0] is no wrapper."""
+    valued = _WRAPPERS.get(PurePath(words[0]).name) if words else None
+    if valued is None:
+        return words
+    position = 1
+    while position < len(words) and words[position].startswith("-"):
+        position += 2 if words[position] in valued else 1
+    return words[position:]
+
+
+def _model_option(host: Host, words: list[str]) -> str:
+    _program, rest = _split(_unwrapped(words))
+    options = _MODEL_OPTIONS.get(host.id, ())
+    for position, word in enumerate(rest):
+        if word in options and position + 1 < len(rest):
+            return rest[position + 1][:80]
+        if word.startswith("--model="):
+            return word.split("=", 1)[1][:80]
+    return ""
+
+
+def model_of(table: Mapping[int, Proc], pid: int) -> str:
+    """The model the agent process *pid* was started with (``--model X``, ``-m X``, ``--model=X``),
+    "" when its command line names none. A parent that is a wrapper running this same agent
+    (Blackbox's sandbox launcher: ``sandbox-exec -f … claude --model haiku``) is read too. WHY
+    (KI-575, real run 2026-11-22): under the launcher the agent's own process did not carry the
+    words the person typed; its ``sandbox-exec`` parent did."""
+    proc = table.get(pid)
+    host = classify(proc.command) if proc is not None else None
+    if host is None or proc is None:
+        return ""
+    found = _model_option(host, _words(proc.command))
+    parent = table.get(proc.ppid)
+    if not found and parent is not None:
+        words = _words(parent.command)
+        if words and PurePath(words[0]).name in _WRAPPERS and classify(" ".join(shlex.quote(w) for w in _unwrapped(words))) is host:
+            found = _model_option(host, words)
+    return found
+
+
+def launch_of(table: Mapping[int, Proc], pid: int) -> str:
+    """How the agent process *pid* was started, read from its command line: ``headless``
+    (``claude -p``, ``codex exec``, ``gemini -p``, ``opencode run``…), ``sdk`` (``codex
+    app-server``, ``opencode serve``), ``ide`` (the Cursor / Windsurf app) or ``interactive``;
+    "" when *pid* is not an agent process in *table*."""
+    proc = table.get(pid)
+    host = classify(proc.command) if proc is not None else None
+    return _launch(host, _words(proc.command)) if host is not None and proc is not None else ""
+
+
+def _profile(host: Host, pid: int) -> str:
+    """The config home *pid* was started with (``Host.home_env``), "" for the default one. The
+    kernel's own record is asked first (a path with a space stays whole); ``ps``'s words are the
+    fallback."""
+    if not host.home_env:
+        return ""
+    exact = platform.process_variable(pid, host.home_env)
+    if exact:
+        return exact[:500]
+    match = re.search(rf"(?:^|\s){re.escape(host.home_env)}=(\S+)", platform.process_environment(pid))
+    return match.group(1)[:500] if match else ""
+
+
+def running(table: Mapping[int, Proc]) -> list[Running]:
+    """One :class:`Running` per agent process whose parent is not the same agent (an agent's own
+    helper processes are part of it, not more instances)."""
+    out = []
+    for proc in table.values():
+        host = classify(proc.command)
+        if host is None:
+            continue
+        parent = table.get(proc.ppid)
+        if parent is not None and classify(parent.command) is host:
+            continue
+        words = _argv(proc)
+        skipped = next((reason for (agent, flag), reason in _SKIPS.items() if agent == host.id and flag in words), "")
+        skipped = skipped or hooks_switched_off(host, _split(words)[1], proc.pid, proc.command)
+        profile = _profile(host, proc.pid)
+        # Hooks the agent itself will not run until the person trusts them (Codex, L7): this run is unseen.
+        skipped = skipped or hook_trust.run_reason(profiles.variant(host, Path(profile), default=not profile), words, Path.home())
+        out.append(Running(proc.pid, proc.ppid, host.id, _launch(host, words), profile, skipped, proc.started,
+                           tuple(permission_risks.from_command(host.id, _split(words)[1])), platform.process_cwd(proc.pid)[:500],
+                           launched_by_blackbox(proc.pid)))
+    return out
+
+
+def agent_of(table: Mapping[int, Proc], pid: int, agent: str) -> int:
+    """The pid of the *agent* process that *pid* (a hook's parent) belongs to: the nearest
+    ancestor (or *pid* itself) that is that agent, climbing on only while the parent is the same
+    agent too (an agent's launcher and its program are ONE instance, as in :func:`running`); 0
+    when none is (the hook then has no process to follow).
+
+    WHY the climb stops at the first other process: an agent started by another run of the same
+    agent (a ``claude -p`` that a Claude Code session runs as a tool) is its OWN instance — the
+    outermost one would give two sessions one process (found in the KI-548 process-tree test)."""
+    current, top = table.get(pid), 0
+    for _ in range(MAX_ANCESTORS):
+        if current is None:
+            break
+        host = classify(current.command)
+        if host is not None and host.id == agent:
+            top = current.pid
+        elif top:
+            break   # the chain of this agent's processes ended
+        current = table.get(current.ppid)
+    return top
+
+
+MAX_DESCENDANTS = 2000
+
+
+def read_users() -> dict[int, tuple[int, int]]:
+    """``{pid: (real uid, effective uid)}`` for every process ({} when it cannot be read)."""
+    users = {}
+    for line in platform.process_users().splitlines():
+        words = line.split()
+        if len(words) == 3 and all(word.lstrip("-").isdigit() for word in words):
+            users[int(words[0])] = (int(words[1]), int(words[2]))
+    return users
+
+
+def descendants(table: Mapping[int, Proc], pid: int) -> list[Proc]:
+    """Every process *pid* started, at any depth (bounded), nearest first; *pid* itself is not in it."""
+    children: dict[int, list[Proc]] = {}
+    for proc in table.values():
+        children.setdefault(proc.ppid, []).append(proc)
+    found, queue, seen = [], [pid], {pid}
+    while queue and len(found) < MAX_DESCENDANTS:
+        for child in children.get(queue.pop(0), []):
+            if child.pid not in seen:
+                seen.add(child.pid)
+                found.append(child)
+                queue.append(child.pid)
+    return found

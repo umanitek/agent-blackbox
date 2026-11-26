@@ -9,11 +9,13 @@ relaunched for ever (KI-414, KI-426).
 The service is found by REGISTRATION, not by inspecting a running process: when the node is down
 (stopped for a restart, or crashed) there is no process to inspect, and that is exactly when a
 caller would otherwise start an unsupervised copy. A registration counts only when its start
-command is THIS install's DKG CLI (``cfg.dkg_bin``), so another install's service on the same
-machine is never touched.
+command is THIS install's DKG CLI (``cfg.dkg_bin``) — directly, or through the Blackbox launcher the
+installer puts in front of it (KI-529: reading only the first argument missed the launcher, so every
+macOS sync restarted the node behind launchd) — so another install's service is never touched.
 
 Strategy pattern: :class:`NodeService` holds one manager's way of answering "which process do you
-run?" and "restart it"; :func:`registered` picks the strategy.
+run?" and "restart it"; each ``sync/platform/<os>`` module builds its own (KI-628) and
+:func:`registered` asks this machine's.
 
 Usage::
 
@@ -28,30 +30,16 @@ from __future__ import annotations
 
 import logging
 import os
-import plistlib
-import subprocess
-import sys
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-import psutil
-
 from ..kernel.config import BlackboxConfig
+from . import platform as os_platform
+from .platform.model import (DASHBOARD_LAUNCHD_LABEL, DASHBOARD_SYSTEMD_UNIT, LAUNCHD_LABEL, LAUNCHD_LABELS,
+                             SYSTEM_UNIT_DIR, SYSTEMD_UNIT, SYSTEMD_UNITS, WINDOWS_TASKS, NodeService)
 
 logger = logging.getLogger(__name__)
 
-# THE names of the background services the installers register (scripts/blackbox-install.sh|.ps1
-# use the same ones). Uninstall removes the services by these names, through ``sync``'s entry.
-LAUNCHD_LABEL = "ai.umanitek.blackbox-dkg"   # = BLACKBOX_DKG_LAUNCHD_LABEL in scripts/blackbox-install.sh
-SYSTEMD_UNIT = "blackbox-dkg"
-SYSTEM_UNIT_DIR = Path("/etc/systemd/system")
-DASHBOARD_LAUNCHD_LABEL = "ai.umanitek.blackbox-dashboard"
-DASHBOARD_SYSTEMD_UNIT = "blackbox-dashboard"
-WINDOWS_TASKS = ("Agent Blackbox dashboard", "Agent Blackbox DKG node")
-#: Every service Blackbox registers, per platform, the dashboard first.
-LAUNCHD_LABELS = (DASHBOARD_LAUNCHD_LABEL, LAUNCHD_LABEL)
-SYSTEMD_UNITS = (f"{DASHBOARD_SYSTEMD_UNIT}.service", f"{SYSTEMD_UNIT}.service")
 # launchd keeps no journal, so the installer sends the LaunchAgent node's stderr here (in the node's
 # home, = blackbox_dkg_launchd_error_log in the installer). The node writes its warnings there too,
 # a few MB a day, so it is trimmed in place: launchd holds it open for appending, and a replaced
@@ -59,134 +47,22 @@ SYSTEMD_UNITS = (f"{DASHBOARD_SYSTEMD_UNIT}.service", f"{SYSTEMD_UNIT}.service")
 LAUNCHD_ERROR_LOG = "launchd-errors.log"
 ERROR_LOG_MAX_BYTES = 5 * 1024 * 1024
 ERROR_LOG_KEEP_BYTES = 1024 * 1024
-_COMMAND_TIMEOUT_SECONDS = 120
 
 
-@dataclass(frozen=True)
-class NodeService:
-    """One registered service for the node.
-
-    ``name``: shown in logs and errors (``blackbox-dkg.service`` / the LaunchAgent label).
-    ``pid_argv``: prints the pid of the process the service runs (empty / 0 when not running).
-    ``restart_argv``: restarts the node through the service manager.
-    """
-
-    name: str
-    pid_argv: tuple[str, ...]
-    restart_argv: tuple[str, ...]
-
-    def running_pid(self) -> Optional[int]:
-        """The pid of the process the service runs now, or None (not running / no answer)."""
-        try:
-            result = subprocess.run(list(self.pid_argv), stdin=subprocess.DEVNULL, capture_output=True,
-                                    text=True, timeout=10, check=False)
-        except (OSError, subprocess.SubprocessError):
-            return None
-        return _pid_in(result.stdout)
-
-    def owns(self, pid: Optional[int]) -> bool:
-        """Whether *pid* (the node daemon) is the service's process or its child.
-
-        ``dkg start --foreground`` (what every service runs) is the DKG CLI's supervisor; the node
-        daemon is its child and writes its own pid to daemon.pid.
-        """
-        service_pid = self.running_pid()
-        if pid is None or service_pid is None:
-            return False
-        if pid == service_pid:
-            return True
-        try:
-            return psutil.Process(pid).ppid() == service_pid
-        except psutil.Error:
-            return False
-
-    def restart(self) -> subprocess.CompletedProcess[str]:
-        """Restart the node through the service manager (raises OSError / SubprocessError)."""
-        return subprocess.run(list(self.restart_argv), stdin=subprocess.DEVNULL, capture_output=True,
-                              text=True, timeout=_COMMAND_TIMEOUT_SECONDS, check=False)
-
-
-def _pid_in(text: str) -> Optional[int]:
-    """The pid in ``systemctl show -p MainPID --value`` or ``launchctl print`` output, else None."""
-    for line in text.splitlines():
-        line = line.strip().removeprefix("pid = ")
-        if line.isdigit() and int(line) > 0:
-            return int(line)
-    return None
-
-
-def _same_file(a: str, b: str) -> bool:
-    try:
-        return Path(a).expanduser().resolve() == Path(b).expanduser().resolve()
-    except (OSError, RuntimeError):
-        return False
-
-
-def _gui_domain() -> str:
-    """launchd's per-user domain, ``gui/<uid>``. Every system with launchd has ``os.getuid``; the
-    fallback only keeps this module importable (and its launchd branch testable) on Windows."""
-    getuid = getattr(os, "getuid", None)
-    return f"gui/{getuid() if getuid is not None else 0}"
-
-
-def _launch_agent(cfg: BlackboxConfig, home: Path) -> Optional[NodeService]:
-    plist_path = home / "Library" / "LaunchAgents" / f"{LAUNCHD_LABEL}.plist"
-    try:
-        program = plistlib.loads(plist_path.read_bytes()).get("ProgramArguments") or []
-    except (OSError, plistlib.InvalidFileException, ValueError):
-        return None
-    if not program or not _same_file(str(program[0]), cfg.dkg_bin):
-        return None
-    target = f"{_gui_domain()}/{LAUNCHD_LABEL}"
-    try:
-        loaded = subprocess.run(["launchctl", "print", target], stdin=subprocess.DEVNULL,
-                                capture_output=True, text=True, timeout=10, check=False).returncode == 0
-    except (OSError, subprocess.SubprocessError):
-        return None
-    if not loaded:
-        return None   # registered for the next login only: nothing to route through yet
-    return NodeService(LAUNCHD_LABEL, ("launchctl", "print", target), ("launchctl", "kickstart", "-k", target))
-
-
-def _systemd_unit(cfg: BlackboxConfig, home: Path) -> Optional[NodeService]:
-    for scope, unit_dir in (((), SYSTEM_UNIT_DIR), (("--user",), home / ".config" / "systemd" / "user")):
-        try:
-            text = (unit_dir / f"{SYSTEMD_UNIT}.service").read_text(encoding="utf-8-sig")
-        except OSError:
-            continue
-        exec_start = next((line.split("=", 1)[1].split()[0] for line in text.splitlines()
-                           if line.startswith("ExecStart=") and line.split("=", 1)[1].split()), "")
-        if not exec_start or not _same_file(exec_start, cfg.dkg_bin):
-            continue
-        systemctl = ("systemctl", *scope)
-        try:
-            enabled = subprocess.run([*systemctl, "is-enabled", "--quiet", SYSTEMD_UNIT], stdin=subprocess.DEVNULL,
-                                     capture_output=True, timeout=10, check=False).returncode == 0
-        except (OSError, subprocess.SubprocessError):
-            continue
-        if enabled:
-            return NodeService(f"{SYSTEMD_UNIT}.service", (*systemctl, "show", "-p", "MainPID", "--value", SYSTEMD_UNIT),
-                               (*systemctl, "restart", SYSTEMD_UNIT))
-    return None
-
-
-def systemd_unit(unit: str) -> NodeService:
-    """The systemd unit *unit* (e.g. found from the node process's cgroup) as a NodeService."""
-    return NodeService(unit, ("systemctl", "show", "-p", "MainPID", "--value", unit), ("systemctl", "restart", unit))
+def systemd_unit(unit: str) -> Optional[NodeService]:
+    """The systemd unit *unit* (e.g. found from the node process's cgroup) as a NodeService; None
+    on a system without systemd."""
+    return os_platform.service_for_unit(unit)
 
 
 def registered(cfg: BlackboxConfig, home: Optional[Path] = None) -> Optional[NodeService]:
     """The service registered to run this install's node (LaunchAgent / systemd unit), or None.
 
-    None means no service runs THIS install's ``dkg_bin`` (not installed, another install's, a
-    LaunchAgent not loaded yet, a unit not enabled): the caller runs the node itself.
+    None means no service is registered for THIS install's ``dkg_bin`` (not installed, another
+    install's, a unit not enabled): the caller runs the node itself. A LaunchAgent registered but
+    not loaded IS this install's service — restarting it loads it (KI-529).
     """
-    home = home if home is not None else Path.home()
-    if sys.platform == "darwin":
-        return _launch_agent(cfg, home)
-    if sys.platform.startswith("linux"):
-        return _systemd_unit(cfg, home)
-    return None
+    return os_platform.registered(cfg, home if home is not None else Path.home())
 
 
 def trim_error_log(dkg_home: Path, max_bytes: int = ERROR_LOG_MAX_BYTES, keep_bytes: int = ERROR_LOG_KEEP_BYTES) -> bool:
@@ -212,3 +88,21 @@ def trim_error_log(dkg_home: Path, max_bytes: int = ERROR_LOG_MAX_BYTES, keep_by
         logger.debug("blackbox: could not trim %s: %s", path, exc)
         return False
 
+
+__all__ = [
+    "DASHBOARD_LAUNCHD_LABEL",
+    "DASHBOARD_SYSTEMD_UNIT",
+    "ERROR_LOG_KEEP_BYTES",
+    "ERROR_LOG_MAX_BYTES",
+    "LAUNCHD_ERROR_LOG",
+    "LAUNCHD_LABEL",
+    "LAUNCHD_LABELS",
+    "SYSTEMD_UNIT",
+    "SYSTEMD_UNITS",
+    "SYSTEM_UNIT_DIR",
+    "WINDOWS_TASKS",
+    "NodeService",
+    "registered",
+    "systemd_unit",
+    "trim_error_log",
+]

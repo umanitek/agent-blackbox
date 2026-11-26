@@ -5,12 +5,29 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-const BLACKBOX_BLAZEGRAPH_JAVA_OPTS = '-Xms512m -Xmx4g';
+// The store's Java heap cap: BLACKBOX_BLAZEGRAPH_HEAP (installer --help), default 4g, at least 1g.
+// WHY a setting: the JVM is the biggest part of Blackbox's memory on a machine with Docker (Linux
+// round L2, KI-675: 2.5 GB RSS for a complete graph under the 4g cap) — a 4 GB laptop or a small
+// server can lower it. A container at or above the cap is reused; a smaller one is replaced
+// (kept stopped as a backup), as before.
+const DEFAULT_BLAZEGRAPH_HEAP = '4g';
+const MINIMUM_SETTABLE_HEAP_BYTES = 1024 ** 3;
+function chosenHeap(raw) {
+  const text = String(raw || '').trim();
+  if (!text) return DEFAULT_BLAZEGRAPH_HEAP;
+  if (!/^\d+[mMgG]$/.test(text) || heapBytes(`-Xmx${text}`) < MINIMUM_SETTABLE_HEAP_BYTES) {
+    process.stderr.write(`Blazegraph: BLACKBOX_BLAZEGRAPH_HEAP=${text} is not a heap of at least 1g (e.g. 2g, 3072m); using ${DEFAULT_BLAZEGRAPH_HEAP}\n`);
+    return DEFAULT_BLAZEGRAPH_HEAP;
+  }
+  return text.toLowerCase();
+}
+const BLACKBOX_BLAZEGRAPH_HEAP = chosenHeap(process.env.BLACKBOX_BLAZEGRAPH_HEAP);
+const BLACKBOX_BLAZEGRAPH_JAVA_OPTS = `-Xms512m -Xmx${BLACKBOX_BLAZEGRAPH_HEAP}`;
 // At most 4 CPUs for the store — never more than Docker has: `docker run --cpus 4` is refused
 // outright on a 2-CPU machine ("range of CPUs is from 0.01 to 2.00"), which stopped the default
 // install on small servers. Docker's own count is used (Docker Desktop's VM may have fewer than the host).
 const BLACKBOX_BLAZEGRAPH_MAX_CPUS = 4;
-const MINIMUM_BLAZEGRAPH_HEAP_BYTES = 4 * 1024 * 1024 * 1024;
+const MINIMUM_BLAZEGRAPH_HEAP_BYTES = heapBytes(`-Xmx${BLACKBOX_BLAZEGRAPH_HEAP}`);
 
 function fail(message) {
   process.stderr.write(`Blazegraph setup failed: ${message}\n`);
@@ -235,7 +252,7 @@ function blackboxDockerRunner(log) {
 
       const name = String(args[1] || 'dkg-blazegraph');
       const backup = backupContainerName(name);
-      log(`  Existing container "${name}" uses ${javaOpts || 'the image-default heap'}; replacing it with a 4 GB instance.`);
+      log(`  Existing container "${name}" uses ${javaOpts || 'the image-default heap'}; replacing it with a ${BLACKBOX_BLAZEGRAPH_HEAP} heap instance.`);
       const stopped = await runDocker(['stop', name], { timeoutMs: 30_000 });
       if (stopped.exitCode !== 0) {
         throw new Error(`Could not stop undersized Blazegraph container "${name}": ${stopped.stderr.trim()}`);

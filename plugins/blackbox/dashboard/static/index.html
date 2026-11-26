@@ -881,7 +881,9 @@
   /* ---------- Shields: the "New" banner (static/shields.js) ---------- */
   .ts-banner { position: relative; overflow: hidden; margin-top: 28px; border: 1px solid color-mix(in srgb, var(--signal) 55%, transparent);
     border-radius: var(--radius); background: var(--panel); padding: 20px 56px 20px 22px; display: flex; flex-wrap: wrap; gap: 16px 28px; align-items: center; }
-  .ts-banner[hidden] { display: none; }   /* display:flex above would otherwise override [hidden] */
+  .ts-banner[hidden] { display: none; }
+  #tm-watch[hidden] { display: none; }
+  #tm-watch { text-decoration: none; margin-left: 6px; }   /* display:flex above would otherwise override [hidden] */
   .ts-glow { position: absolute; inset: -40% -10% auto auto; width: 340px; height: 340px; border-radius: 50%;
     background: radial-gradient(circle, color-mix(in srgb, var(--signal) 22%, transparent), transparent 65%); pointer-events: none; animation: tsGlow 6s ease-in-out infinite; }
   @keyframes tsGlow { 0%,100% { transform: translate(0,0); opacity: .8; } 50% { transform: translate(-30px,10px); opacity: 1; } }
@@ -910,6 +912,7 @@
   .wallet-pick { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }
   .wallet-pick.soon { color: var(--muted); cursor: default; }
   .wallet-pick.soon span { font-size: 11px; }
+  .wallet-pick .pick-note { font-size: 11px; color: var(--muted); }
   .wp-mode { font-size: 11px; font-weight: 700; letter-spacing: .08em; padding: 4px 10px; border-radius: 999px; }
   .wp-mode.block { background: var(--secure-soft); color: var(--secure); box-shadow: inset 0 0 0 1px var(--secure); }   /* green: secured */
   .wp-mode.audit { background: var(--caution-soft); color: var(--caution); box-shadow: inset 0 0 0 1px var(--caution); }  /* amber: watched only */
@@ -960,6 +963,46 @@
   .wl.big { width: 28px; height: 28px; margin: 0; vertical-align: middle; }
   .wl.huge { width: 40px; height: 40px; margin: 0 0 6px; }
   .wp-ev .wl { width: 18px; height: 18px; vertical-align: -4px; }
+
+  /* ---------- Agents: "Running now" and the instance / history / profile pages (agent_*.js) ---------- */
+  .ai-panel { margin-top: 12px; }
+  .ai-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 8px 16px; padding: 14px 18px; border-bottom: 1px solid var(--border); }
+  .ai-head-title { font-weight: 650; font-size: 14px; }
+  .ai-head-note { font-size: 12px; color: var(--muted); margin: 2px 0 8px; }
+  .ai-links { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12.5px; margin-top: 6px; }
+  .ai-body { display: grid; }
+  .ai-project { padding: 10px 18px 14px; border-bottom: 1px solid var(--border); }
+  .ai-project:last-child { border-bottom: 0; }
+  .ai-project-name { font-family: var(--mono-font); font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted-strong); margin: 4px 0 6px; }
+  .ai-product { font-size: 12px; font-weight: 650; color: var(--muted-strong); margin: 8px 0 4px; }
+  .ai-row { padding: 8px 0 8px 12px; border-left: 2px solid var(--border); margin: 4px 0; min-width: 0; }
+  .ai-row.ai-sub { margin-left: 24px; }
+  .ai-row.ai-had-late { border-left-color: var(--caution); }
+  .ai-row-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; min-width: 0; }
+  .ai-title { font-size: 13.5px; font-weight: 600; color: var(--text); overflow-wrap: anywhere; }
+  .ai-facts, .ai-last { font-size: 12px; color: var(--muted); margin-top: 3px; overflow-wrap: anywhere; }
+  .ai-last { font-family: var(--mono-font); font-size: 11.5px; }
+  .ai-warn { font-size: 12.5px; color: var(--caution); margin-top: 4px; }
+  .ai-empty { padding: 16px 0; color: var(--muted); font-size: 13px; }
+  .ai-chip { font-size: 10.5px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; border-radius: 999px; padding: 1px 8px; border: 1px solid var(--border-strong); color: var(--muted-strong); }
+  .ai-chip.ai-live { color: var(--secure); border-color: var(--secure); }
+  .ai-chip.ai-waiting { color: var(--caution); border-color: var(--caution); }
+  .ai-chip.ai-unprotected { color: var(--signal); border-color: var(--signal); }
+  .ai-page { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 8px 24px 40px; }
+  .ai-table td { white-space: normal; overflow-wrap: anywhere; vertical-align: top; }
+  .ai-table th, .ai-table td.ai-nowrap { white-space: nowrap; overflow-wrap: normal; }   /* KI-584: Time, Kind, Tool, Verdict whole */
+  .ai-table td.ai-wrap { overflow-wrap: anywhere; min-width: 12ch; }
+  .ai-table td.ai-reason { min-width: 24ch; }
+  .ai-late td { background: var(--caution-soft); }
+  .ai-late-mark { color: var(--caution); font-weight: 700; }
+  .ai-more { margin-top: 12px; border: 1px solid var(--border-strong); background: transparent; color: var(--text); border-radius: var(--radius); padding: 6px 12px; font: 600 12.5px var(--body-font); cursor: pointer; }
+  .ai-filters { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+  .ai-select { background: var(--panel); color: var(--text); border: 1px solid var(--border-strong); border-radius: var(--radius); padding: 6px 8px; font: 13px var(--body-font); max-width: 100%; }
+  .ai-file { border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel); margin: 6px 0; padding: 8px 12px; }
+  .ai-file summary { cursor: pointer; font-family: var(--mono-font); font-size: 12px; overflow-wrap: anywhere; }
+  .ai-pre { white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--mono-font); font-size: 12px; line-height: 1.5; max-height: 420px; overflow-y: auto; margin: 8px 0 0; }
+  .ai-subhead { margin: 14px 0 6px; font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+  @media (max-width: 640px) { .ai-page { padding: 8px 16px 32px; } .ai-row.ai-sub { margin-left: 12px; } .ai-view .wev-facts { grid-template-columns: 1fr; } }
 
   /* ---------- Shields: the full-screen events window (local only) ---------- */
   .wev-overlay { position: fixed; inset: 0; z-index: 1000;   /* the modals' layer: above the sticky header */
@@ -3018,6 +3061,10 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/><path d="M8 9h8M8 13h5"/></svg>
             <span class="header-action-label">Assistant</span>
           </button>
+          <a class="gear-btn protection-link" id="protection-open" href="/protection" aria-label="Open Protection: tamper attempts, the protection log and watch rules" title="Protection">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></svg>
+            <span class="header-action-label">Protection</span>
+          </a>
           <a class="gear-btn docs-link" id="docs-open" href="/docs" aria-label="Open the Blackbox docs" title="Docs">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/><path d="M9 7h7M9 11h5"/></svg>
             <span class="header-action-label">Docs</span>
@@ -3049,6 +3096,9 @@
     <!-- Each shield's "New" banner, drawn by static/shields.js from /api/shields -->
     <div id="shield-banners"></div>
 
+    <!-- "Allow Blackbox to notify you" (or the way to System Settings while they are off), drawn by notify-allow.js -->
+    <div id="notify-allow-root" hidden></div>
+
     <!-- "Connect your agent to an AI model", drawn by model-connect.js from /api/agent-model (only while the agent has none) -->
     <div id="model-connect-root" hidden></div>
 
@@ -3068,11 +3118,15 @@
           </button>
         </div>
       </div>
+      <!-- Agents on this machine Blackbox does not protect yet, drawn by agent-coverage.js (empty when every one is) -->
+      <div id="agent-coverage-root" hidden></div>
       <div class="panel">
         <div class="agents-strip" id="agents-strip">
           <div class="empty" style="padding:28px 20px; width:100%;">Loading agents&hellip;</div>
         </div>
       </div>
+      <!-- Running now: every live session and sub-agent, drawn by agent-instances.js; its pages (instance, history, profiles) by agent-pages.js -->
+      <div class="panel ai-panel" id="agent-instances-root" hidden></div>
     </section>
 
     <!-- One card per shield, drawn by static/shields.js from /api/shields (shown while the shield is on) -->
@@ -3366,8 +3420,14 @@
 
 <!-- Vendored (same-origin) force-graph UMD bundle — defines window.ForceGraph. -->
 <script src="./vendor/force-graph.min.js"></script>
+<script src="./approvals.js"></script>
 <script src="./shields.js"></script>
 <script src="./model-connect.js"></script>
+<script src="./agent-coverage.js"></script>
+<script src="./agent-instances.js"></script>
+<script src="./agent-pages.js"></script>
+<script src="./agent-profiles.js"></script>
+<script src="./notify-allow.js"></script>
 <script src="./playground.js"></script>
 <script>
 (function () {
@@ -3986,14 +4046,21 @@
   // One Blackbox serves every Hermes profile on the machine (2026-11-19), so a row says which
   // one: a named profile's workspace is ~/.hermes/profiles/<name>; Blackbox's own assistant runs
   // in the "agent-blackbox" profile. The main profile keeps the plain framework name.
+  // The profile a row's workspace names: a Hermes profile (…/profiles/<name>) or an OpenClaw one
+  // (~/.openclaw-<name>; plain ~/.openclaw is the default profile, "").
   function profileOf(workspace) {
-    var m = /[\\/]profiles[\\/]([^\\/]+)[\\/]?$/.exec(String(workspace || ""));
+    var path = String(workspace || "");
+    var m = /[\\/]profiles[\\/]([^\\/]+)[\\/]?$/.exec(path) || /[\\/]\.openclaw-([^\\/]+)[\\/]?$/.exec(path);
     return m ? m[1] : "";
   }
-  function agentName(fw, workspace) {
+  // "Hermes · coder", "OpenClaw · work / research": the profile, then (OpenClaw) which agent of
+  // that profile acted — left out for its default agent, "main".
+  function agentName(fw, workspace, agent) {
     var profile = profileOf(workspace);
     if (profile === "agent-blackbox") return "Blackbox assistant";
-    return profile ? fwLabel(fw) + " \u00b7 " + profile : fwLabel(fw);
+    var name = profile ? fwLabel(fw) + " \u00b7 " + profile : fwLabel(fw);
+    agent = String(agent || "");
+    return agent && agent !== "main" ? name + " / " + agent : name;
   }
   function fwLabel(fw) {
     fw = String(fw || "").toLowerCase();
@@ -5602,7 +5669,7 @@
   }
   // A reference becomes a link only as an http(s) address: graph and finding data choose these
   // strings, and a javascript: (or data:) link clicked here would run in the dashboard's own
-  // origin, which holds the session token. Anything else is shown as text (Desktop does the same).
+  // origin, which holds the session token. Anything else is shown as text (Hermes Desktop does the same).
   function isWebLink(u) { return /^https?:\/\/[^\s]+$/i.test(String(u || "").trim()); }
   function refsHTML(refs) {
     if (!Array.isArray(refs) || !refs.length) return "";
@@ -5744,7 +5811,7 @@
 	    $("tm-tags").innerHTML = modalTags(cat, topSev, false) + '<span class="m-tag">Category</span>';
 	    $("tm-id").textContent = "";
 	    var idrow = $("tm-idrow"); if (idrow) idrow.style.display = "none";
-	    var copyBtn = $("tm-copy"); if (copyBtn) { copyBtn.textContent = "Copy"; copyBtn.classList.remove("ok"); }
+	    var copyBtn = $("tm-copy"); if (copyBtn) { copyBtn.textContent = "Copy"; copyBtn.classList.remove("ok"); } var tmWatch = $("tm-watch"); if (tmWatch) tmWatch.hidden = true;
 	    $("tm-body").innerHTML =
 	      '<div class="modal-desc">' + esc(CAT_SUMMARY[cat] || CAT_SUMMARY.other) + '</div>' +
 	      gridHTML(rows) +
@@ -5843,7 +5910,7 @@
     $("tm-tags").innerHTML = modalTags(cat, sevClass(sev), false);
     $("tm-id").textContent = node.identifier || "";
     var idrow = $("tm-idrow"); if (idrow) idrow.style.display = "";
-    var copyBtn = $("tm-copy"); if (copyBtn) { copyBtn.textContent = "Copy"; copyBtn.classList.remove("ok"); }
+    var copyBtn = $("tm-copy"); if (copyBtn) { copyBtn.textContent = "Copy"; copyBtn.classList.remove("ok"); } var tmWatch = $("tm-watch"); if (tmWatch) tmWatch.hidden = true;
     overlay.classList.add("open");
     overlay.setAttribute("aria-hidden", "false");
 
@@ -5931,7 +5998,7 @@
     var rows = [];
     function add(k, v, mono) { if (v !== undefined && v !== null && String(v) !== "") rows.push([k, String(v), !!mono]); }
     add("Detected", fmtDateFull(f.time || f.ts || f.timestamp));
-    add("Agent", agentName(f.framework, f.workspace));
+    add("Agent", agentName(f.framework, f.workspace, f.agent));
     add("Tool", f.tool_name || f.tool, true);
     add("Trigger", EVENT_LABEL[String(f.event || "")] || f.event);
     // Every time this machine recorded the threat (each is a separate detection), with when.
@@ -6023,7 +6090,14 @@
     var id = f.identifier || "";
     $("tm-id").textContent = id;
     var idrow = $("tm-idrow"); if (idrow) idrow.style.display = id ? "" : "none";
-    var copyBtn = $("tm-copy"); if (copyBtn) { copyBtn.textContent = "Copy"; copyBtn.classList.remove("ok"); }
+    var copyBtn = $("tm-copy"); if (copyBtn) { copyBtn.textContent = "Copy"; copyBtn.classList.remove("ok"); } var tmWatch = $("tm-watch"); if (tmWatch) tmWatch.hidden = true;
+    // "Watch this": the host or package the finding names, pre-filled on the Protection page (watch.suggest).
+    if (tmWatch) postJSON("/api/protection/watch/suggest", { finding: f }).then(function (res) { return res.json(); }).then(function (d) {
+      var s = d && d.suggestion;
+      if (!s || TM.finding !== f) return;
+      tmWatch.href = "/protection?" + new URLSearchParams({ kind: s.kind, value: s.value, note: s.note || "" }).toString();
+      tmWatch.hidden = false;
+    }, function () {});
     // One paint from three parts, so re-renders replace the proof instead of stacking copies.
     var parts = { intel: "", proof: "" };
     var paint = function () { if (TM.finding === f) $("tm-body").innerHTML = findingBaseHTML(f) + parts.intel + parts.proof; };
@@ -6864,9 +6938,9 @@
   }
 
   // Shared row renderer — Time · Agent · Severity · Type · Reasoning.
-  function agentTag(fw, workspace) {
+  function agentTag(fw, workspace, agent) {
     return '<span class="agent-tag" style="--fw:' + fwColor(fw) + '">' +
-      '<span class="agent-tag-ico">' + fwIcon(fw) + '</span>' + esc(agentName(fw, workspace)) + '</span>';
+      '<span class="agent-tag-ico">' + fwIcon(fw) + '</span>' + esc(agentName(fw, workspace, agent)) + '</span>';
   }
   function typeTag(cat) {
     var ck = catKey(cat);
@@ -6891,7 +6965,7 @@
     return '<tr class="row-link' + (f.sandbox ? ' is-sandbox' : '') + '" data-idx="' + i + '" tabindex="0" role="button" ' +
       'aria-label="' + esc("View details: " + (f.title || f.evidence || "finding")) + '">' +
       '<td class="col-time">' + fmtTime(f.time || f.ts || f.timestamp) + '</td>' +
-      '<td>' + agentTag(f.framework, f.workspace) + '</td>' +
+      '<td>' + agentTag(f.framework, f.workspace, f.agent) + '</td>' +
       '<td><span class="pill ' + sev + '">' + esc(sev) + '</span></td>' +
       '<td>' + shieldsUI.findingMark(f) + typeTag(f.category || f.type) + (f.sandbox ? ' <span class="sb-tag">SANDBOX</span>' : '') + '</td>' +
       '<td>' + reasonCell(f) + '</td>' +
@@ -7094,7 +7168,7 @@
     var fw = entry.framework || (entry.finding && entry.finding.framework) || "hermes";
     var agentCell = '<span class="au-agent">' +
       fwIcon(fw) +
-      '<span>' + esc(agentName(fw, entry.workspace)) + '</span>' +
+      '<span>' + esc(agentName(fw, entry.workspace, (entry.detail || {}).agent)) + '</span>' +
       '</span>';
     var eventCell = '<span class="au-event ev-' + grp + '">' + esc(evtLabel(entry.event)) + '</span>' +
       (entry.sandbox ? ' <span class="sb-tag">SANDBOX</span>' : '');
@@ -7819,16 +7893,40 @@
 
   // A fully-defaulted state (used as a fallback and by "Reset to defaults").
   function defaultSetState() {
+    var fresh = defaultValues();
+    if (!fresh.initial) {   // nothing was read: what it starts with is all it may post unchanged — nothing
+      fresh.initial = {};
+      SET_SCALARS.forEach(function (key) { fresh.initial[key] = fresh[key]; });
+    }
+    return fresh;
+  }
+
+  function defaultValues() {
     var cats = {};
     SET_CATS.forEach(function (c) { cats[c.key] = { enabled: true, min_severity: "info" }; });
     return {
       mode: "audit", block_severity: "critical",
       report: false, report_min_severity: "high", community_sandbox: false,
       discover: true, osv_lookup: true,
-      categories: cats, protected_paths: [],
-      category_labels: {}
+      // Not a default to reset: whether new agents are protected was the operator's own choice.
+      auto_attach: !!(setState && setState.auto_attach),
+      // The plugin's own default list (served as default_protected_paths): a reset that sent []
+      // would be kept as given and strip ~/.ssh/*, .env, *.pem … from the protected files.
+      categories: cats,
+      protected_paths: (setState && Array.isArray(setState.default_protected_paths)) ? setState.default_protected_paths.slice() : [],
+      default_protected_paths: (setState && Array.isArray(setState.default_protected_paths)) ? setState.default_protected_paths.slice() : [],
+      category_labels: {},
+      // Which fields the server SERVED, and their values as read (KI-582): Save posts a field only
+      // when the server served it or the person changed it — never a default the page made up.
+      served: (setState && setState.served) ? Object.assign({}, setState.served) : {},
+      initial: (setState && setState.initial) ? Object.assign({}, setState.initial) : null
     };
   }
+
+  // The top-level settings Save may post, each only when served or changed (see buildPayload).
+  var SET_SCALARS = ["mode", "block_severity", "report", "report_min_severity", "discover", "osv_lookup",
+                     "auto_attach", "community_sandbox"];
+  var SET_LISTS = ["categories", "protected_paths"];
 
   // Normalize whatever the API returns into our safe, complete shape.
   function normalizeSettings(data) {
@@ -7841,6 +7939,9 @@
     out.community_sandbox = data.community_sandbox === true;
     out.discover = data.discover !== false;
     out.osv_lookup = data.osv_lookup !== false;
+    // KI-582: never defaulted to off — a page that did not copy it posted "auto_attach": false on
+    // every save and asked the person to approve a weakening they never made.
+    out.auto_attach = data.auto_attach === true;
     var cats = (data.categories && typeof data.categories === "object") ? data.categories : {};
     SET_CATS.forEach(function (c) {
       var item = cats[c.key] || {};
@@ -7853,8 +7954,17 @@
       ? data.protected_paths.map(function (p) { return String(p == null ? "" : p); })
                             .filter(function (p) { return p.trim() !== ""; })
       : [];
+    out.default_protected_paths = Array.isArray(data.default_protected_paths)
+      ? data.default_protected_paths.map(function (p) { return String(p == null ? "" : p); })
+      : out.default_protected_paths;
     out.category_labels = (data.category_labels && typeof data.category_labels === "object")
       ? data.category_labels : {};
+    out.served = {};
+    SET_SCALARS.concat(SET_LISTS).forEach(function (key) {
+      if (Object.prototype.hasOwnProperty.call(data, key)) out.served[key] = true;
+    });
+    out.initial = {};
+    SET_SCALARS.forEach(function (key) { out.initial[key] = out[key]; });
     return out;
   }
 
@@ -7867,7 +7977,7 @@
     if (!setState) return;
     var block = setState.mode === "block";
     var ba = $("set-mode-audit"), bb = $("set-mode-block");
-    ba.classList.toggle("active", !block);
+    ba.classList.toggle("active", setState.mode === "audit");   // "starting": the saved mode is not read yet — neither
     bb.classList.toggle("active", block);
     ba.setAttribute("aria-pressed", block ? "false" : "true");
     bb.setAttribute("aria-pressed", block ? "true" : "false");
@@ -7959,6 +8069,7 @@
     if (!setState) return;
     $("set-discover").checked = !!setState.discover;
     $("set-osv").checked = !!setState.osv_lookup;
+    if ($("set-auto-attach")) $("set-auto-attach").checked = !!setState.auto_attach;
     if ($("set-report")) $("set-report").checked = !!setState.report;
     if ($("set-sandbox")) $("set-sandbox").checked = !!setState.community_sandbox;
   }
@@ -7992,19 +8103,35 @@
       var st = setState.categories[c.key];
       cats[c.key] = { enabled: !!st.enabled, min_severity: sevOk(st.min_severity) };
     });
-    return {
-      mode: setState.mode === "block" ? "block" : "audit",
+    var payload = {
+      // Never write a mode the page did not read (KI-PENDING-b28f8f: "starting" → leave the saved one as it is).
+      mode: setState.mode === "block" || setState.mode === "audit" ? setState.mode : undefined,
       block_severity: sevOk(setState.block_severity),
       report: !!setState.report,
       report_min_severity: sevOk(setState.report_min_severity),
       discover: !!setState.discover,
       osv_lookup: !!setState.osv_lookup,
-      report: !!setState.report,
+      auto_attach: !!setState.auto_attach,
       community_sandbox: !!setState.community_sandbox,
       categories: cats,
       protected_paths: setState.protected_paths.slice(0, 100),
       shields: shieldsUI.settings.payload()   // only the shields the settings view carried
     };
+    return onlyServedOrChanged(payload);
+  }
+
+  // KI-582: a field the server did not serve is posted only when the person changed it (its value
+  // differs from the one the page started with); a list it did not serve is never posted.
+  function onlyServedOrChanged(payload) {
+    var served = setState.served || {};
+    var initial = setState.initial || {};
+    SET_SCALARS.forEach(function (key) {
+      var changed = Object.prototype.hasOwnProperty.call(initial, key) && initial[key] !== setState[key];
+      if (!served[key] && !changed) delete payload[key];
+    });
+    SET_LISTS.forEach(function (key) { if (!served[key]) delete payload[key]; });
+    Object.keys(payload).forEach(function (key) { if (payload[key] === undefined) delete payload[key]; });
+    return payload;
   }
 
   // Every mutation carries the per-process session token (browser-boundary
@@ -8215,6 +8342,9 @@
     });
     $("set-osv").addEventListener("change", function () {
       if (!setState) return; setState.osv_lookup = this.checked; markDirty();
+    });
+    if ($("set-auto-attach")) $("set-auto-attach").addEventListener("change", function () {
+      if (!setState) return; setState.auto_attach = this.checked; markDirty();
     });
     if ($("set-report")) $("set-report").addEventListener("change", function () {
       if (!setState) return; setState.report = this.checked; markDirty();
@@ -8552,6 +8682,7 @@
     <div class="modal-id" id="tm-idrow">
       <code id="tm-id"></code>
       <button class="modal-copy" id="tm-copy">Copy</button>
+      <a class="modal-copy" id="tm-watch" href="/protection" hidden title="Watch the host or package this finding names: calls to it are counted, not blocked, until you block it">Watch this</a>
     </div>
     <div class="modal-body" id="tm-body"></div>
   </div>
@@ -8692,6 +8823,20 @@
 
       <!-- One group per shield, drawn by static/shields.js from the settings view's shields -->
       <div id="set-shields"></div>
+
+      <!-- Agents: protect every new one (auto_attach — opted into at install, switch here) -->
+      <div class="set-group">
+        <div class="set-glabel">Agents</div>
+        <div class="set-row">
+          <div class="set-rl">
+            <div class="set-rt">Protect new agents automatically</div>
+            <div class="set-rh">Every Hermes profile and OpenClaw workspace added on this machine is protected within a minute, with these same settings, and its findings show here labelled with its name. An agent you switch off under Connected agents stays off. Off: a new agent is listed under Connected agents, unprotected, until you switch it on.</div>
+          </div>
+          <div class="set-rc">
+            <label class="set-toggle"><input type="checkbox" id="set-auto-attach" /><span class="set-track"></span></label>
+          </div>
+        </div>
+      </div>
 
       <!-- Advanced -->
       <div class="set-group">

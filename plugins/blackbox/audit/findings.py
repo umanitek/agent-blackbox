@@ -13,7 +13,7 @@ import time
 from typing import Any, Optional
 from ..kernel import constants
 from ..kernel.bounded_files import read_jsonl
-from . import finding_display, log_store
+from . import finding_display, log_store, tamper
 from . import redaction
 
 logger = logging.getLogger(__name__)
@@ -86,8 +86,12 @@ def _flatten_finding_row(rec: dict[str, Any], default_fw: str) -> dict[str, Any]
         "ts": rec.get("ts") or 0,
         "event": rec.get("event"),
         "session_id": detail.get("session_id"),
+        # A coding agent's sub-agent inside that session (hashed id, "" when none) — KI-588.
+        "sub_agent": str(detail.get("sub_agent") or ""),
         "task_id": detail.get("task_id"),
         "turn_id": detail.get("turn_id"),
+        # The one tool call (or sandbox refusal) this row is about: distinct calls stay distinct rows.
+        "tool_call_id": str(detail.get("tool_call_id") or ""),
         "identifier": finding.get("identifier"),
         "category": finding.get("category"),
         "severity": finding.get("severity"),
@@ -100,9 +104,19 @@ def _flatten_finding_row(rec: dict[str, Any], default_fw: str) -> dict[str, Any]
         "source": finding.get("source") or ("public" if is_confirmed(finding) else "heuristic"),
         # What the hook did with it: "block" | "flag" ("" for rows older than KI-189).
         "decision": str(detail.get("decision") or ""),
+        # A local rule's own fields (the person's protected item, path, route) — see _finding_summary.
+        "fields": finding.get("fields") if isinstance(finding.get("fields"), dict) else {},
+        # Which agent of an OpenClaw profile acted ("" for Hermes rows: the workspace is the agent).
+        "agent": str(detail.get("agent") or "")[:120],
         # Local-only conversation snapshot (redacted upstream).
         "context": _bounded_context(detail.get("context") or finding.get("context")),
         "found_in": finding.get("found_in") or "",
+        "advice": str(finding.get("advice") or ""),
+        # An install's package that already landed (the after-install check): the alert says how to remove it.
+        "after_install": detail.get("after_install") is True,
+        # The folder the agent works in, where the row's workspace names something else (a Hermes
+        # row's workspace is its Hermes home — KI-603).
+        "folder": str(detail.get("cwd") or ""),
     }
     # What the pages group on (one threat on screen) and which row stands for it — served, not re-derived.
     row["display_key"], row["display_rank"] = finding_display.display_key(row), finding_display.display_rank(row)
@@ -110,7 +124,9 @@ def _flatten_finding_row(rec: dict[str, Any], default_fw: str) -> dict[str, Any]
 
 
 def _dedupe_finding_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Collapse repeated findings emitted by multiple API calls in one turn."""
+    """Collapse repeated findings emitted by multiple API calls in one turn. Two different tool
+    calls (or sandbox refusals) are never one row: KI-538 (E2E full4) — 13 File Shield refusals in a
+    session showed as 9, because rows with the same evidence in one session were taken as repeats."""
     deduped: dict[tuple, dict[str, Any]] = {}
     order: list[tuple] = []
     for row in rows:
@@ -122,6 +138,7 @@ def _dedupe_finding_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             scope,
             row.get("identifier"),
             row.get("evidence"),
+            row.get("tool_call_id") or "",
         )
         existing = deduped.get(key)
         if existing is None:
@@ -180,12 +197,19 @@ def count_findings() -> int:
     return len(_all_findings())
 
 
+#: Who records File Shield's OS-sandbox refusals: not an agent (any sandboxed agent's program), so
+#: never listed as one (KI-538: the Agents page offered "agent-sandbox" with "Stop protecting").
+SANDBOX_RECORDER = "agent-sandbox"
+#: Recorders whose logs are not an agent's.
+NOT_AGENTS = frozenset({SANDBOX_RECORDER})
+
+
 def local_frameworks() -> list[str]:
     """Frameworks that have written findings into this shared home (for the
     dashboard's agent list). Always includes ``hermes`` when its log exists."""
     out: list[str] = []
     for path, default_fw in log_store._findings_files():
-        if path.exists() and default_fw not in out:
+        if path.exists() and default_fw not in out and default_fw not in NOT_AGENTS:
             out.append(default_fw)
     return out
 
@@ -198,7 +222,7 @@ def local_active_frameworks() -> list[str]:
     """
     out = local_frameworks()
     for audit_path, framework in log_store._audit_files():
-        if framework in out or not audit_path.exists():
+        if framework in out or framework in NOT_AGENTS or not audit_path.exists():
             continue
         try:
             if any(line.strip() for line in audit_path.read_text(encoding="utf-8-sig").splitlines()):
@@ -227,16 +251,34 @@ def record(
     *findings* are Finding dicts (evidence already redacted). *detail* is extra
     context (tool name, ids, args) and is redacted again here before writing.
     """
+    # Profile-level identity is local-only and lets the dashboard keep
+    # separate Hermes homes from inheriting each other's activity.
+    _record(event, findings, detail, framework="", workspace=str(constants.hermes_home()))
+
+
+def record_for(framework: str, *, event: str, workspace: str = "",
+               findings: Optional[list[dict[str, Any]]] = None, detail: Optional[dict[str, Any]] = None) -> None:
+    """:func:`record` for another local agent: written to ``audit.<framework>.jsonl`` and
+    ``findings.<framework>.jsonl`` (the files every reader already merges), labelled with the
+    *framework* and its *workspace*. *framework* must be a plain id without dots (``claude-code``)."""
+    if not framework or "." in framework or "/" in framework:
+        raise ValueError(f"not a framework id: {framework!r}")
+    _record(event, [{**f, "framework": framework} for f in findings or []] or None, detail,
+            framework=framework, workspace=workspace)
+
+
+def _record(event: str, findings: Optional[list[dict[str, Any]]], detail: Optional[dict[str, Any]],
+            *, framework: str, workspace: str) -> None:
     try:
         now = time.time()
         base = {
             "ts": now,
             "iso": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
             "event": event,
-            # Profile-level identity is local-only and lets the dashboard keep
-            # separate Hermes homes from inheriting each other's activity.
-            "workspace": str(constants.hermes_home()),
+            "workspace": workspace,
         }
+        if framework:
+            base["framework"] = framework
         if detail:
             # Redact the detail normally, but rebuild ``detail.context`` via
             # ``_bounded_context``: a plain ``redact`` would re-clamp the
@@ -251,10 +293,12 @@ def record(
         if findings:
             base["findingCount"] = len(findings)
             base["findings"] = [_finding_summary(f) for f in findings]
-        log_store._append_jsonl(log_store._home() / "audit.jsonl", base)
+        suffix = f".{framework}" if framework else ""
+        log_store._append_jsonl(log_store._home() / f"audit{suffix}.jsonl", base)
         for finding in findings or []:
-            log_store._append_jsonl(log_store._home() / "findings.jsonl", {**base, "finding": _finding_summary(finding)})
-    except Exception as exc:  # pragma: no cover - fail open
+            log_store._append_jsonl(log_store._home() / f"findings{suffix}.jsonl", {**base, "finding": _finding_summary(finding)})
+        tamper.note(event, findings, detail, tamper.acting_agent(framework, detail, NOT_AGENTS))   # every refusal passes here, whoever made it
+    except Exception as exc:  # pragma: no cover - fail open  # health: allow BLE001 -- recording never stops the hook (moved from record)
         logger.debug("blackbox: audit record failed: %s", exc)
 
 
@@ -275,7 +319,22 @@ def _finding_summary(finding: dict[str, Any]) -> dict[str, Any]:
         "sighting": {str(k)[:64]: str(v)[:128] for k, v in (finding.get("sighting") or {}).items()},
         # Where an injection was met — a closed word (constants.INJECTION_CONTEXTS), never content.
         "found_in": _found_in(finding),
+        # What the person should do now (a landed package: its removal command and the
+        # install-scripts warning, KI-603) — Blackbox's own words, bounded.
+        **({"advice": redaction.sanitize_text(str(finding["advice"]), 500)} if finding.get("advice") else {}),
+        # A rule of the person's own (source "custom": File Shield, protected paths) is never shared;
+        # its fields (the item, path and route) are what the hits list shows, so they are kept,
+        # redacted and bounded. Every other finding keeps none (unchanged).
+        **({"fields": _local_fields(finding)} if finding.get("source") == "custom" else {}),
     }
+
+
+def _local_fields(finding: dict[str, Any]) -> dict[str, str]:
+    fields = finding.get("fields")
+    if not isinstance(fields, dict):
+        return {}
+    return {str(key)[:32]: redaction.sanitize_text(str(value), 400) for key, value in list(fields.items())[:8]
+            if isinstance(value, (str, int, float, bool))}
 
 
 def _found_in(finding: dict[str, Any]) -> str:

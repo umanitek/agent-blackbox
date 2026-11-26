@@ -22,8 +22,10 @@
  * exactly like Python's `normalize_arg_shape`.
  */
 import { createHash } from "node:crypto";
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { codeFileArgs, shellFileArgs, withNestedCommands } from "./shellFiles.js";
 import {
   BlackboxSeverity,
   escalationIdentifier,
@@ -452,6 +454,11 @@ const MAX_SHAPE_SCAN = 8000;
  *   - anything else            → ""
  */
 export function commandFromArgs(toolName: string, args: unknown): string {
+  return withNestedCommands(rawCommandFromArgs(toolName, args));
+}
+
+/** The command as written, before the commands it hands to another shell are appended. */
+function rawCommandFromArgs(toolName: string, args: unknown): string {
   if (typeof args === "string") return args.slice(0, MAX_SHAPE_SCAN);
   if (args == null || typeof args !== "object" || Array.isArray(args)) return "";
   const obj = args as Record<string, unknown>;
@@ -1407,7 +1414,18 @@ export async function discoverDependencyCandidates(
 function expandUser(p: string): string {
   if (p === "~") return os.homedir();
   if (p.startsWith("~/") || p.startsWith("~\\")) return path.join(os.homedir(), p.slice(2));
+  // `~name/…` for the user running the agent is the same home folder (Python's expanduser).
+  const named = /^~([^/\\]+)(?:[/\\](.*))?$/.exec(p);
+  if (named && named[1] === currentUserName()) return path.join(os.homedir(), named[2] ?? "");
   return p;
+}
+
+function currentUserName(): string {
+  try {
+    return os.userInfo().username;
+  } catch {
+    return "";   // no passwd entry (some containers): only `~/` is expanded
+  }
 }
 
 /**
@@ -1474,6 +1492,8 @@ export function protectedPathMatch(p: string, pattern: string): boolean {
     const normPath = path.normalize(expandUser(String(p ?? "")));
     const normPat = path.normalize(expandUser(String(pattern ?? "")));
     if (!normPath || !normPat) return false;
+    // A template to copy (`.env.example`) is not the secret itself, unless the pattern names one.
+    if (isTemplate(normPath) && !isTemplate(normPat)) return false;
     if (fnmatch(normPath, normPat)) return true;
     if (fnmatch(path.basename(normPath), normPat)) return true;
     // Directory-prefix semantics for glob-free patterns.
@@ -1505,18 +1525,16 @@ export function detectCustomFileAccess(
 ): Finding[] {
   const patterns = [...(protectedPaths ?? [])].filter((p) => String(p ?? "").trim());
   if (patterns.length === 0) return [];
-  const access = fileAccessArg(toolName, args);
-  if (!access) return [];
-  for (const pattern of patterns) {
-    if (protectedPathMatch(access.path, pattern)) {
-      const tool = access.tool;
+  for (const access of fileAccesses(toolName, args)) {
+    for (const pattern of patterns) {
+      if (!protects(access.path, access.mode, pattern)) continue;
       return [
         {
-          identifier: fileaccessIdentifierFor(tool, "user-protected"),
+          identifier: fileaccessIdentifierFor(access.tool, "user-protected"),
           category: "fileaccess",
           severity: "critical",
           title: "Access to a user-protected path",
-          toolName: tool,
+          toolName: access.tool,
           matched: "user-protected",
           evidence: `${access.mode} path matching protected pattern ${String(pattern).slice(0, 120)}`,
           confirmed: false,
@@ -1527,6 +1545,111 @@ export function detectCustomFileAccess(
     }
   }
   return [];
+}
+
+/** Tools that run code directly, not through a shell (Python `CODE_TOOLS`). */
+export const CODE_TOOLS = new Set(["execute_code", "code_execution", "run_code", "run_python", "python"]);
+/** At most this many files a wildcard expands to are checked (Python `_MAX_GLOB_FILES`). */
+const MAX_GLOB_FILES = 64;
+const GLOB_CHARS = /[*?[]/;
+/** Endings that mark a file as a template to copy, not the secret itself. */
+const TEMPLATE_SUFFIXES = [".example", ".sample", ".template", ".dist", ".default"];
+
+function isTemplate(file: string): boolean {
+  const lowered = file.toLowerCase();
+  return TEMPLATE_SUFFIXES.some((suffix) => lowered.endsWith(suffix));
+}
+
+/** One file a call reads or copies: `mode` is "copy" when a whole folder is handed over. */
+export interface FileAccessed {
+  tool: string;
+  path: string;
+  mode: string;
+}
+
+/**
+ * Every file this call reads or copies: the file tool's path, the paths in a code tool's code,
+ * or every path a shell command reads, copies or archives (where a copy WRITES is left out).
+ * Port of Python `paths/protected.py::_accesses` — the shell half was missing here until
+ * 2026-11-20, so `exec cat ~/.ssh/id_rsa` passed while Hermes blocked it.
+ */
+export function fileAccesses(toolName: string, args: unknown): FileAccessed[] {
+  const access = fileAccessArg(toolName, args);
+  if (access) return [{ tool: access.tool, path: access.path, mode: access.mode }];
+  const tool = (toolName || "").trim().toLowerCase();
+  const code = args && typeof args === "object" ? (args as Record<string, unknown>).code : undefined;
+  if (CODE_TOOLS.has(tool) && typeof code === "string") {
+    return codeFileArgs(code).map((arg) => ({ tool, path: arg.path, mode: arg.recursive ? "copy" : "read" }));
+  }
+  if (!SHELL_TOOLS.has(tool)) return [];
+  return shellFileArgs(commandFromArgs(toolName, args))
+    .filter((arg) => !arg.destination)
+    .map((arg) => ({ tool, path: arg.path, mode: arg.recursive ? "copy" : "read" }));
+}
+
+/**
+ * `file` and the real files it stands for: what a wildcard expands to on disk (`cat server.k*`)
+ * and where an existing link points. The disk is touched only for an anchored path, for at most
+ * MAX_GLOB_FILES files; an unreadable folder leaves the text itself to be checked.
+ */
+function candidates(file: string): string[] {
+  const found = [file];
+  const expanded = expandUser(String(file ?? ""));
+  if (!path.isAbsolute(expanded)) return found;
+  try {
+    if (GLOB_CHARS.test(expanded) && typeof fs.globSync === "function") {
+      found.push(...fs.globSync(expanded).slice(0, MAX_GLOB_FILES).map(String));
+    }
+    for (const each of [...found]) {
+      const real = expandUser(each);
+      if (fs.lstatSync(real, { throwIfNoEntry: false })?.isSymbolicLink()) found.push(fs.realpathSync(real));
+    }
+  } catch {
+    /* the text itself is still checked */
+  }
+  return found;
+}
+
+/** True when `file` is a wildcard that could name a file a glob-free `pattern` protects (`cat .env*`). */
+function nameGlobHits(file: string, pattern: string): boolean {
+  const expanded = path.normalize(expandUser(String(file ?? "")));
+  const name = path.basename(expanded);
+  // Only where there is nothing on disk to look at (Python `_name_glob_hits`, 2026-11-21): an
+  // existing folder's real matches are what `candidates` checks.
+  if (path.isAbsolute(expanded)) {
+    try {
+      if (fs.statSync(path.dirname(expanded), { throwIfNoEntry: false })?.isDirectory()) return false;
+    } catch {
+      /* unreadable: judge by name */
+    }
+  }
+  return GLOB_CHARS.test(name) && !GLOB_CHARS.test(pattern) && fnmatch(path.basename(pattern.replace(/\/+$/, "")), name);
+}
+
+/**
+ * True when copying `folder` whole would take a file `pattern` protects: the pattern names a
+ * place under the home or root (`~/.ssh/*`) and `folder` is that place or one of its parents
+ * (`tar czf x.tgz ~` takes `~/.ssh` with it). Name-only patterns say nothing about where.
+ */
+function folderHolds(folder: string, pattern: string): boolean {
+  const expanded = expandUser(String(pattern ?? ""));
+  if (!path.isAbsolute(expanded)) return false;
+  const stem = expanded.split(/[*?[]/, 1)[0]!;
+  const place = path.normalize(stem.endsWith(path.sep) || stem === expanded ? stem : path.dirname(stem));
+  const normFolder = path.normalize(expandUser(String(folder ?? "")));
+  if (!path.isAbsolute(normFolder)) return false;
+  const trimmedPlace = place.length > 1 ? place.replace(/[/\\]+$/, "") : place;
+  const trimmedFolder = normFolder.length > 1 ? normFolder.replace(/[/\\]+$/, "") : normFolder;
+  return trimmedPlace === trimmedFolder || trimmedPlace.startsWith(trimmedFolder.replace(/[/\\]+$/, "") + path.sep);
+}
+
+/** Port of Python `_protects`: the path (or what it expands to), a wildcard name, or a folder copy. */
+export function protects(file: string, mode: string, pattern: string): boolean {
+  return (
+    candidates(file).some((candidate) => protectedPathMatch(candidate, pattern)) ||
+    nameGlobHits(file, pattern) ||
+    (mode === "copy" && folderHolds(file, pattern))
+  );
 }
 
 // ---------------------------------------------------------------------------

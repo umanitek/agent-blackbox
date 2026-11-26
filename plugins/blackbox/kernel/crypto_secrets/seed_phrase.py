@@ -35,7 +35,7 @@ Usage::
 
     for run in find_seed_phrase_runs(text):
         run.valid_words      # 12/15/18/21/24 when a checksum-valid phrase is inside, else 0
-    redact_seed_phrases(text)  # every run of 12+ list words → [REDACTED_SEED_PHRASE]
+    redact_seed_phrases(text)  # every phrase-shaped run → [REDACTED_SEED_PHRASE]
 """
 
 from __future__ import annotations
@@ -169,6 +169,22 @@ def _runs(text: str, words: dict[str, int]) -> list[list[tuple[int, int, int]]]:
     return runs
 
 
+#: Repeated words a real phrase may hold, per word of its length (12 and 15 words: 2; 18 and
+#: 21: 3; 24: 4). WHY (KI-556): ordinary commands can be made of list words — ``echo loop-1 ;
+#: echo loop-2 …`` is 24 of them — and with sliding windows some window of such a run passes the
+#: 4-bit checksum about one time in sixteen. A phrase drawn from 128+ random bits almost never
+#: repeats words this often (more than 2 repeats in 12 words: about 6 in a million); a command
+#: that reuses its few words always does. Used for the checksum (detection: a looping command is
+#: not a "valid phrase") and for redaction (:func:`_random_looking`). The published test
+#: phrases, whose entropy is one repeated byte, are recognised as such by detection.
+REPEATS_PER_WORD = 1 / 6
+
+
+def _real_shape(indices: list[int], entropy: bytes) -> bool:
+    """True when a checksum-valid window looks like a phrase drawn from random bits."""
+    return len(set(entropy)) == 1 or len(indices) - len(set(indices)) <= int(len(indices) * REPEATS_PER_WORD)
+
+
 def _longest_valid(run: list[tuple[int, int, int]]) -> tuple[int, list[int], Optional[bytes]]:
     """``(length, offsets, entropy)`` for the longest standard length at which
     *run* holds a checksum-valid phrase: EVERY offset that is valid at that
@@ -179,7 +195,8 @@ def _longest_valid(run: list[tuple[int, int, int]]) -> tuple[int, list[int], Opt
     for length in PHRASE_LENGTHS:
         found = [(offset, checksum_entropy(indices[offset:offset + length]))
                  for offset in range(len(indices) - length + 1)]
-        valid = [(offset, entropy) for offset, entropy in found if entropy is not None]
+        valid = [(offset, entropy) for offset, entropy in found
+                 if entropy is not None and _real_shape(indices[offset:offset + length], entropy)]
         if valid:
             return length, [offset for offset, _entropy in valid], valid[0][1]
     return 0, [], None
@@ -249,12 +266,39 @@ def find_seed_phrase_runs(text: str) -> list[SeedPhraseRun]:
     return sorted(_plain_runs(text, words) + _encoded_runs(text, words), key=lambda run: run.start)
 
 
+def _random_looking(run: list[tuple[int, int, int]]) -> bool:
+    """True when some :data:`MIN_WORDS`-word stretch of *run* repeats at most
+    ``MIN_WORDS * REPEATS_PER_WORD`` words — what a phrase drawn from random bits does, whole,
+    cut short or mistyped. One pass with a sliding count, no checksum."""
+    allowed = int(MIN_WORDS * REPEATS_PER_WORD)
+    counts: dict[int, int] = {}
+    for position, (_start, _end, index) in enumerate(run):
+        counts[index] = counts.get(index, 0) + 1
+        if position >= MIN_WORDS:
+            gone = run[position - MIN_WORDS][2]
+            counts[gone] -= 1
+            if not counts[gone]:
+                del counts[gone]
+        if position >= MIN_WORDS - 1 and MIN_WORDS - len(counts) <= allowed:
+            return True
+    return False
+
+
+def _phrase_shaped(text: str, run: list[tuple[int, int, int]]) -> bool:
+    """True when *run* (12+ list words in *text*) has a seed phrase's shape: its words look drawn
+    at random (:func:`_random_looking` — a whole phrase, one cut short or one mistyped: still a
+    secret), or it is LABELLED as one (a cue word near it, or numbered words). Ordinary text made
+    of list words reuses its few words (``echo loop-1 … echo loop-12``) and is neither (KI-556)."""
+    return _random_looking(run) or _has_cue(text, run[0][0], run[-1][1])
+
+
 def _spans(text: str, words: dict[str, int]) -> list[tuple[int, int]]:
-    """Original spans of every run (plain or base64-encoded) — no checksums computed."""
-    spans = [view.original_span(run[0][0], run[-1][1]) for view in readings(text) for run in _runs(view.text, words)]
+    """Original spans of every PHRASE-SHAPED run (plain or base64-encoded; :func:`_phrase_shaped`)."""
+    spans = [view.original_span(run[0][0], run[-1][1]) for view in readings(text) for run in _runs(view.text, words)
+             if _phrase_shaped(view.text, run)]
     for match in list(_BASE64.finditer(text))[:_MAX_ENCODED]:
         decoded = _decoded_text(match.group(0))
-        if decoded and any(_runs(view.text, words) for view in readings(decoded)):
+        if decoded and any(_phrase_shaped(view.text, run) for view in readings(decoded) for run in _runs(view.text, words)):
             spans.append(match.span())
     merged: list[tuple[int, int]] = []
     for start, end in sorted(spans):
@@ -266,18 +310,20 @@ def _spans(text: str, words: dict[str, int]) -> list[tuple[int, int]]:
 
 
 def seed_phrase_spans(text: str) -> list[tuple[int, int]]:
-    """``(start, end)`` of every run of 12+ list words in *text* (plain or base64), merged
-    and in order — what :func:`redact_seed_phrases` removes. For callers that must map a
+    """``(start, end)`` of every phrase-shaped run of 12+ list words in *text* (plain or
+    base64), merged and in order — what :func:`redact_seed_phrases` removes. For callers that must map a
     phrase back onto the pieces it was assembled from (a list of words, a dict)."""
     words = _wordlist()
     return _spans(text, words) if text and words is not None else []
 
 
 def redact_seed_phrases(text: str) -> str:
-    """*text* with every run of 12+ consecutive wordlist words (plain or base64-encoded)
-    replaced by :data:`MARKER` — checksum or not: a mistyped phrase is still a secret. No
-    checksum is computed here: a log full of list words costs one pass, not five per
-    word (KI-382)."""
+    """*text* with every seed phrase (plain or base64-encoded) replaced by :data:`MARKER`: a
+    run of 12+ wordlist words with a phrase's shape (:func:`_phrase_shaped`) — words that look
+    drawn at random, checksum or not (a phrase cut short or mistyped is still a secret), or a
+    labelled run. An ordinary command made of list words is left as it is
+    (KI-556). No checksum is computed here: a log full of list words costs one pass, not five
+    per word (KI-382)."""
     words = _wordlist()
     if not text or words is None:
         return text

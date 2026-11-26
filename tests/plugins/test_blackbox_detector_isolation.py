@@ -132,4 +132,6 @@ def test_arguments_nested_too_deep_to_parse_are_checked_as_text_instead_of_raisi
 
 def test_the_hook_answers_for_arguments_nested_too_deep_to_parse(monkeypatch, tmp_path):
     monkeypatch.setenv("BLACKBOX_HOME", str(tmp_path))
-    assert hooks.on_pre_tool_call(tool_name="terminal", args=_nested_json_text(200_000)) is None
+    # 150,000 deep is 900,000 characters: far past what can be parsed, and under the million past
+    # which a command is refused unread (test_blackbox_self_protection.py).
+    assert hooks.on_pre_tool_call(tool_name="terminal", args=_nested_json_text(150_000)) is None

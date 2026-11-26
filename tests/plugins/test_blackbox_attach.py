@@ -106,6 +106,31 @@ def test_discover_hermes_homes_skips_managed_blackbox_chat_profile(fake_env, nam
     assert blackbox not in homes
 
 
+def test_discover_hermes_homes_never_lists_a_missing_dot_hermes(tmp_path, monkeypatch):
+    """Clean-Mac install 2026-11-26: Blackbox ran in its own home, Hermes was never installed, and
+    "protect every agent" created ~/.hermes with a plugin copy. A missing home is not an agent
+    (FIX-PENDING-f96873)."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr("pathlib.Path.home", lambda: home)
+    own = tmp_path / "Application Support" / "Blackbox" / "hermes"
+    monkeypatch.setenv("HERMES_HOME", str(own))
+
+    assert attach.discover_hermes_homes() == [own], "only the home Blackbox runs in"
+    report = attach.attach_all(hermes=True, openclaw=False, dry_run=True)
+    assert all(".hermes" not in str(row) for row in report["hermes"]), report
+    assert not (home / ".hermes").exists()
+
+
+def test_discover_hermes_homes_lists_dot_hermes_once_it_exists(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    (home / ".hermes").mkdir(parents=True)
+    monkeypatch.setattr("pathlib.Path.home", lambda: home)
+    own = tmp_path / "own"
+    monkeypatch.setenv("HERMES_HOME", str(own))
+    assert attach.discover_hermes_homes() == [own, home / ".hermes"]
+
+
 def test_discover_hermes_homes_deduplicates(fake_env):
     homes = attach.discover_hermes_homes()
     assert len(homes) == len(set(homes))
@@ -164,6 +189,30 @@ def test_copy_plugin_tree_records_source_checkout(tmp_path, monkeypatch):
     attach_plugin_copy.copy_plugin_tree(src, dest)
 
     assert (dest / ".blackbox-source-root").read_text(encoding="utf-8") == str(repo)
+
+
+def test_copy_plugin_tree_replaces_a_copy_a_running_process_writes_into(tmp_path, monkeypatch):
+    """Fix wave W12 (macOS VM, an upgrade over a running install): `blackbox attach` failed with
+    "[Errno 17] File exists: …/plugins/blackbox/shields" — the running dashboard wrote a fresh
+    __pycache__ into the copy while rmtree + copytree replaced it in place (KI-644's race, in the
+    attach path). The copy is built aside and swapped in by rename: the writer can not break it."""
+    src = tmp_path / "src"
+    (src / "shields").mkdir(parents=True)
+    (src / "shields" / "new.py").write_text("NEW = 1\n", encoding="utf-8")
+    dest = tmp_path / ".hermes" / "plugins" / "blackbox"
+    (dest / "shields").mkdir(parents=True)
+    (dest / "shields" / "old.py").write_text("OLD = 1\n", encoding="utf-8")
+    real_copytree = attach_plugin_copy.shutil.copytree
+
+    def copytree_while_a_process_imports(*args, **kwargs):
+        (dest / "shields" / "__pycache__").mkdir(parents=True, exist_ok=True)   # the running dashboard's import
+        return real_copytree(*args, **kwargs)
+    monkeypatch.setattr(attach_plugin_copy.shutil, "copytree", copytree_while_a_process_imports)
+    monkeypatch.setattr(attach_plugin_copy, "_bundle_openclaw_plugin", lambda _src, _dest: None)
+    attach_plugin_copy.copy_plugin_tree(src, dest)
+    assert (dest / "shields" / "new.py").is_file() and not (dest / "shields" / "old.py").exists()
+    assert sorted(path.name for path in dest.parent.iterdir()) == ["blackbox"]   # nothing left inside plugins/
+    assert not (tmp_path / ".hermes" / ".blackbox-attach-copy").exists()
 
 
 def test_attach_hermes_is_idempotent(fake_env):
@@ -715,10 +764,18 @@ def test_the_dashboard_rescan_keeps_an_agent_the_operator_switched_off(fake_env,
     server = load_blackbox("dashboard.server")
     profile = fake_env["profile"]
     attach.attach_hermes(profile)
+    # Switching an agent off turns protection down: it waits for the person (approvals gate), who
+    # confirms it at the system's password prompt — stood in for here.
+    system_prompt = load_blackbox("approvals.system_prompt")
+    monkeypatch.setattr(system_prompt, "_prompter", lambda: lambda _text: True)
+    switch_off = {"targets": [{"kind": "hermes", "target": str(profile), "enabled": False}]}
     with TestClient(server.create_app(), base_url="http://127.0.0.1:9700") as client:
         token = {"X-Blackbox-Token": client.get("/api/session").json()["token"]}
-        off = client.post("/api/agents/protection", json={"targets": [{"kind": "hermes", "target": str(profile), "enabled": False}]},
-                          headers=token)
+        held = client.post("/api/agents/protection", json=switch_off, headers=token)
+        assert held.status_code == 428
+        confirmed = client.post("/api/approvals/confirm", json={"id": held.json()["approval"]["id"]}, headers=token)
+        assert confirmed.status_code == 200
+        off = client.post("/api/agents/protection", json=switch_off, headers=token)
         assert off.status_code == 200
         client.post("/api/agents/rescan", headers=token)   # ↻ — a forced reconcile of every agent
 

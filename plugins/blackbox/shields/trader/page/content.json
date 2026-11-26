@@ -1,26 +1,73 @@
 {
- "about": "Trader Shield page prose: what it can do today, what it cannot yet, and what is coming. The page (trader.html) loads this file and renders it as given; 'N attacks tested' and the tested-with sentence come from the served attack table, never from here.",
- "version": "Beta · updated 2026-10-16",
- "can": [
-  ["Keep your agent out of your wallets", "MetaMask, Phantom, Coinbase Wallet, Rabby, Trust Wallet, OKX Wallet, Keplr and Solflare in Chrome, Brave, Edge, Opera, Vivaldi and Arc; MetaMask, Phantom, Keplr and Solflare in Firefox; Exodus and Electrum on the desktop; the Solana CLI key file — through file tools, the terminal, find, one-line scripts, copies and archives"],
-  ["Recognise real seed phrases", "12 to 24 words, checked with the phrase's own checksum, so ordinary text doesn't trigger it — even written into a web address"],
-  ["Stop a seed phrase or wallet key leaving", "however it goes: curl, wget or nc, a web address the agent opens, or a script that posts it — in block mode"],
-  ["Recognise your own raw private key", "list your public addresses in Settings and a bare 64-character key that opens one is caught; transaction hashes are left alone"],
-  ["Spot a labelled private key or a Solana key", "PRIVATE_KEY=, pk:, \"privateKey\": and similar, and any real Solana key; flagged, because your own trading config may hold one, and blocked when sent"],
-  ["Keep exchange API keys with their exchange", "a Binance, OKX, Bybit, Coinbase Exchange or KuCoin key header sent anywhere but that exchange is blocked"],
-  ["Catch the approval a drainer needs", "an approval to a wallet the verified threat graph lists as a drainer is blocked; any unlimited approval is flagged so you see it"],
-  ["Guard your other secrets", ".env files, SSH keys, key files and the macOS keychain (its file and the security tool), through file tools and the terminal"],
-  ["Keep secrets out of Blackbox's logs", "phrases and keys are scrubbed before anything is recorded"],
-  ["Explain every event", "what the agent reached for, why it matters, and what led to it"]
- ],
- "cannot": [
-  ["Other wallets yet", "Bitcoin Core and others are coming"],
-  ["Wallets from Edge's own store", "wallets are recognised as installed from the Chrome Web Store; from Edge Add-ons only MetaMask is, so far"],
-  ["Every exchange", "Kraken and Bitget use header names many other services share, so their keys are not matched yet"],
-  ["Stop malware outside your agent", "Trader Shield guards what your AI agent does, not other programs"],
-  ["Block links or addresses on their own", "known scam sites and wallets are flagged; only an approval to a known drainer is blocked"],
-  ["Read a path a script builds piece by piece", "quoted paths and the usual home-folder joins are read; a path assembled character by character is not"]
- ],
- "coming": ["Bitcoin Core", "More exchanges", "Safari wallets"],
- "testimonial": null
+  "about": "Trader Shield page prose: what it can do today, what it cannot yet, and what is coming. The page (trader.html) loads this file and renders it as given; 'N attacks tested' and the tested-with sentence come from the served attack table, never from here.",
+  "version": "Beta · updated 2026-10-16",
+  "can": [
+    [
+      "Keep your agent out of your wallets",
+      "MetaMask, Phantom, Coinbase Wallet, Rabby, Trust Wallet, OKX Wallet, Keplr and Solflare in Chrome, Brave, Edge, Opera, Vivaldi and Arc; MetaMask, Phantom, Keplr and Solflare in Firefox; Exodus and Electrum on the desktop; the Solana CLI key file — through file tools, the terminal, find, one-line scripts, copies and archives"
+    ],
+    [
+      "Recognise real seed phrases",
+      "12 to 24 words, checked with the phrase's own checksum, so ordinary text doesn't trigger it — even written into a web address"
+    ],
+    [
+      "Stop a seed phrase or wallet key leaving",
+      "however it goes: curl, wget or nc, a web address the agent opens, or a script that posts it — in block mode"
+    ],
+    [
+      "Recognise your own raw private key",
+      "list your public addresses in Settings and a bare 64-character key that opens one is caught; transaction hashes are left alone"
+    ],
+    [
+      "Spot a labelled private key or a Solana key",
+      "PRIVATE_KEY=, pk:, \"privateKey\": and similar, and any real Solana key; flagged, because your own trading config may hold one, and blocked when sent"
+    ],
+    [
+      "Keep exchange API keys with their exchange",
+      "a Binance, OKX, Bybit, Coinbase Exchange or KuCoin key header sent anywhere but that exchange is blocked"
+    ],
+    [
+      "Catch the approval a drainer needs",
+      "an approval to a wallet the verified threat graph lists as a drainer is blocked; any unlimited approval is flagged so you see it"
+    ],
+    [
+      "Guard your other secrets",
+      ".env files, SSH keys, key files and the macOS keychain (its file and the security tool), through file tools and the terminal"
+    ],
+    [
+      "Keep secrets out of Blackbox's logs",
+      "phrases and keys are scrubbed before anything is recorded"
+    ],
+    [
+      "Explain every event",
+      "what the agent reached for, why it matters, and what led to it"
+    ]
+  ],
+  "cannot": [
+    [
+      "Other wallets",
+      "only the wallets listed in Settings are recognised"
+    ],
+    [
+      "Wallets from Edge's own store",
+      "wallets are recognised as installed from the Chrome Web Store; from Edge Add-ons only MetaMask is"
+    ],
+    [
+      "Every exchange",
+      "Kraken and Bitget use header names many other services share, so their keys are not matched"
+    ],
+    [
+      "Stop malware outside your agent",
+      "Trader Shield guards what your AI agent does, not other programs"
+    ],
+    [
+      "Block links or addresses on their own",
+      "known scam sites and wallets are flagged; only an approval to a known drainer is blocked"
+    ],
+    [
+      "Read a path a script builds piece by piece",
+      "quoted paths and the usual home-folder joins are read; a path assembled character by character is not"
+    ]
+  ],
+  "testimonial": null
 }

@@ -27,15 +27,15 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Callable
 
-HERE = Path(__file__).resolve().parent
-SCRIPT = HERE / "playground.js"
+#: The panel script, kept with the dashboard's other static files (``dashboard/static/``).
+SCRIPT = Path(__file__).resolve().parents[1] / "static" / "playground.js"
 NO_CACHE = {"Cache-Control": "no-store"}
 
 Cache = Callable[..., Any]
 #: Reads the sandbox lane for a config: the node itself, or (in the routes) the dashboard's cache.
 LaneReader = Callable[[Any], Any]
 #: How old a cached sandbox lane may be (LES-040: a recurring node query is cached — the panel
-#: polls every 5 s per tab and Desktop every 4 s; a member's new test shows within this).
+#: polls every 5 s per tab and Hermes Desktop every 4 s; a member's new test shows within this).
 LANE_TTL_SECONDS = 10.0
 
 

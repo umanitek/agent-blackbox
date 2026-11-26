@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -161,8 +162,9 @@ def test_claimed_findings_are_the_shields_own():
     for identifier in ("fileaccess:terminal:macos-keychain", "secret:token-approval-drainer", "secret:exchange-api-key"):
         assert TRADER.claims({"identifier": identifier}), identifier
     assert not TRADER.claims({"identifier": "fileaccess:terminal:user-protected"})
-    [card] = json.loads(FIXTURE.read_text(encoding="utf-8"))
-    assert card["claims"] == [kind.identifier for kind in TRADER.finding_kinds if kind.identifier]
+    cards = {card["shield_id"]: card for card in json.loads(FIXTURE.read_text(encoding="utf-8"))}
+    for record in shields.all_shields():
+        assert cards[record.id]["claims"] == [kind.identifier for kind in record.finding_kinds if kind.identifier]
 
 
 @pytest.mark.parametrize("finding, goal", [
@@ -231,7 +233,7 @@ def test_the_captured_payload_replays_clean_at_desktop_and_phone_widths(served, 
         assert not [check for check in view["checks"] if check["horizontalOverflow"]], (width, view["checks"])
         card, text = found["card"], found["card"]["text"].lower()   # headings are upper-cased by CSS (LES-039)
         assert not card["hidden"] and "found on this machine" in text and "recent events" in text, (width, card)
-        assert "blocking" in text and "new since you last saved" in text and found["cardLogos"] >= 1
+        assert "blocking" in text and "chosen but unavailable" in text and found["cardLogos"] >= 1
         assert found["banner"]["present"] and found["banner"]["hidden"], (width, found["banner"])     # engaged: no banner
         story = found["windowStory"]["text"]   # <b> kept; any other tag shown as inert text, never run
         assert not found["window"]["hidden"] and story.startswith("ok<img src=x"), (width, story)
@@ -248,3 +250,63 @@ def test_the_captured_payload_replays_clean_at_desktop_and_phone_widths(served, 
         assert not found["offBanner"]["hidden"] and "engage trader shield" in found["offBanner"]["text"].lower()
         assert found["offCard"]["hidden"]
         assert found["sparse"] == [0, 1, 1, 0], (width, found["sparse"])
+
+
+# ------------------------------------------------------------------ Settings picks, drawn in Node
+
+RENDER = Path(__file__).with_name("shields_settings_render.mjs")
+NODE = shutil.which("node")
+
+
+def _render_settings(view: dict, tmp_path: Path) -> dict:
+    view_file = tmp_path / "view.json"
+    view_file.write_text(json.dumps(view), encoding="utf-8")
+    result = subprocess.run([NODE, str(RENDER), str(STATIC / "shields.js"), str(view_file)],
+                            capture_output=True, text=True, timeout=60, check=False)
+    assert result.returncode == 0, result.stderr[-2000:]
+    return json.loads(result.stdout)
+
+
+@pytest.mark.skipif(NODE is None, reason="node draws the Settings picks")
+def test_only_a_really_unavailable_choice_is_drawn_greyed_out(tmp_path):
+    """BB-SHIELDS-001: a choice with no status, or one not installed yet, stays pickable; only
+    ``unavailable`` / ``needs-helper`` / ``planned`` are greyed, with the server's reason."""
+    options = [{"id": "a", "name": "Agent A", "status": "supported"},
+               {"id": "b", "name": "Agent B", "status": "not installed", "note": "not installed on this machine yet"},
+               {"id": "c", "name": "Agent C", "status": ""},
+               {"id": "d", "name": "Agent D", "status": "unavailable", "note": "This Mac has no sandbox-exec."},
+               {"id": "e", "name": "Agent E", "status": "needs-helper"}]
+    view = {"file-shield": {"mode": {"enabled": True, "sandboxed": ["b"]},
+                            "fields": [{"key": "enabled", "kind": "toggle", "label": "Engage"},
+                                       {"key": "sandboxed", "kind": "multi-pick", "label": "Sandbox", "options": options}]}}
+    drawn = _render_settings(view, tmp_path)
+    labels = {re.search(r"Agent [A-E]", label).group(0): label
+              for label in re.findall(r'<label class="wallet-pick.*?</label>', drawn["settings"])}
+    pickable = {name for name, label in labels.items() if 'data-option="' in label and "disabled" not in label}
+    assert pickable == {"Agent A", "Agent B", "Agent C"}, labels
+    assert "checked" in labels["Agent B"] and "not installed" in labels["Agent B"]
+    assert "This Mac has no sandbox-exec." in labels["Agent D"] and "needs the system protection helper" in labels["Agent E"]
+    assert drawn["pathRows"] == ""   # a sandboxed agent is not a key place: no "everywhere it keeps its keys" row
+
+
+@pytest.mark.skipif(NODE is None, reason="node draws the Settings picks")
+def test_the_real_file_shield_choices_are_pickable_where_the_sandbox_runs(tmp_path, monkeypatch):
+    from plugins.blackbox.shields.files import sandbox
+    monkeypatch.setattr(sandbox.platform, "unavailable", lambda: None)
+    view = {"file-shield": shields.settings_view()["file-shield"]}
+    view["file-shield"]["mode"]["enabled"] = True
+    drawn = _render_settings(view, tmp_path)
+    assert 'class="wallet-pick soon"' not in drawn["settings"] and 'data-option="hermes"' in drawn["settings"]
+
+
+@pytest.mark.skipif(NODE is None, reason="node draws the Settings picks")
+def test_a_shield_field_the_server_did_not_serve_is_never_posted_as_a_default(tmp_path):
+    """KI-582 (FIX-0364): Save must post the values the page read (or the person's changes), never a default
+    for a field it was not served — the page once posted a weakening the person never made."""
+    fields = [{"key": "enabled", "kind": "toggle", "label": "Engage"},
+              {"key": "sandboxed", "kind": "multi-pick", "label": "Sandbox", "options": [{"id": "a", "name": "A", "status": "supported"}]},
+              {"key": "protected", "kind": "lines", "label": "Protected"}]
+    view = {"file-shield": {"mode": {"enabled": True, "sandboxed": ["a"]}, "fields": fields}}
+    assert _render_settings(view, tmp_path)["payload"] == {"file-shield": {"enabled": True, "sandboxed": ["a"]}}
+    view = {"file-shield": {"mode": {"enabled": True, "sandboxed": ["a"], "protected": ["~/Vault"]}, "fields": fields}}
+    assert _render_settings(view, tmp_path)["payload"] == {"file-shield": {"enabled": True, "sandboxed": ["a"], "protected": ["~/Vault"]}}

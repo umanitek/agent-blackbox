@@ -1,0 +1,24 @@
+# Recorded on a real machine (fix wave L-W1, 2026-11-24): Ubuntu 24.04.5, kernel 7.0.0-43, systemd 255.4-1ubuntu8.18,
+# as the person over ssh: find $XDG_RUNTIME_DIR -maxdepth 4 \( -type s -o -type d \) -printf '%y %m %p\n' | sort
+d 0 /run/user/1000/systemd/inaccessible/dir
+d 700 /run/user/1000
+d 700 /run/user/1000/gnupg
+d 755 /run/user/1000/systemd
+d 755 /run/user/1000/systemd/generator.late
+d 755 /run/user/1000/systemd/generator.late/xdg-desktop-autostart.target.wants
+d 755 /run/user/1000/systemd/inaccessible
+d 755 /run/user/1000/systemd/propagate
+d 755 /run/user/1000/systemd/propagate/.os-release-stage
+d 755 /run/user/1000/systemd/units
+s 0 /run/user/1000/systemd/inaccessible/sock
+s 600 /run/user/1000/gnupg/S.dirmngr
+s 600 /run/user/1000/gnupg/S.gpg-agent
+s 600 /run/user/1000/gnupg/S.gpg-agent.browser
+s 600 /run/user/1000/gnupg/S.gpg-agent.extra
+s 600 /run/user/1000/gnupg/S.gpg-agent.ssh
+s 600 /run/user/1000/gnupg/S.keyboxd
+s 666 /run/user/1000/bus
+s 666 /run/user/1000/pk-debconf-socket
+s 666 /run/user/1000/snapd-session-agent.socket
+s 700 /run/user/1000/systemd/private
+s 775 /run/user/1000/systemd/notify

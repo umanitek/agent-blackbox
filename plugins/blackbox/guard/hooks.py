@@ -12,15 +12,17 @@ from __future__ import annotations
 import functools
 import json
 import logging
-from typing import Any, Callable, Optional
-from .. import audit, detection, killlist, overrides, shields
-from ..kernel import config as config_mod, constants
+from dataclasses import dataclass
+from typing import Any, Callable, Optional, TypedDict
+from .. import audit, detection, killlist, overrides, shields, watch
+from ..kernel import action_context, agent_hosts, config as config_mod, constants
 from ..kernel.config import BlackboxConfig
 from . import api_request, background, graph_rules
 from . import injection_sites
 from . import reporting
 from .reporting import blackbox_block_message
-from . import session_context
+from . import dependency_files, host_process, session_context
+from .activity import record_activity as _record_activity
 
 logger = logging.getLogger(__name__)
 
@@ -95,29 +97,46 @@ def _would_block(cfg: BlackboxConfig, findings: list[detection.Finding]) -> list
     are higher-churn / higher-FP than pinned package versions, so they are
     validated in audit mode first.
     """
+    # Refused in EVERY mode: Blackbox's own core (2026-11-20 — in Audit mode an agent could switch
+    # the guard off and was merely flagged for it) and what the person protected with File Shield
+    # (2026-11-21: their own explicit rule). Nothing else blocks unless Block mode is on.
+    always = [f for f in findings if f.matched in detection.ALWAYS_BLOCKED_MATCHES]
     if not cfg.block_enabled:
-        return []
-    return [
+        return always
+    return always + [
         f for f in findings
         if (f.confirmed or f.source in ("custom", "secret"))
         and getattr(f, "kind", None) not in (constants.KIND_VULNERABILITY, "historical", detection.KIND_FLAG_ONLY)
         and f.category != "ioc"
-        and cfg.meets_block_threshold(f.severity)
+        and cfg.meets_block_threshold(f.severity) and f not in always
     ]
 
 
 def _raw_findings(cfg: BlackboxConfig, rs: Any, tool_name: str, args: Any,
-                  active: shields.ShieldsSnapshot) -> list[detection.Finding]:
-    """All raw findings for one call, gathered here so new detectors join without growing the hook body."""
+                  active: shields.ShieldsSnapshot, notes: Optional[list[str]] = None) -> list[detection.Finding]:
+    """All raw findings for one call, gathered here so new detectors join without growing the hook body.
+    What could not be checked is added to *notes* (None: not kept)."""
+    notes = [] if notes is None else notes
     isolated = detection.run_isolated   # each check on its own: one that raises costs only its findings
     raw = detection.detect_all(tool_name, args, rs, discover=cfg.discover)
     raw += isolated("detect_custom_fileaccess",
                     lambda: detection.detect_custom_fileaccess(tool_name, args, cfg.protected_paths))
     raw += shields.check(tool_name, args, active)
     # KI-473: an agent never switches its guard off.
-    raw += isolated("detect_guard_tamper", lambda: detection.detect_guard_tamper(tool_name, args))
+    raw += isolated("detect_guard_tamper", lambda: detection.detect_guard_tamper(tool_name, args, cfg))
+    # Nor switches any agent's hooks off, its own or another's, user-level or in a project (R8, High).
+    raw += isolated("detect_hook_switch_off", lambda: detection.detect_hook_switch_off(tool_name, args))
+    # Nothing an agent leaves may start by itself later, outside its checks (the sandbox's own list).
+    raw += isolated("detect_persistence_write", lambda: detection.detect_persistence_write(tool_name, args))
+    # An agent's sudo write to the machine's own folders: refused in Block mode (the Linux sudo policy).
+    raw += isolated("detect_privileged_write", lambda: detection.detect_privileged_write(tool_name, args))
+    # An agent asking for root is made visible (a flag, never a refusal: D7 leaves sudo alone).
+    raw += isolated("detect_elevation", lambda: detection.detect_elevation(tool_name, args))
     # R14: curator-signed DISABLE / WARN, last-good list.
     raw += isolated("kill_list", lambda: _kill_list_findings(rs, tool_name, args))
+    raw += isolated("watch", lambda: watch.check(tool_name, args, agent=action_context.acting_agent()))   # flag first, then block
+    # KI-595: the manifests and lockfiles an install installs from, and packages a write adds to them.
+    raw += isolated("dependency_files", lambda: dependency_files.before_call(cfg, rs, tool_name, args, notes))
     return raw
 
 
@@ -145,6 +164,84 @@ def _with_normalised_call(hook: Callable[..., Any]) -> Callable[..., Any]:
     return wrapper
 
 
+@dataclass(frozen=True)
+class _Judgement:
+    """What the checks make of one tool call: the rules they ran on (and how they were read),
+    the findings worth flagging, and the ones that block. Built once by :func:`_judge` for both
+    the Hermes hook and :func:`tool_call_verdict`, so the two can never disagree."""
+
+    cfg: BlackboxConfig
+    rules: Any
+    graph_evidence: Any
+    findings: list[detection.Finding]
+    blocking: list[detection.Finding]
+    notes: list[str]   # what could not be checked ("dependencies not checked: …"), said on the session
+
+
+def _judge(tool_name: str, args: Any, cwd: str = "", agent: str = "") -> _Judgement:
+    """The checks on one call *agent* runs in the folder *cwd* (``kernel.action_context``: a script a
+    command names by a relative path is the one there; a folder rule scoped to an agent is its own)."""
+    cfg = _config()
+    rs, graph_evidence = graph_rules.detection_rules(cfg, tool_name, args)
+    notes: list[str] = []
+    with config_mod.one_entry_read(), action_context.working_in(cwd, agent):   # one read: shields and watch rules
+        active = shields.snapshot()   # every shield's mode, read once for this call
+        findings = reporting._flag_worthy(cfg, _raw_findings(cfg, rs, tool_name, args, active, notes), active)
+    return _Judgement(cfg, rs, graph_evidence, findings, _blocking(cfg, findings), notes)
+
+
+class ToolCallVerdict(TypedDict):
+    """:func:`tool_call_verdict`'s (and :func:`after_tool_call_verdict`'s) answer. ``findings``
+    are ``Finding.to_dict()`` rows; ``blocked`` the identifiers that block; ``decision`` is "",
+    "flag", "flag (local override)" or "block"; ``message`` what the agent is told when blocked
+    ("" otherwise); ``notes`` what could not be checked, for the caller to record on its session."""
+
+    findings: list[dict[str, Any]]
+    blocked: list[str]
+    decision: str
+    message: str
+    notes: list[str]
+
+
+@_with_normalised_call
+def tool_call_verdict(tool_name: str = "", args: Any = None, cwd: str = "", agent: str = "", **_: Any) -> ToolCallVerdict:
+    """What Blackbox makes of one tool call, for a runtime that is not Hermes (2026-11-20).
+
+    The OpenClaw plugin asks this through the dashboard (``POST /api/guard/verdict``) before
+    each tool call, so an OpenClaw agent is judged by the SAME checks as a Hermes agent — the
+    verified threat graph, the protected paths, every shield, the kill list, local overrides —
+    instead of by a second copy of them. Nothing is recorded or reported here: the asking
+    runtime records the finding under its own agent's name. Raises on failure (the caller then
+    falls back to its own built-in checks).
+
+        verdict = guard.tool_call_verdict("exec", {"command": "npm install left-pad"})
+        verdict["decision"], verdict["blocked"], verdict["message"]
+
+    *cwd*: the folder the agent runs the call in (its hook names it), so a script a command names
+    by a relative path is the right file (``kernel.action_context``). *agent*: the asking agent's
+    catalogue id (``claude-code``), so a folder rule the person scoped to it applies.
+    """
+    judged = _judge(tool_name, args, cwd, agent)
+    decision = _decision(judged.cfg, judged.findings, judged.blocking) if judged.findings else ""
+    return ToolCallVerdict(findings=[finding.to_dict() for finding in judged.findings],
+                           blocked=[finding.identifier for finding in judged.blocking], decision=decision,
+                           message=blackbox_block_message(judged.blocking) if judged.blocking else "", notes=judged.notes)
+
+
+@_with_normalised_call
+def after_tool_call_verdict(tool_name: str = "", args: Any = None, cwd: str = "", **_: Any) -> ToolCallVerdict:
+    """What Blackbox makes of one tool call AFTER it ran, for a runtime that is not Hermes: the
+    packages an install added to its lockfile (``dependency_files.after_check``, the same check
+    the Hermes post hook runs — KI-602). Never blocks (it already ran): a listed package that
+    landed is a flag, critical when verified, whose advice names the removal. Records nothing.
+
+        verdict = guard.after_tool_call_verdict("terminal", {"command": "npm install express"}, cwd="/app")
+    """
+    check = dependency_files.after_check(_config(), tool_name, args, cwd)
+    return ToolCallVerdict(findings=[finding.to_dict() for finding in check.findings], blocked=[],
+                           decision="flag" if check.findings else "", message="", notes=check.notes)
+
+
 @_with_normalised_call
 def on_pre_tool_call(
     tool_name: str = "",
@@ -159,21 +256,16 @@ def on_pre_tool_call(
     Only CONFIRMED graph findings can block; discovery candidates only alert.
     """
     try:
-        cfg = _config()
-        rs, graph_evidence = graph_rules.detection_rules(cfg, tool_name, args)
+        judged = _judge(tool_name, args, host_process.facts()["cwd"], agent_hosts.HERMES_ID)   # this Hermes process's folder
+        cfg, findings, blocking = judged.cfg, judged.findings, judged.blocking
+        dependency_files.record_notes(judged.notes, tool_name, session_id)
         _record_activity(tool_name, args)   # visibility: log every file-access tool call (best-effort)
-        active = shields.snapshot()   # every shield's mode, read once for this call
-        raw = _raw_findings(cfg, rs, tool_name, args, active)
-        findings = reporting._flag_worthy(cfg, raw, active)
         detail = {"tool_name": tool_name, "session_id": session_id, "task_id": task_id,
-                  "tool_call_id": tool_call_id, "args": audit.redact(args), "graph_read": graph_evidence}
-        # Build conversation context only when a finding needs it.
-        if findings:
+                  "tool_call_id": tool_call_id, "args": audit.redact(args), "graph_read": judged.graph_evidence}
+        if findings:   # conversation context only when a finding needs it
             ctx = session_context._tool_context(session_id, args)
             if ctx:
                 detail["context"] = ctx
-        blocking = _blocking(cfg, findings)
-        if findings:
             # KI-189: the audit row says what the hook DID, not only what it saw —
             # R10's "a revoked threat blocked N actions here" counts these.
             detail.update(_decision_detail(cfg, findings, blocking))
@@ -182,7 +274,7 @@ def on_pre_tool_call(
         # OSV auto-discovery runs off the blocking path so a network lookup
         # never delays or breaks the tool call.
         if cfg.discover and cfg.osv_lookup:
-            background._spawn_osv_discovery(cfg, rs, tool_name, args)
+            background._spawn_osv_discovery(cfg, judged.rules, tool_name, args)
         if blocking:
             return {"action": "block", "message": blackbox_block_message(blocking)}
         return None
@@ -201,33 +293,6 @@ def _recorded_findings() -> set[tuple[str, str]]:
     """``(identifier, evidence)`` of the findings already in Blackbox's log (the log's own cache)."""
     rows = audit.read_findings(limit=1000)
     return {(str(row.get("identifier") or ""), str(row.get("evidence") or "")) for row in rows}
-
-
-def _record_activity(tool_name: str, args: Any) -> None:
-    """Log what the agent touched to the visibility trail (fail-open).
-
-    Covers both the dedicated file tools and the shell channel (parsing reads,
-    downloads, and dependency installs out of commands). Visibility, not
-    detection: everything is logged regardless of whether it flags.
-    """
-    try:
-        access = detection.file_access_arg(tool_name, args)
-        if access:
-            audit.record_file_access(access["tool"], access["path"], access["mode"])
-            return
-        if (tool_name or "").strip().lower() not in detection.SHELL_TOOLS:
-            return
-        command = detection.command_from_args(tool_name, args)
-        if not command:
-            return
-        for path in detection.parse_shell_reads(command):
-            audit.record_file_access("shell", path, "read")
-        for url in detection.parse_downloads(command):
-            audit.record_file_access("shell", url, "download")
-        for dep in detection.parse_dependency_installs(command):
-            audit.record_dependency(dep["ecosystem"], dep["name"], dep.get("version", ""), "shell")
-    except Exception as exc:  # pragma: no cover - fail open
-        logger.debug("blackbox: activity visibility log failed: %s", exc)
 
 
 def on_post_tool_call(
@@ -255,6 +320,8 @@ def on_post_tool_call(
         )
     except Exception as exc:  # pragma: no cover - fail open, said out loud (FIX-0160)
         reporting.hook_failed("post_tool_call", exc, tool_name=tool_name, consequence="the result was not audited")
+    # KI-595: what an install added to its lockfile (a named install's transitive packages). Fail-open.
+    dependency_files.after_call(_config, tool_name, args, session_id, tool_call_id)
 
 
 
@@ -276,7 +343,10 @@ def on_pre_api_request(**kwargs: Any) -> None:
         if _is_blackbox_assistant():   # it reads Blackbox's own findings back: an old one is not a new attack
             findings = api_request.drop_record_echoes(findings, sources, api_request.tool_output_texts(sources),
                                                       _recorded_findings())
-        findings = reporting._flag_worthy(cfg, findings, shields.snapshot())
+        active = shields.snapshot()
+        # A prompt that names an item the person protected (File Shield): flagged, never kept.
+        findings += shields.prompt_findings([part for context, part in sources if context == "in-user-prompt"], active)
+        findings = reporting._flag_worthy(cfg, findings, active)
         detail = {
             "graph_read": graph_evidence,
             "session_id": kwargs.get("session_id"),
@@ -301,7 +371,16 @@ def on_pre_api_request(**kwargs: Any) -> None:
 
 def on_session_start(session_id: str = "", **kwargs: Any) -> None:
     try:
-        audit.record(event="session_start", detail={"session_id": session_id})
+        # The Hermes agent picked for File Shield's sandbox: its terminal tool's shells and its
+        # execute_code Python start inside it.
+        cover = shields.enter_hermes_process()
+        # Where it works, its process, how it started, its model and what of it is sandboxed:
+        # the instance tree's facts (KI-572, KI-580).
+        audit.record(event="session_start", detail={"session_id": session_id, "model": str(kwargs.get("model") or "")[:80],
+                                                     "shells_sandboxed": cover.shells is True,
+                                                     "code_sandboxed": cover.execute_code is True,
+                                                     "sandbox_note": str(cover.note)[:200],
+                                                     **host_process.facts(str(kwargs.get("platform") or ""))})
         cfg = _config()
         background._spawn_auto_attach(cfg)
         from . import semantic_review

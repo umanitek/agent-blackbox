@@ -23,7 +23,7 @@ from pathlib import Path
 import pytest
 
 DASHBOARD = Path(__file__).resolve().parents[2] / "plugins" / "blackbox" / "dashboard"
-SCRIPT = (DASHBOARD / "playground_routes" / "playground.js").read_text(encoding="utf-8")
+SCRIPT = (DASHBOARD / "static" / "playground.js").read_text(encoding="utf-8")
 INDEX = (DASHBOARD / "static" / "index.html").read_text(encoding="utf-8")
 
 
@@ -37,7 +37,7 @@ def test_the_script_parses():
     node = shutil.which("node")
     if node is None:
         pytest.skip("node is not installed")
-    result = subprocess.run([node, "--check", str(DASHBOARD / "playground_routes" / "playground.js")],
+    result = subprocess.run([node, "--check", str(DASHBOARD / "static" / "playground.js")],
                             capture_output=True, text=True, check=False)
     assert result.returncode == 0, result.stderr
 

@@ -1,0 +1,26 @@
+GEM
+  remote: https://rubygems.org/
+  specs:
+    evil-gem (1.0.0)
+    nokogiri (1.16.2-x86_64-darwin)
+      racc (~> 1.4)
+    racc (1.7.3)
+    rails-ish (7.1.0)
+      evil-gem (>= 1.0)
+      nokogiri (>= 1.6)
+
+GIT
+  remote: https://github.com/someone/private-gem.git
+  revision: abc123
+  specs:
+    private-gem (0.1.0)
+
+PLATFORMS
+  x86_64-darwin-23
+
+DEPENDENCIES
+  private-gem!
+  rails-ish (~> 7.1)
+
+BUNDLED WITH
+   2.5.6

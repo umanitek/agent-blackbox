@@ -2,7 +2,11 @@
 
 A **shield** is a named, opt-in protection pack: one kind of user (a crypto trader, say) switches
 it on and gets a set of extra rules made for them. **Trader Shield** is the first. It keeps an AI
-agent away from crypto wallets, seed phrases and keys.
+agent away from crypto wallets, seed phrases and keys. **Network Shield** is the second: it keeps
+AI agents to the hosts the user allows, shows what talks to the internet, and — through the system
+protection helper (`blackbox-netd`, a small root daemon) — refuses malicious domains and addresses
+for every app, cuts connections, locks SSH and watches who is in the machine. An add-on may
+add richer views on top (see Add-ons below).
 
 This folder holds everything a shield is. Blackbox's core (the hooks, the dashboard and the
 settings) never names a shield or a wallet; it asks the **registry** in `__init__.py`. Adding a
@@ -18,7 +22,24 @@ the code.
 shields/
 ├── __init__.py        the registry: snapshot · check · allows · statuses · events · settings_validators
 ├── contract.py        what a shield IS: the Shield record and the typed records it answers with
+├── event_records.py   the records of a shield's events report (re-exported by contract.py)
+├── json_records.py    how every record becomes plain JSON (JsonValue, as_json helpers)
+├── shield_api.py      a shield's own endpoints (ShieldApi) and what the dashboard injects (ShieldContext)
 ├── packs.py           one loader for any shield's packs and browsers.json (validate, then use)
+├── extensions.py      the extension point: an add-on beside the plugin adds shields and more of a shield
+├── network/           Network Shield
+│   ├── __init__.py    NETWORK = Shield(...); __all__ = what an add-on may use
+│   ├── mode.py        its setting (shields.network-shield)
+│   ├── helper.py      whether the system protection helper is installed (needs-helper)
+│   ├── lockdown.py    agent network lockdown and the block list, in the guard
+│   ├── monitor/       see: traffic (nettop + ps), SSH watch, remote access, exposure, posture, signatures
+│   ├── protect/       act: the helper's plan, public block lists, Lock remote access, posture fixes, tamper guard
+│   ├── respond/       events, alerts and the Remote access page's actions
+│   ├── system.py      CPU, memory, disks, network interfaces (psutil)
+│   ├── addresses.py   which graph addresses may be acted on (public ones only)
+│   ├── api.py · system_api.py   every endpoint, the helper's plan and report included
+│   ├── status.py      the card: active only while the helper reports it
+│   ├── events.py · lists/ · attacks.json · page/
 └── trader/            Trader Shield
     ├── __init__.py    TRADER = Shield(...): wires its parts together
     ├── mode.py        its setting (shields.trader), and the old keys it still reads
@@ -49,6 +70,7 @@ A `Shield` is a **record of plain functions**, not a class to subclass (the Stra
 | `finding_kinds` · `capabilities` | What it can find, and what it covers beyond packs |
 | `packs` · `page` · `attacks` · `browser_roots` | Where its data lives |
 | `detectors` | The detectors that serve its pack kinds |
+| `api` | Optional named endpoints beyond the card and events, served at `GET`/`POST /api/shields/<id>/api/<name>` with a `ShieldContext` (the verified network lists, the assistant, the mode) the dashboard injects |
 
 ## How one action is checked
 
@@ -122,8 +144,8 @@ writes `shields.trader` and removes them.
    { "id": "rabby", "name": "Rabby", "kind": "browser-extension", "status": "planned", "order": 110 }
    ```
 
-   A `planned` pack is enough to show the wallet as **coming soon** in Settings. To make it
-   `supported`, add `verified` (the date you checked it on the real software) and `source`
+   A `planned` pack is loaded but never shown (launch-first: Settings and the page list only
+   wallets Trader Shield protects today). To make it `supported`, add `verified` (the date you checked it on the real software) and `source`
    (where you checked it), plus the block for its kind:
 
    | `kind` | Block | Example |
@@ -146,9 +168,9 @@ writes `shields.trader` and removes them.
 5. **Regenerate the OpenClaw list**, which is generated from the packs:
    `uv run python scripts/gen_openclaw_wallets.py`, then commit
    `integrations/openclaw/src/generated/wallets.json` (it is git-ignored, so `git add -f`).
-6. **Run the tests** below. If you changed what Settings or the page lists as coming soon,
-   update `test_settings_coming_soon_is_unchanged` / `test_page_coming_next_is_unchanged`
-   in the same commit, on purpose.
+6. **Run the tests** below. Nothing is ever listed as coming soon: Settings and the page show
+   only supported wallets (`test_settings_offers_only_supported_wallets`,
+   `test_the_page_promises_nothing_that_is_not_out`).
 
 Users who saved their wallet list before the new wallet existed keep their saved list. The card
 shows the new wallet under **new since you last saved**, so it is not switched on behind their
@@ -194,3 +216,24 @@ agent's call is read with `kernel.bounded_files.read_small_text(..., nofollow=Tr
 
 Run the whole Blackbox suite before a commit:
 `uv run pytest tests/plugins/test_blackbox_*.py tests/test_blackbox_*.py`.
+
+
+## Add-ons
+
+An add-on is a package folder beside the plugin, `<Hermes plugins>/<name>/`, that declares itself
+with a manifest file, `blackbox-addon.json`, holding `{"extends": "blackbox"}`
+(`kernel.addons.MANIFEST`). Every declared add-on is found on the registry's first use
+(`extensions.py`), in name order, and its `register(registrar)` is called. A folder without the
+manifest is never loaded, and self-protection guards each add-on folder and the manifest name. It reaches the plugin only through its package entries
+(`from ..blackbox import shields`) and may:
+
+* `registrar.register_shield(shield)` — a whole shield of its own;
+* `registrar.extend(ShieldExtension(shield_id=..., ...))` — more of a plugin shield: endpoints
+  merged into its API, options it unlocks (`unlocks`), detectors (with the identifier patterns
+  they claim), events, a card decorator, and its own packs + page + attack table together;
+* `registrar.add_routes(register_routes)` — dashboard routes (`register_routes(app)`).
+
+An add-on that fails to load contributes nothing (`extensions.problems()` says why); an extension's
+detector, card or events that raise add nothing for that call. Network Shield's
+protections do not need the add-on — they need the system protection helper; an add-on builds on
+the shield through `shields.network`'s `__all__` (its API, the helper's plan, the signature reader).

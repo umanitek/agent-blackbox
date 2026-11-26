@@ -1,0 +1,29 @@
+version = 1
+requires-python = ">=3.11"
+
+[[package]]
+name = "certifi"
+version = "2024.2.2"
+source = { registry = "https://pypi.org/simple" }
+
+[[package]]
+name = "evil-pkg"
+version = "0.1.0"
+source = { registry = "https://pypi.org/simple" }
+
+[[package]]
+name = "requests"
+version = "2.32.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "certifi" },
+    { name = "evil-pkg" },
+]
+
+[[package]]
+name = "shop"
+version = "1.0.0"
+source = { editable = "." }
+dependencies = [
+    { name = "requests" },
+]

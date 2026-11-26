@@ -237,6 +237,13 @@ def register(app: Any, swr: Cache) -> None:
     from fastapi.responses import FileResponse, JSONResponse
 
     register_pages(app)
+    from . import api_routes
+    api_routes.register(app)   # each shield's own endpoints: /api/shields/{id}/api/{name}
+    for register_routes in shields.addon_routes():   # an installed add-on's own routes (shields.extensions)
+        try:
+            register_routes(app)
+        except Exception:   # an add-on never takes the dashboard down: its routes are left out
+            logger.warning("blackbox: add-on routes could not be added", exc_info=True)
 
     @app.get("/shields.js")
     def shields_script() -> Any:

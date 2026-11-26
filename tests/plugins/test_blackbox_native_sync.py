@@ -323,3 +323,25 @@ def test_the_successor_subscription_is_asked_only_while_not_yet_subscribed(monke
     for _poll in range(4):
         run._subscribe()
     assert run.subscribed and len(asked) == 2   # the failed attempt and the one that succeeded; never again
+
+
+# ------------------------------------------------------------------ the profile before the first start
+
+
+def test_the_installer_writes_the_node_profile_before_the_service_first_starts_the_node(dkg_home, tmp_path, monkeypatch):
+    """KI-541 (E2E full5 2026-11-22): the first sync after a fresh install found config.json still on
+    the installer's own profile, rewrote it and restarted the just-started node. The installer now
+    runs `blackbox sync --node-profile-only` before registering the node's service: the profile is
+    written, nothing is restarted, nothing is transferred — and the first sync then has nothing to change."""
+    dkg_bin = tmp_path / "bin" / "dkg"
+    dkg_bin.parent.mkdir()
+    dkg_bin.write_text("#!/bin/sh\n", encoding="utf-8")
+    cfg = _cfg(dkg_home, dkg_bin=str(dkg_bin))
+    sync_entry = load_blackbox("sync")
+    monkeypatch.setattr(sync_entry, "load_blackbox_config", lambda: cfg)
+    monkeypatch.setattr(managed_node, "_restart_managed_dkg", lambda _cfg: pytest.fail("restarted the node"))
+    args = argparse.Namespace(node_profile_only=True, wait=False, timeout=3600, require_rules=False)
+    assert sync_entry.cmd_sync(args) == 0
+    persisted = json.loads((dkg_home / "config.json").read_text(encoding="utf-8"))
+    assert persisted["vmReconcilerEnabled"] is True and persisted["syncSharedMemoryOnConnect"] is True
+    assert managed_node._set_persisted_dkg_sync_state(cfg) is False   # the first sync finds it right

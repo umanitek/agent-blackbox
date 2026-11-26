@@ -37,10 +37,12 @@
   <ol>
     <li><a href="#overview">What Blackbox is</a></li>
     <li><a href="#protection">Built-in protection</a></li>
+    <li><a href="#packages">What Blackbox checks for packages</a></li>
     <li><a href="#check">How a check works</a></li>
     <li><a href="#flows">The four flows</a></li>
     <li><a href="#decisions">Block, flag or allow</a></li>
     <li><a href="#graph">The threat graph</a></li>
+    <li><a href="#agents">What Blackbox protects</a></li>
   </ol>
   <p class="toc-title">Shields</p>
   <ol id="toc-shields">
@@ -125,6 +127,18 @@
   </div>
 </section>
 
+<section id="packages" class="doc" data-keywords="packages dependencies npm pip pypi uv poetry cargo gem lockfile manifest package-lock requirements transitive supply chain install">
+  <h2>What Blackbox checks for packages</h2>
+  <p>Every package Blackbox sees is checked against the same threat graph, in the same tiers: a package the <b>verified</b> graph lists is blocked (in block mode), one only the community lists is flagged.</p>
+  <div class="cards">
+    <article class="card"><h3>Named installs</h3><p>The packages written in an install command — <code>npm install express</code>, <code>pip install requests==2.32.3</code>, <code>uv add</code>, <code>cargo add</code>, <code>gem install</code>, and runners such as <code>npx</code>, <code>pnpm dlx</code> and <code>bunx</code> — are checked before the command runs.</p></article>
+    <article class="card"><h3>Lockfiles and manifests</h3><p>An install that names no package — <code>npm install</code>, <code>npm ci</code>, <code>pnpm install</code>, <code>yarn</code>, <code>bun install</code>, <code>pip install -r</code>, <code>pip install .</code>, <code>uv sync</code>, <code>uv pip sync</code>, <code>poetry install</code>, <code>pipenv install</code>, <code>cargo build</code>, <code>bundle install</code> — is checked by the files it installs from, in the folder it runs in: package-lock.json, npm-shrinkwrap.json, pnpm-lock.yaml, yarn.lock, bun.lock, requirements files (with their <code>-r</code> includes), uv.lock, poetry.lock, Pipfile.lock, pyproject.toml, Cargo.lock and Gemfile.lock. A block names the package, its version, the file and the chain that pulled it in, such as <code>express → body-parser → bad-pkg@1.2.3</code>. With no lockfile, package.json, pyproject.toml and Pipfile hold <b>ranges, not exact versions</b>: only whole-package rules and exact pins can match them, and Blackbox says so.</p></article>
+    <article class="card"><h3>Transitive dependencies</h3><p>What a lockfile pins is checked before the install, all the way down the tree. A named install with no lockfile yet can only be seen after it runs: Blackbox then reads the lockfile the install wrote and checks every package it added. A verified-listed package that landed is a critical alert that names the command to remove it and warns that its install scripts may already have run. <b>Before an install, Blackbox can only see what a lockfile already pins.</b></p></article>
+    <article class="card"><h3>Writes to these files</h3><p>An agent writing or editing package.json, a lockfile or a requirements file is judged at the write by the packages it adds: a verified-listed one blocks the write, a community-listed one flags it.</p></article>
+    <article class="card"><h3>What it cannot do</h3><p>It recognises <b>known-bad</b> packages only — not new malware nobody has listed yet. The verified graph's package data is a July 2026 snapshot until Umanitek's feed resumes. The OSV.dev lookup runs in the background for named, pinned installs and never blocks. A file it cannot read (too large, a symlink, unparsable, a binary bun.lockb, a git or URL source) lets the install through with a note on the session ("dependencies not checked: …") — never silently. The agent sandbox, not this check, is the backstop for unknown malware.</p></article>
+  </div>
+</section>
+
 <section id="check" class="doc" data-keywords="check pipeline hook intercept name match decide record">
   <h2>How a check works</h2>
   <p>Each step below happens for every single action, in a fraction of a millisecond. Press a step to read what it does.</p>
@@ -171,6 +185,25 @@
     <article class="card"><h3>Verified graph</h3><p>Curated by Umanitek. Only its curator can write to it. Its threats may block. <code>blackbox status</code> shows how many of its assets are on your machine.</p></article>
     <article class="card"><h3>Community graph</h3><p>A separate graph where Blackbox users can share sightings — only if they choose to. Community findings only flag, never block.</p></article>
   </div>
+</section>
+
+<section id="agents" class="doc" data-keywords="agents claude code codex cursor gemini copilot windsurf devin cline opencode hooks sandbox sub-agents profiles tested versions coverage">
+  <h2>What Blackbox protects</h2>
+  <p>For each coding agent: where Blackbox's hooks are, every way the agent can be started and whether its hooks run there, what was tested on a real machine, and what is not covered yet. Three layers, from lightest to deepest.</p>
+  <div id="agent-cards">Reading the agent list…</div>
+</section>
+
+<section id="agent-sandbox" class="doc" data-keywords="sandbox agent sudo setuid top crontab ps homebrew brew open osascript limits default">
+  <h2>The agent sandbox and its limits</h2>
+  <p>Agents run inside Blackbox's sandbox: they can't use sudo, change their own hook settings or your shell startup files, or reach protected items. Turn off per agent if a tool you need doesn't work (File Shield's settings; turning one off asks you first). The sandbox is meant to be on by default for every agent Blackbox finds, keeping any agent you took out; that default is switched on only after a full system-level test passes.</p>
+  <ul>
+    <li><b>sudo and setuid tools</b> (<code>sudo</code>, <code>su</code>, <code>top</code>, <code>crontab -l</code>): macOS doesn't allow setuid programs inside the agent sandbox; run them in your own terminal. <code>ps</code> works from the sandbox's own copy.</li>
+    <li><b>Homebrew installs</b>: Homebrew sandboxes its own installs, and two sandboxes can't nest, so Blackbox installs for the agent: official packages by name only, checked against the threat rules, run as you and reported to you (the sandbox permission <i>Homebrew installs</i>: allow, ask each time, or block). Homebrew's own install scripts then run outside the sandbox, as when you run <code>brew</code> yourself.</li>
+    <li><b>Sandbox permissions</b>: what an agent inside the sandbox may do beyond your files — global installs, your tool folders, opening links and apps, AppleScript, stopping a program, Docker, services on this Mac, the clipboard — is a list on File Shield's page: block, ask each time, or allow, for every agent, one agent or one project. Turning one up asks you first; what Blackbox itself keeps closed (its own files, your startup places, ssh into this Mac) is never unlocked.</li>
+    <li><b>Opening or driving other apps</b> (<code>open -a</code>, <code>osascript</code>, Automator, Shortcuts) is refused: the other app would act outside the sandbox.</li>
+    <li><b>A folder holding a protected item</b> (<code>grep -r ~</code>, a zip of <code>~/Documents</code>) is not swept whole: work on its subfolders.</li>
+  </ul>
+  <p>When the sandbox refuses something, the agent is told "Blackbox's sandbox refused this (…)" and the refusal counts on the session.</p>
 </section>
 
 <section id="shields" class="doc" data-keywords="shields concept industry layer extend pack">
@@ -252,5 +285,6 @@
 </main>
 </div>
 <script src="/docs/assets/docs.js" defer></script>
+<script src="/docs/assets/agents.js" defer></script>
 </body>
 </html>

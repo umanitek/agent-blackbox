@@ -4,10 +4,8 @@
 plain callables (composition, no base class); the functions here fan a call out to
 every shield and apply the rules no shield may opt out of:
 
-* ``snapshot()`` reads every shield's mode ONCE; the hooks take one snapshot per call
-  and hand it to ``check`` and ``allows``. Nothing here reads config on its own
-  behalf — a mode is read only by the shield's own ``mode()``, only in ``snapshot()``
-  and the dashboard views.
+* ``snapshot()`` reads every shield's mode ONCE; the hooks take one snapshot per call and hand it
+  to ``check`` and ``allows``. A mode is read only by the shield's own ``mode()``.
 * ``check()`` runs every ENABLED shield's ``detect`` and marks each finding
   ``source="secret"`` (local only: the community gate refuses that source); a finding
   whose ``fields["pack"]`` names no pack of its shield is dropped, and a shield whose
@@ -17,8 +15,11 @@ every shield and apply the rules no shield may opt out of:
   ``claims`` or ``allows`` raises is read as "claims and refuses" — opt-in
   protection fails toward OFF.
 
-Packs and browser roots are loaded at import (never on the hot path) and loading
-never raises: a broken pack is ``unavailable`` with its reason, the rest load.
+Packs and browser roots are loaded once — the plugin's own shields' at import, an add-on's
+changes on the registry's first use — never on the hot path, and loading never raises: a broken pack is ``unavailable`` with its reason, the rest
+load. That first use also finds any add-on installed beside the plugin (:mod:`.extensions`, the
+extension point every add-on registers through): its own shields join the registry
+and its extensions are applied to the shields they extend.
 
 Usage::
 
@@ -31,59 +32,87 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+import threading
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional
 
 from ..detection import Finding
+from ..kernel.config import one_entry_read
 from ..kernel.settings import SettingsValidator
+from . import extensions, files, network, trader
+from .change_words import describe_change, shield_name
 from .contract import (
     BrowserRoot,
+    Capability,
     Pack,
-    Shield,
+    Shield, ShieldAlert,
     ShieldEvent,
     ShieldMode,
     ShieldsSnapshot,
     ShieldStatus,
 )
+from .extensions import Registrar, ShieldExtension
+from .alerting import alerts
+from .json_records import JsonValue
+from .local_only import LOCAL_ONLY_SOURCE, LOCAL_ONLY_SOURCES
+from .local_only import local_only as _local_only
+from .network.lockdown import hosts_in   # the hosts a call names, as Network Shield reads them (watch rules)
 from .packs import TABLE_MAX_BYTES, ShieldData, load_shield_data, read_json_file
 from .self_test import SELF_TESTS, SelfTest
-from . import trader
+from .shield_api import MAX_WRITE_BYTES as API_MAX_WRITE_BYTES
+from .shield_api import NAME_PATTERN as API_NAME_PATTERN
+from .shield_api import (
+    AssistantAnswer,
+    InstanceRef,
+    RawAnswer,
+    RunningAgent,
+    ShieldApi,
+    ShieldApiError,
+    ShieldContext,
+)
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
-    "BrowserRoot",
-    "Pack",
-    "SelfTest",
-    "Shield",
-    "ShieldEvent",
-    "ShieldMode",
-    "ShieldStatus",
-    "ShieldsSnapshot",
-    "all_shields",
-    "allows",
-    "attack_table",
-    "browser_roots",
-    "check",
-    "events",
-    "get",
-    "loaded_packs",
-    "pack_logo",
-    "self_tests",
-    "settings_validators",
-    "settings_view",
-    "snapshot",
-    "statuses",
+    "AGENT_SANDBOX", "API_MAX_WRITE_BYTES", "API_NAME_PATTERN", "PACKAGE_INSTALLS", "AssistantAnswer",
+    "BrowserRoot", "Capability", "InstanceRef", "Pack", "RawAnswer", "Registrar", "RunningAgent", "SelfTest", "Shield",
+    "ShieldAlert", "ShieldApi", "ShieldApiError", "ShieldContext", "ShieldEvent", "ShieldExtension",
+    "ShieldMode", "ShieldStatus", "ShieldsSnapshot", "addon_routes", "agent_sandbox_weakening",
+    "alerts", "all_shields", "allow_lists", "allows", "apply_sandbox_default", "attack_table",
+    "browser_roots", "call_api", "check", "describe_change", "enter_hermes_process", "events", "get", "hosts_in",
+    "loaded_packs", "pack_logo", "package_installs_weakening", "permission_refused", "prompt_findings", "reload_registry",
+    "remove_sandbox_placeholders", "run_hides_socket",
+    "self_tests", "settings_validators", "settings_view", "shield_name", "snapshot", "statuses",
+    "unlocked", "write_weakening",
 ]
 
-#: Every registered shield, in registration order. Registering one is one line here.
-_SHIELDS: tuple[Shield, ...] = (trader.TRADER,)
+#: File Shield's sandbox for the Hermes agent's own shells, at each Hermes session start (fail-open).
+enter_hermes_process = files.sandbox.enter_hermes_session
+#: Uninstall: the agent sandbox's still-empty startup placeholders taken back (Linux; KI-677).
+remove_sandbox_placeholders = files.sandbox.remove_placeholders
+#: File Shield's agent sandbox by default, on install, upgrade and attach (gated: ``sandbox.defaults``).
+apply_sandbox_default = files.sandbox.defaults.apply
+#: ``agent_packages``: Homebrew installs Blackbox makes for sandboxed agents; loosening it waits (approvals).
+PACKAGE_INSTALLS, package_installs_weakening = files.sandbox.packages.SECTION, files.sandbox.packages.setting_weakening
+#: ``agent_sandbox``: the sandbox permissions per agent and project; loosening them waits (approvals).
+AGENT_SANDBOX, agent_sandbox_weakening = files.sandbox.permissions.SECTION, files.sandbox.permissions.section_weakening
+#: A sandbox refusal an agent's hook saw: asks the person when the permission it means is on "ask"
+#: (a refused signal: the stop broker, with the process it named); where the helper does not report
+#: refusals (Linux), a refused write to Blackbox's or a startup place is counted as tamper (KI-693).
+permission_refused = files.on_refusal
+#: Whether the profile a sandboxed run started with hides an engine's socket (``<file>#<digest>``,
+#: the socket path): how a refused Docker connect is recognised from outside the sandbox (KI-685).
+run_hides_socket = files.sandbox.run_hides_socket
+
+#: The plugin's own shields, in registration order. Registering one is one line here; an add-on's
+#: shields and extensions join them on first use (:func:`_registry`).
+_BASE: tuple[Shield, ...] = (trader.TRADER, network.NETWORK, files.FILES)
+#: The plugin's own folder and package: where add-ons are looked for, and under which parent.
+_PLUGIN_DIR = Path(__file__).resolve().parent.parent
+_PLUGIN_PACKAGE = __name__.rpartition(".")[0]
 
 #: The block threshold an attack table is tested at when it names none (Blackbox's default).
 DEFAULT_TESTED_SEVERITY = "critical"
-
-#: The finding source every shield finding carries: never shared (community.NEVER_SHARED_SOURCES).
-LOCAL_ONLY_SOURCE = "secret"
 
 
 def _load_all(shields: Iterable[Shield]) -> dict[str, ShieldData]:
@@ -100,20 +129,58 @@ def _load_all(shields: Iterable[Shield]) -> dict[str, ShieldData]:
     return loaded
 
 
-_DATA: dict[str, ShieldData] = _load_all(_SHIELDS)
-#: Every pack id each shield loaded: a finding's ``fields["pack"]`` must be one of its shield's.
-_PACK_IDS: dict[str, frozenset[str]] = {shield_id: frozenset(pack.id for pack in data.packs)
-                                        for shield_id, data in _DATA.items()}
+#: The plugin's own shields' data, loaded at import as always (their code relies on it from then
+#: on: a shield's ``use_data`` hands it its packs); an add-on's changes load on first use.
+_BASE_DATA: dict[str, ShieldData] = _load_all(_BASE)
+_registry_lock = threading.Lock()
+#: The assembled registry: shields, each one's data, and each one's pack ids (built once).
+_built: dict[str, Any] = {}
+
+
+def _registry() -> dict[str, Any]:
+    """The registry, built on first use: add-ons found, shields assembled, their data loaded."""
+    if _built:
+        return _built
+    with _registry_lock:
+        if not _built:
+            extensions.load(_PLUGIN_PACKAGE, _PLUGIN_DIR)
+            shields = extensions.assemble(_BASE)
+            unchanged = {id(shield) for shield in _BASE}
+            data = {**{shield.id: _BASE_DATA[shield.id] for shield in shields if id(shield) in unchanged},
+                    **_load_all(shield for shield in shields if id(shield) not in unchanged)}
+            _built.update(shields=shields, data=data,
+                          pack_ids={shield_id: frozenset(pack.id for pack in item.packs) for shield_id, item in data.items()})
+    return _built
+
+
+def reload_registry() -> None:
+    """Forgets the assembled registry and the add-ons (tests; a changed add-on)."""
+    with _registry_lock:
+        _built.clear()
+        extensions.reset()
+        _BASE_DATA.update(_load_all(_BASE))   # each base shield's own data handed back to it
 
 
 def all_shields() -> tuple[Shield, ...]:
-    """Every registered shield, in registration order."""
-    return _SHIELDS
+    """Every registered shield, in registration order (the plugin's, then each add-on's)."""
+    return _registry()["shields"]
 
 
 def get(shield_id: str) -> Optional[Shield]:
     """The shield registered as *shield_id*, or None."""
-    return next((shield for shield in _SHIELDS if shield.id == shield_id), None)
+    return next((shield for shield in all_shields() if shield.id == shield_id), None)
+
+
+def addon_routes() -> list[Any]:
+    """Each add-on's route registrar (``register_routes(app)``), for the dashboard."""
+    _registry()
+    return extensions.route_registrars()
+
+
+def unlocked(shield_id: str) -> frozenset[str]:
+    """The options of *shield_id* an installed add-on makes available."""
+    _registry()
+    return extensions.unlocked(shield_id)
 
 
 def _mode_of(shield: Shield) -> ShieldMode:
@@ -125,8 +192,10 @@ def _mode_of(shield: Shield) -> ShieldMode:
 
 
 def snapshot() -> ShieldsSnapshot:
-    """Every shield paired with its mode, each read once — take one per hook call."""
-    return ShieldsSnapshot(entries=tuple((shield, _mode_of(shield)) for shield in _SHIELDS))
+    """Every shield paired with its mode, each read once — take one per hook call. The config is
+    read once for all of them (``kernel.config.one_entry_read``), however many shields there are."""
+    with one_entry_read():
+        return ShieldsSnapshot(entries=tuple((shield, _mode_of(shield)) for shield in all_shields()))
 
 
 def check(tool_name: str, args: Any, active: ShieldsSnapshot) -> list[Finding]:
@@ -143,14 +212,28 @@ def check(tool_name: str, args: Any, active: ShieldsSnapshot) -> list[Finding]:
             continue
         for finding in raised:
             pack = finding.fields.get("pack")
-            if pack is not None and pack not in _PACK_IDS.get(shield.id, frozenset()):
+            if pack is not None and pack not in _registry()["pack_ids"].get(shield.id, frozenset()):
                 logger.warning("blackbox: shield %s finding %s names unknown pack %r; dropped",
                                shield.id, finding.identifier, pack)
                 continue
-            if finding.source != LOCAL_ONLY_SOURCE:
-                logger.warning("blackbox: shield %s finding %s had source %r; made local-only",
-                               shield.id, finding.identifier, finding.source)
-            findings.append(dataclasses.replace(finding, source=LOCAL_ONLY_SOURCE))
+            findings.append(_local_only(shield.id, finding))
+    return findings
+
+
+def prompt_findings(texts: Iterable[str], active: ShieldsSnapshot) -> list[Finding]:
+    """Every enabled shield's flags for the prompts *texts* (``Shield.prompt_check``), each marked
+    local-only; a check that raises contributes nothing (fail-open)."""
+    findings: list[Finding] = []
+    for shield, mode in active.entries:
+        if not mode.enabled or shield.prompt_check is None:
+            continue
+        for text in texts:
+            try:
+                raised = shield.prompt_check(text, mode)
+            except Exception:   # a broken check contributes nothing (fail-open); the traceback says why
+                logger.warning("blackbox: shield %s prompt check failed", shield.id, exc_info=True)
+                continue
+            findings.extend(_local_only(shield.id, finding) for finding in raised)
     return findings
 
 
@@ -181,14 +264,35 @@ def self_tests() -> list[tuple[Shield, SelfTest]]:
 
 def settings_validators() -> tuple[SettingsValidator, ...]:
     """One settings validator per shield, for ``kernel.settings.write_settings(validators=...)``."""
-    return tuple(shield.validate for shield in _SHIELDS)
+    return tuple(shield.validate for shield in all_shields())
+
+
+def allow_lists() -> dict[str, frozenset[str]]:
+    """``{shield id: its allow-list options}`` — adding to one of these turns protection down;
+    on every other list option, removing an entry does (``approvals`` judges by this)."""
+    return {shield.id: shield.allow_lists for shield in all_shields()}
+
+
+def write_weakening(shield_id: str, name: str, body: Mapping[str, Any]) -> Optional[list[str]]:
+    """Why ``POST /api/shields/<shield_id>/api/<name>`` with *body* would turn protection down
+    (empty: it would not). None when that write has no judge — it never weakens anything. A
+    judge that fails answers that the change could not be checked: it asks rather than applies."""
+    shield = get(shield_id)
+    judge = shield.api.weakening.get(name) if shield is not None and shield.api is not None else None
+    if judge is None:
+        return None
+    try:
+        return list(judge(body))
+    except Exception:   # health: allow BLE001 -- an unreadable current state asks the person
+        logger.warning("blackbox shields: weakening judge %s/%s failed", shield_id, name, exc_info=True)
+        return [f"Change {shield.name} (Blackbox could not check whether it turns protection down)"]
 
 
 def settings_view() -> dict[str, Any]:
     """``{shield id: {mode, fields}}`` for the Settings page (the one view that shows personal options)."""
     return {shield.id: {"mode": _mode_of(shield).as_json(include_personal=True),
                         "fields": [item.as_json() for item in shield.settings_fields()]}
-            for shield in _SHIELDS}
+            for shield in all_shields()}
 
 
 def statuses() -> list[ShieldStatus]:
@@ -204,7 +308,7 @@ def events(shield_id: str) -> list[ShieldEvent]:
 
 def pack_logo(shield_id: str, pack_id: str) -> Optional[Path]:
     """The logo file of a usable pack, resolved through the registry only; None when it has none."""
-    data = _DATA.get(shield_id)
+    data = _registry()["data"].get(shield_id)
     pack = next((item for item in data.packs if item.id == pack_id), None) if data else None
     if pack is None or pack.status == "unavailable" or pack.logo is None:
         return None
@@ -214,14 +318,14 @@ def pack_logo(shield_id: str, pack_id: str) -> Optional[Path]:
 def loaded_packs(shield_id: str) -> tuple[Pack, ...]:
     """Every pack *shield_id* loaded, in display order (unavailable ones included, with their
     reason); empty for an unknown id."""
-    data = _DATA.get(shield_id)
+    data = _registry()["data"].get(shield_id)
     return data.packs if data else ()
 
 
 def browser_roots(shield_id: str) -> tuple[BrowserRoot, ...]:
     """Every browser folder rule *shield_id* loaded from its ``browsers.json``, in file order
     (a bad entry was dropped with a health reason); empty for an unknown id or a shield with none."""
-    data = _DATA.get(shield_id)
+    data = _registry()["data"].get(shield_id)
     return data.roots if data else ()
 
 
@@ -252,3 +356,26 @@ def _spoken_list(names: list[str]) -> str:
     if len(names) < 2:
         return "".join(names) or "no pack"
     return ", ".join(names[:-1]) + " and " + names[-1]
+
+
+def call_api(shield_id: str, method: str, name: str, context: ShieldContext, data: Any) -> JsonValue:
+    """Runs endpoint *name* of shield *shield_id*'s own API (:mod:`.shield_api`): a ``GET``
+    read with *data* as its query parameters, or a ``POST`` write with *data* as its body.
+
+    Raises :class:`ShieldApiError` 404 for an unknown shield or endpoint (or the wrong method),
+    and passes on the refusals the endpoint raises itself. Anything else an endpoint raises is
+    a 500 here: a shield never takes the dashboard down.
+    """
+    shield = get(shield_id)
+    api = shield.api if shield else None
+    handlers = (api.reads if method == "GET" else api.writes if method == "POST" else {}) if api else {}
+    handler = handlers.get(name)
+    if handler is None:
+        raise ShieldApiError(404, "unknown shield endpoint")
+    try:
+        return handler(context, data)
+    except ShieldApiError:
+        raise
+    except Exception:   # health: allow BLE001 -- a broken shield endpoint answers 500, never breaks the dashboard
+        logger.warning("blackbox shields: %s %s/%s failed", method, shield_id, name, exc_info=True)
+        raise ShieldApiError(500, "the shield could not answer") from None

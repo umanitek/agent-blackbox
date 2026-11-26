@@ -12,6 +12,9 @@ from _blackbox_loader import load_blackbox
 
 audit = load_blackbox("audit")
 constants = load_blackbox("kernel.constants")
+# Loaded with the module, so conftest's autouse fixture finds the guard's report queue and runs
+# the follow-up inline (the guard package's entry is lazy since L-W4: nothing loads it for us).
+load_blackbox("guard.report_queue")
 
 
 class _RecordingClient:
