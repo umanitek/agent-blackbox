@@ -42,6 +42,20 @@ def test_a_store_that_cannot_answer_is_one_high_finding_per_episode(home):
     assert alarm.check(LookupState(OK, "", 9100.0, 0, 9100.0), now=99999.0) is False
 
 
+def test_an_outage_that_ended_before_the_dashboard_looked_is_still_said_once(home, tmp_path):
+    """On bb-l7-u24 (L-W5 proof run) the store was OOM-killed and back while the dashboard was stopped:
+    the recorded state read "ok" again by the time the dashboard looked, and nothing was said."""
+    from plugins.blackbox.ruleset.live.health import LookupHealth
+    health = LookupHealth(tmp_path / "lookups.json")
+    health.record(False, "store did not answer", now=5000.0)
+    health.record(False, "store did not answer", now=5030.0)
+    health.record(True, now=5100.0)                                     # back before anyone looked
+    state = LookupHealth(tmp_path / "lookups.json").read()               # another process reads the file
+    assert not state.degraded and (state.ended_since, state.ended_until) == (5000.0, 5100.0)
+    assert alarm.check(state, now=6000.0) is True
+    assert "From " in _said()[0]["evidence"] and alarm.check(state, now=99999.0) is False
+
+
 def test_the_dashboards_background_look_raises_it(home, monkeypatch):
     seen = []
     monkeypatch.setattr(alarm, "check", lambda *a, **k: seen.append(1) or False)

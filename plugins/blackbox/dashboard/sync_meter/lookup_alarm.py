@@ -43,31 +43,46 @@ def _state_path():
     return constants.blackbox_home() / STATE_NAME
 
 
-def finding(reason: str, since: float) -> dict[str, Any]:
-    """The finding for an episode that began at *since* with *reason*."""
-    began = time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(since)) if since else "a moment ago"
+def _utc(at: float) -> str:
+    return time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(at))
+
+
+def finding(reason: str, since: float, until: float = 0.0) -> dict[str, Any]:
+    """The finding for an episode that began at *since* with *reason* (and ended at *until*, 0.0: still on)."""
+    began = _utc(since) if since else "a moment ago"
+    when = f"From {began} to {_utc(until)}" if until else f"Since {began}"
     return {"identifier": UNAVAILABLE_ID, "category": "dependency", "severity": "high", "title": TITLE,
             "matched": "threat-graph-unavailable", "source": "custom", "kind": "flag-only", "confirmed": False,
-            "evidence": f"Since {began}: {reason or 'the graph store did not answer'}"[:300],
+            "evidence": f"{when}: {reason or 'the graph store did not answer'}"[:300],
             "advice": ("Until the threat graph answers again, packages and addresses your agents use are not checked against "
                        "it. Check Blackbox's node and its store (`blackbox status`), then run `blackbox sync --wait`.")}
 
 
+def _episode(state: Any) -> Optional[tuple[float, float, str, int]]:
+    """``(since, until, reason, failures)`` of the episode to say: the one on now, else the last
+    one that ended (it may have begun and ended while no dashboard looked); None: none."""
+    if getattr(state, "degraded", False):
+        return float(state.since or 0.0), 0.0, str(state.reason or ""), int(state.failures or 0)
+    if float(getattr(state, "ended_since", 0.0) or 0.0):
+        return float(state.ended_since), float(state.ended_until or 0.0), str(state.ended_reason or ""), int(state.ended_failures or 0)
+    return None
+
+
 def check(health: Optional[Any] = None, now: Optional[float] = None) -> bool:
-    """Record the finding when the lookups are degraded and this episode was not said yet (and the
-    last one is :data:`MIN_INTERVAL_SECONDS` old). Fail-open: False on any error."""
+    """Record the finding for a degraded episode — on now, or over — that was not said yet (and the
+    last one said is :data:`MIN_INTERVAL_SECONDS` old). Fail-open: False on any error."""
     from ... import audit, ruleset   # late: the dashboard's look only
     try:
-        state = ruleset.live.HEALTH.read() if health is None else health
-        if not getattr(state, "degraded", False) or not constants.blackbox_home().is_dir():
+        episode = _episode(ruleset.live.HEALTH.read() if health is None else health)
+        if episode is None or not constants.blackbox_home().is_dir():
             return False
+        since, until, reason, failures = episode
         now = time.time() if now is None else now
         said = read_json_object(_state_path()) or {}
-        since = float(getattr(state, "since", 0.0) or 0.0)
         if said.get("since") == since or now - float(said.get("at") or 0.0) < MIN_INTERVAL_SECONDS:
             return False
-        audit.record(event=UNAVAILABLE_EVENT, findings=[finding(str(getattr(state, "reason", "")), since)],
-                     detail={"decision": "flag", "failures": int(getattr(state, "failures", 0) or 0)})
+        audit.record(event=UNAVAILABLE_EVENT, findings=[finding(reason, since, until)],
+                     detail={"decision": "flag", "failures": failures})
         write_json_object(_state_path(), {"since": since, "at": now}, what="the threat-graph alarm's record")
         return True
     except Exception:   # health: allow BLE001 -- fail open: the look goes on; status and the panel still say it
