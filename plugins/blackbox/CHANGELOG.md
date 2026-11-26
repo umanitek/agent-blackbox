@@ -108,6 +108,22 @@ that the two version fields agree.
   "Protect every agent, now and later".
 
 ### Fixed
+
+- **No false "running without Blackbox" alert when the sandbox starts an agent.** An agent started
+  through Blackbox's sandbox launcher can take longer than 20 s to send its first hook event on a
+  busy machine. Such a run now gets up to 90 s. A run whose hooks are switched off is still
+  reported at once, and the launcher's mark can only delay an alert, never remove it.
+- **The first threat-graph sync gives way to your own work.** The sync runs at a lower CPU and disk
+  priority, and the dashboard no longer copies the whole Hermes config on every settings read. The
+  DKG node gets more time to start on a busy machine, so it no longer restart-loops. The node
+  itself keeps its priority: it answers the hooks' threat-graph lookups.
+- **The Linux sandbox's network rules are in place before the agent starts.** On a busy machine,
+  the helper's agent rules waited on a slow dashboard. The agent started without them ("did not
+  apply this agent's network rules in time"). The helper now binds a new agent at once, and a
+  start waits up to 2 s for it.
+- **Linux: a stop Blackbox refuses names the right system.** The reason it never stops a system
+  process said "it is part of macOS" on Linux too. The Blackbox tests also no longer depend on the
+  machine that runs them (29 failed on a Linux runner).
 - `blackbox uninstall` also removes the system protection helper, first — your DNS and firewall
   go back to how they were before it (macOS asks for your admin password once).
 - Self-protection covers add-ons: each add-on folder beside the plugin (one that carries the `blackbox-addon.json` manifest, `kernel.addons.MANIFEST`) is guarded in every Hermes home like the plugin's own, and an add-on can declare its other places (`Registrar.protect_places`) — before, an agent could delete an add-on and silently remove the protection it brings.
@@ -143,7 +159,8 @@ that the two version fields agree.
 ### Changed
 
 - **Agents run inside Blackbox's sandbox by default.** On install, upgrade and `blackbox attach`
-  every agent Blackbox finds is picked for the agent sandbox (macOS), File Shield engaged. An agent
+  every agent Blackbox finds is picked for the agent sandbox (macOS, and Linux where the system
+  protection helper's `blackbox-sandbox` is installed), File Shield engaged. An agent
   you took out of the sandbox stays out, upgrades included; taking one out still asks you first; a
   File Shield you turned off stays off.
 - **Uninstall asks whether to remove the Hermes host Blackbox's installer set up.** On a machine
@@ -167,6 +184,21 @@ that the two version fields agree.
 
 ### Security
 
+- **Hermes no longer runs without Blackbox on a busy machine.** Hermes drops a plugin whose start
+  takes longer than its 10 s limit, and Blackbox's took 10-15 s on a loaded 4-CPU machine, so
+  Hermes ran unguarded and nothing said so. Blackbox now hands Hermes its hooks at once and loads
+  the rest beside them. A tool call made before that is finished waits for it, and is refused
+  ("not checked yet, try again") rather than let through. If Hermes still starts without Blackbox,
+  that is a HIGH "running without Blackbox" finding, read from Hermes's own log.
+- **A coding agent's hook answers before the agent stops waiting.** When the dashboard was slow,
+  Blackbox's own check could take longer than the 10 s an agent waits, and the agent then ran the
+  call: a graph-listed package installed. The hook now answers within its time: the dashboard
+  first, then the same check (with the same threat-graph lookup) made locally. A tool call that
+  could not be checked in time is refused, never passed. Recording happens after the answer.
+- **Codex is shown as NOT protected until you trust Blackbox's hooks in Codex.** Codex runs a
+  hook only after you approve it with `/hooks`. Blackbox reads Codex's own trust record and says
+  so in `blackbox status`, the dashboard and `blackbox attach`, with the one step to fix it. A
+  Codex run while its hooks are untrusted is a HIGH finding. Blackbox never approves them for you.
 - **An agent cannot switch off its own hooks.** A write that would turn hooks off or remove
   Blackbox's hook entries in an agent's settings — Claude Code's user or project
   `settings.json` / `settings.local.json`, another project's, Codex's or Gemini CLI's project
