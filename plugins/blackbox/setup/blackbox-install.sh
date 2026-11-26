@@ -974,7 +974,7 @@ provision_blackbox_store() {
     local existing_state namespace existing_backend existing_url existing_managed
     local provisioned parsed
 
-    existing_state="$($VENV_DIR/bin/python - "$BLACKBOX_DKG_HOME" <<'PYEOF'
+    existing_state="$("$VENV_DIR/bin/python" - "$BLACKBOX_DKG_HOME" <<'PYEOF'
 import json
 import sys
 from pathlib import Path
@@ -1103,7 +1103,7 @@ PYEOF
         warn "Could not provision Blazegraph."
         return 1
     fi
-    parsed="$($VENV_DIR/bin/python - "$provisioned" <<'PYEOF'
+    parsed="$("$VENV_DIR/bin/python" - "$provisioned" <<'PYEOF'
 import json
 import sys
 
@@ -2072,12 +2072,27 @@ use_running_hermes() {
         on_path="$(command -v hermes 2>/dev/null || true)"
         link_dir="$(dirname "${on_path:-$HERMES_BIN}")"
     fi
-    if [ -w "$link_dir" ]; then
+    if inside_app_bundle "$link_dir"; then
+        # WHY: an app bundle is sealed by its signature; one file added there breaks the seal
+        # ("a sealed resource is missing or invalid") and a read-only, translocated copy refuses
+        # the write. The command is only a shortcut for `hermes blackbox`.
+        step "Hermes runs from an app bundle; the blackbox command was not added there. Use: hermes blackbox"
+    elif [ -w "$link_dir" ]; then
         install_blackbox_shim "$link_dir"
     else
         warn "Cannot write $link_dir: the blackbox command was not added; use: hermes blackbox"
     fi
     export PATH="$VENV_DIR/bin:$PATH"
+}
+
+# True when *dir* (links resolved) lies inside a macOS app bundle (`….app/Contents/…`).
+inside_app_bundle() {
+    local real
+    real="$(cd "$1" 2>/dev/null && pwd -P)" || return 1
+    case "$real/" in
+        *.app/Contents/*) return 0 ;;
+    esac
+    return 1
 }
 
 # Earlier runs of this installer linked ~/.local/bin/hermes to a Hermes Python environment.

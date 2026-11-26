@@ -109,6 +109,10 @@ that the two version fields agree.
 
 ### Fixed
 
+- **Setup no longer writes into the app bundle of a Hermes it runs from.** When Hermes runs from
+  an application bundle, setup added its `blackbox` shortcut beside it, which broke the bundle's
+  signature seal. The shortcut is left out there; `hermes blackbox` does the same.
+
 - **"Protect every agent" no longer creates a Hermes home that is not there.** On a machine
   where Blackbox runs in its own home and Hermes was never installed, it created `~/.hermes` with a
   copy of the plugin. Only homes that exist are protected (plus the one Blackbox runs in).
