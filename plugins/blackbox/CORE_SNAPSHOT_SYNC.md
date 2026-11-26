@@ -6,7 +6,7 @@ selected core nodes and the local node, with exact-batch streaming enabled.
 The new persistent-core defaults and automatic source selection require the
 companion DKG update.
 
-**Compatibility and rollout:** setup pins the released DKG 10.0.26 package and
+**Compatibility and rollout:** setup pins the released DKG 10.1.2 package (the Core chain cache arrived in 10.0.26) and
 integrity. Fresh installations and upgrades without an explicit `snapshot_sync`
 choice select this transport for the shipped Base mainnet graph when their local
 daemon advertises `DKG_Core_chain_cache`. Unreachable or incompatible daemons keep

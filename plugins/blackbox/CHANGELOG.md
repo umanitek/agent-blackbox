@@ -40,6 +40,11 @@ that the two version fields agree.
 
 ## [1.6.1] - 2026-11-26
 
+### Changed
+
+- **New installs use DKG node 10.1.2** (was 10.0.26), checked against its published sha512
+  before it is installed (#64).
+
 ### Security
 
 - **A command the shell decodes onto Blackbox's own folder is refused.** For an agent checked only
