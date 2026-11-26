@@ -50,6 +50,9 @@ def home(tmp_path, monkeypatch):
     (real / "Documents" / "Vault" / "secret.txt").write_text("secret", encoding="utf-8")
     (real / ".claude").mkdir()
     (real / ".claude" / "settings.json").write_text("{}", encoding="utf-8")
+    # A machine where agents can be sandboxed (a Mac; Linux once the launcher is installed), whatever
+    # runs the test: on a CI runner without the launcher, sync() writes nothing (PR #63's Linux CI)
+    monkeypatch.setattr(sandbox.platform, "unavailable", lambda: None)
     changes.reset()
     store.reset()   # each test's instances are its own: a refusal is given only to a single live one (KI-598)
     yield real

@@ -47,6 +47,9 @@ def home(tmp_path, monkeypatch):
     (real / "Documents" / "Vault").mkdir(parents=True)
     (real / "Documents" / "Vault" / "secret.txt").write_text("secret", encoding="utf-8")
     (real / "Documents" / "beside.txt").write_text("fine", encoding="utf-8")
+    # A machine where agents can be sandboxed (a Mac; Linux once the launcher is installed), whatever
+    # runs the test: on a CI runner without the launcher, sync() writes nothing (PR #63's Linux CI)
+    monkeypatch.setattr(sandbox.platform, "unavailable", lambda: None)
     changes.reset()
     yield real
     changes.reset()

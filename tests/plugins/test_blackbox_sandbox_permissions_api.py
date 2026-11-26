@@ -40,6 +40,9 @@ def home(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(real))
     monkeypatch.setenv("BLACKBOX_HOME", str(real / "bb"))
     (real / "work" / "shop").mkdir(parents=True)
+    # A machine where agents can be sandboxed (a Mac; Linux once the launcher is installed), whatever
+    # runs the test: a CI runner without the launcher answers the not-here view (KI-660's own test)
+    monkeypatch.setattr(sandbox.platform, "unavailable", lambda: None)
     return real
 
 
