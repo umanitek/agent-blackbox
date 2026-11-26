@@ -112,6 +112,7 @@ class Running:
     started: float = 0.0
     skips_prompts: tuple[str, ...] = ()   # its flags that skip the person's permission prompts (permission_risks)
     folder: str = ""               # the folder it works in (its project), "" when it can not be read
+    launched: bool = False         # started by Blackbox's sandbox launcher (observe.launched): a longer grace, never a pass
 
 
 @dataclass(frozen=True)

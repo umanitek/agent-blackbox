@@ -21,6 +21,12 @@ QUIET_SECONDS = store.QUIET_SECONDS
 #: A hook event this recent proves the process is hooked (a process younger than this may not
 #: have reported yet, so it is not called unprotected).
 GRACE_SECONDS = 20.0
+#: The grace for a process Blackbox's own sandbox launcher started (``Running.launched``). WHY
+#: (Linux round L7, BB-LINUX-PENDING-b4bf05): such a start sent its first hook event at +23 s on the
+#: busy VM (namespaces, then the helper's network rules) and every one was called unseen at +20 s.
+#: Bounded, and never a pass: past it a launched run with no hook event is reported like any other,
+#: and a run whose hooks are known to be off is reported at once (``observe/launched.py``).
+LAUNCHED_GRACE_SECONDS = 90.0
 
 
 def close_stale(alive: Optional[Iterable[int]] = None, *, read_at: Optional[float] = None) -> int:
@@ -126,7 +132,8 @@ def _unprotected(running: Iterable[Running], sessions: Iterable[Instance]) -> li
     now = time.time()
     out = []
     for proc in running:
-        if _hooked(proc, sessions) or (not proc.hooks_skipped and now - proc.started < GRACE_SECONDS):
+        grace = LAUNCHED_GRACE_SECONDS if proc.launched else GRACE_SECONDS
+        if _hooked(proc, sessions) or (not proc.hooks_skipped and now - proc.started < grace):
             continue
         host = BY_ID.get(proc.agent)
         out.append({"pid": proc.pid, "agent": proc.agent, "name": host.name if host else proc.agent, "launch": proc.launch,

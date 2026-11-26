@@ -35,6 +35,7 @@ from ..instances.model import Running
 from .. import profiles
 from . import hook_trust, platform
 from .hooks_off import hooks_switched_off
+from .launched import launched_by_blackbox
 
 __all__ = ["Proc", "agent_of", "ancestry", "classify", "descendants", "hooks_switched_off", "host_pid", "launch_of", "read_table",
            "read_users", "running"]
@@ -267,7 +268,8 @@ def running(table: Mapping[int, Proc]) -> list[Running]:
         # Hooks the agent itself will not run until the person trusts them (Codex, L7): this run is unseen.
         skipped = skipped or hook_trust.run_reason(profiles.variant(host, Path(profile), default=not profile), words, Path.home())
         out.append(Running(proc.pid, proc.ppid, host.id, _launch(host, words), profile, skipped, proc.started,
-                           tuple(permission_risks.from_command(host.id, _split(words)[1])), platform.process_cwd(proc.pid)[:500]))
+                           tuple(permission_risks.from_command(host.id, _split(words)[1])), platform.process_cwd(proc.pid)[:500],
+                           launched_by_blackbox(proc.pid)))
     return out
 
 
