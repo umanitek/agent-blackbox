@@ -25,13 +25,14 @@
 //! A folder named like a scope anywhere else only ever gets refusals, never fewer.
 //!
 //! After a table holding a scope is loaded, `/run/blackbox-netd/agents/<scope>.ready` is written:
-//! the launcher waits for it (at most 500 ms) before it starts the agent. WHY a 100 ms look at the
+//! the launcher waits for it (at most `scope::READY_WAIT`) before it starts the agent. WHY a 100 ms look at the
 //! cgroup tree: that wait is the bound an agent's first connections are unguarded within, so the
 //! look keeps its pace (LES-141); reading a few cgroup folders costs microseconds.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde::Deserialize;
@@ -203,17 +204,29 @@ pub fn mark_ready(folder: &Path, scopes: &[Scope]) -> std::io::Result<()> {
 /// unreadable plan keeps the last one; a table that does not load leaves no readiness mark, so
 /// the launcher says the rules are not applied. The dashboard's port comes in each policy's
 /// `allow` list (the plugin adds it), so the table needs no port of its own here.
+///
+/// The plan is fetched on its OWN thread ([`spawn_plan_fetch`]). WHY (Linux round L7,
+/// BB-LINUX-PENDING-530001): fetched inside this loop, a busy dashboard held the 100 ms cgroup look
+/// for up to [`TIMEOUT`] (10 s), so a new agent's scope was not bound before the launcher stopped
+/// waiting and it started with its network rules NOT applied ("did not apply this agent's network
+/// rules in time"). A new scope is now bound with the rules held, at the look's own pace.
 pub fn run() {
-    let Ok(mut link) = crate::link::Link::new(Path::new(super::HOME)) else { return };
+    let Ok(link) = crate::link::Link::new(Path::new(super::HOME)) else { return };
+    let latest: Arc<Mutex<Option<BTreeMap<String, AgentRule>>>> = Arc::new(Mutex::new(None));
+    let mut inline = spawn_plan_fetch(link, Arc::clone(&latest)).err();
     let mut rules: BTreeMap<String, AgentRule> = BTreeMap::new();
     let mut last_plan: Option<Instant> = None;
     let mut loaded: Option<(Vec<Scope>, BTreeMap<String, AgentRule>)> = None;
     loop {
-        if last_plan.is_none_or(|at| at.elapsed() >= PLAN_EVERY) {
-            last_plan = Some(Instant::now());
-            if let crate::link::Fetched::Plan(plan) = link.plan::<Plan>(PLAN_PATH, "", TIMEOUT) {
-                rules = plan.by_digest();
+        if let Some(link) = inline.as_mut() {   // no thread could be made: fetched here, as before
+            if last_plan.is_none_or(|at| at.elapsed() >= PLAN_EVERY) {
+                last_plan = Some(Instant::now());
+                if let crate::link::Fetched::Plan(plan) = link.plan::<Plan>(PLAN_PATH, "", TIMEOUT) {
+                    rules = plan.by_digest();
+                }
             }
+        } else if let Some(fresh) = latest.lock().ok().and_then(|mut slot| slot.take()) {
+            rules = fresh;
         }
         let now = scopes(Path::new(CGROUP_ROOT));
         if loaded.as_ref() != Some(&(now.clone(), rules.clone())) {
@@ -229,6 +242,29 @@ pub fn run() {
             }
         }
         std::thread::sleep(LOOK_EVERY);
+    }
+}
+
+/// Fetches the plan every [`PLAN_EVERY`] on its own thread and leaves each one in *latest* for the
+/// loop; the link back when no thread could be made (the loop then fetches it itself).
+fn spawn_plan_fetch(
+    link: crate::link::Link, latest: Arc<Mutex<Option<BTreeMap<String, AgentRule>>>>,
+) -> Result<(), crate::link::Link> {
+    let (handoff, take) = std::sync::mpsc::channel::<crate::link::Link>();
+    let spawned = std::thread::Builder::new().name("agent-guard-plan".into()).spawn(move || {
+        let Ok(mut link) = take.recv() else { return };
+        loop {
+            if let crate::link::Fetched::Plan(plan) = link.plan::<Plan>(PLAN_PATH, "", TIMEOUT) {
+                if let Ok(mut slot) = latest.lock() {
+                    *slot = Some(plan.by_digest());
+                }
+            }
+            std::thread::sleep(PLAN_EVERY);
+        }
+    });
+    match spawned {
+        Ok(_) => handoff.send(link).map_err(|returned| returned.0),
+        Err(_) => Err(link),
     }
 }
 

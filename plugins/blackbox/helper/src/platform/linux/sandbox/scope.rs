@@ -35,8 +35,11 @@ pub const HELPER: &str = super::super::BINARY;
 /// (the plugin's status page reads it: `shields/files/sandbox/platform/linux/probe.py`). A start
 /// whose rules did come clears it.
 pub const UNBOUND_FOLDER: &str = "blackbox/sandbox-unbound";
-/// How long an agent's start waits for its scope's network rules, at most.
-pub const READY_WAIT: Duration = Duration::from_millis(500);
+/// How long an agent's start waits for its scope's network rules, at most. WHY 2 s (Linux round
+/// L7, BB-LINUX-PENDING-530001): on the busy VM loading the table overran 500 ms and agents started
+/// with their network rules NOT applied; a start waits longer only while the rules are not there,
+/// and every millisecond of that wait is one the agent's connections are not left unguarded.
+pub const READY_WAIT: Duration = Duration::from_millis(2000);
 const READY_POLL: Duration = Duration::from_millis(10);
 /// The digest characters a unit name carries.
 pub const DIGEST_CHARS: usize = 12;
