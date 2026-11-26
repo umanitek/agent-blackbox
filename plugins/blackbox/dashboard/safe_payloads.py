@@ -82,13 +82,18 @@ _PROFILE_KEYS = ("threatGoal", "resourceAtRisk", "attackTechnique", "outcome", "
                  "verifiedSubject")
 
 
-def sanitized_ledger(limit: int = 50) -> list[dict[str, Any]]:
-    """This node's outbound reports ledger, sanitized for serving."""
+def sanitized_ledger(limit: int = 50, *, sandbox: bool = False) -> list[dict[str, Any]]:
+    """This node's outbound reports ledger, sanitized for serving; *sandbox*: the sandbox lane's
+    own ledger (``$BLACKBOX_HOME/sandbox/``), where every share made in sandbox mode is recorded."""
+    import contextlib
+
     from .. import audit as _audit
 
     rows = []
     try:
-        for row in _audit.read_share_ledger(limit=limit):
+        with _audit.sandbox_run() if sandbox else contextlib.nullcontext():
+            ledger = _audit.read_share_ledger(limit=limit)
+        for row in ledger:
             rows.append({
                 "ts": safe_text(row.get("ts"), 32),
                 "identifier": safe_identifier(row.get("identifier")),

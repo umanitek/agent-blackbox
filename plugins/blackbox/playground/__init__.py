@@ -12,7 +12,8 @@ Public surface (use only these):
 
 * :data:`KINDS` — the test kinds (``package``, ``domain``, ``ip``, ``url``);
 * :func:`run_test` — run one test, returns a :class:`TestResult`;
-  raises :class:`PlaygroundRefused` with a plain reason when it cannot run;
+  raises :class:`PlaygroundRefused` with a plain reason when it cannot run; it answers
+  within :data:`RUN_BUDGET_S` seconds, a share still on its way then reads :data:`PENDING`;
 * :func:`recent_tests` — this node's own sandbox findings, newest first;
 * :func:`sandbox_activity` — the same tests as sessions → events → threats;
 * :func:`sandbox_audit` — the same tests as Agent activity entries (``/api/audit``'s shape);
@@ -34,12 +35,14 @@ from __future__ import annotations
 
 from . import graph
 from .lane import LaneEntry, LaneView, read_lane
-from .runner import (KINDS, SESSION_ID, PlaygroundRefused, TestResult, recent_tests, require_sandbox, run_test,
-                     sandbox_activity, sandbox_audit)
+from .runner import (KINDS, PENDING, RUN_BUDGET_S, SESSION_ID, PlaygroundRefused, TestResult, recent_tests,
+                     require_sandbox, run_test, sandbox_activity, sandbox_audit)
 from .wallets import WalletTestResult, require_sandbox_mode, run_wallet_test, wallet_tests
 
 __all__ = [
     "KINDS",
+    "PENDING",
+    "RUN_BUDGET_S",
     "SESSION_ID",
     "LaneEntry",
     "LaneView",

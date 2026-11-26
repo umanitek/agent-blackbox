@@ -110,6 +110,10 @@ def community_stats_payload(verified_reports: VerifiedReportsRead) -> Any:
         "new_today": fresh_today,
         "last_refresh": rs.synced_at or None,
         "last_share": ledger[0] if ledger else None,
+        # sandbox mode: every share goes to the sandbox lane and its own ledger, which the tile must
+        # read too (dev node 2026-11-26: "nothing shared yet" after two accepted sandbox shares)
+        "sandbox": bool(cfg.community_sandbox),
+        "sandbox_last_share": next(iter(sanitized_ledger(1, sandbox=True)), None) if cfg.community_sandbox else None,
         # distinct VERIFIED signers (R0d); None when no graph is configured
         "contributing_agents": community.contributing_agent_count(verified_reports(cfg)) if graph else None,
         # which graph this node joined and whether it is connected yet (2026-10-12: a new

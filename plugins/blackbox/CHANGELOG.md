@@ -38,6 +38,22 @@ that the two version fields agree.
 
 ## [Unreleased]
 
+## [1.6.2] - 2026-11-26
+
+### Changed
+
+- **New installs use DKG node 10.1.2** (was 10.0.26), checked against its published sha512
+  before it is installed (#64).
+
+### Fixed
+
+- **A Playground test always answers, and says where its share is.** A test now answers within two
+  minutes. A slow node refuses it with the reason, and a share the node has not confirmed reads
+  "still sending" instead of "not sent". In sandbox mode the Threat sharing tile shows the last
+  test share instead of "nothing shared yet".
+- **Dashboard layout:** "No coding agent is running right now" lines up with its card, and a
+  threat-graph type holding only sandbox tests reads "1 TEST", not "0 THREATS + 1 TEST".
+
 ## [1.6.1] - 2026-11-26
 
 ### Security
@@ -754,7 +770,8 @@ The first version in the Hermes plugin catalog (commit `7d697683`, added by Herm
 in NousResearch/hermes-agent#140529). Its `plugin.yaml` said 1.0.0 while Blackbox's own code and
 dashboard reported 1.1.0; 1.1.0 is therefore skipped, so no two different builds share a number.
 
-[Unreleased]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.6.1...main
+[Unreleased]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.6.2...main
+[1.6.2]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.6.1...blackbox-v1.6.2
 [1.6.1]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.6.0...blackbox-v1.6.1
 [1.6.0]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.5.0...blackbox-v1.6.0
 [1.5.0]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.4.1...blackbox-v1.5.0

@@ -651,7 +651,7 @@ protections independently of the snapshot transfer path.
 
 ### Core snapshot sync
 
-With released DKG 10.0.26, fresh installs and upgrades without an explicit snapshot
+With the released DKG the installer pins (10.1.2; the Core chain cache arrived in 10.0.26), fresh installs and upgrades without an explicit snapshot
 choice can use **Lower RPC usage by using the DKG Core chain cache** for the shipped
 mainnet graph. The local capability admits an attempt; DKG authenticates registered
 cores and checks graph/asset identities, roots and final coverage at runtime.

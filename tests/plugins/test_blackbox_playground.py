@@ -170,3 +170,95 @@ def test_a_test_waits_for_its_own_share_only_never_another_agents(tmp_path, monk
         assert own.joined and not other_agents.joined
     finally:
         release.set()
+
+
+class _SlowNode:
+    """A ruleset whose every live read takes 10 s of a fake clock and finds no usable package."""
+
+    verified_scope = SimpleNamespace(verified_counts={"dependency:npm": 100})
+
+    def __init__(self, clock):
+        self.clock, self.reads = clock, 0
+
+    def live_browse(self, **_filters):
+        self.reads += 1
+        self.clock["now"] += 10.0
+        return SimpleNamespace(known=True, entries=[{"identifier": "dep:npm:left-pad@*"}])
+
+
+def test_a_slow_rule_read_refuses_with_the_reason_instead_of_holding_the_request(monkeypatch):
+    """Dev node 2026-11-26: "Send: Malware package" sat on "Asking Blackbox… (up to 90 s)" while the
+    node was busy. The pick read up to twelve live windows (two node queries each, 10 s timeout
+    apiece) with no overall limit, so a slow node held the request for minutes. It now gives up at
+    its budget and says why."""
+    clock = {"now": 1000.0}
+    monkeypatch.setattr(runner, "time", SimpleNamespace(time=lambda: clock["now"], monotonic=lambda: clock["now"]))
+    rules = _SlowNode(clock)
+    monkeypatch.setattr(runner.ruleset, "get", lambda cfg: rules)
+    with pytest.raises(playground.PlaygroundRefused, match="answering slowly"):
+        playground.run_test("package", _cfg(report=True, community_sandbox=True))
+    assert rules.reads * 10.0 <= runner.RUN_BUDGET_S - runner._SHARE_WAIT_S + 10.0
+
+
+def test_a_share_still_on_its_way_reads_pending_and_all_shares_share_one_deadline(tmp_path, monkeypatch):
+    """Dev node 2026-11-26: a domain test with two findings waited 90 s for the follow-up and 90 s
+    per share (~3 min behind a button that said "up to 90 s"), and a share still in flight read as
+    "not sent" though the ledger said "accepted" seconds later. The whole wait is now one deadline
+    and an unfinished share reads PENDING."""
+    import threading
+    from plugins.blackbox.guard import reporting
+
+    waits = []
+    clock = {"now": 1000.0}   # a join "takes" its whole timeout on this clock, so no real time passes
+    monkeypatch.setattr(runner, "time", SimpleNamespace(time=lambda: clock["now"], monotonic=lambda: clock["now"]))
+
+    class Slow(threading.Thread):
+        def __init__(self):
+            super().__init__(target=release.wait, name="blackbox-community-share", daemon=True)
+
+        def join(self, timeout=None):
+            waits.append(timeout)
+            clock["now"] += timeout or 0.0
+
+    release = threading.Event()
+    shares = [Slow(), Slow()]
+    monkeypatch.setattr(constants, "blackbox_home", lambda: tmp_path)
+    monkeypatch.setattr(runner.ruleset, "get", lambda cfg: _Rules())
+
+    def hook(**_kwargs):
+        for share in shares:
+            share.start()
+            reporting._COLLECTED_SHARES.get().append(share)
+        audit.record(event="pre_tool_call", findings=[{"identifier": IDENTIFIER, "severity": "high"}], detail={})
+
+    monkeypatch.setattr(runner.guard, "on_pre_tool_call", hook)
+    try:
+        result = playground.run_test("domain", _cfg(report=True, community_sandbox=True))
+    finally:
+        release.set()
+    assert result.shared == runner.PENDING
+    assert len(waits) == 2 and sum(waits) <= runner._SHARE_WAIT_S
+
+
+def test_the_sharing_tile_reads_the_sandbox_ledger_in_sandbox_mode(tmp_path, monkeypatch):
+    """Dev node 2026-11-26: the Threat sharing tile said "on · nothing shared yet" after two accepted
+    sandbox shares. In sandbox mode every share is ledgered in the sandbox folder, and the tile read
+    only the real ledger. /api/community-stats now carries the sandbox lane's last share too."""
+    from plugins.blackbox import community
+    from plugins.blackbox.dashboard import community_routes
+
+    monkeypatch.setattr(constants, "blackbox_home", lambda: tmp_path)
+    monkeypatch.setattr(bb_config, "load_blackbox_config",
+                        lambda: _cfg(report=True, community_sandbox=True))
+    monkeypatch.setattr(community, "read_membership_status", lambda client, graph: None)
+    monkeypatch.setattr(community, "contributing_agent_count", lambda reports: 0)
+    community_routes.MEMBERSHIP_STATUS.clear()
+    with audit.sandbox_run():
+        audit.record_share_outcome(identifier=IDENTIFIER, category="ioc", severity="high", subject="urn:r:1",
+                                   asset_name="sandbox-1", ok=True, outcome="accepted")
+
+    stats = community_routes.community_stats_payload(lambda cfg: SimpleNamespace())
+
+    assert stats["sandbox"] is True and stats["last_share"] is None   # the real ledger stays empty
+    assert stats["sandbox_last_share"]["identifier"] == IDENTIFIER
+    assert stats["sandbox_last_share"]["outcome"] == "accepted"
