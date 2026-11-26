@@ -145,7 +145,7 @@ def _judge_in_time(event: str, body: dict, deadline: float) -> Verdict:
         except BaseException as broken:   # health: allow BLE001 -- handed back below: fail open
             outcome.append(broken)
 
-    worker = threading.Thread(target=run, name="blackbox-judge-here", daemon=True)
+    worker = threading.Thread(target=run, name="blackbox-judge-here", daemon=True)   # health: allow HX012 -- stdlib-only runner, one process per hook: no profile scope to carry
     worker.start()
     worker.join(max(0.0, deadline - time.time()))
     if not outcome:
@@ -184,14 +184,14 @@ def record_detached(record) -> None:
     sys.stdout.flush()
     sys.stderr.flush()
     try:
-        child = os.fork()
+        child = os.fork()   # windows-footgun: ok -- guarded above: no fork means record here
     except OSError:
         record()
         return
     if child:
         return
     try:   # the child: no pipe of the agent's, its own session, a bounded life
-        os.setsid()
+        os.setsid()   # windows-footgun: ok -- only in the forked child (POSIX)
         quiet = os.open(os.devnull, os.O_RDWR)
         for stream in (0, 1, 2):
             os.dup2(quiet, stream)

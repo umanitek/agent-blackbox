@@ -75,15 +75,19 @@ def test_with_the_dashboard_stopped_a_graph_listed_package_is_still_refused_in_b
     assert rows and rows[0]["framework"] == "gemini-cli"      # recorded after the answer, not lost
 
 
+#: Holds the slow dashboard's answer until the test is done with it.
+_ANSWER = threading.Event()
+
+
 class _SlowDashboard(BaseHTTPRequestHandler):
-    """Answers its session at once and each event only after the runner stopped waiting for it."""
+    """Answers its session at once and each event only once the test lets it (after the runner stopped waiting)."""
 
     def do_GET(self):
         self._send({"token": "t"})
 
     def do_POST(self):
         self.rfile.read(int(self.headers.get("Content-Length") or 0))
-        threading.Event().wait(judge_here.TIMEOUT_SECONDS + 1.0)   # slower than the runner's share for it
+        _ANSWER.wait(30)
         self._send({"decision": "allow"})
 
     def _send(self, data):
@@ -105,6 +109,7 @@ def test_a_slow_dashboard_never_weakens_the_verdict(machine, monkeypatch, capsys
     try:
         _code, out, took = _run(monkeypatch, capsys, f"http://127.0.0.1:{server.server_port}", INSTALL)
     finally:
+        _ANSWER.set()
         server.shutdown()
     assert _refused(out), out
     assert judge_here.TIMEOUT_SECONDS - 0.2 < took < judge_here.BUDGET_SECONDS
