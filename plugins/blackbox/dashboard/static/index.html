@@ -983,7 +983,7 @@
   .ai-facts, .ai-last { font-size: 12px; color: var(--muted); margin-top: 3px; overflow-wrap: anywhere; }
   .ai-last { font-family: var(--mono-font); font-size: 11.5px; }
   .ai-warn { font-size: 12.5px; color: var(--caution); margin-top: 4px; }
-  .ai-empty { padding: 16px 0; color: var(--muted); font-size: 13px; }
+  .ai-empty { padding: 16px 18px; color: var(--muted); font-size: 13px; }
   .ai-chip { font-size: 10.5px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; border-radius: 999px; padding: 1px 8px; border: 1px solid var(--border-strong); color: var(--muted-strong); }
   .ai-chip.ai-live { color: var(--secure); border-color: var(--secure); }
   .ai-chip.ai-waiting { color: var(--caution); border-color: var(--caution); }
@@ -5231,8 +5231,10 @@
       var name = node.label || "";
       // Magnitude labels always use corpus totals, never the rendered leaf sample.
       var magnitude = isHub ? node.count : (isCenter ? node.threatTotal : null);
-      var count = magnitude == null ? "" : magnitude.toLocaleString() + " THREAT" + (magnitude === 1 ? "" : "S") +
-        (isHub && node.sandboxCount ? " + " + node.sandboxCount.toLocaleString() + " TEST" + (node.sandboxCount === 1 ? "" : "S") : "");
+      var tests = isHub && node.sandboxCount ? node.sandboxCount.toLocaleString() + " TEST" + (node.sandboxCount === 1 ? "" : "S") : "";
+      // A type holding only sandbox tests reads "1 TEST", not "0 THREATS + 1 TEST" (Amos, 2026-11-26).
+      var count = magnitude == null ? "" : (tests && !magnitude) ? tests :
+        magnitude.toLocaleString() + " THREAT" + (magnitude === 1 ? "" : "S") + (tests ? " + " + tests : "");
       ctx.save();
       ctx.font = nameFont;
       var width = ctx.measureText(name).width;
@@ -5295,7 +5297,9 @@
       }
 	      if (node.kind === "hub") {
 	        var action = graphDetailMode[activeTier] === "explore" ? "click to focus" : "click for details";
-	        var hc = node.count != null
+	        var hc = (node.count === 0 && node.sandboxCount)
+	          ? (num(node.sandboxCount) + ' sandbox test' + (node.sandboxCount === 1 ? '' : 's') + ', no real threats · ' + action)
+	          : node.count != null
 	          ? (node.count.toLocaleString() + ' threat' + (node.count === 1 ? '' : 's') +
 	             (node.sandboxCount ? ' · plus ' + num(node.sandboxCount) + ' sandbox test' + (node.sandboxCount === 1 ? '' : 's') :
 	              (node.sightings && node.sightings !== node.count ? ' · seen ' + num(node.sightings) + ' times in all' : '')) + ' · ' + action)

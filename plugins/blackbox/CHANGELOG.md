@@ -73,6 +73,8 @@ that the two version fields agree.
   Codex would not run Blackbox's hooks.
 - **Linux notices no longer call your computer "this Mac".**
 - **The "protect new agents automatically" switch is never shown as off before it is read.**
+- **Dashboard layout:** "No coding agent is running right now" lines up with its card, and a
+  threat-graph type holding only sandbox tests reads "1 TEST", not "0 THREATS + 1 TEST".
 - A test of the hook's time budget no longer depends on how long the test process has run (it
   failed once on a slow CI runner).
 
