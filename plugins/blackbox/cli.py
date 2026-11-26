@@ -182,6 +182,7 @@ def _cmd_status(args: argparse.Namespace) -> int:
     print(f"  findings logged:   {audit.count_findings()}")
     print(f"  dashboard:         http://127.0.0.1:{cfg.dashboard_port}")
     _print_attached_targets()
+    _print_coding_agents()
     return 0
 
 
@@ -243,3 +244,23 @@ def _print_attached_targets() -> None:
     print(f"  attached (openclaw): {len(attached_openclaw)}")
     for path in attached_openclaw:
         print(f"      - {path}")
+
+
+#: Coding-agent states where Blackbox's hooks are installed but do NOT run (said loudly).
+_UNSEEN_STATES = frozenset({"trust-required", "degraded"})
+
+
+def _print_coding_agents() -> None:
+    """Each coding agent on this machine with its honest state (``agent_hooks.rows``); an agent
+    whose hooks do not run — Codex until the person trusts them (L7) — is said NOT protected,
+    with the step. Fail-open: status never crashes on an agent's config."""
+    from . import agent_hooks   # late: only status reads the agents
+    try:
+        rows = agent_hooks.rows()
+    except Exception:   # health: allow BLE001 -- status never crashes on an agent's config; logged with its traceback
+        logger.debug("blackbox status: coding agents skipped", exc_info=True)
+        return
+    print(f"  coding agents:     {len(rows)}")
+    for row in rows:
+        mark = "!! " if row.state in _UNSEEN_STATES else ""
+        print(f"      - {mark}{row.name}: {row.state} — {row.detail}")

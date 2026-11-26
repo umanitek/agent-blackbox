@@ -48,8 +48,9 @@ def _finding(row: Mapping[str, Any]) -> dict[str, Any]:
     return {"identifier": UNGUARDED_ID, "category": "escalation", "severity": "high",
             "title": f"{name} is running in {folder} without Blackbox"[:200], "tool_name": agent, "matched": MATCHED,
             "evidence": reason[:300], "confirmed": False, "source": "custom", "kind": "flag-only",
-            "advice": (f"Blackbox sees none of what this {name} session does. Check that folder's {name} settings for a switch "
-                       "that turns hooks off, or start it again so Blackbox's hooks run."),
+            "advice": (f"Blackbox sees none of what this {name} session does. Fix what the evidence names (a switch that "
+                       f"turns hooks off, or hooks {name} has not been told to trust yet), then start it again so "
+                       "Blackbox's hooks run."),
             "fields": {"agent": agent, "folder": folder[:400], "pid": int(row.get("pid") or 0)}}
 
 

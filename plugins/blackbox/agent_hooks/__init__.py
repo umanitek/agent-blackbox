@@ -39,6 +39,7 @@ from ..kernel.bounded_files import atomic_write
 from .. import audit
 from ..kernel.config import load_blackbox_config
 from . import owners, process_facts, profiles, prompt_text, tracking, versions
+from .observe import hook_trust
 from .protect import config_edit, foreign_hooks, hook_watch, own_files
 from .protect import recorder
 from .protect.judge_here import JUDGE_HERE_FILE
@@ -242,7 +243,11 @@ def _invalid(host: Host) -> list[str]:
     return [] if host.style in _OWN_FILE_STYLES else config_edit.invalid_entries(host, _home())
 
 
-def _state_of(host: Host, hooked: bool, runnable: bool, record: dict[str, Any], invalid: tuple[str, ...] = ()) -> tuple[str, str]:
+def _state_of(host: Host, hooked: bool, runnable: bool, record: dict[str, Any], invalid: tuple[str, ...] = (),
+              trust: Optional[hook_trust.HookTrust] = None) -> tuple[str, str]:
+    """The honest state of *host* and why. *trust*: what the agent itself makes of Blackbox's
+    hooks (``observe.hook_trust``; None for an agent with no trust step) — a hook the agent will
+    not run is never "hooked" or "connected", whatever events an earlier run sent (L7: Codex)."""
     last, last_error = record.get("last_event") or 0, record.get("last_error") or 0
     if record.get("disabled"):
         return "off", "You stopped protecting it."
@@ -252,11 +257,13 @@ def _state_of(host: Host, hooked: bool, runnable: bool, record: dict[str, Any], 
         return "degraded", "The hook cannot run: the Python or the runner it names is gone. Protect it again."
     if invalid:
         return "degraded", f"{host.name} would not run Blackbox's hook as written ({invalid[0]}). Protect it again."
+    if trust is not None and not trust.runs and trust.state != hook_trust.NOT_HOOKED:
+        return ("degraded" if trust.state == hook_trust.DISABLED else "trust-required"), trust.detail
     if last_error > last:
         return "degraded", "Its latest hook event could not be checked."
     if last and time.time() - last < CONNECTED_SECONDS:
         return "connected", "Blackbox checked its actions in the last 15 minutes."
-    if not last and host.trust_note:
+    if not last and host.trust_note and trust is None:   # a trust step Blackbox cannot read: unproven until an event
         return "trust-required", host.trust_note
     return "hooked", "Hooks installed; protection is proven by its first checked action."
 
@@ -270,7 +277,8 @@ def rows() -> list[AgentRow]:
         record = state.get(host.id, {})
         if not host.installed(_home()) and not commands and not record:
             continue
-        name, detail = _state_of(host, bool(commands), _runnable(host, commands), record, tuple(_invalid(host)))
+        name, detail = _state_of(host, bool(commands), _runnable(host, commands), record, tuple(_invalid(host)),
+                                 hook_trust.read(host, _home()))
         sessions = sorted(({"id": key, **value} for key, value in (record.get("sessions") or {}).items()),
                           key=lambda row: row.get("last", 0), reverse=True)
         out.append(AgentRow(host.id, host.name, name, detail, str(host.config_path(_home())), record.get("last_event"),
@@ -289,7 +297,12 @@ def set_protection(agent_id: str, enabled: bool) -> dict[str, Any]:
         state = read_state()
         state["agents"].setdefault(agent_id, {})["disabled"] = not enabled
         write_state(state)
-    return {"ok": result.ok, "kind": agent_id, "target": result.path, "enabled": enabled, "note": result.error}
+    # Hooks written are not hooks run: an agent that asks its person to trust them first is said
+    # NOT protected yet, with the step (L7: Codex said "attached" and ran 58 commands unseen).
+    trust = hook_trust.read(host, _home()) if enabled and result.ok else None
+    waiting = trust is not None and not trust.runs and trust.state != hook_trust.NOT_HOOKED
+    return {"ok": result.ok, "kind": agent_id, "target": result.path, "enabled": enabled,
+            "note": result.error or (trust.detail if waiting else ""), "trust_required": waiting}
 
 
 def _uninstall(host: Host) -> config_edit.EditResult:
