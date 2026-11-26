@@ -184,6 +184,10 @@ that the two version fields agree.
 
 ### Security
 
+- **The bundled Node.js is 26.13.1, which carries Node's October and November 2026 security
+  releases.** Builds that bundle their own runtime shipped Node 26.7.0, and setup warned that it
+  should be upgraded. Every platform's pin now names 26.13.1 with nodejs.org's published checksums,
+  so the runtime comes in through the package manager's normal checks.
 - **Hermes no longer runs without Blackbox on a busy machine.** Hermes drops a plugin whose start
   takes longer than its 10 s limit, and Blackbox's took 10-15 s on a loaded 4-CPU machine, so
   Hermes ran unguarded and nothing said so. Blackbox now hands Hermes its hooks at once and loads
