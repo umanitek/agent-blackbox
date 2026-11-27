@@ -40,6 +40,11 @@ that the two version fields agree.
 
 ### Fixed
 
+- **Placeholder keys in `.env.example` files and mock secrets in tests are no longer blocked.** A value
+  shaped like a key but carrying no randomness (`sk-xxxx…`, `sk-ant-your-key-here`, `AIzaXXXX…`, AWS's
+  documented `AKIA…EXAMPLE`, `ghp_abcdef…0123456789`, a mock `BEGIN PRIVATE KEY` block with no key
+  material) is not a secret. Blackbox judges the value, never the file's name or folder, so a real key
+  written into a test file or a template is still caught (BB-005).
 - **The verified-sync panel says "node offline" only when the node is down.** On a busy node,
   counting what it holds can take 5–10 seconds. The panel used to give up after 5 seconds and
   call a node that was still answering "offline", with every number blank. It now counts in the

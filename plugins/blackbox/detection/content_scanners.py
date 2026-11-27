@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 from . import shell_shapes
+from .secrets_handled.placeholders import is_placeholder
 from ..kernel import crypto_secrets, redaction, threat_ids
 
 # ---------------------------------------------------------------------------
@@ -117,26 +118,28 @@ def scan_secret_values(text: str, *more: str) -> list[dict[str, str]]:
     value (see ``kernel.redaction.redact_secret_values``).
     """
     worst: dict[str, str] = {}
-    for window in (window for part in (text, *more) if part for window in secret_scan_windows(part)):
-        for hit in _scan_window(window):
-            if _SEVERITY_RANK[hit["severity"]] > _SEVERITY_RANK[worst.get(hit["type"], "")]:
-                worst[hit["type"]] = hit["severity"]
+    for part in (part for part in (text, *more) if part):
+        windows = secret_scan_windows(part)
+        for index, window in enumerate(windows):
+            # The head of a long call is cut at its end: a key there may run on past it.
+            for hit in _scan_window(window, cut=index == 0 and len(windows) > 1):
+                if _SEVERITY_RANK[hit["severity"]] > _SEVERITY_RANK[worst.get(hit["type"], "")]:
+                    worst[hit["type"]] = hit["severity"]
     return [{"type": secret_type, "severity": severity} for secret_type, severity in worst.items()]
 
 
-def _scan_window(scan: str) -> list[dict[str, str]]:
-    """The secret values in one window of text."""
+def _scan_window(scan: str, *, cut: bool = False) -> list[dict[str, str]]:
+    """The secret values in one window of text (*cut*: the window stops short of the text's end)."""
     out: list[dict[str, str]] = []
     seen: set = set()
     for typ, severity, pattern in redaction.SECRET_VALUE_RULES:
         if typ in seen:
             continue
-        try:
-            if pattern.search(scan):
-                seen.add(typ)
-                out.append({"type": typ, "severity": severity})
-        except re.error:  # pragma: no cover - static patterns
-            continue
+        # A value shaped like a key but carrying no randomness (``sk-xxxx…``, a mock PEM
+        # block in a test) is a placeholder, not a secret (BB-005); any real one still counts.
+        if any(not is_placeholder(typ, scan, match.start(), match.end(), cut=cut) for match in pattern.finditer(scan)):
+            seen.add(typ)
+            out.append({"type": typ, "severity": severity})
     seed = _seed_phrase_severity(scan)
     if seed:
         out.append({"type": "seed-phrase", "severity": seed})
