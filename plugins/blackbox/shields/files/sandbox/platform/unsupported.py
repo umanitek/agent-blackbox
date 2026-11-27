@@ -63,7 +63,7 @@ def render(_places: Places, digest_line: str = "", allowances: object = None) ->
     return ""
 
 
-def launcher_script(_command: str, _here: str, _profile: str) -> str:
+def launcher_script(_command: str, _here: str, _profile: str, _canary: str) -> str:
     return ""
 
 
@@ -71,11 +71,11 @@ def open_app(app: str, _profile: str, **_options: object) -> str:
     raise ValueError(f"unknown app {app!r}")
 
 
-def shell_shim(_shell: str, _here: str, _profile: str, _launchers: str = "") -> str:
+def shell_shim(_shell: str, _here: str, _profile: str, _canary: str, _launchers: str = "") -> str:
     return ""
 
 
-def command_shim(_profile: str, _launchers: str = "") -> str:
+def command_shim(_profile: str, _canary: str, _launchers: str = "") -> str:
     return ""
 
 
@@ -111,6 +111,7 @@ class ProcessFacts:   # the same shape as macOS's; never built here
     uid: int
     path: str
     args: str
+    started: str = ""
 
 
 def describe(_pid: int) -> None:

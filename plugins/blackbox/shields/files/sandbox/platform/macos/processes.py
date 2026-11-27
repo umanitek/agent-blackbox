@@ -2,7 +2,7 @@
 
 Usage::
 
-    describe(8240)      # ProcessFacts(uid=501, path="/opt/homebrew/bin/node", args="node server.js")
+    describe(8240)      # ProcessFacts(uid=501, path="/opt/homebrew/bin/node", args="node server.js", started="Thu Nov 26 …")
     terminate(8240)     # True when the signal was sent
 """
 
@@ -24,11 +24,14 @@ SYSTEM_PREFIXES = ("/System/", "/usr/libexec/", "/usr/sbin/", "/sbin/", "/Librar
 
 @dataclass(frozen=True)
 class ProcessFacts:
-    """One process: its owner's ``uid``, its program ``path`` and its command line ``args``."""
+    """One process: its owner's ``uid``, its program ``path``, its command line ``args`` and when
+    it ``started`` (``ps -o lstart``, "" when unknown) — with *path*, what tells a process from a
+    later one that got the same number."""
 
     uid: int
     path: str
     args: str
+    started: str = ""
 
 
 def _ps(words: list[str]) -> subprocess.CompletedProcess[str]:
@@ -40,12 +43,13 @@ def describe(pid: int) -> Optional[ProcessFacts]:
     try:
         done = _ps(["-o", "uid=", "-o", "comm=", "-p", str(pid)])
         args = _ps(["-o", "args=", "-p", str(pid)]).stdout.strip()
+        started = _ps(["-o", "lstart=", "-p", str(pid)]).stdout.strip()
     except (OSError, subprocess.SubprocessError):
         return None
     head = done.stdout.strip().split(None, 1)
     if done.returncode != 0 or len(head) != 2 or not head[0].isdigit():
         return None
-    return ProcessFacts(int(head[0]), head[1], args)
+    return ProcessFacts(int(head[0]), head[1], args, started)
 
 
 def is_system(path: str) -> bool:

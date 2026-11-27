@@ -40,6 +40,26 @@ that the two version fields agree.
 
 ### Fixed
 
+- **Agents in the sandbox can no longer get Blackbox to open an app they built themselves.** Agents can open
+  only apps root installed (system apps, and apps an installer put in /Applications as root). An app you
+  dragged into /Applications yourself is owned by you, so agents can no longer open it.
+- **Agent lockdown and your block list see every way of writing an IP address in a link** (IPv6 in brackets,
+  whole-number and hex IPv4), and an all-number "domain" such as `999.1.1.1` is refused when you add it.
+- **Setting an environment variable, or making the sandbox's check file unreadable, no longer takes an agent out
+  of the sandbox** or marks it as sandboxed.
+- **One bad line in a shield's settings no longer switches off the rest of that setting**; the card names the
+  lines it skipped.
+- **One agent can no longer borrow another agent's sandbox permissions**: the asking agent is found from its
+  own connection.
+- **Old, replayed or unsigned reports from the system protection helper are refused**, and a damaged helper key
+  is reported as broken instead of "no key".
+- **Fake "Blackbox" startup items are no longer rated safe.**
+- **If the firewall fails to load its rules once, Blackbox keeps trying** and keeps the previous rules in place
+  meanwhile. Turning DNS Shield off always gives back every network's own DNS servers, even after a switch-on
+  that failed half-way.
+- **The Network Shield card no longer shows a protection as on after another program removed its rules.**
+- **On macOS, connections to blocked addresses fail at once instead of hanging for up to a minute**, and on
+  Linux a sandboxed agent starts only after its own network rules are in place.
 - **A coding agent's tool call too large or malformed for Blackbox to read is now refused**, never allowed
   unchecked (actions only; observing events still pass). The readable size went up from 1 MiB to 16 MiB.
 - **Gemini CLI's read-many-files tool has every file it names checked**, and PowerShell tool calls (Copilot CLI

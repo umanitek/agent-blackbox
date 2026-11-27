@@ -36,7 +36,7 @@ from ... import mode as mode_module
 from .catalogue import BY_ID, NEVER, NOT_CONTROLLABLE, PERMISSIONS
 from .judge import loosened
 from .model import Access, FolderRule, Mode, Route, Rule, Scope, Settings
-from .section import SECTION, as_section, current, known_agent, stored
+from .section import SECTION, as_section, current, known_agent, problems, stored
 
 logger = logging.getLogger(__name__)
 #: When a change reaches an agent, per route.
@@ -160,6 +160,8 @@ def view(sandboxed: tuple[str, ...] = ()) -> dict[str, Any]:
                    for agent in sandboxed],
         "hooks_only_note": HOOKS_ONLY_NOTE,
         "sandbox_unavailable": "",
+        # rows of the stored setting that could not be read: each dropped alone, the rest in force
+        "problems": list(problems()),
     }
 
 

@@ -6,15 +6,15 @@ use std::net::{IpAddr, SocketAddr};
 
 use super::enforce::{pf, sessions, system};
 use super::system_guard;
-use crate::platform::{Enforcer, Filter, SavedDns};
+use crate::platform::{Enforcer, Filter, Pointed, SavedDns};
 
 /// macOS's enforcer (no state of its own; the saved state is the helper's).
 #[derive(Debug, Default, Clone, Copy)]
 pub struct MacEnforcer;
 
 impl Enforcer for MacEnforcer {
-    fn point_dns_at_shield(&self) -> Result<SavedDns, String> {
-        system::point_dns_at_shield()
+    fn point_dns_at_shield(&self, already: &SavedDns) -> Pointed {
+        system::point_dns_at_shield(already)
     }
 
     fn restore_dns(&self, saved: &SavedDns) -> Vec<String> {

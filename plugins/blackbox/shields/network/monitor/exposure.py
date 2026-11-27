@@ -10,12 +10,21 @@ ad-hoc or test-signed, or run from a temporary / Downloads folder), ``medium`` (
 developer — check you know it; configuration profiles, kernel extensions, scheduled jobs),
 ``low`` (part of macOS, or Blackbox itself), ``checking`` (signature not read yet).
 
-Blackbox's own items are recognised by IDENTITY, not trusted by name (E2E 2026-11-21: Blackbox
-rated its own services critical, and its node's port high): a startup item is Blackbox's when its
-label is one of Blackbox's AND its program sits in a folder only Blackbox and the person may change
-(Blackbox's data folder — where its launchers live — its node's folder, the root-only helper
-folder); a listener is Blackbox's when its process is this dashboard or Blackbox's own DKG node
-(the node's pid file). Anything else named "Blackbox" is judged like any program.
+Blackbox's own items are recognised only from facts nothing in the person's account can forge
+(independent review 2026-11-26, finding 9: a LaunchAgent planted with an ``ai.umanitek.blackbox.*``
+label and a program under Blackbox's data folder — both the person's, so an agent's, to write —
+rated "Blackbox, low"; so did any process whose pid was written into the node's pid file):
+
+* a startup item is Blackbox's (``own``, low) when the root helper reports it from a place only
+  root writes (a system launch daemon / agent, a system systemd unit), with one of Blackbox's
+  labels, and its program is root's own file inside the root-only helper folder;
+* a listener is Blackbox's when its process is this dashboard (the helper reports the pid; the
+  dashboard knows its own).
+
+An item in the person's own account that LOOKS like Blackbox's (its label and a program in
+Blackbox's folders, or the node's pid file) is rated like any program and marked
+``claims_own`` with a sentence saying so — Blackbox can not vouch for what the person's account
+can change. Anything else named "Blackbox" is judged like any program.
 """
 
 from __future__ import annotations
@@ -47,6 +56,12 @@ _ORDER = {"critical": 0, "high": 1, "medium": 2, "checking": 3, "low": 4}
 #: Blackbox's launchd labels all start so (dashboard, node, system protection helper, curator…).
 OWN_LABEL_PREFIX = "ai.umanitek.blackbox"
 OWN_NAME = "Blackbox (this protection)"
+#: Startup kinds the helper reads from places only root writes.
+ROOT_HELD_KINDS = frozenset({"launch-daemon", "launch-agent", "systemd-unit"})
+NODE_CLAIM = (" Blackbox's DKG node file names this process; its peer-to-peer port is how it receives the threat "
+              "graph — but that file is yours to change, so check it is Blackbox's node.")
+CLAIMED_WHY = (" It says it is Blackbox's, but it sits where any program you run could change it, "
+               "so Blackbox can not vouch for it.")
 _NODE_PID_FILE = "daemon.pid"
 _checking: set[str] = set()
 _lock = threading.Lock()
@@ -108,35 +123,47 @@ def _own_folders() -> tuple[str, ...]:
                  (constants.blackbox_home(), config.dkg_home(), system_helper.HOME))
 
 
+def _root_file(path: str) -> bool:
+    try:
+        return os.lstat(path).st_uid == 0
+    except OSError:
+        return False
+
+
 def is_own_startup_item(item: Mapping[str, Any]) -> bool:
-    """Blackbox's own login service or helper: its label AND a program inside Blackbox's folders."""
+    """Blackbox's own helper, proven: a root-held kind (the helper's report), one of Blackbox's
+    labels, and a root-owned program inside the root-only helper folder."""
+    program = os.path.realpath(str(item.get("program") or ""))
+    return (item.get("kind") in ROOT_HELD_KINDS and str(item.get("label") or "").startswith(OWN_LABEL_PREFIX)
+            and program.startswith(os.path.realpath(str(system_helper.HOME)) + os.sep) and _root_file(program))
+
+
+def claims_own_startup_item(item: Mapping[str, Any]) -> bool:
+    """Looks like Blackbox's (its label and a program in Blackbox's folders) but is not proven."""
     program = os.path.realpath(str(item.get("program") or ""))
     return str(item.get("label") or "").startswith(OWN_LABEL_PREFIX) and program.startswith(_own_folders())
 
 
-def _own_pids() -> dict[int, str]:
-    """The processes that are Blackbox: this dashboard, and its DKG node (by its pid file)."""
-    pids = {os.getpid(): "Blackbox's dashboard."}
+def _node_pid() -> int:
+    """The pid Blackbox's DKG node's pid file names (the person's file: a claim, never proof)."""
     text = read_small_text(str(config.dkg_home() / _NODE_PID_FILE), 64)
-    if text and text.strip().isdigit():
-        pids[int(text.strip())] = ("Blackbox's own DKG node: its peer-to-peer port is how it receives the threat "
-                                   "graph, so other computers are expected to reach it.")
-    return pids
+    return int(text.strip()) if text and text.strip().isdigit() else 0
 
 
 def listeners(snapshot: Mapping[str, Any]) -> list[dict[str, Any]]:
     rows, unknown = [], []
-    own = _own_pids()
+    node = _node_pid()
     for item in snapshot.get("exposure", []):
-        if item.get("pid") in own:
-            rows.append({**item, "service": OWN_NAME, "risk": "low", "why": own[item["pid"]], "signature": None, "own": True,
+        if item.get("pid") == os.getpid():
+            rows.append({**item, "service": OWN_NAME, "risk": "low", "why": "Blackbox's dashboard.", "signature": None, "own": True,
                          "first_seen": system_report.first_seen(item) or item.get("since")})
             continue
         risk, why, sig = judge(item["program"])
         if risk == "checking":
             unknown.append(item["program"])
+        claimed = {"claims_own": True, "why": why + NODE_CLAIM} if node and item.get("pid") == node else {}
         rows.append({**item, "service": SERVICES.get(item["port"], ""), "risk": risk, "why": why, "signature": sig,
-                     "first_seen": system_report.first_seen(item) or item.get("since")})
+                     "first_seen": system_report.first_seen(item) or item.get("since"), **claimed})
     _check_later(unknown)
     return sorted(rows, key=lambda r: (_ORDER.get(r["risk"], 9), -(r["first_seen"] or 0)))
 
@@ -166,8 +193,9 @@ def startup_items(snapshot: Mapping[str, Any]) -> list[dict[str, Any]]:
             risk, why, sig = judge(item["program"], startup=True)
             if risk == "checking":
                 unknown.append(item["program"])
+        claimed = {"claims_own": True, "why": why + CLAIMED_WHY} if claims_own_startup_item(item) else {}
         rows.append({**item, "kind_name": ITEM_NAMES.get(kind, kind), "risk": risk, "why": why, "signature": sig,
-                     "added_at": system_report.first_seen(original)})
+                     "added_at": system_report.first_seen(original), **claimed})
     _check_later(unknown)
     return sorted(rows, key=lambda r: (_ORDER.get(r["risk"], 9), -(r["added_at"] or 0)))
 

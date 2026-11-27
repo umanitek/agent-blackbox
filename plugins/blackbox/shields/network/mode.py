@@ -55,11 +55,13 @@ Usage::
 from __future__ import annotations
 
 import ipaddress
+from dataclasses import replace
 from typing import Any, Iterable, Mapping, Optional
 
 from ...kernel import threat_ids
 from .. import extensions
 from ..contract import Pack, SettingField, SettingOption, ShieldMode
+from ..setting_lists import EntryReader, kept, strict
 
 SHIELD_ID = "network-shield"
 DNS, FIREWALL, LOCKDOWN, CUT, SSH_LOCKDOWN = "dns", "firewall", "lockdown", "cut", "ssh-lockdown"
@@ -134,6 +136,8 @@ def normalise_entry(value: Any) -> Optional[str]:
         pass
     domain = threat_ids.normalize_ioc_value("domain", text)
     labels = domain.split(".")
+    if domain.replace(".", "").isdigit():
+        return None   # WHY: all digits yet no address (999.1.1.1): no name, and no firewall entry either
     if len(labels) < 2 or not all(label and len(label) <= 63 and all(c.isalnum() or c in "-_" for c in label)
                                   for label in labels):
         return None
@@ -178,51 +182,58 @@ def agent_hosts(mode: ShieldMode) -> tuple[str, ...]:
     return option(mode, OPT_AGENT_HOSTS)
 
 
+def _choice_reader(allowed: Iterable[str]) -> EntryReader:
+    allowed = frozenset(allowed)
+
+    def read(item: Any) -> Optional[str]:
+        chosen = str(item or "").strip().lower()
+        return chosen if chosen in allowed else None
+    return read
+
+
 def _choices(raw: Any, allowed: Iterable[str]) -> Optional[tuple[str, ...]]:
     """*raw* as allowed ids in order, deduplicated; None when it is not such a list."""
     allowed = tuple(allowed)
-    if not isinstance(raw, list) or len(raw) > len(allowed):
-        return None
-    chosen = [str(item or "").strip().lower() for item in raw]
-    if any(item not in allowed for item in chosen):
-        return None
-    return tuple(dict.fromkeys(chosen))
+    return strict(raw, _choice_reader(allowed), len(allowed))
 
 
 def _entries(raw: Any, key: str) -> Optional[tuple[str, ...]]:
     """*raw* as normalised domains / IPs, deduplicated; None when anything in it is invalid."""
-    if not isinstance(raw, list) or len(raw) > MAX_ENTRIES[key]:
-        return None
-    entries = [normalise_entry(item) for item in raw]
-    if any(entry is None for entry in entries):
-        return None
-    return tuple(dict.fromkeys(entry for entry in entries if entry))
+    return strict(raw, normalise_entry, MAX_ENTRIES[key])
 
 
 def _sources(raw: Any) -> Optional[tuple[str, ...]]:
     """*raw* as normalised addresses / networks, deduplicated; None when anything is invalid."""
-    if not isinstance(raw, list) or len(raw) > MAX_SSH_ALLOW:
-        return None
-    sources = [normalise_source(item) for item in raw]
-    if any(source is None for source in sources):
-        return None
-    return tuple(dict.fromkeys(source for source in sources if source))
+    return strict(raw, normalise_source, MAX_SSH_ALLOW)
 
 
 def from_entry(entry: Mapping[str, Any]) -> ShieldMode:
-    """The mode as the ``blackbox`` config entry states it (defaults when absent or invalid)."""
+    """The mode as the ``blackbox`` config entry states it (defaults when absent), each stored list
+    read entry by entry (``setting_lists.kept``): a bad entry is dropped alone and named in the
+    mode's ``problems``, every good one stays in force (a duplicate is folded, never a reason to
+    drop the list)."""
     shields = entry.get("shields")
     section = shields.get(SHIELD_ID) if isinstance(shields, Mapping) else None
     section = section if isinstance(section, Mapping) else {}
-    return build(
+    problems: list[str] = []
+
+    def read(key: str, reader: EntryReader, limit: int) -> Optional[tuple[str, ...]]:
+        if section.get(key) is None:
+            return None
+        found = kept(section[key], reader, limit, f"shields.{SHIELD_ID}.{key}")
+        problems.extend(found.problems)
+        return found.values
+    lists = tuple(supported_lists())
+    mode = build(
         enabled=section.get("enabled") is True,
-        protections=_choices(section.get(OPT_PROTECTIONS), PROTECTIONS) if OPT_PROTECTIONS in section else None,
-        lists=_choices(section.get(OPT_LISTS), supported_lists()) or (),
-        allow=_entries(section.get(OPT_ALLOW), OPT_ALLOW) or (),
-        block=_entries(section.get(OPT_BLOCK), OPT_BLOCK) or (),
-        agent_hosts=_entries(section.get(OPT_AGENT_HOSTS), OPT_AGENT_HOSTS) if OPT_AGENT_HOSTS in section else None,
-        ssh_allow=_sources(section.get(OPT_SSH_ALLOW)) or (),
+        protections=read(OPT_PROTECTIONS, _choice_reader(PROTECTIONS), len(PROTECTIONS)),
+        lists=read(OPT_LISTS, _choice_reader(lists), max(len(lists), 1)) or (),
+        allow=read(OPT_ALLOW, normalise_entry, MAX_ENTRIES[OPT_ALLOW]) or (),
+        block=read(OPT_BLOCK, normalise_entry, MAX_ENTRIES[OPT_BLOCK]) or (),
+        agent_hosts=read(OPT_AGENT_HOSTS, normalise_entry, MAX_ENTRIES[OPT_AGENT_HOSTS]),
+        ssh_allow=read(OPT_SSH_ALLOW, normalise_source, MAX_SSH_ALLOW) or (),
     )
+    return replace(mode, problems=tuple(problems)) if problems else mode
 
 
 def current() -> ShieldMode:

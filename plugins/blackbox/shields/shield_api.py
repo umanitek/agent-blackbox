@@ -66,6 +66,17 @@ class InstanceRef:
 
 
 @dataclass(frozen=True)
+class Peer:
+    """The HTTP connection one endpoint call came in on, as the server saw it: the client's *host*
+    and *port* and the server's own *server_port*. A broker finds the process that asked from it
+    (the one process holding that client socket), never from what the request says about itself."""
+
+    host: str
+    port: int
+    server_port: int
+
+
+@dataclass(frozen=True)
 class RunningAgent:
     """A live agent instance inside Blackbox's sandbox: *agent*, *instance* key, agent process *pid*
     (0 when not known) and the *profile* its launcher chose (``<file>#<digest>``, as its own hook
@@ -124,6 +135,9 @@ class ShieldContext:
     #: ``sandboxed_runs() -> [RunningAgent]`` — the live agents inside the sandbox with the profile
     #: each started in (the agent tracker's answer); None where it can not be asked.
     sandboxed_runs: Optional[Callable[[], list[RunningAgent]]] = None
+    #: The connection this call came in on (the dashboard's request peer); None where not known —
+    #: a broker then names no asking agent (it never takes the request's word for it).
+    peer: Optional[Peer] = None
 
     def indicators_now(self) -> Optional[Any]:
         """The verified network lists known now, never waiting for a build."""

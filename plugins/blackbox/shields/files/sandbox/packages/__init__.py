@@ -261,10 +261,12 @@ def _install(context: ShieldContext, body: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _asker(context: ShieldContext, body: Mapping[str, Any]) -> Any:
-    """The agent instance whose process asked (the client sends its parent's pid; KI-605: the notice
-    said "for an AI agent", naming none). None when not known — never guessed."""
-    pid = body.get("pid")
-    if context.owner_of_pid is None or not isinstance(pid, int) or isinstance(pid, bool) or pid <= 1:
+    """The agent instance whose process asked: the one holding the request's connection
+    (``platform.connection_pid``; the body's ``pid`` is the agent's to choose and is never believed
+    — review 2026-11-26, finding 6). KI-605: the notice said "for an AI agent", naming none. None
+    when not known — never guessed."""
+    pid = platform.connection_pid(context.peer)
+    if context.owner_of_pid is None or pid <= 1:
         return None
     try:
         return context.owner_of_pid(pid)

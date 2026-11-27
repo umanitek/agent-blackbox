@@ -228,8 +228,12 @@ def test_a_forged_file_report_is_refused_once_paired(home, monkeypatch):
     with pytest.raises(ShieldApiError) as refused:
         api.file_report(unsigned, json.loads(body))
     assert refused.value.status == 401
+    import time
+    stamp, nonce = int(time.time()), "0f" * 16
     signed = ShieldContext(network_indicators=lambda: None, ask_assistant=lambda _m: None, request_body=body,
-                           request_headers={helper_link.HELPER_SIGNATURE_HEADER.lower(): helper_link.sign_report(KEY, body)})
+                           request_headers={helper_link.HELPER_SIGNATURE_HEADER.lower(): helper_link.sign_report(KEY, stamp, nonce, body),
+                                            helper_link.HELPER_TIMESTAMP_HEADER.lower(): str(stamp),
+                                            helper_link.HELPER_NONCE_HEADER.lower(): nonce})
     assert api.file_report(signed, json.loads(body)) == {"kept": 1}
 
 

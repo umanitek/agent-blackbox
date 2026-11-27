@@ -347,7 +347,7 @@ mod tests {
         let unit = fs::read_to_string(&layout.unit).unwrap();
         assert!(unit.contains("Restart=always") && unit.contains("NoNewPrivileges=yes"), "{unit}");
         assert!(unit.contains(&format!("ExecStart={}", layout.binary.display())));
-        assert!(link::load_key(&layout.home).is_some_and(|key| key.len() == link::KEY_BYTES));
+        assert!(link::load_key(&layout.home).usable().is_some_and(|key| key.len() == link::KEY_BYTES));
         assert_eq!(fs::read_to_string(&layout.receipt).unwrap(), format!("sha256 {}\n", hex::encode(Sha256::digest(b"new helper"))));
         assert!(systemd.state.borrow().active && systemd.state.borrow().relabelled.len() == 2, "labelled for SELinux, started");
         assert!(fs::read_dir(&layout.lib).unwrap().flatten().all(|e| !e.file_name().to_string_lossy().starts_with(".netd-staging")));
@@ -421,14 +421,14 @@ mod tests {
         let (dir, layout) = layout("refused");
         let systemd = FakeSystemd::default();
         install_into(&args_for(&dir, b"old helper"), &layout, &systemd, &no_put_back).unwrap();
-        let key = link::load_key(&layout.home).unwrap();
+        let key = link::load_key(&layout.home).usable().unwrap();
         let refusing = FakeSystemd { refuse: Some((layout.binary.clone(), b"new helper".to_vec())), ..Default::default() };
         refusing.state.borrow_mut().active = true;
         let error = install_into(&args_for(&dir, b"new helper"), &layout, &refusing, &no_put_back).unwrap_err();
         assert!(error.contains("back in place and running"), "{error}");
         assert_eq!(fs::read(&layout.binary).unwrap(), b"old helper");
         assert!(refusing.state.borrow().active);
-        assert_eq!(link::load_key(&layout.home).unwrap(), key, "pairing kept");
+        assert_eq!(link::load_key(&layout.home).usable().unwrap(), key, "pairing kept");
         assert!(fs::read_to_string(&layout.receipt).unwrap().contains(&hex::encode(Sha256::digest(b"old helper"))));
         assert!(!crate::handover::pending(&layout.home, std::time::SystemTime::now()));
         let _ = fs::remove_dir_all(&dir);

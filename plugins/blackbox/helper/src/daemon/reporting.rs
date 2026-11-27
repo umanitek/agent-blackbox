@@ -20,27 +20,33 @@ impl Helper {
         let pf_on = state.firewall_active || state.cut_active || state.ssh_lockdown_active || state.remote_lock_active;
         // What is really enforced (KI-695): a filter another root program flushed, emptied or
         // switched off is not "active" until it is loaded again (`keep_filter_intact`).
-        let intact = self.filtered.lock().ok().and_then(|filtered| filtered.as_ref().map(|filter| self.enforcer.filter_intact(filter)))
-            .flatten() != Some(false);
+        // Every firewall-backed flag (threats, cut, SSH lockdown, remote lock) and DNS is ANDed with
+        // what is measured in effect (LES-166), here and in `protections`.
+        let in_effect_filter = self.filtered.lock().ok().and_then(|keeper| keeper.in_effect());
+        let in_effect = InEffect {
+            dns: self.enforcer.dns_in_effect() != Some(false),
+            filter: in_effect_filter.is_none_or(|filter| self.enforcer.filter_intact(&filter) != Some(false)),
+        };
         let remote = if self.watching.load(Ordering::SeqCst) { self.observer.remote_snapshot() } else { None };
+        let failures = self.failures.lock().map(|f| f.clone()).unwrap_or_default();
         json!({
-            "running": true, "dns_active": state.dns_active && self.enforcer.dns_in_effect() != Some(false), "firewall_active": state.firewall_active && intact,
-            "cut_active": state.cut_active, "ssh_lockdown_active": state.ssh_lockdown_active,
+            "running": true, "dns_active": state.dns_active && in_effect.dns, "firewall_active": state.firewall_active && in_effect.filter,
+            "cut_active": state.cut_active && in_effect.filter, "ssh_lockdown_active": state.ssh_lockdown_active && in_effect.filter,
             "version": state.version, "queries": self.resolver.queries.load(std::sync::atomic::Ordering::Relaxed),
             // What the person needs to trust the screen: whether the link is authenticated and the
             // last thing that failed (null when everything applied).
             "auth": self.link.lock().map(|link| link.mode()).unwrap_or("legacy"),
             "last_error": self.last_error.lock().ok().and_then(|e| e.clone()),
             "resolver_ok": self.resolver.alive.load(Ordering::SeqCst),
-            "dns_error": self.failures.lock().ok().and_then(|f| f.dns.clone()),
-            "filter_error": self.failures.lock().ok().and_then(|f| f.filter.clone()),
-            "protections": protections(&state, &self.failures.lock().map(|f| f.clone()).unwrap_or_default()),
+            "dns_error": failures.dns,
+            "filter_error": failures.filter,
+            "protections": protections(&state, &failures, in_effect),
             "firewall_dropped": if pf_on { self.enforcer.dropped() } else { 0 },
             // What is really enforced, not what was asked: pf must be seen Enabled.
             "pf_enabled": if pf_on { self.enforcer.filter_enabled() } else { None },
             "blocks": blocks, "resolved": resolved, "watch": snapshot, "events": events,
             // Under its own key, so a plugin that predates it ignores it instead of refusing the report.
-            "remote": remote.map(|snapshot| json!({"snapshot": snapshot, "events": remote_events, "lock_active": state.remote_lock_active})),
+            "remote": remote.map(|snapshot| json!({"snapshot": snapshot, "events": remote_events, "lock_active": state.remote_lock_active && in_effect.filter})),
         })
     }
 

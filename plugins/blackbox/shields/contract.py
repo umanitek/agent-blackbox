@@ -58,17 +58,21 @@ class ShieldMode:
     *options* maps an option to its chosen values (``{"wallets": ("metamask",)}``).
     A chosen pack that is not supported right now stays here (reported, never
     dropped). *personal* names the options that hold personal data (the operator's
-    own wallet addresses); ``as_json()`` leaves them out unless asked.
+    own wallet addresses); ``as_json()`` leaves them out unless asked. *problems*: the
+    stored entries that could not be read, each dropped alone (``setting_lists``), shown by
+    ``as_json()`` only when there are any.
     """
 
     enabled: bool
     options: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
     personal: frozenset[str] = frozenset()
+    problems: tuple[str, ...] = ()
 
     def as_json(self, include_personal: bool = False) -> dict[str, JsonValue]:
         options: dict[str, JsonValue] = {key: list(values) for key, values in self.options.items()
                    if include_personal or key not in self.personal}
-        return {"enabled": self.enabled, **options}
+        shown: dict[str, JsonValue] = {"problems": list(self.problems)} if self.problems else {}
+        return {"enabled": self.enabled, **options, **shown}
 
 
 @dataclass(frozen=True)

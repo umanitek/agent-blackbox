@@ -33,9 +33,11 @@ Usage::
 
 from __future__ import annotations
 
+import errno
 import json
 import logging
 import os
+import stat
 import time
 from pathlib import Path
 from typing import Any, Optional
@@ -113,7 +115,7 @@ def _sync_launchers(commands: dict[str, str]) -> None:
     folder = launcher_dir()
     if commands:
         for command, agent in sorted(commands.items()):
-            write_if_changed(folder / command, platform.launcher_script(command, str(folder), str(agent_profile(agent))), 0o755)
+            write_if_changed(folder / command, platform.launcher_script(command, str(folder), str(agent_profile(agent)), str(canary_path())), 0o755)
         _keep_on_path(folder)
     else:
         shell_path.remove()
@@ -284,12 +286,37 @@ def open_app(app: str) -> str:
 
 def proven(canary: Optional[Path] = None) -> bool:
     """True when THIS process is inside the sandbox: only a sandboxed process is refused the canary
-    (unforgeable from inside — an environment variable is not). The hook runner asks the same."""
+    (unforgeable from inside — an environment variable is not). The hook runner asks the same, and
+    the launchers' shell twin is ``platform.posix_scripts.inside_test``.
+
+    A refusal counts only when the canary's own permissions can not explain it (independent review
+    2026-11-26, finding 10: ``chmod 000`` on the canary, outside any sandbox, read as "inside"): its
+    folder is a real folder and the canary no link, and the refusal is EPERM (Seatbelt; a refused
+    ``lstat`` too) or EACCES from a regular file on another device than its folder (the Linux
+    sandbox's mode-0000 mask, mounted over it). ``chmod``, an ACL or a folder without search rights
+    give EACCES on the canary's own device: never "inside"."""
+    path = canary or canary_path()
     try:
-        with open(canary or canary_path(), encoding="utf-8-sig") as handle:
-            handle.read(1)
-        return False
-    except PermissionError:
-        return True
+        folder = os.lstat(path.parent)
     except OSError:
         return False
+    try:
+        with open(path, "rb") as handle:
+            handle.read(1)
+        return False
+    except PermissionError as refused:
+        return stat.S_ISDIR(folder.st_mode) and _refused_by_a_sandbox(path, folder, refused.errno)
+    except OSError:
+        return False
+
+
+def _refused_by_a_sandbox(path: Path, folder: os.stat_result, number: Optional[int]) -> bool:
+    try:
+        facts = os.lstat(path)
+    except PermissionError:
+        return number == errno.EPERM   # Seatbelt hides the canary's metadata as well
+    except OSError:
+        return False
+    if not stat.S_ISREG(facts.st_mode):
+        return False
+    return number == errno.EPERM or (number == errno.EACCES and facts.st_dev != folder.st_dev)

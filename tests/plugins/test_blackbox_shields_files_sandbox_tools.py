@@ -88,7 +88,7 @@ def test_the_tools_are_made_again_only_when_macos_changes(home):
 
 
 def test_the_hermes_shells_put_the_tools_first_on_the_sandboxed_path_only():
-    shim = macos.shell_shim("bash", "/bb/sandbox/hermes-shell", "/bb/sandbox/agents.sb", "/bb/agent-bin")
+    shim = macos.shell_shim("bash", "/bb/sandbox/hermes-shell", "/bb/sandbox/agents.sb", "/bb/sandbox/canary", "/bb/agent-bin")
     before_exec = shim.split("exec /usr/bin/sandbox-exec")[0]
     assert "tools='/bb/agent-bin/sandbox-tools'" in before_exec and 'PATH="$tools:$PATH"' in before_exec
     outside = shim.split("then exec \"$real\"")[0]

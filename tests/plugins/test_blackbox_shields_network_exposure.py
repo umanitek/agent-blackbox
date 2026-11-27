@@ -16,6 +16,8 @@ helper's plan then watches nothing.
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from plugins.blackbox.shields.network import mode as network_mode
@@ -142,16 +144,24 @@ def test_off_means_no_reads_and_a_plan_that_watches_nothing(monkeypatch):
 
 
 
-def test_blackbox_recognises_itself_by_identity_and_never_by_name_alone(home, monkeypatch):
-    """E2E 2026-11-21: Blackbox rated its own LaunchAgents critical (each listed twice) and its DKG
-    node's peer-to-peer port high. Its own items are low and named; a look-alike is not."""
-    import os
+def test_blackbox_recognises_itself_only_from_facts_the_person_can_not_change(home, monkeypatch, tmp_path):
+    """E2E 2026-11-21: Blackbox rated its own LaunchAgents critical (each listed twice). Independent
+    review 2026-11-26, finding 9: "own, low" came from the label and a program under Blackbox's
+    data folder — both the person's (so an agent's) to write — and from the node's pid file. Now
+    only the root-held helper and this dashboard are Blackbox's; a look-alike in the person's
+    account is rated like any program and says it claims to be Blackbox's; listed once."""
     from plugins.blackbox.kernel import constants
     monkeypatch.setattr(signature, "lookup", lambda path: signature.Signature(kind="adhoc", signer=""))
+    helper_home = tmp_path / "netd"
+    helper_home.mkdir()
+    monkeypatch.setattr(exposure.system_helper, "HOME", helper_home)
+    monkeypatch.setattr(exposure, "_root_file", lambda path: path.startswith(str(helper_home.resolve())))
+    helper_item = {"kind": "launch-daemon", "id": "/Library/LaunchDaemons/ai.umanitek.blackbox.netd.plist",
+                   "label": "ai.umanitek.blackbox.netd", "program": str(helper_home / "blackbox-netd")}
     launcher = str(constants.blackbox_home() / "bin" / "Blackbox")
-    ours = {"kind": "user-agent", "id": "/Users/me/Library/LaunchAgents/ai.umanitek.blackbox-dashboard.plist",
-            "label": "ai.umanitek.blackbox-dashboard", "program": launcher}
-    ours_again = {**ours, "kind": "login-item", "id": "btm:ai.umanitek.blackbox-dashboard"}
+    planted = {"kind": "user-agent", "id": "/Users/me/Library/LaunchAgents/ai.umanitek.blackbox-dashboard.plist",
+               "label": "ai.umanitek.blackbox-dashboard", "program": launcher}
+    planted_again = {**planted, "kind": "login-item", "id": "btm:ai.umanitek.blackbox-dashboard"}
     look_alike = {"kind": "user-agent", "id": "/Users/me/Library/LaunchAgents/ai.umanitek.blackbox-x.plist",
                   "label": "ai.umanitek.blackbox-x", "program": "/Users/me/.local/evil"}
     nameless = {"kind": "login-item", "id": "btm:1", "label": "(null)", "program": "/Applications/Tool.app/Contents/MacOS/tool"}
@@ -159,17 +169,22 @@ def test_blackbox_recognises_itself_by_identity_and_never_by_name_alone(home, mo
     node.mkdir(parents=True, exist_ok=True)
     (node / "daemon.pid").write_text("4242\n", encoding="utf-8")
     p2p = {"protocol": "tcp6", "address": "::", "port": 63333, "program": "/usr/local/bin/node", "pid": 4242, "since": 1}
+    dashboard = {**p2p, "port": 9700, "address": "127.0.0.1", "pid": os.getpid()}
     stranger = {**p2p, "port": 8000, "pid": 77}
-    system_report.record(system_report.validate(_report(exposure=[p2p, stranger], persistence=[ours, ours_again, look_alike, nameless]), NOW))
+    system_report.record(system_report.validate(_report(exposure=[p2p, dashboard, stranger],
+                                                        persistence=[helper_item, planted, planted_again, look_alike, nameless]), NOW))
     view = exposure.view(NOW)
     startup = {row["label"]: row for row in view["startup"]}
-    assert len([row for row in view["startup"] if row["label"] == ours["label"]]) == 1, "listed once"
-    assert startup[ours["label"]]["risk"] == "low" and startup[ours["label"]].get("own")
-    assert startup[look_alike["label"]]["risk"] == "critical", "a Blackbox-looking label elsewhere is not Blackbox"
+    assert len([row for row in view["startup"] if row["label"] == planted["label"]]) == 1, "listed once"
+    assert startup[helper_item["label"]]["risk"] == "low" and startup[helper_item["label"]].get("own")
+    claimed = startup[planted["label"]]
+    assert claimed["risk"] == "critical" and not claimed.get("own") and claimed["claims_own"] and "vouch" in claimed["why"]
+    assert startup[look_alike["label"]]["risk"] == "critical" and not startup[look_alike["label"]].get("claims_own")
     assert "tool" in startup and "(null)" not in startup
     ports = {row["port"]: row for row in view["listeners"]}
-    assert ports[63333]["risk"] == "low" and "expected" in ports[63333]["why"]
-    assert ports[8000]["risk"] == "high"
+    assert ports[9700]["risk"] == "low" and ports[9700]["own"]
+    assert ports[63333]["risk"] == "high" and ports[63333]["claims_own"] and not ports[63333].get("own")
+    assert ports[8000]["risk"] == "high" and not ports[8000].get("claims_own")
 
 
 def test_the_node_is_found_where_the_installer_put_it_not_in_the_fallback_folder(home, monkeypatch, tmp_path):
@@ -189,4 +204,4 @@ def test_the_node_is_found_where_the_installer_put_it_not_in_the_fallback_folder
     p2p = {"protocol": "tcp4", "address": "0.0.0.0", "port": 55260, "program": "/opt/homebrew/bin/node", "pid": 90424, "since": 1}
     system_report.record(system_report.validate(_report(exposure=[p2p]), NOW))
     row = exposure.view(NOW)["listeners"][0]
-    assert row.get("own") and row["risk"] == "low", row
+    assert row.get("claims_own") and not row.get("own"), row   # the pid file is the person's: a claim (finding 9)

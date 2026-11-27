@@ -1,8 +1,13 @@
 """Agent network lockdown and the block list, inside Blackbox's own guard.
 
 Every AI-agent tool call already passes through ``shields.check``. This detector finds the hosts
-a call would reach — with detection's own extractor (``iter_ioc_candidates`` over the call's
-text: URLs and their hosts, bare domains, IPv4s), never a second parser — and reports:
+a call would reach and reports them. Bare domains and IPv4s come from detection's own extractor
+(``iter_ioc_candidates`` over the call's text). A URL's host is read as the program reaching it
+reads it: ``urllib.parse.urlsplit(...).hostname`` (a bracketed IPv6 host whole), and every IPv4
+spelling ``inet_aton`` / ``curl`` accept — one integer, hex, octal, short dotted forms
+(:func:`numeric_ipv4`) — becomes the address it names, so the lists judge the canonical value
+(LES-105). A URL whose host can not be read is a lockdown finding while lockdown is on (lockdown
+fails closed). It reports:
 
 * ``network:blocked-host`` — a host on the operator's block list (while the shield is on);
 * ``network:agent-lockdown`` — under lockdown, a host not on ``agent_hosts`` / ``allow``
@@ -17,7 +22,9 @@ unreadable call yields nothing.
 from __future__ import annotations
 
 import ipaddress
-from typing import Any, Iterable
+import re
+from typing import Any, Iterable, NamedTuple, Optional
+from urllib.parse import urlsplit
 
 from ...detection import Finding, injection_scan_text, iter_ioc_candidates
 from ...kernel import public_suffix
@@ -32,6 +39,8 @@ CATEGORY = "network"
 #: Hosts one call may name before the rest are ignored (a call listing thousands is itself odd,
 #: and the extractor caps its own output too).
 MAX_HOSTS_PER_CALL = 64
+#: Unreadable URL hosts one call reports (one already refuses the call under lockdown).
+MAX_UNREADABLE_PER_CALL = 4
 #: The sighting layer's row: data leaving through the network (classification "over-broad-network").
 FINDING_KINDS: tuple[FindingKind, ...] = (
     FindingKind("data-exfil", "host-system", "T1041", identifier=LOCKDOWN_ID),
@@ -39,23 +48,81 @@ FINDING_KINDS: tuple[FindingKind, ...] = (
 )
 
 
-def hosts_in(args: Any) -> list[str]:
+#: A URL's scheme and authority (what ``urlsplit`` needs to find the host); the path is not read.
+_URL_AUTHORITY = re.compile(r"\b[a-z][a-z0-9+.-]{0,30}://[^\s/?#'\"<>`\\]+", re.IGNORECASE)
+#: One part of an ``inet_aton`` address: hex, octal (a leading 0) or decimal.
+_NUMERIC_PART = re.compile(r"^(0x[0-9a-f]*|[0-9]+)$", re.IGNORECASE)
+IPV4_PARTS = 4
+
+
+class CallHosts(NamedTuple):
+    """The hosts one call names (:func:`read_hosts`): *hosts* canonical, most specific first;
+    *unreadable* the URL hosts that are no host Blackbox can judge (as written, at most a few)."""
+
+    hosts: list[str]
+    unreadable: list[str]
+
+
+def _part_value(part: str) -> Optional[int]:
+    if not _NUMERIC_PART.match(part):
+        return None
+    if part.lower().startswith("0x"):
+        return int(part[2:] or "0", 16)
+    if len(part) > 1 and part.startswith("0"):
+        return int(part, 8) if all(digit in "01234567" for digit in part) else None
+    return int(part)
+
+
+def numeric_ipv4(name: str) -> Optional[str]:
+    """The IPv4 address an ``inet_aton`` spelling names (``134744072``, ``0x08080808``,
+    ``010.010.010.010``, ``8.8.2056`` -> ``8.8.8.8``), None for anything else. The last part fills
+    the bytes the parts before it leave, as ``inet_aton`` reads it."""
+    parts = name.split(".")
+    if not 1 <= len(parts) <= IPV4_PARTS:
+        return None
+    values = [_part_value(part) for part in parts]
+    if any(value is None for value in values):
+        return None
+    *leading, last = values
+    tail_bytes = IPV4_PARTS - len(leading)
+    if any(value > 0xFF for value in leading) or last >= 1 << (8 * tail_bytes):
+        return None
+    number = 0
+    for value in leading:
+        number = number << 8 | value
+    return str(ipaddress.IPv4Address(number << (8 * tail_bytes) | last))
+
+
+def _url_host(url: str) -> tuple[str, bool]:
+    """``(host, readable)`` for one URL's authority; ``("", True)`` when it names no host."""
+    try:
+        name = urlsplit(url).hostname
+    except ValueError:   # an unbalanced bracket, a bad port: no host Blackbox can judge
+        return url.split("://", 1)[-1], False
+    if not name:
+        return "", True
+    host = numeric_ipv4(name) or mode_module.normalise_entry(name)
+    return (host, True) if host else (name, False)
+
+
+def read_hosts(args: Any) -> CallHosts:
     """The hosts *args* names (domains lower-case, IPs canonical), most specific first, one per
     destination (a parent the extractor also emits — ``attacker.com`` beside
-    ``exfil.attacker.com`` — is dropped).
+    ``exfil.attacker.com`` — is dropped), and the URL hosts that could not be read.
 
     A host from a URL and an IP address always count. A bare name counts only when it is a real
     host by shape (:func:`_bare_name_is_host`): the extractor also yields file names, and
     ``main.py`` or ``notes.md`` end in real country domains (Paraguay, Moldova).
     """
+    text = injection_scan_text(args)
     url_hosts: list[str] = []
-    bare: list[str] = []
-    for identifier in iter_ioc_candidates(injection_scan_text(args)):
-        kind, _, value = identifier.partition(":")[2].partition(":")
-        if kind == "url":
-            url_hosts.append(value.split("://", 1)[-1].split("/", 1)[0].split("@")[-1].rsplit(":", 1)[0].strip("[]"))
-        elif kind in ("domain", "ip"):
-            bare.append(value)
+    unreadable: list[str] = []
+    for match in _URL_AUTHORITY.finditer(text):
+        host, readable = _url_host(match.group(0))
+        if host:
+            (url_hosts if readable else unreadable).append(host)
+    bare = [value for kind, value in (identifier.partition(":")[2].partition(":")[::2]
+                                      for identifier in iter_ioc_candidates(text)) if kind in ("domain", "ip")]
     hosts: list[str] = []
     for raw, from_url in [(host, True) for host in url_hosts] + [(host, False) for host in bare]:
         host = mode_module.normalise_entry(raw) or ""
@@ -64,7 +131,13 @@ def hosts_in(args: Any) -> list[str]:
         hosts.append(host)
         if len(hosts) >= MAX_HOSTS_PER_CALL:
             break
-    return [host for host in hosts if not any(other != host and other.endswith("." + host) for other in hosts)]
+    kept = [host for host in hosts if not any(other != host and other.endswith("." + host) for other in hosts)]
+    return CallHosts(kept, unreadable[:MAX_UNREADABLE_PER_CALL])
+
+
+def hosts_in(args: Any) -> list[str]:
+    """The readable hosts *args* names (:func:`read_hosts`)."""
+    return read_hosts(args).hosts
 
 
 #: Top-level domains that are also common file extensions: a bare two-label name ending in one
@@ -108,7 +181,11 @@ def detect(tool_name: str, args: Any, mode: ShieldMode) -> list[Finding]:
     lockdown = mode_module.LOCKDOWN in mode_module.protections(mode)
     agent_hosts = mode_module.agent_hosts(mode) + allowed
     findings: list[Finding] = []
-    for host in hosts_in(args):
+    named = read_hosts(args)
+    if lockdown:
+        findings += [finding(LOCKDOWN_ID, tool_name, host, "is no host Blackbox can read (agent network lockdown)")
+                     for host in named.unreadable]
+    for host in named.hosts:
         if _covered(host, allowed):
             continue
         if _covered(host, blocked):

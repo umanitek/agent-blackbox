@@ -8,17 +8,19 @@ use std::path::Path;
 
 use super::enforce::{dns, nft};
 use super::{procfs, NOT_YET};
-use crate::platform::{Enforcer, Filter, SavedDns};
+use crate::platform::{Enforcer, Filter, Pointed, SavedDns};
 
 /// The Linux enforcer (no state of its own; the saved state is the helper's).
 #[derive(Debug, Default, Clone, Copy)]
 pub struct LinuxEnforcer;
 
 impl Enforcer for LinuxEnforcer {
-    fn point_dns_at_shield(&self) -> Result<SavedDns, String> {
-        let (actions, saved) = dns::point(&dns::read_view());
+    fn point_dns_at_shield(&self, already: &SavedDns) -> Pointed {
+        // What to save is read from the system BEFORE any change, so it is the original also when
+        // a later action fails: it goes back with the error ([`Pointed`]).
+        let (actions, saved) = dns::point(&dns::read_view(), already);
         let errors = dns::run(&actions);
-        if errors.is_empty() { Ok(saved) } else { Err(errors.join("; ")) }
+        Pointed { saved, error: (!errors.is_empty()).then(|| errors.join("; ")) }
     }
 
     fn restore_dns(&self, saved: &SavedDns) -> Vec<String> {

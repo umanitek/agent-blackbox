@@ -135,7 +135,9 @@ def test_the_plan_reads_the_monitor_only_while_cut_is_on(monkeypatch):
 @pytest.mark.parametrize("sources, ok", [
     (["192.168.1.0/24", "10.0.0.5", "fd00::/8"], True),
     (["192.168.1.7/24"], True),                       # host bits cleared, not refused
-    (["example.com"], False), (["10.0.0.0/33"], False), (["1.2.3.4"] * 101, False),
+    (["example.com"], False), (["10.0.0.0/33"], False),
+    ([f"10.0.{n // 250}.{n % 250 + 1}" for n in range(101)], False),   # too many (duplicates fold first: review 2026-11-26)
+    (["1.2.3.4"] * 101, True),
 ])
 def test_ssh_allow_takes_addresses_and_networks_only(sources, ok):
     _id, section, errors = network_mode.validate({"shields": {"network-shield": {"ssh_allow": sources}}})

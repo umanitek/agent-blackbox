@@ -167,8 +167,8 @@ def test_a_profile_grant_is_taken_by_exactly_one_launch(entry, home):
     once = profiles.write_once(sandbox.policy(files_mode.current()), request, permissions.current())
     assert once.name == "claude-code.once.sb" and once.is_file()
     env = _launcher_env(home)
-    inside = subprocess.run(["claude"], capture_output=True, text=True, timeout=30, env={**env, "BLACKBOX_AGENT_SANDBOX": "1"},
-                            cwd=str(home / "shop"), check=False)
+    inside = subprocess.run([macos_profile.SANDBOX_EXEC, "-f", str(sandbox.profile_path()), "claude"], capture_output=True,
+                            text=True, timeout=30, env=env, cwd=str(home / "shop"), check=False)   # the canary proves it
     assert "profile=none" in inside.stdout and once.is_file()     # inside a sandbox: nothing taken
     launches = [subprocess.Popen(["claude"], stdout=subprocess.PIPE, text=True, env=env, cwd=str(home / "shop")) for _ in range(2)]
     outputs = [launch.communicate(timeout=30)[0] for launch in launches]

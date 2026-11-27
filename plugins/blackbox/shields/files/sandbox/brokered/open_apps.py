@@ -3,7 +3,8 @@
 other apps (Terminal, iTerm, Script Editor, Automator, Shortcuts … — ``platform.APP_DRIVER_APPS``:
 ``open -a Terminal x.command`` would run it outside the sandbox). Each file must exist, in its
 canonical spelling, and be neither a protected item (nor inside one) nor one of Blackbox's own
-places. A folder alone opens in Finder. Then ``/usr/bin/open -a <app> -- <files>`` outside the sandbox.
+places. A folder alone opens in Finder — never an app bundle (a ``.app`` folder, or any folder
+holding ``Contents/MacOS``; nor as a file for an app): Finder would launch it, outside the sandbox. Then ``/usr/bin/open -a <app> -- <files>`` outside the sandbox.
 
 **Security cost:** the app works on the file outside the sandbox, with the person's rights.
 
@@ -28,10 +29,17 @@ from .asking import Asking, Planned, decide
 PERMISSION = "open-apps"
 MAX_FILES = 20
 FINDER = "Finder"
+#: A folder Finder runs instead of showing: an app bundle, by name or by shape.
+BUNDLE_SUFFIX = ".app"
+BUNDLE_PROGRAMS = os.path.join("Contents", "MacOS")
 
 
 def _inside(path: str, place: str) -> bool:
     return path == place or path.startswith(place.rstrip("/") + "/")
+
+
+def _is_bundle(path: str) -> bool:
+    return path.lower().endswith(BUNDLE_SUFFIX) or os.path.isdir(os.path.join(path, BUNDLE_PROGRAMS))
 
 
 def _file(word: str, folder: str, protected: tuple[str, ...]) -> str:
@@ -41,6 +49,8 @@ def _file(word: str, folder: str, protected: tuple[str, ...]) -> str:
     own = [os.path.realpath(str(constants.blackbox_home())), os.path.realpath(str(constants.hermes_root()))]
     if any(_inside(path, os.path.realpath(os.path.expanduser(item))) for item in protected) or any(_inside(path, place) for place in own):
         raise ShieldApiError(403, f"{word} is kept from AI agents, so Blackbox will not open it for one")
+    if _is_bundle(path):
+        raise ShieldApiError(403, f"{word} is an app: Blackbox does not start an app an agent names by its folder")
     return path
 
 

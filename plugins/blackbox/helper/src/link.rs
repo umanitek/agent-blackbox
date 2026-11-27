@@ -9,12 +9,15 @@
 //!   signed with another key or for another nonce is REFUSED (and reported as an error) — another
 //!   local account that grabbed the port first cannot steer the helper or replay an old plan;
 //! * **reports** go out only to a server that proved the key within [`VERIFIED_FOR`], each signed
-//!   `X-Blackbox-Helper-Signature: hex(HMAC-SHA256(key, body))` — so a squatter never receives what
-//!   the helper sees (sessions, startup items, posture);
+//!   over its time and a fresh nonce with the body ([`sign_report`], headers
+//!   [`HELPER_TIMESTAMP_HEADER`] and [`HELPER_NONCE_HEADER`]) — so a squatter never receives what
+//!   the helper sees (sessions, startup items, posture), and a report it did catch can not be
+//!   replayed to the plugin later (the plugin refuses an old time or a nonce it saw);
 //! * losing the plugin NEVER undoes anything: the caller keeps the last verified plan.
 //!
 //! A helper installed before keys existed has no key file: it keeps working ("legacy", accepted
-//! unsigned) and says so in every report, so the plugin can ask the person to reinstall it.
+//! unsigned) and says so in every report, so the plugin can ask the person to reinstall it. ONLY a
+//! missing file is legacy: a key file that is there but wrong in any way is "broken" ([`load_key`]).
 //! Contract: helper/PLAN.md.
 
 use std::path::Path;
@@ -33,6 +36,12 @@ pub const PLUGIN: &str = "http://127.0.0.1:9700";
 pub const VERIFIED_FOR: Duration = Duration::from_secs(120);
 pub const SIGNATURE_HEADER: &str = "X-Blackbox-Signature";
 pub const HELPER_SIGNATURE_HEADER: &str = "X-Blackbox-Helper-Signature";
+/// The report's time (unix seconds, decimal ASCII) and nonce (32 lower-case hex), both signed.
+pub const HELPER_TIMESTAMP_HEADER: &str = "X-Blackbox-Helper-Timestamp";
+pub const HELPER_NONCE_HEADER: &str = "X-Blackbox-Helper-Nonce";
+/// The first line of a report's signed material: names the form, so a plan signature
+/// (`nonce + "\n" + body`) can never pass for a report's.
+pub const REPORT_SIGNING_CONTEXT: &[u8] = b"blackbox-helper-report-v2\n";
 pub const KEY_BYTES: usize = 32;
 
 type HmacSha256 = Hmac<Sha256>;
@@ -44,6 +53,12 @@ pub fn sign(key: &[u8], parts: &[&[u8]]) -> String {
         mac.update(part);
     }
     hex::encode(mac.finalize().into_bytes())
+}
+
+/// A report's signature: hex(HMAC-SHA256(key, "blackbox-helper-report-v2\n" + ts + "\n" + nonce +
+/// "\n" + body)), *ts* in decimal ASCII and *nonce* as sent in [`HELPER_NONCE_HEADER`].
+pub fn sign_report(key: &[u8], ts: u64, nonce: &str, body: &[u8]) -> String {
+    sign(key, &[REPORT_SIGNING_CONTEXT, ts.to_string().as_bytes(), b"\n", nonce.as_bytes(), b"\n", body])
 }
 
 /// Whether *signature* is the HMAC of nonce + "\n" + body under *key* (constant time).
@@ -70,10 +85,52 @@ pub fn new_key() -> Vec<u8> {
     bytes
 }
 
-/// Reads the key from *home* (None: a legacy install without one; a key of the wrong size is
-/// treated as missing-but-broken and refuses everything — see [`Link::new`]).
-pub fn load_key(home: &Path) -> Option<Vec<u8>> {
-    crate::safe_read::read_regular(&home.join(KEY_FILE), 4096)
+/// What the key file in the helper's folder is.
+#[derive(Debug, PartialEq, Eq)]
+pub enum KeyFile {
+    /// No file: a legacy install from before keys.
+    Missing,
+    Key(Vec<u8>),
+    /// A file is there but can not be trusted or used (the text says why): fail closed.
+    Broken(String),
+}
+
+impl KeyFile {
+    /// The key, when there is a usable one.
+    pub fn usable(self) -> Option<Vec<u8>> {
+        match self { KeyFile::Key(key) => Some(key), _ => None }
+    }
+}
+
+/// Reads the key from *home*. WHY anything but "not found" is [`KeyFile::Broken`] (review finding
+/// 2026-11-26): a link, the wrong size, a file other accounts can read or write, or one this
+/// account does not own used to read as "no key" — legacy, accepting unsigned plans from whoever
+/// answers on the plugin's port.
+pub fn load_key(home: &Path) -> KeyFile {
+    use std::os::unix::fs::MetadataExt;
+    let path = home.join(KEY_FILE);
+    let meta = match std::fs::symlink_metadata(&path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return KeyFile::Missing,
+        Err(error) => return KeyFile::Broken(format!("the key file can not be read: {error}")),
+        Ok(meta) => meta,
+    };
+    // SAFETY: geteuid has no preconditions and can not fail.
+    let me = unsafe { libc::geteuid() };
+    let why = if !meta.file_type().is_file() {
+        "it is not a plain file"
+    } else if meta.len() != KEY_BYTES as u64 {
+        "it is not 32 bytes"
+    } else if meta.mode() & 0o077 != 0 {
+        "other accounts can read or change it"
+    } else if meta.uid() != me {
+        "it is not owned by the helper's account"
+    } else {
+        return match crate::safe_read::read_regular(&path, KEY_BYTES as u64) {
+            Some(key) if key.len() == KEY_BYTES => KeyFile::Key(key),
+            _ => KeyFile::Broken("the key file can not be read".into()),
+        };
+    };
+    KeyFile::Broken(format!("the key file is damaged: {why}"))
 }
 
 /// What a plan request came back as.
@@ -98,12 +155,15 @@ pub struct Link {
 }
 
 impl Link {
-    /// The link for the helper in *home*. A key file that exists but is not KEY_BYTES long is
-    /// "broken": every plan is refused (fail closed) rather than falling back to legacy.
+    /// The link for the helper in *home*. A key file that exists but is not usable
+    /// ([`KeyFile::Broken`]) is "broken": every plan is refused (fail closed) rather than falling
+    /// back to legacy.
     pub fn new(home: &Path) -> Result<Link, String> {
-        let raw = load_key(home);
-        let broken_key = raw.as_ref().is_some_and(|k| k.len() != KEY_BYTES);
-        let key = raw.filter(|k| k.len() == KEY_BYTES);
+        let (key, broken_key) = match load_key(home) {
+            KeyFile::Key(key) => (Some(key), false),
+            KeyFile::Missing => (None, false),
+            KeyFile::Broken(_) => (None, true),
+        };
         let http = reqwest::blocking::Client::builder()
             .redirect(reqwest::redirect::Policy::none())   // a loopback plugin never redirects
             .build().map_err(|error| error.to_string())?;
@@ -182,7 +242,9 @@ impl Link {
             let mut request = self.http.post(format!("{PLUGIN}{path}")).timeout(timeout)
                 .header("X-Blackbox-Token", token).header("content-type", "application/json");
             if let Some(key) = &self.key {
-                request = request.header(HELPER_SIGNATURE_HEADER, sign(key, &[&raw]));
+                let (ts, nonce) = (crate::state::now(), nonce());
+                request = request.header(HELPER_SIGNATURE_HEADER, sign_report(key, ts, &nonce, &raw))
+                    .header(HELPER_TIMESTAMP_HEADER, ts.to_string()).header(HELPER_NONCE_HEADER, nonce);
             }
             match request.body(raw.clone()).send() {
                 Ok(response) if matches!(response.status().as_u16(), 401 | 403) => continue,
@@ -210,6 +272,41 @@ mod tests {
         assert_eq!(sign(&KEY, &[br#"{"running":true}"#]), "ed7cae0659cb0798e3f55b0bb6586ee82d23ca413253a304832605c7bf4dd449");
     }
 
+    /// The report vector the plugin checks too (helper_link.py): v2 signs the time and a nonce with
+    /// the body, so a captured report can not be replayed later (review finding 2026-11-26).
+    #[test]
+    fn a_report_signature_covers_its_time_and_nonce() {
+        let body = br#"{"running":true}"#;
+        let nonce = "000102030405060708090a0b0c0d0e0f";
+        assert_eq!(sign_report(&KEY, 1_700_000_000, nonce, body), "6e4673cb0bd283133f4f0e4cb64a08a542446a2ac5bba7b9aefa4fad7dded6e2");
+        assert_ne!(sign_report(&KEY, 1_700_000_001, nonce, body), sign_report(&KEY, 1_700_000_000, nonce, body));
+        assert_ne!(sign_report(&KEY, 1_700_000_000, "ff0102030405060708090a0b0c0d0e0f", body), sign_report(&KEY, 1_700_000_000, nonce, body));
+    }
+
+    /// Review finding 2026-11-26: only "no key file" is legacy; a key file that is there but a link,
+    /// the wrong size or open to other accounts is BROKEN (every plan refused), never "no key".
+    #[test]
+    fn only_a_missing_key_file_is_legacy_anything_else_wrong_is_broken() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("bb-link-key-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(KEY_FILE);
+        assert_eq!(load_key(&dir), KeyFile::Missing);
+        crate::private_files::write(&path, &KEY).unwrap();
+        assert_eq!(load_key(&dir), KeyFile::Key(KEY.to_vec()));
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(matches!(load_key(&dir), KeyFile::Broken(_)), "readable by other accounts");
+        crate::private_files::write(&path, b"short").unwrap();
+        assert!(matches!(load_key(&dir), KeyFile::Broken(_)), "the wrong size");
+        std::fs::remove_file(&path).unwrap();
+        crate::private_files::write(&dir.join("elsewhere"), &KEY).unwrap();
+        std::os::unix::fs::symlink(dir.join("elsewhere"), &path).unwrap();
+        assert!(matches!(load_key(&dir), KeyFile::Broken(_)), "a link");
+        assert_eq!(Link::new(&dir).unwrap().mode(), "broken");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn a_plan_signed_for_this_nonce_with_this_key_verifies() {
         let body = br#"{"version":"v1"}"#;
@@ -232,11 +329,11 @@ mod tests {
     fn with_a_key_nothing_is_reported_until_the_server_proved_it() {
         let dir = std::env::temp_dir().join(format!("bb-link-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join(KEY_FILE), KEY).unwrap();
+        crate::private_files::write(&dir.join(KEY_FILE), &KEY).unwrap();
         let link = Link::new(&dir).unwrap();
         assert_eq!(link.mode(), "signed");
         assert!(!link.may_report(), "no report to a server that never proved the key");
-        std::fs::write(dir.join(KEY_FILE), b"short").unwrap();
+        crate::private_files::write(&dir.join(KEY_FILE), b"short").unwrap();
         let mut broken = Link::new(&dir).unwrap();
         assert_eq!(broken.mode(), "broken");
         assert!(!broken.may_report());
@@ -262,7 +359,7 @@ mod tests {
         });
         let dir = std::env::temp_dir().join(format!("bb-link-squat-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join(KEY_FILE), KEY).unwrap();
+        crate::private_files::write(&dir.join(KEY_FILE), &KEY).unwrap();
         let mut link = Link::new(&dir).unwrap();
         let fetched: Fetched<Value> = link.plan_from(&format!("http://127.0.0.1:{port}"), "/plan", "", Duration::from_secs(5));
         assert!(matches!(fetched, Fetched::Refused(ref why) if why.contains("unsigned")), "{fetched:?}");

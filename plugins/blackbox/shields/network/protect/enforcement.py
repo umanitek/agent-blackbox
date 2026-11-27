@@ -82,8 +82,15 @@ def _state_path() -> Path:
 
 
 def _is_ip(entry: str) -> bool:
-    """True for an IP address (``normalise_entry`` stores IPs in canonical form)."""
-    return ":" in entry or entry.replace(".", "").isdigit()
+    """True for an IP address (``normalise_entry`` stores IPs in canonical form). Parsed, never
+    judged by shape: ``999.1.1.1`` would go to the firewall, which drops it, and be enforced nowhere."""
+    if ":" not in entry and not entry.replace(".", "").isdigit():
+        return False   # WHY: a name, decided without a parse (block lists hold ~1.2M of them)
+    try:
+        ipaddress.ip_address(entry)
+    except ValueError:
+        return False
+    return True
 
 
 def _ips(entries: Iterable[str]) -> list[str]:
@@ -101,6 +108,15 @@ _plan_cache: dict[str, Any] = {"key": None, "plan": None}
 MAX_SPARED = 200
 
 
+def _plan_key(mode: ShieldMode, indicators: Optional[Any], cut: tuple[str, ...], syncing: bool) -> tuple[Any, ...]:
+    """What a plan is built from (:data:`_plan_cache`): the mode, the graph's lists, each chosen
+    block list's loaded version, the addresses to cut, remote lock and the sync state."""
+    chosen_lists = tuple(sorted(mode_module.option(mode, mode_module.OPT_LISTS)))
+    return (json.dumps(mode.as_json(include_personal=True), sort_keys=True), id(indicators),
+            getattr(indicators, "built_at", None), tuple((pack_id, blocklists.version(pack_id)) for pack_id in chosen_lists), cut,
+            remote_lock.version(mode.enabled), syncing)
+
+
 def plan(mode: ShieldMode, indicators: Optional[Any], have: str = "", cut_ips: Iterable[str] = (),
          syncing: bool = False) -> dict[str, Any]:
     """What the enforcer must apply now under *mode*, given the verified graph's *indicators*
@@ -109,17 +125,15 @@ def plan(mode: ShieldMode, indicators: Optional[Any], have: str = "", cut_ips: I
     while ``cut`` is on). *syncing*: this node is still downloading the graph, so lists read from
     every asset it holds so far are NOT the whole graph (KI-683). Built once per change
     (:data:`_plan_cache`); ``have`` equal to its version answers ``unchanged``."""
-    chosen_lists = tuple(sorted(mode_module.option(mode, mode_module.OPT_LISTS)))
     cut = tuple(sorted(set(cut_ips)))
-    key = (json.dumps(mode.as_json(include_personal=True), sort_keys=True), id(indicators),
-           getattr(indicators, "built_at", None), tuple((pack_id, blocklists.version(pack_id)) for pack_id in chosen_lists), cut,
-           remote_lock.version(mode.enabled), syncing)
     with _lock:
-        cached = _plan_cache["plan"] if _plan_cache["key"] == key else None
+        cached = _plan_cache["plan"] if _plan_cache["key"] == _plan_key(mode, indicators, cut, syncing) else None
     if cached is None:
         cached = _build_plan(mode, indicators, cut, syncing)
+        # WHY: the key is taken AFTER the build — building loads the chosen block lists, which
+        # changes their version; a key from before would rebuild the same plan on the next ask.
         with _lock:
-            _plan_cache["key"], _plan_cache["plan"] = key, cached
+            _plan_cache["key"], _plan_cache["plan"] = _plan_key(mode, indicators, cut, syncing), cached
     if have and have == cached["version"]:
         return {"version": cached["version"], "unchanged": True}
     return cached

@@ -64,6 +64,7 @@ from .shield_api import NAME_PATTERN as API_NAME_PATTERN
 from .shield_api import (
     AssistantAnswer,
     InstanceRef,
+    Peer,
     RawAnswer,
     RunningAgent,
     ShieldApi,
@@ -75,7 +76,7 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "AGENT_SANDBOX", "API_MAX_WRITE_BYTES", "API_NAME_PATTERN", "PACKAGE_INSTALLS", "AssistantAnswer",
-    "BrowserRoot", "Capability", "InstanceRef", "Pack", "RawAnswer", "Registrar", "RunningAgent", "SelfTest", "Shield",
+    "BrowserRoot", "Capability", "InstanceRef", "Pack", "Peer", "RawAnswer", "Registrar", "RunningAgent", "SelfTest", "Shield",
     "ShieldAlert", "ShieldApi", "ShieldApiError", "ShieldContext", "ShieldEvent", "ShieldExtension",
     "ShieldMode", "ShieldStatus", "ShieldsSnapshot", "addon_routes", "agent_sandbox_weakening",
     "alerts", "all_shields", "allow_lists", "allows", "apply_sandbox_default", "attack_table",

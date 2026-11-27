@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 
-use super::{EndRequest, Enforcer, Filter, Observer, SavedDns};
+use super::{EndRequest, Enforcer, Filter, Observer, Pointed, SavedDns};
 
 /// The helper does not run on this operating system yet.
 pub const SUPPORTED: bool = false;
@@ -30,7 +30,7 @@ pub fn subcommand(args: &[String]) -> Option<Result<(), String>> {
 pub struct SystemEnforcer;
 
 impl Enforcer for SystemEnforcer {
-    fn point_dns_at_shield(&self) -> Result<SavedDns, String> { Err(NOT_SUPPORTED.into()) }
+    fn point_dns_at_shield(&self, _already: &SavedDns) -> Pointed { Pointed { saved: SavedDns::new(), error: Some(NOT_SUPPORTED.into()) } }
     fn restore_dns(&self, _saved: &SavedDns) -> Vec<String> { vec![] }
     fn current_upstreams(&self) -> Vec<SocketAddr> { vec![] }
     fn dhcp_upstreams(&self) -> Vec<SocketAddr> { vec![] }

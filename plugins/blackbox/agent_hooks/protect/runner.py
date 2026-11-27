@@ -49,12 +49,12 @@ from pathlib import Path
 if __package__:
     from .answers import allow_output, deny_output, note_output, post_output, prompt_output
     from .judge_here import BLOCKING_EVENTS, NOT_READ, TIMEOUT_SECONDS, Verdict, answer_in_time, keep, process_age
-    from .identity import AGENT_TURN_MARKS, MODEL_EVENTS, effective_agent, identity, transcript_model, workspace
+    from .identity import AGENT_TURN_MARKS, MODEL_EVENTS, effective_agent, identity, inside_sandbox, transcript_model, workspace
     from .tool_shapes import READ_MANY_NAMES, cline_tool, many_read, parsed_json
 else:
     from answers import allow_output, deny_output, note_output, post_output, prompt_output
     from judge_here import BLOCKING_EVENTS, NOT_READ, TIMEOUT_SECONDS, Verdict, answer_in_time, keep, process_age
-    from identity import AGENT_TURN_MARKS, MODEL_EVENTS, effective_agent, identity, transcript_model, workspace
+    from identity import AGENT_TURN_MARKS, MODEL_EVENTS, effective_agent, identity, inside_sandbox, transcript_model, workspace
     from tool_shapes import READ_MANY_NAMES, cline_tool, many_read, parsed_json
 
 #: The most of stdin read (a write tool's whole file, or the file Cursor's beforeReadFile is about to
@@ -294,14 +294,7 @@ CANARY = INSTALLED_HOME / "sandbox" / "canary"
 def sandboxed() -> bool:
     """True when this hook (so the agent that started it) runs inside Blackbox's OS sandbox: only a
     sandboxed process is refused the canary — a variable could be faked, the kernel's refusal can not."""
-    try:
-        with open(CANARY, encoding="utf-8-sig") as handle:
-            handle.read(1)
-        return False
-    except PermissionError:
-        return True
-    except OSError:
-        return False
+    return inside_sandbox(CANARY)
 
 
 def summary(agent: str, event: str, payload: dict) -> dict:

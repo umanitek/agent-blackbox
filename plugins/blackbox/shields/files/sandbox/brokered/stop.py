@@ -17,7 +17,10 @@ whether the process exists or not), so no process outside is revealed to it.
 NEVER stopped, whatever the permission says (:func:`never`): process 1 and below, Blackbox itself
 (this process, its parent, anything running Blackbox's plugin or from its home), the operating
 system's own programs (``platform.is_system``, named by ``platform.SYSTEM_NAME``), another user's processes, and another AI agent. The check is made again right before
-the signal: a process id can be reused.
+the signal: a process id can be reused. A process the person was ASKED about is stopped only while
+it is still the same process — the same program, started at the same time (``ProcessFacts.path``
+and ``.started``, remembered when asked): between the question and the answer its number may have
+gone to another program of the person's (independent review 2026-11-26, finding 11).
 
 Usage::
 
@@ -29,6 +32,8 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
+from typing import Optional
 
 from ..... import audit
 from .....kernel import constants
@@ -40,6 +45,26 @@ PERMISSION = "stop-processes"
 UNSEEN_KIND = "signal-unseen"
 _PLUGIN = os.path.realpath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 logger = logging.getLogger(__name__)
+#: The processes open stop requests name, as they were when asked: pid -> (program, start time).
+MAX_REMEMBERED = 256
+_asked: dict[int, tuple[str, str]] = {}
+_asked_lock = threading.Lock()
+
+
+def _identity(pid: int) -> Optional[tuple[str, str]]:
+    facts = platform.describe(pid)
+    return (facts.path, facts.started) if facts is not None else None
+
+
+def _remember(pid: int) -> None:
+    identity = _identity(pid)
+    with _asked_lock:
+        if identity is None:
+            _asked.pop(pid, None)
+            return
+        if len(_asked) >= MAX_REMEMBERED and pid not in _asked:
+            _asked.pop(next(iter(_asked)))   # the oldest question: its answer then stops nothing
+        _asked[pid] = identity
 
 
 def never(pid: int) -> str:
@@ -87,14 +112,21 @@ def on_refused(pid: int, agent: str, instance: str, folder: str, unseen: bool = 
     mode = permissions.decide(PERMISSION, agent, folder)
     if mode is permissions.Mode.ALLOW and not unseen:
         return "stopped" if _stop(pid, agent, folder) else "refused"
-    if mode is not permissions.Mode.BLOCK and permissions.ask(PERMISSION, agent, instance, folder, f"stop {_name(pid)} (process {pid})",
-                                                               pid, even_on_allow=unseen):
-        return "asked"
+    if mode is not permissions.Mode.BLOCK:
+        _remember(pid)
+        if permissions.ask(PERMISSION, agent, instance, folder, f"stop {_name(pid)} (process {pid})", pid, even_on_allow=unseen):
+            return "asked"
     return "refused"
 
 
 def act(request: permissions.PermissionRequest) -> None:
-    """The person allowed stopping the process *request* names: stop it (checked again first)."""
+    """The person allowed stopping the process *request* names: stop it — checked again first, and
+    only while it is the process they were asked about (see the module doc)."""
+    with _asked_lock:
+        expected = _asked.pop(request.pid, None)
+    if expected is None or _identity(request.pid) != expected:
+        logger.info("blackbox: process %s is no longer the one the person was asked about; not stopped", request.pid)
+        return
     _stop(request.pid, request.agent, request.project)
 
 
