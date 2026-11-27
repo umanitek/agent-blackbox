@@ -13,6 +13,8 @@ Routes (the POSTs behind the boundary's token):
 ``GET  /api/companion/approvals``           ``{"paired": bool, "confirm_here": bool, "waiting": [held …]}``
 ``POST /api/companion/approvals/pair``      ``{"key": hex, "proof": hex?}`` — the companion app's key
 ``POST /api/companion/approvals/answer``    ``{"id", "approve": bool, "proof": hex}`` — the app's native dialog
+``GET  /api/approvals/{id}``              ``{"id", "state": "waiting" | "approved" | "gone"}`` — a page that held
+                                          a change sends it again once approved (owner decision 7)
 ``POST /api/approvals/confirm``           ``{"id"}`` — the dashboard page's path: the system's password
                                           prompt (``approvals.system_prompt``), at most once per request
 ``GET  /approvals.js``                    the page script: a held answer shows "Confirm with your
@@ -122,10 +124,9 @@ def register(app: Any, _swr: Any = None, store: Approvals | None = None) -> None
     from fastapi import Request
     from fastapi.responses import FileResponse, JSONResponse
     from starlette.concurrency import run_in_threadpool
-
-    store = store if store is not None else approvals.STORE
     from starlette.middleware import Middleware
 
+    store = store if store is not None else approvals.STORE
     # WHY append to user_middleware instead of add_middleware: add_middleware puts a layer
     # OUTSIDE the ones already there, i.e. before the browser boundary's token check — then an
     # unauthenticated request could raise dialogs. Starlette builds the stack from this list,
@@ -153,7 +154,8 @@ def register(app: Any, _swr: Any = None, store: Approvals | None = None) -> None
             return JSONResponse({"ok": False, "error": "not confirmed: protection stays on"}, status_code=403)
         return JSONResponse({"ok": store.approve_confirmed(held.id)})
 
-    _register_terminal(app, store)
+    for more_routes in (_register_terminal, _register_state):   # blackbox approve's routes; a held change's state
+        more_routes(app, store)
 
     @app.post("/api/companion/approvals/pair")
     async def approvals_pair(request: Request) -> Any:
@@ -166,6 +168,16 @@ def register(app: Any, _swr: Any = None, store: Approvals | None = None) -> None
         body = await _small_json(request)
         ok = store.answer(str(body.get("id") or ""), body.get("approve") is True, str(body.get("proof") or ""))
         return JSONResponse({"ok": ok}, status_code=200 if ok else 403)
+
+
+def _register_state(app: Any, store: Approvals) -> None:
+    """``GET /api/approvals/{id}``: where one held change is (``Approvals.state``) — a page polls it
+    and sends the change again once it is approved, so one press finishes it (owner decision 7)."""
+    from fastapi.responses import JSONResponse
+
+    @app.get("/api/approvals/{request_id}")
+    def approval_state(request_id: str) -> Any:
+        return JSONResponse({"id": request_id, "state": store.state(request_id)}, headers={"Cache-Control": "no-store"})
 
 
 def _register_terminal(app: Any, store: Approvals) -> None:

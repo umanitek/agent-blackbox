@@ -5,9 +5,9 @@ so, the same line as a missing profile.
 
 Usage::
 
-    launcher_script("claude", here, profile)
-    shell_shim("bash", here, profile, launchers)
-    command_shim(profile, launchers)
+    launcher_script("claude", here, profile, canary)
+    shell_shim("bash", here, profile, canary, launchers)
+    command_shim(profile, canary, launchers)
 """
 
 from __future__ import annotations
@@ -25,19 +25,19 @@ RUNNER = f'{quote_shell(SANDBOX)} run --policy "$profile" --'
 READY = f"[ -x {quote_shell(SANDBOX)} ]"
 
 
-def launcher_script(command: str, here: str, profile: str) -> str:
+def launcher_script(command: str, here: str, profile: str, canary: str) -> str:
     """The launcher first on PATH for *command*, with ``<here>/sandbox-tools`` first on the sandboxed PATH."""
-    return posix_scripts.launcher_script(command, here, profile, RUNNER, tools_dir(here), SUFFIXES, READY)
+    return posix_scripts.launcher_script(command, here, profile, RUNNER, tools_dir(here), SUFFIXES, canary, READY)
 
 
-def shell_shim(shell: str, here: str, profile: str, launchers: str = "") -> str:
+def shell_shim(shell: str, here: str, profile: str, canary: str, launchers: str = "") -> str:
     """The Hermes agent's sandboxed *shell*."""
-    return posix_scripts.shell_shim(shell, here, profile, RUNNER, tools_dir(launchers) if launchers else "", SUFFIXES, READY)
+    return posix_scripts.shell_shim(shell, here, profile, RUNNER, tools_dir(launchers) if launchers else "", SUFFIXES, canary, READY)
 
 
-def command_shim(profile: str, launchers: str = "") -> str:
+def command_shim(profile: str, canary: str, launchers: str = "") -> str:
     """The Hermes agent's ``execute_code`` interpreter launcher."""
-    return posix_scripts.command_shim(profile, RUNNER, tools_dir(launchers) if launchers else "", SUFFIXES, READY)
+    return posix_scripts.command_shim(profile, RUNNER, tools_dir(launchers) if launchers else "", SUFFIXES, canary, READY)
 
 
 __all__ = ["ONCE_MINUTES", "ONCE_SUFFIX", "PROJECT_INDEX", "READY", "RUNNER", "RUN_INFIX", "SUFFIXES", "command_shim",

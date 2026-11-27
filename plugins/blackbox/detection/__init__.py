@@ -27,6 +27,8 @@ Usage::
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from . import osv, reviewer, script_files
 from .action_parsing import (FETCH_TOOL_PREFIXES, HOST_FILE_AND_SKILL_TOOLS, SENSITIVE_PATH_CATEGORIES, file_access_arg, parse_dependency_installs,
                              parse_downloads, parse_shell_reads, skill_install_arg)
@@ -37,15 +39,40 @@ from .finding import FIELD_WALLET_SECRET_SENT, KIND_FLAG_ONLY, MANAGER_ORDER, PE
 from .elevation import ELEVATION_ID, detect_elevation
 from .hook_switches import detect_hook_switch_off
 from .paths.guard_settings import MATCHED as GUARD_TAMPER
-from .persistence_writes import MATCHED as STARTUP_ITEM, detect_persistence_write
+from .persistence_writes import MATCHED as STARTUP_ITEM, SHELL_MATCHED as SHELL_STARTUP, detect_persistence_write
 from .privileged_writes import MATCHED as ROOT_WRITE, detect_privileged_write
 from .paths.protected import PathTouch, mentions as protected_path_mentions, touches as protected_path_touches
 
-#: ``Finding.matched`` values refused in EVERY mode, Audit included: an agent switching Blackbox
-#: off (its self-protection), an agent touching what the person protected (File Shield), an
-#: agent writing a place something starts from by itself (as the agent sandbox refuses it) and an
-#: order from whoever manages this machine (an add-on's ``MANAGER_ORDER`` finding).
-ALWAYS_BLOCKED_MATCHES = frozenset({GUARD_TAMPER, PERSON_PROTECTED, STARTUP_ITEM, MANAGER_ORDER})
+# What is refused in EVERY mode, Audit included: the one list the guard enforces
+# (``ALWAYS_BLOCKED_MATCHES``, read by ``guard.hooks``) and the pages show with its words, so the two
+# can not drift (LES-137). ``permission`` names the agent permission that may let an agent outside
+# the sandbox through ("" = no setting relaxes it).
+@dataclass(frozen=True)
+class AlwaysBlocked:
+    """One rule refused in every mode: the ``matched`` value, its ``name`` and ``why``, and the
+    agent ``permission`` that may relax it ("" = no setting relaxes it)."""
+
+    matched: str
+    name: str
+    why: str
+    permission: str = ""
+
+
+ALWAYS_BLOCKED: tuple[AlwaysBlocked, ...] = (
+    AlwaysBlocked(GUARD_TAMPER, "Switching Blackbox off",
+                  "changing its settings, files or keys, or switching any agent's hooks off"),
+    AlwaysBlocked(PERSON_PROTECTED, "Your protected files and folders",
+                  "File Shield's list, by any route an agent takes; change the list itself to allow one"),
+    AlwaysBlocked(STARTUP_ITEM, "Places something starts from by itself",
+                  "launchd jobs, login items, cron and at, systemd units, SSH login files, Homebrew's folders, and "
+                  "sudo writes that change how the system starts or logs in", "startup-items"),
+    AlwaysBlocked(SHELL_STARTUP, "Your shell startup files",
+                  "~/.zshrc, ~/.bashrc and the other files a new terminal runs", "shell-startup"),
+    AlwaysBlocked(MANAGER_ORDER, "Orders from whoever manages this machine", "when an add-on carries them"),
+)
+
+ALWAYS_BLOCKED_MATCHES: frozenset[str] = frozenset(rule.matched for rule in ALWAYS_BLOCKED)
+
 from .paths.guard_settings import detect_guard_tamper
 from .paths.guard_secrets import builtin_patterns as blackbox_key_patterns
 from .detectors import (
@@ -75,64 +102,67 @@ from .content_scanners import iter_ioc_candidates
 from .manifests import DependencyCheck, check_dependency_write, check_install_files, check_landed
 
 __all__ = [
-                             'ALWAYS_BLOCKED_MATCHES',
-                             'ANSWERED_BY_FALLBACK',
-                             'DEPENDENCY_ECOSYSTEMS',
-                             'ELEVATION_ID',
-                             'ESCALATION_SHAPES',
-                             'FETCH_TOOL_PREFIXES',
-                             'FIELD_WALLET_SECRET_SENT',
-                             'GUARD_TAMPER',
-                             'HOST_FILE_AND_SKILL_TOOLS',
-                             'KIND_FLAG_ONLY',
-                             'MANAGER_ORDER',
-                             'PERSON_PROTECTED',
-                             'ROOT_WRITE',
-                             'SENSITIVE_PATH_CATEGORIES',
-                             'SHELL_TOOLS',
-                             'SKILL_DANGER_SHAPES',
-                             'STARTUP_ITEM',
-                             'DependencyCheck',
-                             'Finding',
-                             'PathTouch',
-                             'advisory_kind',
-                             'blackbox_key_patterns',
-                             'builds_hidden_command',
-                             'check_dependency_write',
-                             'check_install_files',
-                             'check_landed',
-                             'cmd_setup_llm',
-                             'command_from_args',
-                             'detect_all',
-                             'detect_custom_fileaccess',
-                             'detect_dependency',
-                             'detect_elevation',
-                             'detect_escalation',
-                             'detect_fileaccess',
-                             'detect_guard_tamper',
-                             'detect_hook_switch_off',
-                             'detect_injection',
-                             'detect_ioc',
-                             'detect_model_request_secrets',
-                             'detect_own_wallet_keys',
-                             'detect_persistence_write',
-                             'detect_privileged_write',
-                             'detect_secret_exposure',
-                             'detect_skill',
-                             'discover_dependency_candidates',
-                             'discover_injection',
-                             'file_access_arg',
-                             'injection_scan_text',
-                             'iter_ioc_candidates',
-                             'osv',
-                             'parse_dependency_installs',
-                             'parse_downloads',
-                             'parse_shell_reads',
-                             'protected_path_mentions',
-                             'protected_path_touches',
-                             'reviewer',
-                             'run_isolated',
-                             'script_files',
-                             'shell_file_args',
-                             'skill_install_arg',
+    'ALWAYS_BLOCKED',
+    'ALWAYS_BLOCKED_MATCHES',
+    'ANSWERED_BY_FALLBACK',
+    'DEPENDENCY_ECOSYSTEMS',
+    'ELEVATION_ID',
+    'ESCALATION_SHAPES',
+    'FETCH_TOOL_PREFIXES',
+    'FIELD_WALLET_SECRET_SENT',
+    'GUARD_TAMPER',
+    'HOST_FILE_AND_SKILL_TOOLS',
+    'KIND_FLAG_ONLY',
+    'MANAGER_ORDER',
+    'PERSON_PROTECTED',
+    'ROOT_WRITE',
+    'SENSITIVE_PATH_CATEGORIES',
+    'SHELL_STARTUP',
+    'SHELL_TOOLS',
+    'SKILL_DANGER_SHAPES',
+    'STARTUP_ITEM',
+    'AlwaysBlocked',
+    'DependencyCheck',
+    'Finding',
+    'PathTouch',
+    'advisory_kind',
+    'blackbox_key_patterns',
+    'builds_hidden_command',
+    'check_dependency_write',
+    'check_install_files',
+    'check_landed',
+    'cmd_setup_llm',
+    'command_from_args',
+    'detect_all',
+    'detect_custom_fileaccess',
+    'detect_dependency',
+    'detect_elevation',
+    'detect_escalation',
+    'detect_fileaccess',
+    'detect_guard_tamper',
+    'detect_hook_switch_off',
+    'detect_injection',
+    'detect_ioc',
+    'detect_model_request_secrets',
+    'detect_own_wallet_keys',
+    'detect_persistence_write',
+    'detect_privileged_write',
+    'detect_secret_exposure',
+    'detect_skill',
+    'discover_dependency_candidates',
+    'discover_injection',
+    'file_access_arg',
+    'injection_scan_text',
+    'iter_ioc_candidates',
+    'osv',
+    'parse_dependency_installs',
+    'parse_downloads',
+    'parse_shell_reads',
+    'protected_path_mentions',
+    'protected_path_touches',
+    'reviewer',
+    'run_isolated',
+    'script_files',
+    'shell_file_args',
+    'skill_install_arg',
 ]

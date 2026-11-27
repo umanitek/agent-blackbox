@@ -566,8 +566,31 @@
     });
   }
 
+  // ---- The security settings, from the one catalogue the guard and the Security page use -----
+  var MODE_WORDS = { block: "blocked", ask: "asks you", allow: "allowed" };
+  function renderSettings(settings) {
+    if (!settings) return;
+    var table = document.getElementById("settings-permissions");
+    table.textContent = "";
+    table.appendChild(el("tr", {}, [el("th", { text: "Setting" }), el("th", { text: "Starts" }), el("th", { text: "When allowed" }),
+                                    el("th", { text: "While blocked" }), el("th", { text: "If you relax it" })]));
+    (settings.permissions || []).forEach(function (row) {
+      table.appendChild(el("tr", {}, [el("th", { scope: "row", text: row.name }), el("td", { text: MODE_WORDS[row.default] || row.default }),
+                                      el("td", { text: row.unlocks }), el("td", { text: row.when_blocked }), el("td", { text: row.cost })]));
+    });
+    [["settings-always-blocked", settings.always_blocked], ["settings-always-on", settings.always_on]].forEach(function (pair) {
+      var list = document.getElementById(pair[0]);
+      list.textContent = "";
+      (pair[1] || []).forEach(function (rule) {
+        var tail = rule.permission ? " (an agent outside the sandbox can be let through with a setting)" : "";
+        list.appendChild(el("li", {}, [el("b", { text: rule.name }), " — " + rule.why + tail]));
+      });
+    });
+  }
+
   function render(payload) {
     renderStats(payload);
+    renderSettings(payload.settings);
     drawLayers(payload.shields);
     renderShieldSections(payload);
     numberSections();

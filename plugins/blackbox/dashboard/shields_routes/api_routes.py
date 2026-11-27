@@ -15,10 +15,11 @@ parsed. Answers are never cached: shield endpoints serve live data.
 # annotation as the class itself, and that class is imported inside ``register``.
 import json
 import re
-from typing import Any
+from typing import Any, Optional
 
 from ... import agent_hooks, approvals, guard, ruleset, shields
 from ...kernel import threat_ids
+from ...kernel.constants import DEFAULT_DASHBOARD_PORT
 from ...kernel.config import load_blackbox_config
 from .. import sync_meter
 from ..assistant import runner as assistant_runner
@@ -70,9 +71,19 @@ def sandboxed_runs() -> list:
     return [shields.RunningAgent(run.agent, run.instance, run.pid, run.profile) for run in agent_hooks.owners.sandboxed_runs()]
 
 
-def context(body: bytes = b"", headers: Any = None) -> shields.ShieldContext:
-    """The context one shield endpoint call receives (*body* / *headers*: the request's own)."""
+def peer_of(request: Any) -> Optional[shields.Peer]:
+    """The connection *request* came in on, so a broker names the asking process from the socket,
+    never from what the request says about itself (review 2026-11-27). None when unknown."""
+    client = getattr(request, "client", None)
+    if client is None or not client.host or not client.port:
+        return None
+    return shields.Peer(str(client.host), int(client.port), int(request.url.port or DEFAULT_DASHBOARD_PORT))
+
+
+def context(body: bytes = b"", headers: Any = None, peer: Optional[shields.Peer] = None) -> shields.ShieldContext:
+    """The context one shield endpoint call receives (*body* / *headers* / *peer*: the request's own)."""
     return shields.ShieldContext(
+        peer=peer,
         request_body=body,
         request_headers={str(name).lower(): str(value) for name, value in dict(headers or {}).items()},
         network_indicators=ruleset.network_indicators,
@@ -111,11 +122,12 @@ def register(app: Any) -> None:
     from fastapi.responses import JSONResponse, Response
     from starlette.concurrency import run_in_threadpool
 
-    def answer(shield_id: str, method: str, name: str, data: Any, raw: bytes = b"", headers: Any = None) -> Any:
+    def answer(shield_id: str, method: str, name: str, data: Any, raw: bytes = b"", headers: Any = None,
+               peer: Optional[shields.Peer] = None) -> Any:
         if not _valid(shield_id, name):
             return JSONResponse({"error": "unknown shield endpoint"}, status_code=404, headers=NO_CACHE)
         try:
-            result = shields.call_api(shield_id, method, name, context(raw, headers), data)
+            result = shields.call_api(shield_id, method, name, context(raw, headers, peer), data)
             if isinstance(result, shields.RawAnswer):   # signed bytes: sent exactly as built
                 return Response(content=result.body, media_type="application/json", headers={**NO_CACHE, **dict(result.headers)})
             return JSONResponse(result, headers=NO_CACHE)
@@ -124,7 +136,7 @@ def register(app: Any) -> None:
 
     @app.get("/api/shields/{shield_id}/api/{name}")
     def shield_api_read(shield_id: str, name: str, request: Request) -> Any:
-        return answer(shield_id, "GET", name, dict(request.query_params), headers=request.headers)
+        return answer(shield_id, "GET", name, dict(request.query_params), headers=request.headers, peer=peer_of(request))
 
     @app.post("/api/shields/{shield_id}/api/{name}")
     async def shield_api_write(shield_id: str, name: str, request: Request) -> Any:
@@ -139,4 +151,4 @@ def register(app: Any) -> None:
             return JSONResponse({"error": "body must be a JSON object"}, status_code=400, headers=NO_CACHE)
         # WHY the thread pool: an endpoint may take minutes (an assistant answer); run in
         # this async route directly it would stall every other request of the dashboard.
-        return await run_in_threadpool(answer, shield_id, "POST", name, body, raw, request.headers)
+        return await run_in_threadpool(answer, shield_id, "POST", name, body, raw, request.headers, peer_of(request))

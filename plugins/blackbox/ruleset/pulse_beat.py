@@ -106,7 +106,7 @@ def request_refresh_now(config: BlackboxConfig) -> bool:
     with locks._ruleset_refresh_lock(blocking=False) as held:
         if not held:
             return False
-        rs = refresh_cycle.peek(config)
+        rs = refresh_cycle.peek(config).derive()   # the generation hooks read is never edited
         rs.refresh_due_at = time.time()
         disk_cache._write_cache(rs)
         refresh_cycle._memory.store(rs)

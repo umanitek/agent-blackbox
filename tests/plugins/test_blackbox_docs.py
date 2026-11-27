@@ -64,7 +64,7 @@ def test_api_docs_answers_with_the_payload_shape(client):
     answer = client.get("/api/docs")
     assert answer.status_code == 200
     body = answer.json()
-    assert set(body) == {"version", "shields", "field_tests"}
+    assert set(body) == {"version", "shields", "settings", "field_tests"}
     assert isinstance(body["shields"], list)
 
 
@@ -149,3 +149,19 @@ def test_docs_js_never_writes_product_data_as_markup():
 def test_the_dashboard_links_to_the_docs():
     index = (docs_routes.HERE.parent / "static" / "index.html").read_text(encoding="utf-8")
     assert 'href="/docs"' in index
+
+
+def test_the_security_settings_are_documented_from_the_catalogue(docs):
+    """Engine build 2026-11-27 (owner: the docs in the application reflect what can be done now):
+    every agent permission is listed with its three explanations and its strict default, and the
+    every-mode and always-on lists are the engine's own — none is a hand-kept copy."""
+    from plugins.blackbox import detection
+
+    listed = {row["id"]: row for row in docs["settings"]["permissions"]}
+    offered = {each.id: each for each in shields.AGENT_PERMISSIONS if each.controllable}
+    assert set(listed) == set(offered)
+    for permission_id, row in listed.items():
+        assert row["unlocks"] and row["when_blocked"] and row["cost"], permission_id
+        assert row["default"] == offered[permission_id].default.value
+    assert [rule["name"] for rule in docs["settings"]["always_blocked"]] == [rule.name for rule in detection.ALWAYS_BLOCKED]
+    assert [rule["name"] for rule in docs["settings"]["always_on"]] == [rule.name for rule in shields.ALWAYS_ON]

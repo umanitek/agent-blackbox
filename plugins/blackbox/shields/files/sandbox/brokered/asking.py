@@ -1,9 +1,12 @@
 """Who asked a broker, and the sandbox permission's answer for them — shared by every brokered
 action (open a link, open an app, stop a process, run AppleScript).
 
-The agent and instance come from Blackbox's own attribution of the asking pid
-(``ShieldContext.owner_of_pid``), never from the request; the working folder is the client's
-(an agent can ``cd`` anywhere, so naming it is no weaker than being there).
+The agent and instance come from Blackbox's own attribution (``ShieldContext.owner_of_pid``) of
+the process holding the request's connection (``ShieldContext.peer`` → ``platform.connection_pid``),
+never from the request: a ``pid`` in the body is the asking agent's to choose, and one agent named
+another's process to get its "allow" (independent review 2026-11-26, finding 6). No peer, or no
+process found: the asker is unknown (judged by the rules for every agent). The working folder is
+the client's (an agent can ``cd`` anywhere, so naming it is no weaker than being there).
 
 Each action's door (``open_link``, ``open_app``, ``applescript.run``) does only the cheap steps —
 validate, find who asked, decide the permission — and answers a :class:`Planned` action; the
@@ -25,7 +28,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Mapping, Optional
 
 from ....shield_api import InstanceRef, ShieldApiError, ShieldContext
-from .. import permissions
+from .. import permissions, platform
 
 #: The broker's answer while the person has not answered the request yet: the client asks again.
 WAITING = 423
@@ -36,7 +39,7 @@ logger = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class Asking:
     """The asker of one brokered request: *owner* (None when not known), its working *folder*
-    (canonical, "" when not given) and the client's parent *pid* (0 when not given)."""
+    (canonical, "" when not given) and the *pid* holding the request's connection (0 when not known)."""
 
     owner: Optional[InstanceRef]
     folder: str
@@ -52,8 +55,8 @@ class Asking:
 
     @staticmethod
     def of(context: ShieldContext, body: Mapping[str, Any]) -> Asking:
-        raw_pid, cwd = body.get("pid"), body.get("cwd")
-        pid = raw_pid if isinstance(raw_pid, int) and not isinstance(raw_pid, bool) and raw_pid > 1 else 0
+        cwd = body.get("cwd")   # the body's "pid" is accepted from older clients and never believed
+        pid = platform.connection_pid(context.peer)
         folder = os.path.realpath(cwd) if isinstance(cwd, str) and cwd.startswith("/") and len(cwd) <= MAX_CWD_CHARS \
             and "\x00" not in cwd else ""
         owner = None

@@ -212,10 +212,14 @@ def page_rows(client: Any, graph: str, view: str, sparql_after: Callable[[str], 
     builds one page's query (subjects after *cursor*, ordered, LIMITed).
 
     Same cursor discipline as the verified pager (monotonic subject cursor,
-    bounded pages, hard row ceiling). Returns None when ANY page fails, comes
-    back malformed, or comes back empty after a timeout-length wait
-    (:func:`query_rows`), so the caller keeps last-good (fail-open); [] when
-    the node answered that the graph holds no such rows.
+    bounded pages, hard row ceiling). Pages until an EMPTY page: a page shorter
+    than *page_size* proves nothing, because DKG daemons cap a reply below the
+    LIMIT asked for (KI-052: 5,000 asked, 1,000 returned — review 2026-11-26).
+    Returns None when ANY page fails, comes back malformed, or comes back empty
+    after a timeout-length wait (:func:`query_rows`), and when *max_rows* stops
+    the read before its end — so the caller keeps last-good (fail-open); [] when
+    the node answered that the graph holds no such rows. *page_size* is the
+    LIMIT the caller's query builder asks for (kept for the callers' signature).
     """
     rows: list[dict[str, Any]] = []
     after = ""
@@ -226,17 +230,15 @@ def page_rows(client: Any, graph: str, view: str, sparql_after: Callable[[str], 
             # makes the whole read unavailable: a partial list must never pass
             # as the graph's contents (R0 tri-state, KI-112, KI-262).
             return None
-        if not page:
-            break
-        rows.extend(page)
         cursors = [extract_binding(r.get("r")) for r in page if extract_binding(r.get("r"))]
         next_cursor = max(cursors) if cursors else ""
-        if not next_cursor or next_cursor <= after:
-            break  # non-monotonic cursor: stop rather than loop forever
+        if not page or (next_cursor and next_cursor <= after):
+            return rows   # the end — or a node that ignored the cursor: its page repeats rows already read
+        rows.extend(page)
+        if not next_cursor:
+            return rows   # rows without a cursor cannot be paged: the one page is the answer
         after = next_cursor
-        if len(page) < page_size:
-            break
-    return rows
+    return None   # the ceiling stopped the read before an empty page: a part, never the list
 
 
 def run_query(client, sparql, cg_id, view, on_error, agent_address, timeout, sub_graph):

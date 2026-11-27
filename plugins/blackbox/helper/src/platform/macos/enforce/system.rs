@@ -8,6 +8,9 @@ use std::collections::BTreeMap;
 use std::net::{IpAddr, SocketAddr};
 use std::process::Command;
 
+use super::restore::RESOLVER;
+use crate::platform::{Pointed, SavedDns};
+
 const NETWORKSETUP: &str = "/usr/sbin/networksetup";
 const SCUTIL: &str = "/usr/sbin/scutil";
 /// Used when the Mac had no upstream DNS of its own to forward to.
@@ -34,19 +37,46 @@ pub fn parse_dns_servers(text: &str) -> Vec<String> {
     text.lines().map(str::trim).filter(|line| line.parse::<IpAddr>().is_ok()).map(str::to_string).collect()
 }
 
-/// Points every enabled service at the Shield and returns what each had before.
-pub fn point_dns_at_shield() -> Result<BTreeMap<String, Vec<String>>, String> {
-    let mut saved = BTreeMap::new();
-    for service in parse_services(&run(NETWORKSETUP, &["-listallnetworkservices"])?) {
-        let current = parse_dns_servers(&run(NETWORKSETUP, &["-getdnsservers", &service]).unwrap_or_default());
-        if current == ["127.0.0.1"] {
-            continue; // already ours (a restart): keep the earlier saved value
-        }
-        run(NETWORKSETUP, &["-setdnsservers", &service, "127.0.0.1"])?;
-        saved.insert(service, current);
-    }
+/// Points every enabled service at the Shield and returns what each had before ([`point_with`]).
+pub fn point_dns_at_shield(already: &SavedDns) -> Pointed {
+    let pointed = point_with(already, |args| run(NETWORKSETUP, args));
     flush_dns_caches();
-    Ok(saved)
+    pointed
+}
+
+/// [`point_dns_at_shield`] through *networksetup* (args → its output; tests pass a stand-in).
+/// Every service is tried, one failure never stops the rest, and what was saved before a failure
+/// is answered with it ([`Pointed`]). A service already at 127.0.0.1 is skipped only when
+/// *already* holds its original; with none (it was lost) it is saved as "automatic" — WHY: putting
+/// back 127.0.0.1 would leave the Mac on a resolver that is gone once DNS Shield is off, while
+/// "automatic" takes this network's own servers again.
+pub fn point_with(already: &SavedDns, mut networksetup: impl FnMut(&[&str]) -> Result<String, String>) -> Pointed {
+    let mut pointed = Pointed::default();
+    let services = match networksetup(&["-listallnetworkservices"]) {
+        Ok(text) => parse_services(&text),
+        Err(error) => return Pointed { error: Some(error), ..pointed },
+    };
+    let mut errors = vec![];
+    for service in services {
+        // WHY an unreadable service is left alone: saving "none" for it would put back "automatic"
+        // later in place of servers the person set by hand.
+        let current = match networksetup(&["-getdnsservers", &service]) {
+            Ok(text) => parse_dns_servers(&text),
+            Err(error) => { errors.push(error); continue; }
+        };
+        if current == [RESOLVER] {
+            if !already.contains_key(&service) {
+                pointed.saved.insert(service, vec![]);
+            }
+            continue;
+        }
+        match networksetup(&["-setdnsservers", &service, RESOLVER]) {
+            Ok(_) => { pointed.saved.insert(service, current); }
+            Err(error) => errors.push(error),
+        }
+    }
+    pointed.error = (!errors.is_empty()).then(|| errors.join("; "));
+    pointed
 }
 
 /// The commands that make macOS drop the answers it cached from the servers it used before
@@ -163,6 +193,33 @@ mod tests {
                     \nresolver #1\n  nameserver[0] : 192.168.64.1\n";
         assert_eq!(first_nameserver(ours).as_deref(), Some("127.0.0.1"), "a scoped resolver below does not count");
         assert_eq!(first_nameserver("DNS configuration\n\nresolver #1\n  domain : local\n"), None);
+    }
+
+    /// Review finding 2026-11-26 (partial DNS switch): a failure on one service kept the originals
+    /// already saved for the others, and a retry never takes a service already at 127.0.0.1 with
+    /// no saved original as "already ours".
+    #[test]
+    fn a_failure_on_one_service_keeps_what_the_others_had_and_a_retry_never_loses_an_original() {
+        let mut dns: BTreeMap<String, Vec<String>> = BTreeMap::from([("Ethernet".into(), vec!["192.168.1.1".into()]), ("Wi-Fi".into(), vec![])]);
+        let mut fail_wifi = true;
+        let fake = |dns: &mut BTreeMap<String, Vec<String>>, fail: bool, args: &[&str]| -> Result<String, String> {
+            match args {
+                ["-listallnetworkservices"] => Ok("An asterisk (*) denotes that a network service is disabled.\nEthernet\nWi-Fi\n".into()),
+                ["-getdnsservers", service] => Ok(dns[*service].join("\n")),
+                ["-setdnsservers", "Wi-Fi", _] if fail => Err("networksetup: timed out".into()),
+                ["-setdnsservers", service, ip] => { dns.insert(service.to_string(), vec![ip.to_string()]); Ok(String::new()) }
+                _ => Err(format!("unexpected {args:?}")),
+            }
+        };
+        let first = point_with(&SavedDns::new(), |args| fake(&mut dns, fail_wifi, args));
+        assert!(first.error.is_some());
+        assert_eq!(first.saved, SavedDns::from([("Ethernet".into(), vec!["192.168.1.1".to_string()])]), "Ethernet's original is kept with the error");
+        fail_wifi = false;
+        let retry = point_with(&first.saved, |args| fake(&mut dns, fail_wifi, args));
+        assert_eq!(retry, Pointed { saved: SavedDns::from([("Wi-Fi".into(), vec![])]), error: None }, "Ethernet is ours with its original saved");
+        let lost = point_with(&SavedDns::new(), |args| fake(&mut dns, fail_wifi, args));
+        assert_eq!(lost.saved, SavedDns::from([("Ethernet".into(), vec![]), ("Wi-Fi".into(), vec![])]),
+                   "at 127.0.0.1 with no original: put back as automatic, never as 127.0.0.1");
     }
 
     #[test]

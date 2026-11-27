@@ -6,6 +6,8 @@ authority's curator keys signed (under the manifest in force on its day)
 points at it, and the report reads back from Verified Memory with exactly the
 signed digest. Revocations and corrections withdraw it; a read that could not
 tell keeps the last promoted rules; rules already in Verified Memory stay.
+A report is verified against the CONFIGURED verified graph, never the graph its
+own envelope names (review 2026-11-26, finding 13).
 """
 
 from __future__ import annotations
@@ -218,3 +220,11 @@ def test_the_curator_tier_withdraws_revocations_then_serves_promotions(world, mo
     curator_tier.apply_curator_tier(rs, node, CFG)
     assert [rule["identifier"] for rule in rs.dependency.values()] == ["dep:npm:other-pkg@2.0.0"]
     assert rs.curator_revoked == frozenset({EVIL})
+
+
+def test_a_report_signed_for_another_graph_is_never_served(world):
+    """Review 2026-11-26 (finding 13): the report copy was verified against the graph its own
+    envelope named, so a report signed for any other graph passed as this graph's."""
+    elsewhere = "0x" + "b" * 40 + "/another-graph"
+    report = _promoted_store(world, shared_report(EVIL, EDGE, "medium", graph=elsewhere))
+    assert not _served(Node([statement_row(promotion_envelope(report, NOW_SIGNED, sequence=3, day="2026-11-15"))])).dependency

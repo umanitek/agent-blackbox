@@ -7,9 +7,11 @@ library only; copied beside ``runner.py`` into Blackbox's data folder).
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import re
+import stat
 from pathlib import Path
 
 #: The environment variable that moves each agent's config home — its PROFILE (the catalogue's
@@ -158,3 +160,33 @@ def transcript_model(payload: dict) -> str:
 
 #: How a turn the AGENT starts (not its person) begins: Claude Code's background-task result (KI-567).
 AGENT_TURN_MARKS = ("<task-notification", "<system-reminder")
+
+
+def inside_sandbox(canary: Path) -> bool:
+    """True when this process runs inside Blackbox's OS sandbox: only a sandboxed process is refused
+    *canary*. A refusal counts only when the canary's own permissions can not explain it, the same
+    rule as ``shields.files.sandbox.proven`` (review 2026-11-27: ``chmod 000`` on the canary, outside
+    any sandbox, used to read as "inside"): its folder is a real folder and the canary no link, and
+    the refusal is EPERM (Seatbelt; a refused ``lstat`` too) or EACCES from a regular file on another
+    device than its folder (the Linux sandbox's mode-0000 mask, mounted over it)."""
+    try:
+        folder = os.lstat(canary.parent)
+    except OSError:
+        return False
+    try:
+        with open(canary, "rb") as handle:
+            handle.read(1)
+        return False
+    except PermissionError as refused:
+        if not stat.S_ISDIR(folder.st_mode):
+            return False
+        try:
+            facts = os.lstat(canary)
+        except PermissionError:
+            return refused.errno == errno.EPERM
+        except OSError:
+            return False
+        return stat.S_ISREG(facts.st_mode) and (
+            refused.errno == errno.EPERM or (refused.errno == errno.EACCES and facts.st_dev != folder.st_dev))
+    except OSError:
+        return False

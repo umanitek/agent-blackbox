@@ -24,12 +24,14 @@ Usage::
 from __future__ import annotations
 
 import threading
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from .compiler import Ruleset
 
 StampReader = Callable[[], Optional[int]]
 RulesetLoader = Callable[[], Optional[Ruleset]]
+#: ``store``'s default: take the stamp at store time.
+_NOW = object()
 
 
 class RulesetCache:
@@ -61,12 +63,14 @@ class RulesetCache:
             self._known_stamp = stamp
             return self._ruleset
 
-    def store(self, ruleset: Ruleset) -> None:
-        """Install a generation the caller just wrote to (or read from) disk;
-        the stamp is taken now, so the next :meth:`current` serves it."""
+    def store(self, ruleset: Ruleset, stamp: Any = _NOW) -> None:
+        """Install a generation the caller just wrote to disk (the stamp is taken
+        now, so the next :meth:`current` serves it) — or read from disk: then pass
+        the *stamp* taken BEFORE that read, so a file another process replaced
+        during the read is reloaded by the next :meth:`current`, never pinned."""
         with self._lock:
             self._ruleset = ruleset
-            self._known_stamp = self._stamp()
+            self._known_stamp = self._stamp() if stamp is _NOW else stamp
 
     def memory_only(self) -> Optional[Ruleset]:
         """What memory holds right now, without checking the disk."""

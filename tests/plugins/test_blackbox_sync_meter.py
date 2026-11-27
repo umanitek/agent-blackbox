@@ -4,6 +4,12 @@ Covers the three readings (node backlog from daemon.log, downloaded totals from
 one aggregate _meta query, compiled progress), the pure combination into a
 state + percentages, and the cached ``GET /api/verified-sync`` route. A number
 nobody could read must come back unknown, never zero (LES-011).
+
+BB-004 (blackbox-dev, 2026-11-27): the count query took 5.7–10.1 s on a busy node
+and the meter gave up at 5 s, so a node that was answering — serving live
+lookups — read as "node offline" with every number blank. "Node offline" is now
+said only when the node is not answering; the count is read in the background,
+the last good one kept with its age, and only a fresh count can be "synced".
 """
 
 from __future__ import annotations
@@ -14,6 +20,7 @@ import pytest
 
 from plugins.blackbox import ruleset
 from plugins.blackbox.dashboard import server, sync_meter
+from plugins.blackbox.dashboard.sync_meter import download_counts
 from plugins.blackbox.ruleset import graph_queries
 from plugins.blackbox.sync import read_recovery_backlog
 from plugins.blackbox.sync.progress import RecoveryBacklog
@@ -174,11 +181,43 @@ def test_an_unknown_backlog_shows_counts_without_a_percentage():
     assert meter.downloaded_assets == 137
 
 
-def test_an_unreadable_node_is_unavailable_not_zero_percent():
-    meter = _meter(downloaded=None)
+def test_a_node_that_is_not_answering_is_unavailable_not_zero_percent():
+    meter = sync_meter.build_sync_meter(downloaded=None, pending=427, compiled_assets=124, verified_rules=1,
+                                        node_answering=False)
 
     assert meter.state == "unavailable"
     assert meter.downloaded_assets is None and meter.percent_compiled is None
+
+
+def test_an_answering_node_without_a_count_yet_is_counting_not_offline():
+    """BB-004: a missing count from a node that answers is never "node offline"."""
+    meter = _meter(downloaded=None)
+
+    assert meter.state == "counting"
+    assert meter.downloaded_assets is None and meter.percent_compiled is None
+
+
+def test_a_stale_count_is_shown_but_never_called_synced():
+    """LES-159: only a fresh count proves done; a stale one is "counting", with its numbers."""
+    meter = sync_meter.build_sync_meter(downloaded=ruleset.DownloadTotals(assets=564, triples=6_385_136), pending=0,
+                                        compiled_assets=564, verified_rules=1, counts_fresh=False)
+
+    assert meter.state == "counting"
+    assert meter.downloaded_assets == 564 and meter.percent_compiled == 100.0
+
+
+def test_a_slow_count_from_a_reachable_node_reads_counting_not_offline(monkeypatch, tmp_path):
+    """BB-004 as it happened: the node answers (lookups live) but the count does not come back."""
+    (tmp_path / "daemon.log").write_text(_reconcile_line("2026-11-27 02:00:38", VM_GRAPH, 0), encoding="utf-8")
+    monkeypatch.setattr(ruleset, "verified_download_totals", lambda client, graph, timeout=None: None)
+    monkeypatch.setattr(ruleset, "verified_progress", lambda graph: {"assets_compiled": 1744})
+    cfg = type("Cfg", (), {"context_graph_id": VM_GRAPH, "dkg_url": "http://127.0.0.1:1", "dkg_home": str(tmp_path)})()
+
+    meter = sync_meter.read_sync_meter(cfg, node_reachable=True, verified_rules=1_729_340)
+
+    assert meter.state == "counting"
+    assert meter.state != "unavailable" and meter.lookups.get("state") != "unknown"
+    assert meter.compiled_assets == 1744 and meter.counts_note
 
 
 def test_an_unreachable_node_is_never_queried(monkeypatch, tmp_path):
@@ -194,6 +233,11 @@ def test_an_unreachable_node_is_never_queried(monkeypatch, tmp_path):
 
 
 # --- the route ------------------------------------------------------------------
+
+def _inline_reader(**kwargs: Any) -> sync_meter.DownloadCountReader:
+    """A count reader that runs its read in the caller's thread (no background thread in a test)."""
+    return sync_meter.DownloadCountReader(start=lambda work: work(), **kwargs)
+
 
 def test_the_route_serves_the_meter_and_reuses_a_reading_within_the_cache_window(monkeypatch, tmp_path):
     fastapi = pytest.importorskip("fastapi")
@@ -212,7 +256,7 @@ def test_the_route_serves_the_meter_and_reuses_a_reading_within_the_cache_window
 
     app = fastapi.FastAPI()
     sync_meter.register_sync_meter_routes(app, load_config=load_config, node_reachable=lambda c: True,
-                                          verified_rules=lambda c: 106_760)
+                                          verified_rules=lambda c: 106_760, count_reader=_inline_reader())
     with TestClient(app) as client:
         first = client.get("/api/verified-sync").json()
         second = client.get("/api/verified-sync").json()
@@ -230,13 +274,14 @@ def _meter_app(monkeypatch, tmp_path, downloads: list[int]):
     fastapi = pytest.importorskip("fastapi")
     counts = iter(downloads)
     monkeypatch.setattr(sync_meter, "CACHE_SECONDS", 0.0)
+    monkeypatch.setattr(download_counts, "REFRESH_SECONDS", 0.0)
     monkeypatch.setattr(ruleset, "verified_download_totals",
                         lambda client, graph, timeout=None: ruleset.DownloadTotals(assets=next(counts), triples=1))
     monkeypatch.setattr(ruleset, "verified_progress", lambda graph: {"assets_compiled": 0})
     cfg = type("Cfg", (), {"context_graph_id": VM_GRAPH, "dkg_url": "http://127.0.0.1:1", "dkg_home": str(tmp_path)})()
     app = fastapi.FastAPI()
     sync_meter.register_sync_meter_routes(app, load_config=lambda: cfg, node_reachable=lambda c: True,
-                                          verified_rules=lambda c: 0)
+                                          verified_rules=lambda c: 0, count_reader=_inline_reader())
     return app
 
 
@@ -299,7 +344,7 @@ def test_an_unreadable_node_leaves_the_anchor_untouched(monkeypatch, tmp_path):
 
     meter = sync_meter.read_sync_meter(cfg, node_reachable=True, verified_rules=0, anchor=anchor)
 
-    assert meter.state == "unavailable" and meter.graph_assets is None
+    assert meter.state == "counting" and meter.graph_assets is None
     assert anchor.downloaded_at_pass("probe", 1) == 1   # nothing was anchored by the failed read
 
 

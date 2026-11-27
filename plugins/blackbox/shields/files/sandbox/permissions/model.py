@@ -35,10 +35,14 @@ class Mode(str, Enum):
 
 class Route(str, Enum):
     """How a permission is enforced: in the Seatbelt PROFILE (fixed when the agent starts), by a
-    BROKER (Blackbox does the action outside the sandbox, after its checks) or by both."""
+    BROKER (Blackbox does the action outside the sandbox, after its checks), or by the HOOK
+    judgement every agent's tool calls pass through, sandboxed or not (the findings named in
+    :attr:`Permission.hook_findings`). A hook permission never opens the sandbox: what the
+    sandbox's profile closes stays closed inside it."""
 
     PROFILE = "profile"
     BROKER = "broker"
+    HOOK = "hook"
 
 
 class Access(str, Enum):
@@ -58,10 +62,17 @@ class Choice(str, Enum):
 
 @dataclass(frozen=True)
 class Permission:
-    """One catalogue entry: ``id``, ``name`` and ``unlocks`` (plain words), the security ``cost`` of
-    allowing it, its ``route``, its ``default`` mode, the ``modes`` the person may pick, and
-    ``refusal_kinds`` — the sandbox refusals (``agent_hooks`` kinds) that mean an agent wanted it.
-    ``controllable`` is False until Blackbox can really enforce it on this OS; ``note`` says why."""
+    """One catalogue entry, explained in the person's words wherever it can be changed:
+
+    * ``name`` and ``unlocks`` — what the agent may do when it is allowed;
+    * ``when_blocked`` — what the agent meets while it is blocked (what changes if you block it);
+    * ``cost`` — what can go wrong if you allow it (what changes if you relax it).
+
+    Then its ``route``, its ``default`` mode (the strict starting point), the ``modes`` the person
+    may pick, and ``refusal_kinds`` — the sandbox refusals (``agent_hooks`` kinds) that mean an agent
+    wanted it. ``controllable`` is False until Blackbox can really enforce it on this OS; ``note``
+    says why. ``hook_findings`` (HOOK route only): the ``Finding.matched`` or ``Finding.kind``
+    values this permission decides — BLOCK refuses them, ALLOW records them as flags only."""
 
     id: str
     name: str
@@ -77,6 +88,10 @@ class Permission:
     ports: bool = False
     #: The broker acts when the person answers (the agent does not ask again): stopping a process.
     acts_on_answer: bool = False
+    #: What the agent meets while this is blocked, in plain words (shown next to every control).
+    when_blocked: str = ""
+    #: HOOK route: the ``Finding.matched`` / ``Finding.kind`` values this permission decides.
+    hook_findings: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -195,6 +210,35 @@ class Allowances:
 
 
 @dataclass(frozen=True)
+class HookPermissions:
+    """The HOOK-route permissions in force for one acting agent in one folder, read ONCE per tool
+    call: ``modes`` maps each :attr:`Permission.hook_findings` value (a ``Finding.matched`` or
+    ``Finding.kind``) to ``(permission id, mode)``. ``unreadable``: the setting could not be read,
+    so every such finding is decided BLOCK (LES-159: unknown takes the protective branch).
+
+    Usage::
+
+        permissions.allowing("startup-item", "")   # "startup-items" when the person allowed it, else ""
+        permissions.blocks("vulnerability")        # True while vulnerable-packages is blocked"""
+
+    modes: tuple[tuple[str, str, Mode], ...] = ()
+    unreadable: bool = False
+
+    def _decided(self, names: tuple[str, ...]) -> list[tuple[str, Mode]]:
+        return [(permission, mode) for name, permission, mode in self.modes if name and name in names]
+
+    def allowing(self, *names: str) -> str:
+        """The permission that lets a finding named *names* (its matched, its kind) through: "" unless
+        every permission deciding it is ALLOW (two that disagree: the protective one wins)."""
+        decided = [] if self.unreadable else self._decided(names)
+        return decided[0][0] if decided and all(mode is Mode.ALLOW for _, mode in decided) else ""
+
+    def blocks(self, name: str) -> bool:
+        """True when the permission deciding finding *name* is not ALLOW (or the setting is unreadable)."""
+        return self.unreadable or any(mode is not Mode.ALLOW for _, mode in self._decided((name,)))
+
+
+@dataclass(frozen=True)
 class PermissionRequest:
     """An agent wanted a permission it does not have: what the person is asked about. ``pid``: the
     asking process — for ``stop-processes`` the process the agent wanted stopped."""
@@ -235,5 +279,5 @@ class PermissionChange:
     request: str = ""
 
 
-__all__ = ["Access", "Allowances", "Choice", "FolderLimits", "FolderRule", "Mode", "Never", "OnceGrant", "Permission", "PermissionChange",
+__all__ = ["Access", "Allowances", "Choice", "FolderLimits", "FolderRule", "HookPermissions", "Mode", "Never", "OnceGrant", "Permission", "PermissionChange",
            "PermissionRequest", "Route", "Rule", "Scope", "Settings"]

@@ -23,9 +23,10 @@ pub fn guard_dns(guard: bool, dns_active: bool, servers: &[String], now: u64) ->
     if !guard || !dns_active || servers.is_empty() || !drifted(servers) {
         return None;
     }
-    Some(match system::point_dns_at_shield() {
-        Ok(_) => json!({"kind": "dns-restored", "ts": now, "was": servers}),
-        Err(error) => json!({"kind": "dns-restore-failed", "ts": now, "error": error.chars().take(300).collect::<String>()}),
+    // Nothing it saves is kept: a tampered value never becomes the "original" (module doc).
+    Some(match system::point_dns_at_shield(&crate::platform::SavedDns::new()).error {
+        None => json!({"kind": "dns-restored", "ts": now, "was": servers}),
+        Some(error) => json!({"kind": "dns-restore-failed", "ts": now, "error": error.chars().take(300).collect::<String>()}),
     })
 }
 

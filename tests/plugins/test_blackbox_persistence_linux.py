@@ -29,6 +29,8 @@ detection = load_blackbox("detection")
 places = load_blackbox("kernel.persistence_places")
 
 STARTUP_ITEM = "startup-item"
+#: A shell startup file is its own finding (``shell-startup``, judged apart since 2026-11-27); both are refusals here.
+STARTUP_MATCHES = {STARTUP_ITEM, "shell-startup"}
 
 
 @pytest.fixture
@@ -46,7 +48,7 @@ def home(monkeypatch, tmp_path):
 
 
 def _refused(tool: str, args: dict) -> bool:
-    return any(finding.matched == STARTUP_ITEM for finding in detection.detect_persistence_write(tool, args))
+    return any(finding.matched in STARTUP_MATCHES for finding in detection.detect_persistence_write(tool, args))
 
 
 def test_every_linux_startup_place_is_refused_by_the_hook(home):

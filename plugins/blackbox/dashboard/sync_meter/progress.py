@@ -42,9 +42,10 @@ def sync_phase(meter: SyncMeter, stalled: bool) -> tuple[str, str]:
     """Pure: ``(phase, sentence)`` for the step the sync is on, in plain words.
 
     Usage: ``phase, text = sync_phase(meter, stalled=watch.observe(meter).stalled)``.
-    "" when there is nothing to say (the node is not answering: the note already says so).
+    "" when there is nothing to say (the node is not answering, or its count is not in yet:
+    the note already says so — a step guessed from a missing or stale count would mislead).
     """
-    if meter.state in ("unavailable", "synced"):
+    if meter.state in ("unavailable", "counting", "synced"):
         return ("synced", "") if meter.state == "synced" else ("", "")
     downloaded, total = meter.downloaded_assets or 0, meter.graph_assets
     if stalled:
@@ -138,7 +139,7 @@ class SyncProgressWatch:
                     self._save()
                 self._status = ""
                 return SyncProgress(None, None, False)
-            if meter.state not in ("syncing", "unknown"):   # could not tell: keep what we knew
+            if meter.state not in ("syncing", "unknown"):   # could not tell (counting, unavailable): keep what we knew
                 return SyncProgress(self._since, self._last_change, False)
             counts = (meter.downloaded_assets, meter.compiled_assets, meter.graph_assets)
             changed = self._since is None or counts != self._last_counts

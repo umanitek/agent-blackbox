@@ -93,7 +93,7 @@ pub fn hand_key_to(folder: &Path, owner: u32, key: &[u8]) -> Result<(), String> 
 
 /// The plan key, created once (a reinstall keeps it, so the plugin's copy stays valid).
 pub fn ensure_key(home: &Path) -> Result<Vec<u8>, String> {
-    if let Some(key) = link::load_key(home).filter(|key| key.len() == link::KEY_BYTES) {
+    if let link::KeyFile::Key(key) = link::load_key(home) {
         return Ok(key);
     }
     let key = link::new_key();

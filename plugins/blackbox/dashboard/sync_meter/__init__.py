@@ -19,12 +19,19 @@ Three numbers, each from the place that actually knows it:
   ``pending`` until the next pass; once caught up it is exact (checked on
   mainnet 2026-10-08: 153 downloaded + 411 pending = 564).
 * **downloaded** — assets + triples confirmed in the node's _meta, one
-  aggregate query (:func:`..ruleset.verified_download_totals`).
+  aggregate query (:func:`..ruleset.verified_download_totals`), read in the
+  background by :class:`.download_counts.DownloadCountReader` — never on a page
+  poll, and the last good count is kept with its age. The query can take 5–10 s
+  on a busy node; read inline under a 5 s cap it made a reachable node read as
+  "node offline" with every number blank (BB-004).
 * **compiled** — assets the last refresh turned into rules
   (:func:`..ruleset.verified_progress`), plus the live verified rule count.
 
 A number nobody could read is reported as unknown, never as zero (LES-011):
-the meter shows a percentage only when the graph size is known.
+the meter shows a percentage only when the graph size is known. "Node offline"
+(``unavailable``) is said ONLY when the dashboard's debounced liveness probe
+says the node is not answering; a node that answers but has not returned its
+count is ``counting`` — and only a fresh count can make it ``synced``.
 
 Registered by :func:`.server.create_app` through
 :func:`register_sync_meter_routes` → ``GET /api/verified-sync``.
@@ -39,19 +46,16 @@ from dataclasses import asdict, dataclass, field, replace
 from typing import Any, Callable, Optional
 
 from ... import ruleset
-from ...kernel.dkg_client import DkgClient
 from ...sync import read_recovery_backlog
 from . import lookup_alarm   # the finding when the threat graph cannot answer (L8)
+from .download_counts import CountReading, DownloadCountReader
 from .progress import STALL_SECONDS, WATCH, SyncProgress, SyncProgressWatch, sync_phase
 
 logger = logging.getLogger(__name__)
 
-#: Seconds one meter reading is reused — the page polls every few seconds and
-#: the node only moves every minute or two, so the node is asked at most this often.
+#: Seconds one meter reading is reused — the page polls every few seconds. A reading is
+#: local reads only (the node's log tail, the compile record, the background count).
 CACHE_SECONDS = 10.0
-#: The _meta aggregate is small; a node that cannot answer in this long is busy,
-#: and the meter says "could not tell" rather than wait.
-QUERY_TIMEOUT_SECONDS = 5.0
 
 
 @dataclass(frozen=True)
@@ -64,8 +68,12 @@ class SyncMeter:
     * ``syncing`` — the node is still downloading, or rules lag the download;
     * ``unknown`` — the node answered but its backlog is unknown, so there is
       no total to take a percentage of (counts are still shown);
-    * ``unavailable`` — the node could not be read at all.
+    * ``counting`` — the node is answering, but no FRESH count of what it holds
+      came back yet (first read running, or the store is busy): the last count is
+      shown with ``counts_read_at``, never taken as synced (BB-004);
+    * ``unavailable`` — the node is not answering (the liveness probe says so).
 
+    Every state but ``synced`` is "not done" to a reader that gates on it (LES-159).
     ``graph_assets`` / ``percent_*`` are None whenever the total is unknown.
     ``checked_at`` is the node's own timestamp of the backlog it reported.
     """
@@ -91,6 +99,10 @@ class SyncMeter:
     #: (:class:`.progress.SyncProgressWatch`); None when not syncing.
     running_since: Optional[float] = None
     last_progress: Optional[float] = None
+    #: Epoch seconds the downloaded count shown was read (None: no count yet), and a plain
+    #: sentence when it is missing or stale ("" when fresh) — see :class:`.download_counts.CountReading`.
+    counts_read_at: Optional[float] = None
+    counts_note: str = ""
 
 
 def _percent(part: int, whole: int) -> float:
@@ -135,32 +147,38 @@ class GraphSizeAnchor:
 
 def build_sync_meter(*, downloaded: Optional[ruleset.DownloadTotals], pending: Optional[int],
                      compiled_assets: Optional[int], verified_rules: int, checked_at: str = "",
-                     downloaded_at_pass: Optional[int] = None) -> SyncMeter:
+                     downloaded_at_pass: Optional[int] = None, node_answering: bool = True,
+                     counts_fresh: bool = True) -> SyncMeter:
     """Combine the three readings into one :class:`SyncMeter` (pure — no I/O).
 
-    *downloaded* None = the node could not be read; *pending* None = its
-    backlog is unknown; *compiled_assets* None = nothing compiled yet;
+    *node_answering* = the liveness probe's answer (False: ``unavailable``, the last
+    counts still shown); *counts_fresh* = *downloaded* was read recently
+    (:data:`.download_counts.FRESH_SECONDS`). *downloaded* None from an answering node
+    is ``counting``; a stale *downloaded* is shown but is ``counting``, never ``synced``.
+    *pending* None = its backlog is unknown; *compiled_assets* None = nothing compiled yet;
     *downloaded_at_pass* = the node's download count when the *pending* pass
     was logged (from :class:`GraphSizeAnchor`), None = take the live count.
     The size is that count + *pending*, and never less than what the node
     already holds (assets published and fetched before the next pass).
     """
-    if downloaded is None:
-        return SyncMeter(state="unavailable", graph_assets=None, downloaded_assets=None, downloaded_triples=None,
+    if not node_answering or downloaded is None:
+        return SyncMeter(state="counting" if node_answering else "unavailable", graph_assets=None,
+                         downloaded_assets=downloaded.assets if downloaded else None,
+                         downloaded_triples=downloaded.triples if downloaded else None,
                          compiled_assets=compiled_assets, verified_rules=verified_rules,
                          percent_downloaded=None, percent_compiled=None, checked_at=checked_at)
     # The compile record can trail a download that was rolled back or re-read;
     # rules never cover more assets than the node holds.
     compiled = min(compiled_assets, downloaded.assets) if compiled_assets is not None else None
     if pending is None:
-        return SyncMeter(state="unknown", graph_assets=None, downloaded_assets=downloaded.assets,
+        return SyncMeter(state="unknown" if counts_fresh else "counting", graph_assets=None, downloaded_assets=downloaded.assets,
                          downloaded_triples=downloaded.triples, compiled_assets=compiled, verified_rules=verified_rules,
                          percent_downloaded=None, percent_compiled=None, checked_at=checked_at)
     at_pass = downloaded.assets if downloaded_at_pass is None else downloaded_at_pass
     graph_assets = max(downloaded.assets, at_pass + pending)
     done = pending == 0 and compiled is not None and compiled >= downloaded.assets
     return SyncMeter(
-        state="synced" if done else "syncing",
+        state=("synced" if done else "syncing") if counts_fresh else "counting",
         graph_assets=graph_assets,
         downloaded_assets=downloaded.assets,
         downloaded_triples=downloaded.triples,
@@ -216,18 +234,19 @@ def verified_graph_still_arriving(cfg: Any) -> bool:
 
 
 def read_sync_meter(cfg: Any, *, node_reachable: bool, verified_rules: int,
-                    anchor: Optional[GraphSizeAnchor] = None) -> SyncMeter:
-    """Take one live reading for *cfg*'s verified graph (``cfg.context_graph_id``).
+                    anchor: Optional[GraphSizeAnchor] = None,
+                    counts: Optional[DownloadCountReader] = None) -> SyncMeter:
+    """Take one reading for *cfg*'s verified graph (``cfg.context_graph_id``).
 
     Pass the process's *anchor* so the graph size holds steady between the
-    node's reconcile passes; without one the size uses the live count (a
-    one-off reading).
+    node's reconcile passes, and its *counts* reader so the downloaded count
+    comes from the background read (instant). Without *counts* the count is
+    read inline once (a one-off reading: a CLI or a test).
     """
     graph_id = cfg.context_graph_id
-    downloaded = None
-    if node_reachable:
-        client = DkgClient.for_config(cfg)
-        downloaded = ruleset.verified_download_totals(client, graph_id, timeout=QUERY_TIMEOUT_SECONDS)
+    reader = counts if counts is not None else DownloadCountReader(start=lambda work: work())
+    count: CountReading = reader.reading(cfg, reachable=node_reachable)
+    downloaded = count.totals
     backlog = read_recovery_backlog(cfg.dkg_home, graph_id)
     compiled = (ruleset.verified_progress(graph_id) or {}).get("assets_compiled")
     at_pass = None
@@ -235,7 +254,8 @@ def read_sync_meter(cfg: Any, *, node_reachable: bool, verified_rules: int,
     if backlog is not None and backlog.head is not None and downloaded is not None:
         # The node states the graph's size: what is missing is head - held (a restart's re-check is not).
         pending = backlog.to_fetch(downloaded.assets)
-    elif anchor is not None and backlog is not None and downloaded is not None:
+    elif anchor is not None and backlog is not None and downloaded is not None and count.fresh:
+        # Only a fresh count anchors: a stale one would pin the size below what the node holds.
         # Keyed by graph too: a config switch to another graph must not reuse this one's count.
         at_pass = anchor.downloaded_at_pass(f"{graph_id}@{backlog.logged_at}", downloaded.assets)
     meter = build_sync_meter(
@@ -245,7 +265,10 @@ def read_sync_meter(cfg: Any, *, node_reachable: bool, verified_rules: int,
         verified_rules=verified_rules,
         checked_at=backlog.logged_at if backlog else "",
         downloaded_at_pass=at_pass,
+        node_answering=node_reachable,
+        counts_fresh=count.fresh,
     )
+    meter = replace(meter, counts_read_at=count.read_at, counts_note=count.note)
     if node_reachable:
         meter.lookups.update(lookup_status(getattr(ruleset.peek(cfg), "verified_scope", None), ruleset.live.HEALTH.read()))
     else:   # the last lookup's ✓ says nothing about a node that is not answering now (LES-011)
@@ -257,18 +280,22 @@ def read_sync_meter(cfg: Any, *, node_reachable: bool, verified_rules: int,
 
 def register_sync_meter_routes(app: Any, *, load_config: Callable[[], Any],
                                node_reachable: Callable[[Any], bool],
-                               verified_rules: Callable[[Any], int]) -> Callable[[], dict[str, Any]]:
+                               verified_rules: Callable[[Any], int],
+                               count_reader: Optional[DownloadCountReader] = None) -> Callable[[], dict[str, Any]]:
     """Add ``GET /api/verified-sync`` to *app* (a FastAPI app); returns the handler.
 
     Each reading also feeds :data:`WATCH` and carries the sync's phase (:func:`sync_phase`).
     *node_reachable* is the server's cached liveness probe (never blocks);
-    *verified_rules* maps cfg → the compiled verified-rule count. Readings are
+    *verified_rules* maps cfg → the compiled verified-rule count; *count_reader*
+    (default: a new background :class:`.download_counts.DownloadCountReader`) holds
+    the node's downloaded count. Readings are
     cached for :data:`CACHE_SECONDS` behind one lock, so concurrent polls
     trigger one node query, not one each.
     """
     lock = threading.Lock()
     cached: dict[str, Any] = {"at": -1e9, "body": None}
     anchor = GraphSizeAnchor()
+    counts = count_reader or DownloadCountReader()
 
     @app.get("/api/verified-sync")
     def verified_sync() -> dict[str, Any]:
@@ -276,7 +303,7 @@ def register_sync_meter_routes(app: Any, *, load_config: Callable[[], Any],
             if cached["body"] is None or time.monotonic() - cached["at"] >= CACHE_SECONDS:
                 cfg = load_config()
                 meter = read_sync_meter(cfg, node_reachable=node_reachable(cfg), verified_rules=verified_rules(cfg),
-                                        anchor=anchor)
+                                        anchor=anchor, counts=counts)
                 progress = WATCH.observe(meter)
                 phase, phase_text = sync_phase(meter, progress.stalled)
                 meter = replace(meter, phase=phase, phase_text=phase_text, running_since=progress.running_since,
@@ -298,7 +325,7 @@ _READER = _ReaderHolder()
 
 
 def current_state() -> str:
-    """The meter's ``state`` now (``synced`` / ``syncing`` / ``unknown`` / ``unavailable``), from the
+    """The meter's ``state`` now (``synced`` / ``syncing`` / ``unknown`` / ``counting`` / ``unavailable``), from the
     cached reading (at most one node query per :data:`CACHE_SECONDS`); ``unavailable`` before the
     dashboard registered the meter or when it cannot be read. Shield pages ask this."""
     if _READER.handler is None:
@@ -323,6 +350,6 @@ def first_sync_state() -> str:
     return WATCH.first_sync()
 
 
-__all__ = ["STALL_SECONDS", "WATCH", "GraphSizeAnchor", "SyncMeter", "SyncProgress", "SyncProgressWatch",
+__all__ = ["STALL_SECONDS", "WATCH", "CountReading", "DownloadCountReader", "GraphSizeAnchor", "SyncMeter", "SyncProgress", "SyncProgressWatch",
            "build_sync_meter", "current_state", "first_sync_state", "lookup_alarm", "lookup_status", "read_sync_meter", "register_sync_meter_routes", "sync_phase",
            "verified_graph_still_arriving"]

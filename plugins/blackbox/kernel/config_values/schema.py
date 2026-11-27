@@ -53,6 +53,24 @@ DETECTION_CATEGORIES = ("injection", "escalation", "dependency", "fileaccess", "
 MAX_PROTECTED_PATHS = 100
 
 
+#: ``hook_payload_limit_mb``: the most of a coding agent's pre-tool payload its hook runner reads, in
+#: MiB (``agent_hooks/protect/runner.py``). A call larger than this is refused unread, never passed.
+#: WHY neither direction is a weakening (no approval asked): a larger limit only reads more calls whole
+#: and JUDGES them (still bounded), a smaller one refuses more calls as unread — no choice lets a
+#: call through unchecked. The runner keeps its own copy of these numbers (it imports no plugin code);
+#: a test holds the two equal.
+HOOK_PAYLOAD_LIMITS_MB = (4, 16, 64)
+DEFAULT_HOOK_PAYLOAD_LIMIT_MB = 16
+
+
+def hook_payload_limit(raw: Any) -> Optional[int]:
+    """*raw* as one of :data:`HOOK_PAYLOAD_LIMITS_MB` (a whole number, or its text), or None."""
+    if isinstance(raw, bool) or not isinstance(raw, (int, str)):
+        return None
+    text = str(raw).strip()
+    return int(text) if text.isdigit() and int(text) in HOOK_PAYLOAD_LIMITS_MB else None
+
+
 def choice(kind: type[StrEnum], raw: Any) -> Optional[str]:
     """*raw* as one of *kind*'s values (trimmed, lowercased), or None when it is not one."""
     text = str(raw).strip().lower()

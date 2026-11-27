@@ -17,7 +17,10 @@ and is erased with the identity (`--erase-identity`). No record means the
 default: sharing OFF. A record is in force only when it holds an acceptance
 (``accepted_at``) and no ``withdrawn_at``, whatever terms version it names (a
 terms change does not pause sharing; the terms' "What changed" section is
-shown to the operator instead).
+shown to the operator instead). Owner decision 2026-11-27: consent NEVER
+expires — it is not bound to the terms' version or hash, and a terms change
+never asks again. The hash and version in the record say which text was
+accepted; no gate reads them.
 
 Usage::
 

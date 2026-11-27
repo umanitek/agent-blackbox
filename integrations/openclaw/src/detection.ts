@@ -16,16 +16,19 @@
  *   - detectEscalation(toolName, args, rs)   — compares BOTH toolName AND argShape
  *   - detectDependency(toolName, args, rs)   — parses install cmds → dep lookup
  *
- * `normalizeArgShape` lives here (single source) and is reused by the reporter
- * for identifier building, so independent clients
- * shapes stay consistent. It returns the SINGLE top-priority shape (or null),
- * exactly like Python's `normalize_arg_shape`.
+ * `normalizeArgShapes` lives here (single source; the shapes themselves are judged
+ * on shell words in escalationShapes.ts) and is reused by the reporter for
+ * identifier building, so independent clients' shapes stay consistent.
+ * `normalizeArgShape` returns the first (top-priority) one or null, exactly like
+ * Python's `normalize_arg_shape`.
  */
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { codeFileArgs, shellFileArgs, withNestedCommands } from "./shellFiles.js";
+import { SHAPE_ORDER, shapesOf } from "./escalationShapes.js";
+import { parseDependencyInstalls } from "./dependencyInstalls.js";
 import {
   BlackboxSeverity,
   escalationIdentifier,
@@ -278,23 +281,23 @@ export function detectInjection(text: string, ruleset: Ruleset): Finding[] {
 }
 
 /**
- * Escalation: derive the arg shape deterministically, then match a rule ONLY
- * when BOTH toolName AND argShape agree.
+ * Escalation: derive every arg shape deterministically, then match a rule ONLY
+ * when BOTH toolName AND one of the call's argShapes agree — a harmless segment
+ * before a dangerous one never hides it (port of Python `detect_escalation`).
  */
 export function detectEscalation(
   toolName: string,
   args: unknown,
   ruleset: Ruleset,
 ): Finding[] {
-  const shape = normalizeArgShape(toolName, args);
-  if (!shape) return [];
+  const shapes = normalizeArgShapes(toolName, args);
+  if (shapes.length === 0) return [];
   const tool = (toolName || "").trim().toLowerCase();
   const out: Finding[] = [];
   const seen = new Set<string>();
   for (const rule of ruleset.escalation) {
-    if (seen.has(rule.identifier)) continue;
-    if (rule.toolName.trim().toLowerCase() !== tool) continue;
-    if (rule.argShape.trim() !== shape) continue;
+    const shape = rule.argShape.trim();
+    if (seen.has(rule.identifier) || rule.toolName.trim().toLowerCase() !== tool || !shapes.includes(shape)) continue;
     seen.add(rule.identifier);
     const src = ruleSource(rule);
     out.push({
@@ -312,7 +315,9 @@ export function detectEscalation(
   }
   // Discovery layer: a dangerous shape that no graph rule covers is still a
   // candidate escalation nominated to the community graph.
-  if (out.length === 0) {
+  const matched = new Set(out.map((finding) => finding.matched));
+  for (const shape of shapes) {
+    if (matched.has(shape)) continue;
     out.push({
       identifier: escalationIdentifier(tool, shape),
       category: "escalation",
@@ -405,42 +410,16 @@ export function detectDependency(
 // Arg-shape normalization — port of detection/shell_shapes.py
 // ---------------------------------------------------------------------------
 
-// A remote-download-piped-to-interpreter shape: `curl ... | sh`, `wget ... | bash`.
+// A remote-download-piped-to-interpreter shape in TEXT (a skill's code: SKILL_CODE_RULES):
+// `curl ... | sh`, `wget ... | bash`. A shell command is judged on its words (escalationShapes.ts).
 const REMOTE_SCRIPT_RE = /\b(?:curl|wget)\b[\s\S]{0,500}\|\s*(?:sh|bash|zsh|python|python3|node)\b/i;
-// `rm -rf` against DANGEROUS roots only (mirrors Python RM_RF_SYSTEM_RE): system
-// roots, bare `/`, whole-home wipe (~, $HOME), or a sensitive home dir. Routine
-// cleanup (node_modules, ~/.cache, ~/build, /var/tmp) does NOT match.
-const RM_RF_SYSTEM_RE =
-  /\brm\s+(?:-[a-z]*r[a-z]*f|-[a-z]*f[a-z]*r|-r\s+-f|-f\s+-r|--recursive\s+--force|--force\s+--recursive|-r\s+--force|--recursive\s+-f)\b[\s\S]{0,200}(?:\s\/(?:etc|usr|bin|sbin|opt|private|System|Library)\b|\s\/var(?!\/(?:tmp|folders))\b|\s\/\s*(?=[;&|]|$)|\s(?:~|\$HOME)\/?(?=\s|[;&|]|$)|\s(?:~|\$HOME)\/\.(?:ssh|aws|gnupg|gpg|kube|docker|password-store)\b)/i;
-// `chmod 777` against a SENSITIVE target only (mirrors Python CHMOD_WORLD_RE).
-const CHMOD_WORLD_RE =
-  /\bchmod\s+(?:-R\s+)?0?777\b[\s\S]{0,200}(?:\s\/(?:etc|usr|bin|sbin|var|opt|private|System|Library)\b|\s\/\s*(?=[;&|]|$)|\s(?:~|\$HOME)\/?\.?(?:ssh|aws|gnupg))/i;
-// Piping a fetched payload straight into eval.
-const CURL_EVAL_RE = /\b(?:curl|wget)\b[\s\S]{0,300}\|\s*eval\b/i;
-// Disabling TLS verification on a network fetch (mirrors Python INSECURE_FETCH_RE).
-const INSECURE_FETCH_RE =
-  /\bcurl\b[\s\S]{0,200}(?:--insecure|--no-check-certificate|\s-[a-z]*k[a-z]*\b)|\bwget\b[\s\S]{0,200}--no-check-certificate/i;
-// A local/private/dev host — an insecure TLS fetch against one of these is
-// routine, not a threat (mirrors Python _LOCAL_HOST_RE).
-const LOCAL_HOST_RE =
-  /(?:localhost|127\.0\.0\.\d+|0\.0\.0\.0|\[::1\]|\b10\.\d+\.\d+\.\d+|\b192\.168\.\d+\.\d+|\b172\.(?:1[6-9]|2\d|3[01])\.\d+\.\d+|\.local\b|\.internal\b)/i;
 
-/**
- * Ordered so the most specific / most dangerous shape wins for a given command.
- * Mirrors Python `_SHELL_SHAPE_RULES` exactly (priority order matters).
- */
-const SHELL_SHAPE_RULES: ReadonlyArray<readonly [string, RegExp]> = [
-  ["remote-script-pipe", REMOTE_SCRIPT_RE],
-  ["remote-eval-pipe", CURL_EVAL_RE],
-  ["rm-rf-system-paths", RM_RF_SYSTEM_RE],
-  ["chmod-world-writable", CHMOD_WORLD_RE],
-  ["insecure-tls-fetch", INSECURE_FETCH_RE],
-];
-
-// Tool names whose payload is treated as a shell command string.
-export const SHELL_TOOLS = new Set(["terminal", "shell", "bash", "run_command", "exec", "command"]);
+// Tool names whose payload is treated as a shell command string (PowerShell's too: Windows agents).
+export const SHELL_TOOLS = new Set([
+  "terminal", "shell", "bash", "run_command", "exec", "command", "powershell", "pwsh", "powershell.exe", "pwsh.exe",
+]);
 /** The escalation arg shapes a report may name (Python `shell_shapes.ESCALATION_SHAPES`). */
-export const ESCALATION_SHAPES: ReadonlySet<string> = new Set(SHELL_SHAPE_RULES.map(([shape]) => shape));
+export const ESCALATION_SHAPES: ReadonlySet<string> = new Set(SHAPE_ORDER);
 const COMMAND_KEYS = ["command", "cmd", "shell", "script", "input"] as const;
 
 const MAX_SHAPE_SCAN = 8000;
@@ -480,29 +459,19 @@ export function isShellTool(toolName: string): boolean {
 }
 
 /**
- * Derive a deterministic escalation `argShape` for a tool call.
- *
- * Returns the SINGLE top-priority stable slug (e.g. `remote-script-pipe`) or
- * `null` when the call matches no known dangerous shape. Deterministic and pure
- * so independent clients agree on identifiers.
- * Port of Python `normalize_arg_shape` (returns ONE shape or None).
+ * Every escalation `argShape` a tool call has, in SHAPE_ORDER (`[]` for none) —
+ * judged on the shell words of every segment (escalationShapes.ts), so a harmless
+ * segment before a dangerous one hides nothing. Deterministic and pure so
+ * independent clients agree on identifiers. Port of Python `normalize_arg_shapes`.
  */
-export function normalizeArgShape(toolName: string, args: unknown): string | null {
+export function normalizeArgShapes(toolName: string, args: unknown): string[] {
   const command = commandFromArgs(toolName, args);
-  if (!command) return null;
-  for (const [shape, pattern] of SHELL_SHAPE_RULES) {
-    try {
-      if (pattern.test(command)) {
-        // Insecure TLS against a localhost / private / .local host is routine
-        // dev work, not a threat — skip it (mirrors Python normalize_arg_shape).
-        if (shape === "insecure-tls-fetch" && LOCAL_HOST_RE.test(command)) continue;
-        return shape;
-      }
-    } catch {
-      // static patterns; ignore any engine hiccup and keep scanning.
-    }
-  }
-  return null;
+  return command ? shapesOf(command) : [];
+}
+
+/** The first of `normalizeArgShapes` (the most specific / most dangerous), or null. Port of Python `normalize_arg_shape`. */
+export function normalizeArgShape(toolName: string, args: unknown): string | null {
+  return normalizeArgShapes(toolName, args)[0] ?? null;
 }
 
 // ---------------------------------------------------------------------------
@@ -1087,22 +1056,8 @@ export function detectIoc(toolName: string, args: unknown, ruleset: Ruleset): Fi
 }
 
 // ---------------------------------------------------------------------------
-// Dependency install parsing — port
+// Shell reads and downloads (visibility only)
 // ---------------------------------------------------------------------------
-
-const SHELL_INSTALL_PATTERNS = [
-  /\b(?:python(?:3)?\s+-m\s+)?pip3?\s+install\b/i,
-  /\buv\s+pip\s+install\b/i,
-  /\buv\s+add\b/i,
-  /\buvx\b/i,
-  /\bnpm\s+(?:install|i|add)\b/i,
-  /\bpnpm\s+add\b/i,
-  /\byarn\s+add\b/i,
-  /\bbun\s+add\b/i,
-  /\bcargo\s+add\b/i,
-  /\bgem\s+install\b/i,
-  /\bbrew\s+install\b/i,
-];
 
 const TOKEN_RE = /"([^"]*)"|'([^']*)'|(\S+)/g;
 
@@ -1160,134 +1115,9 @@ export function parseDownloads(command: string): string[] {
   return [...new Set(command.match(/https?:\/\/[^\s;'"|&>]+/gi) ?? [])];
 }
 
-export interface ParsedPackage {
-  ecosystem: string;
-  name: string;
-  version: string;
-}
-
-/**
- * Parse a single install token into `{name, version}` for `ecosystem`.
- * Port of Python `_parse_package_token`.
- */
-function parsePackageToken(raw: string, ecosystem: string): { name: string; version: string } | null {
-  const token = raw.replace(/,/g, "").replace(/;/g, "").trim();
-  if (
-    !token ||
-    token.startsWith("http://") ||
-    token.startsWith("https://") ||
-    token.startsWith("/") ||
-    token.startsWith(".") ||
-    token.startsWith("@git")
-  ) {
-    return null;
-  }
-  if (ecosystem === "pypi" || ecosystem === "rubygems") {
-    const exact = /^([A-Za-z0-9][A-Za-z0-9._-]*)==([A-Za-z0-9._+!-]+)$/.exec(token);
-    if (exact) return { name: exact[1], version: exact[2] };
-    const loose = /^([A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[^\]]*\])?$/.exec(token);
-    if (loose) return { name: loose[1], version: "" };
-    return null;
-  }
-  if (ecosystem === "npm") {
-    const idx = token.lastIndexOf("@");
-    if (idx > 0) return { name: token.slice(0, idx), version: token.slice(idx + 1) }; // scoped names start with @, require idx > 0
-    if (/^(?:@[A-Za-z0-9._-]+\/)?[A-Za-z0-9._-]+$/.test(token)) return { name: token, version: "" };
-    return null;
-  }
-  // cargo / homebrew / other: name[@version]
-  const idx = token.lastIndexOf("@");
-  if (idx > 0) return { name: token.slice(0, idx), version: token.slice(idx + 1) };
-  if (/^[A-Za-z0-9._+/-]+$/.test(token)) return { name: token, version: "" };
-  return null;
-}
-
-// manager token spec key -> [ecosystem, number of leading subcommand tokens to skip].
-// The lookup order in the loop mirrors Python's `_MANAGER_SPECS` dict lookups.
-type ManagerSpec = { eco: string; skip: number };
-
-const MANAGER_SPECS_PAIR: Record<string, ManagerSpec> = {
-  "pip|install": { eco: "pypi", skip: 2 },
-  "pip3|install": { eco: "pypi", skip: 2 },
-  "uv|pip": { eco: "pypi", skip: 3 }, // `uv pip install <pkg>`
-  "uv|add": { eco: "pypi", skip: 2 },
-  "pnpm|add": { eco: "npm", skip: 2 },
-  "yarn|add": { eco: "npm", skip: 2 },
-  "bun|add": { eco: "npm", skip: 2 },
-  "cargo|add": { eco: "cargo", skip: 2 },
-  "gem|install": { eco: "rubygems", skip: 2 },
-  "brew|install": { eco: "homebrew", skip: 2 },
-};
-
-const MANAGER_SPECS_SINGLE: Record<string, ManagerSpec> = {
-  uvx: { eco: "pypi", skip: 1 },
-  // `npm install|i|add` is handled explicitly below (the Python `("npm", None)` entry).
-};
-
-/**
- * Parse install commands into `[{ecosystem, name, version}, ...]`.
- * Faithful port of Python `parse_dependency_installs`, including the `i = j`
- * advance (the outer index jumps past the packages consumed for this manager)
- * and dedup by `{ecosystem}:{name.lower()}:{version}`.
- */
-export function parseDependencyInstalls(command: string): ParsedPackage[] {
-  if (!command || !SHELL_INSTALL_PATTERNS.some((re) => re.test(command))) return [];
-  const tokens = tokenizeShell(command);
-  const out: ParsedPackage[] = [];
-  const seen = new Set<string>();
-  let i = 0;
-  while (i < tokens.length) {
-    const tok = (tokens[i] ?? "").toLowerCase();
-    const nxt = i + 1 < tokens.length ? (tokens[i + 1] ?? "").toLowerCase() : null;
-    let ecosystem = "";
-    let start = -1;
-
-    // Python special-cases `(tok, "pip") in _MANAGER_SPECS and nxt == "pip"`
-    // ahead of the generic pair lookup so `uv pip install` resolves to skip=3.
-    if (MANAGER_SPECS_PAIR[`${tok}|pip`] && nxt === "pip") {
-      const spec = MANAGER_SPECS_PAIR[`${tok}|pip`];
-      ecosystem = spec.eco;
-      start = i + spec.skip;
-    } else if (nxt !== null && MANAGER_SPECS_PAIR[`${tok}|${nxt}`]) {
-      const spec = MANAGER_SPECS_PAIR[`${tok}|${nxt}`];
-      ecosystem = spec.eco;
-      start = i + spec.skip;
-    } else if (MANAGER_SPECS_SINGLE[tok]) {
-      const spec = MANAGER_SPECS_SINGLE[tok];
-      ecosystem = spec.eco;
-      start = i + spec.skip;
-    } else if (tok === "npm" && (nxt === "install" || nxt === "i" || nxt === "add")) {
-      ecosystem = "npm";
-      start = i + 2;
-    }
-
-    if (start < 0 || !ecosystem) {
-      i += 1;
-      continue;
-    }
-
-    let j = start;
-    while (j < tokens.length) {
-      const raw = tokens[j] ?? "";
-      if (raw === ";" || raw === "&&" || raw === "||" || raw === "|") break;
-      if (raw.startsWith("-") || raw === "install" || raw === "add" || raw === "i") {
-        j += 1;
-        continue;
-      }
-      const parsed = parsePackageToken(raw, ecosystem);
-      if (parsed && parsed.name) {
-        const key = `${ecosystem}:${parsed.name.toLowerCase()}:${parsed.version}`;
-        if (!seen.has(key)) {
-          seen.add(key);
-          out.push({ ecosystem, name: parsed.name, version: parsed.version });
-        }
-      }
-      j += 1;
-    }
-    i = j;
-  }
-  return out;
-}
+// Which packages a command installs by name lives in dependencyInstalls.ts (the
+// shell's own words, through the one lexer); named here for the existing callers.
+export { parseDependencyInstalls, type ParsedPackage } from "./dependencyInstalls.js";
 
 // ---------------------------------------------------------------------------
 // Text flattening (injection scan helper) + evidence sampling

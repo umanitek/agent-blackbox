@@ -7,7 +7,7 @@ Contracts (red on the base ed4152ceac: no project profiles, no projects.idx, no 
   that agent's index; a project named for another agent does not; stale ones are removed;
 * the launcher picks the LONGEST project folder holding the working folder (spaces and all), the
   agent's own profile when none holds it or the index is missing, and nothing at all inside a
-  sandbox (``BLACKBOX_AGENT_SANDBOX=1``); a sibling sharing a prefix is not inside;
+  sandbox (the canary proves it, never ``BLACKBOX_AGENT_SANDBOX=1``: review 2026-11-26, finding 3); a sibling sharing a prefix is not inside;
 * on THIS Mac, end to end through the launcher: a folder kept from Claude Code in one project is
   refused there and readable in another.
 """
@@ -71,7 +71,7 @@ def test_each_named_project_gets_a_profile_and_an_index_line(home, entry):
     assert not profiles.projects_dir("claude-code").exists() and not profiles.projects_dir("codex").exists()
 
 
-def _launch(home, cwd, extra_env=None) -> str:
+def _launch(home, cwd, extra_env=None, inside=False) -> str:
     fake = home / "fakebin"
     fake.mkdir(exist_ok=True)
     agent = fake / "claude"
@@ -82,7 +82,9 @@ def _launch(home, cwd, extra_env=None) -> str:
     env.pop("BLACKBOX_SANDBOX_PROFILE", None)
     if not extra_env:
         env.pop("BLACKBOX_AGENT_SANDBOX", None)
-    done = subprocess.run(["claude"], capture_output=True, text=True, timeout=30, env=env, cwd=str(cwd), check=False)
+    # inside: started in a real sandbox, so the launcher's canary test (never a variable) sees it
+    argv = [macos_profile.SANDBOX_EXEC, "-f", str(sandbox.profile_path()), "claude"] if inside else ["claude"]
+    done = subprocess.run(argv, capture_output=True, text=True, timeout=30, env=env, cwd=str(cwd), check=False)
     return done.stdout
 
 
@@ -99,7 +101,8 @@ def test_the_launcher_picks_the_longest_project_holding_the_working_folder(home,
     assert f"profile={own}" in _launch(home, home / "work/other")
     (profiles.projects_dir("claude-code") / profiles.INDEX).unlink()
     assert f"profile={own}" in _launch(home, home / "work/my shop/api")      # no index: the agent's own
-    assert "profile=none" in _launch(home, home / "work/other", {"BLACKBOX_AGENT_SANDBOX": "1"})
+    assert "profile=none" in _launch(home, home / "work/other", inside=True)
+    assert f"profile={own}" in _launch(home, home / "work/other", {"BLACKBOX_AGENT_SANDBOX": "1"})   # a variable proves nothing
 
 
 @REAL

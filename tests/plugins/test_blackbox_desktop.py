@@ -201,8 +201,7 @@ def test_the_switch_saves_block_mode_through_the_settings_path():
     from plugins.blackbox.kernel.config import load_blackbox_config
     assert desktop.set_mode("block") == {"ok": True, "mode": "block", "errors": []}
     assert load_blackbox_config().mode == "block"
-    assert desktop.set_mode("audit")["mode"] == "audit"
-    assert load_blackbox_config().mode == "audit"
+    # Audit turns protection down: it goes through the dashboard's gate (test_blackbox_hermes_mode_gate.py).
 
 
 def test_the_switch_refuses_an_unknown_mode_and_writes_nothing(monkeypatch):

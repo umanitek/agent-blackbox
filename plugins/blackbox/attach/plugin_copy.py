@@ -9,13 +9,17 @@ copy is stale (version change or any newer shipped file).
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
 import shutil
+import time
+import uuid
 from pathlib import Path
 from typing import Optional
 from ..kernel import constants, os_layout
+from . import serial
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +36,14 @@ _COPY_EXCLUDE_SUFFIXES = (".pyc", ".pyo")
 # OpenClaw always has something to load, even when Blackbox was copied into a
 # user home with no sibling ``integrations/`` (see ``_openclaw_plugin_source``).
 _BUNDLED_OPENCLAW_DIRNAME = "_openclaw"
+
+#: Where a copy is built and the previous one set aside: beside ``plugins/``, never inside it
+#: (Hermes would scan it as a plugin).
+_ASIDE_DIRNAME = ".blackbox-attach-copy"
+#: A staging folder older than this was left by a writer that died mid-copy; the next copy removes it.
+_STALE_STAGING_S = 3600.0
+#: How often the swap is tried when another process puts its copy in place between our two renames.
+_SWAP_ATTEMPTS = 3
 
 
 # ---------------------------------------------------------------------------
@@ -133,6 +145,7 @@ def _copy_ignore(folder: str, names: list[str]) -> list[str]:
     return skipped + [n for n in os_layout.other_os_entries(folder, names) if n not in skipped]
 
 
+@serial.serialized
 def copy_plugin_tree(src: Path, dest: Path) -> None:
     """Copy the plugin tree from *src* to *dest*, excluding pycache/tests and other operating
     systems' platform modules.
@@ -140,32 +153,86 @@ def copy_plugin_tree(src: Path, dest: Path) -> None:
     Replaces any existing copy so a version bump fully refreshes the files, and
     bundles the OpenClaw JS plugin so an installed copy can still point OpenClaw
     at it (an installed ``plugins/blackbox`` has no sibling ``integrations/``).
+    Raises ``OSError`` when the copy cannot be made; *dest* then still holds the previous copy.
     """
     # Built beside, then swapped in by two renames — the installer's own refresh (KI-644). WHY here
     # too (fix wave W12, macOS VM: an upgrade over a running install failed in `blackbox attach` with
     # "[Errno 17] File exists: …/plugins/blackbox/shields"): the running dashboard and hooks import
     # from the copy and write fresh __pycache__ folders while rmtree + copytree replace it in place.
-    # A rename is atomic and does not care what runs from the folder. The aside folder sits beside
-    # the plugins folder, never inside it (Hermes would scan it as a plugin).
-    aside = dest.parent.parent / ".blackbox-attach-copy"
-    staged, old_copy = aside / f"new-{os.getpid()}", aside / f"old-{os.getpid()}"
-    shutil.rmtree(staged, ignore_errors=True)
-    shutil.rmtree(old_copy, ignore_errors=True)
+    # A rename is atomic and does not care what runs from the folder.
+    # WHY a unique staging name per call, and only our own removed (review 2026-11-26, LES-167): two
+    # writers shared "new-<pid>" and the last step removed the whole aside folder — another writer's
+    # half-built copy with it — and an agent's plugin folder was left missing.
+    aside = dest.parent.parent / _ASIDE_DIRNAME
     aside.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(src, staged, ignore=_copy_ignore)
-    _bundle_openclaw_plugin(src, staged)
-    (staged / _INSTALL_STAMP_MARKER).write_text(constants.__version__, encoding="utf-8")
-    source_root = _source_checkout_root(src)
-    if source_root is not None:
+    _remove_stale_staging(aside)
+    token = f"{os.getpid()}-{uuid.uuid4().hex}"
+    staged, old_copy = aside / f"new-{token}", aside / f"old-{token}"
+    try:
+        shutil.copytree(src, staged, ignore=_copy_ignore)
+        _bundle_openclaw_plugin(src, staged)
+        (staged / _INSTALL_STAMP_MARKER).write_text(constants.__version__, encoding="utf-8")
+        source_root = _source_checkout_root(src)
+        if source_root is not None:
+            try:
+                (staged / _SOURCE_ROOT_MARKER).write_text(str(source_root), encoding="utf-8")
+            except OSError:
+                pass
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        _swap_in(staged, dest, old_copy)
+    finally:
+        _remove(staged)
+        if dest.exists():   # WHY the check: when the swap and its roll-back both failed, old_copy is the only copy
+            _remove(old_copy)
+        with contextlib.suppress(OSError):
+            aside.rmdir()   # only when empty: another writer may be staging there
+
+
+def _swap_in(staged: Path, dest: Path, old_copy: Path) -> None:
+    """Put *staged* at *dest* by renames, the previous copy set aside at *old_copy*. On a failure
+    the previous copy is put back and the error raised. When another process swaps its own copy in
+    between our two renames, the swap is tried again (at most :data:`_SWAP_ATTEMPTS` times)."""
+    for attempt in range(_SWAP_ATTEMPTS):
+        moved = False
+        if dest.exists() or dest.is_symlink():
+            _remove(old_copy)   # a retry: the copy set aside first is older than the one there now
+            os.rename(dest, old_copy)
+            moved = True
         try:
-            (staged / _SOURCE_ROOT_MARKER).write_text(str(source_root), encoding="utf-8")
+            os.rename(staged, dest)
+            return
         except OSError:
-            pass
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    if dest.exists() or dest.is_symlink():
-        os.rename(dest, old_copy)
-    os.rename(staged, dest)
-    shutil.rmtree(aside, ignore_errors=True)
+            if dest.exists() or dest.is_symlink():   # another writer's copy landed meanwhile
+                if attempt + 1 < _SWAP_ATTEMPTS:
+                    continue
+                raise
+            if moved:
+                os.rename(old_copy, dest)
+            raise
+
+
+def _remove(path: Path) -> None:
+    """Remove a folder or a link to one; a missing path is fine."""
+    if path.is_symlink():
+        with contextlib.suppress(OSError):
+            path.unlink()
+    else:
+        shutil.rmtree(path, ignore_errors=True)
+
+
+def _remove_stale_staging(aside: Path) -> None:
+    """Remove staging folders a writer that died mid-copy left behind (older than :data:`_STALE_STAGING_S`)."""
+    cutoff = time.time() - _STALE_STAGING_S
+    try:
+        entries = list(aside.iterdir())
+    except OSError:
+        return
+    for entry in entries:
+        try:
+            if entry.lstat().st_mtime < cutoff:
+                _remove(entry)
+        except OSError:
+            continue
 
 
 def _source_checkout_root(src: Path) -> Optional[Path]:

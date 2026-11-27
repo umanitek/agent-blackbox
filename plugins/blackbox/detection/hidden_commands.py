@@ -44,6 +44,7 @@ from __future__ import annotations
 import re
 
 from .paths.shell_scripts import MAX_DECODED_CHARS, _INTERPRETERS, _decode_bytes, _resolved, _unescape
+from .command_line.lexer import unresolved
 from .paths.shell_words import _SEPARATORS, _words
 
 #: The most string literals of one piece of inline code read as commands.
@@ -121,10 +122,28 @@ def _substitutions(command: str) -> list[tuple[int, int, str]]:
     return found
 
 
+#: A word ``echo`` prints as written: nothing the shell decides at run time but the home folder.
+_LITERAL_WORD = re.compile(r"(?:[^$`(){}*?\[\]]|\$HOME\b|\$\{HOME\})*")
+
+
+def _echoed(inner: str) -> str:
+    """What ``echo WORDS`` / ``printf %s WORDS`` of literal words prints (``$(echo ~)`` is ``~``), else ""."""
+    words = _words(inner)
+    if words[:1] == ["printf"] and words[1:2] in (["%s"], ["%s\\n"], ["%s\n"]):
+        words = ["echo", *words[2:]]
+    if words[:1] != ["echo"] or len(words) < 2 or any(word in _SEPARATORS for word in words):
+        return ""
+    printed = [word for word in words[1:] if word not in ("-n", "-e", "-E")]
+    return " ".join(printed) if printed and all(_LITERAL_WORD.fullmatch(word) for word in printed) else ""
+
+
 def _static_value(inner: str) -> str:
     """What a substitution's command *inner* prints, when that is fixed by the line alone: a
-    decode of a literal or ``printf`` escapes ("" when it is not)."""
+    decode of a literal, ``printf`` escapes, or ``echo`` of literal words ("" when it is not)."""
     inner = inner.strip()
+    echoed = _echoed(inner)
+    if echoed:
+        return echoed
     pipe = _PIPE_DECODE.fullmatch(inner)
     if pipe:
         return _decode_bytes(pipe.group("data"), _tool_kind(pipe.group("tool")))
@@ -146,7 +165,8 @@ def _shell_decodes(command: str) -> list[str]:
         out.append(inner)   # what it runs, judged on its own
         value = _static_value(inner)
         if value:
-            out.append(value)   # a decoded command handed to eval or a shell
+            if not _echoed(inner.strip()):
+                out.append(value)   # a decoded command handed to eval or a shell
             resolved = resolved[:start] + _quoted(value) + resolved[end:]
     for match in _PIPE_DECODE.finditer(command):
         value = _decode_bytes(match.group("data"), _tool_kind(match.group("tool")))
@@ -209,6 +229,31 @@ def code_commands(code: str, interpreter: str = "", argv: tuple[str, ...] = ()) 
     return out + _argv_commands(resolved)
 
 
+#: A word that sets a variable for the command after it (``LC_ALL=C sort``).
+_SETS_VARIABLE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+
+
+def program_index(words: list[str]) -> int:
+    """Where the program one simple command *words* runs stands: past ``NAME=value`` words and
+    every wrapper (``sudo -u root``, ``env A=1``, ``timeout 5``, ``nohup``…) with its options and
+    values; ``len(words)`` when it runs none."""
+    index = 0
+    while index < len(words):
+        if _SETS_VARIABLE.match(words[index]):
+            index += 1
+            continue
+        name = words[index].rsplit("/", 1)[-1].lower()
+        if name not in _WRAPPERS:
+            return index
+        takes_value, value_first = _WRAPPERS[name], name in _TAKES_VALUE_FIRST
+        index += 1
+        while index < len(words) and (words[index].startswith("-") or value_first or (name == "env" and "=" in words[index])):
+            if not words[index].startswith("-") and not (name == "env" and "=" in words[index]):
+                value_first = False   # ``timeout 5``: the value, then the command
+            index += 2 if words[index] in takes_value else 1
+    return index
+
+
 def _wrapped(words: list[str], index: int) -> str:
     """The command a wrapper at *index* runs (``env A=1 cat x`` → ``cat x``), "" when none."""
     name = words[index].rsplit("/", 1)[-1].lower()
@@ -265,16 +310,25 @@ _DYNAMIC_DECODE = re.compile(r"\b(?:base64|base32)\s+(?:-d|--decode|-D)\b|\bxxd\
                              r"\b(?:fromhex|unhexlify|b64decode|b32decode|atob|decode64)\s*\(\s*[A-Za-z_$]|\bchr\s*\(|String\.fromCharCode")
 
 
+#: A variable the shell rewrites at run time — trimmed (``${HOME%/*}``), replaced, sliced, made
+#: conditional (``${X:+…}``) or named indirectly — whose result the line does not spell out.
+_RUN_TIME_PARAMETER = re.compile(r"\$\{(?:[!#][A-Za-z_]|[A-Za-z_][A-Za-z0-9_]*(?::?\+|[%#/^,@]|:\s*-?\d))")
+
+
 def undecidable(command: str) -> bool:
     """True when *command* builds part of what it runs or opens at run time in a way this module
     cannot read off the line: a substitution whose output is not fixed (``$(cat list | base64
-    -d)``), or a decode of something that is not a literal. File Shield flags such a command —
+    -d)``), a decode of something that is not a literal, a variable rewritten at run time
+    (``${HOME%/*}``) or a brace group too large to expand (``command_line.lexer.unresolved``). File Shield flags such a command —
     with that reason — when it also names the folder that holds a protected item."""
     if any(not _static_value(inner) for _start, _end, inner in _substitutions(command)):
+        return True
+    if _RUN_TIME_PARAMETER.search(command) or any(unresolved(line) for line in command.split("\n")):
         return True
     rest = _PIPE_DECODE.sub(" ", command)   # a decode of a literal is read, not unknown
     rest = _CODE_DECODE.sub(" ", rest)
     return bool(_DYNAMIC_DECODE.search(rest))
 
 
-__all__ = ["MAX_DECODED_CHARS", "MAX_HIDDEN", "MAX_LITERALS", "MAX_LITERAL_CHARS", "code_commands", "hidden_commands", "undecidable"]
+__all__ = ["MAX_DECODED_CHARS", "MAX_HIDDEN", "MAX_LITERALS", "MAX_LITERAL_CHARS", "code_commands", "hidden_commands", "program_index",
+           "undecidable"]

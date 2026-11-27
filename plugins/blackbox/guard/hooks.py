@@ -46,69 +46,84 @@ def _kill_list_findings(rs: Any, tool_name: str, args: Any) -> list[detection.Fi
     return [found] if found is not None else []
 
 
-def _decision(cfg: BlackboxConfig, findings: list[detection.Finding], blocking: list[detection.Finding]) -> str:
-    """What the hook DID, for the audit row: "block", "flag", or "flag (local override)"
-    when a verified rule would have blocked but the operator unblocked it here (R7b)."""
+def _decision(cfg: BlackboxConfig, findings: list[detection.Finding], blocking: list[detection.Finding],
+              overridden: Optional[list[detection.Finding]] = None) -> str:
+    """What the hook DID, for the audit row: "block", "flag", or "flag (local override)" when a
+    verified rule would have blocked but the operator unblocked it here (R7b). *overridden*: what
+    :func:`_split` demoted for this call (None: worked out here)."""
     if blocking:
         return "block"
-    return "flag (local override)" if _overridden(cfg, findings) else "flag"
+    overridden = _split(cfg, findings)[1] if overridden is None else overridden
+    return "flag (local override)" if overridden else "flag"
 
 
-def _decision_detail(cfg: BlackboxConfig, findings: list[detection.Finding],
-                     blocking: list[detection.Finding]) -> dict[str, Any]:
+def _decision_detail(cfg: BlackboxConfig, findings: list[detection.Finding], blocking: list[detection.Finding],
+                     overridden: list[detection.Finding]) -> dict[str, Any]:
     """The audit row's ``decision`` and, when something blocked, ``blocked`` —
     which findings did, so each report can say blocked or flagged (threat-profiles D3)."""
-    out: dict[str, Any] = {"decision": _decision(cfg, findings, blocking)}
+    out: dict[str, Any] = {"decision": _decision(cfg, findings, blocking, overridden)}
     if blocking:
         out["blocked"] = [f.identifier for f in blocking]
     return out
 
 
-def _overridden(cfg: BlackboxConfig, findings: list[detection.Finding]) -> list[detection.Finding]:
-    """Findings a local override keeps from blocking (empty unless block mode is on)."""
+def _split(cfg: BlackboxConfig, findings: list[detection.Finding],
+           permissions: Optional[shields.HookPermissions] = None) -> tuple[list[detection.Finding], list[detection.Finding]]:
+    """``(blocking, overridden)`` for one call: :func:`_would_block` split by the operator's local
+    overrides (R7b — a reduction every operator keeps), with ``overrides.json`` read once."""
+    would = _would_block(cfg, findings, permissions)
+    if not would:
+        return [], []
     try:
         unblocked = overrides.OverrideStore().unblocked()
-    except Exception:  # pragma: no cover - fail open: no store, no override
-        return []
-    return overrides.demote_blocking(_would_block(cfg, findings), unblocked)[1] if unblocked else []
+    except Exception:  # health: allow BLE001 -- fail open to the published rule (a malformed overrides.json)
+        return would, []
+    return overrides.demote_blocking(would, unblocked) if unblocked else (would, [])
 
 
 def _blocking(cfg: BlackboxConfig, findings: list[detection.Finding]) -> list[detection.Finding]:
-    """The findings that block this call: :func:`_would_block` minus the
-    operator's local overrides (R7b — a reduction every operator keeps)."""
-    would = _would_block(cfg, findings)
-    if not would:
-        return []
-    try:
-        unblocked = overrides.OverrideStore().unblocked()
-    except Exception:  # pragma: no cover - fail open to the published rule
-        return would
-    return overrides.demote_blocking(would, unblocked)[0]
+    """The findings that block this call (:func:`_split`'s first half)."""
+    return _split(cfg, findings)[0]
 
 
-def _would_block(cfg: BlackboxConfig, findings: list[detection.Finding]) -> list[detection.Finding]:
+#: ``Finding.fields`` key: the person's permission that let a finding through (its audit row shows it).
+ALLOWED_BY_PERMISSION = "allowed_by_permission"
+
+
+def _permitted(findings: list[detection.Finding], permissions: shields.HookPermissions) -> list[detection.Finding]:
+    """*findings* less those a HOOK-route permission the person ALLOWED lets through (each marked)."""
+    for finding in findings:
+        if allowed := permissions.allowing(finding.matched, finding.kind or ""):
+            finding.fields[ALLOWED_BY_PERMISSION] = allowed
+    return [finding for finding in findings if ALLOWED_BY_PERMISSION not in finding.fields]
+
+
+def _would_block(cfg: BlackboxConfig, findings: list[detection.Finding],
+                 permissions: Optional[shields.HookPermissions] = None) -> list[detection.Finding]:
     """The findings that block this call (empty unless block mode is on).
 
-    Confirmed findings and custom rules block; community/heuristic ones only
-    alert. ``vulnerability`` kind never blocks (a legit-but-vulnerable package
-    must keep working), nor ``flag-only`` (a local rule's community-sourced or
-    routine finding, KI-385) — only ``malware`` is stopped. IOC findings alert but
-    never auto-block in this rollout: network and crypto-address blocklists
-    are higher-churn / higher-FP than pinned package versions, so they are
-    validated in audit mode first.
+    Confirmed findings and custom rules block; community/heuristic ones only alert. Never blocking:
+    ``flag-only`` (KI-385), ``vulnerability`` while ``vulnerable-packages`` allows it (its default: a
+    legit-but-vulnerable package must keep working), and IOC findings (higher-churn blocklists, in
+    audit first). *permissions*: the acting agent's HOOK-route permissions in its folder (None: read
+    once here from ``kernel.action_context``); what one ALLOWS is only flagged (:func:`_permitted`),
+    what one blocks keeps its rule — startup places in every mode, the rest in Block mode.
     """
+    if permissions is None:
+        permissions = shields.hook_permissions(action_context.acting_agent(), action_context.working_folder())
+    findings = _permitted(findings, permissions)
     # Refused in EVERY mode: Blackbox's own core (2026-11-20 — in Audit mode an agent could switch
     # the guard off and was merely flagged for it) and what the person protected with File Shield
     # (2026-11-21: their own explicit rule). Nothing else blocks unless Block mode is on.
     always = [f for f in findings if f.matched in detection.ALWAYS_BLOCKED_MATCHES]
     if not cfg.block_enabled:
         return always
+    flag_kinds = ("historical", detection.KIND_FLAG_ONLY, *(() if permissions.blocks(constants.KIND_VULNERABILITY)
+                                                            else (constants.KIND_VULNERABILITY,)))
     return always + [
         f for f in findings
-        if (f.confirmed or f.source in ("custom", "secret"))
-        and getattr(f, "kind", None) not in (constants.KIND_VULNERABILITY, "historical", detection.KIND_FLAG_ONLY)
-        and f.category != "ioc"
-        and cfg.meets_block_threshold(f.severity) and f not in always
+        if (f.confirmed or f.source in ("custom", "secret")) and getattr(f, "kind", None) not in flag_kinds
+        and f.category != "ioc" and cfg.meets_block_threshold(f.severity) and f not in always
     ]
 
 
@@ -175,6 +190,7 @@ class _Judgement:
     graph_evidence: Any
     findings: list[detection.Finding]
     blocking: list[detection.Finding]
+    overridden: list[detection.Finding]   # would have blocked; a local override demoted them (R7b)
     notes: list[str]   # what could not be checked ("dependencies not checked: …"), said on the session
 
 
@@ -184,10 +200,11 @@ def _judge(tool_name: str, args: Any, cwd: str = "", agent: str = "") -> _Judgem
     cfg = _config()
     rs, graph_evidence = graph_rules.detection_rules(cfg, tool_name, args)
     notes: list[str] = []
-    with config_mod.one_entry_read(), action_context.working_in(cwd, agent):   # one read: shields and watch rules
+    with config_mod.one_entry_read(), action_context.working_in(cwd, agent):   # one read: shields, watch rules, permissions
         active = shields.snapshot()   # every shield's mode, read once for this call
         findings = reporting._flag_worthy(cfg, _raw_findings(cfg, rs, tool_name, args, active, notes), active)
-    return _Judgement(cfg, rs, graph_evidence, findings, _blocking(cfg, findings), notes)
+        blocking, overridden = _split(cfg, findings)   # the acting agent's permissions, in its folder
+    return _Judgement(cfg, rs, graph_evidence, findings, blocking, overridden, notes)
 
 
 class ToolCallVerdict(TypedDict):
@@ -222,7 +239,7 @@ def tool_call_verdict(tool_name: str = "", args: Any = None, cwd: str = "", agen
     catalogue id (``claude-code``), so a folder rule the person scoped to it applies.
     """
     judged = _judge(tool_name, args, cwd, agent)
-    decision = _decision(judged.cfg, judged.findings, judged.blocking) if judged.findings else ""
+    decision = _decision(judged.cfg, judged.findings, judged.blocking, judged.overridden) if judged.findings else ""
     return ToolCallVerdict(findings=[finding.to_dict() for finding in judged.findings],
                            blocked=[finding.identifier for finding in judged.blocking], decision=decision,
                            message=blackbox_block_message(judged.blocking) if judged.blocking else "", notes=judged.notes)
@@ -268,7 +285,7 @@ def on_pre_tool_call(
                 detail["context"] = ctx
             # KI-189: the audit row says what the hook DID, not only what it saw —
             # R10's "a revoked threat blocked N actions here" counts these.
-            detail.update(_decision_detail(cfg, findings, blocking))
+            detail.update(_decision_detail(cfg, findings, blocking, judged.overridden))
         reporting._report_and_audit(cfg, "pre_tool_call", findings, detail)
         background.review_tool(cfg, tool_name, args, detail)
         # OSV auto-discovery runs off the blocking path so a network lookup
@@ -307,23 +324,13 @@ def on_post_tool_call(
 ) -> None:
     """Audit the redacted tool result. Never blocks."""
     try:
-        audit.record(
-            event="post_tool_call",
-            detail={
-                "tool_name": tool_name,
-                "session_id": session_id,
-                "task_id": task_id,
-                "tool_call_id": tool_call_id,
-                "duration_ms": duration_ms,
-                "result": audit.redact(result),
-            },
-        )
+        audit.record(event="post_tool_call", detail={"tool_name": tool_name, "session_id": session_id, "task_id": task_id,
+                                                     "tool_call_id": tool_call_id, "duration_ms": duration_ms,
+                                                     "result": audit.redact(result)})
     except Exception as exc:  # pragma: no cover - fail open, said out loud (FIX-0160)
         reporting.hook_failed("post_tool_call", exc, tool_name=tool_name, consequence="the result was not audited")
     # KI-595: what an install added to its lockfile (a named install's transitive packages). Fail-open.
     dependency_files.after_call(_config, tool_name, args, session_id, tool_call_id)
-
-
 
 
 def on_pre_api_request(**kwargs: Any) -> None:
@@ -347,14 +354,8 @@ def on_pre_api_request(**kwargs: Any) -> None:
         # A prompt that names an item the person protected (File Shield): flagged, never kept.
         findings += shields.prompt_findings([part for context, part in sources if context == "in-user-prompt"], active)
         findings = reporting._flag_worthy(cfg, findings, active)
-        detail = {
-            "graph_read": graph_evidence,
-            "session_id": kwargs.get("session_id"),
-            "task_id": kwargs.get("task_id"),
-            "turn_id": kwargs.get("turn_id"),
-            "model": kwargs.get("model"),
-            "provider": kwargs.get("provider"),
-        }
+        detail = {"graph_read": graph_evidence,
+                  **{key: kwargs.get(key) for key in ("session_id", "task_id", "turn_id", "model", "provider")}}
         # Always warm the per-session store (so later tool-call findings can show
         # the turn); attach as context only when this request produced a finding.
         turns = session_context._conversation_turns(kwargs.get("user_message"), kwargs.get("request_messages"))
@@ -392,9 +393,6 @@ def on_session_start(session_id: str = "", **kwargs: Any) -> None:
 def on_session_end(session_id: str = "", completed: bool = True, interrupted: bool = False, **kwargs: Any) -> None:
     try:
         session_context._forget_convo(session_id)
-        audit.record(
-            event="session_end",
-            detail={"session_id": session_id, "completed": completed, "interrupted": interrupted},
-        )
+        audit.record(event="session_end", detail={"session_id": session_id, "completed": completed, "interrupted": interrupted})
     except Exception as exc:  # pragma: no cover - fail open
         logger.debug("blackbox: on_session_end failed: %s", exc)

@@ -67,60 +67,40 @@ def dependency_rules(ruleset: Any, candidates: list[Any]) -> dict[str, dict[str,
 def detect_escalation(tool_name: str, args: Any, ruleset: Any) -> list[Finding]:
     """Match a tool call against escalation rules on BOTH toolName AND argShape.
 
-    This is the fix for the original bug where only the tool name (or only the
-    shape) was compared. We compute the observed shape once and require an
-    exact (tool_name, arg_shape) match against a cached rule.
+    Every shape the call has counts (``shell_shapes.normalize_arg_shapes``): a harmless segment
+    before a dangerous one never hides it from a rule. A rule matches on an exact
+    (tool_name, arg_shape) pair, one finding per rule.
     """
-    arg_shape = shell_shapes.normalize_arg_shape(tool_name or "", args)
-    if not arg_shape:
+    arg_shapes = shell_shapes.normalize_arg_shapes(tool_name or "", args)
+    if not arg_shapes:
         return []
     tool_lower = (tool_name or "").strip().lower()
     out: list[Finding] = []
     seen: set = set()
     for rule in getattr(ruleset, "escalation", []) or []:
         identifier = rule.get("identifier", "")
-        rule_tool = str(rule.get("toolName", "")).strip().lower()
         rule_shape = str(rule.get("argShape", "")).strip()
-        if identifier in seen:
-            continue
         # Both must match. This is the corrected contract.
-        if rule_tool == tool_lower and rule_shape == arg_shape:
-            seen.add(identifier)
-            src = _rule_source(rule)
-            out.append(
-                Finding(
-                    identifier=identifier,
-                    category="escalation",
-                    severity=rule.get("severity", "high"),
-                    title=rule.get("name") or f"Dangerous {tool_lower} call ({arg_shape})",
-                    tool_name=tool_name or "",
-                    matched=arg_shape,
-                    evidence=arg_shape,
-                    confirmed=src == "public",
-                    source=src, rule_subject=rule_subject(rule),
-                    fields={"tool_name": tool_lower, "arg_shape": arg_shape},
-                )
-            )
-    # Discovery layer: a dangerous shape that no graph rule covers is still a
-    # candidate escalation nominated to the community graph — except for shapes
-    # that overlap routine behaviour (e.g. `curl … | bash` installers), which
-    # only ever match an explicitly curated rule, never self-nominate.
-    if not out and arg_shape not in shell_shapes.NO_AUTO_NOMINATE_SHAPES:
-        candidate_id = threat_ids.escalation_identifier(tool_lower, arg_shape)
-        out.append(
-            Finding(
-                identifier=candidate_id,
-                category="escalation",
-                severity="high",
-                title=f"Suspicious {tool_lower} call ({arg_shape})",
-                tool_name=tool_name or "",
-                matched=arg_shape,
-                evidence=arg_shape,
-                confirmed=False,
-                source="heuristic",
-                fields={"tool_name": tool_lower, "arg_shape": arg_shape},
-            )
-        )
+        if identifier in seen or str(rule.get("toolName", "")).strip().lower() != tool_lower or rule_shape not in arg_shapes:
+            continue
+        seen.add(identifier)
+        src = _rule_source(rule)
+        out.append(Finding(
+            identifier=identifier, category="escalation", severity=rule.get("severity", "high"),
+            title=rule.get("name") or f"Dangerous {tool_lower} call ({rule_shape})", tool_name=tool_name or "",
+            matched=rule_shape, evidence=rule_shape, confirmed=src == "public", source=src, rule_subject=rule_subject(rule),
+            fields={"tool_name": tool_lower, "arg_shape": rule_shape}))
+    # Discovery layer: a dangerous shape that no graph rule covers is still a candidate escalation
+    # nominated to the community graph — except shapes that overlap routine behaviour (e.g. `curl … |
+    # bash` installers), which only ever match an explicitly curated rule, never self-nominate.
+    matched = {finding.matched for finding in out}
+    for arg_shape in arg_shapes:
+        if arg_shape in matched or arg_shape in shell_shapes.NO_AUTO_NOMINATE_SHAPES:
+            continue
+        out.append(Finding(
+            identifier=threat_ids.escalation_identifier(tool_lower, arg_shape), category="escalation", severity="high",
+            title=f"Suspicious {tool_lower} call ({arg_shape})", tool_name=tool_name or "", matched=arg_shape,
+            evidence=arg_shape, confirmed=False, source="heuristic", fields={"tool_name": tool_lower, "arg_shape": arg_shape}))
     return out
 
 

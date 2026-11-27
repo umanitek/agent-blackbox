@@ -337,7 +337,7 @@ mod tests {
         // E2E 2026-11-21: "Bootstrap failed: 5: Input/output error" during an upgrade ended with
         // no helper at all. Now the previous one is restored and started again.
         let (dir, layout) = installed("refused", b"old helper");
-        let key = link::load_key(&layout.home).unwrap();
+        let key = link::load_key(&layout.home).usable().unwrap();
         let launchd = launchd::fake::FakeLaunchd {
             linger: 2,
             refuse: Some((layout.home.join(BINARY), b"new helper".to_vec())),
@@ -349,7 +349,7 @@ mod tests {
         assert_eq!(fs::read(layout.home.join(BINARY)).unwrap(), b"old helper");
         assert!(launchd.state.borrow().loaded, "the old helper runs again");
         assert_eq!(fs::read_to_string(&layout.plist).unwrap(), plist_for(&layout.home));
-        assert_eq!(link::load_key(&layout.home).unwrap(), key, "pairing kept");
+        assert_eq!(link::load_key(&layout.home).usable().unwrap(), key, "pairing kept");
         assert!(fs::read_to_string(&layout.receipt).unwrap().contains(&hex::encode(Sha256::digest(b"old helper"))));
         let _ = fs::remove_dir_all(&dir);
     }
@@ -357,13 +357,13 @@ mod tests {
     #[test]
     fn an_upgrade_waits_for_launchd_to_let_go_keeps_the_key_and_records_the_new_helper() {
         let (dir, layout) = installed("upgrade", b"old helper");
-        let key = link::load_key(&layout.home).unwrap();
+        let key = link::load_key(&layout.home).usable().unwrap();
         let launchd = launchd::fake::FakeLaunchd { linger: 3, ..Default::default() };
         launchd.state.borrow_mut().loaded = true;
         install_into(&args_for(&dir, b"new helper"), &layout, &launchd, &no_put_back).unwrap();
         assert_eq!(fs::read(layout.home.join(BINARY)).unwrap(), b"new helper");
         assert_eq!(launchd.state.borrow().bootstraps, 1, "it waited for the old job instead of failing a bootstrap");
-        assert_eq!(link::load_key(&layout.home).unwrap(), key, "an upgrade never replaces the plan key");
+        assert_eq!(link::load_key(&layout.home).usable().unwrap(), key, "an upgrade never replaces the plan key");
         assert_eq!(fs::read_to_string(&layout.receipt).unwrap(), format!("sha256 {}\n", hex::encode(Sha256::digest(b"new helper"))));
         assert_eq!(fs::metadata(&layout.receipt).unwrap().permissions().mode() & 0o777, 0o644, "readable without root");
         let _ = fs::remove_dir_all(&dir);

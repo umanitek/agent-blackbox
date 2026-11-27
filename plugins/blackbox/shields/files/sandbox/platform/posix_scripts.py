@@ -5,6 +5,10 @@ supplies only what differs — its *runner* (the words that start a program insi
 ``/usr/bin/sandbox-exec -f "$profile"`` on macOS, ``blackbox-sandbox run --policy "$profile" --``
 on Linux) and its profile file names.
 
+"Already inside a sandbox" is decided by the canary (:func:`inside_test`), never by
+``BLACKBOX_AGENT_SANDBOX``: a variable is the agent's to set (``launchctl setenv``), and a launcher
+that trusted it ran the real program unsandboxed (independent review 2026-11-26, finding 3; LES-154).
+
 Shared by name, not by OS: this file sits in ``platform/`` but is no OS's (``kernel.os_layout``
 copies it everywhere).
 
@@ -13,7 +17,7 @@ a port fills in.
 
 Usage::
 
-    launcher_script("claude", here, profile, runner, tools_dir, Suffixes(".sb", ".once.sb"))
+    launcher_script("claude", here, profile, runner, tools_dir, Suffixes(".sb", ".once.sb"), canary)
     manager_shims(tools, python, dashboard_url)
 """
 
@@ -41,6 +45,37 @@ class Suffixes:
 
 def quote_shell(text: str) -> str:
     return "'" + text.replace("'", "'\\''") + "'"
+
+
+#: The programs the canary test runs, by absolute path (a PATH lookup would be the agent's to steer).
+CANARY_READER = "/bin/cat"
+CANARY_STAT = "/usr/bin/stat"
+#: What the sandboxes' refusals say (``LC_ALL=C``): Seatbelt refuses with EPERM; the Linux sandbox
+#: covers the canary with a mode-0000 file from its own tmpfs, so a read is refused with EACCES.
+SEATBELT_REFUSAL = "Operation not permitted"
+MASK_REFUSAL = "Permission denied"
+
+
+def inside_test(canary: str) -> str:
+    """The shell lines that set ``inside=1`` only when THIS process runs inside Blackbox's sandbox —
+    the shell twin of ``sandbox.canary.proven`` (one rule, two languages): the canary's folder is a
+    real folder, the canary no link, and reading it is refused the way only a sandbox refuses it —
+    EPERM (Seatbelt), or EACCES from a file on another device than its folder (the Linux sandbox's
+    mask, mounted over it). A canary the person (so an agent) made unreadable outside — ``chmod
+    000``, an ACL, a deleted file, a folder without search rights — is refused with EACCES on the
+    canary's own device, or not at all: never "inside"."""
+    folder = quote_shell(os.path.dirname(canary))
+    return f"""canary={quote_shell(canary)}
+inside=0
+if [ -d {folder} ] && [ ! -L {folder} ] && [ ! -L "$canary" ] && ! refused=$(LC_ALL=C {CANARY_READER} -- "$canary" 2>&1 >/dev/null); then
+  case "$refused" in
+    *"{SEATBELT_REFUSAL}"*) inside=1 ;;
+    *"{MASK_REFUSAL}"*)
+      device=$({CANARY_STAT} -c %d "$canary" 2>/dev/null)
+      if [ -n "$device" ] && [ -f "$canary" ] && [ "$device" != "$({CANARY_STAT} -c %d {folder} 2>/dev/null)" ]; then inside=1; fi ;;
+  esac
+fi
+"""
 
 
 def with_tools(tools: str) -> str:
@@ -78,11 +113,12 @@ BLACKBOX_SANDBOX_PROFILE="$profile#$digest"; export BLACKBOX_SANDBOX_PROFILE
 """
 
 
-def launcher_script(command: str, here: str, profile: str, runner: str, tools: str, suffixes: Suffixes, ready: str = "") -> str:
+def launcher_script(command: str, here: str, profile: str, runner: str, tools: str, suffixes: Suffixes, canary: str,
+                    ready: str = "") -> str:
     """The launcher put first on PATH for *command*: finds the real program further down PATH and
     runs it inside the profile (``exec <runner> "$real" "$@"``), with the sandbox's *tools* folder
-    first on ITS PATH. Already inside a sandbox (an agent starting another) it runs the program as
-    it is — the sandbox it is in still applies. No profile, or the shell test *ready* (the port's
+    first on ITS PATH. Already inside a sandbox (an agent starting another; :func:`inside_test` on
+    *canary*) it runs the program as it is — the sandbox it is in still applies. No profile, or the shell test *ready* (the port's
     "my sandbox program is there", e.g. ``[ -x … ]``) fails: Blackbox's hooks only, said on stderr
     (fail-open: an agent always starts)."""
     return f"""#!/bin/sh
@@ -91,7 +127,7 @@ here={quote_shell(here)}
 profile={quote_shell(profile)}
 path_rest=$(printf '%s' "$PATH" | tr ':' '\\n' | grep -vxF "$here" | paste -sd: -)
 real=$(PATH="$path_rest" command -v {quote_shell(command)}) || {{ echo "blackbox: {command} is not installed" >&2; exit 127; }}
-if [ "${{BLACKBOX_AGENT_SANDBOX:-}}" = 1 ]; then exec "$real" "$@"; fi
+{inside_test(canary)}if [ "$inside" = 1 ]; then exec "$real" "$@"; fi
 {pick_profile(suffixes)}if [ -r "$profile" ]{f" && {ready}" if ready else ""}; then
   BLACKBOX_AGENT_SANDBOX=1; export BLACKBOX_AGENT_SANDBOX
   {with_tools(tools).strip().replace(chr(10), chr(10) + "  ")}
@@ -102,33 +138,35 @@ exec "$real" "$@"
 """
 
 
-def shell_shim(shell: str, here: str, profile: str, runner: str, tools: str, suffixes: Suffixes, ready: str = "") -> str:
+def shell_shim(shell: str, here: str, profile: str, runner: str, tools: str, suffixes: Suffixes, canary: str,
+               ready: str = "") -> str:
     """A ``bash`` / ``sh`` / ``zsh`` that runs the real shell inside the profile — put first on the
     Hermes agent's OWN PATH (never the person's), so every shell its terminal tool starts is inside
     the sandbox while the Hermes process itself (and Blackbox in it) stays outside. *tools*: the
-    sandbox-tools folder first on the sandboxed shell's PATH ("" for none); *ready* as for
-    :func:`launcher_script` (it fails: the real shell, as without a profile)."""
+    sandbox-tools folder first on the sandboxed shell's PATH ("" for none); *canary* and *ready* as
+    for :func:`launcher_script` (*ready* fails: the real shell, as without a profile)."""
     return f"""#!/bin/sh
 # Blackbox agent sandbox: {shell} for the Hermes agent's tools — generated by Blackbox (File Shield).
 here={quote_shell(here)}
 profile={quote_shell(profile)}
 path_rest=$(printf '%s' "$PATH" | tr ':' '\\n' | grep -vxF "$here" | paste -sd: -)
 real=$(PATH="$path_rest" command -v {quote_shell(shell)}) || real=/bin/{shell}
-if [ "${{BLACKBOX_AGENT_SANDBOX:-}}" = 1 ] || [ ! -r "$profile" ]{f" || ! {ready}" if ready else ""}; then exec "$real" "$@"; fi
+{inside_test(canary)}if [ "$inside" = 1 ] || [ ! -r "$profile" ]{f" || ! {ready}" if ready else ""}; then exec "$real" "$@"; fi
 {pick_profile(suffixes)}BLACKBOX_AGENT_SANDBOX=1; export BLACKBOX_AGENT_SANDBOX
 {with_tools(tools) if tools else ""}exec {runner} "$real" "$@"
 """
 
 
-def command_shim(profile: str, runner: str, tools: str, suffixes: Suffixes, ready: str = "") -> str:
+def command_shim(profile: str, runner: str, tools: str, suffixes: Suffixes, canary: str, ready: str = "") -> str:
     """A wrapper that runs the command it is given inside the profile — the interpreter launcher
     Blackbox hands the Hermes agent for its ``execute_code`` Python (Hermes's
-    ``HERMES_EXECUTE_CODE_LAUNCHER`` hook point). Already inside a sandbox, or no profile: the
+    ``HERMES_EXECUTE_CODE_LAUNCHER`` hook point). Already inside a sandbox (:func:`inside_test` on
+    *canary*), or no profile: the
     command runs as it is (fail-open: execute_code always starts; Blackbox reports the level)."""
     return f"""#!/bin/sh
 # Blackbox agent sandbox: the Hermes agent's execute_code interpreter — generated by Blackbox (File Shield).
 profile={quote_shell(profile)}
-if [ "${{BLACKBOX_AGENT_SANDBOX:-}}" = 1 ] || [ ! -r "$profile" ]{f" || ! {ready}" if ready else ""}; then exec "$@"; fi
+{inside_test(canary)}if [ "$inside" = 1 ] || [ ! -r "$profile" ]{f" || ! {ready}" if ready else ""}; then exec "$@"; fi
 {pick_profile(suffixes)}BLACKBOX_AGENT_SANDBOX=1; export BLACKBOX_AGENT_SANDBOX
 {with_tools(tools) if tools else ""}exec {runner} "$@"
 """
@@ -231,6 +269,6 @@ def stop_group(process: subprocess.Popen[str]) -> None:
         pass
 
 
-__all__ = ["BREW_READ_ONLY", "MANAGER_PROGRAMS", "ONCE_MINUTES", "PROJECT_INDEX", "RUN_INFIX", "Suffixes", "brew_shim",
-           "command_shim", "launcher_script", "manager_shims", "pick_profile", "quote_shell", "shell_shim", "spawn_brew",
+__all__ = ["BREW_READ_ONLY", "CANARY_READER", "CANARY_STAT", "MANAGER_PROGRAMS", "ONCE_MINUTES", "PROJECT_INDEX", "RUN_INFIX", "Suffixes", "brew_shim",
+           "command_shim", "inside_test", "launcher_script", "manager_shims", "pick_profile", "quote_shell", "shell_shim", "spawn_brew",
            "standin", "stop_group", "with_tools"]

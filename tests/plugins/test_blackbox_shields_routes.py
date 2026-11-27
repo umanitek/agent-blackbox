@@ -30,7 +30,8 @@ ALIASES = {"/trader-shield": "/shields/trader",
            "/trader-shield/attacks.json": "/shields/trader/attacks.json",
            "/trader-shield/graph.json": "/shields/trader/graph.json"}
 LOGO_HEADERS = {"content-type": "image/svg+xml", "x-content-type-options": "nosniff",
-                "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox"}
+                "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox; frame-ancestors 'none'",
+                "x-frame-options": "DENY"}   # the frame guard adds to the logo's own policy
 
 
 @pytest.fixture(scope="module")

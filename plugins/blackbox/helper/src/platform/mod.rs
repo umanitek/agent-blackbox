@@ -64,6 +64,18 @@ pub fn sandbox_main(_args: Vec<std::ffi::OsString>) -> i32 {
 /// resolver (restored exactly; an empty list means "automatic").
 pub type SavedDns = BTreeMap<String, Vec<String>>;
 
+/// What [`Enforcer::point_dns_at_shield`] did: the originals it saved — ALSO when a later step
+/// failed (the caller merges them into its saved state at once) — and what failed, if anything.
+/// WHY not a `Result` (review finding, 2026-11-26): an error used to throw away the servers
+/// already saved for the services switched before the failure; the retry then saw those services
+/// at 127.0.0.1, treated them as "already ours" and never saved them, so turning DNS Shield off
+/// restored nothing and the machine stayed on a resolver that was gone.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Pointed {
+    pub saved: SavedDns,
+    pub error: Option<String>,
+}
+
 /// What the firewall must enforce; `None` = that protection is off.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Filter {
@@ -114,8 +126,10 @@ pub struct EndRequest {
 /// What the helper changes on the system. Every method is reversible by another one here, and
 /// none decides policy: the plan says what, this says how on this OS.
 pub trait Enforcer: Send + Sync {
-    /// Points every network service's DNS at the local resolver; answers what each had before.
-    fn point_dns_at_shield(&self) -> Result<SavedDns, String>;
+    /// Points every network service's DNS at the local resolver; answers what each had before
+    /// (see [`Pointed`]). *already*: the originals saved earlier — a setting found already pointing
+    /// at the resolver is skipped only when its original is in there.
+    fn point_dns_at_shield(&self, already: &SavedDns) -> Pointed;
     /// Puts each service's DNS back exactly as saved; answers what failed (nothing → empty).
     fn restore_dns(&self, saved: &SavedDns) -> Vec<String>;
     /// The DNS servers the system resolves with now (the resolver's upstreams).

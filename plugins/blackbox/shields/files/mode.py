@@ -39,10 +39,12 @@ Usage::
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
 from ..contract import SettingField, SettingOption, ShieldMode
+from ..setting_lists import kept, strict
 
 SHIELD_ID = "file-shield"
 OPT_PROTECTED = "protected"
@@ -63,8 +65,9 @@ ITEM_PATTERN = r"^(~|/)[^\x00]{1,1023}$"
 #: The pattern Settings checks each watched folder against: a path from the home folder.
 FOLDER_PATTERN = r"^~/[^\x00]{1,200}$"
 #: Places too broad to protect: protecting them would stop every agent working at all.
+#: Checked on the RESOLVED path, so macOS's /tmp and /var are named as they resolve too (/private/…).
 # no-tmp: ok — a place too broad to protect (it names the system's temp folder), never scratch space
-_TOO_BROAD = frozenset({"/", "/Users", "/home", "/Volumes", "/private", "/System", "/var", "/tmp"})
+_TOO_BROAD = frozenset({"/", "/Users", "/home", "/Volumes", "/private", "/System", "/var", "/tmp", "/private/tmp", "/private/var"})
 
 ENGAGE_HELP = ("Protect the files and folders you choose from every AI agent — Hermes, Blackbox's assistant, "
                "Claude Code, Codex, Cursor, Gemini, Copilot, Windsurf, Cline, OpenCode, OpenClaw and their MCP "
@@ -144,44 +147,50 @@ def watch_paths(mode: ShieldMode) -> tuple[str, ...]:
     return tuple(dict.fromkeys(items + [str(path) for path in resolved(mode)]))
 
 
+def _agent_id(item: Any) -> Optional[str]:
+    """*item* when it is an agent the sandbox can start (a catalogue id with a command-line
+    launcher, not Windsurf, or the Hermes agent); None otherwise."""
+    from ...kernel.agent_hosts import BY_ID, HERMES_ID
+    if not isinstance(item, str) or (item != HERMES_ID and (item not in BY_ID or not BY_ID[item].commands or item == "windsurf")):
+        return None
+    return item
+
+
+def _max_agents() -> int:
+    from ...kernel.agent_hosts import BY_ID
+    return len(BY_ID) + 1
+
+
 def _items(raw: Any) -> Optional[tuple[str, ...]]:
-    if not isinstance(raw, list) or len(raw) > MAX_PROTECTED:
-        return None
-    entries = [canonical_item(item) for item in raw]
-    if any(entry is None for entry in entries):
-        return None
-    return tuple(dict.fromkeys(entry for entry in entries if entry))
+    return strict(raw, canonical_item, MAX_PROTECTED)
 
 
 def _folders(raw: Any) -> Optional[tuple[str, ...]]:
-    if not isinstance(raw, list) or len(raw) > MAX_FOLDERS:
-        return None
-    entries = [normalise_folder(item) for item in raw]
-    if any(entry is None for entry in entries):
-        return None
-    return tuple(dict.fromkeys(entry for entry in entries if entry))
+    return strict(raw, normalise_folder, MAX_FOLDERS)
 
 
 def _sandboxed(raw: Any) -> Optional[tuple[str, ...]]:
-    """Agent ids from the catalogue that have a command-line launcher; None for anything else."""
-    from ...kernel.agent_hosts import BY_ID, HERMES_ID
-    if not isinstance(raw, list) or len(raw) > len(BY_ID) + 1:
-        return None
-    if any(not isinstance(item, str) or (item != HERMES_ID and (item not in BY_ID or not BY_ID[item].commands or item == "windsurf"))
-           for item in raw):
-        return None
-    return tuple(dict.fromkeys(raw))
+    """Agent ids the sandbox can start (:func:`_agent_id`); None for anything else."""
+    return strict(raw, _agent_id, _max_agents())
 
 
 def from_entry(entry: Mapping[str, Any]) -> ShieldMode:
-    """The mode as the ``blackbox`` config entry states it (defaults when absent or invalid)."""
+    """The mode as the ``blackbox`` config entry states it (defaults when absent), each stored list
+    read entry by entry (``setting_lists.kept``): a bad entry is dropped alone and named in the
+    mode's ``problems``, every good one stays in force."""
     shields = entry.get("shields")
     section = shields.get(SHIELD_ID) if isinstance(shields, Mapping) else None
     section = section if isinstance(section, Mapping) else {}
-    chosen = _folders(section.get(OPT_FOLDERS)) if OPT_FOLDERS in section else None
-    return build(enabled=section.get("enabled") is True, protected=_items(section.get(OPT_PROTECTED)) or (),
-                 folders=chosen, sandboxed=_sandboxed(section.get(OPT_SANDBOXED)) or (),
-                 declined=_sandboxed(section.get(OPT_DECLINED)) or ())
+    where = f"shields.{SHIELD_ID}."
+    items = kept(section.get(OPT_PROTECTED) or [], canonical_item, MAX_PROTECTED, where + OPT_PROTECTED)
+    chosen = (kept(section[OPT_FOLDERS], normalise_folder, MAX_FOLDERS, where + OPT_FOLDERS)
+              if section.get(OPT_FOLDERS) is not None else None)
+    agents = kept(section.get(OPT_SANDBOXED) or [], _agent_id, _max_agents(), where + OPT_SANDBOXED)
+    declined = kept(section.get(OPT_DECLINED) or [], _agent_id, _max_agents(), where + OPT_DECLINED)
+    mode = build(enabled=section.get("enabled") is True, protected=items.values,
+                 folders=chosen.values if chosen else None, sandboxed=agents.values, declined=declined.values)
+    problems = items.problems + (chosen.problems if chosen else ()) + agents.problems + declined.problems
+    return replace(mode, problems=problems) if problems else mode
 
 
 def current() -> ShieldMode:

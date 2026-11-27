@@ -24,7 +24,8 @@
 //! agent's rules ever loaded — security Critical 2026-11-24-linux-sandbox-the-helper-never-finds-an-).
 //! A folder named like a scope anywhere else only ever gets refusals, never fewer.
 //!
-//! After a table holding a scope is loaded, `/run/blackbox-netd/agents/<scope>.ready` is written:
+//! After a table holding a scope WITH its own policy's rules is loaded ([`ready_scopes`]),
+//! `/run/blackbox-netd/agents/<scope>.ready` is written:
 //! the launcher waits for it (at most `scope::READY_WAIT`) before it starts the agent. WHY a 100 ms look at the
 //! cgroup tree: that wait is the bound an agent's first connections are unguarded within, so the
 //! look keeps its pace (LES-141); reading a few cgroup folders costs microseconds.
@@ -182,6 +183,15 @@ pub fn ruleset(scopes: &[Scope], rules: &BTreeMap<String, AgentRule>, dashboard:
     text
 }
 
+/// The scopes whose OWN policy's rules are in *rules*: only these are marked ready. WHY (review
+/// finding 2026-11-26): a scope whose digest the plan did not name yet (the dashboard slow, the
+/// plan not fetched) was marked ready holding the never-list rule only, so a `local-ports: block`
+/// agent started and reached every local port but 22. It now waits for its rules (the launcher
+/// says they are not applied when they never come).
+pub fn ready_scopes(scopes: &[Scope], rules: &BTreeMap<String, AgentRule>) -> Vec<Scope> {
+    scopes.iter().filter(|scope| scope::digest_of_unit(&scope.unit).is_some_and(|digest| rules.contains_key(digest))).cloned().collect()
+}
+
 /// Writes a readiness mark in *folder* for each of *scopes* and removes every other one.
 pub fn mark_ready(folder: &Path, scopes: &[Scope]) -> std::io::Result<()> {
     fs::create_dir_all(folder)?;
@@ -232,7 +242,7 @@ pub fn run() {
         if loaded.as_ref() != Some(&(now.clone(), rules.clone())) {
             match super::enforce::nft::load(&ruleset(&now, &rules, 0)) {
                 Ok(()) => {
-                    let _ = mark_ready(Path::new(scope::READY_FOLDER), &now);
+                    let _ = mark_ready(Path::new(scope::READY_FOLDER), &ready_scopes(&now, &rules));
                     loaded = Some((now, rules.clone()));
                 }
                 Err(_) => {
@@ -404,6 +414,15 @@ mod tests {
     fn a_plan_digest_that_is_not_hex_is_ignored() {
         let plan: Plan = serde_json::from_str(r#"{"agents": [{"digest": "../../etc"}, {"digest": "0123456789AB"}]}"#).unwrap();
         assert_eq!(plan.by_digest().keys().cloned().collect::<Vec<_>>(), vec!["0123456789ab"]);
+    }
+
+    #[test]
+    fn only_a_scope_whose_own_rules_are_loaded_is_ready() {
+        let rules = Plan { agents: vec![AgentRule { digest: "0123456789ab".into(), local_ports: true, ..Default::default() }] }.by_digest();
+        let scope = |unit: &str| Scope { unit: unit.into(), path: String::new() };
+        let (known, unknown) = (scope(UNIT), scope("blackbox-agent-ffffffffffff-1.scope"));
+        assert_eq!(ready_scopes(&[known.clone(), unknown.clone()], &rules), vec![known]);
+        assert!(ready_scopes(&[unknown], &BTreeMap::new()).is_empty(), "no plan yet: nobody is ready");
     }
 
     #[test]

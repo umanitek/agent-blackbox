@@ -9,6 +9,7 @@ plugin, so DNS Shield and the Threat Firewall never apply.
 from __future__ import annotations
 
 import json
+import time
 
 import pytest
 
@@ -25,7 +26,10 @@ KEY = bytes([7] * 32)
 # matches any long hex next to KEY).
 NONCE = "0123456789abcdef0123456789abcdef"  # gitleaks:allow
 PLAN_VECTOR = "556ad530e22f4180c7080a144eb88187e9e5c5668311aa23dc2fd484f285eafa"
+#: A report from a helper before 1.6.3 (body only, DEPRECATED) and a v2 report (time + nonce +
+#: body; helper/src/link.rs a_report_signature_covers_its_time_and_nonce).
 REPORT_VECTOR = "ed7cae0659cb0798e3f55b0bb6586ee82d23ca413253a304832605c7bf4dd449"
+REPORT_V2_VECTOR = "6e4673cb0bd283133f4f0e4cb64a08a542446a2ac5bba7b9aefa4fad7dded6e2"
 
 
 @pytest.fixture
@@ -48,7 +52,8 @@ def _context(body: bytes = b"", headers: dict | None = None) -> ShieldContext:
 
 def test_the_shared_vector_matches_the_helper_crate():
     assert helper_link.sign_plan(KEY, "abc", b'{"version":"v1"}') == PLAN_VECTOR
-    assert helper_link.sign_report(KEY, b'{"running":true}') == REPORT_VECTOR
+    assert helper_link.sign_legacy_report(KEY, b'{"running":true}') == REPORT_VECTOR
+    assert helper_link.sign_report(KEY, 1_700_000_000, "000102030405060708090a0b0c0d0e0f", b'{"running":true}') == REPORT_V2_VECTOR
 
 
 def test_a_plan_is_signed_for_the_helpers_nonce_over_the_exact_bytes(home):
@@ -79,6 +84,41 @@ def test_a_report_must_carry_the_helpers_signature_once_paired(home):
     with pytest.raises(ShieldApiError):   # signed, but for other bytes
         helper_link.require_signed_report(_context(b'{"running":false}', {helper_link.HELPER_SIGNATURE_HEADER: REPORT_VECTOR}))
     helper_link.require_signed_report(_context(body, {helper_link.HELPER_SIGNATURE_HEADER: REPORT_VECTOR}))
+
+
+def _v2(body: bytes, stamp: int, nonce: str = "0d" * 16, key: bytes = KEY) -> ShieldContext:
+    return _context(body, {helper_link.HELPER_SIGNATURE_HEADER: helper_link.sign_report(key, stamp, nonce, body),
+                           helper_link.HELPER_TIMESTAMP_HEADER: str(stamp), helper_link.HELPER_NONCE_HEADER: nonce})
+
+
+def test_a_broken_key_file_refuses_every_report_never_reads_as_not_paired(home):
+    """Review 2026-11-26, finding 7: a key file of the wrong size or a link let unsigned reports in."""
+    path = helper_link.key_path()
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"short")
+    with pytest.raises(ShieldApiError) as refused:
+        helper_link.require_signed_report(_context(b'{"running":true}'))
+    assert refused.value.status == 401
+    path.unlink()
+    path.symlink_to(home / "elsewhere")
+    with pytest.raises(ShieldApiError):
+        helper_link.require_signed_report(_context(b'{"running":true}'))
+
+
+def test_a_report_is_fresh_and_new_or_refused(home):
+    """Review 2026-11-26, finding 7: the signature covered the body only, so a caught report could
+    be replayed. Now its time and a nonce are signed: an old one or a second copy is refused, and
+    once this helper has sent one, a body-only signature is refused for good."""
+    _pair(home)
+    body, now = b'{"running":true}', int(time.time())
+    helper_link.require_signed_report(_v2(body, now, "0a" * 16))
+    for refused in (_v2(body, now, "0a" * 16),                                   # the same report again
+                    _v2(body, now - helper_link.REPORT_FRESH_SECONDS - 5, "0b" * 16),   # an old one
+                    _v2(body, now, "0c" * 16, key=bytes(32)),                     # another key
+                    _context(body, {helper_link.HELPER_SIGNATURE_HEADER: REPORT_VECTOR})):   # body only, after v2
+        with pytest.raises(ShieldApiError) as why:
+            helper_link.require_signed_report(refused)
+        assert why.value.status == 401
 
 
 def test_a_key_file_of_the_wrong_kind_is_broken_never_used(home):
@@ -144,9 +184,11 @@ def test_the_enforcement_plan_route_is_signed_and_its_report_route_checks_the_si
         token = client.get("/api/session").json()["token"]   # the helper sends the session token too
         unsigned = client.post("/api/shields/network-shield/api/enforcer-report", content=report,
                                headers={"content-type": "application/json", "X-Blackbox-Token": token})
+        stamp, report_nonce = int(time.time()), "0e" * 16
         signed = client.post("/api/shields/network-shield/api/enforcer-report", content=report,
                              headers={"content-type": "application/json", "X-Blackbox-Token": token,
-                                      helper_link.HELPER_SIGNATURE_HEADER: helper_link.sign_report(KEY, report)})
+                                      helper_link.HELPER_SIGNATURE_HEADER: helper_link.sign_report(KEY, stamp, report_nonce, report),
+                                      helper_link.HELPER_TIMESTAMP_HEADER: str(stamp), helper_link.HELPER_NONCE_HEADER: report_nonce})
     assert plan.status_code == 200
     assert plan.headers[helper_link.SIGNATURE_HEADER] == helper_link.sign_plan(KEY, nonce, plan.content)
     assert unsigned.status_code == 401

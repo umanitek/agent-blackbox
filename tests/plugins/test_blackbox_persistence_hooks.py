@@ -29,6 +29,8 @@ sandbox = load_blackbox("shields.files.sandbox")
 runner = load_blackbox("agent_hooks.protect.runner")
 
 STARTUP_ITEM = "startup-item"
+#: A shell startup file is its own finding (``shell-startup``, judged apart since 2026-11-27); both are refusals here.
+STARTUP_MATCHES = {STARTUP_ITEM, "shell-startup"}
 KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIR5TESTR5TESTR5TESTR5TESTR5TESTR5TESTR5T r5test"
 #: The s5-persh commands, as Claude Code sent them (only the brew prefix is the test's own).
 ROUND5 = {
@@ -69,7 +71,7 @@ def machine(monkeypatch, tmp_path):
 
 
 def _refused(tool: str, args: dict) -> bool:
-    return any(finding.matched == STARTUP_ITEM for finding in detection.detect_persistence_write(tool, args))
+    return any(finding.matched in STARTUP_MATCHES for finding in detection.detect_persistence_write(tool, args))
 
 
 def _brew(command: str, brew) -> str:

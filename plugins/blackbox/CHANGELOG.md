@@ -38,6 +38,125 @@ that the two version fields agree.
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-11-27
+
+### Added
+
+- **One Security page for everything that limits your agents** (`/security`, in the header menu). It has
+  the protection mode, what agents may do (every permission, for every agent, one agent, one project
+  or one agent in one project), the threat checks, the hook size limit, and the rules that are
+  always on. Every setting explains itself where you change it: what the agent may do when it is
+  allowed, what it meets while it is blocked, what can go wrong if you relax it, its strict default
+  and when a change applies. Loosening anything still waits for your approval. The protection mode
+  and threat checks moved here from the settings menu, which now links to this page.
+- **More limits you can relax per agent**, each blocked by default:
+  - opening apps you installed yourself;
+  - adding things that start by themselves (for an agent outside the sandbox);
+  - editing your shell startup files (Blackbox's own line in them stays protected);
+  - `sudo` changes to system folders;
+  - skill installs that name no publisher while a curator kill for a whole publisher is in force.
+
+  You can now also **block** packages with known vulnerabilities per agent (they are flagged, not
+  blocked, until you do). Inside the sandbox, startup places and shell startup files stay closed
+  whatever you set.
+- **The hook size limit is a setting**: 4, 16 or 64 MB (16 by default). A tool call over the limit
+  can't be checked, so it is refused.
+- **The docs page has a "Your security settings" section**, built from the same list the Security page
+  and the checks use, so it shows what the engine does today.
+
+### Changed
+
+- **Switching to Audit from the Hermes desktop app's page needs one press.** After you approve the
+  switch, the page finishes it by itself.
+- **The docs page now says what Audit mode really does.** It no longer says Audit stops nothing: a few
+  rules refuse in every mode, and the page lists them. Opening apps, severities (`info` included),
+  community reports (kept in the verified graph's shared memory) and vulnerable packages are
+  described as they work now.
+- Sharing consent never expires: a change to the reporter terms doesn't ask again (owner decision,
+  2026-11-27; this is how it already worked, now written down).
+
+### Fixed
+
+- **A huge single-word tool call no longer stalls the check.** A 900,000-character call of nested JSON made
+  the shell reader take minutes (each quote and brace re-read the whole word); it is read in one pass now.
+- **Spelling a command differently no longer hides it from Blackbox.** Quoting or escaping (`~/.s"s"h`,
+  `r''m`), brace expansion, `${HOME:-…}`, `$(echo ~)`, subshells, or a Windows path elsewhere on the line no
+  longer hide a protected file or an SSH-key write. A harmless command before a dangerous one no longer hides
+  it, and quoting or splitting `rm -rf` flags, or adding `sudo`, no longer slips past.
+- **A package is recognised however its install is spelled** (quotes, `>=`, `~=`, extras, `pip3.12`,
+  `bun install`, `yarn global add`), and `-r requirements.txt` is no longer taken for a package.
+- **Padding a long text, or flooding it with decoy domains, no longer hides an injection phrase** or a bad
+  address, wallet, IP or hash.
+- **Windows-style and doubled-slash paths and macOS's `/private/etc` are recognised as sensitive.**
+- **A rule from an unknown source can only flag, never block**, and a mistyped `protected_paths` setting
+  keeps the default protected paths.
+- **PowerShell commands get the shell checks**, and OpenClaw agents get the same shell-command judgement as
+  Hermes when Blackbox cannot answer.
+- **A failed curator read no longer brings revoked threats back**, and corrections need curator signatures in
+  normal refreshes once curator roots are pinned (today's graph compiles exactly as before).
+- **No rules are skipped or cut off when Blackbox reads the threat graph**: injection, skill and correction
+  rules are no longer skipped when several assets are read together, and community reports, curator
+  statements, manifests and kill lists are no longer cut off at 1,000.
+- **A package lookup whose answer may have been cut off reports "could not tell" instead of "clean".**
+- **The optional fallback index reads whole assets, respects later corrections, and keeps rules found in more
+  than one asset.**
+- **`blackbox sync --wait` reports done only when the catch-up is really done.**
+- **One reporter can no longer push out another reporter's report by reusing its address**, and a promoted
+  report signed for another graph is ignored.
+- **"Could not tell" is kept when the rules are saved and loaded again.**
+- **Agents in the sandbox can no longer get Blackbox to open an app they built themselves.** Agents can open
+  only apps root installed (system apps, and apps an installer put in /Applications as root). An app you
+  dragged into /Applications yourself is owned by you, so agents can no longer open it.
+- **Agent lockdown and your block list see every way of writing an IP address in a link** (IPv6 in brackets,
+  whole-number and hex IPv4), and an all-number "domain" such as `999.1.1.1` is refused when you add it.
+- **Setting an environment variable, or making the sandbox's check file unreadable, no longer takes an agent out
+  of the sandbox** or marks it as sandboxed.
+- **One bad line in a shield's settings no longer switches off the rest of that setting**; the card names the
+  lines it skipped.
+- **One agent can no longer borrow another agent's sandbox permissions**: the asking agent is found from its
+  own connection.
+- **Old, replayed or unsigned reports from the system protection helper are refused**, and a damaged helper key
+  is reported as broken instead of "no key".
+- **Fake "Blackbox" startup items are no longer rated safe.**
+- **If the firewall fails to load its rules once, Blackbox keeps trying** and keeps the previous rules in place
+  meanwhile. Turning DNS Shield off always gives back every network's own DNS servers, even after a switch-on
+  that failed half-way.
+- **The Network Shield card no longer shows a protection as on after another program removed its rules.**
+- **On macOS, connections to blocked addresses fail at once instead of hanging for up to a minute**, and on
+  Linux a sandboxed agent starts only after its own network rules are in place.
+- **A coding agent's tool call too large or malformed for Blackbox to read is now refused**, never allowed
+  unchecked (actions only; observing events still pass). The readable size went up from 1 MiB to 16 MiB.
+- **Gemini CLI's read-many-files tool has every file it names checked**, and PowerShell tool calls (Copilot CLI
+  and Claude Code on Windows) are checked like any shell command.
+- **Raising a severity floor written in capitals now asks for your approval** like any other weakening change,
+  and changing protected paths asks when the current list cannot be read.
+- **A kill-list entry held for 24 hours now takes effect when the hold ends**, and a publisher-wide kill
+  matches whatever case or spacing the publisher is written in.
+- **A watch rule set to block still blocks when Blackbox cannot save its hit count**, and counting never holds
+  up a call.
+- **An override set with stray spaces can be removed the same way.**
+- **Switching to Audit from Hermes Desktop now waits for your confirmation**, the same as in the dashboard.
+- **An agent's Blackbox folder can no longer go missing when two attaches run at once.** Every attach and
+  detach takes one lock, stages under its own name and puts the old copy back if the swap fails.
+- **A bad number in a dashboard request can no longer tie up the dashboard**, and other web pages can no
+  longer show the dashboard inside a hidden frame.
+- **Agents you switched off stay in the agent list** so you can switch them back on, and the dashboard
+  switches protection only for agents it found on this machine.
+- **Hermes profiles in custom, Docker and Windows locations are found**, and deleted profiles are skipped.
+- **A log record written while another process held the log lock is no longer lost.**
+- **Your questions to the Blackbox assistant no longer show in the system's process list.**
+- **Placeholder keys in `.env.example` files and mock secrets in tests are no longer blocked.** A value
+  shaped like a key but carrying no randomness (`sk-xxxx…`, `sk-ant-your-key-here`, `AIzaXXXX…`, AWS's
+  documented `AKIA…EXAMPLE`, `ghp_abcdef…0123456789`, a mock `BEGIN PRIVATE KEY` block with no key
+  material) is not a secret. Blackbox judges the value, never the file's name or folder, so a real key
+  written into a test file or a template is still caught (BB-005).
+- **The verified-sync panel says "node offline" only when the node is down.** On a busy node,
+  counting what it holds can take 5–10 seconds. The panel used to give up after 5 seconds and
+  call a node that was still answering "offline", with every number blank. It now counts in the
+  background (once a minute, waiting up to a minute) and keeps the last count with its age. A
+  node that answers but has not returned a fresh count reads "counting", and only a fresh count
+  can read "synced", so Network Shield never takes a stale count as a complete graph (BB-004).
+
 ## [1.6.2] - 2026-11-26
 
 ### Changed
@@ -770,7 +889,8 @@ The first version in the Hermes plugin catalog (commit `7d697683`, added by Herm
 in NousResearch/hermes-agent#140529). Its `plugin.yaml` said 1.0.0 while Blackbox's own code and
 dashboard reported 1.1.0; 1.1.0 is therefore skipped, so no two different builds share a number.
 
-[Unreleased]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.6.2...main
+[Unreleased]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.7.0...main
+[1.7.0]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.6.2...blackbox-v1.7.0
 [1.6.2]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.6.1...blackbox-v1.6.2
 [1.6.1]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.6.0...blackbox-v1.6.1
 [1.6.0]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.5.0...blackbox-v1.6.0

@@ -2,7 +2,8 @@
 
 The Docs page explains Blackbox in prose it ships with (``docs.html``), and reads everything that
 changes with the product from ``GET /api/docs`` — built here, live, from the shields registry:
-each shield, its page prose (what it does today, what it cannot yet, what comes next), its packs
+the security settings (every agent permission explained, what is refused in every mode, what no
+setting relaxes — :func:`settings_doc`), each shield, its page prose (what it does today, what it cannot yet, what comes next), its packs
 (with each pack's stores, browsers and sources), the browser folders it knows, its tested attack
 table and the real-machine runs that exercised it. Nothing here is a hand-kept copy of product data, so the docs
 cannot drift from what the product does. The one hand-written record is ``field_tests.json``: the
@@ -24,7 +25,7 @@ import logging
 from pathlib import Path
 from typing import Any, Optional, TypedDict
 
-from ... import shields
+from ... import detection, shields
 from ...kernel.constants import __version__
 
 logger = logging.getLogger(__name__)
@@ -98,12 +99,44 @@ class ShieldDoc(TypedDict):
     field_tests: list[dict[str, Any]]
 
 
+class PermissionDoc(TypedDict):
+    """One agent permission as the person reads it: what it ``unlocks``, what the agent meets
+    ``when_blocked``, its ``cost`` if relaxed, its strict ``default`` and the ``modes`` on offer."""
+
+    id: str
+    name: str
+    unlocks: str
+    when_blocked: str
+    cost: str
+    default: str
+    modes: list[str]
+    route: str
+
+
+class RuleDoc(TypedDict):
+    """A rule shown with its reason: one refused in every mode, or one no setting relaxes."""
+
+    name: str
+    why: str
+    permission: str
+
+
+class SettingsDoc(TypedDict):
+    """The security settings: every agent permission, what is refused in every mode (and which
+    permission may relax it), and the self-protection rules no setting relaxes."""
+
+    permissions: list[PermissionDoc]
+    always_blocked: list[RuleDoc]
+    always_on: list[RuleDoc]
+
+
 class DocsPayload(TypedDict):
-    """``GET /api/docs``: the product version, every shield, and the real-machine runs that name
-    no shield (a run naming one is listed under that shield)."""
+    """``GET /api/docs``: the product version, every shield, the security settings, and the
+    real-machine runs that name no shield (a run naming one is listed under that shield)."""
 
     version: str
     shields: list[ShieldDoc]
+    settings: SettingsDoc
     field_tests: list[dict[str, Any]]
 
 
@@ -175,9 +208,21 @@ def _field_tests() -> list[dict[str, Any]]:
     return [run for run in runs if isinstance(run, dict)] if isinstance(runs, list) else []
 
 
+def settings_doc() -> SettingsDoc:
+    """The security settings, read from the one catalogue the guard and the Security page use."""
+    permissions = [PermissionDoc(id=each.id, name=each.name, unlocks=each.unlocks, when_blocked=each.when_blocked,
+                                 cost=each.cost, default=each.default.value, modes=[mode.value for mode in each.modes],
+                                 route=each.route.value)
+                   for each in shields.AGENT_PERMISSIONS if each.controllable]
+    return SettingsDoc(permissions=permissions,
+                       always_blocked=[RuleDoc(name=rule.name, why=rule.why, permission=rule.permission)
+                                       for rule in detection.ALWAYS_BLOCKED],
+                       always_on=[RuleDoc(name=rule.name, why=rule.why, permission="") for rule in shields.ALWAYS_ON])
+
+
 def build_payload() -> DocsPayload:
     """The Docs page's live data (see :class:`DocsPayload`)."""
     runs = _field_tests()
     registered = {shield.id for shield in shields.all_shields()}
     return DocsPayload(version=__version__, shields=[_shield_doc(shield, runs) for shield in shields.all_shields()],
-                       field_tests=[run for run in runs if run.get("shield") not in registered])
+                       settings=settings_doc(), field_tests=[run for run in runs if run.get("shield") not in registered])

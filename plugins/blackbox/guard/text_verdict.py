@@ -45,8 +45,8 @@ def text_verdict(texts: Sequence[tuple[str, str]]) -> ToolCallVerdict:
     # A prompt that names an item the person protected (File Shield): flagged, never kept.
     findings += shields.prompt_findings([text for context, text in sources if context == "in-user-prompt"], active)
     findings = reporting._flag_worthy(cfg, findings, active)
-    blocking = hooks._blocking(cfg, findings)
-    decision = hooks._decision(cfg, findings, blocking) if findings else ""
+    blocking, overridden = hooks._split(cfg, findings)   # overrides read once
+    decision = hooks._decision(cfg, findings, blocking, overridden) if findings else ""
     return ToolCallVerdict(findings=[finding.to_dict() for finding in findings],
                            blocked=[finding.identifier for finding in blocking], decision=decision,
                            message=blackbox_block_message(blocking, sources[0][0] if len({c for c, _ in sources}) == 1 else "text")

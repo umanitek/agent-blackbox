@@ -27,11 +27,14 @@ MAX_READ = 64 * 1024
 
 @dataclass(frozen=True)
 class ProcessFacts:
-    """One process: its owner's ``uid``, its program ``path`` and its command line ``args``."""
+    """One process: its owner's ``uid``, its program ``path``, its command line ``args`` and when
+    it ``started`` (``/proc/<pid>/stat`` field 22, clock ticks since boot; "" when unknown) — with
+    *path*, what tells a process from a later one that got the same number."""
 
     uid: int
     path: str
     args: str
+    started: str = ""
 
 
 def _read(pid: int, name: str, proc: str) -> bytes:
@@ -53,7 +56,16 @@ def describe(pid: int, proc: str = PROC) -> Optional[ProcessFacts]:
         path = os.readlink(os.path.join(proc, str(pid), "exe")).removesuffix(" (deleted)")
     except OSError:
         path = argv[0] if argv else ""
-    return ProcessFacts(int(uid), path, " ".join(argv))
+    return ProcessFacts(int(uid), path, " ".join(argv), _started(pid, proc))
+
+
+def _started(pid: int, proc: str) -> str:
+    """Field 22 of ``stat`` (after the command name's closing parenthesis, which may hold spaces)."""
+    try:
+        fields = _read(pid, "stat", proc).decode("ascii", "replace").rsplit(")", 1)[1].split()
+    except (OSError, IndexError):
+        return ""
+    return fields[19] if len(fields) > 19 else ""
 
 
 def is_system(path: str) -> bool:

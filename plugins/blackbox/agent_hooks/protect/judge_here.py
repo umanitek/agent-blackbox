@@ -69,6 +69,22 @@ def judge_here(body: dict) -> tuple:
     return _judged(importlib.import_module(_HERE_PACKAGE + ".agent_hooks.protect.events"), body)
 
 
+#: :data:`JUDGE_HERE_FILE`'s key: the pre-tool payload limit the person chose (``hook_payload_limit_mb``).
+LIMIT_KEY = "hook_payload_limit_mb"
+#: Its choices and default in MiB — this file imports no plugin code, so a test holds them equal to
+#: ``kernel.config_values.schema.HOOK_PAYLOAD_LIMITS_MB`` / ``DEFAULT_HOOK_PAYLOAD_LIMIT_MB``.
+PAYLOAD_LIMITS_MB, DEFAULT_PAYLOAD_LIMIT_MB = (4, 16, 64), 16
+
+
+def payload_limit_bytes() -> int:
+    """The most of a pre-tool payload the runner reads, in bytes: the person's choice as the plugin
+    last wrote it into :data:`JUDGE_HERE_FILE`. Unreadable, missing or not one of the choices: the
+    default (16 MiB) — always bounded, and a call over the limit is refused, never passed."""
+    chosen = _where().get(LIMIT_KEY)
+    size = chosen if type(chosen) is int and chosen in PAYLOAD_LIMITS_MB else DEFAULT_PAYLOAD_LIMIT_MB
+    return size * 1024 * 1024
+
+
 def _where() -> dict:
     """What :data:`JUDGE_HERE_FILE` says (``{}`` when it can not be read)."""
     try:
@@ -104,6 +120,10 @@ BUDGET_SECONDS = 6.5
 #: never passed unjudged (the same rule Hermes keeps for its own timed-out ``pre_tool_call``).
 NOT_CHECKED_IN_TIME = ("Blackbox could not check this action in time (this computer is very busy), so it was refused. "
                        "Try it again in a moment.")
+#: What an agent is told when its pre-tool payload could not be read whole (too large, nested too
+#: deep, not a JSON object). WHY refused (review 2026-11-26): read as "no call", it was ALLOWED
+#: unjudged on every agent — now the same rule as :data:`NOT_CHECKED_IN_TIME`.
+NOT_READ = "Blackbox could not read this action in full (it is too large or malformed), so it was refused."
 #: The most a detached recorder (:func:`_record_detached`) may run before it ends itself.
 RECORD_SECONDS = 120
 
@@ -336,6 +356,28 @@ def record_detached(record) -> None:
         os._exit(0)
 
 
-__all__ = ["BLOCKING_EVENTS", "BUDGET_SECONDS", "JOURNAL_SOCKET", "JOURNAL_TAG", "JUDGE_HERE_FILE", "MAX_SPOOLED", "NOT_CHECKED_IN_TIME",
-           "RECORD_SECONDS", "SPOOL_KEY", "TIMEOUT_SECONDS", "UNSPOOLED", "Verdict", "answer_in_time", "ask", "judge_here", "keep", "process_age",
-           "record_detached"]
+__all__ = [
+    "BLOCKING_EVENTS",
+    "BUDGET_SECONDS",
+    "DEFAULT_PAYLOAD_LIMIT_MB",
+    "JOURNAL_SOCKET",
+    "JOURNAL_TAG",
+    "JUDGE_HERE_FILE",
+    "LIMIT_KEY",
+    "MAX_SPOOLED",
+    "NOT_CHECKED_IN_TIME",
+    "NOT_READ",
+    "PAYLOAD_LIMITS_MB",
+    "RECORD_SECONDS",
+    "SPOOL_KEY",
+    "TIMEOUT_SECONDS",
+    "UNSPOOLED",
+    "Verdict",
+    "answer_in_time",
+    "ask",
+    "judge_here",
+    "keep",
+    "payload_limit_bytes",
+    "process_age",
+    "record_detached",
+]

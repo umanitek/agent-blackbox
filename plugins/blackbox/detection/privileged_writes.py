@@ -38,10 +38,10 @@ from typing import Any
 from . import shell_shapes
 from .elevation import way_of
 from .finding import Finding
-from ..kernel import threat_ids
+from ..kernel import persistence_places, threat_ids
 from .paths import guard_places, guard_settings
 
-MATCHED = "root-write"
+MATCHED = persistence_places.ROOT_WRITE
 TITLE = "Would change the machine's own files as root"
 ADVICE = ("An AI agent may not use sudo to change this machine's own folders (/etc, /usr, /boot and the like): "
           "in Block mode Blackbox refuses it. If you meant it, run the command yourself in your own terminal.")

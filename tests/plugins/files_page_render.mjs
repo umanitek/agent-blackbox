@@ -38,7 +38,7 @@ const document = { getElementById: (id) => hosts[id] || null, createElement: (ta
 const posts = [], errors = [];
 const answer = (status, json) => Promise.resolve({ ok: status < 400, status, json: () => Promise.resolve(json) });
 const context = {
-  document, console, Promise, Date, Math, Number, String, Array, Object, JSON, setInterval() {}, setTimeout() {},
+  encodeURIComponent, document, console, Promise, Date, Math, Number, String, Array, Object, JSON, setInterval() {}, setTimeout() {},
   fetch: (url, options) => {
     if (url.endsWith("/api/session")) return answer(200, { token: "t" });
     if (options && options.method === "POST") {
@@ -53,6 +53,12 @@ const context = {
 };
 vm.createContext(context);
 const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((match) => match[1]);
+// The dashboard's shared scripts the page loads by address (the permission card), from the tree.
+const STATIC = new URL("../../plugins/blackbox/dashboard/static/", import.meta.url);
+const SHARED = { "/permission-card.js": "permission_card.js" };
+for (const match of html.matchAll(/<script src="([^"]+)"><\/script>/g)) {
+  if (SHARED[match[1]]) vm.runInContext(readFileSync(new URL(SHARED[match[1]], STATIC), "utf8"), context);
+}
 try { vm.runInContext(scripts[scripts.length - 1], context); } catch (error) { errors.push(String(error && error.stack)); }
 const settle = async () => { for (let i = 0; i < 20; i++) await new Promise((resolve) => setImmediate(resolve)); };
 await settle();

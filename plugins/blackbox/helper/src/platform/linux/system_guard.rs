@@ -46,7 +46,7 @@ pub fn guard_dns(guard: bool, active: bool, view: &dns::DnsView, at: u64) -> Opt
     if !guard || !active || !dns::drifted(view) {
         return None;
     }
-    let (actions, _saved) = dns::point(view);   // the original servers stay the ones saved at switch-on
+    let (actions, _saved) = dns::point(view, &crate::platform::SavedDns::new());   // the original servers stay the ones saved at switch-on
     let errors = dns::run(&actions);
     Some(if errors.is_empty() { json!({"kind": "dns-restored", "ts": at, "was": tamper::dns_servers()}) }
          else { json!({"kind": "dns-restore-failed", "ts": at, "error": errors.join("; ").chars().take(300).collect::<String>()}) })

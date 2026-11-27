@@ -2,6 +2,7 @@
 //! [`apply`] (applying a plan), [`look`] (watching) and [`reporting`] (reports and stopping).
 
 mod apply;
+mod filter_keeper;
 mod look;
 mod reporting;
 
@@ -55,9 +56,9 @@ struct Helper {
     /// The verified graph's lists last applied: what a `keep_verified` plan keeps (the graph's
     /// store being down never clears protection — [`crate::plan::Kept`]).
     kept: Mutex<crate::plan::Kept>,
-    /// The filter last applied (None while every firewall protection is off): what
-    /// [`Helper::keep_filter_intact`] loads again when another program removed or changed the rules.
-    filtered: Mutex<Option<platform::Filter>>,
+    /// The filter the plan wants and the one loaded: what [`Helper::keep_filter_intact`] tries
+    /// again when it failed, and loads again when another program removed or changed the rules.
+    filtered: Mutex<filter_keeper::FilterKeeper>,
     /// Whether the plan last applied wants DNS Shield on: what [`Helper::keep_dns_safe`] keeps true
     /// in effect, also when switching it on failed (a boot before the resolver answered).
     dns_wanted: AtomicBool,
@@ -94,16 +95,27 @@ impl Failures {
     }
 }
 
-/// Per protection: whether it is applied now and, if its last apply failed, why — so the screen
-/// never shows "on" for a protection that did not take (security finding).
-fn protections(state: &State, failures: &Failures) -> Value {
+/// What is really in effect now, measured (LES-166): the system's DNS points at the resolver, and
+/// the firewall still holds the rules loaded. False only when seen otherwise (unreadable counts as
+/// in effect: nothing is re-applied for it either).
+#[derive(Debug, Clone, Copy)]
+struct InEffect {
+    dns: bool,
+    filter: bool,
+}
+
+/// Per protection: whether it is applied AND in effect now and, if its last apply failed, why — so
+/// the screen never shows "on" for a protection that did not take (security finding), nor for one
+/// whose rules another program removed (review finding 2026-11-26: after a flush of Blackbox's
+/// table the card still said "remote locked").
+fn protections(state: &State, failures: &Failures, in_effect: InEffect) -> Value {
     let one = |applied: bool, error: &Option<String>| json!({"applied": applied, "error": error});
     json!({
-        "dns": one(state.dns_active, &failures.dns),
-        "firewall": one(state.firewall_active, &failures.filter),
-        "cut": one(state.cut_active, &failures.filter),
-        "ssh_lockdown": one(state.ssh_lockdown_active, &failures.filter),
-        "remote_lock": one(state.remote_lock_active, &failures.filter),
+        "dns": one(state.dns_active && in_effect.dns, &failures.dns),
+        "firewall": one(state.firewall_active && in_effect.filter, &failures.filter),
+        "cut": one(state.cut_active && in_effect.filter, &failures.filter),
+        "ssh_lockdown": one(state.ssh_lockdown_active && in_effect.filter, &failures.filter),
+        "remote_lock": one(state.remote_lock_active && in_effect.filter, &failures.filter),
     })
 }
 
@@ -159,7 +171,7 @@ pub fn run() -> Result<(), String> {
         observer: SystemObserver::default(),
         ended: Mutex::new(HashSet::new()),
         kept: Mutex::new(crate::plan::Kept::default()),
-        filtered: Mutex::new(None),
+        filtered: Mutex::new(filter_keeper::FilterKeeper::default()),
         dns_wanted: AtomicBool::new(false),
         wake: Wake::default(),
     });
@@ -237,11 +249,27 @@ mod tests {
     fn each_protection_reports_whether_it_applied_and_why_not() {
         let state = State { dns_active: false, firewall_active: true, ..Default::default() };
         let failures = Failures { dns: Some("no DNS server known".into()), filter: None };
-        let report = protections(&state, &failures);
+        let report = protections(&state, &failures, InEffect { dns: true, filter: true });
         assert_eq!(report["dns"]["applied"], false);
         assert_eq!(report["dns"]["error"], "no DNS server known");
         assert_eq!(report["firewall"]["applied"], true);
         assert!(report["firewall"]["error"].is_null());
+    }
+
+    /// Review finding 2026-11-26 (LES-166): every firewall-backed protection reads off once the
+    /// rules are seen gone (`nft flush table inet blackbox_netd`), whatever the saved state says.
+    #[test]
+    fn a_protection_whose_rules_were_removed_is_not_reported_as_applied() {
+        let state = State { dns_active: true, firewall_active: true, cut_active: true, ssh_lockdown_active: true,
+                            remote_lock_active: true, ..Default::default() };
+        let flushed = protections(&state, &Failures::default(), InEffect { dns: true, filter: false });
+        for part in ["firewall", "cut", "ssh_lockdown", "remote_lock"] {
+            assert_eq!(flushed[part]["applied"], false, "{part}");
+        }
+        assert_eq!(flushed["dns"]["applied"], true);
+        let dns_reset = protections(&state, &Failures::default(), InEffect { dns: false, filter: true });
+        assert_eq!(dns_reset["dns"]["applied"], false);
+        assert_eq!(dns_reset["remote_lock"]["applied"], true);
     }
 
 

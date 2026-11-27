@@ -23,7 +23,7 @@ from typing import Any, Callable, Iterable, NamedTuple
 
 from . import constants
 from . import yaml_files
-from .config import DEFAULT_PROTECTED_PATHS, MODE_STARTING, agent_activity, load_blackbox_config, mode_answer
+from .config import DEFAULT_PROTECTED_PATHS, MODE_STARTING, agent_activity, hook_payload_limit_mb, load_blackbox_config, mode_answer
 from .config_values import schema
 from .config_values.schema import DETECTION_CATEGORIES, MAX_PROTECTED_PATHS
 
@@ -56,6 +56,10 @@ SettingsValidator = Callable[[dict[str, Any]], tuple[Any, ...]]
 _SUPERSEDED = object()
 #: Sections another package owns: ``{key: validate(raw, errors) -> section}``, deep-merged like ``llm``.
 SECTION_VALIDATORS: dict[str, Callable[[Any, list[str]], dict[str, Any]]] = {}
+#: Top-level keys holding one value: ``{key: coerce(raw) -> the saved value, or None when invalid}``.
+_SCALARS: dict[str, Callable[[Any], Any]] = {"mode": lambda raw: schema.choice(schema.Mode, raw), "block_severity": schema.severity,
+                                             "report_min_severity": schema.severity,
+                                             "hook_payload_limit_mb": schema.hook_payload_limit}
 
 
 def read_settings() -> dict[str, Any]:
@@ -73,6 +77,7 @@ def read_settings() -> dict[str, Any]:
         "discover": cfg.discover,
         "osv_lookup": cfg.osv_lookup,
         "auto_attach": cfg.auto_attach,
+        "hook_payload_limit_mb": hook_payload_limit_mb(),   # choices: schema.HOOK_PAYLOAD_LIMITS_MB
         "agent_activity": asdict(agent_activity()),
         "categories": categories,
         "protected_paths": list(cfg.protected_paths),
@@ -113,17 +118,10 @@ def _validate(payload: dict[str, Any], *, sharing_consent: bool = False) -> tupl
     if not isinstance(payload, dict):
         return {}, ["payload must be an object"]
 
-    if "mode" in payload:
-        mode = schema.choice(schema.Mode, payload["mode"])
-        (updates.__setitem__("mode", mode) if mode else errors.append(f"invalid mode: {payload['mode']!r}"))
-
-    for key in ("block_severity", "report_min_severity"):
+    for key, coerce in _SCALARS.items():
         if key in payload:
-            val = schema.severity(payload[key])
-            if val:
-                updates[key] = val
-            else:
-                errors.append(f"invalid {key}: {payload[key]!r}")
+            val = coerce(payload[key])
+            (updates.__setitem__(key, val) if val else errors.append(f"invalid {key}: {payload[key]!r}"))
 
     for key in ("discover", "osv_lookup", "auto_attach", "report", "community_sandbox"):
         # `report` (KI-005): the community-sharing switch is a real settings

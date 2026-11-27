@@ -1,4 +1,4 @@
-/* @umanitek/blackbox-openclaw — built from src/ by `npm run build`; do not edit. source sha256:bb82d8d4b7c5ff2ed9541d17b1e54def21bfdc781494a91821ed52963071f243 */
+/* @umanitek/blackbox-openclaw — built from src/ by `npm run build`; do not edit. source sha256:2ae960179c22f8814bbf08a00382be9e723c423215a9d53bf8bce9878c1042de */
 
 // src/consent.ts
 import { readFileSync } from "node:fs";
@@ -157,7 +157,7 @@ var READ_COMMANDS = /* @__PURE__ */ new Set([
 var UPLOAD_COMMANDS = /* @__PURE__ */ new Set(["curl", "wget", "http", "https"]);
 var UPLOAD_FILE_OPTIONS = /* @__PURE__ */ new Set(["-T", "--upload-file", "--post-file", "--body-file"]);
 var ASSIGNMENT = /^([A-Za-z_][A-Za-z0-9_]*)=([\s\S]*)$/;
-var VARIABLE_USE = /\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))/g;
+var PARAMETER = /\$\{([A-Za-z_][A-Za-z0-9_]*)(?:(:?[-=?])([^}]*))?\}|\$([A-Za-z_][A-Za-z0-9_]*)/g;
 var NAMING_COMMANDS = /* @__PURE__ */ new Set(["echo", "printf"]);
 var RECURSIVE_COMMANDS = /* @__PURE__ */ new Set([
   "cp",
@@ -187,7 +187,7 @@ var RECURSIVE_WITH_FLAG = {
   egrep: ["-r", "-R"],
   fgrep: ["-r", "-R"]
 };
-var SEPARATORS = /* @__PURE__ */ new Set([";", "&&", "||", "|", "&", ">", ">>", "<", "|&"]);
+var SEPARATORS = /* @__PURE__ */ new Set([";", "&&", "||", "|", "&", ">", ">>", "<", "|&", "(", ")"]);
 var COPY_COMMANDS = /* @__PURE__ */ new Set([
   "cp",
   "scp",
@@ -223,180 +223,255 @@ var WHOLE_FOLDER_CODE = /copytree|make_archive|tarfile|zipfile|os\.walk|\bwalk\(
 var HOME_CODE = /homedir\(|expanduser|Path\.home|environ\[.HOME.\]|getenv\(.HOME.\)|env\.HOME|ENV\[.HOME.\]|Dir\.home/;
 var HEREDOC = /^[^\n]*?\b(python[23]?|node|ruby|perl|php|bun)\b[^\n]*<<-?\s*(['"]?)(\w+)\2[^\n]*\n([\s\S]*?)\n\s*\3\s*$/gm;
 var FIND_EXEC = /* @__PURE__ */ new Set(["-exec", "-execdir", "-ok", "-okdir"]);
-var WINDOWS_PATH = /[A-Za-z]:\\|%[A-Za-z_]+%\\/;
+var MAX_BRACE_WORDS = 64;
+var OPERATOR_CHARS = ";&|<>";
+var SUBSHELL_CHARS = "()";
 var WHITESPACE = " 	\r\n";
-var PUNCTUATION = ";&|<>";
-var QUOTES = `'"`;
-var SplitError = class extends Error {
+var OPEN = "\uE000";
+var COMMA = "\uE001";
+var CLOSE = "\uE002";
+var MARK_OF = { "{": OPEN, ",": COMMA, "}": CLOSE };
+var WINDOWS_BEFORE = new RegExp(String.raw`(?:^|[^A-Za-z0-9])[A-Za-z]:(?=\n?$)|%[A-Za-z_][A-Za-z0-9_]*%(?=\n?$)|^\.{1,2}(?=\n?$)|^~(?=\n?$)|^\$HOME(?=\n?$)|^\$env:[A-Za-z_][\p{L}\p{N}_]*(?=\n?$)`, "iu");
+var WINDOWS_INSIDE = /(?:^|[^A-Za-z0-9])[A-Za-z]:\\|%[A-Za-z_][A-Za-z0-9_]*%\\|^(?:\.{1,2}|~)\\/;
+var WINDOWS_TAIL = 256;
+var MAX_SEQUENCE_BODY = 16;
+var PLAIN = /[^\s;&|<>()\\'"$`{},]+/y;
+var SEQUENCE = /^(-?\d{1,6})\.\.(-?\d{1,6})(?=\n?$)|^([A-Za-z])\.\.([A-Za-z])(?=\n?$)/;
+var DOUBLE_QUOTE_ESCAPE = /\\([$`"\\\n])/g;
+var Unbalanced = class extends Error {
 };
-var ShlexReader = class {
-  position = 0;
-  pushback = [];
-  state = " ";
-  token = "";
-  quoted = false;
-  escapedState = " ";
-  command;
-  posix;
-  // Plain fields, not constructor parameter properties: Node's type stripping (how the parity
-  // test loads this file without a build) only accepts syntax it can erase.
-  constructor(command, posix) {
-    this.command = command;
-    this.posix = posix;
-  }
-  /** Every word of the command, in order. */
-  words() {
-    const out = [];
-    for (; ; ) {
-      const word = this.readWord();
-      if (word !== null) out.push(word);
-      if (this.state === null) return out;
-    }
-  }
-  /** The next word, or null when nothing was read (the end, or only a comment). */
-  readWord() {
-    this.token = "";
-    this.quoted = false;
-    this.escapedState = " ";
-    while (!this.step(this.read())) {
-    }
-    const empty = this.token === "" && !(this.posix && this.quoted);
-    return empty ? null : this.token;
-  }
-  read() {
-    return this.pushback.pop() ?? (this.position < this.command.length ? this.command[this.position++] : "");
-  }
-  skipLine() {
-    const end = this.command.indexOf("\n", this.position);
-    this.position = end === -1 ? this.command.length : end + 1;
-  }
-  /** True when a word boundary ends a word that has content (an empty quoted word counts in POSIX mode). */
-  wordIsComplete() {
-    return this.token !== "" || this.posix && this.quoted;
-  }
-  step(next) {
-    if (this.state === null) {
-      this.token = "";
-      return true;
-    }
-    if (this.state === " ") return this.betweenWords(next);
-    if (QUOTES.includes(this.state)) return this.insideQuote(next, this.state);
-    if (this.state === "\\") return this.afterBackslash(next, this.state);
-    return this.insideWord(next);
-  }
-  betweenWords(next) {
-    if (!next) {
-      this.state = null;
-      return true;
-    }
-    if (WHITESPACE.includes(next)) return this.wordIsComplete();
-    if (next === "#") {
-      this.skipLine();
-      return false;
-    }
-    if (this.posix && next === "\\") {
-      this.escapedState = "a";
-      this.state = next;
-      return false;
-    }
-    if (PUNCTUATION.includes(next)) {
-      this.token = next;
-      this.state = "c";
-      return false;
-    }
-    if (QUOTES.includes(next)) {
-      if (!this.posix) this.token = next;
-      this.state = next;
-      return false;
-    }
-    this.token = next;
-    this.state = "a";
-    return false;
-  }
-  insideQuote(next, quote) {
-    this.quoted = true;
-    if (!next) throw new SplitError("No closing quotation");
-    if (next === quote) {
-      if (this.posix) {
-        this.state = "a";
-        return false;
-      }
-      this.token += next;
-      this.state = " ";
-      return true;
-    }
-    if (this.posix && next === "\\" && quote === '"') {
-      this.escapedState = quote;
-      this.state = next;
-      return false;
-    }
-    this.token += next;
-    return false;
-  }
-  afterBackslash(next, backslash) {
-    if (!next) throw new SplitError("No escaped character");
-    if (QUOTES.includes(this.escapedState) && next !== backslash && next !== this.escapedState) this.token += backslash;
-    this.token += next;
-    this.state = this.escapedState;
-    return false;
-  }
-  /** In a word ("a") or a run of punctuation ("c"). */
-  insideWord(next) {
-    if (!next) {
-      this.state = null;
-      return true;
-    }
-    if (WHITESPACE.includes(next)) {
-      this.state = " ";
-      return this.wordIsComplete();
-    }
-    if (next === "#") return this.commentInWord();
-    if (this.state === "c") return this.insidePunctuation(next);
-    if (this.posix && QUOTES.includes(next)) {
-      this.state = next;
-      return false;
-    }
-    if (this.posix && next === "\\") {
-      this.escapedState = "a";
-      this.state = next;
-      return false;
-    }
-    if (!PUNCTUATION.includes(next)) {
-      this.token += next;
-      return false;
-    }
-    this.pushback.push(next);
-    this.state = " ";
-    return this.wordIsComplete();
-  }
-  commentInWord() {
-    this.skipLine();
-    if (!this.posix) return false;
-    this.state = " ";
-    return this.wordIsComplete();
-  }
-  insidePunctuation(next) {
-    if (PUNCTUATION.includes(next)) {
-      this.token += next;
-      return false;
-    }
-    this.pushback.push(next);
-    this.state = " ";
-    return true;
-  }
-};
-function shlexSplit(command, posix) {
-  return new ShlexReader(command, posix).words();
+function literalMarks(text) {
+  return text.replace(/[\ue000-\ue002]/g, (mark) => mark === OPEN ? "{" : mark === COMMA ? "," : "}");
 }
-function stripQuotes(word) {
-  return word.replace(/^["']+|["']+$/g, "");
+function closing(text, start, openChar, closeChar) {
+  let depth = 1;
+  let index = start;
+  while (index < text.length) {
+    const char = text[index];
+    if (char === "\\") {
+      index += 2;
+      continue;
+    }
+    if ((char === "'" || char === '"') && openChar !== "`") {
+      const end = char === "'" ? text.indexOf("'", index + 1) : doubleQuoteEnd(text, index + 1);
+      if (end < 0) throw new Unbalanced(text);
+      index = end + 1;
+      continue;
+    }
+    if (char === closeChar && (openChar !== closeChar || depth === 1)) {
+      depth -= 1;
+      if (depth === 0) return index + 1;
+    } else if (char === openChar) {
+      depth += 1;
+    }
+    index += 1;
+  }
+  throw new Unbalanced(text);
+}
+function doubleQuoteEnd(text, start) {
+  let index = start;
+  while (index < text.length) {
+    const char = text[index];
+    if (char === "\\") index += 2;
+    else if (char === '"') return index;
+    else if (text.startsWith("$(", index) || text.startsWith("${", index)) {
+      index = closing(text, index + 2, text[index + 1], text[index + 1] === "(" ? ")" : "}");
+    } else if (char === "`") index = closing(text, index + 1, "`", "`");
+    else index += 1;
+  }
+  return -1;
+}
+var Lexer = class {
+  index = 0;
+  words = [];
+  current = [];
+  started = false;
+  windows = false;
+  /** The last WINDOWS_TAIL characters of the word (marks literal), whether it is longer, and whether a Windows path showed in it. */
+  tail = "";
+  long = false;
+  windowsSeen = false;
+  unresolved = false;
+  text;
+  // A plain field, not a constructor parameter property: Node's type stripping (how the parity
+  // test loads this file without a build) only accepts syntax it can erase.
+  constructor(text) {
+    this.text = text;
+  }
+  finish() {
+    if (this.started) this.words.push(...expanded(this.current.join(""), this));
+    this.current = [];
+    this.started = false;
+    this.windows = false;
+    this.tail = "";
+    this.long = false;
+    this.windowsSeen = false;
+  }
+  /** Append `piece` to the word being built, keeping the bounded tail the Windows checks read. */
+  add(piece) {
+    this.current.push(piece);
+    const joined = this.tail + literalMarks(piece);
+    if (!this.windowsSeen && piece.includes("\\") && WINDOWS_INSIDE.test(this.anchored(joined))) this.windowsSeen = true;
+    this.long = this.long || joined.length > WINDOWS_TAIL;
+    this.tail = joined.slice(-WINDOWS_TAIL);
+  }
+  /** `text` as the checks read it: a word cut to its tail gets a letter in front, so nothing anchors at the cut. */
+  anchored(text) {
+    return this.long ? "a" + text : text;
+  }
+  run() {
+    const text = this.text;
+    const length = text.length;
+    while (this.index < length) {
+      const char = text[this.index];
+      if (WHITESPACE.includes(char)) {
+        this.finish();
+        this.index += 1;
+      } else if (char === "#" && !this.started) {
+        const newline = text.indexOf("\n", this.index);
+        this.index = newline < 0 ? length : newline;
+      } else if (OPERATOR_CHARS.includes(char) || SUBSHELL_CHARS.includes(char)) {
+        this.finish();
+        let end = this.index + 1;
+        while (OPERATOR_CHARS.includes(char) && end < length && OPERATOR_CHARS.includes(text[end])) end += 1;
+        this.words.push(text.slice(this.index, end));
+        this.index = end;
+      } else {
+        this.started = true;
+        this.wordPart(char);
+      }
+    }
+    this.finish();
+    return this.words;
+  }
+  wordPart(char) {
+    const text = this.text;
+    if (char === "\\") {
+      this.backslash();
+    } else if (char === "'") {
+      const end = text.indexOf("'", this.index + 1);
+      if (end < 0) throw new Unbalanced(text);
+      this.add(text.slice(this.index + 1, end));
+      this.index = end + 1;
+    } else if (char === '"') {
+      this.doubleQuoted();
+    } else if (text.startsWith("$(", this.index) || text.startsWith("${", this.index)) {
+      const open = text[this.index + 1];
+      const end = closing(text, this.index + 2, open, open === "(" ? ")" : "}");
+      this.add(text.slice(this.index, end));
+      this.index = end;
+    } else if (char === "`") {
+      const end = closing(text, this.index + 1, "`", "`");
+      this.add(text.slice(this.index, end));
+      this.index = end;
+    } else {
+      PLAIN.lastIndex = this.index;
+      const plain = PLAIN.exec(text);
+      if (plain) {
+        this.add(plain[0]);
+        this.index = PLAIN.lastIndex;
+      } else {
+        this.add(MARK_OF[char] ?? char);
+        this.index += 1;
+      }
+    }
+  }
+  backslash() {
+    const text = this.text;
+    const at = this.index;
+    if (this.windows || WINDOWS_BEFORE.test(this.anchored(this.tail))) {
+      this.windows = true;
+      this.add("\\");
+      this.index = at + 1;
+    } else if (at + 1 < text.length) {
+      if (text[at + 1] !== "\n") this.add(text[at + 1]);
+      this.index = at + 2;
+    } else {
+      this.index = at + 1;
+    }
+  }
+  doubleQuoted() {
+    const text = this.text;
+    const end = doubleQuoteEnd(text, this.index + 1);
+    if (end < 0) throw new Unbalanced(text);
+    let inner = text.slice(this.index + 1, end);
+    if (this.windowsSeen || inner.includes("\\") && WINDOWS_INSIDE.test(this.anchored(this.tail) + inner)) this.windows = true;
+    if (!this.windows) inner = inner.replace(DOUBLE_QUOTE_ESCAPE, (_whole, escaped) => escaped === "\n" ? "" : escaped);
+    this.add(inner);
+    this.index = end + 1;
+  }
+};
+function expanded(word, lexer) {
+  if (!word.includes(OPEN)) return [literalMarks(word)];
+  const found = alternatives(word);
+  if (found === null) {
+    lexer.unresolved = true;
+    return [literalMarks(word)];
+  }
+  return found.map(literalMarks);
+}
+function groups(word) {
+  const found = /* @__PURE__ */ new Map();
+  const openMarks = [];
+  for (let index = 0; index < word.length; index += 1) {
+    const char = word[index];
+    if (char === OPEN) openMarks.push([index, []]);
+    else if (char === COMMA && openMarks.length) openMarks[openMarks.length - 1][1].push(index);
+    else if (char === CLOSE && openMarks.length) {
+      const [start, commas] = openMarks.pop();
+      found.set(start, [index, commas]);
+    }
+  }
+  return found;
+}
+function sequence(body) {
+  const found = SEQUENCE.exec(body);
+  if (!found) return null;
+  const numbers = found[1] !== void 0;
+  const first = numbers ? Number(found[1]) : found[3].charCodeAt(0);
+  const last = numbers ? Number(found[2]) : found[4].charCodeAt(0);
+  const step = last >= first ? 1 : -1;
+  const out = [];
+  for (let value = first; out.length <= MAX_BRACE_WORDS && (step > 0 ? value <= last : value >= last); value += step) {
+    out.push(numbers ? String(value) : String.fromCharCode(value));
+  }
+  return out;
+}
+function alternatives(word) {
+  const closed = groups(word);
+  let start = word.indexOf(OPEN);
+  while (start >= 0) {
+    const group = closed.get(start);
+    if (group === void 0) return [word];
+    const [end, commas] = group;
+    let choices;
+    if (commas.length) {
+      const cuts = [start, ...commas, end];
+      choices = cuts.slice(0, -1).map((cut, at) => word.slice(cut + 1, cuts[at + 1]));
+    } else {
+      const body = end - start - 1 <= MAX_SEQUENCE_BODY ? word.slice(start + 1, end) : "";
+      choices = !body || body.includes(OPEN) ? null : sequence(literalMarks(body));
+    }
+    if (choices !== null) {
+      const out = [];
+      const prefix = word.slice(0, start);
+      const suffix = word.slice(end + 1);
+      for (const choice of choices) {
+        const rest = alternatives(choice + suffix);
+        if (rest === null || out.length + rest.length > MAX_BRACE_WORDS) return null;
+        out.push(...rest.map((each) => prefix + each));
+      }
+      return out;
+    }
+    start = word.indexOf(OPEN, start + 1);
+  }
+  return [word];
 }
 function splitWords(command) {
   try {
-    if (WINDOWS_PATH.test(command)) return shlexSplit(command, false).map(stripQuotes);
-    return shlexSplit(command, true);
+    return new Lexer(command).run();
   } catch (error) {
-    if (!(error instanceof SplitError)) throw error;
+    if (!(error instanceof Unbalanced)) throw error;
     return command.split(/\s+/).filter(Boolean);
   }
 }
@@ -460,14 +535,20 @@ function destinations(name, args, paths) {
 }
 function withVariables(words) {
   const values = /* @__PURE__ */ new Map();
+  const value = (whole, braced, operator, fallback, bare) => {
+    const name = braced ?? bare ?? "";
+    const set = values.get(name);
+    if (set !== void 0) return set;
+    if (name === "HOME") return "$HOME";
+    return operator && ["-", "="].includes(operator.replace(/^:/, "")) ? fallback ?? "" : whole;
+  };
   return words.map((word) => {
     const assignment = ASSIGNMENT.exec(word);
     if (assignment) {
       values.set(assignment[1], assignment[2]);
       return word;
     }
-    if (values.size === 0 || !word.includes("$")) return word;
-    return word.replace(VARIABLE_USE, (whole, braced, bare) => values.get(braced ?? bare ?? "") ?? whole);
+    return word.includes("$") ? word.replace(PARAMETER, value) : word;
   });
 }
 function redirectedIn(words, index) {
@@ -513,8 +594,8 @@ function commandArgs(name, words, index, inKnownFolder = false) {
   const oldStyleTarFlags = name === "tar" && args.length > 0 && isAlpha(args[0]);
   const paths = args.filter((word, position) => !word.startsWith("-") && !(oldStyleTarFlags && position === 0) && (looksLikePath(word) || (RECURSIVE_COMMANDS.has(name) || inKnownFolder) && word !== "{}"));
   const written = destinations(name, args, paths);
-  const operands = name === "tar" ? tarOperands(args, paths, written) : paths;
-  return [operands.map((word) => ({ path: word, command: name, recursive, destination: written.has(word) })), end];
+  const operands2 = name === "tar" ? tarOperands(args, paths, written) : paths;
+  return [operands2.map((word) => ({ path: word, command: name, recursive, destination: written.has(word) })), end];
 }
 function tarOperands(args, paths, written) {
   let folder = "";
@@ -527,7 +608,7 @@ function tarOperands(args, paths, written) {
   }
   const long = args.find((word) => word.startsWith("--directory="));
   if (long) folder = long.split("=", 2)[1] ?? folder;
-  const operands = paths.filter((word) => !skip.has(word));
+  const operands2 = paths.filter((word) => !skip.has(word));
   const clusters = args.filter((word, position) => word.startsWith("-") && !word.startsWith("--") || position === 0 && isAlpha(word)).map((word) => word.replace(/^-+/, ""));
   if (clusters.some((cluster) => /[xt]/.test(cluster)) || args.some((word) => ["--extract", "--list", "--get"].includes(word))) {
     let archive = "";
@@ -538,10 +619,10 @@ function tarOperands(args, paths, written) {
         break;
       }
     }
-    return operands.includes(archive) ? [archive] : [];
+    return operands2.includes(archive) ? [archive] : [];
   }
-  if (!folder) return operands;
-  return operands.map((word) => written.has(word) || isAnchored(word) ? word : folder.replace(/\/+$/, "") + "/" + word);
+  if (!folder) return operands2;
+  return operands2.map((word) => written.has(word) || isAnchored(word) ? word : folder.replace(/\/+$/, "") + "/" + word);
 }
 function xargsFeedsAReader(words, position) {
   if (position >= words.length || words[position] !== "|") return false;
@@ -558,7 +639,7 @@ function findArgs(words, index) {
     position += 1;
   }
   let feedsAReader = false;
-  while (position < words.length && (words[position] === ";" || !SEPARATORS.has(words[position]))) {
+  while (position < words.length && ([";", "(", ")"].includes(words[position]) || !SEPARATORS.has(words[position]))) {
     if (FIND_EXEC.has(words[position]) && position + 1 < words.length) {
       feedsAReader = feedsAReader || readsFiles(baseName(words[position + 1]));
       while (position < words.length && words[position] !== ";" && words[position] !== "+") position += 1;
@@ -650,10 +731,10 @@ function pathsInCode(interpreter, code, argv = []) {
 }
 function scriptArgs(name, words, index) {
   const end = segmentEnd(words, index + 1);
-  const options = INTERPRETERS[name];
+  const options2 = INTERPRETERS[name];
   const found = [];
   for (let position = index + 1; position < end - 1; position += 1) {
-    if (options.includes(words[position])) found.push(...pathsInCode(name, words[position + 1], words.slice(position + 2, end)));
+    if (options2.includes(words[position])) found.push(...pathsInCode(name, words[position + 1], words.slice(position + 2, end)));
   }
   return [found, end];
 }
@@ -665,7 +746,7 @@ function cd(words, index, folder) {
   if (isAnchored(target)) return [trimTrailingSlashes(target) || "/", end];
   return [folder ? trimTrailingSlashes(folder) + "/" + target : "", end];
 }
-var HOME_VARIABLE = /^(?:\$HOME(?![A-Za-z0-9_])|\$\{HOME\}|%USERPROFILE%)/;
+var HOME_VARIABLE = /^(?:\$HOME(?![A-Za-z0-9_])|\$\{HOME(?::?[-=?][^}]*)?\}|%USERPROFILE%|\$[Ee][Nn][Vv]:(?:[Uu][Ss][Ee][Rr][Pp][Rr][Oo][Ff][Ii][Ll][Ee]|[Hh][Oo][Mm][Ee])(?![A-Za-z0-9_]))/;
 function homeAsTilde(path2) {
   return path2.replace(HOME_VARIABLE, "~");
 }
@@ -749,6 +830,434 @@ function withNestedCommands(command, depth = NESTING_DEPTH) {
 }
 function codeFileArgs(code, language = "python") {
   return pathsInCode(language, code || "").map((arg) => fromFolder(arg, ""));
+}
+
+// src/escalationShapes.ts
+var SHAPE_ORDER = [
+  "remote-script-pipe",
+  "remote-eval-pipe",
+  "rm-rf-system-paths",
+  "chmod-world-writable",
+  "insecure-tls-fetch"
+];
+var WORD = String.raw`[\p{L}\p{N}_]`;
+var EDGE_AFTER = `(?!${WORD})`;
+var EDGE_BEFORE = `(?<!${WORD})`;
+var MAY_HAVE_A_SHAPE = new RegExp(String.raw`curl|wget|${EDGE_BEFORE}rm${EDGE_AFTER}|chmod|${EDGE_BEFORE}(?:iwr|irm)${EDGE_AFTER}|invoke-(?:webrequest|restmethod)`, "iu");
+var FETCHERS = /* @__PURE__ */ new Set(["curl", "wget", "iwr", "irm", "invoke-webrequest", "invoke-restmethod"]);
+var SCRIPT_RUNNERS = /^(?:sh|bash|zsh|dash|ksh|node|python(?:\d+(?:\.\d+)*)?|iex|invoke-expression)$/;
+var SHELLS = /* @__PURE__ */ new Set(["sh", "bash", "zsh", "dash", "ksh"]);
+var FETCH_SUBSTITUTION = new RegExp(String.raw`\$\(\s*(?:curl|wget)${EDGE_AFTER}|` + "`" + String.raw`\s*(?:curl|wget)${EDGE_AFTER}`, "u");
+var PIPES = /* @__PURE__ */ new Set(["|", "|&"]);
+var LIST_OPERATOR_CHARS = ";&|()";
+var REDIRECTS = /* @__PURE__ */ new Set([">", ">>", "<", ">|", "&>", "&>>", ">&", "<&", "<<<"]);
+var SYSTEM_ROOT = String.raw`/+(?:etc|usr|bin|sbin|opt|private|System|Library)${EDGE_AFTER}`;
+var RM_TARGET = new RegExp(
+  String.raw`^(?:${SYSTEM_ROOT}|/+var${EDGE_AFTER}(?!/+(?:tmp|folders)${EDGE_AFTER})|/+\**$|~/?\**$|~/+\.(?:ssh|aws|gnupg|gpg|kube|docker|password-store)${EDGE_AFTER})`,
+  "iu"
+);
+var CHMOD_TARGET = new RegExp(String.raw`^(?:${SYSTEM_ROOT}|/+var${EDGE_AFTER}|/+$|~/+\.?(?:ssh|aws|gnupg)${EDGE_AFTER})`, "iu");
+var WORLD_WRITABLE = /^0?777$/;
+var LOCAL_HOST = new RegExp(
+  String.raw`^(?:localhost|127\.\d+\.\d+\.\d+|0\.0\.0\.0|::1|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(?:1[6-9]|2\d|3[01])\.\d+\.\d+` + String.raw`|.+\.local|.+\.internal|.+\.localhost)$`,
+  "i"
+);
+var FETCH_VALUE_OPTIONS = /* @__PURE__ */ new Set([
+  "-o",
+  "--output",
+  "-d",
+  "--data",
+  "--data-raw",
+  "--data-binary",
+  "--data-urlencode",
+  "-H",
+  "--header",
+  "-u",
+  "--user",
+  "-X",
+  "--request",
+  "-T",
+  "--upload-file",
+  "-F",
+  "--form",
+  "-e",
+  "--referer",
+  "-A",
+  "--user-agent",
+  "-b",
+  "--cookie",
+  "-c",
+  "--cookie-jar",
+  "-x",
+  "--proxy",
+  "--cacert",
+  "--capath",
+  "-E",
+  "--cert",
+  "--key",
+  "-K",
+  "--config",
+  "--resolve",
+  "--connect-to",
+  "-w",
+  "--write-out",
+  "-m",
+  "--max-time",
+  "--retry",
+  "-r",
+  "--range",
+  "-C",
+  "--continue-at",
+  "-O",
+  "--output-document",
+  "-P",
+  "--directory-prefix",
+  "-OutFile",
+  "-Uri",
+  "-Method",
+  "-Headers",
+  "-Body"
+]);
+var WRAPPERS = {
+  env: ["-u", "-C", "-S", "--unset", "--chdir"],
+  nohup: [],
+  nice: ["-n"],
+  stdbuf: ["-i", "-o", "-e"],
+  caffeinate: ["-t", "-w"],
+  time: [],
+  command: [],
+  exec: ["-a"],
+  sudo: ["-u", "-g", "-C", "-D", "-h", "-p", "-U"],
+  doas: ["-u", "-C"],
+  timeout: ["-s", "-k", "--signal", "--kill-after"],
+  gtimeout: ["-s", "-k"],
+  script: ["-t", "-T"],
+  arch: ["-arch", "-e"],
+  flock: ["-w", "-E", "--timeout", "--conflict-exit-code"],
+  unbuffer: [],
+  taskpolicy: ["-c", "-d", "-g", "-t", "-l"]
+};
+var TAKES_VALUE_FIRST = /* @__PURE__ */ new Set(["timeout", "gtimeout", "script", "flock"]);
+var SETS_VARIABLE = /^[A-Za-z_][A-Za-z0-9_]*=/;
+function programIndex(words) {
+  let index = 0;
+  while (index < words.length) {
+    if (SETS_VARIABLE.test(words[index])) {
+      index += 1;
+      continue;
+    }
+    const name = baseName2(words[index]);
+    if (!Object.hasOwn(WRAPPERS, name)) return index;
+    const takesValue = WRAPPERS[name];
+    let valueFirst = TAKES_VALUE_FIRST.has(name);
+    index += 1;
+    while (index < words.length && (words[index].startsWith("-") || valueFirst || name === "env" && words[index].includes("="))) {
+      const word = words[index];
+      if (!word.startsWith("-") && !(name === "env" && word.includes("="))) valueFirst = false;
+      index += takesValue.includes(word) ? 2 : 1;
+    }
+  }
+  return index;
+}
+function baseName2(word) {
+  return word.slice(word.lastIndexOf("/") + 1).toLowerCase();
+}
+function stages(line) {
+  const pipelines = [];
+  let pipeline = [];
+  let current = [];
+  for (const word of withVariables(splitWords(line))) {
+    if (PIPES.has(word)) {
+      pipeline.push(current);
+      current = [];
+    } else if (SEPARATORS.has(word) && !REDIRECTS.has(word) || [...word].every((char) => LIST_OPERATOR_CHARS.includes(char))) {
+      pipelines.push([...pipeline, current]);
+      pipeline = [];
+      current = [];
+    } else {
+      current.push(word);
+    }
+  }
+  pipelines.push([...pipeline, current]);
+  return pipelines.filter((each) => each.some((stage) => stage.length)).map((each) => each.filter((stage) => stage.length));
+}
+function program(stage) {
+  const at = programIndex(stage);
+  if (at >= stage.length) return ["", []];
+  const word = stage[at];
+  const name = word.slice(word.lastIndexOf("/") + 1);
+  const lower = name.slice(name.lastIndexOf("\\") + 1).toLowerCase();
+  return [lower.endsWith(".exe") ? lower.slice(0, -4) : lower, stage.slice(at + 1)];
+}
+function operands(rest) {
+  const out = [];
+  let optionsEnd = false;
+  let skip = false;
+  for (const word of rest) {
+    if (skip) skip = false;
+    else if (REDIRECTS.has(word)) skip = true;
+    else if (word === "--" && !optionsEnd) optionsEnd = true;
+    else if (optionsEnd || !word.startsWith("-")) out.push(homeAsTilde(word));
+  }
+  return out;
+}
+function options(rest) {
+  const letters = /* @__PURE__ */ new Set();
+  const longs = /* @__PURE__ */ new Set();
+  for (const word of rest) {
+    if (word === "--") break;
+    if (word.startsWith("--")) longs.add(word.split("=", 1)[0].toLowerCase());
+    else if (word.startsWith("-") && word.length > 1) for (const letter of word.slice(1)) letters.add(letter);
+  }
+  return [letters, longs];
+}
+function rmWipes(rest) {
+  const [letters, longs] = options(rest);
+  const recursive = letters.has("r") || letters.has("R") || longs.has("--recursive");
+  const force = letters.has("f") || longs.has("--force");
+  return recursive && force && operands(rest).some((target) => RM_TARGET.test(target));
+}
+function chmodOpens(rest) {
+  const found = operands(rest);
+  return found.length > 0 && WORLD_WRITABLE.test(found[0]) && found.slice(1).some((path2) => CHMOD_TARGET.test(path2));
+}
+function skipsCertificates(name, rest) {
+  if (name === "curl") {
+    return rest.some((word) => word === "--insecure" || word === "--no-check-certificate" || word.startsWith("-") && !word.startsWith("--") && word.slice(1).includes("k") && new RegExp("^\\p{L}+$", "u").test(word.slice(1)));
+  }
+  if (name === "wget") return rest.includes("--no-check-certificate");
+  return FETCHERS.has(name) && rest.some((word) => word.toLowerCase() === "-skipcertificatecheck");
+}
+function hostOf(word) {
+  let rest = word.includes("://") ? word : "//" + word;
+  const colon = rest.indexOf(":");
+  if (colon > 0 && /^[A-Za-z][A-Za-z0-9+.-]*$/.test(rest.slice(0, colon))) rest = rest.slice(colon + 1);
+  if (!rest.startsWith("//")) return "";
+  const location = rest.slice(2).split(/[/?#]/, 1)[0];
+  if (location.includes("[") !== location.includes("]")) return "";
+  const host = location.slice(location.lastIndexOf("@") + 1);
+  const name = host.includes("[") ? host.slice(host.indexOf("[") + 1).split("]", 1)[0] : host.split(":", 1)[0];
+  return name.toLowerCase();
+}
+function fetchedHosts(rest) {
+  const hosts = [];
+  let skip = false;
+  for (const word of rest) {
+    if (skip) skip = false;
+    else if (REDIRECTS.has(word) || FETCH_VALUE_OPTIONS.has(word)) skip = true;
+    else if (!word.startsWith("-")) hosts.push(hostOf(word));
+  }
+  return hosts;
+}
+function insecureFetch(name, rest) {
+  if (!skipsCertificates(name, rest)) return false;
+  const hosts = fetchedHosts(rest);
+  return hosts.length === 0 || !hosts.every((host) => host && LOCAL_HOST.test(host));
+}
+function pipelineShapes(pipeline, found) {
+  let fetched = false;
+  for (const stage of pipeline) {
+    const [name, rest] = program(stage);
+    if (fetched && SCRIPT_RUNNERS.test(name)) found.add("remote-script-pipe");
+    if (fetched && name === "eval") found.add("remote-eval-pipe");
+    if ((name === "eval" || SHELLS.has(name)) && rest.some((word) => FETCH_SUBSTITUTION.test(word))) {
+      found.add(name === "eval" ? "remote-eval-pipe" : "remote-script-pipe");
+    }
+    if (FETCHERS.has(name)) {
+      fetched = true;
+      if (insecureFetch(name, rest)) found.add("insecure-tls-fetch");
+    } else if (name === "rm" && rmWipes(rest)) {
+      found.add("rm-rf-system-paths");
+    } else if (name === "chmod" && chmodOpens(rest)) {
+      found.add("chmod-world-writable");
+    }
+  }
+}
+function processSubstitution(line) {
+  const words = splitWords(line);
+  for (let index = 0; index < words.length - 3; index += 1) {
+    if (words[index + 1] === "<" && words[index + 2] === "(" && SCRIPT_RUNNERS.test(baseName2(words[index]))) {
+      const after = words.slice(index + 3);
+      const close = after.indexOf(")");
+      if ((close < 0 ? after : after.slice(0, close)).some((word) => FETCHERS.has(baseName2(word)))) return true;
+    }
+  }
+  return false;
+}
+function shapesOf(command) {
+  const found = /* @__PURE__ */ new Set();
+  for (const line of command.replaceAll("\\\n", " ").split("\n")) {
+    if (!MAY_HAVE_A_SHAPE.test(line.replace(/["'\\]/g, ""))) continue;
+    for (const pipeline of stages(line)) pipelineShapes(pipeline, found);
+    if (line.includes("<") && processSubstitution(line)) found.add("remote-script-pipe");
+  }
+  return SHAPE_ORDER.filter((shape) => found.has(shape));
+}
+
+// src/dependencyInstalls.ts
+var MANAGER_WORD = /(?<![\p{L}\p{N}_])(?:pip|uv|uvx|pipx|npm|pnpm|yarn|bun|bunx|npx|cargo|gem|brew)/iu;
+var PIP = /^pip(?:\d+(?:\.\d+)*)?(?=\n?$)/;
+var PYTHON = /^python(?:\d+(?:\.\d+)*)?(?=\n?$)/;
+var MANAGERS = {
+  pip: { install: "pypi" },
+  uv: { add: "pypi" },
+  uvx: { "": "pypi" },
+  pipx: { install: "pypi", run: "pypi" },
+  npm: { install: "npm", i: "npm", add: "npm" },
+  pnpm: { add: "npm", dlx: "npm" },
+  yarn: { add: "npm", dlx: "npm" },
+  bun: { add: "npm", install: "npm", i: "npm" },
+  npx: { "": "npm" },
+  bunx: { "": "npm" },
+  cargo: { add: "cargo" },
+  gem: { install: "rubygems" },
+  brew: { install: "homebrew" }
+};
+var DEEPER = { "uv pip": ["install"], "uv tool": ["install", "run"], "yarn global": ["add"] };
+var RUNS_FIRST = /* @__PURE__ */ new Set(["", "run", "dlx"]);
+var VALUE_OPTIONS = /* @__PURE__ */ new Set([
+  "-r",
+  "--requirement",
+  "-c",
+  "--constraint",
+  "-e",
+  "--editable",
+  "-i",
+  "--index-url",
+  "--extra-index-url",
+  "--index",
+  "--default-index",
+  "-f",
+  "--find-links",
+  "-t",
+  "--target",
+  "--python",
+  "-p",
+  "--prefix",
+  "--root",
+  "--src",
+  "--platform",
+  "--python-version",
+  "--implementation",
+  "--abi",
+  "--cache-dir",
+  "--trusted-host",
+  "--proxy",
+  "--timeout",
+  "--retries",
+  "--cert",
+  "--client-cert",
+  "--log",
+  "--report",
+  "--exists-action",
+  "--upgrade-strategy",
+  "--progress-bar",
+  "--group",
+  "--extra",
+  "--registry",
+  "--tag",
+  "--cache",
+  "--userconfig",
+  "-C",
+  "--dir",
+  "--cwd",
+  "--filter",
+  "-w",
+  "--workspace",
+  "--otp",
+  "--scope",
+  "--omit",
+  "--include",
+  "--install-strategy",
+  "--source",
+  "--version",
+  "-v",
+  "--install-dir",
+  "--bindir",
+  "--features",
+  "-F",
+  "--manifest-path",
+  "--package",
+  "--rename",
+  "--branch",
+  "--rev",
+  "--git",
+  "--path"
+]);
+var ECOSYSTEM_ONLY = { "-v": "rubygems", "--version": "rubygems", "-p": "pypi", "-F": "cargo", "-C": "npm" };
+var REQUIREMENT = /^([A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)\s*(?:\[[^\]]*\])?\s*((?:===|==|~=|!=|>=|<=|<|>|@|;).*)?(?=\n?$)/;
+var EXACT_PIN = /^===?\s*([A-Za-z0-9._+!-]+)\s*(?:;.*)?(?=\n?$)/;
+var NOT_A_NAME = ["http://", "https://", "/", ".", "~", "git+", "file:", "@git"];
+var ARCHIVE_ENDINGS = [".whl", ".tar.gz", ".tgz", ".zip", ".gem"];
+var NPM_NAME = /^(?:@[A-Za-z0-9._-]+\/)?[A-Za-z0-9._-]+$/;
+var OTHER_NAME = /^[A-Za-z0-9._+/-]+$/;
+function packageOf(raw, ecosystem) {
+  const token2 = raw.trim();
+  if (!token2 || NOT_A_NAME.some((prefix) => token2.startsWith(prefix)) || ARCHIVE_ENDINGS.some((end) => token2.toLowerCase().endsWith(end))) {
+    return null;
+  }
+  if (ecosystem === "pypi" || ecosystem === "rubygems") {
+    const found = REQUIREMENT.exec(token2);
+    if (!found) return null;
+    const pin = EXACT_PIN.exec(found[2] ?? "");
+    return { name: found[1], version: pin ? pin[1] : "" };
+  }
+  const at = token2.lastIndexOf("@");
+  if (at > 0) return { name: token2.slice(0, at), version: token2.slice(at + 1) };
+  return (ecosystem === "npm" ? NPM_NAME : OTHER_NAME).test(token2) ? { name: token2, version: "" } : null;
+}
+function managerAt(words, index) {
+  const word = words[index];
+  let name = word.slice(word.lastIndexOf("/") + 1).toLowerCase();
+  if (PYTHON.test(name) && words[index + 1] === "-m" && index + 2 < words.length) {
+    index += 2;
+    name = words[index].toLowerCase();
+  }
+  if (PIP.test(name)) name = "pip";
+  const table = Object.hasOwn(MANAGERS, name) ? MANAGERS[name] : null;
+  if (!table) return ["", "", -1];
+  const sub = index + 1 < words.length ? words[index + 1].toLowerCase() : "";
+  const deeper = Object.hasOwn(DEEPER, `${name} ${sub}`) ? DEEPER[`${name} ${sub}`] : null;
+  if (deeper) {
+    const third = index + 2 < words.length ? words[index + 2].toLowerCase() : "";
+    if (!deeper.includes(third)) return ["", "", -1];
+    return [name === "uv" ? "pypi" : "npm", third === "run" ? "run" : third, index + 3];
+  }
+  if (Object.hasOwn(table, "")) return [table[""], "", index + 1];
+  return Object.hasOwn(table, sub) ? [table[sub], sub, index + 2] : ["", "", -1];
+}
+function parseDependencyInstalls(command) {
+  if (!command || !MANAGER_WORD.test(command.replace(/["'\\]/g, ""))) return [];
+  const words = splitWords(command);
+  const out = [];
+  const seen = /* @__PURE__ */ new Set();
+  let index = 0;
+  while (index < words.length) {
+    const [ecosystem, sub, start] = managerAt(words, index);
+    if (start < 0) {
+      index += 1;
+      continue;
+    }
+    index = start;
+    while (index < words.length && !SEPARATORS.has(words[index])) {
+      const word = words[index];
+      index += 1;
+      if (word.startsWith("-")) {
+        if (VALUE_OPTIONS.has(word) && (ECOSYSTEM_ONLY[word] ?? ecosystem) === ecosystem) index += 1;
+        continue;
+      }
+      const parsed = packageOf(word, ecosystem);
+      if (!parsed) continue;
+      const key = `${ecosystem}:${parsed.name.toLowerCase()}:${parsed.version}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        out.push({ ecosystem, name: parsed.name, version: parsed.version });
+      }
+      if (RUNS_FIRST.has(sub)) break;
+    }
+    while (index < words.length && !SEPARATORS.has(words[index])) index += 1;
+  }
+  return out;
 }
 
 // src/signing.ts
@@ -931,19 +1440,19 @@ function canonicalIp(raw) {
   if (halves.length > 2) return raw;
   const head = halves[0] ? halves[0].split(":") : [];
   const tail = halves.length === 2 && halves[1] ? halves[1].split(":") : [];
-  const groups = [...head, ...tail];
-  const last = groups[groups.length - 1];
+  const groups2 = [...head, ...tail];
+  const last = groups2[groups2.length - 1];
   if (last && last.includes(".")) {
     const octets = last.split(".").map((o) => Number(o));
     if (octets.length !== 4 || octets.some((o) => !Number.isInteger(o) || o < 0 || o > 255)) return raw;
-    groups.splice(groups.length - 1, 1, (octets[0] << 8 | octets[1]).toString(16), (octets[2] << 8 | octets[3]).toString(16));
-    if (halves.length === 2 && halves[1]) tail.splice(tail.length - 1, 1, groups[groups.length - 2], groups[groups.length - 1]);
+    groups2.splice(groups2.length - 1, 1, (octets[0] << 8 | octets[1]).toString(16), (octets[2] << 8 | octets[3]).toString(16));
+    if (halves.length === 2 && halves[1]) tail.splice(tail.length - 1, 1, groups2[groups2.length - 2], groups2[groups2.length - 1]);
   }
-  if (groups.some((g) => !/^[0-9a-f]{1,4}$/.test(g))) return raw;
-  const missing = 8 - groups.length;
+  if (groups2.some((g) => !/^[0-9a-f]{1,4}$/.test(g))) return raw;
+  const missing = 8 - groups2.length;
   if (halves.length === 2 ? missing < 1 : missing !== 0) return raw;
-  const headGroups = halves.length === 2 ? head : groups;
-  const full = halves.length === 2 ? [...headGroups, ...Array(missing).fill("0"), ...tail.map((g) => g)] : groups;
+  const headGroups = halves.length === 2 ? head : groups2;
+  const full = halves.length === 2 ? [...headGroups, ...Array(missing).fill("0"), ...tail.map((g) => g)] : groups2;
   const words = full.map((g) => parseInt(g, 16));
   if (words.slice(0, 5).every((w) => w === 0) && words[5] === 65535) {
     return `::ffff:${words[6] >> 8}.${words[6] & 255}.${words[7] >> 8}.${words[7] & 255}`;
@@ -1190,15 +1699,14 @@ function detectInjection(text, ruleset) {
   return out;
 }
 function detectEscalation(toolName, args, ruleset) {
-  const shape = normalizeArgShape(toolName, args);
-  if (!shape) return [];
+  const shapes = normalizeArgShapes(toolName, args);
+  if (shapes.length === 0) return [];
   const tool = (toolName || "").trim().toLowerCase();
   const out = [];
   const seen = /* @__PURE__ */ new Set();
   for (const rule of ruleset.escalation) {
-    if (seen.has(rule.identifier)) continue;
-    if (rule.toolName.trim().toLowerCase() !== tool) continue;
-    if (rule.argShape.trim() !== shape) continue;
+    const shape = rule.argShape.trim();
+    if (seen.has(rule.identifier) || rule.toolName.trim().toLowerCase() !== tool || !shapes.includes(shape)) continue;
     seen.add(rule.identifier);
     const src = ruleSource(rule);
     out.push({
@@ -1214,7 +1722,9 @@ function detectEscalation(toolName, args, ruleset) {
       fields: src === "community" ? { toolName: tool, argShape: shape } : {}
     });
   }
-  if (out.length === 0) {
+  const matched = new Set(out.map((finding) => finding.matched));
+  for (const shape of shapes) {
+    if (matched.has(shape)) continue;
     out.push({
       identifier: escalationIdentifier(tool, shape),
       category: "escalation",
@@ -1281,20 +1791,19 @@ function detectDependency(toolName, args, ruleset) {
   return out;
 }
 var REMOTE_SCRIPT_RE = /\b(?:curl|wget)\b[\s\S]{0,500}\|\s*(?:sh|bash|zsh|python|python3|node)\b/i;
-var RM_RF_SYSTEM_RE = /\brm\s+(?:-[a-z]*r[a-z]*f|-[a-z]*f[a-z]*r|-r\s+-f|-f\s+-r|--recursive\s+--force|--force\s+--recursive|-r\s+--force|--recursive\s+-f)\b[\s\S]{0,200}(?:\s\/(?:etc|usr|bin|sbin|opt|private|System|Library)\b|\s\/var(?!\/(?:tmp|folders))\b|\s\/\s*(?=[;&|]|$)|\s(?:~|\$HOME)\/?(?=\s|[;&|]|$)|\s(?:~|\$HOME)\/\.(?:ssh|aws|gnupg|gpg|kube|docker|password-store)\b)/i;
-var CHMOD_WORLD_RE = /\bchmod\s+(?:-R\s+)?0?777\b[\s\S]{0,200}(?:\s\/(?:etc|usr|bin|sbin|var|opt|private|System|Library)\b|\s\/\s*(?=[;&|]|$)|\s(?:~|\$HOME)\/?\.?(?:ssh|aws|gnupg))/i;
-var CURL_EVAL_RE = /\b(?:curl|wget)\b[\s\S]{0,300}\|\s*eval\b/i;
-var INSECURE_FETCH_RE = /\bcurl\b[\s\S]{0,200}(?:--insecure|--no-check-certificate|\s-[a-z]*k[a-z]*\b)|\bwget\b[\s\S]{0,200}--no-check-certificate/i;
-var LOCAL_HOST_RE = /(?:localhost|127\.0\.0\.\d+|0\.0\.0\.0|\[::1\]|\b10\.\d+\.\d+\.\d+|\b192\.168\.\d+\.\d+|\b172\.(?:1[6-9]|2\d|3[01])\.\d+\.\d+|\.local\b|\.internal\b)/i;
-var SHELL_SHAPE_RULES = [
-  ["remote-script-pipe", REMOTE_SCRIPT_RE],
-  ["remote-eval-pipe", CURL_EVAL_RE],
-  ["rm-rf-system-paths", RM_RF_SYSTEM_RE],
-  ["chmod-world-writable", CHMOD_WORLD_RE],
-  ["insecure-tls-fetch", INSECURE_FETCH_RE]
-];
-var SHELL_TOOLS = /* @__PURE__ */ new Set(["terminal", "shell", "bash", "run_command", "exec", "command"]);
-var ESCALATION_SHAPES = new Set(SHELL_SHAPE_RULES.map(([shape]) => shape));
+var SHELL_TOOLS = /* @__PURE__ */ new Set([
+  "terminal",
+  "shell",
+  "bash",
+  "run_command",
+  "exec",
+  "command",
+  "powershell",
+  "pwsh",
+  "powershell.exe",
+  "pwsh.exe"
+]);
+var ESCALATION_SHAPES = new Set(SHAPE_ORDER);
 var COMMAND_KEYS = ["command", "cmd", "shell", "script", "input"];
 var MAX_SHAPE_SCAN = 8e3;
 function commandFromArgs(toolName, args) {
@@ -1317,19 +1826,9 @@ function rawCommandFromArgs(toolName, args) {
 function isShellTool(toolName) {
   return SHELL_TOOLS.has((toolName || "").trim().toLowerCase());
 }
-function normalizeArgShape(toolName, args) {
+function normalizeArgShapes(toolName, args) {
   const command = commandFromArgs(toolName, args);
-  if (!command) return null;
-  for (const [shape, pattern] of SHELL_SHAPE_RULES) {
-    try {
-      if (pattern.test(command)) {
-        if (shape === "insecure-tls-fetch" && LOCAL_HOST_RE.test(command)) continue;
-        return shape;
-      }
-    } catch {
-    }
-  }
-  return null;
+  return command ? shapesOf(command) : [];
 }
 var INJECTION_HEURISTICS = [
   // OpenClaw replaces model-control delimiters in external content with this
@@ -1760,19 +2259,6 @@ function detectIoc(toolName, args, ruleset) {
   }
   return out;
 }
-var SHELL_INSTALL_PATTERNS = [
-  /\b(?:python(?:3)?\s+-m\s+)?pip3?\s+install\b/i,
-  /\buv\s+pip\s+install\b/i,
-  /\buv\s+add\b/i,
-  /\buvx\b/i,
-  /\bnpm\s+(?:install|i|add)\b/i,
-  /\bpnpm\s+add\b/i,
-  /\byarn\s+add\b/i,
-  /\bbun\s+add\b/i,
-  /\bcargo\s+add\b/i,
-  /\bgem\s+install\b/i,
-  /\bbrew\s+install\b/i
-];
 var TOKEN_RE = /"([^"]*)"|'([^']*)'|(\S+)/g;
 function tokenizeShell(command) {
   const out = [];
@@ -1820,99 +2306,6 @@ function parseShellReads(command) {
 function parseDownloads(command) {
   if (!command || !/\b(?:curl|wget)\b/i.test(command)) return [];
   return [...new Set(command.match(/https?:\/\/[^\s;'"|&>]+/gi) ?? [])];
-}
-function parsePackageToken(raw, ecosystem) {
-  const token2 = raw.replace(/,/g, "").replace(/;/g, "").trim();
-  if (!token2 || token2.startsWith("http://") || token2.startsWith("https://") || token2.startsWith("/") || token2.startsWith(".") || token2.startsWith("@git")) {
-    return null;
-  }
-  if (ecosystem === "pypi" || ecosystem === "rubygems") {
-    const exact = /^([A-Za-z0-9][A-Za-z0-9._-]*)==([A-Za-z0-9._+!-]+)$/.exec(token2);
-    if (exact) return { name: exact[1], version: exact[2] };
-    const loose = /^([A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[^\]]*\])?$/.exec(token2);
-    if (loose) return { name: loose[1], version: "" };
-    return null;
-  }
-  if (ecosystem === "npm") {
-    const idx2 = token2.lastIndexOf("@");
-    if (idx2 > 0) return { name: token2.slice(0, idx2), version: token2.slice(idx2 + 1) };
-    if (/^(?:@[A-Za-z0-9._-]+\/)?[A-Za-z0-9._-]+$/.test(token2)) return { name: token2, version: "" };
-    return null;
-  }
-  const idx = token2.lastIndexOf("@");
-  if (idx > 0) return { name: token2.slice(0, idx), version: token2.slice(idx + 1) };
-  if (/^[A-Za-z0-9._+/-]+$/.test(token2)) return { name: token2, version: "" };
-  return null;
-}
-var MANAGER_SPECS_PAIR = {
-  "pip|install": { eco: "pypi", skip: 2 },
-  "pip3|install": { eco: "pypi", skip: 2 },
-  "uv|pip": { eco: "pypi", skip: 3 },
-  // `uv pip install <pkg>`
-  "uv|add": { eco: "pypi", skip: 2 },
-  "pnpm|add": { eco: "npm", skip: 2 },
-  "yarn|add": { eco: "npm", skip: 2 },
-  "bun|add": { eco: "npm", skip: 2 },
-  "cargo|add": { eco: "cargo", skip: 2 },
-  "gem|install": { eco: "rubygems", skip: 2 },
-  "brew|install": { eco: "homebrew", skip: 2 }
-};
-var MANAGER_SPECS_SINGLE = {
-  uvx: { eco: "pypi", skip: 1 }
-  // `npm install|i|add` is handled explicitly below (the Python `("npm", None)` entry).
-};
-function parseDependencyInstalls(command) {
-  if (!command || !SHELL_INSTALL_PATTERNS.some((re) => re.test(command))) return [];
-  const tokens = tokenizeShell(command);
-  const out = [];
-  const seen = /* @__PURE__ */ new Set();
-  let i = 0;
-  while (i < tokens.length) {
-    const tok = (tokens[i] ?? "").toLowerCase();
-    const nxt = i + 1 < tokens.length ? (tokens[i + 1] ?? "").toLowerCase() : null;
-    let ecosystem = "";
-    let start = -1;
-    if (MANAGER_SPECS_PAIR[`${tok}|pip`] && nxt === "pip") {
-      const spec = MANAGER_SPECS_PAIR[`${tok}|pip`];
-      ecosystem = spec.eco;
-      start = i + spec.skip;
-    } else if (nxt !== null && MANAGER_SPECS_PAIR[`${tok}|${nxt}`]) {
-      const spec = MANAGER_SPECS_PAIR[`${tok}|${nxt}`];
-      ecosystem = spec.eco;
-      start = i + spec.skip;
-    } else if (MANAGER_SPECS_SINGLE[tok]) {
-      const spec = MANAGER_SPECS_SINGLE[tok];
-      ecosystem = spec.eco;
-      start = i + spec.skip;
-    } else if (tok === "npm" && (nxt === "install" || nxt === "i" || nxt === "add")) {
-      ecosystem = "npm";
-      start = i + 2;
-    }
-    if (start < 0 || !ecosystem) {
-      i += 1;
-      continue;
-    }
-    let j = start;
-    while (j < tokens.length) {
-      const raw = tokens[j] ?? "";
-      if (raw === ";" || raw === "&&" || raw === "||" || raw === "|") break;
-      if (raw.startsWith("-") || raw === "install" || raw === "add" || raw === "i") {
-        j += 1;
-        continue;
-      }
-      const parsed = parsePackageToken(raw, ecosystem);
-      if (parsed && parsed.name) {
-        const key = `${ecosystem}:${parsed.name.toLowerCase()}:${parsed.version}`;
-        if (!seen.has(key)) {
-          seen.add(key);
-          out.push({ ecosystem, name: parsed.name, version: parsed.version });
-        }
-      }
-      j += 1;
-    }
-    i = j;
-  }
-  return out;
 }
 function collectText(value, out = [], depth = 0) {
   if (value == null || depth > 6) return out;
@@ -2097,11 +2490,11 @@ function fileAccesses(toolName, args) {
 }
 function candidates(file) {
   const found = [file];
-  const expanded = expandUser(String(file ?? ""));
-  if (!path.isAbsolute(expanded)) return found;
+  const expanded2 = expandUser(String(file ?? ""));
+  if (!path.isAbsolute(expanded2)) return found;
   try {
-    if (GLOB_CHARS.test(expanded) && typeof fs.globSync === "function") {
-      found.push(...fs.globSync(expanded).slice(0, MAX_GLOB_FILES).map(String));
+    if (GLOB_CHARS.test(expanded2) && typeof fs.globSync === "function") {
+      found.push(...fs.globSync(expanded2).slice(0, MAX_GLOB_FILES).map(String));
     }
     for (const each of [...found]) {
       const real = expandUser(each);
@@ -2112,21 +2505,21 @@ function candidates(file) {
   return found;
 }
 function nameGlobHits(file, pattern) {
-  const expanded = path.normalize(expandUser(String(file ?? "")));
-  const name = path.basename(expanded);
-  if (path.isAbsolute(expanded)) {
+  const expanded2 = path.normalize(expandUser(String(file ?? "")));
+  const name = path.basename(expanded2);
+  if (path.isAbsolute(expanded2)) {
     try {
-      if (fs.statSync(path.dirname(expanded), { throwIfNoEntry: false })?.isDirectory()) return false;
+      if (fs.statSync(path.dirname(expanded2), { throwIfNoEntry: false })?.isDirectory()) return false;
     } catch {
     }
   }
   return GLOB_CHARS.test(name) && !GLOB_CHARS.test(pattern) && fnmatch(path.basename(pattern.replace(/\/+$/, "")), name);
 }
 function folderHolds(folder, pattern) {
-  const expanded = expandUser(String(pattern ?? ""));
-  if (!path.isAbsolute(expanded)) return false;
-  const stem = expanded.split(/[*?[]/, 1)[0];
-  const place = path.normalize(stem.endsWith(path.sep) || stem === expanded ? stem : path.dirname(stem));
+  const expanded2 = expandUser(String(pattern ?? ""));
+  if (!path.isAbsolute(expanded2)) return false;
+  const stem = expanded2.split(/[*?[]/, 1)[0];
+  const place = path.normalize(stem.endsWith(path.sep) || stem === expanded2 ? stem : path.dirname(stem));
   const normFolder = path.normalize(expandUser(String(folder ?? "")));
   if (!path.isAbsolute(normFolder)) return false;
   const trimmedPlace = place.length > 1 ? place.replace(/[/\\]+$/, "") : place;
@@ -2959,8 +3352,8 @@ function expandHome(path2) {
 function currentWorkspace() {
   const configPath = process.env.OPENCLAW_CONFIG_PATH?.trim();
   if (configPath) {
-    const expanded = expandHome(configPath);
-    const absolute = isAbsolute(expanded) ? expanded : resolve(expanded);
+    const expanded2 = expandHome(configPath);
+    const absolute = isAbsolute(expanded2) ? expanded2 : resolve(expanded2);
     return basename(absolute) === "openclaw.json" ? dirname(absolute) : absolute;
   }
   const stateDir = process.env.OPENCLAW_STATE_DIR?.trim();

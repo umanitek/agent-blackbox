@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 READ_ROUTES = re.compile(
     r"api/(?:agents|attach-targets|audit|community-statements|community-stats|findings|graph|graph-status|health"
     r"|local-activity|playground(?:/(?:graph|local|threat|wallets))?|reports|settings|shields(?:/[a-z0-9_-]{1,40}/events)?"
-    r"|threat|threat-proof|trust|verified-sync|docs)"
+    r"|threat|threat-proof|trust|verified-sync|docs|approvals/[0-9a-f]{24})"
     r"|shields/[a-z0-9_-]{1,40}/(?:content|attacks|graph)\.json")
 #: Dashboard routes the Hermes Desktop page may change through (POST).
 WRITE_ROUTES = re.compile(r"api/(?:settings|agents/protection|agents/rescan|sync|playground/run|playground/wallets/run|blackbox-chat)")

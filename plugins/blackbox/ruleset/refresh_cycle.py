@@ -86,10 +86,11 @@ def _current_or_empty(config: BlackboxConfig) -> compiler.Ruleset:
     else an empty ruleset — stored as the current one (what :func:`get` and :func:`peek` serve)."""
     cached = _latest_cached_ruleset(config.context_graph_id)
     if cached is None:
+        stamp = _cache_file_stamp()   # BEFORE the read: a file replaced meanwhile is reloaded next time
         disk = disk_cache._read_cache()
         cached = (disk if _matches_context_graph(disk, config.context_graph_id)
                   else compiler.Ruleset(context_graph_id=config.context_graph_id))
-        _memory.store(cached)
+        _memory.store(cached, stamp=stamp)
     return cached
 
 
@@ -215,12 +216,25 @@ def _refresh_unlocked(
         if existing is not None:
             return _reuse_generation(existing, context_graph_id, client, config, listing)
 
-    rs = compiler.build_from_rows([(row, "public") for row in public_rows or []])
-    rs.context_graph_id = context_graph_id
-    _apply_overlays(rs, client, config, listing=listing)
+    view = curator_tier.read_view(client, config)   # read once: the correction pin and the curator tier use it
+    rs = _compile(public_rows or [], client, config, view)
+    _apply_overlays(rs, client, config, listing=listing, view=view)
     _schedule_next_refresh(rs, config, empty_success)
     disk_cache._write_cache(rs)
     _memory.store(rs)
+    return rs
+
+
+def _compile(public_rows: list[dict[str, Any]], client: DkgClient, config: BlackboxConfig, view: Any) -> compiler.Ruleset:
+    """The verified build of *public_rows*, its corrections judged by the pin in force
+    (trust-and-threat-lab R3): the trusted manifest's legacy pin from *view* (the last
+    generation's when the view could not tell), the assets from the last scope."""
+    prior = _latest_cached_ruleset(config.context_graph_id)
+    tagged = [(row, "public") for row in public_rows]
+    pin = live.correction_pin(client, config.context_graph_id, tagged, legacy_assets_hash=curator_tier.legacy_pin(view, prior),
+                              previous=prior.verified_scope if prior is not None else None)
+    rs = compiler.build_from_rows(tagged, pin=pin)
+    rs.context_graph_id = config.context_graph_id
     return rs
 
 
@@ -258,7 +272,8 @@ def _previous_scope(config: BlackboxConfig) -> Optional[live.VerifiedScope]:
 
 
 def _apply_overlays(rs: compiler.Ruleset, client: Optional[DkgClient], config: BlackboxConfig, *,
-                    reused: bool = False, listing: Optional[fetching.PartitionListing] = None) -> None:
+                    reused: bool = False, listing: Optional[fetching.PartitionListing] = None,
+                    view: Any = None) -> None:
     """The tiers layered on top of the verified build, on EVERY refresh path.
 
     First the curator tier (Refine R2): verified rules the curator revoked are
@@ -268,12 +283,14 @@ def _apply_overlays(rs: compiler.Ruleset, client: Optional[DkgClient], config: B
     rules already occupy their keys (public-beats-community precedence is
     then structural). *reused* = *rs* is a last-good generation being kept
     (its community tier is re-applied in place); otherwise the previous cached
-    generation supplies first-seen history and last-good. Entirely fail-open:
+    generation supplies first-seen history and last-good. *view* — the curator
+    view the compile already read (None: read here). Entirely fail-open:
     a community problem never degrades the verified ruleset.
     """
     if client is None:
         return
-    curator_tier.apply_curator_tier(rs, client, config, rs if reused else _latest_cached_ruleset(config.context_graph_id))
+    curator_tier.apply_curator_tier(rs, client, config, rs if reused else _latest_cached_ruleset(config.context_graph_id),
+                                    view=view)
     # DKG-lookup B2: the live verified scope is rebuilt on every path, so a last-good
     # generation kept through an empty read still learns the assets confirmed since.
     rs.verified_scope = live.scope_for_generation(

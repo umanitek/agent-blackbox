@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 from . import shell_shapes
+from .secrets_handled.placeholders import is_placeholder
 from ..kernel import crypto_secrets, redaction, threat_ids
 
 # ---------------------------------------------------------------------------
@@ -70,7 +71,7 @@ def scan_injection_heuristics(text: str) -> list[dict[str, str]]:
     """
     if not text:
         return []
-    scan = text[:_MAX_INJECTION_SCAN]
+    scan = head_and_tail(text, _MAX_INJECTION_SCAN)
     out: list[dict[str, str]] = []
     seen: set = set()
     for severity, owasp, pattern in _INJECTION_HEURISTICS:
@@ -100,6 +101,15 @@ SECRET_SCAN_WINDOW = 50_000
 _SEVERITY_RANK = {"": -1, "low": 0, "medium": 1, "high": 2, "critical": 3}
 
 
+def head_and_tail(text: str, window: int = SECRET_SCAN_WINDOW) -> str:
+    """*text* as a bounded scan reads it: whole up to twice *window*, else its first and its last
+    *window* characters joined by a newline — padding before or after a phrase, an address or a
+    secret never moves it out of the scan (the rule :func:`secret_scan_windows` keeps)."""
+    if len(text) <= 2 * window:
+        return text
+    return text[:window] + "\n" + text[-window:]
+
+
 def secret_scan_windows(text: str) -> tuple[str, ...]:
     """The parts of *text* a secret scan reads: all of it, or its head and its tail."""
     if len(text) <= 2 * SECRET_SCAN_WINDOW:
@@ -117,26 +127,28 @@ def scan_secret_values(text: str, *more: str) -> list[dict[str, str]]:
     value (see ``kernel.redaction.redact_secret_values``).
     """
     worst: dict[str, str] = {}
-    for window in (window for part in (text, *more) if part for window in secret_scan_windows(part)):
-        for hit in _scan_window(window):
-            if _SEVERITY_RANK[hit["severity"]] > _SEVERITY_RANK[worst.get(hit["type"], "")]:
-                worst[hit["type"]] = hit["severity"]
+    for part in (part for part in (text, *more) if part):
+        windows = secret_scan_windows(part)
+        for index, window in enumerate(windows):
+            # The head of a long call is cut at its end: a key there may run on past it.
+            for hit in _scan_window(window, cut=index == 0 and len(windows) > 1):
+                if _SEVERITY_RANK[hit["severity"]] > _SEVERITY_RANK[worst.get(hit["type"], "")]:
+                    worst[hit["type"]] = hit["severity"]
     return [{"type": secret_type, "severity": severity} for secret_type, severity in worst.items()]
 
 
-def _scan_window(scan: str) -> list[dict[str, str]]:
-    """The secret values in one window of text."""
+def _scan_window(scan: str, *, cut: bool = False) -> list[dict[str, str]]:
+    """The secret values in one window of text (*cut*: the window stops short of the text's end)."""
     out: list[dict[str, str]] = []
     seen: set = set()
     for typ, severity, pattern in redaction.SECRET_VALUE_RULES:
         if typ in seen:
             continue
-        try:
-            if pattern.search(scan):
-                seen.add(typ)
-                out.append({"type": typ, "severity": severity})
-        except re.error:  # pragma: no cover - static patterns
-            continue
+        # A value shaped like a key but carrying no randomness (``sk-xxxx…``, a mock PEM
+        # block in a test) is a placeholder, not a secret (BB-005); any real one still counts.
+        if any(not is_placeholder(typ, scan, match.start(), match.end(), cut=cut) for match in pattern.finditer(scan)):
+            seen.add(typ)
+            out.append({"type": typ, "severity": severity})
     seed = _seed_phrase_severity(scan)
     if seed:
         out.append({"type": "seed-phrase", "severity": seed})
@@ -248,7 +260,10 @@ _MD5_RE = re.compile(r"\b[a-fA-F0-9]{32}\b")
 _BTC_RE = re.compile(r"\b(?:bc1[023-9ac-hj-np-z]{11,71}|[13][a-km-zA-HJ-NP-Z1-9]{25,39})\b")
 _SOL_RE = re.compile(r"\b[1-9A-HJ-NP-Za-km-z]{32,44}\b")
 _MAX_IOC_TEXT = 50_000
-_MAX_IOC_CANDIDATES = 4000
+#: Each kind of indicator has its own share of the candidates looked up, so a flood of one kind
+#: (thousands of decoy domains) never pushes another (a wallet, an IP, a hash) out of the lookup.
+_IOC_BUDGETS = {"url": 800, "domain": 1200, "ip": 500, "hash": 500, "wallet": 1000}
+_MAX_IOC_CANDIDATES = sum(_IOC_BUDGETS.values())
 
 
 def _host_suffixes(host: str) -> list[str]:
@@ -272,7 +287,8 @@ def _host_suffixes(host: str) -> list[str]:
 
 
 def iter_ioc_candidates(text: str) -> list[str]:
-    """Candidate ``ioc:`` identifiers to look up for *text* (deduped, capped).
+    """Candidate ``ioc:`` identifiers to look up for *text* (deduped, capped per kind: :data:`_IOC_BUDGETS`;
+    a long text read by its head and tail, :func:`head_and_tail`).
 
     Extracts URLs (+ their hosts), bare domains, IPv4s, sha256/md5 hashes, and
     EVM/BTC/Solana crypto addresses. An EVM/base58 address is emitted as BOTH a
@@ -281,17 +297,19 @@ def iter_ioc_candidates(text: str) -> list[str]:
     """
     if not text:
         return []
-    if len(text) > _MAX_IOC_TEXT:
-        text = text[:_MAX_IOC_TEXT]
+    text = head_and_tail(text, _MAX_IOC_TEXT)
     out: list[str] = []
     seen: set = set()
+    used = dict.fromkeys(_IOC_BUDGETS, 0)
 
     def add(ioc_type: str, value: str) -> None:
-        if len(out) >= _MAX_IOC_CANDIDATES:
+        kind = "wallet" if ioc_type == "contract" else ioc_type
+        if used[kind] >= _IOC_BUDGETS[kind]:
             return
         ident = threat_ids.ioc_identifier(ioc_type, value)
         if ident not in seen:
             seen.add(ident)
+            used[kind] += 1
             out.append(ident)
 
     for url in _URL_RE.findall(text):

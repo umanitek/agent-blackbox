@@ -16,7 +16,11 @@ every permission is in the catalogue and controllable, every mode one it allows,
 local-ports (1–65535, at most 32), every agent a known one, every project and folder in its ONE
 canonical spelling (LES-105: refused otherwise, never rewritten) and not too broad, no folder rule
 on Blackbox's own places, one rule per (permission, agent, project). :func:`current` reads the
-setting for enforcement; until the person sets Homebrew here, its mode is read from the older
+setting for enforcement ROW BY ROW: a row that does not read cleanly is dropped alone and named in
+:func:`problems` (the card shows them), every other rule and folder rule stays in force, and of two
+rules for one permission, agent and project the more protective wins (independent review
+2026-11-26, finding 4: one bad row used to drop every rule, ``docker: block`` and folder rules with
+it). Until the person sets Homebrew here, its mode is read from the older
 ``agent_packages.installs`` (off → block), so nothing changes on upgrade.
 
 Usage::
@@ -29,6 +33,7 @@ Usage::
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 from typing import Any, Mapping, Optional
 
 from .....kernel import agent_hosts, constants
@@ -166,9 +171,58 @@ def stored() -> Optional[Settings]:
     return None if errors else with_legacy(settings)
 
 
+def _salvaged(raw: Any, errors: list[str]) -> Settings:
+    """Every row of *raw* that reads cleanly (the first :data:`MAX_RULES` / :data:`MAX_FOLDERS`),
+    duplicates folded to the most protective; every problem appended to *errors*."""
+    if not isinstance(raw, Mapping):
+        errors.append(f"{SECTION} holds {RULES} and {FOLDERS}")
+        return Settings()
+    if set(raw) - {RULES, FOLDERS}:
+        errors.append(f"{SECTION} holds {RULES} and {FOLDERS} (the rest is ignored)")
+    trimmed: dict[str, Any] = {}
+    for key, limit in ((RULES, MAX_RULES), (FOLDERS, MAX_FOLDERS)):
+        rows = raw.get(key) or []
+        if not isinstance(rows, list):
+            errors.append(f"{SECTION}.{key} is a list")
+            rows = []
+        elif len(rows) > limit:
+            errors.append(f"{SECTION}.{key}: at most {limit}; the rest is ignored")
+        trimmed[key] = rows[:limit]
+    settings = parse(trimmed, errors)
+    return Settings(_most_protective(settings.rules), tuple(dict.fromkeys(settings.folders)))
+
+
+def _most_protective(rules: tuple[Rule, ...]) -> tuple[Rule, ...]:
+    """One rule per (permission, scope): the lower mode rank wins; two equal ones keep only the
+    ports both name (a port is an exception to a block)."""
+    kept: dict[tuple[str, Scope], Rule] = {}
+    for rule in rules:
+        key = (rule.permission, rule.scope)
+        other = kept.get(key)
+        if other is None or rule.mode.rank < other.mode.rank:
+            kept[key] = rule
+        elif rule.mode == other.mode:
+            kept[key] = replace(other, ports=tuple(port for port in other.ports if port in rule.ports))
+    return tuple(kept.values())
+
+
+def _read() -> tuple[Settings, tuple[str, ...]]:
+    raw = shield_entry().get(SECTION)
+    if raw is None:
+        return with_legacy(Settings()), ()
+    errors: list[str] = []
+    settings = _salvaged(raw, errors)
+    return with_legacy(settings), tuple(errors)
+
+
 def current() -> Settings:
-    """The setting in force: what is stored, or the catalogue defaults when it can not be read."""
-    return stored() or with_legacy(Settings())
+    """The setting in force: every stored row that reads cleanly (see the module doc)."""
+    return _read()[0]
+
+
+def problems() -> tuple[str, ...]:
+    """What in the stored setting could not be read (each row dropped, the rest in force); () when clean."""
+    return _read()[1]
 
 
 def with_legacy(settings: Settings) -> Settings:
@@ -183,4 +237,4 @@ def with_legacy(settings: Settings) -> Settings:
 
 
 __all__ = ["FOLDERS", "MAX_FOLDERS", "MAX_PORTS", "MAX_RULES", "RULES", "SECTION", "as_section", "current", "known_agent", "parse",
-           "stored", "validate_section", "with_legacy"]
+           "problems", "stored", "validate_section", "with_legacy"]

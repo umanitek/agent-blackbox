@@ -31,8 +31,8 @@ from ..kernel.browser_boundary import LOOPBACK_HOSTS, BrowserBoundary
 from ..kernel.host_command import hermes_argv
 from .. import attach, shields
 from ..sync import read_durable_progress
-from . import (agent_coverage_routes, agent_hooks_routes, approval_routes, community_routes, direct_reads, docs_routes, graph_pages, guard_routes, lifecycle, model_connect_routes,
-               notify_routes, playground_routes, protection_routes, shields_routes, sync_meter, sync_timing)
+from . import (agent_coverage_routes, agent_hooks_routes, approval_routes, community_routes, direct_reads, docs_routes, frame_guard, graph_pages, guard_routes, lifecycle, model_connect_routes,
+               notify_routes, playground_routes, protection_routes, security_routes, shields_routes, sync_meter, sync_timing)
 from .assistant import runner as assistant_runner
 from .graph_pages import _balanced_graph_entries, _graph_entries
 from .network_sync import network_sync_argv as _network_sync_argv
@@ -44,9 +44,7 @@ from .safe_payloads import graph_tier_item, safe_text
 
 logger = logging.getLogger(__name__)
 
-_RESCAN_INTERVAL_SEC = 5.0
 _SLOW_NODE_READ_SEC = 10.0   # a cached node read slower than this is logged (KI-335)
-_RECONCILE_INTERVAL_SEC = 60.0
 _RULESET_EMPTY_RETRY_SEC = 10.0
 _RULESET_MIN_RETRY_SEC = 5.0
 # A complete VM refresh pages through every curated rule. On a large graph it
@@ -74,7 +72,7 @@ _FONT_FILES = frozenset({
     "ibm-plex-mono-600-latin.woff2", "ibm-plex-mono-600-latin-ext.woff2",
 })
 #: The sub-packages that add their own routes and pages, each through ``register(app, swr)``.
-_ROUTE_PACKAGES = (shields_routes, docs_routes, playground_routes, model_connect_routes, agent_coverage_routes, guard_routes, agent_hooks_routes, approval_routes, notify_routes, protection_routes)
+_ROUTE_PACKAGES = (shields_routes, docs_routes, playground_routes, model_connect_routes, agent_coverage_routes, guard_routes, agent_hooks_routes, approval_routes, notify_routes, protection_routes, security_routes)
 def _dkg_durable_progress(dkg_home: str, context_graph_id: str) -> dict[str, Any]:
     """Read the latest resumable VM offset reported by the managed DKG."""
     return read_durable_progress(dkg_home, context_graph_id)
@@ -688,6 +686,7 @@ def create_app(*, manage_blackbox: bool = False):
     # through DNS rebinding thanks to the Host gate).
     _session_token = secrets.token_urlsafe(32)
     BrowserBoundary(LOOPBACK_HOSTS, lambda _request: _session_token).install(app)   # loopback Hosts only
+    frame_guard.install(app)   # outermost: no other page frames the dashboard, refusals included (clickjacking)
 
     @app.get("/api/session")
     async def session():   # async: every hook asks this first; it must never wait for a pool thread (KI-552)
@@ -695,12 +694,8 @@ def create_app(*, manage_blackbox: bool = False):
         origins (the middleware rejects rebound/foreign hosts first)."""
         return {"token": _session_token}
 
-    _rescan_state: dict[str, Any] = {
-        "stop": False,
-        "known": set(),
-        "last_reconcile": 0.0,
-        "lock": threading.Lock(),
-    }
+    _rescan_state: dict[str, Any] = {"stop": False}   # the background loops' "shutting down" flag
+    _agent_rescan = agent_coverage_routes.AgentRescan(stopped=lambda: _rescan_state["stop"])
     _blackbox_stop = threading.Event()
     _blackbox_state: dict[str, Any] = {
         "process": None,
@@ -820,47 +815,6 @@ def create_app(*, manage_blackbox: bool = False):
             if not _blackbox_stop.is_set():
                 _blackbox_stop.wait(_BLACKBOX_RESTART_DELAY_SEC)
 
-    def _rescan_once(*, force: bool = False) -> list[dict[str, Any]]:
-        """Discover local Hermes/OpenClaw workspaces and keep Blackbox hooked into the chosen ones.
-
-        Which targets it may attach is ``attach.automatic_targets`` (one policy): with
-        ``auto_attach`` off (the default) nothing new is ever attached and a reconcile
-        (``force`` = the manual refresh, or every 60 s) only re-hooks targets already
-        attached; with it on, new targets too. Never one the operator switched off.
-        Returns the attach-result row for each target it touched. Serialized so the
-        loop and a manual refresh never write one config at once. Fail-open per target."""
-        with _rescan_state["lock"]:
-            current: set[tuple[str, str]] = set()
-            for h in attach.discover_hermes_homes():
-                current.add(("hermes", str(h)))
-            for w in attach.discover_openclaw_workspaces():
-                current.add(("openclaw", str(w)))
-            known: set[tuple[str, str]] = _rescan_state["known"]
-            removed = known - current
-            now = time.monotonic()
-            reconcile = force or now - float(_rescan_state["last_reconcile"] or 0.0) >= _RECONCILE_INTERVAL_SEC
-            targets = attach.automatic_targets(current, known, reconcile=reconcile, auto_attach=load_blackbox_config().auto_attach)
-            if reconcile:
-                _rescan_state["last_reconcile"] = now
-            touched = attach.protect_automatically(targets)   # notes each newly protected agent
-            for kind, target in removed:
-                logger.info("blackbox rescan: %s workspace vanished at %s", kind, target)
-            _rescan_state["known"] = current
-            return touched
-
-    def _rescan_loop() -> None:
-        """Every ``_RESCAN_INTERVAL_SEC`` seconds, attach any newly appeared
-        Hermes/OpenClaw workspace and log ones that vanished."""
-        while not _rescan_state["stop"]:
-            try:
-                _rescan_once()
-            except Exception as exc:  # pragma: no cover - fail open
-                logger.debug("blackbox rescan: iteration failed: %s", exc)
-            for _ in range(int(_RESCAN_INTERVAL_SEC * 10)):
-                if _rescan_state["stop"]:
-                    return
-                time.sleep(0.1)
-
     def _ruleset_sync_loop() -> None:
         """Keep verified VM threat rows network-synced while the dashboard runs.
 
@@ -912,12 +866,8 @@ def create_app(*, manage_blackbox: bool = False):
 
     @lifecycle.on_startup(app)
     def _start_rescanner() -> None:
-        # Do NOT pre-seed ``known``: attach is idempotent, so the first
-        # iteration walks every workspace and self-heals anything the
-        # CLI-level attach missed.
-        t = threading.Thread(target=_rescan_loop, name="blackbox-rescan", daemon=True)
-        t.start()
-        logger.info("blackbox rescan: background thread started (interval %.1fs)", _RESCAN_INTERVAL_SEC)
+        threading.Thread(target=_agent_rescan.loop, name="blackbox-rescan", daemon=True).start()
+        logger.info("blackbox rescan: background thread started")
         threading.Thread(target=_ruleset_sync_loop, name="blackbox-ruleset-sync", daemon=True).start()
         logger.info("blackbox automatic graph sync: background thread started")
         if manage_blackbox:
@@ -1412,8 +1362,9 @@ def create_app(*, manage_blackbox: bool = False):
                 returned.add(kind)
 
         try:
-            _add_rows("hermes", attach.attach_all(openclaw=False, dry_run=True).get("hermes", []))
-            _add_rows("openclaw", attach.attach_all(hermes=False, dry_run=True).get("openclaw", []))
+            # include_declined: an agent the operator switched off stays listed (unticked) so it can be switched back on.
+            _add_rows("hermes", attach.attach_all(openclaw=False, dry_run=True, include_declined=True).get("hermes", []))
+            _add_rows("openclaw", attach.attach_all(hermes=False, dry_run=True, include_declined=True).get("openclaw", []))
         except Exception as exc:  # pragma: no cover - fail open
             logger.debug("blackbox dashboard: attach target discovery failed: %s", exc)
         for kind, reason in supported.items():
@@ -1429,9 +1380,9 @@ def create_app(*, manage_blackbox: bool = False):
 
     @app.post("/api/agents/protection")
     def save_agent_protection(payload: dict[str, Any] = Body(...)) -> Any:
-        """Apply desired protection for selected targets — under the rescan's lock, so a sweep already under way never re-attaches a target switched off meanwhile."""
+        """Apply desired protection for selected targets — under the one attach lock, so a sweep already under way never re-attaches a target switched off meanwhile."""
         rows: list[dict[str, Any]] = []
-        with _rescan_state["lock"]:
+        with attach.ATTACH_LOCK:
             for item in payload.get("targets") or []:
                 if not isinstance(item, dict):
                     continue
@@ -1439,7 +1390,11 @@ def create_app(*, manage_blackbox: bool = False):
                 target = str(item.get("target") or "").strip()
                 if not target:
                     continue
-                row = attach.set_protection(kind, target, bool(item.get("enabled")))
+                found = attach.discovered_target(kind, target)   # only an agent this machine has, by its discovered folder
+                if found is None:
+                    rows.append({"kind": kind, "target": target, "ok": False, "error": "not an agent Blackbox found on this machine"})
+                    continue
+                row = attach.set_protection(kind, str(found), bool(item.get("enabled")))
                 if row is not None:
                     rows.append(row)
         ok = all(row.get("ok") for row in rows) if rows else False
@@ -1455,7 +1410,7 @@ def create_app(*, manage_blackbox: bool = False):
         re-polls ``/api/agents`` afterwards to render any new cards. Fail-open:
         never 500s the dashboard."""
         try:
-            touched = _rescan_once(force=True)
+            touched = _agent_rescan.once(force=True)
         except Exception as exc:  # pragma: no cover - fail open
             logger.debug("blackbox dashboard: manual rescan failed: %s", exc)
             return JSONResponse({"ok": False, "error": str(exc), "attached": 0, "newly_attached": 0})

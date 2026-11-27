@@ -20,7 +20,11 @@ from plugins.blackbox.kernel import settings as kernel_settings
 from plugins.blackbox.shields.files.sandbox import packages, permissions
 from plugins.blackbox.shields.files.sandbox.packages import jobs
 from plugins.blackbox.shields.files.sandbox.permissions import grants, requests
-from plugins.blackbox.shields.shield_api import InstanceRef, ShieldApiError, ShieldContext
+from plugins.blackbox.shields.files.sandbox.platform import peer_process
+from plugins.blackbox.shields.shield_api import InstanceRef, Peer, ShieldApiError, ShieldContext
+
+#: The connection a request came in on; the process holding it is the asker (review 2026-11-26, finding 6).
+PEER = Peer("127.0.0.1", 52344, 9700)
 
 
 @pytest.fixture(autouse=True)
@@ -35,6 +39,7 @@ def setting(monkeypatch, tmp_path):
     monkeypatch.setattr(kernel_settings, "_persist", lambda updates: state.update(updates) or True)
     monkeypatch.setattr(jobs, "brew_path", lambda: "/opt/homebrew/bin/brew")
     monkeypatch.setattr(jobs, "start", lambda request, brew, **_: type("Job", (), {"id": "job-1"})())
+    monkeypatch.setattr(peer_process, "peer_pid", lambda peer: 4242 if peer == PEER else 0)
     requests.reset()
     grants.reset()
     yield state
@@ -44,7 +49,7 @@ def setting(monkeypatch, tmp_path):
 def _context(agent="claude-code"):
     return ShieldContext(network_indicators=lambda: None, ask_assistant=lambda message: None,
                          tool_call_verdict=lambda tool, args: {"decision": "", "findings": []},
-                         owner_of_pid=lambda pid: InstanceRef(agent, f"{agent}:s1", "", "shop"))
+                         owner_of_pid=lambda pid: InstanceRef(agent, f"{agent}:s1", "", "shop") if pid == 4242 else None, peer=PEER)
 
 
 def _brew(tmp_path, folder="shop", argv=("install", "tree"), agent="claude-code"):

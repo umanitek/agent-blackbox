@@ -120,18 +120,40 @@ async function saveSettings(payload, done) {
   return ok
 }
 
+// A change Blackbox held for the person's approval (Audit lowers protection): read where it is every
+// 2 s until the person answers or it expires (approvals' 300 s), then the caller sends it again once.
+const APPROVAL_POLL_MS = 2000
+const APPROVAL_LIMIT_MS = 300000
+
+async function approvedLater(approvalId) {
+  const deadline = Date.now() + APPROVAL_LIMIT_MS
+  while (Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, APPROVAL_POLL_MS))
+    const state = asObject(await dash(`api/approvals/${approvalId}`)).state
+    if (state === 'approved') return true
+    if (state === 'gone') return false // refused, expired or used elsewhere
+  }
+  return false
+}
+
+const modeDone = mode => (mode === 'block' ? 'Blocking is on: Blackbox now stops threats' : 'Audit mode: Blackbox records threats but does not stop them')
+
 // The Audit / Block switch. Saved by Blackbox's own checked settings path (POST /mode), never by an agent.
+// Audit waits for the person's approval (owner decision 7): once they approve, the same change is sent
+// again here and applied, so one press finishes the switch.
 async function setMode(mode) {
   if (!rest) return false
   try {
-    const result = await rest('/mode', { method: 'POST', body: { mode } })
+    let result = await rest('/mode', { method: 'POST', body: { mode } })
+    const held = asObject(result && result.approval).id
+    if (held && !(result && result.ok)) {
+      host.notify({ kind: 'info', message: 'Waiting for your approval: confirm it in your companion app or with your password. The switch finishes by itself.' })
+      result = (await approvedLater(held)) ? await rest('/mode', { method: 'POST', body: { mode } }) : { ok: false, errors: ['not approved: protection stays on'] }
+    }
     queryClient.invalidateQueries({ queryKey: STATUS_KEY })
     refreshDash()
     if (result && result.ok) {
-      host.notify({
-        kind: 'success',
-        message: mode === 'block' ? 'Blocking is on: Blackbox now stops threats' : 'Audit mode: Blackbox records threats but does not stop them'
-      })
+      host.notify({ kind: 'success', message: modeDone(mode) })
       return true
     }
     host.notify({ kind: 'error', message: `Could not change the mode: ${asList(result && result.errors).join('; ') || (result && result.error) || 'unknown error'}` })

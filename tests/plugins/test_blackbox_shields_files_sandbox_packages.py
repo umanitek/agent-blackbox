@@ -231,11 +231,16 @@ def test_the_install_notice_and_audit_row_name_the_agent_that_asked(monkeypatch,
     monkeypatch.setattr(jobs, "brew_path", lambda: "/opt/homebrew/bin/brew")
     real_record = packages._record
     monkeypatch.setattr(packages, "_record", lambda job: (real_record(job), finished.set()))
+    from plugins.blackbox.shields.files.sandbox.platform import peer_process
+    from plugins.blackbox.shields.shield_api import Peer
+    peer = Peer("127.0.0.1", 52344, 9700)   # the asker is the process holding the connection (review 2026-11-26, finding 6)
+    monkeypatch.setattr(peer_process, "peer_pid", lambda seen: 4242 if seen == peer else 0)
     asked = []
     context = ShieldContext(network_indicators=lambda: None, ask_assistant=lambda message: None,
                             tool_call_verdict=lambda tool, args: {"decision": "", "findings": []},
-                            owner_of_pid=lambda pid: asked.append(pid) or InstanceRef("claude-code", "claude-code:ab12", "", "s4-br1"))
-    packages.API_WRITES["brew"](context, {"argv": ["install", "hello"], "pid": 4242})
+                            owner_of_pid=lambda pid: asked.append(pid) or InstanceRef("claude-code", "claude-code:ab12", "", "s4-br1"),
+                            peer=peer)
+    packages.API_WRITES["brew"](context, {"argv": ["install", "hello"], "pid": 1111})
     assert finished.wait(30) and asked == [4242]
     assert any(row["text"] == "Blackbox installed hello with Homebrew for Claude Code in s4-br1." and row["agent"] == "claude-code"
                for row in packages.alerts())

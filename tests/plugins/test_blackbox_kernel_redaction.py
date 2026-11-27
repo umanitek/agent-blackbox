@@ -60,7 +60,14 @@ def test_audit_redacts_before_truncating():
 
 
 def test_detection_still_flags_a_private_key_header():
-    hits = content_scanners.scan_secret_values(f"echo {PEM[:40]}")
+    hits = content_scanners.scan_secret_values(f"echo {PEM}")
+    assert {"type": "private-key", "severity": "critical"} in hits
+
+
+def test_detection_flags_a_header_cut_off_at_the_scan_window():
+    """The head window of a long call ends mid-block: the body may lie past the cut (LES-011)."""
+    head = "x" * (content_scanners.SECRET_SCAN_WINDOW - 40) + PEM[:40]
+    hits = content_scanners.scan_secret_values(head + "y" * (2 * content_scanners.SECRET_SCAN_WINDOW))
     assert {"type": "private-key", "severity": "critical"} in hits
 
 

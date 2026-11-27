@@ -4,7 +4,8 @@
 //! `com.apple/*` anchor, so no system file is edited). It holds three tables and only the rules
 //! of the protections that are on:
 //!
-//! - **Threat Firewall** — `<bb_threats>`: drop traffic to and from the verified graph's addresses;
+//! - **Threat Firewall** — `<bb_threats>`: refuse traffic to (at once, `block return`) and drop
+//!   traffic from the verified graph's addresses;
 //! - **Cut malicious connections** — `<bb_cut>`: the addresses the plugin told the helper to cut,
 //!   dropped both ways, and their open states killed (`pfctl -k`), so a connection already open
 //!   ends instead of living on in pf's state table;
@@ -45,11 +46,13 @@ pub fn rules(filter: &Filter) -> String {
             "pass in quick on lo0 proto tcp to any port {REMOTE_PORTS}\nblock return in quick proto tcp to any port {REMOTE_PORTS}\n"
         ));
     }
+    // Outbound is refused with `return` (TCP RST / ICMP unreachable: this Mac's connect fails at
+    // once — a dropped SYN hangs it 5–75 s, LES-156); inbound from a listed address is dropped.
     if filter.threats.is_some() {
-        text.push_str(&format!("block drop out quick to <{THREATS}>\nblock drop in quick from <{THREATS}>\n"));
+        text.push_str(&format!("block return out quick to <{THREATS}>\nblock drop in quick from <{THREATS}>\n"));
     }
     if filter.cut.is_some() {
-        text.push_str(&format!("block drop out quick to <{CUT}>\nblock drop in quick from <{CUT}>\n"));
+        text.push_str(&format!("block return out quick to <{CUT}>\nblock drop in quick from <{CUT}>\n"));
     }
     if filter.ssh_allow.is_some() {
         text.push_str(&format!(
@@ -226,12 +229,25 @@ mod tests {
         let none = rules(&Filter { threats: Some(vec![]), ..Default::default() });
         assert!(none.contains("block drop in quick from <bb_threats>") && !none.contains("bb_cut>\n") && !none.contains("port 22"));
         let all = rules(&Filter { threats: None, cut: Some(vec![]), ssh_allow: Some(vec![]), ..Default::default() });
-        assert!(all.contains("block drop out quick to <bb_cut>") && !all.contains("to <bb_threats>"));
+        assert!(all.contains("block return out quick to <bb_cut>") && !all.contains("to <bb_threats>"));
         let lo = all.find("on lo0").unwrap();
         let allow = all.find("from <bb_ssh_allow>").unwrap();
         let refuse = all.find("block return in quick proto tcp to any port 22").unwrap();
         assert!(lo < allow && allow < refuse, "the passes come before the refusal");
         assert!(Filter::default().is_off());
+    }
+
+    /// LES-156 on macOS (review finding 2026-11-26): outbound to a listed address is refused with
+    /// `return` (pf answers a TCP RST / an ICMP unreachable, so the connect fails at once) — a
+    /// `drop` let it hang 5–75 s; inbound from it is still dropped silently.
+    #[test]
+    fn outbound_to_a_listed_address_is_refused_at_once_and_inbound_is_dropped() {
+        let text = rules(&Filter { threats: Some(vec![]), cut: Some(vec![]), ..Default::default() });
+        for table in ["bb_threats", "bb_cut"] {
+            assert!(text.contains(&format!("block return out quick to <{table}>\n")), "{text}");
+            assert!(text.contains(&format!("block drop in quick from <{table}>\n")), "{text}");
+        }
+        assert!(!text.contains("block drop out"), "{text}");
     }
 
     #[test]
@@ -251,8 +267,8 @@ mod tests {
         let filter = Filter { threats: Some(vec!["203.0.113.7".parse().unwrap(), "203.0.113.8".parse().unwrap()]),
                               cut: Some(vec![]), ssh_allow: Some(vec!["192.168.1.0/24".into()]), ..Default::default() };
         // What `pfctl -a … -s rules` prints for that filter (pf's own spelling of each rule).
-        let listed = "block drop out quick to <bb_threats>\nblock drop in quick from <bb_threats>\n\
-                      block drop out quick to <bb_cut>\nblock drop in quick from <bb_cut>\n\
+        let listed = "block return out quick to <bb_threats>\nblock drop in quick from <bb_threats>\n\
+                      block return out quick to <bb_cut>\nblock drop in quick from <bb_cut>\n\
                       pass in quick on lo0 proto tcp from any to any port = 22 flags S/SA keep state\n\
                       pass in quick proto tcp from <bb_ssh_allow> to any port = 22 flags S/SA keep state\n\
                       block return in quick proto tcp from any to any port = 22\n";

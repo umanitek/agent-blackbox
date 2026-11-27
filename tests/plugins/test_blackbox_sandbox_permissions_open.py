@@ -51,7 +51,9 @@ def setting(monkeypatch, tmp_path):
     (real / "Vault" / "s.pdf").write_text("s", encoding="utf-8")
     for app in ("Preview", "Terminal"):
         (real / "Applications" / f"{app}.app").mkdir(parents=True)
-    monkeypatch.setattr(opener, "APP_FOLDERS", ("{home}/Applications",))
+    monkeypatch.setattr(opener, "APP_FOLDERS", (str(real / "Applications"),))
+    # a temp folder is the person's, never root's: these contracts are about the rest of the check
+    monkeypatch.setattr(opener, "trusted", lambda bundle: True)
     # macOS's app finder (Preview.app, Terminal.app), whatever OS runs the test: the Linux runner's
     # facade otherwise reads .desktop entries and finds neither (PR #63's Linux CI)
     monkeypatch.setattr(sandbox_platform, "find_app", opener.find_app)

@@ -48,6 +48,7 @@ merely curls this dashboard cannot read it.
 """
 
 # No ``from __future__ import annotations`` here: FastAPI must see the handlers' annotations.
+import math
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -64,10 +65,14 @@ MAX_PROJECT_CHARS = 200
 
 
 def _number(text: Any, default: float = 0.0) -> float:
+    """*text* as a finite number, else *default*. WHY finite: ``float("nan")`` and ``"inf"`` parse,
+    and a NaN wait never ends (the long-poll's deadline is never reached) — a GET any page can
+    send pinned a thread at full CPU — while ``int(inf)`` raised a 500 (review 2026-11-26)."""
     try:
-        return float(text)
-    except (TypeError, ValueError):
+        number = float(text)
+    except (TypeError, ValueError, OverflowError):
         return default
+    return number if math.isfinite(number) else default
 
 
 def register(app: Any) -> None:

@@ -60,6 +60,8 @@
   button { padding: 10px 16px; border-radius: 10px; border: 1px solid var(--border); background: var(--elevated); color: var(--text); cursor: pointer; font-weight: 600; }
   button.primary { background: var(--signal); border-color: var(--signal); color: #fff; }
   .item { font-family: var(--mono); font-size: 13px; word-break: break-all; } .note { min-height: 1.4em; }
+  .permission-why { margin-top: 6px; font-size: 12.5px; line-height: 1.5; } .permission-why b { font-weight: 600; color: var(--text); }
+  .modes { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; align-self: flex-start; }
 </style>
 </head>
 <body>
@@ -83,7 +85,7 @@
   </section>
   <section class="card">
     <h2>Sandbox permissions</h2>
-    <p class="muted">What an agent inside the sandbox may do beyond your files. Block, ask you each time, or allow — for every agent here; a rule for one agent or one project folder wins over it. Turning one up asks you first.</p>
+    <p class="muted">What an agent inside the sandbox may do beyond your files. Block, ask you each time, or allow — for every agent here; a rule for one agent or one project folder wins over it. Turning one up asks you first. Set one per agent or per project on the <a href="/security">Security page</a>.</p>
     <div id="permissions" class="muted">Reading the permissions…</div>
     <div id="permission-restart"></div>
     <h3>Exceptions</h3>
@@ -113,6 +115,7 @@
   </section>
 </main>
 <script src="/approvals.js"></script>
+<script src="/permission-card.js"></script>
 <script>
   // Every value is put on the page as text, never as markup.
   function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
@@ -201,73 +204,12 @@
       });
     }).catch(function () {});
   }
-  var MODE_WORDS = { block: "Block", ask: "Ask", allow: "Allow" };
-  function sayPermission(text) { document.getElementById("permissions-note").textContent = text; }
-  function changePermission(name, body) {
-    sayPermission("Saving…");
-    post(name, body).then(function (r) {
-      return r.json().then(function (answer) {
-        if (r.ok) { sayPermission("Saved."); drawPermissions(answer); }
-        else { sayPermission(String((answer && (answer.error || answer.detail)) || "Not changed.")); }
-      });
-    }).catch(function () { sayPermission("Not changed."); });
-  }
-  function scopeWords(row) {
-    return (row.agent || "every agent") + (row.project ? " in " + row.project : "");
-  }
-  function drawPermissions(view) {
-    var host = document.getElementById("permissions"); host.textContent = ""; host.className = "";
-    (view.permissions || []).forEach(function (permission) {
-      var line = el("div", "row permission"), left = el("div");
-      left.appendChild(el("div", "item", String(permission.name)));
-      left.appendChild(el("div", "muted", String(permission.unlocks)));
-      line.appendChild(left);
-      if (!permission.controllable) { line.appendChild(el("span", "tag", "not controllable yet")); host.appendChild(line); return; }
-      var modes = el("div", "modes");
-      (permission.modes || []).forEach(function (mode) {
-        var button = el("button", mode === permission.mode ? "primary" : null, MODE_WORDS[mode] || mode);
-        button.setAttribute("aria-pressed", mode === permission.mode ? "true" : "false");
-        button.addEventListener("click", function () { changePermission("permission-set", { permission: permission.id, mode: mode }); });
-        modes.appendChild(button);
-      });
-      line.appendChild(modes);
-      line.appendChild(el("span", "tag", permission.applies === "now" ? "now" : "after restart"));
-      host.appendChild(line);
-    });
-    var rules = document.getElementById("permission-rules"); rules.textContent = "";
-    var exceptions = (view.rules || []).filter(function (row) { return row.agent || row.project; });
-    var names = {}; (view.permissions || []).forEach(function (p) { names[p.id] = p.name; });
-    exceptions.forEach(function (row) {
-      var line = el("div", "row");
-      line.appendChild(el("span", null, (names[row.permission] || row.permission) + " · " + (MODE_WORDS[row.mode] || row.mode) + " · " + scopeWords(row)));
-      var remove = el("button", null, "Remove");
-      remove.addEventListener("click", function () { changePermission("permission-clear", { permission: row.permission, agent: row.agent || "", project: row.project || "" }); });
-      line.appendChild(remove); rules.appendChild(line);
-    });
-    (view.folders || []).forEach(function (row) {
-      var line = el("div", "row");
-      line.appendChild(el("span", null, row.path + " · " + (row.access === "read" ? "read only" : "kept out") + " · " + scopeWords(row)));
-      var remove = el("button", null, "Remove");
-      remove.addEventListener("click", function () { changePermission("folder-clear", { path: row.path, agent: row.agent || "", project: row.project || "" }); });
-      line.appendChild(remove); rules.appendChild(line);
-    });
-    rules.className = rules.children.length ? "" : "muted";
-    if (!rules.children.length) rules.textContent = "No exceptions: every agent follows the list above.";
-    var restart = document.getElementById("permission-restart"); restart.textContent = "";
-    (view.restart_needed || []).forEach(function (run) {
-      var line = el("div", "row");
-      line.appendChild(el("span", "tag", "restart needed"));
-      line.appendChild(el("span", null, String(run.name) + " " + String(run.note)));
-      var stop = el("button", null, "Stop it");
-      stop.addEventListener("click", function () { changePermission("stop-agent", { instance: run.instance }); });
-      line.appendChild(stop); restart.appendChild(line);
-    });
-    var never = document.getElementById("permission-never"); never.textContent = "";
-    (view.never || []).concat(view.not_controllable || []).forEach(function (row) {
-      var li = el("li"); li.appendChild(el("b", null, String(row.name))); li.appendChild(document.createTextNode(" — " + String(row.why))); never.appendChild(li);
-    });
-  }
-  function readPermissions() { getJSON(API + "permissions").then(drawPermissions).catch(function () {}); }
+  // The permission list, its exceptions and the never-list: the dashboard's one permission card.
+  var permissionCard = BlackboxPermissionCard.mount({
+    api: API, getJSON: getJSON, post: post,
+    hosts: { list: "permissions", restart: "permission-restart", rules: "permission-rules", never: "permission-never", note: "permissions-note" },
+  });
+  function readPermissions() { permissionCard.read(); }
   var since = 0;
   function readChanges() {
     getJSON(API + "changes?since=0").then(function (view) {

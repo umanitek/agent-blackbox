@@ -213,8 +213,8 @@ def _agreed_evidence(row: Mapping[str, Any], payload: Mapping[str, str]) -> Opti
     return tuple(sorted(fields))
 
 
-def unique_by_subject(found: list[Any]) -> list[Any]:
-    """One statement per subject, first seen kept (KI-207).
+def unique_by_subject_and_author(found: list[Any]) -> list[Any]:
+    """One statement per (subject, author), first seen kept (KI-207).
 
     An epoch copy — the same statement re-shared under a NEW asset name to
     outlive expiry (R5) — carries the same subject and sits beside the
@@ -222,16 +222,23 @@ def unique_by_subject(found: list[Any]) -> list[Any]:
     both would double a reporter's statements against the per-author cap and
     the daily budget; they are one statement, so every reader folds them here
     before anything is counted.
+
+    WHY the author too (review 2026-11-26): a report's subject is built from the
+    self-described reporter address, which no signature ties to the signing key.
+    Folded by subject alone, a statement another key signed under the same
+    address, read first, displaced the genuine one. The author is the signer —
+    what the signature proves (LES-014) — so a copy folds only into its own author's.
     """
     seen = set()
     unique = []
     for item in found:
-        if item.subject in seen:
+        key = (item.subject, item.author)
+        if key in seen:
             continue
-        seen.add(item.subject)
+        seen.add(key)
         unique.append(item)
     if len(unique) < len(found):
-        logger.debug("blackbox: %d duplicate statement copy(ies) folded by subject", len(found) - len(unique))
+        logger.debug("blackbox: %d duplicate statement copy(ies) folded by subject and author", len(found) - len(unique))
     return unique
 
 
@@ -273,7 +280,7 @@ def shown_as_signed(row: Mapping[str, Any], signed: Mapping[str, str]) -> bool:
 def verified_rows(rows: Iterable[Mapping[str, Any]], verify: Callable[[Mapping[str, Any]], Optional[Any]],
                   kind: str) -> tuple[list[Any], int]:
     """``(verified statements, rows dropped)``: *verify* each row (None = drop), log how many were
-    dropped (a jump is the visible sign of forged traffic), keep one statement per subject."""
+    dropped (a jump is the visible sign of forged traffic), keep one statement per subject and author."""
     found: list[Any] = []
     dropped = 0
     for row in rows:
@@ -284,5 +291,5 @@ def verified_rows(rows: Iterable[Mapping[str, Any]], verify: Callable[[Mapping[s
             found.append(statement)
     if dropped:
         logger.info("blackbox: community read dropped %d unsigned or unverifiable %s row(s)", dropped, kind)
-    return unique_by_subject(found), dropped
+    return unique_by_subject_and_author(found), dropped
 

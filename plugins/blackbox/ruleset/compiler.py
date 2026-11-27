@@ -84,6 +84,10 @@ class Ruleset(live.LiveAnswering):
     #: The trusted manifest's legacy pin ("" = no trusted manifest; None = the curator read could not
     #: tell) — the live scope checks the shipped legacy asset list against it (trust-and-threat-lab R1).
     curator_legacy_assets_hash: Optional[str] = None
+    #: The last curator / community read could not tell (LES-011); saved with the generation, so
+    #: one loaded from disk still says so (the direct reader then answers could-not-tell).
+    curator_read_unavailable: bool = False
+    community_read_unavailable: bool = False
     #: When this generation was compiled (epoch seconds; 0 = never). Shown as "last sync" and
     #: used for ages and staleness — never moved for scheduling (that is ``refresh_due_at``).
     synced_at: float = 0.0

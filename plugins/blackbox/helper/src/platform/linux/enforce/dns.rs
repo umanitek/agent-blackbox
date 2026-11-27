@@ -145,8 +145,11 @@ fn run_line(words: &[&str]) -> Action {
     Action::Run(words.iter().map(|w| w.to_string()).collect())
 }
 
-/// What pointing DNS at the resolver does, and what to save. Nothing already Blackbox's is saved.
-pub fn point(view: &DnsView) -> (Vec<Action>, SavedDns) {
+/// What pointing DNS at the resolver does, and what to save. Nothing already Blackbox's is saved
+/// as an original; a link already changed whose original is not in *already* (it was lost) is
+/// saved with its default route on — WHY: "off" would leave it unable to resolve once DNS Shield
+/// is off, while "on" is how resolved sets up a link with servers.
+pub fn point(view: &DnsView, already: &SavedDns) -> (Vec<Action>, SavedDns) {
     let mode = mode(view);
     let mut saved = SavedDns::new();
     saved.insert(MODE_KEY.into(), vec![mode.name().into()]);
@@ -167,9 +170,13 @@ pub fn point(view: &DnsView) -> (Vec<Action>, SavedDns) {
         Mode::Resolved => {
             let mut actions = vec![Action::Write(RESOLVED_DROP_IN.into(), RESOLVED_TEXT.into()), run_line(&[SYSTEMCTL, "restart", "systemd-resolved"])];
             for link in view.links.iter().filter(|link| !link.servers.is_empty() || link.default_route == "yes") {
-                if !view.resolved_drop_in {   // a drop-in already there: these links were already changed by us
+                let route_key = format!("{LINK_ROUTE}{}", link.name);
+                if !view.resolved_drop_in {
                     saved.insert(format!("{LINK_SERVERS}{}", link.name), link.servers.clone());
-                    saved.insert(format!("{LINK_ROUTE}{}", link.name), vec![link.default_route.clone()]);
+                    saved.insert(route_key, vec![link.default_route.clone()]);
+                } else if !already.contains_key(&route_key) {   // already changed by us, original lost
+                    saved.insert(format!("{LINK_SERVERS}{}", link.name), link.servers.clone());
+                    saved.insert(route_key, vec!["yes".into()]);
                 }
                 actions.push(run_line(&[RESOLVECTL, "default-route", &link.name, "false"]));
             }
@@ -224,7 +231,8 @@ pub fn restore(saved: &SavedDns) -> Vec<Action> {
 pub fn drifted(view: &DnsView) -> bool {
     match mode(view) {
         Mode::Resolved => !view.resolved_drop_in || view.links.iter().any(|link| !link.servers.is_empty() && link.default_route == "yes"),
-        Mode::NetworkManager => !view.nm_drop_in,
+        // The drop-in is only asked for: what NetworkManager really wrote is resolv.conf (LES-166).
+        Mode::NetworkManager => !view.nm_drop_in || nameservers(&String::from_utf8_lossy(&view.resolv)) != [RESOLVER],
         Mode::Plain => nameservers(&String::from_utf8_lossy(&view.resolv)) != [RESOLVER],
     }
 }
@@ -359,7 +367,7 @@ mod tests {
     fn resolved_gets_a_drop_in_and_each_link_loses_its_default_route_then_all_comes_back() {
         let view = resolved_view();
         assert_eq!(mode(&view), Mode::Resolved);
-        let (actions, saved) = point(&view);
+        let (actions, saved) = point(&view, &SavedDns::new());
         assert_eq!(actions[0], Action::Write(RESOLVED_DROP_IN.into(), RESOLVED_TEXT.into()));
         assert!(actions.contains(&run_line(&[RESOLVECTL, "default-route", "enp0s1", "false"])));
         assert_eq!(saved["resolved-default-route:wg0"], vec!["no"]);
@@ -369,16 +377,31 @@ mod tests {
         assert!(back.contains(&run_line(&[RESOLVECTL, "default-route", "enp0s1", "true"])));
         assert!(back.contains(&run_line(&[RESOLVECTL, "default-route", "wg0", "false"])), "a link without a default route stays without");
         let again = DnsView { resolved_drop_in: true, ..resolved_view() };
-        assert!(!point(&again).1.keys().any(|k| k.starts_with(LINK_ROUTE)), "an already-changed link is never saved as the original");
+        assert!(!point(&again, &saved).1.keys().any(|k| k.starts_with(LINK_ROUTE)), "an already-changed link is never saved as the original");
+    }
+
+    /// Review finding 2026-11-26 (partial DNS switch): a retry after a failed switch finds the drop-in
+    /// in place; a link whose original was never saved is saved with its route ON (never "no", which
+    /// would leave it unable to resolve after DNS Shield is off), and NetworkManager mode counts as
+    /// in effect only when resolv.conf really names the resolver (LES-166).
+    #[test]
+    fn a_link_with_no_saved_original_is_saved_routed_and_nm_drift_reads_resolv_conf() {
+        let changed = DnsView { resolved_drop_in: true, links: vec![Link { name: "enp0s1".into(), servers: vec!["192.168.64.1".into()], default_route: "no".into() }], ..resolved_view() };
+        let saved = point(&changed, &SavedDns::new()).1;
+        assert_eq!(saved["resolved-default-route:enp0s1"], vec!["yes"]);
+        assert!(restore(&saved).contains(&run_line(&[RESOLVECTL, "default-route", "enp0s1", "true"])));
+        let nm = |resolv: &str| DnsView { resolv: resolv.as_bytes().to_vec(), nm_drop_in: true, ..Default::default() };
+        assert!(drifted(&nm("# Generated by NetworkManager\nnameserver 192.168.1.1\n")), "drop-in there, resolv.conf not ours: not in effect");
+        assert!(!drifted(&nm("# Generated by NetworkManager\nnameserver 127.0.0.1\n")));
     }
 
     /// KI-677 (Linux round L2): after DNS Shield was turned off, an empty
     /// /etc/systemd/resolved.conf.d was left — Ubuntu ships without that folder, the drop-in made it.
     #[test]
     fn the_drop_in_folder_blackbox_made_goes_again_and_one_that_was_there_stays() {
-        let made = restore(&point(&resolved_view()).1);
+        let made = restore(&point(&resolved_view(), &SavedDns::new()).1);
         assert!(made.contains(&Action::RemoveEmptyFolder("/etc/systemd/resolved.conf.d".into())), "{made:?}");
-        let there = restore(&point(&DnsView { resolved_folder: true, ..resolved_view() }).1);
+        let there = restore(&point(&DnsView { resolved_folder: true, ..resolved_view() }, &SavedDns::new()).1);
         assert!(!there.iter().any(|action| matches!(action, Action::RemoveEmptyFolder(_))), "{there:?}");
         let folder = std::env::temp_dir().join(format!("bb-dns-folder-{}", std::process::id()));
         let _ = fs::remove_dir_all(&folder);
@@ -396,17 +419,17 @@ mod tests {
     fn plain_and_networkmanager_resolv_conf_come_back_exactly() {
         let original = b"# my own\nnameserver 9.9.9.9\nsearch home\n".to_vec();
         let plain = DnsView { resolv: original.clone(), ..Default::default() };
-        let (actions, saved) = point(&plain);
+        let (actions, saved) = point(&plain, &SavedDns::new());
         assert_eq!(actions, vec![Action::Write(RESOLV_CONF.into(), PLAIN_TEXT.into())]);
         assert_eq!(restore(&saved), vec![Action::Write(RESOLV_CONF.into(), original)]);
         assert_eq!(upstreams_from_saved(&saved), vec!["9.9.9.9:53".parse().unwrap()]);
         let linked = DnsView { resolv_link: Some("/run/resolvconf/resolv.conf".into()), ..plain.clone() };
-        assert_eq!(restore(&point(&linked).1), vec![Action::Symlink("/run/resolvconf/resolv.conf".into(), RESOLV_CONF.into())]);
+        assert_eq!(restore(&point(&linked, &SavedDns::new()).1), vec![Action::Symlink("/run/resolvconf/resolv.conf".into(), RESOLV_CONF.into())]);
         let ours = DnsView { resolv: PLAIN_TEXT.into(), ..Default::default() };
-        assert!(!point(&ours).1.contains_key(RESOLV_BYTES), "ours is never saved as the original");
+        assert!(!point(&ours, &SavedDns::new()).1.contains_key(RESOLV_BYTES), "ours is never saved as the original");
         let nm = DnsView { resolv: b"# Generated by NetworkManager\nnameserver 192.168.1.1\n".to_vec(), ..Default::default() };
-        assert_eq!(point(&nm).0[0], Action::Write(NM_DROP_IN.into(), NM_TEXT.into()));
-        assert_eq!(restore(&point(&nm).1)[0], Action::Remove(NM_DROP_IN.into()));
+        assert_eq!(point(&nm, &SavedDns::new()).0[0], Action::Write(NM_DROP_IN.into(), NM_TEXT.into()));
+        assert_eq!(restore(&point(&nm, &SavedDns::new()).1)[0], Action::Remove(NM_DROP_IN.into()));
         assert!(restore(&SavedDns::new()).is_empty());
     }
 

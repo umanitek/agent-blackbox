@@ -107,7 +107,7 @@ def test_the_launcher_runs_the_agent_through_blackbox_sandbox_with_the_tools_fir
     (real_bin / "claude").chmod(0o755)
     policy = tmp_path / "claude-code.policy"
     policy.write_text("# blackbox-sandbox policy 1\n# x sha256:00ff\n", encoding="utf-8")
-    (here / "claude").write_text(launchers.launcher_script("claude", str(here), str(policy)), encoding="utf-8")
+    (here / "claude").write_text(launchers.launcher_script("claude", str(here), str(policy), str(tmp_path / "canary")), encoding="utf-8")
     (here / "claude").chmod(0o755)
     called = tmp_path / "called"
     env = {"PATH": f"{here}:{real_bin}:/usr/bin:/bin", "BB_CALLED": str(called), "HOME": str(tmp_path)}
@@ -130,7 +130,7 @@ def test_without_the_launcher_installed_the_agent_runs_with_the_hooks_only_line(
     (real_bin / "codex").chmod(0o755)
     policy = tmp_path / "codex.policy"
     policy.write_text("# blackbox-sandbox policy 1\n", encoding="utf-8")
-    (here / "codex").write_text(launchers.launcher_script("codex", str(here), str(policy)), encoding="utf-8")
+    (here / "codex").write_text(launchers.launcher_script("codex", str(here), str(policy), str(tmp_path / "canary")), encoding="utf-8")
     (here / "codex").chmod(0o755)
     done = subprocess.run([str(here / "codex")], env={"PATH": f"{here}:{real_bin}:/usr/bin:/bin"}, capture_output=True,
                           text=True, encoding="utf-8", check=True, cwd=tmp_path)

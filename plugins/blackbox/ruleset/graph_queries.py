@@ -45,14 +45,29 @@ def _threat_cursor_filter(after: str) -> str:
     return f"FILTER(STR(?threat) > {json.dumps(after, ensure_ascii=True)})"
 
 
-def _scoped(body: str, graph_uri: str, graph_prefix: str) -> tuple:
-    """Wrap *body* in the graph it reads: ONE named graph (*graph_uri*), or every
-    graph under *graph_prefix* (``GRAPH ?g`` + a prefix filter, ``?g`` selected so
-    the caller can keep only the confirmed assets). Returns (body, select columns)."""
+def _paged(selection: str, cursor_filter: str, limit: int, rest: str, graph_uri: str, graph_prefix: str) -> tuple:
+    """One page's WHERE body and its select columns: the next *limit* subjects
+    matching *selection* after the cursor, then *rest* (their properties).
+
+    * ONE named graph (*graph_uri*): the whole body runs inside ``GRAPH <uri>``.
+    * Every graph under *graph_prefix*: the sub-select pages the DISTINCT
+      subjects of ALL those graphs together (``GRAPH ?g`` INSIDE it), and the
+      outer part reads each subject's rows from every graph that holds it, with
+      ``?g`` selected so the caller keeps only the confirmed assets. WHY (review
+      2026-11-26): with the sub-select inside ``GRAPH ?g`` its LIMIT applied per
+      graph — a page took the first *limit* subjects of EVERY asset and the cursor
+      then skipped the unread subjects of all but the last one.
+    """
+    def page_of(pattern: str) -> str:
+        return (f"{{\n        SELECT DISTINCT ?threat WHERE {{\n            {pattern}\n            {cursor_filter}\n        }}\n"
+                f"        ORDER BY STR(?threat)\n        LIMIT {int(limit)}\n    }}")
+
     if graph_prefix:
-        body = (f"  GRAPH ?g {{\n{body}\n  }}\n"
-                f"  FILTER(STRSTARTS(STR(?g), {json.dumps(graph_prefix)}))")
+        in_prefix = f"FILTER(STRSTARTS(STR(?g), {json.dumps(graph_prefix)}))"
+        body = (f"    {page_of(f'GRAPH ?g {{ {selection} }} {in_prefix}')}\n"
+                f"  GRAPH ?g {{\n    {selection}\n{rest}\n  }}\n  {in_prefix}")
         return body, f"{_SELECT_COLUMNS} ?g"
+    body = f"    {page_of(selection)}\n{rest}"
     if graph_uri:
         body = f"  GRAPH <{graph_uri}> {{\n{body}\n  }}"
     return body, _SELECT_COLUMNS
@@ -67,18 +82,8 @@ def _defender_page_sparql(
     *,
     graph_prefix: str = "",
 ) -> str:
-    cursor_filter = _threat_cursor_filter(after)
-    body = f"""    {{
-        SELECT ?threat WHERE {{
-            ?threat a defender:{signal_type} .
-            {cursor_filter}
-        }}
-        ORDER BY STR(?threat)
-        LIMIT {int(limit)}
-    }}
-    BIND(defender:{signal_type} AS ?rdfType)
-{properties}"""
-    body, columns = _scoped(body, graph_uri, graph_prefix)
+    body, columns = _paged(f"?threat a defender:{signal_type} .", _threat_cursor_filter(after), limit,
+                           f"    BIND(defender:{signal_type} AS ?rdfType)\n{properties}", graph_uri, graph_prefix)
     return f"""{_DEFENDER_PREFIXES}
 SELECT DISTINCT {columns}
 WHERE {{
@@ -225,34 +230,25 @@ def _legacy_threats_sparql(
     *,
     graph_prefix: str = "",
 ) -> str:
-    cursor_filter = _threat_cursor_filter(after)
-    body = f"""  {{
-    SELECT ?threat WHERE {{
-      ?threat g:identifier ?cursorIdentifier .
-      {cursor_filter}
-    }}
-    ORDER BY STR(?threat)
-    LIMIT {int(limit)}
-  }}
+    body, columns = _paged("?threat g:identifier ?identifier .", _threat_cursor_filter(after), limit, """\
   ?threat g:identifier ?identifier .
-  OPTIONAL {{ ?threat a ?rdfType . }}
-  OPTIONAL {{ ?threat g:kind ?kind . }}
-  OPTIONAL {{ ?threat g:severity ?severity . }}
-  OPTIONAL {{ ?threat schema:name ?name . }}
-  OPTIONAL {{ ?threat schema:description ?description . }}
-  OPTIONAL {{ ?threat g:pattern ?pattern . }}
-  OPTIONAL {{ ?threat g:toolName ?toolName . }}
-  OPTIONAL {{ ?threat g:argShape ?argShape . }}
-  OPTIONAL {{ ?threat g:packageName ?packageName . }}
-  OPTIONAL {{ ?threat g:packageVersion ?packageVersion . }}
-  OPTIONAL {{ ?threat g:packageEcosystem ?packageEcosystem . }}
-  OPTIONAL {{ ?threat schema:identifier ?advisoryId . }}
-  OPTIONAL {{ ?threat g:curated ?curated . }}
-  OPTIONAL {{ ?threat g:category ?category . }}
-  OPTIONAL {{ ?threat g:skillName ?skillName . }}
-  OPTIONAL {{ ?threat g:skillVersion ?skillVersion . }}
-  OPTIONAL {{ ?threat g:dangerShape ?dangerShape . }}"""
-    body, columns = _scoped(body, graph_uri, graph_prefix)
+  OPTIONAL { ?threat a ?rdfType . }
+  OPTIONAL { ?threat g:kind ?kind . }
+  OPTIONAL { ?threat g:severity ?severity . }
+  OPTIONAL { ?threat schema:name ?name . }
+  OPTIONAL { ?threat schema:description ?description . }
+  OPTIONAL { ?threat g:pattern ?pattern . }
+  OPTIONAL { ?threat g:toolName ?toolName . }
+  OPTIONAL { ?threat g:argShape ?argShape . }
+  OPTIONAL { ?threat g:packageName ?packageName . }
+  OPTIONAL { ?threat g:packageVersion ?packageVersion . }
+  OPTIONAL { ?threat g:packageEcosystem ?packageEcosystem . }
+  OPTIONAL { ?threat schema:identifier ?advisoryId . }
+  OPTIONAL { ?threat g:curated ?curated . }
+  OPTIONAL { ?threat g:category ?category . }
+  OPTIONAL { ?threat g:skillName ?skillName . }
+  OPTIONAL { ?threat g:skillVersion ?skillVersion . }
+  OPTIONAL { ?threat g:dangerShape ?dangerShape . }""", graph_uri, graph_prefix)
     return f"""{sparql_text.GUARDIAN_PREFIX}
 PREFIX schema: <http://schema.org/>
 SELECT DISTINCT {columns}

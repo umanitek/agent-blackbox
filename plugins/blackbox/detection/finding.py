@@ -102,11 +102,12 @@ def rule_subject(rule: Optional[dict[str, Any]]) -> str:
 
 
 def _rule_source(rule: dict[str, Any]) -> str:
-    """Trust tier of a graph rule. Untagged rules default to ``public`` —
-    rules built before tier tagging (or handed in directly by tests) were
-    always treated as verified."""
-    src = str(rule.get("source") or "public").lower()
-    return src if src in ("public", "community") else "public"
+    """Trust tier of a graph rule: ``public`` (verified, may block) or ``community`` (flag only).
+    An UNTAGGED rule is ``public`` — rules built before tier tagging (and rules handed in directly
+    by tests) were always verified. A tag this build does not know is ``community``: an unknown
+    tier never gains the power to block (fail closed on trust, LES-011)."""
+    src = str(rule.get("source") or "public").strip().lower()
+    return "public" if src == "public" else "community"
 
 
 #: What a lookup answer says about itself when the graph store could not answer and

@@ -48,10 +48,12 @@ def test_detect_injection_survives_bad_regex():
     assert detection.detect_injection("anything", rs) == []
 
 
-def test_detect_injection_caps_oversize_text():
+def test_detect_injection_reads_a_long_text_by_its_head_and_tail():
+    # Review 2026-11-26 finding 6: padding before a phrase no longer hides it; the middle of a
+    # text longer than twice the window is the known, bounded gap.
     rs = _ruleset(injection=[_inj_rule("needle")])
-    huge = ("x" * 60_000) + "needle"  # needle sits past the 50k cap → no match
-    assert detection.detect_injection(huge, rs) == []
+    assert detection.detect_injection(("x" * 60_000) + "needle", rs)
+    assert detection.detect_injection(("x" * 60_000) + "needle" + ("x" * 60_000), rs) == []
 
 
 def test_detect_escalation_requires_both_tool_and_shape():

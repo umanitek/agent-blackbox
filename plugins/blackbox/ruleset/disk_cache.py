@@ -54,6 +54,9 @@ def _serialize(rs: compiler.Ruleset) -> dict[str, Any]:
         "kill_list": rs.kill_list,
         "kill_list_refused": rs.kill_list_refused,
         "curator_manifest_state": rs.curator_manifest_state,
+        "curator_legacy_assets_hash": rs.curator_legacy_assets_hash,
+        "curator_read_unavailable": rs.curator_read_unavailable,
+        "community_read_unavailable": rs.community_read_unavailable,
         "verified_scope": rs.verified_scope.to_json() if rs.verified_scope is not None else None,
         "curator_revoked": sorted(rs.curator_revoked),
     }
@@ -103,11 +106,22 @@ def _deserialize(data: dict[str, Any]) -> compiler.Ruleset:
     rs.community_paused = bool(data.get("community_paused", False))
     rs.community_fingerprint = str(data.get("community_fingerprint") or "")
     rs.community_empty_since = float(data.get("community_empty_since") or 0.0)
+    rs.community_read_unavailable = bool(data.get("community_read_unavailable", False))
+    _restore_curator_state(rs, data)
+    _restore_live_scope(rs, data)
+    return rs
+
+
+def _restore_curator_state(rs: compiler.Ruleset, data: dict[str, Any]) -> None:
+    """The curator overlay's state: the kill list in force, the manifest's clock and
+    legacy pin, and whether the curator read could not tell (an older cache without
+    a key loads as before: no pin known = None, could-not-tell = False)."""
     rs.kill_list = dict(data.get("kill_list") or {}) if isinstance(data.get("kill_list"), dict) else {}
     rs.kill_list_refused = str(data.get("kill_list_refused") or "")
     rs.curator_manifest_state = str(data.get("curator_manifest_state") or "")
-    _restore_live_scope(rs, data)
-    return rs
+    pin = data.get("curator_legacy_assets_hash")
+    rs.curator_legacy_assets_hash = pin if isinstance(pin, str) else None
+    rs.curator_read_unavailable = bool(data.get("curator_read_unavailable", False))
 
 
 def _restore_live_scope(rs: compiler.Ruleset, data: dict[str, Any]) -> None:

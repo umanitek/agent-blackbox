@@ -5,9 +5,9 @@ The scripts are the POSIX ports' shared ones (``platform/posix_scripts.py``); ma
 
 Usage::
 
-    launcher_script("claude", here, profile)
-    shell_shim("bash", here, profile, launchers)
-    command_shim(profile, launchers)
+    launcher_script("claude", here, profile, canary)
+    shell_shim("bash", here, profile, canary, launchers)
+    command_shim(profile, canary, launchers)
 """
 
 from __future__ import annotations
@@ -30,21 +30,21 @@ def pick_profile() -> str:
     return posix_scripts.pick_profile(SUFFIXES)
 
 
-def launcher_script(command: str, here: str, profile: str) -> str:
+def launcher_script(command: str, here: str, profile: str, canary: str) -> str:
     """The launcher first on PATH for *command* (``posix_scripts.launcher_script``), with the
     sandbox's tools (``<here>/sandbox-tools``) first on the sandboxed PATH."""
-    return posix_scripts.launcher_script(command, here, profile, RUNNER, tools_dir(here), SUFFIXES)
+    return posix_scripts.launcher_script(command, here, profile, RUNNER, tools_dir(here), SUFFIXES, canary)
 
 
-def shell_shim(shell: str, here: str, profile: str, launchers: str = "") -> str:
+def shell_shim(shell: str, here: str, profile: str, canary: str, launchers: str = "") -> str:
     """The Hermes agent's sandboxed *shell* (``posix_scripts.shell_shim``); *launchers*: the folder
     whose ``sandbox-tools`` go first on the sandboxed shell's PATH."""
-    return posix_scripts.shell_shim(shell, here, profile, RUNNER, tools_dir(launchers) if launchers else "", SUFFIXES)
+    return posix_scripts.shell_shim(shell, here, profile, RUNNER, tools_dir(launchers) if launchers else "", SUFFIXES, canary)
 
 
-def command_shim(profile: str, launchers: str = "") -> str:
+def command_shim(profile: str, canary: str, launchers: str = "") -> str:
     """The Hermes agent's ``execute_code`` interpreter launcher (``posix_scripts.command_shim``)."""
-    return posix_scripts.command_shim(profile, RUNNER, tools_dir(launchers) if launchers else "", SUFFIXES)
+    return posix_scripts.command_shim(profile, RUNNER, tools_dir(launchers) if launchers else "", SUFFIXES, canary)
 
 
 __all__ = [

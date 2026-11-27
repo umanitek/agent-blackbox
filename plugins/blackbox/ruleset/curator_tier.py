@@ -47,24 +47,51 @@ from .live import promoted
 logger = logging.getLogger(__name__)
 
 
-def apply_curator_tier(rs: compiler.Ruleset, client: DkgClient, config: BlackboxConfig,
-                       prior: Optional[compiler.Ruleset] = None) -> int:
-    """Drop the verified rules the curator revoked (returns how many), then
-    serve the promoted reports — *prior*'s when they cannot be read now."""
+def read_view(client: DkgClient, config: BlackboxConfig) -> Any:
+    """The curator view for one refresh; an UNAVAILABLE view (could not tell) when the
+    read raises. Fail-open: it never raises."""
     try:
-        view = community.read_curator_view(client, config)
-    except Exception as exc:  # pragma: no cover - fail open (an outer boundary)
-        logger.warning("blackbox: curator revocations not applied this refresh: %s", exc)
-        rs.curator_read_unavailable = True
-        return 0
-    rs.curator_read_unavailable = bool(view.unavailable or view.lookup_incomplete or view.manifest_conflict)
+        return community.read_curator_view(client, config)
+    except Exception:  # health: allow BLE001 -- fail open: an outer boundary; the view is then "could not tell"
+        logger.warning("blackbox: curator view not read this refresh", exc_info=True)
+        return community.CuratorView(unavailable=True)
+
+
+def could_not_tell(view: Any) -> bool:
+    """Whether *view* leaves what the curators said unknown: unread, cut short or frozen by a conflict."""
+    return bool(view.unavailable or view.lookup_incomplete or view.manifest_conflict)
+
+
+def legacy_pin(view: Any, prior: Optional[compiler.Ruleset]) -> Optional[str]:
+    """The trusted manifest's legacy pin as this refresh knows it: *view*'s ("" = no trusted
+    manifest); when the view could not tell, *prior*'s — the last verdict stands (LES-011);
+    None when neither can tell."""
+    if not view.unavailable:
+        return view.manifest.legacy_assets_hash if view.manifest is not None else ""
+    return prior.curator_legacy_assets_hash if prior is not None else None
+
+
+def apply_curator_tier(rs: compiler.Ruleset, client: DkgClient, config: BlackboxConfig,
+                       prior: Optional[compiler.Ruleset] = None, view: Any = None) -> int:
+    """Drop the verified rules the curator revoked (returns how many), then
+    serve the promoted reports — *prior*'s when they cannot be read now.
+    *view* — the curator view this refresh already read (None: read it now).
+
+    WHY *prior*'s revocations stay while the view could not tell (review
+    2026-11-26): an unreadable view says nothing about revocations; taking it as
+    "none" made every revoked verified rule block again. A complete read still
+    decides, so an un-revoke waits for one — the safe direction."""
+    view = view if view is not None else read_view(client, config)
+    rs.curator_read_unavailable = could_not_tell(view)
     _apply_kill_list(rs, client, config, view)
     rs.curator_manifest_state = ({"stale": "STALE since ", "pending": "PENDING until "}.get(view.manifest_state, "")
                                  + view.manifest_state_day) if view.manifest_state else ""
-    rs.curator_revoked = frozenset(view.revoked)
-    rs.curator_legacy_assets_hash = (view.manifest.legacy_assets_hash if view.manifest is not None
-                                     else None if view.unavailable else "")   # unavailable: could not tell (LES-011)
-    removed = rs.drop_identifiers(view.revoked)
+    revoked = frozenset(view.revoked)
+    if rs.curator_read_unavailable and prior is not None:
+        revoked |= prior.curator_revoked
+    rs.curator_revoked = revoked
+    rs.curator_legacy_assets_hash = legacy_pin(view, prior)
+    removed = rs.drop_identifiers(revoked)
     if removed:
         logger.info("blackbox: %d verified rule(s) withdrawn by curator revocation", removed)
     try:
