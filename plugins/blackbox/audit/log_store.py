@@ -11,9 +11,10 @@ import contextvars
 import json
 import logging
 import os
+import secrets
 import threading
 from pathlib import Path
-from typing import Any, Callable, Iterable, Iterator, TypeVar
+from typing import Any, Callable, Iterable, Iterator, Optional, TypeVar
 from ..kernel import constants
 from ..kernel.bounded_files import append_line, atomic_write, file_lock, read_jsonl
 
@@ -59,8 +60,14 @@ _lock = threading.Lock()
 #: One lock file per log folder, shared by every agent process that writes there.
 _LOGS_LOCK_FILE = ".logs.lock"
 #: The longest a record waits for another process's append or trim. A hook must never
-#: stall on a lock: past this, the record is written without it (and no trim is tried).
+#: stall on a lock: past this, the record goes to a side file (:data:`_PENDING_DIR`).
 _LOGS_LOCK_WAIT_S = 0.5
+#: Beside the logs: records written while another process held the lock, one file each, named
+#: ``<log name>.<pid>.<random>``. No trim touches them; the next writer holding the lock moves
+#: them into their log (:func:`_merge_pending`).
+_PENDING_DIR = ".pending-records"
+#: The most side files one locked append moves in (keeps one append bounded; the rest wait).
+_PENDING_MERGE_MAX = 64
 
 
 def _home() -> Path:
@@ -119,25 +126,63 @@ def _append_jsonl(path: Path, record: dict[str, Any]) -> None:
     Several agent processes write the same logs, so the append and the trim happen under
     the folder's cross-process lock: a trim reads the tail and swaps it in while no one
     else is appending, so no record is lost and no reader sees a half-written log. When
-    the lock cannot be had in :data:`_LOGS_LOCK_WAIT_S` the record is still written (a
-    record is never dropped for a lock) and the trim waits for a later append."""
+    the lock cannot be had in :data:`_LOGS_LOCK_WAIT_S`, the record goes to a side file
+    instead (a record is never dropped for a lock, and the hook never waits longer); the
+    next append that holds the lock moves it into the log.
+
+    WHY not append without the lock (review 2026-11-26): the holder may be trimming — it read
+    the tail and is about to rename the kept tail over the log — and a record appended to the
+    old file in that moment was lost with it."""
     line = json.dumps(record, ensure_ascii=False)
     with _lock, _logs_lock(path) as locked:
-        append_line(path, line)
-        if locked:
+        if locked is None:   # this process cannot use the lock at all: nobody trims through it either
+            append_line(path, line)
+        elif locked:
+            _merge_pending(path)
+            append_line(path, line)
             _trim_if_needed(path)
+        else:
+            _write_pending(path, line)
 
 
 @contextlib.contextmanager
-def _logs_lock(path: Path) -> Iterator[bool]:
-    """The cross-process lock for *path*'s folder; yields False when it could not be taken."""
+def _logs_lock(path: Path) -> Iterator[Optional[bool]]:
+    """The cross-process lock for *path*'s folder: yields True when held, False when another
+    process kept it past the wait, None when the lock file cannot be used here."""
     with contextlib.ExitStack() as held:
         try:
-            locked = held.enter_context(file_lock(path.with_name(_LOGS_LOCK_FILE), timeout_s=_LOGS_LOCK_WAIT_S))
+            locked: Optional[bool] = held.enter_context(file_lock(path.with_name(_LOGS_LOCK_FILE), timeout_s=_LOGS_LOCK_WAIT_S))
         except OSError as exc:
             logger.debug("blackbox: log lock unavailable (%s); writing without it", exc)
-            locked = False
+            locked = None
         yield locked
+
+
+def _write_pending(path: Path, line: str) -> None:
+    """Keep *line* for *path* in its own side file (written whole: a merger never reads half)."""
+    name = f"{path.name}.{os.getpid()}.{secrets.token_hex(6)}"
+    atomic_write(path.parent / _PENDING_DIR / name, line + "\n")
+
+
+def _merge_pending(path: Path) -> None:
+    """Move the side files kept for *path* into it, oldest first (the caller holds the logs lock).
+    A side file is removed only after its record is in the log."""
+    try:
+        entries = [entry for entry in os.scandir(path.parent / _PENDING_DIR)
+                   if entry.name.startswith(path.name + ".") and ".tmp." not in entry.name]
+    except OSError:   # no side folder: the usual case, one failed stat
+        return
+    entries.sort(key=lambda entry: entry.stat().st_mtime_ns)
+    for entry in entries[:_PENDING_MERGE_MAX]:
+        try:
+            text = Path(entry.path).read_text(encoding="utf-8-sig")
+            for line in text.splitlines():
+                if line.strip():
+                    append_line(path, line)
+            os.unlink(entry.path)
+        except OSError as exc:
+            logger.warning("blackbox: could not move a kept record into %s (%s); the next append tries again", path.name, exc)
+            return
 
 
 def _trim_if_needed(path: Path) -> None:

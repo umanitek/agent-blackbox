@@ -12,8 +12,9 @@ This module is the one door both use — a Facade over the config, the ruleset a
   limit: started in the background and read back by id (``long_calls.py``);
 - :func:`readiness_status` / :func:`start_setup` — where the machine is between plugin install and synced, and
   the page's "Set up Blackbox" button (``readiness.py``: one owned ``hermes blackbox setup`` run);
-- :func:`set_mode` — the page's Audit / Block switch, saved through the dashboard's own checked path
-  (``kernel.settings.write_settings``); reached only through Hermes Desktop's authenticated route;
+- :func:`set_mode` — the page's Audit / Block switch: Block saved at once (``kernel.settings.write_settings``),
+  Audit through the dashboard's gated ``/api/settings`` (it waits for the person); reached only through
+  Hermes Desktop's authenticated route;
 - :func:`announce_findings` — called by the hook right after findings are recorded; pushes one
   ``plugin.blackbox.finding`` event per checked action to every connected Hermes Desktop window (Observer).
 
@@ -208,20 +209,39 @@ def long_calls() -> LongCalls:
 
 
 MODES = ("audit", "block")
+#: The strongest mode: switching to it never weakens protection, so it needs no one's confirmation.
+STRONGEST_MODE = "block"
 
 
 def set_mode(mode: str) -> dict[str, Any]:
     """Switch Blackbox to *mode* (``audit`` or ``block``) for the person at the Hermes Desktop page.
 
-    Returns ``{"ok": bool, "mode": <the mode now in force>, "errors": [...]}``; nothing is written on
-    an unknown mode. The same validate-then-persist path as the dashboard's Settings, so the config
-    keeps its comments and every other setting is untouched.
+    Returns ``{"ok": bool, "mode": <the mode now in force>, "errors": [...]}``, plus ``"approval"``
+    (the held request) when the change waits for the person; nothing is written on an unknown mode.
+
+    Block applies at once (strengthening is never delayed). Audit turns protection down, so it
+    goes through the dashboard's own ``POST /api/settings`` (:func:`dashboard_link`), where the
+    approvals gate holds it until the person confirms — the same answer the dashboard's Settings
+    gives. WHY not :func:`approvals.reasons` here: the held request must live in the dashboard's
+    one store, where the companion app and the password prompt answer it. No dashboard running →
+    refused, never applied unconfirmed.
     """
     wanted = str(mode or "").strip().lower()
     if wanted not in MODES:
         return {"ok": False, "mode": load_blackbox_config().mode, "errors": [f"mode must be one of {', '.join(MODES)}"]}
-    result = settings.write_settings({"mode": wanted})
-    return {"ok": bool(result.get("ok")), "mode": load_blackbox_config().mode, "errors": list(result.get("errors") or [])}
+    if wanted == STRONGEST_MODE:
+        result = settings.write_settings({"mode": wanted})
+        return {"ok": bool(result.get("ok")), "mode": load_blackbox_config().mode, "errors": list(result.get("errors") or [])}
+    answer = dashboard_link().forward("POST", "api/settings", "", {"mode": wanted})
+    body = answer.body if isinstance(answer.body, dict) else {}
+    errors = [str(error) for error in body.get("errors") or ([body["error"]] if body.get("error") else [])]
+    reply: dict[str, Any] = {"ok": answer.status == 200 and bool(body.get("ok")), "mode": load_blackbox_config().mode,
+                             "errors": errors}
+    if isinstance(body.get("approval"), dict):
+        reply["approval"] = body["approval"]
+    if not reply["ok"] and not errors:
+        reply["errors"] = ["the Blackbox dashboard did not save the change"]
+    return reply
 
 
 #: Stages in which the page offers setup; once the node is installed and answering, setup is done.

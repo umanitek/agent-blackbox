@@ -117,7 +117,8 @@ def test_a_busy_lock_delays_the_trim_but_never_the_record(tmp_path, monkeypatch)
     with file_lock(log.with_name(log_store._LOGS_LOCK_FILE)):          # another process is mid-trim
         for number in range(10):
             log_store._append_jsonl(log, {"n": number, "pad": "x" * 40})
-        assert len(log_store.read_jsonl(log)) == 10                    # all written, none trimmed
+    # Kept aside while the lock was busy (never appended under another process's trim, review
+    # 2026-11-26): the next locked append moves them in, then trims (test_blackbox_audit_log_lock_timeout.py).
     log_store._append_jsonl(log, {"n": 10, "pad": "x" * 40})
 
     assert log.stat().st_size <= 200 and log_store.read_jsonl(log)[-1]["n"] == 10

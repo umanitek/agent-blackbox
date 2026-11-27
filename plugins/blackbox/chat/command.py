@@ -109,6 +109,8 @@ If the dashboard is NOT running (curl to :9700 fails), fall back to:
 def add_blackbox_chat_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("prompt", nargs="*", help='Bare prompt text, e.g. "who are you?"')
     parser.add_argument("-q", "--query", help="Single query (non-interactive mode)")
+    parser.add_argument("--query-file", metavar="PATH",
+                        help="Read the single query from a file ('-' reads stdin), so it never shows on a command line")
     parser.add_argument("--image", help="Optional local image path to attach to a single query")
     parser.add_argument("-m", "--model", help="Model to use")
     parser.add_argument("--provider", help="Inference provider")
@@ -251,6 +253,7 @@ def _blackbox_chat_args(args: argparse.Namespace) -> list[str]:
     out: list[str] = []
     for attr, flag in [
         ("query", "--query"),
+        ("query_file", "--query-file"),
         ("image", "--image"),
         ("model", "--model"),
         ("provider", "--provider"),
@@ -286,7 +289,7 @@ def _blackbox_chat_args(args: argparse.Namespace) -> list[str]:
         if getattr(args, attr, False):
             out.append(flag)
     prompt = getattr(args, "prompt", None) or []
-    if prompt and not getattr(args, "query", None):
+    if prompt and not getattr(args, "query", None) and not getattr(args, "query_file", None):
         out.append("--query=" + " ".join(prompt))
     return out
 

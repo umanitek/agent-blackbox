@@ -10,6 +10,9 @@
   ``auto_attach: true`` (the same writer as the installers' ``blackbox attach --all --auto``)
   and protects every agent found now, except any the operator switched off.
 
+:class:`AgentRescan` (``rescan.py``) is the dashboard's background sweep and manual refresh that
+keep the chosen agents hooked; it holds ``attach.ATTACH_LOCK`` like every other attach path.
+
 The POST is a state change, so the app-wide browser boundary demands the session token
 (KI-028 / LES-006); an agent cannot reach it either (the guard flags its own settings routes).
 """
@@ -20,6 +23,8 @@ import itertools
 from pathlib import Path
 from typing import Any, Callable
 
+from .rescan import AgentRescan
+
 #: The panel script, kept with the dashboard's other static files (``dashboard/static/``).
 SCRIPT = Path(__file__).resolve().parents[1] / "static" / "agent_coverage.js"
 NO_CACHE = {"Cache-Control": "no-store"}
@@ -27,6 +32,8 @@ NO_CACHE = {"Cache-Control": "no-store"}
 TTL_SECONDS = 5.0
 
 Cache = Callable[..., Any]
+
+__all__ = ["AgentRescan", "register"]
 
 
 def register(app: Any, swr: Cache) -> None:

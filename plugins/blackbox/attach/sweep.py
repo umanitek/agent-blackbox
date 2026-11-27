@@ -27,6 +27,7 @@ from . import declined
 from . import hermes_homes
 from . import openclaw_bridge
 from . import openclaw_discovery
+from . import serial
 from .report import AttachReport
 
 logger = logging.getLogger(__name__)
@@ -37,13 +38,17 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
+@serial.serialized
 def attach_all(*, hermes: bool = True, openclaw: bool = True, dry_run: bool = False,
-               explicit: bool = False, auto_attach: bool | None = None) -> dict[str, Any]:
+               explicit: bool = False, auto_attach: bool | None = None,
+               include_declined: bool = False) -> dict[str, Any]:
     """Attach Blackbox to the discovered targets this call may touch. Returns a combined report.
 
     * ``explicit=True`` — the operator's own ``blackbox attach`` — attaches every target,
       which also clears a switch-off (:mod:`.declined`).
-    * ``dry_run=True`` reports every target not switched off, and writes nothing.
+    * ``dry_run=True`` reports every target not switched off, and writes nothing; with
+      ``include_declined=True`` the switched-off ones too, so a list of agents can offer to switch
+      one back on. Every dry-run row then says ``"declined": bool``.
     * Otherwise this is an AUTOMATIC sweep and asks :func:`automatic_targets` (a full pass):
       with ``auto_attach`` off (the default) only targets already attached are refreshed and
       nothing new is joined (KI-492: ``blackbox dashboard`` runs at every login and used to
@@ -58,7 +63,7 @@ def attach_all(*, hermes: bool = True, openclaw: bool = True, dry_run: bool = Fa
     if explicit:
         chosen = targets
     elif dry_run:
-        chosen = [target for target in targets if not declined.is_declined(*target)]
+        chosen = [target for target in targets if include_declined or not declined.is_declined(*target)]
     else:
         if auto_attach is None:
             auto_attach = load_blackbox_config().auto_attach
@@ -66,11 +71,15 @@ def attach_all(*, hermes: bool = True, openclaw: bool = True, dry_run: bool = Fa
         chosen = [target for target in targets if target in allowed]
     attach_one = {"hermes": hermes_homes.attach_hermes, "openclaw": openclaw_bridge.attach_openclaw}
     for kind, path in chosen:
-        report[kind].append(attach_one[kind](path, dry_run=dry_run))
+        row = attach_one[kind](path, dry_run=dry_run)
+        if dry_run and include_declined:
+            row["declined"] = declined.is_declined(kind, path)
+        report[kind].append(row)
     report["count"] = _protected_count(report)
     return report
 
 
+@serial.serialized
 def attach_named(paths: Iterable[str | Path], *, hermes: bool = True, openclaw: bool = True,
                  dry_run: bool = False) -> dict[str, Any]:
     """Attach exactly the targets the operator named (``blackbox attach <home> …``).
@@ -102,6 +111,7 @@ def attach_named(paths: Iterable[str | Path], *, hermes: bool = True, openclaw: 
 Target = tuple[str, str]
 
 
+@serial.serialized
 def set_protection(kind: str, target: str, enabled: bool) -> Optional[AttachReport]:
     """Switch protection of one agent on or off — THE dispatch by agent kind ("hermes" /
     "openclaw") the dashboard's rescan and its protection route share; None for a kind
@@ -109,6 +119,21 @@ def set_protection(kind: str, target: str, enabled: bool) -> Optional[AttachRepo
     switch = {"hermes": (hermes_homes.detach_hermes, hermes_homes.attach_hermes),
               "openclaw": (openclaw_bridge.detach_openclaw, openclaw_bridge.attach_openclaw)}.get(str(kind).lower())
     return switch[bool(enabled)](Path(target)) if switch else None
+
+
+def discovered_target(kind: str, target: str | Path) -> Optional[Path]:
+    """The agent folder discovery found that *target* names (compared as :func:`declined.same_path`
+    spells folders), or None when *kind* is unknown or no discovered agent of that kind is there.
+
+    WHY: a route that switches protection on or off for a caller-named folder must act only on an
+    agent this machine has, and on the folder discovery found, never on the caller's spelling —
+    otherwise it copies the plugin and writes a config.yaml into any folder it is handed."""
+    finders = {"hermes": hermes_homes.discover_hermes_homes, "openclaw": openclaw_discovery.discover_openclaw_workspaces}
+    find = finders.get(str(kind).lower())
+    if find is None or not str(target).strip():
+        return None
+    wanted = declined.same_path(target)
+    return next((Path(path) for path in find() if declined.same_path(path) == wanted), None)
 
 
 def is_attached(kind: str, target: str | Path) -> bool:
@@ -152,6 +177,7 @@ def automatic_targets(current: Iterable[Target], known: Iterable[Target], *, rec
     return {target for target in candidates if not declined.is_declined(*target)}
 
 
+@serial.serialized
 def detach_all(
     *, hermes: bool = True, openclaw: bool = True, remove_files: bool = False, dry_run: bool = False
 ) -> dict[str, Any]:

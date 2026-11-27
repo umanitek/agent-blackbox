@@ -6,10 +6,9 @@ A Hermes home is protected when the plugin is copied into its
 """
 
 from __future__ import annotations
-from . import declined
+from . import declined, serial
 
 import logging
-import os
 import shutil
 from pathlib import Path
 from typing import Any, Optional
@@ -28,10 +27,12 @@ def discover_hermes_homes(*, include_managed: bool = False) -> list[Path]:
     Blackbox's own chat profile (:func:`is_managed_blackbox_chat_profile`) is left out — it is
     not an agent to defend — unless *include_managed* (uninstall: Blackbox must leave it too).
 
-    The resolved default home (``$HERMES_HOME``, else ``~/.hermes``) even before it exists, then,
-    only when they exist, ``~/.hermes``, each ``~/.hermes/profiles/*/`` and (Windows)
-    ``%LOCALAPPDATA%/hermes``; de-duplicated, in order. WHY only existing ones: a missing home is
-    not an agent — listing it made "protect every agent" create ~/.hermes on a Mac without Hermes.
+    The resolved default home (``$HERMES_HOME``, else the platform default) even before it exists,
+    then, only when they exist, each Hermes root (:func:`_hermes_roots`: the active home's root and
+    the platform default) and every live profile under its ``profiles/``; de-duplicated, in order.
+    WHY only existing ones: a missing home is not an agent — listing it made "protect every agent"
+    create ~/.hermes on a Mac without Hermes. A profile Hermes deleted (its tombstone in
+    ``profiles/.deleted/``) and dot-folders such as that tombstone folder are never listed.
     """
     homes: list[Path] = []
 
@@ -51,27 +52,48 @@ def discover_hermes_homes(*, include_managed: bool = False) -> list[Path]:
     except Exception:  # pragma: no cover - defensive
         pass
 
-    default_dot = Path.home() / ".hermes"
-    if default_dot.is_dir():
-        _add(default_dot)
-
-    # Every existing profile directory under the default home.
-    profiles_dir = default_dot / "profiles"
-    try:
-        if profiles_dir.is_dir():
-            for child in sorted(profiles_dir.iterdir()):
-                if child.is_dir() and (include_managed or not is_managed_blackbox_chat_profile(child)):
-                    _add(child)
-    except Exception:
-        pass
-
-    # Windows: %LOCALAPPDATA%/hermes.
-    if os.name == "nt":
-        local_appdata = os.environ.get("LOCALAPPDATA")
-        if local_appdata and (Path(local_appdata) / "hermes").is_dir():
-            _add(Path(local_appdata) / "hermes")
-
+    for root in _hermes_roots():
+        if not root.is_dir():
+            continue
+        _add(root)
+        profiles_dir = root / "profiles"
+        try:
+            children = sorted(profiles_dir.iterdir()) if profiles_dir.is_dir() else []
+        except OSError:
+            children = []
+        for child in children:
+            if (child.is_dir() and not child.name.startswith(".") and not _profile_deleted(child)
+                    and (include_managed or not is_managed_blackbox_chat_profile(child))):
+                _add(child)
     return homes
+
+
+def _hermes_roots() -> list[Path]:
+    """The Hermes roots on this machine, as Hermes itself resolves them: the active home's root
+    (``constants.hermes_root``: a custom or Docker root's ``<root>/profiles/<name>`` → ``<root>``)
+    and the platform default (``~/.hermes`` with ``HERMES_DATA_DIR_SUFFIX``, ``%LOCALAPPDATA%/hermes``
+    on Windows). WHY not ``Path.home() / ".hermes"``: that missed every other layout (CLAUDE.md:
+    never hardcode ``~/.hermes``)."""
+    roots = [constants.hermes_root()]
+    try:
+        from hermes_constants import get_default_hermes_root
+
+        roots.append(Path(get_default_hermes_root(home="")))   # "": no explicit home -> the platform default
+    except (ImportError, AttributeError, OSError, ValueError, TypeError):   # an older Hermes: the active root is what we know
+        pass
+    return roots
+
+
+def _profile_deleted(profile_home: Path) -> bool:
+    """Whether Hermes deleted this named profile (``hermes_constants.named_profile_is_deleted``)."""
+    try:
+        from hermes_constants import named_profile_is_deleted
+    except ImportError:   # an older Hermes without tombstones
+        return False
+    try:
+        return bool(named_profile_is_deleted(profile_home))
+    except OSError:
+        return False
 
 
 def is_managed_blackbox_chat_profile(path: Path) -> bool:
@@ -123,6 +145,7 @@ def _enable_in(data: dict[str, Any]) -> None:
     if isinstance(disabled, list) and "blackbox" in disabled:   # an uninstall that kept a bundling Hermes (KI-610)
         plugins["disabled"] = [name for name in disabled if name != "blackbox"]
 
+@serial.serialized
 @declined.remembers("hermes", switched_off=False)
 @yaml_files.edits_config
 def attach_hermes(home: Path, *, dry_run: bool = False) -> AttachReport:
@@ -176,6 +199,7 @@ def attach_hermes(home: Path, *, dry_run: bool = False) -> AttachReport:
     return report
 
 
+@serial.serialized
 @declined.remembers("hermes", switched_off=True)
 @yaml_files.edits_config
 def detach_hermes(home: Path, *, remove_files: bool = False, dry_run: bool = False) -> AttachReport:

@@ -34,6 +34,7 @@ The pump (``notify.PUMP``) starts and stops with the app.
 """
 
 # No ``from __future__ import annotations`` here: FastAPI must see the handlers' annotations.
+import math
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Callable
@@ -48,9 +49,10 @@ Cache = Callable[..., Any]
 
 
 def _int(value: Any, default: int = 0) -> int:
+    """*value* as a whole number, else *default* — ``inf`` from a JSON body (``1e400``) too."""
     try:
         return int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return default
 
 
@@ -104,7 +106,9 @@ def _register_writes(app: Any, notify: Any) -> None:
             return JSONResponse({"error": "holder is required"}, status_code=400, headers=NO_CACHE)
         try:
             seconds = float(body.get("seconds") or 0)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
+            seconds = math.nan
+        if not math.isfinite(seconds):
             return JSONResponse({"error": "seconds must be a number"}, status_code=400, headers=NO_CACHE)
         return JSONResponse({"seconds": notify.claim(holder, seconds), "delivered": notify.delivered()}, headers=NO_CACHE)
 

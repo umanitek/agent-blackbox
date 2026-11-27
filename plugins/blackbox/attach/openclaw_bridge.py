@@ -5,7 +5,7 @@ Blackbox entries, keeping everything else), and removes it on detach.
 """
 
 from __future__ import annotations
-from . import declined
+from . import declined, serial
 
 import logging
 import json
@@ -93,6 +93,7 @@ def _is_missing_pre_blackbox_load_path(value: Any) -> bool:
         return True
 
 
+@serial.serialized
 @declined.remembers("openclaw", switched_off=False)
 def attach_openclaw(workspace: Path, *, dry_run: bool = False) -> AttachReport:
     """Enable Blackbox in a single OpenClaw *workspace*.
@@ -271,6 +272,7 @@ def _merge_openclaw(data: dict[str, Any], cfg: dict[str, Any], load_path: Option
     return changed
 
 
+@serial.serialized
 @declined.remembers("openclaw", switched_off=True)
 def detach_openclaw(workspace: Path, *, dry_run: bool = False) -> AttachReport:
     """Disable Blackbox in a single OpenClaw *workspace* (idempotent, fail-open)."""

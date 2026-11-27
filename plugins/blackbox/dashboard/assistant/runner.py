@@ -36,8 +36,10 @@ def ask(message: str, session_id: str = "") -> tuple[dict[str, Any], int]:
     if len(message) > MAX_MESSAGE:
         return {"ok": False, "error": "Message is too long."}, 400
     session_id = str(session_id or "").strip()
-    # WHY "--opt=value": a question or id starting with "-" would otherwise be read as an option.
-    argv = hermes_argv("blackbox", "chat", f"--query={with_state_brief(message)}", "--quiet", "--pass-session-id")
+    # WHY on stdin (--query-file=-, read by Hermes' own chat): a command line is readable by every
+    # local process (`ps`), and the question and the state brief are the person's (review 2026-11-26).
+    # WHY "--opt=value": an id starting with "-" would otherwise be read as an option.
+    argv = hermes_argv("blackbox", "chat", "--query-file=-", "--quiet", "--pass-session-id")
     if session_id and len(session_id) <= 128 and all(c.isalnum() or c in "_.:-" for c in session_id):
         argv.append(f"--resume={session_id}")
     try:
@@ -45,7 +47,7 @@ def ask(message: str, session_id: str = "") -> tuple[dict[str, Any], int]:
             argv,
             cwd=str(attach.repo_root()),
             text=True,
-            stdin=subprocess.DEVNULL, capture_output=True,
+            input=with_state_brief(message), capture_output=True,
             timeout=TIMEOUT_SECONDS, check=False,
         )
     except subprocess.TimeoutExpired:

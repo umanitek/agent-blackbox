@@ -40,6 +40,16 @@ that the two version fields agree.
 
 ### Fixed
 
+- **Switching to Audit from Hermes Desktop now waits for your confirmation**, the same as in the dashboard.
+- **An agent's Blackbox folder can no longer go missing when two attaches run at once.** Every attach and
+  detach takes one lock, stages under its own name and puts the old copy back if the swap fails.
+- **A bad number in a dashboard request can no longer tie up the dashboard**, and other web pages can no
+  longer show the dashboard inside a hidden frame.
+- **Agents you switched off stay in the agent list** so you can switch them back on, and the dashboard
+  switches protection only for agents it found on this machine.
+- **Hermes profiles in custom, Docker and Windows locations are found**, and deleted profiles are skipped.
+- **A log record written while another process held the log lock is no longer lost.**
+- **Your questions to the Blackbox assistant no longer show in the system's process list.**
 - **Placeholder keys in `.env.example` files and mock secrets in tests are no longer blocked.** A value
   shaped like a key but carrying no randomness (`sk-xxxx…`, `sk-ant-your-key-here`, `AIzaXXXX…`, AWS's
   documented `AKIA…EXAMPLE`, `ghp_abcdef…0123456789`, a mock `BEGIN PRIVATE KEY` block with no key

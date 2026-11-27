@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Any, Iterable, TypedDict
 
 from ..kernel.config import load_blackbox_config, settings_known
-from . import declined, hermes_homes, openclaw_discovery
+from . import declined, hermes_homes, openclaw_discovery, serial
 from .sweep import Target, is_attached, set_protection
 
 logger = logging.getLogger(__name__)
@@ -91,6 +91,7 @@ class AutoProtected:
 RECENT = AutoProtected()
 
 
+@serial.serialized
 def protect_automatically(targets: Iterable[Target]) -> list[dict[str, Any]]:
     """Protect each of *targets* (the sweep's choice from :func:`~.sweep.automatic_targets`) and
     note every one that was not protected before. Fail-open per target: one broken agent config
