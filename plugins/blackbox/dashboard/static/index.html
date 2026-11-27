@@ -4208,7 +4208,10 @@
   // could read stays "—", never 0. The ring shows the compiled share (what
   // actually protects you); the bars show both stages against the graph size.
   var VS_RING_LENGTH = 326.73;   // 2 * pi * r, r = 52 in the ring's SVG
-  var VS_STATE_TEXT = { synced: "synced", syncing: "syncing", unknown: "size unknown", unavailable: "node offline" };
+  // "node offline" is said ONLY for unavailable, which the server sends only when its debounced
+  // liveness probe finds the node not answering. A node that answers but has not returned its
+  // count (busy store) is "counting", with the last count and its age (BB-004).
+  var VS_STATE_TEXT = { synced: "synced", syncing: "syncing", unknown: "size unknown", counting: "counting", unavailable: "node offline" };
 
   function vsNumber(n) { return (typeof n === "number") ? n.toLocaleString() : "\u2014"; }
   function vsSet(id, text) { var el = document.getElementById(id); if (el) el.textContent = text; }
@@ -4220,9 +4223,16 @@
       : vsNumber(count));
   }
 
+  function vsLastCount(m) {
+    if (typeof m.counts_read_at !== "number" || typeof m.downloaded_assets !== "number") return "";
+    var minutes = Math.max(0, Math.round((Date.now() / 1000 - m.counts_read_at) / 60));
+    return " Last count: " + vsNumber(m.downloaded_assets) + " assets, " + (minutes < 1 ? "just now" : minutes + " min ago") + ".";
+  }
+
   function vsNote(m) {
     var checked = m.checked_at ? " (node checked " + String(m.checked_at).slice(11, 16) + ")" : "";
-    if (m.state === "unavailable") return "Your local DKG node is not answering \u2014 the meter resumes when it is back.";
+    if (m.state === "unavailable") return "Your local DKG node is not answering \u2014 the meter resumes when it is back." + vsLastCount(m);
+    if (m.state === "counting") return m.counts_note || "Counting what this node holds\u2026";
     if (m.state === "unknown") return "The node has not reported the graph's full size yet \u2014 showing what it holds so far.";
     if (m.state === "synced") return "Caught up with every verified asset Umanitek has published" + checked + ". New assets are picked up automatically.";
     var left = m.graph_assets - (m.downloaded_assets || 0);

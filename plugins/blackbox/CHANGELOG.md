@@ -38,6 +38,15 @@ that the two version fields agree.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The verified-sync panel says "node offline" only when the node is down.** On a busy node,
+  counting what it holds can take 5–10 seconds. The panel used to give up after 5 seconds and
+  call a node that was still answering "offline", with every number blank. It now counts in the
+  background (once a minute, waiting up to a minute) and keeps the last count with its age. A
+  node that answers but has not returned a fresh count reads "counting", and only a fresh count
+  can read "synced", so Network Shield never takes a stale count as a complete graph (BB-004).
+
 ## [1.6.2] - 2026-11-26
 
 ### Changed
