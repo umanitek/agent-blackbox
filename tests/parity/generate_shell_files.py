@@ -318,6 +318,11 @@ INSTALLS = [
     "npx cowsay hello",
     "yarn global add left-pad@1.0.0",
     "bun i lodash",
+    # a line break ends a command (field report 2026-11-27): prose after a bare install is no package
+    "npm install\nThe server listens at port 3000.",
+    "npm install\nDon't worry, it runs at boot.",
+    "npm install left-pad\nnpm i evil@1.0",
+    "cd app &&\n  npm i evil@1.0",
     "gem install rails -v 7.0.0",
     "cargo add serde -F derive",
     "brew install wget && pip3.12 install rich===13.0",

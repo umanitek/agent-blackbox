@@ -77,6 +77,11 @@ that the two version fields agree.
 
 ### Fixed
 
+- **A line break ends a command, so prose is no longer read as packages.** A Markdown file holding a bare
+  `npm install`, then a JSON example or a sentence with "at" on the next lines, was refused as installing the
+  npm packages `name` and `at` (CRITICAL). The shell lexer read a line break as a space; it now ends the
+  command as the shell does (`&&`, `|` and a `\` continuation still carry on). A real two-line script is read
+  right too. Same change in the OpenClaw bridge.
 - **A huge single-word tool call no longer stalls the check.** A 900,000-character call of nested JSON made
   the shell reader take minutes (each quote and brace re-read the whole word); it is read in one pass now.
 - **Spelling a command differently no longer hides it from Blackbox.** Quoting or escaping (`~/.s"s"h`,

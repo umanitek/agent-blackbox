@@ -83,6 +83,12 @@ const OPERATOR_CHARS = ";&|<>";
 const SUBSHELL_CHARS = "()";
 const WHITESPACE = " \t\r\n";
 /**
+ * The word an unquoted line break becomes (it ends a command as `;` does), and the words after which a
+ * line break carries the command on instead (lexer.py `_LINE_END`, `_CARRIES_ON`).
+ */
+const LINE_END = ";";
+const CARRIES_ON: ReadonlySet<string> = new Set(["&&", "||", "|", "|&", "(", ";", "&"]);
+/**
  * Brace-expansion marks for an UNQUOTED `{` `,` `}` while a word is built (a quoted or escaped one
  * is a literal character): private-use code points, never typed in a real command.
  */
@@ -215,6 +221,7 @@ class Lexer {
       const char = text[this.index]!;
       if (WHITESPACE.includes(char)) {
         this.finish();
+        if (char === "\n") this.endLine();
         this.index += 1;
       } else if (char === "#" && !this.started) {
         const newline = text.indexOf("\n", this.index);
@@ -232,6 +239,11 @@ class Lexer {
     }
     this.finish();
     return this.words;
+  }
+
+  /** An unquoted line break: a `;` word unless the command carries on (lexer.py `end_line`). */
+  private endLine(): void {
+    if (this.words.length && !CARRIES_ON.has(this.words[this.words.length - 1]!)) this.words.push(LINE_END);
   }
 
   private wordPart(char: string): void {
@@ -372,14 +384,25 @@ function alternatives(word: string): string[] | null {
   return [word];
 }
 
-/** The shell words of `command` (see `Lexer`); an unbalanced quote falls back to whitespace splitting. */
+/** The shell words of `command` (see `Lexer`); an unbalanced quote falls back to whitespace splitting, line by line. */
 export function splitWords(command: string): string[] {
   try {
     return new Lexer(command).run();
   } catch (error) {
     if (!(error instanceof Unbalanced)) throw error;
-    return command.split(/\s+/).filter(Boolean);
+    return plainWords(command);
   }
+}
+
+/** `command` split on whitespace, a `;` between its lines (lexer.py `_plain_words`). */
+function plainWords(command: string): string[] {
+  const out: string[] = [];
+  for (const line of command.split("\n")) {
+    const words = line.split(/\s+/).filter(Boolean);
+    if (words.length && out.length && !CARRIES_ON.has(out[out.length - 1]!)) out.push(LINE_END);
+    out.push(...words);
+  }
+  return out;
 }
 
 function baseName(word: string): string {
