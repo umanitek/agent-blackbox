@@ -38,6 +38,8 @@ that the two version fields agree.
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-11-27
+
 ### Added
 
 - **One Security page for everything that limits your agents** (`/security`, in the header menu). It has
@@ -885,7 +887,8 @@ The first version in the Hermes plugin catalog (commit `7d697683`, added by Herm
 in NousResearch/hermes-agent#140529). Its `plugin.yaml` said 1.0.0 while Blackbox's own code and
 dashboard reported 1.1.0; 1.1.0 is therefore skipped, so no two different builds share a number.
 
-[Unreleased]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.6.2...main
+[Unreleased]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.7.0...main
+[1.7.0]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.6.2...blackbox-v1.7.0
 [1.6.2]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.6.1...blackbox-v1.6.2
 [1.6.1]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.6.0...blackbox-v1.6.1
 [1.6.0]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.5.0...blackbox-v1.6.0

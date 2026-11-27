@@ -18,7 +18,7 @@ and flags or blocks it before anything happens.
 | **Shows** | every finding in a local dashboard, an audit trail and your system's notifications |
 | **Shares** | privacy-safe, signed threat reports with the community — opt-in: off until you turn it on |
 
-This guide documents Agent Blackbox **1.6.2** (2026-11-26). What changed, release by release:
+This guide documents Agent Blackbox **1.7.0** (2026-11-27). What changed, release by release:
 [CHANGELOG.md](CHANGELOG.md).
 
 **Contents:** [Supported agents](#supported-agents) ·
@@ -266,7 +266,7 @@ and the other answers are no):
 
 **Audit or Block.** Audit mode records what your agents do and flags threats, but stops only what
 self-protection, File Shield and the startup places always stop. Block mode also stops what the
-verified graph confirms. Switch any time in the dashboard's Settings.
+verified graph confirms. Switch any time on the dashboard's Security page (`/security`).
 
 **Protect every agent.** The same choice later: `blackbox attach --all --auto` (or `--no-auto`),
 `blackbox setup --protect-new-agents` / `--no-protect-new-agents`, or Settings → Agents. An agent
@@ -423,7 +423,7 @@ rule for it. The finding lands in the dashboard's live feed within a second. In
 the default `audit` mode it is flagged and logged; nothing is stopped.
 
 **Switch to blocking.** When you want confirmed threats stopped rather than
-just flagged, use the mode in the dashboard's Settings, the Audit / Block switch
+just flagged, use the mode on the dashboard's Security page, the Audit / Block switch
 on the Blackbox page in Hermes Desktop, or `config.yaml`:
 
 ```yaml
@@ -920,7 +920,8 @@ browser cannot alter your settings.
 | **Shields** | `/shields/…`: File Shield (protected items, the sandbox, its permissions and launch coverage), Network Shield, Trader Shield |
 | **Protection** | `/protection`: every refused attempt to switch Blackbox off or get around it, counted by kind (self-protection, the kernel sandbox, startup items); the **protection log**, whose entries are chained so an edit, a cut or a rewind of the record shows; **watch-first rules** — watch a host or a package, see how often agents reach for it, then block it with one click (taking a block off asks you first) |
 | **Notifications** | `/notifications`: what you are told, muted agents, quiet hours |
-| **Settings** | mode, categories and minimum severities, protected paths, shields, agents, community sharing and sandbox mode, the AI model |
+| **Security** | `/security`: everything that limits your agents in one place — the mode and block severity, what agents may do (every permission per agent and per project, each explaining what it allows, what the agent meets while blocked and what can go wrong if relaxed), the threat checks, the hook size limit, and what is always on |
+| **Settings** | appearance, protected paths, shields, agents, community sharing and sandbox mode, the AI model (the mode and threat checks moved to Security) |
 | **Playground** | in sandbox mode only (above) |
 | **Docs** | `/docs`: every shield, its wallets and its tested attacks, live from this install |
 | **Assistant** | the Blackbox chat, from the top bar |
@@ -958,7 +959,7 @@ the sidebar:
 |---|---|
 | **Overview** | open findings, verified threats synced, last sync, the community graph and threat sharing; your connected agents and **Attach agent**; Trader Shield — wallets found here, what it always watches, recent events |
 | **Threat graph** | the verified, community and local graphs as a live bubble map (drag, zoom, click a threat), the verified graph's sync progress, a search over every verified threat, and **Threats detected** and **Agent activity** as sortable, paged tables |
-| **Settings** | the mode, what Blackbox checks and from which severity, protected paths, Trader Shield, community sharing |
+| **Settings** | protected paths, Trader Shield, community sharing (the mode and what Blackbox checks: the Security page) |
 
 The **status bar** shows a shield with the mode — **Audit** in amber (recording,
 not stopping), **Block** in green — and what was caught today. Switching to Audit
@@ -973,7 +974,7 @@ is not running, the page says how to start it.
 ## Configuration
 
 Settings live under `plugins.entries.blackbox` in your Hermes `config.yaml`.
-The easiest way to change them is the dashboard's Settings. Most keys also
+The easiest way to change them is the dashboard's Security page and Settings. Most keys also
 accept a `BLACKBOX_*` environment variable, such as `BLACKBOX_MODE`.
 
 | Key | Default | Meaning |
@@ -987,6 +988,8 @@ accept a `BLACKBOX_*` environment variable, such as `BLACKBOX_MODE`.
 | `detection.<category>.min_severity` | `info` | quiet a category below this level |
 | `protected_paths` | `~/.ssh/*`, `.env`, `.env.*`, `*.pem`, `*.key`, `*.p12`, `~/.aws/credentials`, Blackbox's own folders | files and folders that block in block mode and never leave the machine |
 | `shields.trader` | off | Trader Shield (see above) |
+| `agent_sandbox.permissions` | each permission's strict default | what agents may do, per agent and project: `{permission, mode: block\|ask\|allow, agent, project}` — see the Security page or [docs/file-shield.md](docs/file-shield.md#sandbox-permissions) |
+| `hook_payload_limit_mb` | `16` | the largest tool call Blackbox reads (4, 16 or 64); a larger call can't be checked, so it is refused |
 | `auto_attach` | `false` | protect agents added later on their own (the installer's "protect every agent" turns it on) |
 | `osv_lookup` | `true` | look packages up on OSV.dev |
 | `context_graph_id` | `0x37b1Fdfd…/agent-blackbox-vm` | the verified threat graph (the community's reports live in its shared memory) |
@@ -1170,7 +1173,7 @@ puts back what is missing. For a catalog install, run `hermes blackbox setup`.
 
 ## Versions
 
-- **Current:** 1.6.2 (2026-11-26). The version is the same in `plugin.yaml`,
+- **Current:** 1.7.0 (2026-11-27). The version is the same in `plugin.yaml`,
   `kernel/constants.py` and [CHANGELOG.md](CHANGELOG.md).
 - **How versions work** ([Semantic Versioning](https://semver.org/)): a **patch** (1.6.**2**) is
   fixes only; a **minor** (1.**6**) adds behaviour that works with everything before; a **major**
