@@ -11,7 +11,8 @@ Reads (GET):
 * ``watch-plan`` — what the system protection helper watches, SIGNED for its nonce (helper_link);
 * ``sandbox`` — Layer 2: which agents run inside the OS sandbox, whether their launchers are in
   place, and the GUI editors that can be opened inside it (:mod:`.sandbox`);
-* ``permissions`` — the sandbox permissions per agent and project (``sandbox.permissions``);
+* ``permissions`` — the sandbox permissions per agent and project (``sandbox.permissions``), each
+  explained where it is edited; ``?agent=&project=`` answers each mode as it is for that scope;
 * ``permission-requests`` — what agents asked for and the person has not answered yet.
 
 Writes (POST):
@@ -195,9 +196,11 @@ def _runs(context: Any) -> list[Any]:
         return []
 
 
-def permissions_view(context: ShieldContext, _params: Mapping[str, str]) -> dict[str, Any]:
-    """The sandbox permissions, and every running agent that still has its old ones (``restart_needed``)."""
-    view = permissions.view(sandbox.chosen(mode_module.current()))
+def permissions_view(context: ShieldContext, params: Mapping[str, str]) -> dict[str, Any]:
+    """The sandbox permissions — for one agent and/or project when ``?agent=&project=`` name one —
+    and every running agent that still has its old ones (``restart_needed``)."""
+    scoped = {key: params.get(key, "") for key in ("agent", "project")} if params else {}
+    view = permissions.view(sandbox.chosen(mode_module.current()), scoped)
     why = sandbox.unavailable()
     if why:   # nothing here enforces a permission: say so instead of offering controls (KI-660)
         return permissions.not_here(view, why)

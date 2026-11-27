@@ -55,7 +55,7 @@ def test_a_field_the_server_did_not_serve_is_never_posted_unless_the_person_chan
     view = {key: value for key, value in _served().items() if key not in ("auto_attach", "discover", "categories")}
     payload = _page_posts(tmp_path, view)["payload"]
     assert "auto_attach" not in payload and "discover" not in payload and "categories" not in payload
-    assert payload["mode"] in ("block", "audit") and "osv_lookup" in payload   # what it read is posted as read
+    assert "osv_lookup" in payload   # what it read is posted as read
     changed = _page_posts(tmp_path, view, {"auto_attach": True})["payload"]
     assert changed["auto_attach"] is True   # the person's own change is posted
 
@@ -64,3 +64,21 @@ def test_reset_to_defaults_keeps_the_operators_auto_attach(tmp_path):
     assert settings.write_settings({"auto_attach": True})["ok"]
     payload = _page_posts(tmp_path, _served(), {"reset": True})["payload"]
     assert payload["auto_attach"] is True
+
+
+def test_the_settings_window_never_posts_what_the_security_page_edits(tmp_path):
+    """One place per setting (engine build 2026-11-27): the mode, the severity that blocks and the
+    threat checks are edited on the Security page only, so a Save in the settings window can never
+    write back a stale copy of them (red on the base 138eafb5bd: it posted all three)."""
+    assert settings.write_settings({"mode": "block"})["ok"]
+    payload = _page_posts(tmp_path, _served(), {"discover": False})["payload"]
+    assert not {"mode", "block_severity", "categories"} & set(payload)
+    assert payload["discover"] is False
+
+
+def test_the_security_page_is_served_and_linked_from_the_dashboard():
+    client = TestClient(server.create_app(), base_url="http://127.0.0.1")
+    page = client.get("/security")
+    assert page.status_code == 200 and "Protection mode" in page.text and "/permission-card.js" in page.text
+    assert client.get("/security.js").status_code == 200 and client.get("/permission-card.js").status_code == 200
+    assert 'href="/security"' in client.get("/").text

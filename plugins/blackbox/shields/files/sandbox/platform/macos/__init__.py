@@ -53,7 +53,7 @@ from ......kernel.persistence_places import startup_places
 from .apps import APPS, ELECTRON_FLAGS, open_app
 from .launchers import ONCE_MINUTES, ONCE_SUFFIX, PROJECT_INDEX, RUN_INFIX, command_shim, launcher_script, shell_shim
 from .applescript import run_script
-from .opener import find_app, is_driver, open_url, open_with
+from .opener import find_app, find_person_app, is_driver, open_url, open_with
 from .processes import SYSTEM_NAME, ProcessFacts, describe, is_system, terminate
 from .profile import APP_DRIVERS, LOCAL_SSH, PROFILE_SUFFIX, SANDBOX_EXEC, hides_socket, render
 from .shims import BREW_PATHS, BREW_READ_ONLY, MANAGER_FOLDERS, brew_shim, broker_shims, manager_shims, open_shim, osascript_shim, spawn_brew, stop_group
@@ -114,6 +114,7 @@ __all__ = [
     "command_shim",
     "describe",
     "find_app",
+    "find_person_app",
     "hides_socket",
     "is_driver",
     "is_system",

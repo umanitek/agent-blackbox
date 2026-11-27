@@ -95,6 +95,10 @@ def find_app(_name: str) -> str:
     return ""
 
 
+def find_person_app(_name: str) -> str:
+    return ""
+
+
 def is_driver(_app_path: str) -> bool:
     return True
 

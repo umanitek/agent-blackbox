@@ -3,9 +3,14 @@
 Reads (GET):
 
 * ``permissions`` — the catalogue with each permission's mode everywhere and per sandboxed agent,
-  when a change applies (``now`` for a broker, ``after restart`` for the profile), the
-  never-list, what can not be controlled, the person's rules and folder rules, and per agent
-  whether only the hook-enforced part applies (F9).
+  each explained where it is edited (``unlocks`` when allowed, ``when_blocked`` while blocked,
+  ``cost`` if relaxed, its strict ``default``, its ``route`` and when a change applies: ``applies``
+  ``now`` / ``after restart`` and the sentence ``applies_line``), the self-protection rules no
+  setting relaxes (``always_on``), the never-list, what can not be controlled (each name + why),
+  the person's rules and folder rules, per agent whether only the hook-enforced part applies (F9),
+  and every agent a rule may name (``scope_agents``). With ``scope`` ``{agent?, project?}`` each
+  ``mode`` is the one in force for that agent and/or project, ``set_here`` when a rule for exactly
+  that scope decides it.
 
 Writes (POST), each through the ONE settings writer with the section's validator:
 
@@ -28,19 +33,28 @@ from __future__ import annotations
 import logging
 from typing import Any, Callable, Mapping
 
-from ..... import audit
+from ..... import audit, detection
+from .....kernel import agent_hosts
 from .....kernel.agent_hosts import product_name
 from .....kernel.settings import write_settings
 from ....shield_api import ShieldApiError, ShieldContext
 from ... import mode as mode_module
-from .catalogue import BY_ID, NEVER, NOT_CONTROLLABLE, PERMISSIONS
+from .catalogue import ALWAYS_ON, BY_ID, NEVER, NOT_CONTROLLABLE, PERMISSIONS
 from .judge import loosened
-from .model import Access, FolderRule, Mode, Route, Rule, Scope, Settings
+from .model import Access, FolderRule, Mode, Never, Permission, Route, Rule, Scope, Settings
 from .section import SECTION, as_section, current, known_agent, problems, stored
 
 logger = logging.getLogger(__name__)
 #: When a change reaches an agent, per route.
-APPLIES = {Route.BROKER: "now", Route.PROFILE: "after restart"}
+APPLIES = {Route.BROKER: "now", Route.PROFILE: "after restart", Route.HOOK: "now"}
+#: When a change reaches an agent, per route, in the person's words (shown next to every control).
+APPLIES_LINE = {
+    Route.BROKER: "Applies at once: Blackbox does this for the agent and decides each time it is asked.",
+    Route.PROFILE: "Applies when the agent starts again: its sandbox is fixed when it starts.",
+    Route.HOOK: "Applies at once, to every agent's next tool call, sandboxed or not.",
+}
+#: Said once for every permission: turning one down waits for the person.
+LOOSENING_NOTE = "Loosening a permission waits for your approval; tightening one applies without asking."
 HOOKS_ONLY_NOTE = ("not in the sandbox: only folder rules and the places something starts from apply (through its hooks); "
                    "the other permissions need the sandbox")
 
@@ -144,20 +158,45 @@ def _mode_row(settings: Settings, agent: str) -> dict[str, str]:
     return {each.id: settings.mode(each, agent).value for each in PERMISSIONS if each.controllable}
 
 
-def view(sandboxed: tuple[str, ...] = ()) -> dict[str, Any]:
-    """The ``permissions`` read (see the module doc); *sandboxed*: the agents inside the sandbox."""
+def _permission_row(settings: Settings, each: Permission, scope: Scope) -> dict[str, Any]:
+    """One permission as the read shows it, its ``mode`` the one in force for *scope*, and
+    ``set_here`` True when a rule for exactly that scope decides it (so the page can offer to
+    clear it and fall back to the wider setting)."""
+    rule = settings.rule(each.id, scope.agent, scope.project_path())
+    return {"id": each.id, "name": each.name, "unlocks": each.unlocks, "when_blocked": each.when_blocked, "cost": each.cost,
+            "route": each.route.value, "default": each.default.value, "modes": [mode.value for mode in each.modes],
+            "mode": settings.mode(each, scope.agent, scope.project_path()).value, "applies": APPLIES[each.route],
+            "applies_line": APPLIES_LINE[each.route], "set_here": rule is not None and rule.scope == scope,
+            "controllable": each.controllable, "note": each.note, "ports": each.ports}
+
+
+def _listed(entries: tuple[Never, ...]) -> list[dict[str, str]]:
+    return [{"id": each.id, "name": each.name, "why": each.why} for each in entries]
+
+
+def view(sandboxed: tuple[str, ...] = (), scoped: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """The ``permissions`` read (see the module doc); *sandboxed*: the agents inside the sandbox;
+    *scoped*: ``{"agent"?, "project"?}`` — each permission's mode as it is for that agent and/or
+    project (everywhere when empty; raises ShieldApiError for an unknown agent or a too-broad folder)."""
     settings = current()
     rules = as_section(settings)
+    scope = _scope(scoped or {})
     return {
-        "permissions": [{"id": each.id, "name": each.name, "unlocks": each.unlocks, "cost": each.cost, "route": each.route.value,
-                         "default": each.default.value, "modes": [mode.value for mode in each.modes],
-                         "mode": settings.mode(each).value, "applies": APPLIES[each.route], "controllable": each.controllable,
-                         "note": each.note, "ports": each.ports} for each in PERMISSIONS],
-        "never": [{"id": each.id, "name": each.name, "why": each.why} for each in NEVER],
-        "not_controllable": [{"id": each.id, "name": each.name, "why": each.why} for each in NOT_CONTROLLABLE],
+        "scope": {"agent": scope.agent, "project": scope.project, "words": scope.words(product_name)},
+        "permissions": [_permission_row(settings, each, scope) for each in PERMISSIONS],
+        "always_on": _listed(ALWAYS_ON),
+        # refused in every mode, Audit included: the guard's own list (detection.ALWAYS_BLOCKED), never retyped
+        "always_blocked": [{"name": rule.name, "why": rule.why, "permission": rule.permission}
+                           for rule in detection.ALWAYS_BLOCKED],
+        "never": _listed(NEVER),
+        "not_controllable": _listed(NOT_CONTROLLABLE),
+        "loosening_note": LOOSENING_NOTE,
         "rules": rules["permissions"], "folders": rules["folders"],
         "agents": [{"id": agent, "name": product_name(agent), "sandboxed": True, "modes": _mode_row(settings, agent)}
                    for agent in sandboxed],
+        # every agent a rule may name (a HOOK permission reaches agents outside the sandbox too)
+        "scope_agents": [{"id": agent, "name": product_name(agent), "sandboxed": agent in sandboxed}
+                         for agent in (agent_hosts.HERMES_ID, *agent_hosts.BY_ID)],
         "hooks_only_note": HOOKS_ONLY_NOTE,
         "sandbox_unavailable": "",
         # rows of the stored setting that could not be read: each dropped alone, the rest in force
@@ -167,11 +206,16 @@ def view(sandboxed: tuple[str, ...] = ()) -> dict[str, Any]:
 
 def not_here(view: dict[str, Any], why: str) -> dict[str, Any]:
     """*view* on a machine where agents can not be sandboxed (*why*, the platform's reason): every
-    permission shown as not controllable, with that reason, and no never-list — none of them does
-    anything here. KI-660 (Linux round L1): the page offered macOS's whole catalogue with live
+    sandbox permission shown as not controllable, with that reason, and no never-list — none of them
+    does anything here. The HOOK-route permissions and the self-protection rules (``always_on``)
+    still hold: they are the hooks'.
+    KI-660 (Linux round L1): the page offered macOS's whole catalogue with live
     Block / Ask / Allow buttons (Homebrew, AppleScript, "Services on this Mac", pbpaste…) and
     "ssh into this Mac … (probed on macOS 27.2)" on a Linux machine with no sandbox at all."""
-    permissions = [{**each, "controllable": False, "note": why} for each in view["permissions"]]
+    # The HOOK-route permissions are enforced by the hook judgement every agent passes through, not
+    # by the sandbox, so they stay settable here (startup items, shell startup files, sudo writes …).
+    permissions = [each if each["route"] == Route.HOOK.value else {**each, "controllable": False, "note": why}
+                   for each in view["permissions"]]
     return {**view, "permissions": permissions, "never": [], "not_controllable": [], "agents": [], "sandbox_unavailable": why}
 
 
@@ -185,4 +229,4 @@ WRITES = ("permission-set", "permission-clear", "folder-set", "folder-clear")
 API_WRITES = {name: _writer(name) for name in WRITES}
 API_WEAKENING = {name: weakening(name) for name in WRITES}
 
-__all__ = ["API_WEAKENING", "API_WRITES", "APPLIES", "HOOKS_ONLY_NOTE", "WRITES", "view", "weakening"]
+__all__ = ["API_WEAKENING", "API_WRITES", "APPLIES", "APPLIES_LINE", "HOOKS_ONLY_NOTE", "LOOSENING_NOTE", "WRITES", "view", "weakening"]

@@ -14,7 +14,7 @@ category                          counted when
 ``self-protection-kernel``        the operating system's agent sandbox refused a write to
                                   Blackbox's own places
 ``startup-item``                  the guard refused an agent writing a place something starts from
-                                  by itself (login items, services, schedules)
+                                  by itself (login items, services, schedules, shell startup files)
 ================================  ===============================================================
 
 Counted at the one place every refusal is recorded, :func:`note`, called by the audit log for each
@@ -35,7 +35,7 @@ from typing import Any, Optional, TypedDict
 
 from ..kernel import constants, threat_ids
 from ..kernel.bounded_files import file_lock, read_json_object, write_json_object
-from ..kernel.persistence_places import STARTUP_ITEM
+from ..kernel.persistence_places import SHELL_STARTUP, STARTUP_ITEM
 from . import protection_log
 
 #: The record of a refusal the operating system's sandbox made (its findings are refusals by nature).
@@ -61,7 +61,7 @@ def _path() -> Path:
 def category(finding: dict[str, Any], event: str) -> Optional[str]:
     """The tamper category of a REFUSED *finding* in a record of *event*, or None for any other."""
     identifier, matched = str(finding.get("identifier") or ""), str(finding.get("matched") or "")
-    if matched == STARTUP_ITEM:
+    if matched in (STARTUP_ITEM, SHELL_STARTUP):   # a shell startup file is a place something starts from too
         return STARTUP
     if matched == threat_ids.SELF_PROTECTION or threat_ids.is_self_protection(identifier):
         return SELF_PROTECTION_KERNEL if event == KERNEL_REFUSAL_EVENT else SELF_PROTECTION

@@ -48,17 +48,18 @@ from pathlib import Path
 # imported as a module by the plugin and its tests.
 if __package__:
     from .answers import allow_output, deny_output, note_output, post_output, prompt_output
-    from .judge_here import BLOCKING_EVENTS, NOT_READ, TIMEOUT_SECONDS, Verdict, answer_in_time, keep, process_age
+    from .judge_here import BLOCKING_EVENTS, NOT_READ, TIMEOUT_SECONDS, Verdict, answer_in_time, keep, payload_limit_bytes, process_age
     from .identity import AGENT_TURN_MARKS, MODEL_EVENTS, effective_agent, identity, inside_sandbox, transcript_model, workspace
     from .tool_shapes import READ_MANY_NAMES, cline_tool, many_read, parsed_json
 else:
     from answers import allow_output, deny_output, note_output, post_output, prompt_output
-    from judge_here import BLOCKING_EVENTS, NOT_READ, TIMEOUT_SECONDS, Verdict, answer_in_time, keep, process_age
+    from judge_here import BLOCKING_EVENTS, NOT_READ, TIMEOUT_SECONDS, Verdict, answer_in_time, keep, payload_limit_bytes, process_age
     from identity import AGENT_TURN_MARKS, MODEL_EVENTS, effective_agent, identity, inside_sandbox, transcript_model, workspace
     from tool_shapes import READ_MANY_NAMES, cline_tool, many_read, parsed_json
 
-#: The most of stdin read (a write tool's whole file, or the file Cursor's beforeReadFile is about to
-#: read, can be in the payload). A pre-tool payload larger than this is refused (:data:`NOT_READ`).
+#: The most of stdin read by default (a write tool's whole file, or the file Cursor's beforeReadFile is
+#: about to read, can be in the payload); the person picks 4, 16 or 64 MiB (``hook_payload_limit_mb``,
+#: :func:`payload_limit_bytes`). A pre-tool payload larger than the limit is refused (:data:`NOT_READ`).
 MAX_INPUT_BYTES = 16 * 1024 * 1024
 #: The most text (a prompt, a tool's output, a file about to be read) sent for the injection check.
 MAX_TEXT_CHARS = 256 * 1024
@@ -360,9 +361,10 @@ def main(argv: list, detach: bool = False) -> int:
 
 def _payload() -> dict | None:
     """The agent's JSON object on stdin ({} when it sent nothing); None when it can not be read
-    whole: larger than :data:`MAX_INPUT_BYTES`, nested too deep to parse, or not a JSON object."""
-    raw = sys.stdin.buffer.read(MAX_INPUT_BYTES + 1)
-    if len(raw) > MAX_INPUT_BYTES:
+    whole: larger than the limit (:func:`payload_limit_bytes`), nested too deep to parse, or not a JSON object."""
+    limit = payload_limit_bytes()   # read once per hook call, from the small file beside the runner
+    raw = sys.stdin.buffer.read(limit + 1)
+    if len(raw) > limit:
         return None
     try:
         payload = json.loads(raw.decode("utf-8", "replace") or "{}")

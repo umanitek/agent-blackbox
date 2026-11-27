@@ -18,17 +18,17 @@ import sys
 
 if sys.platform == "darwin":
     from .macos import (APPS, BREW_PATHS, HELPER_REPORTS_REFUSALS, MANAGER_FOLDERS, ONCE_MINUTES, SYSTEM_NAME, ProcessFacts, describe, is_system, terminate, ONCE_SUFFIX, PROFILE_SUFFIX,
-            PROJECT_INDEX, RUN_INFIX, SETUID_NOTE, TOOLS_FOLDER, brew_shim, broker_shims, command_shim, find_app, is_driver,
+            PROJECT_INDEX, RUN_INFIX, SETUID_NOTE, TOOLS_FOLDER, brew_shim, broker_shims, command_shim, find_app, find_person_app, is_driver,
             hides_socket, launcher_script, layers, manager_shims, network_rules, open_app, open_shim, open_url, open_with, osascript_shim, prepare,
             refresh_tools, render, run_script, shell_shim, spawn_brew, startup_places, stop_group, unavailable, unprepare)
 elif sys.platform.startswith("linux"):
     from .linux import (APPS, BREW_PATHS, HELPER_REPORTS_REFUSALS, MANAGER_FOLDERS, ONCE_MINUTES, SYSTEM_NAME, ProcessFacts, describe, is_system, terminate, ONCE_SUFFIX, PROFILE_SUFFIX,
-            PROJECT_INDEX, RUN_INFIX, SETUID_NOTE, TOOLS_FOLDER, brew_shim, broker_shims, command_shim, find_app, is_driver,
+            PROJECT_INDEX, RUN_INFIX, SETUID_NOTE, TOOLS_FOLDER, brew_shim, broker_shims, command_shim, find_app, find_person_app, is_driver,
             hides_socket, launcher_script, layers, manager_shims, network_rules, open_app, open_shim, open_url, open_with, osascript_shim, prepare,
             refresh_tools, render, run_script, shell_shim, spawn_brew, startup_places, stop_group, unavailable, unprepare)
 else:
     from .unsupported import (APPS, BREW_PATHS, HELPER_REPORTS_REFUSALS, MANAGER_FOLDERS, ONCE_MINUTES, SYSTEM_NAME, ProcessFacts, describe, is_system, terminate, ONCE_SUFFIX, PROFILE_SUFFIX,
-            PROJECT_INDEX, RUN_INFIX, SETUID_NOTE, TOOLS_FOLDER, brew_shim, broker_shims, command_shim, find_app, is_driver,
+            PROJECT_INDEX, RUN_INFIX, SETUID_NOTE, TOOLS_FOLDER, brew_shim, broker_shims, command_shim, find_app, find_person_app, is_driver,
             hides_socket, launcher_script, layers, manager_shims, network_rules, open_app, open_shim, open_url, open_with, osascript_shim, prepare,
             refresh_tools, render, run_script, shell_shim, spawn_brew, startup_places, stop_group, unavailable, unprepare)
 
@@ -54,6 +54,7 @@ __all__ = [
     "connection_pid",
     "describe",
     "find_app",
+    "find_person_app",
     "hides_socket",
     "is_driver",
     "is_system",

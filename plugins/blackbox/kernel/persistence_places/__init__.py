@@ -227,10 +227,13 @@ class HookPlaces:
     ``starts`` — a write there starts something by itself (launchd, login items, cron, ``at``,
     OpenSSH's login files, the shell startup files): any change but a read is refused.
     ``programs`` — Homebrew's own folders: running or reading a program there is everyday work,
-    so only a WRITE there (a redirect, a copy, a writing command) is refused."""
+    so only a WRITE there (a redirect, a copy, a writing command) is refused.
+    ``shell`` — the shell startup files among ``starts`` (:func:`is_shell_startup`): judged apart,
+    so the person's ``shell-startup`` permission decides them and ``startup-items`` the rest."""
 
     starts: tuple[str, ...]
     programs: tuple[str, ...]
+    shell: tuple[str, ...] = ()
 
 
 def hook_places(home: str, prefixes: tuple[str, ...] = HOMEBREW_PREFIXES) -> HookPlaces:
@@ -238,8 +241,15 @@ def hook_places(home: str, prefixes: tuple[str, ...] = HOMEBREW_PREFIXES) -> Hoo
     startup files for the person at *home*, as the hook judgement reads them."""
     folders, files, globs = startup_places(home, prefixes, EVERY_SYSTEM)
     programs = tuple(homebrew_folders(prefixes, home))
-    starts = [place for place in folders if place not in programs] + files + globs + shell_startup_files(home)
-    return HookPlaces(starts=_with_real_spellings(starts), programs=_with_real_spellings(programs))
+    starts = _with_real_spellings([place for place in folders if place not in programs] + files + globs + shell_startup_files(home))
+    return HookPlaces(starts=starts, programs=_with_real_spellings(programs),
+                      shell=tuple(place for place in starts if is_shell_startup(place)))
+
+
+def is_shell_startup(path: str) -> bool:
+    """True for a file (or folder) a shell reads when it starts: zsh's, bash's and ``~/.profile``
+    (:data:`..shell_path.STARTUP_FILES`) and fish's ``config.fish`` / ``conf.d``."""
+    return os.path.basename(path.rstrip("/")) in shell_path.STARTUP_FILES or "/.config/fish/" in path + "/"
 
 
 def _with_real_spellings(places: list[str] | tuple[str, ...]) -> tuple[str, ...]:
@@ -255,11 +265,17 @@ def _with_real_spellings(places: list[str] | tuple[str, ...]) -> tuple[str, ...]
 
 #: The ``fileaccess`` category of an agent writing one of these places (``fileaccess:<tool>:startup-item``).
 STARTUP_ITEM = "startup-item"
+#: The ``fileaccess`` category of an agent writing a shell startup file (``~/.zshrc``, ``~/.bashrc`` …),
+#: kept apart from :data:`STARTUP_ITEM` so the person can relax the one without the other.
+SHELL_STARTUP = "shell-startup"
+#: The ``fileaccess`` category of an agent's ``sudo`` write into :data:`ROOT_PLACES`.
+ROOT_WRITE = "root-write"
 
 
 def is_startup_item(identifier: str) -> bool:
-    """True for a finding of an agent writing a persistence place (``fileaccess:<tool>:startup-item``)."""
-    return identifier.startswith("fileaccess:") and identifier.endswith(":" + STARTUP_ITEM)
+    """True for a finding of an agent writing a persistence place (``fileaccess:<tool>:startup-item``,
+    or ``…:shell-startup`` for a shell startup file)."""
+    return identifier.startswith("fileaccess:") and identifier.endswith((":" + STARTUP_ITEM, ":" + SHELL_STARTUP))
 
 
 #: What each place is, for the words of a refusal (the first match wins).
@@ -310,8 +326,10 @@ __all__ = [
     "PERSISTENCE_FOLDERS",
     "PERSISTENCE_GLOBS",
     "ROOT_PLACES",
+    "ROOT_WRITE",
     "SHARED_FILES",
     "SHARED_FOLDERS",
+    "SHELL_STARTUP",
     "STARTUP_ITEM",
     "SUDO_RULES",
     "USER_TOOL_FOLDERS",
@@ -321,6 +339,7 @@ __all__ = [
     "describe",
     "homebrew_folders",
     "hook_places",
+    "is_shell_startup",
     "is_startup_item",
     "places_of",
     "schedules",

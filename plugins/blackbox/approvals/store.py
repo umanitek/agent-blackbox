@@ -43,6 +43,8 @@ USE_WINDOW_SECONDS = 120
 MAX_HELD = 20
 #: The companion app's key length, in bytes.
 KEY_BYTES = 32
+#: Where a held request is (:meth:`Approvals.state`).
+WAITING, APPROVED, GONE = "waiting", "approved", "gone"
 
 
 def body_digest(body: bytes) -> str:
@@ -138,6 +140,18 @@ class Approvals:
         with self._lock:
             self._expire()
             return [held for held in self._held.values() if held.approved_at is None]
+
+    def state(self, request_id: str) -> str:
+        """Where *request_id* is: :data:`WAITING` for the person, :data:`APPROVED` (send the same
+        change again to apply it, within :data:`USE_WINDOW_SECONDS`) or :data:`GONE` (refused,
+        expired, already used or never held). A page that held a change polls this and sends it
+        again once approved, so the person does not have to press twice (owner decision 7)."""
+        with self._lock:
+            self._expire()
+            held = self._held.get(str(request_id))
+            if held is None:
+                return GONE
+            return APPROVED if held.approved_at is not None else WAITING
 
     def answer(self, request_id: str, approve: bool, proof: str) -> bool:
         """The person's answer, as signed by the app. False for an unknown, expired or

@@ -286,7 +286,7 @@ def _file_tool_tampers(access: dict[str, str], args: Any) -> bool:
         return False
     path, text, own = access["path"], _written_text(args)[:_MAX_STAGED_CHARS], guard_places.scope() == guard_places.OWN
     if not own:   # a persistence place: any write; a script that would write one (not in Homebrew's folders)
-        scripts_judged = guard_places.scope() in (guard_places.STARTS, guard_places.HOOKS)
+        scripts_judged = guard_places.scope() in (guard_places.STARTS, guard_places.SHELL, guard_places.HOOKS)
         return guard_places.reaches(path) or (scripts_judged and script_tampers(str(path), text))
     if not guard_places.reaches(path):
         name = os.path.basename(os.path.expanduser(str(path or "")))

@@ -75,12 +75,12 @@ from .shield_api import (
 logger = logging.getLogger(__name__)
 
 __all__ = [
-    "AGENT_SANDBOX", "API_MAX_WRITE_BYTES", "API_NAME_PATTERN", "PACKAGE_INSTALLS", "AssistantAnswer",
-    "BrowserRoot", "Capability", "InstanceRef", "Pack", "Peer", "RawAnswer", "Registrar", "RunningAgent", "SelfTest", "Shield",
+    "AGENT_PERMISSIONS", "AGENT_SANDBOX", "ALWAYS_ON", "API_MAX_WRITE_BYTES", "API_NAME_PATTERN", "PACKAGE_INSTALLS", "AssistantAnswer",
+    "BrowserRoot", "Capability", "HookPermissions", "InstanceRef", "Pack", "Peer", "RawAnswer", "Registrar", "RunningAgent", "SelfTest", "Shield",
     "ShieldAlert", "ShieldApi", "ShieldApiError", "ShieldContext", "ShieldEvent", "ShieldExtension",
     "ShieldMode", "ShieldStatus", "ShieldsSnapshot", "addon_routes", "agent_sandbox_weakening",
     "alerts", "all_shields", "allow_lists", "allows", "apply_sandbox_default", "attack_table",
-    "browser_roots", "call_api", "check", "describe_change", "enter_hermes_process", "events", "get", "hosts_in",
+    "browser_roots", "call_api", "check", "describe_change", "enter_hermes_process", "events", "get", "hook_permissions", "hosts_in",
     "loaded_packs", "pack_logo", "package_installs_weakening", "permission_refused", "prompt_findings", "reload_registry",
     "remove_sandbox_placeholders", "run_hides_socket",
     "self_tests", "settings_validators", "settings_view", "shield_name", "snapshot", "statuses",
@@ -97,6 +97,14 @@ apply_sandbox_default = files.sandbox.defaults.apply
 PACKAGE_INSTALLS, package_installs_weakening = files.sandbox.packages.SECTION, files.sandbox.packages.setting_weakening
 #: ``agent_sandbox``: the sandbox permissions per agent and project; loosening them waits (approvals).
 AGENT_SANDBOX, agent_sandbox_weakening = files.sandbox.permissions.SECTION, files.sandbox.permissions.section_weakening
+#: The person's HOOK-route permissions for one agent in one folder (``startup-items``, ``shell-startup``,
+#: ``root-writes``, ``unnamed-publisher``, ``vulnerable-packages``): the guard reads them once per tool
+#: call to decide the findings they name. Never raises; unreadable blocks (``HookPermissions.unreadable``).
+hook_permissions, HookPermissions = files.sandbox.permissions.hook_permissions, files.sandbox.permissions.HookPermissions
+#: Every agent permission, each explaining itself (``unlocks`` / ``when_blocked`` / ``cost``, its strict
+#: default), and the self-protection rules no setting relaxes: the Docs page lists them from here.
+AGENT_PERMISSIONS = files.sandbox.permissions.catalogue.PERMISSIONS
+ALWAYS_ON = files.sandbox.permissions.catalogue.ALWAYS_ON
 #: A sandbox refusal an agent's hook saw: asks the person when the permission it means is on "ask"
 #: (a refused signal: the stop broker, with the process it named); where the helper does not report
 #: refusals (Linux), a refused write to Blackbox's or a startup place is counted as tamper (KI-693).

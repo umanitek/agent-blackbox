@@ -2286,26 +2286,6 @@
   .set-select:focus-visible { outline: 2px solid var(--settings-mint); outline-offset: 1px; border-color: var(--settings-mint); }
   .set-select:disabled { opacity: 0.4; cursor: default; }
 
-  /* per-category rows */
-  .cat-row {
-    display: flex; align-items: flex-start; gap: 13px;
-    padding: 13px 0; border-top: 1px solid var(--wash-4);
-  }
-  .cat-row:first-of-type { border-top: none; }
-  .cat-ico {
-    flex: 0 0 auto; width: 30px; height: 30px; border-radius: 2px; margin-top: 1px;
-    display: flex; align-items: center; justify-content: center;
-    background: color-mix(in srgb, var(--cat, var(--mint)) 12%, transparent);
-    border: 1px solid color-mix(in srgb, var(--cat, var(--mint)) 32%, transparent);
-    color: var(--cat, var(--mint));
-  }
-  .cat-ico svg { width: 17px; height: 17px; display: block; }
-  .cat-main { flex: 1 1 auto; min-width: 0; }
-  .cat-name { font-size: 13px; font-weight: 600; color: var(--text); }
-  .cat-help { font-size: 11.5px; color: var(--muted); margin-top: 2px; line-height: 1.45; }
-  .cat-ctrl { flex: 0 0 auto; display: flex; align-items: center; gap: 11px; padding-top: 2px; }
-  .cat-row.off .cat-name, .cat-row.off .cat-ico { opacity: 0.5; }
-
   /* protected-paths list editor */
   .paths-list { display: flex; flex-direction: column; gap: 7px; margin-bottom: 12px; }
   .paths-shield-note { font-size: 11.5px; color: var(--muted); margin-top: 6px; }
@@ -2557,23 +2537,6 @@
     }
     .set-row .set-seg { width: 100%; }
     .set-row .set-seg button { flex: 1 1 0; }
-    .cat-row {
-      display: grid;
-      grid-template-columns: 30px minmax(0, 1fr);
-      gap: 8px 12px;
-      align-items: start;
-      padding: 12px 0;
-    }
-    .cat-ico { grid-column: 1; grid-row: 1; }
-    .cat-main { grid-column: 2; grid-row: 1; }
-    .cat-ctrl {
-      grid-column: 2;
-      grid-row: 2;
-      width: 100%;
-      padding-top: 0;
-      justify-content: space-between;
-    }
-    .cat-ctrl .set-select { flex: 1 1 auto; }
     .path-add { align-items: stretch; }
     .path-add-btn { padding-left: 14px; padding-right: 14px; }
     .set-reset-row { align-items: stretch; flex-direction: column; gap: 12px; }
@@ -3064,6 +3027,10 @@
           <a class="gear-btn protection-link" id="protection-open" href="/protection" aria-label="Open Protection: tamper attempts, the protection log and watch rules" title="Protection">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></svg>
             <span class="header-action-label">Protection</span>
+          </a>
+          <a class="gear-btn protection-link" id="security-open" href="/security" aria-label="Open Security: the protection mode, what agents may do, threat checks and limits" title="Security">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+            <span class="header-action-label">Security</span>
           </a>
           <a class="gear-btn docs-link" id="docs-open" href="/docs" aria-label="Open the Blackbox docs" title="Docs">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/><path d="M9 7h7M9 11h5"/></svg>
@@ -7829,20 +7796,6 @@
   // Severity whitelist: every server value is checked against this before it
   // can build an <option>, so a malformed payload can't inject markup.
   var SEV_ORDER = ["info", "low", "medium", "high", "critical"];
-  // Category → accent color + built-in helper line (order matches the API).
-  var SET_CATS = [
-    { key: "injection",  color: "#FB7185", help: "Detects hidden instructions and prompt-injection patterns in tool inputs." },
-    { key: "escalation", color: "#EF4444", help: "Flags dangerous shell commands and privilege-escalation attempts." },
-    { key: "dependency", color: "#F59E0B", help: "Catches known-vulnerable packages pulled into the workspace." },
-    { key: "fileaccess", color: "#3B82F6", help: "Watches for reads/writes to sensitive files and credential stores." },
-    { key: "skill",      color: "#A78BFA", help: "Reviews installed skills for suspicious or unexpected behaviour." },
-    { key: "secret",     color: "#F97316", help: "Flags real API keys, tokens, and private keys the agent handles or sends off-box." }
-  ];
-  var SET_DEFAULT_LABELS = {
-    injection: "Prompt injection", escalation: "Dangerous commands",
-    dependency: "Vulnerable dependencies", fileaccess: "Sensitive file access",
-    skill: "Suspicious skills", secret: "Secret exposure"
-  };
 
   // Live UI state from GET /api/settings, mutated in place on edit, serialized
   // on Save. Separate from the poll caches so the 4s loop never touches it.
@@ -7899,15 +7852,6 @@
     return SEV_ORDER.indexOf(v) !== -1 ? v : "info";
   }
 
-  // Build <option>s from the whitelist only (never from raw server strings).
-  function sevOptions(selected) {
-    selected = sevOk(selected);
-    return SEV_ORDER.map(function (s) {
-      return '<option value="' + s + '"' + (s === selected ? ' selected' : '') + '>' +
-        esc(s.charAt(0).toUpperCase() + s.slice(1)) + '</option>';
-    }).join("");
-  }
-
   // A fully-defaulted state (used as a fallback and by "Reset to defaults").
   function defaultSetState() {
     var fresh = defaultValues();
@@ -7919,20 +7863,15 @@
   }
 
   function defaultValues() {
-    var cats = {};
-    SET_CATS.forEach(function (c) { cats[c.key] = { enabled: true, min_severity: "info" }; });
     return {
-      mode: "audit", block_severity: "critical",
       report: false, report_min_severity: "high", community_sandbox: false,
       discover: true, osv_lookup: true,
       // Not a default to reset: whether new agents are protected was the operator's own choice.
       auto_attach: !!(setState && setState.auto_attach),
       // The plugin's own default list (served as default_protected_paths): a reset that sent []
       // would be kept as given and strip ~/.ssh/*, .env, *.pem … from the protected files.
-      categories: cats,
       protected_paths: (setState && Array.isArray(setState.default_protected_paths)) ? setState.default_protected_paths.slice() : [],
       default_protected_paths: (setState && Array.isArray(setState.default_protected_paths)) ? setState.default_protected_paths.slice() : [],
-      category_labels: {},
       // Which fields the server SERVED, and their values as read (KI-582): Save posts a field only
       // when the server served it or the person changed it — never a default the page made up.
       served: (setState && setState.served) ? Object.assign({}, setState.served) : {},
@@ -7941,16 +7880,15 @@
   }
 
   // The top-level settings Save may post, each only when served or changed (see buildPayload).
-  var SET_SCALARS = ["mode", "block_severity", "report", "report_min_severity", "discover", "osv_lookup",
+  // The mode, the severity that blocks and the threat checks are the Security page's (one place each).
+  var SET_SCALARS = ["report", "report_min_severity", "discover", "osv_lookup",
                      "auto_attach", "community_sandbox"];
-  var SET_LISTS = ["categories", "protected_paths"];
+  var SET_LISTS = ["protected_paths"];
 
   // Normalize whatever the API returns into our safe, complete shape.
   function normalizeSettings(data) {
     var out = defaultSetState();
     data = data || {};
-    out.mode = (String(data.mode).toLowerCase() === "block") ? "block" : "audit";
-    out.block_severity = sevOk(data.block_severity || "critical");
     out.report_min_severity = sevOk(data.report_min_severity || "high");
     out.report = data.report === true;
     out.community_sandbox = data.community_sandbox === true;
@@ -7959,14 +7897,6 @@
     // KI-582: never defaulted to off — a page that did not copy it posted "auto_attach": false on
     // every save and asked the person to approve a weakening they never made.
     out.auto_attach = data.auto_attach === true;
-    var cats = (data.categories && typeof data.categories === "object") ? data.categories : {};
-    SET_CATS.forEach(function (c) {
-      var item = cats[c.key] || {};
-      out.categories[c.key] = {
-        enabled: item.enabled !== false,
-        min_severity: sevOk(item.min_severity || "info")
-      };
-    });
     out.protected_paths = Array.isArray(data.protected_paths)
       ? data.protected_paths.map(function (p) { return String(p == null ? "" : p); })
                             .filter(function (p) { return p.trim() !== ""; })
@@ -7974,8 +7904,6 @@
     out.default_protected_paths = Array.isArray(data.default_protected_paths)
       ? data.default_protected_paths.map(function (p) { return String(p == null ? "" : p); })
       : out.default_protected_paths;
-    out.category_labels = (data.category_labels && typeof data.category_labels === "object")
-      ? data.category_labels : {};
     out.served = {};
     SET_SCALARS.concat(SET_LISTS).forEach(function (key) {
       if (Object.prototype.hasOwnProperty.call(data, key)) out.served[key] = true;
@@ -7985,66 +7913,7 @@
     return out;
   }
 
-  function catLabel(key) {
-    return (setState && setState.category_labels[key]) || SET_DEFAULT_LABELS[key] || key;
-  }
-
   // ---- render pieces ----
-  function renderModeUI() {
-    if (!setState) return;
-    var block = setState.mode === "block";
-    var ba = $("set-mode-audit"), bb = $("set-mode-block");
-    ba.classList.toggle("active", setState.mode === "audit");   // "starting": the saved mode is not read yet — neither
-    bb.classList.toggle("active", block);
-    ba.setAttribute("aria-pressed", block ? "false" : "true");
-    bb.setAttribute("aria-pressed", block ? "true" : "false");
-    $("set-mode-help").innerHTML = block
-      ? "Stop confirmed threats at or above the chosen severity."
-      : "Record findings without blocking agent actions.";
-    // block-severity row is only meaningful in block mode
-    var row = $("set-block-sev-row");
-    row.style.display = block ? "" : "none";
-    $("set-block-severity").disabled = !block;
-  }
-
-  function renderCategoriesUI() {
-    if (!setState) return;
-    var host = $("set-categories");
-    host.innerHTML = SET_CATS.map(function (c) {
-      var st = setState.categories[c.key] || { enabled: true, min_severity: "info" };
-      var off = st.enabled ? "" : " off";
-      return '<div class="cat-row' + off + '" data-cat="' + c.key + '">' +
-        '<span class="cat-ico" style="--cat:' + c.color + '">' + catIconSVG(catKey(c.key), c.color) + '</span>' +
-        '<div class="cat-main">' +
-          '<div class="cat-name">' + esc(catLabel(c.key)) + '</div>' +
-          '<div class="cat-help">' + esc(c.help) + '</div>' +
-        '</div>' +
-        '<div class="cat-ctrl">' +
-          '<select class="set-select cat-sev" data-cat="' + c.key + '" aria-label="Minimum severity for ' + esc(catLabel(c.key)) + '"' + (st.enabled ? '' : ' disabled') + '>' +
-            sevOptions(st.min_severity) +
-          '</select>' +
-          '<label class="set-toggle"><input type="checkbox" class="cat-enabled" data-cat="' + c.key + '"' + (st.enabled ? ' checked' : '') + ' aria-label="Enable ' + esc(catLabel(c.key)) + '" /><span class="set-track"></span></label>' +
-        '</div>' +
-      '</div>';
-    }).join("");
-    // wire the freshly-built controls
-    Array.prototype.forEach.call(host.querySelectorAll(".cat-enabled"), function (cb) {
-      cb.addEventListener("change", function () {
-        var key = cb.getAttribute("data-cat");
-        setState.categories[key].enabled = cb.checked;
-        renderCategoriesUI();          // re-render to reflect enabled/disabled styling
-        markDirty();
-      });
-    });
-    Array.prototype.forEach.call(host.querySelectorAll(".cat-sev"), function (sel) {
-      sel.addEventListener("change", function () {
-        var key = sel.getAttribute("data-cat");
-        setState.categories[key].min_severity = sevOk(sel.value);
-        markDirty();
-      });
-    });
-  }
-
   function renderPathsUI() {
     if (!setState) return;
     var host = $("set-paths-list");
@@ -8092,10 +7961,6 @@
   }
 
   function renderAllSettings() {
-    // Selects whose options are static across renders get filled once here.
-    $("set-block-severity").innerHTML = sevOptions(setState.block_severity);
-    renderModeUI();
-    renderCategoriesUI();
     renderPathsUI();
     renderAdvancedUI();
     shieldsUI.settings.render();
@@ -8115,22 +7980,13 @@
 
   // ---- assemble the POST payload (validated shapes only) ----
   function buildPayload() {
-    var cats = {};
-    SET_CATS.forEach(function (c) {
-      var st = setState.categories[c.key];
-      cats[c.key] = { enabled: !!st.enabled, min_severity: sevOk(st.min_severity) };
-    });
     var payload = {
-      // Never write a mode the page did not read (KI-PENDING-b28f8f: "starting" → leave the saved one as it is).
-      mode: setState.mode === "block" || setState.mode === "audit" ? setState.mode : undefined,
-      block_severity: sevOk(setState.block_severity),
       report: !!setState.report,
       report_min_severity: sevOk(setState.report_min_severity),
       discover: !!setState.discover,
       osv_lookup: !!setState.osv_lookup,
       auto_attach: !!setState.auto_attach,
       community_sandbox: !!setState.community_sandbox,
-      categories: cats,
       protected_paths: setState.protected_paths.slice(0, 100),
       shields: shieldsUI.settings.payload()   // only the shields the settings view carried
     };
@@ -8238,9 +8094,6 @@
 
   function resetDefaults() {
     setState = defaultSetState();
-    // keep the server-provided labels if we have them
-    var labels = (window.__setLabels) || {};
-    setState.category_labels = labels;
     renderAllSettings();
     setStatus("Defaults restored. Click Save to apply.", "ok");
   }
@@ -8251,7 +8104,6 @@
     return getJSON("/api/settings").then(function (data) {
       setState = normalizeSettings(data);
       shieldsUI.settings.load(data && data.shields);
-      window.__setLabels = setState.category_labels;   // remembered for Reset
       setLoaded = true;
       renderAllSettings();
       setStatus("");
@@ -8341,17 +8193,6 @@
         setThreatAlertsEnabled(this.checked, true);
       });
     }
-
-    // protection mode segmented control
-    $("set-mode-audit").addEventListener("click", function () {
-      if (!setState) return; setState.mode = "audit"; renderModeUI(); markDirty();
-    });
-    $("set-mode-block").addEventListener("click", function () {
-      if (!setState) return; setState.mode = "block"; renderModeUI(); markDirty();
-    });
-    $("set-block-severity").addEventListener("change", function () {
-      if (!setState) return; setState.block_severity = sevOk(this.value); markDirty();
-    });
 
     // advanced toggles
     $("set-discover").addEventListener("change", function () {
@@ -8791,38 +8632,16 @@
         </div>
       </div>
 
-      <!-- Protection mode -->
+      <!-- Protection mode and threat checks are edited on the Security page only (one place per setting) -->
       <div class="set-group">
-        <div class="set-glabel">Protection mode</div>
+        <div class="set-glabel">Protection mode &amp; threat checks</div>
         <div class="set-row">
           <div class="set-rl">
-            <div class="set-rt">Enforcement</div>
-            <div class="set-rh"><b id="set-mode-help">Record findings without blocking agent actions.</b></div>
+            <div class="set-rt">On the Security page</div>
+            <div class="set-rh">Audit or Block, the severity that blocks, each threat check and what agents may do — each explained where you change it.</div>
           </div>
-          <div class="set-rc">
-            <div class="set-seg" role="group" aria-label="Protection mode">
-              <button type="button" id="set-mode-audit" class="active" aria-pressed="true">Audit</button>
-              <button type="button" id="set-mode-block" class="warn" aria-pressed="false">Block</button>
-            </div>
-          </div>
+          <div class="set-rc"><a class="set-cancel" id="set-security-link" href="/security" style="text-decoration:none">Open Security</a></div>
         </div>
-        <div class="set-row" id="set-block-sev-row">
-          <div class="set-rl">
-            <div class="set-rt">Block at severity</div>
-            <div class="set-rh">Confirmed threats at or above this level are stopped.</div>
-          </div>
-          <div class="set-rc">
-            <select class="set-select" id="set-block-severity" aria-label="Block at severity"></select>
-          </div>
-        </div>
-      </div>
-
-      <!-- Threat categories -->
-      <div class="set-group">
-        <div class="set-glabel">Threat categories
-          <span class="set-gnote">toggle a category, or raise its minimum severity to cut noise</span>
-        </div>
-        <div id="set-categories"></div>
       </div>
 
       <!-- Protected files & folders -->

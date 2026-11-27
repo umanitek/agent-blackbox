@@ -67,10 +67,11 @@ def _decision_detail(cfg: BlackboxConfig, findings: list[detection.Finding], blo
     return out
 
 
-def _split(cfg: BlackboxConfig, findings: list[detection.Finding]) -> tuple[list[detection.Finding], list[detection.Finding]]:
+def _split(cfg: BlackboxConfig, findings: list[detection.Finding],
+           permissions: Optional[shields.HookPermissions] = None) -> tuple[list[detection.Finding], list[detection.Finding]]:
     """``(blocking, overridden)`` for one call: :func:`_would_block` split by the operator's local
     overrides (R7b — a reduction every operator keeps), with ``overrides.json`` read once."""
-    would = _would_block(cfg, findings)
+    would = _would_block(cfg, findings, permissions)
     if not would:
         return [], []
     try:
@@ -85,29 +86,44 @@ def _blocking(cfg: BlackboxConfig, findings: list[detection.Finding]) -> list[de
     return _split(cfg, findings)[0]
 
 
-def _would_block(cfg: BlackboxConfig, findings: list[detection.Finding]) -> list[detection.Finding]:
+#: ``Finding.fields`` key: the person's permission that let a finding through (its audit row shows it).
+ALLOWED_BY_PERMISSION = "allowed_by_permission"
+
+
+def _permitted(findings: list[detection.Finding], permissions: shields.HookPermissions) -> list[detection.Finding]:
+    """*findings* less those a HOOK-route permission the person ALLOWED lets through (each marked)."""
+    for finding in findings:
+        if allowed := permissions.allowing(finding.matched, finding.kind or ""):
+            finding.fields[ALLOWED_BY_PERMISSION] = allowed
+    return [finding for finding in findings if ALLOWED_BY_PERMISSION not in finding.fields]
+
+
+def _would_block(cfg: BlackboxConfig, findings: list[detection.Finding],
+                 permissions: Optional[shields.HookPermissions] = None) -> list[detection.Finding]:
     """The findings that block this call (empty unless block mode is on).
 
-    Confirmed findings and custom rules block; community/heuristic ones only
-    alert. ``vulnerability`` kind never blocks (a legit-but-vulnerable package
-    must keep working), nor ``flag-only`` (a local rule's community-sourced or
-    routine finding, KI-385) — only ``malware`` is stopped. IOC findings alert but
-    never auto-block in this rollout: network and crypto-address blocklists
-    are higher-churn / higher-FP than pinned package versions, so they are
-    validated in audit mode first.
+    Confirmed findings and custom rules block; community/heuristic ones only alert. Never blocking:
+    ``flag-only`` (KI-385), ``vulnerability`` while ``vulnerable-packages`` allows it (its default: a
+    legit-but-vulnerable package must keep working), and IOC findings (higher-churn blocklists, in
+    audit first). *permissions*: the acting agent's HOOK-route permissions in its folder (None: read
+    once here from ``kernel.action_context``); what one ALLOWS is only flagged (:func:`_permitted`),
+    what one blocks keeps its rule — startup places in every mode, the rest in Block mode.
     """
+    if permissions is None:
+        permissions = shields.hook_permissions(action_context.acting_agent(), action_context.working_folder())
+    findings = _permitted(findings, permissions)
     # Refused in EVERY mode: Blackbox's own core (2026-11-20 — in Audit mode an agent could switch
     # the guard off and was merely flagged for it) and what the person protected with File Shield
     # (2026-11-21: their own explicit rule). Nothing else blocks unless Block mode is on.
     always = [f for f in findings if f.matched in detection.ALWAYS_BLOCKED_MATCHES]
     if not cfg.block_enabled:
         return always
+    flag_kinds = ("historical", detection.KIND_FLAG_ONLY, *(() if permissions.blocks(constants.KIND_VULNERABILITY)
+                                                            else (constants.KIND_VULNERABILITY,)))
     return always + [
         f for f in findings
-        if (f.confirmed or f.source in ("custom", "secret"))
-        and getattr(f, "kind", None) not in (constants.KIND_VULNERABILITY, "historical", detection.KIND_FLAG_ONLY)
-        and f.category != "ioc"
-        and cfg.meets_block_threshold(f.severity) and f not in always
+        if (f.confirmed or f.source in ("custom", "secret")) and getattr(f, "kind", None) not in flag_kinds
+        and f.category != "ioc" and cfg.meets_block_threshold(f.severity) and f not in always
     ]
 
 
@@ -184,10 +200,11 @@ def _judge(tool_name: str, args: Any, cwd: str = "", agent: str = "") -> _Judgem
     cfg = _config()
     rs, graph_evidence = graph_rules.detection_rules(cfg, tool_name, args)
     notes: list[str] = []
-    with config_mod.one_entry_read(), action_context.working_in(cwd, agent):   # one read: shields and watch rules
+    with config_mod.one_entry_read(), action_context.working_in(cwd, agent):   # one read: shields, watch rules, permissions
         active = shields.snapshot()   # every shield's mode, read once for this call
         findings = reporting._flag_worthy(cfg, _raw_findings(cfg, rs, tool_name, args, active, notes), active)
-    return _Judgement(cfg, rs, graph_evidence, findings, *_split(cfg, findings), notes)
+        blocking, overridden = _split(cfg, findings)   # the acting agent's permissions, in its folder
+    return _Judgement(cfg, rs, graph_evidence, findings, blocking, overridden, notes)
 
 
 class ToolCallVerdict(TypedDict):
@@ -307,23 +324,13 @@ def on_post_tool_call(
 ) -> None:
     """Audit the redacted tool result. Never blocks."""
     try:
-        audit.record(
-            event="post_tool_call",
-            detail={
-                "tool_name": tool_name,
-                "session_id": session_id,
-                "task_id": task_id,
-                "tool_call_id": tool_call_id,
-                "duration_ms": duration_ms,
-                "result": audit.redact(result),
-            },
-        )
+        audit.record(event="post_tool_call", detail={"tool_name": tool_name, "session_id": session_id, "task_id": task_id,
+                                                     "tool_call_id": tool_call_id, "duration_ms": duration_ms,
+                                                     "result": audit.redact(result)})
     except Exception as exc:  # pragma: no cover - fail open, said out loud (FIX-0160)
         reporting.hook_failed("post_tool_call", exc, tool_name=tool_name, consequence="the result was not audited")
     # KI-595: what an install added to its lockfile (a named install's transitive packages). Fail-open.
     dependency_files.after_call(_config, tool_name, args, session_id, tool_call_id)
-
-
 
 
 def on_pre_api_request(**kwargs: Any) -> None:
@@ -347,14 +354,8 @@ def on_pre_api_request(**kwargs: Any) -> None:
         # A prompt that names an item the person protected (File Shield): flagged, never kept.
         findings += shields.prompt_findings([part for context, part in sources if context == "in-user-prompt"], active)
         findings = reporting._flag_worthy(cfg, findings, active)
-        detail = {
-            "graph_read": graph_evidence,
-            "session_id": kwargs.get("session_id"),
-            "task_id": kwargs.get("task_id"),
-            "turn_id": kwargs.get("turn_id"),
-            "model": kwargs.get("model"),
-            "provider": kwargs.get("provider"),
-        }
+        detail = {"graph_read": graph_evidence,
+                  **{key: kwargs.get(key) for key in ("session_id", "task_id", "turn_id", "model", "provider")}}
         # Always warm the per-session store (so later tool-call findings can show
         # the turn); attach as context only when this request produced a finding.
         turns = session_context._conversation_turns(kwargs.get("user_message"), kwargs.get("request_messages"))
@@ -392,9 +393,6 @@ def on_session_start(session_id: str = "", **kwargs: Any) -> None:
 def on_session_end(session_id: str = "", completed: bool = True, interrupted: bool = False, **kwargs: Any) -> None:
     try:
         session_context._forget_convo(session_id)
-        audit.record(
-            event="session_end",
-            detail={"session_id": session_id, "completed": completed, "interrupted": interrupted},
-        )
+        audit.record(event="session_end", detail={"session_id": session_id, "completed": completed, "interrupted": interrupted})
     except Exception as exc:  # pragma: no cover - fail open
         logger.debug("blackbox: on_session_end failed: %s", exc)

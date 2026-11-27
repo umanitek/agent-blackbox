@@ -36,7 +36,7 @@ from . import placeholders
 from .apps import APPS, ELECTRON_FLAGS, open_app
 from .network import NetworkRules, network_rules
 from .launchers import ONCE_MINUTES, ONCE_SUFFIX, PROJECT_INDEX, RUN_INFIX, command_shim, launcher_script, shell_shim
-from .opener import find_app, is_driver, open_url, open_with
+from .opener import find_app, find_person_app, is_driver, open_url, open_with
 from .probe import layers, unavailable
 from .processes import SYSTEM_NAME, ProcessFacts, describe, is_system, terminate
 from .profile import PROFILE_SUFFIX, SANDBOX, hides_socket, render
@@ -83,6 +83,7 @@ __all__ = [
     "command_shim",
     "describe",
     "find_app",
+    "find_person_app",
     "hides_socket",
     "is_driver",
     "is_system",

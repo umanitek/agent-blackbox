@@ -12,6 +12,12 @@ one dragged into ``/Applications`` and owned by the person) could be the agent's
 outside the sandbox by the broker. Never opened either: an app that drives other apps or runs
 commands (:data:`APP_DRIVER_APPS`).
 
+With the sandbox permission ``user-apps`` allowed (block by default; the caller decides),
+:func:`find_person_app` also finds an app the PERSON installed: a bundle directly in
+``/Applications`` or ``~/Applications`` (:func:`person_app_folders`) that the person or root owns,
+with every folder above it, nobody else able to write any of it, and its resolved path still in
+the folder it was found in (never a link out to ``~/Downloads``). Never an app driver either.
+
 Usage::
 
     find_app("Preview")                      # "/System/Applications/Preview.app"
@@ -25,7 +31,7 @@ import os
 import subprocess
 from typing import Sequence
 
-from ..root_owned import entries_held, held_by_root
+from ..root_owned import TRUSTED_OWNERS, entries_held, held_by, person_or_root
 
 OPEN = "/usr/bin/open"
 TIMEOUT_SECONDS = 10
@@ -39,20 +45,30 @@ APP_DRIVER_APPS = frozenset({"terminal", "iterm", "iterm2", "script editor", "au
                              "system preferences", "automator application stub"})
 
 
-def trusted(bundle: str) -> bool:
-    """True when root holds the app *bundle* (see the module doc): nothing in it the broker would
-    run can have been written by the person, so not by a sandboxed agent either."""
+def trusted(bundle: str, owners: frozenset[int] = TRUSTED_OWNERS) -> bool:
+    """True when *owners* (root by default) hold the app *bundle* (see the module doc): with root
+    alone, nothing in it the broker would run can have been written by the person, so not by a
+    sandboxed agent either."""
     contents = os.path.join(bundle, "Contents")
     programs = os.path.join(contents, "MacOS")
-    return (all(held_by_root(path, shared_parents=SHARED_APP_FOLDERS) for path in (bundle, contents, programs))
-            and entries_held(contents) and entries_held(programs))
+    return (all(held_by(path, owners=owners, shared_parents=SHARED_APP_FOLDERS) for path in (bundle, contents, programs))
+            and entries_held(contents, owners=owners) and entries_held(programs, owners=owners))
+
+
+def person_app_folders() -> tuple[str, ...]:
+    """Where an app the person installed is looked for (``user-apps``): ``/Applications`` and ``~/Applications``."""
+    return ("/Applications", os.path.join(os.path.expanduser("~"), "Applications"))
+
+
+def _bundle_name(name: str) -> str:
+    base = os.path.basename(name.strip())
+    return base[:-4] if base.lower().endswith(".app") else base
 
 
 def find_app(name: str) -> str:
     """The installed ``.app`` named *name* (case as on disk; ``Preview`` or ``Preview.app``), its
     resolved path; "" when none, when it drives other apps, or when root does not hold it."""
-    base = os.path.basename(name.strip())
-    base = base[:-4] if base.lower().endswith(".app") else base
+    base = _bundle_name(name)
     if not base or base.lower() in APP_DRIVER_APPS:
         return ""
     for folder in APP_FOLDERS:
@@ -60,6 +76,23 @@ def find_app(name: str) -> str:
         if os.path.isdir(path):
             real = os.path.realpath(path)
             return real if trusted(real) else ""
+    return ""
+
+
+def find_person_app(name: str, folders: Sequence[str] = ()) -> str:
+    """The ``.app`` named *name* that the person installed (see the module doc), its resolved path;
+    "" when none, when it drives other apps, when someone other than the person or root owns or may
+    write it, or when it resolves outside the folder it is in. *folders*: tests."""
+    base = _bundle_name(name)
+    if not base or base.lower() in APP_DRIVER_APPS:
+        return ""
+    for folder in folders or person_app_folders():
+        path = os.path.join(folder, base + ".app")
+        if not os.path.isdir(path):
+            continue
+        real = os.path.realpath(path)
+        inside = os.path.dirname(real) == os.path.realpath(folder)
+        return real if inside and not is_driver(real) and trusted(real, owners=person_or_root()) else ""
     return ""
 
 
@@ -87,4 +120,5 @@ def open_with(app_path: str, files: Sequence[str]) -> int:
     return _run([OPEN, "-a", app_path, "--", *files])
 
 
-__all__ = ["APP_DRIVER_APPS", "APP_FOLDERS", "OPEN", "find_app", "is_driver", "open_url", "open_with", "trusted"]
+__all__ = ["APP_DRIVER_APPS", "APP_FOLDERS", "OPEN", "find_app", "find_person_app", "is_driver", "open_url", "open_with",
+           "person_app_folders", "trusted"]

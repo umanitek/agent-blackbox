@@ -14,8 +14,9 @@ command, and every wildcard, parent folder or pieced-together spelling of all of
 * :func:`names_in_pieces` — does this text spell a guarded place piece by piece
   (``homedir() + '/.hermes/config.yaml'``, ``Path.home() / '.hermes' / 'config.yaml'``)?
 * :func:`judging` — which places are "guarded" while a check runs: Blackbox's own (:data:`OWN`,
-  the default), the places something starts from by itself (:data:`STARTS`) or Homebrew's program
-  folders (:data:`PROGRAMS`) — both read from ``kernel.persistence_places``, the one list the agent
+  the default), the places something starts from by itself (:data:`STARTS`), the shell startup files
+  (:data:`SHELL`, kept apart so their own permission decides them) or Homebrew's program
+  folders (:data:`PROGRAMS`) — all read from ``kernel.persistence_places``, the one list the agent
   sandbox's profile reads too (private security finding
   ``2026-11-23-hooks-only-an-agent-appends-an-ssh-key-t``). Pattern: **Context Object** (a
   ``ContextVar``, per thread and task), so the one reading of a command line serves every place set.
@@ -68,15 +69,17 @@ _HOOKS_IN_PIECES = re.compile("|".join(
 #: The place sets a check can judge against (see :func:`judging`): ROOT is the machine's own folders
 #: (``kernel.persistence_places.ROOT_PLACES``), judged only for a privileged command; HOOKS every
 #: file an agent reads a hooks-off switch from, user-level and in any project folder
-#: (``kernel.agent_hosts.hook_switches``, judged by ``detection.hook_switches``).
-OWN, STARTS, PROGRAMS, ROOT, HOOKS = "own", "starts", "programs", "root", "hooks"
+#: (``kernel.agent_hosts.hook_switches``, judged by ``detection.hook_switches``). STARTS holds every
+#: startup place but the shell startup files, which are SHELL (``HookPlaces.shell``).
+OWN, STARTS, SHELL, PROGRAMS, ROOT, HOOKS = "own", "starts", "shell", "programs", "root", "hooks"
 _SCOPE: contextvars.ContextVar[str] = contextvars.ContextVar("blackbox_guard_scope", default=OWN)
 
 
 @contextmanager
 def judging(scope: str) -> Iterator[None]:
     """Within the block, :func:`reaches`, :func:`holds`, :func:`inside` and :func:`guarded_places`
-    answer for the place set *scope* (:data:`OWN`, :data:`STARTS`, :data:`PROGRAMS` or :data:`ROOT`)."""
+    answer for the place set *scope* (:data:`OWN`, :data:`STARTS`, :data:`SHELL`, :data:`PROGRAMS`,
+    :data:`ROOT` or :data:`HOOKS`)."""
     token = _SCOPE.set(scope)
     try:
         yield
@@ -155,7 +158,12 @@ def _current() -> tuple[tuple[str, ...], tuple[str, ...], re.Pattern[str]]:
 
 
 def _starts_places() -> tuple[str, ...]:
-    return persistence_places.hook_places(os.path.expanduser("~")).starts
+    places = persistence_places.hook_places(os.path.expanduser("~"))
+    return tuple(place for place in places.starts if place not in places.shell)
+
+
+def _shell_places() -> tuple[str, ...]:
+    return persistence_places.hook_places(os.path.expanduser("~")).shell
 
 
 def _program_places() -> tuple[str, ...]:
@@ -257,6 +265,7 @@ def reaches(word: str) -> bool:
 
 
 _PLACES = {OWN: Kept(lambda: _read_places(_all_places())), STARTS: Kept(lambda: _read_places(_starts_places())),
+           SHELL: Kept(lambda: _read_places(_shell_places())),
            PROGRAMS: Kept(lambda: _read_places(_program_places())),
            ROOT: Kept(lambda: _read_places(persistence_places.ROOT_PLACES)), HOOKS: Kept(lambda: _read_places(_hook_switch_places()))}
 

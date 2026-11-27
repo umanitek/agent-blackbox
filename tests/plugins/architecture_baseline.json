@@ -31,7 +31,6 @@
     "detection/reviewer_setup/__init__.py::cmd_setup_llm": 76,
     "guard/hooks.py::on_pre_tool_call": 38,
     "kernel/config.py::load_blackbox_config": 71,
-    "kernel/settings.py::_validate": 54,
     "ruleset/compiler.py::Ruleset.graph_entries": 47,
     "ruleset/compiler.py::build_from_rows": 51,
     "ruleset/fetching.py::fetch_tier": 49,

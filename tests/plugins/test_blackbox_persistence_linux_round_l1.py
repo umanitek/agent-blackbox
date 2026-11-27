@@ -26,6 +26,8 @@ from plugins.blackbox.kernel import config as config_mod
 from plugins.blackbox.ruleset import Ruleset
 
 STARTUP_ITEM = "startup-item"
+#: A shell startup file is its own finding (``shell-startup``, judged apart since 2026-11-27); both are refusals here.
+STARTUP_MATCHES = {STARTUP_ITEM, "shell-startup"}
 
 
 @pytest.fixture
@@ -102,7 +104,7 @@ L1_FORMS = {
 def test_every_l1_persistence_form_is_refused(home, agent, name):
     verdict = _verdict(agent, L1_FORMS[name], home)
     assert verdict["decision"] == "block", (name, verdict)
-    assert any(finding["matched"] == STARTUP_ITEM for finding in verdict["findings"]), verdict["findings"]
+    assert any(finding["matched"] in STARTUP_MATCHES for finding in verdict["findings"]), verdict["findings"]
 
 
 #: The everyday commands next to those forms stay allowed.
@@ -117,7 +119,7 @@ LOOKS = [
 @pytest.mark.parametrize("command", LOOKS)
 def test_the_looks_beside_them_stay_allowed(home, command):
     verdict = _verdict("claude-code", command, home)
-    assert not any(finding["matched"] == STARTUP_ITEM for finding in verdict["findings"]), (command, verdict)
+    assert not any(finding["matched"] in STARTUP_MATCHES for finding in verdict["findings"]), (command, verdict)
 
 
 def test_the_refusal_words_name_linuxs_kinds(home):

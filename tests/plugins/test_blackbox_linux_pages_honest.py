@@ -27,9 +27,22 @@ def test_where_agents_can_not_be_sandboxed_no_permission_is_offered_as_a_control
     monkeypatch.setattr(sandbox, "unavailable", lambda: why)
     monkeypatch.setattr(sandbox, "stale_runs", lambda runs: [])
     view = files_api.permissions_view(None, {})
-    assert view["permissions"] and all(each["controllable"] is False and each["note"] == why for each in view["permissions"])
+    sandbox_rows = [each for each in view["permissions"] if each["route"] != "hook"]
+    assert sandbox_rows and all(each["controllable"] is False and each["note"] == why for each in sandbox_rows)
     assert view["never"] == [] and view["not_controllable"] == [] and view["sandbox_unavailable"] == why
     assert not any("this Mac" in str(each) for each in view["never"])
+
+
+def test_where_agents_can_not_be_sandboxed_the_hook_permissions_stay_settable(monkeypatch):
+    """The hooks, not the sandbox, enforce startup items, shell startup files, sudo writes, unnamed
+    publishers and vulnerable packages: a machine with no sandbox still offers them (engine build
+    2026-11-27)."""
+    monkeypatch.setattr(sandbox, "unavailable", lambda: "no sandbox here")
+    monkeypatch.setattr(sandbox, "stale_runs", lambda runs: [])
+    view = files_api.permissions_view(None, {})
+    hook_rows = {each["id"]: each for each in view["permissions"] if each["route"] == "hook"}
+    assert set(hook_rows) == {"startup-items", "shell-startup", "root-writes", "unnamed-publisher", "vulnerable-packages"}
+    assert all(each["controllable"] and each["note"] != "no sandbox here" for each in hook_rows.values())
 
 
 def test_where_the_sandbox_runs_the_catalogue_is_unchanged(monkeypatch):

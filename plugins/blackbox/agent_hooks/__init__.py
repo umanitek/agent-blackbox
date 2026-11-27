@@ -37,13 +37,13 @@ from typing import Any, Optional
 from ..kernel import constants
 from ..kernel.bounded_files import atomic_write
 from .. import audit
-from ..kernel.config import load_blackbox_config
+from ..kernel.config import hook_payload_limit_mb, load_blackbox_config
 from . import owners, process_facts, profiles, prompt_text, tracking, versions
 from .observe import hook_trust
 from .protect import config_edit, foreign_hooks, hook_watch, own_files
 from .protect import recorder
 from .protect import spool
-from .protect.judge_here import JUDGE_HERE_FILE, SPOOL_KEY
+from .protect.judge_here import JUDGE_HERE_FILE, LIMIT_KEY, SPOOL_KEY
 from .protect.sandbox_errors import RefusalSeen, on_sandbox_refusal
 from .protect.sandbox_run import answer_hidden_sockets_with
 from .protect.events import answer_event, note_error, read_state, record_event, write_state
@@ -107,10 +107,12 @@ def _runner() -> Path:
 
 def _write_judge_here() -> None:
     """Tell the runner where this plugin and its homes are, so it can judge a call itself while
-    the dashboard does not answer (``protect.runner.judge_here``)."""
+    the dashboard does not answer (``protect.runner.judge_here``), and the payload limit the person
+    chose (``hook_payload_limit_mb``: the runner reads no config of its own)."""
     target = constants.blackbox_home() / "agent-hooks" / JUDGE_HERE_FILE
     text = json.dumps({"plugin": str(Path(__file__).resolve().parent.parent), "hermes_home": str(constants.hermes_root()),
-                       "blackbox_home": str(constants.blackbox_home()), SPOOL_KEY: str(spool.folder())}, indent=1) + "\n"
+                       "blackbox_home": str(constants.blackbox_home()), SPOOL_KEY: str(spool.folder()),
+                       LIMIT_KEY: hook_payload_limit_mb()}, indent=1) + "\n"
     if not target.exists() or target.read_text(encoding="utf-8-sig") != text:
         atomic_write(target, text)
 
@@ -195,6 +197,8 @@ def keep_hooks() -> list[dict[str, Any]]:
     Blackbox's in its place is moved aside, kept). A hook installed before this watch existed is
     adopted as it is; an agent the person removed from this machine (no folder, no command) is
     forgotten, never re-created. Answers one ``{kind, restored, lost}`` per change found."""
+    if (constants.blackbox_home() / "agent-hooks" / JUDGE_HERE_FILE).exists():
+        _write_judge_here()   # a changed payload limit reaches the runner within one look (it rewrites only a change)
     state = read_state()["agents"]
     done = []
     for host in HOSTS:

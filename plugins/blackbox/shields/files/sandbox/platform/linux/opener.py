@@ -10,6 +10,12 @@ opened: an entry root does not hold (``platform.root_owned``: the entry and ever
 runs outside the sandbox); an entry that runs commands or drives other apps — a terminal (``Terminal=true``, the
 ``TerminalEmulator`` category, or a known terminal's name: :data:`APP_DRIVER_APPS`).
 
+With the sandbox permission ``user-apps`` allowed (block by default; the caller decides),
+:func:`find_person_app` also finds an entry the PERSON installed (``~/.local/share/applications``,
+their own Flatpak exports): owned by the person or root, with every folder above it, nobody else
+able to write any of it, resolving inside the person's own data folder or the folder it was found
+in (never a link out), and never an app driver.
+
 A machine with no desktop session (a server over ssh) has nothing to open with: the broker answers
 that the person opens it themselves.
 
@@ -27,7 +33,7 @@ import shutil
 import subprocess
 from typing import Sequence
 
-from ..root_owned import held_by_root
+from ..root_owned import held_by, held_by_root, person_or_root
 
 TIMEOUT_SECONDS = 10
 MAX_ENTRY_BYTES = 64 * 1024
@@ -102,6 +108,33 @@ def find_app(name: str, folders: Sequence[str] = ()) -> str:
     return next((usable for usable in map(_usable, named) if usable), "")
 
 
+def _person_usable(path: str, folder: str, home: str) -> str:
+    real = os.path.realpath(path)
+    own_data = os.path.realpath(os.path.join(home, ".local", "share"))
+    inside = any(real.startswith(root.rstrip("/") + "/") for root in (os.path.realpath(folder), own_data))
+    return real if inside and held_by(real, owners=person_or_root()) and not is_driver(real) else ""
+
+
+def find_person_app(name: str, folders: Sequence[str] = ()) -> str:
+    """The desktop entry for *name* (its id or its shown name, as :func:`find_app`) that the person
+    installed, or that root holds (see the module doc); "" when none or when it is not safe to start."""
+    wanted = os.path.basename(name.strip()).removesuffix(".desktop")
+    if not wanted or wanted.lower() in APP_DRIVER_APPS:
+        return ""
+    home = os.path.expanduser("~")
+    candidates: list[tuple[str, str]] = []
+    for folder in folders or data_dirs(home):
+        apps = os.path.join(folder, "applications")
+        path = os.path.join(apps, wanted + ".desktop")
+        usable = _person_usable(path, folder, home) if os.path.isfile(path) else ""
+        if usable:
+            return usable
+        if os.path.isdir(apps):
+            candidates += [(os.path.join(apps, entry), folder) for entry in sorted(os.listdir(apps)) if entry.endswith(".desktop")]
+    named = ((path, folder) for path, folder in candidates if _entry(path).get("Name", "").lower() == wanted.lower())
+    return next((usable for usable in (_person_usable(path, folder, home) for path, folder in named) if usable), "")
+
+
 def is_driver(app_path: str) -> bool:
     """True for a terminal or another app that runs commands (see the module doc)."""
     entry = _entry(app_path)
@@ -138,4 +171,4 @@ def open_with(app_path: str, files: Sequence[str]) -> int:
     return _run(["gio", "launch", app_path, *files])
 
 
-__all__ = ["APP_DRIVER_APPS", "NO_DESKTOP", "SESSION_VARIABLES", "data_dirs", "find_app", "is_driver", "open_url", "open_with"]
+__all__ = ["APP_DRIVER_APPS", "NO_DESKTOP", "SESSION_VARIABLES", "data_dirs", "find_app", "find_person_app", "is_driver", "open_url", "open_with"]

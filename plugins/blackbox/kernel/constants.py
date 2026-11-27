@@ -114,6 +114,8 @@ BLACKBOX_VERSION_PRED = f"{BLACKBOX_ONTOLOGY}blackboxVersion"
 KIND_PRED = f"{BLACKBOX_ONTOLOGY}kind"
 KIND_MALWARE = "malware"
 KIND_VULNERABILITY = "vulnerability"
+#: ``Finding.matched`` of an install that names no publisher while a publisher-wide kill is in force.
+UNNAMED_PUBLISHER = "unnamed-publisher"
 
 # file-access predicates (g:toolName reused; category is new) ----------------
 CATEGORY_PRED = f"{BLACKBOX_ONTOLOGY}category"

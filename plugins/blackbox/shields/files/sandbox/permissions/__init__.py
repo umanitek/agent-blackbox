@@ -20,6 +20,7 @@ table of **Strategy** records (data, no subclasses).
 Usage::
 
     decide("docker", "claude-code", "/Users/me/work/shop")   # Mode.ASK
+    hook_permissions("codex", "/Users/me/work/shop").allowing("startup-item")   # "" unless allowed
     section_weakening({"permissions": [...]})                  # why the change waits, or []
 """
 
@@ -35,7 +36,8 @@ from . import answers, catalogue, grants, requests
 from .api import API_WEAKENING, API_WRITES, not_here, view
 from .catalogue import BY_ID, NEVER, NOT_CONTROLLABLE, PERMISSIONS, profile_permissions
 from .judge import loosened
-from .model import Access, Allowances, Choice, FolderLimits, FolderRule, Mode, Permission, PermissionRequest, Route, Rule, Scope, Settings
+from .model import (Access, Allowances, Choice, FolderLimits, FolderRule, HookPermissions, Mode, Permission, PermissionRequest, Route, Rule,
+                    Scope, Settings)
 from .section import SECTION, current, parse, stored, validate_section, with_legacy
 
 kernel_settings.SECTION_VALIDATORS[SECTION] = validate_section
@@ -44,6 +46,19 @@ kernel_settings.SECTION_VALIDATORS[SECTION] = validate_section
 def decide(permission: str, agent: str = "", folder: str = "") -> Mode:
     """The mode in force for *permission* when *agent* works in absolute *folder*."""
     return current().mode(BY_ID[permission], agent, folder)
+
+
+def hook_permissions(agent: str = "", folder: str = "") -> HookPermissions:
+    """The HOOK-route permissions in force for *agent* working in absolute *folder*, for the guard to
+    read once per tool call. Never raises: a setting that can not be read answers
+    ``HookPermissions(unreadable=True)``, which blocks every finding they decide (LES-159). They
+    never reach a sandbox profile (:func:`allowances` reads only profile-route permissions)."""
+    try:
+        settings = current()
+    except Exception:  # health: allow BLE001 -- an unreadable setting is decided protectively, never let through
+        return HookPermissions(unreadable=True)
+    return HookPermissions(tuple((name, each.id, settings.mode(each, agent, folder))
+                                 for each in PERMISSIONS if each.route is Route.HOOK for name in each.hook_findings))
 
 
 def folder_limits(settings: Settings, agent: str = "", folder: str = "") -> FolderLimits:
@@ -122,8 +137,11 @@ def broker_decision(permission: str, agent: str, instance: str, folder: str, wha
     return WAITING if opened else REFUSED
 
 
-#: Which permission a refusal kind asks for when several share it (``open`` of an app vs a link:
-#: a link goes through Blackbox's ``open`` stand-in, so a bare LaunchServices refusal is an app).
+#: Which permission a refusal kind asks for when several share it. ``open-app`` is listed by
+#: open-links, open-apps AND user-apps; a bare LaunchServices refusal always means open-apps:
+#: a link goes through Blackbox's ``open`` stand-in (never a bare refusal), and only the broker
+#: can tell an app the person installed (it reads the bundle's owner), so ``user-apps`` is asked
+#: by the broker itself (``brokered.open_apps``), never from a refusal the hook read.
 _FIRST_FOR_KIND = {catalogue.KIND_OPEN_APP: "open-apps"}
 
 
@@ -149,8 +167,46 @@ def section_weakening(raw: Any) -> list[str]:
     return [] if errors else loosened(stored(), with_legacy(after))
 
 
-__all__ = ["ALLOWED", "API_WEAKENING", "API_WRITES", "BY_ID", "NEVER", "NOT_CONTROLLABLE", "PERMISSIONS", "REFUSED",
-           "SECTION", "WAITING", "Access", "Allowances", "Choice", "FolderLimits", "FolderRule", "Mode", "Permission",
-           "PermissionRequest", "Route", "Rule", "Scope", "Settings", "allowances", "answers", "ask",
-           "broker_decision", "catalogue", "current", "decide", "folder_limits", "grants", "loosened", "not_here", "refused", "requests",
-           "section_weakening", "stored", "validate_section", "view"]
+__all__ = [
+    "ALLOWED",
+    "API_WEAKENING",
+    "API_WRITES",
+    "BY_ID",
+    "NEVER",
+    "NOT_CONTROLLABLE",
+    "PERMISSIONS",
+    "REFUSED",
+    "SECTION",
+    "WAITING",
+    "Access",
+    "Allowances",
+    "Choice",
+    "FolderLimits",
+    "FolderRule",
+    "HookPermissions",
+    "Mode",
+    "Permission",
+    "PermissionRequest",
+    "Route",
+    "Rule",
+    "Scope",
+    "Settings",
+    "allowances",
+    "answers",
+    "ask",
+    "broker_decision",
+    "catalogue",
+    "current",
+    "decide",
+    "folder_limits",
+    "grants",
+    "hook_permissions",
+    "loosened",
+    "not_here",
+    "refused",
+    "requests",
+    "section_weakening",
+    "stored",
+    "validate_section",
+    "view",
+]

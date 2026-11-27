@@ -15,12 +15,13 @@ from pathlib import Path
 from contextlib import contextmanager
 from contextvars import ContextVar
 from .snapshot_config import SnapshotSyncConfig, snapshot_fields
-
 from dataclasses import dataclass, field
 from typing import Any, Iterator, Mapping, Optional
 
 from . import constants, yaml_files
 from .config_values import saved_entry, schema
+from .config_values import (_as_bool, _as_int, _as_float, _env_or, _first_env,
+                            _default_dkg_url, _is_default_dkg_home, _fallback_mode)
 from .config_values.semantic import SemanticConfig, semantic_config
 from .host_secrets import read_host_secret
 
@@ -45,9 +46,6 @@ DEFAULT_PROTECTED_PATHS: tuple[str, ...] = (
     "~/.hermes/plugins/blackbox/*",   # the plugin code itself
 )
 
-
-from .config_values import (_as_bool, _as_int, _as_float, _env_or, _first_env,
-                            _default_dkg_url, _is_default_dkg_home, _fallback_mode)
 
 @dataclass(frozen=True)
 class BlackboxConfig:
@@ -167,10 +165,7 @@ class BlackboxConfig:
         if min_sev not in constants.SEVERITY_RANK:
             min_sev = "info"
         enabled = raw.get("enabled")
-        return {
-            "enabled": bool(enabled) if isinstance(enabled, bool) else True,
-            "min_severity": min_sev,
-        }
+        return {"enabled": bool(enabled) if isinstance(enabled, bool) else True, "min_severity": min_sev}
 
     def category_allows(self, category: str, severity: str) -> bool:
         """True when the user's policy lets a *category* finding at *severity* flag."""
@@ -247,6 +242,11 @@ def dkg_home() -> Path:
     because its pid file was looked for in the fallback folder).
     """
     return Path(_resolve_dkg_home(_blackbox_entry())).expanduser()
+
+
+def hook_payload_limit_mb() -> int:
+    """The agents' hook runner's pre-tool payload limit in MiB (``schema.HOOK_PAYLOAD_LIMITS_MB``; bad or none: 16)."""
+    return schema.hook_payload_limit(_blackbox_entry().get("hook_payload_limit_mb")) or schema.DEFAULT_HOOK_PAYLOAD_LIMIT_MB
 
 
 def raw_section(name: str) -> dict[str, Any]:

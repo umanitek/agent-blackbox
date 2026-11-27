@@ -24,7 +24,7 @@ function block(start, open, close) {
 }
 
 const source = [
-  block("var SEV_ORDER", "[", "]"), block("var SET_CATS", "[", "]"),
+  block("var SEV_ORDER", "[", "]"),
   block("var SET_SCALARS", "[", "]"), block("var SET_LISTS", "[", "]"),
   block("function sevOk(", "{", "}"), block("function defaultSetState(", "{", "}"),
   block("function defaultValues(", "{", "}"), block("function normalizeSettings(", "{", "}"),
