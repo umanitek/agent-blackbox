@@ -21,9 +21,11 @@ class _Node:
     def query(self, sparql, cg, view=None, on_error=None, **kw):
         import re
         graph = re.search(r"GRAPH <([^>]+)>", sparql).group(1)
-        self.reads.append(graph)
         if graph in self.refuse:
             return on_error
+        if "COUNT(" in sparql:   # the asset's triple count, read before its pages (review 2026-11-26)
+            return [{"n": str(len(self.graphs.get(graph, [])))}]
+        self.reads.append(graph)
         return [{"threat": s, "p": p, "o": o} for s, p, o in self.graphs.get(graph, [])]
 
 

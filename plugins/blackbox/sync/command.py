@@ -393,13 +393,13 @@ class _CatchupSync:
                 self.auth_cache_refreshed = True
 
     def _base_sync_complete(self, fresh_job_complete: bool, barrier_job_id: str) -> bool:
-        """Rules are here and the fresh catch-up has landed. A terminal generic catch-up is not
-        success by itself; a completed, idempotent pinned recovery is (it verified the snapshot)."""
+        """Rules are here and the fresh catch-up has landed: its state is exactly "done" — an
+        unread (""), deferred, unreachable or failed one is not (LES-159). A completed,
+        idempotent pinned recovery is success too (it verified the snapshot)."""
         authoritative_ready = self.auth_recovered and self.auth_cache_refreshed
         cache_refreshed = not fresh_job_complete or self.refreshed_job_id == barrier_job_id
         catchup_complete = authoritative_ready or (not self.wait or (
-            self.catchup_state not in {"queued", "running"} and cache_refreshed
-            and (not self.fresh_seen or fresh_job_complete)))
+            self.catchup_state == "done" and cache_refreshed and (not self.fresh_seen or fresh_job_complete)))
         return self.public_count > 0 and catchup_complete
 
     def _authoritative_empty(self) -> bool:

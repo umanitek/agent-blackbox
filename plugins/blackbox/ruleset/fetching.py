@@ -107,7 +107,7 @@ def fetch_tier(
             return None
         if len(small_tiers) + len(root_rows) >= sparql_text.MAX_ROWS:
             return None
-        return _dedupe_threat_rows([*small_tiers, *root_rows])
+        return _dedupe_threat_rows(small_tiers, root_rows)
 
     return _fetch_paged_lanes(
         client,
@@ -231,18 +231,20 @@ def _fetch_paged_lanes(
             # and the old short-page break silently truncated every lane to its
             # first page (the KI-052 "one _PAGE_SIZE compiled" signature).
             after = next_cursor
+        else:
+            # The ceiling stopped the lane before an empty page: what was read is
+            # a part, never the lane (review 2026-11-26) — could not tell.
+            return None
     return rows
 
 
-def _dedupe_threat_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Prefer confirmed partition rows when a migrated root repeats a threat."""
-    result: list[dict[str, Any]] = []
-    seen: set = set()
-    for row in rows:
-        threat = extract_binding(row.get("threat"))
-        if threat and threat in seen:
-            continue
-        if threat:
-            seen.add(threat)
-        result.append(row)
-    return result
+def _dedupe_threat_rows(asset_rows: list[dict[str, Any]], root_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Every row of the confirmed assets, then the root graph's rows of the subjects
+    no asset holds (a migrated root repeats a threat: the asset's copy wins).
+
+    A subject may come back as several rows — a correction naming two
+    ``dp:targetSubject``, a rule with two identifiers — and every one of them is
+    kept: the old one-row-per-subject fold dropped a correction's second target
+    (review 2026-11-26)."""
+    in_assets = {threat for row in asset_rows if (threat := extract_binding(row.get("threat")))}
+    return [*asset_rows, *(row for row in root_rows if extract_binding(row.get("threat")) not in in_assets)]

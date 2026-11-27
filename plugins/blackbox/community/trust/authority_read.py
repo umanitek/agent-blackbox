@@ -91,12 +91,14 @@ def read_curator_view(client: DkgClient, cfg: BlackboxConfig, environment: str =
 
     An empty view unless a root is trusted and a root-signed key manifest is
     found. Fail-open: an unreadable read contributes nothing that could raise
-    enforcement, and never removes what this node already verified."""
+    enforcement, and never removes what this node already verified. A node
+    whose status cannot be read gives an UNAVAILABLE view (could not tell), never
+    an empty available one — readers then keep what they last verified."""
     try:
         environment = environment or network_environment(client.status())
-    except Exception as exc:  # node unreachable: no curator view this time
-        logger.debug("blackbox: curator view skipped (%s)", exc)
-        return curator_view.CuratorView()
+    except Exception as exc:  # node unreachable: this node cannot tell what the curators said (LES-011)
+        logger.debug("blackbox: curator view unavailable (%s)", exc)
+        return curator_view.CuratorView(unavailable=True)
     verified_roots = trust_anchors.RootPins.for_environment(environment) if environment else trust_anchors.RootPins()
     community_roots = _community_roots(cfg) if environment else trust_anchors.RootPins()
     if not verified_roots and not community_roots:

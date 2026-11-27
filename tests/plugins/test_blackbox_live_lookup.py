@@ -281,7 +281,7 @@ def test_a_refresh_writes_a_ready_scope_into_the_cache_on_both_paths(monkeypatch
     from plugins.blackbox.ruleset.partitions import rows_from_triples
     public_rows = [rows_from_triples(PART_A, _dep("urn:defender:signal:a1", "evil-pkg", "1.0.0"))]
     monkeypatch.setattr(refresh_cycle.fetching, "fetch_tier", lambda client, cg, view, **kw: public_rows[0])
-    monkeypatch.setattr(refresh_cycle.curator_tier, "apply_curator_tier", lambda rs, client, cfg, prior=None: 0)
+    monkeypatch.setattr(refresh_cycle.curator_tier, "apply_curator_tier", lambda rs, client, cfg, prior=None, view=None: 0)
 
     class Client:
         def status(self, timeout=None):

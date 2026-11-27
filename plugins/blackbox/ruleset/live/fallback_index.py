@@ -32,6 +32,7 @@ from ...kernel import constants, sparql_text, threat_ids
 from ...kernel.dkg_client import DkgClient, extract_binding
 from .. import row_adapters
 from ..partitions import rows_from_triples
+from .asset_facts import _int
 from .lookup import CLEAN, COULD_NOT_TELL, HIT, LookupAnswer
 from .scope import VerifiedScope
 
@@ -47,12 +48,19 @@ INDEX_BUDGET_SECONDS = 600.0
 #: 15,032 triples, in one answer).
 PAGE_TRIPLES = 50_000
 
+#: The table layout's version (``PRAGMA user_version``). 2: a rule is keyed by (key, graph) — one
+#: row per asset holding it; before, a second asset's copy replaced the first (review 2026-11-26).
+SCHEMA_VERSION = 2
 _SCHEMA = (
     "CREATE TABLE IF NOT EXISTS asset (graph TEXT PRIMARY KEY, indexed_at REAL NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS dependency (key TEXT PRIMARY KEY, graph TEXT NOT NULL, rule TEXT NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS ioc (key TEXT PRIMARY KEY, graph TEXT NOT NULL, rule TEXT NOT NULL, value TEXT NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS dependency (key TEXT NOT NULL, graph TEXT NOT NULL, rule TEXT NOT NULL, "
+    "PRIMARY KEY (key, graph))",
+    "CREATE TABLE IF NOT EXISTS ioc (key TEXT NOT NULL, graph TEXT NOT NULL, rule TEXT NOT NULL, value TEXT NOT NULL, "
+    "PRIMARY KEY (key, graph))",
     "CREATE INDEX IF NOT EXISTS ioc_value ON ioc (value)",
 )
+#: An index written in an older layout is dropped and rebuilt (each asset is read again, once).
+_OLD_TABLES = ("asset", "dependency", "ioc")
 
 
 def index_path() -> Path:
@@ -67,8 +75,13 @@ class FallbackIndex:
         self.path = path or index_path()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._db = sqlite3.connect(str(self.path), timeout=2.0)
-        for statement in _SCHEMA:
-            self._db.execute(statement)
+        with self._db:
+            if self._db.execute("PRAGMA user_version").fetchone()[0] < SCHEMA_VERSION:
+                for table in _OLD_TABLES:
+                    self._db.execute(f"DROP TABLE IF EXISTS {table}")
+            for statement in _SCHEMA:
+                self._db.execute(statement)
+            self._db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
     @classmethod
     def for_scope(cls, scope: Optional[VerifiedScope], path: Optional[Path] = None) -> Optional[FallbackIndex]:
@@ -105,15 +118,22 @@ class FallbackIndex:
             chunk = keys[start:start + 500]
             marks = ",".join("?" * len(chunk))
             for key, graph, rule in self._db.execute(
-                    f"SELECT key, graph, rule FROM {table} WHERE {column} IN ({marks})", chunk):
-                if graph in self.scope.assertion_graphs:
-                    loaded = json.loads(rule)
-                    allowed = self.scope.as_tier_allows(graph, table, key, loaded)   # same tier rule as the store lookup
-                    if allowed is not None and loaded.get("identifier") not in self.scope.revoked_identifiers:
+                    f"SELECT key, graph, rule FROM {table} WHERE {column} IN ({marks}) ORDER BY graph", chunk):
+                if graph in self.scope.assertion_graphs and key not in rules:
+                    allowed = self._as_scope_allows(graph, table, key, json.loads(rule))
+                    if allowed is not None:
                         rules[key] = allowed
         if rules:
             return LookupAnswer(rules, HIT, "fallback index")
         return LookupAnswer({}, CLEAN if self.complete() else COULD_NOT_TELL, "fallback index")
+
+    def _as_scope_allows(self, graph: str, table: str, key: str, rule: dict[str, Any]) -> Optional[dict[str, Any]]:
+        """*rule* as TODAY's scope allows it — the same filters as the store lookup: a
+        suppressed subject (a correction that may have arrived after the asset was
+        indexed) or a revoked identifier is never served; the asset tier applies."""
+        if rule.get("subject") in self.scope.suppressed_subjects or rule.get("identifier") in self.scope.revoked_identifiers:
+            return None
+        return self.scope.as_tier_allows(graph, table, key, rule)
 
     # -- building ----------------------------------------------------------
 
@@ -185,11 +205,20 @@ class OnDemandIndex:
 
 
 def _read_asset(client: DkgClient, cg_id: str, graph: str) -> Optional[list[tuple[str, str, str]]]:
-    """Every triple of one asset's graph, cursor-paged by subject; None on failure."""
+    """Every triple of one asset's graph, cursor-paged by subject; None on failure.
+
+    WHY a count first (review 2026-11-26): a page shorter than :data:`PAGE_TRIPLES`
+    proves nothing — DKG daemons cap a reply at 1,000 rows (KI-052) — so the asset
+    is complete only when the triples read add up to the count the node gives."""
     failure = object()
     graph_iri = sparql_text.sparql_iri(graph)
     if not graph_iri:   # not writable as <iri>: never put into a query
         return None
+    counted = client.query(f"SELECT (COUNT(*) AS ?n) WHERE {{ GRAPH {graph_iri} {{ ?s ?p ?o }} }}",
+                           cg_id, view=None, on_error=failure)
+    if counted is failure or not counted:
+        return None
+    expected = _int(counted[0].get("n"))
     triples: list[tuple[str, str, str]] = []
     after = ""
     while True:
@@ -199,12 +228,14 @@ def _read_asset(client: DkgClient, cg_id: str, graph: str) -> Optional[list[tupl
         if page is failure:
             return None
         batch = [(extract_binding(row.get("threat")), extract_binding(row.get("p")), _raw(row.get("o"))) for row in page]
-        if len(batch) < PAGE_TRIPLES:
+        if len(triples) + len(batch) == expected:
             return triples + batch
-        last = batch[-1][0]
+        if not batch:
+            return None                                        # fewer triples than the node counted
+        last = batch[-1][0]   # the page may end inside its last subject: that one is read again
         complete = [triple for triple in batch if triple[0] != last]
         if not complete:
-            return None
+            return None                                        # one subject larger than a reply
         triples.extend(complete)
         after = complete[-1][0]
 

@@ -53,8 +53,11 @@ CHUNK = 200
 PARALLEL_QUERIES = 4
 #: The most values one call looks up — the content scanner's own candidate cap.
 MAX_VALUES = 4000
-#: Rows per query: candidates × ~15 triples each, with headroom.
+#: Rows per query: candidates × ~15 triples each, with headroom. An answer this long may be cut short.
 ROW_LIMIT = 20_000
+#: The reason a lookup gives when one value's answer reached :data:`ROW_LIMIT` — the store
+#: answered (its health is fine), but the answer may be missing rows.
+CUT_SHORT = f"one value's answer reached the {ROW_LIMIT:,}-row limit"
 #: EVM addresses per call also asked for in their EIP-55 spelling (~0.3 ms each).
 CHECKSUM_SPELLINGS = 64
 #: While the store is degraded, one lookup probes it at most this often; the rest answer
@@ -149,7 +152,8 @@ class VerifiedLookup:
             answer = skipped                                   # the breaker: not asked, not recorded
         else:
             answer = self._ask(items, build_query, category)
-            self.health.record(answer.known, answer.reason)    # the STORE's health, whatever answers next
+            # The STORE's health, whatever answers next: an answer cut at the row limit came from a store that answered.
+            self.health.record(answer.known or answer.reason == CUT_SHORT, answer.reason)
         if not answer.known and self.fallback is not None:
             return self._from_fallback(items if fallback_items is None else fallback_items, category, answer)
         return answer
@@ -178,13 +182,33 @@ class VerifiedLookup:
         if not self.scope.ready:
             return LookupAnswer({}, COULD_NOT_TELL, "verified scope not ready")
         rules: dict[str, dict[str, Any]] = {}
-        queries = [build_query(items[start:start + CHUNK]) for start in range(0, len(items), CHUNK)]
+        chunks = [items[start:start + CHUNK] for start in range(0, len(items), CHUNK)]
+        queries = [build_query(chunk) for chunk in chunks]
         answers = _pool().map(self.store.select, queries) if len(queries) > 1 else map(self.store.select, queries)
-        for answer in answers:   # in query order: the first could-not-tell is the answer, as before
-            if not answer.known:
-                return LookupAnswer(rules, COULD_NOT_TELL, answer.reason)
-            rules.update(self._rules_from(answer.rows or [], category))
+        for chunk, answer in zip(chunks, answers):   # in query order: the first could-not-tell is the answer, as before
+            part = self._chunk_answer(chunk, build_query, category, answer)
+            rules.update(part.rules)
+            if not part.known:
+                return LookupAnswer(rules, COULD_NOT_TELL, part.reason)
         return LookupAnswer(rules, HIT if rules else CLEAN)
+
+    def _chunk_answer(self, chunk: Sequence[Any], build_query: Any, category: str, answer: Any) -> LookupAnswer:
+        """The rules in one chunk's store *answer*. An answer of :data:`ROW_LIMIT` rows may be cut
+        short (review 2026-11-26), so its chunk is asked again in halves; one value whose answer is
+        still cut could not tell (its hits are kept) — a cut answer is never "clean" (LES-011)."""
+        if not answer.known:
+            return LookupAnswer({}, COULD_NOT_TELL, answer.reason)
+        rows = answer.rows or []
+        if len(rows) < ROW_LIMIT:
+            return LookupAnswer(self._rules_from(rows, category), CLEAN)
+        if len(chunk) == 1:
+            return LookupAnswer(self._rules_from(rows, category), COULD_NOT_TELL, CUT_SHORT)
+        half = len(chunk) // 2
+        parts = [self._chunk_answer(part, build_query, category, self.store.select(build_query(part)))
+                 for part in (chunk[:half], chunk[half:])]
+        rules = {key: rule for part in parts for key, rule in part.rules.items()}
+        unknown = next((part for part in parts if not part.known), None)
+        return LookupAnswer(rules, CLEAN, "") if unknown is None else LookupAnswer(rules, COULD_NOT_TELL, unknown.reason)
 
     def _rules_from(self, rows: Iterable[dict[str, str]], category: str) -> dict[str, dict[str, Any]]:
         """Triples → rules through the compiler's own builders, scope applied

@@ -102,7 +102,7 @@ def promoted_rules(client: DkgClient, graph: str, view: Any) -> Optional[list[tu
     served: dict[str, tuple[str, str, dict[str, Any]]] = {}
     for found in sorted(promotions, key=lambda found: found.sequence, reverse=True):
         if found.identifier not in served:
-            rule = _rule(found, copies.get(found.report, ()), environment)
+            rule = _rule(found, copies.get(found.report, ()), environment, graph)
             if rule is not None:
                 served[found.identifier] = rule
     return list(served.values())
@@ -152,14 +152,17 @@ def _verified_copies(client: DkgClient, graph: str, subjects: set[str]) -> Optio
 
 
 def _rule(found: statement.Promotion, copies: Iterable[statement.ReportCopy],
-          environment: str) -> Optional[tuple[str, str, dict[str, Any]]]:
+          environment: str, graph: str) -> Optional[tuple[str, str, dict[str, Any]]]:
     """The verified rule of the report *found* points at — from the copy that
-    is exactly that report and verifies — or None when no copy does."""
+    is exactly that report and verifies for this network and the configured
+    verified *graph* — or None when no copy does. WHY *graph* (review
+    2026-11-26): verified against the graph its own envelope named, a report
+    signed for any other graph passed as this graph's."""
     for copy in copies:
         envelope = signing.from_text(copy.text)
         if envelope is None or envelope.environment != environment or not statement.is_the_report(found, copy.text):
             continue
-        report = community.ReportVerifier(environment, envelope.graph).verify_signed(copy.text)
+        report = community.ReportVerifier(environment, graph).verify_signed(copy.text)
         if report is None or (report.subject, report.identifier) != (found.report, found.identifier):
             continue
         row = {"threat": report.subject, "identifier": report.identifier, "severity": found.severity,

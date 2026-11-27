@@ -40,6 +40,18 @@ that the two version fields agree.
 
 ### Fixed
 
+- **A failed curator read no longer brings revoked threats back**, and corrections need curator signatures in
+  normal refreshes once curator roots are pinned (today's graph compiles exactly as before).
+- **No rules are skipped or cut off when Blackbox reads the threat graph**: injection, skill and correction
+  rules are no longer skipped when several assets are read together, and community reports, curator
+  statements, manifests and kill lists are no longer cut off at 1,000.
+- **A package lookup whose answer may have been cut off reports "could not tell" instead of "clean".**
+- **The optional fallback index reads whole assets, respects later corrections, and keeps rules found in more
+  than one asset.**
+- **`blackbox sync --wait` reports done only when the catch-up is really done.**
+- **One reporter can no longer push out another reporter's report by reusing its address**, and a promoted
+  report signed for another graph is ignored.
+- **"Could not tell" is kept when the rules are saved and loaded again.**
 - **Agents in the sandbox can no longer get Blackbox to open an app they built themselves.** Agents can open
   only apps root installed (system apps, and apps an installer put in /Applications as root). An app you
   dragged into /Applications yourself is owned by you, so agents can no longer open it.
