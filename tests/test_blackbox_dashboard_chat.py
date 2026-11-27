@@ -598,7 +598,7 @@ def test_blackbox_dashboard_chat_starts_session(monkeypatch):
     calls = []
 
     def fake_run(argv, **kwargs):
-        calls.append(argv)
+        calls.append([*argv, "<stdin>" + str(kwargs.get("input"))])
         return subprocess.CompletedProcess(argv, 0, stdout="hello\n", stderr="\nsession_id: sid-1\n")
 
     monkeypatch.setattr(server.subprocess, "run", fake_run)
@@ -611,14 +611,14 @@ def test_blackbox_dashboard_chat_starts_session(monkeypatch):
 
     assert res.status_code == 200
     assert res.json() == {"ok": True, "answer": "hello", "session_id": "sid-1"}
-    assert calls == [[*THIS_HERMES, "blackbox", "chat", "--query=hi", "--quiet", "--pass-session-id"]]
+    assert calls == [[*THIS_HERMES, "blackbox", "chat", "--query-file=-", "--quiet", "--pass-session-id", "<stdin>hi"]]
 
 
 def test_blackbox_dashboard_chat_resumes_session(monkeypatch):
     calls = []
 
     def fake_run(argv, **kwargs):
-        calls.append(argv)
+        calls.append([*argv, "<stdin>" + str(kwargs.get("input"))])
         return subprocess.CompletedProcess(argv, 0, stdout="follow-up\n", stderr="\nsession_id: sid-1\n")
 
     monkeypatch.setattr(server.subprocess, "run", fake_run)
@@ -636,10 +636,11 @@ def test_blackbox_dashboard_chat_resumes_session(monkeypatch):
             *THIS_HERMES,
             "blackbox",
             "chat",
-            "--query=which of these?",
+            "--query-file=-",
             "--quiet",
             "--pass-session-id",
             "--resume=sid-1",
+            "<stdin>which of these?",
         ]
     ]
 
@@ -657,13 +658,13 @@ def test_blackbox_dashboard_chat_drops_a_session_id_that_is_not_one(monkeypatch)
     calls = []
 
     def fake_run(argv, **kwargs):
-        calls.append(argv)
+        calls.append([*argv, "<stdin>" + str(kwargs.get("input"))])
         return subprocess.CompletedProcess(argv, 0, stdout="ok\n", stderr="")
 
     res = _chat(monkeypatch, fake_run, {"message": "-v", "session_id": "--yolo x"})
 
     assert res.status_code == 200
-    assert calls == [[*THIS_HERMES, "blackbox", "chat", "--query=-v", "--quiet", "--pass-session-id"]]
+    assert calls == [[*THIS_HERMES, "blackbox", "chat", "--query-file=-", "--quiet", "--pass-session-id", "<stdin>-v"]]
 
 
 def test_blackbox_dashboard_chat_never_shows_the_system_error(monkeypatch):
@@ -687,7 +688,7 @@ def test_blackbox_dashboard_chat_keeps_the_answers_paragraph_breaks(monkeypatch)
     assert res.json()["answer"] == "First paragraph.\n\nSecond paragraph:\n- one\n- two"
 
 def test_attach_targets_include_unavailable_supported_agents(monkeypatch):
-    def fake_attach_all(*, hermes=True, openclaw=True, dry_run=False):
+    def fake_attach_all(*, hermes=True, openclaw=True, dry_run=False, include_declined=False):
         if hermes and not openclaw:
             return {
                 "hermes": [
@@ -718,7 +719,7 @@ def test_attach_targets_include_unavailable_supported_agents(monkeypatch):
 
 
 def test_attach_targets_do_not_duplicate_errored_supported_agents(monkeypatch):
-    def fake_attach_all(*, hermes=True, openclaw=True, dry_run=False):
+    def fake_attach_all(*, hermes=True, openclaw=True, dry_run=False, include_declined=False):
         if hermes and not openclaw:
             return {"hermes": []}
         if openclaw and not hermes:
