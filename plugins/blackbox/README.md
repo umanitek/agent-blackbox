@@ -18,7 +18,7 @@ and flags or blocks it before anything happens.
 | **Shows** | every finding in a local dashboard, an audit trail and your system's notifications |
 | **Shares** | privacy-safe, signed threat reports with the community — opt-in: off until you turn it on |
 
-This guide documents Agent Blackbox **1.7.0** (2026-11-27). What changed, release by release:
+This guide documents Agent Blackbox **1.7.1** (2026-11-27). What changed, release by release:
 [CHANGELOG.md](CHANGELOG.md).
 
 **Contents:** [Supported agents](#supported-agents) ·
@@ -1173,7 +1173,7 @@ puts back what is missing. For a catalog install, run `hermes blackbox setup`.
 
 ## Versions
 
-- **Current:** 1.7.0 (2026-11-27). The version is the same in `plugin.yaml`,
+- **Current:** 1.7.1 (2026-11-27). The version is the same in `plugin.yaml`,
   `kernel/constants.py` and [CHANGELOG.md](CHANGELOG.md).
 - **How versions work** ([Semantic Versioning](https://semver.org/)): a **patch** (1.6.**2**) is
   fixes only; a **minor** (1.**6**) adds behaviour that works with everything before; a **major**

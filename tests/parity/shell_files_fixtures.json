@@ -1233,8 +1233,10 @@
         "-",
         "<<",
         "EOF",
+        ";",
         "import",
         "pathlib",
+        ";",
         "print",
         "(",
         "pathlib.Path",
@@ -1248,6 +1250,7 @@
         "(",
         ")",
         ")",
+        ";",
         "EOF"
       ],
       "args": [
@@ -1265,6 +1268,7 @@
         "node",
         "<<",
         "EOF",
+        ";",
         "console.log",
         "(",
         "require",
@@ -1276,7 +1280,9 @@
         "/etc/passwd,utf8",
         ")",
         ")",
+        ";",
         "EOF",
+        ";",
         "echo",
         "done"
       ],
@@ -2058,6 +2064,7 @@
         "cat",
         "~/tab",
         "here.txt",
+        ";",
         "cat",
         "~/second/line.txt"
       ],
@@ -3421,6 +3428,39 @@
           "ecosystem": "npm",
           "name": "lodash",
           "version": ""
+        }
+      ]
+    },
+    {
+      "command": "npm install\nThe server listens at port 3000.",
+      "packages": []
+    },
+    {
+      "command": "npm install\nDon't worry, it runs at boot.",
+      "packages": []
+    },
+    {
+      "command": "npm install left-pad\nnpm i evil@1.0",
+      "packages": [
+        {
+          "ecosystem": "npm",
+          "name": "left-pad",
+          "version": ""
+        },
+        {
+          "ecosystem": "npm",
+          "name": "evil",
+          "version": "1.0"
+        }
+      ]
+    },
+    {
+      "command": "cd app &&\n  npm i evil@1.0",
+      "packages": [
+        {
+          "ecosystem": "npm",
+          "name": "evil",
+          "version": "1.0"
         }
       ]
     },

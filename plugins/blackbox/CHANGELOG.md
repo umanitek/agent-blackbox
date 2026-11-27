@@ -38,6 +38,16 @@ that the two version fields agree.
 
 ## [Unreleased]
 
+## [1.7.1] - 2026-11-27
+
+### Fixed
+
+- **A line break ends a command, so prose is no longer read as packages.** A Markdown file holding a bare
+  `npm install`, then a JSON example or a sentence with "at" on the next lines, was refused as installing the
+  npm packages `name` and `at` (CRITICAL). The shell lexer read a line break as a space; it now ends the
+  command as the shell does (`&&`, `|` and a `\` continuation still carry on). A real two-line script is read
+  right too. Same change in the OpenClaw bridge.
+
 ## [1.7.0] - 2026-11-27
 
 ### Added
@@ -889,7 +899,8 @@ The first version in the Hermes plugin catalog (commit `7d697683`, added by Herm
 in NousResearch/hermes-agent#140529). Its `plugin.yaml` said 1.0.0 while Blackbox's own code and
 dashboard reported 1.1.0; 1.1.0 is therefore skipped, so no two different builds share a number.
 
-[Unreleased]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.7.0...main
+[Unreleased]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.7.1...main
+[1.7.1]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.7.0...blackbox-v1.7.1
 [1.7.0]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.6.2...blackbox-v1.7.0
 [1.6.2]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.6.1...blackbox-v1.6.2
 [1.6.1]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.6.0...blackbox-v1.6.1

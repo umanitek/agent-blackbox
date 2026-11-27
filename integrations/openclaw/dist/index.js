@@ -1,4 +1,4 @@
-/* @umanitek/blackbox-openclaw — built from src/ by `npm run build`; do not edit. source sha256:2ae960179c22f8814bbf08a00382be9e723c423215a9d53bf8bce9878c1042de */
+/* @umanitek/blackbox-openclaw — built from src/ by `npm run build`; do not edit. source sha256:5bbfa2d7bd5557b229fbb984c9244de3b6ed77ef40c3fe866f4b174b8f7f3b7a */
 
 // src/consent.ts
 import { readFileSync } from "node:fs";
@@ -227,6 +227,8 @@ var MAX_BRACE_WORDS = 64;
 var OPERATOR_CHARS = ";&|<>";
 var SUBSHELL_CHARS = "()";
 var WHITESPACE = " 	\r\n";
+var LINE_END = ";";
+var CARRIES_ON = /* @__PURE__ */ new Set(["&&", "||", "|", "|&", "(", ";", "&"]);
 var OPEN = "\uE000";
 var COMMA = "\uE001";
 var CLOSE = "\uE002";
@@ -326,6 +328,7 @@ var Lexer = class {
       const char = text[this.index];
       if (WHITESPACE.includes(char)) {
         this.finish();
+        if (char === "\n") this.endLine();
         this.index += 1;
       } else if (char === "#" && !this.started) {
         const newline = text.indexOf("\n", this.index);
@@ -343,6 +346,10 @@ var Lexer = class {
     }
     this.finish();
     return this.words;
+  }
+  /** An unquoted line break: a `;` word unless the command carries on (lexer.py `end_line`). */
+  endLine() {
+    if (this.words.length && !CARRIES_ON.has(this.words[this.words.length - 1])) this.words.push(LINE_END);
   }
   wordPart(char) {
     const text = this.text;
@@ -472,8 +479,17 @@ function splitWords(command) {
     return new Lexer(command).run();
   } catch (error) {
     if (!(error instanceof Unbalanced)) throw error;
-    return command.split(/\s+/).filter(Boolean);
+    return plainWords(command);
   }
+}
+function plainWords(command) {
+  const out = [];
+  for (const line of command.split("\n")) {
+    const words = line.split(/\s+/).filter(Boolean);
+    if (words.length && out.length && !CARRIES_ON.has(out[out.length - 1])) out.push(LINE_END);
+    out.push(...words);
+  }
+  return out;
 }
 function baseName(word) {
   return word.slice(word.lastIndexOf("/") + 1).toLowerCase();

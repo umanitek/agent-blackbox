@@ -4,7 +4,9 @@
 
 What it does, the way bash does it:
 
-* whitespace separates words; ``'…'`` keeps everything literal; ``"…"`` keeps everything but
+* whitespace separates words, and an unquoted line break ends a command the way ``;`` does (a ``;``
+  word), except straight after an operator that carries on to the next line (``&&``, ``||``, ``|``,
+  ``|&``, ``(``) and at the start of the text; ``'…'`` keeps everything literal; ``"…"`` keeps everything but
   ``\\$``, ``\\```, ``\\"``, ``\\\\`` and a line continuation; a backslash outside quotes takes the next
   character literally;
 * ``;`` ``&`` ``|`` ``<`` ``>`` runs are operator words (``&&``, ``>>``, ``2>&1`` → ``2`` ``>&`` ``1``),
@@ -22,7 +24,12 @@ is a Windows path from the backslash after a drive (``C:\\``), a ``%VAR%``, ``~`
 for the other words of the line (``echo C:\\x; cat ~/.s"s"h/id_rsa`` reads ``~/.ssh/id_rsa``).
 
 An unbalanced quote (a line the shell itself refuses) falls back to plain whitespace splitting,
-so a malformed command still yields its paths.
+line by line with the same ``;`` between lines, so a malformed command still yields its paths.
+
+WHY the line break: a file an agent writes is read as a command too (an install written into a
+README), and prose after a bare ``npm install`` on the next line was read as its packages —
+``npm install`` ⏎ ``It listens at 3000`` named the npm packages ``at`` and ``listens`` (field report,
+2026-11-27). A real two-line script was misread the same way.
 
 Pure and deterministic; reads no files. Linear in the line's length.
 
@@ -44,6 +51,10 @@ MAX_BRACE_WORDS = 64
 _OPERATOR_CHARS = frozenset(";&|<>")
 _SUBSHELL_CHARS = frozenset("()")
 _WHITESPACE = frozenset(" \t\r\n")
+#: The word an unquoted line break becomes, and the words after which a line break carries the
+#: command on instead (bash reads ``a &&`` ⏎ ``b`` as one list).
+_LINE_END = ";"
+_CARRIES_ON = frozenset({"&&", "||", "|", "|&", "(", ";", "&"})
 #: Brace-expansion marks for an UNQUOTED ``{`` ``,`` ``}`` while a word is built (a quoted or escaped
 #: one is a literal character): private-use code points, never typed in a real command.
 _OPEN, _COMMA, _CLOSE = "\ue000", "\ue001", "\ue002"
@@ -156,6 +167,8 @@ class _Lexer:
             char = text[self.index]
             if char in _WHITESPACE:
                 self.finish()
+                if char == "\n":
+                    self.end_line()
                 self.index += 1
             elif char == "#" and not self.started:
                 newline = text.find("\n", self.index)
@@ -172,6 +185,11 @@ class _Lexer:
                 self.word_part(char)
         self.finish()
         return tuple(self.words)
+
+    def end_line(self) -> None:
+        """An unquoted line break: a ``;`` word unless the command carries on (see the module doc)."""
+        if self.words and self.words[-1] not in _CARRIES_ON:
+            self.words.append(_LINE_END)
 
     def word_part(self, char: str) -> None:
         text = self.text
@@ -303,7 +321,18 @@ def _lexed(command: str) -> tuple[tuple[str, ...], bool]:
     try:
         return lexer.run(), lexer.unresolved
     except _Unbalanced:   # an unbalanced quote: still find the paths
-        return tuple(command.split()), False
+        return _plain_words(command), False
+
+
+def _plain_words(command: str) -> tuple[str, ...]:
+    """*command* split on whitespace, a ``;`` between its lines (the fallback for an unbalanced quote)."""
+    out: list[str] = []
+    for line in command.split("\n"):
+        words = line.split()
+        if words and out and out[-1] not in _CARRIES_ON:
+            out.append(_LINE_END)
+        out += words
+    return tuple(out)
 
 
 def split_words(command: str) -> tuple[str, ...]:
