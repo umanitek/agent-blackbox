@@ -53,4 +53,5 @@ def register(app: Any, swr: Cache) -> None:
 
     @app.get("/api/docs")
     def docs_data() -> Any:
-        return swr(CACHE_KEY, build_payload, {"version": "", "shields": [], "field_tests": []}, CACHE_TTL_SECONDS)
+        return swr(CACHE_KEY, build_payload, {"version": "", "shields": [], "settings": {"permissions": [], "always_blocked": [], "always_on": []},
+                                              "field_tests": []}, CACHE_TTL_SECONDS)

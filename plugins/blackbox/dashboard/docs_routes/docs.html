@@ -41,6 +41,7 @@
     <li><a href="#check">How a check works</a></li>
     <li><a href="#flows">The four flows</a></li>
     <li><a href="#decisions">Block, flag or allow</a></li>
+    <li><a href="#security">Your security settings</a></li>
     <li><a href="#graph">The threat graph</a></li>
     <li><a href="#agents">What Blackbox protects</a></li>
   </ol>
@@ -116,7 +117,7 @@
       <svg class="protect-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/></svg>
       <h3>Vulnerable packages</h3>
       <p>A package version with a published vulnerability is looked up on OSV.dev (name and version only) when the agent installs it, so you hear about it before it lands.</p>
-      <span class="tier">Flags only — never blocks</span>
+      <span class="tier">Flags by default; block them per agent on the Security page</span>
     </article>
     <article class="protect" data-tier="flag">
       <svg class="protect-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9 10h.01M15 10h.01M9 15c1.5 1 4.5 1 6 0"/></svg>
@@ -171,11 +172,28 @@
   <h2>Block, flag or allow</h2>
   <p>What Blackbox does with a finding depends on two settings and one rule.</p>
   <div class="cards three">
-    <article class="card"><h3>Mode</h3><p><b>Audit</b> records and shows every finding but stops nothing — good for getting to know what your agent does. <b>Block</b> stops serious findings before they run. You switch in Settings.</p></article>
-    <article class="card"><h3>Severity</h3><p>Each finding is low, medium, high or critical. In block mode, findings at or above your block level are stopped; the rest are flagged.</p></article>
+    <article class="card"><h3>Mode</h3><p><b>Audit</b> records and shows every finding and lets threats run — good for getting to know what your agent does. A few rules still refuse in Audit mode (switching Blackbox off, your protected files, startup places and shell startup files); they are listed under <a href="#security">Your security settings</a>. <b>Block</b> also stops serious findings before they run. You switch on the <a href="/security">Security page</a>; switching to Audit waits for your approval.</p></article>
+    <article class="card"><h3>Severity</h3><p>Each finding is info, low, medium, high or critical. In block mode, findings at or above your block level are stopped; the rest are flagged.</p></article>
     <article class="card"><h3>Trust</h3><p>Only <b>verified</b> threats (from Umanitek's curated graph) and protections you switch on yourself, like Trader Shield, can block. Community reports and guesses only ever flag, so nobody else can stop your agent.</p></article>
   </div>
   <p class="note">Blackbox fails open: if Blackbox itself ever has a problem, your agent keeps working. A security tool must never become the reason your work stops.</p>
+</section>
+
+<section id="security" class="doc" data-keywords="security settings permissions strict relax approval allow block ask sandbox startup sudo shell zshrc publisher vulnerable apps hook size limit always on">
+  <h2>Your security settings</h2>
+  <p>Blackbox starts strict. Everything that limits what your agents may do is on the <a href="/security">Security page</a>, and every setting there explains itself: what the agent may do when it is allowed, what it meets while it is blocked, and what can go wrong if you relax it. You can set each one for every agent, one agent, one project folder, or one agent in one project; the most specific setting wins.</p>
+  <div class="cards three">
+    <article class="card"><h3>Relaxing waits for you</h3><p>Any change that lets an agent do more — Audit mode, a higher block level, a check turned off, a permission moved from block to ask or allow — waits until you approve it (on this machine's password prompt or a paired companion app). Making Blackbox stricter applies at once. Agents can never change these settings themselves.</p></article>
+    <article class="card"><h3>When a change applies</h3><p>Permissions Blackbox does for the agent, and those its hooks judge, apply on the next tool call. Permissions the sandbox's profile holds apply when the agent next starts; the page says which is which.</p></article>
+    <article class="card"><h3>The hook size limit</h3><p>Blackbox reads every tool call before it runs. A call larger than the limit (4, 16 or 64 MB; 16 by default) can not be checked, so it is refused. Raising the limit lets larger writes through and checks them; lowering it refuses more.</p></article>
+  </div>
+  <h3>What agents may do</h3>
+  <div class="table-wrap"><table id="settings-permissions" class="settings"><tr><td>Reading the settings…</td></tr></table></div>
+  <h3>Refused in every mode, Audit included</h3>
+  <ul id="settings-always-blocked"></ul>
+  <h3>Always on: no setting relaxes these</h3>
+  <p>These protect Blackbox itself. An agent that could have one relaxed could switch Blackbox off, so they hold for every agent in every mode, sandboxed or not.</p>
+  <ul id="settings-always-on"></ul>
 </section>
 
 <section id="graph" class="doc" data-keywords="threat graph dkg node verified community sync lookup">
@@ -183,7 +201,7 @@
   <p>Blackbox's knowledge of known threats — malicious packages, wallet drainers, scam sites, dangerous commands — comes from a <b>verified threat graph</b> that Umanitek curates and publishes on the OriginTrail Decentralized Knowledge Graph (DKG). Your install runs its own small DKG node, which keeps a copy of that graph on your machine. Checks then ask your own node, never a server, so they are fast and private.</p>
   <div class="cards two">
     <article class="card"><h3>Verified graph</h3><p>Curated by Umanitek. Only its curator can write to it. Its threats may block. <code>blackbox status</code> shows how many of its assets are on your machine.</p></article>
-    <article class="card"><h3>Community graph</h3><p>A separate graph where Blackbox users can share sightings — only if they choose to. Community findings only flag, never block.</p></article>
+    <article class="card"><h3>Community reports</h3><p>Sightings Blackbox users chose to share, kept in the verified graph's shared memory for Umanitek's curators to review. A community finding only flags, never blocks; a curator can confirm it into the verified graph.</p></article>
   </div>
 </section>
 
@@ -199,8 +217,8 @@
   <ul>
     <li><b>sudo and setuid tools</b> (<code>sudo</code>, <code>su</code>, <code>top</code>, <code>crontab -l</code>): macOS doesn't allow setuid programs inside the agent sandbox; run them in your own terminal. <code>ps</code> works from the sandbox's own copy.</li>
     <li><b>Homebrew installs</b>: Homebrew sandboxes its own installs, and two sandboxes can't nest, so Blackbox installs for the agent: official packages by name only, checked against the threat rules, run as you and reported to you (the sandbox permission <i>Homebrew installs</i>: allow, ask each time, or block). Homebrew's own install scripts then run outside the sandbox, as when you run <code>brew</code> yourself.</li>
-    <li><b>Sandbox permissions</b>: what an agent inside the sandbox may do beyond your files — global installs, your tool folders, opening links and apps, AppleScript, stopping a program, Docker, services on this Mac, the clipboard — is a list on File Shield's page: block, ask each time, or allow, for every agent, one agent or one project. Turning one up asks you first; what Blackbox itself keeps closed (its own files, your startup places, ssh into this Mac) is never unlocked.</li>
-    <li><b>Opening or driving other apps</b> (<code>open -a</code>, <code>osascript</code>, Automator, Shortcuts) is refused: the other app would act outside the sandbox.</li>
+    <li><b>Sandbox permissions</b>: what an agent inside the sandbox may do beyond your files — global installs, your tool folders, opening links, files in apps and apps you installed, AppleScript, stopping a program, Docker, services on this Mac, the clipboard — is set on the <a href="/security">Security page</a> (and File Shield's page): block, ask each time, or allow, for every agent, one agent or one project. Turning one up asks you first; what Blackbox itself keeps closed (its own files, startup places from inside the sandbox, ssh into this Mac) is never unlocked.</li>
+    <li><b>Opening apps</b> (<code>open -a</code>) goes through Blackbox: system apps and apps an administrator installed follow <i>Opening files in apps</i>; apps you put in Applications yourself follow <i>Opening apps you installed</i>, blocked unless you allow it, because any program running as you could replace such an app. Apps that drive other apps (Terminal, Script Editor, Automator, Shortcuts, System Settings) are never opened; <code>osascript</code> is the separate <i>AppleScript</i> permission.</li>
     <li><b>A folder holding a protected item</b> (<code>grep -r ~</code>, a zip of <code>~/Documents</code>) is not swept whole: work on its subfolders.</li>
   </ul>
   <p>When the sandbox refuses something, the agent is told "Blackbox's sandbox refused this (…)" and the refusal counts on the session.</p>

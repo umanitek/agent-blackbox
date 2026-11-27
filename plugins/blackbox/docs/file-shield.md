@@ -212,7 +212,10 @@ in this project / Keep blocked) or allow — for every agent, one agent, one pro
 agent in one project; the most specific rule wins, in both directions. Turning one up asks you
 first (your password or the companion app). A permission enforced by **the profile** reaches an
 agent at its next start (the Hermes agent: its next command); one done by **Blackbox** (outside the
-sandbox, checked and recorded) applies at once.
+sandbox, checked and recorded) applies at once, and so does one judged by **the hooks** (every
+agent's tool calls, sandboxed or not). Every permission is also on the dashboard's Security page
+(`/security`), where each one shows what it allows, what the agent meets while it is blocked, and
+what can go wrong if you relax it.
 
 | Permission | What it unlocks | Done by | Default | Cost of allowing it |
 |---|---|---|---|---|
@@ -228,14 +231,23 @@ sandbox, checked and recorded) applies at once.
 | Clipboard | `pbpaste` and reading what you copied (blocking it also stops copy and paste in an editor opened in the sandbox) | profile | allow | what you copied may be a password |
 | Keychain | `security`, git's keychain helper | profile | allow | **not controllable yet** — not proven on a real keychain |
 | Camera and microphone | recording | profile | — | **not controllable yet** — not proven on a real device |
+| Opening apps you installed | `open -a` for an app you put in `/Applications` or `~/Applications` yourself (owned by you, writable by nobody else, never an app driver); also needs *Opening files in apps* | Blackbox | block | any program running as you can replace such an app |
+| Adding things that start by themselves | launchd jobs, login items, cron and `at`, systemd units, SSH login files — for an agent outside the sandbox; refused in every mode while blocked | hooks | block | it runs later by itself, outside Blackbox's checks |
+| Editing your shell startup files | `~/.zshrc`, `~/.bashrc`, `~/.profile` and the like — Blackbox's own line in them stays protected; refused in every mode while blocked | hooks | block | what it adds runs in your next terminal, outside the sandbox |
+| sudo changes to system folders | `sudo` writes into `/etc`, `/usr`, `/boot` and the machine's other own folders (refused in Block mode while blocked) | hooks | block | the agent can change how the whole machine works |
+| Installs that name no publisher | a skill install naming no publisher while a curator kill for a whole publisher is in force | hooks | block | the killed publisher's package can come in unnamed |
+| Packages with known vulnerabilities | installing a version with a published vulnerability (always flagged; blocked in Block mode while this is blocked) | hooks | allow | the vulnerable version stays until someone upgrades it |
 
 **Folder rules** keep a folder out of reach (`none`: no read, no write) or read-only (`read`) for
 every agent, one agent or one project — they only ever tighten. Mounting a protected item (or a
 folder holding one) into a container is refused by the hooks too (`docker run -v …`).
 
+A hooks permission never opens the sandbox: inside it, startup places and shell startup files stay
+closed whatever you set.
+
 **Never unlocked**, whatever you set: Blackbox's own files, Hermes' `config.yaml` and `.env`, every
-agent's hook settings and your shell startup files, the places something starts from by itself,
-your protected items, ssh into this Mac (Seatbelt's `localhost` covers every address of this Mac),
+agent's hook settings, your shell startup files and the places something starts from by itself
+from inside the sandbox, your protected items, ssh into this Mac (Seatbelt's `localhost` covers every address of this Mac),
 signals to programs outside the sandbox, sudo / setuid programs, and blocking Blackbox's dashboard.
 Not controllable at all: screen capture (macOS asks you for the terminal app itself) and setuid tools.
 
@@ -253,8 +265,8 @@ plugins:
           - {path: "~/work/shop/secrets", access: read, agent: codex}
 ```
 
-Agents on hooks only (not in the sandbox) get the folder rules and the startup places through their
-hooks; the other permissions need the sandbox. The hook reads the same folder rules the profile is
+Agents on hooks only (not in the sandbox) get the folder rules, the startup places and the hooks
+permissions through their hooks; the other permissions need the sandbox. The hook reads the same folder rules the profile is
 built from, for the agent and the folder it works in: a folder kept out refuses any touch (reading,
 listing, a `cd`, writing, a whole-tree command on a folder above it); a read-only folder refuses
 writes, redirects, deletes, moves, new files and permission changes there, and stays readable. Like

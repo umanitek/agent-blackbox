@@ -38,6 +38,41 @@ that the two version fields agree.
 
 ## [Unreleased]
 
+### Added
+
+- **One Security page for everything that limits your agents** (`/security`, in the header menu). It has
+  the protection mode, what agents may do (every permission, for every agent, one agent, one project
+  or one agent in one project), the threat checks, the hook size limit, and the rules that are
+  always on. Every setting explains itself where you change it: what the agent may do when it is
+  allowed, what it meets while it is blocked, what can go wrong if you relax it, its strict default
+  and when a change applies. Loosening anything still waits for your approval. The protection mode
+  and threat checks moved here from the settings menu, which now links to this page.
+- **More limits you can relax per agent**, each blocked by default:
+  - opening apps you installed yourself;
+  - adding things that start by themselves (for an agent outside the sandbox);
+  - editing your shell startup files (Blackbox's own line in them stays protected);
+  - `sudo` changes to system folders;
+  - skill installs that name no publisher while a curator kill for a whole publisher is in force.
+
+  You can now also **block** packages with known vulnerabilities per agent (they are flagged, not
+  blocked, until you do). Inside the sandbox, startup places and shell startup files stay closed
+  whatever you set.
+- **The hook size limit is a setting**: 4, 16 or 64 MB (16 by default). A tool call over the limit
+  can't be checked, so it is refused.
+- **The docs page has a "Your security settings" section**, built from the same list the Security page
+  and the checks use, so it shows what the engine does today.
+
+### Changed
+
+- **Switching to Audit from the Hermes desktop app's page needs one press.** After you approve the
+  switch, the page finishes it by itself.
+- **The docs page now says what Audit mode really does.** It no longer says Audit stops nothing: a few
+  rules refuse in every mode, and the page lists them. Opening apps, severities (`info` included),
+  community reports (kept in the verified graph's shared memory) and vulnerable packages are
+  described as they work now.
+- Sharing consent never expires: a change to the reporter terms doesn't ask again (owner decision,
+  2026-11-27; this is how it already worked, now written down).
+
 ### Fixed
 
 - **Spelling a command differently no longer hides it from Blackbox.** Quoting or escaping (`~/.s"s"h`,
