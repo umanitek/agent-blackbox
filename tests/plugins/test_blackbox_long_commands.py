@@ -66,10 +66,11 @@ def test_one_check_splits_and_walks_a_command_once_however_many_checks_ask(monke
     """Protected paths, the keychain rule and the guard-settings rule all read the same command.
     Its word split and its path arguments are worked out once, so reading the whole command
     (not 8,000 characters of it) does not multiply the cost by the number of checks."""
+    from plugins.blackbox.detection.command_line import lexer
     from plugins.blackbox.detection.paths import shell_files
 
     monkeypatch.setenv("BLACKBOX_HOME", str(tmp_path))
-    shell_files._split.cache_clear()
+    lexer._lexed.cache_clear()
     shell_files._file_args.cache_clear()
     command = _padding(120_000) + "cat ~/.ssh/id_rsa"
     assert "fileaccess:terminal:user-protected" in _identifiers(command)

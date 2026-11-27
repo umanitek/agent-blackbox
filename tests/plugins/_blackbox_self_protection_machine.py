@@ -10,6 +10,7 @@ args)``: the one assertion every attack case makes. ``here(value)``: ``@SRC@`` f
 from __future__ import annotations
 
 import json
+import shlex
 from pathlib import Path
 
 import pytest
@@ -29,13 +30,16 @@ CONFIG = "plugins:\n  enabled:\n    - blackbox\n  entries:\n    blackbox:\n     
 OPENCLAW = {"plugins": {"allow": ["blackbox"], "entries": {"blackbox": {"enabled": True, "config": {"mode": "block"}}}}}
 
 
-def here(value):
-    """*value* with ``@SRC@`` replaced by this checkout, through strings, lists and dicts."""
+def here(value, *, in_command: bool = False):
+    """*value* with ``@SRC@`` replaced by this checkout, through strings, lists and dicts. Inside a
+    shell command the checkout is shell-quoted, as a working attack must write it: a checkout whose
+    path holds a space (``~/Library/Application Support/…``) is two words unquoted, and neither is
+    the checkout, so the shell never reaches it."""
     if isinstance(value, str):
-        return value.replace("@SRC@", REPO)
+        return value.replace("@SRC@", shlex.quote(REPO) if in_command else REPO)
     if isinstance(value, dict):
-        return {key: here(item) for key, item in value.items()}
-    return [here(item) for item in value] if isinstance(value, list) else value
+        return {key: here(item, in_command=in_command or key == "command") for key, item in value.items()}
+    return [here(item, in_command=in_command) for item in value] if isinstance(value, list) else value
 
 
 def make_machine(monkeypatch, tmp_path):

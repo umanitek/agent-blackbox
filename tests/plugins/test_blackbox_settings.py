@@ -122,12 +122,12 @@ def test_load_config_drops_garbage_values(monkeypatch):
                 # unknown category name is ignored entirely.
                 "not_a_category": {"min_severity": "critical"},
             },
-            "protected_paths": "not-a-list",  # non-list → ignored
+            "protected_paths": "not-a-list",  # non-list → malformed: the defaults stay (review 2026-11-26, finding 10)
         },
     )
     cfg = config_mod.load_blackbox_config()
     assert dict(cfg.categories) == {"dependency": {"enabled": True}}
-    assert cfg.protected_paths == ()
+    assert cfg.protected_paths == config_mod.DEFAULT_PROTECTED_PATHS
     # With only enabled=True set, the min_severity floor stays at the default.
     assert cfg.category_setting("dependency") == {"enabled": True, "min_severity": "info"}
 

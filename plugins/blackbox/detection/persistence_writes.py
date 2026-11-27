@@ -50,7 +50,7 @@ from typing import Any
 from . import script_files, shell_shapes
 from .finding import Finding
 from ..kernel import persistence_places, threat_ids
-from .paths import guard_paths, guard_places, guard_settings, shell_files
+from .paths import guard_paths, guard_places, guard_settings, shell_words
 
 MATCHED = persistence_places.STARTUP_ITEM
 TITLE = "Would leave something that starts by itself"
@@ -66,8 +66,8 @@ def _schedules(command: str) -> bool:
     also when it hands that command to another shell (``bash -lc "launchctl bootstrap …"``,
     Codex's wrapper: round 6 loaded a launchd job, a cron and an ``at`` job that way)."""
     for line in shell_shapes.with_nested_commands(command).split("\n"):
-        for segment in guard_paths._segments(shell_files._with_variables(shell_files._words(line))):
-            name, rest = guard_paths._command_of(segment)
+        for segment in shell_words.segments(shell_words.with_variables(shell_words.words(line))):
+            name, rest = guard_paths.command_of(segment)
             if persistence_places.schedules(name, rest):
                 return True
     return False

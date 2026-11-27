@@ -23,7 +23,7 @@ from __future__ import annotations
 import os
 import re
 
-from . import guard_landing, guard_places, shell_files
+from . import guard_landing, guard_places, shell_files, shell_words
 from ...kernel import agent_hosts
 
 #: The folder a command is taken to start in when no ``cd`` has said otherwise.
@@ -91,7 +91,7 @@ def _program_at(segment: list[str]) -> int:
     return index
 
 
-def _command_of(segment: list[str]) -> tuple[str, list[str]]:
+def command_of(segment: list[str]) -> tuple[str, list[str]]:
     """The command one simple command runs and its other words (see :func:`_program_at`)."""
     index = _program_at(segment)
     if index >= len(segment):
@@ -218,25 +218,14 @@ def _only_reads(name: str, rest: list[str]) -> bool:
     return name in READ_ONLY
 
 
-def _segments(words: list[str]) -> list[list[str]]:
-    segments, current = [], []
-    for word in words:
-        if word in shell_files._SEPARATORS:
-            segments.append(current)
-            current = []
-        else:
-            current.append(word)
-    return [segment for segment in segments + [current] if segment]
-
-
 def line_changes_a_place(line: str, folder: str) -> tuple[bool, str]:
     """``(changes, folder)``: whether *line*, run in *folder*, does anything to a guarded place
     but read it or sends its output onto one; and the folder the next line runs in."""
-    words = shell_files._with_variables(shell_files._words(line))
-    for segment in _segments(words):
-        name, rest = _command_of(segment)
+    words = shell_words.with_variables(shell_words.words(line))
+    for segment in shell_words.segments(words):
+        name, rest = command_of(segment)
         if name in ("cd", "pushd"):
-            folder = shell_files._cd(segment, 0, folder)[0] or next((word for word in segment[1:] if word.startswith("$")), "")
+            folder = shell_files.cd_target(segment, 0, folder)[0] or next((word for word in segment[1:] if word.startswith("$")), "")
             continue
         if _segment_changes_a_place(name, rest, segment, folder, line):
             return True, folder

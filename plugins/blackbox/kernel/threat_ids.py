@@ -373,7 +373,7 @@ def ioc_value_is_well_formed(ioc_type: str, value: str) -> bool:
         return False
     if kind == "ip" and ":" in value:
         return _is_canonical_ipv6(value)   # KI-193: IPv6 in its one canonical spelling
-    if ioc_type == "domain" and len(value) > 253:
+    if kind == "domain" and len(value) > 253:
         return False
     return shape.fullmatch(value) is not None
 

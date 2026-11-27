@@ -58,13 +58,13 @@ import itertools
 import re
 from dataclasses import replace
 
-# The words of a command (shell_words) and the paths in script code (shell_scripts) live in their
-# own files since 2026-11-20; their names stay reachable here for the callers that already use them.
+# The words of a command (shell_words) and the paths in script code (shell_scripts) live in their own files.
 from .shell_scripts import _HEREDOC, _INTERPRETERS, _paths_in_code, _script_args
 from .shell_words import (ShellFileArg, _SEPARATORS, _home_as_tilde, _is_anchored, _looks_like_path,
                           _segment_end, _split, _with_variables, _words)
 
-__all__ = ["_HEREDOC", "_INTERPRETERS", "_SEPARATORS", "ShellFileArg", "_split", "_words", "code_file_args", "inline_runs", "shell_file_args", "with_base64_decoded"]
+__all__ = ["_HEREDOC", "_INTERPRETERS", "_SEPARATORS", "ShellFileArg", "_split", "_words", "cd_target", "code_file_args", "inline_runs", "shell_file_args",
+           "with_base64_decoded"]
 
 #: Commands that read a file's contents.
 _READ_COMMANDS = frozenset({
@@ -133,7 +133,7 @@ def _file_args(command: str) -> tuple[ShellFileArg, ...]:
     while index < len(words):
         name = words[index].rsplit("/", 1)[-1].lower()
         if name in ("cd", "pushd"):
-            folder, index = _cd(words, index, folder)
+            folder, index = cd_target(words, index, folder)
             continue
         if name == "find":
             found, index = _find_args(words, index)
@@ -313,7 +313,7 @@ def _find_args(words: list[str], index: int) -> tuple[list[ShellFileArg], int]:
         roots.append(words[position])
         position += 1
     feeds_a_reader = False
-    while position < len(words) and words[position] not in _SEPARATORS - {";"}:
+    while position < len(words) and words[position] not in _SEPARATORS - {";", "(", ")"}:   # find's own ; \( \)
         if words[position] in _FIND_EXEC and position + 1 < len(words):
             feeds_a_reader = feeds_a_reader or _reads_files(words[position + 1].rsplit("/", 1)[-1].lower())
             while position < len(words) and words[position] not in (";", "+"):
@@ -341,7 +341,7 @@ def code_file_args(code: str, language: str = "python") -> list[ShellFileArg]:
     return [_from_folder(arg, "") for arg in _paths_in_code(language, code or "")]
 
 
-def _cd(words: list[str], index: int, folder: str) -> tuple[str, int]:
+def cd_target(words: list[str], index: int, folder: str) -> tuple[str, int]:
     """The folder a ``cd``/``pushd`` at *index* moves to: an absolute or home path as
     written, a relative one joined onto the folder already known; ``cd`` alone is home.
     Unknown (``""``) when it moves somewhere this cannot name (``cd -``, ``cd $DIR``)."""

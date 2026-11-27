@@ -359,14 +359,14 @@ def load_blackbox_config(*, entry: dict[str, Any] | None = None) -> BlackboxConf
 def _normalize_protected_paths(raw: Any) -> tuple[str, ...]:
     """Validate ``protected_paths`` into a tuple of non-empty pattern strings.
 
-    A missing key (``None``) falls back to :data:`DEFAULT_PROTECTED_PATHS`; an
-    explicit list — including an empty one — is honoured verbatim so a user who
-    clears the list keeps it cleared.
+    A missing key (``None``) and a malformed one (a scalar such as ``protected_paths: ~/.ssh/*``)
+    fall back to :data:`DEFAULT_PROTECTED_PATHS` — a typo never drops Blackbox's own state from the
+    list; an explicit list, an empty one included, is honoured verbatim (a cleared list stays cleared).
     """
-    if raw is None:
+    if raw is not None and not isinstance(raw, (list, tuple)):
+        logger.warning("blackbox: protected_paths must be a list; keeping the default protected paths")
+    if raw is None or not isinstance(raw, (list, tuple)):
         return DEFAULT_PROTECTED_PATHS
-    if not isinstance(raw, (list, tuple)):
-        return ()
     return tuple(schema.path_list(raw)[:schema.MAX_PROTECTED_PATHS])
 
 

@@ -44,7 +44,7 @@ from typing import Any, Iterable, NamedTuple
 from .. import action_parsing, shell_shapes
 from ..finding import Finding
 from ...kernel import threat_ids
-from . import shell_files
+from . import shell_files, shell_words
 
 #: Tools that run code directly, with the code in ``args["code"]`` (Hermes's ``execute_code`` runs Python).
 CODE_TOOLS = frozenset({"execute_code", "code_execution", "run_code", "run_python", "python"})
@@ -208,19 +208,19 @@ def _named_paths(command: str) -> list[tuple[str, str]]:
     a relative path placed under the folder an earlier ``cd`` moved to, and the home folder
     written ``~``. WHY: for an item nothing may touch, an unknown command naming it is enough —
     the list of commands that read files can never be complete. Each comes with its command's name."""
-    words = shell_files._with_variables(shell_files._words(command))
+    words = shell_words.with_variables(shell_words.words(command))
     folder, found, index, verb = "", [], 0, ""
     while index < len(words):
         word = words[index]
         name = word.rsplit("/", 1)[-1].lower()
         if name in ("cd", "pushd"):
-            moved, index = shell_files._cd(words, index, folder)
+            moved, index = shell_files.cd_target(words, index, folder)
             folder, verb = moved, ""
             if moved:
                 found.append((moved, "cd"))
             continue
         index += 1
-        if word in shell_files._SEPARATORS:
+        if word in shell_words.SEPARATORS:
             verb = ""
             continue
         if not verb and not word.startswith("-") and "=" not in word[:1]:
@@ -232,10 +232,10 @@ def _named_paths(command: str) -> list[tuple[str, str]]:
         if word.startswith("-") or not _NAMES_PLACE.search(word):
             continue
         path = word.split("=", 1)[1] if word.startswith(("if=", "of=")) else word
-        if folder and not shell_files._is_anchored(path):
+        if folder and not shell_words.is_anchored(path):
             path = folder.rstrip("/") + "/" + path.removeprefix("./")
         redirected = index > 1 and words[index - 2] in (">", ">>", ">|", "&>", "&>>")   # a redirect target is written
-        found.append((shell_files._home_as_tilde(path), ">" if redirected else verb))
+        found.append((shell_words.home_as_tilde(path), ">" if redirected else verb))
     return list(dict.fromkeys(found))
 
 
@@ -245,7 +245,7 @@ _NAMES_PLACE = re.compile(r"/|^~|^\$HOME|^\$\{HOME\}|^\.")
 
 def _find_names(command: str) -> tuple[str, ...]:
     """The ``-name`` / ``-iname`` patterns a ``find`` in *command* picks files by."""
-    words = shell_files._words(command)
+    words = shell_words.words(command)
     return tuple(words[index + 1] for index, word in enumerate(words[:-1]) if word in ("-name", "-iname"))
 
 
@@ -339,7 +339,7 @@ def touches(tool_name: str, args: Any, patterns: Iterable[str], *, whole: bool =
     for tool, path, mode in _accesses(tool_name, args, whole=whole, every_route=every_route or changes, changes=changes):
         if changes and mode not in ("write", "tree"):
             continue
-        path = shell_files._home_as_tilde(path)   # a file tool's "$HOME/…" is the same "~/…"
+        path = shell_words.home_as_tilde(path)   # a file tool's "$HOME/…" is the same "~/…"
         for pattern in wanted:
             if _protects(path, mode, pattern):
                 found.append(PathTouch(tool, path, "copy" if mode.startswith("copy") else mode, pattern))
@@ -362,7 +362,7 @@ def mentions(text: str, patterns: Iterable[str]) -> list[PathTouch]:
     wanted = [str(p) for p in (patterns or []) if str(p or "").strip()]
     found: list[PathTouch] = []
     for match in _TEXT_PATH.finditer(str(text or "")[:_MAX_TEXT_CHARS]) if wanted else ():
-        path = shell_files._home_as_tilde(match.group(0).rstrip(".:!?"))
+        path = shell_words.home_as_tilde(match.group(0).rstrip(".:!?"))
         pattern = next((item for item in wanted if _protected_path_match(path, item)), None)
         if pattern and len(path) > 1:
             found.append(PathTouch("prompt", path, "mention", pattern))

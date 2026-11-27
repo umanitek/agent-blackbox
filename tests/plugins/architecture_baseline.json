@@ -26,7 +26,6 @@
     "dashboard/server.py::create_app.graph_status": 131,
     "dashboard/server.py::create_app.threat": 82,
     "detection/detectors.py::detect_dependency": 51,
-    "detection/detectors.py::detect_escalation": 58,
     "detection/skill_detection.py::detect_skill": 51,
     "detection/detectors.py::discover_dependency_candidates": 51,
     "detection/reviewer_setup/__init__.py::cmd_setup_llm": 76,

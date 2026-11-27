@@ -5,23 +5,27 @@ this part knows how a command line is SPLIT and how a path is WRITTEN; ``shell_f
 commands read which of their words, and :mod:`.shell_scripts` reads paths out of script code.
 
 * :class:`ShellFileArg` — one path a command touches (as written, the home folder spelled ``~``).
-* ``_words`` / ``_split`` — the words of a command, split the way a POSIX shell splits them
-  (quotes and backslash escapes respected; a Windows path line is split without POSIX escaping;
-  an unbalanced quote falls back to whitespace).
-* ``_with_variables`` — variables set earlier on the line put in where they are used.
-* ``_home_as_tilde``, ``_is_anchored``, ``_looks_like_path``, ``_segment_end``, ``_SEPARATORS``.
+* :func:`words` (``_words``) — the words of a command, split by the ONE lexer (:mod:`..command_line.lexer`:
+  quotes and escapes respected, a Windows path judged per word, ``(``/``)`` words of their own,
+  brace expansion).
+* :func:`with_variables` — variables set earlier on the line put in where they are used, and
+  ``${NAME:-default}`` read as the shell reads it.
+* :func:`segments` — the simple commands of a list of words.
+* :func:`home_as_tilde`, :func:`is_anchored`, :data:`SEPARATORS` (the public surface), ``_looks_like_path``, ``_segment_end``;
+  the underscore names of the public ones stay for the callers that already use them.
 
 Pure and deterministic; reads no files.
 """
 
 from __future__ import annotations
 
-import functools
 import re
-import shlex
 from dataclasses import dataclass
 
-_SEPARATORS = frozenset({";", "&&", "||", "|", "&", ">", ">>", "<", "|&"})
+from ..command_line.lexer import split_words
+
+#: The words that end one simple command: the list operators, pipes, redirects and a subshell's brackets.
+SEPARATORS = _SEPARATORS = frozenset({";", "&&", "||", "|", "&", ">", ">>", "<", "|&", "(", ")"})
 
 
 @dataclass(frozen=True)
@@ -40,7 +44,9 @@ class ShellFileArg:
 
 
 #: The home folder named by a variable at the start of a path: ``$HOME``, ``${HOME}``, ``%USERPROFILE%``.
-_HOME_VARIABLE = re.compile(r"^(?:\$HOME(?![A-Za-z0-9_])|\$\{HOME\}|%USERPROFILE%)")
+#: ``${HOME:-x}`` / ``${HOME-x}`` / ``${HOME:=x}`` / ``${HOME:?}`` are the home folder too (it is always set);
+#: PowerShell names it ``$env:USERPROFILE`` / ``$env:HOME``.
+_HOME_VARIABLE = re.compile(r"^(?:\$HOME(?![A-Za-z0-9_])|\$\{HOME(?::?[-=?][^}]*)?\}|%USERPROFILE%|(?i:\$env:(?:USERPROFILE|HOME))(?![A-Za-z0-9_]))")
 #: Linux's ``/proc`` spellings of the root folder: a process's ``root`` link (``/proc/self/root``,
 #: ``/proc/thread-self/root``, ``/proc/<pid>/root``, a thread's ``/proc/<pid>/task/<tid>/root``), as
 #: often as it is repeated. Private security finding ``2026-11-24-linux-proc-self-root-home-reads-the-prot``
@@ -54,7 +60,7 @@ _PROC_ROOT = re.compile(r"^(?:/+proc/+(?:self|thread-self|\d+)(?:/+task/+\d+)?/+
 _PROC_CWD = re.compile(r"^/+proc/+(?:self|thread-self)(?:/+task/+\d+)?/+cwd(?:/+|$)")
 
 
-def _home_as_tilde(path: str) -> str:
+def home_as_tilde(path: str) -> str:
     """*path* in the ONE spelling every path check reads: Linux's ``/proc`` aliases of the root
     folder taken away (``/proc/self/root/home/me/x`` is ``/home/me/x``), the acting process's own
     ``/proc/self/cwd/`` read as its working folder (a relative path), and a leading home-folder
@@ -64,29 +70,17 @@ def _home_as_tilde(path: str) -> str:
     return _HOME_VARIABLE.sub("~", path, count=1)
 
 
-#: A Windows path (``C:\\Users``, ``%APPDATA%\\``): backslash is a separator there,
-#: not an escape, so such a line is split without POSIX escaping.
-_WINDOWS_PATH = re.compile(r"[A-Za-z]:\\|%[A-Za-z_]+%\\")
+_home_as_tilde = home_as_tilde
 
 
-def _words(command: str) -> list[str]:
-    """The shell words of *command* (a fresh list). Several checks split the same command of
-    one call, so the last few splits are remembered (:func:`_split`)."""
-    return list(_split(command))
+def words(command: str) -> list[str]:
+    """The shell words of *command* (a fresh list; see :mod:`..command_line.lexer`). Several checks split
+    the same command of one call, so the last few splits are remembered."""
+    return list(split_words(command))
 
 
-@functools.lru_cache(maxsize=4)
-def _split(command: str) -> tuple[str, ...]:
-    try:
-        if _WINDOWS_PATH.search(command):
-            lexer = shlex.shlex(command, posix=False, punctuation_chars=";&|<>")
-            lexer.whitespace_split = True
-            return tuple(word.strip("\"'") for word in lexer)
-        lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|<>")
-        lexer.whitespace_split = True
-        return tuple(lexer)
-    except ValueError:  # an unbalanced quote: still find the paths
-        return tuple(command.split())
+_words = words
+_split = split_words
 
 
 def _looks_like_path(word: str) -> bool:
@@ -105,25 +99,56 @@ def _segment_end(words: list[str], start: int) -> int:
 _ASSIGNMENT = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", re.DOTALL)
 
 
-def _with_variables(words: list[str]) -> list[str]:
+#: A variable where it is used: ``$NAME``, ``${NAME}``, or ``${NAME<op>WORD}`` with a default
+#: (``:-`` ``-``), an assignment (``:=`` ``=``) or a check (``:?`` ``?``).
+_PARAMETER = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?:(:?[-=?])([^}]*))?\}|\$([A-Za-z_][A-Za-z0-9_]*)")
+
+
+def with_variables(words: list[str]) -> list[str]:
     """*words* with the variables set earlier on the same line put in where they are used:
-    after ``H=$HOME``, ``$H/.ssh/key`` reads as ``$HOME/.ssh/key``. Only names assigned on this
-    line are replaced; an assignment word itself is kept as written."""
+    after ``H=$HOME``, ``$H/.ssh/key`` reads as ``$HOME/.ssh/key``. ``${HOME<op>…}`` is ``$HOME`` (it is
+    always set), and a variable not set on the line that carries a default (``${NOPE:-~}``) reads as
+    its default — what the shell gives for an unset one. Any other variable is kept as written; an
+    assignment word itself too."""
     values: dict[str, str] = {}
+
+    def value(found: re.Match) -> str:
+        name, operator, default = found.group(1) or found.group(4), found.group(2), found.group(3)
+        if name in values:
+            return values[name]
+        if name == "HOME":
+            return "$HOME"
+        return default if operator and operator.lstrip(":") in ("-", "=") else found.group(0)
+
     out: list[str] = []
     for word in words:
         assignment = _ASSIGNMENT.match(word)
-        if assignment and "/" not in assignment.group(1):
+        if assignment:
             values[assignment.group(1)] = assignment.group(2)
             out.append(word)
             continue
-        if values and "$" in word:
-            word = re.sub(r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))",
-                          lambda found: values.get(found.group(1) or found.group(2), found.group(0)), word)
-        out.append(word)
+        out.append(_PARAMETER.sub(value, word) if "$" in word else word)
     return out
 
 
-def _is_anchored(path: str) -> bool:
+_with_variables = with_variables
+
+
+def segments(words: list[str]) -> list[list[str]]:
+    """The simple commands in *words*: the words between two :data:`SEPARATORS`, empty ones left out."""
+    found, current = [], []
+    for word in words:
+        if word in SEPARATORS:
+            found.append(current)
+            current = []
+        else:
+            current.append(word)
+    return [segment for segment in found + [current] if segment]
+
+
+def is_anchored(path: str) -> bool:
     """True for a path that does not depend on the current folder."""
     return path.startswith(("/", "~", "$HOME", "%")) or bool(re.match(r"[A-Za-z]:[\\/]", path))
+
+
+_is_anchored = is_anchored

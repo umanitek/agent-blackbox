@@ -46,7 +46,11 @@ const UPLOAD_COMMANDS = new Set(["curl", "wget", "http", "https"]);
 const UPLOAD_FILE_OPTIONS = new Set(["-T", "--upload-file", "--post-file", "--body-file"]);
 /** `NAME=VALUE` at the start of a word: a variable set on the command line. */
 const ASSIGNMENT = /^([A-Za-z_][A-Za-z0-9_]*)=([\s\S]*)$/;
-const VARIABLE_USE = /\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))/g;
+/**
+ * A variable where it is used: `$NAME`, `${NAME}`, or `${NAME<op>WORD}` with a default (`:-` `-`),
+ * an assignment (`:=` `=`) or a check (`:?` `?`).
+ */
+const PARAMETER = /\$\{([A-Za-z_][A-Za-z0-9_]*)(?:(:?[-=?])([^}]*))?\}|\$([A-Za-z_][A-Za-z0-9_]*)/g;
 /** Commands whose words name things rather than read them; what they print may be piped to `xargs`. */
 const NAMING_COMMANDS = new Set(["echo", "printf"]);
 const RECURSIVE_COMMANDS = new Set([
@@ -56,7 +60,8 @@ const RECURSIVE_COMMANDS = new Set([
 const RECURSIVE_WITH_FLAG: Record<string, readonly string[]> = {
   grep: ["-r", "-R", "--recursive"], egrep: ["-r", "-R"], fgrep: ["-r", "-R"],
 };
-const SEPARATORS = new Set([";", "&&", "||", "|", "&", ">", ">>", "<", "|&"]);
+/** The words that end one simple command: the list operators, pipes, redirects and a subshell's brackets. */
+export const SEPARATORS: ReadonlySet<string> = new Set([";", "&&", "||", "|", "&", ">", ">>", "<", "|&", "(", ")"]);
 const COPY_COMMANDS = new Set([
   "cp", "scp", "rsync", "mv", "ditto", "copy", "xcopy", "robocopy", "copy-item", "cpi", "move-item", "ln", "link",
 ]);
@@ -71,162 +76,271 @@ const WHOLE_FOLDER_CODE = /copytree|make_archive|tarfile|zipfile|os\.walk|\bwalk
 const HOME_CODE = /homedir\(|expanduser|Path\.home|environ\[.HOME.\]|getenv\(.HOME.\)|env\.HOME|ENV\[.HOME.\]|Dir\.home/;
 const HEREDOC = /^[^\n]*?\b(python[23]?|node|ruby|perl|php|bun)\b[^\n]*<<-?\s*(['"]?)(\w+)\2[^\n]*\n([\s\S]*?)\n\s*\3\s*$/gm;
 const FIND_EXEC = new Set(["-exec", "-execdir", "-ok", "-okdir"]);
-const WINDOWS_PATH = /[A-Za-z]:\\|%[A-Za-z_]+%\\/;
 
+/** The most words one brace-expanded word becomes; a group past it is left as written. */
+const MAX_BRACE_WORDS = 64;
+const OPERATOR_CHARS = ";&|<>";
+const SUBSHELL_CHARS = "()";
 const WHITESPACE = " \t\r\n";
-const PUNCTUATION = ";&|<>";
-const QUOTES = "'\"";
+/**
+ * Brace-expansion marks for an UNQUOTED `{` `,` `}` while a word is built (a quoted or escaped one
+ * is a literal character): private-use code points, never typed in a real command.
+ */
+const OPEN = "\ue000";
+const COMMA = "\ue001";
+const CLOSE = "\ue002";
+const MARK_OF: Record<string, string> = { "{": OPEN, ",": COMMA, "}": CLOSE };
+// Python's `$` (no MULTILINE) also matches just before a final newline: `(?=\n?$)` is that in JS.
+/** What a word holds just before a backslash that makes it a Windows path (lexer.py `_WINDOWS_BEFORE`). */
+const WINDOWS_BEFORE = new RegExp(String.raw`(?:^|[^A-Za-z0-9])[A-Za-z]:(?=\n?$)|%[A-Za-z_][A-Za-z0-9_]*%(?=\n?$)|^\.{1,2}(?=\n?$)|^~(?=\n?$)|^\$HOME(?=\n?$)|^\$env:[A-Za-z_][\p{L}\p{N}_]*(?=\n?$)`, "iu");
+/** A Windows path inside double quotes (`"C:\Program Files\x"`): its backslashes stay as written. */
+const WINDOWS_INSIDE = /(?:^|[^A-Za-z0-9])[A-Za-z]:\\|%[A-Za-z_][A-Za-z0-9_]*%\\|^(?:\.{1,2}|~)\\/;
+/** A run of characters that mean nothing special inside a word. */
+const PLAIN = /[^\s;&|<>()\\'"$`{},]+/y;
+const SEQUENCE = /^(-?\d{1,6})\.\.(-?\d{1,6})(?=\n?$)|^([A-Za-z])\.\.([A-Za-z])(?=\n?$)/;
+const DOUBLE_QUOTE_ESCAPE = /\\([$`"\\\n])/g;
 
-/** Thrown for an unbalanced quote or a trailing backslash, as Python's shlex raises ValueError. */
-class SplitError extends Error {}
+/** Thrown for a quote or a `$(` that never closes (lexer.py `_Unbalanced`). */
+class Unbalanced extends Error {}
+
+function literalMarks(text: string): string {
+  return text.replace(/[\ue000-\ue002]/g, (mark) => (mark === OPEN ? "{" : mark === COMMA ? "," : "}"));
+}
+
+/** The index just past the `closeChar` that balances the `openChar` before `start`; quotes inside are skipped as the shell skips them. */
+function closing(text: string, start: number, openChar: string, closeChar: string): number {
+  let depth = 1;
+  let index = start;
+  while (index < text.length) {
+    const char = text[index]!;
+    if (char === "\\") { index += 2; continue; }
+    if ((char === "'" || char === '"') && openChar !== "`") {
+      const end = char === "'" ? text.indexOf("'", index + 1) : doubleQuoteEnd(text, index + 1);
+      if (end < 0) throw new Unbalanced(text);
+      index = end + 1;
+      continue;
+    }
+    if (char === closeChar && (openChar !== closeChar || depth === 1)) {
+      depth -= 1;
+      if (depth === 0) return index + 1;
+    } else if (char === openChar) {
+      depth += 1;
+    }
+    index += 1;
+  }
+  throw new Unbalanced(text);
+}
+
+/** The index of the `"` that closes a double-quoted run starting at `start`, or -1. */
+function doubleQuoteEnd(text: string, start: number): number {
+  let index = start;
+  while (index < text.length) {
+    const char = text[index]!;
+    if (char === "\\") index += 2;
+    else if (char === '"') return index;
+    else if (text.startsWith("$(", index) || text.startsWith("${", index)) {
+      index = closing(text, index + 2, text[index + 1]!, text[index + 1] === "(" ? ")" : "}");
+    } else if (char === "`") index = closing(text, index + 1, "`", "`");
+    else index += 1;
+  }
+  return -1;
+}
 
 /**
- * Python `shlex.shlex(command, posix, punctuation_chars=";&|<>")` with `whitespace_split = True`,
- * read to the end: the state machine of `shlex.read_token`, one method per state. `#` starts a
- * comment to the end of the line (also inside a word), a run of punctuation is one word, and in
- * POSIX mode quotes are removed and a backslash escapes the next character.
+ * One pass over one line — port of lexer.py `_Lexer`, the ONE shell lexer: whitespace separates
+ * words; `'…'` keeps everything literal; `"…"` keeps all but `\$ \` \" \\` and a line continuation;
+ * a backslash outside quotes takes the next character literally; runs of `;&|<>` are operator
+ * words and `(` / `)` words of their own; `$(…)`, `${…}` and backticks stay whole; `#` starts a
+ * comment only at the start of a word; brace expansion up to MAX_BRACE_WORDS. A backslash is a
+ * separator, not an escape, in a word that is a Windows path — decided PER WORD.
  *
- * Pattern: State — `state` is " " (between words), a quote character (inside that quote), "\\"
- * (after a backslash), "a" (in a word), "c" (in a run of punctuation) or null (input ended).
- * Each state method takes the next character and returns true when the current word is complete.
+ * Pattern: State — the word being built and whether it is a Windows path.
  */
-class ShlexReader {
-  private position = 0;
-  private readonly pushback: string[] = [];
-  private state: string | null = " ";
-  private token = "";
-  private quoted = false;
-  private escapedState = " ";
-  private readonly command: string;
-  private readonly posix: boolean;
+class Lexer {
+  private index = 0;
+  private readonly words: string[] = [];
+  private current: string[] = [];
+  private started = false;
+  private windows = false;
+  unresolved = false;
+  private readonly text: string;
 
-  // Plain fields, not constructor parameter properties: Node's type stripping (how the parity
+  // A plain field, not a constructor parameter property: Node's type stripping (how the parity
   // test loads this file without a build) only accepts syntax it can erase.
-  constructor(command: string, posix: boolean) {
-    this.command = command;
-    this.posix = posix;
+  constructor(text: string) {
+    this.text = text;
   }
 
-  /** Every word of the command, in order. */
-  words(): string[] {
-    const out: string[] = [];
-    for (;;) {
-      const word = this.readWord();
-      if (word !== null) out.push(word);
-      if (this.state === null) return out;
+  private finish(): void {
+    if (this.started) this.words.push(...expanded(this.current.join(""), this));
+    this.current = [];
+    this.started = false;
+    this.windows = false;
+  }
+
+  run(): string[] {
+    const text = this.text;
+    const length = text.length;
+    while (this.index < length) {
+      const char = text[this.index]!;
+      if (WHITESPACE.includes(char)) {
+        this.finish();
+        this.index += 1;
+      } else if (char === "#" && !this.started) {
+        const newline = text.indexOf("\n", this.index);
+        this.index = newline < 0 ? length : newline;
+      } else if (OPERATOR_CHARS.includes(char) || SUBSHELL_CHARS.includes(char)) {
+        this.finish();
+        let end = this.index + 1;
+        while (OPERATOR_CHARS.includes(char) && end < length && OPERATOR_CHARS.includes(text[end]!)) end += 1;
+        this.words.push(text.slice(this.index, end));
+        this.index = end;
+      } else {
+        this.started = true;
+        this.wordPart(char);
+      }
+    }
+    this.finish();
+    return this.words;
+  }
+
+  private wordPart(char: string): void {
+    const text = this.text;
+    if (char === "\\") {
+      this.backslash();
+    } else if (char === "'") {
+      const end = text.indexOf("'", this.index + 1);
+      if (end < 0) throw new Unbalanced(text);
+      this.current.push(text.slice(this.index + 1, end));
+      this.index = end + 1;
+    } else if (char === '"') {
+      this.doubleQuoted();
+    } else if (text.startsWith("$(", this.index) || text.startsWith("${", this.index)) {
+      const open = text[this.index + 1]!;
+      const end = closing(text, this.index + 2, open, open === "(" ? ")" : "}");
+      this.current.push(text.slice(this.index, end));
+      this.index = end;
+    } else if (char === "`") {
+      const end = closing(text, this.index + 1, "`", "`");
+      this.current.push(text.slice(this.index, end));
+      this.index = end;
+    } else {
+      PLAIN.lastIndex = this.index;
+      const plain = PLAIN.exec(text);
+      if (plain) {
+        this.current.push(plain[0]);
+        this.index = PLAIN.lastIndex;
+      } else {
+        this.current.push(MARK_OF[char] ?? char);
+        this.index += 1;
+      }
     }
   }
 
-  /** The next word, or null when nothing was read (the end, or only a comment). */
-  private readWord(): string | null {
-    this.token = "";
-    this.quoted = false;
-    this.escapedState = " ";
-    while (!this.step(this.read())) { /* keep reading */ }
-    const empty = this.token === "" && !(this.posix && this.quoted);
-    return empty ? null : this.token;
-  }
-
-  private read(): string {
-    return this.pushback.pop() ?? (this.position < this.command.length ? this.command[this.position++]! : "");
-  }
-
-  private skipLine(): void {
-    const end = this.command.indexOf("\n", this.position);
-    this.position = end === -1 ? this.command.length : end + 1;
-  }
-
-  /** True when a word boundary ends a word that has content (an empty quoted word counts in POSIX mode). */
-  private wordIsComplete(): boolean {
-    return this.token !== "" || (this.posix && this.quoted);
-  }
-
-  private step(next: string): boolean {
-    if (this.state === null) { this.token = ""; return true; }
-    if (this.state === " ") return this.betweenWords(next);
-    if (QUOTES.includes(this.state)) return this.insideQuote(next, this.state);
-    if (this.state === "\\") return this.afterBackslash(next, this.state);
-    return this.insideWord(next);
-  }
-
-  private betweenWords(next: string): boolean {
-    if (!next) { this.state = null; return true; }
-    if (WHITESPACE.includes(next)) return this.wordIsComplete();
-    if (next === "#") { this.skipLine(); return false; }
-    if (this.posix && next === "\\") { this.escapedState = "a"; this.state = next; return false; }
-    if (PUNCTUATION.includes(next)) { this.token = next; this.state = "c"; return false; }
-    if (QUOTES.includes(next)) { if (!this.posix) this.token = next; this.state = next; return false; }
-    this.token = next;   // a word character, or any other one (whitespace_split)
-    this.state = "a";
-    return false;
-  }
-
-  private insideQuote(next: string, quote: string): boolean {
-    this.quoted = true;
-    if (!next) throw new SplitError("No closing quotation");
-    if (next === quote) {
-      if (this.posix) { this.state = "a"; return false; }
-      this.token += next;
-      this.state = " ";
-      return true;
+  private backslash(): void {
+    const text = this.text;
+    const at = this.index;
+    if (this.windows || WINDOWS_BEFORE.test(literalMarks(this.current.join("")))) {
+      this.windows = true;
+      this.current.push("\\");
+      this.index = at + 1;
+    } else if (at + 1 < text.length) {
+      if (text[at + 1] !== "\n") this.current.push(text[at + 1]!);   // a line continuation joins the lines
+      this.index = at + 2;
+    } else {
+      this.index = at + 1;
     }
-    if (this.posix && next === "\\" && quote === '"') { this.escapedState = quote; this.state = next; return false; }
-    this.token += next;
-    return false;
   }
 
-  private afterBackslash(next: string, backslash: string): boolean {
-    if (!next) throw new SplitError("No escaped character");
-    if (QUOTES.includes(this.escapedState) && next !== backslash && next !== this.escapedState) this.token += backslash;
-    this.token += next;
-    this.state = this.escapedState;
-    return false;
-  }
-
-  /** In a word ("a") or a run of punctuation ("c"). */
-  private insideWord(next: string): boolean {
-    if (!next) { this.state = null; return true; }
-    if (WHITESPACE.includes(next)) { this.state = " "; return this.wordIsComplete(); }
-    if (next === "#") return this.commentInWord();
-    if (this.state === "c") return this.insidePunctuation(next);
-    if (this.posix && QUOTES.includes(next)) { this.state = next; return false; }
-    if (this.posix && next === "\\") { this.escapedState = "a"; this.state = next; return false; }
-    if (!PUNCTUATION.includes(next)) { this.token += next; return false; }
-    this.pushback.push(next);
-    this.state = " ";
-    return this.wordIsComplete();
-  }
-
-  private commentInWord(): boolean {
-    this.skipLine();
-    if (!this.posix) return false;
-    this.state = " ";
-    return this.wordIsComplete();
-  }
-
-  private insidePunctuation(next: string): boolean {
-    if (PUNCTUATION.includes(next)) { this.token += next; return false; }
-    this.pushback.push(next);
-    this.state = " ";
-    return true;
+  private doubleQuoted(): void {
+    const text = this.text;
+    const end = doubleQuoteEnd(text, this.index + 1);
+    if (end < 0) throw new Unbalanced(text);
+    let inner = text.slice(this.index + 1, end);
+    if (WINDOWS_INSIDE.test(literalMarks(this.current.join("")) + inner)) this.windows = true;
+    if (!this.windows) inner = inner.replace(DOUBLE_QUOTE_ESCAPE, (_whole, escaped: string) => (escaped === "\n" ? "" : escaped));
+    this.current.push(inner);
+    this.index = end + 1;
   }
 }
 
-function shlexSplit(command: string, posix: boolean): string[] {
-  return new ShlexReader(command, posix).words();
+/** `word` (with brace marks) as the words brace expansion makes of it, marks made literal. */
+function expanded(word: string, lexer: Lexer): string[] {
+  if (!word.includes(OPEN)) return [literalMarks(word)];
+  const found = alternatives(word);
+  if (found === null) {
+    lexer.unresolved = true;
+    return [literalMarks(word)];
+  }
+  return found.map(literalMarks);
 }
 
-function stripQuotes(word: string): string {
-  return word.replace(/^["']+|["']+$/g, "");
+/** The index of the `}` mark closing the `{` mark at `start` (-1 for none) and the top-level commas. */
+function groupEnd(word: string, start: number): [number, number[]] {
+  let depth = 0;
+  const commas: number[] = [];
+  for (let index = start; index < word.length; index += 1) {
+    const char = word[index];
+    if (char === OPEN) depth += 1;
+    else if (char === CLOSE) {
+      depth -= 1;
+      if (depth === 0) return [index, commas];
+    } else if (char === COMMA && depth === 1) commas.push(index);
+  }
+  return [-1, commas];
 }
 
-/** The shell words of `command`; an unparsable line falls back to whitespace splitting. */
+/** `1..3` / `a..c` as its items (at most one past MAX_BRACE_WORDS, so a longer one is seen as too long), null when no sequence. */
+function sequence(body: string): string[] | null {
+  const found = SEQUENCE.exec(body);
+  if (!found) return null;
+  const numbers = found[1] !== undefined;
+  const first = numbers ? Number(found[1]) : found[3]!.charCodeAt(0);
+  const last = numbers ? Number(found[2]) : found[4]!.charCodeAt(0);
+  const step = last >= first ? 1 : -1;
+  const out: string[] = [];
+  for (let value = first; out.length <= MAX_BRACE_WORDS && (step > 0 ? value <= last : value >= last); value += step) {
+    out.push(numbers ? String(value) : String.fromCharCode(value));
+  }
+  return out;
+}
+
+/** Every word `word`'s brace groups make, at most MAX_BRACE_WORDS (null past it). */
+function alternatives(word: string): string[] | null {
+  let start = word.indexOf(OPEN);
+  while (start >= 0) {
+    const [end, commas] = groupEnd(word, start);
+    if (end < 0) return [word];
+    const body = word.slice(start + 1, end);
+    let choices: string[] | null;
+    if (commas.length) {
+      const cuts = [start, ...commas, end];
+      choices = cuts.slice(0, -1).map((cut, at) => word.slice(cut + 1, cuts[at + 1]));
+    } else {
+      choices = body.includes(OPEN) ? null : sequence(literalMarks(body));
+    }
+    if (choices !== null) {
+      const out: string[] = [];
+      const prefix = word.slice(0, start);
+      const suffix = word.slice(end + 1);
+      for (const choice of choices) {
+        const rest = alternatives(choice + suffix);
+        if (rest === null || out.length + rest.length > MAX_BRACE_WORDS) return null;
+        out.push(...rest.map((each) => prefix + each));
+      }
+      return out;
+    }
+    start = word.indexOf(OPEN, start + 1);   // `{}` or `{x}`: a literal brace; look further on
+  }
+  return [word];
+}
+
+/** The shell words of `command` (see `Lexer`); an unbalanced quote falls back to whitespace splitting. */
 export function splitWords(command: string): string[] {
   try {
-    if (WINDOWS_PATH.test(command)) return shlexSplit(command, false).map(stripQuotes);
-    return shlexSplit(command, true);
+    return new Lexer(command).run();
   } catch (error) {
-    if (!(error instanceof SplitError)) throw error;
+    if (!(error instanceof Unbalanced)) throw error;
     return command.split(/\s+/).filter(Boolean);
   }
 }
@@ -301,17 +415,29 @@ function destinations(name: string, args: string[], paths: string[]): Set<string
   return new Set();
 }
 
-/** `words` with the variables set earlier on the same line put in where they are used (`H=$HOME; cat $H/x`). */
-function withVariables(words: string[]): string[] {
+/**
+ * `words` with the variables set earlier on the same line put in where they are used
+ * (`H=$HOME; cat $H/x`). `${HOME<op>…}` is `$HOME` (it is always set), and a variable not set on
+ * the line that carries a default (`${NOPE:-~}`) reads as its default — what the shell gives for an
+ * unset one. Any other variable is kept as written; an assignment word itself too.
+ * Port of shell_words.py `with_variables`.
+ */
+export function withVariables(words: string[]): string[] {
   const values = new Map<string, string>();
+  const value = (whole: string, braced?: string, operator?: string, fallback?: string, bare?: string): string => {
+    const name = braced ?? bare ?? "";
+    const set = values.get(name);
+    if (set !== undefined) return set;
+    if (name === "HOME") return "$HOME";
+    return operator && ["-", "="].includes(operator.replace(/^:/, "")) ? fallback ?? "" : whole;
+  };
   return words.map((word) => {
     const assignment = ASSIGNMENT.exec(word);
     if (assignment) {
       values.set(assignment[1]!, assignment[2]!);
       return word;
     }
-    if (values.size === 0 || !word.includes("$")) return word;
-    return word.replace(VARIABLE_USE, (whole, braced: string | undefined, bare: string | undefined) => values.get(braced ?? bare ?? "") ?? whole);
+    return word.includes("$") ? word.replace(PARAMETER, value) : word;
   });
 }
 
@@ -422,7 +548,8 @@ function findArgs(words: string[], index: number): [ShellFileArg[], number] {
     position += 1;
   }
   let feedsAReader = false;
-  while (position < words.length && (words[position] === ";" || !SEPARATORS.has(words[position]!))) {
+  // find's own `;` `\(` `\)` are its expression, not the end of the command.
+  while (position < words.length && ([";", "(", ")"].includes(words[position]!) || !SEPARATORS.has(words[position]!))) {
     if (FIND_EXEC.has(words[position]!) && position + 1 < words.length) {
       feedsAReader = feedsAReader || readsFiles(baseName(words[position + 1]!));
       while (position < words.length && words[position] !== ";" && words[position] !== "+") position += 1;
@@ -542,15 +669,19 @@ function cd(words: string[], index: number, folder: string): [string, number] {
   return [folder ? trimTrailingSlashes(folder) + "/" + target : "", end];
 }
 
-/** The home folder named by a variable at the start of a path: `$HOME`, `${HOME}`, `%USERPROFILE%`. */
-const HOME_VARIABLE = /^(?:\$HOME(?![A-Za-z0-9_])|\$\{HOME\}|%USERPROFILE%)/;
+/**
+ * The home folder named by a variable at the start of a path: `$HOME`, `${HOME}`, `%USERPROFILE%`;
+ * `${HOME:-x}` / `${HOME-x}` / `${HOME:=x}` / `${HOME:?}` too (it is always set), and PowerShell's
+ * `$env:USERPROFILE` / `$env:HOME`.
+ */
+const HOME_VARIABLE = /^(?:\$HOME(?![A-Za-z0-9_])|\$\{HOME(?::?[-=?][^}]*)?\}|%USERPROFILE%|\$[Ee][Nn][Vv]:(?:[Uu][Ss][Ee][Rr][Pp][Rr][Oo][Ff][Ii][Ll][Ee]|[Hh][Oo][Mm][Ee])(?![A-Za-z0-9_]))/;
 
 /**
  * `path` with a leading home-folder variable written as `~`: every rule that reads these paths
  * expands `~` and none expanded `$HOME` — a blocked `cat ~/.ssh/key` was retried as
  * `cat $HOME/.ssh/key` by a real agent and went through (2026-11-20).
  */
-function homeAsTilde(path: string): string {
+export function homeAsTilde(path: string): string {
   return path.replace(HOME_VARIABLE, "~");
 }
 

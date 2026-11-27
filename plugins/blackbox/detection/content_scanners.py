@@ -71,7 +71,7 @@ def scan_injection_heuristics(text: str) -> list[dict[str, str]]:
     """
     if not text:
         return []
-    scan = text[:_MAX_INJECTION_SCAN]
+    scan = head_and_tail(text, _MAX_INJECTION_SCAN)
     out: list[dict[str, str]] = []
     seen: set = set()
     for severity, owasp, pattern in _INJECTION_HEURISTICS:
@@ -99,6 +99,15 @@ def scan_injection_heuristics(text: str) -> list[dict[str, str]]:
 #: of a text longer than twice this is a known gap.
 SECRET_SCAN_WINDOW = 50_000
 _SEVERITY_RANK = {"": -1, "low": 0, "medium": 1, "high": 2, "critical": 3}
+
+
+def head_and_tail(text: str, window: int = SECRET_SCAN_WINDOW) -> str:
+    """*text* as a bounded scan reads it: whole up to twice *window*, else its first and its last
+    *window* characters joined by a newline — padding before or after a phrase, an address or a
+    secret never moves it out of the scan (the rule :func:`secret_scan_windows` keeps)."""
+    if len(text) <= 2 * window:
+        return text
+    return text[:window] + "\n" + text[-window:]
 
 
 def secret_scan_windows(text: str) -> tuple[str, ...]:
@@ -251,7 +260,10 @@ _MD5_RE = re.compile(r"\b[a-fA-F0-9]{32}\b")
 _BTC_RE = re.compile(r"\b(?:bc1[023-9ac-hj-np-z]{11,71}|[13][a-km-zA-HJ-NP-Z1-9]{25,39})\b")
 _SOL_RE = re.compile(r"\b[1-9A-HJ-NP-Za-km-z]{32,44}\b")
 _MAX_IOC_TEXT = 50_000
-_MAX_IOC_CANDIDATES = 4000
+#: Each kind of indicator has its own share of the candidates looked up, so a flood of one kind
+#: (thousands of decoy domains) never pushes another (a wallet, an IP, a hash) out of the lookup.
+_IOC_BUDGETS = {"url": 800, "domain": 1200, "ip": 500, "hash": 500, "wallet": 1000}
+_MAX_IOC_CANDIDATES = sum(_IOC_BUDGETS.values())
 
 
 def _host_suffixes(host: str) -> list[str]:
@@ -275,7 +287,8 @@ def _host_suffixes(host: str) -> list[str]:
 
 
 def iter_ioc_candidates(text: str) -> list[str]:
-    """Candidate ``ioc:`` identifiers to look up for *text* (deduped, capped).
+    """Candidate ``ioc:`` identifiers to look up for *text* (deduped, capped per kind: :data:`_IOC_BUDGETS`;
+    a long text read by its head and tail, :func:`head_and_tail`).
 
     Extracts URLs (+ their hosts), bare domains, IPv4s, sha256/md5 hashes, and
     EVM/BTC/Solana crypto addresses. An EVM/base58 address is emitted as BOTH a
@@ -284,17 +297,19 @@ def iter_ioc_candidates(text: str) -> list[str]:
     """
     if not text:
         return []
-    if len(text) > _MAX_IOC_TEXT:
-        text = text[:_MAX_IOC_TEXT]
+    text = head_and_tail(text, _MAX_IOC_TEXT)
     out: list[str] = []
     seen: set = set()
+    used = dict.fromkeys(_IOC_BUDGETS, 0)
 
     def add(ioc_type: str, value: str) -> None:
-        if len(out) >= _MAX_IOC_CANDIDATES:
+        kind = "wallet" if ioc_type == "contract" else ioc_type
+        if used[kind] >= _IOC_BUDGETS[kind]:
             return
         ident = threat_ids.ioc_identifier(ioc_type, value)
         if ident not in seen:
             seen.add(ident)
+            used[kind] += 1
             out.append(ident)
 
     for url in _URL_RE.findall(text):

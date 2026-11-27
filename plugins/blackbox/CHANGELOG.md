@@ -40,6 +40,19 @@ that the two version fields agree.
 
 ### Fixed
 
+- **Spelling a command differently no longer hides it from Blackbox.** Quoting or escaping (`~/.s"s"h`,
+  `r''m`), brace expansion, `${HOME:-…}`, `$(echo ~)`, subshells, or a Windows path elsewhere on the line no
+  longer hide a protected file or an SSH-key write. A harmless command before a dangerous one no longer hides
+  it, and quoting or splitting `rm -rf` flags, or adding `sudo`, no longer slips past.
+- **A package is recognised however its install is spelled** (quotes, `>=`, `~=`, extras, `pip3.12`,
+  `bun install`, `yarn global add`), and `-r requirements.txt` is no longer taken for a package.
+- **Padding a long text, or flooding it with decoy domains, no longer hides an injection phrase** or a bad
+  address, wallet, IP or hash.
+- **Windows-style and doubled-slash paths and macOS's `/private/etc` are recognised as sensitive.**
+- **A rule from an unknown source can only flag, never block**, and a mistyped `protected_paths` setting
+  keeps the default protected paths.
+- **PowerShell commands get the shell checks**, and OpenClaw agents get the same shell-command judgement as
+  Hermes when Blackbox cannot answer.
 - **A failed curator read no longer brings revoked threats back**, and corrections need curator signatures in
   normal refreshes once curator roots are pinned (today's graph compiles exactly as before).
 - **No rules are skipped or cut off when Blackbox reads the threat graph**: injection, skill and correction

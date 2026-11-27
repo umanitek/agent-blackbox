@@ -29,15 +29,14 @@ def detect_injection(text: str, ruleset: Any, context: Optional[str] = None) -> 
     """Match each cached injection regex against *text*.
 
     Patterns are peer-supplied and therefore untrusted: each is wrapped so a
-    bad regex is skipped rather than raising. Text is capped for performance.
+    bad regex is skipped rather than raising. A long text is read by its head and its tail.
     *context* (one of ``constants.INJECTION_CONTEXTS``) says where *text* was
     seen and is the only field a match carries (Refine R1, decision 24): never
     the pattern or the matched text. Without a context a match stays local.
     """
     if not text:
         return []
-    if len(text) > _MAX_INJECTION_TEXT:
-        text = text[:_MAX_INJECTION_TEXT]
+    text = content_scanners.head_and_tail(text, _MAX_INJECTION_TEXT)   # padding before a phrase never hides it
     out: list[Finding] = []
     seen: set = set()
     for rule in getattr(ruleset, "injection", []) or []:
