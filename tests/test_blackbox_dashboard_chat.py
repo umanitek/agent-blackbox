@@ -480,7 +480,11 @@ def test_dashboard_does_not_position_private_storage_as_normal_product_behavior(
     ):
         assert unwanted not in html
 
-    assert "Record findings without blocking agent actions." in html
+    # The mode moved to the Security page (2026-11-27): Audit is described there, as recording that lets threats run.
+    security = (Path(__file__).resolve().parents[1] / "plugins" / "blackbox" / "dashboard" / "static" / "security.html").read_text(encoding="utf-8")
+    assert "Audit records and flags threats but lets them run." in security
+    for unwanted in ("Nothing is shared yet", "findings and reports stay local", "Changes stay on this machine."):
+        assert unwanted not in security
     assert "Off until you turn it on." in html
     assert "Your prompts, commands and files never leave this machine." in html
 
