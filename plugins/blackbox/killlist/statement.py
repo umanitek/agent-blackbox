@@ -121,11 +121,15 @@ class KillEntry:
 @dataclass(frozen=True)
 class KillList:
     """``version`` (the signed sequence — latest wins), ``day`` (signed UTC
-    day the list was made; the 24 h hold counts from it), ``entries``."""
+    day the list was made; the 24 h hold counts from it), ``entries``.
+    ``held``: LOCAL only — on the last-good list (:mod:`.store`), the entries of
+    the same signed version still inside their 24 h hold (never signed, never
+    in the ruleset cache, never enforced)."""
 
     version: int
     day: str
     entries: tuple[KillEntry, ...]
+    held: tuple[KillEntry, ...] = ()
 
     def to_payload(self) -> dict[str, str]:
         return {"version": str(self.version), "day": self.day,

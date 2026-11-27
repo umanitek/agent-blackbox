@@ -48,6 +48,12 @@ class LocalOverride:
         return {"identifier": self.identifier, "reason": self.reason, "day": self.day}
 
 
+def canonical_identifier(identifier: object) -> str:
+    """The one spelling every store operation keys an override on (trimmed text). WHY (review
+    2026-11-26): ``unblock`` saved the trimmed text while ``reblock`` looked the raw one up."""
+    return str(identifier or "").strip()
+
+
 class OverrideStore:
     def __init__(self, path: Optional[Path] = None) -> None:
         self._path = path or (constants.blackbox_home() / _STORE_FILE)
@@ -61,11 +67,11 @@ class OverrideStore:
         return frozenset(self.current())
 
     def is_unblocked(self, identifier: str) -> bool:
-        return identifier in self.current()
+        return canonical_identifier(identifier) in self.current()
 
     def unblock(self, identifier: str, reason: str) -> LocalOverride:
         """Demote *identifier* to FLAG here (idempotent; the newest reason wins)."""
-        override = LocalOverride(identifier=identifier.strip(), reason=str(reason or "")[:_MAX_REASON],
+        override = LocalOverride(identifier=canonical_identifier(identifier), reason=str(reason or "")[:_MAX_REASON],
                                  day=datetime.now(UTC).date().isoformat())
         with self._lock:
             current = self._load()
@@ -77,6 +83,7 @@ class OverrideStore:
 
     def reblock(self, identifier: str) -> bool:
         """Remove the override (the verified rule blocks again). True when one was removed."""
+        identifier = canonical_identifier(identifier)
         with self._lock:
             current = self._load()
             if identifier not in current:
@@ -89,9 +96,9 @@ class OverrideStore:
     def _load(self) -> dict[str, LocalOverride]:
         try:
             data = json.loads(self._path.read_text(encoding="utf-8-sig"))
-            return {str(item["identifier"]): LocalOverride(str(item["identifier"]), str(item.get("reason", "")),
-                                                           str(item.get("day", "")))
-                    for item in data.get("overrides", []) if isinstance(item, dict) and item.get("identifier")}
+            return {canonical_identifier(item["identifier"]): LocalOverride(canonical_identifier(item["identifier"]),
+                                                                            str(item.get("reason", "")), str(item.get("day", "")))
+                    for item in data.get("overrides", []) if isinstance(item, dict) and canonical_identifier(item.get("identifier"))}
         except (OSError, ValueError, TypeError, KeyError):
             return {}
 

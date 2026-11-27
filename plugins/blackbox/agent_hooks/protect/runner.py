@@ -48,23 +48,26 @@ from pathlib import Path
 # imported as a module by the plugin and its tests.
 if __package__:
     from .answers import allow_output, deny_output, note_output, post_output, prompt_output
-    from .judge_here import BLOCKING_EVENTS, TIMEOUT_SECONDS, Verdict, answer_in_time, keep, process_age
+    from .judge_here import BLOCKING_EVENTS, NOT_READ, TIMEOUT_SECONDS, Verdict, answer_in_time, keep, process_age
     from .identity import AGENT_TURN_MARKS, MODEL_EVENTS, effective_agent, identity, transcript_model, workspace
-    from .tool_shapes import cline_tool
+    from .tool_shapes import READ_MANY_NAMES, cline_tool, many_read, parsed_json
 else:
     from answers import allow_output, deny_output, note_output, post_output, prompt_output
-    from judge_here import BLOCKING_EVENTS, TIMEOUT_SECONDS, Verdict, answer_in_time, keep, process_age
+    from judge_here import BLOCKING_EVENTS, NOT_READ, TIMEOUT_SECONDS, Verdict, answer_in_time, keep, process_age
     from identity import AGENT_TURN_MARKS, MODEL_EVENTS, effective_agent, identity, transcript_model, workspace
-    from tool_shapes import cline_tool
+    from tool_shapes import READ_MANY_NAMES, cline_tool, many_read, parsed_json
 
-#: The most of stdin read (a write tool's whole file can be in the payload).
-MAX_INPUT_BYTES = 1024 * 1024
+#: The most of stdin read (a write tool's whole file, or the file Cursor's beforeReadFile is about to
+#: read, can be in the payload). A pre-tool payload larger than this is refused (:data:`NOT_READ`).
+MAX_INPUT_BYTES = 16 * 1024 * 1024
 #: The most text (a prompt, a tool's output, a file about to be read) sent for the injection check.
 MAX_TEXT_CHARS = 256 * 1024
 #: Events whose TEXT is checked for prompt injection.
 TEXT_EVENTS = frozenset({"prompt", "post_tool"})
-SHELL_NAMES = frozenset({"bash", "shell", "run_shell_command", "run_terminal_cmd", "execute_command", "exec", "terminal", "command"})
-READ_NAMES = frozenset({"read", "read_file", "view", "readfile", "read_many_files"})
+#: Shell tools, PowerShell too (Copilot CLI's ``powershell``, Claude Code's ``PowerShell``: they once skipped every shell check).
+SHELL_NAMES = frozenset({"bash", "shell", "run_shell_command", "run_terminal_cmd", "execute_command", "exec", "terminal", "command",
+                         "powershell", "pwsh", "write_powershell", "write_bash"})
+READ_NAMES = frozenset({"read", "read_file", "view", "readfile"})
 WRITE_NAMES = frozenset({"write", "write_file", "edit", "multiedit", "replace", "write_to_file", "replace_in_file", "create_file",
                          "str_replace_editor", "create", "notebookedit", "notebook_edit", "edit_file"})
 #: Where each agent's tools carry a file path, and a file's new text (Claude, Codex, Cursor,
@@ -99,16 +102,15 @@ def _canonical(tool_name: str, args: object) -> tuple[str, object]:
     """The guard's own vocabulary: ``terminal`` / ``read_file`` / ``write_file``, else as given."""
     name = (tool_name or "").strip()
     lowered = name.lower()
-    if isinstance(args, str) and args.lstrip().startswith("{"):
-        try:
-            args = json.loads(args)
-        except ValueError:
-            pass
+    parsed = parsed_json(args)
+    args = parsed if isinstance(parsed, dict) else args   # arguments sent as JSON text: the object they encode
     if lowered in SHELL_NAMES:
-        command = _first(args, "command", "cmd", "command_line") if isinstance(args, dict) else args
+        command = _first(args, "command", "cmd", "command_line", "input") if isinstance(args, dict) else args
         return "terminal", {"command": _command_text(command)}
     if lowered == "apply_patch":
         return "apply_patch", {"patch": _patch_text(args)[:200_000]}
+    if lowered in READ_MANY_NAMES:
+        return many_read(args)
     if lowered in READ_NAMES:
         return "read_file", {"path": str(_first(args, *PATH_KEYS) or "")}
     if lowered in WRITE_NAMES:
@@ -343,15 +345,17 @@ def main(argv: list, detach: bool = False) -> int:
     agent, event, url = effective_agent(argv[1]), argv[2], argv[3].rstrip("/")
     if not agent:
         return 0   # Devin's own hook reports this action
-    payload: dict = {}
+    payload, unread = {}, False
     try:
-        raw = sys.stdin.buffer.read(MAX_INPUT_BYTES)
-        payload = json.loads(raw.decode("utf-8", "replace") or "{}")
-        payload = payload if isinstance(payload, dict) else {}
+        read = _payload()
+        unread, payload = read is None, read or {}
         body = summary(agent, event, payload)
     except Exception:   # health: allow BLE001 -- fail open: the agent continues without Blackbox's answer
         body = {}
-    verdict = answer_in_time(url, event, body, started) if body else Verdict({})
+    if unread and event == "pre_tool" and body:   # not read whole: refused and kept, as a call not checked in time
+        body, verdict = {**body, "tool_name": "unread", "args": {}}, Verdict({"decision": "block", "message": NOT_READ}, unrecorded=True)
+    else:   # any other event not read whole fails open (it can only flag)
+        verdict = answer_in_time(url, event, body, started) if body and not unread else Verdict({})
     code = _respond(agent, event, payload, verdict.answer)
     keep(verdict, body, detach)   # what the dashboard did not record: here, or spooled for it
     if verdict.late:   # the unfinished judgement holds the interpreter: end without waiting for it
@@ -359,6 +363,19 @@ def main(argv: list, detach: bool = False) -> int:
         sys.stderr.flush()
         os._exit(code)
     return code
+
+
+def _payload() -> dict | None:
+    """The agent's JSON object on stdin ({} when it sent nothing); None when it can not be read
+    whole: larger than :data:`MAX_INPUT_BYTES`, nested too deep to parse, or not a JSON object."""
+    raw = sys.stdin.buffer.read(MAX_INPUT_BYTES + 1)
+    if len(raw) > MAX_INPUT_BYTES:
+        return None
+    try:
+        payload = json.loads(raw.decode("utf-8", "replace") or "{}")
+    except (ValueError, RecursionError):
+        return None
+    return payload if isinstance(payload, dict) else None
 
 
 def _respond(agent: str, event: str, payload: dict, answer: dict) -> int:

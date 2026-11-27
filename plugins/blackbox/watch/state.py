@@ -18,7 +18,9 @@ from ..kernel import constants
 from ..kernel.bounded_files import file_lock, read_json_object, write_json_object
 from . import rules as rules_module
 
-LOCK_TIMEOUT_S = 2.0
+#: How long counting a hit may wait for the lock. WHY short (review 2026-11-26): it runs on the hot
+#: path before the verdict; a count is a tally, so a busy lock skips it rather than hold the call.
+LOCK_TIMEOUT_S = 0.1
 MAX_AGENT_CHARS = 64
 
 
@@ -44,17 +46,27 @@ def hits() -> dict[str, Hits]:
     return out
 
 
-def count(rule_ids: list[str], agent: str) -> None:
-    """Add one hit to each of *rule_ids*."""
+def count(rule_ids: list[str], agent: str) -> bool:
+    """Add one hit to each of *rule_ids*; True when counted. Best-effort, never raises: False when
+    the lock is busy past :data:`LOCK_TIMEOUT_S` (never written without it) or the folder can not
+    be written (read-only inside the OS sandbox)."""
     path = _folder() / "hits.json"
-    with file_lock(path.with_suffix(".lock"), timeout_s=LOCK_TIMEOUT_S):
-        current = hits()
-        now = time.time()
-        for key in rule_ids:
-            previous = current.get(key) or {"count": 0}
-            current[key] = {"count": int(previous["count"]) + 1, "last_at": now,
-                            "last_agent": (agent or "hermes")[:MAX_AGENT_CHARS]}
-        write_json_object(path, dict(current), what="Blackbox's watch rule hits")
+    try:
+        with file_lock(path.with_suffix(".lock"), timeout_s=LOCK_TIMEOUT_S) as held:
+            return held and _add(path, rule_ids, agent)
+    except OSError:
+        return False
+
+
+def _add(path: Path, rule_ids: list[str], agent: str) -> bool:
+    """Under the lock: one hit more for each of *rule_ids*."""
+    current = hits()
+    now = time.time()
+    for key in rule_ids:
+        previous = current.get(key) or {"count": 0}
+        current[key] = {"count": int(previous["count"]) + 1, "last_at": now,
+                        "last_agent": (agent or "hermes")[:MAX_AGENT_CHARS]}
+    return write_json_object(path, dict(current), what="Blackbox's watch rule hits")
 
 
 def organisation_rules() -> tuple[int, tuple[rules_module.WatchRule, ...]]:

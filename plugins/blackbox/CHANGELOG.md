@@ -40,6 +40,17 @@ that the two version fields agree.
 
 ### Fixed
 
+- **A coding agent's tool call too large or malformed for Blackbox to read is now refused**, never allowed
+  unchecked (actions only; observing events still pass). The readable size went up from 1 MiB to 16 MiB.
+- **Gemini CLI's read-many-files tool has every file it names checked**, and PowerShell tool calls (Copilot CLI
+  and Claude Code on Windows) are checked like any shell command.
+- **Raising a severity floor written in capitals now asks for your approval** like any other weakening change,
+  and changing protected paths asks when the current list cannot be read.
+- **A kill-list entry held for 24 hours now takes effect when the hold ends**, and a publisher-wide kill
+  matches whatever case or spacing the publisher is written in.
+- **A watch rule set to block still blocks when Blackbox cannot save its hit count**, and counting never holds
+  up a call.
+- **An override set with stray spaces can be removed the same way.**
 - **Switching to Audit from Hermes Desktop now waits for your confirmation**, the same as in the dashboard.
 - **An agent's Blackbox folder can no longer go missing when two attaches run at once.** Every attach and
   detach takes one lock, stages under its own name and puts the old copy back if the swap fails.

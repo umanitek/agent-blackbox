@@ -104,6 +104,10 @@ BUDGET_SECONDS = 6.5
 #: never passed unjudged (the same rule Hermes keeps for its own timed-out ``pre_tool_call``).
 NOT_CHECKED_IN_TIME = ("Blackbox could not check this action in time (this computer is very busy), so it was refused. "
                        "Try it again in a moment.")
+#: What an agent is told when its pre-tool payload could not be read whole (too large, nested too
+#: deep, not a JSON object). WHY refused (review 2026-11-26): read as "no call", it was ALLOWED
+#: unjudged on every agent — now the same rule as :data:`NOT_CHECKED_IN_TIME`.
+NOT_READ = "Blackbox could not read this action in full (it is too large or malformed), so it was refused."
 #: The most a detached recorder (:func:`_record_detached`) may run before it ends itself.
 RECORD_SECONDS = 120
 
@@ -336,6 +340,6 @@ def record_detached(record) -> None:
         os._exit(0)
 
 
-__all__ = ["BLOCKING_EVENTS", "BUDGET_SECONDS", "JOURNAL_SOCKET", "JOURNAL_TAG", "JUDGE_HERE_FILE", "MAX_SPOOLED", "NOT_CHECKED_IN_TIME",
+__all__ = ["BLOCKING_EVENTS", "BUDGET_SECONDS", "JOURNAL_SOCKET", "JOURNAL_TAG", "JUDGE_HERE_FILE", "MAX_SPOOLED", "NOT_CHECKED_IN_TIME", "NOT_READ",
            "RECORD_SECONDS", "SPOOL_KEY", "TIMEOUT_SECONDS", "UNSPOOLED", "Verdict", "answer_in_time", "ask", "judge_here", "keep", "process_age",
            "record_detached"]

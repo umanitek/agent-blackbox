@@ -9,6 +9,9 @@ A signed kill list is not applied blindly. Reader-side, per entry:
   previous applied list — more, and the WHOLE list is refused.
 
 Refused entries fall out; a refused list leaves the LAST-GOOD list in force.
+Held entries are kept beside the last-good list (``KillList.held``), and the
+SAME version is judged again while any are held, so they apply when the hold
+ends (review 2026-11-26: refused as "not newer", a held kill never applied).
 Never "disable all", never "enable all": the Mozilla 2019 certificate
 expiry disabled every add-on at once, which is the failure this guards.
 
@@ -56,6 +59,13 @@ def _held(kill_list: KillList, now: float) -> bool:
     return now < signed + POPULAR_HOLD_SECONDS
 
 
+def _resumes(kill_list: KillList, previous: KillList) -> bool:
+    """True when *kill_list* is the version *previous* came from with entries still held: same
+    version and signed day, and every entry *previous* applied or holds is in it."""
+    return (bool(previous.held) and kill_list.version == previous.version and kill_list.day == previous.day
+            and {e.key for e in previous.entries + previous.held} <= {e.key for e in kill_list.entries})
+
+
 def admit(kill_list: KillList, *, signers: AbstractSet[str], root_signers: AbstractSet[str],
           previous: Optional[KillList], now: float,
           is_popular: Callable[[KillEntry], bool] = lambda entry: False) -> Decision:
@@ -63,7 +73,7 @@ def admit(kill_list: KillList, *, signers: AbstractSet[str], root_signers: Abstr
     keys that signed it (quorum already checked by the parser); *root_signers*
     — root keys that signed it; *previous* — the last applied list."""
     previous_entries = previous.entries if previous is not None else ()
-    if previous is not None and kill_list.version <= previous.version:
+    if previous is not None and kill_list.version <= previous.version and not _resumes(kill_list, previous):
         return Decision(previous_entries, previous.version, refused=f"version {kill_list.version} is not newer than {previous.version}")
     root_signed = bool(root_signers)
     held = _held(kill_list, now)

@@ -46,44 +46,43 @@ def _kill_list_findings(rs: Any, tool_name: str, args: Any) -> list[detection.Fi
     return [found] if found is not None else []
 
 
-def _decision(cfg: BlackboxConfig, findings: list[detection.Finding], blocking: list[detection.Finding]) -> str:
-    """What the hook DID, for the audit row: "block", "flag", or "flag (local override)"
-    when a verified rule would have blocked but the operator unblocked it here (R7b)."""
+def _decision(cfg: BlackboxConfig, findings: list[detection.Finding], blocking: list[detection.Finding],
+              overridden: Optional[list[detection.Finding]] = None) -> str:
+    """What the hook DID, for the audit row: "block", "flag", or "flag (local override)" when a
+    verified rule would have blocked but the operator unblocked it here (R7b). *overridden*: what
+    :func:`_split` demoted for this call (None: worked out here)."""
     if blocking:
         return "block"
-    return "flag (local override)" if _overridden(cfg, findings) else "flag"
+    overridden = _split(cfg, findings)[1] if overridden is None else overridden
+    return "flag (local override)" if overridden else "flag"
 
 
-def _decision_detail(cfg: BlackboxConfig, findings: list[detection.Finding],
-                     blocking: list[detection.Finding]) -> dict[str, Any]:
+def _decision_detail(cfg: BlackboxConfig, findings: list[detection.Finding], blocking: list[detection.Finding],
+                     overridden: list[detection.Finding]) -> dict[str, Any]:
     """The audit row's ``decision`` and, when something blocked, ``blocked`` —
     which findings did, so each report can say blocked or flagged (threat-profiles D3)."""
-    out: dict[str, Any] = {"decision": _decision(cfg, findings, blocking)}
+    out: dict[str, Any] = {"decision": _decision(cfg, findings, blocking, overridden)}
     if blocking:
         out["blocked"] = [f.identifier for f in blocking]
     return out
 
 
-def _overridden(cfg: BlackboxConfig, findings: list[detection.Finding]) -> list[detection.Finding]:
-    """Findings a local override keeps from blocking (empty unless block mode is on)."""
+def _split(cfg: BlackboxConfig, findings: list[detection.Finding]) -> tuple[list[detection.Finding], list[detection.Finding]]:
+    """``(blocking, overridden)`` for one call: :func:`_would_block` split by the operator's local
+    overrides (R7b — a reduction every operator keeps), with ``overrides.json`` read once."""
+    would = _would_block(cfg, findings)
+    if not would:
+        return [], []
     try:
         unblocked = overrides.OverrideStore().unblocked()
-    except Exception:  # pragma: no cover - fail open: no store, no override
-        return []
-    return overrides.demote_blocking(_would_block(cfg, findings), unblocked)[1] if unblocked else []
+    except Exception:  # health: allow BLE001 -- fail open to the published rule (a malformed overrides.json)
+        return would, []
+    return overrides.demote_blocking(would, unblocked) if unblocked else (would, [])
 
 
 def _blocking(cfg: BlackboxConfig, findings: list[detection.Finding]) -> list[detection.Finding]:
-    """The findings that block this call: :func:`_would_block` minus the
-    operator's local overrides (R7b — a reduction every operator keeps)."""
-    would = _would_block(cfg, findings)
-    if not would:
-        return []
-    try:
-        unblocked = overrides.OverrideStore().unblocked()
-    except Exception:  # pragma: no cover - fail open to the published rule
-        return would
-    return overrides.demote_blocking(would, unblocked)[0]
+    """The findings that block this call (:func:`_split`'s first half)."""
+    return _split(cfg, findings)[0]
 
 
 def _would_block(cfg: BlackboxConfig, findings: list[detection.Finding]) -> list[detection.Finding]:
@@ -175,6 +174,7 @@ class _Judgement:
     graph_evidence: Any
     findings: list[detection.Finding]
     blocking: list[detection.Finding]
+    overridden: list[detection.Finding]   # would have blocked; a local override demoted them (R7b)
     notes: list[str]   # what could not be checked ("dependencies not checked: …"), said on the session
 
 
@@ -187,7 +187,7 @@ def _judge(tool_name: str, args: Any, cwd: str = "", agent: str = "") -> _Judgem
     with config_mod.one_entry_read(), action_context.working_in(cwd, agent):   # one read: shields and watch rules
         active = shields.snapshot()   # every shield's mode, read once for this call
         findings = reporting._flag_worthy(cfg, _raw_findings(cfg, rs, tool_name, args, active, notes), active)
-    return _Judgement(cfg, rs, graph_evidence, findings, _blocking(cfg, findings), notes)
+    return _Judgement(cfg, rs, graph_evidence, findings, *_split(cfg, findings), notes)
 
 
 class ToolCallVerdict(TypedDict):
@@ -222,7 +222,7 @@ def tool_call_verdict(tool_name: str = "", args: Any = None, cwd: str = "", agen
     catalogue id (``claude-code``), so a folder rule the person scoped to it applies.
     """
     judged = _judge(tool_name, args, cwd, agent)
-    decision = _decision(judged.cfg, judged.findings, judged.blocking) if judged.findings else ""
+    decision = _decision(judged.cfg, judged.findings, judged.blocking, judged.overridden) if judged.findings else ""
     return ToolCallVerdict(findings=[finding.to_dict() for finding in judged.findings],
                            blocked=[finding.identifier for finding in judged.blocking], decision=decision,
                            message=blackbox_block_message(judged.blocking) if judged.blocking else "", notes=judged.notes)
@@ -268,7 +268,7 @@ def on_pre_tool_call(
                 detail["context"] = ctx
             # KI-189: the audit row says what the hook DID, not only what it saw —
             # R10's "a revoked threat blocked N actions here" counts these.
-            detail.update(_decision_detail(cfg, findings, blocking))
+            detail.update(_decision_detail(cfg, findings, blocking, judged.overridden))
         reporting._report_and_audit(cfg, "pre_tool_call", findings, detail)
         background.review_tool(cfg, tool_name, args, detail)
         # OSV auto-discovery runs off the blocking path so a network lookup

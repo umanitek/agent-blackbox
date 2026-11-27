@@ -76,9 +76,9 @@ def _settings(body: Mapping[str, Any], current: Current) -> list[str]:
     mode = body.get("mode")
     if isinstance(mode, str) and MODE_RANK.get(mode.lower(), -1) < MODE_RANK.get(str(now.get("mode", "block")).lower(), 1):
         out.append(f"Switch Blackbox to {mode.capitalize()} mode (threats are recorded, no longer stopped)")
-    severity = body.get("block_severity")
-    if isinstance(severity, str) and SEVERITY_RANK.get(severity.lower(), 99) > SEVERITY_RANK.get(str(now.get("block_severity", "info")), 0):
-        out.append(f"Block only {severity.lower()} threats and above")
+    severity = _saved_severity(body.get("block_severity"))
+    if severity and SEVERITY_RANK[severity] > SEVERITY_RANK.get(str(now.get("block_severity", "info")), 0):
+        out.append(f"Block only {severity} threats and above")
     for key, what in PROTECTING_SWITCHES.items():
         if body.get(key) is False and now.get(key, True) is not False:
             out.append(f"Stop {what}")
@@ -92,8 +92,8 @@ def _settings(body: Mapping[str, Any], current: Current) -> list[str]:
             was = was if isinstance(was, Mapping) else {}
             if policy.get("enabled") is False and was.get("enabled", True) is not False:
                 out.append(f"Turn off {name} detection")
-            floor = policy.get("min_severity")
-            if isinstance(floor, str) and SEVERITY_RANK.get(floor, 0) > SEVERITY_RANK.get(str(was.get("min_severity", "info")), 0):
+            floor = _saved_severity(policy.get("min_severity"))
+            if floor and SEVERITY_RANK[floor] > SEVERITY_RANK.get(str(was.get("min_severity", "info")), 0):
                 out.append(f"Flag {name} only at {floor} and above")
     activity = body.get("agent_activity")
     if isinstance(activity, Mapping) and activity.get("record_prompt_text") is True:
@@ -105,12 +105,22 @@ def _settings(body: Mapping[str, Any], current: Current) -> list[str]:
         if key in body:
             out.extend(judge(body[key]))
     paths = body.get("protected_paths")
-    if isinstance(paths, list):
+    if isinstance(paths, list) and not now:   # what is protected now is unknown: any new list could drop one
+        out.append("Replace the protected file paths (the current list could not be read)")
+    elif isinstance(paths, list):
         dropped = [p for p in now.get("protected_paths") or [] if p not in paths]
         if dropped:
             out.append(f"Stop protecting {len(dropped)} file path{'s' if len(dropped) != 1 else ''} ({', '.join(map(str, dropped[:3]))})")
     out.extend(_shields(body.get("shields"), current))
     return out
+
+
+def _saved_severity(raw: Any) -> Optional[str]:
+    """*raw* as the settings writer saves a severity (trimmed, lower-cased, on the kernel's ladder —
+    the rule of ``kernel.config_values.schema.severity``), or None when it is not one. WHY (review
+    2026-11-26): ranked on its raw spelling, ``"CRITICAL"`` asked nothing yet was saved as critical."""
+    text = raw.strip().lower() if isinstance(raw, str) else ""
+    return text if text in SEVERITY_RANK else None
 
 
 def _invalid(body: Mapping[str, Any]) -> bool:

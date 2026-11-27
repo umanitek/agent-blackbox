@@ -89,15 +89,18 @@ def _matches(rule: WatchRule, hosts: set[str], packages: set[str]) -> bool:
 
 def check(tool_name: str, args: Any, *, agent: str = "") -> list[Finding]:
     """The findings of every rule *args* names; each hit is counted. ``watch``: a flag that never
-    blocks; ``enforce``: a critical rule of the person's that blocks in Block mode."""
+    blocks; ``enforce``: a critical rule of the person's that blocks in Block mode. The findings
+    are built first and the count is best-effort (``state.count``): a hit that can not be written
+    never loses an enforced rule's refusal (review 2026-11-26)."""
     rules = all_rules()
     if not rules:
         return []
     hosts, packages = _named(tool_name, args)
     hit = [rule for rule in rules if _matches(rule, hosts, packages)]
+    found = [_finding(rule, tool_name) for rule in hit]
     if hit:
         state.count([rule.rule_id for rule in hit], agent)
-    return [_finding(rule, tool_name) for rule in hit]
+    return found
 
 
 def _finding(rule: WatchRule, tool_name: str) -> Finding:

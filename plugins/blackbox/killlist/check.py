@@ -26,12 +26,18 @@ from ..detection import Finding, skill_install_arg
 from .statement import KillAction, KillEntry, KillList
 
 
+def _canonical(text: object) -> str:
+    """A name or publisher as matched: trimmed and case-folded (review 2026-11-26: a publisher-wide
+    kill missed ``"evilcorp "`` — the spelling is the caller's, the match is on the canonical value)."""
+    return str(text or "").strip().casefold()
+
+
 def _skill_matches(entry: KillEntry, name: str, version: str, artifact_hash: str, publisher: str) -> bool:
     if entry.registry != "skill":
         return False
     if entry.publisher:
-        return bool(publisher) and entry.publisher.lower() == publisher.lower()
-    if entry.identifier.lower() != name.lower():
+        return bool(publisher) and _canonical(entry.publisher) == publisher
+    if _canonical(entry.identifier) != _canonical(name):
         return False
     if entry.version and entry.version != version:
         return False
@@ -42,7 +48,7 @@ def match(entries: Iterable[KillEntry], tool_name: str, args: Any) -> Optional[K
     """The first entry the call hits (DISABLE entries are checked before WARN ones)."""
     tool = (tool_name or "").strip().lower()
     skill = skill_install_arg(tool_name, args)
-    publisher = str((args or {}).get("publisher") or (args or {}).get("author") or "") if isinstance(args, dict) else ""
+    publisher = _canonical(args.get("publisher") or args.get("author")) if isinstance(args, dict) else ""
     ordered = sorted(entries, key=lambda e: e.action is not KillAction.DISABLE)
     for entry in ordered:
         if entry.registry == "mcp" and entry.tool_prefix and tool.startswith(entry.tool_prefix):
