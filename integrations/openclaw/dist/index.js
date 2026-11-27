@@ -1,4 +1,4 @@
-/* @umanitek/blackbox-openclaw — built from src/ by `npm run build`; do not edit. source sha256:e4add5d5b914725fa0f2af6ae858cdc5fd0b71a01a99a9ddd7227bab13e8be1c */
+/* @umanitek/blackbox-openclaw — built from src/ by `npm run build`; do not edit. source sha256:2ae960179c22f8814bbf08a00382be9e723c423215a9d53bf8bce9878c1042de */
 
 // src/consent.ts
 import { readFileSync } from "node:fs";
@@ -233,6 +233,8 @@ var CLOSE = "\uE002";
 var MARK_OF = { "{": OPEN, ",": COMMA, "}": CLOSE };
 var WINDOWS_BEFORE = new RegExp(String.raw`(?:^|[^A-Za-z0-9])[A-Za-z]:(?=\n?$)|%[A-Za-z_][A-Za-z0-9_]*%(?=\n?$)|^\.{1,2}(?=\n?$)|^~(?=\n?$)|^\$HOME(?=\n?$)|^\$env:[A-Za-z_][\p{L}\p{N}_]*(?=\n?$)`, "iu");
 var WINDOWS_INSIDE = /(?:^|[^A-Za-z0-9])[A-Za-z]:\\|%[A-Za-z_][A-Za-z0-9_]*%\\|^(?:\.{1,2}|~)\\/;
+var WINDOWS_TAIL = 256;
+var MAX_SEQUENCE_BODY = 16;
 var PLAIN = /[^\s;&|<>()\\'"$`{},]+/y;
 var SEQUENCE = /^(-?\d{1,6})\.\.(-?\d{1,6})(?=\n?$)|^([A-Za-z])\.\.([A-Za-z])(?=\n?$)/;
 var DOUBLE_QUOTE_ESCAPE = /\\([$`"\\\n])/g;
@@ -285,6 +287,10 @@ var Lexer = class {
   current = [];
   started = false;
   windows = false;
+  /** The last WINDOWS_TAIL characters of the word (marks literal), whether it is longer, and whether a Windows path showed in it. */
+  tail = "";
+  long = false;
+  windowsSeen = false;
   unresolved = false;
   text;
   // A plain field, not a constructor parameter property: Node's type stripping (how the parity
@@ -297,6 +303,21 @@ var Lexer = class {
     this.current = [];
     this.started = false;
     this.windows = false;
+    this.tail = "";
+    this.long = false;
+    this.windowsSeen = false;
+  }
+  /** Append `piece` to the word being built, keeping the bounded tail the Windows checks read. */
+  add(piece) {
+    this.current.push(piece);
+    const joined = this.tail + literalMarks(piece);
+    if (!this.windowsSeen && piece.includes("\\") && WINDOWS_INSIDE.test(this.anchored(joined))) this.windowsSeen = true;
+    this.long = this.long || joined.length > WINDOWS_TAIL;
+    this.tail = joined.slice(-WINDOWS_TAIL);
+  }
+  /** `text` as the checks read it: a word cut to its tail gets a letter in front, so nothing anchors at the cut. */
+  anchored(text) {
+    return this.long ? "a" + text : text;
   }
   run() {
     const text = this.text;
@@ -330,27 +351,27 @@ var Lexer = class {
     } else if (char === "'") {
       const end = text.indexOf("'", this.index + 1);
       if (end < 0) throw new Unbalanced(text);
-      this.current.push(text.slice(this.index + 1, end));
+      this.add(text.slice(this.index + 1, end));
       this.index = end + 1;
     } else if (char === '"') {
       this.doubleQuoted();
     } else if (text.startsWith("$(", this.index) || text.startsWith("${", this.index)) {
       const open = text[this.index + 1];
       const end = closing(text, this.index + 2, open, open === "(" ? ")" : "}");
-      this.current.push(text.slice(this.index, end));
+      this.add(text.slice(this.index, end));
       this.index = end;
     } else if (char === "`") {
       const end = closing(text, this.index + 1, "`", "`");
-      this.current.push(text.slice(this.index, end));
+      this.add(text.slice(this.index, end));
       this.index = end;
     } else {
       PLAIN.lastIndex = this.index;
       const plain = PLAIN.exec(text);
       if (plain) {
-        this.current.push(plain[0]);
+        this.add(plain[0]);
         this.index = PLAIN.lastIndex;
       } else {
-        this.current.push(MARK_OF[char] ?? char);
+        this.add(MARK_OF[char] ?? char);
         this.index += 1;
       }
     }
@@ -358,12 +379,12 @@ var Lexer = class {
   backslash() {
     const text = this.text;
     const at = this.index;
-    if (this.windows || WINDOWS_BEFORE.test(literalMarks(this.current.join("")))) {
+    if (this.windows || WINDOWS_BEFORE.test(this.anchored(this.tail))) {
       this.windows = true;
-      this.current.push("\\");
+      this.add("\\");
       this.index = at + 1;
     } else if (at + 1 < text.length) {
-      if (text[at + 1] !== "\n") this.current.push(text[at + 1]);
+      if (text[at + 1] !== "\n") this.add(text[at + 1]);
       this.index = at + 2;
     } else {
       this.index = at + 1;
@@ -374,9 +395,9 @@ var Lexer = class {
     const end = doubleQuoteEnd(text, this.index + 1);
     if (end < 0) throw new Unbalanced(text);
     let inner = text.slice(this.index + 1, end);
-    if (WINDOWS_INSIDE.test(literalMarks(this.current.join("")) + inner)) this.windows = true;
+    if (this.windowsSeen || inner.includes("\\") && WINDOWS_INSIDE.test(this.anchored(this.tail) + inner)) this.windows = true;
     if (!this.windows) inner = inner.replace(DOUBLE_QUOTE_ESCAPE, (_whole, escaped) => escaped === "\n" ? "" : escaped);
-    this.current.push(inner);
+    this.add(inner);
     this.index = end + 1;
   }
 };
@@ -389,18 +410,19 @@ function expanded(word, lexer) {
   }
   return found.map(literalMarks);
 }
-function groupEnd(word, start) {
-  let depth = 0;
-  const commas = [];
-  for (let index = start; index < word.length; index += 1) {
+function groups(word) {
+  const found = /* @__PURE__ */ new Map();
+  const openMarks = [];
+  for (let index = 0; index < word.length; index += 1) {
     const char = word[index];
-    if (char === OPEN) depth += 1;
-    else if (char === CLOSE) {
-      depth -= 1;
-      if (depth === 0) return [index, commas];
-    } else if (char === COMMA && depth === 1) commas.push(index);
+    if (char === OPEN) openMarks.push([index, []]);
+    else if (char === COMMA && openMarks.length) openMarks[openMarks.length - 1][1].push(index);
+    else if (char === CLOSE && openMarks.length) {
+      const [start, commas] = openMarks.pop();
+      found.set(start, [index, commas]);
+    }
   }
-  return [-1, commas];
+  return found;
 }
 function sequence(body) {
   const found = SEQUENCE.exec(body);
@@ -416,17 +438,19 @@ function sequence(body) {
   return out;
 }
 function alternatives(word) {
+  const closed = groups(word);
   let start = word.indexOf(OPEN);
   while (start >= 0) {
-    const [end, commas] = groupEnd(word, start);
-    if (end < 0) return [word];
-    const body = word.slice(start + 1, end);
+    const group = closed.get(start);
+    if (group === void 0) return [word];
+    const [end, commas] = group;
     let choices;
     if (commas.length) {
       const cuts = [start, ...commas, end];
       choices = cuts.slice(0, -1).map((cut, at) => word.slice(cut + 1, cuts[at + 1]));
     } else {
-      choices = body.includes(OPEN) ? null : sequence(literalMarks(body));
+      const body = end - start - 1 <= MAX_SEQUENCE_BODY ? word.slice(start + 1, end) : "";
+      choices = !body || body.includes(OPEN) ? null : sequence(literalMarks(body));
     }
     if (choices !== null) {
       const out = [];
@@ -1416,19 +1440,19 @@ function canonicalIp(raw) {
   if (halves.length > 2) return raw;
   const head = halves[0] ? halves[0].split(":") : [];
   const tail = halves.length === 2 && halves[1] ? halves[1].split(":") : [];
-  const groups = [...head, ...tail];
-  const last = groups[groups.length - 1];
+  const groups2 = [...head, ...tail];
+  const last = groups2[groups2.length - 1];
   if (last && last.includes(".")) {
     const octets = last.split(".").map((o) => Number(o));
     if (octets.length !== 4 || octets.some((o) => !Number.isInteger(o) || o < 0 || o > 255)) return raw;
-    groups.splice(groups.length - 1, 1, (octets[0] << 8 | octets[1]).toString(16), (octets[2] << 8 | octets[3]).toString(16));
-    if (halves.length === 2 && halves[1]) tail.splice(tail.length - 1, 1, groups[groups.length - 2], groups[groups.length - 1]);
+    groups2.splice(groups2.length - 1, 1, (octets[0] << 8 | octets[1]).toString(16), (octets[2] << 8 | octets[3]).toString(16));
+    if (halves.length === 2 && halves[1]) tail.splice(tail.length - 1, 1, groups2[groups2.length - 2], groups2[groups2.length - 1]);
   }
-  if (groups.some((g) => !/^[0-9a-f]{1,4}$/.test(g))) return raw;
-  const missing = 8 - groups.length;
+  if (groups2.some((g) => !/^[0-9a-f]{1,4}$/.test(g))) return raw;
+  const missing = 8 - groups2.length;
   if (halves.length === 2 ? missing < 1 : missing !== 0) return raw;
-  const headGroups = halves.length === 2 ? head : groups;
-  const full = halves.length === 2 ? [...headGroups, ...Array(missing).fill("0"), ...tail.map((g) => g)] : groups;
+  const headGroups = halves.length === 2 ? head : groups2;
+  const full = halves.length === 2 ? [...headGroups, ...Array(missing).fill("0"), ...tail.map((g) => g)] : groups2;
   const words = full.map((g) => parseInt(g, 16));
   if (words.slice(0, 5).every((w) => w === 0) && words[5] === 65535) {
     return `::ffff:${words[6] >> 8}.${words[6] & 255}.${words[7] >> 8}.${words[7] & 255}`;

@@ -95,6 +95,14 @@ const MARK_OF: Record<string, string> = { "{": OPEN, ",": COMMA, "}": CLOSE };
 const WINDOWS_BEFORE = new RegExp(String.raw`(?:^|[^A-Za-z0-9])[A-Za-z]:(?=\n?$)|%[A-Za-z_][A-Za-z0-9_]*%(?=\n?$)|^\.{1,2}(?=\n?$)|^~(?=\n?$)|^\$HOME(?=\n?$)|^\$env:[A-Za-z_][\p{L}\p{N}_]*(?=\n?$)`, "iu");
 /** A Windows path inside double quotes (`"C:\Program Files\x"`): its backslashes stay as written. */
 const WINDOWS_INSIDE = /(?:^|[^A-Za-z0-9])[A-Za-z]:\\|%[A-Za-z_][A-Za-z0-9_]*%\\|^(?:\.{1,2}|~)\\/;
+/**
+ * How much of the word being built the Windows-path checks read (lexer.py `_WINDOWS_TAIL`): they look
+ * only at its end, so a bounded tail keeps the lexer linear. WHY: re-joining the whole word at every
+ * quote or backslash was quadratic — a 900,000-character call of nested JSON hung the hook.
+ */
+const WINDOWS_TAIL = 256;
+/** The longest body a `{1..3}` / `{a..c}` sequence can have (lexer.py `_MAX_SEQUENCE_BODY`). */
+const MAX_SEQUENCE_BODY = 16;
 /** A run of characters that mean nothing special inside a word. */
 const PLAIN = /[^\s;&|<>()\\'"$`{},]+/y;
 const SEQUENCE = /^(-?\d{1,6})\.\.(-?\d{1,6})(?=\n?$)|^([A-Za-z])\.\.([A-Za-z])(?=\n?$)/;
@@ -162,6 +170,10 @@ class Lexer {
   private current: string[] = [];
   private started = false;
   private windows = false;
+  /** The last WINDOWS_TAIL characters of the word (marks literal), whether it is longer, and whether a Windows path showed in it. */
+  private tail = "";
+  private long = false;
+  private windowsSeen = false;
   unresolved = false;
   private readonly text: string;
 
@@ -176,6 +188,24 @@ class Lexer {
     this.current = [];
     this.started = false;
     this.windows = false;
+    this.tail = "";
+    this.long = false;
+    this.windowsSeen = false;
+  }
+
+  /** Append `piece` to the word being built, keeping the bounded tail the Windows checks read. */
+  private add(piece: string): void {
+    this.current.push(piece);
+    const joined = this.tail + literalMarks(piece);
+    // A Windows path ends in a backslash: only a piece holding one can make a new match.
+    if (!this.windowsSeen && piece.includes("\\") && WINDOWS_INSIDE.test(this.anchored(joined))) this.windowsSeen = true;
+    this.long = this.long || joined.length > WINDOWS_TAIL;
+    this.tail = joined.slice(-WINDOWS_TAIL);
+  }
+
+  /** `text` as the checks read it: a word cut to its tail gets a letter in front, so nothing anchors at the cut. */
+  private anchored(text: string): string {
+    return this.long ? "a" + text : text;
   }
 
   run(): string[] {
@@ -211,27 +241,27 @@ class Lexer {
     } else if (char === "'") {
       const end = text.indexOf("'", this.index + 1);
       if (end < 0) throw new Unbalanced(text);
-      this.current.push(text.slice(this.index + 1, end));
+      this.add(text.slice(this.index + 1, end));
       this.index = end + 1;
     } else if (char === '"') {
       this.doubleQuoted();
     } else if (text.startsWith("$(", this.index) || text.startsWith("${", this.index)) {
       const open = text[this.index + 1]!;
       const end = closing(text, this.index + 2, open, open === "(" ? ")" : "}");
-      this.current.push(text.slice(this.index, end));
+      this.add(text.slice(this.index, end));
       this.index = end;
     } else if (char === "`") {
       const end = closing(text, this.index + 1, "`", "`");
-      this.current.push(text.slice(this.index, end));
+      this.add(text.slice(this.index, end));
       this.index = end;
     } else {
       PLAIN.lastIndex = this.index;
       const plain = PLAIN.exec(text);
       if (plain) {
-        this.current.push(plain[0]);
+        this.add(plain[0]);
         this.index = PLAIN.lastIndex;
       } else {
-        this.current.push(MARK_OF[char] ?? char);
+        this.add(MARK_OF[char] ?? char);
         this.index += 1;
       }
     }
@@ -240,12 +270,12 @@ class Lexer {
   private backslash(): void {
     const text = this.text;
     const at = this.index;
-    if (this.windows || WINDOWS_BEFORE.test(literalMarks(this.current.join("")))) {
+    if (this.windows || WINDOWS_BEFORE.test(this.anchored(this.tail))) {
       this.windows = true;
-      this.current.push("\\");
+      this.add("\\");
       this.index = at + 1;
     } else if (at + 1 < text.length) {
-      if (text[at + 1] !== "\n") this.current.push(text[at + 1]!);   // a line continuation joins the lines
+      if (text[at + 1] !== "\n") this.add(text[at + 1]!);   // a line continuation joins the lines
       this.index = at + 2;
     } else {
       this.index = at + 1;
@@ -257,9 +287,9 @@ class Lexer {
     const end = doubleQuoteEnd(text, this.index + 1);
     if (end < 0) throw new Unbalanced(text);
     let inner = text.slice(this.index + 1, end);
-    if (WINDOWS_INSIDE.test(literalMarks(this.current.join("")) + inner)) this.windows = true;
+    if (this.windowsSeen || (inner.includes("\\") && WINDOWS_INSIDE.test(this.anchored(this.tail) + inner))) this.windows = true;
     if (!this.windows) inner = inner.replace(DOUBLE_QUOTE_ESCAPE, (_whole, escaped: string) => (escaped === "\n" ? "" : escaped));
-    this.current.push(inner);
+    this.add(inner);
     this.index = end + 1;
   }
 }
@@ -275,19 +305,24 @@ function expanded(word: string, lexer: Lexer): string[] {
   return found.map(literalMarks);
 }
 
-/** The index of the `}` mark closing the `{` mark at `start` (-1 for none) and the top-level commas. */
-function groupEnd(word: string, start: number): [number, number[]] {
-  let depth = 0;
-  const commas: number[] = [];
-  for (let index = start; index < word.length; index += 1) {
+/**
+ * Every `{` mark of `word` that is closed: its index -> [the closing `}` mark's index, its top-level
+ * commas]. One pass with a stack (lexer.py `_groups`). WHY: scanning to the end of the word for each
+ * `{` was quadratic — 150,000 nested braces hung the hook.
+ */
+function groups(word: string): Map<number, [number, number[]]> {
+  const found = new Map<number, [number, number[]]>();
+  const openMarks: [number, number[]][] = [];
+  for (let index = 0; index < word.length; index += 1) {
     const char = word[index];
-    if (char === OPEN) depth += 1;
-    else if (char === CLOSE) {
-      depth -= 1;
-      if (depth === 0) return [index, commas];
-    } else if (char === COMMA && depth === 1) commas.push(index);
+    if (char === OPEN) openMarks.push([index, []]);
+    else if (char === COMMA && openMarks.length) openMarks[openMarks.length - 1]![1].push(index);
+    else if (char === CLOSE && openMarks.length) {
+      const [start, commas] = openMarks.pop()!;
+      found.set(start, [index, commas]);
+    }
   }
-  return [-1, commas];
+  return found;
 }
 
 /** `1..3` / `a..c` as its items (at most one past MAX_BRACE_WORDS, so a longer one is seen as too long), null when no sequence. */
@@ -307,17 +342,19 @@ function sequence(body: string): string[] | null {
 
 /** Every word `word`'s brace groups make, at most MAX_BRACE_WORDS (null past it). */
 function alternatives(word: string): string[] | null {
+  const closed = groups(word);
   let start = word.indexOf(OPEN);
   while (start >= 0) {
-    const [end, commas] = groupEnd(word, start);
-    if (end < 0) return [word];
-    const body = word.slice(start + 1, end);
+    const group = closed.get(start);
+    if (group === undefined) return [word];   // no `}` closes it: the rest is literal
+    const [end, commas] = group;
     let choices: string[] | null;
     if (commas.length) {
       const cuts = [start, ...commas, end];
       choices = cuts.slice(0, -1).map((cut, at) => word.slice(cut + 1, cuts[at + 1]));
     } else {
-      choices = body.includes(OPEN) ? null : sequence(literalMarks(body));
+      const body = end - start - 1 <= MAX_SEQUENCE_BODY ? word.slice(start + 1, end) : "";
+      choices = !body || body.includes(OPEN) ? null : sequence(literalMarks(body));
     }
     if (choices !== null) {
       const out: string[] = [];

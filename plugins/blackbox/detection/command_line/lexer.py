@@ -54,7 +54,14 @@ _WINDOWS_BEFORE = re.compile(r"(?:^|[^A-Za-z0-9])[A-Za-z]:$|%[A-Za-z_][A-Za-z0-9
 #: A Windows path inside double quotes (``"C:\\Program Files\\x"``): its backslashes stay as written.
 _WINDOWS_INSIDE = re.compile(r"(?:^|[^A-Za-z0-9])[A-Za-z]:\\|%[A-Za-z_][A-Za-z0-9_]*%\\|^(?:\.{1,2}|~)\\")
 #: A run of characters that mean nothing special inside a word.
+#: How much of the word being built the Windows-path checks read: they look only at its end (a drive
+#: letter, ``%VAR%``, ``~`` or ``..`` just before a backslash), so a bounded tail keeps the lexer
+#: linear. WHY: re-joining the whole word at every quote or backslash was quadratic — a 900,000
+#: character call of nested JSON hung the hook for minutes (CI, 2026-11-27).
+_WINDOWS_TAIL = 256
 _PLAIN = re.compile(r"[^\s;&|<>()\\'\"$`{},]+")
+#: The longest body a ``{1..3}`` / ``{a..c}`` sequence can have (two six-digit signed numbers and ``..``).
+_MAX_SEQUENCE_BODY = 16
 _SEQUENCE = re.compile(r"^(-?\d{1,6})\.\.(-?\d{1,6})$|^([A-Za-z])\.\.([A-Za-z])$")
 
 
@@ -113,12 +120,35 @@ class _Lexer:
         self.words: list[str] = []
         self.current: list[str] = []
         self.started = self.windows = self.unresolved = False
+        self._reset_word()
+
+    def _reset_word(self) -> None:
+        #: The last :data:`_WINDOWS_TAIL` characters of the word (marks made literal), whether the word
+        #: is longer than that, and whether a Windows path showed anywhere in it so far.
+        self.tail, self.long, self.windows_seen = "", False, False
+
+    def add(self, piece: str) -> None:
+        """Append *piece* to the word being built, keeping the bounded tail the Windows checks read."""
+        self.current.append(piece)
+        joined = self.tail + piece.translate(_MARKS)
+        # A Windows path ends in a backslash: only a piece holding one can make a new match.
+        if not self.windows_seen and "\\" in piece and _WINDOWS_INSIDE.search(self._anchored(joined)):
+            self.windows_seen = True
+        self.long = self.long or len(joined) > _WINDOWS_TAIL
+        self.tail = joined[-_WINDOWS_TAIL:]
+
+    def _anchored(self, text: str) -> str:
+        """*text* as the checks read it. A word cut to its tail does not start where the word does, so
+        a letter goes in front: nothing anchors at the cut (``^`` and a non-letter boundary), and the
+        place it hides was already read with its real neighbours when it was the end of the word."""
+        return "a" + text if self.long else text
 
     def finish(self) -> None:
         if self.started:
             for word in _expanded("".join(self.current), self):
                 self.words.append(word)
         self.current, self.started, self.windows = [], False, False
+        self._reset_word()
 
     def run(self) -> tuple[str, ...]:
         text, length = self.text, len(self.text)
@@ -151,36 +181,36 @@ class _Lexer:
             end = text.find("'", self.index + 1)
             if end < 0:
                 raise _Unbalanced(text)
-            self.current.append(text[self.index + 1:end])
+            self.add(text[self.index + 1:end])
             self.index = end + 1
         elif char == '"':
             self.double_quoted()
         elif text.startswith(("$(", "${"), self.index):
             end = _closing(text, self.index + 2, text[self.index + 1], ")" if text[self.index + 1] == "(" else "}")
-            self.current.append(text[self.index:end])
+            self.add(text[self.index:end])
             self.index = end
         elif char == "`":
             end = _closing(text, self.index + 1, "`", "`")
-            self.current.append(text[self.index:end])
+            self.add(text[self.index:end])
             self.index = end
         else:
             plain = _PLAIN.match(text, self.index)
             if plain:
-                self.current.append(plain.group(0))
+                self.add(plain.group(0))
                 self.index = plain.end()
             else:
-                self.current.append({"{": _OPEN, ",": _COMMA, "}": _CLOSE}.get(char, char))
+                self.add({"{": _OPEN, ",": _COMMA, "}": _CLOSE}.get(char, char))
                 self.index += 1
 
     def backslash(self) -> None:
         text, at = self.text, self.index
-        if self.windows or _WINDOWS_BEFORE.search("".join(self.current).translate(_MARKS)):
+        if self.windows or _WINDOWS_BEFORE.search(self._anchored(self.tail)):
             self.windows = True
-            self.current.append("\\")
+            self.add("\\")
             self.index = at + 1
         elif at + 1 < len(text):
             if text[at + 1] != "\n":   # a line continuation joins the lines
-                self.current.append(text[at + 1])
+                self.add(text[at + 1])
             self.index = at + 2
         else:
             self.index = at + 1
@@ -191,11 +221,11 @@ class _Lexer:
         if end < 0:
             raise _Unbalanced(text)
         inner = text[self.index + 1:end]
-        if _WINDOWS_INSIDE.search("".join(self.current).translate(_MARKS) + inner):
+        if self.windows_seen or ("\\" in inner and _WINDOWS_INSIDE.search(self._anchored(self.tail) + inner)):
             self.windows = True
         if not self.windows:
             inner = re.sub(r'\\([$`"\\\n])', lambda found: "" if found.group(1) == "\n" else found.group(1), inner)
-        self.current.append(inner)
+        self.add(inner)
         self.index = end + 1
 
 
@@ -210,20 +240,21 @@ def _expanded(word: str, lexer: _Lexer) -> list[str]:
     return [each.translate(_MARKS) for each in found]
 
 
-def _group_end(word: str, start: int) -> tuple[int, list[int]]:
-    """The index of the ``}`` mark closing the ``{`` mark at *start* (-1 for none) and the top-level commas."""
-    depth, commas = 0, []
-    for index in range(start, len(word)):
-        char = word[index]
+def _groups(word: str) -> dict[int, tuple[int, list[int]]]:
+    """Every ``{`` mark of *word* that is closed: its index -> (the closing ``}`` mark's index, its
+    top-level commas). One pass with a stack. WHY: scanning to the end of the word for each ``{`` was
+    quadratic — 150,000 nested braces hung the hook (CI, 2026-11-27)."""
+    found: dict[int, tuple[int, list[int]]] = {}
+    open_marks: list[tuple[int, list[int]]] = []
+    for index, char in enumerate(word):
         if char == _OPEN:
-            depth += 1
-        elif char == _CLOSE:
-            depth -= 1
-            if depth == 0:
-                return index, commas
-        elif char == _COMMA and depth == 1:
-            commas.append(index)
-    return -1, commas
+            open_marks.append((index, []))
+        elif char == _COMMA and open_marks:
+            open_marks[-1][1].append(index)
+        elif char == _CLOSE and open_marks:
+            start, commas = open_marks.pop()
+            found[start] = (index, commas)
+    return found
 
 
 def _sequence(body: str) -> list[str] | None:
@@ -241,17 +272,18 @@ def _sequence(body: str) -> list[str] | None:
 
 def _alternatives(word: str) -> list[str] | None:
     """Every word *word*'s brace groups make, at most :data:`MAX_BRACE_WORDS` (None past it)."""
+    groups = _groups(word)
     start = word.find(_OPEN)
     while start >= 0:
-        end, commas = _group_end(word, start)
-        if end < 0:
+        if start not in groups:   # no ``}`` closes it: the rest is literal
             return [word]
-        body = word[start + 1:end]
+        end, commas = groups[start]
         if commas:
             cuts = [start, *commas, end]
             choices = [word[cuts[at] + 1:cuts[at + 1]] for at in range(len(cuts) - 1)]
         else:
-            choices = _sequence(body.translate(_MARKS)) if _OPEN not in body else None
+            body = word[start + 1:end] if end - start - 1 <= _MAX_SEQUENCE_BODY else ""
+            choices = _sequence(body.translate(_MARKS)) if body and _OPEN not in body else None
         if choices is not None:
             out: list[str] = []
             prefix, suffix = word[:start], word[end + 1:]

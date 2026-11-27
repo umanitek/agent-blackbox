@@ -77,6 +77,8 @@ that the two version fields agree.
 
 ### Fixed
 
+- **A huge single-word tool call no longer stalls the check.** A 900,000-character call of nested JSON made
+  the shell reader take minutes (each quote and brace re-read the whole word); it is read in one pass now.
 - **Spelling a command differently no longer hides it from Blackbox.** Quoting or escaping (`~/.s"s"h`,
   `r''m`), brace expansion, `${HOME:-…}`, `$(echo ~)`, subshells, or a Windows path elsewhere on the line no
   longer hide a protected file or an SSH-key write. A harmless command before a dangerous one no longer hides

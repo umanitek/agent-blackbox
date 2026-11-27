@@ -60,3 +60,29 @@ def test_what_can_not_be_expanded_is_undecidable_and_what_can_is_not():
 def test_powershell_calls_are_shell_commands():
     assert {"powershell", "pwsh"} <= SHELL_TOOLS
     assert protected_path_touches("pwsh", {"command": "Get-Content ~/.ssh/id_rsa"}, SSH)
+
+
+def test_one_huge_word_is_read_in_linear_time():
+    """CI, 2026-11-27 (1.7.0 PR): a 900,000-character call of nested JSON — one word with 300,000
+    quotes and 150,000 braces — hung the hook past CI's 300 s limit. The Windows-path checks re-joined
+    the whole word at every quote, and brace expansion rescanned to its end for every ``{``. Both now
+    read a bounded tail / pair the braces in one pass. Bound generous: the quadratic version took minutes."""
+    import time
+
+    from plugins.blackbox.detection.command_line import lexer
+
+    word = '{"a":' * 150_000 + "1" + "}" * 150_000
+    started = time.monotonic()
+    lexer.split_words("echo " + word)
+    assert time.monotonic() - started < 20
+
+
+@pytest.mark.parametrize(("command", "word"), [
+    ('cat "C:\\Program Files\\x"', "C:\\Program Files\\x"),        # a Windows path inside quotes keeps its backslashes
+    ("cat " + "a" * 600 + '-"C:\\x"', "a" * 600 + "-C:\\x"),         # after a long stretch of the same word (the cut tail)
+    ('cat "a\\"b"', 'a"b'),                                          # elsewhere, the shell's own escapes
+])
+def test_windows_paths_are_still_told_from_shell_escapes(command, word):
+    from plugins.blackbox.detection.command_line import lexer
+
+    assert lexer.split_words(command)[1] == word
