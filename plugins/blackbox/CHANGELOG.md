@@ -46,7 +46,7 @@ Found in an external review of 1.7.1 and reported privately. Thank you to the re
 
 - **More kinds of credentials are kept out of the audit log.** Authorization headers of any scheme,
   `Basic` credentials, short passwords (`password=abc1`), quoted passwords with spaces, the password
-  in `curl -u user:password` and in a URL's `user:password@` are now redacted, as are a finding's
+  given to curl's `-u` option and in a URL's user information are now redacted, as are a finding's
   title and sighting. Ordinary text such as `max_tokens=4096` or `docker run -u 1000:1000` is kept.
   Same rules in the OpenClaw bridge.
 - **Network lockdown treats cloud metadata as outside this machine.** Under agent network lockdown,

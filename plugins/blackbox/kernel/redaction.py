@@ -139,10 +139,10 @@ _AUTH_HEADER_RE = re.compile(
 _SCHEME = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,31}$")
 #: ``Basic <base64>`` anywhere: redacted when the base64 decodes to ``user:password``.
 _BASIC_RE = re.compile(r"\bBasic[ \t]+(?P<value>[A-Za-z0-9+/]{4,}={0,2})(?![A-Za-z0-9+/=])", re.IGNORECASE)
-#: ``curl -u user:password`` (``--user``, ``--proxy-user``, ``-U``, ``=`` or a space).
+#: curl's ``-u`` / ``--user`` / ``--proxy-user`` / ``-U`` value, a user and a password (``=`` or a space).
 _USER_OPTION_RE = re.compile(
     r"(?P<opt>(?<![^\s\"'])(?:-u|-U|--user|--proxy-user)(?:[ \t]+|=)[\"']?)(?P<user>[^\s\"':]{1,128}):(?P<pw>[^\s\"']{1,256})")
-#: ``scheme://user:password@host``: the password part of a URL's user information.
+#: A URL's user information (``scheme://`` user ``:`` password ``@`` host): its password part.
 _URL_PASSWORD_RE = re.compile(r"(?P<pre>\b[a-z][a-z0-9+.-]{0,30}://[^\s/?#@:'\"<>]{1,128}):(?P<pw>[^\s/?#@'\"<>]{1,256})@",
                               re.IGNORECASE)
 _REDACTED = "[REDACTED]"
@@ -202,7 +202,7 @@ def redact_secret_values(text: str) -> str:
     shapes become typed markers (``[REDACTED_PRIVATE_KEY]``);
     bearer tokens become ``Bearer [REDACTED]``; secret-named assignments keep
     their key and lose their value (``DB_PASSWORD=[REDACTED]``), a quoted or a short
-    password's too; an authorization header, ``Basic`` credentials, ``curl -u user:pw``
+    password's too; an authorization header, ``Basic`` credentials, curl's ``-u`` value
     and a URL's ``user:password@`` lose the secret part (:func:`redact_credentials`). Truncate
     AFTER calling this, never before — a secret cut in half no longer matches.
     """
