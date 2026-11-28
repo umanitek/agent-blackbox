@@ -307,7 +307,7 @@ def _finding_summary(finding: dict[str, Any]) -> dict[str, Any]:
         "identifier": finding.get("identifier"),
         "category": finding.get("category"),
         "severity": finding.get("severity"),
-        "title": finding.get("title"),
+        "title": finding.get("title") and redaction.sanitize_text(str(finding["title"]), 300),
         "framework": finding.get("framework") or "hermes",
         "tool_name": finding.get("tool_name"),
         "evidence": redaction.sanitize_text(str(finding.get("evidence") or ""), 700),
@@ -315,8 +315,8 @@ def _finding_summary(finding: dict[str, Any]) -> dict[str, Any]:
         "candidate": bool(finding.get("candidate", not finding.get("confirmed", True))),
         "source": str(finding.get("source") or ("public" if finding.get("confirmed", True) else "heuristic")),
         "ts": time.time(),
-        # threat profiles: the closed-vocabulary sighting the guard attached (goal, at risk, outcome…).
-        "sighting": {str(k)[:64]: str(v)[:128] for k, v in (finding.get("sighting") or {}).items()},
+        # threat profiles: the sighting the guard attached; it and the title pass the redactor too (review 2026-11-28).
+        "sighting": {redaction.sanitize_text(str(k), 64): redaction.sanitize_text(str(v), 128) for k, v in (finding.get("sighting") or {}).items()},
         # Where an injection was met — a closed word (constants.INJECTION_CONTEXTS), never content.
         "found_in": _found_in(finding),
         # What the person should do now (a landed package: its removal command and the

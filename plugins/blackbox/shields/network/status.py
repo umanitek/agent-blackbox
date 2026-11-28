@@ -66,9 +66,6 @@ PAIR_HOW = ("Reinstall it to pair them: run Blackbox's installer with --system-p
 def _helper_rows(applied: Mapping[str, Any]) -> tuple[StatusRow, ...]:
     """The helper's health beyond running: pairing, pf, its resolver, its last error."""
     rows = []
-    if applied.get("auth") == "legacy":
-        rows.append(StatusRow(icon="!", state="warn", text="System protection helper is an older version",
-                              sub="It accepts plans without a signature. " + PAIR_HOW))
     if applied.get("pf_enabled") is False:
         rows.append(StatusRow(icon="!", state="warn", text="The macOS packet filter is off",
                               sub="The Threat Firewall, cutting and SSH lockdown cannot work until the helper turns it back on."))
@@ -85,7 +82,7 @@ def _helper_section(applied: Mapping[str, Any]) -> StatusSection:
     if not helper.installed():
         row = StatusRow(icon="↓", state=mode_module.NEEDS_HELPER, text="System protection helper not installed",
                         sub=HELPER_HOW)
-    elif pairing != helper_link.PAIRED and applied.get("auth") != "legacy":
+    elif pairing != helper_link.PAIRED:
         # A keyed helper refuses every plan this Blackbox cannot sign: say so, with the fix.
         text = ("System protection helper not paired" if pairing == helper_link.NOT_PAIRED
                 else "System protection helper's key file is damaged")

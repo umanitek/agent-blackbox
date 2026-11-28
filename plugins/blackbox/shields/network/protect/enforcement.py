@@ -266,8 +266,8 @@ def _protection_results(raw: Any) -> dict[str, dict[str, Any]]:
     return results
 
 
-#: How the helper authenticated (helper/PLAN.md): signed plans, a pre-key helper, or a bad key.
-AUTH_STATES = ("signed", "legacy", "broken")
+#: How the helper authenticated (helper/PLAN.md): signed plans, no key file, or a bad key.
+AUTH_STATES = ("signed", "unkeyed", "broken")
 MAX_ERROR_TEXT = 300
 
 

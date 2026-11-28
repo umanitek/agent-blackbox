@@ -274,10 +274,7 @@ def build_from_rows(rows: list[dict[str, Any]], source: str = "public", pin: liv
     never shadow (or escalate/downgrade) a curated public rule.
     """
     rs = Ruleset(synced_at=time.time())
-    inj_seen: set = set()
-    esc_seen: set = set()
-    fa_seen: set = set()
-    skill_seen: set = set()
+    positions: dict[tuple[str, str], int] = {}
     graph_seen: set = set()
     tagged_rows = [item if isinstance(item, tuple) else (item, source) for item in rows]
     rs.suppressed_subjects = suppressed_subjects(tagged_rows, pin)
@@ -295,27 +292,31 @@ def build_from_rows(rows: list[dict[str, Any]], source: str = "public", pin: liv
         if not mapped:
             continue
         category, key, rule = mapped
-        if category == "injection":
-            if key not in inj_seen:
-                inj_seen.add(key)
-                rs.injection.append(rule)
-        elif category == "escalation":
-            if key not in esc_seen:
-                esc_seen.add(key)
-                rs.escalation.append(rule)
-        elif category == "fileaccess":
-            if key not in fa_seen:
-                fa_seen.add(key)
-                rs.fileaccess.append(rule)
-        elif category == "skill":
-            if key not in skill_seen:
-                skill_seen.add(key)
-                rs.skill.append(rule)
+        if category in _LIST_TABLES:
+            _keep_public_first_in_list(getattr(rs, category), positions, (category, key), rule)
         elif category == "ioc":
             _keep_public_first(rs.ioc, key, rule)
         else:
             _keep_public_first(rs.dependency, key, rule)
     return rs
+
+
+#: The rule tables kept as ordered lists (the detectors read them in order); ``ioc`` and
+#: ``dependency`` are dicts (O(1) lookups).
+_LIST_TABLES = frozenset({"injection", "escalation", "fileaccess", "skill"})
+
+
+def _keep_public_first_in_list(table: list[dict[str, Any]], positions: dict[tuple[str, str], int],
+                               key: tuple[str, str], rule: dict[str, Any]) -> None:
+    """:func:`_keep_public_first` for a list table: the first rule for *key* keeps its place, and a
+    public rule replaces a community one there. WHY (external review, 2026-11-28): these four
+    tables kept the first row seen, so a community row before a public one shadowed it."""
+    at = positions.get(key)
+    if at is None:
+        positions[key] = len(table)
+        table.append(rule)
+    elif table[at].get("source") == "community" and rule.get("source") == "public":
+        table[at] = rule
 
 
 def _keep_public_first(table: dict[str, dict[str, Any]], key: str, rule: dict[str, Any]) -> None:

@@ -15,6 +15,8 @@ Usage::
 
 from __future__ import annotations
 
+import base64
+import binascii
 import re
 
 from .crypto_secrets import redact_bitcoin_keys, redact_own_keys, redact_seed_phrases, redact_solana_keys, text_view
@@ -108,6 +110,85 @@ _SECRET_ASSIGNMENT_RE = re.compile(
     re.IGNORECASE,
 )
 
+# The credential forms the assignment rule above can not see (external review, 2026-11-28).
+# Each keeps what explains the line (the header name, the scheme, the user name) and drops the
+# secret; each is idempotent (a value already ``[REDACTED…]`` is left as it is).
+#
+#: The names whose value is a secret however short (``password=abc``): the token- and key-named
+#: ones keep the 8-character floor above, so ``max_tokens=4096`` stays readable.
+STRONG_SECRET_WORDS = ("password", "passwd", "passphrase", "secret", "credential")
+_STRONG_NAME_PATTERN = "|".join(STRONG_SECRET_WORDS)
+_SHORT_SECRET_RE = re.compile(
+    r"(?P<key>\b(?=[A-Za-z0-9_-]{0,64}?(?:" + _STRONG_NAME_PATTERN + r"))[A-Za-z0-9_-]{1,64}+[\"']?)"
+    r"(?P<sep>\s*[:=]\s*[\"']?)"
+    r"(?P<value>[^\s\"'\[\],;]{1,7})(?![^\s\"'\[\],;])",
+    re.IGNORECASE,
+)
+#: A secret-named name with a QUOTED value, spaces and all (``password="my long pass"``).
+_QUOTED_SECRET_RE = re.compile(
+    r"(?P<key>\b(?=[A-Za-z0-9_-]{0,64}?(?:" + _SECRET_NAME_PATTERN + r"))[A-Za-z0-9_-]{1,64}+[\"']?)"
+    r"(?P<sep>[ \t]*[:=][ \t]*)(?P<quote>[\"'])(?P<value>[^\"'\r\n]{1,512})(?P=quote)",
+    re.IGNORECASE,
+)
+#: An ``Authorization:`` / ``Proxy-Authorization:`` header: the rest of its line is read by
+#: :func:`_header_value` (scheme kept, credential dropped).
+_AUTH_HEADER_RE = re.compile(
+    r"(?P<head>\b(?:proxy-)?authorization[\"']?[ \t]*[:=][ \t]*[\"']?)(?P<rest>[^\r\n\"',;]{1,1024})",
+    re.IGNORECASE,
+)
+_SCHEME = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,31}$")
+#: ``Basic <base64>`` anywhere: redacted when the base64 decodes to ``user:password``.
+_BASIC_RE = re.compile(r"\bBasic[ \t]+(?P<value>[A-Za-z0-9+/]{4,}={0,2})(?![A-Za-z0-9+/=])", re.IGNORECASE)
+#: ``curl -u user:password`` (``--user``, ``--proxy-user``, ``-U``, ``=`` or a space).
+_USER_OPTION_RE = re.compile(
+    r"(?P<opt>(?<![^\s\"'])(?:-u|-U|--user|--proxy-user)(?:[ \t]+|=)[\"']?)(?P<user>[^\s\"':]{1,128}):(?P<pw>[^\s\"']{1,256})")
+#: ``scheme://user:password@host``: the password part of a URL's user information.
+_URL_PASSWORD_RE = re.compile(r"(?P<pre>\b[a-z][a-z0-9+.-]{0,30}://[^\s/?#@:'\"<>]{1,128}):(?P<pw>[^\s/?#@'\"<>]{1,256})@",
+                              re.IGNORECASE)
+_REDACTED = "[REDACTED]"
+_DIGITS = re.compile(r"[0-9]+")
+
+
+def _header_value(found: re.Match) -> str:
+    """An authorization header's line with its credential dropped: ``Basic x`` -> ``Basic [REDACTED]``,
+    a bare credential -> ``[REDACTED]``; whatever follows the credential is kept."""
+    rest = found.group("rest")
+    words = rest.split(" ")
+    at = 1 if len(words) > 1 and _SCHEME.match(words[0]) else 0
+    if words[at].startswith("[REDACTED"):
+        return found.group(0)
+    words[at] = _REDACTED
+    return found.group("head") + " ".join(words)
+
+
+def _basic_value(found: re.Match) -> str:
+    value = found.group("value")
+    if len(value) % 4:
+        return found.group(0)
+    try:
+        decoded = base64.b64decode(value, validate=True)
+    except (binascii.Error, ValueError):
+        return found.group(0)
+    return "Basic " + _REDACTED if b":" in decoded else found.group(0)
+
+
+def _user_option(found: re.Match) -> str:
+    user, password = found.group("user"), found.group("pw")
+    if _DIGITS.fullmatch(user) and _DIGITS.fullmatch(password):   # ``docker run -u 1000:1000``: a user and group id
+        return found.group(0)
+    return f"{found.group('opt')}{user}:{_REDACTED}"
+
+
+def redact_credentials(text: str) -> str:
+    """*text* with the credential forms of :data:`_AUTH_HEADER_RE` .. :data:`_SHORT_SECRET_RE` dropped
+    (a step of :func:`redact_secret_values`)."""
+    out = _AUTH_HEADER_RE.sub(_header_value, text)
+    out = _BASIC_RE.sub(_basic_value, out)
+    out = _USER_OPTION_RE.sub(_user_option, out)
+    out = _URL_PASSWORD_RE.sub(lambda found: f"{found.group('pre')}:{_REDACTED}@", out)
+    out = _QUOTED_SECRET_RE.sub(lambda found: f"{found.group('key')}{found.group('sep')}{found.group('quote')}{_REDACTED}{found.group('quote')}", out)
+    return _SHORT_SECRET_RE.sub(lambda found: f"{found.group('key')}{found.group('sep')}{_REDACTED}", out)
+
 
 def redact_secret_values(text: str) -> str:
     """Replace every recognizable secret value in *text* with a marker.
@@ -120,7 +201,9 @@ def redact_secret_values(text: str) -> str:
     ``[REDACTED_WALLET_PRIVATE_KEY]``; known secret
     shapes become typed markers (``[REDACTED_PRIVATE_KEY]``);
     bearer tokens become ``Bearer [REDACTED]``; secret-named assignments keep
-    their key and lose their value (``DB_PASSWORD=[REDACTED]``). Truncate
+    their key and lose their value (``DB_PASSWORD=[REDACTED]``), a quoted or a short
+    password's too; an authorization header, ``Basic`` credentials, ``curl -u user:pw``
+    and a URL's ``user:password@`` lose the secret part (:func:`redact_credentials`). Truncate
     AFTER calling this, never before — a secret cut in half no longer matches.
     """
     # A URL is read the way its receiver reads it: %2C, %3D, %20 and double-encoded escapes
@@ -134,5 +217,6 @@ def redact_secret_values(text: str) -> str:
     out = redact_own_keys(out)              # then UNLABELLED raw keys of the operator's listed addresses (KI-377)
     for typ, pattern in _REDACTION_ONLY_RULES:
         out = pattern.sub(f"[REDACTED_{typ.upper().replace('-', '_')}]", out)
+    out = redact_credentials(out)           # headers, Basic, -u user:pw, URL passwords, quoted and short secrets
     out = _BEARER_RE.sub("Bearer [REDACTED]", out)
     return _SECRET_ASSIGNMENT_RE.sub(lambda m: f"{m.group('key')}{m.group('sep')}[REDACTED]", out)

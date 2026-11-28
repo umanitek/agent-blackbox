@@ -35,7 +35,7 @@ impl Helper {
             "version": state.version, "queries": self.resolver.queries.load(std::sync::atomic::Ordering::Relaxed),
             // What the person needs to trust the screen: whether the link is authenticated and the
             // last thing that failed (null when everything applied).
-            "auth": self.link.lock().map(|link| link.mode()).unwrap_or("legacy"),
+            "auth": self.link.lock().map(|link| link.mode()).unwrap_or("broken"),
             "last_error": self.last_error.lock().ok().and_then(|e| e.clone()),
             "resolver_ok": self.resolver.alive.load(Ordering::SeqCst),
             "dns_error": failures.dns,
