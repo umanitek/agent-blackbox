@@ -38,6 +38,34 @@ that the two version fields agree.
 
 ## [Unreleased]
 
+## [1.7.2] - 2026-11-28
+
+### Security
+
+Found in an external review of 1.7.1 and reported privately. Thank you to the reporter.
+
+- **More kinds of credentials are kept out of the audit log.** Authorization headers of any scheme,
+  `Basic` credentials, short passwords (`password=abc1`), quoted passwords with spaces, the password
+  in `curl -u user:password` and in a URL's `user:password@` are now redacted, as are a finding's
+  title and sighting. Ordinary text such as `max_tokens=4096` or `docker run -u 1000:1000` is kept.
+  Same rules in the OpenClaw bridge.
+- **Network lockdown treats cloud metadata as outside this machine.** Under agent network lockdown,
+  link-local addresses (`169.254.0.0/16`, `fe80::/10`, also written inside IPv6) and the named
+  cloud metadata services need an `allow` entry like any other host; loopback and the local network
+  stay reachable. A call naming more hosts than Blackbox reads in one call is refused under
+  lockdown, and `localhost` URLs are no longer refused as unreadable.
+- **The system protection helper and Blackbox must share a key.** With no key file, Blackbox now
+  refuses the helper's reports, and the helper refuses every plan, as it already did for a damaged
+  key. Every published helper writes its key at install; an older source build is shown as not
+  paired, with how to fix it. The helper's side takes effect with the next helper release.
+- **A verified rule always wins over a community one with the same key**, in every rule table
+  (injection, escalation, file access and skill rules too, not only packages and indicators).
+
+### Changed
+
+- The READMEs' "what Blackbox covers" sections list what is supported on each platform and drop
+  the list of protection limits; the threat model keeps the full picture.
+
 ## [1.7.1] - 2026-11-27
 
 ### Fixed
@@ -899,7 +927,8 @@ The first version in the Hermes plugin catalog (commit `7d697683`, added by Herm
 in NousResearch/hermes-agent#140529). Its `plugin.yaml` said 1.0.0 while Blackbox's own code and
 dashboard reported 1.1.0; 1.1.0 is therefore skipped, so no two different builds share a number.
 
-[Unreleased]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.7.1...main
+[Unreleased]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.7.2...main
+[1.7.2]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.7.1...blackbox-v1.7.2
 [1.7.1]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.7.0...blackbox-v1.7.1
 [1.7.0]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.6.2...blackbox-v1.7.0
 [1.6.2]: https://github.com/umanitek/agent-blackbox/compare/blackbox-v1.6.1...blackbox-v1.6.2
