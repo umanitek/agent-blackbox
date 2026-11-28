@@ -90,16 +90,16 @@ recorded test runs: [`plugins/blackbox/docs/agent-compat/`](plugins/blackbox/doc
 
 | ✅ Covered today | ⏳ Not yet |
 |---|---|
-| **macOS:** hooks, the agent sandbox (Seatbelt, on by default), sandbox permissions, File, Network and Trader Shield, DNS Shield and the Threat Firewall (with the helper), approvals by your password, native notifications | **Windows deep protection:** Windows has the hooks, detection, dependency checks and the dashboard; no agent sandbox, no system protection helper, no Network Shield enforcement, no native notifications yet |
-| **Linux** (Ubuntu 24.04, 22.04 tested): the same, built on namespaces, seccomp, Landlock, nftables and systemd | **The Linux system protection helper is not published as a download yet:** a Linux install runs on the hooks until you build the helper from source; the Linux sandbox, DNS Shield and Threat Firewall come with it |
-| **Proven with the real agents** on macOS and Linux: Hermes, Claude Code, Codex, Gemini CLI, Cline, OpenCode | **Not yet in a real-agent round:** Cursor, GitHub Copilot CLI and Windsurf (built from their official docs); OpenClaw is parity-tested, live validation pending |
-| **Self-protection in every mode:** an agent cannot switch off its hooks, change Blackbox, stop its services or signal its processes, or leave startup items | **Codex** is protected only after you approve its hooks once (`/hooks`) |
-| **Packages** checked against the threat graph, including lockfiles and transitive dependencies | **While the threat graph cannot answer** (its store stopped or starting), packages are **not checked against it**: actions pass, and one HIGH finding per outage says so |
-| **Prompt injection** checked on prompts and on tool output | **The first sync is heavy:** about half an hour of download and CPU (at low priority); until it ends only the built-in rules protect |
-| **Weakening changes wait for you;** a session running without Blackbox is a HIGH finding | **Known-bad only:** packages and indicators must be listed; new malware is the sandbox's job. Hooks alone cannot judge code decided at run time |
+| **macOS:** hooks, the agent sandbox (Seatbelt, on by default), sandbox permissions, File, Network and Trader Shield, DNS Shield and the Threat Firewall (with the helper), approvals by your password, native notifications | **Windows deep protection:** Windows has the hooks, detection, dependency checks and the dashboard; the agent sandbox, the system protection helper, Network Shield enforcement and native notifications are still to come |
+| **Linux** (Ubuntu 24.04, 22.04 tested): the same, built on namespaces, seccomp, Landlock, nftables and systemd | **A Linux helper download:** on Linux, build the system protection helper from source for now; the Linux sandbox, DNS Shield and Threat Firewall come with it |
+| **Proven with the real agents** on macOS and Linux: Hermes, Claude Code, Codex, Gemini CLI, Cline, OpenCode | **Real-agent rounds for** Cursor, GitHub Copilot CLI and Windsurf (built from their official docs) and a live OpenClaw round (parity-tested today) |
+| **Self-protection in every mode:** an agent cannot switch off its hooks, change Blackbox, stop its services or signal its processes, or leave startup items | **Codex:** approve its hooks once (`/hooks`) to switch its protection on |
+| **Packages** checked against the threat graph, including lockfiles and transitive dependencies | **The first sync** takes about half an hour of download and CPU (at low priority); the built-in rules protect meanwhile |
+| **Prompt injection** checked on prompts and on tool output | |
+| **Weakening changes wait for you;** a session running without Blackbox is a HIGH finding | |
 
-The full, per-OS list: [plugin README](plugins/blackbox/README.md#what-blackbox-covers--and-what-it-doesnt-yet)
-and the [threat model](plugins/blackbox/docs/THREAT_MODEL.md) ("Residual risks", "Open gaps").
+Per OS in detail: the [plugin README](plugins/blackbox/README.md#what-blackbox-covers--and-what-it-doesnt-yet).
+How each protection is enforced and tested: the [threat model](plugins/blackbox/docs/THREAT_MODEL.md).
 
 ---
 

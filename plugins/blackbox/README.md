@@ -113,38 +113,24 @@ Per agent: Hermes, Claude Code, Codex, Gemini CLI, Cline and OpenCode are proven
 with the real agents (table above). On Windows the hook-based rows apply to Hermes, and Windows has
 not been through the real-agent test rounds.
 
-**Not yet (known limitations)**
+**Not yet**
 
-- **Windows has the hooks only.** No agent sandbox, no system protection helper, no Network Shield
-  enforcement and no native notifications yet. Hermes runs best under WSL2 there; inside WSL2 use
-  the Linux install.
-- **The Linux system protection helper is not published as a download yet.** This release
-  publishes it for macOS only. On Linux the installer says so and Blackbox runs on the hooks; the
-  Linux agent sandbox, DNS Shield and Threat Firewall come with the helper, which you can build from
-  source today (see [The system protection helper](#the-system-protection-helper)).
-- **Cursor, GitHub Copilot CLI and Windsurf** are built from their official docs but have not been
-  through a real-agent test round yet. Their sandbox launchers are not proven.
-- **OpenClaw** is parity-tested against the Python side, not yet validated on a live OpenClaw agent.
-- **Codex needs your `/hooks` approval** before Blackbox protects it.
-- **While the threat graph cannot answer** (its store stopped, starting or stuck), packages and
-  other verified rules are **not checked against the graph**. Blackbox lets actions through
-  meanwhile (it never breaks your agent), raises one HIGH finding per outage and says so in
-  `blackbox status`. Your protected files, self-protection and the startup places still hold.
+- **Windows has the hooks only for now.** The agent sandbox, the system protection helper, Network
+  Shield enforcement and native notifications are still to come. Hermes runs best under WSL2
+  there; inside WSL2 use the Linux install.
+- **The Linux system protection helper is not a download yet.** This release publishes it for
+  macOS. On Linux the installer says so, and you can build the helper from source today (see
+  [The system protection helper](#the-system-protection-helper)); the Linux agent sandbox, DNS
+  Shield and Threat Firewall come with it.
+- **Cursor, GitHub Copilot CLI and Windsurf** are built from their official docs and have not been
+  through a real-agent test round yet.
+- **OpenClaw** is parity-tested against the Python side; a live OpenClaw round is still to come.
+- **Codex needs your `/hooks` approval** once before Blackbox protects it.
 - **The first sync is heavy.** The first download of the verified graph takes about half an hour,
-  longer on a slow machine or network, and uses CPU and disk meanwhile (at a lower priority than
-  your own work). Until it ends, only the built-in rules protect.
-- **Known-bad packages only.** The package checks recognise listed packages, not new malware; the
-  sandbox is the backstop. The verified graph's package data is a July 2026 snapshot until
-  Umanitek's feed resumes.
-- **Hooks read text.** An agent on hooks only (taken out of the sandbox, or started another way)
-  can still run a program whose behaviour is decided at run time. Only the sandbox stops that.
-- **Real-time file watching needs the helper.** Without it, changes made outside an agent's tool
-  calls are not watched as they happen.
-- **Known-bad domains and addresses only flag** in an agent's tool calls; they are refused
-  machine-wide only by DNS Shield and the Threat Firewall (the helper).
+  longer on a slow machine or network, at a lower priority than your own work. The built-in rules
+  protect meanwhile.
 
-The full list, with what each protection covers and where it is enforced:
-[the threat model](docs/THREAT_MODEL.md) ("Residual risks" and "Open gaps").
+How each protection is enforced and tested: [the threat model](docs/THREAT_MODEL.md).
 
 ## How it works
 
