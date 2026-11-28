@@ -6,9 +6,25 @@ scope for vulnerability reports.
 
 ## 1. Reporting a Vulnerability
 
-Report privately via [GitHub Security Advisories](https://github.com/NousResearch/hermes-agent/security/advisories/new)
-or **security@nousresearch.com**. Do not open public issues for
-security vulnerabilities. **Hermes Agent does not operate a bug
+This repository is **Agent Blackbox** by Umanitek, built on a fork of
+Hermes Agent. Report every vulnerability found in this repository to
+Umanitek, privately:
+
+- [GitHub Security Advisories](https://github.com/umanitek/agent-blackbox/security/advisories/new)
+  on `umanitek/agent-blackbox`, or
+- **support@umanitek.ai** (also the fallback when the advisory form is
+  not available).
+
+That covers Agent Blackbox itself (`plugins/blackbox/`,
+`integrations/`, its installers and CI) and the Hermes host code as it
+ships here. A flaw that is also in upstream Hermes Agent may in addition
+be reported to Nous Research through
+[their advisories](https://github.com/NousResearch/hermes-agent/security/advisories/new)
+or **security@nousresearch.com**; tell us when you do, so the fix lands
+in both places.
+
+Do not open public issues, pull requests or discussions for security
+vulnerabilities. **Neither Umanitek nor Hermes Agent operates a bug
 bounty program.**
 
 A useful report includes:
@@ -329,7 +345,8 @@ that:
 
 - **Coordinated disclosure window:** 90 days from report, or until a
   fix is released, whichever comes first.
-- **Channel:** the GHSA thread or email correspondence with
-  security@nousresearch.com.
+- **Channel:** the GHSA thread on `umanitek/agent-blackbox` or email
+  correspondence with support@umanitek.ai (for an upstream Hermes
+  report, Nous Research's own thread or security@nousresearch.com).
 - **Credit:** reporters are credited in release notes unless
   anonymity is requested.
