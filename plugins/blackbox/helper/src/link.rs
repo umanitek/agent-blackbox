@@ -15,9 +15,11 @@
 //!   replayed to the plugin later (the plugin refuses an old time or a nonce it saw);
 //! * losing the plugin NEVER undoes anything: the caller keeps the last verified plan.
 //!
-//! A helper installed before keys existed has no key file: it keeps working ("legacy", accepted
-//! unsigned) and says so in every report, so the plugin can ask the person to reinstall it. ONLY a
-//! missing file is legacy: a key file that is there but wrong in any way is "broken" ([`load_key`]).
+//! No usable key — the file missing ("unkeyed") or there but wrong in any way ("broken",
+//! [`load_key`]) — refuses every plan and sends no report: the helper keeps the last plan it
+//! verified and the plugin's card asks the person to reinstall it. WHY (external review,
+//! 2026-11-28): a missing key used to mean "legacy", accepting unsigned plans from whatever answered
+//! on the plugin's port; every published helper writes its key at install (since 2026-11-21).
 //! Contract: helper/PLAN.md.
 
 use std::path::Path;
@@ -88,7 +90,7 @@ pub fn new_key() -> Vec<u8> {
 /// What the key file in the helper's folder is.
 #[derive(Debug, PartialEq, Eq)]
 pub enum KeyFile {
-    /// No file: a legacy install from before keys.
+    /// No file: an install from before keys (2026-11-21), or a key removed — fail closed.
     Missing,
     Key(Vec<u8>),
     /// A file is there but can not be trusted or used (the text says why): fail closed.
@@ -147,6 +149,8 @@ pub struct Link {
     http: reqwest::blocking::Client,
     key: Option<Vec<u8>>,
     broken_key: bool,
+    /// No key file at all (refused like a broken one; told apart in [`Link::mode`] and the refusal).
+    missing_key: bool,
     token: Option<String>,
     verified_at: Option<Instant>,
     /// The exact bytes of the last plan this link accepted (verified when a key is installed):
@@ -155,24 +159,23 @@ pub struct Link {
 }
 
 impl Link {
-    /// The link for the helper in *home*. A key file that exists but is not usable
-    /// ([`KeyFile::Broken`]) is "broken": every plan is refused (fail closed) rather than falling
-    /// back to legacy.
+    /// The link for the helper in *home*. Without a usable key — none ([`KeyFile::Missing`]) or one
+    /// that is not usable ([`KeyFile::Broken`]) — every plan is refused (fail closed).
     pub fn new(home: &Path) -> Result<Link, String> {
-        let (key, broken_key) = match load_key(home) {
-            KeyFile::Key(key) => (Some(key), false),
-            KeyFile::Missing => (None, false),
-            KeyFile::Broken(_) => (None, true),
+        let (key, broken_key, missing_key) = match load_key(home) {
+            KeyFile::Key(key) => (Some(key), false, false),
+            KeyFile::Missing => (None, false, true),
+            KeyFile::Broken(_) => (None, true, false),
         };
         let http = reqwest::blocking::Client::builder()
             .redirect(reqwest::redirect::Policy::none())   // a loopback plugin never redirects
             .build().map_err(|error| error.to_string())?;
-        Ok(Link { http, key, broken_key, token: None, verified_at: None, last_body: None })
+        Ok(Link { http, key, broken_key, missing_key, token: None, verified_at: None, last_body: None })
     }
 
-    /// "signed" (a key is installed), "legacy" (none) or "broken" — for reports.
+    /// "signed" (a key is installed), "unkeyed" (no key file) or "broken" — for reports and logs.
     pub fn mode(&self) -> &'static str {
-        if self.broken_key { "broken" } else if self.key.is_some() { "signed" } else { "legacy" }
+        if self.broken_key { "broken" } else if self.missing_key { "unkeyed" } else { "signed" }
     }
 
     /// GET *path* with *query* (already encoded) plus a fresh nonce; the answer counts only when
@@ -185,6 +188,9 @@ impl Link {
     pub fn plan_from<T: DeserializeOwned>(&mut self, base: &str, path: &str, query: &str, timeout: Duration) -> Fetched<T> {
         if self.broken_key {
             return Fetched::Refused("the helper's key file is damaged: reinstall the helper".into());
+        }
+        if self.missing_key {
+            return Fetched::Refused("the helper has no key file: reinstall the helper".into());
         }
         let nonce = nonce();
         let separator = if query.is_empty() { "" } else { "&" };
@@ -217,12 +223,11 @@ impl Link {
         self.last_body.take()
     }
 
-    /// Whether reports may go out now: legacy, or the server proved the key recently.
+    /// Whether reports may go out now: only to a server that proved the key recently.
     pub fn may_report(&self) -> bool {
         match (&self.key, self.verified_at) {
-            (None, _) => !self.broken_key,
             (Some(_), Some(at)) => at.elapsed() <= VERIFIED_FOR,
-            (Some(_), None) => false,
+            _ => false,
         }
     }
 
@@ -283,10 +288,10 @@ mod tests {
         assert_ne!(sign_report(&KEY, 1_700_000_000, "ff0102030405060708090a0b0c0d0e0f", body), sign_report(&KEY, 1_700_000_000, nonce, body));
     }
 
-    /// Review finding 2026-11-26: only "no key file" is legacy; a key file that is there but a link,
-    /// the wrong size or open to other accounts is BROKEN (every plan refused), never "no key".
+    /// Review finding 2026-11-26: a key file that is there but a link, the wrong size or open to
+    /// other accounts is BROKEN (every plan refused), never "no key".
     #[test]
-    fn only_a_missing_key_file_is_legacy_anything_else_wrong_is_broken() {
+    fn a_key_file_that_is_there_but_wrong_is_broken() {
         use std::os::unix::fs::PermissionsExt;
         let dir = std::env::temp_dir().join(format!("bb-link-key-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -338,8 +343,32 @@ mod tests {
         assert_eq!(broken.mode(), "broken");
         assert!(!broken.may_report());
         assert!(matches!(broken.plan::<Value>("/x", "", Duration::from_secs(1)), Fetched::Refused(_)), "a damaged key fails closed");
-        std::fs::remove_file(dir.join(KEY_FILE)).unwrap();
-        assert_eq!(Link::new(&dir).unwrap().mode(), "legacy");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// External review 2026-11-28: with no key file the helper used to accept an unsigned plan from
+    /// whatever answered on the plugin's port ("legacy"). Now it refuses every plan and reports nothing.
+    #[test]
+    fn without_a_key_file_every_plan_is_refused_and_nothing_is_reported() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                use std::io::{Read, Write};
+                let mut buffer = [0u8; 2048];
+                let _ = stream.read(&mut buffer);
+                let body = r#"{"version":"unsigned"}"#;
+                let _ = write!(stream, "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}", body.len(), body);
+            }
+        });
+        let dir = std::env::temp_dir().join(format!("bb-link-unkeyed-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut link = Link::new(&dir).unwrap();
+        assert_eq!(link.mode(), "unkeyed");
+        assert!(!link.may_report(), "no report without a key");
+        let fetched: Fetched<Value> = link.plan_from(&format!("http://127.0.0.1:{port}"), "/plan", "", Duration::from_secs(5));
+        assert!(matches!(fetched, Fetched::Refused(ref why) if why.contains("no key file")), "{fetched:?}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

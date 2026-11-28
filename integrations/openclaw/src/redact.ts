@@ -56,8 +56,49 @@ const BEARER_RE = /Bearer\s+[A-Za-z0-9._~+/=-]+/gi;
 // 64 name characters are taken with no backtracking — JavaScript has no
 // possessive `{1,64}+`, so the capture-inside-a-look-ahead + back-reference
 // idiom stands in for it.
-const SECRET_ASSIGNMENT_RE =
-  /(?<key>\b(?=[A-Za-z0-9_-]{0,64}?(?:api[_-]?key|token|secret|password|passwd|credential|private[_-]?key|client[_-]?secret|access[_-]?key))(?=(?<name>[A-Za-z0-9_-]{1,64}))\k<name>["']?)(?<sep>\s*[:=]\s*["']?)(?<value>[^\s"'[\],;]{8,})/gi;
+// The names are Python's `SECRET_NAME_WORDS`, in its order.
+const SECRET_NAMES = "api[_-]?key|token|secret|password|passwd|credential|authorization|private[_-]?key|access[_-]?key";
+const SECRET_ASSIGNMENT_RE = new RegExp(
+  String.raw`(?<key>\b(?=[A-Za-z0-9_-]{0,64}?(?:${SECRET_NAMES}))(?=(?<name>[A-Za-z0-9_-]{1,64}))\k<name>["']?)(?<sep>\s*[:=]\s*["']?)(?<value>[^\s"'[\],;]{8,})`, "gi");
+
+// The credential forms the assignment rule can not see (external review, 2026-11-28), each as
+// Python's `redact_credentials` reads them: kernel/redaction.py is the one rule table.
+const STRONG_NAMES = "password|passwd|passphrase|secret|credential";
+const SHORT_SECRET_RE = new RegExp(
+  String.raw`(?<key>\b(?=[A-Za-z0-9_-]{0,64}?(?:${STRONG_NAMES}))(?=(?<name>[A-Za-z0-9_-]{1,64}))\k<name>["']?)(?<sep>\s*[:=]\s*["']?)(?<value>[^\s"'[\],;]{1,7})(?![^\s"'[\],;])`, "gi");
+const QUOTED_SECRET_RE = new RegExp(
+  String.raw`(?<key>\b(?=[A-Za-z0-9_-]{0,64}?(?:${SECRET_NAMES}))(?=(?<name>[A-Za-z0-9_-]{1,64}))\k<name>["']?)(?<sep>[ \t]*[:=][ \t]*)(?<quote>["'])(?<value>[^"'\r\n]{1,512})\k<quote>`, "gi");
+const AUTH_HEADER_RE = /(?<head>\b(?:proxy-)?authorization["']?[ \t]*[:=][ \t]*["']?)(?<rest>[^\r\n"',;]{1,1024})/gi;
+const SCHEME = /^[A-Za-z][A-Za-z0-9_-]{0,31}$/;
+const BASIC_RE = /\bBasic[ \t]+(?<value>[A-Za-z0-9+/]{4,}={0,2})(?![A-Za-z0-9+/=])/gi;
+const USER_OPTION_RE = /(?<opt>(?<![^\s"'])(?:-u|-U|--user|--proxy-user)(?:[ \t]+|=)["']?)(?<user>[^\s"':]{1,128}):(?<pw>[^\s"']{1,256})/g;
+const URL_PASSWORD_RE = /(?<pre>\b[a-z][a-z0-9+.-]{0,30}:\/\/[^\s/?#@:'"<>]{1,128}):(?<pw>[^\s/?#@'"<>]{1,256})@/gi;
+const REDACTED = "[REDACTED]";
+const DIGITS = /^[0-9]+$/;
+
+function headerValue(whole: string, head: string, rest: string): string {
+  const words = rest.split(" ");
+  const at = words.length > 1 && SCHEME.test(words[0]!) ? 1 : 0;
+  if (words[at]!.startsWith("[REDACTED")) return whole;
+  words[at] = REDACTED;
+  return head + words.join(" ");
+}
+
+function basicValue(whole: string, value: string): string {
+  if (value.length % 4) return whole;
+  return Buffer.from(value, "base64").includes(0x3a) ? "Basic " + REDACTED : whole;
+}
+
+/** Python's `redact_credentials`: headers, Basic, `-u user:pw`, URL passwords, quoted and short secrets. */
+function redactCredentials(text: string): string {
+  let out = text.replace(AUTH_HEADER_RE, (whole, head: string, rest: string) => headerValue(whole, head, rest));
+  out = out.replace(BASIC_RE, (whole, value: string) => basicValue(whole, value));
+  out = out.replace(USER_OPTION_RE, (whole, opt: string, user: string, pw: string) =>
+    DIGITS.test(user) && DIGITS.test(pw) ? whole : `${opt}${user}:${REDACTED}`);
+  out = out.replace(URL_PASSWORD_RE, (_whole, pre: string) => `${pre}:${REDACTED}@`);
+  out = out.replace(QUOTED_SECRET_RE, "$<key>$<sep>$<quote>" + REDACTED + "$<quote>");
+  return out.replace(SHORT_SECRET_RE, "$<key>$<sep>" + REDACTED);
+}
 
 /** Object KEYS whose whole value is dropped. Mirrors `audit/redaction._SECRET_KEY_RE`. */
 const SECRET_KEY_RE =
@@ -78,6 +119,7 @@ export function redactSecretValues(text: string): string {
   out = redactBitcoinKeys(out); // then Bitcoin WIF / xprv keys, as in Python
   for (const [secretType, pattern] of SECRET_VALUE_RULES) out = out.replace(pattern, marker(secretType));
   for (const [secretType, pattern] of REDACTION_ONLY_RULES) out = out.replace(pattern, marker(secretType));
+  out = redactCredentials(out); // as Python, just before the bearer rule
   out = out.replace(BEARER_RE, "Bearer [REDACTED]");
   return out.replace(SECRET_ASSIGNMENT_RE, "$<key>$<sep>[REDACTED]");
 }

@@ -1,4 +1,4 @@
-/* @umanitek/blackbox-openclaw — built from src/ by `npm run build`; do not edit. source sha256:5bbfa2d7bd5557b229fbb984c9244de3b6ed77ef40c3fe866f4b174b8f7f3b7a */
+/* @umanitek/blackbox-openclaw — built from src/ by `npm run build`; do not edit. source sha256:f412edf6aed719fe582bc4fa63165320b6983c7ad8fd4facc28169850f4ec7c7 */
 
 // src/consent.ts
 import { readFileSync } from "node:fs";
@@ -3249,7 +3249,46 @@ var REDACTION_ONLY_RULES = [
   ["github-token", /\b(?:gh[pousr]|github_pat)_[A-Za-z0-9_]{16,}/g]
 ];
 var BEARER_RE = /Bearer\s+[A-Za-z0-9._~+/=-]+/gi;
-var SECRET_ASSIGNMENT_RE = /(?<key>\b(?=[A-Za-z0-9_-]{0,64}?(?:api[_-]?key|token|secret|password|passwd|credential|private[_-]?key|client[_-]?secret|access[_-]?key))(?=(?<name>[A-Za-z0-9_-]{1,64}))\k<name>["']?)(?<sep>\s*[:=]\s*["']?)(?<value>[^\s"'[\],;]{8,})/gi;
+var SECRET_NAMES = "api[_-]?key|token|secret|password|passwd|credential|authorization|private[_-]?key|access[_-]?key";
+var SECRET_ASSIGNMENT_RE = new RegExp(
+  String.raw`(?<key>\b(?=[A-Za-z0-9_-]{0,64}?(?:${SECRET_NAMES}))(?=(?<name>[A-Za-z0-9_-]{1,64}))\k<name>["']?)(?<sep>\s*[:=]\s*["']?)(?<value>[^\s"'[\],;]{8,})`,
+  "gi"
+);
+var STRONG_NAMES = "password|passwd|passphrase|secret|credential";
+var SHORT_SECRET_RE = new RegExp(
+  String.raw`(?<key>\b(?=[A-Za-z0-9_-]{0,64}?(?:${STRONG_NAMES}))(?=(?<name>[A-Za-z0-9_-]{1,64}))\k<name>["']?)(?<sep>\s*[:=]\s*["']?)(?<value>[^\s"'[\],;]{1,7})(?![^\s"'[\],;])`,
+  "gi"
+);
+var QUOTED_SECRET_RE = new RegExp(
+  String.raw`(?<key>\b(?=[A-Za-z0-9_-]{0,64}?(?:${SECRET_NAMES}))(?=(?<name>[A-Za-z0-9_-]{1,64}))\k<name>["']?)(?<sep>[ \t]*[:=][ \t]*)(?<quote>["'])(?<value>[^"'\r\n]{1,512})\k<quote>`,
+  "gi"
+);
+var AUTH_HEADER_RE = /(?<head>\b(?:proxy-)?authorization["']?[ \t]*[:=][ \t]*["']?)(?<rest>[^\r\n"',;]{1,1024})/gi;
+var SCHEME = /^[A-Za-z][A-Za-z0-9_-]{0,31}$/;
+var BASIC_RE = /\bBasic[ \t]+(?<value>[A-Za-z0-9+/]{4,}={0,2})(?![A-Za-z0-9+/=])/gi;
+var USER_OPTION_RE = /(?<opt>(?<![^\s"'])(?:-u|-U|--user|--proxy-user)(?:[ \t]+|=)["']?)(?<user>[^\s"':]{1,128}):(?<pw>[^\s"']{1,256})/g;
+var URL_PASSWORD_RE = /(?<pre>\b[a-z][a-z0-9+.-]{0,30}:\/\/[^\s/?#@:'"<>]{1,128}):(?<pw>[^\s/?#@'"<>]{1,256})@/gi;
+var REDACTED = "[REDACTED]";
+var DIGITS = /^[0-9]+$/;
+function headerValue(whole, head, rest) {
+  const words = rest.split(" ");
+  const at = words.length > 1 && SCHEME.test(words[0]) ? 1 : 0;
+  if (words[at].startsWith("[REDACTED")) return whole;
+  words[at] = REDACTED;
+  return head + words.join(" ");
+}
+function basicValue(whole, value) {
+  if (value.length % 4) return whole;
+  return Buffer.from(value, "base64").includes(58) ? "Basic " + REDACTED : whole;
+}
+function redactCredentials(text) {
+  let out = text.replace(AUTH_HEADER_RE, (whole, head, rest) => headerValue(whole, head, rest));
+  out = out.replace(BASIC_RE, (whole, value) => basicValue(whole, value));
+  out = out.replace(USER_OPTION_RE, (whole, opt, user, pw) => DIGITS.test(user) && DIGITS.test(pw) ? whole : `${opt}${user}:${REDACTED}`);
+  out = out.replace(URL_PASSWORD_RE, (_whole, pre) => `${pre}:${REDACTED}@`);
+  out = out.replace(QUOTED_SECRET_RE, "$<key>$<sep>$<quote>" + REDACTED + "$<quote>");
+  return out.replace(SHORT_SECRET_RE, "$<key>$<sep>" + REDACTED);
+}
 var SECRET_KEY_RE = /(api[_-]?key|token|secret|password|passwd|credential|authorization|private[_-]?key|client[_-]?secret|access[_-]?token|refresh[_-]?token)/i;
 function marker(secretType) {
   return `[REDACTED_${secretType.toUpperCase().replace(/-/g, "_")}]`;
@@ -3261,6 +3300,7 @@ function redactSecretValues(text) {
   out = redactBitcoinKeys(out);
   for (const [secretType, pattern] of SECRET_VALUE_RULES) out = out.replace(pattern, marker(secretType));
   for (const [secretType, pattern] of REDACTION_ONLY_RULES) out = out.replace(pattern, marker(secretType));
+  out = redactCredentials(out);
   out = out.replace(BEARER_RE, "Bearer [REDACTED]");
   return out.replace(SECRET_ASSIGNMENT_RE, "$<key>$<sep>[REDACTED]");
 }

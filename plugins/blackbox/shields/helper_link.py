@@ -16,10 +16,11 @@ companion app both drive the same helper). This module reads it and:
   replayed later (independent review 2026-11-26, finding 7; the helper's ``link.rs`` signs the
   same bytes, one test vector on both sides). Refused with 401 when wrong, stale, replayed or missing.
 
-Only a MISSING key file is "not paired": plans go out unsigned (a keyed helper refuses them) and
-reports are accepted unsigned from a helper installed before keys (the card says it is not paired,
-:func:`pairing`). A key file that is there but wrong (a link, the wrong size) is BROKEN: every
-report is refused — it is never read as "no key".
+A MISSING key file is "not paired" and a key file that is there but wrong (a link, the wrong size)
+is BROKEN: either way every report is refused and plans go out unsigned (the helper refuses them);
+the card says so, with the fix (:func:`pairing`). WHY (external review, 2026-11-28): with no key file
+an unsigned report was accepted, so any local program could write the helper's status; every
+published helper has a key since 2026-11-21.
 
 Upgrade window (DEPRECATED, one release): a helper from before 1.6.3 signs only the body. Its
 report is accepted until this Mac's helper has sent one v2 report (then :func:`_v2_seen` stays
@@ -185,12 +186,12 @@ def _check_v2(key: bytes, headers: Mapping[str, str], body: bytes, now: int) -> 
 
 
 def require_signed_report(context: ShieldContext, clock: Callable[[], float] = time.time) -> None:
-    """Refuses (401) a report that is not signed with the key, fresh and new (see the module doc);
-    accepts an unsigned one only while no key file exists at all."""
+    """Refuses (401) a report that is not signed with the key, fresh and new (see the module doc),
+    and every report while this Mac has no usable key."""
     key = read_key()
     if key is None:
         if pairing() == NOT_PAIRED:
-            return   # not paired: a helper from before keys reports unsigned ("auth": "legacy")
+            _refuse("this Mac has no helper key; reinstall the system protection helper to pair it")
         _refuse("the helper key on this Mac is broken; reinstall the system protection helper")
     headers = {str(name).lower(): str(value) for name, value in (context.request_headers or {}).items()}
     if HELPER_TIMESTAMP_HEADER.lower() in headers or HELPER_NONCE_HEADER.lower() in headers or _v2_seen():

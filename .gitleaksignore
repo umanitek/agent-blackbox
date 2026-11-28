@@ -250,3 +250,5 @@ cdf5732af67c9c1784ba4857191c499c3f3b741e:hermes_cli/left_core_migration.py:gener
 3551045907580e25a766d01bc56eb0ee41115d0d:docs/gateway-classic-cli.md:generic-api-key:36
 # Reviewed 2026-11-25: a made-up test nonce ("0123456789ab…"), replaced by a named constant in a later commit.
 c4c0df494f51a2d7a3eeb9353c3bad51bb866252:tests/plugins/test_blackbox_shields_network_helper_link.py:generic-api-key:55
+# 2026-11-28: a FAKE credential in the 1.7.2 redaction test (commit 6a86ce58d6); the file now builds it from pieces.
+6a86ce58d664d1de56dc6fb708203b01b56e0c8f:tests/plugins/test_blackbox_redaction_credentials.py:curl-auth-user:31

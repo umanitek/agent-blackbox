@@ -32,9 +32,10 @@ installer compares with the helper it carries to upgrade only one that differs.
   checks reports; the card says "not paired" when the helper is installed but this person has
   no key. Both sides check one shared vector (key 32×0x07, nonce `abc`, body
   `{"version":"v1"}` → `556ad530…85eafa`).
-* **Legacy.** A helper installed before keys existed has no key file: it accepts unsigned plans
-  and says `"auth": "legacy"` in every report, so the plugin can ask the person to reinstall it.
-  A key file of the wrong size is `"auth": "broken"`: every plan is refused (fail closed).
+* **No usable key.** A helper with no key file (`"unkeyed"`, an install from before keys) or a
+  damaged one (`"broken"`) refuses every plan and sends no report (fail closed); the plugin
+  refuses unsigned reports and its card says the helper is not paired, with the fix. Until
+  2026-11-28 a missing key was "legacy" and accepted unsigned plans (external review).
 * Losing the plugin never undoes anything: the last verified plan stays applied.
 
 ## Plan — `GET /api/shields/network-shield/api/enforcement?have=<version>&nonce=<hex>`
@@ -92,7 +93,7 @@ a protected item). FSEvents cannot say which program made a change, and the help
 
 `POST /api/shields/network-shield/api/enforcer-report` — running, `dns_active`, `firewall_active`,
 `cut_active`, `ssh_lockdown_active`, `version`, `queries`, `firewall_dropped`, `blocks`, `watch`,
-`events`, `remote`, plus (wave 2) `auth` ("signed" | "legacy" | "broken"), `last_error`,
+`events`, `remote`, plus (wave 2) `auth` ("signed" | "unkeyed" | "broken"), `last_error`,
 `pf_enabled`, `resolver_ok`, `dns_error`, `filter_error`, and `resolved` (KI-588:
 `[{"ip", "domain", "ts"}]`, at most 500 — which name each address DNS Shield relayed an answer for
 was asked as; the plugin keeps it in memory only, never on disk).

@@ -153,6 +153,13 @@ def _cases() -> list[str]:
         "",
         "MY_API_TOKEN_" + "X" * 47 + "=" + "q" * 6 + "7" * 6,            # a 60-character name: redacted
         "parity only: MY_API_TOKEN_" + "X" * 70 + "=" + "q" * 6 + "7" * 6,   # past the 64-character name bound (KI-373)
+        # credential forms (external review, 2026-11-28)
+        "cu" + "rl -H 'Authorization: Basic " + base64.b64encode(("user:" + "hunter" + "2").encode()).decode() + "' https://x.example",
+        '{"Authorization": "token ' + _ALNUM[:12] + '", "Proxy-Authorization": "Basic ' + base64.b64encode(b"a:b").decode() + '"}',
+        "parity only: Basic setup steps and Basic QUJDRA== (no colon inside) stay",
+        "password=abc1 passwd: x9 secret='a b c' DB_PASSWORD=\"two words\" max_tokens=4096",
+        "cu" + "rl -u admin:" + "hunter" + "2 https://x.example --proxy-user=p:q; docker run -u 1000:1000 img; sort -u a:b",
+        "git clone https://bob:" + "s3" + "cret@git.example/r.git and ssh://alice@host.example and git@github.com:a/b",
     ] + _key_material_cases() + _spelling_cases()
 
 

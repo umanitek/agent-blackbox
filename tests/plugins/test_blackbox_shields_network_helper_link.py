@@ -74,7 +74,6 @@ def test_without_a_key_or_a_nonce_the_plan_goes_out_plain(home):
 
 def test_a_report_must_carry_the_helpers_signature_once_paired(home):
     body = b'{"running":true}'
-    helper_link.require_signed_report(_context(body))                   # not paired: a pre-key helper
     _pair(home)
     with pytest.raises(ShieldApiError) as unsigned:
         helper_link.require_signed_report(_context(body))
@@ -84,6 +83,16 @@ def test_a_report_must_carry_the_helpers_signature_once_paired(home):
     with pytest.raises(ShieldApiError):   # signed, but for other bytes
         helper_link.require_signed_report(_context(b'{"running":false}', {helper_link.HELPER_SIGNATURE_HEADER: REPORT_VECTOR}))
     helper_link.require_signed_report(_context(body, {helper_link.HELPER_SIGNATURE_HEADER: REPORT_VECTOR}))
+
+
+def test_with_no_key_file_every_report_is_refused(home):
+    """External review 2026-11-28 (recorded privately): with no key file an unsigned report was accepted
+    as a helper from before keys, so any local program could write the helper's status. Red on 7e2470de18."""
+    assert helper_link.pairing() == helper_link.NOT_PAIRED
+    for headers in ({}, {helper_link.HELPER_SIGNATURE_HEADER: REPORT_VECTOR}):
+        with pytest.raises(ShieldApiError) as refused:
+            helper_link.require_signed_report(_context(b'{"running":true}', headers))
+        assert refused.value.status == 401 and "reinstall" in str(refused.value)
 
 
 def _v2(body: bytes, stamp: int, nonce: str = "0d" * 16, key: bytes = KEY) -> ShieldContext:

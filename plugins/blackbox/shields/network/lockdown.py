@@ -11,8 +11,12 @@ fails closed). It reports:
 
 * ``network:blocked-host`` — a host on the operator's block list (while the shield is on);
 * ``network:agent-lockdown`` — under lockdown, a host not on ``agent_hosts`` / ``allow``
-  (each entry covers its subdomains). Loopback and private addresses are always allowed: an
-  agent working on this machine or the local network is not leaving it.
+  (each entry covers its subdomains). Loopback and private addresses are allowed: an agent
+  working on this machine or the local network is not leaving it. Link-local addresses are NOT
+  (``169.254.169.254`` is where a cloud machine hands out its credentials, and an IPv4 address
+  written inside IPv6 is judged as the IPv4 it is); they need an ``allow`` entry like any host.
+  A call naming more hosts than :data:`MAX_HOSTS_PER_CALL` is a lockdown finding too: the ones
+  past the bound were not checked (lockdown fails closed).
 
 All are ``critical`` local findings (category ``network``) (``shields.check`` makes every shield finding local-only),
 so Block mode refuses the call and the agent is told which host and why. Fails open: an
@@ -36,9 +40,12 @@ BLOCKED_ID = "network:blocked-host"
 #: Its own category: a policy knob of its own (``detection.network``), and the classification row
 #: ``community/sighting/classification.py`` keys on it.
 CATEGORY = "network"
-#: Hosts one call may name before the rest are ignored (a call listing thousands is itself odd,
-#: and the extractor caps its own output too).
+#: Hosts one call may name before the rest are not read (a call listing thousands is itself odd,
+#: and the extractor caps its own output too). Under lockdown a call past it is refused.
 MAX_HOSTS_PER_CALL = 64
+#: Cloud metadata services outside the link-local range (AWS's IPv6 one sits in private fd00::/8,
+#: Alibaba's in shared 100.64.0.0/10): never "this machine" under lockdown.
+CLOUD_METADATA = frozenset({ipaddress.ip_address("fd00:ec2::254"), ipaddress.ip_address("100.100.100.200")})
 #: Unreadable URL hosts one call reports (one already refuses the call under lockdown).
 MAX_UNREADABLE_PER_CALL = 4
 #: The sighting layer's row: data leaving through the network (classification "over-broad-network").
@@ -61,6 +68,8 @@ class CallHosts(NamedTuple):
 
     hosts: list[str]
     unreadable: list[str]
+    #: True when the call named more than :data:`MAX_HOSTS_PER_CALL` hosts (the rest were not read).
+    truncated: bool = False
 
 
 def _part_value(part: str) -> Optional[int]:
@@ -101,6 +110,8 @@ def _url_host(url: str) -> tuple[str, bool]:
         return url.split("://", 1)[-1], False
     if not name:
         return "", True
+    if name == "localhost" or name.endswith(".localhost"):
+        return name, True   # this machine's own name: no entry spelling, but a host lockdown reads (_local)
     host = numeric_ipv4(name) or mode_module.normalise_entry(name)
     return (host, True) if host else (name, False)
 
@@ -124,15 +135,17 @@ def read_hosts(args: Any) -> CallHosts:
     bare = [value for kind, value in (identifier.partition(":")[2].partition(":")[::2]
                                       for identifier in iter_ioc_candidates(text)) if kind in ("domain", "ip")]
     hosts: list[str] = []
+    truncated = False
     for raw, from_url in [(host, True) for host in url_hosts] + [(host, False) for host in bare]:
         host = mode_module.normalise_entry(raw) or ""
         if not host or host in hosts or not (from_url or host in url_hosts or _bare_name_is_host(host)):
             continue
-        hosts.append(host)
         if len(hosts) >= MAX_HOSTS_PER_CALL:
+            truncated = True
             break
+        hosts.append(host)
     kept = [host for host in hosts if not any(other != host and other.endswith("." + host) for other in hosts)]
-    return CallHosts(kept, unreadable[:MAX_UNREADABLE_PER_CALL])
+    return CallHosts(kept, unreadable[:MAX_UNREADABLE_PER_CALL], truncated)
 
 
 def hosts_in(args: Any) -> list[str]:
@@ -169,7 +182,11 @@ def _local(host: str) -> bool:
         address = ipaddress.ip_address(host)
     except ValueError:
         return False
-    return address.is_loopback or address.is_private or address.is_link_local
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+        address = address.ipv4_mapped   # ``::ffff:169.254.169.254`` is that IPv4 address
+    if address.is_link_local or address in CLOUD_METADATA:
+        return False   # cloud metadata lives here: never "this machine" (see the module doc)
+    return address.is_loopback or address.is_private
 
 
 def detect(tool_name: str, args: Any, mode: ShieldMode) -> list[Finding]:
@@ -185,6 +202,9 @@ def detect(tool_name: str, args: Any, mode: ShieldMode) -> list[Finding]:
     if lockdown:
         findings += [finding(LOCKDOWN_ID, tool_name, host, "is no host Blackbox can read (agent network lockdown)")
                      for host in named.unreadable]
+        if named.truncated:
+            findings.append(finding(LOCKDOWN_ID, tool_name, f"more than {MAX_HOSTS_PER_CALL} hosts",
+                                    "in one call are more than Blackbox reads (agent network lockdown)"))
     for host in named.hosts:
         if _covered(host, allowed):
             continue
